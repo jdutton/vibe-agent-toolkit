@@ -62,7 +62,7 @@ async function populateThrough(store: FakeProjectionStore): Promise<{ projection
     onContributorTiming: () => {
       contributorRan = true;
     },
-    cache: { store, treeHash: TREE_HASH },
+    cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH },
   });
   return { projection, contributorRan };
 }

@@ -492,6 +492,24 @@ const DATABASE_FILENAME = 'projection.db';
 const DEFAULT_RETAINED_EXTENTS_PER_ROOT = 3;
 
 /**
+ * How many roots keep their trees at all, when the caller does not say.
+ *
+ * ⛔ Per-root retention alone is not a bound. Every distinct root path — each
+ * worktree, each CI job directory, each subdirectory a command ran from — kept
+ * up to {@link DEFAULT_RETAINED_EXTENTS_PER_ROOT} trees forever, because nothing
+ * ever reclaimed a root that was not written again. With the store on by default
+ * that was unbounded growth. The least recently written root is dropped whole
+ * once this many are held; a root is as recent as its newest tree, so a busy
+ * repository is never aged out behind a quiet one.
+ *
+ * Arithmetic: eight roots × three trees × the 9.83 MB measured for one scan of a
+ * 12,602-file adopter is a ~236 MB ceiling for the extent tier at that size, and
+ * far less for an ordinary repository. Too low costs a cold run on the ninth
+ * worktree; too high costs disk `vat cache clear` reclaims.
+ */
+const DEFAULT_RETAINED_ROOTS = 8;
+
+/**
  * How many content keys' blob facts survive a write, when the caller does not
  * say.
  *
@@ -539,6 +557,12 @@ export interface SqliteStoreOptions {
    * that holds nothing.
    */
   readonly retainedExtentsPerRoot?: number;
+  /**
+   * How many roots keep their trees at all. Defaults to
+   * {@link DEFAULT_RETAINED_ROOTS}; clamped to at least one, for the same reason
+   * as {@link SqliteStoreOptions.retainedExtentsPerRoot}.
+   */
+  readonly retainedRoots?: number;
   /**
    * How many content keys' blob facts survive a write.
    *
@@ -670,7 +694,10 @@ export function openSqliteProjectionStore(options: SqliteStoreOptions = {}): Sql
   return new SqliteProjectionStore(
     database,
     Math.max(1, Math.trunc(options.retainedExtentsPerRoot ?? DEFAULT_RETAINED_EXTENTS_PER_ROOT)),
-    { retainedBlobKeys: Math.max(1, Math.trunc(options.retainedBlobKeys ?? DEFAULT_RETAINED_BLOB_KEYS)) },
+    {
+      retainedBlobKeys: Math.max(1, Math.trunc(options.retainedBlobKeys ?? DEFAULT_RETAINED_BLOB_KEYS)),
+      retainedRoots: Math.max(1, Math.trunc(options.retainedRoots ?? DEFAULT_RETAINED_ROOTS)),
+    },
   );
 }
 
@@ -731,6 +758,73 @@ export interface SqlQueryableStore extends ProjectionStore {
   query(sql: string, ...parameters: readonly SqliteValue[]): readonly Record<string, unknown>[];
 
   /**
+   * Write the rows one lens evaluation produced, so SQL can ask about them.
+   *
+   * ## 🚨 "A lens's output never reaches the shared on-disk store" is enforced
+   * at RUNTIME. Do not re-read it as a type guarantee — it was one, wrongly.
+   *
+   * An earlier version of this docstring claimed `openSqliteProjectionStore`
+   * returned the narrower `ProjectionStore`, so declaring the write here made
+   * it unreachable on disk "without a runtime guard anyone could forget".
+   * **That was false.** The factory returns `SqlQueryableStore`, so every
+   * consumer of this package sees `writeDerived` on a shared on-disk handle
+   * with no type friction whatsoever. The wide type is correct — the
+   * file-backed store is legitimately queryable — so the guarantee is a
+   * refusal instead: only a store from `openEphemeralProjectionStore` may write
+   * derived relations, and every other store throws.
+   *
+   * ## 🚨 A derived relation EXISTS only once this method has been given it.
+   *
+   * The table is created by the first write that names it — an empty array
+   * included, because "evaluated, no rows" is a real answer. Until then a
+   * statement naming it fails with SQLite's own `no such table`. That absence is
+   * the query lane's refusal of a relation no lens filled: a table that existed
+   * EMPTY would answer `SELECT COUNT(*)` with `0` at exit 0, and nothing that
+   * scans the statement's text can be trusted to notice every way of naming it.
+   * ⛔ Do not "simplify" by creating every derived relation up front.
+   *
+   * ⛔ Nor by moving the derived DDL into `createSchema`. That is the obvious
+   * "why do these two schemas differ?" cleanup, and it would make the write
+   * succeed silently on a database shared by every
+   * repository on the machine — where the rows are also **unevictable** (they
+   * carry no extent key, and eviction goes by the extent manifest) and where
+   * this method's per-relation `DELETE` has **no root predicate**, so one
+   * repository's evaluation would empty another's.
+   *
+   * The rule matters because the on-disk store is **one database per VAT
+   * release, shared by every root on the machine**, retaining three tree hashes
+   * per root. A lens's rows are a function of bytes AND of the lens, and a
+   * question asked once — so persisting them would mean a later run reading one
+   * lens's answers under another lens's question, across repositories.
+   *
+   * ⚠️ **Replaces the relation's contents.** Two evaluations in one process are
+   * two answers to two questions, not an accumulation; appending would silently
+   * union them and make every `GROUP BY` double-count.
+   *
+   * @param rows - Each derived relation's rows, keyed by `DERIVED_TABLES`'s own
+   *   keys. A relation the caller omits is left UNTOUCHED — not emptied, and
+   *   not created
+   * @throws If this store may not hold derived relations, or a row carries a
+   *   value no column type can store
+   */
+  writeDerived(rows: DerivedRows): Promise<void>;
+}
+
+/**
+ * The full queryable schema — every projection table AND every derived
+ * relation — holding no rows, able only to COMPILE a statement.
+ *
+ * 🔑 **Why this is not a method on {@link SqlQueryableStore}.** A statement is
+ * compiled before the run has evaluated any lens, so the preflight needs every
+ * derived relation to exist. The query store deliberately has none until a lens
+ * writes it — that absence is how a statement over an unevaluated relation is
+ * refused. A compile method on the query store would therefore reject every
+ * check over `edges`; one on a store WITH the relations would be a query store
+ * whose empty tables answer `0`. A type that can compile and cannot answer is
+ * the only shape where neither mistake is expressible.
+ */
+export interface ProjectionCompileProbe {
+  /**
    * Compile one statement and throw it away, running NOTHING.
    *
    * 🔑 **The point is what it does not do.** SQLite resolves every table and
@@ -750,7 +844,7 @@ export interface SqlQueryableStore extends ProjectionStore {
    * token.
    *
    * Runs the same kind, single-statement and placeholder-count gates as
-   * {@link query}, so a statement refused for what it IS — or for what the
+   * {@link SqlQueryableStore.query}, so a statement refused for what it IS — or for what the
    * caller forgot to bind — is refused just as early as one refused for what
    * it names.
    *
@@ -759,51 +853,14 @@ export interface SqlQueryableStore extends ProjectionStore {
    *   Required rather than defaulted, because an omitted argument would read as
    *   "no values" and silently pass every under-bound statement through the
    *   very preflight meant to catch it early
-   * @throws The same errors {@link query} throws for a statement that is not a
+   * @throws The same errors {@link SqlQueryableStore.query} throws for a statement that is not a
    *   query, is more than one statement, does not pair its placeholders with
    *   `parameters`, or names something the schema lacks
    */
   assertCompiles(sql: string, parameters: readonly SqliteValue[]): void;
 
-  /**
-   * Write the rows one lens evaluation produced, so SQL can ask about them.
-   *
-   * ## 🚨 "A lens's output never reaches the shared on-disk store" is enforced
-   * at RUNTIME. Do not re-read it as a type guarantee — it was one, wrongly.
-   *
-   * An earlier version of this docstring claimed `openSqliteProjectionStore`
-   * returned the narrower `ProjectionStore`, so declaring the write here made
-   * it unreachable on disk "without a runtime guard anyone could forget".
-   * **That was false.** The factory returns `SqlQueryableStore`, so every
-   * consumer of this package sees `writeDerived` on a shared on-disk handle
-   * with no type friction whatsoever. The wide type is correct — the
-   * file-backed store is legitimately queryable — so the guarantee is a
-   * refusal instead: a store built without the derived DDL throws, and only
-   * `openEphemeralProjectionStore` builds one with it.
-   *
-   * ⛔ Do not "simplify" by moving `allDerivedSpecs()` into `createSchema`.
-   * That is the obvious "why are these two loops different?" cleanup, and it
-   * would make the write succeed silently on a database shared by every
-   * repository on the machine — where the rows are also **unevictable** (they
-   * carry no extent key, and eviction goes by the extent manifest) and where
-   * this method's per-relation `DELETE` has **no root predicate**, so one
-   * repository's evaluation would empty another's.
-   *
-   * The rule matters because the on-disk store is **one database per VAT
-   * release, shared by every root on the machine**, retaining three tree hashes
-   * per root. A lens's rows are a function of bytes AND of the lens, and a
-   * question asked once — so persisting them would mean a later run reading one
-   * lens's answers under another lens's question, across repositories.
-   *
-   * ⚠️ **Replaces the relation's contents.** Two evaluations in one process are
-   * two answers to two questions, not an accumulation; appending would silently
-   * union them and make every `GROUP BY` double-count.
-   *
-   * @param rows - Each derived relation's rows, keyed by `DERIVED_TABLES`'s own
-   *   keys. A relation the caller omits is left UNTOUCHED — not emptied
-   * @throws If a row carries a value no column type can store
-   */
-  writeDerived(rows: DerivedRows): Promise<void>;
+  /** Release the connection. Idempotent; every other call refuses afterwards. */
+  close(): Promise<void>;
 }
 
 /**
@@ -864,18 +921,37 @@ export type DerivedRows = {
 export function openEphemeralProjectionStore(): SqlQueryableStore {
   const database = new DatabaseSync(':memory:');
   createSchema(database);
-  // ⛔ HERE AND NOWHERE ELSE. `createSchema` is shared with the file-backed
-  // store, and a lens's rows must never enter it — that database is one per VAT
-  // release, shared by every root on the machine, so a persisted lens answer
-  // would be read back under a different lens's question in a different
-  // repository. Creating the relations only on this path means the on-disk
-  // schema has no table for them to land in even if a future caller tried.
+  // 🚨 NO derived relation is created here. Each is created by the first
+  // `writeDerived` that names it, so a relation no lens evaluated is ABSENT and
+  // a statement naming it fails `no such table` — see `writeDerived`. Creating
+  // them all up front would turn that refusal back into an empty table that
+  // answers `0`.
+  //
+  // ⛔ And never in `createSchema`: it is shared with the file-backed store, and
+  // a lens's rows must never enter that database — one per VAT release, shared
+  // by every root on the machine, so a persisted lens answer would be read back
+  // under a different lens's question in a different repository. This `true` is
+  // the only one in the package: no other store may create the relations.
+  return new SqliteProjectionStore(database, DEFAULT_RETAINED_EXTENTS_PER_ROOT, { mayWriteDerived: true });
+}
+
+/**
+ * Open a {@link ProjectionCompileProbe}: the full queryable schema, derived
+ * relations included, in memory, with no rows and no way to ask for any.
+ *
+ * Every derived relation is created up front HERE, which is exactly what the
+ * query store must not do — and safe here only because nothing can read this
+ * database's empty tables as an answer.
+ *
+ * @returns An open probe; close it when done
+ */
+export function openProjectionCompileProbe(): ProjectionCompileProbe {
+  const database = new DatabaseSync(':memory:');
+  createSchema(database);
   for (const spec of allDerivedSpecs()) {
     database.exec(createDerivedTableSql(spec));
   }
-  // The `true` and the loop above are ONE decision: this is the only store that
-  // has the relations, so it is the only one permitted to write them.
-  return new SqliteProjectionStore(database, DEFAULT_RETAINED_EXTENTS_PER_ROOT, { hasDerivedTables: true });
+  return new SqliteCompileProbe(database);
 }
 
 /**
@@ -1086,6 +1162,76 @@ function createSchema(database: DatabaseSync): void {
   }
 }
 
+/**
+ * Gate one caller statement, compile it on a read-only connection, and hand the
+ * compiled statement to `step` — the one path both `query` and `assertCompiles`
+ * take, so the two cannot disagree on what is admitted.
+ *
+ * `query_only` is set before `prepare` because `prepare` is where SQLite decides
+ * a statement is legal, and a writable connection would compile things this
+ * surface must never admit. It is restored in `finally`, FIRST, so a sweep that
+ * somehow throws still leaves the connection writable for the store's own
+ * writes. The sweep is unconditional and costs one `PRAGMA database_list` per
+ * call — the alternative is trusting that the kind gate is airtight on a path
+ * whose failure discloses every repository on the machine. See
+ * {@link detachForeignSchemas}.
+ *
+ * @param database - The connection
+ * @param sql - The caller's statement
+ * @param parameters - What the caller binds (or will bind)
+ * @param step - What to do with the compiled statement
+ * @returns Whatever `step` returns
+ * @throws The kind, single-statement and placeholder-count refusals, or
+ *   SQLite's own for a name the schema lacks
+ */
+function runGated<T>(
+  database: DatabaseSync,
+  sql: string,
+  parameters: readonly SqliteValue[],
+  step: (statement: StatementSync) => T,
+): T {
+  assertSingleStatement(sql);
+  assertIsQuery(sql);
+  assertParametersBound(sql, parameters);
+  database.exec('PRAGMA query_only = 1');
+  try {
+    return step(database.prepare(sql));
+  } finally {
+    database.exec('PRAGMA query_only = 0');
+    detachForeignSchemas(database);
+  }
+}
+
+/** The {@link ProjectionCompileProbe} contract over one in-memory connection. */
+class SqliteCompileProbe implements ProjectionCompileProbe {
+  readonly #database: DatabaseSync;
+  #closed = false;
+
+  /** @param database - An open connection holding the full queryable schema */
+  constructor(database: DatabaseSync) {
+    this.#database = database;
+  }
+
+  /** @inheritdoc */
+  assertCompiles(sql: string, parameters: readonly SqliteValue[]): void {
+    if (this.#closed) throw new Error('This compile probe is closed');
+    // Compiled and discarded: the step callback does nothing. `.all()` is
+    // deliberately NOT called — stepping is the unbounded half, and the whole
+    // value of this method is being the half that is not.
+    runGated(this.#database, sql, parameters, () => undefined);
+  }
+
+  /** @inheritdoc */
+  async close(): Promise<void> {
+    // Nothing reads this database after the preflight, so there is no
+    // transaction or statement cache to settle first.
+    if (!this.#closed) {
+      this.#closed = true;
+      this.#database.close();
+    }
+  }
+}
+
 /** The `ProjectionStore` contract over one SQLite connection. */
 class SqliteProjectionStore implements SqlQueryableStore {
   readonly #database: DatabaseSync;
@@ -1096,6 +1242,9 @@ class SqliteProjectionStore implements SqlQueryableStore {
   readonly #extentsPastRetention: StatementSync;
   readonly #forgetExtent: StatementSync;
   readonly #retainedExtentsPerRoot: number;
+  /** Which roots are past the machine-wide root window — see {@link DEFAULT_RETAINED_ROOTS}. */
+  readonly #rootsPastRetention: StatementSync;
+  readonly #retainedRoots: number;
   /** The blob tier's three eviction statements — see {@link BLOB_KEYS_TABLE}. */
   readonly #recordBlobKey: StatementSync;
   readonly #blobKeysPastRetention: StatementSync;
@@ -1103,10 +1252,14 @@ class SqliteProjectionStore implements SqlQueryableStore {
   readonly #retainedBlobKeys: number;
   /** Blob-fact statements memoized by table and placeholder count — see {@link TablePlan}. */
   readonly #blobStatements = new Map<string, StatementSync>();
-  /** Derived-relation statements, prepared on first use — see {@link SqliteProjectionStore.writeDerived}. */
-  #derivedPlanCache: readonly DerivedPlan[] | undefined;
   /**
-   * Whether this connection's schema HAS the derived relations.
+   * Derived-relation statements by registry key, each prepared by the write that
+   * CREATED its table — so a key's presence here means the relation exists. See
+   * {@link SqliteProjectionStore.writeDerived}.
+   */
+  readonly #derivedPlans = new Map<string, DerivedPlan>();
+  /**
+   * Whether this store may create and write the derived relations.
    *
    * 🚨 The one thing standing between a lens's rows and the shared on-disk
    * database, and it has to be a runtime flag rather than a type. An earlier
@@ -1118,7 +1271,7 @@ class SqliteProjectionStore implements SqlQueryableStore {
    * tree, one answer" honest. So the wide type is right and the guarantee had
    * to move here.
    */
-  readonly #hasDerivedTables: boolean;
+  readonly #mayWriteDerived: boolean;
   #closed = false;
 
   /**
@@ -1127,20 +1280,21 @@ class SqliteProjectionStore implements SqlQueryableStore {
    *   write. Already clamped to at least one by {@link openSqliteProjectionStore}
    * @param tiers - The other two dials, grouped so a caller cannot transpose
    *   two positional numbers. `retainedBlobKeys` is already clamped to at least
-   *   one by {@link openSqliteProjectionStore}; `hasDerivedTables` says whether
-   *   this connection's schema carries the derived relations, which is the ONLY
-   *   thing permitting `writeDerived`, and defaults to false so a new factory
+   *   one by {@link openSqliteProjectionStore}; `mayWriteDerived` is the ONLY
+   *   thing permitting `writeDerived` (which creates each relation it is given),
+   *   and defaults to false so a new factory
    *   has to opt in deliberately
    */
   constructor(
     database: DatabaseSync,
     retainedExtentsPerRoot: number,
-    tiers: { retainedBlobKeys?: number; hasDerivedTables?: boolean } = {},
+    tiers: { retainedBlobKeys?: number; retainedRoots?: number; mayWriteDerived?: boolean } = {},
   ) {
     this.#database = database;
     this.#retainedExtentsPerRoot = retainedExtentsPerRoot;
+    this.#retainedRoots = tiers.retainedRoots ?? DEFAULT_RETAINED_ROOTS;
     this.#retainedBlobKeys = tiers.retainedBlobKeys ?? DEFAULT_RETAINED_BLOB_KEYS;
-    this.#hasDerivedTables = tiers.hasDerivedTables ?? false;
+    this.#mayWriteDerived = tiers.mayWriteDerived ?? false;
     this.#plans = allSpecs().map((spec) => ({
       spec,
       columns: projectionColumnTypes(spec),
@@ -1173,6 +1327,12 @@ class SqliteProjectionStore implements SqlQueryableStore {
     this.#extentsPastRetention = database.prepare(
       `SELECT "storeTreeHash" FROM "${EXTENTS_TABLE}" WHERE "storeRootId" = ?`
       + ` ORDER BY "${WRITTEN_AT_COLUMN}" DESC, "rowid" DESC LIMIT -1 OFFSET ?`,
+    );
+    // A root is as recent as its newest tree. `MAX(rowid)` breaks the tie for the
+    // same reason the per-root statement above uses `rowid`.
+    this.#rootsPastRetention = database.prepare(
+      `SELECT "storeRootId" FROM "${EXTENTS_TABLE}" GROUP BY "storeRootId"`
+      + ` ORDER BY MAX("${WRITTEN_AT_COLUMN}") DESC, MAX("rowid") DESC LIMIT -1 OFFSET ?`,
     );
     this.#forgetExtent = database.prepare(
       `DELETE FROM "${EXTENTS_TABLE}" WHERE "storeRootId" = ? AND "storeTreeHash" = ?`,
@@ -1217,7 +1377,7 @@ class SqliteProjectionStore implements SqlQueryableStore {
       // keys this write just inserted.
       const writtenAt = new Date().toISOString();
       for (const key of contentKeys) this.#recordBlobKey.run(key, writtenAt);
-      evicted = this.#evictBlobKeysPastRetention();
+      evicted = this.#evictBlobKeysPastRetention(contentKeys.length);
     });
     // Outside the transaction, because SQLite refuses `incremental_vacuum`
     // inside one — the same arrangement, and the same reason, as `writeExtent`.
@@ -1251,10 +1411,19 @@ class SqliteProjectionStore implements SqlQueryableStore {
    * store no longer holds, and rows with no manifest row would be unevictable
    * for good.
    *
+   * ⛔ The offset is never less than the keys this write recorded. They hold the
+   * newest rowids, so an offset of the window alone cut the write's OWN oldest
+   * keys whenever one write named more keys than the window — and because the
+   * coverage check is all-or-nothing, a tree that size then missed on every run
+   * while paying for every write. The surplus is reclaimed by the next, smaller
+   * write.
+   *
+   * @param written - How many keys the calling write recorded
    * @returns How many keys were evicted
    */
-  #evictBlobKeysPastRetention(): number {
-    const victims = (this.#blobKeysPastRetention.all(this.#retainedBlobKeys) as {
+  #evictBlobKeysPastRetention(written: number): number {
+    const offset = Math.max(this.#retainedBlobKeys, written);
+    const victims = (this.#blobKeysPastRetention.all(offset) as {
       contentKey: string;
     }[]).map((row) => row.contentKey);
     if (victims.length === 0) return 0;
@@ -1300,7 +1469,7 @@ class SqliteProjectionStore implements SqlQueryableStore {
       // AFTER the manifest row, inside the same transaction. Before it, this
       // write's own tree would not yet be in the ordering and a retention of one
       // would evict the newest tree the store had — the one it is replacing.
-      evicted = this.#evictPastRetention(key.rootId);
+      evicted = this.#evictPastRetention(key.rootId) + this.#evictRootsPastRetention();
     });
     // Outside the transaction, because SQLite refuses `incremental_vacuum`
     // inside one, and only when something was actually freed — an ordinary
@@ -1311,11 +1480,10 @@ class SqliteProjectionStore implements SqlQueryableStore {
   /**
    * @inheritdoc
    *
-   * Prepared lazily rather than in the constructor, because the constructor is
-   * shared with the file-backed store whose schema has no derived relations to
-   * prepare against. The RUNTIME REFUSAL below keeps that store from reaching
-   * the write; the laziness keeps it from paying for statements it could never
-   * run.
+   * Each relation's table is created — and its statements prepared — by the
+   * first write that names it, never before: the absence of an unwritten
+   * relation is the query lane's refusal of it (see the interface). The RUNTIME
+   * REFUSAL below keeps the file-backed store from creating any.
    *
    * ⛔ Not "the type keeps that store from reaching this method" — that was the
    * claim this PR shipped in four places and it was false in all of them:
@@ -1323,11 +1491,11 @@ class SqliteProjectionStore implements SqlQueryableStore {
    * right there on a file-backed handle. Three copies were corrected and this
    * one, the closest to the code, was missed — which is the narrow-to-the-
    * instance fix the review keeps finding. See {@link SqliteProjectionStore.
-   * #hasDerivedTables}.
+   * #mayWriteDerived}.
    */
   async writeDerived(rows: DerivedRows): Promise<void> {
     this.#assertOpen();
-    if (!this.#hasDerivedTables) {
+    if (!this.#mayWriteDerived) {
       throw new Error(
         'This store has no derived relations, so a lens evaluation cannot be written to it.'
         + ' They exist only on the per-run in-memory store from `openEphemeralProjectionStore()`.'
@@ -1339,15 +1507,35 @@ class SqliteProjectionStore implements SqlQueryableStore {
       );
     }
     const bundle = rows as Record<string, readonly Record<string, unknown>[] | undefined>;
+    const knownBefore = new Set(this.#derivedPlans.keys());
+    try {
+      this.#writeDerivedRows(bundle);
+    } catch (error) {
+      // The rollback removed every table this write created; forget their plans
+      // too, or the next write would skip the `CREATE` and fail `no such table`.
+      for (const key of this.#derivedPlans.keys()) {
+        if (!knownBefore.has(key)) this.#derivedPlans.delete(key);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * `writeDerived`'s transaction: create, clear and fill each supplied relation.
+   *
+   * @param bundle - The rows, by registry key
+   */
+  #writeDerivedRows(bundle: Readonly<Record<string, readonly Record<string, unknown>[] | undefined>>): void {
     this.#transaction(() => {
-      for (const plan of this.#derivedPlans()) {
-        const supplied = bundle[plan.spec.key];
+      for (const spec of allDerivedSpecs()) {
+        const supplied = bundle[spec.key];
         // Omitted is not the same as empty: an omitted relation is one this
-        // evaluation has nothing to say about, and clearing it would be this
-        // method inventing a claim. An empty ARRAY does mean "no rows", and
-        // clears — which is why the two are distinguished here rather than
-        // collapsed with `?? []`.
+        // evaluation has nothing to say about, and clearing — or creating — it
+        // would be this method inventing a claim. An empty ARRAY does mean "no
+        // rows", and creates-then-clears — which is why the two are
+        // distinguished here rather than collapsed with `?? []`.
         if (supplied === undefined) continue;
+        const plan = this.#derivedPlanFor(spec);
         plan.clear.run();
         for (const row of supplied) {
           plan.insert.run(...plan.columns.map(([column, { kind }]) => encodeValue(kind, row[column])));
@@ -1357,21 +1545,28 @@ class SqliteProjectionStore implements SqlQueryableStore {
   }
 
   /**
-   * The derived relations' statements, prepared once and memoized.
+   * One derived relation's statements — creating its table on first use.
    *
-   * @returns One plan per derived relation, in registry order
+   * Called inside `writeDerived`'s transaction, so a write that fails rolls the
+   * `CREATE TABLE` back with its rows. 🪤 The memo is then ahead of the schema:
+   * it holds statements for a table the rollback removed. Dropped on failure for
+   * that reason, so the next write creates the table again.
+   *
+   * @param spec - The relation
+   * @returns Its plan
    */
-  #derivedPlans(): readonly DerivedPlan[] {
-    const cached = this.#derivedPlanCache;
+  #derivedPlanFor(spec: DerivedTableSpec): DerivedPlan {
+    const cached = this.#derivedPlans.get(spec.key);
     if (cached !== undefined) return cached;
-    const plans: readonly DerivedPlan[] = allDerivedSpecs().map((spec) => ({
+    this.#database.exec(createDerivedTableSql(spec));
+    const plan: DerivedPlan = {
       spec,
       columns: projectionColumnTypes(spec),
       insert: this.#database.prepare(insertDerivedSql(spec)),
       clear: this.#database.prepare(`DELETE FROM ${quoteIdentifier(spec.name)}`),
-    }));
-    this.#derivedPlanCache = plans;
-    return plans;
+    };
+    this.#derivedPlans.set(spec.key, plan);
+    return plan;
   }
 
   /** @inheritdoc */
@@ -1397,9 +1592,6 @@ class SqliteProjectionStore implements SqlQueryableStore {
   /** @inheritdoc */
   query(sql: string, ...parameters: readonly SqliteValue[]): readonly Record<string, unknown>[] {
     this.#assertOpen();
-    assertSingleStatement(sql);
-    assertIsQuery(sql);
-    assertParametersBound(sql, parameters);
 
     // 🪤 Read-only-ness is `PRAGMA query_only` and NOT an inspection of the
     // statement, because there is nothing useful to inspect: `StatementSync`
@@ -1440,42 +1632,12 @@ class SqliteProjectionStore implements SqlQueryableStore {
     // method on this store uses: leaving it read-only would turn the next
     // `writeExtent` into "attempt to write a readonly database" somewhere with
     // no query in sight.
-    this.#database.exec('PRAGMA query_only = 1');
-    try {
-      return this.#database.prepare(sql).all(...parameters) as readonly Record<string, unknown>[];
-    } finally {
-      // `query_only` FIRST, so a sweep that somehow throws still leaves the
-      // connection writable for `writeExtent`. The sweep is unconditional and
-      // costs one `PRAGMA database_list` per call — the alternative is trusting
-      // that the gate above is airtight on a path whose failure discloses every
-      // repository on the machine. See {@link detachForeignSchemas}.
-      this.#database.exec('PRAGMA query_only = 0');
-      detachForeignSchemas(this.#database);
-    }
-  }
-
-  /** @inheritdoc */
-  assertCompiles(sql: string, parameters: readonly SqliteValue[]): void {
-    this.#assertOpen();
-    assertSingleStatement(sql);
-    assertIsQuery(sql);
-    assertParametersBound(sql, parameters);
-
-    // `query_only` is set for the same reason {@link query} sets it, and NOT as
-    // ceremony: `prepare` is where SQLite decides a statement is legal, and a
-    // connection left writable would compile things this surface must never
-    // admit. The restore is in `finally` for the same reason too — this is the
-    // connection every other method uses.
-    this.#database.exec('PRAGMA query_only = 1');
-    try {
-      // Compiled and discarded. `.all()` is deliberately NOT called: stepping is
-      // the unbounded half, and the whole value of this method is being the half
-      // that is not.
-      this.#database.prepare(sql);
-    } finally {
-      this.#database.exec('PRAGMA query_only = 0');
-      detachForeignSchemas(this.#database);
-    }
+    return runGated(
+      this.#database,
+      sql,
+      parameters,
+      (statement) => statement.all(...parameters) as readonly Record<string, unknown>[],
+    );
   }
 
   /** @inheritdoc */
@@ -1553,14 +1715,41 @@ class SqliteProjectionStore implements SqlQueryableStore {
    * @returns How many trees were evicted
    */
   #evictPastRetention(rootId: string): number {
-    const victims = this.#extentsPastRetention.all(rootId, this.#retainedExtentsPerRoot) as {
-      storeTreeHash: string;
-    }[];
+    return this.#forgetTrees(rootId, this.#extentsPastRetention.all(rootId, this.#retainedExtentsPerRoot));
+  }
+
+  /**
+   * Drop every tree of every root past the machine-wide root window.
+   *
+   * Same transaction and same manifest-last ordering as
+   * {@link SqliteProjectionStore.#evictPastRetention}. The writing root cannot
+   * be selected: its manifest row was just recorded, so it is the newest root.
+   *
+   * @returns How many trees were evicted
+   */
+  #evictRootsPastRetention(): number {
+    const roots = this.#rootsPastRetention.all(this.#retainedRoots) as { storeRootId: string }[];
+    let evicted = 0;
+    for (const { storeRootId } of roots) {
+      evicted += this.#forgetTrees(storeRootId, this.#extentsPastRetention.all(storeRootId, 0));
+    }
+    return evicted;
+  }
+
+  /**
+   * Delete some of one root's trees, rows first and manifest row last.
+   *
+   * @param rootId - The root
+   * @param victims - The trees to forget
+   * @returns How many were forgotten
+   */
+  #forgetTrees(rootId: string, victims: readonly Record<string, unknown>[]): number {
     for (const victim of victims) {
+      const treeHash = String(victim['storeTreeHash']);
       for (const plan of this.#plansOfScope('extent')) {
-        plan.deleteExtent?.run(rootId, victim.storeTreeHash);
+        plan.deleteExtent?.run(rootId, treeHash);
       }
-      this.#forgetExtent.run(rootId, victim.storeTreeHash);
+      this.#forgetExtent.run(rootId, treeHash);
     }
     return victims.length;
   }

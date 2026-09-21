@@ -187,6 +187,8 @@ function filesystemAndClosure(): ContributorRegistry {
 
 /** What one population run is asked to do. */
 interface RunRequest {
+  /** What the cache reports when asked whether the tree still matches its key. Default true. */
+  readonly treeUnchanged?: boolean;
   /** The contributors to register. */
   readonly registry: ContributorRegistry;
   /** The store to cache through, or omitted to run with no cache at all. */
@@ -243,7 +245,13 @@ async function run(request: RunRequest): Promise<Run> {
     onBlobPopulation: DISCARD_BLOB_POPULATION,
     ...(request.store === undefined
       ? {}
-      : { cache: { store: request.store, treeHash: request.treeHash ?? TREE_HASH } }),
+      : {
+        cache: {
+          store: request.store,
+          treeHash: request.treeHash ?? TREE_HASH,
+          treeUnchanged: () => request.treeUnchanged ?? true,
+        },
+      }),
     ...(request.contentParsing === undefined ? {} : { contentParsing: request.contentParsing }),
     ...(request.gitTracker === undefined ? {} : { gitTracker: request.gitTracker }),
   });
@@ -523,6 +531,24 @@ describe('populate through a projection store', () => {
 
       expect(other.contributorRuns.length).toBeGreaterThan(0);
       expect(store.writeExtentCalls).toBe(2);
+    });
+
+    it('files NO extent when the tree moved while it was being derived', async () => {
+      // ⛔ The key is the hash taken when the run STARTED; the rows are what it
+      // READ. An edit landing between the two filed the edited rows under the
+      // unedited key, and once the edit was reverted every later run was served
+      // them — a wrong answer that outlived the edit that caused it.
+      const store = new FakeProjectionStore();
+      await run({ registry: filesystemAndClosure(), store, treeUnchanged: false });
+
+      expect(store.writeExtentCalls).toBe(0);
+
+      // Nothing was filed, so the same key is a miss rather than a stale hit.
+      const next = await run({ registry: filesystemAndClosure(), store });
+      expect(next.contributorRuns.length).toBeGreaterThan(0);
+      // The positive control: an unmoved tree files, so the zero above is the
+      // guard and not a store that never writes.
+      expect(store.writeExtentCalls).toBe(1);
     });
 
     it('misses when the run registered a contributor the stored extent never ran', async () => {

@@ -110,7 +110,6 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
-import { parserKindForPath } from '../../content-key.js';
 import {
   ExtentDeclarationSchema,
   type ExtentDeclaration,
@@ -235,6 +234,11 @@ interface WalkContext {
    * in this module's docstring true.
    */
   readonly refusalOf: (candidate: ResourceRealizationRow) => ExtentRefusalRule | undefined;
+  /**
+   * Does the walk go THROUGH this target? Compiled once from `traverseGlobs`;
+   * always true when the declaration names none.
+   */
+  readonly isDoor: (path: string) => boolean;
 }
 
 /**
@@ -341,6 +345,7 @@ export class ClosureExtentContributor implements ExtentContributor {
       byPath: realizationsByPathFor(base),
       byBlob: referencesByBlobFor(base),
       refusalOf: refusalMatcher(declaration, base),
+      isDoor: doorMatcher(declaration.traverseGlobs),
     });
 
     return { contexts: [context], ...walk };
@@ -615,6 +620,7 @@ export function closureProvenance(
     byBlob: referencesByBlobFor(partialBase),
     // Sound only under the guard above.
     refusalOf: () => undefined,
+    isDoor: doorMatcher(input.declaration.traverseGlobs),
   };
 
   const provenance = new Map<string, ImportProvenance>();
@@ -751,9 +757,8 @@ function hopFor(
   // nothing, so there is no hop for a limit to bound" — and charging it anyway
   // is what made a bounded closure disagree with the packager about the image
   // hanging off a document at the frontier. Declared, never assumed: a
-  // declaration that names no `traverseParserKinds` charges every target, which
-  // is what every declaration written before this field did.
-  if (!isTraversable(target, walk.declaration)) return [target.path, depth + 1, false];
+  // declaration that names no `traverseGlobs` charges every target.
+  if (!walk.isDoor(target.path)) return [target.path, depth + 1, false];
   // The depth bound is checked LAST, and after the refusal — the order is
   // `classifyExclusion`-before-`processRegistryResource`, which is the order
   // `walk-link-graph.ts` checks them in. It matters because both can apply to
@@ -768,20 +773,20 @@ function hopFor(
 }
 
 /**
- * Does this closure walk THROUGH this target, or is it cargo?
+ * Compile a declaration's door globs: which targets the walk goes THROUGH.
  *
- * Keyed on {@link parserKindForPath} rather than on an extension list of its
- * own, so VAT keeps ONE parser discriminator — the same reason
- * `walk-link-graph.ts`'s `isRoutable` is keyed on it. A format that gains a
- * parser gains a traversability answer in the same edit.
+ * ⛔ Globs, not parser kinds. The packager traverses REGISTRY members and its
+ * registry is a glob; `parserKindForPath` also calls `.txt`, `.markdown` and
+ * `README` markdown, so a kind-keyed rule walked through files the build ships
+ * unopened and admitted documents it never ships. `dot: true`, as the crawl
+ * that builds the registry uses.
  *
- * @param target - The resolved target's realization row
- * @param declaration - The extent declaration
- * @returns True when the walk may follow references out of the target
+ * @param globs - The declared door globs, or null for "every target"
+ * @returns A matcher over root-relative paths
  */
-function isTraversable(target: ResourceRealizationRow, declaration: ExtentDeclaration): boolean {
-  const kinds = declaration.traverseParserKinds;
-  return kinds === null || kinds.includes(parserKindForPath(target.path));
+function doorMatcher(globs: ExtentDeclaration['traverseGlobs']): (path: string) => boolean {
+  if (globs === null) return () => true;
+  return picomatch([...globs], { dot: true });
 }
 
 /**

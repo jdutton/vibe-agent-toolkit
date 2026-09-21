@@ -8,9 +8,9 @@ contributors ship and a whole-corpus population of this repository runs end to e
 is now ✅ partly built: `resolveEdges()` COMPUTES `edges` and `edge_resolutions` per lens, and
 `vat resources query` / `vat resources check` expose them — with `lens_contexts` — as derived
 relations over a per-run in-memory database. A second lens ships beside it: `claude_context_chains`
-and `claude_context_loads` compute the always-loaded instruction chain, which is what makes
-`vat claude budget` a default REPORT over selectable rows rather than the only way to ask its
-question. ⚠️ All five are computed, never materialised: nothing *populates* them and nothing
+and `claude_context_loads` compute the always-loaded instruction chain and publish it as rows — VAT
+ships no threshold or verdict of its own; an adopter checks them with their own `resources.checks`
+SQL, summing `tokens` `WHERE launchCharge = 'charged'`. ⚠️ All five are computed, never materialised: nothing *populates* them and nothing
 persists them, which is a different statement from "nothing implements them". ✅ **A lens is
 evaluated only when one of the statements a run DECLARED names one of its relations** — the
 claude-context lens runs a population of its own, so an unconditional evaluation would charge every
@@ -92,14 +92,23 @@ of cost, because it POPULATES (below), so the selection became mandatory rather 
 for the reason this section already gives: a lens is invented on demand to answer a question nobody
 anticipated, so a population cannot produce one — inventing it is the asking side's job.
 
-🚨 **The selector over-selects on purpose: a false negative is a wrong answer.** A lens evaluated
-needlessly costs time; a lens SKIPPED when its relation is named answers from an empty table, which
-is indistinguishable from a healthy tree — the "a check that cannot fail" drift class. So the scan
-strips comments and string literals and then matches whole identifiers (a CTE or alias sharing a
-relation's name still selects it, harmlessly); a caller that declares NO statements gets every lens,
-because "I cannot say what I will ask" must mean correct rows rather than cheap ones; and
-`unevaluatedRelationsNamed` lets the query lane REFUSE a statement reaching for a relation nothing
-evaluated. That refusal is what makes this an optimisation instead of a silent narrowing.
+🚨 **An unevaluated relation does not exist, so SQLite refuses it.** The per-run in-memory store
+creates a derived relation's table only when `writeDerived` is given rows for it (an empty array
+included — "evaluated, no rows" is a real answer). A statement naming a relation no lens filled
+therefore fails `no such table`, and the query lane's `describeQueryFailure` says why (for
+`vat resources check`, a `RESOURCE_CHECK_BROKEN` finding). That refusal is what makes this an
+optimisation instead of a silent narrowing — an empty table would answer `0` at exit 0, the "a check
+that cannot fail" drift class. ⚠️ It is deliberately the ENGINE's refusal, not a scan of the
+statement: an earlier guard re-ran the selector's own scanner, so it could never fire for a statement
+the selector had seen, and a spelling the scanner missed would have read the empty table. The
+statement pre-flight compiles against a separate compile-only probe that carries every derived
+relation, because it runs before any lens and cannot answer a query.
+
+The selector still over-selects on purpose, because a false negative now fails a run that had an
+answer: the scan strips comments and string literals and then matches whole identifiers (a CTE or
+alias sharing a relation's name still selects it, harmlessly), and a caller that declares NO
+statements gets every lens, because "I cannot say what I will ask" must mean correct rows rather
+than cheap ones.
 
 ⛔ Two lenses must never claim one relation: it would make "was it evaluated" unanswerable, and the
 second `writeDerived` would CLEAR the first's rows, since `writeDerived` replaces a relation's
@@ -123,19 +132,21 @@ projection STORE, so the second population is a store hit whenever this lane has
 the same tree before — a different question filed under its own key, not a competitor for the
 resources lane's entry.
 
-`claudeContextRelations` is the same function `sweepAlwaysLoadedBudgets` folds, so `vat claude
-budget`'s verdict and a statement over these relations are two readings of one row set. That is the
-point of materialising them: the verb is *a* default report, never the only way to ask.
+`claudeContextRelations` is the one function that produces these rows — nothing on VAT's own side
+folds them into a verdict, so a statement written against them is the only reading of the row set
+there is. That is the point of publishing them: a fact, never a threshold.
 
 #### The two claude-context relations, and the rules they carry
 
 `whatLoadsAt` answers "what loads here, and why" as a nested object graph reachable from exactly one
-place — a TypeScript caller holding a projection — so every question about it needed a new verb, and
-`vat claude budget` was the only way to ask any of them. **The standing ruling is that a verb is *a*
-default report over materialised facts, never the only way to ask**; removing the verb outright has
-to stay a live option. So the chain is flattened into `claude_context_chains` and
-`claude_context_loads` (`packages/resources/src/projection/claude-context-relations.ts`), reachable
-from `vat resources query` and `vat resources check` exactly as `edges` is.
+place — a TypeScript caller holding a projection — so every question about it once needed a new verb.
+`vat claude budget` was that verb. **The standing ruling was that a verb is *a* default report over
+materialised facts, never the only way to ask** — and removing the verb outright, rather than keeping
+it beside the relations, is exactly what happened: `vat claude budget` is gone, and the chain is
+flattened only into `claude_context_chains` and `claude_context_loads`
+(`packages/resources/src/projection/claude-context-relations.ts`), reachable from `vat resources
+query` and `vat resources check` exactly as `edges` is — VAT ships no threshold over them; an adopter
+writes their own `resources.checks` SQL.
 
 ⛔ **They are DERIVED, not materialised, and that is not a technicality.** Nothing populates them:
 they are the output of running `whatLoadsAt` once per instruction chain over a projection that
@@ -154,25 +165,16 @@ chain. `claude-context-regions.ts` owns the collapse.
 `unknown` — the representative is a path this projection never realized — the chain is omitted from
 both relations rather than emitted with an empty load list. An empty load list is a legitimate answer
 ("this chain loads nothing"), and conflating it with "VAT never looked" is the confident-zero failure
-this lane refuses everywhere else. `contextChains` reports such a chain with `loads: null` so
-`sweepAlwaysLoadedBudgets` can keep counting it, and `vat claude budget` keeps publishing that count
-as `skippedUnknownLocations`.
+this lane refuses everywhere else. `contextChains` reports such a chain with `loads: null` so a reader can tell the two apart;
+`vat claude context`'s own cost map counts these as `skippedUnknownLocations` in its printed summary
+(`packages/resources/src/projection/claude-context-cost-map.ts`).
 
-**The SQL twins are documentation, never executed.** `ALWAYS_LOADED_BUDGET_SQL_TWIN` and
-`ALWAYS_LOADED_CONTRIBUTORS_SQL_TWIN` exist so an adopter can copy the verb's own question into
-`resources.checks` and adapt it — a different threshold, a `WHERE chainId LIKE …`, a severity of
-their own — for the same reason `builtin-checks.ts` ships `sqlTwin` fields rather than SQL built-ins
-(a default-on rule written as SQL would make the query engine mandatory for everyone who inherits
-it).
-
-🪤 **The fan-out those statements are written to avoid:** `claude_context_chains` holds ONE ROW PER
-WORKING LOCATION, so the obvious `JOIN claude_context_chains ON chainId` multiplies every load row by
-the number of locations paying that chain — a chain paid by 366 directories would report 366× its
+🪤 **The fan-out a statement over these relations must avoid:** `claude_context_chains` holds ONE ROW
+PER WORKING LOCATION, so the obvious `JOIN claude_context_chains ON chainId` multiplies every load row
+by the number of locations paying that chain — a chain paid by 366 directories would report 366× its
 real cost, silently and plausibly. Totals are therefore computed in a subquery over
 `claude_context_loads` ALONE, and the chain relation is consulted only by correlated subqueries that
-aggregate or limit. ⛔ The threshold is interpolated from `DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS`
-rather than written as a literal: it is a MEASURED quantity, and a copy of it in a documentation
-string is a second source of truth that goes stale in silence.
+aggregate or limit.
 
 ### Lens identity factors in two
 
@@ -183,7 +185,7 @@ point**: same extent, same resolution semantics, same interpretation, same trave
 the ancestry chain. Keying edges on the instance stores identical resolutions once per directory,
 growing as `O(references × directories)`.
 
-The always-loaded budget is what makes the entry point worth a row at all. Measured with the shipped
+The always-loaded token cost is what makes the entry point worth a row at all. Measured with the shipped
 estimator (`estimateTokens`, `Math.ceil(chars / 4)` — `packages/resources/src/link-parser.ts:131`)
 over each directory's CLAUDE.md ancestry chain plus its transitive `@` imports, on 2026-08-13:
 
@@ -327,7 +329,7 @@ catch is the only place that collision is observable today. A contributor that w
 realization at an occupied path emits a **collision condition row** instead, so the diagnostic
 survives and no consumer resolving `(extentId, path)` gets a nondeterministic answer.
 
-### The `claude_rule_patterns` table — three statuses, one witness
+### The `claude_rule_patterns` table — four statuses, one witness
 
 One row per `paths:` glob of one `.claude/rules` file, and what it scopes in this tree
 (`packages/resources/src/schemas/projection-claude-rules.ts`).
@@ -341,14 +343,17 @@ rather than partitioned per context. It is nonetheless **extent-scoped**, not bl
 `witnessPath` and `status` are facts about a TREE — two corpora holding byte-identical rules files
 have different witnesses, and a blob-scoped row would serve one corpus's witness as the other's.
 
-🚨 **Why three statuses and not two.** `matched` and `inert` are the evaluated cases; `unevaluated`
+🚨 **Why four statuses and not two.** `matched` and `inert` are the evaluated cases; `unevaluated`
 means the matcher was NEVER RUN, because the rule's whole `paths:` list blew the vendor's shared
 expansion budget (`EXPANDED_PATTERN_BUDGET` / `PATTERN_BYTE_BUDGET` in `claude-context-rules.ts`) and
 the harness uses it unexpanded. A two-state column would have to read a null witness as inertness,
 and it is not: for an over-budget rule a null witness records a **refusal to evaluate**, and
 collapsing the two would report VAT's own declined work as a defect in the adopter's rule. That is
 the *"a guard that returns the reassuring value"* shape — refused reads as absent — and the fix is to
-make the refusal representable, not to widen what `inert` means.
+make the refusal representable, not to widen what `inert` means. `gitignored` is the same move for
+the other thing VAT declines: the glob matched no file VAT can see and its territory is gitignored,
+which VAT never realizes while Claude Code reads the filesystem — so no verdict is given, and the
+built-in check reports `inert` alone.
 
 🚨 **Why a witness and not a `matchCount`.** Counting every path a pattern matches is O(files) **per
 pattern**, and the shipped prune stops at the FIRST hit: `firstMatchUnder` compiles the matcher once,
@@ -873,7 +878,7 @@ extents:
     closureFrom: skills/foo/SKILL.md     # root-relative; admitted before any traversal
     follow: [markdown-link, markdown-link-reference, markdown-definition]   # default
     maxDepth: 2                          # number of hops, or "full"
-    traverseParserKinds: [markdown]      # doors; any other target is a LEAF (see below). null = all
+    traverseGlobs: ['**/*.md']           # doors; any other target is a LEAF (see below). null = all; [] refused
     refusals:                            # ORDERED cascade — first match wins
       - label: DIRECTORY_TARGET          # opaque to the primitive; reported as the condition code
         kinds: ['directory']             # resources.kind values
@@ -925,7 +930,7 @@ not is listed below, and each unexpressible row names the oracle it would need:
 |---|---|
 | `linkFollowDepth` *membership* | **expressible** — same union, same off-by-one |
 | `depth-exceeded` *the REASON* | **expressible** — `maxDepth` bounds ADMISSION, not ENUMERATION: a member sitting at the bound still has its references resolved and judged, and one only the budget turns away becomes a `CLOSURE_DEPTH_EXCEEDED` condition carrying the same provenance a refusal does. The primitive's own verdict rather than a `refusals` label, so `matchedPattern` is null — which is what the walker's row says too (`makeExclusion` attaches `matchedRule` only for `pattern-matched`) |
-| `isRoutable` — a LEAF vs a door | **expressible** — `traverseParserKinds: [markdown]` *is* `isRoutable` (both read `parserKindForPath`). A target routing to any other kind is admitted as a member, **not** charged against `maxDepth`, and never traversed through, which is the walker's own order: it tests routability BEFORE its depth check and reaches its plain-asset branch with no depth test at all. Checked after the refusal cascade on both arms, so an excluded asset stays excluded |
+| registry membership — a LEAF vs a door | **expressible** — `traverseGlobs: ['**/*.md']`, the glob the build's registry crawls (`LINK_GRAPH_MEMBER_GLOBS`, one constant for both). The walker opens a target only when it is a registry member; a parser-kind rule is WIDER, because `.txt`, `.markdown` and `README` parse as markdown yet ship unopened, and keyed that way the closure admitted documents behind them that no build ships. A target matching no door glob is admitted as a member, **not** charged against `maxDepth`, and never traversed through, which is the walker's own order: it tests routability BEFORE its depth check and reaches its plain-asset branch with no depth test at all. Checked after the refusal cascade on both arms, so an excluded asset stays excluded |
 | `excludeReferencesFromBundle` *membership* | **expressible** — first-match-wins and any-match select the identical file set, so a flat union of every rule's patterns in one refusal rule is exact |
 | `excludeNavigationFiles` | **expressible** — a refusal rule over the navigation basename set, gated on the knob exactly as `classifyExclusion` gates its branch |
 | `agent-instruction-file` *membership* | **expressible** — a refusal rule over the agent-instruction basename set, unconditionally (that branch is deliberately not gated on the navigation knob), and the explicit-`files:` escape hatch becomes `admitPaths` |
@@ -978,7 +983,9 @@ closing it in the code.*
 >
 > The walker won, because it is the packager and its behaviour is the deliberate one a leaf deserves:
 > *bundling a leaf enqueues nothing, so there is no hop for a budget to bound.* The closure gained the
-> verdict it was short of — `traverseParserKinds` — rather than the test gaining an exception. Note
+> verdict it was short of — first as `traverseParserKinds`, which fixed the depth half and opened an
+> over-report on `.txt`-shaped cargo, then as `traverseGlobs` over the registry's own glob — rather than
+> the test gaining an exception. Note
 > which way that goes: the anomaly was recorded against the WALKER, and the resolution changed the
 > CLOSURE. "Observed, not yet filed" is where a divergence waits for a corpus that can see it.
 

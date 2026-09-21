@@ -4,12 +4,12 @@ Which of VAT's commands read the filesystem to build a resource population, and 
 entry point. This exists to replace the standing claim *"~70 commands, 5 examined"* with a bounded
 list, so any change to enumeration knows exactly whose behaviour it must preserve.
 
-**Population: 72 commands** — 71 leaves plus `vat audit`, the only command group that is also
+**Population: 71 commands** — 70 leaves plus `vat audit`, the only command group that is also
 runnable in its own right (`vat audit [git-url-or-path]` alongside its `settings` subcommand).
 The population is re-derived from the built CLI by the method at the end of this page; do not
 correct the count by hand — re-run the recursion and replace the list.
 
-**25 enumerate. 47 do not.**
+**24 enumerate. 47 do not.**
 
 ## The enumeration entry points
 
@@ -62,21 +62,22 @@ sources, and neither is a clean fifth sink:
 
 Either way the command reports the enumerator that RAN, not the one the environment asked for. So a
 projection row's `crawl` mark is true but partial: it names a sink the lane can reach, not the
-enumerator doing the work. **Nine rows carry a projection**, each by default unless its escape hatch
+enumerator doing the work. **Eight rows carry a projection**, each by default unless its escape hatch
 is set: `vat resources scan`, `vat resources validate` and `vat rag index` through
 `packages/cli/src/utils/resource-loader.ts › loadResourcesWithConfig()`; `vat skills validate`,
 `vat skills build` and `vat claude plugin build` for their link registries through
 `› withResourcePopulationSource()` — both gated by `› resourcesProjectionCrawlSelected()`, which is
-`!== 'walk'`; `vat inventory` on a plugin directory; and `vat claude context` and `vat claude budget`,
-neither of which has a walk arm at all. Four more inherit one: `vat build`, `vat validate` and
+`!== 'walk'`; `vat inventory` on a plugin directory; and `vat claude context`, which has no walk
+arm at all. Four more inherit one: `vat build`, `vat validate` and
 `vat verify` through the phases they spawn, and `vat skill test run` by re-entering
 `vat claude plugin build`.
 
-No command carries two projections in one process: `vat claude budget` owns the always-loaded
-context-budget check that `vat resources validate` used to run beside its resource population. The
-two populations answer different questions (*what files are here* versus *what does the harness
-load*) and derive differently (the resource population skips content keying and the blob stage; the
-context population needs both), which is why they were never merged into one.
+No command carries two projections in one process: `vat claude context` populates the claude-context
+lens that `vat resources validate` used to also populate, beside its resource population, for a
+default-on context-budget check now removed entirely. The two populations answer different questions
+(*what files are here* versus *what does the harness load*) and derive differently (the resource
+population skips content keying and the blob stage; the context population needs both), which is why
+they were never merged into one.
 `docs/architecture/command-population-matrix.md` §2–§5 is the accounting for the projection lane and
 those other routes — their selectors, extents and content stages; this table is deliberately not a
 second copy of it, and records only which enumeration entry point a command's route reaches.
@@ -106,17 +107,16 @@ process" — a cross-process cache is the only kind that can help them.
 | `vat resources check` | `crawl`, *in a spawned child* | `resources/check.ts` — one population, same lane as `resources query`; both reach it through `packages/cli/src/utils/projection-query.ts › withQueriedProjection()`. With a `--budget` (the default), the crawl happens in a CHILD process: the parent spawns `dist/bin.js resources check … --cost-log <path>` and enumerates nothing itself, so it can kill a run that stops making progress (a check's SQL is adopter-authored and a runaway statement cannot be interrupted in process). `--budget 0` keeps everything in one process. It spawns ITSELF, exactly once, and its lane is unchanged |
 | `vat resources query` | `crawl` | `resources/query.ts` — one population, via `packages/resources/src/projection/resource-population.ts › buildResourceProjection()`. Same registry and same `DECLINE_IGNORED` parameter set as `resources scan`/`validate`, with content parsing ON. ⚠️ Its ROW SET is a strict superset of what `scan`/`validate` see: those post-filter directories, non-existent rows and gitignored rows out of the population, so `SELECT COUNT(*) FROM resource_realizations` counts directories a validate run never looks at |
 | `vat resources scan` | `crawl` | `resources/scan.ts` |
-| `vat resources validate` | `crawl` ×1 | `resources/validate.ts` — one crawl, for the resource population, via `loadResourcesWithConfig()`. It has no knowledge of the context budget: no check, no flag in either direction (that lives in `vat claude budget`) |
+| `vat resources validate` | `crawl` ×1 | `resources/validate.ts` — one crawl, for the resource population, via `loadResourcesWithConfig()`. It has no knowledge of the context budget: no check, no flag in either direction, and no other command carries one either — VAT ships no default-on context-budget check at all |
 | `vat skills list` | `crawl`, or `raw-readdir` under `--user` | `skills/list.ts` — project mode goes through the discovery package's `scan`; `--user` mode is `› scanSkillsDir()`'s own `readdirSync` over `~/.claude/skills` |
 | `vat rag index` | `crawl` | `rag/index-command.ts` |
 | `vat claude context [paths...]` | `crawl` ×1 | `claude/context.ts` → `buildClaudeContextPopulation` → `› sharedEnumeration()` → `crawlSourceFor` → `GitCrawlSource` **by default**, or `FilesystemCrawlSource` → `crawlDirectory`. Two `populate()` passes, ONE crawl: both `FilesystemExtentContributor` registrations are handed the same enumeration |
-| `vat claude budget [paths...]` | `crawl` ×1 | `claude/budget.ts` → the same route, the same double `populate()` and the same single crawl as `vat claude context`. SAME lane, SAME population; only the question differs — `context` reports what one path loads, `budget` sweeps every working location and applies a threshold (`packages/resources/src/projection/claude-context-budget-sweep.ts › sweepAlwaysLoadedBudgets()`) |
 | `vat inventory [path]` | `crawl`, **or** the projection's `filesystem` extent on a plugin directory (the default there) | `inventory.ts` → `routeInventory()`; the walk at `packages/claude-marketplace/src/inventory/extract-skill.ts › crawlSkillLinkRegistry()` → `crawlDirectory`; the projection at `inventory.ts › populationProviderFor()` → `buildInventoryPopulation` → `FilesystemExtentContributor` → `crawlSourceFor` → `crawlDirectory` or `GitCrawlSource`. Two extractors also `readdir` trees of their own (`extract-plugin.ts`, three sites; `extract-install.ts`) — `raw-readdir` |
 | `vat claude marketplace validate` | `crawl` + `raw-readdir` | `claude/marketplace/validate.ts` — `readdirSync` over `plugins/` and each plugin's `skills/` (`› listPluginDirs`, the skill-entry loop), then the packaging validator's registry crawl per skill |
 | `vat claude org skills install` | `raw-readdir` | `claude/org/skills.ts › collectFiles()` — recursively `readdirSync`s the skill directory (or the `dist/skills/` of a downloaded npm package, found through `› listNodeModulePackages()` / `› findSkillsDir()`) and **uploads those bytes**. Not `crawlDirectory`: the walk has no gitignore awareness, so an untracked file in the source directory ships |
 | `vat claude org skills versions add` | `raw-readdir` | `claude/org/skills.ts` — the same `collectFiles()` walk and the same consequence as `install`; only the id is given rather than minted |
 
-`vat claude context` and `vat claude budget` each **populate** twice, and that doubling is
+`vat claude context` **populates** twice, and that doubling is
 structural rather than incidental: `ContributorRegistry` keys on `id` and partitions on `kind`
 before any `contribute` runs, so `discoverImportRoots` must run once — under `CONTENT_PARSING_SKIP`,
 with `'deferred'` content, reading no bytes — purely to name the `@`-import contributors the real

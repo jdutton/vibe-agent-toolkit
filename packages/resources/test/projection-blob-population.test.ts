@@ -472,8 +472,13 @@ describe('populateBlobs', () => {
     expect(projection.blobs).toHaveLength(1);
     const conditions = projection.blobConditions.filter((row) => row.code === BLOB_NOT_TEXT);
     expect(conditions).toHaveLength(1);
-    expect(conditions[0]?.message).toContain('archive.md');
+    // Path-free: the row lives in a content-addressed tier shared across roots.
+    // The file is reached through the key instead.
+    expect(conditions[0]?.message).not.toContain('archive.md');
     expect(conditions[0]?.message).not.toContain(suite.tempDir);
+    const archive = projection.resourceRealizations.find((row) => row.path === 'archive.md');
+    expect(archive?.contentKey).toBeDefined();
+    expect(conditions[0]?.blob).toBe(archive?.contentKey);
   });
 
   it('derives a text file with no extension, so the refusal is about bytes and not names', async () => {
@@ -743,7 +748,7 @@ describe('populateBlobs, over blobs no document parser routes to', () => {
   it('gives it a blobs row with a real token estimate, rather than refusing it', async () => {
     // The whole reason `none` is a third shape and not a fourth refusal. With no
     // `blobs` row there is no `tokenEstimate`, `whatLoadsAt` reports
-    // `tokens: null`, and `chargeOf` answers `unknown-size` — a live accounting
+    // `tokens: null`, and `sizeCliffOf` answers `unmeasured` — a live accounting
     // state that would appear the moment a CLAUDE.md imports a `.ts` file.
     const { projection, unparsedKey } = await deriveBothRoutes();
     const row = projection.blobs.find((blob) => blob.contentKey === unparsedKey);

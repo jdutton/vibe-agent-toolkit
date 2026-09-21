@@ -73,10 +73,14 @@ export {
 // contention — see `store.ts`. The ephemeral variant answers the same schema
 // with no file at all, so a query does not depend on a cache being there; it
 // deliberately skips every one of those pragmas, which are all file properties.
+// The compile probe is the one place every derived relation exists without a
+// lens having filled it, which is why it can compile and cannot answer.
 export {
+  type ProjectionCompileProbe,
   type SqlQueryableStore,
   type SqliteStoreOptions,
   defaultStoreDirectory,
   openEphemeralProjectionStore,
+  openProjectionCompileProbe,
   openSqliteProjectionStore,
 } from './store.js';

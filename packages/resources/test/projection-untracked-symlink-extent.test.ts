@@ -12,7 +12,7 @@
  * links are all committed therefore exercises one lane and reads as if it had
  * covered the mechanism, which is precisely how the untracked lane came to emit
  * symlinks under a docstring in four files, and one published `vat claude
- * budget` limit, all saying that no lane does.
+ * context` limit, all saying that no lane does.
  *
  * So the two links here are planted AFTER the fixture's commit and never staged,
  * and the controls prove that rather than assuming it — the staged listing must
@@ -35,7 +35,7 @@
  * the same `contentKey` while minting two identities — `canonicalPathFor` takes
  * git's spelling for anything `git ls-files --cached --others` lists, and never
  * reaches its `realpath` fallback. Two identities over one set of bytes is a
- * budget that charges those bytes twice, which is the direction that makes a
+ * launch total that charges those bytes twice, which is the direction that makes a
  * reader cut context they did not need to cut. The last test states that as a
  * property over the whole contribution rather than as a fact about these two
  * paths, so a future source that mints a third such pair reddens here.
@@ -171,7 +171,7 @@ describe.skipIf(!symlinkCapability())('crawl sources — an UNTRACKED symlink on
 
     // A symlink realizes its TARGET's bytes under its OWN identity, so a link
     // that slipped into the population makes one set of bytes billable twice —
-    // an over-report in `vat claude budget`, the direction that makes a reader
+    // an over-report in `vat claude context`, the direction that makes a reader
     // cut context they did not have to cut.
     expect(shared).toEqual([]);
   });

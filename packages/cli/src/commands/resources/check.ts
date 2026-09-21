@@ -35,6 +35,8 @@ import {
   bindBuiltinChecks,
   BUILTIN_CHECK_NAMES,
   issuesFromCheckRows,
+  LIMIT_DIRECTIONS,
+  type StatedLimit,
   type BoundBuiltinCheck,
   type ResourceCheck,
 } from '@vibe-agent-toolkit/resources';
@@ -64,6 +66,7 @@ import {
   type PopulationExtent,
   type ProjectionProvenance,
 } from '../../utils/projection-query.js';
+import { relationBoundsFor } from '../../utils/relation-limits.js';
 import { nothingCheckedFinding, runIntegrityFinding } from '../../utils/run-integrity.js';
 
 import {
@@ -171,6 +174,40 @@ const PublishedCheckCostSchema = z.object({
 }).strict();
 
 /**
+ * The published copy of {@link relationBoundsFor}'s answer.
+ *
+ * The registry lists are `readonly` and this document is handed to a serializer,
+ * so the arrays are copied rather than referenced — the same rule
+ * `lensesEvaluated` follows one field above: a published document owns no
+ * reference into the run's own state.
+ *
+ * @param lensesEvaluated - The lenses this run evaluated
+ * @returns The bounds keys to spread, or nothing
+ */
+function structuredBounds(lensesEvaluated: readonly string[]): {
+  boundsStatement?: string;
+  limits?: { id: string; direction: StatedLimit['direction']; statement: string }[];
+} {
+  const bounds = relationBoundsFor(lensesEvaluated);
+  if (bounds.boundsStatement === undefined || bounds.limits === undefined) return {};
+  return { boundsStatement: bounds.boundsStatement, limits: bounds.limits.map((limit) => ({ ...limit })) };
+}
+
+/**
+ * A signed bound on what the derived rows settle, as `@vibe-agent-toolkit/resources`
+ * states it.
+ *
+ * ⛔ The direction vocabulary is IMPORTED, never respelled: `LIMIT_DIRECTIONS`
+ * is the one list, tied to `StatedLimit['direction']` by `satisfies`, so a
+ * fifth direction cannot leave this schema quietly rejecting it.
+ */
+const StatedLimitSchema = z.object({
+  id: z.string(),
+  direction: z.enum(LIMIT_DIRECTIONS),
+  statement: z.string(),
+}).strict();
+
+/**
  * What the check run reports beyond its findings.
  *
  * The envelope's `examined` is `membersEnumerated` — what the rules ran
@@ -194,6 +231,18 @@ export const CheckDataSchema = z.object({
    * a gate that cannot fail.
    */
   lensesEvaluated: z.array(z.string()),
+  /**
+   * The prose frame {@link CheckDataSchema.limits} is read under. Present
+   * exactly when a lens with stated bounds was evaluated.
+   */
+  boundsStatement: z.string().optional(),
+  /**
+   * What the derived rows this run could read do NOT settle — signed and
+   * directional, the same list `vat claude context` publishes beside its own
+   * answer. Absent when no bounded lens ran: an empty list would claim nothing
+   * bounds the answer, which is stronger than "the answer holds no such row".
+   */
+  limits: z.array(StatedLimitSchema).optional(),
   /** The number of rules that EXECUTED. Derived from `checks`, never carried beside it. */
   checksRun: z.number().int().nonnegative(),
   /** What each rule cost, directly under the denominator it is the breakdown of. */
@@ -330,6 +379,12 @@ export function buildCheckOutputData(input: CheckPayloadInput): CheckReport {
       // into a plain array so the published document owns no reference into the
       // run's own state.
       lensesEvaluated: [...input.lensesEvaluated],
+      // The bounds of the rows those lenses produced, stated ONCE and only when
+      // a bounded lens ran. This is the verb an adopter makes GATE, so it is the
+      // one that most owes them — `utils/relation-limits.ts` carries why.
+      // Copied out of the readonly registry lists: the published document owns
+      // no reference into module state a later render could mutate.
+      ...structuredBounds(input.lensesEvaluated),
       // The denominator of rules. Derived from `checks`, never carried beside it.
       checksRun: input.costs.length,
       // What each rule cost, directly under the denominator it is a breakdown

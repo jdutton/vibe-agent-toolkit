@@ -36,7 +36,7 @@ import {
   isFilesystemAccessError,
   normalizedTmpdir,
   safePath,
-  toForwardSlash,
+  toForwardSlashAnyPlatform,
 } from '@vibe-agent-toolkit/utils';
 // Type-only: the runtime import stays lazy inside `inspectZipArchive`, so the
 // archive reader is loaded on the one path that parses an archive.
@@ -369,8 +369,8 @@ function bundleRelativeName(filename: string, bundleRoot: string | undefined): s
 	// `safePath.relative`, so they are already forward-slashed — but a prefix test
 	// that only holds because of where its inputs came from is one refactor from
 	// silently never matching on Windows.
-	const name = toForwardSlash(filename);
-	const prefix = `${toForwardSlash(bundleRoot)}/`;
+	const name = toForwardSlashAnyPlatform(filename);
+	const prefix = `${toForwardSlashAnyPlatform(bundleRoot)}/`;
 	return name.startsWith(prefix) ? name.slice(prefix.length) : name;
 }
 
@@ -614,7 +614,7 @@ async function sendUpload<T>(
  */
 export function resolveSourceArgument(source: string): string {
 	return isAbsoluteAnyPlatform(source)
-		? toForwardSlash(source)
+		? toForwardSlashAnyPlatform(source)
 		: safePath.resolve(process.cwd(), source);
 }
 
@@ -760,7 +760,7 @@ export async function inspectZipArchive(zipPath: string): Promise<ZipInspection 
 	const files = entries.filter(entry => !entry.isDirectory);
 	const uncompressedBytes = files.reduce((sum, entry) => sum + entry.header.size, 0);
 	const neverUploaded = files
-		.map(entry => toForwardSlash(entry.entryName))
+		.map(entry => toForwardSlashAnyPlatform(entry.entryName))
 		.filter(name => name.split('/').some(segment => NEVER_UPLOADED_DIR_NAMES.has(segment)));
 
 	// PASS 2 — the entries worth inflating, and only once the total says this
@@ -808,7 +808,7 @@ function describeZipFailure(error: unknown): string {
 function inflateMarkdownMembers(files: readonly ZipEntry[], unreadable: ZipEntryFailure[]): MultipartFile[] {
 	const documents: MultipartFile[] = [];
 	for (const entry of files) {
-		const filename = toForwardSlash(entry.entryName);
+		const filename = toForwardSlashAnyPlatform(entry.entryName);
 		if (!filename.toLowerCase().endsWith('.md')) continue;
 		if (entry.header.size > MAX_INSPECTED_DOCUMENT_BYTES) continue;
 		const content = inflateOrRecord(entry, unreadable);
@@ -833,7 +833,7 @@ function inflateOrRecord(entry: ZipEntry, unreadable: ZipEntryFailure[]): Buffer
 	} catch (error) {
 		// Once per member: the elected SKILL.md is asked for twice (its name, then
 		// its text), and one refusal is one fact.
-		const name = toForwardSlash(entry.entryName);
+		const name = toForwardSlashAnyPlatform(entry.entryName);
 		if (!unreadable.some((failure) => failure.entry === name)) {
 			unreadable.push({ entry: name, reason: describeZipFailure(error) });
 		}
@@ -851,7 +851,7 @@ function inflateOrRecord(entry: ZipEntry, unreadable: ZipEntryFailure[]): Buffer
  */
 function archiveRootOf(entryName: string | undefined): string | undefined {
 	if (entryName === undefined) return undefined;
-	const cut = toForwardSlash(entryName).lastIndexOf('/');
+	const cut = toForwardSlashAnyPlatform(entryName).lastIndexOf('/');
 	return cut === -1 ? undefined : entryName.slice(0, cut);
 }
 

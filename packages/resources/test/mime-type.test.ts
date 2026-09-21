@@ -1,3 +1,5 @@
+import { sep } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { mimeTypeForPath, parserKindForMimeType } from '../src/mime-type.js';
@@ -182,7 +184,8 @@ describe('mimeTypeForPath — extension casing and multiple dots', () => {
   });
 });
 
-describe('mimeTypeForPath — Windows-style paths', () => {
+// Gated: the input is a NATIVE path, and a backslash is a separator only on win32 (a filename character on POSIX).
+describe.skipIf(sep !== '\\')('mimeTypeForPath — Windows-style paths', () => {
   // CI runs on Windows. A backslash-separated path must yield the same answer as
   // its forward-slash twin, including for the extensionless basename rule where a
   // naive POSIX basename() would hand back the whole `C:\...\README` string.

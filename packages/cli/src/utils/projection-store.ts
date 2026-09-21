@@ -50,7 +50,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
 import type { PopulationCache, ProjectionStore } from '@vibe-agent-toolkit/resources';
 import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
-import { gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
+import { freshGitTreeSnapshot, gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
 import { isModuleMissing, reportMissingBackend, type OptionalBackend } from './optional-backend.js';
 import { installSqliteWarningFilter } from './sqlite-experimental-warning.js';
@@ -234,9 +234,9 @@ export interface OpenedPopulationCache {
  *
  * Returns `undefined` when no store is selected, and when the tree cannot be
  * keyed — the two "carry on without a cache" answers. It does **not** return
- * `undefined` for an uninstalled backend: a user who set the selector asked for
- * a store, and answering that request by silently not having one is how an
- * opted-in cache becomes an unmeasured one.
+ * `undefined` for an uninstalled backend: the store is on unless a user turned it
+ * off, and answering that by silently not having one is how a default-on cache
+ * becomes an unmeasured one.
  *
  * @param options - Where the corpus is
  * @param options.root - The absolute corpus root. Used to find the repository;
@@ -254,17 +254,24 @@ export async function openPopulationCache(options: {
   // snapshot of an initialized repository stays distinguishable from it.
   const snapshot = gitTreeSnapshot({ cwd: options.root });
   if (snapshot === null) {
+    // Not "the selector is set": the store is on by default, so most users who
+    // see this never wrote the variable.
     process.stderr.write(
-      `${PROJECTION_STORE_ENV} is set, but ${options.root} is not inside a readable git`
+      `The projection store is on, but ${options.root} is not inside a readable git`
       + ' repository, so there is no deterministic key to store a projection under.'
-      + ' Populating without a cache.\n',
+      + ` Populating without a cache. Set ${PROJECTION_STORE_ENV}=${PROJECTION_STORE_OFF} to silence this.\n`,
     );
     return undefined;
   }
 
   const store = await loadStore();
+  const cwd = options.root;
   return {
-    cache: { store, treeHash: snapshot.hash },
+    cache: {
+      store,
+      treeHash: snapshot.hash,
+      treeUnchanged: () => freshGitTreeSnapshot({ cwd })?.hash === snapshot.hash,
+    },
     close: () => store.close(),
   };
 }
@@ -311,6 +318,19 @@ async function loadStore(): Promise<ProjectionStore> {
  */
 export async function openEphemeralQueryStore(): Promise<ProjectionSqlite.SqlQueryableStore> {
   return (await loadBackend()).openEphemeralProjectionStore();
+}
+
+/**
+ * Open a compile-only probe over the full queryable schema, derived relations
+ * included — for checking statements BEFORE any population or lens has run.
+ *
+ * ⚠️ Not {@link openEphemeralQueryStore}: that store has no table for a derived
+ * relation until a lens fills it, which is how an unevaluated one is refused.
+ *
+ * @returns An open probe; close it when done
+ */
+export async function openCompileProbe(): Promise<ProjectionSqlite.ProjectionCompileProbe> {
+  return (await loadBackend()).openProjectionCompileProbe();
 }
 
 /**

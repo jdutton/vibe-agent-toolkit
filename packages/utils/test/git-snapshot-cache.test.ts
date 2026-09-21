@@ -63,7 +63,7 @@ vi.mock('@vibe-validate/git', async (importOriginal) => {
   };
 });
 
-const { gitTreeSnapshot, withGitSnapshotCache } = await import('../src/git-snapshot.js');
+const { freshGitTreeSnapshot, gitTreeSnapshot, withGitSnapshotCache } = await import('../src/git-snapshot.js');
 
 const created: string[] = [];
 
@@ -192,6 +192,25 @@ describe('withGitSnapshotCache', () => {
     // the assertion above is about the bracket rather than about git.
     const reread = gitTreeSnapshot({ cwd: root });
     expect(reread?.entries.some((e) => e.absolutePath.endsWith(LATE_ARRIVAL))).toBe(true);
+  });
+
+  it('offers a FRESH snapshot inside a bracket, which is how a caller checks the memo still holds', () => {
+    // ⛔ The bracket makes the key and the crawl agree with EACH OTHER. It cannot
+    // make them agree with the files read afterwards: an edit landing mid-run is
+    // read by the population and filed under the pre-edit key. Only a snapshot
+    // the memo does not answer can tell the two apart.
+    const { root } = makeRepo();
+
+    const [memoized, fresh, memoizedAgain] = withGitSnapshotCache(() => {
+      const first = gitTreeSnapshot({ cwd: root });
+      writeFileSync(safePath.join(root, LATE_ARRIVAL), '# late\n');
+      return [first, freshGitTreeSnapshot({ cwd: root }), gitTreeSnapshot({ cwd: root })];
+    });
+
+    expect(fresh?.hash).not.toBe(memoized?.hash);
+    // The fresh call neither read nor replaced the bracket's answer.
+    expect(memoizedAgain).toBe(memoized);
+    expect(git.calls).toBe(2);
   });
 
   it('caches the "git could not answer" result too, so a failure is paid for once', () => {

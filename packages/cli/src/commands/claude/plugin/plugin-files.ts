@@ -14,7 +14,7 @@ import { copyFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
-import { issueLocation, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { issueLocation, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 export interface ApplyPluginFilesArgs {
   projectRoot: string;
@@ -24,7 +24,7 @@ export interface ApplyPluginFilesArgs {
 }
 
 function validateDest(rawDest: string, pluginOutputDir: string): string {
-  const normalized = toForwardSlash(rawDest);
+  const normalized = toForwardSlashAnyPlatform(rawDest);
   if (normalized.startsWith('/')) {
     throw new Error(`plugin files[].dest must be relative; got absolute path: ${rawDest}`);
   }
@@ -67,7 +67,7 @@ export async function applyPluginFiles(args: ApplyPluginFilesArgs): Promise<void
     const destAbs = validateDest(entry.dest, pluginOutputDir);
 
     if (existsSync(destAbs) && info) {
-      info(`plugin files[]: overwriting existing ${toForwardSlash(entry.dest)}`);
+      info(`plugin files[]: overwriting existing ${toForwardSlashAnyPlatform(entry.dest)}`);
     }
 
     await mkdir(dirname(destAbs), { recursive: true });

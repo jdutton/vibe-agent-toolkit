@@ -1,16 +1,32 @@
 /**
- * ESLint rule to enforce using toForwardSlash() instead of manual normalization
+ * ESLint rule to enforce the forward-slash converters instead of hand-rolled
+ * normalization.
  *
- * Detects manual path normalization patterns and suggests using the utility function.
+ * Two converters, because a backslash means two different things:
+ *
+ * - `toForwardSlash(p)` — a NATIVE path (from `fs`, `path.*`, git). Converts
+ *   only where the host's separator is a backslash; on POSIX a backslash is a
+ *   filename character and is kept. `split(path.sep).join('/')` is exactly
+ *   this, so it autofixes here.
+ * - `toForwardSlashAnyPlatform(text)` — AUTHOR-WRITTEN text (an href, a glob, a
+ *   config value, an archive entry name). Converts every backslash on every
+ *   host. A literal-backslash `split('\\').join('/')`, `replaceAll('\\', '/')`
+ *   or `replace(/\\/g, '/')` is exactly this, so each autofixes here — never to
+ *   `toForwardSlash`, which would silently stop converting on POSIX.
+ *
+ * Whether a given literal-backslash site is really author text is the author's
+ * call; the fix preserves behaviour, and a native-path site should then be
+ * switched to `toForwardSlash` by hand.
  *
  * @example
  * // ❌ BAD - manual normalization
- * const normalized = relativePath.split(path.sep).join('/');
- * const normalized = somePath.split('\\').join('/');
+ * const a = relativePath.split(path.sep).join('/');
+ * const b = href.replaceAll('\\', '/');
  *
- * // ✅ GOOD - use utility function
- * import { toForwardSlash } from '@vibe-agent-toolkit/utils/path';
- * const normalized = toForwardSlash(relativePath);
+ * // ✅ GOOD - use the utility functions
+ * import { toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils/path';
+ * const a = toForwardSlash(relativePath);
+ * const b = toForwardSlashAnyPlatform(href);
  */
 
 const {
@@ -26,8 +42,62 @@ const {
   resolveSafeModule,
 } = require('./safe-import.cjs');
 
-const SAFE_FN = 'toForwardSlash';
+const NATIVE_FN = 'toForwardSlash';
+const ANY_PLATFORM_FN = 'toForwardSlashAnyPlatform';
+const MESSAGE_FOR = { [NATIVE_FN]: 'useToForwardSlash', [ANY_PLATFORM_FN]: 'useToForwardSlashAnyPlatform' };
 const PATH_MODULES = new Set(['node:path', 'path']);
+const BACKSLASH = '\\';
+
+/** `.name(...)` on some receiver, with exactly `arity` arguments? */
+function isMethodCall(node, name, arity) {
+  return (
+    node?.type === 'CallExpression' &&
+    node.callee.type === 'MemberExpression' &&
+    node.callee.property.name === name &&
+    node.arguments.length === arity
+  );
+}
+
+function isStringLiteral(node, value) {
+  return node.type === 'Literal' && node.value === value;
+}
+
+/** `/\\/g` — one literal backslash, global. */
+function isGlobalBackslashRegex(node) {
+  return node.type === 'Literal' && node.regex?.pattern === String.raw`\\` && node.regex.flags.includes('g');
+}
+
+function isPathSep(node) {
+  return node.type === 'MemberExpression' && node.object.name === 'path' && node.property.name === 'sep';
+}
+
+/**
+ * `<x>.split(<sep>).join('/')` → the converter it is equivalent to.
+ *
+ * Splitting on a TWO-backslash SEQUENCE (e.g. collapsing a UNC server prefix)
+ * is a different operation that neither converter matches, so it is not
+ * reported.
+ */
+function matchSplitJoin(node) {
+  if (!isMethodCall(node, 'join', 1) || !isStringLiteral(node.arguments[0], '/')) return undefined;
+  const split = node.callee.object;
+  if (!isMethodCall(split, 'split', 1)) return undefined;
+  const [separator] = split.arguments;
+  if (isPathSep(separator)) return { receiver: split.callee.object, fn: NATIVE_FN };
+  if (isStringLiteral(separator, BACKSLASH)) return { receiver: split.callee.object, fn: ANY_PLATFORM_FN };
+  return undefined;
+}
+
+/** `<x>.replaceAll('\\', '/')` or `<x>.replace(/\\/g, '/')` → the any-platform converter. */
+function matchReplace(node) {
+  const isReplace = isMethodCall(node, 'replace', 2) || isMethodCall(node, 'replaceAll', 2);
+  if (!isReplace || !isStringLiteral(node.arguments[1], '/')) return undefined;
+  const [pattern] = node.arguments;
+  const allBackslashes =
+    isGlobalBackslashRegex(pattern) ||
+    (node.callee.property.name === 'replaceAll' && isStringLiteral(pattern, BACKSLASH));
+  return allBackslashes ? { receiver: node.callee.object, fn: ANY_PLATFORM_FN } : undefined;
+}
 
 module.exports = {
   meta: {
@@ -36,8 +106,8 @@ module.exports = {
       description:
         'Disallow manual path normalization patterns',
       category: 'Path handling',
-      bans: "hand-rolled `.replace(/\\\\/g, '/')`",
-      useInstead: '`toForwardSlash()`',
+      bans: "hand-rolled `.replace(/\\\\/g, '/')` / `split(path.sep).join('/')`",
+      useInstead: '`toForwardSlash()` (native paths) / `toForwardSlashAnyPlatform()` (authored text)',
       subpath: '/path',
       recommended: true,
       recommendedSeverity: 'error',
@@ -46,7 +116,11 @@ module.exports = {
     messages: {
       useToForwardSlash:
         'Use toForwardSlash() from {{safeModule}} instead of manual path normalization. ' +
-        'Manual normalization is error-prone and less maintainable.',
+        'It converts a native path only where the host separator is a backslash.',
+      useToForwardSlashAnyPlatform:
+        'Use toForwardSlashAnyPlatform() from {{safeModule}} instead of a hand-rolled backslash replace. ' +
+        'If this string is a native filesystem/git path rather than authored text, use toForwardSlash() — ' +
+        'on POSIX a backslash is a filename character.',
       [DEAD_UNSAFE_IMPORT]: DEAD_UNSAFE_IMPORT_MESSAGE,
     },
     schema: [SAFE_MODULE_ONLY_SCHEMA],
@@ -55,23 +129,42 @@ module.exports = {
   create(context) {
     const sourceCode = context.getSourceCode();
     const targetModule = resolveSafeModule(context, SAFE_PATH_MODULE);
-    // Seeded from SCOPE: a file that already imports `toForwardSlash` from the
-    // barrel must have the call rewritten WITHOUT gaining a second binding of
-    // the same name — that is a SyntaxError. See `safe-import.cjs`.
-    let hasToForwardSlashImport = isNameAlreadyBound(sourceCode, SAFE_FN);
+    // Seeded from SCOPE: a file that already binds the name must have the call
+    // rewritten WITHOUT gaining a second binding of the same name — that is a
+    // SyntaxError. See `safe-import.cjs`.
+    const bound = {
+      [NATIVE_FN]: isNameAlreadyBound(sourceCode, NATIVE_FN),
+      [ANY_PLATFORM_FN]: isNameAlreadyBound(sourceCode, ANY_PLATFORM_FN),
+    };
     // Never mutated — the dead-import leg must not be armed by a flag that a
     // suppressed report's `fix()` can spend. See `dead-import.cjs`.
-    const safeBoundInSource = hasToForwardSlashImport;
+    const safeBoundInSource = bound[NATIVE_FN];
     // The dead-import leg's OTHER gate: a `toForwardSlash(…)` call is the text
-    // this fixer writes, and the only evidence available that it wrote it here.
-    // Without it, any file with `toForwardSlash` in scope armed the leg — see
-    // `dead-import.cjs`. Read from the source, never from a `fix()`.
+    // this fixer writes for `path.sep`, and the only evidence available that it
+    // wrote it here. Read from the source, never from a `fix()`.
     let safeReplacementCalled = false;
     let utilsImportNode = null;
     // `path.sep` is the last `path.*` reference in plenty of files, and
-    // `toForwardSlash(raw)` consumes it — leaving the same dead `node:path`
-    // binding the `safePath` rules used to leave.
+    // `toForwardSlash(raw)` consumes it — leaving a dead `node:path` binding.
     const pathImportNodes = [];
+
+    /**
+     * Add `fn` to the import, when nothing binds it yet.
+     *
+     * NOT latched: two reports insert identical text at the identical anchor, so
+     * ESLint applies one and drops the other as overlapping. Latching is not
+     * free — ESLint runs `fix()` for a SUPPRESSED problem before the
+     * `eslint-disable` filter discards it, so a latch could be spent by a report
+     * that is then thrown away.
+     */
+    function importFix(fixer, fn) {
+      if (bound[fn]) return [];
+      if (utilsImportNode) {
+        return [fixer.insertTextAfter(utilsImportNode.specifiers.at(-1), `, ${fn}`)];
+      }
+      const newImport = `import { ${fn} } from '${targetModule}';\n`;
+      return [insertAboveWithComments(fixer, sourceCode, sourceCode.ast.body[0], newImport)];
+    }
 
     return {
       'Program:exit'() {
@@ -88,99 +181,30 @@ module.exports = {
         if (PATH_MODULES.has(node.source.value)) {
           pathImportNodes.push(node);
         }
-        if (node.source.value === targetModule) {
-          utilsImportNode = node;
-          for (const spec of node.specifiers) {
-            if (spec.type === 'ImportSpecifier' && spec.imported.name === SAFE_FN) {
-              hasToForwardSlashImport = true;
-            }
+        if (node.source.value !== targetModule) return;
+        utilsImportNode = node;
+        for (const spec of node.specifiers) {
+          if (spec.type === 'ImportSpecifier' && spec.imported.name in bound) {
+            bound[spec.imported.name] = true;
           }
         }
       },
 
       CallExpression(node) {
-        if (node.callee.type === 'Identifier' && node.callee.name === SAFE_FN) {
+        if (node.callee.type === 'Identifier' && node.callee.name === NATIVE_FN) {
           safeReplacementCalled = true;
         }
-
-        // Check for .split(...).join('/') pattern
-        if (
-          node.callee.type === 'MemberExpression' &&
-          node.callee.property.name === 'join' &&
-          node.arguments.length === 1 &&
-          node.arguments[0].type === 'Literal' &&
-          node.arguments[0].value === '/'
-        ) {
-          // Check if the object is a .split() call
-          const splitCall = node.callee.object;
-          if (
-            splitCall.type === 'CallExpression' &&
-            splitCall.callee.type === 'MemberExpression' &&
-            splitCall.callee.property.name === 'split' &&
-            splitCall.arguments.length === 1
-          ) {
-            const splitArg = splitCall.arguments[0];
-
-            // Split on path.sep, or on a single backslash character
-            // (source literal '\\'). Splitting on a two-backslash SEQUENCE
-            // (source literal '\\\\', decoded value: two backslash characters)
-            // is a different, rarer operation -- e.g. collapsing a UNC path's
-            // leading double-backslash server prefix -- and toForwardSlash()
-            // is not equivalent to it. Autofixing that case would silently
-            // change program behavior, so it is deliberately excluded here.
-            const isSplittingByPathSep =
-              (splitArg.type === 'MemberExpression' &&
-                splitArg.object.name === 'path' &&
-                splitArg.property.name === 'sep') ||
-              (splitArg.type === 'Literal' && splitArg.value === '\\');
-
-            if (isSplittingByPathSep) {
-              const variableBeingSplit = splitCall.callee.object;
-
-              context.report({
-                node,
-                messageId: 'useToForwardSlash',
-                data: { safeModule: targetModule },
-                fix(fixer) {
-                  const fixes = [];
-
-                  // Replace the entire .split(...).join('/') with toForwardSlash(...)
-                  const originalVar = sourceCode.getText(variableBeingSplit);
-                  fixes.push(fixer.replaceText(node, `${SAFE_FN}(${originalVar})`));
-
-                  // Add import if needed
-                  if (!hasToForwardSlashImport) {
-                    if (utilsImportNode) {
-                      // Add to existing utils import
-                      const lastSpecifier = utilsImportNode.specifiers.at(-1);
-                      fixes.push(fixer.insertTextAfter(lastSpecifier, `, ${SAFE_FN}`));
-                    } else {
-                      // Create new import at the top
-                      const firstNode = sourceCode.ast.body[0];
-                      const newImport = `import { ${SAFE_FN} } from '${targetModule}';\n`;
-                      fixes.push(insertAboveWithComments(fixer, sourceCode, firstNode, newImport));
-                    }
-                    // NOT latched. The comment here used to claim that without a
-                    // `hasToForwardSlashImport = true` a second occurrence would
-                    // insert the import twice; an adversarial run could not
-                    // reproduce that at any occurrence count. It cannot happen:
-                    // both reports insert identical text at the identical anchor,
-                    // so the ranges coincide and ESLint applies one and drops the
-                    // other as overlapping.
-                    //
-                    // Latching it is not free, either. ESLint runs `fix()` for a
-                    // SUPPRESSED problem before the `eslint-disable` filter
-                    // discards it, so the first report could spend the flag and
-                    // then be thrown away — leaving later occurrences rewritten
-                    // to a `toForwardSlash` nothing imports.
-                  }
-
-                  return fixes;
-                },
-              });
-            }
-          }
-        }
+        const match = matchSplitJoin(node) ?? matchReplace(node);
+        if (!match) return;
+        context.report({
+          node,
+          messageId: MESSAGE_FOR[match.fn],
+          data: { safeModule: targetModule },
+          fix(fixer) {
+            const receiver = sourceCode.getText(match.receiver);
+            return [fixer.replaceText(node, `${match.fn}(${receiver})`), ...importFix(fixer, match.fn)];
+          },
+        });
       },
     };
   },

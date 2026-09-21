@@ -1,3 +1,4 @@
+import { toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils/path';
 import {
   isProtectedName,
   parseStreamJsonTranscript,
@@ -72,7 +73,7 @@ import { sanitizeGraderText } from './grader-text.js';
  * longer than 8 characters and are therefore exactly what Windows shortens.
  */
 function normalizeForMatch(value: string): string {
-  return value.replaceAll('\\', '/').replaceAll(/\/{2,}/g, '/').toLowerCase();
+  return toForwardSlashAnyPlatform(value).replaceAll(/\/{2,}/g, '/').toLowerCase();
 }
 
 /**

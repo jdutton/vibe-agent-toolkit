@@ -1,6 +1,6 @@
 /**
- * The region model: the collapse `claude-context-budget-sweep.ts` implements
- * privately, promoted to a primitive two callers share.
+ * The region model: the per-chain collapse, as a primitive two callers share
+ * (`claude-context-relations.ts` and `claude-context-cost-map.ts`).
  *
  * ## What this suite is actually defending
  *

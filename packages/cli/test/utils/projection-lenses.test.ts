@@ -12,23 +12,26 @@
  * ## 🚨 The direction that matters is the FALSE NEGATIVE
  *
  * A lens selected when it was not needed costs time. A lens *skipped* when it
- * WAS needed returns an empty relation — a silent wrong answer, and the "check
- * that cannot fail" drift class exactly. So the selector is written to over- not
- * under-select (a name inside a CTE or an alias still selects), a run that
- * declares no statements at all evaluates everything, and
- * `withQueriedProjection` refuses a statement naming a relation nothing
- * evaluated rather than answering it from an empty table.
+ * WAS needed leaves its relation absent, and a statement that had an answer is
+ * refused. So the selector is written to over- not under-select (a name inside a
+ * CTE or an alias still selects), and a run that declares no statements at all
+ * evaluates everything. The refusal itself is SQLite's (`no such table`) and
+ * does not depend on this scan — see `projection-lens-laziness`.
  */
 
+import { DERIVED_TABLES, type Projection } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
+import { createLogger } from '../../src/utils/logger.js';
 import {
   AUTHORED_LINK_LENS,
   CLAUDE_CONTEXT_LENS,
   PROJECTION_LENSES,
+  evaluateLens,
   lensRelationNames,
   lensesNamedBy,
-  unevaluatedRelationsNamed,
+  type LensRows,
+  type ProjectionLens,
 } from '../../src/utils/projection-lenses.js';
 
 /** Lens names, for an assertion that reads as a set rather than as objects. */
@@ -95,21 +98,24 @@ describe('lensesNamedBy', () => {
       AUTHORED_LINK_LENS.name,
     ]);
   });
-});
 
-describe('unevaluatedRelationsNamed', () => {
-  it('names the relation a statement reaches for that nothing evaluated', () => {
-    // Evaluated: the statement can be answered, so nothing is missing.
-    expect(unevaluatedRelationsNamed('SELECT * FROM edges', [AUTHORED_LINK_LENS]))
-      .toStrictEqual([]);
-    // NOT evaluated: `edges` exists in the schema and is empty, which is the
-    // silent wrong answer the query lane refuses on the strength of this.
-    expect(unevaluatedRelationsNamed('SELECT * FROM edges', [CLAUDE_CONTEXT_LENS]))
-      .toStrictEqual(['edges']);
-  });
-
-  it('returns nothing for a statement that names no lens relation', () => {
-    expect(unevaluatedRelationsNamed('SELECT 1', PROJECTION_LENSES)).toStrictEqual([]);
+  it.each([
+    // ⚠️ Each case needs the CLOSING marker a real statement supplies, or the
+    // span never opens and the case passes for the wrong reason: a lone
+    // apostrophe with no second quote matches no literal at all.
+    ['an apostrophe', `SELECT COUNT(*) AS "won't" FROM edges WHERE kind = 'link'`],
+    ['a line-comment marker', `SELECT COUNT(*) AS "a--b" FROM edges`],
+    ['a block-comment opener', `SELECT COUNT(*) AS "a/*b" FROM edges /* note */`],
+    ['an apostrophe, bracket-quoted', `SELECT COUNT(*) AS [won't] FROM edges WHERE kind = 'link'`],
+    ['an apostrophe, backtick-quoted', "SELECT COUNT(*) AS `won't` FROM edges WHERE kind = 'link'"],
+  ])('still selects when a quoted identifier contains %s', (_what, sql) => {
+    // ⛔ THE UNDER-SELECT DIRECTION, and it is the dangerous one. SQLite gives
+    // `'`, `--` and `/*` no meaning inside a quoted identifier, so a blanker that
+    // honours them there desynchronises and blanks a span of REAL SQL — taking
+    // the relation name with it. The lens is then skipped, its relation is
+    // absent, and a declared check that had an answer is refused instead.
+    // Over-selecting only costs time; this costs the answer.
+    expect(namesOf(lensesNamedBy([sql]))).toStrictEqual([AUTHORED_LINK_LENS.name]);
   });
 });
 
@@ -127,5 +133,54 @@ describe('PROJECTION_LENSES', () => {
         seen.add(relation);
       }
     }
+  });
+});
+
+describe('the lens registry against DERIVED_TABLES', () => {
+  it('has every derived relation claimed by exactly one lens, and nothing else', () => {
+    // An unclaimed relation is never filled, so it never exists in a run's
+    // database and every statement naming it is refused.
+    const byName = (left: string, right: string): number => left.localeCompare(right);
+    const claimed = PROJECTION_LENSES.flatMap((lens) => lens.relations).toSorted(byName);
+    expect(claimed).toEqual(Object.keys(DERIVED_TABLES).toSorted(byName));
+  });
+
+  it('names every relation as one identifier word, which is all the selector can see', () => {
+    for (const lens of PROJECTION_LENSES) {
+      for (const relation of lensRelationNames(lens)) expect(relation).toMatch(/^[a-z0-9_]+$/);
+    }
+  });
+});
+
+/**
+ * A lens over two relations that returns whatever it is given.
+ *
+ * @param rows - What `evaluate` returns
+ * @returns The lens
+ */
+function lensReturning(rows: LensRows): ProjectionLens {
+  return { name: 'stub', relations: ['edges', 'edgeResolutions'], evaluate: () => rows };
+}
+
+describe('evaluateLens', () => {
+  const input = {
+    projection: {} as Projection,
+    root: '/corpus',
+    logger: createLogger({}),
+    cache: undefined,
+  };
+
+  it('hands back rows that are exactly the declared relations', async () => {
+    const rows: LensRows = { edges: [], edgeResolutions: [] };
+    await expect(evaluateLens(lensReturning(rows), input)).resolves.toBe(rows);
+  });
+
+  it('refuses rows that omit a declared relation', async () => {
+    await expect(evaluateLens(lensReturning({ edges: [] }), input)).rejects.toThrow(/missing \[edgeResolutions\]/);
+  });
+
+  it('refuses rows carrying a relation the lens does not own', async () => {
+    const rows: LensRows = { edges: [], edgeResolutions: [], lensContexts: [] };
+    await expect(evaluateLens(lensReturning(rows), input)).rejects.toThrow(/undeclared \[lensContexts\]/);
   });
 });

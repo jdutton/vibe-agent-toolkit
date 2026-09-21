@@ -24,7 +24,7 @@ The last two columns are the ones that matter when choosing. **"Resolves with ze
 
 | Subpath | Contents | Node builtins reached | Third-party | Resolves with zero deps installed? |
 |---|---|---|---|---|
-| `./path` | `safePath`, `toForwardSlash`, `toNfc`, `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `relativeEscapesRoot`, `isSingleFsSegment`, `toAbsolutePath`, `getRelativePath`, `issueLocation` | `path` only | — | **yes** |
+| `./path` | `safePath`, `toForwardSlash`, `toForwardSlashAnyPlatform`, `toNfc`, `isAbsolutePath`, `isAbsoluteAnyPlatform`, `hasParentTraversalSegment`, `relativeEscapesRoot`, `isSingleFsSegment`, `toAbsolutePath`, `getRelativePath`, `issueLocation` | `path` only | — | **yes** |
 | `./text` | `decodeTextContent` — the one bytes-to-text seam: BOM-announced UTF-8/UTF-16LE/UTF-16BE/UTF-32LE/UTF-32BE, BOM stripped, UTF-8 assumed otherwise; reports the encoding, whether it was a BOM fact or an assumption, and how many U+FFFD the decode substituted | **none** | — | **yes** |
 | `./zod` | `ZodTypeNames`, `getZodTypeName`, `isZodType`, `unwrapZodType`, `isZodOptional`, `isZodNullable` | **none** | — | **yes** |
 | `./glob` | `isGlob`, static base extraction, magic remainder | `path` only | — | **yes** |
@@ -128,7 +128,8 @@ FUNCTION, LAZY, PROMISE, and more...
 These always return forward slashes on every platform, so they are safe for comparisons, `Map` keys, globs, and display.
 
 - `safePath.join()` / `.resolve()` / `.relative()` - forward-slash equivalents of the `node:path` functions
-- `toForwardSlash()` - explicit converter for any path string
+- `toForwardSlash()` - converter for a NATIVE path (fs, `path.*`, git output): converts only where the host separator is a backslash (win32); on POSIX a backslash is a filename character and is kept
+- `toForwardSlashAnyPlatform()` - converter for AUTHOR-WRITTEN text (hrefs, globs, config values, CLI arguments, archive entry names): converts every backslash on every host. Never for a path read from disk — on POSIX it would turn the one file `docs/x\y.md` into a phantom `docs/x/y.md`
 - `toNfc()` - Unicode-NFC normalizer for filename **comparison keys** (see the warning below)
 - `toAbsolutePath()` - resolve a path relative to a base directory
 - `getRelativePath()` - relative path between two absolute paths

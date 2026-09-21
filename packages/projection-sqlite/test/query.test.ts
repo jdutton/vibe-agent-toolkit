@@ -378,12 +378,6 @@ describe('every placeholder must be bound', () => {
       expect(() => store.query(sql)).toThrow(/named or numbered parameter/);
     },
   );
-
-  it('refuses before stepping: assertCompiles applies the same count', () => {
-    expect(() => store.assertCompiles(TWO_SLOTS, ['a']))
-      .toThrow(/2 placeholders.*1 value was bound/s);
-    expect(() => store.assertCompiles('SELECT ? AS x', ['a'])).not.toThrow();
-  });
 });
 
 describe('query answers identically on the file-backed store', () => {

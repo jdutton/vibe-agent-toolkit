@@ -53,7 +53,7 @@ const PATHLESS_NAMES = ['validate', 'verify'];
  * subject positional either. A `{subject}` token in any of these would make
  * every repeat a usage error.
  */
-const CWD_SCOPED_NAMES = [...PATHLESS_NAMES, CONTEXT_SWEEP, 'claude-budget'];
+const CWD_SCOPED_NAMES = [...PATHLESS_NAMES, CONTEXT_SWEEP];
 
 /** Every command handed the subject as a positional argument. */
 const SUBJECT_NAMES = [
@@ -71,7 +71,6 @@ const FINDINGS_NAMES = [
   'resources-validate',
   'validate',
   'verify',
-  'claude-budget',
   'skills-validate',
   'audit',
 ];

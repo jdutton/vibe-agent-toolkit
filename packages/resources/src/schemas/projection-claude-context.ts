@@ -1,43 +1,59 @@
 import { z } from 'zod';
 
+// Values from two projection modules whose own imports are type-only, so the
+// schema stays loadable on its own and each vocabulary has one list.
+import { SIZE_CLIFF_STATES } from '../projection/claude-context-accounting.js';
+import { LAUNCH_CHARGES } from '../projection/claude-context-launch-charge.js';
+import type { Admission } from '../projection/claude-context-query.js';
+
 /**
- * How one always-class row reaches — or fails to reach — the always-loaded
- * budget's total.
+ * Every admission kind a `claude_context_loads` row can name.
  *
- * 🔑 **This column is what makes the budget reproducible in SQL.** The verb's
- * total is narrower than `SUM(tokens) WHERE loadClass = 'always'`: qualifying
- * reads the admission LIST (several per row, one qualifying is enough) and the
- * 4 MiB cliff's verdict, neither of which survives into a flat relation. So the
- * decision is made once and STORED, and an adopter's `SUM(tokens) WHERE
- * budgetDisposition = 'charged'` is the same arithmetic rather than a
- * re-derivation free to drift.
+ * `satisfies` holds this list inside the `Admission` union, and
+ * `claude-context-relations.ts` holds the union inside this list where it
+ * writes the column, so the published description cannot name a kind that no
+ * longer exists or miss one that does.
+ */
+export const CLAUDE_CONTEXT_ADMISSION_KINDS = [
+  'ancestry',
+  'root-rule',
+  'nested-rule',
+  'glob-rule',
+  'glob-rule-covers-dir',
+  'glob-rule-may-fire',
+  'import',
+] as const satisfies readonly Admission['kind'][];
+
+/** One member of {@link CLAUDE_CONTEXT_ADMISSION_KINDS}. */
+export type ClaudeContextAdmissionKind = (typeof CLAUDE_CONTEXT_ADMISSION_KINDS)[number];
+
+/**
+ * Whether a row's bytes are paid when a session starts.
+ *
+ * 🔑 **This column is the filter a launch-cost sum needs.** It folds `loadClass`
+ * and `sizeCliff`, because neither alone is the right `WHERE`: `sizeCliff =
+ * 'loaded'` also holds every on-demand rule, and `loadClass = 'always'` also
+ * holds a `CLAUDE.md` the 4 MiB cliff skipped. `SUM(tokens) WHERE launchCharge =
+ * 'charged'` over one chain is `vat claude context`'s `alwaysTokens` for any of
+ * its locations.
  *
  * ⛔ An **open** vocabulary (a string, not an enum), for the same reason
- * `ClaudeRulePatternStatusSchema` is: a disposition added later must add rows,
- * never migrate a schema. Today's seven:
+ * `ClaudeRulePatternStatusSchema` is: a value added later must add rows, never
+ * migrate a schema. Today's four:
  *
- * - **`charged`** — qualified, measurable, and its `tokens` are in the total.
- * - **`unknown-size`** — qualified, but nothing measured it. COUNTED, never
- *   summed as zero: a confident zero is indistinguishable from a free file.
- * - **`oversize`** — qualified, and the 4 MiB cliff skipped it or an oversize
- *   ancestor pruned it. Adds nothing AND counts nothing: the harness genuinely
- *   did not load it, which is knowledge rather than ignorance.
- * - **`excluded-rule`** — every admission is an on-demand rule kind (or the row
- *   has no admission at all). Excluded by design, not by uncertainty.
- * - **`excluded-deep-import`** — every import admission is more than one hop
- *   from its root, past the depth the budget is calibrated for.
- * - **`excluded-unattributed-import`** — an import admission VAT could not
- *   attribute (`depth: null`). Reported ahead of `excluded-deep-import` when a
- *   row carries both, because "could not say where this came from" is the more
- *   urgent fact.
- * - **`not-always`** — an `on-demand` row. Silently outside this budget; it is
- *   not an exclusion anybody should count.
+ * - **`charged`** — loaded at launch, and its `tokens` are measured.
+ * - **`unknown-size`** — loaded at launch, but nothing measured it. COUNT these
+ *   beside the sum: a confident zero is indistinguishable from a free file.
+ * - **`oversize`** — always-class, but the 4 MiB cliff skipped it or an oversize
+ *   ancestor pruned it. The harness genuinely does not load it — knowledge, not
+ *   ignorance.
+ * - **`not-always`** — an `on-demand` row: loaded when the agent touches a
+ *   matching file, never at launch.
  */
-export const ClaudeContextBudgetDispositionSchema = z.string().min(1)
+export const ClaudeContextLaunchChargeSchema = z.string().min(1)
   .describe(
-    'How this row reaches the always-loaded budget — open vocabulary: "charged", "unknown-size",'
-    + ' "oversize", "excluded-rule", "excluded-deep-import", "excluded-unattributed-import",'
-    + ' "not-always"',
+    'Whether this row\'s bytes are paid when a session starts — sum tokens or bytes WHERE this is "charged". Open vocabulary: '
+    + LAUNCH_CHARGES.map((charge) => `"${charge}"`).join(', '),
   );
 
 /**
@@ -74,7 +90,7 @@ export type ClaudeContextChainRow = z.infer<typeof ClaudeContextChainRowSchema>;
  * member is ordinary — and a row per admission would make every `SUM(tokens)`
  * double-count exactly the diamond `whatLoadsAt` dedupes by identity to avoid.
  * So the admission columns describe the **deciding** admission: the first that
- * qualifies for the budget, or the first carried when none does.
+ * can load at launch, or the first carried when none can.
  * {@link admissionCount} says how many there were.
  *
  * {@link pattern} holds that admission's distinguishing string, which depends on
@@ -102,16 +118,19 @@ export const ClaudeContextLoadRowSchema = z.object({
   loadClass: z.string().min(1)
     .describe('"always" (loaded at session start) or "on-demand" (loaded when the agent touches a matching file)'),
   admissionKind: z.string().min(1).nullable()
-    .describe('Kind of the DECIDING admission, or null when nothing admitted this row'),
+    .describe(
+      'Kind of the DECIDING admission, or null when nothing admitted this row: '
+      + CLAUDE_CONTEXT_ADMISSION_KINDS.map((kind) => `"${kind}"`).join(', '),
+    ),
   pattern: z.string().nullable()
     .describe('The deciding admission\'s distinguishing string — a glob, a directory, or a closure root; null where its kind has none'),
   depth: z.number().int().nonnegative().nullable()
     .describe('Import hops from the closure root, for an `import` admission VAT could attribute; null otherwise'),
   admissionCount: z.number().int().nonnegative()
     .describe('How many admissions this row carries — the deciding one is a summary of them, not the whole list'),
-  charge: z.string().min(1)
-    .describe('The 4 MiB cliff\'s verdict: "charged", "oversize-skipped", "pruned-by-oversize" or "unknown-size"'),
-  budgetDisposition: ClaudeContextBudgetDispositionSchema,
+  sizeCliff: z.enum(SIZE_CLIFF_STATES)
+    .describe('The 4 MiB CLAUDE.md cliff\'s verdict on this file — NOT whether it is paid at launch; that is launchCharge. "unmeasured" means no blob, so no size'),
+  launchCharge: ClaudeContextLaunchChargeSchema,
   tokens: z.number().int().nonnegative().nullable()
     .describe('blobs.tokenEstimate, or null when this realization has no blob. Null is UNKNOWN, never zero'),
   bytes: z.number().int().nonnegative().nullable()

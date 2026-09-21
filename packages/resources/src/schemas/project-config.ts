@@ -11,7 +11,7 @@ import {
 
 import { LinkAuthConfigSchema } from './link-auth.js';
 import { ReferenceSyntacticFormSchema } from './projection-blobs.js';
-import { JsonValueSchema, ParserKindSchema } from './projection-shared.js';
+import { JsonValueSchema } from './projection-shared.js';
 import { ZoneKindSchema } from './projection-zones.js';
 
 /**
@@ -597,8 +597,8 @@ export const ExtentDeclarationSchema = z.object({
     .describe('How this closure INTERPRETS the tokens it follows. Defaults to "href" — RFC 3986 through resolveLocalHref — so every declaration written before this field existed is unchanged. "claude-import" is the only correct reading of an at-prefixed token in a CLAUDE.md or .claude/rules file: a leading @ is stripped, ~/ expands to the home directory (landing OUTSIDE the corpus, which is the healthy state the vendor recommends for sharing instructions across worktrees), and a leading / is filesystem-absolute rather than root-relative. Inert data, so it rides onto zone_provenance.parameterSet verbatim and the store correctly treats two runs over one tree under different dialects as two different questions.'),
   maxDepth: z.union([z.number().int().min(0), z.literal('full')]).default('full')
     .describe('Reference hops from the root, or "full" for an unbounded closure. Same union as skills packaging linkFollowDepth, so one concept has one spelling.'),
-  traverseParserKinds: z.array(ParserKindSchema).nullable().default(null)
-    .describe('Which parser kinds this closure walks THROUGH. A target routing to any other kind is a LEAF: admitted as a member WITHOUT being charged against maxDepth — bundling it enqueues nothing, so there is no hop for the budget to bound — and never traversed, so its own references are not this extent\'s edges. Checked BEFORE the depth bound and AFTER the refusal cascade, which is the order walk-link-graph.ts checks them in. Null (the default) means every target is a door and every target is charged, which is how every declaration written before this field behaved. ["markdown"] is walk-link-graph.ts\'s isRoutable exactly, and it is why an image or an HTML page hanging off a document AT the depth frontier ships on both arms instead of only on the packager\'s.'),
+  traverseGlobs: z.array(z.string().min(1)).min(1).nullable().default(null)
+    .describe('Which targets this closure walks THROUGH, as root-relative globs (dot files included). A target matching none is a LEAF: admitted as a member WITHOUT being charged against maxDepth — bundling it enqueues nothing, so there is no hop for the budget to bound — and never traversed, so its own references are not this extent\'s edges. Checked BEFORE the depth bound and AFTER the refusal cascade, which is the order walk-link-graph.ts checks them in. Null (the default) means every target is a door and every target is charged. An EMPTY list is refused: it would walk through nothing while reading like "no restriction". The build lanes declare the glob their registry crawls (["**/*.md"]), because walk-link-graph.ts traverses registry MEMBERS — a parser-kind rule is wider, since .txt and README parse as markdown yet ship unopened. The root is always traversed.'),
   refusals: z.array(ExtentRefusalRuleSchema).default([])
     .describe('ORDERED refusal cascade — FIRST MATCH WINS, and the winning rule\'s label is what the refusal reports as its condition code. THE ORDER IS BEHAVIOUR: a candidate matching two rules is attributed to the earlier one, the same way walk-link-graph.ts\'s classifyExclusion attributes a directory that is also pattern-matched to "directory-target" rather than to "pattern-matched". Never rewrite this as a set or a record. A refused candidate is neither admitted nor traversed through, so the subtree reachable only through it is refused with it.'),
   admitPaths: z.array(z.string().min(1)).default([])

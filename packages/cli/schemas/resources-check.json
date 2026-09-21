@@ -129,6 +129,38 @@
                     "type": "string"
                   }
                 },
+                "boundsStatement": {
+                  "type": "string"
+                },
+                "limits": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "direction": {
+                        "type": "string",
+                        "enum": [
+                          "over-report",
+                          "under-report",
+                          "scope",
+                          "assumption"
+                        ]
+                      },
+                      "statement": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "direction",
+                      "statement"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
                 "checksRun": {
                   "type": "integer",
                   "minimum": 0

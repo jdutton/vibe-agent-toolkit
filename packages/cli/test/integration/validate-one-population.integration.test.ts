@@ -1,8 +1,7 @@
 /**
- * `vat validate` populates ONCE, across every surface it runs.
+ * `vat validate` derives ONCE across every surface it runs, through the default store.
  *
- * Two things had to be true at the same time for this to be assertable at all,
- * and this file is where they meet:
+ * Two things landed together, and only the first is what this file can see:
  *
  * - **The store is the default.** No selector is set below — deliberately. An
  *   arm that named `VAT_PROJECTION_STORE=sqlite` would pass identically against
@@ -24,12 +23,13 @@
  * one WAL database leave the same file, the same rows and the same timing rows
  * as one.
  *
- * What IS observable from out here is the consequence the hoist and the default
- * exist for together: a two-surface run **derives the filesystem extent once**
- * and **writes the store once**, while consulting it twice. That is the shape of
- * one population shared by two lanes, and every part of it is a count rather
- * than a presence — `calls`, not "was this contributor charged", because a
- * contributor invoked once and invoked five times file the same single row.
+ * ⚠️ So this file does NOT pin the hoist: remove it and the counts below are
+ * unchanged, because the second lane's own bracket still hits the extent the
+ * first one wrote. What it pins is the DEFAULT-ON store doing that sharing: a
+ * two-surface run **derives the filesystem extent once** and **writes the store
+ * once**, while consulting it twice. Every part is a count rather than a
+ * presence — `calls`, not "was this contributor charged", because a contributor
+ * invoked once and invoked five times file the same single row.
  *
  * ## The positive controls
  *

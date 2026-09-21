@@ -28,7 +28,7 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig, SkillSourceDescriptor, TestConfig } from '@vibe-agent-toolkit/resources';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, prefixMessageOnce, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, prefixMessageOnce, resolveAssetReference, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { Command } from 'commander';
 
@@ -50,7 +50,7 @@ import { assertValidAuth, assertValidRequireAuth } from './auth-flags.js';
 
 /** Extract the trailing path segment (cross-platform) from a path-like string. */
 function lastPathSegment(p: string): string {
-  return basename(toForwardSlash(p));
+  return basename(toForwardSlashAnyPlatform(p));
 }
 
 // ---------------------------------------------------------------------------
@@ -222,7 +222,7 @@ export function deriveDeclaredExecutableNames(
 ): DeclaredExecutable[] | undefined {
   if (executables === undefined || executables.length === 0) return undefined;
   return executables.map((e) => {
-    const path = toForwardSlash(e.path);
+    const path = toForwardSlashAnyPlatform(e.path);
     const base = basename(path);
     const ext = extname(base);
     const name = ext === '' ? base : base.slice(0, -ext.length);

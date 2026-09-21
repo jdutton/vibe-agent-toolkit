@@ -135,6 +135,14 @@ describe('CLAUDE_RULE_GLOB_INERT — one finding per dead glob', () => {
     expect(findingsFor([pattern({ status: 'inert' })])).toHaveLength(1);
   });
 
+  it('⭐ says NOTHING about a GITIGNORED pattern — VAT cannot see what the harness can', () => {
+    // A glob scoped to `dist/**` matches no file VAT realizes, and the harness
+    // reads the filesystem. Reporting it would have the author delete a glob
+    // that fires. The pair differs only in the status column.
+    expect(findingsFor([pattern({ status: 'gitignored' })])).toStrictEqual([]);
+    expect(findingsFor([pattern({ status: 'inert' })])).toHaveLength(1);
+  });
+
   it('says nothing at all when the table is empty', () => {
     // The state of every projection until the producer lands, and the state of a
     // healthy repository afterwards. An empty table is a pass, never a refusal:

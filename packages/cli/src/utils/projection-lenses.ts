@@ -2,11 +2,13 @@
  * Which lenses a run evaluates, and when it does NOT — the selection that keeps
  * the derived relations affordable.
  *
- * 🚨 **The selector over-selects on purpose: a FALSE NEGATIVE is a wrong
- * answer.** A lens skipped when its relation is named answers from an empty
- * table, which is indistinguishable from a healthy tree. The cost that forced
- * the selection, the three rules that keep it fail-safe, and why the registry
- * lives in the CLI rather than in a population are in
+ * 🚨 **The selector over-selects on purpose: a FALSE NEGATIVE fails a run that
+ * had an answer.** A lens skipped when its relation is named leaves that
+ * relation ABSENT from the run's database, so the statement is refused with
+ * `no such table` — loud rather than wrong, because the refusal is SQLite's and
+ * does not depend on this scan. The cost that forced the selection, the rules
+ * that keep it fail-safe, and why the registry lives in the CLI rather than in a
+ * population are in
  * `docs/architecture/zones.md` §2, "A lens is evaluated only when a statement
  * names one of its relations".
  */
@@ -112,41 +114,33 @@ export function lensesNamedBy(statements: readonly string[] | undefined): readon
 }
 
 /**
- * The relations a statement reaches for that none of `evaluated` produced.
+ * Evaluate one lens and hand back its rows, refusing any that are not exactly
+ * the relations it declares.
  *
- * 🔑 The guard that turns this selection into an optimisation rather than a
- * silent narrowing. A statement naming `edges` on a run where the authored-link
- * lens was not evaluated must FAIL, not return zero rows: an empty relation and
- * a tree with no links are the same result set.
- *
- * @param sql - The statement about to run
- * @param evaluated - The lenses this run evaluated
- * @returns The relation names it names that nothing filled, in registry order
- */
-export function unevaluatedRelationsNamed(
-  sql: string,
-  evaluated: readonly ProjectionLens[],
-): readonly string[] {
-  const words = wordsIn(withoutCommentsAndLiterals(sql));
-  const filled = new Set(evaluated.flatMap((lens) => lensRelationNames(lens)));
-  return PROJECTION_LENSES
-    .flatMap((lens) => lensRelationNames(lens))
-    .filter((relation) => !filled.has(relation) && namesRelation(words, relation));
-}
-
-/**
- * Evaluate one lens and hand back its rows — a one-line indirection so the lane
- * has a single `await` per lens and no lens has to decide whether it is async.
+ * `LensRows` makes every relation optional, so a lens that forgot one compiles —
+ * and `writeDerived` would leave that relation empty, a table that reads as a
+ * healthy tree. Checked here because this is the one place every lens passes.
  *
  * @param lens - The lens
  * @param input - What it may read
  * @returns Its rows
+ * @throws Error When the rows omit a declared relation or carry an undeclared one
  */
 export async function evaluateLens(
   lens: ProjectionLens,
   input: LensEvaluationInput,
 ): Promise<LensRows> {
-  return lens.evaluate(input);
+  const rows = await lens.evaluate(input);
+  const declared: readonly string[] = lens.relations;
+  const missing = declared.filter((name) => !Object.hasOwn(rows, name));
+  const undeclared = Object.keys(rows).filter((name) => !declared.includes(name));
+  if (missing.length > 0 || undeclared.length > 0) {
+    throw new Error(
+      `Lens "${lens.name}" must produce exactly [${declared.join(', ')}];`
+      + ` missing [${missing.join(', ')}], undeclared [${undeclared.join(', ')}]`,
+    );
+  }
+  return rows;
 }
 
 /**
@@ -161,18 +155,85 @@ export async function evaluateLens(
  * @returns The statement with every non-code span blanked
  */
 function withoutCommentsAndLiterals(sql: string): string {
-  return sql.replaceAll(NON_CODE_SPANS, (span) => ' '.repeat(span.length));
+  let out = '';
+  let index = 0;
+  while (index < sql.length) {
+    const end = spanEnd(sql, index);
+    if (end === undefined) {
+      out += sql.charAt(index);
+      index += 1;
+      continue;
+    }
+    const span = sql.slice(index, end);
+    out += QUOTED_IDENTIFIER_CLOSERS.has(span.charAt(0)) ? span : ' '.repeat(span.length);
+    index = end;
+  }
+  return out;
+}
+
+/** The characters that open a quoted identifier, and the one that closes each. */
+const QUOTED_IDENTIFIER_CLOSERS: ReadonlyMap<string, string> = new Map([['"', '"'], ['[', ']'], ['`', '`']]);
+
+/** Every quoted span's opener and closer: the identifiers, plus `'` for a literal. */
+const QUOTE_CLOSERS: ReadonlyMap<string, string> = new Map([...QUOTED_IDENTIFIER_CLOSERS, ["'", "'"]]);
+
+/**
+ * Where a span starting at `start` ends: a line comment, a block comment, a
+ * single-quoted literal — or a quoted IDENTIFIER, consumed only so it can be
+ * handed back unblanked.
+ *
+ * ⛔ Quoted identifiers MUST be consumed by this same scan even though their
+ * contents stay code, and the reason is the whole of this function. SQLite gives
+ * `'`, `--` and `/*` no meaning inside `"…"`, `[…]` or `` `…` ``. A scanner that
+ * skips those spans lets a character inside one open a literal or a comment that
+ * SQLite never opened, desynchronises, and blanks a span of REAL SQL — taking the
+ * relation name with it. The statement then reads an EMPTY relation and answers 0
+ * instead of being refused, which for a declared check is a silent exit 0: a gate
+ * that cannot fail.
+ *
+ * Scanning left to right is what keeps the spans mutually exclusive: a comment
+ * marker inside a literal is never looked at, nor a quote inside a comment.
+ *
+ * @param sql - The statement
+ * @param start - Where to look
+ * @returns The index just past the span, or undefined when none opens here
+ */
+function spanEnd(sql: string, start: number): number | undefined {
+  const pair = sql.slice(start, start + 2);
+  if (pair === '--') {
+    const newline = sql.indexOf('\n', start);
+    return newline === -1 ? sql.length : newline;
+  }
+  if (pair === '/*') {
+    const close = sql.indexOf('*/', start + 2);
+    return close === -1 ? undefined : close + 2;
+  }
+  const closer = QUOTE_CLOSERS.get(sql.charAt(start));
+  return closer === undefined ? undefined : quotedEnd(sql, start, closer);
 }
 
 /**
- * Line comments, block comments and single-quoted literals, in one alternation.
+ * Where a quoted span ends. A doubled closer (`''`, `""`, two backticks) is an
+ * escaped one; `[…]` has no escape. Left unterminated, the span ends at the last
+ * doubled closer instead — what the single pattern this replaced did by
+ * backtracking.
  *
- * ⚠️ Ordered so a comment marker inside a literal loses to the literal and a
- * quote inside a comment loses to the comment — one pass with this ordering is
- * what makes the two mutually exclusive. `''` is SQL's escaped quote and is
- * matched by the repetition, so `'it''s'` is consumed whole.
+ * @param sql - The statement
+ * @param start - The opening quote
+ * @param closer - The character that closes it
+ * @returns The index just past the span, or undefined when it never closes
  */
-const NON_CODE_SPANS = /--[^\n]*|\/\*[\s\S]*?\*\/|'(?:[^']|'')*'/g;
+function quotedEnd(sql: string, start: number, closer: string): number | undefined {
+  let fallback: number | undefined;
+  let from = start + 1;
+  for (;;) {
+    const close = sql.indexOf(closer, from);
+    if (close === -1) return fallback;
+    if (closer === ']' || sql.charAt(close + 1) !== closer) return close + 1;
+    fallback = close + 1;
+    from = close + 2;
+  }
+}
 
 /**
  * Every whole word in a statement, lowercased.

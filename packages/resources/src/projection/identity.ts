@@ -131,7 +131,7 @@ export interface CanonicalPathContext {
  * one.** The mode-`120000` drop lived in the tree-snapshot half alone, so a
  * committed link was excluded while `ls-files --others` re-offered an untracked
  * one — and this function then minted it its own id over its TARGET's
- * `contentKey`, which is one set of bytes charged twice by `vat claude budget`.
+ * `contentKey`, which is one set of bytes charged twice by `vat claude context`.
  * Every fixture that could have caught it was committed, i.e. tracked.
  * `packages/resources/test/projection-untracked-symlink-extent.test.ts` plants
  * the untracked case in both lanes and asserts that no `contentKey` carries two

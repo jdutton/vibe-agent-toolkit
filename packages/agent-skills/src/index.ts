@@ -256,3 +256,4 @@ export {
   type PluginLocalSkillIndex,
   type PluginSkillExclusion,
 } from './plugin-distribution-layout.js';
+export { LINK_GRAPH_MEMBER_GLOBS } from './link-graph-members.js';

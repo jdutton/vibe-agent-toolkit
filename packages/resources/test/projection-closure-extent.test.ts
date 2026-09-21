@@ -58,6 +58,15 @@ const ASSET_PNG = 'skills/foo/diagram.png';
 /** Reachable only from {@link ASSET_PNG} — the subtree a leaf must NOT open. */
 const DOC_PAST_ASSET = 'skills/foo/past-asset.md';
 
+/** Text a markdown parser would accept, which no `**\/*.md` registry includes. */
+const NOTES_TXT = 'skills/foo/notes.txt';
+
+/** Reachable only from {@link NOTES_TXT}. */
+const DOC_PAST_TXT = 'skills/foo/past-txt.md';
+
+/** The glob both build registries include — the packager's door rule. */
+const MARKDOWN_MEMBERS = '**/*.md';
+
 /** A DIRECTORY entity, whose path is shaped exactly like a file's. */
 const DOC_DIR = 'skills/foo/nested';
 
@@ -147,6 +156,21 @@ const CHAIN_WITH_ASSET: readonly FixtureFile[] = [
   { path: DOC_C, refs: [] },
   { path: ASSET_PNG, refs: [{ rawRef: 'past-asset.md' }] },
   { path: DOC_PAST_ASSET, refs: [] },
+];
+
+/**
+ * `SKILL.md → b.md → notes.txt → past-txt.md`.
+ *
+ * `notes.txt` PARSES as markdown — `parserKindForPath` says so — but the build's
+ * registry includes `**\/*.md` and nothing else, so the packager bundles it as
+ * cargo and never opens it. A traversal rule keyed on parser kind walked through
+ * it and admitted a document the build does not ship.
+ */
+const CHAIN_WITH_TXT: readonly FixtureFile[] = [
+  { path: ROOT_DOC, refs: [{ rawRef: 'b.md' }] },
+  { path: DOC_B, refs: [{ rawRef: 'notes.txt' }] },
+  { path: NOTES_TXT, refs: [{ rawRef: 'past-txt.md' }] },
+  { path: DOC_PAST_TXT, refs: [] },
 ];
 
 const HUB_CHAIN: readonly FixtureFile[] = [
@@ -398,7 +422,7 @@ describe('ClosureExtentContributor', () => {
     // files the closure called `depth-exceeded`.
     const contribution = await contributeOver(
       CHAIN_WITH_ASSET,
-      declarationOf({ maxDepth: 1, traverseParserKinds: ['markdown'] }),
+      declarationOf({ maxDepth: 1, traverseGlobs: [MARKDOWN_MEMBERS] }),
     );
 
     // `DOC_C` and `ASSET_PNG` are both two hops out of the root, and only one of
@@ -416,7 +440,7 @@ describe('ClosureExtentContributor', () => {
     expectContributionRowsValid(contribution);
   });
 
-  it('charges every target when the declaration names no traverseParserKinds', async () => {
+  it('charges every target when the declaration names no traverseGlobs', async () => {
     // The default is null, and null means "every target is a door" — the
     // behaviour of every declaration written before the field existed. Without
     // this case the field would be an optional seam whose omission is the
@@ -428,13 +452,33 @@ describe('ClosureExtentContributor', () => {
     expect(conditionCodeFor(contribution, ASSET_PNG)).toBe(CLOSURE_DEPTH_EXCEEDED);
   });
 
+  it('treats a file that merely PARSES as markdown as a leaf when the door glob excludes it', async () => {
+    // ⛔ The over-report the parser-kind rule traded the under-report for. The
+    // packager's door is registry membership, and the registry is a glob.
+    const contribution = await contributeOver(
+      CHAIN_WITH_TXT,
+      declarationOf({ maxDepth: 'full', traverseGlobs: [MARKDOWN_MEMBERS] }),
+    );
+
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B, NOTES_TXT]);
+    expect(memberPaths(contribution)).not.toContain(DOC_PAST_TXT);
+  });
+
+  it('refuses an EMPTY traverseGlobs, which would silently walk through nothing', () => {
+    // `[]` reads as "no restriction" to an author who just learned null is the
+    // permissive default, and meant the opposite: the root and its direct
+    // references, with no row saying anything was held back.
+    expect(ExtentDeclarationSchema.safeParse(declarationOf({ traverseGlobs: [] })).success).toBe(false);
+    expect(ExtentDeclarationSchema.safeParse(declarationOf({ traverseGlobs: null })).success).toBe(true);
+  });
+
   it('leaves a leaf subject to the refusal cascade, which outranks the exemption', async () => {
     // Order is the behaviour on both arms: the walker's `checkExclusions` runs
     // before it ever asks whether the target is routable, so "assets bypass the
     // depth limit" has never meant "assets bypass an exclude rule".
     const contribution = await contributeOver(CHAIN_WITH_ASSET, declarationOf({
       maxDepth: 1,
-      traverseParserKinds: ['markdown'],
+      traverseGlobs: [MARKDOWN_MEMBERS],
       refusals: [refusalRule(LABEL_GLOB, { patterns: ['**/*.png'] })],
     }));
     expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);

@@ -6,7 +6,7 @@
  *
  * A system test can only assert over the document a real tree produces, and on a
  * real tree every row has a measured blob — so `row.tokens === null` is `false`
- * everywhere and an assertion pairing it with `charge === 'unknown-size'`
+ * everywhere and an assertion pairing it with `sizeCliff === 'unmeasured'`
  * compares `false === false` on every row and passes VACUOUSLY. Worse, that
  * pairing is a property of `account()` in `@vibe-agent-toolkit/resources`, which
  * already pins it directly; it says nothing about the renderer. The only code
@@ -37,14 +37,14 @@ function accountedRow(overrides: Partial<AccountedRow>): AccountedRow {
     bytes: 400,
     loadClass: 'always',
     admissions: [{ kind: 'ancestry', dir: '' }],
-    charge: 'charged',
+    sizeCliff: 'loaded',
     ...overrides,
   };
 }
 
 describe('chargeText', () => {
   it('renders an unknown size as words, NEVER as a zero', () => {
-    const rendered = chargeText(accountedRow({ tokens: null, bytes: null, charge: 'unknown-size' }));
+    const rendered = chargeText(accountedRow({ tokens: null, bytes: null, sizeCliff: 'unmeasured' }));
 
     expect(rendered).toContain('size unknown');
     // ⛔ The half that fails on `?? 0`: a confident zero is indistinguishable
@@ -53,11 +53,11 @@ describe('chargeText', () => {
   });
 
   it('refuses to invent a number even if a null reaches the charged branch', () => {
-    // `chargeOf` classifies a blobless row `unknown-size` before this is called,
+    // `sizeCliffOf` classifies a blobless row `unmeasured` before this is called,
     // so this pairing cannot arise today. It is asserted anyway: the guard in
     // the renderer is a VALUE test rather than a trust in that ordering, and a
     // `?? 0` would be invisible from the outside until the ordering changed.
-    const rendered = chargeText(accountedRow({ tokens: null, bytes: null, charge: 'charged' }));
+    const rendered = chargeText(accountedRow({ tokens: null, bytes: null, sizeCliff: 'loaded' }));
 
     expect(rendered).toContain('size unknown');
     expect(rendered).not.toMatch(/\d/);
@@ -68,8 +68,8 @@ describe('chargeText', () => {
   });
 
   it('says why a skipped or pruned row costs nothing, without a count', () => {
-    const skipped = chargeText(accountedRow({ charge: 'oversize-skipped' }));
-    const pruned = chargeText(accountedRow({ charge: 'pruned-by-oversize' }));
+    const skipped = chargeText(accountedRow({ sizeCliff: 'oversize-skipped' }));
+    const pruned = chargeText(accountedRow({ sizeCliff: 'pruned-by-oversize' }));
 
     expect(skipped).toContain('4 MiB');
     expect(pruned).toContain('not reached');

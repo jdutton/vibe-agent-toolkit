@@ -9,6 +9,7 @@ import path from 'node:path';
 import {
   isFilesystemAccessError,
   toForwardSlash,
+  toForwardSlashAnyPlatform,
   normalizePath,
   safePath,
   realpathFrom,
@@ -174,7 +175,7 @@ function decodeHrefSegment(segment: string): string {
  * `unknown` there. A URL's backslashes are never reinterpreted by this path.
  */
 function decodeHrefPath(fileHref: string): string {
-  return toForwardSlash(fileHref).split('/').map(decodeHrefSegment).join('/');
+  return toForwardSlashAnyPlatform(fileHref).split('/').map(decodeHrefSegment).join('/');
 }
 
 /**

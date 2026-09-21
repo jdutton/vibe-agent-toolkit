@@ -227,7 +227,9 @@ describe('an ordinary parser failure during blob derivation', () => {
     expect(counts.blobsParseFailed).toBe(CORPUS.length);
     const conditions = conditionsWithCode(builder.build(), BLOB_PARSE_FAILED);
     expect(conditions).toHaveLength(CORPUS.length);
-    expect(conditions[0]?.message).toContain('parser threw on the bytes at');
+    expect(conditions[0]?.message).toContain('parser threw on these bytes');
+    // Content-addressed and shared across repositories: no path belongs in it.
+    expect(conditions[0]?.message).not.toMatch(/ at "/);
   });
 });
 

@@ -97,13 +97,40 @@ describe('claude_rule_patterns row shape', () => {
     expect(SPEC.schema.parse(patternRow())).toStrictEqual(patternRow());
   });
 
-  it('accepts all three statuses, and a null witness beside each', () => {
-    // The three-state column, asserted as three states. `unevaluated` beside a
-    // null witness is the case a two-state column cannot express: the pattern
-    // was never run, so its null witness is a REFUSAL, not inertness.
-    for (const status of ['matched', 'inert', 'unevaluated']) {
-      expect(SPEC.schema.parse(patternRow({ status, witnessPath: null }))).toMatchObject({ status });
+  it('accepts exactly the four statuses, each with the witness it implies', () => {
+    // `unevaluated` beside a null witness is the case a two-state column cannot
+    // express: the pattern was never run, so its null witness is a REFUSAL, not
+    // inertness.
+    const accepted = [
+      { status: 'matched', witnessPath: 'src/a.ts' },
+      { status: 'inert', witnessPath: null },
+      { status: 'unevaluated', witnessPath: null },
+      { status: 'gitignored', witnessPath: null },
+    ] as const;
+    for (const pair of accepted) {
+      expect(SPEC.schema.parse(patternRow(pair))).toMatchObject(pair);
     }
+  });
+
+  it.each(['banana', 'INERT', 'inert ', '', 'ignored'])('refuses the status %j', (status) => {
+    // ⛔ The negative control the closed-vocabulary assertion needs to mean anything.
+    // The default-on check dispatches on the exact string `inert`, so a dead glob
+    // whose status arrived as `inert ` or `INERT` read as healthy and was never
+    // reported. An open vocabulary here is a check that cannot fail.
+    expect(() => SPEC.schema.parse(patternRow({ status, witnessPath: null } as never))).toThrow();
+  });
+
+  it.each([
+    // A match with nothing proving it — the row the witness exists to falsify.
+    ['matched', null],
+    // A witness for a matcher that, by the status' own definition, never ran.
+    ['unevaluated', 'src/a.ts'],
+    ['inert', 'src/a.ts'],
+    ['gitignored', 'src/a.ts'],
+  ] as const)('refuses status %s beside witness %j', (status, witnessPath) => {
+    // Both directions, as `resource_realizations` pins contentState ⟺ contentKey:
+    // either half alone leaves a lie representable.
+    expect(() => SPEC.schema.parse(patternRow({ status, witnessPath }))).toThrow();
   });
 
   it('refuses a column the table does not declare', () => {

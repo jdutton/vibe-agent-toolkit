@@ -134,6 +134,57 @@ describe('writeDerived fills the relations the ephemeral store creates', () => {
   });
 });
 
+describe('an UNEVALUATED derived relation does not exist, so SQLite refuses it', () => {
+  // 🚨 The refusal the query lane's lazy lens evaluation rests on. It used to be
+  // a word scan over the statement, run by the same scanner that SELECTED the
+  // lenses — so it could never fire for a statement the selector had seen, and a
+  // reference the scanner missed would read an existing, EMPTY table and answer
+  // 0. With no table, the engine itself says `no such table`, whatever spelling
+  // reached it.
+  it('throws `no such table` for a relation nothing wrote', async () => {
+    const store = openEphemeralProjectionStore();
+    try {
+      expect(() => store.query('SELECT * FROM edges')).toThrow(/no such table: edges/u);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('creates the relation on an EMPTY write — "evaluated, no rows" is a real answer', async () => {
+    const store = openEphemeralProjectionStore();
+    try {
+      await store.writeDerived({ edges: [] });
+      expect(store.query('SELECT * FROM edges')).toEqual([]);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('creates ONLY the relations the write names', async () => {
+    const store = openEphemeralProjectionStore();
+    try {
+      await store.writeDerived({ edges: [edgeRow('res-1', 0, 'lens-a')] });
+      expect(store.query('SELECT COUNT(*) AS n FROM edges')).toEqual([{ n: 1 }]);
+      expect(() => store.query('SELECT * FROM lens_contexts')).toThrow(/no such table: lens_contexts/u);
+    } finally {
+      await store.close();
+    }
+  });
+
+  it('rolls a failed first write back to ABSENT, and a later write still creates the relation', async () => {
+    const store = openEphemeralProjectionStore();
+    try {
+      await expect(store.writeDerived({ edges: [{ ...edgeRow('res-1', 0, 'lens-a'), refOrdinal: 'x' }] }))
+        .rejects.toThrow(/numeric column/u);
+      expect(() => store.query('SELECT * FROM edges')).toThrow(/no such table: edges/u);
+      await store.writeDerived({ edges: [edgeRow('res-1', 0, 'lens-a')] });
+      expect(store.query('SELECT COUNT(*) AS n FROM edges')).toEqual([{ n: 1 }]);
+    } finally {
+      await store.close();
+    }
+  });
+});
+
 describe('the shared on-disk store REFUSES a lens evaluation', () => {
   // 🚨 This is the whole safety property, and it had NO test in either
   // direction. It also is not what an earlier docstring claimed: the claim was

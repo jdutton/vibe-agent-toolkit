@@ -31,7 +31,7 @@ import { dirname } from 'node:path';
 
 import type { SkillPackagingConfig } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { isGlob, issueLocation, relativeEscapesRoot, safePath, staticGlobBase, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isGlob, issueLocation, relativeEscapesRoot, safePath, staticGlobBase, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import { type SkillFileEntry } from './files-config.js';
 import { DEFAULT_EVALS_SUBPATH } from './skill-test/eval-suite-isolation.js';
@@ -315,9 +315,9 @@ export function packagedFileEntries(
 export function testInputFileEntryIssues(dropped: readonly SkillFileEntry[]): ValidationIssue[] {
   return dropped.map((entry) =>
     materializeIssue('PACKAGED_TEST_INPUT', {
-      location: toForwardSlash(entry.dest),
+      location: toForwardSlashAnyPlatform(entry.dest),
       message:
-        `files: entry "${toForwardSlash(entry.source)} -> ${toForwardSlash(entry.dest)}" points into ` +
+        `files: entry "${toForwardSlashAnyPlatform(entry.source)} -> ${toForwardSlashAnyPlatform(entry.dest)}" points into ` +
         `declared test input (some skill's test.evals) and was NOT packaged — test input, ` +
         `including the expected_output answer key, never ships to consumers.`,
     }),

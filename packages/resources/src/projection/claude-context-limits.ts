@@ -72,6 +72,23 @@ const UNDER_REPORT = 'under-report';
 const SCOPE = 'scope';
 const ASSUMPTION = 'assumption';
 
+/**
+ * The same four, as a runtime list.
+ *
+ * ⛔ The ONE source for the vocabulary. A consumer that validates a published
+ * limit — `vat resources check` builds a Zod enum from this — must not spell
+ * the four out again: a fifth direction added here would leave that copy
+ * silently rejecting the new value, and a renamed one would leave it accepting
+ * a value nothing produces. `satisfies` ties the list to the union, so the two
+ * cannot drift in either direction.
+ */
+export const LIMIT_DIRECTIONS = [
+  OVER_REPORT,
+  UNDER_REPORT,
+  SCOPE,
+  ASSUMPTION,
+] as const satisfies readonly StatedLimit['direction'][];
+
 /** The one doc every modelled behaviour is cited from, with its fetch date. */
 const MEMORY_DOC = 'https://code.claude.com/docs/en/memory (fetched 2026-08-21)';
 
@@ -110,8 +127,8 @@ export const CLAUDE_CONTEXT_LIMITS: readonly StatedLimit[] = [
   { id: 'add-dir', direction: UNDER_REPORT, statement: '`--add-dir` with `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD` loads CLAUDE.md, `.claude/CLAUDE.md`, `.claude/rules/*.md` and CLAUDE.local.md from directories outside the root. Without the env var `--add-dir` loads none of them, and the `additionalDirectories` setting never does.' },
   { id: 'unresolved-conditions-collapse', direction: UNDER_REPORT, statement: 'A file with several broken @ imports reports only one of them. Conditions are keyed by file and code with no line or reference, so every unresolved import after the first collapses onto it. Treat the number of broken imports shown as a lower bound, never a total.' },
   { id: 'variable-imports-unfollowed', direction: UNDER_REPORT, statement: 'An import whose path contains a variable — `@${VAR}/path.md`, `@$HOME/notes.md` — is never followed, and nothing says so. The lexer classifies any token carrying a variable expansion as `env-anchored`, and only `at-prefixed` tokens are followed, so such an import produces no member, no tokens AND no condition row: it is absent from the answer rather than flagged in it. Whatever the variable expands to in a real session, and everything that file imports, is uncounted.' },
-  { id: 'gitignored-not-realized', direction: UNDER_REPORT, statement: 'A gitignored file is not seen. This lane declines every path the repository ignores, so a generated CLAUDE.md, a generated rules file, or an `@` import resolving into ignored territory contributes nothing here — and the harness would load it, because it reads the FILESYSTEM and not git. The omission is deliberate rather than an oversight: a file that is inside a repository but not in git records neither when nor how it was built, so a budget computed against it describes a session state nobody can reproduce. Outside a git working tree nothing is ignored and nothing is declined, so this bound is empty there.' },
-  { id: 'existential-needs-a-file', direction: UNDER_REPORT, statement: 'A directory query\'s ∃ classification is decided against the files that exist RIGHT NOW. A path-scoped rule whose patterns match nothing currently in the tree is absent from THIS answer — not reported as costing zero, absent — and it will fire the moment a matching file is created. So a rule scoped to a generated directory, a not-yet-written package, or a path deleted since the rule was authored makes the directory\'s on-demand total smaller than a future session\'s will be. It is no longer UNNAMEABLE, and that is the half that changed: `claude_rule_patterns` carries one row per declared glob, a dead one reads `status = \'inert\'` with the pattern beside it, and `vat resources check` reports it as CLAUDE_RULE_GLOB_INERT at `info` without being asked. ⚠️ A missing witness there has a THIRD meaning: `status = \'unevaluated\'` says no matcher was ever run, because the rule\'s whole `paths:` list blew the vendor\'s shared expansion budget. Such a rule is missing from this answer too, and its absence is no evidence its globs are dead — the harness uses that list unexpanded, so it may well fire. Read `inert`, never `!= \'matched\'`. The ∀ half is immune: it is decided by pattern containment and needs no file to exist.' },
+  { id: 'gitignored-not-realized', direction: UNDER_REPORT, statement: 'A gitignored file is not seen. This lane declines every path the repository ignores, so a generated CLAUDE.md, a generated rules file, or an `@` import resolving into ignored territory contributes nothing here — and the harness would load it, because it reads the FILESYSTEM and not git. The omission is deliberate rather than an oversight: a file that is inside a repository but not in git records neither when nor how it was built, so a total computed against it describes a session state nobody can reproduce. Outside a git working tree nothing is ignored and nothing is declined, so this bound is empty there.' },
+  { id: 'existential-needs-a-file', direction: UNDER_REPORT, statement: 'A directory query\'s ∃ classification is decided against the files that exist RIGHT NOW. A path-scoped rule whose patterns match nothing currently in the tree is absent from THIS answer — not reported as costing zero, absent — and it will fire the moment a matching file is created. So a rule scoped to a generated directory, a not-yet-written package, or a path deleted since the rule was authored makes the directory\'s on-demand total smaller than a future session\'s will be. It is no longer UNNAMEABLE, and that is the half that changed: `claude_rule_patterns` carries one row per declared glob, a dead one reads `status = \'inert\'` with the pattern beside it, and `vat resources check` reports it as CLAUDE_RULE_GLOB_INERT at `info` without being asked. ⚠️ A missing witness there has two other meanings. `status = \'unevaluated\'` says no matcher was ever run, because the rule\'s whole `paths:` list blew the vendor\'s shared expansion budget. `status = \'gitignored\'` says the glob matched nothing this lane realizes and its territory is gitignored — a rule scoped to build output, whose files the harness reads and this lane never does. Either rule is missing from this answer too, and its absence is no evidence its globs are dead: it may well fire. Read `inert`, never `!= \'matched\'`. The ∀ half is immune: it is decided by pattern containment and needs no file to exist.' },
   { id: 'discovery-one-hop', direction: SCOPE, statement: 'The discoverable set (--discoverable) follows links authored IN the loaded files and stops there — ONE hop, never transitive. A transitive walk would answer "what is reachable from this tree", which in a cross-linked documentation corpus is the tree, and would be near-identical for every path. It is not a cost: nothing loads a markdown link, so `discoverableTokens` is an upper bound on what following every link once would add, never a charge. It is also not a link-integrity verdict — a target this projection does not realize is reported `unrealized`, which is an absence, not a broken link. `vat resources validate` is the lane that adjudicates that.' },
   { id: 'main-conversation-only', direction: SCOPE, statement: 'The answer is for the MAIN CONVERSATION only. A subagent receives the full CLAUDE.md hierarchy except that the built-in Explore and Plan agents skip it, with no frontmatter field or per-agent setting to change which agents skip them, and a non-fork subagent does not inherit auto memory. For those two agents the true answer is ZERO, not this number.' },
   { id: 'version-gated', direction: SCOPE, statement: 'Behaviours are version-gated and this answer pins no floor — see the modelled-behaviour list. The gate that carries a direction is symlinks: from v2.1.198 the harness matches a symlinked path against a path-scoped rule, while this lane realizes no symlink path at all — the filesystem walk sets `followSymlinks: false`, and the git route drops one in a single place for both of the sources it answers from: git\'s mode-`120000` bit for anything the tree snapshot described, an `lstat` for the collapsed `ls-files --others` entries git spells exactly like files — so a rule whose patterns match only a symlinked name is absent from the answer. That is an under-report, and it is the only direction available here: a symlink path is never a member, so nothing can be charged twice under two names. The vendor states no version gate for the other half, but the same absence applies to it — a CLAUDE.md, a rules file or an `@` import reachable only through a symlinked name is uncounted. A query ON a symlinked path yields no wrong number: nothing realizes it, so the answer is `unknown`.' },
@@ -122,6 +139,7 @@ export const CLAUDE_CONTEXT_LIMITS: readonly StatedLimit[] = [
   { id: 'root-claude-md-order', direction: ASSUMPTION, statement: 'The order of `./CLAUDE.md` against `./.claude/CLAUDE.md` is ASSUMED, not cited: root CLAUDE.md, then `.claude/CLAUDE.md`, then CLAUDE.local.md. The vendor documents the first two as alternative locations and never their relative order.' },
   { id: 'dot-matching', direction: ASSUMPTION, statement: '`dot: true` on the `paths:` matcher is an ASSUMPTION. Anthropic documents nothing about dotfile matching there. It is kept because adopter paths traverse `.claude/`.' },
   { id: 'nested-rule-trigger', direction: ASSUMPTION, statement: 'The trigger for a NESTED paths-less rule is ASSUMED to be a query at or below the rules directory\'s parent — the directional analogue of the subdirectory-CLAUDE.md rule. The vendor states only that nested rules directories are in the on-demand class. Such rules are never counted into the always-loaded total.' },
+  { id: 'nested-rule-glob-base', direction: OVER_REPORT, statement: 'A NESTED rules file\'s `paths:` globs are matched against BOTH the repository root and the project directory the second `.claude/` belongs to, and the rule fires if either matches. The vendor does not say which base applies, so a nested rule may be admitted, and a nested glob called live, on the strength of a base the harness does not use. Taking the union means a glob is reported inert only when it is dead under both.' },
 ];
 
 /**
@@ -136,4 +154,103 @@ export const CLAUDE_CONTEXT_MODELLED_BEHAVIOURS: readonly ModelledBehaviour[] = 
   { behaviour: 'Nested `.claude/rules/` directories load on demand', introducedIn: 'v2.1.211', citedFrom: MEMORY_DOC },
   { behaviour: 'A `paths:` list shares a 1,000-pattern / 4 MiB expansion budget', introducedIn: 'v2.1.217', citedFrom: MEMORY_DOC },
   { behaviour: 'A malformed `[` in a pattern matches nothing', introducedIn: 'v2.1.207', citedFrom: MEMORY_DOC },
+];
+
+/**
+ * The ids of {@link CLAUDE_CONTEXT_LIMITS} that bound the two derived relations
+ * `claude_context_chains` and `claude_context_loads` too.
+ *
+ * The relations hold `vat claude context`'s answer for each chain's
+ * representative — always-loaded AND on-demand rows — so every limit on that
+ * answer carries across but one: `discovery-one-hop` is about the
+ * `--discoverable` set, which the relations do not hold.
+ *
+ * ⛔ Written out rather than computed as "all but one", so a limit added to the
+ * list above has to be ruled in or out here by a person rather than inherited by
+ * default.
+ */
+const RELATION_LIMIT_IDS_FROM_CONTEXT: readonly string[] = [
+  'claude-md-excludes',
+  'setting-sources',
+  'html-comments',
+  'glob-dialect',
+  'directory-glob',
+  'auto-memory',
+  'managed-claude-md-key',
+  'user-and-managed-scope',
+  'add-dir',
+  'unresolved-conditions-collapse',
+  'variable-imports-unfollowed',
+  'gitignored-not-realized',
+  'existential-needs-a-file',
+  'main-conversation-only',
+  'version-gated',
+  'outside-root-is-not-external',
+  'context-window-scope',
+  'cliff-scope',
+  'token-estimate',
+  'root-claude-md-order',
+  'dot-matching',
+  'nested-rule-trigger',
+  'nested-rule-glob-base',
+];
+
+/**
+ * Select published limits by id, refusing to be quiet about one that moved.
+ *
+ * ⛔ Throws rather than filtering. A missing id means an entry above was renamed
+ * or removed, and the failure this guards is a bound silently disappearing from a
+ * report that still looks complete — a reader cannot tell a caveat that was
+ * dropped from one that never applied. It runs at MODULE LOAD, so no suite that
+ * imports this package can pass over it.
+ *
+ * @param ids - Ids of {@link CLAUDE_CONTEXT_LIMITS} entries, in the order wanted
+ * @returns The entries themselves, by reference, in the requested order
+ * @throws Error naming every id that is not in {@link CLAUDE_CONTEXT_LIMITS}
+ */
+function limitsById(ids: readonly string[]): readonly StatedLimit[] {
+  const byId = new Map(CLAUDE_CONTEXT_LIMITS.map((limit) => [limit.id, limit]));
+  const missing = ids.filter((id) => !byId.has(id));
+  if (missing.length > 0) {
+    throw new Error(
+      `No CLAUDE_CONTEXT_LIMITS entry has the id ${missing.join(', ')}.`
+      + ' A stated limit was renamed or removed without being ruled in or out for the relations;'
+      + ' fix the id or delete it deliberately, because dropping it silently un-publishes a bound.',
+    );
+  }
+  return ids.map((id) => byId.get(id) as StatedLimit);
+}
+
+/**
+ * Every limit a statement over `claude_context_chains` / `claude_context_loads`
+ * is published with — by `vat resources query` and `vat resources check`, once
+ * per report, whenever the claude-context lens was evaluated.
+ *
+ * The shared block first, in {@link CLAUDE_CONTEXT_LIMITS}' own order, then the
+ * two that exist only because the answer is flattened into rows: the collapse
+ * that keys them per chain, and the column a launch-cost sum filters on.
+ */
+export const CLAUDE_CONTEXT_RELATION_LIMITS: readonly StatedLimit[] = [
+  ...limitsById(RELATION_LIMIT_IDS_FROM_CONTEXT),
+  {
+    id: 'chain-on-demand-is-representative',
+    direction: SCOPE,
+    statement: 'The load rows are computed ONCE per chain, at its `representative`, and'
+      + ' `claude_context_chains` maps every other working location onto them. That is exact for'
+      + ' the always-loaded rows — a directory with no CLAUDE.md of its own loads exactly what its'
+      + ' nearest instructed ancestor loads — and it is NOT exact for the on-demand rows: a'
+      + ' path-scoped rule is admitted to a directory only when a file under THAT directory'
+      + ' matches, so another location\'s on-demand set can differ from its representative\'s.'
+      + ' Read `not-always` rows as the representative\'s; for any other location ask'
+      + ' `vat claude context <path>`.',
+  },
+  {
+    id: 'path-scoped-rules-not-charged',
+    direction: SCOPE,
+    statement: 'A PATH-SCOPED rule — one carrying a `paths:` list — and anything only it imports is'
+      + ' `launchCharge = \'not-always\'`: it loads when the agent touches a matching file rather'
+      + ' than at launch. An UNSCOPED rule in the root `.claude/rules/` IS charged, because nothing'
+      + ' gates it on a path. Its absence from a launch-cost sum is a scope decision, never a'
+      + ' finding that it is free — the row is still in the relation, with its tokens.',
+  },
 ];

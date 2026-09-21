@@ -8,6 +8,7 @@
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 
+import { toForwardSlash } from '@vibe-agent-toolkit/utils/path';
 import { vi, expect } from 'vitest';
 
 import type { DoctorCheckResult, DoctorOutcome } from '../../src/commands/doctor.js';
@@ -212,7 +213,7 @@ export async function mockDoctorFileSystem(
 
   vi.mocked(readFileSync).mockImplementation((path): string => {
     // Normalize path separators for cross-platform compatibility (Windows uses backslashes)
-    const pathStr = path.toString().replaceAll('\\', '/');
+    const pathStr = toForwardSlash(path.toString());
 
     // package.json
     if (pathStr.includes('package.json')) {
@@ -245,7 +246,7 @@ export async function mockDoctorFileSystem(
 
   vi.mocked(existsSync).mockImplementation((path): boolean => {
     // Normalize path separators for cross-platform compatibility (Windows uses backslashes)
-    const pathStr = path.toString().replaceAll('\\', '/');
+    const pathStr = toForwardSlash(path.toString());
 
     if (pathStr.includes(CONFIG_FILENAME)) {
       return opts.configExists;

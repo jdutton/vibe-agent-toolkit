@@ -34,7 +34,7 @@
               "type": "null"
             }
           ],
-          "description": "Kind of the DECIDING admission, or null when nothing admitted this row"
+          "description": "Kind of the DECIDING admission, or null when nothing admitted this row: \"ancestry\", \"root-rule\", \"nested-rule\", \"glob-rule\", \"glob-rule-covers-dir\", \"glob-rule-may-fire\", \"import\""
         },
         "pattern": {
           "type": [
@@ -60,15 +60,20 @@
           "minimum": 0,
           "description": "How many admissions this row carries — the deciding one is a summary of them, not the whole list"
         },
-        "charge": {
+        "sizeCliff": {
           "type": "string",
-          "minLength": 1,
-          "description": "The 4 MiB cliff's verdict: \"charged\", \"oversize-skipped\", \"pruned-by-oversize\" or \"unknown-size\""
+          "enum": [
+            "loaded",
+            "oversize-skipped",
+            "pruned-by-oversize",
+            "unmeasured"
+          ],
+          "description": "The 4 MiB CLAUDE.md cliff's verdict on this file — NOT whether it is paid at launch; that is launchCharge. \"unmeasured\" means no blob, so no size"
         },
-        "budgetDisposition": {
+        "launchCharge": {
           "type": "string",
           "minLength": 1,
-          "description": "How this row reaches the always-loaded budget — open vocabulary: \"charged\", \"unknown-size\", \"oversize\", \"excluded-rule\", \"excluded-deep-import\", \"excluded-unattributed-import\", \"not-always\""
+          "description": "Whether this row's bytes are paid when a session starts — sum tokens or bytes WHERE this is \"charged\". Open vocabulary: \"charged\", \"unknown-size\", \"oversize\", \"not-always\""
         },
         "tokens": {
           "anyOf": [
@@ -104,8 +109,8 @@
         "pattern",
         "depth",
         "admissionCount",
-        "charge",
-        "budgetDisposition",
+        "sizeCliff",
+        "launchCharge",
         "tokens",
         "bytes"
       ],

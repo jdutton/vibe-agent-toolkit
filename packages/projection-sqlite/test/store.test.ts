@@ -563,6 +563,41 @@ function treeKey(hash: string, rootId: string = KEY.rootId): ExtentKey {
 }
 
 describe('eviction', () => {
+  it('bounds how many ROOTS it holds, dropping the least recently written root whole', async () => {
+    // ⛔ Retention is per root, so every distinct root path — a worktree, a CI
+    // job directory, a subdirectory a command ran from — kept its trees forever.
+    // Six copies of one repository measured six roots and six stored trees, none
+    // ever reclaimed, in a store that is on by default.
+    const evicting = openSqliteProjectionStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2 });
+    const first = treeKey('tree-1', 'root-first');
+    await evicting.writeExtent(first, extentBundle(BROAD));
+    await evicting.writeExtent(treeKey('tree-1', 'root-second'), extentBundle(BROAD));
+    expect(await store.readExtent(first)).toBeDefined();
+
+    await evicting.writeExtent(treeKey('tree-1', 'root-third'), extentBundle(BROAD));
+    await evicting.close();
+
+    expect(await store.readExtent(first)).toBeUndefined();
+    expect(storedRowTotal(first)).toBe(0);
+    expect(await store.readExtent(treeKey('tree-1', 'root-second'))).toBeDefined();
+    expect(await store.readExtent(treeKey('tree-1', 'root-third'))).toBeDefined();
+  });
+
+  it('counts a root as recent when ANY of its trees was written recently', async () => {
+    // A busy root rewriting its newest tree must not be aged out behind a quiet
+    // one, which is the reason retention was per root in the first place.
+    const evicting = openSqliteProjectionStore({ directory, retainedExtentsPerRoot: 3, retainedRoots: 2 });
+    await evicting.writeExtent(treeKey('tree-1', 'root-busy'), extentBundle(BROAD));
+    await evicting.writeExtent(treeKey('tree-1', 'root-quiet'), extentBundle(BROAD));
+    await evicting.writeExtent(treeKey('tree-2', 'root-busy'), extentBundle(BROAD));
+    await evicting.writeExtent(treeKey('tree-1', 'root-new'), extentBundle(BROAD));
+    await evicting.close();
+
+    expect(await store.readExtent(treeKey('tree-1', 'root-quiet'))).toBeUndefined();
+    expect(await store.readExtent(treeKey('tree-2', 'root-busy'))).toBeDefined();
+    expect(await store.readExtent(treeKey('tree-1', 'root-new'))).toBeDefined();
+  });
+
   it('keeps every tree while the root is under its retention limit', async () => {
     // The negative control. Without it, an eviction that deleted everything it
     // touched would satisfy every other case in this block.
@@ -820,6 +855,40 @@ describe('the blob tier is bounded', () => {
       expect(held.blobs).toHaveLength(1);
     }
     await evicting.close();
+  });
+
+  it('never evicts the keys it is writing when ONE write names more keys than the window', async () => {
+    // ⛔ The case the one-key-per-write test above cannot see. Every key of a
+    // single write shares its timestamp and holds the newest rowids, but an
+    // OFFSET of the window still cut the write's own oldest keys — and the
+    // coverage check is all-or-nothing, so one missing key made every run of a
+    // tree larger than the window a full re-derivation that could never hit.
+    const evicting = openWithBlobWindow(3);
+    const keys = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'].map((seed) => contentKey(seed));
+    await evicting.writeBlobFacts({
+      blobs: [], blobReferences: [], blobSections: [],
+      blobConditions: keys.flatMap((key) => declinedBlobRows(key).blobConditions),
+    });
+    const held = await evicting.readBlobFacts(keys);
+    await evicting.close();
+
+    expect(new Set(held.blobConditions.map((row) => row.blob))).toEqual(new Set(keys));
+  });
+
+  it('trims back to the window on the next write, and only then', async () => {
+    // The oversized write above holds more than the window until a later write
+    // reclaims the surplus — so the bound is still a bound.
+    const evicting = openWithBlobWindow(2);
+    await evicting.writeBlobFacts({
+      blobs: [], blobReferences: [], blobSections: [],
+      blobConditions: ['a', 'b', 'c', 'd'].flatMap((seed) => declinedBlobRows(contentKey(seed)).blobConditions),
+    });
+    expect(trackedBlobKeys()).toBe(4);
+
+    await evicting.writeBlobFacts(sampleBlobRows(contentKey('e')));
+    await evicting.close();
+
+    expect(trackedBlobKeys()).toBe(2);
   });
 
   it('holds at least one key however low the caller sets the window', async () => {

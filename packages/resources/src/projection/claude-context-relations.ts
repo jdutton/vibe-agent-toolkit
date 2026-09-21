@@ -1,6 +1,6 @@
 /**
- * The always-loaded context chain as RELATIONS — the facts `vat claude budget`
- * reports on, in a shape an adopter can select from.
+ * The instruction chain as RELATIONS — what Claude Code loads at each working
+ * location, in a shape an adopter can select from.
  *
  * ⛔ **`claude_context_chains` and `claude_context_loads` are DERIVED, not
  * materialised**: nothing populates them, they are `whatLoadsAt` run once per
@@ -10,23 +10,21 @@
  * an empty load list — an empty list is an answer, and conflating it with "VAT
  * never looked" is the confident-zero failure this lane refuses everywhere else.
  *
- * Why the verb is not the only way to ask, why the rows are keyed per CHAIN
- * rather than per location, and the join fan-out the SQL twins below are written
- * to avoid: `docs/architecture/zones.md` §2, "The two claude-context relations,
- * and the rules they carry".
+ * No threshold and no verdict live here or anywhere in VAT: the rows are the
+ * facts, and what counts as too much is the adopter's `resources.checks` to say.
+ * Why the rows are keyed per CHAIN rather than per location, and the join
+ * fan-out a statement over them must avoid: `docs/architecture/zones.md` §2,
+ * "The two claude-context relations, and the rules they carry".
  */
 
 import type {
+  ClaudeContextAdmissionKind,
   ClaudeContextChainRow,
   ClaudeContextLoadRow,
 } from '../schemas/projection-claude-context.js';
 
 import { account, type AccountedRow } from './claude-context-accounting.js';
-import {
-  admissionQualifiesForBudget,
-  budgetDisposition,
-  DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS,
-} from './claude-context-budget.js';
+import { admissionLoadsAtLaunch, launchCharge } from './claude-context-launch-charge.js';
 import type { Admission } from './claude-context-query.js';
 import { whatLoadsAt } from './claude-context-query.js';
 import { claudeMdIdentities, contextRegions } from './claude-context-regions.js';
@@ -35,12 +33,17 @@ import type { Projection } from './projection.js';
 /**
  * One instruction chain: the locations that pay it, and what it loads.
  *
- * The intermediate both consumers read. `claudeContextRelations` flattens it
- * into the two relations SQL sees; `sweepAlwaysLoadedBudgets` folds the same
- * rows into a verdict. Neither re-queries, which is what makes "the verb and the
- * relation cannot disagree" structural rather than a claim.
+ * The intermediate `claudeContextRelations` flattens into the two relations SQL
+ * sees.
+ *
+ * ⚠️ `loads` is the REPRESENTATIVE's answer. Its always-loaded rows hold for
+ * every location in the chain — that is the collapse `claude-context-regions.ts`
+ * owns — but its on-demand rows do not: a path-scoped rule is admitted to a
+ * directory query only when a file under THAT directory matches, so a
+ * region-mate's on-demand set can differ. The `chain-on-demand-is-representative`
+ * stated limit says so wherever these rows are published.
  */
-export interface ContextChain {
+interface ContextChain {
   /** The chain's id — {@link ClaudeContextChainRow.chainId}. */
   readonly chainId: string;
   /** The instructed directory whose chain this is. `''` is the corpus root. */
@@ -65,48 +68,6 @@ export interface ClaudeContextRelations {
 
 /** The prefix a chain id carries, so an id is recognisable in a result set. */
 const CHAIN_ID_PREFIX = 'chain-';
-
-/**
- * The statement that reproduces `vat claude budget`'s verdict. **Documentation,
- * never executed** — an adopter copies it into `resources.checks` and adapts it.
- *
- * 🪤 Totals are computed in a subquery over `claude_context_loads` ALONE, and
- * the chain relation is consulted only by correlated subqueries that aggregate
- * or limit, because a plain `JOIN claude_context_chains ON chainId` multiplies
- * every load row by the number of locations paying that chain.
- *
- * ⛔ The threshold is interpolated from {@link DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS}
- * rather than written as a literal — a copy of a MEASURED quantity in a
- * documentation string is a second source of truth that goes stale in silence.
- */
-export const ALWAYS_LOADED_BUDGET_SQL_TWIN =
-  'SELECT b.chainId,\n'
-  + '       b.alwaysTokens,\n'
-  + '       (SELECT c.representative FROM claude_context_chains c\n'
-  + '         WHERE c.chainId = b.chainId LIMIT 1) AS representative,\n'
-  + '       (SELECT COUNT(*) FROM claude_context_chains c\n'
-  + '         WHERE c.chainId = b.chainId) AS payingLocations\n'
-  + '  FROM (SELECT chainId, SUM(tokens) AS alwaysTokens\n'
-  + '          FROM claude_context_loads\n'
-  + "         WHERE budgetDisposition = 'charged'\n"
-  + '         GROUP BY chainId) AS b\n'
-  + ` WHERE b.alwaysTokens > ${String(DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS)}`;
-
-/**
- * The per-FILE half: what one chain is paying for, biggest first.
- *
- * The verdict says a chain is over budget; this says which files put it there,
- * which is the question a reader asks next and the one `contributors` answers
- * inside the verb. `budgetDisposition` is selected rather than filtered on, so
- * the rows the total EXCLUDED are visible beside the rows it charged — a file
- * counted under `unknown-size` is the most interesting row in the list and a
- * `WHERE budgetDisposition = 'charged'` here would hide it.
- */
-export const ALWAYS_LOADED_CONTRIBUTORS_SQL_TWIN =
-  'SELECT path, tokens, budgetDisposition, admissionKind, pattern\n'
-  + '  FROM claude_context_loads\n'
-  + " WHERE chainId = ? AND loadClass = 'always'\n"
-  + ' ORDER BY tokens DESC';
 
 /**
  * The chain id for one representative.
@@ -136,7 +97,7 @@ export function contextChainId(representative: string): string {
  * @param projection - A populated projection from `buildClaudeContextPopulation`
  * @returns One entry per distinct chain, in `contextRegions` order
  */
-export function contextChains(projection: Projection): readonly ContextChain[] {
+function contextChains(projection: Projection): readonly ContextChain[] {
   const claudeMdIds = claudeMdIdentities(projection);
 
   return contextRegions(projection).map((region) => {
@@ -191,12 +152,12 @@ function loadRow(chainId: string, row: AccountedRow): ClaudeContextLoadRow {
     resourceId: row.resourceId,
     path: row.path,
     loadClass: row.loadClass,
-    admissionKind: deciding?.kind ?? null,
+    admissionKind: (deciding?.kind satisfies ClaudeContextAdmissionKind | undefined) ?? null,
     pattern: deciding === undefined ? null : admissionPattern(deciding),
     depth: deciding?.kind === 'import' ? deciding.depth : null,
     admissionCount: row.admissions.length,
-    charge: row.charge,
-    budgetDisposition: budgetDisposition(row),
+    sizeCliff: row.sizeCliff,
+    launchCharge: launchCharge(row),
     tokens: row.tokens,
     bytes: row.bytes,
   };
@@ -205,19 +166,21 @@ function loadRow(chainId: string, row: AccountedRow): ClaudeContextLoadRow {
 /**
  * The admission whose kind the row is reported under.
  *
- * 🔑 The first QUALIFYING admission, falling back to the first of any kind. A
- * row carries several — a rules file that is also an ancestry member is
- * ordinary — and one row per admission would make every `SUM(tokens)`
+ * 🔑 The first admission that CAN load at launch, falling back to the first of
+ * any kind. A row carries several — a rules file that is also an ancestry member
+ * is ordinary — and one row per admission would make every `SUM(tokens)`
  * double-count exactly the diamond `whatLoadsAt` dedupes by identity to avoid.
- * Reporting the qualifying one is what keeps `admissionKind` consistent with the
- * `budgetDisposition` stored beside it: when the row is charged, the kind shown
- * is the kind that charged it.
+ * Preferring a launch-time kind is what keeps `admissionKind` consistent with
+ * the `launchCharge` stored beside it: a charged row never names a path-scoped
+ * rule. ⚠️ Among several `import` admissions the first is shown, which may name
+ * an on-demand closure root while an always-loaded one is what charged the row;
+ * `admissionCount` says there were more.
  *
  * @param admissions - Every admission the row carries
  * @returns The deciding admission, or undefined when the row carries none
  */
 function decidingAdmission(admissions: readonly Admission[]): Admission | undefined {
-  return admissions.find(admissionQualifiesForBudget) ?? admissions[0];
+  return admissions.find(admissionLoadsAtLaunch) ?? admissions[0];
 }
 
 /**

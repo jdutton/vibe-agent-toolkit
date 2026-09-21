@@ -12,7 +12,7 @@
 import {
 	AGENT_INSTRUCTION_FILE_PATTERNS,
 	NAVIGATION_FILE_PATTERNS,
-} from '@vibe-agent-toolkit/agent-skills';
+ LINK_GRAPH_MEMBER_GLOBS } from '@vibe-agent-toolkit/agent-skills';
 import type { ExtentRefusalRule } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
@@ -67,7 +67,7 @@ describe('inventoryExtentDeclaration', () => {
 			// the depth half of the leaf rule cannot fire there — but the traversal
 			// half does: without it the closure would walk through an HTML page the
 			// walker treats as cargo.
-			traverseParserKinds: ['markdown'],
+			traverseGlobs: [...LINK_GRAPH_MEMBER_GLOBS],
 			follow: ['markdown-link', 'markdown-link-reference', 'markdown-definition'],
 			// The schema default, materialized by `parse`. This lane reads hrefs the
 			// way the walker does — RFC 3986 — and must NOT pick up Claude Code's

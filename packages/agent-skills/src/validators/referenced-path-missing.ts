@@ -112,7 +112,7 @@ import { existsSync } from 'node:fs';
 
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import {
   CLAUDE_WEB_REFERENCES_SUBDIR,
@@ -147,7 +147,7 @@ const NON_LITERAL = /[*?<>{}[\]]/u;
  * dropped — and a build drop referenced as `./scripts/setup.mjs` is the very case
  * this module exists for.
  *
- * ⚠️ The `toForwardSlash` call also normalizes `scripts\x.mjs`, and this comment
+ * ⚠️ The `toForwardSlashAnyPlatform` call also normalizes `scripts\x.mjs`, and this comment
  * used to claim that as a third recognized spelling. It is UNREACHABLE from the
  * shipped lexer, which only emits a run containing one of `/ $ % @` — a
  * backslash-only path never becomes a candidate, so no Windows-authored token
@@ -164,7 +164,7 @@ const NON_LITERAL = /[*?<>{}[\]]/u;
  */
 function bundleRelativeSegments(token: string): string[] | null {
   if (NON_LITERAL.test(token)) return null;
-  const segments = toForwardSlash(token).split('/');
+  const segments = toForwardSlashAnyPlatform(token).split('/');
   if (segments[0] === '.') segments.shift();
   if (segments.length < 2) return null;
   if (segments.some(segment => segment === '' || segment === '.' || segment === '..')) return null;

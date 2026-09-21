@@ -2,7 +2,7 @@
  * `no-hardcoded-path-split` — `.split('/')` / `.split('\\')` on something that
  * may be a native path. It is a HEURISTIC: it cannot see the operand's type, so
  * the VALID rows pin every shape it has to let through for the rule to survive
- * contact with a real tree — the inline `toForwardSlash()` wrap, a variable
+ * contact with a real tree — the inline `toForwardSlash()` / `toForwardSlashAnyPlatform()` wrap, a variable
  * assigned from one, and the naming hints (`normalized…`, `unix…`, `forward…`).
  */
 
@@ -18,6 +18,9 @@ const CASES: RuleCases = {
     // Normalized inline, or through a variable that was.
     { code: "const parts = toForwardSlash(p).split('/');" },
     { code: "const n = toForwardSlash(p); const parts = n.split('/');" },
+    // The any-platform converter (authored text) normalizes just as well.
+    { code: "const parts = toForwardSlashAnyPlatform(glob).split('/');" },
+    { code: "const g = toForwardSlashAnyPlatform(glob); const parts = g.split('/');" },
     // Naming hints the rule honours.
     { code: "const parts = normalizedPath.split('/');" },
     { code: "const parts = unixPath.split('/');" },

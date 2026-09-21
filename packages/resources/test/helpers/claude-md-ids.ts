@@ -6,7 +6,7 @@ import type { Projection } from '../../src/projection/projection.js';
  *
  * ⛔ Deliberately NOT `claudeMdIdentities` from `claude-context-regions.ts`,
  * which is the SHIPPED derivation and is exported. Both differential oracles
- * that use this — the budget sweep's and the cost map's — exist to check a
+ * that use this — the chains oracle's and the cost map's — exist to check a
  * collapsed computation against a naive one, and an oracle that reaches for the
  * production helper is comparing the shipped code to itself. The duplication
  * against production is the point.

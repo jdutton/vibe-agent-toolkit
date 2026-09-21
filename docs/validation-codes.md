@@ -1061,65 +1061,40 @@ Scope in v1: detectors run against SKILL.md and its transitively linked markdown
 - **Why it matters:** Absence of a target declaration is not the same as "compatible everywhere." Surfacing the gap lets adopters make the choice explicit.
 - **Fix:** Declare targets in `vibe-agent-toolkit.config.yaml` (`skills.config.<name>.targets`), `plugin.json`, or marketplace defaults.
 
-## Context Budget Codes
-
-*Fire from the resource projection — the always-loaded context a working directory pays before an agent reads a single line of the task.*
-
-Every other code in this document is about one file. These are about a *position
-in the tree*: what an agent starting work in a given directory is charged for
-having started there.
-
-⚠️ **These are emitted by `vat claude budget` alone**, and by no other command.
-Between 2026-08-22 and 2026-08-23 `vat resources validate` ran the check by
-default behind a `--no-context-budget` opt-out; it does not any more, and there
-is no flag in either direction — a validation run must not emit findings nobody
-asked for. `vat validate`, which spawns `vat resources validate`, is therefore
-silent about the budget too. `resources.validation.*` is still the configuration
-surface: `vat claude budget` reads the same `thresholds`, `severity` and `allow`
-keys every other lane reads.
-
-### `ALWAYS_LOADED_CONTEXT_BUDGET`
-
-- **Default:** `info`
-- **What:** A working directory's always-loaded context — the repo-root `CLAUDE.md`, every `CLAUDE.md` on the directory path down to it, one level of `@` imports from each, and any **unscoped** rules file in the root `.claude/rules/` — exceeds the configured token budget. An `AGENTS.md` is measured only where a `CLAUDE.md` imports it; Claude Code does not load it by name. Path-scoped rules (a `paths:` list) are excluded: they load when the agent touches a matching file, not at launch.
-- **Why it matters:** This context is not optional and not lazy — it is prepended to the session before any task text, so it is paid in full on every single turn started in that directory, whether or not a word of it is relevant. The cost is also *inherited*: an oversized repo-root file is charged again to every directory beneath it, so one file can put an entire tree over budget while each individual file looks reasonable. The budget makes that inheritance visible; without it, the growth is invisible because no single edit ever looks expensive.
-- **Why `info` and not `warning`:** New rules ship at `info` or `warning` per [validation rule design](./validation-rule-design.md), and 12,000 was calibrated in **2026-08** across four real corpora with the shipped `chars/4` estimator — VAT, a large adopter monorepo, a plugin marketplace tree and a `~/.claude` config snapshot (452 / 1,037 / 102 / 1,665 source directories; 2,027 / 7,912 / 294 / 6,928 files walked) — whose always-loaded chains ran to medians of 10,728 / 9,854 / 0 / 1,433 tokens, p90s of 15,254 / 12,346 / 674 / 2,107 and maxima of 16,263 / 22,078 / 674 / 3,639. 12,000 sits at **p71 / p82 / p100 / p100** of those four distributions. 10,000 is the more principled number and lost on the reason worth keeping: it flags **100% of VAT's own repo**, and shipping a rule the authoring project fails everywhere is how a rule earns a blanket suppression instead of a fix. Read the **distribution shape**, not a flag rate — the per-directory figures have moved since (VAT's source-directory count went 452 → 466 → 468 and the root `CLAUDE.md` fell 28.2%), which is why [zones.md](./architecture/zones.md) quotes no threshold or flag rate from its own single-corpus measurement and neither does this. Independently corroborated: the one production repository known to enforce an equivalent always-loaded chain budget arrived at 40 KiB ≈ 10,240 tokens without us and ships its check deliberately warn-only for the same reason, and its own code validates the `chars/4` estimator at the bytes-per-token ratio recorded in `packages/resources/src/projection/claude-context-budget.ts:61-65`. A number that fails a build is a number people learn to stop reading; this one has to earn the right to block via the documented graduation path.
-- **Emitted by:** `vat claude budget [paths...]` — the check verb. Its query sibling `vat claude context` reads the same lane and never emits a finding, and `vat resources validate` does not emit this code at all.
-- **Fix:** Raise or lower `resources.validation.thresholds.alwaysLoadedContextTokens` in `vibe-agent-toolkit.config.yaml` to move the budget, or set `resources.validation.severity.ALWAYS_LOADED_CONTEXT_BUDGET` to `ignore` to stop reporting it. Neither is usually the real fix: open the largest contributors the finding names, in the order it names them, and trim there. The win is usually in an **ancestor** file — a root `CLAUDE.md` or a root `.claude/rules/` file is paid in full by every directory beneath it, so trimming one is the single edit that lowers every reported directory at once — but the finding, not the file type, says which one.
-- **Bounds:** The command publishes what its answer does not settle, once per run, beside the findings — the same signed, directional limit list `vat claude context` prints. Read it before acting on the number: the total is a lower bound in several named directions, and the token figure is `characters / 4` rather than a tokenizer count. ⚠️ **Characters, not bytes** — the estimator runs on the decoded string, so a byte count read back against a recorded character count manufactures a phantom "this file changed": the root `CLAUDE.md` measures 31,010 bytes against a recorded 30,803 characters, and both numbers are right because the file is multibyte.
-
 ## Claude Rule Codes
 
-*Fire from the same resource-projection lane as the context-budget codes above, about the `.claude/rules/` files a repository ships rather than about the context a directory pays at launch.*
+*Fire from the resource projection, about the `.claude/rules/` files a repository ships.*
 
-A rules file with a `paths:` list is **path-scoped**: Claude Code does not load it at session start, it loads when the agent touches a file one of those globs matches. That is what makes the globs load-bearing. An unscoped rule is always loaded and is charged to [`ALWAYS_LOADED_CONTEXT_BUDGET`](#always_loaded_context_budget) instead; a path-scoped rule costs nothing until it fires, and a path-scoped rule whose globs match nothing costs nothing ever, because it cannot fire.
+A rules file with a `paths:` list is **path-scoped**: Claude Code does not load it at session start, it loads when the agent touches a file one of those globs matches. That is what makes the globs load-bearing. An unscoped rule is loaded at launch and is charged to the `claude_context_loads` rows `vat claude context` reports instead; a path-scoped rule costs nothing until it fires, and a path-scoped rule whose globs match nothing costs nothing ever, because it cannot fire.
 
 ### `CLAUDE_RULE_GLOB_INERT`
 
 - **Default:** `info`
-- **What:** A path-scoped rules file under `.claude/rules/` declares a `paths:` glob that matches no file in the tree, so nothing an agent touches can load that rule. Reported per inert pattern, not per rule: a rule whose other patterns still match is reported only for the dead one.
+- **What:** A path-scoped rules file under `.claude/rules/` declares a `paths:` glob that matches no file VAT can see — tracked files, and untracked files git does not ignore — so no such file can load that rule. Reported per inert pattern, not per rule: a rule whose other patterns still match is reported only for the dead one. A glob that matches nothing VAT can see but covers gitignored territory is **not** reported: its row has status `gitignored`, because Claude Code reads the filesystem and may still load the rule.
 - **Why it matters:** The failure is silent in the direction that matters. A rule that loads and is ignored is at least visible in the transcript; a rule whose glob matches nothing is never offered to anybody, so the author sees no output and reads the absence of findings as compliance. Nothing else in the repository reports it either — the file is present, well-formed, committed and reviewed, and every signal short of a match says the rule is in force. The usual cause is ordinary drift rather than a bad glob: a directory is renamed or moved and the pattern that named it stays behind, which is exactly the edit nobody thinks to grep `.claude/` for.
 - **Why `info` and not `warning`:** New rules ship at `info` or `warning` per [validation rule design](./validation-rule-design.md), and this one has no observed population at all to argue itself up the ladder. The only corpus measured so far is one adopter carrying **245 rules across 673 `paths:` globs, of which zero are inert** — which says the pattern has not yet been caught firing anywhere, not that a known-bad population is being tolerated at a quiet severity. There is also a legitimate arm the detector cannot tell from a typo by looking: a glob deliberately written ahead of the tree it will govern is inert and correct. `info` keeps the observation visible while a corpus accumulates; the [graduation path](./validation-rule-design.md#graduation-path) is how it earns a louder default, once evidence shows inert globs are dominantly dead rather than deliberate.
 - **Emitted by:** `vat resources check`, as the built-in check `claude-rule-glob-inert` — one of VAT's default-on rules, which run whether or not the project declares any `resources.checks` of its own. It is a TypeScript predicate over the projection's `claude_rule_patterns` rows and never SQL, so a default-on rule never makes a query engine part of anybody's gate; `--check claude-rule-glob-inert` runs it alone, and the entry it contributes to `data.checks` carries `builtin: true`.
 - **Ask it yourself:** the facts are ordinary projection rows, so the built-in is the default *report* rather than the only way to ask. Copy this into `resources.checks` and narrow it — the built-in stays available and a severity override silences it:
   ```sql
-  SELECT p.pattern, p.ordinal, r.path
+  SELECT p.pattern, p.ordinal,
+         (SELECT r.path FROM resource_realizations r
+           WHERE r.resourceId = p.resourceId LIMIT 1) AS path
     FROM claude_rule_patterns p
-    LEFT JOIN resource_realizations r ON r.resourceId = p.resourceId
    WHERE p.status = 'inert'
   ```
-  ⚠️ `status = 'inert'`, never `status != 'matched'`. The third status, `unevaluated`, means VAT never ran the matcher — the rule's whole `paths:` list blew the vendor's expansion budget — so counting it here reports VAT's own declined work as the author's typo, and no edit to the rules file would fix it.
+  ⚠️ `status = 'inert'`, never `status != 'matched'`. Two other statuses also have a null witness, and neither means the glob is dead. `unevaluated` means VAT never ran the matcher, because the rule's whole `paths:` list blew the vendor's expansion budget. `gitignored` means the glob matched nothing VAT can see and covers gitignored territory, which VAT never reads and Claude Code does. Counting either one reports a VAT blind spot as the author's typo, and deleting the glob could break a rule that still loads.
 
-  The per-FILE question — *which rules files fire on nothing at all* — is a different aggregate, and the intuitive form of it is wrong. Rules files absent from `claude_context_loads` looks like the answer and is `status != 'matched'` wearing a `LEFT JOIN`: that relation holds one row per glob that CAN fire, so a rule the expansion budget refused has no row there either and reads as dead while firing perfectly well. Aggregate the three-state table instead, and take the size from `blobs` — `resource_realizations` carries no size column:
+  The per-FILE question — *which rules files fire on nothing at all* — is a different aggregate, and the intuitive form of it is wrong. Rules files absent from `claude_context_loads` looks like the answer and is `status != 'matched'` wearing a `LEFT JOIN`: that relation holds one row per glob that CAN fire, so a rule the expansion budget refused has no row there either and reads as dead while firing perfectly well. Aggregate the pattern table instead. A file is dead only when EVERY one of its globs is `inert`, so a single `unevaluated` or `gitignored` glob keeps it alive. Take the size from `blobs`, because `resource_realizations` has no size column:
   ```sql
-  SELECT r.path, b.bytes, COUNT(*) AS globs
+  SELECT r.path, b.bytes, COUNT(DISTINCT p.ordinal) AS globs
     FROM claude_rule_patterns p
     JOIN resource_realizations r ON r.resourceId = p.resourceId
     JOIN blobs b ON b.contentKey = r.contentKey
    GROUP BY r.path, b.bytes
-  HAVING SUM(p.status = 'matched') = 0 AND SUM(p.status = 'unevaluated') = 0
+  HAVING SUM(p.status != 'inert') = 0
   ```
-- **Fix:** Delete the dead glob, or correct it to the path it meant — VAT reports the pattern and never rewrites it. The usual causes are a directory renamed or moved out from under the pattern, a missing `**` between segments, and a pattern written against the repo root when rules match repository-relative paths. If the glob is deliberately ahead of its files, set `resources.validation.severity.CLAUDE_RULE_GLOB_INERT` to `ignore`.
+- **Blind spots:** VAT never sees a gitignored file, but Claude Code reads the filesystem. So a glob over ignored territory (`dist/**`, `build/**/*.js`) gets status `gitignored` and is not reported. VAT decides this by asking git whether a file under the glob's literal prefix would be ignored (for a glob with no wildcards, it asks about the file the glob names). The answer is the same whether or not `dist/` has been built yet. Two shapes still get reported even though the rule may load: a glob with **no literal prefix** (`**/*.gen.ts`), whose territory is the whole tree and is never checked; and a glob whose directory is not ignored but whose files are (`src/**/*.gen.ts` next to a `*.gen.ts` ignore line). Outside a git repository nothing is ignored, so no glob gets `gitignored`. A rules file under a *nested* `.claude/rules/` is matched against both the repository root and its own project directory, because the vendor does not say which base applies; it is reported only when dead under both.
+- **Fix:** First check whether the glob is one of the two shapes above and covers ignored or generated output. If it does, keep it. Otherwise delete the dead glob, or correct it to the path it meant — VAT reports the pattern and never rewrites it. The usual causes are a directory renamed or moved out from under the pattern, a missing `**` between segments, and a pattern written against the repo root when rules match repository-relative paths. If the glob is deliberately ahead of its files, or scopes ignored output, set `resources.validation.severity.CLAUDE_RULE_GLOB_INERT` to `ignore`.
 
 ## Meta Codes
 

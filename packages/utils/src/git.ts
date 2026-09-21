@@ -35,6 +35,7 @@ export { gitFindRoot, gitLsFiles, gitLsOthers, isGitIgnored } from './git-utils.
 // on `./crawl`, where every thrower and catcher of it already lives.
 export type { RefuseListingContext, UnreadablePolicy } from './listing-refusal.js';
 export {
+  freshGitTreeSnapshot,
   gitTreeSnapshot,
   peekGitTreeSnapshot,
   withGitSnapshotCache,

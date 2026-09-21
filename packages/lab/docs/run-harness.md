@@ -110,7 +110,7 @@ the [facet contract](facets.md) forbids.
 
 The default is a default, not a definition. `MEASURABLE_COMMANDS` in the same file is the named
 registry — the three defaults plus `inventory`, `validate`, `verify`, `resources-population`,
-`claude-context-all`, `claude-context`, `claude-budget`, `skills-validate` and `skills-list` — and
+`claude-context-all`, `claude-context`, `skills-validate` and `skills-list` — and
 `vat-lab <facet> run --command <name>` selects from
 it. Adding an entry to the registry changes what a caller *can* ask for and nothing about what a
 bare run measures. The flag is repeatable
@@ -148,22 +148,14 @@ an arm and the two differ (the four clauses are tabled in [Facets](facets.md)).
 their scope from the config at the working directory, which the harness has already set to the
 subject. `verify` reads the built `dist/` tree, so a subject measured with it must have been built.
 `claude-context-all` is subject-less for the same reason — `--all` sweeps every path the projection
-realized and takes no positional. So is `claude-budget`, and there for a sharper reason than
-convention: it **rejects** (exit 2) any path resolving outside the root it discovered, so a
-positional naming the subject fails from every working directory except the subject itself.
+realized and takes no positional.
 
 ## Reaching the rest of the enumerating verbs
 
 `docs/contributing/command-lane-table.md` counts **25 commands that enumerate a corpus**, and those
-are the ones where a cost regression actually hurts. This registry reaches ten of them. That gap is
-the reason `claude-budget`, `skills-validate` and `skills-list` are here:
+are the ones where a cost regression actually hurts. This registry reaches nine of them. That gap is
+the reason `skills-validate` and `skills-list` are here:
 
-- **`claude-budget`** was the largest hole. It shares `claude-context`'s lane, route and population
-  exactly — same `buildClaudeContextPopulation`, same two `populate()` passes, same single crawl —
-  but asks a different question of it: `context` answers for the paths named, while `budget` sweeps
-  every working location through `sweepAlwaysLoadedBudgets()`. Its per-answer cost therefore grows
-  with the number of regions in the tree, and the `claude-context` pair is blind to that by
-  construction, because both of its arms hold the query count fixed.
 - **`skills-validate`** is the `registry-md-html` lane's cheapest read-only door. Every other
   command that builds that registry — `skills build`, `skills package`, `claude plugin build`,
   `agent build`, `skill test run` — writes output; `audit` and `verify` reach it but bundle other

@@ -12,6 +12,10 @@
  * every in-memory test.
  */
 
+import { mkdir, writeFile } from 'node:fs/promises';
+
+import { resetProjectRootCaches, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { DISCARD_BLOB_POPULATION } from '../../src/projection/merge.js';
@@ -76,7 +80,7 @@ async function populateTree(
   return buildResourceProjection({
     root: root(),
     onBlobPopulation: DISCARD_BLOB_POPULATION,
-    ...(store === undefined ? {} : { cache: { store, treeHash: TREE_HASH } }),
+    ...(store === undefined ? {} : { cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH } }),
     ...(onContributor === undefined
       ? {}
       : { onContributorTiming: (timing) => onContributor(timing.contributorId) }),
@@ -138,4 +142,76 @@ describe('claude_rule_patterns through the resources lane', () => {
     // ...and it is not two empty arrays agreeing.
     expect(hydrated.claudeRulePatterns).toHaveLength(2);
   });
+});
+
+/** Identity a commit needs, without touching the developer's config. */
+const COMMIT_IDENTITY = [
+  '-c', 'user.name=VAT Fixture',
+  '-c', 'user.email=fixture@example.invalid',
+  '-c', 'commit.gpgsign=false',
+];
+
+/**
+ * A repository whose rule scopes build output: `dist/` is ignored, and the
+ * rule's first glob names it. The second glob is the control — dead, over
+ * territory nothing ignores — and the third climbs out of the repository.
+ */
+const IGNORED_TREE: Record<string, string> = {
+  '.gitignore': 'dist/\n',
+  [SCOPED_RULE]: '---\npaths: ["dist/**", "gone/**/*.md", "../outside/**"]\n---\n\nBuild-output rules.\n',
+  'src/index.ts': 'export {};\n',
+};
+
+/**
+ * Plant {@link IGNORED_TREE} as a committed repository, optionally with a built
+ * `dist/` on disk, and populate it with a real ignore oracle.
+ *
+ * @param withDist - Whether `dist/app.js` exists when the population runs
+ * @returns `[pattern, status]` per pattern row, in table order
+ */
+async function populateIgnoredTree(withDist: boolean): Promise<Array<[string, string]>> {
+  const dir = await plantTree('vat-rule-patterns-ignored-', IGNORED_TREE);
+  try {
+    runGitOrThrow(['init'], { cwd: dir });
+    runGitOrThrow(['add', '--all'], { cwd: dir });
+    runGitOrThrow([...COMMIT_IDENTITY, 'commit', '-m', 'fixture'], { cwd: dir });
+    if (withDist) {
+      await mkdir(safePath.join(dir, 'dist'), { recursive: true });
+      await writeFile(safePath.join(dir, 'dist', 'app.js'), 'export {};\n');
+    }
+    // `gitFindRoot` memoizes `null` for every directory a prior walk climbed
+    // through, including this root's ancestors before the repository existed.
+    resetProjectRootCaches();
+    const gitTracker = new GitTracker(dir);
+    await gitTracker.initialize();
+    // Positive control on the oracle: an unusable tracker answers "nothing is
+    // ignored", and every row below would be the non-repository answer.
+    expect(gitTracker.isUsable()).toBe(true);
+    const projection = await buildResourceProjection({
+      root: dir, gitTracker, onBlobPopulation: DISCARD_BLOB_POPULATION,
+    });
+    // The premise: the ignored file is never realized, so no witness can exist.
+    expect(projection.resourceRealizations.filter((row) => toForwardSlash(row.path).startsWith('dist/'))).toEqual([]);
+    expect(projection.resourceRealizations.some((row) => row.path === SCOPED_RULE)).toBe(true);
+    return projection.claudeRulePatterns.map((row): [string, string] => [row.pattern, row.status]);
+  } finally {
+    await razeTree(dir);
+  }
+}
+
+describe('claude_rule_patterns over gitignored territory', () => {
+  it.each([
+    ['is not built', false],
+    ['is built', true],
+  ])('reports a glob over an ignored dist/ as gitignored when dist/ %s', async (_what, withDist) => {
+    // ⛔ `dist/` in `.gitignore` matches only a DIRECTORY, and a `dist` that
+    // does not exist is not known to be one — the unbuilt arm is the one a
+    // naive "is the bare prefix ignored?" answers wrongly.
+    expect(await populateIgnoredTree(withDist)).toEqual([
+      ['dist/**', 'gitignored'],
+      ['gone/**/*.md', 'inert'],
+      // Outside the repository nothing is ignored — answered without asking.
+      ['../outside/**', 'inert'],
+    ]);
+  }, 60_000);
 });

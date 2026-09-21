@@ -875,47 +875,14 @@ export const CODE_REGISTRY = {
     'link_auth_provider_error',
   ),
 
-  // Projection path — always-loaded context budget
-  //
-  // `info`, deliberately, and it is the severity that is the decision here — the
-  // detector's arithmetic is not in doubt, the consequence of being wrong about
-  // the THRESHOLD is.
-  //
-  // Three reasons, each sufficient on its own:
-  //
-  //  1. docs/validation-rule-design.md is explicit that new rules ship at `info`
-  //     or `warning`, and that `error` requires demonstrated harm rather than
-  //     disagreement with the pattern. This rule has no corpus evidence yet, so
-  //     it is not entitled to the top of that ladder. (The run-integrity
-  //     exemption in that same doc does not apply: VAT looked successfully and
-  //     disliked what it saw, which is exactly the class the exemption excludes.)
-  //  2. The number behind the code is calibrated but new. A budget is a judgement
-  //     about someone else's repository, and the first version of that judgement
-  //     will be wrong for somebody.
-  //  3. The one production repo known to enforce an equivalent always-loaded
-  //     chain budget ships THEIR chain check deliberately warn-only, having
-  //     already been through this. Shipping stricter than the only prior art,
-  //     with less evidence, would be a claim we cannot support.
-  //
-  // The failure mode being avoided is not a noisy build; it is a number that
-  // fails a build being a number people learn to stop reading. `info` keeps the
-  // measurement visible while it earns the right to block, and
-  // validation-rule-design.md's graduation path is how it earns that.
-  ALWAYS_LOADED_CONTEXT_BUDGET: entry(
-    'info',
-    "A working directory's always-loaded context — the repo-root CLAUDE.md, every CLAUDE.md on the directory path down to it, one level of @ imports from each, and any unscoped rules file in the root .claude/rules/ — exceeds the configured token budget. An AGENTS.md is measured only where a CLAUDE.md imports it; Claude Code does not load it by name.",
-    'Raise or lower resources.validation.thresholds.alwaysLoadedContextTokens in vibe-agent-toolkit.config.yaml to move the budget, or set resources.validation.severity.ALWAYS_LOADED_CONTEXT_BUDGET to ignore to stop reporting it. Neither is usually the real fix: open the largest contributors the finding names, in the order it names them, and trim there. The win is usually in an ancestor file — a root CLAUDE.md or a root .claude/rules/ file is paid in full by every directory beneath it, so trimming one is the single edit that lowers every reported directory at once — but the finding, not the file type, says which one.',
-    'always_loaded_context_budget',
-  ),
-
   // Projection path — a path-scoped Claude rule nothing can trigger.
   // `info` because the observed population of inert globs is still empty, and
   // because an inert glob can be deliberate: docs/validation-rule-design.md,
   // "Worked case: CLAUDE_RULE_GLOB_INERT ships at info".
   CLAUDE_RULE_GLOB_INERT: entry(
     'info',
-    'A path-scoped rules file under .claude/rules/ declares a paths: glob that matches no file in the tree, so nothing an agent touches can load that rule. Reported per inert pattern, not per rule: a rule whose other patterns still match is reported only for the dead one.',
-    'Delete the dead glob, or correct it to the path it meant — VAT reports the pattern and never rewrites it. The usual causes are a directory renamed or moved out from under the pattern, a missing ** between segments, and a pattern written against the repo root when rules match repository-relative paths. If the glob is deliberately ahead of its files, set resources.validation.severity.CLAUDE_RULE_GLOB_INERT to ignore.',
+    'A path-scoped rules file under .claude/rules/ declares a paths: glob that matches no file VAT can see — tracked files, and untracked files git does not ignore — so no such file can load that rule. Reported per inert pattern, not per rule: a rule whose other patterns still match is reported only for the dead one.',
+    'First check whether the glob is one of the two shapes above and covers ignored or generated output. If it does, keep it. Otherwise delete the dead glob, or correct it to the path it meant — VAT reports the pattern and never rewrites it. The usual causes are a directory renamed or moved out from under the pattern, a missing ** between segments, and a pattern written against the repo root when rules match repository-relative paths. If the glob is deliberately ahead of its files, or scopes ignored output, set resources.validation.severity.CLAUDE_RULE_GLOB_INERT to ignore.',
     'claude_rule_glob_inert',
   ),
 } as const satisfies Record<string, CodeRegistryEntry>;

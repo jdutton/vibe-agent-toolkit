@@ -27,12 +27,13 @@ import {
   OVERSIZE_BYTES,
   account,
   type AccountedContext,
-  type ChargeState,
+  type SizeCliffState,
 } from '../src/projection/claude-context-accounting.js';
 import {
   CLAUDE_CONTEXT_BOUNDS_STATEMENT,
   CLAUDE_CONTEXT_LIMITS,
   CLAUDE_CONTEXT_MODELLED_BEHAVIOURS,
+  CLAUDE_CONTEXT_RELATION_LIMITS,
 } from '../src/projection/claude-context-limits.js';
 import type {
   Admission,
@@ -94,8 +95,8 @@ function oversizeRow(path: string, admissions?: readonly Admission[]): LoadedRow
   return row(admissions === undefined ? base : { ...base, admissions });
 }
 
-function chargeAt(result: AccountedContext, path: string): ChargeState | undefined {
-  return result.rows.find((candidate) => candidate.path === path)?.charge;
+function sizeCliffAt(result: AccountedContext, path: string): SizeCliffState | undefined {
+  return result.rows.find((candidate) => candidate.path === path)?.sizeCliff;
 }
 
 /**
@@ -117,14 +118,14 @@ describe('account', () => {
   it('charges an ordinary member', () => {
     const result = account(answer([row({ path: ROOT_CLAUDE_MD })]), claudeMdIds(ROOT_CLAUDE_MD));
 
-    expect(result.rows[0]?.charge).toBe('charged');
+    expect(result.rows[0]?.sizeCliff).toBe('loaded');
     expect(result.totals.alwaysTokens).toBe(100);
   });
 
   it('charges a >4 MiB CLAUDE.md ZERO — a cliff, not a truncation', () => {
     const result = account(answer([oversizeRow(ROOT_CLAUDE_MD)]), claudeMdIds(ROOT_CLAUDE_MD));
 
-    expect(result.rows[0]?.charge).toBe('oversize-skipped');
+    expect(result.rows[0]?.sizeCliff).toBe('oversize-skipped');
     expect(result.totals.alwaysTokens).toBe(0);
     expect(result.totals.skippedOversizeRows).toBe(1);
   });
@@ -133,7 +134,7 @@ describe('account', () => {
     const exact = row({ path: ROOT_CLAUDE_MD, bytes: OVERSIZE_BYTES, tokens: 1_000_000 });
     const result = account(answer([exact]), claudeMdIds(ROOT_CLAUDE_MD));
 
-    expect(result.rows[0]?.charge).toBe('charged');
+    expect(result.rows[0]?.sizeCliff).toBe('loaded');
     expect(result.totals.alwaysTokens).toBe(1_000_000);
     expect(result.totals.skippedOversizeRows).toBe(0);
   });
@@ -145,7 +146,7 @@ describe('account', () => {
       claudeMdIds(ROOT_CLAUDE_MD),
     );
 
-    expect(chargeAt(result, HANDBOOK)).toBe(PRUNED);
+    expect(sizeCliffAt(result, HANDBOOK)).toBe(PRUNED);
     expect(result.totals.alwaysTokens).toBe(0);
     expect(result.totals.prunedRows).toBe(1);
   });
@@ -160,7 +161,7 @@ describe('account', () => {
       claudeMdIds(ROOT_CLAUDE_MD),
     );
 
-    expect(chargeAt(result, 'shared.md')).toBe('charged');
+    expect(sizeCliffAt(result, 'shared.md')).toBe('loaded');
     expect(result.totals.alwaysTokens).toBe(40);
   });
 
@@ -173,7 +174,7 @@ describe('account', () => {
       claudeMdIds(ROOT_CLAUDE_MD),
     );
 
-    expect(chargeAt(result, 'orphan.md')).toBe('charged');
+    expect(sizeCliffAt(result, 'orphan.md')).toBe('loaded');
     expect(result.totals.alwaysTokens).toBe(17);
   });
 
@@ -181,7 +182,7 @@ describe('account', () => {
     const bigRule = oversizeRow('.claude/rules/huge.md', [{ kind: 'root-rule' }]);
     const result = account(answer([bigRule]), claudeMdIds());
 
-    expect(result.rows[0]?.charge).toBe('charged');
+    expect(result.rows[0]?.sizeCliff).toBe('loaded');
     expect(result.totals.alwaysTokens).toBe(2_000_000);
   });
 
@@ -191,7 +192,7 @@ describe('account', () => {
       claudeMdIds(ROOT_CLAUDE_MD),
     );
 
-    expect(result.rows[0]?.charge).toBe('unknown-size');
+    expect(result.rows[0]?.sizeCliff).toBe('unmeasured');
     expect(result.totals.alwaysTokens).toBe(0);
     expect(result.totals.unknownTokenRows).toBe(1);
   });
@@ -218,7 +219,7 @@ describe('account', () => {
       claudeMdIds(),
     );
 
-    expect(result.rows[0]?.charge).toBe('charged');
+    expect(result.rows[0]?.sizeCliff).toBe('loaded');
     expect(result.totals.prunedRows).toBe(0);
     expect(result.totals.alwaysTokens).toBe(9);
   });
@@ -231,7 +232,7 @@ describe('account', () => {
       claudeMdIds(ROOT_CLAUDE_MD),
     );
 
-    expect(chargeAt(result, 'b.md')).toBe(PRUNED);
+    expect(sizeCliffAt(result, 'b.md')).toBe(PRUNED);
     expect(result.totals.alwaysTokens).toBe(0);
     expect(result.totals.prunedRows).toBe(2);
   });
@@ -252,8 +253,8 @@ describe('account', () => {
       claudeMdIds(ROOT_CLAUDE_MD, MIDDLE_CLAUDE_MD),
     );
 
-    expect(chargeAt(result, MIDDLE_CHILD)).toBe(PRUNED);
-    expect(chargeAt(result, 'docs/deeper.md')).toBe(PRUNED);
+    expect(sizeCliffAt(result, MIDDLE_CHILD)).toBe(PRUNED);
+    expect(sizeCliffAt(result, 'docs/deeper.md')).toBe(PRUNED);
     expect(result.totals).toMatchObject({
       alwaysTokens: 5,
       prunedRows: 2,
@@ -277,8 +278,8 @@ describe('account', () => {
       claudeMdIds(ROOT_CLAUDE_MD, MIDDLE_CLAUDE_MD),
     );
 
-    expect(chargeAt(result, RESCUED)).toBe('charged');
-    expect(chargeAt(result, 'docs/below.md')).toBe('charged');
+    expect(sizeCliffAt(result, RESCUED)).toBe('loaded');
+    expect(sizeCliffAt(result, 'docs/below.md')).toBe('loaded');
     expect(result.totals).toMatchObject({ alwaysTokens: 18, prunedRows: 1 });
   });
 
@@ -294,7 +295,7 @@ describe('account', () => {
       claudeMdIds(ROOT_CLAUDE_MD),
     );
 
-    expect(chargeAt(result, 'gone.md')).toBe('unknown-size');
+    expect(sizeCliffAt(result, 'gone.md')).toBe('unmeasured');
     expect(result.totals).toMatchObject({ unknownTokenRows: 1, prunedRows: 0, alwaysTokens: 0 });
   });
 
@@ -305,6 +306,38 @@ describe('account', () => {
 
     expect(result.rows.map((candidate) => candidate.path)).toEqual([ROOT_CLAUDE_MD, HANDBOOK]);
     expect(input.rows[0]).not.toHaveProperty('charge');
+  });
+});
+
+describe('the stated limits on the claude-context relations', () => {
+  const relationIds = CLAUDE_CONTEXT_RELATION_LIMITS.map((limit) => limit.id);
+
+  it('carries every context limit but the discoverable one, in the same order, by reference', () => {
+    // The module lists its ids by hand, so a limit added to CLAUDE_CONTEXT_LIMITS
+    // fails here until a person rules it in or out for the relations.
+    const inherited = CLAUDE_CONTEXT_LIMITS.filter((limit) => limit.id !== 'discovery-one-hop');
+    expect(CLAUDE_CONTEXT_RELATION_LIMITS.slice(0, inherited.length)).toEqual(inherited);
+    for (const [index, limit] of inherited.entries()) {
+      // Composed, never copied: the same objects, so the two cannot disagree.
+      expect(CLAUDE_CONTEXT_RELATION_LIMITS[index]).toBe(limit);
+    }
+    expect(relationIds).not.toContain('discovery-one-hop');
+  });
+
+  it('adds the two limits that exist only because the answer is flattened into rows', () => {
+    expect(relationIds.slice(-2)).toEqual(['chain-on-demand-is-representative', 'path-scoped-rules-not-charged']);
+    expect(new Set(relationIds).size).toBe(relationIds.length);
+  });
+
+  it('publishes nothing about a threshold, which VAT no longer has', () => {
+    // ⛔ The deleted budget list carried these; each described a threshold or a
+    // calibration boundary the relations do not apply.
+    for (const retired of ['threshold-provenance', 'import-hop-calibration', 'unattributed-imports-counted']) {
+      expect(relationIds).not.toContain(retired);
+    }
+    for (const limit of CLAUDE_CONTEXT_RELATION_LIMITS) {
+      expect(limit.statement).not.toMatch(/threshold|budget verdict/i);
+    }
   });
 });
 
@@ -327,7 +360,7 @@ describe('the stated limits', () => {
     // Spec §11's fifteen, plus the nested-rule trigger D-B6 introduced, plus the
     // unresolved-conditions collapse a reviewer confirmed after that, plus the
     // four the final review found missing — the token estimator, the unfollowed
-    // variable import, the overall context-window scope, and the budget check a
+    // variable import, the overall context-window scope, and the pattern-budget check a
     // directory query skips — plus the gitignored half this lane stopped
     // realizing.
     //
@@ -361,6 +394,7 @@ describe('the stated limits', () => {
       'root-claude-md-order',
       'dot-matching',
       'nested-rule-trigger',
+      'nested-rule-glob-base',
     ]);
     const directions = new Set(CLAUDE_CONTEXT_LIMITS.map((limit) => limit.direction));
     expect(directions.has('over-report')).toBe(true);

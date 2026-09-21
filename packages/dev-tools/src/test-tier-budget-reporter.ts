@@ -23,6 +23,7 @@
  */
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { toForwardSlash } from '@vibe-agent-toolkit/utils/path';
 import type { Reporter, TestModule } from 'vitest/node';
 
 import {
@@ -61,10 +62,6 @@ export interface BudgetVerdict {
   readonly budgetMs: number;
   /** The entry's stale line (`STALE_FRACTION` × its `measuredMs`); 0 for an unlisted file. */
   readonly staleBelowMs: number;
-}
-
-function toForwardSlash(p: string): string {
-  return p.replaceAll('\\', '/');
 }
 
 function withTrailingSlash(p: string): string {

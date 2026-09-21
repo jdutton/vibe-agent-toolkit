@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { BUILTIN_CHECKS } from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import GithubSlugger from 'github-slugger';
@@ -103,26 +104,27 @@ describe('docs/validation-codes.md', () => {
     // prose checked by nothing but the anchor test above, which cannot see a
     // description that has gone false.
     //
-    // That is not hypothetical. `ALWAYS_LOADED_CONTEXT_BUDGET`'s prose here
-    // claimed the measured chain was "the repo-root CLAUDE.md/AGENTS.md" —
-    // and an AGENTS.md contributes nothing unless a CLAUDE.md imports it, so a
-    // repo standardised on AGENTS.md was getting a clean bill of health from a
-    // check that had measured none of it. The registry said the same thing, and
-    // nothing compared the two.
+    // That is not hypothetical. The retired `ALWAYS_LOADED_CONTEXT_BUDGET`'s
+    // prose here claimed the measured chain was "the repo-root
+    // CLAUDE.md/AGENTS.md" — and an AGENTS.md contributes nothing unless a
+    // CLAUDE.md imports it, so a repo standardised on AGENTS.md was getting a
+    // clean bill of health from a check that had measured none of it. The
+    // registry said the same thing, and nothing compared the two. The pin below
+    // holds the surviving code of that lane to the same standard.
     //
     // 🔑 Pinned narrowly rather than by widening the catalog: this code belongs
     // to the context lane, not the verdict engine, so putting it in that table
     // would make the table's own scope sentence false. Widening the guard to
     // every registry code is the real fix and is its own change.
-    it('the ALWAYS_LOADED_CONTEXT_BUDGET section quotes the registry verbatim', () => {
-      const entry = CODE_REGISTRY.ALWAYS_LOADED_CONTEXT_BUDGET;
-      const section = sectionFor(doc, '### `ALWAYS_LOADED_CONTEXT_BUDGET`');
+    it('the CLAUDE_RULE_GLOB_INERT section quotes the registry verbatim', () => {
+      const entry = CODE_REGISTRY.CLAUDE_RULE_GLOB_INERT;
+      const section = sectionFor(doc, '### `CLAUDE_RULE_GLOB_INERT`');
 
       // Backticks and bold are the doc's own emphasis and carry no meaning the
       // registry could hold, so they are stripped before comparing. Everything
       // else must match word for word.
-      expect(deEmphasize(section)).toContain(entry.description);
-      expect(deEmphasize(section)).toContain(entry.fix);
+      expect(deEmphasize(section)).toContain(deEmphasize(entry.description));
+      expect(deEmphasize(section)).toContain(deEmphasize(entry.fix));
     });
   });
 });
@@ -148,7 +150,13 @@ function sectionFor(doc: string, heading: string): string {
 /**
  * Strip the markdown emphasis the doc adds and the registry cannot carry.
  *
- * @param text - A section body
+ * ⛔ Applied to BOTH sides, never to the doc alone. A registry sentence can
+ * legitimately contain `**` — `CLAUDE_RULE_GLOB_INERT`'s fix names the missing
+ * glob segment — and stripping bold from the doc while leaving the registry's
+ * literal asterisks intact makes an identical pair compare unequal, which reads
+ * as drift that is not there.
+ *
+ * @param text - A section body or a registry sentence
  * @returns The same text without backticks or `**` runs
  */
 function deEmphasize(text: string): string {
@@ -186,3 +194,17 @@ function parseCatalogRows(doc: string): Map<string, CatalogCells> {
   }
   return rows;
 }
+
+describe('built-in check SQL twins in docs/validation-codes.md', () => {
+  /** Whitespace collapsed, so the doc's indentation is not part of the comparison. */
+  const flat = (text: string): string => text.replaceAll(/\s+/g, ' ').trim();
+
+  it.each(BUILTIN_CHECKS.map((check) => [check.name, check.sqlTwin]))(
+    '%s: the doc carries the twin the code ships',
+    (_name, sqlTwin) => {
+      // The doc's copy is the one an adopter pastes; the code's is the one the
+      // differential test runs. They must be one statement.
+      expect(flat(readFileSync(DOC_PATH, 'utf8'))).toContain(flat(sqlTwin));
+    },
+  );
+});

@@ -27,7 +27,7 @@ import {
   prefixMessageOnce,
   resolveAssetReference,
   safePath,
-  toForwardSlash,
+  toForwardSlashAnyPlatform,
 } from '@vibe-agent-toolkit/utils';
 import {
   getToolVersion,
@@ -778,7 +778,7 @@ function emitSkippedOptionalWarning(skippedOptional: readonly SkippedOptionalIte
  */
 /** The subject skill's display name (trailing segment of the subject arg). */
 function subjectSkillName(opts: RunHarnessOptions): string {
-  return basename(toForwardSlash(opts.subject)) || opts.subject;
+  return basename(toForwardSlashAnyPlatform(opts.subject)) || opts.subject;
 }
 
 /**

@@ -56,6 +56,7 @@ import {
   withQueriedProjection,
   type ProjectionProvenance,
 } from '../../utils/projection-query.js';
+import { relationBoundsFor } from '../../utils/relation-limits.js';
 
 interface QueryOptions {
   debug?: boolean;
@@ -111,6 +112,9 @@ export function buildProjectionQueryOutputData(input: ProjectionQueryPayloadInpu
     // statement saying it asked for none — not a lens that silently stopped
     // running. See `ProjectionProvenance.lensesEvaluated`.
     lensesEvaluated: input.lensesEvaluated,
+    // The bounds of the rows below, stated ONCE and only when a bounded lens
+    // ran — `relation-limits.ts` carries why the SQL route owes them at all.
+    ...relationBoundsFor(input.lensesEvaluated),
     rowCount: input.rows.length,
     durationSecs: formatDurationSecs(input.durationMs),
     rows: input.rows,

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { CONTENT_KEY_PATTERN, PARSER_KINDS } from '../content-key.js';
+import { CONTENT_KEY_PATTERN } from '../content-key.js';
 
 /*
  * There is deliberately no `PROJECTION_SCHEMA_VERSION` here.
@@ -58,14 +58,4 @@ export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
  */
 export const ContentKeySchema = z.string().regex(CONTENT_KEY_PATTERN)
   .describe('A parser-kind-qualified content key: "<markdown|html>.<sha256>"');
-
-/**
- * Which parser a path routes to, as a schema.
- *
- * Built from `content-key.ts`'s own `PARSER_KINDS` rather than spelled out, for
- * the reason that module gives {@link ContentKeySchema}'s pattern: a kind added
- * there must not leave a second list behind that still typechecks.
- */
-export const ParserKindSchema = z.enum(PARSER_KINDS)
-  .describe('Which parser a document routes to — "markdown", "html", or "none" for a blob nothing parses');
 

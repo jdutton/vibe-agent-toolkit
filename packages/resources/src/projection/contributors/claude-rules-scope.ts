@@ -68,11 +68,18 @@
  * ({@link lazyCorpusFiles}). `selectRules`' per-query short-circuit is a
  * different question and is deliberately untouched by this.
  *
+ * ⚠️ **The corpus holds no gitignored file, the harness reads them all.** A glob
+ * that matches nothing here but whose territory is ignored is `gitignored`, not
+ * `inert`; the ignore question goes to {@link ProjectionBase.gitTracker}
+ * through {@link ignoreOracle}, and only for would-be `inert` globs.
+ *
  * ⛔ Emitted under the same identity dedup as the tag, and for a stronger
  * reason: `claude_rule_patterns` is keyed `(resourceId, ordinal)`, so a
  * re-realized rules file's second and third emission would be silently
  * collapsed by the builder while still costing a full glob sweep apiece.
  */
+
+import { relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeRulePatternRow } from '../../schemas/projection-claude-rules.js';
 import type {
@@ -202,6 +209,7 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
     const memberships: ResourceExtentRow[] = [];
     const claudeRulePatterns: ClaudeRulePatternRow[] = [];
     const filesOf = lazyCorpusFiles(base);
+    const isIgnored = ignoreOracle(base);
     const seen = new Set<string>();
 
     for (const row of base.resourceRealizations) {
@@ -245,7 +253,7 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
       // builder would silently collapse the second and third emission of an
       // identity realized under three extents — the duplicate work would stay,
       // invisible, at one tree-wide glob sweep per extra realization per pass.
-      for (const evaluation of this.#patternsOf(frontmatter, filesOf)) {
+      for (const evaluation of this.#patternsOf(row.path, frontmatter, filesOf, isIgnored)) {
         claudeRulePatterns.push({ resourceId: row.resourceId, ...evaluation });
       }
     }
@@ -277,17 +285,53 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
    * inside `selectRules`, whose short-circuit answers a different question and
    * is deliberately left untouched.
    *
+   * @param rulePath - The rules file's root-relative path
    * @param frontmatter - The rules file's parsed frontmatter, or null when its
    *   blob was never keyed
    * @param filesOf - The sweep's shared, lazily-built corpus file list
    * @returns One evaluation per declared glob, in declaration order
    */
   #patternsOf(
+    rulePath: string,
     frontmatter: Readonly<Record<string, JsonValue>> | null,
     filesOf: () => readonly string[],
+    isIgnored: (path: string) => boolean,
   ): readonly Omit<ClaudeRulePatternRow, 'resourceId'>[] {
     const patterns = declaredPatterns(frontmatter);
     if (patterns.length === 0) return [];
-    return evaluateRulePatterns({ patterns, files: filesOf() });
+    return evaluateRulePatterns({ rulePath, patterns, files: filesOf(), isIgnored });
   }
+}
+
+/**
+ * The tree's ignore oracle, over root-relative paths — or one that ignores
+ * nothing when there is no usable tracker.
+ *
+ * Outside a repository nothing is ignored, and a tracker git never answered for
+ * is an empty shell whose "not ignored" is not a verdict — both yield the
+ * non-git answer, which leaves every would-be `inert` glob `inert`.
+ *
+ * `isIgnoredByActiveSet` and not `isIgnored`: it answers an EXISTING ignored
+ * path from the active set with no spawn, and falls back to `git check-ignore`
+ * for a path that does not exist — which is every probe
+ * `evaluateRulePatterns` sends for an unbuilt `dist/`. That fallback answers
+ * from the ignore PATTERNS, which is the question. No `knownToExist`: these
+ * paths are questions, not enumerated observations.
+ *
+ * A path that resolves outside the root (a `../x/**` glob) is not ignored, and
+ * is answered here without asking: `git check-ignore` exits 128 on it and the
+ * tracker's recovery walk then spawns once per ancestor up to the filesystem
+ * root, to arrive at the same `false`.
+ *
+ * @param base - The projection so far
+ * @returns A predicate over root-relative, forward-slashed paths
+ */
+function ignoreOracle(base: ProjectionBase): (path: string) => boolean {
+  const tracker = base.gitTracker;
+  if (!tracker?.isUsable()) return () => false;
+  return (path) => {
+    const absolute = safePath.resolve(base.root, path);
+    if (relativeEscapesRoot(safePath.relative(base.root, absolute))) return false;
+    return tracker.isIgnoredByActiveSet(absolute);
+  };
 }

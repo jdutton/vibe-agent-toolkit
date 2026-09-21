@@ -129,10 +129,6 @@ packages/cli/src/commands/audit/scan-population.ts ScanLogger dead
 packages/cli/src/commands/build.ts BuildCommandOptions dead
 packages/cli/src/commands/cache/cache-control.ts CacheControlOptions dead
 packages/cli/src/commands/cache/clear.ts CacheClearReport dead
-packages/cli/src/commands/claude/budget.ts BudgetDataSchema dead
-packages/cli/src/commands/claude/budget.ts BudgetOutputFormat dead
-packages/cli/src/commands/claude/budget.ts ClaudeBudgetOptions dead
-packages/cli/src/commands/claude/budget.ts ReportInput dead
 packages/cli/src/commands/claude/claude-config.ts LoadedClaudeConfig dead
 packages/cli/src/commands/claude/context.ts ClaudeContextOptions dead
 packages/cli/src/commands/claude/context.ts ContextCostMapEnvelope dead
@@ -296,7 +292,6 @@ packages/cli/src/utils/command-error.ts buildValidationGateFailure dead
 packages/cli/src/utils/command-error.ts CommandErrorDocument dead
 packages/cli/src/utils/command-error.ts ValidationGateFailure dead
 packages/cli/src/utils/config-loader.ts getConfigDir dead
-packages/cli/src/utils/context-budget-issues.ts ScopedSweep dead
 packages/cli/src/utils/edge-lens-evaluation.ts EVALUATED_LENS_RELATIONS dead
 packages/cli/src/utils/edge-lens-evaluation.ts EvaluatedLenses dead
 packages/cli/src/utils/output.ts WriteAllSyncOptions dead

@@ -48,7 +48,7 @@ with a regression test.
 - **`vat-lab` exits `2` (was `3`)** when a comparison completed but a command could not be
   measured; `EXIT_REFUSED` / `EXIT_CHANGED` / `EXIT_UNMEASURABLE` are gone.
 
-- **`vat okf validate`, `vat claude budget`, `vat resources check`, `vat ard emit` (`--format json`)
+- **`vat okf validate`, `vat resources check`, `vat ard emit` (`--format json`)
   and `vat skill review --yaml` publish ONE report envelope**: `status` (`ok | findings | error`), a
   required `examined` count, `findings[]`, `summary` (`{errors, warnings, info}`), `durationMs`, `data`.
   A run that could not finish publishes the SAME envelope (`status: error`, `examined: 0`, `error`,
@@ -431,8 +431,8 @@ with a regression test.
 
 - **VAT now caches that projection to disk, without being asked.** A SQLite file per scanned tree
   under `<tmpdir>/.vat-cache/<version>/projection-<shape>/projection.db` — expect ~71 MB for a
-  12,600-file repository, bounded at 3 trees per repository and 50,000 content keys (~265 MB), and
-  reclaimed by `vat cache clear`. Turn it off with `VAT_PROJECTION_STORE=off`, or `VAT_CACHE=0` for
+  12,600-file repository, bounded at 3 trees per repository, 8 repositories and 50,000 content
+  keys (~265 MB), and reclaimed by `vat cache clear`. Turn it off with `VAT_PROJECTION_STORE=off`, or `VAT_CACHE=0` for
   every VAT cache. Set `VAT_PROJECTION_STORE_DIR` per CI job, or concurrent jobs write into one file.
 
 - **`vat resources query <sql> [path]`** — runs one read-only SQL statement (`SELECT`, `WITH` or
@@ -452,7 +452,7 @@ with a regression test.
 
 - **The link graph is queryable** — `lens_contexts`, `edges` and `edge_resolutions` join
   `vat resources query` and `check`, alongside `claude_context_chains` and `claude_context_loads`
-  (what loads into an agent's context at each working location, with a `budgetDisposition`).
+  (what loads into an agent's context at each working location, with a `launchCharge`).
   A relation is computed only when your statement names it, and a statement naming a relation
   nothing computed is refused rather than answered from an empty table.
   Each resolution is classed by `dstKind` (`resource` |
@@ -470,11 +470,6 @@ with a regression test.
   `@`-imported files load into an agent's context at a path, why each is there, and its estimated
   token cost. `--discoverable` adds one-hop links the harness does not load; `--all` emits a cost
   map. `--format json`/`yaml` documents carry `kind` as their discriminator.
-
-- **`vat claude budget [paths...]`** — reports `ALWAYS_LOADED_CONTEXT_BUDGET` (info) for any
-  instruction chain over `resources.validation.thresholds.alwaysLoadedContextTokens` (default
-  12,000); set the code to `error` to fail the run or `ignore` to silence it. The estimate is
-  neither a floor nor a ceiling — a global `~/.claude/CLAUDE.md` is real cost it cannot see.
 
 - **`vat okf validate`** — conformance checking for Open Knowledge Format bundles declared under
   `okf.bundles.<name>.root`: parseable frontmatter with a non-empty `type` on every non-reserved
@@ -580,7 +575,7 @@ with a regression test.
 
 - **(library) `resource_tags` is now populated** — each resource is tagged with the harness
   convention its path carries (`claude-md`, `skill-md`, `subagent`, …) plus a `loading` row valued
-  `always` or `selected`; `vat claude budget` reads the same rows.
+  `always` or `selected`; the `claude_context_*` relations read the same rows.
 
 - **(library) HTML files now contribute `blob_references` rows** — `<a href>` and `<img src>`
   under an `html-link` syntactic form, which is in no closure's `follow` default, so HTML

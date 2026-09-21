@@ -60,7 +60,7 @@ export interface BoundBuiltinCheck {
   readonly run: () => readonly ValidationIssue[];
 }
 
-/** The status that means *evaluated, and it matched nothing*. The only defect of the three. */
+/** The status that means *evaluated, and it matched nothing*. The only defect of the four. */
 const INERT = 'inert';
 
 /**
@@ -98,20 +98,27 @@ function pathByResourceId(
  */
 function inertMessage(row: ClaudeRulePatternRow, file: string | undefined): string {
   const where = file ?? 'the rules file that declares it';
-  return `The paths: glob "${row.pattern}" (entry ${row.ordinal} of ${where}) matches no file in`
-    + ' this tree, so nothing an agent touches can load the rule it scopes.';
+  // ⛔ "that VAT can see", not "in this tree". The corpus declines every path
+  // git ignores, and the harness reads the filesystem — so for a glob scoped to
+  // `dist/**` the unqualified claim was false, and the fix text below would have
+  // had the author delete a glob that fires.
+  return `The paths: glob "${row.pattern}" (entry ${row.ordinal} of ${where}) matches no file VAT`
+    + ' can see in this tree (tracked, or untracked and not gitignored), so no such file can load the'
+    + ' rule it scopes.';
 }
 
 /**
  * Every `paths:` glob that matches nothing.
  *
- * ## ⭐ `unevaluated` is not a violation, and that is the whole design
+ * ## ⭐ `unevaluated` and `gitignored` are not violations, and that is the whole design
  *
- * Of the three statuses only `inert` is a defect. `matched` is the healthy case;
+ * Of the four statuses only `inert` is a defect. `matched` is the healthy case;
  * `unevaluated` means the matcher was NEVER RUN — a rule whose `paths:` list
  * blows the vendor's shared expansion budget is used unexpanded by the harness
  * and skipped here — so reporting it would report VAT's own declined work as the
- * adopter's typo, and no edit to the rules file would fix it. Widening this to
+ * adopter's typo, and no edit to the rules file would fix it. `gitignored`
+ * means the glob's territory is ignored, so VAT never saw the files the harness
+ * reads there, and deleting the glob would break a rule that fires. Widening this to
  * `status !== 'matched'` is the *guard that returns the reassuring value* drift
  * class arriving from the other side: refused read as present.
  *
@@ -148,10 +155,13 @@ function runClaudeRuleGlobInert(input: BuiltinCheckInput): readonly ValidationIs
 export const CLAUDE_RULE_GLOB_INERT_CHECK: BuiltinCheck = {
   name: 'claude-rule-glob-inert',
   description: 'Every paths: glob in .claude/rules/ matches at least one file in the tree',
+  // A correlated subquery, not a join: a rules file is realized once per extent
+  // that reaches it, and a join would repeat every finding per realization.
   sqlTwin:
-    'SELECT p.pattern, p.ordinal, r.path\n'
+    'SELECT p.pattern, p.ordinal,\n'
+    + '       (SELECT r.path FROM resource_realizations r\n'
+    + '         WHERE r.resourceId = p.resourceId LIMIT 1) AS path\n'
     + '  FROM claude_rule_patterns p\n'
-    + '  LEFT JOIN resource_realizations r ON r.resourceId = p.resourceId\n'
     + " WHERE p.status = 'inert'",
   run: runClaudeRuleGlobInert,
 };

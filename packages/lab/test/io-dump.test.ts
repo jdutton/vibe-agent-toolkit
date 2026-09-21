@@ -19,6 +19,7 @@
  */
 
 import { mkdtemp } from 'node:fs/promises';
+import { sep } from 'node:path';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -126,7 +127,8 @@ describe('normalizeSite', () => {
     );
   });
 
-  it('always returns forward slashes', () => {
+  // Gated: the input is a NATIVE path, and a backslash is a separator only on win32 (a filename character on POSIX).
+  it.skipIf(sep !== '\\')('always returns forward slashes', () => {
     expect(
       normalizeSite(String.raw`C:\repo\vat\packages\cli\dist\x.js:5`, {
         instrumentRoot: String.raw`C:\repo\vat`,

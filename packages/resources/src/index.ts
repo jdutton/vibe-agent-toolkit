@@ -151,8 +151,8 @@ export {
 // these, so the shapes are part of the published surface even though nothing
 // materialises them.
 export {
-  ClaudeContextBudgetDispositionSchema,
   ClaudeContextChainRowSchema,
+  ClaudeContextLaunchChargeSchema,
   ClaudeContextLoadRowSchema,
   type ClaudeContextChainRow,
   type ClaudeContextLoadRow,
@@ -758,64 +758,30 @@ export {
   account,
   type AccountedContext,
   type AccountedRow,
-  type ChargeState,
+  type SizeCliffState,
   type ContextTotals,
 } from './projection/claude-context-accounting.js';
 
-// The always-loaded budget over those charges — VAT's flagship projection check,
-// as a pure predicate. The threshold constant IS exported (unlike `OVERSIZE_BYTES`
-// above) because the CLI's config default reads it: a number the command
-// re-spelled would be a second copy of a measured quantity.
+// The instruction chain as RELATIONS, flattened for SQL. A lens evaluator
+// (`packages/cli/src/utils/claude-context-lens.ts`) is the only caller. There is
+// no threshold or verdict over these rows anywhere in VAT: an adopter who wants
+// one writes it in `resources.checks`.
 export {
-  DEFAULT_ALWAYS_LOADED_CONTEXT_TOKENS,
-  admissionQualifiesForBudget,
-  alwaysLoadedBudget,
-  budgetDisposition,
-  budgetFromDispositions,
-  type AlwaysLoadedBudget,
-  type BudgetChargeRow,
-  type BudgetContributor,
-  type BudgetDisposition,
-} from './projection/claude-context-budget.js';
-
-// The chain as RELATIONS — the same rows the sweep folds, flattened for SQL. A
-// lens evaluator (`packages/cli/src/utils/claude-context-lens.ts`) is the only
-// caller of `claudeContextRelations`; `contextChains` additionally feeds
-// `sweepAlwaysLoadedBudgets`, which is what makes the verb a report OVER these
-// rows rather than a second computation beside them.
-export {
-  ALWAYS_LOADED_BUDGET_SQL_TWIN,
-  ALWAYS_LOADED_CONTRIBUTORS_SQL_TWIN,
   claudeContextRelations,
   contextChainId,
-  contextChains,
   type ClaudeContextRelations,
-  type ContextChain,
 } from './projection/claude-context-relations.js';
 
-// That budget over the WHOLE tree, from one query per distinct instruction chain
-// rather than one per directory — 9 queries instead of 589 on VAT's own corpus.
-// The internals (`representativeFor`, `workingLocations`) stay unexported for the
-// reason `selectRules` does: pre-1.0, a published symbol is a contract, and the
-// collapse's soundness is guarded by the suite's differential oracle rather than
-// by anyone calling its pieces.
-export {
-  sweepAlwaysLoadedBudgets,
-  type BudgetSweep,
-  type LocationBudget,
-} from './projection/claude-context-budget-sweep.js';
-
-// The same collapse WITHOUT a threshold: what it costs to work in each part of a
+// The same collapse as a REPORT: what it costs to work in each part of a
 // tree. `vat claude context --all` used to answer every realized path — 10,438
 // answers and 205,918 lines on one adopter tree, which is a report nobody can
 // read and an agent cannot afford. This reports the always-loaded floor once per
 // distinct instruction chain, and the on-demand burden per DIRECTORY, because
 // only the first of those two collapses.
 //
-// ⛔ `contextRegions` is exported and `sweepAlwaysLoadedBudgets`' internals still
-// are not, and the asymmetry is deliberate: the region model now has TWO callers
-// inside this package, so it is a real seam rather than one lane's private
-// helper. Its soundness is still guarded by the suite's differential oracle.
+// `contextRegions` is exported because the region model has TWO callers inside
+// this package (the cost map and the relations), so it is a real seam rather than
+// one lane's private helper. Its soundness is guarded by the chains oracle suite.
 export {
   buildContextCostMap,
   type ContextCostMap,
@@ -849,23 +815,21 @@ export {
 // to go and find is a limit that never reaches the person acting on the number.
 // The bounds statement ships WITH the list, so a consumer that renders the limits
 // cannot reach them without also reaching the sentence that frames them.
+//
+// `CLAUDE_CONTEXT_RELATION_LIMITS` is the same discipline on the SQL route: the
+// subset (composed by id) plus the two limits that exist only because the answer
+// is flattened into per-chain rows. `vat resources query` and `vat resources
+// check` publish it whenever the claude-context lens was evaluated.
 export {
   CLAUDE_CONTEXT_BOUNDS_STATEMENT,
   CLAUDE_CONTEXT_LIMITS,
   CLAUDE_CONTEXT_MODELLED_BEHAVIOURS,
+  CLAUDE_CONTEXT_RELATION_LIMITS,
+  LIMIT_DIRECTIONS,
   type ModelledBehaviour,
   type StatedLimit,
 } from './projection/claude-context-limits.js';
 
-// The same discipline for the half of the lane that GATES. `vat claude budget`
-// applies a threshold to the measurement `vat claude context` reports, so it owes
-// a reader the same signed bounds — COMPOSED from the list above by id rather
-// than copied, plus the four that only a thresholded reading needs.
-export {
-  ALWAYS_LOADED_BUDGET_LIMITS,
-  BUDGET_LIMIT_IDS_FROM_CONTEXT,
-  limitsById,
-} from './projection/claude-context-budget-limits.js';
 
 // One crawl API, two implementations (scanning-and-caching §3.3): the walk, and
 // git plus a bounded walk of only what git cannot see. Same population, two cost

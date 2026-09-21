@@ -57,11 +57,23 @@ import type { LoadedContextAnswer, LoadedRow } from './claude-context-query.js';
 export const OVERSIZE_BYTES = 4 * 1024 * 1024;
 
 /** Why a row does or does not contribute to a total. */
-export type ChargeState = 'charged' | 'oversize-skipped' | 'pruned-by-oversize' | 'unknown-size';
+export const SIZE_CLIFF_STATES = ['loaded', 'oversize-skipped', 'pruned-by-oversize', 'unmeasured'] as const;
+
+/** The members the fold below compares against, named once. */
+const [LOADED, OVERSIZE_SKIPPED, PRUNED_BY_OVERSIZE, UNMEASURED] = SIZE_CLIFF_STATES;
+
+/**
+ * The 4 MiB cliff's verdict on one row — NOT whether it is paid at launch.
+ *
+ * ⛔ No value may be spelled like a `LaunchCharge`: both ride on one
+ * `claude_context_loads` row, and `charge = 'charged'` once filtered nothing while
+ * reading as the launch-cost filter. Pinned by a disjointness test.
+ */
+export type SizeCliffState = (typeof SIZE_CLIFF_STATES)[number];
 
 /** A loaded row with its charge decided. */
 export interface AccountedRow extends LoadedRow {
-  readonly charge: ChargeState;
+  readonly sizeCliff: SizeCliffState;
 }
 
 /**
@@ -115,7 +127,7 @@ export function account(
   // recomputing it per row would be the same answer at N times the cost.
   const broken = brokenRoutes(answer.rows, oversizePaths);
 
-  const rows = answer.rows.map((row) => ({ ...row, charge: chargeOf(row, oversizePaths, broken) }));
+  const rows = answer.rows.map((row) => ({ ...row, sizeCliff: sizeCliffOf(row, oversizePaths, broken) }));
   return { rows, totals: totalsOf(rows) };
 }
 
@@ -200,14 +212,14 @@ function everyRouteBroken(row: LoadedRow, broken: ReadonlySet<string>): boolean 
  * @param broken - Every path whose every import route passes through one
  * @returns The charge state
  */
-function chargeOf(
+function sizeCliffOf(
   row: LoadedRow,
   oversizePaths: ReadonlySet<string>,
   broken: ReadonlySet<string>,
-): ChargeState {
-  if (oversizePaths.has(row.path)) return 'oversize-skipped';
-  if (row.tokens === null) return 'unknown-size';
-  return broken.has(row.path) ? 'pruned-by-oversize' : 'charged';
+): SizeCliffState {
+  if (oversizePaths.has(row.path)) return OVERSIZE_SKIPPED;
+  if (row.tokens === null) return UNMEASURED;
+  return broken.has(row.path) ? PRUNED_BY_OVERSIZE : LOADED;
 }
 
 /**
@@ -229,12 +241,12 @@ function totalsOf(rows: readonly AccountedRow[]): ContextTotals {
 
   for (const row of rows) {
     // ⚠️ The `?? 0` on the two summing branches is a COMPILER obligation, not a
-    // guard: `chargeOf` returns `unknown-size` for every null-token row before
+    // guard: `sizeCliffOf` returns `unmeasured` for every null-token row before
     // either branch can be reached, so no input can exercise the zero. It cannot
     // be deleted (the field is `number | null`) and it cannot be tested.
-    if (row.charge === 'unknown-size') unknownTokenRows += 1;
-    else if (row.charge === 'oversize-skipped') skippedOversizeRows += 1;
-    else if (row.charge === 'pruned-by-oversize') prunedRows += 1;
+    if (row.sizeCliff === UNMEASURED) unknownTokenRows += 1;
+    else if (row.sizeCliff === OVERSIZE_SKIPPED) skippedOversizeRows += 1;
+    else if (row.sizeCliff === PRUNED_BY_OVERSIZE) prunedRows += 1;
     else if (row.loadClass === 'always') alwaysTokens += row.tokens ?? 0;
     else onDemandTokens += row.tokens ?? 0;
   }

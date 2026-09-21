@@ -792,6 +792,28 @@ describe('withPopulationCache', () => {
     expect(git.calls.count).toBe(0);
   });
 
+  it('reports a mid-scope edit through treeUnchanged, though the memo still hides it', async () => {
+    // The half the bracket below cannot close. The key and the crawl agree with
+    // each other; the files the population READS may not agree with either.
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+    const arrivedLate = safePath.join(repoRoot, 'moved-mid-scope.md');
+
+    try {
+      const verdicts = await withPopulationCache({ root: repoRoot }, async (cache) => {
+        const before = cache?.treeUnchanged();
+        writeFileSync(arrivedLate, '# moved\n', 'utf-8');
+        return { before, after: cache?.treeUnchanged(), memo: gitTreeSnapshot({ cwd: repoRoot })?.hash, key: cache?.treeHash };
+      });
+
+      expect(verdicts.before).toBe(true);
+      expect(verdicts.after).toBe(false);
+      // Still the memo's answer — the check went around it, not through it.
+      expect(verdicts.memo).toBe(verdicts.key);
+    } finally {
+      rmSync(arrivedLate, { force: true });
+    }
+  });
+
   it('is the git-snapshot bracket, so a mid-scope edit cannot split the key from the extent', async () => {
     // The wiring assertion for `withGitSnapshotCache`. `packages/utils` proves
     // the bracket dedupes; only this file can prove the bracket is OPEN AROUND

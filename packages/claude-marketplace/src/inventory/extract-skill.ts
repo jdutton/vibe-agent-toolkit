@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import {
+	LINK_GRAPH_MEMBER_GLOBS,
 	parseFrontmatter,
 	walkLinkGraph,
 	type WalkableRegistry,
@@ -277,7 +278,7 @@ export async function crawlSkillLinkRegistry(projectRoot: string): Promise<Resou
 	// never lists a directory, so there is no knob to name beyond the mode bits.
 	const files = await crawlDirectory({
 		baseDir: projectRoot,
-		include: ['**/*.md'],
+		include: [...LINK_GRAPH_MEMBER_GLOBS],
 		absolute: true,
 		filesOnly: true,
 		includeUntracked: true,

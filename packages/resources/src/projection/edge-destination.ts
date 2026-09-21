@@ -25,7 +25,7 @@
  * path outside the population. See `EdgeDestinationKindSchema` and zones.md §5.
  */
 
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import type { EdgeDestinationKind } from '../schemas/projection-edges.js';
 import { isInvalidUrlError } from '../url-errors.js';
@@ -279,13 +279,13 @@ export function outOfCorpusDestination(relativePath: string, anchor: string | nu
   return {
     dstKind: 'out-of-corpus',
     // One-argument `join` normalizes: it collapses `.`/`..` lexically, so
-    // `docs/./a/../b.md` and `docs/b.md` are one key. `toForwardSlash` runs
+    // `docs/./a/../b.md` and `docs/b.md` are one key. `toForwardSlashAnyPlatform` runs
     // FIRST because a backslash is not a separator on POSIX — normalizing a
     // Windows-spelled path before converting it would leave `docs\a\..\b.md`
     // as one opaque segment and produce a key that never matches its own
     // forward-slashed twin. Lexical, not `realpath`: the target is by
     // definition not in the corpus, so there is nothing here entitled to stat.
-    dstKey: safePath.join(toForwardSlash(relativePath)),
+    dstKey: safePath.join(toForwardSlashAnyPlatform(relativePath)),
     dstResource: null,
     dstAnchor: anchor,
   };

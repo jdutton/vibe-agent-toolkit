@@ -56,6 +56,7 @@ import {
   resolveAssetReference,
   safePath,
   toForwardSlash,
+  toForwardSlashAnyPlatform,
   VatError,
 } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
@@ -74,6 +75,7 @@ import {
   type SkillFileEntry,
 } from './files-config.js';
 import { READ_REMEDY, withFsAttribution } from './fs-attribution.js';
+import { LINK_GRAPH_MEMBER_GLOBS } from './link-graph-members.js';
 import { checkBrokenPackagedLinks, checkMissingReferencedPaths, checkUnreferencedFiles } from './post-build-checks.js';
 import {
   checkPackagedTestInput,
@@ -1176,7 +1178,7 @@ export async function createProjectRegistry(
   const registry = await ResourceRegistry.fromCrawl(
     {
       baseDir: projectRoot,
-      include: ['**/*.md'],
+      include: [...LINK_GRAPH_MEMBER_GLOBS],
       // A build must not ship a shorter bundle: a directory this crawl cannot
       // list refuses the run by name — see `RegistryUnreadablePolicy`.
       unreadable: 'refuse',
@@ -2471,9 +2473,10 @@ export function generateTargetPath(
   // Strip prefix from relative path (if specified)
   // Works for both resource-id and preserve-path strategies
   if (stripPrefix) {
-    // Normalize separators for consistent matching
-    const normalizedRelPath = relPath.replaceAll('\\', '/');
-    const normalizedPrefix = stripPrefix.replaceAll('\\', '/').replace(/\/$/, ''); // Remove trailing slash
+    // `relPath` is already forward-slashed by `safePath.relative`; `stripPrefix`
+    // is author-written config, so its backslashes read as separators anywhere.
+    const normalizedRelPath = relPath;
+    const normalizedPrefix = toForwardSlashAnyPlatform(stripPrefix).replace(/\/$/, ''); // Remove trailing slash
 
     if (normalizedRelPath.startsWith(normalizedPrefix + '/')) {
       // Strip the prefix and leading slash

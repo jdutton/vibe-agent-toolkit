@@ -103,7 +103,7 @@ async function populateCapturing(tracker: GitTracker): Promise<CapturingStore> {
   await buildResourcePopulation({
     root: suite.tempDir,
     gitTracker: tracker,
-    cache: { store, treeHash: FIXTURE_TREE_HASH },
+    cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
   });
   return store;
 }

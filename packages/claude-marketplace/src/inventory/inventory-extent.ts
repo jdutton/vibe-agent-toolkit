@@ -30,7 +30,7 @@
  * | Walk option | Declaration |
  * |---|---|
  * | `maxDepth: Infinity` | {@link INVENTORY_MAX_DEPTH} — `'full'`, the declaration's spelling of the same union |
- * | `isRoutable` (not an option — the walker's own rule) | `traverseParserKinds: ['markdown']`, the same predicate (`parserKindForPath(p) === 'markdown'`). It reads as inert at `'full'`, where the depth half of the leaf rule can never fire, and it is not: the TRAVERSAL half still bites. `walkLinkGraph` bundles an HTML page and records `non-routable-source` for every link out of it; a closure that left this null would walk THROUGH that page and admit a subtree the walker never opened |
+ * | `isRoutable` (not an option — the walker's own rule) | `traverseGlobs: LINK_GRAPH_MEMBER_GLOBS` — the glob this lane's own registry crawls, so the door rule is registry membership exactly. It reads as inert at `'full'`, where the depth half of the leaf rule can never fire, and it is not: the TRAVERSAL half still bites. A target outside the registry — an HTML page, a `.txt` that parses as markdown — is bundled and never opened; a closure that left this null would walk THROUGH it and admit a subtree the walker never opened |
  * | `excludeRules: []` | no `patterns` rule at all; there is nothing to flatten |
  * | `excludeNavigationFiles: true` | {@link INVENTORY_REFUSED_NAVIGATION_FILE}, unconditionally, because the option is a literal |
  * | *(no `deferredArtifacts`)* | no `admitPaths`. With `deferredArtifacts` absent, `refusesAgentInstructionFile` short-circuits on `declaredSources === undefined` and refuses EVERY agent-instruction file, so there is no escape hatch to model |
@@ -71,6 +71,7 @@
 
 import {
   AGENT_INSTRUCTION_FILE_PATTERNS,
+  LINK_GRAPH_MEMBER_GLOBS,
   NAVIGATION_FILE_PATTERNS,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
@@ -233,7 +234,7 @@ export function inventoryExtentDeclaration(
     kind: INVENTORY_EXTENT_KIND,
     closureFrom: skillPath,
     maxDepth: INVENTORY_MAX_DEPTH,
-    traverseParserKinds: ['markdown'],
+    traverseGlobs: [...LINK_GRAPH_MEMBER_GLOBS],
     refusals: inventoryRefusals(hasGitTracker),
     admitPaths: [],
   });

@@ -146,7 +146,7 @@ their own.
 | `resource_realizations` | `(resource_id, zone_id, path)` — one resource id can have many paths (e.g. a source registry and a build-output registry sharing node identity) |
 | `resource_zones` | `(resource_id, zone_kind, zone_id, role)`; `zone_kind ∈ {skill, plugin, marketplace, collection, package, tree}`; tree `role ∈ {source, dist, vendored}` |
 | `resource_tags` | `(resource_id, tag, value, source)`; `source ∈ {filename, config, frontmatter, zone, harness-convention}` |
-| `claude_rule_patterns` (✅ shipped) | `(resource_id, ordinal)` — one row per `paths:` glob of one `.claude/rules` file, with `pattern`, `literal_prefix`, `witness_path` and `status ∈ {matched, inert, unevaluated}`. Keyed on the rules file's IDENTITY, not on an extent, and carrying no context column, for the reason [zones.md §4](zones.md#the-claude_rule_patterns-table--three-statuses-one-witness) gives |
+| `claude_rule_patterns` (✅ shipped) | `(resource_id, ordinal)` — one row per `paths:` glob of one `.claude/rules` file, with `pattern`, `literal_prefix`, `witness_path` and `status ∈ {matched, inert, unevaluated, gitignored}`. Keyed on the rules file's IDENTITY, not on an extent, and carrying no context column, for the reason [zones.md §4](zones.md#the-claude_rule_patterns-table--four-statuses-one-witness) gives |
 | `edges` + `edge_resolutions` | ⚠️ **This row previously described `edges` as carrying `dst_resource` / `dst_anchor` directly. That shape is wrong and the shipped schema rejects it** — a scalar destination cannot hold a many-candidate resolution, and choosing one winner *is* the last-write-wins defect per-lens resolution exists to remove. The destination lives on a separate `edge_resolutions` table, one row per candidate. See [zones.md §5](zones.md#5-references-and-edges), which is authoritative for this model; `packages/resources/src/schemas/projection-edges.ts` is the shipped shape. Resolution is per **resolution context**, not per zone id. |
 
 **`roots` is a table, so `path` alone is never an identifier.** Any SQL check's column contract must
@@ -200,10 +200,11 @@ than against taste** (`packages/resources/src/projection/agentic-tags.ts` carrie
   measurement that motivated `selected` is a **base rate, not a rule**, so the tag ships with no
   `loading` value at all until something reads frontmatter.
 
-  ⚠️ **Two consequences, and the second is a correction the budget check now implements.** First,
-  VAT's own `claude-rules` collection *requires* `paths:` — deliberately stricter than the vendor,
-  because an unscoped rule is charged to every session whether or not the work touches what it
-  guards, and that cost is precisely what this check exists to surface. Second, the design's
+  ⚠️ **Two consequences, and the second is a correction the launch-charge accounting now
+  implements.** First, VAT's own `claude-rules` collection *requires* `paths:` — deliberately
+  stricter than the vendor, because an unscoped rule is charged to every session whether or not the
+  work touches what it guards, and that cost is precisely what `launchCharge` exists to surface.
+  Second, the design's
   instruction to **exclude rules files from the always-loaded chain sum is right only for rules
   that carry `paths:`**. A rule that omits it *is* always-loaded, and excluding it under-reports
   exactly the file whose cost is worst — the same direction of error the `loading` rank rule exists
@@ -220,13 +221,14 @@ than against taste** (`packages/resources/src/projection/agentic-tags.ts` carrie
   tell whether this correction was cosmetic or dominant, and a future edit that flattens it back to
   "rules files are `always`" has nothing to argue against.
 
-  ⭐ **This passage shipped BEFORE the code obeyed it, and that gap was a real defect.**
-  `alwaysLoadedBudget`'s `qualifies()` excluded every rule admission, so `vat claude budget` and
-  `vat claude context` disagreed about the same directory — the query lane classed an unscoped root
-  rule `always`, the check dropped it, and a repo whose root rules omit `paths:` was told *"Every
+  ⭐ **This passage shipped BEFORE the code obeyed it, and that gap was a real defect.** The
+  launch-charge predicate (then `alwaysLoadedBudget`'s `qualifies()`, now `admissionLoadsAtLaunch` in
+  `claude-context-launch-charge.ts`) excluded every rule admission, so the two readings of the same
+  directory disagreed — the query lane classed an unscoped root rule `always`, the now-removed
+  `vat claude budget` check dropped it, and a repo whose root rules omit `paths:` was told *"Every
   instruction chain checked is within budget."* Unreachable from VAT's own tree, where all rules
-  carry `paths:`, which is why nothing went red for it. `qualifies()` now admits `root-rule` and
-  only `root-rule`; the path-scoped kinds stay excluded, for the reason above.
+  carry `paths:`, which is why nothing went red for it. `admissionLoadsAtLaunch` now admits
+  `root-rule` and only `root-rule`; the path-scoped kinds stay excluded, for the reason above.
 - **`AGENTS.md` is not `always`.** Claude Code reads `CLAUDE.md`, not `AGENTS.md`; the latter is
   charged only where a `CLAUDE.md` imports it. Its class is a property of the import graph, so it
   too ships with no `loading` value.
@@ -509,19 +511,20 @@ which a bare commit key cannot express.
     vocabulary the earlier draft listed: the first belongs to the npm Changesets release tool that
     no agent harness reads, and the other three are the skill packager's and a lens's outputs
     rather than functions of a path.
-- ✅ **Consumed as of 2026-08-23.** `resource_tags` has its first reader: the always-loaded
-  context-budget check reads the `claude-md` tag to decide which realizations set an instruction
-  chain (`packages/resources/src/projection/claude-context-budget-sweep.ts › claudeMdIdentities()`,
-  and the same lookup in `claude-context-accounting.ts`'s caller). It ships as `vat claude budget`,
-  a command of its own rather than a check folded into `vat resources validate` — a validation run
-  must not emit findings nobody asked for. `lens_entry_points` remains unbuilt, and the check does
-  not join against it. A populated table is still not evidence of a *useful* one any more than a
-  typed one was evidence of a populated one; what changed is that this one now has a consumer that
-  would break if it went empty.
+- ✅ **Consumed as of 2026-08-23.** `resource_tags` has its first reader: the claude-context lens
+  reads the `claude-md` tag to decide which realizations set an instruction chain
+  (`packages/resources/src/projection/claude-context-regions.ts › claudeMdIdentities()`, consumed by
+  both `claude-context-relations.ts` and `claude-context-cost-map.ts`). It surfaces as published rows
+  — `claude_context_chains` / `claude_context_loads` via `vat resources query` / `vat resources
+  check`, and a whole-tree cost map via `vat claude context` — never as a check folded into
+  `vat resources validate`; a validation run must not emit findings nobody asked for.
+  `lens_entry_points` remains unbuilt, and neither reader joins against it. A populated table is
+  still not evidence of a *useful* one any more than a typed one was evidence of a populated one;
+  what changed is that this one now has a consumer that would break if it went empty.
 - ✅ **Shipped: `claude_rule_patterns`, the thirteenth materialised table.**
   `ClaudeRulesScopeContributor` emits one row per `paths:` glob of one `.claude/rules` file — see
-  §3's row and [zones.md §4](zones.md#the-claude_rule_patterns-table--three-statuses-one-witness)
-  for the key, the three statuses and why a witness rather than a match count. It is reachable from
+  §3's row and [zones.md §4](zones.md#the-claude_rule_patterns-table--four-statuses-one-witness)
+  for the key, the four statuses and why a witness rather than a match count. It is reachable from
   `vat resources query` and `vat resources check` only: the `scan`/`validate` lane populates under
   `CONTENT_PARSING_SKIP`, where registering a blob reader throws.
 - ✅ **Shipped: the first consumer that is a RULE.** `CLAUDE_RULE_GLOB_INERT` ships as the built-in

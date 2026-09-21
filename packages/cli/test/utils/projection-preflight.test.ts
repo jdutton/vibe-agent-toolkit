@@ -46,6 +46,17 @@ describe('assertQueriesCompile', () => {
     await expect(assertQueriesCompile([unbound('SELECT path FROM resource_realizations')])).resolves.toBeUndefined();
   });
 
+  it('accepts a statement over a DERIVED relation, though no lens has run yet', async () => {
+    // 🚨 The preflight runs before any lens is evaluated, and the run's query
+    // store has no table for an unevaluated relation — that absence is how one
+    // is refused. Compiled against that store, every check over `edges` or
+    // `claude_context_loads` would be refused here, before it could ever run.
+    await expect(assertQueriesCompile([
+      unbound('SELECT COUNT(*) FROM edges'),
+      unbound('SELECT chainId FROM claude_context_loads'),
+    ])).resolves.toBeUndefined();
+  });
+
   it('refuses an unknown column and lists the columns the table DOES have', async () => {
     await expect(assertQueriesCompile([unbound(TYPO_STATEMENT)])).rejects.toThrow(/contentKey/);
   });

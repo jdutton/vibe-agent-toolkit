@@ -60,13 +60,8 @@ import { gitTrackerForProjectRoot } from '../commands/audit/distributed-tree.js'
 
 import type { Logger } from './logger.js';
 import { populationWiring } from './population-wiring.js';
-import {
-  evaluateLens,
-  lensesNamedBy,
-  unevaluatedRelationsNamed,
-  type ProjectionLens,
-} from './projection-lenses.js';
-import { openEphemeralQueryStore, withPopulationCache } from './projection-store.js';
+import { evaluateLens, lensesNamedBy } from './projection-lenses.js';
+import { openCompileProbe, openEphemeralQueryStore, withPopulationCache } from './projection-store.js';
 
 /**
  * The tree hash an in-memory store's one population is filed under.
@@ -79,8 +74,11 @@ import { openEphemeralQueryStore, withPopulationCache } from './projection-store
  */
 const EPHEMERAL_TREE_HASH = 'ephemeral';
 
+/** What SQLite says when a statement names a table the schema does not have. */
+const TABLE_NOT_FOUND = 'no such table:';
+
 /** What SQLite says when a statement names something the schema does not have. */
-const NAME_NOT_FOUND: readonly string[] = ['no such table:', 'no such column:'];
+const NAME_NOT_FOUND: readonly string[] = [TABLE_NOT_FOUND, 'no such column:'];
 
 /** Where the POPULATION a statement ran against came from. */
 export type PopulationOrigin = 'derived' | 'store';
@@ -175,9 +173,10 @@ export interface ProjectionProvenance {
    * same family as {@link population}, and what makes a `lensSecs` of `0`
    * legible rather than alarming.
    *
-   * ⚠️ Not the only guard: a statement naming a relation no evaluated lens
-   * produced is REFUSED (see {@link withQueriedProjection}), so this field
-   * explains a cheap run rather than excusing a blind one.
+   * ⚠️ Not the only guard: a relation no evaluated lens produced does not
+   * EXIST in the run's database, so a statement naming it is refused by SQLite
+   * (see {@link withQueriedProjection}). This field explains a cheap run rather
+   * than excusing a blind one.
    */
   readonly lensesEvaluated: readonly string[];
 
@@ -306,7 +305,11 @@ export type AskProjection = (
  */
 export async function assertQueriesCompile(statements: readonly PreflightStatement[]): Promise<void> {
   if (statements.length === 0) return;
-  const probe = await openEphemeralQueryStore();
+  // 🔑 A compile PROBE, not the query store: this runs before any lens is
+  // evaluated, and the query store has no table for an unevaluated relation.
+  // The probe carries every derived relation and cannot answer a query, so its
+  // empty tables can never be read as a result.
+  const probe = await openCompileProbe();
   try {
     for (const { sql, parameters } of statements) {
       try {
@@ -441,10 +444,12 @@ export async function withQueriedProjection<T>(
       // exists only when somebody remembered a flag is one nobody writes a check
       // against. What decides is the statement, which cannot be forgotten.
       //
-      // ⛔ The narrowing is safe ONLY because `ask` below refuses a statement
-      // naming a relation nothing filled. Delete that refusal and this becomes a
-      // silent wrong answer: an unevaluated relation exists in the schema and
-      // selects zero rows.
+      // ⛔ The narrowing is safe ONLY because an unevaluated relation does not
+      // EXIST in `store`: the backend creates a derived table on the write that
+      // fills it, so a statement naming one no lens filled fails `no such table`
+      // in SQLite itself — whatever spelling slipped past the selector's scan —
+      // and {@link describeQueryFailure} says why. Create the relations up front
+      // and this becomes a silent wrong answer: an empty table selecting zero rows.
       const lenses = lensesNamedBy(options.statements);
       const lensStart = performance.now();
       for (const lens of lenses) {
@@ -457,7 +462,6 @@ export async function withQueriedProjection<T>(
       // The shared setup is done. Everything after this line is the caller's.
 
       const ask: AskProjection = (sql, ...parameters) => {
-        assertRelationsEvaluated(sql, lenses);
         try {
           return store.query(sql, ...parameters);
         } catch (error) {
@@ -492,36 +496,22 @@ export async function withQueriedProjection<T>(
 }
 
 /**
- * Refuse a statement reaching for a relation this run did not evaluate.
+ * The derived relation a `no such table` failure names, if it names one.
  *
- * 🚨 **The refusal is what makes lazy lens evaluation an optimisation.** A
- * derived relation always EXISTS in the ephemeral schema — the DDL is issued for
- * every registry entry — so an unevaluated one is an empty table, and
- * `SELECT COUNT(*) FROM edges` over it answers `0` at exit 0: indistinguishable
- * from a tree with no links, and for `vat resources check` a rule that can no
- * longer fail. So the caller gets a legible error naming the relation instead of
- * a confident zero; for `check` that surfaces as a `RESOURCE_CHECK_BROKEN`
- * finding naming the rule.
+ * SQLite echoes the reference as written — `edges`, `EDGES`, `main.edges` — so
+ * the schema prefix is dropped and the comparison case-folds, as SQLite's own
+ * name resolution does. Names come from the relation registry, never a list
+ * kept here.
  *
- * ⚠️ It cannot fire for a caller that passed no `statements` at all: that
- * selects every lens, so nothing is unevaluated. The guard exists for the caller
- * that declared SOME statements and then ran a different one.
- *
- * @param sql - The statement about to run
- * @param evaluated - The lenses this run evaluated
- * @throws When the statement names a relation none of them produced
+ * @param message - What the engine said
+ * @returns The relation's registry spelling, or undefined
  */
-function assertRelationsEvaluated(sql: string, evaluated: readonly ProjectionLens[]): void {
-  const missing = unevaluatedRelationsNamed(sql, evaluated);
-  if (missing.length === 0) return;
-  throw new Error(
-    `This statement reads ${missing.join(', ')}, but no lens producing`
-    + ` ${missing.length === 1 ? 'that relation' : 'those relations'} was evaluated for this run,`
-    + ' so the table is empty and any answer from it would be false.'
-    + ' A derived relation is evaluated only when one of the statements the run DECLARED names it'
-    + ' — declare this statement (`vat resources query` passes the one it was given; `vat resources'
-    + ' check` passes every statement in `resources.checks`) rather than reading the empty table.',
-  );
+function unevaluatedRelationIn(message: string): string | undefined {
+  const at = message.indexOf(TABLE_NOT_FOUND);
+  if (at === -1) return undefined;
+  const reference = message.slice(at + TABLE_NOT_FOUND.length).trim().split(/\s/u)[0] ?? '';
+  const bare = reference.slice(reference.lastIndexOf('.') + 1).toLowerCase();
+  return allDerivedSpecs().find((spec) => spec.name.toLowerCase() === bare)?.name;
 }
 
 /**
@@ -560,6 +550,24 @@ function assertRelationsEvaluated(sql: string, evaluated: readonly ProjectionLen
  */
 export function describeQueryFailure(sql: string, message: string): string {
   if (!NAME_NOT_FOUND.some((prefix) => message.includes(prefix))) return message;
+
+  // 🚨 A MISSING DERIVED RELATION IS NOT A TYPO — it is the refusal that makes
+  // lazy lens evaluation an optimisation. The run's database creates a derived
+  // relation only when a lens fills it, so one no lens was evaluated for is
+  // absent, and SQLite refuses it rather than answering `0` from an empty table
+  // (indistinguishable from a tree with no links, and for `vat resources check`
+  // a rule that could no longer fail). The refusal is the engine's, so it holds
+  // for any spelling the lens selector's scan missed; this only says why. For
+  // `check` it surfaces as a `RESOURCE_CHECK_BROKEN` finding naming the rule.
+  // The compile preflight never reaches here with one: its probe has them all.
+  const unevaluated = unevaluatedRelationIn(message);
+  if (unevaluated !== undefined) {
+    return `${message}\n\n`
+      + `This statement reads ${unevaluated}, a derived relation that was not evaluated for this run:`
+      + ' no statement the run DECLARED names it, so no lens producing it ran and there is no answer'
+      + ' to give. Declare this statement (`vat resources query` passes the one it was given;'
+      + ' `vat resources check` passes every statement in `resources.checks`).';
+  }
 
   // 🪤 The derived relations belong in this listing even though they are not
   // projection tables. A user who mistypes `edge_resolution` gets "no such

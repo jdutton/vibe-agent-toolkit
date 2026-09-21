@@ -14,9 +14,9 @@
  * introduced by the optimisation itself.
  *
  * **Refused.** And the case between them: a statement naming a relation this run
- * did not evaluate is refused outright rather than answered from the empty
- * table. Without that third assertion the first two describe a lane where the
- * cheap path is simply blind.
+ * did not evaluate is refused outright — the relation does not exist in the
+ * run's database — rather than answered from an empty table. Without that third
+ * assertion the first two describe a lane where the cheap path is simply blind.
  *
  * ⚠️ Integration tier: every case builds a real tree on disk and populates it.
  */
@@ -40,7 +40,7 @@ const COUNT_EDGES = 'SELECT COUNT(*) AS n FROM edges';
 
 /** A statement over the claude-context lens's relations. */
 const COUNT_ALWAYS_LOADED =
-  "SELECT COUNT(*) AS n FROM claude_context_loads WHERE budgetDisposition = 'charged'";
+  "SELECT COUNT(*) AS n FROM claude_context_loads WHERE launchCharge = 'charged'";
 
 /**
  * A tree with an authored markdown link AND an always-loaded `CLAUDE.md`, so one
@@ -162,10 +162,17 @@ describe('lens evaluation is driven by what the run declares', () => {
     // 🚨 The guard that makes the laziness an optimisation rather than a silent
     // narrowing. Without it this run answers `n: 0` at exit 0, which is
     // indistinguishable from a tree with no links.
+    //
+    // ⚠️ The DECLARED statement names no relation, and the ASKED one does — so
+    // the lens selector never saw `edges`. An earlier refusal re-ran that same
+    // scanner over the asked statement, and so could never fire for a statement
+    // the selector had seen, nor for a spelling it missed. This passes only
+    // because the relation is ABSENT from the run's database and SQLite itself
+    // refuses it.
     await expect(
       withQueriedProjection({ root, logger, statements: [NAMES_NOTHING] }, (ask) =>
         ask(COUNT_EDGES)),
-    ).rejects.toThrow(/edges.*no lens/s);
+    ).rejects.toThrow(/no such table: edges.*not evaluated for this run/s);
   });
 
   it('evaluates every lens for a caller that declares no statements at all', async () => {

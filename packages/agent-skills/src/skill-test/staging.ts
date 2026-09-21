@@ -3,7 +3,7 @@ import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeF
 import { basename } from 'node:path';
 
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { ZodError } from 'zod';
 
 import type {
@@ -212,7 +212,7 @@ export function descriptorToSource(d: SkillSourceDescriptor): SkillSource {
  * empty-after-sanitize fallback and disambiguates equal basenames).
  */
 export function stagedDirName(name: string): string {
-  const slug = basename(toForwardSlash(name)).replaceAll(/[^A-Za-z0-9_-]/g, '_');
+  const slug = basename(toForwardSlashAnyPlatform(name)).replaceAll(/[^A-Za-z0-9_-]/g, '_');
   const hash = createHash('sha256').update(name).digest('hex').slice(0, 8);
   // Require at least one alphanumeric so an all-separator basename (e.g. '...')
   // falls back to a pure hash rather than a noise segment like '___'.

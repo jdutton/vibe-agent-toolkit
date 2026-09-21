@@ -120,7 +120,6 @@ describe('review-checklist.sectionForCode', () => {
 const FALLS_TO_CATCH_ALL: ReadonlySet<string> = new Set([
   'ALLOW_EXPIRED',
   'ALLOW_UNUSED',
-  'ALWAYS_LOADED_CONTEXT_BUDGET',
   // Emitted over a project's `.claude/rules` tree, which a skill review does not walk —
   // the same reason the resource/link-graph codes below fall through.
   'CLAUDE_RULE_GLOB_INERT',

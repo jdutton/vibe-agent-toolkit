@@ -33,12 +33,17 @@
               "type": "null"
             }
           ],
-          "description": "First tree path this pattern matches, or null when it matched nothing or was never evaluated"
+          "description": "First tree path this pattern matches — non-null exactly when status is \"matched\". Pinned by a superRefine that is NOT encoded in the generated JSON Schema"
         },
         "status": {
           "type": "string",
-          "minLength": 1,
-          "description": "Pattern status — open vocabulary: \"matched\", \"inert\" or \"unevaluated\""
+          "enum": [
+            "matched",
+            "inert",
+            "unevaluated",
+            "gitignored"
+          ],
+          "description": "Pattern status: \"matched\" (witnessPath names a match), \"inert\" (evaluated, matched nothing), \"unevaluated\" (never run — the paths: list blew the expansion budget) or \"gitignored\" (matched nothing VAT can see, and its territory is gitignored — VAT declines to judge it, since the harness reads ignored files)"
         }
       },
       "required": [
@@ -50,7 +55,7 @@
         "status"
       ],
       "additionalProperties": false,
-      "description": "A row of the path-dependent `claude_rule_patterns` table"
+      "description": "A row of the path-dependent `claude_rule_patterns` table. Note: witnessPath is non-null exactly when status is \"matched\"; this constraint is enforced by the Zod schema but not encoded in the generated JSON Schema."
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#"

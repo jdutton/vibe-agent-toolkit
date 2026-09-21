@@ -21,6 +21,8 @@
  * allow the directory itself when a check selects directory rows.
  */
 
+import path from 'node:path';
+
 /** A drive-lettered Windows path, which is absolute however POSIX it looks. */
 const WINDOWS_DRIVE = /^[A-Za-z]:/;
 
@@ -36,7 +38,9 @@ const WINDOWS_DRIVE = /^[A-Za-z]:/;
  */
 export function findingLocation(value: unknown): string | undefined {
   if (typeof value !== 'string' || value.length === 0) return undefined;
-  if (value.includes('\\')) return undefined;
+  // A backslash is a separator only on win32; on POSIX it is a legal filename
+  // character, and `.claude/rules/a\b.md` is a real file that must keep its anchor.
+  if (path.sep === '\\' && value.includes('\\')) return undefined;
   if (value.startsWith('/') || WINDOWS_DRIVE.test(value)) return undefined;
   return value;
 }

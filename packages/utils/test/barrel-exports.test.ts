@@ -106,6 +106,7 @@ const BARREL_EXPORTS = [
   'symlinkCapability',
   'toAbsolutePath',
   'toForwardSlash',
+  'toForwardSlashAnyPlatform',
   'toNfc',
   'transientRefusalClause',
   'unwrapZodType',

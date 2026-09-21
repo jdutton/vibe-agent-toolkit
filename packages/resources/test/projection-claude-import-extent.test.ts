@@ -170,7 +170,7 @@ describe('claudeImportExtentDeclaration', () => {
       // vendor statement that it stops at a non-markdown import. Declaring a
       // narrowing nothing measured would be a claim, so the default stands
       // until an import lane is measured against the real harness.
-      traverseParserKinds: null,
+      traverseGlobs: null,
       refusals: [],
       admitPaths: [],
     });

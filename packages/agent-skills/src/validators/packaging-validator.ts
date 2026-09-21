@@ -42,6 +42,7 @@ import {
   issueLocation,
   normalizedTmpdir,
   toForwardSlash,
+  toForwardSlashAnyPlatform,
   safePath,
 } from '@vibe-agent-toolkit/utils';
 import { type DirectoryRefusal, DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
@@ -226,7 +227,7 @@ function validateFilesConfig(
   const destSet = new Set<string>();
 
   for (const entry of files) {
-    const normalized = toForwardSlash(entry.dest);
+    const normalized = toForwardSlashAnyPlatform(entry.dest);
     if (destSet.has(normalized)) {
       issues.push({
         severity: 'error',

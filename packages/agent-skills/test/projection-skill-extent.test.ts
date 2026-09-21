@@ -52,6 +52,7 @@ import {
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { LINK_GRAPH_MEMBER_GLOBS } from '../src/link-graph-members.js';
 import {
   SKILL_EXTENT_KIND,
   SKILL_REFUSED_AGENT_INSTRUCTION_FILE,
@@ -85,6 +86,10 @@ const SKILL_NAME = 'tool-a';
 const GUIDE_REL = 'docs/guide.md';
 const HELPER_REL = 'skills/shared/helper.mjs';
 const CHAIN_REL = 'docs/chain.md';
+/** Parses as markdown, is not a `**\/*.md` registry member — cargo to the build. */
+const TXT_REL = 'skills/tool-a/notes.txt';
+/** Reachable only through {@link TXT_REL}. */
+const BEHIND_TXT_REL = 'skills/tool-a/behind-txt.md';
 const README_REL = 'docs/README.md';
 const CLAUDE_REL = 'CLAUDE.md';
 const SIBLING_SKILL_REL = 'skills/tool-b/SKILL.md';
@@ -451,11 +456,10 @@ describe('skillExtentDeclaration', () => {
       kind: SKILL_EXTENT_KIND,
       closureFrom: SKILL_REL,
       maxDepth: DEFAULT_DEPTH,
-      // `walkLinkGraph`'s `isRoutable`, in the declaration's vocabulary — both
-      // read `parserKindForPath`. Not derived from config: the packager applies
-      // it to every skill regardless of what the skill declares, so a config-less
-      // skill gets it exactly as a configured one does.
-      traverseParserKinds: ['markdown'],
+      // The packager's door rule: the walker traverses REGISTRY members, and the
+      // registry is this glob. Not derived from config: the packager applies it
+      // to every skill regardless of what the skill declares.
+      traverseGlobs: [...LINK_GRAPH_MEMBER_GLOBS],
       follow: ['markdown-link', 'markdown-link-reference', 'markdown-definition'],
       // The schema default, materialized by `parse`. A skill bundle's links are
       // markdown hrefs and are read under RFC 3986; Claude Code's `@`-import
@@ -704,7 +708,7 @@ describe('membership against walkLinkGraph', () => {
     // refused — recorded here as expected, and separately in zones.md as
     // "observed in shipped code, not yet filed".
     //
-    // It is closed by `traverseParserKinds: ['markdown']`, the declaration's
+    // It is closed by `traverseGlobs: LINK_GRAPH_MEMBER_GLOBS`, the declaration's
     // spelling of `isRoutable`: a leaf is admitted without being charged,
     // because bundling it enqueues nothing and there is no hop for a budget to
     // bound. The walker won because it is the packager.
@@ -716,6 +720,28 @@ describe('membership against walkLinkGraph', () => {
     // the old divergence named.
     expect(closure).toContain(HELPER_REL);
     expect(closure).toEqual(walker);
+  });
+
+  it('AGREES on a document behind a file that parses as markdown but is not in the registry', async () => {
+    // ⛔ The over-report the parser-kind rule traded the depth under-report for.
+    // `notes.txt` routes to the markdown parser, but the build's registry
+    // includes `**/*.md` only, so the walker bundles it as cargo and never opens
+    // it. Keyed on parser kind, the closure walked through it and admitted
+    // `behind-txt.md`, which no build ships — at every depth, with no row.
+    const root = fixtureCorpus('txt-cargo');
+    writeFileSync(safePath.join(root, SKILL_REL), `${CASCADE_SKILL_MD}- [notes](notes.txt)\n`);
+    writeFileSync(safePath.join(root, TXT_REL), '# Notes\n\nSee [behind](behind-txt.md).\n');
+    writeFileSync(safePath.join(root, BEHIND_TXT_REL), '# Behind\n');
+    const config: SkillPackagingConfig = { linkFollowDepth: 'full' };
+
+    const closure = await closureMembers(root, config);
+    const walker = await walkerBundle(root, config);
+
+    // Stated, so two empty sets cannot agree: the cargo arrives on both arms.
+    expect(walker).toContain(TXT_REL);
+    expect(walker).not.toContain(BEHIND_TXT_REL);
+    expect(difference(closure, walker)).toEqual([]);
+    expect(difference(walker, closure)).toEqual([]);
   });
 
   it('AGREES on the three cascade discriminators, and now names each one', async () => {

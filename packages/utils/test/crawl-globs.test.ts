@@ -1,4 +1,5 @@
 import { writeFileSync } from 'node:fs';
+import { sep } from 'node:path';
 
 import { beforeAll, beforeEach, afterAll, describe, expect, it } from 'vitest';
 
@@ -72,10 +73,19 @@ describe('crawlPathFilter — the one matcher both crawl lanes and the projectio
     expect(isMember('.claude/skills/a.md')).toBe(true);
   });
 
-  it('normalizes separators, so a Windows-shaped path meets the same globs', () => {
+  // Gated: the filter takes NATIVE paths, and `docs\guide.md` is a nested native path only on win32.
+  it.skipIf(sep !== '\\')('normalizes separators, so a Windows-shaped path meets the same globs', () => {
     const isMember = crawlPathFilter(['docs/**/*.md'], []);
 
     expect(isMember(String.raw`docs\guide.md`)).toBe(true);
+  });
+
+  // Gated: on win32 the backslash is a separator, and the case above is the contract there.
+  it.skipIf(sep === '\\')('keeps a POSIX backslash as a filename character, so the name sits at the root', () => {
+    const isMember = crawlPathFilter(['docs/**/*.md'], []);
+
+    expect(isMember(String.raw`docs\guide.md`)).toBe(false);
+    expect(isMember('docs/guide.md')).toBe(true);
   });
 });
 
