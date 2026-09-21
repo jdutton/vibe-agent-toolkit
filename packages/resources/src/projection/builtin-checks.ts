@@ -85,6 +85,9 @@ function pathByResourceId(
   return paths;
 }
 
+/** How a finding names a rules file that has no realization row to anchor it. */
+const UNLOCATED_RULES_FILE = 'the rules file that declares it';
+
 /**
  * What one dead glob says to its author.
  *
@@ -93,11 +96,10 @@ function pathByResourceId(
  * file the finding names.
  *
  * @param row - The inert pattern
- * @param file - The rules file, when it is known
+ * @param where - The rules file, or a description of it when its path is unknown
  * @returns The message
  */
-function inertMessage(row: ClaudeRulePatternRow, file: string | undefined): string {
-  const where = file ?? 'the rules file that declares it';
+function inertMessage(row: ClaudeRulePatternRow, where: string): string {
   // ⛔ "that VAT can see", not "in this tree". The corpus declines every path
   // git ignores, and the harness reads the filesystem — so for a glob scoped to
   // `dist/**` the unqualified claim was false, and the fix text below would have
@@ -135,7 +137,7 @@ function runClaudeRuleGlobInert(input: BuiltinCheckInput): readonly ValidationIs
     // produces a finding, without an anchor — dropping it would make the finding
     // count silently disagree with the table and nothing would say so.
     const location = findingLocation(paths.get(row.resourceId));
-    issues.push(createRegistryIssue('CLAUDE_RULE_GLOB_INERT', inertMessage(row, location), {
+    issues.push(createRegistryIssue('CLAUDE_RULE_GLOB_INERT', inertMessage(row, location ?? UNLOCATED_RULES_FILE), {
       // Spread rather than assigned: under `exactOptionalPropertyTypes` an
       // absent key and one holding `undefined` are different values, and
       // `location` is refined to a project-relative POSIX path or nothing. There

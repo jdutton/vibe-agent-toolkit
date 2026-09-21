@@ -59,3 +59,7 @@
 - **`safePath.joinUnderRoot` no longer lets a backslash-spelled `..` escape the root on POSIX.**
   `x\..\..\secret` is one filename there and now stays under the root; it was converted to a climb
   after the containment check had passed.
+
+- **`adm-zip` → `0.6.1`.** Fixes GHSA-7q85-xj36-vmfc (CVSS 7.5, memory exhaustion from a zip's
+  declared size) and the symlink-following extraction advisory GHSA-vwc7-r8mq-g2x9, whose
+  accepted-risk entry is removed. Nothing to change.
