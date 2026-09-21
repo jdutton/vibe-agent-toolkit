@@ -48,7 +48,7 @@ with a regression test.
 - **`vat-lab` exits `2` (was `3`)** when a comparison completed but a command could not be
   measured; `EXIT_REFUSED` / `EXIT_CHANGED` / `EXIT_UNMEASURABLE` are gone.
 
-- **`vat okf validate`, `vat claude budget`, `vat resources check`, `vat ard emit` (`--format json`)
+- **`vat okf validate`, `vat resources check`, `vat ard emit` (`--format json`)
   and `vat skill review --yaml` publish ONE report envelope**: `status` (`ok | findings | error`), a
   required `examined` count, `findings[]`, `summary` (`{errors, warnings, info}`), `durationMs`, `data`.
   A run that could not finish publishes the SAME envelope (`status: error`, `examined: 0`, `error`,
@@ -193,11 +193,17 @@ with a regression test.
 - **`publish: false` now means an in-place skill: `vat build` / `vat skills build` skip it and
   `vat verify` no longer expects its `dist/skills/<name>` bundle** (it reports them as `bundlesInPlace`)
   — it is still validated at source.
-  `skills.defaults.publish: false` declares a whole tree in-place (plugin-local skills still ship
-  with their plugin); `--skill <name>` on an in-place skill now exits `1`.
+  `skills.defaults.publish: false` declares a whole tree in-place; `--skill <name>` on an in-place skill
+  now exits `1`. Plugin-local skills (git-tracked, under a plugin's `skills/`) still ship with their
+  plugin: they are counted as `skillsPluginOnly` / `skillsPluginOnlyNames`, never as in-place, and
+  `--skill` on one exits `1` pointing at `vat build --only claude`.
 - **`skills.defaults.publish` is now honoured by the consistency check**, so a project-wide
   `publish: false` yields `SKILL_UNPUBLISHED` (info) instead of `PUBLISHED_SKILL_NOT_IN_*` errors. A
-  plugin `skills:` selector matching only in-place skills is now `PLUGIN_REFERENCES_UNKNOWN_SKILL`.
+  plugin `skills:` selector matching only in-place skills — or only `publish: false` skills local to
+  a *different* plugin — is now `PLUGIN_REFERENCES_UNKNOWN_SKILL`.
+  A skill under a plugin's `skills/` that git does not track, or that is nested inside another
+  plugin-local skill's directory, no longer counts as assigned to that plugin (the plugin build never
+  shipped it): `git add` it or move it to its own directory, or expect `PUBLISHED_SKILL_NOT_IN_PLUGIN`.
 - **The "link points outside the skill directory" warning is now `LINK_OUTSIDE_SKILL_DIR`, default
   `ignore`** (bundled, link rewritten). For a self-contained skill set it to `error` in
   `validation.severity` under `skills.config.<name>` or `skills.defaults`: validate and build fail,
@@ -421,9 +427,13 @@ with a regression test.
 
 - **The resource projection** — a queryable model of the tree's documents, blobs, links and
   membership, which the resource commands now run on; `vat resources scan` gains `--format json`
-  plus `lane` and `extentSource`. Optional SQLite persistence: install
-  `@vibe-agent-toolkit/projection-sqlite`, set `VAT_PROJECTION_STORE=sqlite`, and set
-  `VAT_PROJECTION_STORE_DIR` per CI job or concurrent jobs write into one file.
+  plus `lane` and `extentSource`.
+
+- **VAT now caches that projection to disk, without being asked.** A SQLite file per scanned tree
+  under `<tmpdir>/.vat-cache/<version>/projection-<shape>/projection.db` — expect ~71 MB for a
+  12,600-file repository, bounded at 3 trees per repository, 8 repositories and 50,000 content
+  keys (~265 MB), and reclaimed by `vat cache clear`. Turn it off with `VAT_PROJECTION_STORE=off`, or `VAT_CACHE=0` for
+  every VAT cache. Set `VAT_PROJECTION_STORE_DIR` per CI job, or concurrent jobs write into one file.
 
 - **`vat resources query <sql> [path]`** — runs one read-only SQL statement (`SELECT`, `WITH` or
   `VALUES`; writes and multi-statement text are refused, exit 2) against the tree's projection.
@@ -432,16 +442,20 @@ with a regression test.
   reach those on every Node this package supports (Node 22.13–22.14 refuse `?NNN` outright).
   `[path]` locates the project and never narrows the corpus — a `WHERE` clause is the only scope.
 
-- **`vat resources check [path]`** — runs the SQL assertions declared under `resources.checks`
-  (each a `description` plus one `sql` selecting the rows that VIOLATE it) and exits 1 when any
-  returns rows; findings carry `CUSTOM:<name>`, which `resources.validation.severity` can
-  downgrade. A check that could not run, or a run with no `checks:` block, is
+- **`vat resources check [path]`** — runs VAT's built-in checks plus the SQL assertions declared
+  under `resources.checks` (each a `description` plus one `sql` selecting the rows that VIOLATE it)
+  and exits 1 when any returns rows; declared findings carry `CUSTOM:<name>`, which
+  `resources.validation.severity` can downgrade. A check that could not run is
   `RESOURCE_CHECK_BROKEN`, which nothing can silence. ⚠️ **Checks run over the TRACKED TREE, not
   your configured resource set** — `resources.include`/`exclude` do not scope the projection;
   narrow with the check's own `WHERE`.
 
 - **The link graph is queryable** — `lens_contexts`, `edges` and `edge_resolutions` join
-  `vat resources query` and `check`; each resolution is classed by `dstKind` (`resource` |
+  `vat resources query` and `check`, alongside `claude_context_chains` and `claude_context_loads`
+  (what loads into an agent's context at each working location, with a `launchCharge`).
+  A relation is computed only when your statement names it, and a statement naming a relation
+  nothing computed is refused rather than answered from an empty table.
+  Each resolution is classed by `dstKind` (`resource` |
   `external` | `out-of-corpus`) and keyed by `dstKey`. ⚠️ **Group by the `(dstKind, dstKey)` pair,
   never `dstKey` alone**, and split on `dstKind` before counting dangling links — `dstResource IS
   NULL` folds external URLs and out-of-corpus targets together, and `out-of-corpus` is a class,
@@ -456,11 +470,6 @@ with a regression test.
   `@`-imported files load into an agent's context at a path, why each is there, and its estimated
   token cost. `--discoverable` adds one-hop links the harness does not load; `--all` emits a cost
   map. `--format json`/`yaml` documents carry `kind` as their discriminator.
-
-- **`vat claude budget [paths...]`** — reports `ALWAYS_LOADED_CONTEXT_BUDGET` (info) for any
-  instruction chain over `resources.validation.thresholds.alwaysLoadedContextTokens` (default
-  12,000); set the code to `error` to fail the run or `ignore` to silence it. The estimate is
-  neither a floor nor a ceiling — a global `~/.claude/CLAUDE.md` is real cost it cannot see.
 
 - **`vat okf validate`** — conformance checking for Open Knowledge Format bundles declared under
   `okf.bundles.<name>.root`: parseable frontmatter with a non-empty `type` on every non-reserved
@@ -566,7 +575,7 @@ with a regression test.
 
 - **(library) `resource_tags` is now populated** — each resource is tagged with the harness
   convention its path carries (`claude-md`, `skill-md`, `subagent`, …) plus a `loading` row valued
-  `always` or `selected`; `vat claude budget` reads the same rows.
+  `always` or `selected`; the `claude_context_*` relations read the same rows.
 
 - **(library) HTML files now contribute `blob_references` rows** — `<a href>` and `<img src>`
   under an `html-link` syntactic form, which is in no closure's `follow` default, so HTML
@@ -769,6 +778,11 @@ with a regression test.
 
 ### Fixed
 
+- **`vat verify` now reads a plugin-local skill's `skills.config` entry exactly as the plugin build
+  does** (declared name, then directory path, then its last segment) when checking its plugin-tree
+  copy — including a skill no `skills.include` glob reaches. A skill whose directory is not named
+  after it had its `files:` dests and severity overrides ignored there. Fixed; a newly reported
+  missing dest is a real one.
 - **`vat claude plugin install`, `list` and `uninstall` now see a plugin or marketplace installed as a
   symlink** (a `--dev` install); the listing skipped links, so a dev install was invisible to the
   commands that manage it. A skill directory that is itself a link is linked like any other.

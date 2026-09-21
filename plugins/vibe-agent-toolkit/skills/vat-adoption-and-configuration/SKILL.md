@@ -175,6 +175,17 @@ phases:
 
 `vat validate` runs the source-only checks — links and SKILL.md frontmatter — that need no build; it's cheap enough to run on every pre-commit or as the first CI-before-build gate. `vat verify` runs the full artifact check (resources → skills → marketplace → consistency) against the built `dist/` tree; it's the authoritative gate before `npm publish`, so it runs after `vat build`. In this repo's own config, `bun run validate` already does this — adopters typically mirror the pattern.
 
+## VAT writes a cache to disk, and CI should know where
+
+Every resource-scanning verb populates a projection and, by default, keeps it in a SQLite file
+under `<tmpdir>/.vat-cache/` — about 71 MB for a 12,600-file repository, bounded at three trees
+per repository and 50,000 content keys. `vat cache clear` reclaims it.
+
+- **Set `VAT_PROJECTION_STORE_DIR` per CI job.** Concurrent jobs on one runner otherwise write
+  into the same file.
+- **`VAT_PROJECTION_STORE=off`** opts out of the store alone; **`VAT_CACHE=0`** vetoes every VAT
+  cache. Either costs a full re-derivation on every run.
+
 ## First-Time Setup Checklist
 
 1. `npm install -g vibe-agent-toolkit` (or add to local deps)
