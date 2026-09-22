@@ -924,7 +924,7 @@ function matchingForms(rulePath: string, pattern: string): string[] {
  * @param path - Root-relative path of the rule
  * @returns The scoping directory, or null when the path is not nested
  */
-function nestedRuleParent(path: string): string | null {
+export function nestedRuleParent(path: string): string | null {
   const index = path.indexOf(RULES_SEGMENT);
   return index <= 0 ? null : path.slice(0, index);
 }

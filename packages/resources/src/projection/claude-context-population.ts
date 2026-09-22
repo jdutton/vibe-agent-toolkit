@@ -165,7 +165,12 @@ async function sharedEnumeration(root: string): Promise<CrawlSource> {
   // the same reason: it is a fact about THIS enumeration, and a replay that
   // dropped it would hand the second pass a population with no record of the
   // directories the first pass could not see into.
-  return { kind: source.kind, unlistable: source.unlistable, enumerate: () => Promise.resolve(enumerated) };
+  return {
+    kind: source.kind,
+    unlistable: source.unlistable,
+    symlinks: source.symlinks,
+    enumerate: () => Promise.resolve(enumerated),
+  };
 }
 
 /**

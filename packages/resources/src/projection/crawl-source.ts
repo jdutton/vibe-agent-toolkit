@@ -216,6 +216,12 @@ class ListingRefusals {
     };
   }
 
+  /** Forget every refusal — called as an enumeration starts, so the list is ITS list. */
+  clear(): void {
+    this.#recorded.length = 0;
+    this.#seen.clear();
+  }
+
   #record(refusal: DirectoryRefusal): void {
     if (this.#seen.has(refusal.directory)) return;
     this.#seen.add(refusal.directory);
@@ -289,6 +295,47 @@ export interface CrawlSource {
    * row.
    */
   readonly unlistable: readonly DirectoryRefusal[];
+  /**
+   * Every symbolic link the last {@link CrawlSource.enumerate} met and did NOT
+   * offer as a member — absolute, forward-slashed, deduplicated, sorted. Empty
+   * until `enumerate` has run, and replayed with it, exactly as
+   * {@link CrawlSource.unlistable} is.
+   *
+   * ⚠️ Required, because the failure it closes is silence: a symlink is never a
+   * member (*"A SYMLINK IS NOT A MEMBER"* below), so without this list a
+   * `link/CLAUDE.md` Claude Code reads through the link is absent from every row
+   * with nothing saying so. `FilesystemExtentContributor` carries each as an
+   * `EXTENT_SYMLINK_NOT_REALIZED` condition row. Both sources report the same
+   * set for the same tree, as they do for members.
+   */
+  readonly symlinks: readonly string[];
+}
+
+/**
+ * Collects the links a source declined, once each, in a stable order.
+ *
+ * One small class so both sources — and the walks inside the git source — feed
+ * one list the same way; a second copy of "dedupe and sort" is where the two
+ * sources would start disagreeing about order.
+ */
+class DeclinedSymlinks {
+  readonly #seen = new Set<string>();
+
+  /** The observer to hand a walk. */
+  readonly add = (absolutePath: string): void => {
+    this.#seen.add(toForwardSlash(absolutePath));
+  };
+
+  /** Forget every link — called as an enumeration starts, so the list is ITS list. */
+  clear(): void {
+    this.#seen.clear();
+  }
+
+  /** @returns Every link recorded, sorted */
+  get recorded(): readonly string[] {
+    // Code-unit order, not `localeCompare`: the host's locale must not decide it.
+    return [...this.#seen].sort((left, right) => (left < right ? -1 : Number(left > right)));
+  }
 }
 
 /** Which of the two implementations answered. */
@@ -306,6 +353,7 @@ export class FilesystemCrawlSource implements CrawlSource {
 
   readonly #root: string;
   readonly #refusals: ListingRefusals;
+  readonly #symlinks = new DeclinedSymlinks();
 
   /**
    * @param root - Absolute corpus root to enumerate
@@ -319,12 +367,18 @@ export class FilesystemCrawlSource implements CrawlSource {
     return this.#refusals.recorded;
   }
 
+  get symlinks(): readonly string[] {
+    return this.#symlinks.recorded;
+  }
+
   /**
    * Walk the root.
    *
    * @returns Every admitted path, with no content hints and no shapes
    */
   async enumerate(): Promise<readonly EnumeratedPath[]> {
+    this.#refusals.clear();
+    this.#symlinks.clear();
     const absolutePaths = await crawlDirectory({
       baseDir: this.#root,
       exclude: [...NEVER_CRAWL_GLOBS],
@@ -339,6 +393,8 @@ export class FilesystemCrawlSource implements CrawlSource {
       // as extra realizations of one identity, which makes the case for
       // declining stronger rather than weaker.
       followSymlinks: false,
+      // Declined, never dropped: see `CrawlSource.symlinks`.
+      onSymlinkNotFollowed: this.#symlinks.add,
       // Directories are resources, not merely containers of them.
       filesOnly: false,
       // The whole point of the extent this feeds: build output git cannot see.
@@ -455,6 +511,7 @@ export class GitCrawlSource implements CrawlSource {
 
   readonly #root: string;
   readonly #refusals: ListingRefusals;
+  readonly #symlinks = new DeclinedSymlinks();
 
   /**
    * @param root - Absolute corpus root, inside a git working tree
@@ -466,6 +523,10 @@ export class GitCrawlSource implements CrawlSource {
 
   get unlistable(): readonly DirectoryRefusal[] {
     return this.#refusals.recorded;
+  }
+
+  get symlinks(): readonly string[] {
+    return this.#symlinks.recorded;
   }
 
   /**
@@ -480,6 +541,8 @@ export class GitCrawlSource implements CrawlSource {
    *   in its own territory — read off its stderr, the only place git says so
    */
   async enumerate(): Promise<readonly EnumeratedPath[]> {
+    this.#refusals.clear();
+    this.#symlinks.clear();
     const isMember = crawlPathFilter(['**/*'], [...NEVER_CRAWL_GLOBS]);
     const admits = (absolutePath: string): boolean =>
       isMember(relativeToRoot(absolutePath, this.#root));
@@ -513,7 +576,11 @@ export class GitCrawlSource implements CrawlSource {
      * symlink was a member for as long as the two rules lived apart.
      */
     const record = (candidate: CrawlCandidate): void => {
-      if (candidate.shape === 'symlink') return;
+      // Declined as a member, RECORDED as a link — see `CrawlSource.symlinks`.
+      if (candidate.shape === 'symlink') {
+        this.#symlinks.add(candidate.absolutePath);
+        return;
+      }
       if (found.has(candidate.absolutePath)) return;
       found.set(candidate.absolutePath, {
         absolutePath: candidate.absolutePath,
@@ -626,7 +693,7 @@ export class GitCrawlSource implements CrawlSource {
     for (const submodule of submodules) {
       candidates.push(
         walkedCandidate(submodule),
-        ...(await expandDirectory(submodule, admits, this.#refusals.inPopulation)).map(walkedCandidate),
+        ...(await expandDirectory(submodule, admits, this.#refusals.inPopulation, this.#symlinks.add)).map(walkedCandidate),
       );
     }
 
@@ -655,7 +722,7 @@ export class GitCrawlSource implements CrawlSource {
       // recorded, never fatal. See {@link ListingRefusals}.
       if (collapsed.isDirectory && collapsed.shape !== 'symlink') {
         candidates.push(
-          ...(await expandDirectory(collapsed.absolutePath, admits, this.#refusals.inIgnoredTerritory)).map(walkedCandidate),
+          ...(await expandDirectory(collapsed.absolutePath, admits, this.#refusals.inIgnoredTerritory, this.#symlinks.add)).map(walkedCandidate),
         );
       }
     }
@@ -755,6 +822,7 @@ async function expandDirectory(
   directory: string,
   admits: (absolutePath: string) => boolean,
   unreadable: UnreadablePolicy,
+  onSymlink: (absolutePath: string) => void,
 ): Promise<string[]> {
   const found = await crawlDirectory({
     baseDir: directory,
@@ -768,6 +836,11 @@ async function expandDirectory(
     // and then filtered — the cost this whole lane exists to avoid.
     exclude: [...NEVER_CRAWL_GLOBS],
     followSymlinks: false,
+    // A link met down here is declined exactly as the snapshot's are, and
+    // recorded the same way — under the same `admits` decision as a member.
+    onSymlinkNotFollowed: (absolutePath) => {
+      if (admits(absolutePath)) onSymlink(absolutePath);
+    },
     filesOnly: false,
     // Already inside ignored territory by construction, so consulting git again
     // would return nothing and cost a spawn.

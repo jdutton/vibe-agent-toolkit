@@ -102,6 +102,13 @@ SELECT path FROM resource_realizations
  WHERE path NOT LIKE 'docs/architecture/adrs/archive/%'
 ```
 
+⚠️ **A symbolic link is never realized** — no row sits at a link's own path, so a
+`link/CLAUDE.md` Claude Code reads through the link counts in no size, chain or rules-pattern
+query. It is not silently absent: each link is a `realization_conditions` row with code
+`EXTENT_SYMLINK_NOT_REALIZED`, naming an in-root target and whether that target is realized.
+`SELECT path, message FROM realization_conditions WHERE code = 'EXTENT_SYMLINK_NOT_REALIZED'`
+lists them.
+
 **Read `population` in the output before you trust a timing.** It is `derived` or `store` — whether
 the rows were built by this run or read from the projection store — and it is reported rather than
 inferred, because a correct store hit and a correct re-derivation produce identical rows.
@@ -198,9 +205,13 @@ check is violated.
 
 ### VAT's built-in checks run first, with or without a config file
 
-A project that declares nothing still gets the **default set** — today one check,
-`claude-rule-glob-inert`, emitting `CLAUDE_RULE_GLOB_INERT`
-at `info` for every `paths:` glob under `.claude/rules/` that matches no file in the tree. Config
+A project that declares nothing still gets the **default set** — today two checks over
+`.claude/rules/`: `claude-rule-glob-inert`, emitting `CLAUDE_RULE_GLOB_INERT`
+at `info` for every `paths:` glob that matches no file in the tree, and
+`claude-rule-frontmatter-invalid`, emitting `CLAUDE_RULE_FRONTMATTER_INVALID`
+at `warning` for every rules file whose YAML frontmatter does not parse — its globs never reach
+`claude_rule_patterns`, so the first check cannot see them (an unquoted `- **/x/*.ts` is a YAML
+alias, the usual cause). Config
 only **adds** to that set or moves a severity in it; a directory with no
 `vibe-agent-toolkit.config.yaml` runs exactly the same built-ins, which is what makes "default-on"
 mean anything.

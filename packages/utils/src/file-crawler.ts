@@ -35,6 +35,22 @@ export interface CrawlOptions {
   exclude?: string[];
   /** Follow symbolic links (default: false) */
   followSymlinks?: boolean;
+  /**
+   * Observer for every symbolic link the WALK met and did not follow — called
+   * once per link that the include/exclude patterns admit, with the path in the
+   * same form a result would carry ({@link CrawlOptions.absolute}).
+   *
+   * An observer rather than a policy, and optional for that reason: declining a
+   * link is already decided by `followSymlinks: false`, and a caller that does not
+   * ask is told nothing it relied on. It exists for the caller that must not let
+   * a declined link vanish without a record — the projection's filesystem extent,
+   * which turns each one into a condition row.
+   *
+   * Walk route only, and ENFORCED: passing it without `respectGitignore: false`
+   * throws. The `git ls-files` route never declines a link (see the KNOWN
+   * DIVERGENCE block below), so it would have none to report.
+   */
+  onSymlinkNotFollowed?: (path: string) => void;
   /** Return absolute paths in results (default: true) */
   absolute?: boolean;
   /** Only return files (not directories) - default: true */
@@ -209,6 +225,22 @@ export async function crawlDirectory(options: CrawlOptions): Promise<string[]> {
 }
 
 /**
+ * Refuse a symlink observer on the `git ls-files` route.
+ *
+ * That route admits links as members and declines none, so the observer would
+ * compile, be accepted, and never be called. Refused up front rather than only
+ * when a git root happens to be found, so the contract is static.
+ *
+ * @param observer - The caller's `onSymlinkNotFollowed`
+ * @param respectGitignore - Whether the git route may be taken
+ */
+function requireWalkForSymlinkObserver(observer: unknown, respectGitignore: boolean): void {
+  if (observer !== undefined && respectGitignore) {
+    throw new TypeError('crawlDirectory: onSymlinkNotFollowed requires respectGitignore: false — the git ls-files route declines no link');
+  }
+}
+
+/**
  * Crawl a directory tree and return matching files (synchronous)
  *
  * Uses picomatch for glob pattern matching (same as Vitest)
@@ -235,8 +267,10 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     respectGitignore = true,
     includeUntracked = false,
     unreadable,
+    onSymlinkNotFollowed,
   } = options;
   requireUnreadablePolicy(unreadable, 'crawlDirectory');
+  requireWalkForSymlinkObserver(onSymlinkNotFollowed, respectGitignore);
 
   const picoOptions = PICOMATCH_OPTIONS;
 
@@ -429,6 +463,9 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
    */
   function processSymlink(fullPath: string, normalizedPath: string, relativePath: string): void {
     if (!followSymlinks) {
+      if (onSymlinkNotFollowed !== undefined && isIncluded(normalizedPath)) {
+        onSymlinkNotFollowed(absolute ? fullPath : relativePath);
+      }
       return;
     }
 

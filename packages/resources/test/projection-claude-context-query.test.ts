@@ -7,6 +7,7 @@ import {
   type LoadedContextAnswer,
 } from '../src/projection/claude-context-query.js';
 import { closureProvenance } from '../src/projection/contributors/closure-extent.js';
+import { EXTENT_SYMLINK_NOT_REALIZED } from '../src/projection/contributors/filesystem-extent.js';
 import type { Projection } from '../src/projection/projection.js';
 import { ExtentDeclarationSchema } from '../src/schemas/project-config.js';
 import type { RealizationConditionRow } from '../src/schemas/projection-resources.js';
@@ -240,6 +241,42 @@ describe('whatLoadsAt', () => {
     // misconfiguration. Re-deriving severity from the CODE alone reported it as
     // quietly as a `@jeff` mention.
     expect(answer.conditions.find((c) => c.code === 'CLOSURE_ROOT_ABSENT')?.severity).toBe('error');
+  });
+
+  it('keeps only the declined links that bear on the queried directory', async () => {
+    const projection = await claudeContextFixture({
+      'CLAUDE.md': 'root\n',
+      'docs/a.md': 'a\n',
+      'link/b.md': 'b\n',
+    });
+    const links = [
+      'CLAUDE.local.md', '.claude/CLAUDE.md', '.claude/rules/linked.md', 'docs/linkdir', 'link/CLAUDE.md', 'other/deep/x.md',
+      // DIRECTORY links, extensionless: the vendor's shared-rules pattern
+      // (`ln -s ~/shared-claude-rules .claude/rules/shared`), and a sibling
+      // package's whole `.claude` — the first bears on every query, the second
+      // only on queries under `link/`.
+      '.claude/rules/shared', 'link/.claude',
+      // A NESTED rules link: a path-scoped nested rule is tried root-relative
+      // too, so it can load for any directory — kept for every query.
+      'pkg/.claude/rules',
+    ];
+    const withLinks = links.reduce(
+      (current, path) => withCondition(current, symlinkRow(projection, path)),
+      projection,
+    );
+    const linkPaths = (path: string): string[] =>
+      narrowed(whatLoadsAt(withLinks, path)).conditions
+        .filter((row) => row.code === EXTENT_SYMLINK_NOT_REALIZED)
+        .map((row) => row.path)
+        .sort((left, right) => left.localeCompare(right));
+
+    // An instruction-file link on the chain, anything under a `.claude` on the
+    // chain, and any link beneath the queried directory — never a sibling's.
+    const rootClaude = ['.claude/CLAUDE.md', '.claude/rules/linked.md', '.claude/rules/shared', 'CLAUDE.local.md'];
+    expect(linkPaths('docs')).toEqual([...rootClaude, 'docs/linkdir', 'pkg/.claude/rules']);
+    expect(linkPaths('link')).toEqual([...rootClaude, 'link/.claude', 'link/CLAUDE.md', 'pkg/.claude/rules']);
+    // The root's subtree is the whole tree.
+    expect(linkPaths('')).toEqual([...links].sort((left, right) => left.localeCompare(right)));
   });
 
   it('escalates a PATH-SHAPED unresolved import to warning and leaves a bare @token at info', async () => {
@@ -530,6 +567,33 @@ function rootAbsentRow(projection: Projection): RealizationConditionRow {
     severity: 'error',
     message: 'the declared closure root realizes nowhere in this population',
     resourceId: realization.resourceId,
+    sourcePath: null,
+    sourceLine: null,
+    sourceRef: null,
+    targetExists: null,
+    matchedPattern: null,
+    matchedPayload: null,
+  };
+}
+
+/**
+ * A declined-link row at `path`, in the base extent — what the filesystem
+ * extent emits for a symlink it met and did not realize.
+ *
+ * @param projection - The fixture projection, for its base extent id
+ * @param path - Root-relative link path
+ * @returns The row
+ */
+function symlinkRow(projection: Projection, path: string): RealizationConditionRow {
+  const extentId = projection.resourceRealizations[0]?.extentId;
+  if (extentId === undefined) throw new Error('fixture realized nothing');
+  return {
+    extentId,
+    path,
+    code: EXTENT_SYMLINK_NOT_REALIZED,
+    severity: 'info',
+    message: 'a declined link',
+    resourceId: null,
     sourcePath: null,
     sourceLine: null,
     sourceRef: null,

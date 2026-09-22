@@ -912,8 +912,12 @@ async function readCachedProjection(
  * Whether every stored `EXTENT_DIRECTORY_UNLISTABLE` row is still true of the
  * tree — the gate that turns a key match into a real hit.
  *
- * Only those rows are re-verified, and only they can be: the other condition
- * rows describe content the tree hash already covers. Rare by construction —
+ * Only those rows are re-verified. The other condition rows describe content
+ * the tree hash already covers, with one exception served as stored: an
+ * `EXTENT_SYMLINK_NOT_REALIZED` row whose `readlink` failed transiently says
+ * "whose target could not be read" until the tree hash changes. It is `info`,
+ * it still records the link, and re-reading every stored link on each hit would
+ * cost a syscall per link to repair a clause. Rare by construction —
  * one probe per stored refusal, not per path — so a tree with none pays one
  * filter over the conditions table and no syscall.
  *

@@ -83,7 +83,8 @@ import type {
   ResourceRealizationRow,
 } from '../schemas/projection-resources.js';
 
-import { claudeAncestry } from './claude-context-ancestry.js';
+import { CLAUDE_MD_TAG, classifyPath } from './agentic-tags.js';
+import { ancestorDirectories, claudeAncestry } from './claude-context-ancestry.js';
 import { selectRules, type RuleAdmission } from './claude-context-rules.js';
 import {
   CLAUDE_IMPORT_CONTRIBUTOR_ID_PREFIX,
@@ -92,6 +93,7 @@ import {
   closureProvenance,
   type ImportProvenance,
 } from './contributors/closure-extent.js';
+import { EXTENT_SYMLINK_NOT_REALIZED } from './contributors/filesystem-extent.js';
 import type { Projection } from './projection.js';
 
 /** Why one resource is in the answer. A row may carry several. */
@@ -210,7 +212,7 @@ export function whatLoadsAt(projection: Projection, inputPath: string): LoadedCo
     directory,
     file,
     rows: rowsFor(index, admissions),
-    conditions: gradeConditions(projection, index, imports.walkedExtents),
+    conditions: gradeConditions(projection, index, imports.walkedExtents, directory),
     overBudgetRules: overBudget,
     unattributedImports: imports.unattributed,
   };
@@ -779,20 +781,27 @@ function importsFromAlwaysRoot(
  * non-closure extent, and only an import extent can be "some other directory's
  * session". {@link ImportIndex.extentIds} is the half that does not vary.
  *
+ * A declined-link row ({@link EXTENT_SYMLINK_NOT_REALIZED}) is base-extent and
+ * so tree-global too, and is scoped the same way — see {@link linkBearsOn}.
+ *
  * @param projection - The populated projection, for `realization_conditions`
  * @param index - The projection's index
  * @param walkedExtents - Context ids of the import closures this query charged
+ * @param directory - The queried directory, root-relative, `''` for the root
  * @returns Every in-scope condition, with its report severity
  */
 function gradeConditions(
   projection: Projection,
   index: ContextQueryIndex,
   walkedExtents: ReadonlySet<string>,
+  directory: string,
 ): GradedCondition[] {
   const importExtentIds = index.importClosures().extentIds;
+  const chain = new Set(ancestorDirectories(directory));
 
   return projection.realizationConditions
     .filter((row) => !importExtentIds.has(row.extentId) || walkedExtents.has(row.extentId))
+    .filter((row) => row.code !== EXTENT_SYMLINK_NOT_REALIZED || linkBearsOn(row.path, directory, chain))
     .map((row) => ({
       code: row.code,
       severity: strongerSeverity(
@@ -806,6 +815,55 @@ function gradeConditions(
       message: row.message,
     }));
 }
+
+/**
+ * Whether a declined link at `linkPath` could hide something a session started
+ * in `directory` loads — the only links its answer names.
+ *
+ * Without this every answer carried every link in the tree: one
+ * `CLAUDE.md -> AGENTS.md` in a sibling directory was ~400 characters of noise
+ * in every directory's answer. A link bears on the query when it is
+ *
+ * - beneath the queried directory — it may BE, or hide, an on-demand file;
+ * - a `CLAUDE.md`-family name in a directory on the chain — a launch-time file; or
+ * - at or under ANY `.claude/rules` — a path-scoped rule is selected by glob
+ *   tree-wide, and a nested one is tried root-relative too (`matchingForms`),
+ *   so it can load for a directory outside its own; or
+ * - at or under a `.claude` directory on the chain — the root's
+ *   `.claude/CLAUDE.md`, a nested `.claude` a session there reads.
+ *
+ * Both decided by path SEGMENT, never by extension: the vendor's shared-rules
+ * pattern links a whole DIRECTORY, `.claude/rules/shared -> ~/shared-claude-rules`.
+ *
+ * The `CLAUDE.md` family is classified by its PATH through the shipped
+ * classifier, as a realization would be: a link has no tags because it has no
+ * realization. The empty plugin-root set is exact here, not a default — the
+ * convention asked about does not consult it.
+ *
+ * @param linkPath - Root-relative link path
+ * @param directory - The queried directory, `''` for the root
+ * @param chain - `ancestorDirectories(directory)`
+ * @returns True when the answer should carry the link's row
+ */
+function linkBearsOn(linkPath: string, directory: string, chain: ReadonlySet<string>): boolean {
+  const slash = linkPath.lastIndexOf('/');
+  const parent = slash === -1 ? '' : linkPath.slice(0, slash);
+  // Beneath the queried directory: it is one of the link's own ancestors.
+  if (ancestorDirectories(parent).includes(directory)) return true;
+  if (DOT_CLAUDE_RULES_SEGMENT.test(linkPath)) return true;
+  for (const match of linkPath.matchAll(DOT_CLAUDE_SEGMENT)) {
+    // The directory holding this `.claude` — `''` at the root.
+    if (chain.has(linkPath.slice(0, Math.max(match.index, 0)))) return true;
+  }
+  const tags = classifyPath(linkPath, linkPath.slice(slash + 1).toLowerCase(), new Set());
+  return tags.some((row) => row.tag === CLAUDE_MD_TAG) && chain.has(parent);
+}
+
+/** A `.claude` path segment; `index` is where the holding directory's spelling ends. */
+const DOT_CLAUDE_SEGMENT = /(?:^|\/)\.claude(?=\/|$)/g;
+
+/** A `.claude/rules` directory, or anything beneath one, at any depth. No `g`: `test` stays stateless. */
+const DOT_CLAUDE_RULES_SEGMENT = /(?:^|\/)\.claude\/rules(?:\/|$)/;
 
 /**
  * The escalation this report applies to one condition, before its stored

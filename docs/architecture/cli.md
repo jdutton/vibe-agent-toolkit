@@ -536,9 +536,9 @@ defect in VAT or an emptied default list rather than anything an adopter wrote. 
 `buildCheckOutputData` is what stops a future edit that empties `BUILTIN_CHECKS` from publishing a
 clean document.
 
-⚠️ **What is NOT claimed:** that the step can now always fail. The only built-in ships at `info`, so
-a project declaring no checks of its own has a `vat resources check` step that exits 0 whatever it
-finds. That is a property of the code's SEVERITY — movable with `resources.validation.severity` —
+⚠️ **What is NOT claimed:** that the step can now always fail. No built-in ships at `error` (one at
+`info`, one at `warning`), so a project declaring no checks of its own has a `vat resources check`
+step that exits 0 whatever it finds. That is a property of the code's SEVERITY — movable with `resources.validation.severity` —
 and not of the denominator, and inventing a second refusal for it would refuse the no-config run the
 default set exists to serve. The stderr warning says which situation the operator is in; the
 document names every rule that ran in `checks[]`, with `builtin: true` on the ones VAT supplied, so
@@ -560,6 +560,11 @@ memory. It ships its SQL twin as `sqlTwin` — DOCUMENTATION an adopter copies i
 `resources.checks` to narrow or re-severity, printed by `--help`, never executed. That is the point
 of materialising these facts as tables: the built-in is the default REPORT, and the same question
 stays askable by anyone who wants a different answer.
+
+✅ The second is `claude-rule-frontmatter-invalid` (`CLAUDE_RULE_FRONTMATTER_INVALID`), and it
+exists because of the first one's blind spot: a rules file whose YAML frontmatter does not parse
+produces no `claude_rule_patterns` rows, so the inert check had nothing to read and passed. It reads
+`blobs.frontmatterError` for identities tagged `rules-file` instead — one finding per file.
 
 **A built-in's findings carry an ORDINARY registry code.** A built-in is not a custom check: its
 findings carry a `CODE_REGISTRY` code with the registry's own default severity, so

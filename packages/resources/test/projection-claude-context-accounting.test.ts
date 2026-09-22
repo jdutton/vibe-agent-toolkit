@@ -548,6 +548,9 @@ describe('the stated limits', () => {
     // Both halves of the false mechanism claim are gone.
     expect(limit?.statement).not.toContain('realpathSync');
     expect(limit?.statement).not.toContain('Dedup');
+    // The under-report is never SILENT: the limit names the row that records
+    // each declined link, so a reader can ask which files are missing.
+    expect(limit?.statement).toContain('EXTENT_SYMLINK_NOT_REALIZED');
   });
 
   it('names no single assumed Claude Code version, only dated per-behaviour citations', () => {

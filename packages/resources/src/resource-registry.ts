@@ -59,6 +59,7 @@ import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } fr
 // A value import, and acyclic: `crawl-source.ts` reaches only `utils` and a
 // type from `realizations.ts`, never back into the registry. The remedy is
 // shared so the walk lane refuses with the projection's exact sentence.
+import { EXTENT_SYMLINK_NOT_REALIZED } from './projection/contributors/filesystem-extent.js';
 import { listingRefusalRemedy } from './projection/crawl-source.js';
 import {
   collectionMimeConflictFinding,
@@ -1463,7 +1464,15 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Kept whole, not narrowed by `include`/`exclude`: a condition is about the
     // enumeration, and a gap the enumerator met outside this crawl's globs is
     // still a gap in the population the projection will answer queries from.
-    this.populationConditions = conditions;
+    // ONE exception: a declined link under an EXCLUDED path is dropped — an
+    // excluded `vendor/CLAUDE.md` link is no more this crawl's business than an
+    // excluded file. Only the exclude half applies: a DIRECTORY link matches no
+    // `**/*.md` include by its own name, yet may hold members
+    // (`.claude/rules/shared -> ~/shared-rules`).
+    const notExcluded = crawlPathFilter(['**/*'], exclude);
+    this.populationConditions = conditions.filter(
+      (row) => row.code !== EXTENT_SYMLINK_NOT_REALIZED || notExcluded(row.path),
+    );
     const admitted: string[] = [];
     for (const absolutePath of paths) {
       if (isMember(safePath.relative(base, absolutePath))) {
