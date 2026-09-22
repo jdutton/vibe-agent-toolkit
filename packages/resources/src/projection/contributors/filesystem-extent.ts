@@ -110,10 +110,20 @@
  * It can be re-sourced.
  */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readlinkSync } from 'node:fs';
+import { basename, isAbsolute } from 'node:path';
 
-import { isPathAbsentError, safePath, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
+import {
+  isAbsoluteAnyPlatform,
+  isFilesystemAccessError,
+  isPathAbsentError,
+  relativeEscapesRoot,
+  safePath,
+  toForwardSlash,
+  transientRefusalClause,
+} from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
+import { normalizePath } from '@vibe-agent-toolkit/utils/fs';
 import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import {
@@ -130,7 +140,7 @@ import type {
   ExtentContribution,
   ExtentContributor,
 } from '../contributor.js';
-import { crawlSourceFor, type CrawlSource } from '../crawl-source.js';
+import { crawlSourceFor, type CrawlSource, type CrawlSourceKind } from '../crawl-source.js';
 import type { ProjectionBase } from '../projection.js';
 import { collectRealization, type ContentDemand } from '../realizations.js';
 
@@ -420,9 +430,22 @@ export class FilesystemExtentContributor implements ExtentContributor {
       // needs to know where the enumeration stopped seeing, because "nothing
       // ignored beneath here" and "could not look beneath here" are different
       // claims and only the first is what `DECLINE_IGNORED` asserts.
-      conditions: source.unlistable.map((refusal) =>
-        unlistableDirectoryCondition(refusal, base.root, extentId, base.identities.idFor(refusal.directory)),
-      ),
+      conditions: [
+        ...source.unlistable.map((refusal) =>
+          unlistableDirectoryCondition(refusal, base.root, extentId, base.identities.idFor(refusal.directory)),
+        ),
+        // Every link the enumerator declined, under the SAME decline this lane
+        // applies to members: a lane that drops ignored rows drops ignored links
+        // too. Decided against the finished realization set, so "the target is
+        // realized" means realized in THIS extent.
+        ...declinedSymlinkConditions(
+          source.symlinks.filter((link) => !declined(link)),
+          base.root,
+          extentId,
+          new Set(realizations.map((row) => row.path)),
+          source.kind,
+        ),
+      ],
       // Classification tables, and this is an enumerator: it says where files
       // are, never what a `.claude/rules` file's `paths:` list reaches.
       claudeRulePatterns: [],
@@ -467,6 +490,157 @@ function unlistableDirectoryCondition(
     resourceId,
     ...CONDITION_WITHOUT_REFERENCE,
   };
+}
+
+/**
+ * `realization_conditions.code` for a symbolic link the enumerator met and
+ * declined to realize — see *"A SYMLINK IS NOT A MEMBER"* in `crawl-source.ts`.
+ *
+ * The policy is unchanged; what this closes is its SILENCE. Claude Code reads a
+ * `link/CLAUDE.md` or a `.claude/rules/x.md` through the link, and with no row
+ * at the link's path every size, chain, load and rules-pattern query omitted it
+ * with nothing saying so. `info`, not `warning`: a link is an ordinary thing to
+ * commit, and the row is the record that it was not counted, not a defect.
+ *
+ * ⚠️ Store-sound by construction. The row states the link's TARGET TEXT
+ * (classified lexically — inside or outside the root) and whether that target
+ * is realized in this same extent. A tracked or untracked-unignored link's
+ * target text is its blob, so it is in the tree hash the store keys on; whether
+ * the target is realized is a fact about this extent's own rows, which are
+ * served together with it.
+ */
+export const EXTENT_SYMLINK_NOT_REALIZED = 'EXTENT_SYMLINK_NOT_REALIZED';
+
+/** What every declined-link message says about the consequence, once. */
+const NOT_COUNTED_CLAUSE =
+  'VAT never realizes a symbolic link\'s own path, so no row in this projection is at that path:'
+  + ' no size, Claude context chain or load, or claude_rule_patterns row counts it, although Claude Code'
+  + ' reads a CLAUDE.md or rules file through a link.';
+
+/**
+ * One condition row per declined link.
+ *
+ * ⛔ Path-free apart from project-relative paths: an out-of-root target is
+ * described, never named — its text can carry `$HOME` or any absolute path the
+ * author's machine had — and the link's own path is always root-relative.
+ *
+ * @param links - Absolute, forward-slashed link paths the source declined
+ * @param root - The corpus root every path is expressed against
+ * @param extentId - This extent
+ * @param realized - Root-relative paths this extent realized
+ * @param recordedBy - Which source met the links — only git can record a link that is not one on disk
+ * @returns The rows, in `links` order
+ */
+function declinedSymlinkConditions(
+  links: readonly string[],
+  root: string,
+  extentId: string,
+  realized: ReadonlySet<string>,
+  recordedBy: CrawlSourceKind,
+): RealizationConditionRow[] {
+  return links.map((link) => {
+    const path = toForwardSlash(safePath.relative(root, link));
+    return {
+      extentId,
+      path,
+      code: EXTENT_SYMLINK_NOT_REALIZED,
+      severity: 'info',
+      message: `'${path}' is a symbolic link ${linkTargetClause(link, root, realized, recordedBy)}.${NOT_COUNTED_CLAUSE}`,
+      resourceId: null,
+      ...CONDITION_WITHOUT_REFERENCE,
+    };
+  });
+}
+
+/**
+ * Where one link points, said without leaking anything outside the root.
+ *
+ * @param link - Absolute, forward-slashed link path
+ * @param root - The corpus root
+ * @param realized - Root-relative paths this extent realized
+ * @param recordedBy - Which source met the link
+ * @returns The clause that follows "is a symbolic link"
+ */
+function linkTargetClause(
+  link: string,
+  root: string,
+  realized: ReadonlySet<string>,
+  recordedBy: CrawlSourceKind,
+): string {
+  let target: string;
+  try {
+    target = readlinkSync(link);
+  } catch (error) {
+    // Gone or unreadable between the enumeration and here: still a declined
+    // link, still recorded — only its target is unknown. A bug is not that.
+    if (!isFilesystemAccessError(error)) throw error;
+    // EINVAL: the path is not a link on disk. From git that is a stable fact —
+    // the index says mode 120000 and the working tree holds a plain file, a
+    // checkout with `core.symlinks=false` (the Windows default without
+    // Developer Mode). From the walk it can only mean the link was replaced
+    // since it was listed, and git is not involved.
+    if ((error as { code?: unknown }).code === 'EINVAL') {
+      return recordedBy === 'git'
+        ? 'in git that is not a symbolic link on disk (a checkout with core.symlinks=false writes it as a plain file holding the target text)'
+        : 'that is no longer a symbolic link on disk';
+    }
+    return 'whose target could not be read';
+  }
+  // A target absolute on SOME platform but not this one — `C:/…` or a UNC
+  // `\\host\share\…` committed from Windows, read on POSIX — would resolve here
+  // as a relative name under the link's directory and be quoted in full. It
+  // names a place outside any root this host can see.
+  const foreignAbsolute = isAbsoluteAnyPlatform(target) && !isAbsolute(target);
+  const relative = foreignAbsolute ? undefined : inRootRelative(root, safePath.resolve(link, '..', target));
+  if (relative === undefined) {
+    return 'whose target lies outside the project root (not named here), so it is realized nowhere in this projection';
+  }
+  if (relative === '') return 'to the project root itself';
+  return realized.has(relative)
+    ? `to ${quotedPath(relative)}, which is realized at its own path`
+    : `to ${quotedPath(relative)}, which is not realized in this projection either — it does not exist, is gitignored, is excluded from the crawl, or is itself a link`;
+}
+
+/**
+ * A link target's root-relative path, or undefined when it lies outside the root.
+ *
+ * An absolute target can name an in-root file through a linked prefix — macOS
+ * spells the temp root `/var/…` and its real path `/private/var/…` — so a
+ * target that escapes lexically is asked again with its parent directory
+ * resolved. Only the escaping case pays for the syscall, and the real path is
+ * only ever used to decide containment: an outside target is never named.
+ *
+ * @param root - The corpus root (a real path)
+ * @param resolved - The target, resolved against the link's directory
+ * @returns Root-relative, forward-slashed; `''` for the root itself
+ */
+function inRootRelative(root: string, resolved: string): string | undefined {
+  const lexical = toForwardSlash(safePath.relative(root, resolved));
+  if (!relativeEscapesRoot(lexical)) return lexical;
+  let parent: string;
+  try {
+    // An absent parent comes back as its own spelling, which still escapes.
+    parent = normalizePath(safePath.resolve(resolved, '..'));
+  } catch (error) {
+    // A directory the OS will not resolve: it cannot be shown to be inside
+    // the root, so it is reported as outside, and never named.
+    if (!isFilesystemAccessError(error)) throw error;
+    return undefined;
+  }
+  const real = toForwardSlash(safePath.relative(root, safePath.join(parent, basename(resolved))));
+  return relativeEscapesRoot(real) ? undefined : real;
+}
+
+/**
+ * A root-relative path quoted for a one-line message: single quotes, with any
+ * control character escaped the way JSON escapes it — a newline in a link
+ * target is legal on POSIX, and written raw it would split the report.
+ *
+ * @param path - Root-relative path
+ * @returns The quoted form
+ */
+function quotedPath(path: string): string {
+  return `'${JSON.stringify(path).slice(1, -1)}'`;
 }
 
 /**

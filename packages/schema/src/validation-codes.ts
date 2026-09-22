@@ -451,6 +451,14 @@ export const CODE_REGISTRY = {
     'Fix the permissions on that directory if what is beneath it should be visible to the projection. Set severity.EXTENT_DIRECTORY_UNLISTABLE to ignore for a directory that is expected to be unreadable (a root-owned cache under an ignored build directory).',
     'extent_directory_unlistable',
   ),
+  // `info` because committing a symlink is ordinary: the row records that VAT
+  // did not count the file, it does not say the author did anything wrong.
+  EXTENT_SYMLINK_NOT_REALIZED: entry(
+    'info',
+    'A symbolic link in the tree is not realized: VAT never realizes a link\'s own path, so nothing in the projection is at that path and no size, Claude context chain or load, or claude_rule_patterns row counts it — although Claude Code reads a CLAUDE.md or rules file through a link. The finding names the target when it is inside the project root and says whether the target is realized at its own path; a target outside the root is described, never named.',
+    'Nothing to fix when the target is realized at its own path and nothing needs to count the link. If the link is a CLAUDE.md or rules file whose load matters to a budget or rules check, replace the link with the file (or an @ import of it) so VAT sees it at that path. Set severity.EXTENT_SYMLINK_NOT_REALIZED to ignore to silence it.',
+    'extent_symlink_not_realized',
+  ),
   SKILL_LENGTH_EXCEEDS_RECOMMENDED: entry(
     'warning',
     'SKILL.md line count exceeds the recommended limit; longer files degrade skill triggering.',
@@ -884,6 +892,19 @@ export const CODE_REGISTRY = {
     'A path-scoped rules file under .claude/rules/ declares a paths: glob that matches no file VAT can see — tracked files, and untracked files git does not ignore — so no such file can load that rule. Reported per inert pattern, not per rule: a rule whose other patterns still match is reported only for the dead one.',
     'First check whether the glob is one of the two shapes above and covers ignored or generated output. If it does, keep it. Otherwise delete the dead glob, or correct it to the path it meant — VAT reports the pattern and never rewrites it. The usual causes are a directory renamed or moved out from under the pattern, a missing ** between segments, and a pattern written against the repo root when rules match repository-relative paths. If the glob is deliberately ahead of its files, or scopes ignored output, set resources.validation.severity.CLAUDE_RULE_GLOB_INERT to ignore.',
     'claude_rule_glob_inert',
+  ),
+  // Projection path — a rules file whose frontmatter did not parse, so its
+  // `paths:` globs never reached `claude_rule_patterns` and CLAUDE_RULE_GLOB_INERT
+  // is structurally blind to it. `warning`, not `info`: unlike an inert glob it
+  // has no deliberate arm — YAML that does not parse is never what the author meant.
+  // Not `error` like FRONTMATTER_INVALID_YAML, validate's parse check over the
+  // same file: a new default-on rule ships at `warning` until a corpus says
+  // otherwise (docs/validation-rule-design.md). The doc entry says so.
+  CLAUDE_RULE_FRONTMATTER_INVALID: entry(
+    'warning',
+    'A rules file under .claude/rules/ has YAML frontmatter that does not parse, so VAT read no paths: from it: the rule is counted as if it had no paths: (a project-root rule at launch, a nested one on demand), and claude_rule_patterns holds no row for any glob it declares — which is why CLAUDE_RULE_GLOB_INERT cannot report them. What Claude Code does with such a file is not documented.',
+    'Fix the YAML. The usual cause is a glob that starts with * left unquoted — YAML reads a leading * as an alias — so quote every paths: entry ("**/x/*.ts"); a value containing ": " needs quoting for the same reason. Set resources.validation.severity.CLAUDE_RULE_FRONTMATTER_INVALID to ignore to silence it.',
+    'claude_rule_frontmatter_invalid',
   ),
 } as const satisfies Record<string, CodeRegistryEntry>;
 

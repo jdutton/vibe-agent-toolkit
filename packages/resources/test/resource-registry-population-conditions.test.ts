@@ -34,6 +34,7 @@ const DOC = 'docs/guide.md';
 const LOCKED = 'build/locked';
 const MIME_CONFLICT = 'COLLECTION_MIME_CONFLICT';
 const UNLISTABLE = 'EXTENT_DIRECTORY_UNLISTABLE';
+const SYMLINK_NOT_REALIZED = 'EXTENT_SYMLINK_NOT_REALIZED';
 
 /** Two collections over `docs/**`, agreeing or not on the file's type. */
 function configTyping(second: string | undefined): ProjectConfig {
@@ -149,6 +150,37 @@ describe('ResourceRegistry surfaces population-time conditions', () => {
 
     it('surfaces nothing when the source carries no conditions (control)', async () => {
       expect(await unlistableIssues(await crawledWith([]))).toEqual([]);
+    });
+
+    it('surfaces a declined link unless the crawl excludes its path', async () => {
+      const linkRow = (path: string): RealizationConditionRow => ({
+        ...unlistableRow(path, 'info'),
+        code: SYMLINK_NOT_REALIZED,
+        message: `'${path}' is a symbolic link`,
+      });
+      const registry = new ResourceRegistry({ baseDir: root });
+      await registry.crawl({
+        unreadable: 'refuse',
+        baseDir: root,
+        include: ['**/*.md'],
+        exclude: ['vendor/**'],
+        populationSource: sourceWith(root, [
+          linkRow('docs/CLAUDE.md'),
+          linkRow('vendor/CLAUDE.md'),
+          linkRow('docs/linkdir'),
+          unlistableRow('vendor/locked'),
+        ]),
+      });
+      const { issues } = await registry.validate({ skipGitIgnoreCheck: true });
+
+      // Only the EXCLUDED link is dropped. The directory link stays although no
+      // `**/*.md` include matches its own name: it may hold members, as the
+      // vendor's `.claude/rules/shared -> ~/shared-rules` does. Every other
+      // condition is kept whole.
+      expect(issues.filter((issue) => issue.code === SYMLINK_NOT_REALIZED).map((issue) => issue.location))
+        .toEqual(['docs/CLAUDE.md', 'docs/linkdir']);
+      expect(issues.filter((issue) => issue.code === UNLISTABLE).map((issue) => issue.location))
+        .toEqual(['vendor/locked']);
     });
 
     it('clears them with the rest of the registry', async () => {

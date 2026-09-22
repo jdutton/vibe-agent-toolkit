@@ -10,13 +10,22 @@
  *
  * All three, with the grounds they were decided on: `docs/architecture/cli.md`,
  * "`vat resources check [path]`".
+ *
+ * Two checks ship, both over `.claude/rules/` files: a `paths:` glob that
+ * matches nothing ({@link CLAUDE_RULE_GLOB_INERT_CHECK}), and frontmatter that
+ * does not parse at all ({@link CLAUDE_RULE_FRONTMATTER_INVALID_CHECK}) — the
+ * second is what keeps the first from passing a rule whose globs never reached
+ * `claude_rule_patterns`.
  */
 
-import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { createRegistryIssue, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
+import type { BlobRow } from '../schemas/projection-blobs.js';
 import type { ClaudeRulePatternRow } from '../schemas/projection-claude-rules.js';
-import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
+import type { ResourceRealizationRow, ResourceTagRow } from '../schemas/projection-resources.js';
 
+import { RULES_FILE_TAG } from './agentic-tags.js';
+import { nestedRuleParent } from './claude-context-rules.js';
 import { findingLocation } from './finding-location.js';
 
 /**
@@ -30,7 +39,11 @@ import { findingLocation } from './finding-location.js';
  */
 export interface BuiltinCheckInput {
   readonly claudeRulePatterns: readonly ClaudeRulePatternRow[];
-  readonly resourceRealizations: readonly Pick<ResourceRealizationRow, 'resourceId' | 'path'>[];
+  readonly resourceRealizations: readonly Pick<ResourceRealizationRow, 'resourceId' | 'path' | 'contentKey'>[];
+  /** Which identities are rules files — the `rules-file` tag the path classifier emits. */
+  readonly resourceTags: readonly Pick<ResourceTagRow, 'resourceId' | 'tag'>[];
+  /** Whether each keyed blob's frontmatter parsed. */
+  readonly blobs: readonly Pick<BlobRow, 'contentKey' | 'frontmatterError'>[];
 }
 
 /** One default-on assertion over the projection's row model. */
@@ -39,6 +52,11 @@ export interface BuiltinCheck {
   readonly name: string;
   /** What it asserts, in one line — the built-in's answer to a declared check's `description`. */
   readonly description: string;
+  /**
+   * The registry code every finding carries. The help renders the code and its
+   * default severity from this, so the two are never transcribed apart.
+   */
+  readonly code: IssueCode;
   /**
    * The SQL that selects the same rows, for an adopter to copy into
    * `resources.checks` and adapt. Documentation, never executed here.
@@ -59,6 +77,12 @@ export interface BoundBuiltinCheck {
   /** @returns One finding per violation */
   readonly run: () => readonly ValidationIssue[];
 }
+
+/** What {@link CLAUDE_RULE_GLOB_INERT_CHECK} emits. */
+const GLOB_INERT_CODE = 'CLAUDE_RULE_GLOB_INERT' satisfies IssueCode;
+
+/** What {@link CLAUDE_RULE_FRONTMATTER_INVALID_CHECK} emits. */
+const FRONTMATTER_INVALID_CODE = 'CLAUDE_RULE_FRONTMATTER_INVALID' satisfies IssueCode;
 
 /** The status that means *evaluated, and it matched nothing*. The only defect of the four. */
 const INERT = 'inert';
@@ -137,7 +161,7 @@ function runClaudeRuleGlobInert(input: BuiltinCheckInput): readonly ValidationIs
     // produces a finding, without an anchor — dropping it would make the finding
     // count silently disagree with the table and nothing would say so.
     const location = findingLocation(paths.get(row.resourceId));
-    issues.push(createRegistryIssue('CLAUDE_RULE_GLOB_INERT', inertMessage(row, location ?? UNLOCATED_RULES_FILE), {
+    issues.push(createRegistryIssue(GLOB_INERT_CODE,inertMessage(row, location ?? UNLOCATED_RULES_FILE), {
       // Spread rather than assigned: under `exactOptionalPropertyTypes` an
       // absent key and one holding `undefined` are different values, and
       // `location` is refined to a project-relative POSIX path or nothing. There
@@ -157,6 +181,7 @@ function runClaudeRuleGlobInert(input: BuiltinCheckInput): readonly ValidationIs
 export const CLAUDE_RULE_GLOB_INERT_CHECK: BuiltinCheck = {
   name: 'claude-rule-glob-inert',
   description: 'Every paths: glob in .claude/rules/ matches at least one file in the tree',
+  code: GLOB_INERT_CODE,
   // A correlated subquery, not a join: a rules file is realized once per extent
   // that reaches it, and a join would repeat every finding per realization.
   sqlTwin:
@@ -169,6 +194,98 @@ export const CLAUDE_RULE_GLOB_INERT_CHECK: BuiltinCheck = {
 };
 
 /**
+ * What one unparseable rules file says to its author.
+ *
+ * The parser's reason is kept to its FIRST line: a YAML error can carry a code
+ * frame, which repeats the file's content and says nothing the first line does
+ * not. The reason is about content, never about a path.
+ *
+ * "As if it had no `paths:`" is a different load for the two locations a rules
+ * file can live in: a project-root rule loads at launch, a nested one only when
+ * Claude reads files under its directory — the same split `ruleScopeFor` draws.
+ *
+ * @param where - The rules file, or a description of it when its path is unknown
+ * @param path - The rules file's root-relative path, for its scope
+ * @param reason - The parser's message
+ * @returns The message
+ */
+function frontmatterInvalidMessage(where: string, path: string, reason: string): string {
+  const firstLine = reason.split('\n', 1)[0] ?? reason;
+  const under = nestedRuleParent(path);
+  const load = under === null
+    ? 'loaded at launch'
+    : `loaded on demand, when Claude reads files under '${under}'`;
+  // A YAML error's first line ends in `:` introducing the code frame it dropped.
+  const said = firstLine.trim().replace(/:$/, '');
+  return `The YAML frontmatter of ${where} does not parse (${said}), so VAT read no paths:`
+    + ` from it: the rule is counted as if it had no paths: (${load}), and claude_rule_patterns`
+    + ' holds no row for any glob it declares, so claude-rule-glob-inert cannot see them. What Claude Code'
+    + ' does with a rules file whose frontmatter does not parse is not documented.';
+}
+
+/**
+ * Every rules file whose frontmatter failed to parse — once per file.
+ *
+ * ## Why this is its own check and not a widening of the inert one
+ *
+ * An unparseable `paths:` list produces NO pattern rows, so the inert-glob check
+ * has nothing to read and passes: an empty table and a clean rules tree are the
+ * same answer there. This check reads the blob's own verdict instead, so the
+ * defect the first check is structurally blind to is reported by the second.
+ *
+ * One finding per IDENTITY: a rules file is realized once per extent that reaches
+ * it, and every realization carries the same path and content key. A realization
+ * with no content key was never read, so it has no verdict to report.
+ *
+ * @param input - The rows
+ * @returns One finding per rules file whose frontmatter did not parse, in realization order
+ */
+function runClaudeRuleFrontmatterInvalid(input: BuiltinCheckInput): readonly ValidationIssue[] {
+  const rulesFiles = new Set(
+    input.resourceTags.filter((row) => row.tag === RULES_FILE_TAG).map((row) => row.resourceId),
+  );
+  const errorByKey = new Map<string, string>();
+  for (const blob of input.blobs) {
+    if (blob.frontmatterError !== null) errorByKey.set(blob.contentKey, blob.frontmatterError);
+  }
+
+  const reported = new Set<string>();
+  const issues: ValidationIssue[] = [];
+  for (const row of input.resourceRealizations) {
+    if (!rulesFiles.has(row.resourceId) || reported.has(row.resourceId) || row.contentKey === null) continue;
+    const reason = errorByKey.get(row.contentKey);
+    if (reason === undefined) continue;
+    reported.add(row.resourceId);
+    const location = findingLocation(row.path);
+    issues.push(createRegistryIssue(
+      FRONTMATTER_INVALID_CODE,
+      frontmatterInvalidMessage(location ?? UNLOCATED_RULES_FILE_ITSELF, row.path, reason),
+      { ...(location === undefined ? {} : { location }), field: 'frontmatter' },
+    ));
+  }
+  return issues;
+}
+
+/** How the frontmatter finding names a rules file whose path cannot be used as a location. */
+const UNLOCATED_RULES_FILE_ITSELF = 'a rules file';
+
+/** The unparseable-frontmatter check. Exported by name so a test can drive one check. */
+export const CLAUDE_RULE_FRONTMATTER_INVALID_CHECK: BuiltinCheck = {
+  name: 'claude-rule-frontmatter-invalid',
+  description: 'Every .claude/rules/ file has YAML frontmatter that parses, so its paths: globs are evaluated',
+  code: FRONTMATTER_INVALID_CODE,
+  // DISTINCT, not a join per realization: every realization of one identity
+  // carries the same path and content key, so DISTINCT collapses the fan-out.
+  sqlTwin:
+    'SELECT DISTINCT r.path, b.frontmatterError\n'
+    + '  FROM resource_realizations r\n'
+    + '  JOIN blobs b ON b.contentKey = r.contentKey\n'
+    + ' WHERE b.frontmatterError IS NOT NULL\n'
+    + "   AND r.resourceId IN (SELECT t.resourceId FROM resource_tags t WHERE t.tag = 'rules-file')",
+  run: runClaudeRuleFrontmatterInvalid,
+};
+
+/**
  * The DEFAULT check set, in the order it runs.
  *
  * 🔑 **It is a constant in the pipeline, never a default in the config object.**
@@ -178,7 +295,10 @@ export const CLAUDE_RULE_GLOB_INERT_CHECK: BuiltinCheck = {
  * being default-on requires a config file to say so."* The command reads this
  * list and merges the project's declared checks onto it.
  */
-export const BUILTIN_CHECKS: readonly BuiltinCheck[] = [CLAUDE_RULE_GLOB_INERT_CHECK];
+export const BUILTIN_CHECKS: readonly BuiltinCheck[] = [
+  CLAUDE_RULE_GLOB_INERT_CHECK,
+  CLAUDE_RULE_FRONTMATTER_INVALID_CHECK,
+];
 
 /** Every built-in's name, for a `--check` guard and for an operator-facing list. */
 export const BUILTIN_CHECK_NAMES: readonly string[] = BUILTIN_CHECKS.map((check) => check.name);

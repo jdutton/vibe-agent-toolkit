@@ -122,12 +122,14 @@ const FALLS_TO_CATCH_ALL: ReadonlySet<string> = new Set([
   'ALLOW_UNUSED',
   // Emitted over a project's `.claude/rules` tree, which a skill review does not walk —
   // the same reason the resource/link-graph codes below fall through.
+  'CLAUDE_RULE_FRONTMATTER_INVALID',
   'CLAUDE_RULE_GLOB_INERT',
   'COLLECTION_MIME_CONFLICT',
   'COMPONENT_DECLARED_BUT_MISSING',
   'COMPONENT_PRESENT_BUT_UNDECLARED',
   'DUPLICATE_RESOURCE_ID',
   'EXTENT_DIRECTORY_UNLISTABLE',
+  'EXTENT_SYMLINK_NOT_REALIZED',
   'EXTERNAL_URL_DEAD',
   'EXTERNAL_URL_ERROR',
   'EXTERNAL_URL_TIMEOUT',

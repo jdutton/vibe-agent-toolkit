@@ -532,7 +532,14 @@ which a bare commit key cannot express.
   documented `sqlTwin`, run whether or not a project declares any `resources.checks`. The invariant
   that keeps a default-on rule from making the query engine mandatory is
   [cli.md](./cli.md#-no-built-in-check-may-be-sql); the code's entry is in
-  [validation-codes.md](../validation-codes.md#claude_rule_glob_inert).
+  [validation-codes.md](../validation-codes.md#claude_rule_glob_inert). Its companion
+  `claude-rule-frontmatter-invalid` reports the rules files whose frontmatter did not parse — the
+  ones whose globs never reached the pattern table
+  ([validation-codes.md](../validation-codes.md#claude_rule_frontmatter_invalid)).
+- ✅ **Shipped: a declined symlink is a row, not a silence.** The filesystem extent still realizes
+  no symlink path, but every link its enumerator met is a `realization_conditions` row
+  `EXTENT_SYMLINK_NOT_REALIZED` at the link's path
+  ([validation-codes.md](../validation-codes.md#extent_symlink_not_realized)).
 - ✅ **Shipped: the store is on by default.** The extent- and blob-scoped tables now cross
   invocations without an opt-in (`VAT_PROJECTION_STORE=off`, or `VAT_CACHE=0` for every cache, is
   the way back), and the blob tier is bounded by a `blob_keys` manifest rather than growing without

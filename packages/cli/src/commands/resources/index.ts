@@ -2,11 +2,11 @@
  * Resources command group
  */
 
-import { BUILTIN_CHECKS } from '@vibe-agent-toolkit/resources';
 import { Command, Option } from 'commander';
 
 import { collectRepeated } from '../../utils/repeatable-option.js';
 
+import { builtinCheckList, builtinSqlTwins } from './builtin-help.js';
 import { checkCommand } from './check.js';
 import { queryCommand } from './query.js';
 import { scanCommand } from './scan.js';
@@ -14,26 +14,6 @@ import { validateCommand } from './validate.js';
 
 /** What every subcommand's `--debug` flag says it does. */
 const DEBUG_HELP = 'Enable debug logging';
-
-/**
- * Every built-in's SQL twin, as a `resources.checks` block a reader can paste.
- *
- * 🔑 RENDERED from `BUILTIN_CHECKS`, never transcribed. A hand-copied statement
- * here backs a claim `check.ts` makes to the operator, and would go silently
- * false the moment a second built-in ships or a column is renamed.
- *
- * @returns The YAML block, indented for the help text
- */
-function builtinSqlTwins(): string {
-  return BUILTIN_CHECKS.map((check) => [
-    '    resources:',
-    '      checks:',
-    `        my-${check.name}:`,
-    `          description: ${check.description}`,
-    '          sql: |',
-    ...check.sqlTwin.split('\n').map((line) => `            ${line}`),
-  ].join('\n')).join('\n\n');
-}
 
 /**
  * The derived relations and the one filter that makes a budget sum correct.
@@ -288,10 +268,12 @@ Description:
   were worth asking every time.
 
 Built-in checks (run with or without a config file):
-  claude-rule-glob-inert   Every paths: glob in .claude/rules/ matches at
-                           least one file in the tree. Emits
-                           CLAUDE_RULE_GLOB_INERT (default: info) per dead
-                           glob, naming the rules file and quoting the glob.
+${builtinCheckList()}
+
+  A rules file whose frontmatter does not parse puts no glob in
+  claude_rule_patterns, so the inert check cannot see its globs -- that is
+  what the frontmatter check is for. The usual cause is an unquoted glob
+  starting with * (a YAML alias).
 
   They are TypeScript predicates over the projection's rows, never SQL, so
   adding one never makes a query engine part of anybody's gate. Config only

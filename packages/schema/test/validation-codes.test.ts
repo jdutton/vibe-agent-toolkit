@@ -218,6 +218,23 @@ describe('CODE_REGISTRY — inert Claude rule globs', () => {
     expect(fix).toMatch(/correct/i);
     expect(fix).not.toMatch(/--fix|automatically|auto-fix/i);
   });
+
+  // The frontmatter check exists because the inert one is blind to a rule whose
+  // YAML did not parse: no pattern rows, nothing to report. `warning`, since
+  // unparseable YAML has no deliberate arm the way a glob-ahead-of-its-files does.
+  it('registers CLAUDE_RULE_FRONTMATTER_INVALID as a warning naming the YAML alias trap', () => {
+    const entry = CODE_REGISTRY.CLAUDE_RULE_FRONTMATTER_INVALID;
+    expect(entry.defaultSeverity).toBe('warning');
+    expect(entry.reference).toBe('#claude_rule_frontmatter_invalid');
+    expect(entry.description).toContain('claude_rule_patterns');
+    expect(entry.fix).toMatch(/quote/i);
+  });
+
+  it('registers EXTENT_SYMLINK_NOT_REALIZED as an info code', () => {
+    const entry = CODE_REGISTRY.EXTENT_SYMLINK_NOT_REALIZED;
+    expect(entry.defaultSeverity).toBe('info');
+    expect(entry.reference).toBe('#extent_symlink_not_realized');
+  });
 });
 
 describe('IssueCodeSchema', () => {

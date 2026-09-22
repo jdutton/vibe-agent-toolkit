@@ -25,6 +25,7 @@ import { describe, expect, it } from 'vitest';
 import {
   bindBuiltinChecks,
   BUILTIN_CHECKS,
+  CLAUDE_RULE_FRONTMATTER_INVALID_CHECK,
   CLAUDE_RULE_GLOB_INERT_CHECK,
   type BuiltinCheckInput,
 } from '../src/projection/builtin-checks.js';
@@ -51,7 +52,9 @@ function pattern(overrides: Partial<ClaudeRulePatternRow> = {}): ClaudeRulePatte
 function input(patterns: readonly ClaudeRulePatternRow[]): BuiltinCheckInput {
   return {
     claudeRulePatterns: patterns,
-    resourceRealizations: [{ resourceId: RULES_ID, path: RULES_FILE }],
+    resourceRealizations: [{ resourceId: RULES_ID, path: RULES_FILE, contentKey: null }],
+    resourceTags: [],
+    blobs: [],
   };
 }
 
@@ -67,8 +70,10 @@ describe('the built-in check registry', () => {
     // The name is the operator's handle: it is what `--check <name>` takes and
     // what the document's `checks[]` publishes, so it is part of the contract
     // rather than an implementation detail.
-    expect(BUILTIN_CHECKS.map((check) => check.name)).toStrictEqual(['claude-rule-glob-inert']);
+    expect(BUILTIN_CHECKS.map((check) => check.name))
+      .toStrictEqual(['claude-rule-glob-inert', 'claude-rule-frontmatter-invalid']);
     expect(CLAUDE_RULE_GLOB_INERT_CHECK.description.length).toBeGreaterThan(20);
+    expect(CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.description.length).toBeGreaterThan(20);
   });
 
   it('binds each built-in to one projection, so the runner never sees the rows', () => {
@@ -76,7 +81,8 @@ describe('the built-in check registry', () => {
     // what keeps the row model out of the command module entirely.
     const bound = bindBuiltinChecks(input([pattern()]));
 
-    expect(bound.map((check) => check.name)).toStrictEqual(['claude-rule-glob-inert']);
+    expect(bound.map((check) => check.name))
+      .toStrictEqual(['claude-rule-glob-inert', 'claude-rule-frontmatter-invalid']);
     expect(bound[0]?.run()).toHaveLength(1);
   });
 });
@@ -156,10 +162,7 @@ describe('CLAUDE_RULE_GLOB_INERT — one finding per dead glob', () => {
     // than one with an anchor; a finding DROPPED because a join missed is worse
     // than both, because the count then silently disagrees with the table and
     // nothing says so.
-    const orphan = {
-      claudeRulePatterns: [pattern({ resourceId: 'res-unknown' })],
-      resourceRealizations: [],
-    };
+    const orphan = { ...input([pattern({ resourceId: 'res-unknown' })]), resourceRealizations: [] };
 
     const [issue] = CLAUDE_RULE_GLOB_INERT_CHECK.run(orphan);
     expect(issue?.code).toBe('CLAUDE_RULE_GLOB_INERT');
@@ -173,10 +176,95 @@ describe('CLAUDE_RULE_GLOB_INERT — one finding per dead glob', () => {
     // keeping `location` project-relative and POSIX — the same guarantee
     // `sql-checks.ts` rests on, which is why both call one predicate.
     const absolute = {
-      claudeRulePatterns: [pattern()],
-      resourceRealizations: [{ resourceId: RULES_ID, path: '/etc/rules.md' }],
+      ...input([pattern()]),
+      resourceRealizations: [{ resourceId: RULES_ID, path: '/etc/rules.md', contentKey: null }],
     };
 
     expect(CLAUDE_RULE_GLOB_INERT_CHECK.run(absolute)[0]?.location).toBeUndefined();
+  });
+});
+
+/** The key the broken rules file's blob is filed under. */
+const BROKEN_KEY = 'markdown.broken';
+/** What the YAML parser said about it — content, never a path. */
+const YAML_ERROR = 'Unresolved alias (the anchor must be set before the alias): */x/*.ts';
+
+/**
+ * A tree with one rules file whose frontmatter did not parse, realized under two
+ * extents (the ordinary state), plus a NON-rules markdown file with the same
+ * defect — which is `vat resources validate`'s business, not this check's.
+ *
+ * @param overrides - Fields to replace
+ * @returns The input
+ */
+function brokenRuleInput(overrides: Partial<BuiltinCheckInput> = {}): BuiltinCheckInput {
+  return {
+    claudeRulePatterns: [],
+    resourceRealizations: [
+      { resourceId: RULES_ID, path: RULES_FILE, contentKey: BROKEN_KEY },
+      { resourceId: RULES_ID, path: RULES_FILE, contentKey: BROKEN_KEY },
+      { resourceId: 'res-doc', path: 'docs/readme.md', contentKey: BROKEN_KEY },
+    ],
+    resourceTags: [{ resourceId: RULES_ID, tag: 'rules-file' }],
+    blobs: [{ contentKey: BROKEN_KEY, frontmatterError: YAML_ERROR }],
+    ...overrides,
+  };
+}
+
+describe('CLAUDE_RULE_FRONTMATTER_INVALID — a rules file whose frontmatter does not parse', () => {
+  it('reports it ONCE per rules file, at the file, carrying the parser reason', () => {
+    const [issue, ...rest] = CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.run(brokenRuleInput());
+
+    // One finding for two realizations, and none for the non-rules file.
+    expect(rest).toStrictEqual([]);
+    expect(issue?.code).toBe('CLAUDE_RULE_FRONTMATTER_INVALID');
+    // From CODE_REGISTRY, not a literal: an ordinary, overridable code.
+    expect(issue?.severity).toBe('warning');
+    expect(issue?.location).toBe(RULES_FILE);
+    expect(issue?.field).toBe('frontmatter');
+    expect(issue?.message).toContain(YAML_ERROR);
+    // Why it matters is in the message: the globs never reached the pattern table.
+    expect(issue?.message).toContain('claude_rule_patterns');
+  });
+
+  it('says NOTHING about a rules file whose frontmatter parsed', () => {
+    // The control: the same tree with the error cleared reports nothing, so the
+    // finding above is about the error column and not about the tag alone.
+    expect(CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.run(brokenRuleInput({
+      blobs: [{ contentKey: BROKEN_KEY, frontmatterError: null }],
+    }))).toStrictEqual([]);
+  });
+
+  it('says NOTHING about a non-rules file with the same defect', () => {
+    expect(CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.run(brokenRuleInput({ resourceTags: [] })))
+      .toStrictEqual([]);
+  });
+
+  it('says nothing about a rules file that was never keyed', () => {
+    // No bytes were read, so nothing was parsed: no verdict to report.
+    expect(CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.run(brokenRuleInput({
+      resourceRealizations: [{ resourceId: RULES_ID, path: RULES_FILE, contentKey: null }],
+    }))).toStrictEqual([]);
+  });
+
+  it('says a ROOT rule loads at launch and a NESTED one on demand', () => {
+    const nested = 'sub/.claude/rules/x.md';
+    const [rootIssue] = CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.run(brokenRuleInput());
+    const [nestedIssue] = CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.run(brokenRuleInput({
+      resourceRealizations: [{ resourceId: RULES_ID, path: nested, contentKey: BROKEN_KEY }],
+    }));
+
+    expect(rootIssue?.message).toContain('loaded at launch');
+    expect(nestedIssue?.message).toContain("loaded on demand, when Claude reads files under 'sub'");
+    expect(nestedIssue?.message).not.toContain('at launch');
+  });
+
+  it('keeps only the first line of a multi-line parser message', () => {
+    const [issue] = CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.run(brokenRuleInput({
+      blobs: [{ contentKey: BROKEN_KEY, frontmatterError: `${YAML_ERROR}\n\n  1 | paths:\n    ^` }],
+    }));
+
+    expect(issue?.message).toContain(YAML_ERROR);
+    expect(issue?.message).not.toContain('1 | paths:');
   });
 });

@@ -116,9 +116,13 @@ describe('docs/validation-codes.md', () => {
     // to the context lane, not the verdict engine, so putting it in that table
     // would make the table's own scope sentence false. Widening the guard to
     // every registry code is the real fix and is its own change.
-    it('the CLAUDE_RULE_GLOB_INERT section quotes the registry verbatim', () => {
-      const entry = CODE_REGISTRY.CLAUDE_RULE_GLOB_INERT;
-      const section = sectionFor(doc, '### `CLAUDE_RULE_GLOB_INERT`');
+    it.each([
+      'CLAUDE_RULE_GLOB_INERT',
+      'CLAUDE_RULE_FRONTMATTER_INVALID',
+      'EXTENT_SYMLINK_NOT_REALIZED',
+    ] as const)('the %s section quotes the registry verbatim', (code) => {
+      const entry = CODE_REGISTRY[code];
+      const section = sectionFor(doc, `### \`${code}\``);
 
       // Backticks and bold are the doc's own emphasis and carry no meaning the
       // registry could hold, so they are stripped before comparing. Everything

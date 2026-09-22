@@ -99,6 +99,15 @@ describe('ValidationConfigSchema — CLAUDE_RULE_GLOB_INERT is an overridable co
   });
 });
 
+describe('ValidationConfigSchema — the two new projection codes are overridable', () => {
+  it.each(['CLAUDE_RULE_FRONTMATTER_INVALID', 'EXTENT_SYMLINK_NOT_REALIZED'])(
+    'accepts a severity override for %s',
+    (code) => {
+      expect(ValidationConfigSchema.safeParse({ severity: { [code]: 'ignore' } }).success).toBe(true);
+    },
+  );
+});
+
 describe('AllowEntrySchema', () => {
   it('defaults paths to ["**/*"] when omitted', () => {
     const result = AllowEntrySchema.safeParse({ reason: 'whole-skill concern' });

@@ -754,6 +754,14 @@ Reported like every other packaging finding — a located, coded issue on the bu
 - **Where it points:** the directory, project-relative.
 - **Fix:** Fix the permissions on that directory if what is beneath it should be visible to the projection. Set `severity.EXTENT_DIRECTORY_UNLISTABLE` to `ignore` for a directory that is expected to be unreadable (a root-owned cache under an ignored build directory).
 
+### `EXTENT_SYMLINK_NOT_REALIZED`
+
+- **Default:** `info`
+- **What:** A symbolic link in the tree is not realized: VAT never realizes a link's own path, so nothing in the projection is at that path and no size, Claude context chain or load, or `claude_rule_patterns` row counts it — although Claude Code reads a CLAUDE.md or rules file through a link. The finding names the target when it is inside the project root and says whether the target is realized at its own path; a target outside the root is described, never named.
+- **Why it matters:** The projection declines every link on purpose — following one would enumerate one file under two names — but it used to decline them silently. A `link/CLAUDE.md -> ../other/CLAUDE.md` or a `.claude/rules/shared.md` linked in from elsewhere (a pattern the Claude Code docs recommend for sharing rules) was simply absent from every SQL question about sizes, chains and rule globs, and the clean answer read as complete. The row is a `realization_conditions` row, so a query can ask for it directly: `SELECT path, message FROM realization_conditions WHERE code = 'EXTENT_SYMLINK_NOT_REALIZED'`.
+- **Where it points:** the link, project-relative. One finding per link, whichever enumerator ran; a gitignored link is reported only by a lane that keeps gitignored rows.
+- **Fix:** Nothing to fix when the target is realized at its own path and nothing needs to count the link. If the link is a CLAUDE.md or rules file whose load matters to a budget or rules check, replace the link with the file (or an @ import of it) so VAT sees it at that path. Set severity.EXTENT_SYMLINK_NOT_REALIZED to ignore to silence it.
+
 ## Quality Codes
 
 *Stance: see [Length and Shape](./skill-quality-and-compatibility.md#length-and-shape) and [Authoring](./skill-quality-and-compatibility.md#authoring).*
@@ -1095,6 +1103,24 @@ A rules file with a `paths:` list is **path-scoped**: Claude Code does not load 
   ```
 - **Blind spots:** VAT never sees a gitignored file, but Claude Code reads the filesystem. So a glob over ignored territory (`dist/**`, `build/**/*.js`) gets status `gitignored` and is not reported. VAT decides this by asking git whether a file under the glob's literal prefix would be ignored (for a glob with no wildcards, it asks about the file the glob names). The answer is the same whether or not `dist/` has been built yet. Two shapes still get reported even though the rule may load: a glob with **no literal prefix** (`**/*.gen.ts`), whose territory is the whole tree and is never checked; and a glob whose directory is not ignored but whose files are (`src/**/*.gen.ts` next to a `*.gen.ts` ignore line). Outside a git repository nothing is ignored, so no glob gets `gitignored`. A rules file under a *nested* `.claude/rules/` is matched against both the repository root and its own project directory, because the vendor does not say which base applies; it is reported only when dead under both.
 - **Fix:** First check whether the glob is one of the two shapes above and covers ignored or generated output. If it does, keep it. Otherwise delete the dead glob, or correct it to the path it meant — VAT reports the pattern and never rewrites it. The usual causes are a directory renamed or moved out from under the pattern, a missing `**` between segments, and a pattern written against the repo root when rules match repository-relative paths. If the glob is deliberately ahead of its files, or scopes ignored output, set `resources.validation.severity.CLAUDE_RULE_GLOB_INERT` to `ignore`.
+
+### `CLAUDE_RULE_FRONTMATTER_INVALID`
+
+- **Default:** `warning`
+- **What:** A rules file under .claude/rules/ has YAML frontmatter that does not parse, so VAT read no paths: from it: the rule is counted as if it had no paths: (a project-root rule at launch, a nested one on demand), and `claude_rule_patterns` holds no row for any glob it declares — which is why `CLAUDE_RULE_GLOB_INERT` cannot report them. What Claude Code does with such a file is not documented.
+- **Why it matters:** `CLAUDE_RULE_GLOB_INERT` reads pattern rows, and an unparseable `paths:` list produces none — so a broken rule passed that check silently, the "check that cannot fail" shape. The common cause is invisible in review: `- **/x/*.ts` looks like a glob and is a YAML **alias** (a leading `*`), so the parse fails and the whole list is gone. VAT's own reading (no `paths:`, so a project-root rule loads at launch and a nested one on demand) is a guess about the harness, and the finding says so; the vendor documents no behaviour for unparseable rules frontmatter.
+- **Why `warning` and not `info`:** unlike an inert glob, which may be written deliberately ahead of its files, YAML that does not parse has no deliberate arm — it is never what the author meant. It does not ship at `error` because no corpus has yet measured how often it fires ([validation rule design](./validation-rule-design.md)).
+- **Why it differs from `FRONTMATTER_INVALID_YAML` (`error`):** the same file, when `vat resources validate` crawls it, also draws [`FRONTMATTER_INVALID_YAML`](#frontmatter_invalid_yaml) — one fact, two lanes. That code is `vat resources validate`'s general parse check over every markdown file it crawls, and a project that runs validate already fails on it. This code is the default-on `vat resources check` report for a tree that may never run validate, and it names the consequence validate cannot: the rule's globs are missing from `claude_rule_patterns`. It follows the new-rule floor; raise it with `resources.validation.severity.CLAUDE_RULE_FRONTMATTER_INVALID: error` to gate on it in `check` alone.
+- **Emitted by:** `vat resources check`, as the built-in check `claude-rule-frontmatter-invalid`, beside `claude-rule-glob-inert`. One finding per rules file, at the file, with `field: frontmatter` and the parser's first line of explanation.
+- **Ask it yourself:**
+  ```sql
+  SELECT DISTINCT r.path, b.frontmatterError
+    FROM resource_realizations r
+    JOIN blobs b ON b.contentKey = r.contentKey
+   WHERE b.frontmatterError IS NOT NULL
+     AND r.resourceId IN (SELECT t.resourceId FROM resource_tags t WHERE t.tag = 'rules-file')
+  ```
+- **Fix:** Fix the YAML. The usual cause is a glob that starts with * left unquoted — YAML reads a leading * as an alias — so quote every paths: entry ("**/x/*.ts"); a value containing ": " needs quoting for the same reason. Set resources.validation.severity.CLAUDE_RULE_FRONTMATTER_INVALID to ignore to silence it.
 
 ## Meta Codes
 
