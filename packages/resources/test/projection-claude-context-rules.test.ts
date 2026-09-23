@@ -11,13 +11,17 @@ import {
   selectRules,
   type DeclaredPattern,
 } from '../src/projection/claude-context-rules.js';
-import type { BlobRow } from '../src/schemas/projection-blobs.js';
 import type {
   ResourceRealizationRow,
   ResourceTagRow,
 } from '../src/schemas/projection-resources.js';
 
-import { queryRealization, queryTag } from './helpers/context-query-rows.js';
+import {
+  pathScopedAdmissions as admissionsFor,
+  queryPathsBlob as blob,
+  queryRealization,
+  queryTag,
+} from './helpers/context-query-rows.js';
 
 /** The `rule-scope` tag `selectRules` reads a rule's scope class from. */
 function scopeTag(path: string, value: string): ResourceTagRow {
@@ -77,16 +81,6 @@ function realizedInThreeExtents(path: string): ResourceRealizationRow[] {
   return ['extent:fs', 'extent:own-closure', 'extent:parent-closure'].map(
     (extentId) => ({ ...queryRealization(path), extentId }),
   );
-}
-
-function blob(path: string, paths: readonly string[] | undefined): BlobRow {
-  return {
-    contentKey: `key:${path}`, bytes: 100, encoding: 'utf-8', encodingSource: 'assumed',
-    replacementCharacters: 0, tokenEstimate: 25,
-    frontmatter: paths === undefined ? null : { paths: [...paths] },
-    frontmatterError: null, wordCount: 10, proseCodeUnits: 100, codeBlockCodeUnits: 0,
-    linkCount: 0, headingCount: 1, sectionCount: 1,
-  };
 }
 
 describe('selectRules', () => {
@@ -1168,29 +1162,6 @@ describe('declaresPaths — the load class the harness would give a rule', () =>
   });
 });
 
-/**
- * One path-scoped rule's selection for a query, over a set of realized files.
- *
- * @param rulePath - The rules file's root-relative path
- * @param paths - Its `paths:` entries
- * @param files - The realized files beside it
- * @param queryDir - The query directory
- * @param queryFile - The query file, or null for a directory query
- * @returns The admissions the query produced
- */
-function admissionsFor(
-  rulePath: string,
-  paths: readonly string[],
-  files: readonly string[],
-  queryDir: string,
-  queryFile: string | null,
-): readonly unknown[] {
-  return selectRules({
-    realizations: [queryRealization(rulePath), ...files.map((file) => queryRealization(file))],
-    tags: [scopeTag(rulePath, PATH_SCOPED)], blobs: [blob(rulePath, paths)], queryDir, queryFile,
-  }).rules.map((rule) => rule.admission);
-}
-
 /** A rules file one project below the root, for the re-base cases. */
 const PKG_RULE = 'pkg/.claude/rules/r.md';
 
@@ -1397,6 +1368,35 @@ describe('a root-anchored glob locates its territory without the anchor', () => 
       rulePath: ROOT_RULE, patterns: declared('/generated/api.ts'), files: corpusOf(SUBJECT_TS),
     });
     expect(asked).toEqual(['generated/api.ts']);
+  });
+});
+
+describe('a NESTED rule is read against paths RELATIVE to its project, never by rewriting its globs', () => {
+  it('⭐ never lets `**` reach the project directory itself — file lane', () => {
+    // ⛔ Re-based, `**/` became `pkg/**/**/`, whose `**/` matches zero segments
+    // and so matched `pkg/` — a path the harness never asks, because it asks
+    // about `.claude/rules/r.md` relative to `pkg`. `!**` could not take `pkg/`
+    // back out, and every file under it read as loaded. Found by the
+    // differential test (seed 4643).
+    expect(admissionsFor(PKG_RULE, ['**/', '!**'], ['pkg/a.ts'], 'pkg', 'pkg/a.ts')).toEqual([]);
+  });
+
+  it('⭐ lets a bare `!` (from `!/**`) exclude everything under the nested base', () => {
+    // `!/**` strips to `!`, which node-ignore reads as negating every path.
+    // Re-based it became the directory-only `!pkg/**/` and excluded no file.
+    expect(admissionsFor(PKG_RULE, ['{a,b}', '!/**'], ['pkg/a'], 'pkg', 'pkg/a')).toEqual([]);
+  });
+});
+
+describe('a bare `!` (the stripped `!/**`) is a live negation', () => {
+  it('⭐ calls it matched on the file it takes back out — witness lane', () => {
+    // ⛔ The cheap prefilter compiled the negation's positive half — the empty
+    // string — which matches nothing, so the one negation that excludes EVERY
+    // file read inert and CLAUDE_RULE_GLOB_INERT told the author to delete it.
+    const result = evaluateRulePatterns({
+      isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared('/a', '!/**'), files: corpusOf('a'),
+    });
+    expect(result.map((entry) => [entry.status, entry.witnessPath])).toEqual([['inert', null], ['matched', 'a']]);
   });
 });
 

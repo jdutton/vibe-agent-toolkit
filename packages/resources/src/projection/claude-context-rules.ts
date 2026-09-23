@@ -444,12 +444,16 @@ function gitignoreMatcher(globs: readonly string[]): (path: string) => boolean {
   return (path) => ignore.isPathValid(path) && compiled.ignores(path);
 }
 
-/** One root-relative form of one declared pattern, compiled. */
+/** One form of one declared pattern — its reading under one base — compiled. */
 interface CompiledForm {
-  /** The form as spelled — what {@link territoryIgnored} asks its prefix about. */
+  /**
+   * The form spelled root-relative ({@link rebase}) — what
+   * {@link territoryIgnored} asks its prefix about, and nothing else.
+   */
   readonly form: string;
   /**
-   * The globs the harness adds for this form: expanded, `/**`-stripped, re-based.
+   * The globs the harness adds for this form: expanded and `/**`-stripped,
+   * and matched against paths relative to {@link under}.
    *
    * ⛔ What {@link CompiledRule.loads} is built from — never {@link form}. The
    * declared spelling still carries its braces and its `/**`, and a matcher
@@ -458,6 +462,8 @@ interface CompiledForm {
    * pattern contributes its unexpanded-but-stripped self, as the harness does.
    */
   readonly globs: readonly string[];
+  /** The nested project directory the globs are read under, or null for the root. */
+  readonly under: string | null;
   /**
    * The subtree every match lives at or below, or `''` when there is no bound.
    *
@@ -485,7 +491,7 @@ interface CompiledPattern {
    * back out of the patterns before it — see {@link negationWitness}.
    */
   readonly negation: boolean;
-  /** The root form, plus the re-based one when the rule is nested. */
+  /** The root-base reading, plus the project-relative one when the rule is nested. */
   readonly forms: readonly CompiledForm[];
   /** Does some form of this pattern cover the corpus ROOT, and so every path? */
   readonly coversRoot: boolean;
@@ -575,9 +581,34 @@ function compileRule(
  * @returns One predicate over root-relative paths per base, in base order
  */
 function baseMatchers(patterns: readonly CompiledPattern[]): readonly ((path: string) => boolean)[] {
-  const baseCount = patterns[0]?.forms.length ?? 0;
-  return Array.from({ length: baseCount }, (_, base) =>
-    gitignoreMatcher(patterns.flatMap((pattern) => pattern.forms[base]?.globs ?? [])));
+  const bases = patterns[0]?.forms.map((form) => form.under) ?? [];
+  return bases.map((under, base) => underBase(
+    under,
+    gitignoreMatcher(patterns.flatMap((pattern) => pattern.forms[base]?.globs ?? [])),
+  ));
+}
+
+/**
+ * A matcher over base-relative paths, asked about root-relative ones.
+ *
+ * ⛔ The nested reading RELATIVISES THE PATH; it never rewrites the glob. The
+ * harness asks `node-ignore` about a path relative to the directory that owns
+ * the `.claude/`, so that directory itself is never a candidate — `ignore`
+ * refuses an empty path. Rewritten as `pkg/**\/**\/`, the inner globstar matched
+ * zero segments and so matched `pkg/` itself, which dragged every file below it in
+ * past a `!**`; and a bare `!` (the stripped `!/**`) became the directory-only
+ * `!pkg/**\/` and excluded no file. A glob-rewrite has to reproduce every such
+ * corner of gitignore; a relative path inherits them.
+ *
+ * @param under - The nested project directory, or null for the root base
+ * @param matches - The compiled matcher over base-relative paths
+ * @returns A predicate over root-relative paths; a path outside the base is false
+ */
+function underBase(under: string | null, matches: (path: string) => boolean): (path: string) => boolean {
+  if (under === null) return matches;
+  const prefix = `${under}/`;
+  // eslint-disable-next-line local/no-path-startswith -- root-relative, forward-slashed corpus paths and query directories, as `isAtOrBelow` documents
+  return (path) => path.startsWith(prefix) && matches(path.slice(prefix.length));
 }
 
 /**
@@ -595,15 +626,17 @@ function compilePattern(
 ): CompiledPattern {
   const base = nestedRuleParent(rulePath);
   const bases = base === null ? [null] : [null, base];
-  const forms = bases.map((under) => {
-    const globs = expansion.globs.map((glob) => rebase(glob, under));
-    return {
-      form: rebase(declared.pattern, under),
-      globs,
-      bound: matchBound(globs),
-      reaches: gitignoreMatcher(globs),
-    };
-  });
+  const bound = matchBound(expansion.globs);
+  const reaches = gitignoreMatcher(expansion.globs);
+  const forms = bases.map((under) => ({
+    form: rebase(declared.pattern, under),
+    globs: expansion.globs,
+    under,
+    // The base-relative bound, re-rooted: an unbounded glob is still bounded
+    // by the base it is read under.
+    bound: under === null || bound === '' ? under ?? bound : `${under}/${bound}`,
+    reaches: underBase(under, reaches),
+  }));
   return {
     ordinal: declared.ordinal,
     pattern: declared.pattern,
@@ -629,6 +662,9 @@ function compilePattern(
  * @returns True when no normalised path can match it
  */
 function deadBySyntax(glob: string): boolean {
+  // A bare `!` — what the harness's strip leaves of `!/**` — is not an empty
+  // segment: `node-ignore` reads it as negating EVERY path.
+  if (glob === '!') return false;
   const positive = glob.startsWith('!') ? glob.slice(1) : glob;
   const unanchored = positive.startsWith('/') ? positive.slice(1) : positive;
   const body = unanchored.endsWith('/') ? unanchored.slice(0, -1) : unanchored;
@@ -649,10 +685,14 @@ function globSegments(glob: string): string[] {
 }
 
 /**
- * One glob under one base — itself at the root, or below a nested rule's project.
+ * One declared pattern SPELLED root-relative — for locating its territory only.
  *
- * Re-basing prefixes the nested project directory and changes nothing else the
- * prefix of the glob means:
+ * ⛔ Never used to MATCH. Matching reads a nested rule's globs against paths
+ * relative to its project ({@link underBase}); a rewritten glob diverged from
+ * that in gitignore's corners. This spelling exists because
+ * {@link territoryIgnored} asks git about a root-relative path, and re-basing
+ * prefixes the nested project directory and changes nothing else the prefix
+ * of the glob means:
  *
  * - **A leading `!`** stays at the FRONT (`!x` → `!pkg/x`). Spliced after the
  *   base it would become a literal `!` in a path segment, and the exclusion
@@ -666,9 +706,7 @@ function globSegments(glob: string): string[] {
  * - **An UNANCHORED glob stays unanchored** below the base (`gen.ts` →
  *   `pkg/**\/gen.ts`). Gitignore anchors a glob only when it has a `/` before
  *   its last character; otherwise it matches at ANY depth under the base it is
- *   read against. ⛔ Spliced as `pkg/gen.ts` it became anchored, so a nested
- *   `!gen.ts` missed `pkg/sub/gen.ts` — the file the harness excludes under
- *   both bases — and VAT loaded it and called the negation inert.
+ *   read against, so its territory is the whole base, not `pkg/gen.ts`.
  *
  * @param glob - The glob, or the declared pattern it came from
  * @param under - The nested rule's project directory, or null for the root
@@ -932,6 +970,9 @@ function loadedThrough(
  * first match the negation's own positive half, and the `without` matcher is
  * built only once such a file turns up. Swept only over each form's own
  * territory ({@link matchBound} reads a negation's bound off its positive half).
+ * ⛔ The positive half of a bare `!` is EVERY path, not the empty glob
+ * ({@link positiveHalf}): as `''` the prefilter matched nothing, and the one
+ * negation that excludes every file read inert.
  *
  * @param rule - The compiled rule
  * @param index - The negation's position among its patterns
@@ -947,7 +988,7 @@ function negationWitness(
   let without: readonly ((path: string) => boolean)[] | undefined;
   const forms = rule.patterns[index]?.forms ?? [];
   for (const [base, form] of forms.entries()) {
-    const touches = gitignoreMatcher(form.globs.map((glob) => glob.replace(/^!/, '')));
+    const touches = underBase(form.under, gitignoreMatcher(form.globs.map(positiveHalf)));
     const loads = rule.byBase[base];
     const excluded = (path: string): boolean => {
       if (loads === undefined || !touches(path) || loads(path)) return false;
@@ -958,6 +999,17 @@ function negationWitness(
     if (witness !== undefined) return witness;
   }
   return undefined;
+}
+
+/**
+ * The paths a negation glob can take back out, as a positive glob.
+ *
+ * @param glob - One expanded, stripped glob of a negation
+ * @returns The glob without its `!`; `**` for a bare `!`, which negates every path
+ */
+function positiveHalf(glob: string): string {
+  const positive = glob.replace(/^!/, '');
+  return positive === '' ? '**' : positive;
 }
 
 /**

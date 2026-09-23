@@ -1,5 +1,5 @@
 /**
- * Minimal `resource_realizations` / `resource_tags` row builders for the two
+ * Minimal `resource_realizations` / `resource_tags` / `blobs` row builders for the
  * Claude-context SELECTOR suites — `projection-claude-context-ancestry.test.ts`
  * and `projection-claude-context-rules.test.ts`.
  *
@@ -16,6 +16,9 @@
  * minimum row instead, and it is built here once rather than once per suite.
  */
 
+import { RULE_SCOPE_TAG } from '../../src/projection/agentic-tags.js';
+import { selectRules, type RuleAdmission } from '../../src/projection/claude-context-rules.js';
+import type { BlobRow } from '../../src/schemas/projection-blobs.js';
 import type {
   ResourceRealizationRow,
   ResourceTagRow,
@@ -73,4 +76,46 @@ export function queryRealization(path: string): ResourceRealizationRow {
  */
 export function queryTag(path: string, tag: string, value: string | null): ResourceTagRow {
   return { resourceId: `id:${path}`, tag, value, source: 'builtin' };
+}
+
+/**
+ * The blob {@link queryRealization}'s content key points at, carrying a
+ * `paths:` frontmatter list — the one column the rules selector reads.
+ *
+ * @param path - The rules file's root-relative path
+ * @param paths - Its `paths:` entries, or undefined for a file with no frontmatter
+ * @returns The blob row
+ */
+export function queryPathsBlob(path: string, paths: readonly string[] | undefined): BlobRow {
+  return {
+    contentKey: `key:${path}`, bytes: 100, encoding: 'utf-8', encodingSource: 'assumed',
+    replacementCharacters: 0, tokenEstimate: 25,
+    frontmatter: paths === undefined ? null : { paths: [...paths] },
+    frontmatterError: null, wordCount: 10, proseCodeUnits: 100, codeBlockCodeUnits: 0,
+    linkCount: 0, headingCount: 1, sectionCount: 1,
+  };
+}
+
+/**
+ * One path-scoped rule's selection for a query, over a set of realized files.
+ *
+ * @param rulePath - The rules file's root-relative path
+ * @param paths - Its `paths:` entries
+ * @param files - The realized files beside it
+ * @param queryDir - The query directory
+ * @param queryFile - The query file, or null for a directory query
+ * @returns The admissions the query produced
+ */
+export function pathScopedAdmissions(
+  rulePath: string,
+  paths: readonly string[],
+  files: readonly string[],
+  queryDir: string,
+  queryFile: string | null,
+): readonly RuleAdmission[] {
+  return selectRules({
+    realizations: [queryRealization(rulePath), ...files.map((file) => queryRealization(file))],
+    tags: [queryTag(rulePath, RULE_SCOPE_TAG, 'path-scoped')],
+    blobs: [queryPathsBlob(rulePath, paths)], queryDir, queryFile,
+  }).rules.map((rule) => rule.admission);
 }
