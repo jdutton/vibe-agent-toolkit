@@ -18,11 +18,13 @@ import { z } from 'zod';
  * - **`inert`** — the pattern was evaluated against the tree and matched
  *   nothing. The rule declares a scope no file in this tree occupies, so it can
  *   never fire here. This is the defect the table exists to make queryable.
- * - **`unevaluated`** — the pattern was **never run**. A rule whose whole
- *   `paths:` list blows the vendor's shared expansion budget
- *   (`EXPANDED_PATTERN_BUDGET` / `PATTERN_BYTE_BUDGET` in
- *   `claude-context-rules.ts`) is used unexpanded by the harness and is skipped
- *   here rather than matched, so no matcher ever touched it.
+ * - **`unevaluated`** — the pattern was **never run**. The vendor's expansion
+ *   budget (`EXPANDED_PATTERN_BUDGET` / `PATTERN_BYTE_BUDGET` in
+ *   `claude-context-rules.ts`) is spent PER PATTERN as a `paths:` list is
+ *   walked, and the entry that exhausts it is used unexpanded by the harness —
+ *   braces literal, matching essentially nothing — so it is skipped here rather
+ *   than matched, and no matcher ever touched it. ⛔ Its live siblings are
+ *   evaluated normally: this status names one entry, never a whole list.
  * - **`gitignored`** — the pattern was evaluated and matched no file VAT can
  *   see, and its territory is **gitignored** (a file beneath its literal prefix,
  *   or the file a wholly-literal pattern names, would be ignored). VAT never
@@ -40,7 +42,7 @@ import { z } from 'zod';
  * table — four statuses, one witness".
  */
 export const ClaudeRulePatternStatusSchema = z.enum(['matched', 'inert', 'unevaluated', 'gitignored'])
-  .describe('Pattern status: "matched" (witnessPath names a match), "inert" (evaluated, matched nothing), "unevaluated" (never run — the paths: list blew the expansion budget) or "gitignored" (matched nothing VAT can see, and its territory is gitignored — VAT declines to judge it, since the harness reads ignored files)');
+  .describe('Pattern status: "matched" (witnessPath names a match), "inert" (evaluated, matched nothing), "unevaluated" (never run — this pattern exhausted the per-pattern expansion budget) or "gitignored" (matched nothing VAT can see, and its territory is gitignored — VAT declines to judge it, since the harness reads ignored files)');
 
 export type ClaudeRulePatternStatus = z.infer<typeof ClaudeRulePatternStatusSchema>;
 

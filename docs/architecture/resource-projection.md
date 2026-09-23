@@ -205,10 +205,13 @@ than against taste** (`packages/resources/src/projection/agentic-tags.ts` carrie
   stricter than the vendor, because an unscoped rule is charged to every session whether or not the
   work touches what it guards, and that cost is precisely what `launchCharge` exists to surface.
   Second, the design's
-  instruction to **exclude rules files from the always-loaded chain sum is right only for rules
-  that carry `paths:`**. A rule that omits it *is* always-loaded, and excluding it under-reports
-  exactly the file whose cost is worst — the same direction of error the `loading` rank rule exists
-  to prevent. The rule is `paths:` present → `selected` (excluded), absent → `always` (charged).
+  instruction to **exclude rules files from the always-loaded chain sum is right only for rules the
+  harness actually scopes by their patterns**. A rule that omits `paths:` *is* always-loaded, and
+  excluding it under-reports exactly the file whose cost is worst — the same direction of error the
+  `loading` rank rule exists to prevent. The test is `declaresPaths`, not the presence of the key:
+  a `paths:` that normalises to nothing, or to `**` alone, leaves the rule always-loaded in the
+  harness too ([evidence](../external/claude-code-rules-paths-behaviour.md)). Scoped → `selected`
+  (excluded), otherwise → `always` (charged).
 
   ⭐ **The magnitude, so nobody "simplifies" the rule back to a class-wide answer.** The same
   refusal to read frontmatter fails in the other direction too, and that direction has a measured

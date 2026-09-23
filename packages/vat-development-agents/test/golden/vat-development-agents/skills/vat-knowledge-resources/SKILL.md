@@ -104,9 +104,12 @@ SELECT path FROM resource_realizations
 
 ⚠️ **A symbolic link is never realized** — no row sits at a link's own path, so a
 `link/CLAUDE.md` Claude Code reads through the link counts in no size, chain or rules-pattern
-query. It is not silently absent: each link is a `realization_conditions` row with code
-`EXTENT_SYMLINK_NOT_REALIZED`, naming an in-root target and whether that target is realized.
-`SELECT path, message FROM realization_conditions WHERE code = 'EXTENT_SYMLINK_NOT_REALIZED'`
+query. It is not silently absent: each link is a `realization_conditions` row —
+`EXTENT_SYMLINK_NOT_REALIZED` when the target is in-root, naming it and whether it is realized, or
+`EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` when the target leaves the root, which is never named. Ask for
+both codes or the out-of-root links are missing from the answer:
+`SELECT path, message FROM realization_conditions
+  WHERE code IN ('EXTENT_SYMLINK_NOT_REALIZED', 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT')`
 lists them.
 
 **Read `population` in the output before you trust a timing.** It is `derived` or `store` — whether
@@ -139,18 +142,20 @@ segments, so "does this rule cover everything under `docs/`?" is a prefix compar
 glob engine), `witnessPath` (the first file it matched, or null) and `status`.
 
 ⚠️ **Four statuses, and the last two are traps.** `matched` and `inert` are the plain cases.
-`unevaluated` means VAT never ran the matcher, because the rule's whole `paths:` list blew Claude
-Code's shared 1,000-pattern / 4 MiB expansion budget. `gitignored` means the glob matched nothing
-VAT can see and covers gitignored territory (`dist/**`). VAT never reads those files, but Claude
+`unevaluated` means VAT never ran the matcher for that ONE pattern, because it is the entry that
+exhausted Claude Code's 1,000-pattern / 4 MiB budget, which is spent per pattern as the list is
+walked — so a live glob beside a refused one is evaluated and reported normally. A brace-free
+pattern costs nothing, and there is no `{1..n}` range expansion. `gitignored` means the glob
+matched nothing VAT can see and covers gitignored territory (`dist/**`). VAT never reads those files, but Claude
 Code does, so the rule may still load. **Filter `status = 'inert'`, never
 `status != 'matched'`** — the latter reports a VAT blind spot as the author's dead glob, and
 deleting that glob could break a rule that still loads.
 
 🪤 **"Which rule FILES fire on nothing?" is not an anti-join.** The intuitive query — rules files
 with no row in `claude_context_loads` — is `status != 'matched'` wearing a `LEFT JOIN`: that table
-holds one row per glob that CAN fire, so a rule refused by the expansion budget has no row there
-either and reads as dead while firing perfectly well. Ask the pattern table instead: a file is dead
-only when every one of its globs is `inert`. Take the size
+holds one row per glob that CAN fire, so a pattern refused by the expansion budget has no row there
+either, and a rule whose globs were all refused reads as dead while firing perfectly well. Ask the
+pattern table instead: a file is dead only when every one of its globs is `inert`. Take the size
 from `blobs` — `resource_realizations` carries no size column, and `claude_context_loads` carries
 `bytes` but cannot see the file you are looking for:
 
@@ -205,14 +210,22 @@ check is violated.
 
 ### VAT's built-in checks run first, with or without a config file
 
-A project that declares nothing still gets the **default set** — today two checks over
-`.claude/rules/`: `claude-rule-glob-inert`, emitting `CLAUDE_RULE_GLOB_INERT`
-at `info` for every `paths:` glob that matches no file in the tree, and
-`claude-rule-frontmatter-invalid`, emitting `CLAUDE_RULE_FRONTMATTER_INVALID`
-at `warning` for every rules file whose YAML frontmatter does not parse — its globs never reach
-`claude_rule_patterns`, so the first check cannot see them (an unquoted `- **/x/*.ts` is a YAML
-alias, the usual cause). Config
-only **adds** to that set or moves a severity in it; a directory with no
+A project that declares nothing still gets the **default set** — today three checks over
+`.claude/rules/`, each covering the one before it:
+
+- `claude-rule-glob-inert`, emitting `CLAUDE_RULE_GLOB_INERT`
+  at `info` for every `paths:` glob that matches no file in the tree.
+- `claude-rule-frontmatter-invalid`, emitting `CLAUDE_RULE_FRONTMATTER_INVALID`
+  at `warning` for every rules file whose YAML frontmatter VAT could not read — it does not parse
+  (an unquoted `- **/x/*.ts` is a YAML alias, the usual cause), or it parses to a sequence or a
+  scalar rather than a mapping. Either way its globs never reach `claude_rule_patterns`, so the
+  first check cannot see them.
+- `claude-rule-link-unchecked`, emitting `CLAUDE_RULE_LINK_UNCHECKED`
+  at `warning` for a rules file or rules directory that is a **symlink**. VAT realizes no link
+  path, so such a rule has no pattern rows and no blob at all and the two checks above pass on it
+  while Claude Code loads it.
+
+Config only **adds** to that set or moves a severity in it; a directory with no
 `vibe-agent-toolkit.config.yaml` runs exactly the same built-ins, which is what makes "default-on"
 mean anything.
 

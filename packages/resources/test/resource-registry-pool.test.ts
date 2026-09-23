@@ -102,10 +102,13 @@ const plantLead = async (): Promise<string> => plant('0-lead.md', '# Lead\n\nAct
  * A registry wired to a fake pool, or to none.
  *
  * `enabled` and `size` are stated rather than left to their defaults, for the
- * reason the projection suite states them: the pool ships OFF, and its default
- * width is derived from how many documents remain, so a pooled test that
- * inherited either would silently become an unpooled test and keep passing —
- * asserting nothing about the pool while looking like it did.
+ * reason the projection suite states them: the pool now ships ON but DECLINES
+ * a corpus too small to pay for a thread, and its default width is derived from
+ * how many documents remain — so a pooled test that inherited either would
+ * silently become an unpooled test and keep passing, asserting nothing about
+ * the pool while looking like it did. The unpooled arm states `enabled: false`
+ * for the mirror reason: with the default ON it would otherwise be whatever
+ * this fixture's size happened to buy.
  *
  * @param pool - The pool to force on, or `undefined` for the unpooled path
  * @param idField - Frontmatter field to take resource ids from

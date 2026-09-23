@@ -71,6 +71,49 @@ function lookAheadOf(policy: ParsePoolPolicy): number {
   return new ParseDispatcher(mutableCache().cache, policy).lookAhead;
 }
 
+describe('ParsePoolPolicy.enabled — the pool is OPT-OUT', () => {
+  it('activates with nothing in the environment at all', () => {
+    // The default arm. Measured on a 12.6k-file adopter, cold `vat claude
+    // context`, A/B alternated: OFF 27.7/24.6 s against ON 16.4/16.1 s.
+    delete process.env[POOL_ENV];
+
+    expect(sizeFromActivation({ size: 2 }, 256, 4096)).toBe(2);
+  });
+
+  it('is turned OFF by VAT_PARSE_POOL=0, and by nothing else', () => {
+    process.env[POOL_ENV] = '0';
+    expect(sizeFromActivation({ size: 2 }, 256, 4096)).toBeNull();
+
+    // Exactly `'0'`. A stray value is not a disable — the escape hatch has one
+    // spelling, so a typo cannot silently cost the measured speed-up.
+    process.env[POOL_ENV] = 'off';
+    expect(sizeFromActivation({ size: 2 }, 256, 4096)).toBe(2);
+  });
+
+  it('lets an explicit policy decision BEAT the environment, both ways', () => {
+    process.env[POOL_ENV] = '0';
+    expect(sizeFromActivation({ size: 2, enabled: true }, 256, 4096)).toBe(2);
+
+    delete process.env[POOL_ENV];
+    expect(sizeFromActivation({ size: 2, enabled: false }, 256, 4096)).toBeNull();
+  });
+
+  it('declines a corpus too small to pay for a thread, with the pool ON', () => {
+    // ⭐ This is why the default needed no NEW corpus-size threshold. The
+    // activation arithmetic already IS one: 128 misses (`PARSES_BEFORE_SIZING`)
+    // and an estimated 2 x 1,000 ms of serial parse still to come. Measured on
+    // VAT's own repository, cold, with the pool enabled: 335 misses, 332
+    // markdown documents, 3.49 MB — `wire-dispatch` 0 calls, ZERO worker
+    // threads in the timing dump. A second gate on file count would be a second
+    // contract for one decision.
+    delete process.env[POOL_ENV];
+
+    // No `size`, so the estimate decides: 200 documents left at the sampled
+    // mean of this fixture's zero-byte parses is worth no thread at all.
+    expect(sizeFromActivation({}, 256, 200)).toBeNull();
+  });
+});
+
 describe('ParsePoolPolicy.size — reachable from the environment', () => {
   it('takes the worker ceiling from VAT_PARSE_POOL_SIZE', () => {
     // The pin the cross-machine comparison needs: this box would otherwise size

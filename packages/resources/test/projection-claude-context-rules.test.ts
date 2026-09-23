@@ -5,8 +5,9 @@ import { RULE_SCOPE_TAG } from '../src/projection/agentic-tags.js';
 import {
   corpusFiles,
   declaredPatterns,
+  declaresPaths,
   evaluateRulePatterns,
-  expandedPatternCount,
+  harnessExpansion,
   selectRules,
   type DeclaredPattern,
 } from '../src/projection/claude-context-rules.js';
@@ -262,14 +263,16 @@ describe('selectRules', () => {
         queryRealization(existential), queryRealization(universal), queryRealization(SUBJECT_TS),
       ],
       tags: [scopeTag(existential, PATH_SCOPED), scopeTag(universal, PATH_SCOPED)],
-      blobs: [blob(existential, [TS_GLOB]), blob(universal, ['**'])],
+      // `**/*`, not `**`: a rule whose patterns are ALL `**` is always-loaded in
+      // the harness (`declaresPaths`), so it would never reach this lane scoped.
+      blobs: [blob(existential, [TS_GLOB]), blob(universal, ['**/*'])],
       queryDir: '', queryFile: null,
     });
 
     const byPath = new Map(result.rules.map((rule) => [rule.path, rule.admission]));
     expect(byPath.get(existential))
       .toEqual({ kind: MAY_FIRE, pattern: TS_GLOB, examplePath: SUBJECT_TS });
-    expect(byPath.get(universal)).toEqual({ kind: COVERS_DIR, pattern: '**' });
+    expect(byPath.get(universal)).toEqual({ kind: COVERS_DIR, pattern: '**/*' });
   });
 
   it('reports an over-budget rule on a DIRECTORY query too, where the check never used to run', () => {
@@ -442,6 +445,19 @@ const ROOT_RULE = '.claude/rules/scoped.md';
 const NESTED_RULE = 'fixtures/sample/.claude/rules/scoped.md';
 
 /**
+ * A glob that is still ANCHORED after the harness strips its trailing `/**`.
+ *
+ * ⛔ The only kind that can prove a nested rule's re-base. A single-segment glob
+ * (`src/**` → `src`) has no slash left and gitignore matches it at any depth, so
+ * it reaches {@link NESTED_ANCHORED_FILE} from the repository root and the
+ * re-base explains nothing.
+ */
+const NESTED_ANCHORED_GLOB = 'src/lib/**';
+
+/** The file {@link NESTED_ANCHORED_GLOB} reaches only under the nested base. */
+const NESTED_ANCHORED_FILE = 'fixtures/sample/src/lib/index.ts';
+
+/**
  * A `paths:` list as the producer hands it over: each glob at its own index.
  *
  * @param patterns - The globs, in declaration order, with nothing dropped
@@ -531,15 +547,16 @@ describe('evaluateRulePatterns', () => {
     }]);
   });
 
-  it('classifies a BUDGET-REFUSED pattern as unevaluated, never as inert', () => {
-    // ⛔ The three-state requirement. A two-state result reports a REFUSAL as a
-    // defect: the harness never expanded this list, so no pattern in it was ever
-    // matched, and a null witness here says nothing about the pattern's reach.
-    // The budget is shared across the whole `paths:` list, so the live sibling is
-    // refused with it.
+  it('classifies a BUDGET-REFUSED pattern as unevaluated, and its LIVE SIBLING as matched', () => {
+    // ⛔ The three-state requirement, and the per-pattern half of it. A
+    // two-state result reports a REFUSAL as a defect: the harness expanded
+    // nothing for this entry, so a null witness here says nothing about its
+    // reach. ⭐ And the budget is spent PER PATTERN as `N()` proceeds — the
+    // sibling after the refusal is brace-free, costs nothing, and is live
+    // there. Refusing it with its neighbour was VAT's own invention.
     const statuses = statusesOf([OVER_BUDGET_PATTERN, TS_GLOB], corpusOf(SUBJECT_TS));
 
-    expect(statuses).toEqual(['unevaluated', 'unevaluated']);
+    expect(statuses).toEqual(['unevaluated', 'matched']);
     expect(statuses).not.toContain('inert');
   });
 
@@ -552,9 +569,9 @@ describe('evaluateRulePatterns', () => {
     });
 
     expect(result.map((entry) => entry.status)).toEqual(['inert', 'matched']);
-    // The fixture is in budget because it expands to two patterns, not because
-    // it looks smaller than its sibling.
-    expect(expandedPatternCount([inBudget])).toBe(2);
+    // The fixture is in budget because it expands to two globs, not because it
+    // looks smaller than its sibling.
+    expect(harnessExpansion([inBudget])[0]?.globs).toEqual(['src/a/x.ts', 'src/b/x.ts']);
   });
 
   it('leaves directoryAdmission answering with ONE first-match admission', () => {
@@ -581,52 +598,71 @@ describe('evaluateRulePatterns', () => {
     expect(evaluateRulePatterns({ isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: [], files: corpusOf(SUBJECT_TS) })).toEqual([]);
   });
 
-  it('matches a ./-prefixed glob exactly as its bare twin, with the bare literal prefix', () => {
-    // ⛔ `.` is not a glob metacharacter, so the prefix used to come back as
-    // `./packages/cli` — a string no root-relative path ever starts with. The
-    // prune then emptied the candidate range and called the glob inert on EVERY
-    // tree, while the compiled matcher (which accepts `./`) said it matched.
+  it('⭐ reports a ./-prefixed glob as INERT, because the harness matches nothing with it', () => {
+    // ⛔ This used to assert the opposite, on the strength of picomatch — which
+    // accepts `./docs/**` against `docs/guide.md`. The harness's matcher is
+    // `node-ignore`, `./` is not gitignore syntax, and the binary's own copy
+    // answers false. So the glob is genuinely dead in Claude Code and saying so
+    // is the whole point of CLAUDE_RULE_GLOB_INERT; calling it live hid a real
+    // defect behind a dialect VAT invented. The bare twin beside it is the
+    // positive control — same tree, same file, one `./` apart.
     const dotted = `./${TS_GLOB}`;
     const result = evaluateRulePatterns({ isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(dotted, TS_GLOB), files: corpusOf(SUBJECT_TS),
     });
 
-    expect(result.map((entry) => entry.status)).toEqual(['matched', 'matched']);
-    expect(result[0]?.witnessPath).toBe(SUBJECT_TS);
+    expect(result.map((entry) => entry.status)).toEqual(['inert', 'matched']);
+    expect(result[1]?.witnessPath).toBe(SUBJECT_TS);
+    // The `literalPrefix` COLUMN still names the directory the author aimed at,
+    // because that is the question git is asked about the glob's territory.
     expect(result[0]?.literalPrefix).toBe(result[1]?.literalPrefix);
     // The reported pattern stays verbatim — the author's spelling, not ours.
     expect(result[0]?.pattern).toBe(dotted);
   });
 
-  it('carries the AUTHOR\'S index past an entry declaredPatterns dropped', () => {
-    // ⛔ The finding names `paths[ordinal]`. Numbered after the drop, a blank
-    // YAML item before a dead glob pointed the author at the HEALTHY glob — and
-    // the fix text says to delete what it names.
-    const patterns = declaredPatterns({ paths: [TS_GLOB, null, 42, OTHER_PKG_GLOB] });
-
-    expect(patterns).toEqual([
+  it('⭐ numbers the PATTERNS densely, and never claims to number the author\'s YAML slots', () => {
+    // ⛔ `ordinal` carried two contracts and they stopped agreeing. It cannot be
+    // `paths[N]`: the comma split makes `['a/**, b/**', 'c/**']` three patterns
+    // from two YAML items, and a SCALAR `paths:` has no list to index at all. So
+    // there is one contract — the dense index among the rule's PATTERNS, which
+    // is what keys `claude_rule_patterns` — and a finding names the pattern
+    // VERBATIM for the author to grep. Both shapes are asserted, because the
+    // scalar is the one no author-slot reading could ever have served.
+    expect(declaredPatterns({ paths: [TS_GLOB, null, 42, OTHER_PKG_GLOB] })).toEqual([
       { ordinal: 0, pattern: TS_GLOB },
-      { ordinal: 3, pattern: OTHER_PKG_GLOB },
+      { ordinal: 1, pattern: OTHER_PKG_GLOB },
     ]);
+    expect(declaredPatterns({ paths: ['a/**, b/**', 'c/**'] }).map((entry) => entry.ordinal))
+      .toEqual([0, 1, 2]);
+    expect(declaredPatterns({ paths: `${TS_GLOB}, ${OTHER_PKG_GLOB}` })).toEqual([
+      { ordinal: 0, pattern: TS_GLOB },
+      { ordinal: 1, pattern: OTHER_PKG_GLOB },
+    ]);
+    const patterns = declaredPatterns({ paths: [TS_GLOB, null, 42, OTHER_PKG_GLOB] });
     expect(evaluateRulePatterns({ isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns, files: corpusOf(SUBJECT_TS) })
-      .map((entry) => [entry.ordinal, entry.status])).toEqual([[0, 'matched'], [3, 'inert']]);
+      .map((entry) => [entry.ordinal, entry.status])).toEqual([[0, 'matched'], [1, 'inert']]);
   });
 
   it("finds a NESTED rule's glob relative to its own project directory", () => {
     // ⛔ The vendor does not say which base a nested rules file's globs resolve
-    // against. Swept only against the repo root, a fixture project's
-    // `src/**` was reported dead beside its own `src/index.ts` — a false
-    // CLAUDE_RULE_GLOB_INERT whose remedy deletes a working glob. Dead now means
-    // dead under BOTH candidate bases.
+    // against. Swept only against the repo root, a fixture project's glob was
+    // reported dead beside its own source file — a false CLAUDE_RULE_GLOB_INERT
+    // whose remedy deletes a working glob. Dead now means dead under BOTH
+    // candidate bases.
+    //
+    // ⚠️ `src/lib/**`, not `src/**`, and the difference is FIX 1: `src/**`
+    // strips to `src`, which gitignore matches at ANY depth, so it would reach
+    // the fixture from the root and prove nothing about re-basing. A glob that
+    // still holds a slash after the strip is the only kind that can.
     const result = evaluateRulePatterns({
       isIgnored: NOTHING_IGNORED,
-      rulePath: NESTED_RULE, patterns: declared('src/**'),
-      files: corpusOf('fixtures/sample/src/index.ts'),
+      rulePath: NESTED_RULE, patterns: declared(NESTED_ANCHORED_GLOB),
+      files: corpusOf(NESTED_ANCHORED_FILE),
     });
 
     expect(result.map((entry) => [entry.status, entry.witnessPath]))
-      .toEqual([['matched', 'fixtures/sample/src/index.ts']]);
+      .toEqual([['matched', NESTED_ANCHORED_FILE]]);
     // The author's spelling survives the re-basing.
-    expect(result[0]?.pattern).toBe('src/**');
+    expect(result[0]?.pattern).toBe(NESTED_ANCHORED_GLOB);
   });
 
   it("still calls a nested rule's glob inert when it matches under NEITHER base", () => {
@@ -640,15 +676,10 @@ describe('evaluateRulePatterns', () => {
   });
 
   it('never re-bases a rule in the project\'s OWN rules directory', () => {
-    // The positive control: the same glob and files, with a root rules file, is
-    // dead — so the test above passes because of the nesting and nothing else.
-    const result = evaluateRulePatterns({
-      isIgnored: NOTHING_IGNORED,
-      rulePath: ROOT_RULE, patterns: declared('src/**'),
-      files: corpusOf('fixtures/sample/src/index.ts'),
-    });
-
-    expect(result.map((entry) => entry.status)).toEqual(['inert']);
+    // The positive control: the same glob and the same file, with a ROOT rules
+    // file, is dead — so the test above passes because of the nesting and
+    // nothing else.
+    expect(statusesOf([NESTED_ANCHORED_GLOB], corpusOf(NESTED_ANCHORED_FILE))).toEqual(['inert']);
   });
 
   it('admits a nested path-scoped rule on a directory query under its own project', () => {
@@ -741,14 +772,31 @@ describe('evaluateRulePatterns — gitignored territory', () => {
 
   it('never consults the oracle for a matched or an unevaluated glob', () => {
     // The cost claim: only a glob that would otherwise be inert asks git, so a
-    // healthy tree (every glob matched) pays nothing.
+    // healthy tree (every glob matched) pays nothing, and a REFUSED one is not
+    // judged at all. ⚠️ The refused entry is alone in its list: the budget is
+    // per pattern now, so a `dist/**` beside it is evaluated on its own merits
+    // and WOULD ask the oracle — which is the next test.
     expect(evaluateRulePatterns({
       isIgnored: neverAsked, rulePath: ROOT_RULE, patterns: declared(TS_GLOB), files: corpusOf(SUBJECT_TS),
     }).map((entry) => entry.status)).toEqual(['matched']);
     expect(evaluateRulePatterns({
-      isIgnored: neverAsked, rulePath: ROOT_RULE, patterns: declared(OVER_BUDGET_PATTERN, 'dist/**'),
+      isIgnored: neverAsked, rulePath: ROOT_RULE, patterns: declared(OVER_BUDGET_PATTERN),
       files: corpusOf(SUBJECT_TS),
-    }).map((entry) => entry.status)).toEqual(['unevaluated', 'unevaluated']);
+    }).map((entry) => entry.status)).toEqual(['unevaluated']);
+  });
+
+  it('⭐ still judges the glob BESIDE a refused one, because the budget is per pattern', () => {
+    // The positive control on the pair above, and the behaviour change itself:
+    // a list is no longer all-or-nothing, so `dist/**` keeps its own
+    // `gitignored` verdict next to a neighbour the harness refused to expand.
+    const oracle = ignoresBeneath('dist');
+    const result = evaluateRulePatterns({
+      isIgnored: oracle.isIgnored, rulePath: ROOT_RULE,
+      patterns: declared(OVER_BUDGET_PATTERN, 'dist/**'), files: corpusOf(SUBJECT_TS),
+    });
+
+    expect(result.map((entry) => entry.status)).toEqual(['unevaluated', 'gitignored']);
+    expect(oracle.asked).toEqual(['dist/vat-territory-probe']);
   });
 
   it("judges a NESTED rule's glob under its own project directory too", () => {
@@ -777,38 +825,345 @@ describe('corpusFiles', () => {
   });
 });
 
-describe('expandedPatternCount', () => {
-  it('multiplies brace groups', () => {
-    expect(expandedPatternCount(['a/{x,y}/{p,q,r}.ts'])).toBe(6);
-  });
-
-  it('counts a brace-free pattern once', () => {
-    expect(expandedPatternCount(['a/**/*.ts'])).toBe(1);
-  });
-
-  it('sums across the list, because the budget is shared', () => {
-    expect(expandedPatternCount(['{a,b}.ts', '{c,d,e}.ts'])).toBe(5);
-  });
-
+describe('the matcher is gitignore, not picomatch', () => {
+  // ⛔ Every row is the SHIPPED harness's own answer, taken by running the
+  // `node-ignore` copy extracted from the Claude Code 2.1.280 binary over the
+  // same glob and path. That copy and the `ignore` package this module compiles
+  // agree on all 5,723,140 (glob, path) pairs of the 13-repo public corpus plus
+  // a synthetic battery, which is why matching with the library is bug-
+  // compatibility and not an approximation of it.
+  //
+  // The picomatch column is what VAT used to answer. The four rows where it
+  // says `false` against a harness `true` are live false CLAUDE_RULE_GLOB_INERT
+  // findings — three of them measured on real public repositories — whose
+  // remedy is "delete this glob".
   it.each([
-    // ⛔ A range has no comma, so counting commas scored it 1 — a list the
-    // harness refuses to expand read as tiny, and was matched instead of
-    // reported `unevaluated`.
-    ['a numeric range', 'logs/{1..5000}/*.txt', 5000],
-    ['a stepped range', 'v{1..10..2}.md', 5],
-    ['a descending range', 'v{5..1}.md', 5],
-    ['a character range', 'dir-{a..e}/x.md', 5],
-    // A nested group: the innermost-only scan undercounted this as 4.
-    ['a nested group', '{x,y}{a,{b,c}}', 6],
-    ['a group holding a range', '{a,{1..3}}.md', 4],
-    // One item and no comma is not a group — braces is literal about it.
-    ['a single-item brace', 'a{b}c.md', 1],
-  ])('counts %s', (_what, pattern, expected) => {
-    expect(expandedPatternCount([pattern])).toBe(expected);
+    // [what, declared glob, file, does the harness load the rule?]
+    ['a single-segment glob is UNANCHORED after the strip', 'src/**', 'packages/cli/src/index.ts', true],
+    ['…and still matches at the root', 'src/**', 'src/index.ts', true],
+    ['a bare filename matches at any depth', 'README.md', 'docs/atlas/README.md', true],
+    ['a mid-`**` glob spans zero segments', 'packages/**/ports*', 'packages/ports/index.ts', true],
+    ['…and many', 'packages/**/ports*', 'packages/core/src/ports.ts', true],
+    ['a matched directory drags its whole subtree', 'docs/*', 'docs/a/b/c.md', true],
+    ['a slash in the middle ANCHORS to the root', 'packages/src/**', 'x/packages/src/a.ts', false],
+    ['a leading slash anchors', '/src/**', 'packages/cli/src/a.ts', false],
+    ['…and matches at the root', '/src/**', 'src/a.ts', true],
+    ['a trailing slash matches a DIRECTORY only', 'notes.md/', 'notes.md', false],
+    ['a character class is supported', 'src/[ab].ts', 'src/a.ts', true],
+    ['an extglob is LITERAL — gitignore has none', 'src/+(a|b).ts', 'src/a.ts', false],
+    ['`./` is not gitignore syntax', './docs/**', 'docs/a.md', false],
+    ['a dotfile needs no option', '.claude/**', '.claude/rules/a.md', true],
+    // The braces are the HARNESS's, expanded before the matcher ever sees them
+    // — `ignore` would have treated them as literal characters.
+    ['a brace group is expanded by the harness, not the matcher', 'src/{a,b}/x.ts', 'src/b/x.ts', true],
+  ])('%s', (_what, glob, file, loads) => {
+    expect(statusesOf([glob], corpusOf(file))).toEqual([loads ? 'matched' : 'inert']);
   });
 
-  it('refuses a paths list whose ONLY expansion is a range', () => {
-    // The consequence the count exists for, end to end.
-    expect(statusesOf(['logs/{1..5000}/*.txt'], corpusOf(SUBJECT_TS))).toEqual(['unevaluated']);
+  it('⭐ answers the three false CLAUDE_RULE_GLOB_INERT findings measured on public repos', () => {
+    // These three are not hypotheses: they are the only liveness divergences in
+    // 314 declared patterns across 13 public repositories with real
+    // `.claude/rules`, and all three were VAT reporting a live glob as dead.
+    // Asserted together so the corpus measurement has one place in the suite.
+    expect(statusesOf(['vitest.config.ts'], corpusOf('apps/web/vitest.config.ts')))
+      .toEqual(['matched']);
+    expect(statusesOf(['playwright.bdd.config.ts'], corpusOf('e2e/playwright.bdd.config.ts')))
+      .toEqual(['matched']);
+    expect(statusesOf(['packages/**/ports*'], corpusOf('packages/ports/index.ts')))
+      .toEqual(['matched']);
+  });
+
+  it('⛔ treats a glob `node-ignore` cannot COMPILE as matching nothing, and does not throw', () => {
+    // 🪤 `src/a[/` is an unterminated character class. `ignore().add()` builds
+    // no regex, so the `SyntaxError` surfaces from a getter at MATCH time,
+    // three frames below any call site — one mistyped glob in one adopter's
+    // rules file would take the whole projection down. The harness drops such a
+    // pattern up front and treats it as matching nothing; so does this. The
+    // second assertion is the positive control: the same class, terminated,
+    // still matches.
+    expect(statusesOf(['src/a[/'], corpusOf('src/a.ts'))).toEqual(['inert']);
+    expect(statusesOf(['src/a[bc].ts'], corpusOf('src/ab.ts'))).toEqual(['matched']);
+  });
+
+  it('answers a FILE query with the whole rule\'s list, so a `!` can take a file back out', () => {
+    // ⛔ The one question a per-pattern matcher cannot answer. A negation means
+    // nothing alone — `ignore()` over `!src/gen/**` matches no path at all — so
+    // the admission is decided by ONE matcher over every glob the rule
+    // declares, in declaration order, exactly as the harness builds it. The
+    // pair is the point: same rule, same two globs, two files either side of
+    // the exclusion.
+    const path = '.claude/rules/negated.md';
+    const included = 'src/**/*.ts';
+    const input = {
+      realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
+      blobs: [blob(path, [included, '!src/gen/*.ts'])], queryDir: 'src',
+    };
+
+    expect(selectRules({ ...input, queryFile: 'src/a.ts' }).rules[0]?.admission)
+      .toEqual({ kind: 'glob-rule', pattern: included });
+    expect(selectRules({ ...input, queryFile: 'src/gen/a.ts' }).rules).toEqual([]);
+    // The positive control on the exclusion: without it, the same file loads.
+    expect(selectRules({
+      ...input, blobs: [blob(path, [included])], queryFile: 'src/gen/a.ts',
+    }).rules[0]?.admission).toEqual({ kind: 'glob-rule', pattern: included });
+  });
+
+  it('cannot re-include under an EXCLUDED DIRECTORY, which is gitignore\'s own rule', () => {
+    // ⚠️ The trap beside the test above, and the reason the negation fixture
+    // there narrows by extension. `src/**` strips to `src`, which matches the
+    // DIRECTORY, and gitignore refuses to re-include anything beneath an
+    // excluded directory — `node-ignore`'s `_t` returns the ancestor's verdict
+    // before the path's own rules are consulted. So `!src/gen/**` beside
+    // `src/**` takes nothing back out, and a fixture written that way would
+    // have asserted the negation worked while measuring that it did not.
+    const path = '.claude/rules/futile-negation.md';
+    const result = selectRules({
+      realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
+      blobs: [blob(path, ['src/**', '!src/gen/**'])],
+      queryDir: 'src', queryFile: 'src/gen/a.ts',
+    });
+
+    expect(result.rules[0]?.admission).toEqual({ kind: 'glob-rule', pattern: 'src/**' });
+  });
+
+  it('⭐ decides ∀ by asking the matcher about the DIRECTORY, so an unanchored glob covers it', () => {
+    // ⛔ The old ∀ was a shape match — a glob-free literal prefix plus `/**` —
+    // and it declined every other spelling of the same claim. Gitignore carries
+    // a matched directory's whole subtree, so `docs` (no slash, unanchored)
+    // covers `packages/cli/src` the moment `src` is one of its segments. Here
+    // the covering glob is `cli`: unanchored, matching the `cli` directory, and
+    // therefore everything under it. No file is realized, so only ∀ can answer.
+    const path = '.claude/rules/covering.md';
+    const result = selectRules({
+      realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
+      blobs: [blob(path, ['cli/**'])], queryDir: PACKAGES_CLI_SRC, queryFile: null,
+    });
+
+    expect(result.rules[0]?.admission).toEqual({ kind: COVERS_DIR, pattern: 'cli/**' });
+  });
+
+  it('still declines ∀ for a glob that covers no whole directory', () => {
+    // The positive control on the test above. `*.md` matches markdown at any
+    // depth and no directory anywhere, so it is ∃ with a witness, never ∀.
+    const path = '.claude/rules/markdown-only.md';
+    const result = selectRules({
+      realizations: [queryRealization(path), queryRealization(SUBJECT_MD), queryRealization(SUBJECT_TS)],
+      tags: [scopeTag(path, PATH_SCOPED)],
+      blobs: [blob(path, ['*.md'])], queryDir: PACKAGES_CLI_SRC, queryFile: null,
+    });
+
+    expect(result.rules[0]?.admission)
+      .toEqual({ kind: MAY_FIRE, pattern: '*.md', examplePath: SUBJECT_MD });
+  });
+});
+
+/**
+ * The globs one `paths:` list expands to, per entry.
+ *
+ * @param patterns - The rule's `paths:` entries
+ * @returns One glob list per entry, in declaration order
+ */
+function globsOf(patterns: readonly string[]): readonly (readonly string[])[] {
+  return harnessExpansion(patterns).map((entry) => entry.globs);
+}
+
+/**
+ * Which entries the vendor's budget refused, by index.
+ *
+ * @param patterns - The rule's `paths:` entries
+ * @returns The refused indices, in order
+ */
+function refusedIndices(patterns: readonly string[]): readonly number[] {
+  return harnessExpansion(patterns).flatMap((entry, index) => (entry.refused ? [index] : []));
+}
+
+describe('harnessExpansion — `N()`, transcribed', () => {
+  it('multiplies brace groups, and strips the trailing `/**` from each result', () => {
+    expect(globsOf(['a/{x,y}/{p,q}/**'])).toEqual([['a/x/p', 'a/x/q', 'a/y/p', 'a/y/q']]);
+  });
+
+  it('leaves a brace-free pattern alone', () => {
+    expect(globsOf(['a/**/*.ts'])).toEqual([['a/**/*.ts']]);
+  });
+
+  // ⛔ Every expectation below is the SHIPPED harness's own output, taken by
+  // running the transcribed `pet()`/`C()`/`N()` on the same input — not what a
+  // brace-expansion library would produce, and not what looks tidy. Three of
+  // them are ugly (`{1..5000}` loses its braces and expands to one literal
+  // segment; a nested group leaves a stray `}` behind) and that ugliness IS the
+  // answer: `l.split(",")` is the whole grammar.
+  it.each([
+    // ⛔ THE invention this replaced. There is no range expansion, so this is
+    // ONE glob there. VAT scored it 5,000, blew a 1,000 allowance on a one-glob
+    // pattern, and reported the rule `unevaluated` — declined work reported as
+    // the adopter's typo.
+    ['a numeric range', 'logs/{1..5000}/*.txt', ['logs/1..5000/*.txt']],
+    ['a stepped range', 'v{1..10..2}.md', ['v1..10..2.md']],
+    ['a character range', 'dir-{a..e}/x.md', ['dir-a..e/x.md']],
+    // A comma-free group is still a group: `split(",")` yields one part, and
+    // the braces come off with it.
+    ['a single-item brace', 'a{b}c.md', ['abc.md']],
+    // `[^}]+` cannot cross a `}`, so the inner group's own closer is consumed
+    // as the OUTER group's, and the leftover `}` rides along on the first and
+    // last alternative. Transcribed, not corrected.
+    ['a nested group', '{x,y}{a,{b,c}}', ['xa}', 'xb', 'xc}', 'ya}', 'yb', 'yc}']],
+  ])('expands %s to %j', (_what, pattern, expected) => {
+    expect(globsOf([pattern])).toEqual([expected]);
+  });
+
+  it('⭐ spends NOTHING on brace-free patterns, so 1,001 of them are all live', () => {
+    // ⛔ `if(!e.includes("{"))return[e]` precedes every decrement. VAT summed
+    // the list to 1,001 against a 1,000 allowance and reported every one of
+    // them `unevaluated`.
+    const many = Array.from({ length: 1001 }, (_unused, index) => `p${index}/**`);
+
+    expect(refusedIndices(many)).toEqual([]);
+    expect(globsOf(many).flat()).toHaveLength(1001);
+  });
+
+  it('⭐ refuses only the pattern that exhausts the budget, and lets the rest continue', () => {
+    // ⛔ The per-pattern half. The oversized entry is used unexpanded — its
+    // braces are literal gitignore characters there — and the brace-free
+    // neighbours on either side of it cost nothing and stay live.
+    expect(refusedIndices([TS_GLOB, OVER_BUDGET_PATTERN, OTHER_PKG_GLOB])).toEqual([1]);
+    expect(globsOf([OVER_BUDGET_PATTERN])).toEqual([[OVER_BUDGET_PATTERN]]);
+  });
+
+  it('gives a range-shaped pattern a STATUS, where VAT used to refuse to look', () => {
+    // The consequence, end to end: one literal glob, evaluated, matching no
+    // file — a defect the adopter can act on rather than a refusal they cannot.
+    expect(statusesOf(['logs/{1..5000}/*.txt'], corpusOf(SUBJECT_TS))).toEqual(['inert']);
+  });
+});
+
+describe('declaredPatterns — what the harness reads out of one `paths:` value', () => {
+  // ⭐ Ground truth is the SHIPPED harness, not the doc. Claude Code 2.1.280
+  // normalises `paths:` through one function: a list is flat-mapped through it,
+  // a STRING is split on commas at brace depth 0 and each part trimmed, and
+  // anything else contributes nothing. The doc shows only a YAML sequence,
+  // which does not make the string form unreadable — it makes it undocumented,
+  // and a rules file carrying one is path-scoped in the harness while VAT saw
+  // no globs at all and charged the rule as always-loaded.
+  it('reads a SCALAR string, comma-split, exactly as the harness does', () => {
+    expect(declaredPatterns({ paths: 'packages/**/*.ts, apps/**/*.tsx' })).toEqual([
+      { ordinal: 0, pattern: 'packages/**/*.ts' },
+      { ordinal: 1, pattern: 'apps/**/*.tsx' },
+    ]);
+  });
+
+  it('reads a single-pattern string as one pattern', () => {
+    expect(declaredPatterns({ paths: TS_GLOB })).toEqual([{ ordinal: 0, pattern: TS_GLOB }]);
+  });
+
+  it('does not split a comma INSIDE a brace group', () => {
+    // The harness tracks brace depth while splitting, because `{ts,tsx}` is one
+    // pattern and splitting it yields two that match nothing.
+    expect(declaredPatterns({ paths: 'src/**/*.{ts,tsx}, docs/**' })).toEqual([
+      { ordinal: 0, pattern: 'src/**/*.{ts,tsx}' },
+      { ordinal: 1, pattern: 'docs/**' },
+    ]);
+  });
+
+  it('comma-splits a LIST entry too, because the harness flat-maps the list', () => {
+    expect(declaredPatterns({ paths: ['a/**, b/**', 'c/**'] })).toEqual([
+      { ordinal: 0, pattern: 'a/**' },
+      { ordinal: 1, pattern: 'b/**' },
+      { ordinal: 2, pattern: 'c/**' },
+    ]);
+  });
+
+  it('drops an empty part rather than declaring a pattern that matches nothing', () => {
+    expect(declaredPatterns({ paths: 'a/**, ,' })).toEqual([{ ordinal: 0, pattern: 'a/**' }]);
+  });
+
+  it('reads no pattern from a paths: that is neither a string nor a list', () => {
+    expect(declaredPatterns({ paths: 42 })).toEqual([]);
+    expect(declaredPatterns({ paths: { glob: 'a/**' } })).toEqual([]);
+    expect(declaredPatterns(null)).toEqual([]);
+  });
+
+  it('⭐ RECURSES into a nested list, because the harness flat-maps through ITSELF', () => {
+    // ⛔ `e.flatMap((a)=>C(a,n))` — `C`, not a string reader. So a nested list
+    // is flattened, not discarded as a non-string. Read array-then-string, a
+    // rule carrying `paths: [["src/**"]]` declared no glob, was classified as
+    // carrying no `paths:` at all, and was charged to every query as
+    // always-loaded. The `{ glob: … }` map above is the positive control: a
+    // genuine non-string still contributes nothing.
+    expect(declaredPatterns({ paths: [['src/**']] })).toEqual([{ ordinal: 0, pattern: 'src/**' }]);
+    expect(declaresPaths({ paths: [['src/**']] })).toBe(true);
+    expect(declaredPatterns({ paths: [[TS_GLOB, [OTHER_PKG_GLOB]]] }).map((entry) => entry.pattern))
+      .toEqual([TS_GLOB, OTHER_PKG_GLOB]);
+  });
+
+  it('⭐ lets the brace depth go NEGATIVE on a stray `}`, as the harness does', () => {
+    // ⛔ `else if(l==="}")o--`, unclamped. A stray closing brace drives the
+    // depth to -1 and every later comma stops separating, so `"a}/b,c"` is ONE
+    // pattern there. VAT clamped at zero — which reads as defensive and is the
+    // thing being modelled getting it wrong differently — and declared two
+    // patterns, one of which the harness never holds.
+    expect(declaredPatterns({ paths: 'a}/b,c' })).toEqual([{ ordinal: 0, pattern: 'a}/b,c' }]);
+    // The positive control: with the brace balanced, the comma splits again.
+    expect(declaredPatterns({ paths: 'a{x}/b,c' }).map((entry) => entry.pattern))
+      .toEqual(['a{x}/b', 'c']);
+  });
+
+  // ⭐ The harness drops a trailing `/**`, then treats "nothing left" and "all
+  // `**`" as NO paths: at all — the rule loads every turn. A pattern reported
+  // for such a rule would name a glob that decides nothing.
+  it('declares NOTHING for a rule the harness loads unconditionally', () => {
+    expect(declaredPatterns({ paths: ['**'] })).toEqual([]);
+    expect(declaredPatterns({ paths: '**, **' })).toEqual([]);
+    expect(declaredPatterns({ paths: ['/**'] })).toEqual([]);
+    expect(declaredPatterns({ paths: [42] })).toEqual([]);
+  });
+
+  it('still declares the patterns of a rule ONE of whose globs is `**`', () => {
+    expect(declaredPatterns({ paths: ['**', 'src/**'] })).toEqual([
+      { ordinal: 0, pattern: '**' },
+      { ordinal: 1, pattern: 'src/**' },
+    ]);
+  });
+});
+
+describe('declaresPaths — the load class the harness would give a rule', () => {
+  it('is path-scoped when a pattern survives normalisation', () => {
+    expect(declaresPaths({ paths: 'src/**' })).toBe(true);
+    expect(declaresPaths({ paths: ['docs/**/*.md'] })).toBe(true);
+    // one `**` beside a real glob still scopes the rule
+    expect(declaresPaths({ paths: ['**', 'src/**'] })).toBe(true);
+  });
+
+  // ⛔ The under-report direction: charged as path-scoped, a rule that actually
+  // loads every turn is missing from every budget answer.
+  it('⭐ is ALWAYS-LOADED when every surviving pattern is `**`', () => {
+    expect(declaresPaths({ paths: '**' })).toBe(false);
+    expect(declaresPaths({ paths: ['**', '**'] })).toBe(false);
+  });
+
+  it('⭐ is ALWAYS-LOADED when nothing survives — including a trailing-`/**`-only glob', () => {
+    expect(declaresPaths({ paths: '/**' })).toBe(false);
+    expect(declaresPaths({ paths: [42] })).toBe(false);
+    expect(declaresPaths({ paths: [] })).toBe(false);
+    expect(declaresPaths({ paths: '  ' })).toBe(false);
+    expect(declaresPaths(null)).toBe(false);
+  });
+
+  it('⭐ EXPANDS before it strips, so a brace group that yields only `**` is always-loaded', () => {
+    // ⛔ The order is the whole answer. `{**,**}` ends in `}`, so a reader that
+    // strips first keeps it intact, finds one survivor that is not `**`, and
+    // calls the rule path-scoped — charging an adopter nothing for a rule that
+    // loads every turn, and reporting a "glob" nobody wrote. The harness
+    // expands first: two `**`s, every survivor `**`, no `paths:` at all.
+    expect(declaresPaths({ paths: ['{**,**}'] })).toBe(false);
+    expect(declaredPatterns({ paths: ['{**,**}'] })).toEqual([]);
+    // `{/**,/**}` expands to two `/**`, each of which the strip empties.
+    expect(declaresPaths({ paths: ['{/**,/**}'] })).toBe(false);
+    // The positive control: the same shape holding one real glob still scopes.
+    expect(declaresPaths({ paths: ['{**,src/**}'] })).toBe(true);
+  });
+
+  it('strips the trailing `/**` for the load class ONLY — `src/**` still scopes', () => {
+    expect(declaresPaths({ paths: 'src/**' })).toBe(true);
+    expect(declaredPatterns({ paths: 'src/**' })).toEqual([{ ordinal: 0, pattern: 'src/**' }]);
   });
 });

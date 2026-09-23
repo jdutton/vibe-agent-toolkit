@@ -20,16 +20,28 @@
  * `status !== 'matched'` and the case below reds; that mutation was run.
  */
 
-import { describe, expect, it } from 'vitest';
+import { symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   bindBuiltinChecks,
   BUILTIN_CHECKS,
   CLAUDE_RULE_FRONTMATTER_INVALID_CHECK,
   CLAUDE_RULE_GLOB_INERT_CHECK,
+  CLAUDE_RULE_LINK_UNCHECKED_CHECK,
   type BuiltinCheckInput,
 } from '../src/projection/builtin-checks.js';
+import {
+  EXTENT_SYMLINK_NOT_REALIZED,
+  EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
+  FilesystemExtentContributor,
+} from '../src/projection/contributors/filesystem-extent.js';
+import { FilesystemCrawlSource } from '../src/projection/crawl-source.js';
 import type { ClaudeRulePatternRow } from '../src/schemas/projection-claude-rules.js';
+import type { ValidationIssue } from '../src/schemas/validation-result.js';
+
+import { plantSymlinkFixture, removeSymlinkFixture } from './helpers/symlink-fixture.js';
+import { buildExtentContribution } from './test-helpers.js';
 
 /** The rules file every case below declares its patterns in. */
 const RULES_FILE = '.claude/rules/demo.md';
@@ -55,6 +67,7 @@ function input(patterns: readonly ClaudeRulePatternRow[]): BuiltinCheckInput {
     resourceRealizations: [{ resourceId: RULES_ID, path: RULES_FILE, contentKey: null }],
     resourceTags: [],
     blobs: [],
+    realizationConditions: [],
   };
 }
 
@@ -70,10 +83,12 @@ describe('the built-in check registry', () => {
     // The name is the operator's handle: it is what `--check <name>` takes and
     // what the document's `checks[]` publishes, so it is part of the contract
     // rather than an implementation detail.
-    expect(BUILTIN_CHECKS.map((check) => check.name))
-      .toStrictEqual(['claude-rule-glob-inert', 'claude-rule-frontmatter-invalid']);
-    expect(CLAUDE_RULE_GLOB_INERT_CHECK.description.length).toBeGreaterThan(20);
-    expect(CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.description.length).toBeGreaterThan(20);
+    expect(BUILTIN_CHECKS.map((check) => check.name)).toStrictEqual([
+      'claude-rule-glob-inert',
+      'claude-rule-frontmatter-invalid',
+      'claude-rule-link-unchecked',
+    ]);
+    for (const check of BUILTIN_CHECKS) expect(check.description.length).toBeGreaterThan(20);
   });
 
   it('binds each built-in to one projection, so the runner never sees the rows', () => {
@@ -81,8 +96,7 @@ describe('the built-in check registry', () => {
     // what keeps the row model out of the command module entirely.
     const bound = bindBuiltinChecks(input([pattern()]));
 
-    expect(bound.map((check) => check.name))
-      .toStrictEqual(['claude-rule-glob-inert', 'claude-rule-frontmatter-invalid']);
+    expect(bound.map((check) => check.name)).toStrictEqual(BUILTIN_CHECKS.map((check) => check.name));
     expect(bound[0]?.run()).toHaveLength(1);
   });
 });
@@ -99,8 +113,14 @@ describe('CLAUDE_RULE_GLOB_INERT — one finding per dead glob', () => {
     expect(issue?.severity).toBe('info');
     // The file a reader opens...
     expect(issue?.location).toBe(RULES_FILE);
-    // ...the slot within its own `paths:` list...
-    expect(issue?.field).toBe('paths[2]');
+    // ...the frontmatter key, and ONLY the key. `paths[2]` was the old promise
+    // and it is unservable: a scalar `paths: "a/**, b/**"` has no YAML sequence
+    // to index, and a list entry carrying a comma declares two patterns at one
+    // author slot. The ordinal is the dense PATTERN index, so it is spelled in
+    // the message in words rather than dressed up as a slot.
+    expect(issue?.field).toBe('paths');
+    // ...one-based, because a rules author counts globs from one...
+    expect(issue?.message).toContain('pattern 3 of');
     // ...and the dead glob VERBATIM. A message that paraphrased it would leave
     // the reader grepping for a pattern that is not written anywhere.
     expect(issue?.message).toContain('"apps/**/*.tsx"');
@@ -116,9 +136,14 @@ describe('CLAUDE_RULE_GLOB_INERT — one finding per dead glob', () => {
       pattern({ ordinal: 1, pattern: 'also-gone/**' }),
     ]);
 
-    expect(issues.map((issue) => issue.field)).toStrictEqual(['paths[0]', 'paths[1]']);
+    // ⛔ Not `field` — it is the same constant on both, so asserting it here
+    // would pass on a predicate that reported ONE finding twice. The glob is
+    // what distinguishes them.
+    expect(issues.map((issue) => issue.field)).toStrictEqual(['paths', 'paths']);
     expect(issues.map((issue) => issue.message.includes('also-gone/**')))
       .toStrictEqual([false, true]);
+    expect(issues.map((issue) => issue.message.includes('pattern 1 of')))
+      .toStrictEqual([true, false]);
   });
 
   it('says NOTHING about a matched pattern', () => {
@@ -207,6 +232,7 @@ function brokenRuleInput(overrides: Partial<BuiltinCheckInput> = {}): BuiltinChe
     ],
     resourceTags: [{ resourceId: RULES_ID, tag: 'rules-file' }],
     blobs: [{ contentKey: BROKEN_KEY, frontmatterError: YAML_ERROR }],
+    realizationConditions: [],
     ...overrides,
   };
 }
@@ -266,5 +292,302 @@ describe('CLAUDE_RULE_FRONTMATTER_INVALID — a rules file whose frontmatter doe
 
     expect(issue?.message).toContain(YAML_ERROR);
     expect(issue?.message).not.toContain('1 | paths:');
+  });
+
+  it('⭐ reports frontmatter that PARSED but is not a mapping, in the same lane', () => {
+    // `---\n- a\n- b\n---` is valid YAML and decodes to a sequence, so `paths:`
+    // cannot be read from it and the rule looks unconditional. `blob-facts.ts`
+    // gives the blob that verdict; this check is where it reaches the operator.
+    const notMapping = 'the frontmatter block is valid YAML but not a YAML mapping — it decodes'
+      + ' to a sequence or a scalar, so it declares no keys at all';
+    const [issue] = CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.run(brokenRuleInput({
+      blobs: [{ contentKey: BROKEN_KEY, frontmatterError: notMapping }],
+    }));
+
+    expect(issue?.code).toBe('CLAUDE_RULE_FRONTMATTER_INVALID');
+    expect(issue?.message).toContain('not a YAML mapping');
+    // The sentence has to survive a reason that is not a parser error: "does
+    // not parse (valid YAML …)" would contradict itself.
+    expect(issue?.message).not.toContain('does not parse (the frontmatter block is valid YAML');
+  });
+});
+
+/** A `realization_conditions` row, with only the fields a case cares about. */
+function symlinkCondition(path: string, code = EXTENT_SYMLINK_NOT_REALIZED): {
+  readonly code: string;
+  readonly path: string;
+} {
+  return { code, path };
+}
+
+/**
+ * The projection slice the link check reads: condition rows and nothing else.
+ *
+ * @param conditions - The `realization_conditions` rows
+ * @returns The input
+ */
+function linkInput(
+  conditions: readonly { readonly code: string; readonly path: string }[],
+): BuiltinCheckInput {
+  return { ...input([]), realizationConditions: conditions };
+}
+
+describe('CLAUDE_RULE_LINK_UNCHECKED — a rules file VAT can see but cannot check', () => {
+  it('reports a symlinked rules FILE, at the link path, naming both blind checks', () => {
+    const [issue, ...rest] = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(
+      linkInput([symlinkCondition('.claude/rules/linked.md')]),
+    );
+
+    expect(rest).toStrictEqual([]);
+    expect(issue?.code).toBe('CLAUDE_RULE_LINK_UNCHECKED');
+    expect(issue?.severity).toBe('warning');
+    expect(issue?.location).toBe('.claude/rules/linked.md');
+    // The consequence, not the mechanism: both built-ins are structurally blind
+    // to this file, and nothing else in the run says so.
+    expect(issue?.message).toContain('claude_rule_patterns');
+    expect(issue?.message).toContain('frontmatter');
+  });
+
+  it('reports a symlinked rules DIRECTORY — every rule beneath it is unchecked', () => {
+    const [issue] = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(
+      linkInput([symlinkCondition('.claude/rules')]),
+    );
+
+    expect(issue?.location).toBe('.claude/rules');
+    expect(issue?.message).toContain('every rules file');
+  });
+
+  it('⭐ reports a link at `.claude` ITSELF — the rules load through it', () => {
+    // 🪤 The predicate searched for a `.claude` segment FOLLOWED BY `rules`, and
+    // the commonest shape of the defect carries neither: `sub/.claude` is one
+    // link that brings a whole rules directory with it, and the link's own path
+    // stops at `.claude`. It read as "not a rules link" and said nothing, while
+    // the adopter gate that found this class fails exactly this case.
+    const issues = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(linkInput([
+      symlinkCondition('.claude'),
+      symlinkCondition('packages/cli/.claude'),
+    ]));
+
+    expect(issues.map((issue) => issue.location))
+      .toStrictEqual(['.claude', 'packages/cli/.claude']);
+    expect(issues[0]?.message).toContain('every');
+  });
+
+  it('reports a NESTED rules directory link as well as a project-root one, each phrased for what it is', () => {
+    const issues = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(linkInput([
+      symlinkCondition('packages/cli/.claude/rules/local.md'),
+      symlinkCondition('packages/cli/.claude/rules/shared'),
+    ]));
+
+    expect(issues.map((issue) => issue.location))
+      .toStrictEqual(['packages/cli/.claude/rules/local.md', 'packages/cli/.claude/rules/shared']);
+    // 🪤 Asserting only the locations left the file/tree split unpinned: collapse
+    // `rulesLinkKind` to `isTheDirectory ? 'tree' : 'file'` and both rows still
+    // appear, under the wrong sentence — the `shared` row is neither markdown nor
+    // the rules directory itself, so the mutant calls a whole linked directory
+    // one file. That mutation survived; these two assertions kill it.
+    expect(issues[0]?.message)
+      .toContain("The rules file 'packages/cli/.claude/rules/local.md' is a symbolic link");
+    expect(issues[1]?.message).toContain('at or under a directory Claude Code loads rules from');
+    expect(issues[1]?.message).toContain('every rules file it reaches through the link');
+  });
+
+  it('reads the .md test case-insensitively, so a linked RULES.MD is still phrased as a file', () => {
+    // 🪤 No fixture used an uppercase extension, so dropping the `.toLowerCase()`
+    // before `.endsWith('.md')` stayed green. It is folded on purpose and only
+    // here: the extension decides the WORDING, both arms are reported either way,
+    // and on a case-insensitive host `LOCAL.MD` is exactly the file the harness
+    // opens for `*.md` — so calling it a directory is the worse guess about a
+    // link VAT never follows.
+    const [issue] = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(
+      linkInput([symlinkCondition('.claude/rules/LOCAL.MD')]),
+    );
+
+    expect(issue?.message).toContain("The rules file '.claude/rules/LOCAL.MD' is a symbolic link");
+  });
+
+  it('reports one finding per PATH, however many extents recorded the link', () => {
+    // A link met by the filesystem walk and by git is two condition rows under
+    // two extent ids, carrying one path. Two findings would double-count a
+    // single file the way a join over realizations does.
+    const issues = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(linkInput([
+      symlinkCondition('.claude/rules/linked.md'),
+      symlinkCondition('.claude/rules/linked.md'),
+    ]));
+
+    expect(issues).toHaveLength(1);
+  });
+
+  it('⭐ reports BOTH declined-link codes — a filter on one drops the worse arm', () => {
+    // 🪤 The consumers filtered on `EXTENT_SYMLINK_NOT_REALIZED` by string, so
+    // introducing the second code would have made every out-of-root rules link
+    // vanish from this check — the arm whose rule Claude Code does not load at
+    // all — with typecheck unable to see it. `DECLINED_SYMLINK_CODES` is the one
+    // contract; collapse `isDeclinedSymlinkCode` to either single code and one
+    // of these two rows disappears.
+    const issues = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(linkInput([
+      symlinkCondition('.claude/rules/inside.md'),
+      symlinkCondition('.claude/rules/outside.md', EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT),
+    ]));
+
+    expect(issues.map((issue) => issue.location))
+      .toStrictEqual(['.claude/rules/inside.md', '.claude/rules/outside.md']);
+  });
+
+  it('says NOTHING about a link outside a rules directory', () => {
+    // The control. `CLAUDE.md -> AGENTS.md` is the commonest link in the corpus
+    // and is no business of a rules check; a predicate that reported every
+    // symlink would be the loudest possible way to be wrong.
+    expect(CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(linkInput([
+      symlinkCondition('CLAUDE.md'),
+      symlinkCondition('docs/shared'),
+      symlinkCondition('.claude/agents/reviewer.md'),
+    ]))).toStrictEqual([]);
+  });
+
+  it('says NOTHING about a case variant of a rules path, which is what the twin has to match', () => {
+    // The segments are compared byte for byte, as `agentic-tags.ts` compares
+    // them. These four are the rows the shipped SQL twin selected and this
+    // predicate did not — written with LIKE, which SQLite makes
+    // ASCII-case-insensitive — so they are pinned on BOTH sides: here, and in
+    // `projection-sqlite`'s differential over the same list.
+    expect(CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(linkInput([
+      symlinkCondition('.CLAUDE/rules/a.md'),
+      symlinkCondition('.Claude/Rules/a.md'),
+      symlinkCondition('.claude/RULES/a.md'),
+      symlinkCondition('X/.CLAUDE'),
+    ]))).toStrictEqual([]);
+  });
+
+  it('⭐ says the IN-ROOT rule is in force and unchecked, and how to make VAT see it', () => {
+    // ⛔ The message said "The rule is in force and unchecked." full stop, and
+    // for an out-of-root link that is false: Claude Code skips a rules file or
+    // directory whose link target resolves outside the directory the session
+    // started in (2.1.280; docs/external/claude-code-rules-paths-behaviour.md).
+    // It then said NEITHER, hedging across both arms, because the verdict lived
+    // only in the condition row's prose. It now dispatches on the row's CODE.
+    const [issue] = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(
+      linkInput([symlinkCondition('.claude/rules/linked.md')]),
+    );
+
+    expect(issue?.message).toContain('target is inside the project root');
+    expect(issue?.message).toContain('it is in force and unchecked');
+    expect(issue?.message).toContain('Replace the link with the file itself');
+    // The hedge that survives, and only on this arm: the harness compares
+    // against the session's own directory, VAT against the project root.
+    expect(issue?.message).toContain('directory the session started in');
+    // Where the target is named, since this finding never names it.
+    expect(issue?.message).toContain('EXTENT_SYMLINK_NOT_REALIZED');
+    // ⛔ And it does NOT hedge any more: the old sentence spanned both arms.
+    expect(issue?.message).not.toContain('depends on where the link points');
+  });
+
+  it('⭐ says the OUT-OF-ROOT rule is in force NOWHERE, with the remedy that differs', () => {
+    // The worse of the two defects, and the one the code exists to separate:
+    // Claude Code skips the link, so the rule set the author believes governs
+    // the session was never loaded. "Stop linking so VAT can check it" is the
+    // wrong advice here — the rules have to come into the repository.
+    const [issue, ...rest] = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(
+      linkInput([symlinkCondition('.claude/rules/shared', EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT)]),
+    );
+
+    expect(rest).toStrictEqual([]);
+    // One registry code and one severity across both arms: an adopter governs
+    // the concern with one `resources.validation.severity` entry.
+    expect(issue?.code).toBe('CLAUDE_RULE_LINK_UNCHECKED');
+    expect(issue?.severity).toBe('warning');
+    expect(issue?.message).toContain('target resolves outside the project root');
+    expect(issue?.message).toContain('the rule set you meant to pull in is in force nowhere');
+    expect(issue?.message).toContain('Copy or vendor those rules into the repository');
+    expect(issue?.message).toContain(EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT);
+    // ⛔ Never the in-root arm's remedy, which would tell the author to fix the
+    // lesser problem and leave the rules unloaded.
+    expect(issue?.message).not.toContain('it is in force and unchecked');
+    expect(issue?.message).not.toContain('Replace the link with the file itself');
+  });
+
+  it('says NOTHING about a condition row carrying another code', () => {
+    // Distinguishable at the seam: the same path under a different code.
+    expect(CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(linkInput([
+      symlinkCondition('.claude/rules/linked.md', 'EXTENT_DIRECTORY_UNLISTABLE'),
+    ]))).toStrictEqual([]);
+    expect(CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(
+      linkInput([symlinkCondition('.claude/rules/linked.md')]),
+    )).toHaveLength(1);
+  });
+
+  it('says nothing at all when no link was declined', () => {
+    expect(CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(linkInput([]))).toStrictEqual([]);
+  });
+
+  it('declines a location the schema refuses rather than emitting one', () => {
+    const [issue] = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(
+      linkInput([symlinkCondition('/etc/.claude/rules/x.md')]),
+    );
+
+    expect(issue?.location).toBeUndefined();
+    expect(Object.hasOwn(issue ?? {}, 'location')).toBe(false);
+  });
+});
+
+
+/**
+ * END TO END, from a real symlink on disk: the extent's own code decides which
+ * sentence the finding carries.
+ *
+ * ⚠️ Every other case in this file hands the check hand-built rows, which is
+ * what keeps the predicate and its producer independently falsifiable. That is
+ * exactly why this one exists: the codes above are strings a fixture can assert
+ * against itself forever while `filesystem-extent.ts` emits something else. Here
+ * nothing is hand-built — two real links are planted, the contributor classifies
+ * them, and the check reads whatever it actually wrote.
+ */
+describe.skipIf(!symlinkCapability())('the linked-rules arms, from a planted tree', () => {
+  const INSIDE_LINK = '.claude/rules/inside.md';
+  const OUTSIDE_LINK = '.claude/rules/outside.md';
+  /** Named only by the out-of-root link's target text — it must reach no message. */
+  const OUTSIDE_NAME = 'vat-builtin-outside-rules.md';
+  let root: string | undefined;
+  let issues: readonly ValidationIssue[] = [];
+
+  beforeAll(async () => {
+    root = plantSymlinkFixture({
+      prefix: 'vat-builtin-rules-link-',
+      files: ['shared/rule.md'],
+      links: [
+        { path: INSIDE_LINK, target: '../../shared/rule.md' },
+        // Enough `..` to leave any temp root, however deep the host puts it.
+        { path: OUTSIDE_LINK, target: `${'../'.repeat(24)}${OUTSIDE_NAME}` },
+      ],
+    }).root;
+    const { contribution } = await buildExtentContribution(
+      root,
+      new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at)),
+    );
+    issues = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run({
+      ...input([]),
+      realizationConditions: contribution.conditions,
+    });
+  });
+
+  afterAll(() => {
+    removeSymlinkFixture(root);
+  });
+
+  it('⭐ the two links draw the two different sentences', () => {
+    // Positive control: both links are reported at all, in fixture order.
+    expect(issues.map((issue) => issue.location)).toStrictEqual([INSIDE_LINK, OUTSIDE_LINK]);
+
+    expect(issues[0]?.message).toContain('target is inside the project root');
+    expect(issues[0]?.message).toContain('it is in force and unchecked');
+    expect(issues[1]?.message).toContain('target resolves outside the project root');
+    expect(issues[1]?.message).toContain('in force nowhere');
+  });
+
+  it('names neither the out-of-root target nor the fixture root', () => {
+    for (const issue of issues) {
+      expect(issue.message, issue.location).not.toContain(OUTSIDE_NAME);
+      expect(issue.message, issue.location).not.toContain(root ?? '<unplanted>');
+    }
   });
 });

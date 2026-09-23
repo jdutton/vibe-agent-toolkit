@@ -375,6 +375,14 @@ export class ParseCache {
    */
   private hitCount = 0;
   private missCount = 0;
+
+  /**
+   * One in-flight or settled shard preparation per directory — see
+   * {@link prepareShard}. Per INSTANCE, never module-level: two caches may be
+   * rooted at two directories, and a shared map would answer one's question
+   * with the other's directory.
+   */
+  private readonly preparedShards = new Map<string, Promise<boolean>>();
   private writeFailureCount = 0;
 
   constructor(options: ParseCacheOptions = {}) {
@@ -540,12 +548,7 @@ export class ParseCache {
   private async write(key: string, result: ParseResult): Promise<boolean> {
     const shardDir = this.shardDir(key);
 
-    // POSIX hardening: a predictable, world-readable cache root means another
-    // local user on a shared box could pre-create `shardDir` before VAT ever
-    // touches it. `mkdir` below does NOT chmod a directory that already
-    // exists, so without this check a hostile pre-created directory would be
-    // silently written into. Meaningless on Windows — see the class docblock.
-    if (process.platform !== 'win32' && !(await isSafeShardDir(shardDir))) {
+    if (!(await this.prepareShard(shardDir))) {
       this.writeFailureCount += 1;
       return false;
     }
@@ -558,7 +561,6 @@ export class ParseCache {
     const entry: StoredEntry = { facts: dehydrate(result) };
 
     try {
-      await fs.mkdir(shardDir, { recursive: true, mode: CACHE_DIR_MODE });
       await fs.writeFile(tempPath, JSON.stringify(entry), 'utf-8');
       await fs.rename(tempPath, this.entryPath(key));
     } catch (error) {
@@ -577,6 +579,48 @@ export class ParseCache {
   }
 
   /**
+   * Make one shard directory fit to write into — **once per cache instance**.
+   *
+   * ## 🔑 Why this is memoized and the write is not
+   *
+   * The safety `stat` and the `mkdir` are per-DIRECTORY questions that
+   * {@link write} was asking per-ENTRY, and a cold run answers them thousands of
+   * times over 256 directories. Measured on a 12.6k-file adopter, cold `vat
+   * claude context`: `cache-write` is **1,640 ms for 2,157 entries** on the one
+   * thread that cannot be parallelized, and two of its four syscalls per entry
+   * are these. Asking them once per shard removes ~2 x (entries − shards) of
+   * them — on that run, roughly 3,800 of 8,600 syscalls.
+   *
+   * The *promise* is memoized rather than its result, so concurrent writers
+   * into one shard — which is exactly what a pooled run produces — share a
+   * single preparation instead of racing to create the directory each for
+   * themselves.
+   *
+   * ⚠️ **A memoized `true` can go stale, and that is handled by the write
+   * failing rather than by re-checking.** If the directory is removed mid-run
+   * (a concurrent `vat cache clear`, an OS tmpdir purge) the `writeFile` below
+   * raises `ENOENT`, which is a filesystem access error, so the entry is counted
+   * in `writeFailures` and the run keeps its fresh result. Re-checking per entry
+   * to close a window that costs one uncached entry is the trade this method
+   * exists to refuse.
+   *
+   * ⛔ A memoized `false` is equally deliberate: an unsafe shard is unsafe for
+   * the run, and re-`stat`ing it per entry would pay the full cost back to
+   * discover the same answer.
+   *
+   * @param shardDir - The directory {@link write} is about to write into
+   * @returns True when it is safe and present
+   */
+  private async prepareShard(shardDir: string): Promise<boolean> {
+    const prepared = this.preparedShards.get(shardDir);
+    if (prepared !== undefined) return prepared;
+
+    const preparing = prepareShardDir(shardDir);
+    this.preparedShards.set(shardDir, preparing);
+    return preparing;
+  }
+
+  /**
    * Delete this cache's entire tree.
    *
    * Runs regardless of {@link enabled}: turning reads off must not disarm an
@@ -586,6 +630,9 @@ export class ParseCache {
    * gone is not a failure (`force`).
    */
   async clear(): Promise<void> {
+    // FIRST, so a concurrent writer that re-prepares mid-`rm` loses its
+    // directory rather than keeping a memo of one that is being removed.
+    this.preparedShards.clear();
     await fs.rm(this.directory, { force: true, recursive: true });
   }
 
@@ -1095,6 +1142,40 @@ function readFacts(raw: string): ParseFacts | null {
   if (typeof value !== 'object' || value === null) return null;
   const parsed = ParseFactsSchema.safeParse((value as Partial<StoredEntry>).facts);
   return parsed.success ? parsed.data : null;
+}
+
+/**
+ * Make one shard directory safe and present, or report that it cannot be.
+ *
+ * The two per-directory syscalls {@link ParseCache.prepareShard} memoizes, in
+ * the order they have always run: the POSIX ownership check answers about a
+ * directory that ALREADY exists, so it has to precede the `mkdir` that would
+ * otherwise create one and make the question moot.
+ *
+ * A free function because it holds nothing — the memo is the instance's, the
+ * decision is not.
+ *
+ * @param shardDir - The directory to prepare
+ * @returns True when it is safe to write into
+ */
+async function prepareShardDir(shardDir: string): Promise<boolean> {
+  // POSIX hardening: a predictable, world-readable cache root means another
+  // local user on a shared box could pre-create `shardDir` before VAT ever
+  // touches it. `mkdir` below does NOT chmod a directory that already exists,
+  // so without this check a hostile pre-created directory would be silently
+  // written into. Meaningless on Windows — see the `ParseCache` docblock.
+  if (process.platform !== 'win32' && !(await isSafeShardDir(shardDir))) return false;
+
+  try {
+    await fs.mkdir(shardDir, { recursive: true, mode: CACHE_DIR_MODE });
+  } catch (error) {
+    // Fail-soft on exactly the errors the write itself is fail-soft on —
+    // EACCES, EROFS, ENOSPC. Anything else is a bug in this module and stays
+    // loud, which is the same split `write` keeps.
+    if (!isFilesystemAccessError(error)) throw error;
+    return false;
+  }
+  return true;
 }
 
 /**

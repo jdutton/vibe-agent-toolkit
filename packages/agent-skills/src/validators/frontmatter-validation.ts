@@ -131,6 +131,150 @@ export function validateFrontmatterRules(
 	return anchoredTo(location, issues);
 }
 
+/**
+ * The vendor rule is "Cannot contain XML tags"
+ * (docs/external/anthropic-skill-authoring-best-practices.md:21,27), and those
+ * docs never define "XML tag" nor mention angle brackets. This module's reading,
+ * stated so it can be argued with:
+ *
+ * **A tag is markup, not an angle bracket** — and the corpus splits in two.
+ *
+ * 1. UNAMBIGUOUS MARKUP. Nothing in prose is shaped like it, so it fires
+ *    wherever it appears, backticks included: a markup declaration or processing
+ *    instruction (`<!--`, `<![CDATA[`, `<!DOCTYPE`, `<?xml`), a closing tag
+ *    (`</x>`), a self-closing tag (`<x/>`, `<x a/>`), and an opening tag that
+ *    carries an ATTRIBUTE ASSIGNMENT (`<div class="x">`). Angle brackets holding
+ *    prose with no `=` in them are not a tag: `<see https://example.com>` and
+ *    `<y and y>` are a URL and a comparison.
+ *
+ * 2. AN AMBIGUOUS BARE `<word>`. `<example>` and `<env>` are the same four
+ *    characters; no rule can tell a tag from a placeholder here. It therefore
+ *    fires — the reading that keeps real tags firing — UNLESS it reads as part
+ *    of a path or identifier (`skills/<name>/SKILL.md`, `Promise<Result>`,
+ *    `repo#<n>`), and the author can mark it as quoted text with backticks,
+ *    which is what the `fix:` text tells them to do. A consequence worth
+ *    naming: a free-standing `<owner>` in `<owner>/<repo>#<n>` fires, because it
+ *    is character-for-character what `<example>/<example>` is, and that one must
+ *    fire. Backticking the whole template clears it.
+ *
+ * Backticks exempt only class 2. A code span may HIDE markup from the eye, but
+ * it must never EXEMPT it: backticks in a description are unpaired often enough
+ * that any pairing rule — naive or CommonMark-exact — can be made to swallow a
+ * real tag (`` ` then <b>x</b> and a final ` `` is ONE span).
+ */
+
+/** An inline code span (`` `...` ``): the author marking content as quoted text. */
+const INLINE_CODE_SPAN = /`[^`]*`/g;
+
+/** `<!--`, `<![CDATA[`, `<!DOCTYPE`, `<?xml` — markup, never prose. */
+const MARKUP_DECLARATION = /<\?|<!(?:--|\[|[A-Za-z])/;
+
+/**
+ * One `<…>` group, to be classified by {@link scanAngleGroups}. `[A-Za-z]` is a
+ * single character and `[^<>]*` is the only quantifier, so the two cannot split
+ * one run between them — the ambiguity that makes an adjacent pair of stars
+ * quadratic. Each start position scans only as far as the next `<` or `>`.
+ */
+const ANGLE_GROUP = /<(\/?)([A-Za-z][^<>]*)>/g;
+
+/** The tag-name prefix of a group body; the remainder is its attribute run. */
+const TAG_NAME_PREFIX = /^[A-Za-z][\w.:-]*/;
+
+/** A character that continues a path or identifier through a `<…>` group. */
+const TOKEN_CHAR = /[\w/.\\:#@-]/;
+
+/** A literal path segment — what has to follow `<name>/` for it to be a path. */
+const PATH_SEGMENT_CHAR = /[\w.]/;
+
+const WORD_CHAR = /\w/;
+
+/**
+ * Every pattern that scans unbounded author text. Exported for the backtracking
+ * guard in `test/validators/frontmatter-validation.test.ts`, which runs each one
+ * under a deadline `node:vm` can enforce — a guard that reads the list cannot go
+ * blind to a pattern added later.
+ */
+export const XML_TAG_SCAN_PATTERNS: readonly RegExp[] = [
+	INLINE_CODE_SPAN,
+	MARKUP_DECLARATION,
+	ANGLE_GROUP,
+	TAG_NAME_PREFIX,
+];
+
+interface AngleScan {
+	/** Class 1 above: markup, whatever it is wrapped in. */
+	markup: boolean;
+	/** Class 2 above: a bare `<word>` that does not read as a path or identifier. */
+	bareTag: boolean;
+}
+
+/**
+ * Whether a `<word>` at `index` reads as a tag rather than as a placeholder
+ * inside a larger token.
+ */
+function isBareTagInProse(text: string, index: number, length: number): boolean {
+	const before = index === 0 ? '' : text.charAt(index - 1);
+	const end = index + length;
+	const after = text.charAt(end);
+
+	// `Promise<Result>`, `skills/<name>`, `list<item>`, `repo#<n>`: a token
+	// continues on the left and the group is followed by punctuation or the end.
+	// A WORD character after `>` means the group is glued into the middle of a
+	// word (`in<thinking>mode`) — that is a tag, not a compound identifier.
+	if (before !== '' && TOKEN_CHAR.test(before) && !WORD_CHAR.test(after)) {
+		return false;
+	}
+
+	// `<name>/SKILL.md`: the path continues with a literal segment.
+	// `<example>/<example>` continues with another group, so it is not a path —
+	// an unconditional "followed by a slash" exemption is an escape hatch for
+	// every tag.
+	if ((after === '/' || after === '\\') && PATH_SEGMENT_CHAR.test(text.charAt(end + 1))) {
+		return false;
+	}
+
+	return true;
+}
+
+/** Classify a group body that is not a bare `<word>`. */
+function isMarkupBody(closing: boolean, attributeRun: string): boolean {
+	if (closing) {
+		return attributeRun.trim() === '';
+	}
+	if (attributeRun.trimEnd().endsWith('/')) {
+		return true;
+	}
+	// An attribute run with no assignment in it is prose between angle brackets.
+	return attributeRun.includes('=');
+}
+
+function scanAngleGroups(text: string): AngleScan {
+	const scan: AngleScan = { markup: MARKUP_DECLARATION.test(text), bareTag: false };
+
+	for (const match of text.matchAll(ANGLE_GROUP)) {
+		const body = match[2] ?? '';
+		const attributeRun = body.slice((TAG_NAME_PREFIX.exec(body)?.[0] ?? '').length);
+		if (match[1] !== '/' && attributeRun.trim() === '') {
+			scan.bareTag ||= isBareTagInProse(text, match.index, match[0].length);
+			continue;
+		}
+		scan.markup ||= isMarkupBody(match[1] === '/', attributeRun);
+	}
+
+	return scan;
+}
+
+function containsXmlTag(text: string): boolean {
+	const raw = scanAngleGroups(text);
+	if (raw.markup) {
+		return true;
+	}
+	if (!text.includes('`')) {
+		return raw.bareTag;
+	}
+	return scanAngleGroups(text.replaceAll(INLINE_CODE_SPAN, ' ')).bareTag;
+}
+
 function validateNameRules(name: string): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
 	const lowered = name.toLowerCase();
@@ -147,13 +291,13 @@ function validateNameRules(name: string): ValidationIssue[] {
 		});
 	}
 
-	if (/[<>]/.test(name)) {
+	if (containsXmlTag(name)) {
 		issues.push({
 			severity: 'error',
 			code: 'SKILL_NAME_XML_TAGS',
 			message: 'Name contains XML tags',
 			field: FRONTMATTER_NAME_FIELD,
-			fix: 'Remove < and > characters from name',
+			fix: 'Remove the XML/HTML tag from the name',
 		});
 	}
 
@@ -163,13 +307,13 @@ function validateNameRules(name: string): ValidationIssue[] {
 function validateDescriptionRules(description: string): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
 
-	if (/[<>]/.test(description)) {
+	if (containsXmlTag(description)) {
 		issues.push({
 			severity: 'error',
 			code: 'SKILL_DESCRIPTION_XML_TAGS',
 			message: 'Description contains XML tags',
 			field: FRONTMATTER_DESC_FIELD,
-			fix: 'Remove < and > characters from description',
+			fix: 'Remove the XML/HTML tag from the description. If it is a literal placeholder such as `<env>` or `<owner>/<repo>`, wrap it in backticks to mark it as quoted text — backticks do not exempt real markup (`</x>`, `<x/>`, `<x a="b">`, `<!--`, `<?`), which must be removed.',
 		});
 	}
 

@@ -260,6 +260,7 @@
         "ajv-formats": "^3.0.1",
         "github-slugger": "^2.0.0",
         "handlebars": "^4.7.8",
+        "ignore": "^7.0.5",
         "markdown-link-check": "^3.14.2",
         "mdast-util-to-string": "^4.0.0",
         "micromark": "^4.0.2",

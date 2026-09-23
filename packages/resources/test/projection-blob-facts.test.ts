@@ -89,6 +89,40 @@ describe('blobRowFor', () => {
     expect(blobRowFor(CONTENT_KEY, 8, decoding(), parseResult()).frontmatter).toBeNull();
   });
 
+  it('⭐ calls a frontmatter block that is not a MAPPING an error, not silence', () => {
+    // `---\n- a\n- b\n---` is valid YAML and decodes to a sequence, so the
+    // parser reports no error and no object — and a `blobs` row carrying
+    // `frontmatter: null, frontmatterError: null` is indistinguishable from a
+    // file with no frontmatter at all. A `.claude/rules/` file in that state
+    // reads as declaring no `paths:`, so it looks unconditional and nothing
+    // says otherwise. The column's own contract is "why frontmatter did not
+    // parse TO AN OBJECT", which this is.
+    const row = blobRowFor(CONTENT_KEY, 8, decoding(), parseMarkdownContent('---\n- a\n- b\n---\n\n# T\n', 20));
+
+    expect(row.frontmatter).toBeNull();
+    expect(row.frontmatterError).toContain('not a YAML mapping');
+  });
+
+  it('says nothing about a document with NO frontmatter block, or an empty one', () => {
+    // The controls either side of it: absent and empty are both "nothing to
+    // read", and neither is a defect. Without these the case above passes on a
+    // rule that accuses every markdown file in the corpus.
+    expect(blobRowFor(CONTENT_KEY, 8, decoding(), parseMarkdownContent('# T\n', 4)).frontmatterError)
+      .toBeNull();
+    expect(blobRowFor(CONTENT_KEY, 8, decoding(), parseMarkdownContent('---\n---\n\n# T\n', 12))
+      .frontmatterError).toBeNull();
+    expect(blobRowFor(CONTENT_KEY, 8, decoding(), parseMarkdownContent('---\ntitle: T\n---\n\n# T\n', 21))
+      .frontmatterError).toBeNull();
+  });
+
+  it('keeps the PARSER\'s reason when the YAML did not parse at all', () => {
+    // The non-mapping verdict is a fallback, never a replacement: a real YAML
+    // failure still reports what the parser said.
+    const row = blobRowFor(CONTENT_KEY, 8, decoding(), parseResult({ frontmatterError: 'boom' }));
+
+    expect(row.frontmatterError).toBe('boom');
+  });
+
   it('counts every heading in the tree, not just its roots', () => {
     // ParseResult.headings is a TREE (buildHeadingTree), so `.length` is the
     // number of ROOT headings. Parsing for real rather than hand-building the

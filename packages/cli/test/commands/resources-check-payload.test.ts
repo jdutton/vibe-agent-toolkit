@@ -81,6 +81,8 @@ const FAKE_BUILTIN_NAMES: readonly string[] = [FAKE_BUILTIN_NAME];
 const INERT_CHECK_NAME = 'claude-rule-glob-inert';
 /** The second built-in; over {@link INERT_PROJECTION} it runs and finds nothing. */
 const FRONTMATTER_CHECK_NAME = 'claude-rule-frontmatter-invalid';
+/** The third; over {@link INERT_PROJECTION} it runs and finds nothing either. */
+const LINK_CHECK_NAME = 'claude-rule-link-unchecked';
 /** The rules file the inert pattern below is declared in. */
 const RULES_FILE = '.claude/rules/demo.md';
 
@@ -105,6 +107,9 @@ const INERT_PROJECTION = {
   resourceRealizations: [{ resourceId: 'res-rules', path: RULES_FILE, contentKey: null }],
   resourceTags: [],
   blobs: [],
+  // The third built-in reads this table; empty is the healthy tree, and the
+  // case above is about the inert glob rather than about links.
+  realizationConditions: [],
 };
 
 /**
@@ -1373,7 +1378,8 @@ describe('the built-in check set runs without any config', () => {
       membersEnumerated: POPULATED,
     });
 
-    expect(costs.map((cost) => cost.name)).toStrictEqual([INERT_CHECK_NAME, FRONTMATTER_CHECK_NAME]);
+    expect(costs.map((cost) => cost.name))
+      .toStrictEqual([INERT_CHECK_NAME, FRONTMATTER_CHECK_NAME, LINK_CHECK_NAME]);
     expect(issues.map((issue) => [issue.code, issue.severity]))
       .toStrictEqual([['CLAUDE_RULE_GLOB_INERT', 'info']]);
     // Quotes the dead glob, and anchors to the file that declares it.
@@ -1393,11 +1399,11 @@ describe('the built-in check set runs without any config', () => {
     });
 
     expect(costs.map((cost) => cost.name))
-      .toStrictEqual([INERT_CHECK_NAME, FRONTMATTER_CHECK_NAME, FIRST, SECOND]);
+      .toStrictEqual([INERT_CHECK_NAME, FRONTMATTER_CHECK_NAME, LINK_CHECK_NAME, FIRST, SECOND]);
     // 🔑 One cost record per check that ran, whichever set it came from — the
     // denominator `checksRun` is derived from. A built-in that skipped the
     // pricing would be a rule running outside the accounting.
-    expect(costs.map((cost) => cost.durationMs)).toStrictEqual([2, 2, 2, 2]);
+    expect(costs.map((cost) => cost.durationMs)).toStrictEqual([2, 2, 2, 2, 2]);
     expect(issues.map((issue) => issue.code))
       .toStrictEqual(['CLAUDE_RULE_GLOB_INERT', FIRST_CODE, SECOND_CODE]);
   });
@@ -1433,7 +1439,8 @@ describe('the built-in check set runs without any config', () => {
     expect(issues).toStrictEqual([]);
     // Ignored means EXECUTED and then dropped. `checksRun` is what keeps that
     // distinguishable from "never ran", and it must not move.
-    expect(costs.map((cost) => cost.name)).toStrictEqual([INERT_CHECK_NAME, FRONTMATTER_CHECK_NAME]);
+    expect(costs.map((cost) => cost.name))
+      .toStrictEqual([INERT_CHECK_NAME, FRONTMATTER_CHECK_NAME, LINK_CHECK_NAME]);
   });
 
   it('PROMOTES the built-in when the adopter asks it to fail the build', () => {
@@ -1488,10 +1495,11 @@ describe('the built-in check set runs without any config', () => {
     });
     const payload = buildCheckOutputData(payloadInput({ issues, costs }));
 
-    expect(payload.data.checksRun).toBe(4);
+    expect(payload.data.checksRun).toBe(5);
     expect(payload.data.checks as PublishedCheck[]).toStrictEqual([
       { name: INERT_CHECK_NAME, durationSecs: 0.001, rows: 1, builtin: true },
       { name: FRONTMATTER_CHECK_NAME, durationSecs: 0.001, rows: 0, builtin: true },
+      { name: LINK_CHECK_NAME, durationSecs: 0.001, rows: 0, builtin: true },
       // 🪤 ABSENT on a declared rule, never `false` — the key's presence is the
       // whole claim.
       { name: FIRST, durationSecs: 0.001, rows: 0 },
@@ -1542,6 +1550,8 @@ describe('the built-in check set runs without any config', () => {
       { kind: 'check', name: INERT_CHECK_NAME, durationMs: 1, rows: 1, builtin: true },
       { kind: 'start', name: FRONTMATTER_CHECK_NAME },
       { kind: 'check', name: FRONTMATTER_CHECK_NAME, durationMs: 1, rows: 0, builtin: true },
+      { kind: 'start', name: LINK_CHECK_NAME },
+      { kind: 'check', name: LINK_CHECK_NAME, durationMs: 1, rows: 0, builtin: true },
       { kind: 'checks-complete' },
     ]);
   });

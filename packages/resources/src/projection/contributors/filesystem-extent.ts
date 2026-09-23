@@ -110,7 +110,7 @@
  * It can be re-sourced.
  */
 
-import { existsSync, readdirSync, readlinkSync } from 'node:fs';
+import { existsSync, readdirSync, readlinkSync, realpathSync } from 'node:fs';
 import { basename, isAbsolute } from 'node:path';
 
 import {
@@ -120,6 +120,7 @@ import {
   relativeEscapesRoot,
   safePath,
   toForwardSlash,
+  toNfc,
   transientRefusalClause,
 } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
@@ -508,8 +509,84 @@ function unlistableDirectoryCondition(
  * target text is its blob, so it is in the tree hash the store keys on; whether
  * the target is realized is a fact about this extent's own rows, which are
  * served together with it.
+ *
+ * ⚠️ One clause is a fact about the HOST, not about the tree, and always was:
+ * the message asks the filesystem whether the link opens. It did so already for
+ * the `EINVAL` arm ("not a symbolic link on disk", which a `core.symlinks=false`
+ * checkout produces and a POSIX one never does), and it now does so for a target
+ * whose spelling differs from the realized file's only in case or Unicode
+ * normalization — `foo.md -> docs/Plain.md` beside `docs/plain.md` opens on
+ * macOS and Windows and dangles on Linux. Both facts are constant for a given
+ * checkout on a given machine, which is the scope a local store serves; a store
+ * copied between hosts that fold differently would serve the other host's
+ * answer. That is stated rather than guarded, because the alternative — deciding
+ * case-folding from `process.platform` — is the *guard that returns the
+ * reassuring value*: it would call the link realized on a case-SENSITIVE APFS
+ * volume, where it is broken.
  */
 export const EXTENT_SYMLINK_NOT_REALIZED = 'EXTENT_SYMLINK_NOT_REALIZED';
+
+/**
+ * `realization_conditions.code` for a declined link whose target resolves
+ * OUTSIDE the corpus root — the same decline as
+ * {@link EXTENT_SYMLINK_NOT_REALIZED}, carrying the one fact a consumer cannot
+ * recover from it.
+ *
+ * ## Why a second CODE and not a second COLUMN
+ *
+ * Where a link points was already computed here and then spent entirely on
+ * prose: {@link linkTarget} classifies the target lexically, and the verdict
+ * survived only inside the row's `message`. Every consumer that needed it — the
+ * `claude-rule-link-unchecked` built-in most of all, because Claude Code SKIPS
+ * a rules file or directory reached through an out-of-root link
+ * (`docs/external/claude-code-rules-paths-behaviour.md`, "Symlinked rules")
+ * while loading an in-root one — would have had to parse that sentence, which
+ * is the *"a contract carried in text"* drift class. `realization_conditions.code`
+ * is an open vocabulary (`RealizationConditionRowSchema`) and a column is not:
+ * a nullable column reaches 17 source files and the store's DDL to carry a fact
+ * only links have.
+ *
+ * ⛔ The two codes are ONE concern and are always read through
+ * {@link DECLINED_SYMLINK_CODES}. A consumer that filters on
+ * `EXTENT_SYMLINK_NOT_REALIZED` alone silently drops every out-of-root link —
+ * a string comparison typecheck cannot see, which is why the set is a constant
+ * and not a literal at each site.
+ *
+ * ⚠️ Lexical, like the clause it replaced: the target text is resolved against
+ * the link's directory and compared with the root. A target that escapes the
+ * root only through a symlinked PREFIX is still in-root (see
+ * {@link resolvedLinkTarget}), and an absolute target spelled for another
+ * platform is outside every root this host can see.
+ */
+export const EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT = 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT';
+
+/**
+ * Every `realization_conditions.code` a declined symbolic link is recorded
+ * under — the ONE contract each consumer filters on.
+ *
+ * Declaration order is the order a reader meets them: the general decline
+ * first, the out-of-root arm second.
+ */
+export const DECLINED_SYMLINK_CODES = [
+  EXTENT_SYMLINK_NOT_REALIZED,
+  EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
+] as const;
+
+/** One of the codes in {@link DECLINED_SYMLINK_CODES}. */
+type DeclinedSymlinkCode = (typeof DECLINED_SYMLINK_CODES)[number];
+
+/** Membership, precomputed — every consumer asks this rather than comparing strings. */
+const DECLINED_SYMLINK_CODE_SET: ReadonlySet<string> = new Set(DECLINED_SYMLINK_CODES);
+
+/**
+ * Whether a condition row records a declined symbolic link.
+ *
+ * @param code - A `realization_conditions.code`
+ * @returns True for either member of {@link DECLINED_SYMLINK_CODES}
+ */
+export function isDeclinedSymlinkCode(code: string): boolean {
+  return DECLINED_SYMLINK_CODE_SET.has(code);
+}
 
 /** What every declined-link message says about the consequence, once. */
 const NOT_COUNTED_CLAUSE =
@@ -540,33 +617,47 @@ function declinedSymlinkConditions(
 ): RealizationConditionRow[] {
   return links.map((link) => {
     const path = toForwardSlash(safePath.relative(root, link));
+    const { code, clause } = linkTarget(link, root, realized, recordedBy);
     return {
       extentId,
       path,
-      code: EXTENT_SYMLINK_NOT_REALIZED,
+      code,
       severity: 'info',
-      message: `'${path}' is a symbolic link ${linkTargetClause(link, root, realized, recordedBy)}.${NOT_COUNTED_CLAUSE}`,
+      message: `'${path}' is a symbolic link ${clause}. ${NOT_COUNTED_CLAUSE}`,
       resourceId: null,
       ...CONDITION_WITHOUT_REFERENCE,
     };
   });
 }
 
+/** Where one link points: the code that carries the verdict, and the prose that states it. */
+interface LinkTargetVerdict {
+  /** The row's `realization_conditions.code` — one of {@link DECLINED_SYMLINK_CODES}. */
+  readonly code: DeclinedSymlinkCode;
+  /** The clause that follows "is a symbolic link". */
+  readonly clause: string;
+}
+
 /**
  * Where one link points, said without leaking anything outside the root.
+ *
+ * ⛔ The CODE is the carrier and the clause is the rendering, never the other
+ * way round: a consumer that needed "is this target outside the root?" used to
+ * have to find the sentence below in `message`, and one reworded clause would
+ * have changed a check's behaviour with no test able to see it.
  *
  * @param link - Absolute, forward-slashed link path
  * @param root - The corpus root
  * @param realized - Root-relative paths this extent realized
  * @param recordedBy - Which source met the link
- * @returns The clause that follows "is a symbolic link"
+ * @returns The row's code and the clause that follows "is a symbolic link"
  */
-function linkTargetClause(
+function linkTarget(
   link: string,
   root: string,
   realized: ReadonlySet<string>,
   recordedBy: CrawlSourceKind,
-): string {
+): LinkTargetVerdict {
   let target: string;
   try {
     target = readlinkSync(link);
@@ -574,17 +665,7 @@ function linkTargetClause(
     // Gone or unreadable between the enumeration and here: still a declined
     // link, still recorded — only its target is unknown. A bug is not that.
     if (!isFilesystemAccessError(error)) throw error;
-    // EINVAL: the path is not a link on disk. From git that is a stable fact —
-    // the index says mode 120000 and the working tree holds a plain file, a
-    // checkout with `core.symlinks=false` (the Windows default without
-    // Developer Mode). From the walk it can only mean the link was replaced
-    // since it was listed, and git is not involved.
-    if ((error as { code?: unknown }).code === 'EINVAL') {
-      return recordedBy === 'git'
-        ? 'in git that is not a symbolic link on disk (a checkout with core.symlinks=false writes it as a plain file holding the target text)'
-        : 'that is no longer a symbolic link on disk';
-    }
-    return 'whose target could not be read';
+    return { code: EXTENT_SYMLINK_NOT_REALIZED, clause: unreadableTargetClause(error, recordedBy) };
   }
   // A target absolute on SOME platform but not this one — `C:/…` or a UNC
   // `\\host\share\…` committed from Windows, read on POSIX — would resolve here
@@ -593,12 +674,152 @@ function linkTargetClause(
   const foreignAbsolute = isAbsoluteAnyPlatform(target) && !isAbsolute(target);
   const relative = foreignAbsolute ? undefined : inRootRelative(root, safePath.resolve(link, '..', target));
   if (relative === undefined) {
-    return 'whose target lies outside the project root (not named here), so it is realized nowhere in this projection';
+    return {
+      code: EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
+      clause: 'whose target lies outside the project root (not named here), so it is realized nowhere in this projection',
+    };
   }
-  if (relative === '') return 'to the project root itself';
-  return realized.has(relative)
-    ? `to ${quotedPath(relative)}, which is realized at its own path`
-    : `to ${quotedPath(relative)}, which is not realized in this projection either — it does not exist, is gitignored, is excluded from the crawl, or is itself a link`;
+  const clause = relative === ''
+    ? 'to the project root itself'
+    : `to ${quotedPath(relative)}, ${realizationClause(
+      linkTargetRealization(relative, realized, () => resolvedLinkTarget(link, root)),
+    )}`;
+  return { code: EXTENT_SYMLINK_NOT_REALIZED, clause };
+}
+
+/**
+ * What the message says when `readlink` refused the path.
+ *
+ * ⚠️ Never the out-of-root arm: nothing was read, so nothing is known about
+ * where the link points, and a code that said "outside the root" here would be
+ * a guess the reader cannot check.
+ *
+ * @param error - The filesystem access error `readlinkSync` threw
+ * @param recordedBy - Which source met the link
+ * @returns The clause that follows "is a symbolic link"
+ */
+function unreadableTargetClause(error: unknown, recordedBy: CrawlSourceKind): string {
+  // EINVAL: the path is not a link on disk. From git that is a stable fact —
+  // the index says mode 120000 and the working tree holds a plain file, a
+  // checkout with `core.symlinks=false` (the Windows default without
+  // Developer Mode). From the walk it can only mean the link was replaced
+  // since it was listed, and git is not involved.
+  if ((error as { code?: unknown }).code === 'EINVAL') {
+    return recordedBy === 'git'
+      ? 'in git that is not a symbolic link on disk (a checkout with core.symlinks=false writes it as a plain file holding the target text)'
+      : 'that is no longer a symbolic link on disk';
+  }
+  return 'whose target could not be read';
+}
+
+/**
+ * What one link's target realization says, after "to '<target>', ".
+ *
+ * @param realization - The verdict {@link linkTargetRealization} reached
+ * @returns The clause
+ */
+function realizationClause(realization: LinkTargetRealization): string {
+  switch (realization.kind) {
+    case 'realized': {
+      return 'which is realized at its own path';
+    }
+    case 'realized-as': {
+      return `which this host's filesystem resolves to ${quotedPath(realization.path)} — the two`
+        + ' spellings differ only in case or Unicode normalization, so the link opens here and'
+        + ` breaks on a byte-exact filesystem; it is realized at ${quotedPath(realization.path)}`;
+    }
+    case 'unrealized': {
+      return 'which is not realized in this projection either — it does not exist, is gitignored,'
+        + ' is excluded from the crawl, or is itself a link';
+    }
+  }
+}
+
+/**
+ * Whether a link's target reaches a realized row — *on this host*.
+ *
+ * ## 🪤 The byte-exact lookup this replaced was wrong on two of the three OSes
+ *
+ * `realized.has(target)` asks the set for the author's spelling. On macOS and
+ * Windows `cased.md -> docs/Plain.md` beside a realized `docs/plain.md` opens
+ * perfectly and was reported *"not realized … it does not exist"* — a claim the
+ * reader can disprove by opening the link, and the kind of false absence that
+ * teaches an adopter to ignore the row.
+ *
+ * ⛔ The host answers, and nothing here re-implements case folding: `realPathOf`
+ * is the filesystem's own resolution (`realpathSync.native`, which returns the
+ * canonical on-disk spelling). A folding table of VAT's own would be a second
+ * matcher free to disagree with the filesystem it is describing, and it would
+ * have to guess whether *this* volume folds — a case-sensitive APFS volume and a
+ * case-insensitive Linux mount both exist.
+ *
+ * ⚠️ The resolution is accepted ONLY as a respelling of the named target. A link
+ * chain can resolve to an entirely different file, and calling the named target
+ * realized on that evidence would be a lie about the path the message quotes.
+ *
+ * @param target - The link's target, root-relative and forward-slashed
+ * @param realized - Root-relative paths this extent realized
+ * @param realPathOf - The host's resolution of the link, root-relative, or
+ *   undefined when it resolves nowhere inside the root
+ * @returns Which of the three answers holds
+ */
+export function linkTargetRealization(
+  target: string,
+  realized: ReadonlySet<string>,
+  realPathOf: () => string | undefined,
+): LinkTargetRealization {
+  if (realized.has(target)) return { kind: 'realized' };
+  const real = realPathOf();
+  if (real === undefined || real === target || !realized.has(real)) return { kind: 'unrealized' };
+  return foldedKey(real) === foldedKey(target)
+    ? { kind: 'realized-as', path: real }
+    : { kind: 'unrealized' };
+}
+
+/**
+ * The comparison key two spellings of one filename share.
+ *
+ * NFC first, then case: a name can differ in both at once, and folding case
+ * alone would miss the composed/decomposed pair macOS also matches. ⛔ A key,
+ * never a path to open — the same prohibition `toNfc` carries.
+ *
+ * @param path - A root-relative, forward-slashed path
+ * @returns Its folded comparison key
+ */
+function foldedKey(path: string): string {
+  return toNfc(path).toLowerCase();
+}
+
+/** The three answers {@link linkTargetRealization} can reach. */
+type LinkTargetRealization =
+  /** The target is realized under the spelling the link wrote. */
+  | { readonly kind: 'realized' }
+  /** The host resolves the target to a realized file spelled differently. */
+  | { readonly kind: 'realized-as'; readonly path: string }
+  /** Nothing this extent realized is reachable through the link. */
+  | { readonly kind: 'unrealized' };
+
+/**
+ * Where the host says this link actually leads, root-relative.
+ *
+ * `realpathSync.native` rather than `realpathSync`: only the native call returns
+ * the canonical on-disk spelling, which is the whole question. It resolves every
+ * link on the path, so a dangling link, a loop or an unreadable directory comes
+ * back as no answer at all.
+ *
+ * @param link - Absolute, forward-slashed link path
+ * @param root - The corpus root
+ * @returns The root-relative real path, or undefined when there is none inside the root
+ */
+function resolvedLinkTarget(link: string, root: string): string | undefined {
+  try {
+    return inRootRelative(root, toForwardSlash(realpathSync.native(link)));
+  } catch (error) {
+    // Dangling, looping or unreadable: the host reaches nothing, which is an
+    // answer rather than a bug. Anything that is not a filesystem refusal is.
+    if (!isFilesystemAccessError(error)) throw error;
+    return undefined;
+  }
 }
 
 /**

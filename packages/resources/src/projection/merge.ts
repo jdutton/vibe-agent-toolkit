@@ -101,7 +101,12 @@ import {
   selectRequestedRows,
   type RequestedContributor,
 } from './store-hydration.js';
-import { splitProjectionByScope, type ExtentKey, type ProjectionStore } from './store.js';
+import {
+  splitProjectionByScope,
+  type ExtentKey,
+  type ExtentScopedRows,
+  type ProjectionStore,
+} from './store.js';
 
 /**
  * The pass number every driver-placed row in the `base` stratum carries.
@@ -871,12 +876,62 @@ async function readCachedProjection(
   const cache = options.cache;
   if (cache === undefined) return undefined;
 
+  const extent = await readStoredExtent(
+    options,
+    rootId,
+    routing,
+    requestedContributors(options),
+  );
+  if (extent === undefined) return undefined;
+
+  // A run that declined to derive the blob tier must also decline to read it
+  // back, or a hit would hand it four tables a populate would have left empty
+  // — and `'skip'` is a claim about what the caller reads, so honouring it on
+  // both paths is what keeps hydrated and populated indistinguishable.
+  if (!parseContent) return assembleProjection(extent, emptyBlobRows());
+
+  const contentKeys = keyedContentKeys(extent);
+  const blobs = await cache.store.readBlobFacts(contentKeys);
+  // See `store-hydration.ts`: an extent written by a run that skipped blob
+  // derivation names keys the blob tier does not hold, and accepting it would
+  // reduce every closure extent to its own root while reporting success.
+  if (!blobFactsCover(blobs, contentKeys)) return undefined;
+
+  return assembleProjection(extent, blobs);
+}
+
+/**
+ * The extent half of a store hit: key, reuse rule, narrowing, staleness gate.
+ *
+ * Split out of {@link readCachedProjection} because one caller needs exactly
+ * this and nothing after it — see {@link readStoredRealizations} — and two
+ * copies of the four steps is how one of them would lose the unlistable gate.
+ * The blob tier is deliberately NOT here: it belongs to the run that reads blob
+ * tables, and a caller asking only *which paths are in this tree* has no use
+ * for it and should not pay a `readBlobFacts`.
+ *
+ * @param options - The run's options, including its cache
+ * @param rootId - This run's corpus root id
+ * @param routing - The run's parse routing, whose fingerprint is part of the key
+ * @param requested - The contributors whose provenance the store must hold
+ * @returns The stored rows narrowed to those contributors' contexts, or
+ *   `undefined` on any kind of miss
+ */
+async function readStoredExtent(
+  options: PopulateOptions,
+  rootId: string,
+  routing: CollectionMimeResolver,
+  requested: readonly RequestedContributor[],
+): Promise<ExtentScopedRows | undefined> {
+  const cache = options.cache;
+  if (cache === undefined) return undefined;
+
   const startedAt = crawlTimingStart();
   try {
     const stored = await cache.store.readExtent(storeKeyFor(options, rootId, cache, routing));
     if (stored === undefined) return undefined;
 
-    const contexts = selectRequestedContexts(stored, requestedContributors(options));
+    const contexts = selectRequestedContexts(stored, requested);
     if (contexts === undefined) return undefined;
 
     const extent = selectRequestedRows(stored, { contexts, rootId });
@@ -886,26 +941,66 @@ async function readCachedProjection(
     // what they claimed and the tree is asked whether it is still so. See
     // `unlistableRowStillHolds` for the staleness this closes.
     if (!unlistableRowsStillHold(extent.realizationConditions, options.root)) return undefined;
-    // A run that declined to derive the blob tier must also decline to read it
-    // back, or a hit would hand it four tables a populate would have left empty
-    // — and `'skip'` is a claim about what the caller reads, so honouring it on
-    // both paths is what keeps hydrated and populated indistinguishable.
-    if (!parseContent) return assembleProjection(extent, emptyBlobRows());
-
-    const contentKeys = keyedContentKeys(extent);
-    const blobs = await cache.store.readBlobFacts(contentKeys);
-    // See `store-hydration.ts`: an extent written by a run that skipped blob
-    // derivation names keys the blob tier does not hold, and accepting it would
-    // reduce every closure extent to its own root while reporting success.
-    if (!blobFactsCover(blobs, contentKeys)) return undefined;
-
-    return assembleProjection(extent, blobs);
+    return extent;
   } finally {
     // Filed whether this hit or missed, and that is the point: a hit runs no
     // contributor, so without this row a dump cannot tell a served population
     // from a subject that exercised nothing. See {@link CRAWL_STORE_READ_ID}.
     recordCrawlPass(CRAWL_STORE_READ_ID, 'base', BASE_STRATUM_PASS, startedAt);
   }
+}
+
+/**
+ * What the store already knows this tree REALIZES, for a subset of the run's
+ * contributors — without populating anything.
+ *
+ * ## Why a lane would ask this instead of populating
+ *
+ * A lane whose contributor set is not known until something about the tree has
+ * been read has to read the tree twice: once to find out what to register, and
+ * once for real. `buildClaudeContextPopulation` is that lane — it needs every
+ * `CLAUDE.md` and `.claude/rules` path before it can register one
+ * `ClaudeImportExtentContributor` per root — and the discovery half cost a
+ * measured **341.7 ms** of a 794.6 ms warm crawl on a 12.6k-file adopter, every
+ * run, for a list the store was already holding. This answers it from the rows
+ * instead.
+ *
+ * ## ⛔ The key is the CALLER'S, and that is a requirement, not a convenience
+ *
+ * `options` must be the **same object** the caller will hand {@link populate},
+ * so both reads compute {@link storeKeyFor} from one registry and one parameter
+ * map and cannot drift apart. A caller registering more contributors afterwards
+ * (which is the whole point) changes the key only if one of them declares an
+ * {@link ExtentContributor.registrationQuestion} — none does today, and if one
+ * ever did, this read would simply stop hitting and the caller would fall back
+ * to deriving the list. Fail-safe in the direction that costs time rather than
+ * correctness.
+ *
+ * ⚠️ **`requested` must be a subset the store can answer ALONE.** Asking for a
+ * contributor the caller has not registered yet is not a hit it would otherwise
+ * have got — it is a guarantee of a miss, because nothing has ever written that
+ * provenance under this key.
+ *
+ * @param options - The options the caller will populate with, unmodified
+ * @param requested - The already-known contributors whose contexts must be
+ *   stored, each with the parameter set `options.parameters` gives it
+ * @returns The realization rows of exactly those contributors' contexts, or
+ *   `undefined` when the store cannot answer — in which case the caller derives
+ *   the list the way it always did
+ */
+export async function readStoredRealizations(
+  options: PopulateOptions,
+  requested: readonly RequestedContributor[],
+): Promise<readonly ResourceRealizationRow[] | undefined> {
+  if (options.cache === undefined) return undefined;
+
+  // The two values `populate` derives before it asks the store, derived the same
+  // way. The resolver is built and discarded here: only its `fingerprint` is
+  // read, and the conflicts it would accumulate belong to the run's own
+  // instance, which `populate` builds for itself.
+  const routing = createCollectionMimeResolver(options.collections);
+  const extent = await readStoredExtent(options, rootIdFor(options.root), routing, requested);
+  return extent?.resourceRealizations;
 }
 
 /**

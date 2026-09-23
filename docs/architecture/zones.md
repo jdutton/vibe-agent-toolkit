@@ -344,10 +344,12 @@ rather than partitioned per context. It is nonetheless **extent-scoped**, not bl
 have different witnesses, and a blob-scoped row would serve one corpus's witness as the other's.
 
 🚨 **Why four statuses and not two.** `matched` and `inert` are the evaluated cases; `unevaluated`
-means the matcher was NEVER RUN, because the rule's whole `paths:` list blew the vendor's shared
-expansion budget (`EXPANDED_PATTERN_BUDGET` / `PATTERN_BYTE_BUDGET` in `claude-context-rules.ts`) and
-the harness uses it unexpanded. A two-state column would have to read a null witness as inertness,
-and it is not: for an over-budget rule a null witness records a **refusal to evaluate**, and
+means the matcher was NEVER RUN for THAT ONE PATTERN, because it is the entry that exhausted the
+vendor's expansion budget (`EXPANDED_PATTERN_BUDGET` / `PATTERN_BYTE_BUDGET` in
+`claude-context-rules.ts`) — which is spent per pattern as the list is walked, so the harness uses
+that entry unexpanded while a live glob beside it is evaluated and reported normally. A two-state
+column would have to read a null witness as inertness,
+and it is not: for an over-budget pattern a null witness records a **refusal to evaluate**, and
 collapsing the two would report VAT's own declined work as a defect in the adopter's rule. That is
 the *"a guard that returns the reassuring value"* shape — refused reads as absent — and the fix is to
 make the refusal representable, not to widen what `inert` means. `gitignored` is the same move for

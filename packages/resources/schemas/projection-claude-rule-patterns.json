@@ -43,7 +43,7 @@
             "unevaluated",
             "gitignored"
           ],
-          "description": "Pattern status: \"matched\" (witnessPath names a match), \"inert\" (evaluated, matched nothing), \"unevaluated\" (never run — the paths: list blew the expansion budget) or \"gitignored\" (matched nothing VAT can see, and its territory is gitignored — VAT declines to judge it, since the harness reads ignored files)"
+          "description": "Pattern status: \"matched\" (witnessPath names a match), \"inert\" (evaluated, matched nothing), \"unevaluated\" (never run — this pattern exhausted the per-pattern expansion budget) or \"gitignored\" (matched nothing VAT can see, and its territory is gitignored — VAT declines to judge it, since the harness reads ignored files)"
         }
       },
       "required": [

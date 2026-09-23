@@ -11,21 +11,37 @@
  * All three, with the grounds they were decided on: `docs/architecture/cli.md`,
  * "`vat resources check [path]`".
  *
- * Two checks ship, both over `.claude/rules/` files: a `paths:` glob that
- * matches nothing ({@link CLAUDE_RULE_GLOB_INERT_CHECK}), and frontmatter that
- * does not parse at all ({@link CLAUDE_RULE_FRONTMATTER_INVALID_CHECK}) — the
- * second is what keeps the first from passing a rule whose globs never reached
- * `claude_rule_patterns`.
+ * Three checks ship, all over `.claude/rules/` files, and each later one exists
+ * because the earlier ones are structurally blind to its case:
+ *
+ * 1. {@link CLAUDE_RULE_GLOB_INERT_CHECK} — a `paths:` glob that matches nothing.
+ * 2. {@link CLAUDE_RULE_FRONTMATTER_INVALID_CHECK} — frontmatter VAT could not
+ *    read `paths:` out of, so the rule's globs never reached
+ *    `claude_rule_patterns` and the first check had nothing to look at.
+ * 3. {@link CLAUDE_RULE_LINK_UNCHECKED_CHECK} — a rules file or directory that
+ *    is ITSELF a SYMLINK. VAT realizes no link path, so such a rule has no
+ *    realization, no blob and no pattern row: both checks above pass on it.
+ *    ⛔ "Itself": a link at a HIGHER ancestor hides a rules tree the same way
+ *    and is out of reach — see {@link rulesLinkKind}.
  */
 
 import { createRegistryIssue, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { BlobRow } from '../schemas/projection-blobs.js';
 import type { ClaudeRulePatternRow } from '../schemas/projection-claude-rules.js';
-import type { ResourceRealizationRow, ResourceTagRow } from '../schemas/projection-resources.js';
+import type {
+  RealizationConditionRow,
+  ResourceRealizationRow,
+  ResourceTagRow,
+} from '../schemas/projection-resources.js';
 
 import { RULES_FILE_TAG } from './agentic-tags.js';
 import { nestedRuleParent } from './claude-context-rules.js';
+import {
+  DECLINED_SYMLINK_CODES,
+  EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
+  isDeclinedSymlinkCode,
+} from './contributors/filesystem-extent.js';
 import { findingLocation } from './finding-location.js';
 
 /**
@@ -44,6 +60,18 @@ export interface BuiltinCheckInput {
   readonly resourceTags: readonly Pick<ResourceTagRow, 'resourceId' | 'tag'>[];
   /** Whether each keyed blob's frontmatter parsed. */
   readonly blobs: readonly Pick<BlobRow, 'contentKey' | 'frontmatterError'>[];
+  /**
+   * What the extents could not realize — the only table that holds the links
+   * they declined.
+   *
+   * ⛔ REQUIRED, like every other member. A rules file reached through a symlink
+   * has no realization row, no blob row and no pattern row, so it is invisible
+   * to the two checks above by construction; an optional field here would have
+   * compiled for every caller that omitted it and left the third check silently
+   * inert — the *"optional seam whose omission is the failure"* shape. A
+   * `Projection` satisfies it unchanged.
+   */
+  readonly realizationConditions: readonly Pick<RealizationConditionRow, 'code' | 'path'>[];
 }
 
 /** One default-on assertion over the projection's row model. */
@@ -128,7 +156,7 @@ function inertMessage(row: ClaudeRulePatternRow, where: string): string {
   // git ignores, and the harness reads the filesystem — so for a glob scoped to
   // `dist/**` the unqualified claim was false, and the fix text below would have
   // had the author delete a glob that fires.
-  return `The paths: glob "${row.pattern}" (entry ${row.ordinal} of ${where}) matches no file VAT`
+  return `The paths: glob "${row.pattern}" (pattern ${row.ordinal + 1} of ${where}) matches no file VAT`
     + ' can see in this tree (tracked, or untracked and not gitignored), so no such file can load the'
     + ' rule it scopes.';
 }
@@ -139,9 +167,11 @@ function inertMessage(row: ClaudeRulePatternRow, where: string): string {
  * ## ⭐ `unevaluated` and `gitignored` are not violations, and that is the whole design
  *
  * Of the four statuses only `inert` is a defect. `matched` is the healthy case;
- * `unevaluated` means the matcher was NEVER RUN — a rule whose `paths:` list
- * blows the vendor's shared expansion budget is used unexpanded by the harness
- * and skipped here — so reporting it would report VAT's own declined work as the
+ * `unevaluated` means the matcher was NEVER RUN for THAT ONE PATTERN — the
+ * vendor's 1,000-pattern / 4 MiB budget is spent per pattern as the list is
+ * walked, so the entry that exhausts it is used unexpanded by the harness and
+ * skipped here while its live neighbours are evaluated and reported normally —
+ * so reporting it would report VAT's own declined work as the
  * adopter's typo, and no edit to the rules file would fix it. `gitignored`
  * means the glob's territory is ignored, so VAT never saw the files the harness
  * reads there, and deleting the glob would break a rule that fires. Widening this to
@@ -167,10 +197,11 @@ function runClaudeRuleGlobInert(input: BuiltinCheckInput): readonly ValidationIs
       // `location` is refined to a project-relative POSIX path or nothing. There
       // is no third state to put a placeholder in.
       ...(location === undefined ? {} : { location }),
-      // The glob's slot in its own `paths:` list. `line` would be the lie: the
-      // ordinal is an index into a YAML sequence, not a line number, and the row
-      // model carries no line.
-      field: `paths[${row.ordinal}]`,
+      // The frontmatter key, not a slot in it. `paths:` is a sequence OR a
+      // comma-separated scalar, so there is no index to name for the scalar form
+      // — `ordinal` is the dense pattern index, which the message already spells
+      // out in words. `line` would be a second lie: the row model carries none.
+      field: 'paths',
     }));
   }
 
@@ -194,7 +225,13 @@ export const CLAUDE_RULE_GLOB_INERT_CHECK: BuiltinCheck = {
 };
 
 /**
- * What one unparseable rules file says to its author.
+ * What one unreadable rules file says to its author.
+ *
+ * ⚠️ "Unreadable", not "unparseable" — the column carries two reasons and the
+ * sentence has to hold both. A YAML syntax error is the first. The second is a
+ * block that PARSES and is not a mapping (`---\n- a\n- b\n---`), which
+ * `blob-facts.ts` gives its own reason: "does not parse (valid YAML …)" would
+ * have contradicted itself.
  *
  * The parser's reason is kept to its FIRST line: a YAML error can carry a code
  * frame, which repeats the file's content and says nothing the first line does
@@ -217,10 +254,10 @@ function frontmatterInvalidMessage(where: string, path: string, reason: string):
     : `loaded on demand, when Claude reads files under '${under}'`;
   // A YAML error's first line ends in `:` introducing the code frame it dropped.
   const said = firstLine.trim().replace(/:$/, '');
-  return `The YAML frontmatter of ${where} does not parse (${said}), so VAT read no paths:`
+  return `VAT could not read the YAML frontmatter of ${where} (${said}), so it read no paths:`
     + ` from it: the rule is counted as if it had no paths: (${load}), and claude_rule_patterns`
     + ' holds no row for any glob it declares, so claude-rule-glob-inert cannot see them. What Claude Code'
-    + ' does with a rules file whose frontmatter does not parse is not documented.';
+    + ' does with a rules file whose frontmatter it cannot read is not documented.';
 }
 
 /**
@@ -285,6 +322,214 @@ export const CLAUDE_RULE_FRONTMATTER_INVALID_CHECK: BuiltinCheck = {
   run: runClaudeRuleFrontmatterInvalid,
 };
 
+/** What {@link CLAUDE_RULE_LINK_UNCHECKED_CHECK} emits. */
+const LINK_UNCHECKED_CODE = 'CLAUDE_RULE_LINK_UNCHECKED' satisfies IssueCode;
+
+/** The two path segments that make a directory a Claude rules directory. */
+const RULES_DIRECTORY_SEGMENTS = ['.claude', 'rules'] as const;
+
+/**
+ * Is this path a rules FILE, something else at or under a rules directory, or
+ * neither?
+ *
+ * `null` for every other path: `CLAUDE.md -> AGENTS.md` is the commonest link
+ * in the corpus and is no business of a rules check.
+ *
+ * ⭐ A link at `.claude` ITSELF counts. `sub/.claude -> ../.claude` carries a
+ * whole rules directory with it, and the link's own path never contains the
+ * `rules` segment — so a `.claude`/`rules` pair search alone read the commonest
+ * shape of the defect as "not a rules link" and said nothing.
+ *
+ * ## ⛔ AT a rules path, never ABOVE one — the class is narrowed, not closed
+ *
+ * A link at any HIGHER ancestor hides a rules tree just as completely:
+ * `sub -> ../shared`, where the target holds `sub/.claude/rules/*.md`, returns
+ * `null` here and is reported by nothing. That is stated rather than fixed,
+ * because nothing available can decide it. The condition row is at `sub`; VAT
+ * follows no link, so it never reads what the target holds; and the row carries
+ * no column saying so. The only predicate that would catch it is *"every
+ * declined link is a possible hidden rule set"*, which reports `CLAUDE.md ->
+ * AGENTS.md` and every vendored tree in the corpus — the loudest available way
+ * to be wrong. So the check's `description`, this predicate and
+ * `docs/validation-codes.md` all claim the narrow thing; closing the wider class
+ * needs a column saying what a declined link's target holds.
+ *
+ * ## Case-SENSITIVE, and the twin has to be too
+ *
+ * `.CLAUDE` is not `.claude` to the rest of this lane — `agentic-tags.ts`
+ * compares the segments byte for byte — so it is not one here. SQLite's `LIKE`
+ * is ASCII-case-insensitive by default, which is why {@link
+ * CLAUDE_RULE_LINK_UNCHECKED_CHECK}'s twin is written with `GLOB`: as `LIKE` it
+ * selected `.CLAUDE/rules/a.md`, `.Claude/Rules/a.md`, `.claude/RULES/a.md` and
+ * `X/.CLAUDE`, none of which this predicate reports, and disagreed with itself
+ * besides (two `=` arms case-sensitive, four `LIKE` arms not).
+ *
+ * `.MD` is the one place case is folded, and it decides only how the finding is
+ * PHRASED — both arms are reported either way. For a link VAT never opens,
+ * calling `linked.MD` a directory is the worse guess: on a case-insensitive host
+ * it is exactly the file the harness opens for `*.md`.
+ *
+ * @param path - A root-relative, forward-slashed path
+ * @returns `'file'` for a markdown file under a rules directory, `'tree'` for a
+ *   `.claude` directory, a rules directory, or any non-markdown path under one,
+ *   `null` otherwise
+ */
+function rulesLinkKind(path: string): 'file' | 'tree' | null {
+  // eslint-disable-next-line local/no-hardcoded-path-split -- `realization_conditions.path` is root-relative and forward-slashed by `relativize()` before any consumer sees it, which is the precondition that rule enforces
+  const segments = path.split('/');
+  if (segments.at(-1) === RULES_DIRECTORY_SEGMENTS[0]) return 'tree';
+  const at = segments.findIndex((segment, index) =>
+    segment === RULES_DIRECTORY_SEGMENTS[0] && segments[index + 1] === RULES_DIRECTORY_SEGMENTS[1]);
+  if (at === -1) return null;
+  const isTheDirectory = segments.length === at + RULES_DIRECTORY_SEGMENTS.length;
+  return !isTheDirectory && path.toLowerCase().endsWith('.md') ? 'file' : 'tree';
+}
+
+/**
+ * What Claude Code does with this link, and what the author should do about it.
+ *
+ * ## ⛔ The two arms are different defects, and the CODE decides which
+ *
+ * Read from the shipped 2.1.280 binary
+ * (`docs/external/claude-code-rules-paths-behaviour.md`, "Symlinked rules"): a
+ * rules file or rules directory reached through a link whose target resolves
+ * OUTSIDE the directory the session started in is skipped — the directory arm
+ * returns `[]`, the file arm `continue`s — and one whose target stays inside is
+ * loaded normally. In-root, a rule governs the session and nothing checked it,
+ * and the remedy is to stop linking so VAT can see it. Out-of-root, the rule set
+ * the author believes governs the session is in force NOWHERE, and VAT's blind
+ * spot is the lesser problem beside that.
+ *
+ * ⚠️ This check is a pure predicate over rows and resolves no link itself. It
+ * reads the verdict from {@link EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT} — the
+ * condition row's own code, set where the target was resolved — and never from
+ * the row's prose, which would be the *"a contract carried in text"* drift
+ * class. For one release both arms shared one sentence for exactly that reason.
+ *
+ * ⚠️ The in-root arm still hedges on ONE point, because the two directories are
+ * not the same question: the harness compares against the directory the session
+ * started in and VAT against the project root, so a session started in a
+ * subdirectory can skip a link VAT calls in-root. The out-of-root arm carries no
+ * such hedge — outside the project root is outside every directory beneath it.
+ *
+ * @param code - The declined link's `realization_conditions.code`
+ * @returns The sentences that follow the blind-checks clause
+ */
+function linkPositionClause(code: string): string {
+  if (code === EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT) {
+    return ' Its target resolves outside the project root, so Claude Code does not load it either:'
+      + ' a rules file or directory reached through such a link is skipped, and the rule set you'
+      + ' meant to pull in is in force nowhere. Copy or vendor those rules into the repository —'
+      + ' sharing one rule set across repositories by symlink does not work. The'
+      + ' EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT row at this path records the position without naming'
+      + ' the target.';
+  }
+  return ' Its target is inside the project root, so Claude Code loads the rule through the link:'
+    + ' it is in force and unchecked. Replace the link with the file itself, or with an @ import of'
+    + ' the shared file from a rules file that is not a link, to make VAT check its globs and'
+    + ' frontmatter. (Claude Code compares against the directory the session started in rather than'
+    + ' the project root, so a session started in a subdirectory can skip this link too.) The'
+    + ' EXTENT_SYMLINK_NOT_REALIZED row at this path names the target.';
+}
+
+/**
+ * What one linked rule says to its author.
+ *
+ * @param path - The link's root-relative path
+ * @param kind - Whether the link is one rules file or a directory of them
+ * @param code - The declined link's `realization_conditions.code`
+ * @returns The message
+ */
+function linkUncheckedMessage(path: string, kind: 'file' | 'tree', code: string): string {
+  const subject = kind === 'file'
+    ? `The rules file '${path}' is a symbolic link`
+    : `'${path}' is a symbolic link at or under a directory Claude Code loads rules from, so every`
+      + ' rules file it reaches through the link is in the same position';
+  return `${subject}. VAT realizes no link path, so there is no claude_rule_patterns row for`
+    + ' any paths: glob it declares and no blobs row at that path for its frontmatter:'
+    + ` claude-rule-glob-inert and claude-rule-frontmatter-invalid are both blind to it.${linkPositionClause(code)}`;
+}
+
+/**
+ * Every declined link that hides a rules file.
+ *
+ * ## Why this reads condition rows rather than realizations
+ *
+ * There is nothing else to read. VAT realizes no symbolic link's own path
+ * (*"A SYMLINK IS NOT A MEMBER"*, `crawl-source.ts`) and that policy stands, so
+ * a linked rules file has no realization row, no blob and no pattern row — it is
+ * absent from every table the other two built-ins query, and both PASS on it.
+ * The declined-link row the extent records is the only trace, and at `info` with
+ * a message about link targets it says nothing about rules.
+ *
+ * ⛔ BOTH declined-link codes, read through {@link DECLINED_SYMLINK_CODES}. The
+ * out-of-root arm is the one whose rule never loads at all, so a filter that
+ * kept only `EXTENT_SYMLINK_NOT_REALIZED` would stay silent about the worse
+ * defect of the two.
+ *
+ * One finding per PATH: an extent records the link it met, so a link met by the
+ * walk and by git is two rows carrying one path, exactly as one rules file is
+ * realized once per extent that reaches it.
+ *
+ * @param input - The rows
+ * @returns One finding per linked rules path, in row order
+ */
+function runClaudeRuleLinkUnchecked(input: BuiltinCheckInput): readonly ValidationIssue[] {
+  const reported = new Set<string>();
+  const issues: ValidationIssue[] = [];
+  for (const row of input.realizationConditions) {
+    if (!isDeclinedSymlinkCode(row.code) || reported.has(row.path)) continue;
+    const kind = rulesLinkKind(row.path);
+    if (kind === null) continue;
+    reported.add(row.path);
+    const location = findingLocation(row.path);
+    issues.push(createRegistryIssue(
+      LINK_UNCHECKED_CODE,
+      linkUncheckedMessage(row.path, kind, row.code),
+      location === undefined ? {} : { location },
+    ));
+  }
+  return issues;
+}
+
+/** The declined-link codes as a SQL `IN` list, derived from the one constant. */
+const DECLINED_SYMLINK_CODES_SQL = DECLINED_SYMLINK_CODES.map((code) => `'${code}'`).join(', ');
+
+/** The linked-rules check. Exported by name so a test can drive one check. */
+export const CLAUDE_RULE_LINK_UNCHECKED_CHECK: BuiltinCheck = {
+  name: 'claude-rule-link-unchecked',
+  description:
+    'No .claude directory, .claude/rules/ directory or file under one is ITSELF a symbolic link,'
+    + ' which VAT realizes at no path and cannot check',
+  code: LINK_UNCHECKED_CODE,
+  // DISTINCT, because one link is recorded by every extent that met it. The
+  // `.claude/rules` test is written as four arms rather than one: the directory
+  // can be the root's own or a nested one, and it can be the link itself or an
+  // ancestor of it.
+  //
+  // ⛔ GLOB, never LIKE. SQLite's LIKE is ASCII-case-insensitive by default and
+  // GLOB is not, and the predicate compares segments byte for byte — so as LIKE
+  // this twin selected four case variants (`.CLAUDE/rules/a.md`,
+  // `.Claude/Rules/a.md`, `.claude/RULES/a.md`, `X/.CLAUDE`) the check does not
+  // report, and disagreed with ITSELF besides: the two `=` arms were
+  // case-sensitive and the four `LIKE` arms were not, so the same tree answered
+  // differently depending on which arm caught it. A twin is documentation an
+  // adopter copies into `resources.checks`; one that selects rows the built-in
+  // does not is a rule that changes meaning on being copied.
+  //
+  // ⛔ BOTH declined-link codes, rendered from `DECLINED_SYMLINK_CODES` rather
+  // than typed out: a twin naming one of them would silently drop every
+  // out-of-root link — the arm whose rule Claude Code does not load at all.
+  sqlTwin:
+    'SELECT DISTINCT c.path\n'
+    + '  FROM realization_conditions c\n'
+    + ` WHERE c.code IN (${DECLINED_SYMLINK_CODES_SQL})\n`
+    + "   AND (c.path = '.claude' OR c.path GLOB '*/.claude'\n"
+    + "        OR c.path = '.claude/rules' OR c.path GLOB '*/.claude/rules'\n"
+    + "        OR c.path GLOB '.claude/rules/*' OR c.path GLOB '*/.claude/rules/*')",
+  run: runClaudeRuleLinkUnchecked,
+};
+
 /**
  * The DEFAULT check set, in the order it runs.
  *
@@ -298,6 +543,7 @@ export const CLAUDE_RULE_FRONTMATTER_INVALID_CHECK: BuiltinCheck = {
 export const BUILTIN_CHECKS: readonly BuiltinCheck[] = [
   CLAUDE_RULE_GLOB_INERT_CHECK,
   CLAUDE_RULE_FRONTMATTER_INVALID_CHECK,
+  CLAUDE_RULE_LINK_UNCHECKED_CHECK,
 ];
 
 /** Every built-in's name, for a `--check` guard and for an operator-facing list. */

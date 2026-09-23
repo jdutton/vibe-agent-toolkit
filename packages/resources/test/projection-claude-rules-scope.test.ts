@@ -63,8 +63,20 @@ describe('ruleScopeFor', () => {
     expect(ruleScopeFor(ROOT_RULE, { paths: [] })).toBe('root');
   });
 
-  it('treats a non-array paths value as paths-less rather than guessing', () => {
-    expect(ruleScopeFor(ROOT_RULE, { paths: 'not-a-list' })).toBe('root');
+  it('⭐ calls a SCALAR string paths: path-scoped, as the harness does', () => {
+    // The harness normalises `paths:` through one function that accepts a
+    // string and comma-splits it; only the doc shows a sequence. Read as
+    // paths-LESS, a rule the harness loads on demand was charged to every
+    // query at launch, and its globs reached no check.
+    expect(ruleScopeFor(ROOT_RULE, { paths: 'src/**/*.ts' })).toBe(PATH_SCOPED);
+    expect(ruleScopeFor(ROOT_RULE, { paths: 'src/**, lib/**' })).toBe(PATH_SCOPED);
+  });
+
+  it('treats an empty or non-list, non-string paths value as paths-less', () => {
+    // Nothing to be scoped by: a blank string declares no pattern, and a number
+    // is not a predicate the harness could run either.
+    expect(ruleScopeFor(ROOT_RULE, { paths: '   ' })).toBe('root');
+    expect(ruleScopeFor(ROOT_RULE, { paths: 42 })).toBe('root');
   });
 
   it('does not mistake a deeper path under the ROOT rules dir for a nested one', () => {
@@ -264,11 +276,13 @@ const PATTERN_FRONTMATTER = [
 ].join('\n');
 
 /**
- * A `paths:` list the vendor's shared expansion budget refuses.
+ * A `paths:` list whose SECOND entry the vendor's expansion budget refuses.
  *
- * Four brace groups of six alternatives expand to 1,296 patterns against a
- * 1,000-pattern budget. The FIRST entry is an obviously-live glob: the budget is
- * shared across the whole list, so it has to come back `unevaluated` too.
+ * Four brace groups of six alternatives expand to 1,296 globs against a
+ * 1,000-glob budget. The FIRST entry is an obviously-live glob, and it is there
+ * to prove the budget is spent PER PATTERN: `N()` early-returns a brace-free
+ * entry before touching the allowance, so `docs/**\/*.md` is expanded, matched,
+ * and comes back `matched` beside its refused neighbour.
  */
 const OVER_BUDGET_FRONTMATTER = [
   '---',
@@ -364,11 +378,14 @@ describe('ClaudeRulesScopeContributor — claude_rule_patterns rows', () => {
     expect(contribution.claudeRulePatterns.at(-1)?.status).toBe('inert');
   });
 
-  it('reports every glob of an over-budget rule as unevaluated, live ones included', async () => {
-    // The vendor spends the 1,000-pattern budget across a rule's whole `paths:`
-    // list at once, so one oversized entry means NONE of them are expanded.
-    // Reporting `docs/**/*.md` as `inert` here would name a defect the rule does
-    // not have and hide the one it does.
+  it('⭐ reports ONLY the over-budget glob as unevaluated, and its live sibling as matched', async () => {
+    // ⛔ This asserted the opposite, on an invented whole-list budget. The
+    // shipped expander spends the allowance as it goes and returns the ONE
+    // pattern that exhausts it unexpanded, so the rest of the list is evaluated
+    // normally — a brace-free entry before or after the exhaustion point costs
+    // nothing at all. Refusing the live sibling with its neighbour reported
+    // VAT's own declined work as something the adopter could not act on, over a
+    // glob that was fine.
     const { base } = buildBase([
       { path: PATTERN_RULE, markdown: OVER_BUDGET_FRONTMATTER },
       { path: 'docs/guide.md', markdown: '# Guide\n' },
@@ -377,8 +394,9 @@ describe('ClaudeRulesScopeContributor — claude_rule_patterns rows', () => {
     const contribution = await new ClaudeRulesScopeContributor().contribute(base, null);
 
     expect(contribution.claudeRulePatterns.map((row) => row.status))
-      .toEqual(['unevaluated', 'unevaluated']);
-    expect(contribution.claudeRulePatterns.map((row) => row.witnessPath)).toEqual([null, null]);
+      .toEqual(['matched', 'unevaluated']);
+    expect(contribution.claudeRulePatterns.map((row) => row.witnessPath))
+      .toEqual(['docs/guide.md', null]);
   });
 
   it('still tags the over-budget rule path-scoped — the refusal is about evaluation', async () => {

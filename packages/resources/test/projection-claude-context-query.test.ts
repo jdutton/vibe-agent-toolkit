@@ -7,7 +7,11 @@ import {
   type LoadedContextAnswer,
 } from '../src/projection/claude-context-query.js';
 import { closureProvenance } from '../src/projection/contributors/closure-extent.js';
-import { EXTENT_SYMLINK_NOT_REALIZED } from '../src/projection/contributors/filesystem-extent.js';
+import {
+  EXTENT_SYMLINK_NOT_REALIZED,
+  EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
+  isDeclinedSymlinkCode,
+} from '../src/projection/contributors/filesystem-extent.js';
 import type { Projection } from '../src/projection/projection.js';
 import { ExtentDeclarationSchema } from '../src/schemas/project-config.js';
 import type { RealizationConditionRow } from '../src/schemas/projection-resources.js';
@@ -260,13 +264,20 @@ describe('whatLoadsAt', () => {
       // too, so it can load for any directory — kept for every query.
       'pkg/.claude/rules',
     ];
+    // ⭐ Half the links are recorded under the OUT-OF-ROOT code. Scoping is
+    // about where a link sits, never about where it points, so both codes must
+    // survive the filter identically — and a filter written on one of them
+    // silently deletes the other from every answer.
     const withLinks = links.reduce(
-      (current, path) => withCondition(current, symlinkRow(projection, path)),
+      (current, path, index) => withCondition(
+        current,
+        symlinkRow(projection, path, index % 2 === 0 ? EXTENT_SYMLINK_NOT_REALIZED : EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT),
+      ),
       projection,
     );
     const linkPaths = (path: string): string[] =>
       narrowed(whatLoadsAt(withLinks, path)).conditions
-        .filter((row) => row.code === EXTENT_SYMLINK_NOT_REALIZED)
+        .filter((row) => isDeclinedSymlinkCode(row.code))
         .map((row) => row.path)
         .sort((left, right) => left.localeCompare(right));
 
@@ -584,13 +595,17 @@ function rootAbsentRow(projection: Projection): RealizationConditionRow {
  * @param path - Root-relative link path
  * @returns The row
  */
-function symlinkRow(projection: Projection, path: string): RealizationConditionRow {
+function symlinkRow(
+  projection: Projection,
+  path: string,
+  code: string = EXTENT_SYMLINK_NOT_REALIZED,
+): RealizationConditionRow {
   const extentId = projection.resourceRealizations[0]?.extentId;
   if (extentId === undefined) throw new Error('fixture realized nothing');
   return {
     extentId,
     path,
-    code: EXTENT_SYMLINK_NOT_REALIZED,
+    code,
     severity: 'info',
     message: 'a declined link',
     resourceId: null,

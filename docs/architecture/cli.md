@@ -562,9 +562,22 @@ of materialising these facts as tables: the built-in is the default REPORT, and 
 stays askable by anyone who wants a different answer.
 
 ✅ The second is `claude-rule-frontmatter-invalid` (`CLAUDE_RULE_FRONTMATTER_INVALID`), and it
-exists because of the first one's blind spot: a rules file whose YAML frontmatter does not parse
+exists because of the first one's blind spot: a rules file whose YAML frontmatter VAT cannot read
 produces no `claude_rule_patterns` rows, so the inert check had nothing to read and passed. It reads
-`blobs.frontmatterError` for identities tagged `rules-file` instead — one finding per file.
+`blobs.frontmatterError` for identities tagged `rules-file` instead — one finding per file. Two
+reasons fill that column: YAML that does not parse, and a block that parses to a **sequence or a
+scalar**, which has no `paths:` key to read and used to be indistinguishable from a file with no
+frontmatter at all.
+
+✅ The third is `claude-rule-link-unchecked` (`CLAUDE_RULE_LINK_UNCHECKED`), and it exists because of
+BOTH of their blind spots. VAT realizes no symbolic link's own path, so a `.claude/rules/x.md` that
+is a link — or a linked rules directory — has no realization row, no blob and no pattern row, and
+both checks above pass on a rule Claude Code loads (the vendor documents `.claude/rules/` as
+supporting symlinks). It reads the `realization_conditions` rows the extents record
+(`EXTENT_SYMLINK_NOT_REALIZED`, `info`) and reports the ones at or under a rules directory, or at a
+`.claude` directory itself — which carries a rules directory with it while its own path stops short
+of the `rules` segment — which is why `BuiltinCheckInput` carries that table, REQUIRED like every
+other member.
 
 **A built-in's findings carry an ORDINARY registry code.** A built-in is not a custom check: its
 findings carry a `CODE_REGISTRY` code with the registry's own default severity, so

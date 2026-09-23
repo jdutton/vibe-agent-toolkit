@@ -270,10 +270,13 @@ Description:
 Built-in checks (run with or without a config file):
 ${builtinCheckList()}
 
-  A rules file whose frontmatter does not parse puts no glob in
-  claude_rule_patterns, so the inert check cannot see its globs -- that is
-  what the frontmatter check is for. The usual cause is an unquoted glob
-  starting with * (a YAML alias).
+  Each later check covers the one before it. A rules file whose frontmatter
+  VAT cannot read puts no glob in claude_rule_patterns, so the inert check
+  cannot see its globs -- that is what the frontmatter check is for (the
+  usual cause is an unquoted glob starting with * , a YAML alias). A rules
+  file reached through a SYMLINK is realized at no path at all, so it has
+  neither pattern rows nor a blob and both of those checks pass on it --
+  that is what the link check is for.
 
   They are TypeScript predicates over the projection's rows, never SQL, so
   adding one never makes a query engine part of anybody's gate. Config only

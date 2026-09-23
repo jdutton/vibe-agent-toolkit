@@ -95,7 +95,12 @@ import {
   classifyPath,
   pluginRootsFrom,
 } from '../agentic-tags.js';
-import { corpusFiles, declaredPatterns, evaluateRulePatterns } from '../claude-context-rules.js';
+import {
+  corpusFiles,
+  declaredPatterns,
+  declaresPaths,
+  evaluateRulePatterns,
+} from '../claude-context-rules.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../contributor.js';
 import type { ProjectionBase } from '../projection.js';
 
@@ -104,20 +109,29 @@ import { extentContextId } from './context-id.js';
 /** This contributor's `resolution_contexts.kind`, and its id. */
 export const CLAUDE_RULES_SCOPE_KIND = 'claude-rules-scope';
 
-/** The frontmatter key whose presence makes a rule path-scoped. */
-const PATHS_KEY = 'paths';
-
 /** The PROJECT-ROOT rules directory — the only location that is `root`-scoped. */
 const ROOT_RULES_DIR = '.claude/rules/';
 
 /**
  * Classify one rules file.
  *
- * ⚠️ **An empty or non-array `paths:` reads as paths-LESS**, deliberately.
- * `paths: []` selects no files, so a rule carrying it has no predicate to be
- * scoped by, and a non-list value is malformed rather than informative. Reading
- * either as `path-scoped` would silently drop a rule that actually loads — the
- * under-report direction, which is the one a budget check cannot tolerate.
+ * ⚠️ **A `paths:` that normalises to nothing reads as paths-LESS**, and so does
+ * one whose surviving patterns are every one `**` — the harness's own rule, and
+ * {@link declaresPaths} holds it. `paths: []`, a blank string, `paths: [42]`,
+ * `paths: "/**"` and `paths: "**"` all leave the rule loading on every turn.
+ * Reading any of them as `path-scoped` silently drops a rule that actually
+ * loads — the under-report direction, which is the one a budget check cannot
+ * tolerate.
+ *
+ * ⭐ **A SCALAR string counts, and so does a NESTED list.** The harness
+ * normalises `paths:` through one function that comma-splits a string and
+ * recurses into an array (see {@link declaredPatterns}; the transcription and
+ * its re-verification clock are in
+ * `docs/external/claude-code-rules-paths-behaviour.md`), so both `paths: src/**`
+ * and `paths: [["src/**"]]` are path-scoped there. Classified as paths-less —
+ * which is what an array-of-strings-only read produced — such a rule was
+ * charged to every query as always-loaded and none of its globs reached
+ * `claude_rule_patterns`.
  *
  * A path *deeper* under the root rules directory (`.claude/rules/lang/ts.md`) is
  * still `root`: "nested" means a second `.claude/` further down the TREE, not a
@@ -132,8 +146,7 @@ export function ruleScopeFor(
   path: string,
   frontmatter: Readonly<Record<string, JsonValue>> | null,
 ): RuleScope {
-  const paths = frontmatter?.[PATHS_KEY];
-  if (Array.isArray(paths) && paths.length > 0) return 'path-scoped';
+  if (declaresPaths(frontmatter)) return 'path-scoped';
   // eslint-disable-next-line local/no-path-startswith -- `resource_realizations.path` is forward-slashed and root-relative by `relativize()` before any consumer sees it, which is the precondition this rule enforces
   return path.startsWith(ROOT_RULES_DIR) ? 'root' : 'nested';
 }

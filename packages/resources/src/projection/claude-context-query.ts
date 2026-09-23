@@ -93,7 +93,7 @@ import {
   closureProvenance,
   type ImportProvenance,
 } from './contributors/closure-extent.js';
-import { EXTENT_SYMLINK_NOT_REALIZED } from './contributors/filesystem-extent.js';
+import { isDeclinedSymlinkCode } from './contributors/filesystem-extent.js';
 import type { Projection } from './projection.js';
 
 /** Why one resource is in the answer. A row may carry several. */
@@ -781,8 +781,10 @@ function importsFromAlwaysRoot(
  * non-closure extent, and only an import extent can be "some other directory's
  * session". {@link ImportIndex.extentIds} is the half that does not vary.
  *
- * A declined-link row ({@link EXTENT_SYMLINK_NOT_REALIZED}) is base-extent and
- * so tree-global too, and is scoped the same way — see {@link linkBearsOn}.
+ * A declined-link row (either code {@link isDeclinedSymlinkCode} accepts) is
+ * base-extent and so tree-global too, and is scoped the same way — see
+ * {@link linkBearsOn}. ⛔ Both codes, never one: an out-of-root link is recorded
+ * under its own code and is exactly as absent from the answer as any other.
  *
  * @param projection - The populated projection, for `realization_conditions`
  * @param index - The projection's index
@@ -801,7 +803,7 @@ function gradeConditions(
 
   return projection.realizationConditions
     .filter((row) => !importExtentIds.has(row.extentId) || walkedExtents.has(row.extentId))
-    .filter((row) => row.code !== EXTENT_SYMLINK_NOT_REALIZED || linkBearsOn(row.path, directory, chain))
+    .filter((row) => !isDeclinedSymlinkCode(row.code) || linkBearsOn(row.path, directory, chain))
     .map((row) => ({
       code: row.code,
       severity: strongerSeverity(

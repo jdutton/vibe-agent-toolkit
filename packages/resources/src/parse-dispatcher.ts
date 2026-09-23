@@ -107,31 +107,56 @@ export type ParseTransport = 'wire' | 'cache';
  */
 export interface ParsePoolPolicy {
   /**
-   * Master switch. Defaults to **OFF**; set `VAT_PARSE_POOL=1` to opt in.
+   * Master switch. Defaults to **ON**; set `VAT_PARSE_POOL=0` to opt out.
    *
-   * ⛔ **THE 6.5× REGRESSION THIS DEFAULT WAS SET FOR NEVER EXISTED.** It was an
-   * instrument artifact, and the table that used to stand here is deleted rather
+   * ## 🔑 MEASURED, cold, A/B ALTERNATED (`vat-lab perf ab`, one instrument, two
+   * environments)
+   *
+   * On a 12.6k-file adopter monorepo, `vat claude context`, pool OFF against
+   * pool ON:
+   *
+   * ```text
+   * OFF   27.7 s / 24.6 s
+   * ON    16.4 s / 16.1 s      1.5–1.7x, ~9 s
+   * ```
+   *
+   * ⛔ **THE 6.5× REGRESSION THIS DEFAULT WAS ONCE SET FOR NEVER EXISTED.** It was
+   * an instrument artifact, and the table that used to stand here is deleted rather
    * than corrected in place, because a wrong measurement left visible gets cited.
    * Parse worker threads share their parent's PID, each filed its own timing dump
    * reporting the WHOLE PROCESS's `uptime()` and `cpuUsage()`, and the lab summed
-   * them — 9 files, 1 pid, inflating both lifetime scalars by exactly 9×. The
-   * A/B's true reading is a **~29% wall-clock IMPROVEMENT**. Both "tells" the
-   * decision rested on were that same artifact: the per-document figure carried
-   * the 9× through its divisor, and "only ONE process wrote a dump" is simply what
-   * nine threads look like to a pid count. Closed at the source: a worker reports
-   * its counters to the main thread, which writes ONE dump per process carrying
-   * every thread, so a lifetime cannot be observed twice.
+   * them — 9 files, 1 pid, inflating both lifetime scalars by exactly 9×. Closed
+   * at the source: a worker reports its counters to the main thread, which writes
+   * ONE dump per process carrying every thread, so a lifetime cannot be observed
+   * twice.
    *
-   * 🚨 **The default stays OFF anyway, for a different and now-honest reason:**
-   * the pool's shape is being reworked and the replacement is designed but not
-   * built. The real defect the corrected numbers expose is **~20% worker
-   * utilization** — the threads are starved, not contended — and separately the
-   * parse-heaviest command (`vat resources validate`) never routes through this
-   * pool at all, so the arm that most needs it is not the arm being measured.
-   * Enabling by default is the LAST step of that work, after the shape is right,
-   * not a flag flip available now.
+   * ## ⭐ There is no corpus-size gate, because the activation arithmetic IS one
    *
-   * ⚠️ The per-call-lifetime hypothesis recorded here is also RETIRED, not merely
+   * A default that wins on a large corpus and loses on a small one would need a
+   * threshold; this one does not, and the reason is that a small corpus never
+   * reaches a pool at all. {@link considerActivation} demands
+   * {@link PARSES_BEFORE_SIZING} cache misses *and* a priced remainder worth
+   * {@link MINIMUM_WORKERS} × {@link PARSE_MS_PER_WORKER} of serial parse.
+   * Measured on VAT's own repository, cold, with the pool enabled: 335 misses,
+   * 332 markdown documents, 3.49 MB, and the parse-timing dump reports
+   * `wire-dispatch` **0 calls** and exactly one thread — the pool declined
+   * itself. The matching A/B is what that predicts: OFF min 3,931 ms against ON
+   * min 3,711 ms, an effect of −220 ms with no measured noise floor, over two
+   * arms that provably ran the same code path.
+   *
+   * A second gate on file count would be a second contract for one decision, and
+   * the two would drift.
+   *
+   * ## What the escape hatch is for
+   *
+   * `VAT_PARSE_POOL=0`, exactly that spelling, and an explicit `enabled: false`
+   * from a caller that has already decided. Each worker holds its own
+   * remark/unified heap (~730 ms to load, not shared between isolates), so a
+   * host that is already running `availableParallelism()` jobs of its own has a
+   * reason to say no. Nothing else is a disable: a stray or misspelled value
+   * leaves the pool on rather than silently costing the measured speed-up.
+   *
+   * ⚠️ The per-call-lifetime hypothesis recorded here is RETIRED, not merely
    * unconfirmed: `populateBlobs` runs ONCE per command, so a per-call dispatcher
    * builds one pool per run and there was never a repeated module load to pay for.
    *
@@ -255,6 +280,16 @@ const MS_PER_MEGABYTE: Readonly<Record<DocumentParserKind, number>> = {
 
 /** One megabyte, so the rates above can be read in the unit they were measured in. */
 const BYTES_PER_MEGABYTE = 1_048_576;
+
+/**
+ * The one `VAT_PARSE_POOL` spelling that turns the pool off.
+ *
+ * Named rather than inlined so the disable has exactly one definition: the
+ * switch is read in one place, and a second call site inventing `'false'` or
+ * `'off'` would be a second contract for one decision. See
+ * {@link ParsePoolPolicy.enabled}.
+ */
+const POOL_DISABLED = '0';
 
 /**
  * Serial parse milliseconds one worker must displace to be worth starting.
@@ -446,11 +481,10 @@ export class ParseDispatcher {
 
   constructor(cache: ParseCache, policy: ParsePoolPolicy) {
     this.#cache = cache;
-    // Opt-IN, not opt-out. NOT because the pool loses — the 6.5x that decided
-    // that was an instrument artifact and the truth is a ~29% improvement; see
-    // {@link ParsePoolPolicy.enabled}. It stays opt-in because the shape is being
-    // reworked. `'1'` exactly, so a stray truthy value cannot silently enable it.
-    this.#enabled = policy.enabled ?? process.env['VAT_PARSE_POOL'] === '1';
+    // Opt-OUT. `'0'` exactly, so only a deliberate disable is one — see
+    // {@link ParsePoolPolicy.enabled} for the A/B and for why no corpus-size
+    // gate accompanies this.
+    this.#enabled = policy.enabled ?? process.env['VAT_PARSE_POOL'] !== POOL_DISABLED;
     // Read per construction for the same reason `enabled` is. `'cache'` exactly,
     // so the shipped behaviour is the wire protocol unless someone names the
     // other one — this switch exists to be A/B'd, not to be guessed at.
@@ -833,9 +867,9 @@ export type ParseWindow = Pick<ParseDispatcher, 'width' | 'lookAhead' | 'conside
  * run from outside the process — the lab varies an arm's environment, and a
  * module constant is exactly what it cannot reach.
  *
- * At width 1 — no pool, which is what ships — this is inert: only one
- * preparation can be in flight, and it is always the head, so nothing is ever
- * buffered.
+ * At width 1 — a run whose corpus never paid for a pool, which is the common
+ * case on a small tree — this is inert: only one preparation can be in flight,
+ * and it is always the head, so nothing is ever buffered.
  */
 const PREPARATION_LOOK_AHEAD = 4;
 

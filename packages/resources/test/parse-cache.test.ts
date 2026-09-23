@@ -774,6 +774,42 @@ describe('ParseCache fail-soft writes', () => {
       expect(await cache.get(keyed)).toBeNull();
     },
   );
+
+  it.skipIf(isWindows)(
+    'asks the shard-safety question ONCE per directory, not once per entry',
+    async () => {
+      // The observable face of the memo in `prepareShard`: the safety `stat`
+      // and the `mkdir` are per-DIRECTORY questions that a cold run was asking
+      // per-ENTRY — measured at 1,640 ms of `cache-write` for 2,157 entries on
+      // a 12.6k-file adopter, two of its four syscalls apiece.
+      //
+      // One entry written twice, so the two writes share a shard by
+      // construction: the shard is the key's last two characters and the key is
+      // a hash of the content, so two DIFFERENT documents would collide only by
+      // luck and the case would silently stop testing anything.
+      const cacheDir = safePath.join(suite.dir(), 'cache');
+      const cache = suite.makeCache({ cacheDir });
+      const keyed = keyedFromText(SIMPLE_DOC);
+      const shardDir = safePath.join(cacheDir, keyed.key.slice(-SHARD_LENGTH));
+
+      expect(await cache.set(keyed, freshParse(keyed))).toBe(true);
+
+      // Another local user opens the shard wide AFTER this run prepared it. The
+      // documented trade: the answer is the run's, so the second write is not
+      // re-asked and succeeds. Re-`stat`ing per entry is what this refuses.
+      await fs.chmod(shardDir, MODE_WORLD_WRITABLE);
+
+      expect(await cache.set(keyed, freshParse(keyed))).toBe(true);
+      expect(cache.stats.writeFailures).toBe(0);
+
+      // The positive control on the paragraph above: a cache that has NOT
+      // prepared this shard still refuses it, so the pass is the memo rather
+      // than the safety check having stopped working.
+      const fresh = suite.makeCache({ cacheDir });
+      expect(await fresh.set(keyed, freshParse(keyed))).toBe(false);
+      expect(fresh.stats.writeFailures).toBe(1);
+    },
+  );
 });
 
 describe('ParseCache enable toggle', () => {

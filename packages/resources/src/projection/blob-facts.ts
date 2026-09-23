@@ -160,7 +160,7 @@ export function blobRowFor(
     // schema is the enforcement point for that, not this assembler: narrowing
     // here would have to either drop or invent values.
     frontmatter: (parsed.frontmatter ?? null) as BlobRow['frontmatter'],
-    frontmatterError: parsed.frontmatterError ?? null,
+    frontmatterError: frontmatterErrorFor(parsed),
     wordCount: measures?.wordCount ?? 0,
     proseCodeUnits: measures?.proseCodeUnits ?? 0,
     codeBlockCodeUnits: measures?.codeBlockCodeUnits ?? 0,
@@ -169,6 +169,49 @@ export function blobRowFor(
     sectionCount: headingCount,
   };
 }
+
+/**
+ * What `blobs.frontmatterError` says about one parse — *why the frontmatter did
+ * not parse to an object*, which is two questions and not one.
+ *
+ * The YAML parser's own failure is the first and is passed through verbatim.
+ * The second is the silent one: a block that is valid YAML and decodes to a
+ * **sequence or a scalar** (`---\n- a\n- b\n---`). `parseFrontmatterSource`
+ * ignores such a value by design — its acceptance rules are behaviour-preserving
+ * for every lane that reads `frontmatter` — so the parse reports neither an
+ * object nor an error, and the row that came out was byte-identical to one for a
+ * file with no frontmatter at all. A `.claude/rules/` file in that state reads
+ * as declaring no `paths:`, so it is counted as an unconditional rule and no
+ * check can tell it from one.
+ *
+ * ⚠️ Decided from `frontmatterSource`, which a cache HIT carries and re-parses
+ * through the same function the cold path runs (`parse-cache.ts`'s
+ * `deriveFrontmatter`), so warm and cold cannot disagree here. The KIND of
+ * non-mapping value is deliberately not named: naming it costs a second YAML
+ * parse of the same bytes — a second reader of one declaration — and the author
+ * is being sent to the block itself either way.
+ *
+ * @param parsed - The parse this row describes
+ * @returns The reason, or null when the frontmatter parsed (including "no block")
+ */
+function frontmatterErrorFor(parsed: ParseResult): string | null {
+  if (parsed.frontmatterError !== undefined) return parsed.frontmatterError;
+  if (parsed.frontmatter !== undefined) return null;
+  // Absent: no block at all. Empty: a block with nothing in it. Neither is a
+  // value that was ignored, and neither is a defect.
+  if ((parsed.frontmatterSource ?? '').trim() === '') return null;
+  return NOT_A_MAPPING;
+}
+
+/**
+ * What a frontmatter block that is valid YAML but not a mapping says.
+ *
+ * Content, never a path: it is stored on a content-addressed row and repeated by
+ * every finding that reads the column.
+ */
+const NOT_A_MAPPING =
+  'the frontmatter block is valid YAML but not a YAML mapping — it decodes to a sequence or a'
+  + ' scalar, so it declares no keys at all';
 
 /**
  * Build the `blob_conditions` rows for one parse.

@@ -144,10 +144,18 @@ The validator checks for:
 - `SKILL_MISSING_DESCRIPTION` - Required "description" field missing
 - `SKILL_NAME_INVALID` - Name doesn't match pattern: `^[a-z0-9]+(-[a-z0-9]+)*$`
 - `RESERVED_WORD_IN_NAME` (warning) - Name contains "claude" or "anthropic"
-- `SKILL_NAME_XML_TAGS` - Name contains < or > characters
+- `SKILL_NAME_XML_TAGS` - Name contains an XML/HTML tag
 - `SKILL_DESCRIPTION_TOO_LONG` - Description exceeds 1024 characters
 - `SKILL_DESCRIPTION_EMPTY` - Description is empty or whitespace-only
-- `SKILL_DESCRIPTION_XML_TAGS` - Description contains < or > characters
+- `SKILL_DESCRIPTION_XML_TAGS` - Description contains an XML/HTML tag. Two lanes:
+  **markup** — a closing `</x>`, a self-closing `<x/>`, an opening tag with an attribute
+  assignment `<x a="b">`, or a declaration (`<!--`, `<![CDATA[`, `<!DOCTYPE`, `<?xml`) — fires
+  wherever it appears, **backticks included**; and a bare **`<word>`**, which is
+  indistinguishable from a placeholder, so it fires unless it reads as part of a path or
+  identifier (`skills/<name>/SKILL.md`, `<name>/SKILL.md`, `Promise<Result>`, `repo#<n>`) — and
+  backticking it (`` `<env>` ``) is the documented way to mark it as quoted text. Not a tag: a
+  comparison or arrow (`a < b`, `<=`, `->`, `=>`), or angle brackets holding prose with no
+  attribute assignment in them (`<see https://example.com>`, `<y and y>`)
 
 **Link Errors:**
 - `LINK_INTEGRITY_BROKEN` - Link points to non-existent file
