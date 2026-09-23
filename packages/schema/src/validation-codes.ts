@@ -461,8 +461,9 @@ export const CODE_REGISTRY = {
   ),
   // The same decline as the code above, under its own name because WHERE the
   // link points must not be carried in message text. A second code, not a
-  // nullable column that only links would fill. `info` like its sibling; the
-  // two are always read together through `DECLINED_SYMLINK_CODES`.
+  // nullable column that only links would fill. `info` like its siblings; all
+  // three (with EXTENT_SYMLINK_TARGET_UNRESOLVED) are always read together
+  // through `DECLINED_SYMLINK_CODES`.
   EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT: entry(
     'info',
     'A symbolic link in the tree is not realized and its target resolves outside the project root, so the target is realized nowhere in this projection and is never named — its text can carry a home directory or any absolute path. Everything EXTENT_SYMLINK_NOT_REALIZED says about the link applies; this code adds only where the target lies, which decides whether Claude Code loads a linked rules file at all.',
@@ -908,7 +909,7 @@ export const CODE_REGISTRY = {
   // "Worked case: CLAUDE_RULE_GLOB_INERT ships at info".
   CLAUDE_RULE_GLOB_INERT: entry(
     'info',
-    'A path-scoped rules file under .claude/rules/ declares a paths: glob that matches no file VAT can see — tracked files, and untracked files git does not ignore — so no such file can load that rule. Reported per inert pattern, not per rule: a rule whose other patterns still match is reported only for the dead one.',
+    'A path-scoped rules file under .claude/rules/ declares a paths: glob that matches no file VAT can see — tracked files, and untracked files git does not ignore — so no such file can load that rule. Reported per inert pattern, not per rule: a rule whose other patterns still match is reported only for the dead one. A ! pattern is reported when it excludes no file the rule would otherwise load, so it has no effect.',
     'First check whether the glob covers ignored or generated output that VAT cannot see (a glob with no literal prefix, or one whose files but not whose directory are gitignored). If it does, keep it. Otherwise delete the dead glob, or correct it to the path it meant — VAT reports the pattern and never rewrites it. The usual causes are a directory renamed or moved out from under the pattern, a missing ** between segments, or a leading ./ (Claude Code never matches ./docs/**; write docs/**). If the glob is deliberately ahead of its files, or scopes ignored output, set resources.validation.severity.CLAUDE_RULE_GLOB_INERT to ignore.',
     'claude_rule_glob_inert',
   ),
@@ -927,14 +928,15 @@ export const CODE_REGISTRY = {
   ),
   // Projection path — a `.claude/rules/` file or directory that is ITSELF a
   // symlink is realized at no path, so BOTH rule checks above are blind to it.
-  // ⛔ ONE code and ONE severity across both arms — the MESSAGE splits, read
-  // from the condition row's code (EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT), never
-  // its prose: one concern, one severity entry, the same size of defect either
+  // ⛔ ONE code and ONE severity across all three arms — the MESSAGE splits,
+  // read from the condition row's code (EXTENT_SYMLINK_NOT_REALIZED /
+  // EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT / EXTENT_SYMLINK_TARGET_UNRESOLVED), never
+  // its prose: one concern, one severity entry, the same size of defect each
   // way. Not `error` (the link is legitimate), not `info` (VAT is not guessing).
   CLAUDE_RULE_LINK_UNCHECKED: entry(
     'warning',
-    'A .claude directory, a .claude/rules/ directory, or a file under one is itself a symbolic link. VAT realizes no link path, so the linked rule is in no claude_rule_patterns row and in no blobs row at that path — CLAUDE_RULE_GLOB_INERT cannot see its paths: globs and CLAUDE_RULE_FRONTMATTER_INVALID cannot see its frontmatter. Whether the rule is in force depends on where the link points, and the finding says which: Claude Code loads a rules file or directory reached through a link whose target stays inside the directory the session started in, and skips one whose target resolves outside it.',
-    'For a target inside the project root the rule is in force and unchecked: replace the link with the file itself, or with an @ import of the shared file from a rules file that is not a link, if you want VAT to check its globs and frontmatter. For a target outside it the rule is in force nowhere, because Claude Code skips the link too — copy or vendor those rules into the repository, since sharing one rule set across repositories by symlink does not work. Keep the link and set resources.validation.severity.CLAUDE_RULE_LINK_UNCHECKED to ignore to accept the blind spot.',
+    'A .claude directory, a .claude/rules/ directory, or a file under one is itself a symbolic link. VAT realizes no link path, so the linked rule is in no claude_rule_patterns row and in no blobs row at that path — CLAUDE_RULE_GLOB_INERT cannot see its paths: globs and CLAUDE_RULE_FRONTMATTER_INVALID cannot see its frontmatter. Whether the rule is in force depends on where the link points, and the finding says which of three arms applies: Claude Code loads a rules file or directory reached through a link whose target stays inside the directory the session started in, skips one whose target resolves outside it, and loads nothing through a link that resolves to nothing.',
+    'For a target inside the project root the rule is in force and unchecked: replace the link with the file itself, or with an @ import of the shared file from a rules file that is not a link, if you want VAT to check its globs and frontmatter. For a target outside it the rule is in force nowhere, because Claude Code skips the link too — copy or vendor those rules into the repository, since sharing one rule set across repositories by symlink does not work. For a link that resolves to nothing no rule is loaded through it: point it at a file that exists or delete it. Keep the link and set resources.validation.severity.CLAUDE_RULE_LINK_UNCHECKED to ignore to accept the blind spot.',
     'claude_rule_link_unchecked',
   ),
 } as const satisfies Record<string, CodeRegistryEntry>;

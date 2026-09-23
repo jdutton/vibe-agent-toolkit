@@ -8,8 +8,8 @@
  */
 
 import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
-import { parse as parseYaml } from 'yaml';
 
+import { frontmatterIsNonMapping } from '../frontmatter-source.js';
 import type { ParseResult } from '../link-parser.js';
 import type { OffsetRange } from '../reference-lexer.js';
 import type { ContentMeasures } from '../schemas/parse-facts.js';
@@ -193,10 +193,9 @@ export function blobRowFor(
  * non-mapping value.** a comment-only block, `~` and `null` all decode to `null`,
  * which `parseFrontmatterSource` drops exactly as it drops a sequence, so
  * "no object and no error" cannot tell a placeholder from a `- a` list. Only
- * the decoded value can, so this path — and only this path, which a mapping, an
- * empty block and a YAML error never reach — decodes the source once more with
- * the same library and the same default schema. The KIND of a real non-mapping
- * value is still not named: the author is sent to the block either way.
+ * the decoded value can; `frontmatterIsNonMapping` is the one statement of that
+ * rule, shared with the OKF judges. The KIND of a real non-mapping value is
+ * still not named: the author is sent to the block either way.
  *
  * @param parsed - The parse this row describes
  * @returns The reason, or null when the frontmatter parsed (including "no block")
@@ -204,23 +203,9 @@ export function blobRowFor(
 function frontmatterErrorFor(parsed: ParseResult): string | null {
   if (parsed.frontmatterError !== undefined) return parsed.frontmatterError;
   if (parsed.frontmatter !== undefined) return null;
-  // Absent: no block at all. Empty: a block with nothing in it. Neither is a
-  // value that was ignored, and neither is a defect.
-  const source = parsed.frontmatterSource ?? '';
-  if (source.trim() === '') return null;
-  return decodesToNull(source) ? null : NOT_A_MAPPING;
-}
-
-/**
- * Whether a frontmatter source decodes to YAML `null` — comment-only, `~`, `null`.
- *
- * @param source - A non-blank frontmatter source that did not decode to a mapping
- * @returns True when the block declares nothing at all
- */
-function decodesToNull(source: string): boolean {
-  // No catch: these bytes already decoded without error upstream (a YAML error
-  // returns before this is asked), so a throw here is a bug, not an answer.
-  return (parseYaml(source) as unknown) === null;
+  // Absent, blank, or declaring nothing (`~`, comment-only): not a value that
+  // was ignored, and not a defect.
+  return frontmatterIsNonMapping(parsed.frontmatterSource) ? NOT_A_MAPPING : null;
 }
 
 /**

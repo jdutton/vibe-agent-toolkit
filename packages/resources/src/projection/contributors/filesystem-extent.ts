@@ -503,16 +503,16 @@ function unlistableDirectoryCondition(
  * with nothing saying so. `info`, not `warning`: a link is an ordinary thing to
  * commit, and the row is the record that it was not counted, not a defect.
  *
- * ⚠️ Store-sound by construction. The row states the link's TARGET TEXT and
- * whether that target is realized in this same extent. A tracked or untracked-unignored link's
- * target text is its blob, so it is in the tree hash the store keys on; whether
- * the target is realized is a fact about this extent's own rows, which are
- * served together with it.
- *
- * ⚠️ The CODE is a fact about the HOST too: which of the three a link draws
- * is decided by where this host resolves it (see {@link hostResolution}), and a
- * link through a directory link or to a file outside the checkout resolves
- * wherever that host's filesystem says.
+ * ⚠️ The TEXT is store-sound; the CODE is not, and is re-checked on every hit.
+ * The row states the link's target text and whether that target is realized in
+ * this same extent. A tracked or untracked-unignored link's target text is its
+ * blob, so it is in the tree hash the store keys on; whether the target is
+ * realized is a fact about this extent's own rows, which are served with it.
+ * Which of the three codes a link draws is decided by where this host resolves
+ * it (see {@link hostResolution}) — through a gitignored target, a directory
+ * link or a file outside the checkout, none of which the tree hash covers — so
+ * the store driver re-resolves every stored link row on a hit and treats a
+ * changed code as a miss ({@link declinedSymlinkRowsStillHold}).
  *
  * ⚠️ One clause is a fact about the HOST, not about the tree, and always was:
  * the message asks the filesystem whether the link opens. It did so already for
@@ -550,7 +550,7 @@ export const EXTENT_SYMLINK_NOT_REALIZED = 'EXTENT_SYMLINK_NOT_REALIZED';
  * a nullable column reaches 17 source files and the store's DDL to carry a fact
  * only links have.
  *
- * ⛔ The two codes are ONE concern and are always read through
+ * ⛔ The three codes are ONE concern and are always read through
  * {@link DECLINED_SYMLINK_CODES}. A consumer that filters on
  * `EXTENT_SYMLINK_NOT_REALIZED` alone silently drops every out-of-root link —
  * a string comparison typecheck cannot see, which is why the set is a constant
@@ -696,35 +696,120 @@ function linkTarget(
   recordedBy: CrawlSourceKind,
 ): LinkTargetVerdict {
   const host = hostResolution(link, roots.realRoot);
-  let target: string;
-  try {
-    target = readlinkSync(link);
-  } catch (error) {
-    // Gone or unreadable between the enumeration and here: still a declined
-    // link, still recorded — only its target text is unknown. A bug is not that.
-    if (!isFilesystemAccessError(error)) throw error;
-    return { code: unnamedTargetCode(host), clause: unreadableTargetClause(error, recordedBy) };
-  }
-  // A target absolute on SOME platform but not this one — `C:/…` or a UNC
-  // `\\host\share\…` committed from Windows, read on POSIX — would resolve here
-  // as a relative name under the link's directory and be quoted in full. It
-  // names a place outside any root this host can see.
-  const foreignAbsolute = isAbsoluteAnyPlatform(target) && !isAbsolute(target);
-  const named = foreignAbsolute ? undefined : inRootRelative(roots, safePath.resolve(link, '..', target));
+  const text = readTargetText(link);
+  const code = declinedCode(host, link, roots, text);
+  // Gone or unreadable between the enumeration and here: still a declined
+  // link, still recorded — only its target text is unknown.
+  if (!text.readable) return { code, clause: unreadableTargetClause(text.error, recordedBy) };
+  const named = namedInRoot(link, roots, text.target);
   switch (host.kind) {
     case 'inside': {
-      return { code: EXTENT_SYMLINK_NOT_REALIZED, clause: insideClause(named ?? host.path, host.path, roots, realized) };
+      return { code, clause: insideClause(named ?? host.path, host.path, roots, realized) };
     }
     case 'outside': {
-      return { code: EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT, clause: escapingClause(named) };
+      return { code, clause: escapingClause(named) };
     }
     case 'nowhere': {
-      return named === undefined
-        ? { code: EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT, clause: OUTSIDE_UNNAMED_CLAUSE }
-        : { code: EXTENT_SYMLINK_TARGET_UNRESOLVED, clause: unresolvedClause(named) };
+      return { code, clause: named === undefined ? OUTSIDE_UNNAMED_CLAUSE : unresolvedClause(named) };
     }
   }
 }
+
+/** A link's target text, or the filesystem refusal that kept it unread. */
+type TargetText =
+  | { readonly readable: true; readonly target: string }
+  | { readonly readable: false; readonly error: unknown };
+
+/**
+ * Read one link's target text.
+ *
+ * @param link - Absolute, forward-slashed link path
+ * @returns The text, or the refusal — a bug is rethrown, never an answer
+ */
+function readTargetText(link: string): TargetText {
+  try {
+    return { readable: true, target: readlinkSync(link) };
+  } catch (error) {
+    if (!isFilesystemAccessError(error)) throw error;
+    return { readable: false, error };
+  }
+}
+
+/**
+ * The in-root spelling of a link's target text, if it has one.
+ *
+ * A target absolute on SOME platform but not this one — `C:/…` or a UNC
+ * `\\host\share\…` committed from Windows, read on POSIX — would resolve here
+ * as a relative name under the link's directory and be quoted in full. It
+ * names a place outside any root this host can see.
+ *
+ * @param link - Absolute, forward-slashed link path
+ * @param roots - The root, as enumerated and as resolved
+ * @param target - The link's target text
+ * @returns Root-relative spelling, or `undefined` when the text leaves the root
+ */
+function namedInRoot(link: string, roots: LinkRoots, target: string): string | undefined {
+  const foreignAbsolute = isAbsoluteAnyPlatform(target) && !isAbsolute(target);
+  return foreignAbsolute ? undefined : inRootRelative(roots, safePath.resolve(link, '..', target));
+}
+
+/**
+ * The ONE decision of a declined link's code — shared by the enumeration that
+ * writes the row and the store hit that re-checks it
+ * ({@link declinedSymlinkRowsStillHold}), so the two cannot drift apart.
+ *
+ * The host's resolution decides. The target text only places a link that
+ * resolves nowhere: outside the root when the text was readable and leaves it.
+ *
+ * @param host - Where the host resolves the link
+ * @param link - Absolute, forward-slashed link path
+ * @param roots - The root, as enumerated and as resolved
+ * @param text - The link's target text
+ * @returns The row's code
+ */
+function declinedCode(host: HostResolution, link: string, roots: LinkRoots, text: TargetText): DeclinedSymlinkCode {
+  if (host.kind !== 'nowhere' || !text.readable) return unnamedTargetCode(host);
+  return namedInRoot(link, roots, text.target) === undefined
+    ? EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT
+    : EXTENT_SYMLINK_TARGET_UNRESOLVED;
+}
+
+/**
+ * Whether every stored declined-link row still carries the code the host gives
+ * its link NOW — the gate beside {@link unlistableRowStillHolds} that turns a
+ * key match into a real hit.
+ *
+ * 🪤 The store key cannot answer this. The code is decided by
+ * `realpathSync.native`, and where a link resolves depends on files the tree
+ * hash does not cover — a gitignored target (`.claude/rules/gen.md ->
+ * ../../build/gen.md` before and after a build) or anything outside the root.
+ * A served row would then say Claude Code loads nothing through a link it now
+ * loads a rule through, or the reverse. The cost is one `realpath` per stored
+ * link ROW (plus a `readlink` for one that resolves nowhere), never per path;
+ * a tree with no declined link pays one filter.
+ *
+ * Only the CODE is compared. The clause also says whether an in-root target is
+ * realized, and realization of a non-ignored path is what the tree hash covers.
+ *
+ * @param conditions - The stored extent's `realization_conditions`
+ * @param root - The corpus root the rows' paths are relative to
+ * @returns True when every declined-link row's code still holds
+ */
+export function declinedSymlinkRowsStillHold(conditions: readonly RealizationConditionRow[], root: string): boolean {
+  const rows = conditions.filter((row) => isDeclinedSymlinkCode(row.code));
+  if (rows.length === 0) return true;
+  const roots: LinkRoots = { root, realRoot: realRootOf(root) };
+  return rows.every((row) => {
+    const link = toForwardSlash(safePath.resolve(root, row.path));
+    const host = hostResolution(link, roots.realRoot);
+    // The text is read only where it can change the code.
+    const text = host.kind === 'nowhere' ? readTargetText(link) : UNREAD_TARGET;
+    return declinedCode(host, link, roots, text) === row.code;
+  });
+}
+
+/** Stands in for a target text the decision does not need. */
+const UNREAD_TARGET: TargetText = { readable: false, error: undefined };
 
 /**
  * The root as the enumeration spelled it, and as the host resolves it.

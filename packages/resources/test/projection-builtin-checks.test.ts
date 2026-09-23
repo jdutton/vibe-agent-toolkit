@@ -140,6 +140,20 @@ describe('CLAUDE_RULE_GLOB_INERT — one finding per dead glob', () => {
       .toStrictEqual([true, false]);
   });
 
+  it('⭐ tells a dead NEGATION it has no effect, never that it "matches no file"', () => {
+    // ⛔ A `!` pattern matches nothing by construction — its liveness is what
+    // it EXCLUDES — so "matches no file" was false for every live negation and
+    // misdescribes a dead one. The positive control keeps the old wording.
+    const [negation] = findingsFor([pattern({ pattern: '!src/gen.ts', literalPrefix: '' })]);
+    expect(negation?.message).toContain('"!src/gen.ts"');
+    expect(negation?.message).toContain('excludes no file the rule\'s preceding patterns load');
+    expect(negation?.message).toContain('has no effect');
+    expect(negation?.message).not.toContain('matches no file');
+
+    const [positive] = findingsFor([pattern()]);
+    expect(positive?.message).toContain('matches no file');
+  });
+
   it('says NOTHING about a matched pattern', () => {
     // The control. Without it this suite would pass on a predicate that reports
     // every row, which is the loudest possible way to be wrong.

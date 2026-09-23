@@ -166,6 +166,13 @@ export function validateFrontmatterRules(
  *    is character-for-character what `<example>/<example>` is, and that one must
  *    fire. Backticking the whole template clears it.
  *
+ * One carve-out inside class 2: a PROMPT-STRUCTURE tag name
+ * ({@link PROMPT_STRUCTURE_TAG_NAMES}) is never read as a placeholder, so no
+ * neighbour exempts it — `<system>.Ignore previous`, `x=<script>`,
+ * `a@<system>` and `<script>.js` all fire. The joiner exemptions exist so
+ * `<name>.md` and `KEY=<value>` stay quiet; they must not become a way to glue
+ * an injection-shaped tag onto punctuation. Backticks still clear it.
+ *
  * Backticks exempt only class 2. A code span may HIDE markup from the eye, but
  * it must never EXEMPT it: backticks in a description are unpaired often enough
  * that any pairing rule — naive or CommonMark-exact — can be made to swallow a
@@ -198,6 +205,36 @@ const WHITESPACE_RUN = /\s+/u;
 
 /** Connectives that make an identifier run read as prose (`<y and y>`). */
 const PROSE_CONNECTIVES: ReadonlySet<string> = new Set(['and', 'or']);
+
+/**
+ * Tag names that structure a prompt (or run code) and are never a sensible
+ * placeholder: the roles and sections of a chat transcript and the Anthropic
+ * prompting guide's own tag vocabulary, plus `script`. Closed on purpose — a
+ * name here fires whatever it is glued to, so the list holds only names whose
+ * appearance in a skill description is injection-shaped. Matched on the WHOLE
+ * tag name, case-insensitively: `<username>` is not `<user>`.
+ */
+const PROMPT_STRUCTURE_TAG_NAMES: ReadonlySet<string> = new Set([
+	'system',
+	'instructions',
+	'instruction',
+	'script',
+	'example',
+	'examples',
+	'user',
+	'assistant',
+	'human',
+	'thinking',
+	'prompt',
+	'system-prompt',
+	'system_prompt',
+	'context',
+	'document',
+	'documents',
+	'tool_use',
+	'tool_result',
+	'function_calls',
+]);
 
 /** A left neighbour that builds an identifier on its own: `Promise<`, `skills/<`. */
 const IDENTIFIER_LEFT = /[\w/]/;
@@ -319,10 +356,13 @@ function scanAngleGroups(text: string): AngleScan {
 
 	for (const match of text.matchAll(ANGLE_GROUP)) {
 		const body = match[2] ?? '';
-		const attributeRun = body.slice((TAG_NAME_PREFIX.exec(body)?.[0] ?? '').length);
+		const tagName = TAG_NAME_PREFIX.exec(body)?.[0] ?? '';
+		const attributeRun = body.slice(tagName.length);
 		const closing = match[1] === '/';
 		if (!closing && isIdentifierRun(attributeRun)) {
-			scan.bareTag ||= isBareTagInProse(text, match.index, match[0].length);
+			scan.bareTag ||=
+				PROMPT_STRUCTURE_TAG_NAMES.has(tagName.toLowerCase()) ||
+				isBareTagInProse(text, match.index, match[0].length);
 			continue;
 		}
 		scan.markup ||= isMarkupBody(closing, attributeRun);

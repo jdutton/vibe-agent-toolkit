@@ -84,7 +84,7 @@ describe.skipIf(!symlinkCapability())('declined symlinks reach the projection on
     expect(codeAt(DANGLING_RULE_LINK)).toBe(EXTENT_SYMLINK_TARGET_UNRESOLVED);
     // Both lanes decline gitignored rows, so the ignored link is declined with them.
     expect(paths).not.toContain(IGNORED_LINK);
-    // Neither code names what lies outside the root.
+    // No code names what lies outside the root.
     for (const row of declined) expect(row.message, row.path).not.toContain(OUTSIDE_NAME);
   });
 });

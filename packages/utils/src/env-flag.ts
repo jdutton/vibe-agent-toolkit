@@ -38,8 +38,9 @@
  * one function, because what it answers is not "is this on" but "did the
  * operator say no".
  *
- * The table is asserted both ways against every `parseEnvBoolean(` call in
- * every package's `src` by `test/env-flag.test.ts`.
+ * The table is asserted both ways, per (file, variable), against every
+ * `parseEnvBoolean` call (aliased imports included) in every package's `src` by
+ * `test/env-flag.test.ts`.
  */
 
 const TRUE_SPELLINGS: ReadonlySet<string> = new Set(['1', 'true', 'yes', 'y', 'on']);

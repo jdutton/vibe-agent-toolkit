@@ -4,8 +4,9 @@
   is `claude-rule-glob-inert`, emitting `CLAUDE_RULE_GLOB_INERT` at `info` for every `paths:` glob
   under `.claude/rules/` that matches no file. Silence it with
   `resources.validation.severity.CLAUDE_RULE_GLOB_INERT: ignore`; run it alone with
-  `--check claude-rule-glob-inert`. Built-ins are never SQL, and `data.checks` marks them
-  `builtin: true`.
+  `--check claude-rule-glob-inert`. Globs are read and matched as Claude Code does: a string
+  `paths:` is a comma-separated list, and a glob starting `./` never matches — drop the `./`.
+  `data.checks` marks a built-in `builtin: true`.
 
 - **`claude_rule_patterns`** joins the projection for `vat resources query` and `check` — one row
   per `paths:` glob with `pattern`, `literalPrefix`, `witnessPath` and `status`

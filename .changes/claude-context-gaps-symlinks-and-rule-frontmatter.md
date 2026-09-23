@@ -10,21 +10,14 @@
 ### Added
 
 - **`vat resources check` reports a `.claude/rules/` file whose YAML frontmatter does not parse**
-  — built-in `claude-rule-frontmatter-invalid`, code `CLAUDE_RULE_FRONTMATTER_INVALID` at `warning`.
-  Such a rule used to pass `claude-rule-glob-inert` silently; quote any `paths:` glob starting with `*`.
-  `vat resources validate` already reports the same file as `FRONTMATTER_INVALID_YAML` (`error`).
+  or parses to a list or a scalar — built-in `claude-rule-frontmatter-invalid`,
+  `CLAUDE_RULE_FRONTMATTER_INVALID` at `warning`. Quote any `paths:` glob starting with `*`.
 
 - **A symlinked file is no longer silently absent from `vat resources query`.** VAT still realizes no
-  link path, so a symlinked `CLAUDE.md` or rules file counts in no size, chain or rule-pattern row;
-  each link is now a `realization_conditions` row `EXTENT_SYMLINK_NOT_REALIZED` (`info`) naming an
-  in-root target and whether it is realized; an out-of-root target (including a Windows `C:/…` or
-  UNC target read on another OS) is described, never named. The common `CLAUDE.md -> AGENTS.md` now
-  shows up as an `info` finding wherever the registry reports (`vat resources validate`, `vat skills
-  validate`, `vat skills build`, `vat claude plugin build`) when the crawl's `include`/`exclude`
-  would admit the link's path, and in a `vat claude context <dir>` answer when the link is beneath
-  `<dir>`, a `CLAUDE.md`-family link on its chain, or under a `.claude` directory on its chain. Set
-  `resources.validation.severity.EXTENT_SYMLINK_NOT_REALIZED: ignore` to silence it in
-  `vat resources validate`.
+  link path, so it counts in no size, chain or rule-pattern row; each declined link is a
+  `realization_conditions` row under one of three `info` codes — `EXTENT_SYMLINK_NOT_REALIZED`,
+  `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` or `EXTENT_SYMLINK_TARGET_UNRESOLVED`. A SQL query about
+  declined links must ask for all three; silence each with `resources.validation.severity.<code>: ignore`.
 
 - **`@vibe-agent-toolkit/utils`: `crawlDirectory` takes `onSymlinkNotFollowed`**, called once per
   link the walk declines. Walk route only: it requires `respectGitignore: false` and throws

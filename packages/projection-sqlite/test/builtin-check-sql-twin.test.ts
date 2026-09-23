@@ -89,11 +89,11 @@ const CASE_VARIANT_PATHS = [
 /**
  * The declined links recorded under the OUT-OF-ROOT code.
  *
- * ⭐ The twin selects on `code`, so a twin naming one of the two declined-link
+ * ⭐ The twin selects on `code`, so a twin naming only some of the three declined-link
  * codes would drop exactly these — the arm whose rule Claude Code does not load
  * at all — while the predicate, which reads the set, still reported them. They
  * are listed apart from {@link LINK_PATHS} only so each side can be read; the
- * check treats the two codes identically.
+ * check treats the three codes identically.
  */
 const OUTSIDE_ROOT_PATHS = [
   '.claude/rules/vendored.md',

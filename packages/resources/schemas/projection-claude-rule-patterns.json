@@ -21,7 +21,7 @@
         },
         "literalPrefix": {
           "type": "string",
-          "description": "The glob-free leading segments of `pattern` as written (leading `./` removed); may be empty. Not a match bound: after the harness strips a trailing `/**`, a pattern with no other slash matches at any depth. Use it for prefix containment only when the stripped pattern contains a `/`."
+          "description": "The glob-free leading segments of `pattern` as written (a leading `./` or `/` removed); may be empty. Not a match bound: after the harness strips a trailing `/**`, a pattern with no `/` before its last character matches at any depth. Use it for prefix containment only when the stripped pattern has a `/` before its last character."
         },
         "witnessPath": {
           "anyOf": [

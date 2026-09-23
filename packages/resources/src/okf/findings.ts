@@ -8,8 +8,7 @@
  * *conformance* unit-testable without a tree.
  */
 
-import * as yaml from 'yaml';
-
+import { frontmatterIsNonMapping } from '../frontmatter-source.js';
 import { OkfConceptFrontmatterSchema } from '../schemas/okf-concept.js';
 
 import type { OkfFinding } from './types.js';
@@ -60,7 +59,7 @@ interface ParsedFrontmatter {
  * a block that yielded no mapping and no error, and whose YAML value is not
  * null, can only have parsed to a sequence or a scalar. That is why
  * {@link ParsedFrontmatter} carries `frontmatterSource` on both lanes, and why
- * {@link isNotAMapping} parses it again rather than testing it for blankness.
+ * {@link isNotAMapping} decodes it rather than testing it for blankness.
  *
  * ⚠️ A block whose value is NULL is excluded deliberately, and is not the same
  * case. `---\n---` parses to `{}` by rule and "carries no keys" is a true
@@ -90,23 +89,16 @@ function notAMappingDraft(document: string): OkfFindingDraft {
  * something other than null — a sequence or a scalar.
  *
  * The VALUE, not the source: `parseFrontmatterSource` folds null, sequence and
- * scalar into one `{}`, and only re-reading the block tells them apart. The
- * re-parse cannot throw for a block that produced no `frontmatterError`, and
- * a block that somehow does is not claimed as a non-mapping either.
+ * scalar into one `{}`, and only re-reading the block tells them apart —
+ * `frontmatterIsNonMapping` is that rule, the same one the projection's
+ * `blob_conditions` reads.
  *
  * @param parsed - What the markdown parser made of the file
  * @returns Whether the YAML parsed to a sequence or a scalar
  */
 function isNotAMapping(parsed: ParsedFrontmatter): boolean {
   if (parsed.frontmatter !== undefined || parsed.frontmatterError !== undefined) return false;
-  if (parsed.frontmatterSource === undefined) return false;
-  try {
-    return yaml.parse(parsed.frontmatterSource) !== null;
-  } catch (error) {
-    // Only the YAML parser's own refusal is "not claimed as a non-mapping".
-    if (!(error instanceof yaml.YAMLError)) throw error;
-    return false;
-  }
+  return frontmatterIsNonMapping(parsed.frontmatterSource);
 }
 
 /** What inspecting a reserved `index.md` produced. */

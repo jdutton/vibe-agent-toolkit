@@ -265,7 +265,7 @@ describe('whatLoadsAt', () => {
       'pkg/.claude/rules',
     ];
     // ⭐ Half the links are recorded under the OUT-OF-ROOT code. Scoping is
-    // about where a link sits, never about where it points, so both codes must
+    // about where a link sits, never about where it points, so every code must
     // survive the filter identically — and a filter written on one of them
     // silently deletes the other from every answer.
     const withLinks = links.reduce(

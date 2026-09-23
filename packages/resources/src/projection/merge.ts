@@ -80,6 +80,7 @@ import { populateBlobs, storableBlobFacts, type BlobPopulationResult } from './b
 import { RunContentCache } from './content-cache.js';
 import type { ContributorRegistry, ExtentContribution, ExtentContributor } from './contributor.js';
 import {
+  declinedSymlinkRowsStillHold,
   EXTENT_DIRECTORY_UNLISTABLE,
   unlistableRowStillHolds,
 } from './contributors/filesystem-extent.js';
@@ -941,6 +942,10 @@ async function readStoredExtent(
     // what they claimed and the tree is asked whether it is still so. See
     // `unlistableRowStillHolds` for the staleness this closes.
     if (!unlistableRowsStillHold(extent.realizationConditions, options.root)) return undefined;
+    // Same shape for a declined link: its code is where the HOST resolves it,
+    // through targets no tree hash covers (a gitignored `build/gen.md`), so a
+    // changed code is a miss. See `declinedSymlinkRowsStillHold`.
+    if (!declinedSymlinkRowsStillHold(extent.realizationConditions, options.root)) return undefined;
     return extent;
   } finally {
     // Filed whether this hit or missed, and that is the point: a hit runs no
@@ -1007,14 +1012,16 @@ export async function readStoredRealizations(
  * Whether every stored `EXTENT_DIRECTORY_UNLISTABLE` row is still true of the
  * tree — the gate that turns a key match into a real hit.
  *
- * Only those rows are re-verified. The other condition rows describe content
- * the tree hash already covers, with one exception served as stored: an
- * `EXTENT_SYMLINK_NOT_REALIZED` row whose `readlink` failed transiently says
- * "whose target could not be read" until the tree hash changes. It is `info`,
- * it still records the link, and re-reading every stored link on each hit would
- * cost a syscall per link to repair a clause. Rare by construction —
- * one probe per stored refusal, not per path — so a tree with none pays one
- * filter over the conditions table and no syscall.
+ * One of two such gates; the other is `declinedSymlinkRowsStillHold`, which
+ * re-resolves every declined-link row (any of the three codes
+ * `EXTENT_SYMLINK_NOT_REALIZED` / `_TARGET_OUTSIDE_ROOT` / `_TARGET_UNRESOLVED`)
+ * because its code depends on targets the tree hash does not cover. Only its
+ * CODE is re-checked: a row whose `readlink` failed transiently keeps saying
+ * "whose target could not be read" until the tree hash changes — `info`, and
+ * repairing a clause is not worth a second syscall per link. The remaining
+ * condition rows describe content the tree hash already covers. One probe per
+ * stored refusal, not per path — so a tree with none pays one filter over the
+ * conditions table and no syscall.
  *
  * @param conditions - The stored extent's `realization_conditions`
  * @param root - The corpus root the rows' paths are relative to

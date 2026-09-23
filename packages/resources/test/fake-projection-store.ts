@@ -21,6 +21,12 @@
  * construction.
  */
 
+import { GitTracker } from '@vibe-agent-toolkit/utils/git';
+
+import { ContributorRegistry } from '../src/projection/contributor.js';
+import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
+import type { Projection } from '../src/projection/projection.js';
 import type {
   BlobScopedRows,
   ExtentKey,
@@ -216,4 +222,33 @@ export class FakeProjectionStore implements ProjectionStore {
  */
 export function extentKeyOf(key: ExtentKey): string {
   return `${key.rootId} ${key.treeHash}`;
+}
+
+/**
+ * One filesystem-extent population of `root` through `store`, with the tree
+ * reported unchanged under a CONSTANT `treeHash` — the shape every store-freshness
+ * suite needs, since the hazard it pins is a fact the tree hash does not cover.
+ * Reports whether a contributor ran, i.e. whether the store hit was refused.
+ */
+export async function populateExtentThrough(
+  root: string,
+  store: FakeProjectionStore,
+  treeHash: string,
+): Promise<{ projection: Projection; contributorRan: boolean }> {
+  const tracker = new GitTracker(root);
+  await tracker.initialize();
+  const registry = new ContributorRegistry();
+  registry.register(new FilesystemExtentContributor());
+  let contributorRan = false;
+  const projection = await populate({
+    root,
+    registry,
+    gitTracker: tracker,
+    onBlobPopulation: DISCARD_BLOB_POPULATION,
+    onContributorTiming: () => {
+      contributorRan = true;
+    },
+    cache: { store, treeUnchanged: () => true, treeHash },
+  });
+  return { projection, contributorRan };
 }

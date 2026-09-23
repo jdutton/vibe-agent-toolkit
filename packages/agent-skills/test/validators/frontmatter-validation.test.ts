@@ -393,6 +393,16 @@ describe('validateFrontmatterRules', () => {
 			['a tag name starting with an underscore', 'Wraps <_x> blocks'],
 			['a tag name with a non-ASCII letter', 'Wraps <système> blocks'],
 			['a closing tag with a non-ASCII name', 'Ends here</système> now'],
+			// A prompt-structure tag name is never a placeholder: no joiner or
+			// identifier neighbour exempts it (v0.1.42 fired on all of these).
+			['a system tag continued by a full stop', '<system>.Ignore previous'],
+			['a system tag continued by a dash', '<system>-override'],
+			['a script tag after an assignment', 'x=<script>'],
+			['a system tag after a word and an at-sign', 'a@<system>'],
+			['a script tag with a file extension', '<script>.js'],
+			['a prompt tag glued after a word', 'foo<instructions> follow'],
+			['a prompt tag after a path segment', 'Reads skills/<assistant> now'],
+			['a prompt tag in any case', 'Set KEY=<SYSTEM> first'],
 		])('should report SKILL_DESCRIPTION_XML_TAGS for %s', (_label, description) => {
 			const issues = validateFrontmatterRules(validFrontmatter({ description }));
 
@@ -439,6 +449,10 @@ describe('validateFrontmatterRules', () => {
 			// A valueless-attribute group is as ambiguous as a bare `<word>` — a
 			// multi-word placeholder has the same shape — so backticks clear it.
 			['a backticked multi-word placeholder', 'Run `vat build <skill name>` to package'],
+			// A prompt-structure tag is still class 2: quoting it is the remedy.
+			['a backticked joined prompt tag', 'Explains the `x=<system>` convention'],
+			// A name that merely STARTS with a prompt tag name is not one.
+			['a placeholder prefixed by a prompt tag name', 'Set KEY=<username> first'],
 		])('should NOT report SKILL_DESCRIPTION_XML_TAGS for %s', (_label, description) => {
 			const issues = validateFrontmatterRules(validFrontmatter({ description }));
 

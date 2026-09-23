@@ -162,7 +162,7 @@ describe.skipIf(!symlinkCapability())('filesystem extent — a declined symlink 
     },
   );
 
-  it.each(SYMLINK_ARMS)('%s: neither code ever leaks a path outside the root', (label) => {
+  it.each(SYMLINK_ARMS)('%s: no code ever leaks a path outside the root', (label) => {
     // The property the second code must not cost: it names WHERE the target
     // lies and still never names the target.
     const { root } = arms.fixture();

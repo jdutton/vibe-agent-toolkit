@@ -357,6 +357,13 @@ the other thing VAT declines: the glob matched no file VAT can see and its terri
 which VAT never realizes while Claude Code reads the filesystem — so no verdict is given, and the
 built-in check reports `inert` alone.
 
+**A witness is judged against the WHOLE list, never against the pattern alone.** gitignore is
+last-match-wins, so a later pattern can undo an earlier one. A positive pattern is `matched` only
+by a file the whole rule loads — `["src/gen.ts", "!src/gen.ts"]` loads nothing, so its first
+pattern is `inert`. A `!` pattern is `matched` by a file the list without it would load and the
+whole list does not — a negation whose every exclusion a later pattern re-includes has no effect,
+and is `inert`.
+
 🚨 **Why a witness and not a `matchCount`.** Counting every path a pattern matches is O(files) **per
 pattern**, and the shipped prune stops at the FIRST hit: `firstMatchUnder` compiles the matcher once,
 scans the candidate range, and returns the moment it finds a path. A count would delete that early
@@ -370,9 +377,11 @@ row falsifiable by a reader, the same reason `RuleAdmission`'s `glob-rule-may-fi
 
 **`literalPrefix` is the glob-free leading segments of `pattern`, and it is NOT a match bound.**
 `packages/some-pkg/src/thing*.ts` yields `packages/some-pkg/src`. The matcher is gitignore dialect
-after the harness strips a trailing `/**`, so a pattern with no other slash matches at ANY depth —
-`src/**` reaches `packages/cli/src/x.ts`, far outside the prefix `src`. A prefix comparison over this
-column answers ∀ containment only when the stripped pattern still contains a `/`; for any other
+after the harness strips a trailing `/**`, so a pattern with no `/` before its last character matches
+at ANY depth — `src/**` and `src/` reach `packages/cli/src/x.ts`, far outside the prefix `src`. A
+leading `/` anchors the pattern and is dropped from the prefix (`/dist/**` yields `dist`). A prefix
+comparison over this column answers ∀ containment only when the stripped pattern still has a `/`
+before its last character; for any other
 pattern it is a wrong answer, not a conservative one. ⛔ A wholly literal pattern yields ITSELF — a FILE
 path, not a directory, because `.` is not a glob metacharacter. Read the column as *"the longest path
 every match lives at or below"*, which a file satisfies only inclusively; `claude-context-rules.ts`

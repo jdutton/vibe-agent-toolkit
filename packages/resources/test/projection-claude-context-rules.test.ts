@@ -1309,4 +1309,93 @@ describe('a NESTED rule re-bases a pattern without changing what its prefix mean
     expect(admissionsFor(PKG_RULE, paths, [], 'pkg/lib/x', 'pkg/lib/x/a.ts'))
       .toEqual([{ kind: 'glob-rule', pattern: 'lib/x/*.ts' }]);
   });
+
+  it('⭐ does not let a root-base negation exclude what the nested base loads', () => {
+    // Under the nested base the list is `pkg/lib/a.ts`, `!pkg/pkg/lib/a.ts`,
+    // which loads `pkg/lib/a.ts`. The root base's `!pkg/lib/a.ts` belongs to a
+    // different reading of the rule and must not subtract from this one.
+    const paths = ['lib/a.ts', '!pkg/lib/a.ts'];
+    expect(admissionsFor(PKG_RULE, paths, [], 'pkg/lib', 'pkg/lib/a.ts'))
+      .toEqual([{ kind: 'glob-rule', pattern: 'lib/a.ts' }]);
+    expect(admissionsFor(PKG_RULE, paths, ['pkg/lib/a.ts'], 'pkg/lib', null))
+      .toEqual([{ kind: MAY_FIRE, pattern: 'lib/a.ts', examplePath: 'pkg/lib/a.ts' }]);
+  });
+});
+
+/** A list whose last pattern RE-INCLUDES what its negation took out. */
+const REINCLUDED = ['*.ts', '!gen.ts', '*.ts'];
+
+describe('the whole-list matcher keeps gitignore\'s last-match-wins order', () => {
+  it('⭐ loads a file a REPEATED positive pattern re-includes after a negation — file lane', () => {
+    // ⛔ De-duplicating the glob list collapsed the third `*.ts` into the first,
+    // so the negation became the last word and `src/gen.ts` read as excluded
+    // while the harness — which adds the list as declared — loads it.
+    expect(admissionsFor(TS_RULE, REINCLUDED, [], 'src', 'src/gen.ts'))
+      .toEqual([{ kind: 'glob-rule', pattern: '*.ts' }]);
+  });
+
+  it('⭐ names the re-included file as the ∃ witness — directory lane', () => {
+    expect(admissionsFor(TS_RULE, REINCLUDED, ['src/gen.ts'], 'src', null))
+      .toEqual([{ kind: MAY_FIRE, pattern: '*.ts', examplePath: 'src/gen.ts' }]);
+  });
+
+  it('⭐ calls the overridden negation inert and both positives matched — witness lane', () => {
+    const result = evaluateRulePatterns({
+      isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(...REINCLUDED),
+      files: corpusOf('src/gen.ts'),
+    });
+    expect(result.map((entry) => [entry.status, entry.witnessPath]))
+      .toEqual([['matched', 'src/gen.ts'], ['inert', null], ['matched', 'src/gen.ts']]);
+  });
+});
+
+describe('a pattern\'s status accounts for the patterns AFTER it', () => {
+  it('⭐ never calls a positive pattern matched on a file a LATER negation takes back out', () => {
+    // The rule loads nothing: the positive's only file is excluded. The
+    // negation is what makes that so, so IT is the live one.
+    const result = evaluateRulePatterns({
+      isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared('src/gen.ts', '!src/gen.ts'),
+      files: corpusOf('src/gen.ts'),
+    });
+    expect(result.map((entry) => [entry.status, entry.witnessPath]))
+      .toEqual([['inert', null], ['matched', 'src/gen.ts']]);
+  });
+
+  it('⭐ calls a negation inert when a LATER pattern re-includes everything it excluded', () => {
+    expect(statusesOf(['src/*.ts', '!src/gen.ts', 'src/gen.ts'], corpusOf('src/a.ts', 'src/gen.ts')))
+      .toEqual(['matched', 'inert', 'matched']);
+  });
+
+  it('keeps the positive control: a negation nothing later overrides is still matched', () => {
+    expect(statusesOf(['src/*.ts', '!src/gen.ts', 'lib/*.ts'], corpusOf('src/a.ts', 'src/gen.ts', 'lib/b.ts')))
+      .toEqual(['matched', 'matched', 'matched']);
+  });
+});
+
+describe('a root-anchored glob locates its territory without the anchor', () => {
+  it('⭐ calls `/dist/**` over a gitignored `dist/` gitignored, as it does `dist/**`', () => {
+    // ⛔ The oracle was asked about `/dist/…` — an ABSOLUTE path, which no
+    // repository ignores — so the anchored spelling of the same glob read as a
+    // dead one and CLAUDE_RULE_GLOB_INERT told the author to delete it.
+    const oracle = ignoresBeneath('dist');
+    const result = evaluateRulePatterns({
+      isIgnored: oracle.isIgnored, rulePath: ROOT_RULE, patterns: declared('/dist/**', 'dist/**'),
+      files: corpusOf(SUBJECT_TS),
+    });
+    expect(result.map((entry) => [entry.status, entry.literalPrefix]))
+      .toEqual([['gitignored', 'dist'], ['gitignored', 'dist']]);
+    expect(oracle.asked.every((path) => !path.startsWith('/'))).toBe(true);
+  });
+
+  it('asks a wholly-literal root-anchored pattern about the FILE it names', () => {
+    const asked: string[] = [];
+    evaluateRulePatterns({
+      isIgnored: (path) => {
+        asked.push(path);
+        return false;
+      },
+      rulePath: ROOT_RULE, patterns: declared('/generated/api.ts'), files: corpusOf(SUBJECT_TS),
+    });
+    expect(asked).toEqual(['generated/api.ts']);
+  });
 });

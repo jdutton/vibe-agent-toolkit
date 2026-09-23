@@ -157,6 +157,14 @@ function inertMessage(row: ClaudeRulePatternRow, where: string): string {
   // git ignores, and the harness reads the filesystem — so for a glob scoped to
   // `dist/**` the unqualified claim was false, and the fix text below would have
   // had the author delete a glob that fires.
+  //
+  // ⛔ A `!` pattern matches nothing by construction — it is judged by what it
+  // EXCLUDES — so "matches no file" would misdescribe every dead negation.
+  if (row.pattern.startsWith('!')) {
+    return `The paths: negation "${row.pattern}" (pattern ${row.ordinal + 1} of ${where}) excludes no file`
+      + ' the rule\'s preceding patterns load that a later pattern does not load again, among the files VAT'
+      + ' can see in this tree (tracked, or untracked and not gitignored), so it has no effect.';
+  }
   return `The paths: glob "${row.pattern}" (pattern ${row.ordinal + 1} of ${where}) matches no file VAT`
     + ' can see in this tree (tracked, or untracked and not gitignored), so no such file can load the'
     + ' rule it scopes.';

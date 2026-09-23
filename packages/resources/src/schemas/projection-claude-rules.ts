@@ -55,10 +55,10 @@ export type ClaudeRulePatternStatus = z.infer<typeof ClaudeRulePatternStatusSche
  *
  * Keyed `(resourceId, ordinal)` — on the identity, not on an extent — and
  * extent-scoped rather than blob-scoped. `literalPrefix` is the glob-free leading
- * segments of `pattern` as written (leading `./` removed), and it is NOT a match
- * bound: after the harness strips a trailing `/**`, a pattern with no other slash
- * matches at any depth. Use it for prefix containment only when the stripped
- * pattern contains a `/`. Why each of those: `docs/architecture/zones.md` §4,
+ * segments of `pattern` as written (a leading `./` or `/` removed), and it is NOT a
+ * match bound: after the harness strips a trailing `/**`, a pattern with no `/`
+ * before its last character matches at any depth. Use it for prefix containment
+ * only when the stripped pattern has a `/` before its last character. Why each of those: `docs/architecture/zones.md` §4,
  * "The `claude_rule_patterns` table — four statuses, one witness".
  */
 export const ClaudeRulePatternRowSchema = z.object({
@@ -69,7 +69,7 @@ export const ClaudeRulePatternRowSchema = z.object({
   pattern: z.string().min(1)
     .describe('The `paths:` glob verbatim, exactly as the rule file declares it'),
   literalPrefix: z.string()
-    .describe('The glob-free leading segments of `pattern` as written (leading `./` removed); may be empty. Not a match bound: after the harness strips a trailing `/**`, a pattern with no other slash matches at any depth. Use it for prefix containment only when the stripped pattern contains a `/`.'),
+    .describe('The glob-free leading segments of `pattern` as written (a leading `./` or `/` removed); may be empty. Not a match bound: after the harness strips a trailing `/**`, a pattern with no `/` before its last character matches at any depth. Use it for prefix containment only when the stripped pattern has a `/` before its last character.'),
   witnessPath: z.string().min(1).nullable()
     .describe('First tree path this pattern matches — non-null exactly when status is "matched". Pinned by a superRefine that is NOT encoded in the generated JSON Schema'),
   status: ClaudeRulePatternStatusSchema,
