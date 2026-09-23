@@ -1,7 +1,7 @@
 /**
  * The `Projection` container and the mutable builder that populates it.
  *
- * A projection is nothing but rows: thirteen tables, each a flat array, produced
+ * A projection is nothing but rows: fourteen tables, each a flat array, produced
  * by contributors that never interpret one another's output. This module owns
  * two things and deliberately nothing else — the shape of that row set, and the
  * single **population** invariant no individual row can observe.
@@ -35,6 +35,7 @@ import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 import type { KeyedContent, ParserKind } from '../content-key.js';
 import { parserKindForMimeType } from '../mime-type.js';
 import type {
+  BlobClaudeImportRow,
   BlobConditionRow,
   BlobReferenceRow,
   BlobRow,
@@ -96,7 +97,7 @@ const NO_PARSER_KIND: ParserKind = 'none';
 const KEY_SEPARATOR = '\u0000';
 
 /**
- * The thirteen materialised tables of the resource projection.
+ * The fourteen materialised tables of the resource projection.
  *
  * `edges`, `edge_resolutions` and `lens_entry_points` are absent on purpose:
  * zones.md §2 places them in the derived-per-lens column, so they are the
@@ -142,6 +143,8 @@ export interface Projection {
   readonly blobSections: readonly BlobSectionRow[];
   /** Blob-keyed parse conditions. */
   readonly blobConditions: readonly BlobConditionRow[];
+  /** Blob-keyed Claude Code `@` imports — the harness's own extractor, not VAT's lexer. */
+  readonly blobClaudeImports: readonly BlobClaudeImportRow[];
 }
 
 /**
@@ -155,7 +158,7 @@ export interface Projection {
  *
  * The arrays are **live**, not snapshots: the merge driver hands the same base
  * to successive strata, and a closure contributor must see what the base
- * stratum contributed. Copying thirteen tables per contributor per fixpoint
+ * stratum contributed. Copying fourteen tables per contributor per fixpoint
  * iteration would be the alternative, and it buys nothing the `readonly` types
  * do not already state.
  */
@@ -214,7 +217,7 @@ type RowKey<T> = (row: T) => string;
 /**
  * One table: insertion-ordered rows plus a key index.
  *
- * Thirteen near-identical `add` implementations would be thirteen places for the
+ * Fourteen near-identical `add` implementations would be fourteen places for the
  * de-duplication rule to drift, so there is one, parameterised by the key.
  */
 class ProjectionTable<T> {
@@ -370,6 +373,9 @@ export class ProjectionBuilder {
   );
   readonly #blobConditions = new ProjectionTable<BlobConditionRow>(
     (row) => compositeKey(row.blob, row.code, row.line, row.message),
+  );
+  readonly #blobClaudeImports = new ProjectionTable<BlobClaudeImportRow>(
+    (row) => compositeKey(row.blob, row.ordinal),
   );
 
   readonly #gitTracker: GitTracker | undefined;
@@ -743,6 +749,16 @@ export class ProjectionBuilder {
   }
 
   /**
+   * Record one Claude Code `@` import.
+   *
+   * @param row - The import row
+   * @returns True when recorded, false when this `(blob, ordinal)` was already present
+   */
+  addBlobClaudeImport(row: BlobClaudeImportRow): boolean {
+    return this.#blobClaudeImports.add(row) === undefined;
+  }
+
+  /**
    * Restamp a set of realization rows with one `(contentKey, contentState)` pair.
    *
    * The two columns are written together and never separately: the schema pins
@@ -796,6 +812,7 @@ export class ProjectionBuilder {
       blobReferences: this.#blobReferences.rows,
       blobSections: this.#blobSections.rows,
       blobConditions: this.#blobConditions.rows,
+      blobClaudeImports: this.#blobClaudeImports.rows,
     };
     return this.#base;
   }
@@ -823,6 +840,7 @@ export class ProjectionBuilder {
       blobReferences: this.#blobReferences.snapshot(),
       blobSections: this.#blobSections.snapshot(),
       blobConditions: this.#blobConditions.snapshot(),
+      blobClaudeImports: this.#blobClaudeImports.snapshot(),
     });
   }
 }

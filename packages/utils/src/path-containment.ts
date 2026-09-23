@@ -79,6 +79,24 @@ function canonicalFromAncestor(target: string): { canonical: string; exists: boo
   }
 }
 
+/**
+ * The canonical (realpath) spelling of `target`, whether or not it exists.
+ *
+ * The same canonicalization {@link isUnderRoot} applies to both of its sides,
+ * exposed for a caller that must COMPARE two spellings rather than ask a
+ * containment question — a root discovered from the physical `process.cwd()`
+ * against a path the operator typed through a symlink (macOS `/tmp` →
+ * `/private/tmp`). A missing target is canonicalized from its deepest existing
+ * ancestor with the missing tail re-appended.
+ *
+ * @param target - Absolute, or relative to cwd; either separator
+ * @returns The canonical spelling, forward-slashed
+ * @throws When the OS refuses to examine the path for any reason but absence
+ */
+export function canonicalPath(target: string): string {
+  return canonicalFromAncestor(target).canonical;
+}
+
 /** Whether an entry (a file, a directory, or a link — dangling or not) is at `p`. */
 function entryExists(p: string): boolean {
   try {

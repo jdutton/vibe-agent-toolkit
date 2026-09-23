@@ -46,8 +46,9 @@ import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 import { computeContentKey } from '../../src/content-key.js';
 import { parseMarkdownContent } from '../../src/link-parser.js';
 import { mimeTypeForPath } from '../../src/mime-type.js';
-import { blobRowFor } from '../../src/projection/blob-facts.js';
+import { blobClaudeImportsFor, blobRowFor } from '../../src/projection/blob-facts.js';
 import { blobReferencesFor } from '../../src/projection/blob-references.js';
+import { claudeMemoryFactsOf, type ClaudeMemoryFacts } from '../../src/projection/claude-memory.js';
 import type { ExtentContribution } from '../../src/projection/contributor.js';
 import { AgenticConventionContributor } from '../../src/projection/contributors/agentic-convention.js';
 import {
@@ -286,7 +287,11 @@ export function addFile(builder: ProjectionBuilder, file: FixtureFile, root: str
     builder.addBlobReference(row);
   }
   if (file.markdown !== undefined) {
-    builder.addBlob(blobRowForFixture(contentKey, file.markdown));
+    // The SHIPPED extractor, the one `blob-population.ts` runs: the in-memory
+    // and on-disk lanes must not have two answers to "which `@` is an import".
+    const claude = claudeMemoryFactsOf(file.markdown);
+    builder.addBlob(blobRowForFixture(contentKey, file.markdown, claude));
+    for (const row of blobClaudeImportsFor(contentKey, claude)) builder.addBlobClaudeImport(row);
   }
 }
 
@@ -297,14 +302,15 @@ export function addFile(builder: ProjectionBuilder, file: FixtureFile, root: str
  *
  * @param contentKey - The blob's content key
  * @param markdown - The file's source text
+ * @param claude - The shipped `claudeMemoryFactsOf` over the same text
  * @returns The blob row
  */
-function blobRowForFixture(contentKey: string, markdown: string) {
+function blobRowForFixture(contentKey: string, markdown: string, claude: ClaudeMemoryFacts) {
   const bytes = Buffer.byteLength(markdown);
   const parsed = parseMarkdownContent(markdown, bytes);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- `text` is discarded on purpose: it is `markdown` itself for a plain-ASCII fixture, and `decoding` is the only half `blobRowFor` wants
   const { text, ...decoding } = decodeTextContent(Buffer.from(markdown, 'utf-8'));
-  return blobRowFor(contentKey, bytes, decoding, parsed);
+  return blobRowFor(contentKey, bytes, decoding, parsed, claude);
 }
 
 /**
@@ -365,10 +371,11 @@ function addDirectory(builder: ProjectionBuilder, dirPath: string, root: string)
   builder.addRealization(realizationRow(resourceId, dirPath, null, true));
 }
 
-/** The two tables `closureProvenance` reads — see {@link closureFixtureFrom}. */
+/** The tables `closureProvenance` reads — see {@link closureFixtureFrom}. */
 export interface ClosureFixture {
   readonly resourceRealizations: ProjectionBase['resourceRealizations'];
   readonly blobReferences: ProjectionBase['blobReferences'];
+  readonly blobClaudeImports: ProjectionBase['blobClaudeImports'];
 }
 
 /**
@@ -398,7 +405,7 @@ export interface ClosureFixture {
  *
  * @param root - The absolute corpus root every path is realized relative to
  * @param files - Root-relative path → markdown source
- * @returns Just the two tables `closureProvenance` reads
+ * @returns Just the tables `closureProvenance` reads
  */
 export function closureFixtureFrom(root: string, files: Record<string, string>): ClosureFixture {
   const builder = new ProjectionBuilder({ root });
@@ -406,7 +413,11 @@ export function closureFixtureFrom(root: string, files: Record<string, string>):
     addFile(builder, { path, refs: [], markdown }, root);
   }
   const base = builder.base();
-  return { resourceRealizations: base.resourceRealizations, blobReferences: base.blobReferences };
+  return {
+    resourceRealizations: base.resourceRealizations,
+    blobReferences: base.blobReferences,
+    blobClaudeImports: base.blobClaudeImports,
+  };
 }
 
 /** Merge one contributor's rows into the builder under construction. */

@@ -21,6 +21,7 @@ function inputFor(files: Record<string, string>, rootFile: string): ClosureProve
     root: ABSENT_ROOT,
     resourceRealizations: fixture.resourceRealizations,
     blobReferences: fixture.blobReferences,
+    blobClaudeImports: fixture.blobClaudeImports,
     declaration: claudeImportExtentDeclaration(rootFile),
   };
 }

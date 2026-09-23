@@ -68,7 +68,7 @@
             "pruned-by-oversize",
             "unmeasured"
           ],
-          "description": "The 4 MiB CLAUDE.md cliff's verdict on this file — NOT whether it is paid at launch; that is launchCharge. \"unmeasured\" means no blob, so no size"
+          "description": "The 4 MiB memory-file cliff's verdict on this file — NOT whether it is paid at launch; that is launchCharge. \"unmeasured\" means no blob, so no size"
         },
         "launchCharge": {
           "type": "string",
@@ -85,7 +85,7 @@
               "type": "null"
             }
           ],
-          "description": "blobs.tokenEstimate, or null when this realization has no blob. Null is UNKNOWN, never zero"
+          "description": "blobs.claudeInjectedTokens — the text Claude Code injects, frontmatter and HTML comment blocks removed — or null when this realization has no blob. Null is UNKNOWN, never zero"
         },
         "bytes": {
           "anyOf": [

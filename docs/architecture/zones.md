@@ -387,6 +387,41 @@ path, not a directory, because `.` is not a glob metacharacter. Read the column 
 every match lives at or below"*, which a file satisfies only inclusively; `claude-context-rules.ts`
 records the silent under-report that reading it as a directory prefix already caused once.
 
+### `blob_claude_imports` and `blobs.claudeInjected*` — the harness's content rules, as blob facts
+
+Three things Claude Code does with a memory file depend on its bytes and nothing else, so all three
+are **blob-scoped** (`packages/resources/src/projection/claude-memory.ts`, transcribed from the shipped
+reader in [`claude-code-memory-loader.md`](../external/claude-code-memory-loader.md)):
+
+- **`blob_claude_imports`** — one row per `@` import the harness reads out of the blob, keyed
+  `(blob, ordinal)`: `rawRef` as authored, `target` (the spelling the harness resolves — `@` dropped,
+  `#fragment` cut, `\ ` unescaped, unique per blob), and the `line` of the `@`. Produced by the
+  binary's own extractor — `marked` 15.0.6 with `gfm: false`, text tokens only — for EVERY derived
+  blob, `.ts` as much as `.md`, because the harness lexes an imported `.ts` exactly as it lexes a
+  `CLAUDE.md`.
+- **`blobs.claudeInjectedBytes` / `claudeInjectedTokens`** — the size of the text the harness
+  INJECTS: frontmatter and block-level HTML comments removed, trimmed. `0` means the file is dropped
+  and its imports never followed.
+- **`blobs.claudePaths`** — the `paths:` globs the harness scopes the file by, read ITS way (`kyn`):
+  its own frontmatter split and YAML parse, for any extension, then the `paths:` normaliser; null
+  when it scopes the file by none. The launch and read walks and `ClaudeRulesScopeContributor` read
+  path-scoping from this column only — never from `blobs.frontmatter`, which is VAT's parser's
+  answer and is absent for a `.ts` import routed to no parser (the in-memory and on-disk lanes
+  disagreed on exactly that). `blobs.frontmatterError` stays the parser's, and is what
+  `CLAUDE_RULE_FRONTMATTER_INVALID` reports.
+
+**Not a subset of `blob_references`, and never read beside it for this question.**
+`blob_references` is VAT's dialect-free record of every reference *candidate*; the two disagree in
+both directions (`(@a.md)` is a candidate and no import; `**@a.md**` is an import the lexer's
+candidate filters differ on; a `@` in a `.ts` code span is a candidate on the no-parser route and code
+to the harness). The `claude-import` closure dialect walks `blob_claude_imports` and nothing else, and
+the schema refuses a `follow` list beside it — one table, one extractor, for the in-memory fixture and
+the on-disk lane alike.
+
+**What stays OFF the blob.** Whether the harness reads a PATH at all — its extension (`Syn`) and the
+4 MiB cliff on `blobs.bytes` — is the walk's judgement (`claude-context-walk.ts`), because a blob is
+shared by every path holding its bytes.
+
 ## 5. References and edges
 
 ### The blob layer records shape; a lens assigns meaning

@@ -393,7 +393,7 @@ describe('vat claude context --all — the machine-readable envelope', () => {
 
     expect(envelope.kind).toBe('context-cost-map');
     expect(envelope.boundsStatement).toBe(CLAUDE_CONTEXT_BOUNDS_STATEMENT);
-    expect(envelope.limits.find((limit) => limit.id === 'cliff-scope')?.direction).toBe('scope');
+    expect(envelope.limits.find((limit) => limit.id === 'main-conversation-only')?.direction).toBe('scope');
     expect(envelope.modelledBehaviours.length).toBeGreaterThan(0);
   });
 

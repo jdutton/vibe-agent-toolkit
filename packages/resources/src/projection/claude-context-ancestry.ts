@@ -18,33 +18,28 @@
  * launch, files in subdirectories BELOW load on demand when Claude reads there —
  * so the ancestry of `D` IS the launch-time set for a session started in `D`.
  *
- * ## ⛔ Exactly two basenames, and membership comes from the shipped classifier
+ * ## ⛔ Membership comes from the shipped classifier
  *
- * *"checking each directory along the way for `CLAUDE.md` and `CLAUDE.local.md`
- * files."* `classifyPath`'s {@link CLAUDE_MD_TAG} rule is precisely those two
- * spellings (`agentic-tags.ts` — `b === 'claude.md' || b === 'claude.local.md'`),
- * so membership is read off the tag rather than re-spelled here. A private glob
- * would keep matching what it always matched while the classifier moved on, and
- * the drift would be silent.
+ * `classifyPath`'s {@link CLAUDE_MD_TAG} rule is `CLAUDE.md` and `CLAUDE.local.md`
+ * (`agentic-tags.ts`), so membership is read off the tag rather than re-spelled
+ * here. A private glob would keep matching what it always matched while the
+ * classifier moved on, and the drift would be silent.
  *
- * `.claude/CLAUDE.md` is honoured at the corpus ROOT only. An earlier draft added
- * it to every ancestor, which read a documented DISJUNCTION (*"a project
- * CLAUDE.md can be stored in either `./CLAUDE.md` or `./.claude/CLAUDE.md`"*) as
- * a conjunction and promoted a project-root location into a per-directory one.
- * Neither is documented.
+ * ## ⭐ Which files, in which order — the binary, not the prose
  *
- * ## Order is root-down, and it is decided HERE because it is decided at render
+ * The launch walk (`$yn`, transcribed in
+ * [`docs/external/claude-code-memory-loader.md`](../../../../docs/external/claude-code-memory-loader.md))
+ * visits every directory from the root down to the working directory and, in each,
+ * reads `CLAUDE.md`, then `.claude/CLAUDE.md`, then that directory's
+ * `.claude/rules`, then `CLAUDE.local.md`. So `.claude/CLAUDE.md` is honoured in
+ * EVERY directory on the walk — an earlier reading kept it to the corpus root —
+ * and a `.claude/CLAUDE.local.md` is never read for the directory above it. Each
+ * entry carries the directory whose walk step reads it (`holder`) and whether it
+ * is the `.local` overlay, so the query can slot that directory's rules between
+ * the two halves without re-deriving either.
  *
- * *"Across the directory tree, content is ordered from the filesystem root down
- * to your working directory. […] Within each directory, `CLAUDE.local.md` is
- * appended after `CLAUDE.md`."* `LensEntryPointRowSchema` documents the opposite
- * — *"nearest ancestor first"* — and Ruling B left that STORED wording untouched,
- * because precedence order and render order are different consumers one
- * `.reverse()` apart. Nothing is stored here, so this returns render order.
- *
- * ⚠️ The order of `./CLAUDE.md` against `./.claude/CLAUDE.md` is an ASSUMPTION,
- * recorded in `claude-context-limits.ts`. The vendor documents the two as
- * alternative locations and never their relative order; do not cite it for this.
+ * `LensEntryPointRowSchema` documents *"nearest ancestor first"*; that stored
+ * wording is precedence order, one `.reverse()` from this render order.
  */
 
 import type {
@@ -54,8 +49,8 @@ import type {
 
 import { CLAUDE_MD_TAG } from './agentic-tags.js';
 
-/** The corpus-root-only second project location, as `resource_realizations.dir` spells it. */
-const ROOT_DOT_CLAUDE_DIR = '.claude';
+/** The second project location's directory segment. */
+const DOT_CLAUDE = '.claude';
 
 /** The `CLAUDE.local.md` basename, lowercased the way the realization column is. */
 const LOCAL_BASENAME = 'claude.local.md';
@@ -67,8 +62,25 @@ export interface AncestryEntry {
   readonly resourceId: string;
   /** Root-relative, forward-slashed. */
   readonly path: string;
-  /** The directory that put it in the chain — `.claude` for the root's second location. */
+  /** The file's own directory — `X/.claude` for `X`'s second project location. */
   readonly dir: string;
+  /** The directory whose launch-walk step reads this file. */
+  readonly holder: string;
+  /** True for `CLAUDE.local.md`, which the walk reads after that directory's rules. */
+  readonly local: boolean;
+}
+
+/**
+ * The directory whose launch-walk step reads a `CLAUDE.md` in `dir` as its
+ * SECOND project location — `X` for `X/.claude` — or null when `dir` is not a
+ * `.claude` directory.
+ *
+ * @param dir - A `CLAUDE.md`'s own directory, root-relative
+ * @returns The holder, `''` for the corpus root, or null
+ */
+export function secondLocationHolder(dir: string): string | null {
+  if (dir === DOT_CLAUDE) return '';
+  return dir.endsWith(`/${DOT_CLAUDE}`) ? dir.slice(0, -DOT_CLAUDE.length - 1) : null;
 }
 
 /**
@@ -98,9 +110,8 @@ export function ancestorDirectories(queryDir: string): string[] {
  * @param realizations - Every realization the projection holds
  * @param tags - Every `resource_tags` row; membership is the {@link CLAUDE_MD_TAG} rows
  * @param queryDir - Root-relative directory, `''` for the corpus root
- * @returns The chain in vendor load order — root-down, `CLAUDE.local.md` after
- *   `CLAUDE.md` within each directory, and the root's `.claude/CLAUDE.md`
- *   between the two
+ * @returns The chain in launch-walk order — root-down, and within each
+ *   directory `CLAUDE.md`, then `.claude/CLAUDE.md`, then `CLAUDE.local.md`
  */
 export function claudeAncestry(
   realizations: readonly ResourceRealizationRow[],
@@ -119,18 +130,15 @@ export function claudeAncestry(
 
   const chain: AncestryEntry[] = [];
   // ⚠️ Deduplicated by identity, and the case is real rather than defensive: a
-  // query INSIDE `.claude/` puts `.claude` in the ancestor list, so
-  // `.claude/CLAUDE.md` would be admitted twice — once by the directory loop and
-  // once by the corpus-root special case below. Two entries for one file would
-  // then be summed twice by any consumer that trusted the array.
+  // query INSIDE `.claude/` visits `.claude` as a directory of its own, so
+  // `.claude/CLAUDE.md` is reachable as the root's second location AND as
+  // `.claude`'s own `CLAUDE.md`. The harness reads it once (`processedPaths`).
   const seen = new Set<string>();
-  for (const dir of ancestorDirectories(queryDir)) {
-    // `CLAUDE.md` first, then the root's second project location, then the
-    // `.local` overlay — see the header for which third of that order is cited
-    // and which two thirds are assumed.
-    pushSorted(chain, seen, byDir.get(dir) ?? [], false);
-    if (dir === '') pushSorted(chain, seen, byDir.get(ROOT_DOT_CLAUDE_DIR) ?? [], false);
-    pushSorted(chain, seen, byDir.get(dir) ?? [], true);
+  for (const holder of ancestorDirectories(queryDir)) {
+    const dotClaude = holder === '' ? DOT_CLAUDE : `${holder}/${DOT_CLAUDE}`;
+    pushSorted(chain, seen, byDir.get(holder) ?? [], holder, false);
+    pushSorted(chain, seen, byDir.get(dotClaude) ?? [], holder, false);
+    pushSorted(chain, seen, byDir.get(holder) ?? [], holder, true);
   }
   return chain;
 }
@@ -140,13 +148,15 @@ export function claudeAncestry(
  *
  * @param chain - The chain being built, appended in place
  * @param seen - Identities already in the chain, added to in place
- * @param rows - That directory's `claude-md` realizations
+ * @param rows - One directory's `claude-md` realizations
+ * @param holder - The directory whose walk step reads them
  * @param local - True to take `CLAUDE.local.md`, false to take `CLAUDE.md`
  */
 function pushSorted(
   chain: AncestryEntry[],
   seen: Set<string>,
   rows: readonly ResourceRealizationRow[],
+  holder: string,
   local: boolean,
 ): void {
   const matching = rows
@@ -155,7 +165,7 @@ function pushSorted(
   for (const row of matching) {
     if (seen.has(row.resourceId)) continue;
     seen.add(row.resourceId);
-    chain.push({ resourceId: row.resourceId, path: row.path, dir: row.dir });
+    chain.push({ resourceId: row.resourceId, path: row.path, dir: row.dir, holder, local });
   }
 }
 

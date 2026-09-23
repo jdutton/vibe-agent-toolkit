@@ -13,9 +13,10 @@ import { frontmatterIsNonMapping } from '../frontmatter-source.js';
 import type { ParseResult } from '../link-parser.js';
 import type { OffsetRange } from '../reference-lexer.js';
 import type { ContentMeasures } from '../schemas/parse-facts.js';
-import type { BlobConditionRow, BlobRow } from '../schemas/projection-blobs.js';
+import type { BlobClaudeImportRow, BlobConditionRow, BlobRow } from '../schemas/projection-blobs.js';
 
 import { flattenHeadings } from './blob-sections.js';
+import type { ClaudeMemoryFacts } from './claude-memory.js';
 
 // `ContentMeasures` is defined by `ContentMeasuresSchema`
 // (`schemas/parse-facts.ts`), not here: the parse cache persists these three
@@ -130,6 +131,10 @@ type ExactBlobEncoding =
  * @param decoding - What the decode of these bytes knew, guessed and lost,
  *   straight off the `KeyedContent` the parse was performed on
  * @param parsed - The parse this row describes
+ * @param claude - `claudeMemoryFactsOf` over the same decoded text — a
+ *   parameter rather than derived here because the same facts also yield the
+ *   `blob_claude_imports` rows ({@link blobClaudeImportsFor}), and deriving them
+ *   twice would lex the text twice
  * @returns The `blobs` row
  */
 export function blobRowFor(
@@ -137,6 +142,7 @@ export function blobRowFor(
   sizeBytes: number,
   decoding: ExactBlobEncoding,
   parsed: ParseResult,
+  claude: ClaudeMemoryFacts,
 ): BlobRow {
   const measures = parsed.contentMeasures;
   // One section per heading, so both columns come from the same count. The
@@ -156,6 +162,9 @@ export function blobRowFor(
     encodingSource: decoding.encodingSource,
     replacementCharacters: decoding.replacementCharacters,
     tokenEstimate: parsed.estimatedTokenCount,
+    claudeInjectedBytes: claude.injectedBytes,
+    claudeInjectedTokens: claude.injectedTokens,
+    claudePaths: claude.paths === null ? null : [...claude.paths],
     // `ParseResult` types frontmatter values as `unknown` — YAML can decode to
     // `Infinity`, `NaN` or a `Buffer`, none of which are JSON. The projection
     // schema is the enforcement point for that, not this assembler: narrowing
@@ -260,6 +269,24 @@ export function blobConditionsFor(contentKey: string, parsed: ParseResult): Blob
   }
 
   return rows;
+}
+
+/**
+ * Build the `blob_claude_imports` rows for one blob — its Claude Code `@`
+ * imports, in the order the harness follows them.
+ *
+ * @param contentKey - The blob's key, written into every row's `blob` column
+ * @param claude - `claudeMemoryFactsOf` over the blob's decoded text
+ * @returns One row per distinct import target
+ */
+export function blobClaudeImportsFor(contentKey: string, claude: ClaudeMemoryFacts): BlobClaudeImportRow[] {
+  return claude.imports.map((entry, ordinal) => ({
+    blob: contentKey,
+    ordinal,
+    rawRef: entry.rawRef,
+    target: entry.target,
+    line: entry.line,
+  }));
 }
 
 /**

@@ -190,17 +190,20 @@ describe('whatLoadsAt', () => {
     expect(rowAt(answer, SHARED)?.admissions).toHaveLength(1);
   });
 
-  it('charges an ancestor that is ALSO an import target once, with both admissions', async () => {
+  it('charges an ancestor that is ALSO an import target once, by the route the launch walk took first', async () => {
     const answer = await answerAt(
       { 'CLAUDE.md': '@docs/CLAUDE.md\n', [NESTED_CLAUDE_MD]: 'nested\n' },
       'docs',
     );
 
+    // The walk reaches it as the root `CLAUDE.md`'s import before it reaches
+    // `docs/`, and one visited set spans the launch: `docs/`'s own step finds
+    // it spent (`$q`, docs/external/claude-code-memory-loader.md).
     expect(pathsOf(answer).filter((path) => path === NESTED_CLAUDE_MD)).toEqual([NESTED_CLAUDE_MD]);
-    expect(rowAt(answer, NESTED_CLAUDE_MD)?.admissions.map((a) => a.kind).sort()).toEqual([
-      'ancestry',
-      'import',
+    expect(rowAt(answer, NESTED_CLAUDE_MD)?.admissions).toEqual([
+      { kind: 'import', rootPath: 'CLAUDE.md', viaPath: 'CLAUDE.md', depth: 1 },
     ]);
+    expect(rowAt(answer, NESTED_CLAUDE_MD)?.loadClass).toBe('always');
   });
 
   it('never re-admits a closure root as an import of itself', async () => {
@@ -334,11 +337,13 @@ describe('whatLoadsAt', () => {
     expect(rowAt(answer, 'CLAUDE.md')?.bytes).toBe(5);
   });
 
-  it('classes a NESTED rules file on-demand and a ROOT one always', async () => {
+  it('classes an unscoped rule ALWAYS in every directory on the walk, nested or root', async () => {
+    // The launch walk reads `.claude/rules` in every directory from the root
+    // down to the working directory (`$yn`, docs/external/claude-code-memory-loader.md).
     const nested = await answerAt({ [NESTED_RULE]: 'nested rule\n' }, 'sub');
     const root = await answerAt({ '.claude/rules/y.md': 'root rule\n' }, '');
 
-    expect(rowAt(nested, NESTED_RULE)?.loadClass).toBe('on-demand');
+    expect(rowAt(nested, NESTED_RULE)?.loadClass).toBe('always');
     expect(rowAt(nested, NESTED_RULE)?.admissions).toEqual([
       { kind: 'nested-rule', under: 'sub' },
     ]);
@@ -373,44 +378,43 @@ describe('whatLoadsAt', () => {
     expect(file?.loadClass).toBe(directory?.loadClass);
   });
 
-  it('keeps a path-scoped rule OUT of the always-loaded budget, closure and all', async () => {
+  it('keeps a path-scoped rule OUT of the always-loaded budget, but not its unscoped import', async () => {
     const answer = await answerAt(SCOPED_RULE_TREE, SCOPED_RULE_SUBJECT);
     const always = answer.rows.filter((row) => row.loadClass === 'always').map((row) => row.path);
 
-    // The consequence, asserted where a consumer sees it: neither the rule nor
-    // what it imports may appear in the launch-time set, and `CLAUDE.md` must —
-    // a suite asserting only the absence would also pass on a query that classed
-    // everything `on-demand`.
-    expect(always).toEqual([ROOT_CLAUDE_MD]);
+    // The launch walk reads the rule, then filters its closure entry by entry on
+    // each file's OWN `paths:` (`Lke`): the rule is dropped, its unscoped import
+    // loads. `CLAUDE.md` is the control a query classing nothing `always` fails.
+    expect(always).toEqual([ROOT_CLAUDE_MD, SCOPED_RULE_HELPER]);
+    expect(rowAt(answer, SCOPED_RULE_HELPER)?.admissions).toEqual([
+      { kind: 'import', rootPath: SCOPED_RULE, viaPath: SCOPED_RULE, depth: 1 },
+    ]);
   });
 
   it('lets `always` win over `on-demand` when one identity carries both', async () => {
-    // The nested rules file is reached by the root `CLAUDE.md`'s import closure
-    // AND admitted as a nested rule for this directory. Reporting the weaker
-    // class would under-report a file the harness loads at launch.
+    // The path-scoped rule is loaded at launch as the root `CLAUDE.md`'s import
+    // (nothing filters a `CLAUDE.md` closure) AND admitted on demand by its glob.
+    // Reporting the weaker class would under-report a file loaded at launch.
     const answer = await answerAt(
-      {
-        'CLAUDE.md': `@${NESTED_RULE}\n`,
-        [NESTED_RULE]: 'nested rule\n',
-      },
-      'sub',
+      { ...SCOPED_RULE_TREE, [ROOT_CLAUDE_MD]: `@${SCOPED_RULE}\n` },
+      SCOPED_RULE_SUBJECT,
     );
-    const row = rowAt(answer, NESTED_RULE);
+    const row = rowAt(answer, SCOPED_RULE);
 
-    expect(row?.admissions.map((a) => a.kind).sort()).toEqual(['import', 'nested-rule']);
+    expect(row?.admissions.map((a) => a.kind).sort()).toEqual(['glob-rule', 'import']);
     expect(row?.loadClass).toBe('always');
   });
 
-  it('renders a member it cannot attribute as unknown rather than inventing a parent', async () => {
+  it('reports a member it cannot attribute, and never charges it on the membership table\'s word', async () => {
     const projection = await withStrayMembership({
       'CLAUDE.md': '@docs/handbook.md\n',
       'docs/handbook.md': 'x\n',
     });
     const answer = narrowed(whatLoadsAt(projection, ''));
 
-    expect(answer.rows.find((row) => row.path === STRAY)?.admissions).toEqual([
-      { kind: 'import', rootPath: 'CLAUDE.md', viaPath: null, depth: null },
-    ]);
+    // The launch walk follows the import edges, and no edge reaches the stray:
+    // it is named as unexplained rather than charged under an invented parent.
+    expect(answer.rows.find((row) => row.path === STRAY)).toBeUndefined();
     expect(answer.unattributedImports).toEqual([STRAY]);
   });
 
@@ -436,18 +440,16 @@ describe('whatLoadsAt', () => {
     expect(() => whatLoadsAt({ ...projection, roots: [] }, '')).toThrow(/no root/);
   });
 
-  it('classes an import member by its closure ROOT, so an on-demand root pulls in on-demand members', async () => {
+  it('never loads a path-scoped rule\'s import on demand — it loaded at launch or not at all', async () => {
     const answer = await answerAt(
-      { [NESTED_RULE]: '@helper.md\n', [NESTED_RULE_HELPER]: 'helper\n' },
-      'sub',
+      { ...SCOPED_RULE_TREE, [SCOPED_RULE_HELPER]: "---\npaths: ['docs/**']\n---\nhelper\n" },
+      SCOPED_RULE_SUBJECT,
     );
 
-    // Nothing in this projection loads either file at launch: the importer is a
-    // nested rules file the session loads on demand, so what it imports is on
-    // demand too. Reading the `import` admission alone said `always` and
-    // over-charged the launch-time budget.
-    expect(rowAt(answer, NESTED_RULE)?.loadClass).toBe('on-demand');
-    expect(rowAt(answer, NESTED_RULE_HELPER)?.loadClass).toBe('on-demand');
+    // The helper declares `paths:` of its own, so the launch walk drops it, and
+    // the read of `src/a.ts` keeps only entries whose OWN globs match it (`y3`).
+    expect(rowAt(answer, SCOPED_RULE)?.loadClass).toBe('on-demand');
+    expect(rowAt(answer, SCOPED_RULE_HELPER)).toBeUndefined();
   });
 
   it('propagates a launch-time class through a root that is itself only always BY import', async () => {
@@ -471,6 +473,7 @@ describe('whatLoadsAt', () => {
       root: projection.roots[0]?.path ?? '',
       resourceRealizations: projection.resourceRealizations,
       blobReferences: projection.blobReferences,
+      blobClaudeImports: projection.blobClaudeImports,
       declaration: ExtentDeclarationSchema.parse(provenanceRow.parameterSet),
     });
 

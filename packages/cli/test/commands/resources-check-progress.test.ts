@@ -43,6 +43,9 @@ const POPULATION: ProgressEntry = {
   membersEnumerated: 12,
 };
 
+/** The line the child writes the moment it has booted, before any work. */
+const STARTED: ProgressEntry = { kind: 'started' };
+
 /** One complete check: the `start` that precedes the statement and its cost. */
 const FIRST_START: ProgressEntry = { kind: 'start', name: 'no-markdown' };
 const FIRST_COST: ProgressEntry = { kind: 'check', name: 'no-markdown', durationMs: 3.5, rows: 2 };
@@ -103,20 +106,27 @@ describe('unitInFlight', () => {
     expect(inFlight).toStrictEqual({ kind: 'check', name: 'no-orphans' });
   });
 
-  it('reports the POPULATION when no population line ever arrived', () => {
-    // 🔑 There is no projection and therefore no honest document — the caller
-    // has to refuse rather than publish a report with invented extent.
-    expect(unitInFlight([])).toStrictEqual({ kind: 'population' });
+  it('reports the POPULATION when the child booted and no population line arrived', () => {
+    // 🔑 There is no projection, so the caller publishes its population fields
+    // as null rather than inventing an extent.
+    expect(unitInFlight([STARTED])).toStrictEqual({ kind: 'population' });
   });
 
-  it('keys the population sentinel on the POPULATION LINE, not on an empty log', () => {
-    // A synthetic log — a real run cannot start a check before it populates —
-    // and that is the point: it pins the DISCRIMINATOR. The cheaper
-    // implementation (`entries.length === 0`) passes the case above and fails
-    // here, and it is wrong for the reason that matters: "no projection" is a
-    // claim about the population line, and an empty log is only one way to
-    // arrive at it.
-    expect(unitInFlight([FIRST_START])).toStrictEqual({ kind: 'population' });
+  it('reports STARTUP when the child never said it had booted', () => {
+    // 🔑 Its own unit: Node and the CLI were still loading, nothing had touched
+    // the tree, and the remedy is not "size the budget against your population".
+    expect(unitInFlight([])).toStrictEqual({ kind: 'startup' });
+  });
+
+  it('keys each sentinel on ITS OWN line, not on an empty log', () => {
+    // Synthetic logs — a real run cannot start a check before it boots or
+    // populates — and that is the point: they pin the DISCRIMINATORS. The
+    // cheaper implementation (`entries.length === 0`) passes the cases above and
+    // fails here, and it is wrong for the reason that matters: "no projection"
+    // is a claim about the population line and "not booted" is a claim about the
+    // started line, and an empty log is only one way to arrive at either.
+    expect(unitInFlight([STARTED, FIRST_START])).toStrictEqual({ kind: 'population' });
+    expect(unitInFlight([FIRST_START])).toStrictEqual({ kind: 'startup' });
   });
 
   it('reports no unit in flight when every started check also completed', () => {

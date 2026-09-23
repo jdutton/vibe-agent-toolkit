@@ -515,10 +515,11 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit of a plugin with a SKILL.md it can
  * `SCAN_PATH_UNREADABLE`, warning, exit 0 — and it is filed once even though
  * the distributed-tree detector meets the same directory.
  *
- * And the other half of the same contract, driven through the CLI: a root with
- * NOTHING readable audited zero files. The refusal row is not a scanned file,
- * so `filesScanned` is 0 and the run ends on the zero-files refusal (exit 1)
- * instead of `filesScanned: 1, filesPassed: 0`, `status: warning`, exit 0.
+ * And the other half, driven through the CLI: a ROOT the OS will not list is
+ * not a degraded run but one that could not start — exit 2, the same ending
+ * `vat resources validate`, `check`, `query` and `scan` give the same argument.
+ * It used to be scanned anyway and end on the zero-files refusal at exit 1: one
+ * outcome, two codes across verbs.
  */
 describe.skipIf(CANNOT_DENY_READS)('vat audit of a plugin with a skill directory it cannot list', () => {
   let pluginTempDir: string;
@@ -555,15 +556,12 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit of a plugin with a skill directory
     expect(report.summary['pathsUnreadable']).toBe(0);
   });
 
-  it('a root with nothing readable audits zero files: the refusal is not counted, so the run is refused at exit 1', () => {
+  it('a root the OS will not list could not be audited at all: exit 2, the invocation\'s ending', () => {
     const result = runAuditCli(lockedSkillDir);
-    const report = parseYaml(result.stdout) as { status: string; summary: Record<string, number>; issues?: Array<{ code: string }>; files: Array<{ issues: Array<{ code: string }> }> };
+    const report = parseYaml(result.stdout) as { status: string; error?: string };
 
-    expect(result.status, result.stderr).toBe(1);
+    expect(result.status, result.stderr).toBe(2);
     expect(report.status).toBe('error');
-    expect(report.summary['filesScanned']).toBe(0);
-    expect(report.summary['pathsUnreadable']).toBe(1);
-    expect(report.files.flatMap((f) => f.issues).map((i) => i.code)).toEqual(['SCAN_PATH_UNREADABLE']);
-    expect(report.issues?.map((i) => i.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
+    expect(report.error).toContain('Path cannot be read');
   });
 });

@@ -32,6 +32,7 @@
  * reason instrumenting it further would look like an improvement and not be one.
  */
 
+import { ExitCode, exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import type { ProgressEntry } from '../../src/commands/resources/check-progress.js';
@@ -49,6 +50,7 @@ import {
 import {
   buildCheckOutputData,
   buildInterruptedCheckInput,
+  CHECK_REPORT_SCHEMA,
   type CheckPayloadInput,
   NODE_FATAL_ABORT_EXIT_CODE,
 } from '../../src/commands/resources/check.js';
@@ -74,6 +76,9 @@ const BROKEN_COST: ProgressEntry = {
   durationMs: 0.9,
   broken: true,
 };
+
+/** The line the child writes the moment it has booted, before any work. */
+const STARTED: ProgressEntry = { kind: 'started' };
 
 /** The line that says every statement is done and the document is being built. */
 const CHECKS_DONE: ProgressEntry = { kind: 'checks-complete' };
@@ -282,11 +287,11 @@ function diedOf(
 
 describe('buildInterruptedCheckInput', () => {
   it('carries the population the child actually reported, never a fabricated one', () => {
-    const input = killed();
+    const { populated } = killed();
 
-    expect(input.population).toBe('store');
-    expect(input.populationMs).toBe(1180);
-    expect(input.membersEnumerated).toBe(8123);
+    expect(populated?.population).toBe('store');
+    expect(populated?.populationMs).toBe(1180);
+    expect(populated?.membersEnumerated).toBe(8123);
   });
 
   it('keeps the checks that COMPLETED, with the rows each selected', () => {
@@ -372,6 +377,22 @@ describe('buildInterruptedCheckInput', () => {
     expect(finding?.message).toContain('no check was running');
   });
 
+  it('never claims an EMPTY `checks` list "DID complete"', () => {
+    // 🚨 The notice about missing violations was appended unconditionally, so a
+    // run that completed no check told the operator the checks it listed — none —
+    // had completed. It must say there is nothing missing instead.
+    const [finding] = killed([POPULATION]).issues;
+
+    expect(finding?.message).not.toContain('DID complete');
+    expect(finding?.message).toContain('No check completed');
+  });
+
+  it('still says what is missing when some checks DID complete', () => {
+    const [finding] = killed().issues;
+
+    expect(finding?.message).toContain('DID complete');
+  });
+
   it('HEDGES that window, because a run that finished every rule also lands in it', () => {
     // 🚨 The hedge ("or after the last one") was deleted on the strength of
     // `checks-complete` — but the last check's cost is filed BEFORE its rows are
@@ -385,20 +406,64 @@ describe('buildInterruptedCheckInput', () => {
     expect(finding?.message).toContain('after the last one');
   });
 
-  it('REFUSES to build a document when population never completed', () => {
-    // 🔑 There is no projection, so `population`, `populationSecs` and
-    // `membersEnumerated` have no honest value — and `membersEnumerated: 0` is
-    // the exact shape that already means "this gate asserted nothing", which
-    // would be a second, wrong claim. An operator error (exit 2) is the truthful
-    // ending.
-    expect(() => killed([])).toThrow(/population/i);
+  it('is an ERROR document — exit 2 — when the population never completed', () => {
+    // 🔑 The exit code follows the CAUSE. Nothing was examined, so this is a
+    // command that could not do its job (`status: error`, exit 2), not a gate
+    // that failed. It used to THROW here, which lost the document; it is now
+    // published, and the code is derived from it rather than chosen by the caller.
+    const payload = buildCheckOutputData(killed([STARTED]));
+
+    expect(payload.status).toBe('error');
+    expect(exitCodeForReport(payload)).toBe(ExitCode.ERROR);
+    expect(payload.error).toContain('before its population completed');
+    // The envelope's error branch: the reason is in `error`, not in `findings`.
+    expect(payload.findings).toStrictEqual([]);
+    expect(CHECK_REPORT_SCHEMA.safeParse(payload).success).toBe(true);
   });
 
-  it('names the budget in the refusal, so the operator can raise it', () => {
-    // 🚨 This asserted `/2/`, and the sentence beside it says population is
-    // "~1.2s warm here but 33-35s" — so deleting the interpolated budget left it
-    // GREEN on the digit in an unrelated measurement. Assert the words.
-    expect(() => killed([])).toThrow(/no progress for 2s/);
+  it('is a FINDINGS document — exit 1 — when a check was in flight', () => {
+    // The other cause: the tree was examined and a rule would not return, so
+    // that rule is broken and the gate fails.
+    const payload = buildCheckOutputData(killed());
+
+    expect(payload.status).toBe('findings');
+    expect(exitCodeForReport(payload)).toBe(ExitCode.FINDINGS);
+  });
+
+  it('publishes the population as NULL, never as a fabricated value', () => {
+    // 🔑 There is no projection, so `population`, `populationSecs`, `lensSecs`
+    // and `lensesEvaluated` have no honest value. `[]` would claim "no check
+    // asked for a lens" and `0` would claim "free" — both are statements about a
+    // population that never happened. `examined: 0` is the one number that is
+    // simply TRUE here: nothing was examined, and the finding says why.
+    const payload = buildCheckOutputData(killed([STARTED]));
+
+    expect(payload.examined).toBe(0);
+    expect(payload.data.population).toBeNull();
+    expect(payload.data.populationSecs).toBeNull();
+    expect(payload.data.lensSecs).toBeNull();
+    expect(payload.data.lensesEvaluated).toBeNull();
+    expect(payload.data.checksRun).toBe(0);
+  });
+
+  it('names the budget and the population in that error, so the operator can raise it', () => {
+    // 🚨 Asserted with the words, not a digit: the sentence beside it quotes
+    // measured timings, and a bare `/2/` was once satisfied by one of those.
+    const { error } = buildCheckOutputData(killed([STARTED]));
+
+    expect(error).toContain('no progress for 2s');
+    expect(error).toContain('before its population completed');
+  });
+
+  it('says the child had not finished STARTING when the log is empty — also exit 2', () => {
+    // 🔑 A different unit with a different remedy. Before the `started` line the
+    // child is still loading Node and the CLI — no tree has been touched — so
+    // sizing the budget against the population would be the wrong advice.
+    const payload = buildCheckOutputData(killed([]));
+
+    expect(exitCodeForReport(payload)).toBe(ExitCode.ERROR);
+    expect(payload.error).toContain('before the child process had finished starting');
+    expect(payload.error).not.toContain('before its population completed');
   });
 });
 
@@ -697,15 +762,23 @@ describe('the document a run that DIED publishes', () => {
     expect(killed().issues[0]?.message).toMatch(/Raise it with `--budget/);
   });
 
-  it('refuses a document when the child died before its population', () => {
-    expect(() => died(ABORTED, [])).toThrow(/SIGABRT/);
+  it('publishes an ERROR document when the child died before its population', () => {
+    // The same cause as a budget kill there: nothing was examined, so exit 2 —
+    // with the document published, not thrown away.
+    const payload = buildCheckOutputData(died(ABORTED, [STARTED]));
+
+    expect(exitCodeForReport(payload)).toBe(ExitCode.ERROR);
+    expect(payload.data.population).toBeNull();
+    expect(payload.error).toContain(ABORTED);
   });
 
-  it('does not blame the budget in that refusal either', () => {
+  it('does not blame the budget in that error either', () => {
     // 🪤 The name promises an ABSENCE and the assertion was a presence, so a
-    // refusal that said both things would have passed. Both halves now.
-    expect(() => died(ABORTED, [])).toThrow(/died|terminated/i);
-    expect(() => died(ABORTED, [])).not.toThrow(/Raise it with `--budget/);
+    // message that said both things would have passed. Both halves now.
+    const message = buildCheckOutputData(died(ABORTED, [STARTED])).error;
+
+    expect(message).toMatch(/died|terminated/i);
+    expect(message).not.toMatch(/Raise it with `--budget/);
   });
 
   it('names the binary when the child could not be spawned at all', () => {

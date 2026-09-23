@@ -65,6 +65,7 @@ function emptyProjection(): Projection {
     blobReferences: [],
     blobSections: [],
     blobConditions: [],
+    blobClaudeImports: [],
   };
 }
 
@@ -126,8 +127,8 @@ describe('vat claude context — the limits belong to the envelope', () => {
     const envelope = contextEnvelope('/repo', sweep(['a']));
 
     expect(envelope.boundsStatement).toContain('neither a floor nor a ceiling');
-    const cliff = envelope.limits.find((limit) => limit.id === 'cliff-scope');
-    expect(cliff?.direction).toBe('scope');
+    const scope = envelope.limits.find((limit) => limit.id === 'main-conversation-only');
+    expect(scope?.direction).toBe('scope');
     expect(envelope.modelledBehaviours.length).toBeGreaterThan(0);
   });
 

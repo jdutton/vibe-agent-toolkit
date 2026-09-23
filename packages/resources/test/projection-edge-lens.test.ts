@@ -141,6 +141,7 @@ function projectionWith(
     blobReferences: references,
     blobSections: [],
     blobConditions: [],
+    blobClaudeImports: [],
   } as unknown as Projection;
 }
 

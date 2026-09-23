@@ -183,8 +183,9 @@ and nothing declares which route a new command should reach for.
 
 **The win is once-per-lifecycle-phase, not incrementality, and the doubled `populate()` in the
 `vat claude context` row above is bounded by that rather than excused by it.** A projection built once and
-read many times beats a walk per check, and that is the whole of the claim. Of the thirteen tables only
-the four blob-scoped ones (`blobs`, `blob_references`, `blob_sections`, `blob_conditions`) are keyed
+read many times beats a walk per check, and that is the whole of the claim. Of the fourteen tables only
+the five blob-scoped ones (`blobs`, `blob_references`, `blob_sections`, `blob_conditions`,
+`blob_claude_imports`) are keyed
 on content and so survive an edit elsewhere in the tree — and content-keyed reuse of parse work is
 not new work: the cross-process parse cache has shipped it since stage 2 (2026-08-10, `c2a05547`),
 measuring 45× warm over cold on VAT's own 265 tracked markdown files, and

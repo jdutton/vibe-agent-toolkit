@@ -59,6 +59,7 @@ const BLOB_KEY_COLUMNS: Readonly<Record<string, string>> = {
   blobReferences: BLOB_COLUMN,
   blobSections: BLOB_COLUMN,
   blobConditions: BLOB_COLUMN,
+  blobClaudeImports: BLOB_COLUMN,
 };
 
 /**

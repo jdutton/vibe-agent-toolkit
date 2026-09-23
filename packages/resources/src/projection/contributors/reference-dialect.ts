@@ -1,95 +1,76 @@
 /**
- * How a closure INTERPRETS the reference tokens it follows.
+ * How a closure INTERPRETS the edges it follows.
  *
- * A `blob_references` row carries the token *exactly as authored* — that is
- * `blob-references.ts`'s stated contract, and it is what lets `rawRef` be
- * printed back to an author in a condition row. Interpretation is therefore a
- * property of the READER, and different readers genuinely disagree: VAT's own
- * link validation reads an href under RFC 3986, and Claude Code reads an
- * `@`-token under a vendor dialect in which three of those rules are different.
+ * Two readers genuinely disagree about what a reference means. VAT's own link
+ * validation reads a `blob_references` token as an href under RFC 3986; Claude
+ * Code reads an `@` import — a `blob_claude_imports` row, produced by the
+ * harness's own extractor — the way its `et` resolves a path. The dialect names
+ * the reader, and the closure picks the edge table from it
+ * (`closure-extent.ts`'s `edgeSourceFor`), so one field decides both what an
+ * edge IS and what it points at.
  *
- * ## Why a declared dialect, and not either of the two alternatives
+ * ## Why a declared dialect
  *
- * ⛔ **Not a strip in the lexer.** `rawRef` is documented as the reference
- * exactly as authored; rewriting it would change the parse-fact shape,
- * invalidate every adopter's parse cache, and make `blob-references.ts`'s
- * `leadingAt` column constant-false. Decisively: **`@` is not always an
- * import.** `@vibe-agent-toolkit/utils` is an npm scope, and a global strip
- * turns it into a path that can resolve against a real directory and be charged
- * as loaded context — a new false positive in the inflating direction.
- *
- * ⛔ **Not a mode inside {@link resolveLocalHref}.** That is VAT's general RFC
- * 3986 resolver, shared with link validation and audit. A vendor dialect living
- * inside it is the same boundary violation as filing a Claude-specific analysis
- * verb under `vat resources`.
- *
- * So the dialect rides on the DECLARATION. It stays inert data, which means it
- * travels onto `zone_provenance.parameterSet` verbatim and the projection
- * store's reuse key correctly treats two runs over one tree under different
- * dialects as two different questions.
+ * `@` is not always an import: `@vibe-agent-toolkit/utils` is an npm scope. A
+ * global reading would turn it into a path that can resolve against a real
+ * directory. The dialect rides on the DECLARATION instead, which is inert data:
+ * it travels onto `zone_provenance.parameterSet` verbatim, and the projection
+ * store's reuse key treats two runs over one tree under different dialects as
+ * two different questions.
  *
  * The vocabulary itself — `ReferenceDialectSchema` — lives in
  * `schemas/project-config.ts` beside the declaration that carries it, not here.
  * A schema importing a contributor would invert the layering every other
  * contributor in this directory observes.
  *
- * ## The dialect DELEGATES; it does not reimplement
+ * ## The two readings
  *
- * `CLAUDE.md` forbids a parallel path-only resolver, and the ordinary case — a
- * relative token resolved against the importing file's directory — is
- * {@link resolveLocalHref}'s, unchanged, called here. The two branches that do
- * NOT delegate are the two where the vendor's rule and RFC 3986's rule are
- * different answers to the same input, so there is no shared resolution to
- * reuse:
- *
- * | Token | RFC 3986 (`href`) | Claude Code (`claude-import`) |
+ * | Edge | `href` (a `blob_references.rawRef`) | `claude-import` (a `blob_claude_imports.target`) |
  * |---|---|---|
- * | `@b.md` | a file literally named `@b.md` | `b.md` |
+ * | `b.md` | relative, percent-decoded | relative, taken literally |
  * | `/x/y.md` | root-relative — resolves INSIDE the corpus | filesystem-absolute |
  * | `~/x.md` | a directory literally named `~` | the user's home directory |
  *
- * ## 🪤 Three consequences worth naming rather than rediscovering
+ * `href` is {@link resolveLocalHref}, unchanged. `claude-import` is the binary's
+ * `et` (trim; `~` and `~/` expand; an absolute path stays; anything else is
+ * `path.resolve`d against the importing file's directory) — transcribed in
+ * `docs/external/claude-code-memory-loader.md`. It does not delegate to
+ * {@link resolveLocalHref} because no branch of that resolver is `et`'s: the
+ * harness percent-decodes nothing and treats a leading `/` as absolute. The
+ * `@`, the `#` fragment and the `\ ` escape were already dealt with by the
+ * extractor that produced the row, so none of them reaches this function.
  *
- * - **`@scope/pkg` resolves as a relative path and lands
- *   `CLOSURE_REFERENCE_UNRESOLVED`.** Accepted, and it is NOT the false positive
- *   the lexer-strip alternative was rejected for: under a *declared* dialect the
- *   strip is reachable only from a `CLAUDE.md` or rules-file root, where an
- *   `@`-token is an import by the vendor's own definition. That scoping is
- *   exactly what a lexer-level strip could not have had.
- * - **`@${VAR}/path.md` never reaches here.** The lexer classifies a token
- *   carrying a variable expansion as `env-anchored` whatever else it looks like
- *   (`reference-lexer.ts`'s `classify`), so a declaration following only
- *   `at-prefixed` does not select it. Probably desirable — an unexpanded
- *   variable cannot be resolved — but it is silent, so it is stated.
- * - **{@link homedir} makes `~/` resolution environment-dependent.** Two runs
- *   under different `HOME` values resolve the same token to different paths. The
- *   dialect is in the store's reuse key; `HOME` is not. A `~/` import is
- *   reported `CLOSURE_REFERENCE_OUTSIDE_ROOT` and never charged, so the
- *   divergence cannot change a token count — but it can change a reported
- *   target path, which is why it is recorded here and not left to be found.
+ * ## 🪤 {@link homedir} makes `~/` resolution environment-dependent
+ *
+ * Two runs under different `HOME` values resolve the same token to different
+ * paths. The dialect is in the store's reuse key; `HOME` is not. A `~/` import
+ * is reported `CLOSURE_REFERENCE_OUTSIDE_ROOT` and never charged, so the
+ * divergence cannot change a token count — but it can change a reported target
+ * path, which is why it is recorded here and not left to be found.
+ *
+ * @vendor-claim reviewed=2026-09-23 verify=Re-extract `et` from the current Claude Code binary per docs/external/claude-code-memory-loader.md and diff it against resolveClaudeImport
  */
 
 import { homedir } from 'node:os';
+import { dirname } from 'node:path';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ReferenceDialect } from '../../schemas/project-config.js';
-import { resolveLocalHref, splitHrefAnchor, type ResolveLocalHrefResult } from '../../utils.js';
+import { resolveLocalHref, type ResolveLocalHrefResult } from '../../utils.js';
 
-/** The token prefix that marks a Claude Code import. */
-const IMPORT_PREFIX = '@';
+/** The token `et` expands to the home directory, alone or as a `~/` prefix. */
+const HOME = '~';
 
-/** The prefix the vendor documents for a home-directory import. */
-const HOME_PREFIX = '~/';
-
-/** The prefix the vendor reads as filesystem-absolute and RFC 3986 reads as root-relative. */
+/** The prefix the harness reads as filesystem-absolute and RFC 3986 reads as root-relative. */
 const ABSOLUTE_PREFIX = '/';
 
 /**
- * Resolve one reference token under a declared dialect.
+ * Resolve one edge under a declared dialect.
  *
  * @param dialect - The declaration's {@link ReferenceDialect}
- * @param rawRef - The reference exactly as authored, `@` and all
+ * @param token - A `blob_references.rawRef` under `href`, a
+ *   `blob_claude_imports.target` under `claude-import`
  * @param sourceFilePath - Absolute path of the file holding the reference
  * @param projectRoot - Absolute corpus root, for the `href` root-relative branch
  * @returns The same discriminated union {@link resolveLocalHref} returns, so
@@ -98,59 +79,40 @@ const ABSOLUTE_PREFIX = '/';
  */
 export function resolveDialectRef(
   dialect: ReferenceDialect,
-  rawRef: string,
+  token: string,
   sourceFilePath: string,
   projectRoot: string,
 ): ResolveLocalHrefResult {
-  if (dialect === 'href') return resolveLocalHref(rawRef, sourceFilePath, projectRoot);
-  return resolveClaudeImport(rawRef, sourceFilePath, projectRoot);
+  if (dialect === 'href') return resolveLocalHref(token, sourceFilePath, projectRoot);
+  return resolveClaudeImport(token, sourceFilePath);
 }
 
 /**
- * The `claude-import` dialect's three rules.
+ * `et` — the harness's own resolution of one import target.
  *
- * Exactly ONE `@` is stripped: a file genuinely named `@notes.md` is imported as
- * `@@notes.md`, and a greedy strip would make it unreachable.
+ * An empty target (only whitespace survived the trim) names no file: `et`
+ * answers the importing directory, which the reader skips as not a regular
+ * file, so `anchor_only` keeps a directory out of the extent.
  *
- * A token that is nothing but `@` becomes the empty href, which
- * {@link resolveLocalHref} reads as `anchor_only`. Answering that directly is
- * what stops a stray `@` in prose from resolving to the containing DIRECTORY and
- * pulling it into the extent.
- *
- * @param rawRef - The reference exactly as authored
- * @param sourceFilePath - Absolute path of the file holding the reference
- * @param projectRoot - Absolute corpus root
+ * @param target - A `blob_claude_imports.target`
+ * @param sourceFilePath - Absolute path of the importing file
  * @returns The resolution outcome
  */
-function resolveClaudeImport(
-  rawRef: string,
-  sourceFilePath: string,
-  projectRoot: string,
-): ResolveLocalHrefResult {
-  // Named `unprefixed` rather than `token`: `security/detect-possible-timing-attacks`
-  // reads an identifier called `token` as a secret and flags the emptiness test
-  // below as a timing leak. It is a lexer token, not a credential.
-  const unprefixed = rawRef.startsWith(IMPORT_PREFIX)
-    ? rawRef.slice(IMPORT_PREFIX.length)
-    : rawRef;
-  if (unprefixed === '') return { kind: 'anchor_only' };
+function resolveClaudeImport(target: string, sourceFilePath: string): ResolveLocalHrefResult {
+  const trimmed = target.trim();
+  if (trimmed === '') return { kind: 'anchor_only' };
+  if (trimmed === HOME) return resolvedAt(homedir());
+  if (trimmed.startsWith(`${HOME}/`)) return resolvedAt(safePath.join(homedir(), trimmed.slice(HOME.length + 1)));
+  if (trimmed.startsWith(ABSOLUTE_PREFIX)) return resolvedAt(safePath.resolve(trimmed));
+  return resolvedAt(safePath.resolve(dirname(sourceFilePath), trimmed));
+}
 
-  if (unprefixed.startsWith(HOME_PREFIX)) {
-    const [fileHref, anchor] = splitHrefAnchor(unprefixed);
-    return {
-      kind: 'resolved',
-      resolvedPath: safePath.join(homedir(), fileHref.slice(HOME_PREFIX.length)),
-      anchor,
-    };
-  }
-
-  if (unprefixed.startsWith(ABSOLUTE_PREFIX)) {
-    const [fileHref, anchor] = splitHrefAnchor(unprefixed);
-    return { kind: 'resolved', resolvedPath: safePath.resolve(fileHref), anchor };
-  }
-
-  // The ordinary case, and the overwhelming majority of every real corpus: a
-  // token resolved against the importing file's directory, which is
-  // `resolveLocalHref`'s own rule and is CALLED rather than restated.
-  return resolveLocalHref(unprefixed, sourceFilePath, projectRoot);
+/**
+ * A resolved outcome with no fragment — the extractor already cut it.
+ *
+ * @param resolvedPath - The absolute target
+ * @returns The outcome
+ */
+function resolvedAt(resolvedPath: string): ResolveLocalHrefResult {
+  return { kind: 'resolved', resolvedPath, anchor: undefined };
 }

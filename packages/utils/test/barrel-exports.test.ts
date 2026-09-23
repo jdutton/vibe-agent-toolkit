@@ -44,6 +44,7 @@ const BARREL_EXPORTS = [
   'SKILL_TARGET_NAMES',
   'VatError',
   'ZodTypeNames',
+  'canonicalPath',
   'compareCodeUnits',
   'copyDirectory',
   'crawlTimingStart',

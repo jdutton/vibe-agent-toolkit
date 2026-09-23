@@ -283,6 +283,9 @@ const FIXTURES: readonly TableFixture[] = [
       encodingSource: 'assumed',
       replacementCharacters: 0,
       tokenEstimate: 30,
+      claudeInjectedBytes: 120,
+      claudeInjectedTokens: 30,
+      claudePaths: null,
       frontmatter: null,
       frontmatterError: null,
       wordCount: 20,
@@ -299,6 +302,9 @@ const FIXTURES: readonly TableFixture[] = [
       encodingSource: 'bom',
       replacementCharacters: 7,
       tokenEstimate: 60,
+      claudeInjectedBytes: 240,
+      claudeInjectedTokens: 60,
+      claudePaths: ['alt/**'],
       frontmatter: { title: 'alt' },
       frontmatterError: 'frontmatter is not a mapping',
       wordCount: 40,
@@ -382,6 +388,12 @@ const FIXTURES: readonly TableFixture[] = [
     (builder, row) => builder.addBlobCondition(row),
     { blob: BLOB_BASE, code: 'PARSE_ODDITY', severity: 'info', message: 'base oddity', line: 4 },
     { blob: BLOB_ALT, code: 'FRONTMATTER_UNPARSED', severity: 'error', message: 'alt oddity', line: null },
+  ),
+  fixture(
+    'blobClaudeImports',
+    (builder, row) => builder.addBlobClaudeImport(row),
+    { blob: BLOB_BASE, ordinal: 0, rawRef: '@base.md', target: 'base.md', line: 2 },
+    { blob: BLOB_ALT, ordinal: 7, rawRef: String.raw`@alt\ doc.md#top`, target: 'alt doc.md', line: 12 },
   ),
 ];
 

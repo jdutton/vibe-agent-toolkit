@@ -27,7 +27,7 @@ import { account, type AccountedRow } from './claude-context-accounting.js';
 import { admissionLoadsAtLaunch, launchCharge } from './claude-context-launch-charge.js';
 import type { Admission } from './claude-context-query.js';
 import { whatLoadsAt } from './claude-context-query.js';
-import { claudeMdIdentities, contextRegions } from './claude-context-regions.js';
+import { contextRegions } from './claude-context-regions.js';
 import type { Projection } from './projection.js';
 
 /**
@@ -98,8 +98,6 @@ export function contextChainId(representative: string): string {
  * @returns One entry per distinct chain, in `contextRegions` order
  */
 function contextChains(projection: Projection): readonly ContextChain[] {
-  const claudeMdIds = claudeMdIdentities(projection);
-
   return contextRegions(projection).map((region) => {
     const chainId = contextChainId(region.representative);
     const answer = whatLoadsAt(projection, region.representative);
@@ -109,7 +107,7 @@ function contextChains(projection: Projection): readonly ContextChain[] {
       locations: region.locations,
       loads:
         answer.kind === 'answer'
-          ? account(answer, claudeMdIds).rows.map((row) => loadRow(chainId, row))
+          ? account(answer).rows.map((row) => loadRow(chainId, row))
           : null,
     };
   });

@@ -910,10 +910,10 @@ Exit Codes:
       or whose skills.include reaches an unreadable directory, is
       SCAN_PATH_UNREADABLE (warning): the run is degraded, not failed —
       readable siblings are still validated, the config's skills
-      config-free, and the refused path is not counted in filesScanned (so
-      a root with nothing readable is a zero-files refusal).
-  2 - The audit could not run at all: the path does not exist or is a file
-      no audit lane recognises, --user with no Claude config dir, a git URL
+      config-free, and the refused path is not counted in filesScanned.
+  2 - The audit could not run at all: the path does not exist, is a
+      directory the OS will not list, or is a file no audit lane
+      recognises, --user with no Claude config dir, a git URL
       that would not clone, an unknown flag, an internal failure. There is
       no report to read.
 
@@ -1450,12 +1450,17 @@ export async function auditCommand(
  * typo in a CI step read as "the tree failed its gate", and the denominator
  * counted a file that was never there.
  *
- * ONLY the root, and only these two conditions. A root the OS refuses to stat
- * is not answered here — the scan degrades it to `SCAN_PATH_UNREADABLE`, which
- * is not counted as a scanned file, so a tree with nothing readable ends on the
- * zero-files refusal (exit 1) like any other tree that yielded nothing. A
- * sub-path inside a readable tree is never the invocation's fault and stays a
- * finding. Pinned by the `audit → error` rows of `exit-codes.system.test.ts`.
+ * 🚨 **And a root DIRECTORY the OS refuses to list.** It used to be left to
+ * the scan, which degraded it to `SCAN_PATH_UNREADABLE` and ended on the
+ * zero-files refusal at exit 1 — while `vat resources validate`, `check`,
+ * `query` and `scan` all end the same argument at exit 2. One outcome, two
+ * codes. Nothing under an unlistable root can be examined, so the audit could
+ * not do its job: that is the INVOCATION's ending, the same as a missing path.
+ *
+ * ONLY the root. A sub-path inside a readable tree is never the invocation's
+ * fault and stays a finding. Pinned by the `audit → error` rows of
+ * `exit-codes.system.test.ts` and the unreadable-root row of
+ * `exit-code-matrix.system.test.ts`.
  */
 async function unusableRootReason(scanPath: string): Promise<string | undefined> {
   let isDirectory: boolean;
@@ -1465,9 +1470,27 @@ async function unusableRootReason(scanPath: string): Promise<string | undefined>
     if (isPathAbsentError(error)) return `Path does not exist: ${scanPath}`;
     return undefined;
   }
-  if (isDirectory || detectFormat(scanPath) === RESOURCE_TYPE_AGENT_SKILL) return undefined;
+  if (isDirectory) return unlistableRootReason(scanPath);
+  if (detectFormat(scanPath) === RESOURCE_TYPE_AGENT_SKILL) return undefined;
   if ((await detectResourceFormat(scanPath)).type !== 'unknown') return undefined;
   return `Path is not a resource this command can audit (a SKILL.md, a plugin or marketplace directory, or a Claude registry file): ${scanPath}`;
+}
+
+/**
+ * Why a root DIRECTORY cannot be audited, or `undefined` when it can be listed.
+ *
+ * @param scanPath - The root the operator named, known to be a directory
+ * @returns The refusal, or undefined
+ */
+function unlistableRootReason(scanPath: string): string | undefined {
+  try {
+    // A probe, not a listing: the crawl owns enumeration, this only asks whether it can start.
+    fs.accessSync(scanPath, fs.constants.R_OK | fs.constants.X_OK);
+    return undefined;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
+    return `Path cannot be read (${code}): ${scanPath}`;
+  }
 }
 
 /**

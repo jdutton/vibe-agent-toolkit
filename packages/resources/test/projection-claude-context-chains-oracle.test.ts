@@ -50,7 +50,6 @@ import type { Projection } from '../src/projection/projection.js';
 import type { ClaudeContextLoadRow } from '../src/schemas/projection-claude-context.js';
 
 import { claudeContextFixture } from './helpers/claude-context-fixture.js';
-import { claudeMdIdsOf } from './helpers/claude-md-ids.js';
 
 /** The corpus root, as both a location and a representative. */
 const ROOT = '';
@@ -196,7 +195,7 @@ function costTheLongWay(projection: Projection, directory: string): LaunchCost {
   const answer = whatLoadsAt(projection, directory);
   expect(answer.kind, `oracle refused ${JSON.stringify(directory)}`).toBe('answer');
   if (answer.kind !== 'answer') throw new Error('unreachable — asserted above');
-  const accounted = account(answer, claudeMdIdsOf(projection));
+  const accounted = account(answer);
   const rows = accounted.rows.map((row) => ({ path: row.path, charge: launchCharge(row) }));
   return {
     charged: pathsCharged(rows, 'charged'),

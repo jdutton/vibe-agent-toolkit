@@ -43,13 +43,33 @@ import { appendFileSync } from 'node:fs';
 import { z } from 'zod';
 
 /**
+ * The child has booted — Node is up, the CLI is loaded, and no work has begun.
+ *
+ * 🚨 **The defect this closes: the population was charged the child's boot.**
+ * The watchdog's clock starts at the spawn, and the population line used to be
+ * the child's FIRST line — so Node's startup and the CLI's module graph were
+ * silently billed to the one unit the budget is already a total bound for. On a
+ * loaded runner the boot alone grows by seconds, and a run whose tree was fine
+ * was killed "during population" for its neighbours' load. This line closes the
+ * boot's window and opens the population's own, so the budget measures work.
+ *
+ * It carries no fields: the fact that it was written is the whole message. Its
+ * ABSENCE is what {@link unitInFlight} reads as `startup` — a run killed before
+ * it could say anything at all.
+ */
+const StartedEntrySchema = z.object({
+  kind: z.literal('started'),
+}).strict();
+
+/**
  * The population finished — how it was obtained, what it cost, and how much of
  * the tree it covered.
  *
  * Written the instant the projection is ready, because a kill BEFORE this line
- * means there is no projection at all and therefore no honest document to
- * publish. The parent distinguishes those two endings by this line's presence
- * and nothing else, so it must never be written early or optimistically.
+ * means there is no projection at all: the document the parent publishes then
+ * carries its population fields as `null`, not as a value nobody measured. The
+ * parent distinguishes those two endings by this line's presence and nothing
+ * else, so it must never be written early or optimistically.
  */
 const PopulationEntrySchema = z.object({
   kind: z.literal('population'),
@@ -129,6 +149,7 @@ const ChecksCompleteEntrySchema = z.object({
 }).strict();
 
 const ProgressEntrySchema = z.discriminatedUnion('kind', [
+  StartedEntrySchema,
   PopulationEntrySchema,
   StartEntrySchema,
   CheckEntrySchema,
@@ -150,6 +171,7 @@ export type ProgressEntry = z.infer<typeof ProgressEntrySchema>;
  * forty rules.
  */
 export type UnitInFlight =
+  | { readonly kind: 'startup' }
   | { readonly kind: 'population' }
   | { readonly kind: 'check'; readonly name: string }
   | { readonly kind: 'reporting' }
@@ -202,14 +224,23 @@ function readLine(line: string): ProgressEntry | undefined {
  *
  * 🔑 The population sentinel is keyed on the population line's ABSENCE rather
  * than on there being no `start` lines. Those are different states: a run killed
- * during population has no projection and no honest document, while a run killed
- * between the population and the first statement has both.
+ * during population has no projection, while a run killed between the population
+ * and the first statement has one.
+ *
+ * 🔑 The startup sentinel is keyed the same way, on the `started` line's
+ * absence — never on an empty log. Before that line the child was still loading
+ * Node and the CLI, nothing had touched the tree, and advice about sizing the
+ * budget against a population would be advice about a unit that never began.
  *
  * @param entries - What {@link parseProgressLog} recovered
  * @returns The unit in flight
  */
 export function unitInFlight(entries: readonly ProgressEntry[]): UnitInFlight {
-  if (!entries.some((entry) => entry.kind === 'population')) return { kind: 'population' };
+  if (!entries.some((entry) => entry.kind === 'population')) {
+    return entries.some((entry) => entry.kind === 'started')
+      ? { kind: 'population' }
+      : { kind: 'startup' };
+  }
 
   const completed = new Set(
     entries.filter((entry) => entry.kind === 'check').map((entry) => entry.name),

@@ -3,38 +3,32 @@
  *
  * ## The 4 MiB cliff, and how far it reaches
  *
- * *"Claude Code loads a `CLAUDE.md` file of up to 4 MiB in full and skips a
- * larger file."* Not a truncation — a cliff, so charging such a file its own size
- * is wrong by the whole file. And a file the harness never read cannot have loaded
- * its imports either, so the skip PRUNES the subtree: §0.7's worked case is a
- * 5 MiB `CLAUDE.md` importing a 200 KB handbook, which the closure admits and
- * nothing else would drop. The closure primitive has no size input, which is
- * precisely why this lives here and not there.
+ * The harness skips any memory file larger than 4,194,304 bytes whole — a cliff,
+ * not a truncation, so charging such a file its own size is wrong by the whole
+ * file. And a file the harness never read cannot have loaded its imports either,
+ * so the skip PRUNES the subtree: a 5 MiB `CLAUDE.md` importing a 200 KB
+ * handbook charges neither.
  *
- * ⛔ The cliff fires on `claude-md` members ONLY. It is documented for
- * `CLAUDE.md` — not for rules files, not for imported files — and applying it
- * more widely would be an assertion the vendor has not made. The PRUNE is not so
- * limited: whatever an oversize `CLAUDE.md` pulled in is unreached whatever type
- * it is.
+ * ⭐ The cliff fires on EVERY row — `CLAUDE.md`, a rules file, an import. The
+ * vendor's prose names `CLAUDE.md` only, and VAT used to stop there; the shipped
+ * reader (`Cge` → `Lx(…, g3)`, transcribed in
+ * `docs/external/claude-code-memory-loader.md`) is the one every memory file
+ * goes through.
  *
  * A member reachable by any route that does not pass through an oversize file is
  * NOT pruned. A `README.md` that is both a root rule's neighbour and the import
  * of a 5 MiB `CLAUDE.md` still loads.
  *
- * ## No threshold, and the HTML over-count is stated rather than fixed
+ * ## No threshold
  *
  * Nothing here compares a total against a number. §8.1's 12,000 was calibrated
  * with `estimateTokens` at ONE import level and is uncalibrated at four hops; a
  * gate that fires wrongly teaches people to ignore it.
  *
- * `blobs.tokenEstimate` runs over RAW content, and the harness strips block-level
- * HTML comments before injection — so a `CLAUDE.md` carrying maintainer notes is
- * over-counted here. Stated in `claude-context-limits.ts`, not fixed:
- * `codeContextRangesFrom` lumps `raw-html` with `inline-link`/`image`/
- * `frontmatter` in one `excluded` array, so separating it is real work for a
- * zero-byte correction on
- * this repo, and the principled fix puts injected-size on the LENS rather than on
- * the blob.
+ * The tokens a row carries are `blobs.claudeInjectedTokens` — the text the
+ * harness injects, frontmatter and block-level comments removed and trimmed —
+ * while the cliff below reads `blobs.bytes`, the file's own size, because the
+ * harness skips on the size it `stat`s, before it reads a byte.
  *
  * ## Nothing here is a floor, and nothing here is a ceiling
  *
@@ -48,7 +42,7 @@
 import type { LoadedContextAnswer, LoadedRow } from './claude-context-query.js';
 
 /**
- * The vendor's `CLAUDE.md` size cliff, in bytes.
+ * The harness's memory-file size cliff, in bytes — `g3` in the shipped reader.
  *
  * A transcribed vendor quantity cited at its use, not a VAT constant anyone bumps.
  * The comparison against it is strictly greater-than: the vendor loads a file of
@@ -104,22 +98,16 @@ export interface AccountedContext {
  * mutated; the charge lands on a copy.
  *
  * @param answer - The query's answer
- * @param claudeMdIds - Resource ids the shipped `classifyPath` tagged `claude-md`.
- *   Passed in rather than re-derived, so the cliff and root discovery read one
- *   vocabulary
  * @returns Every row with its charge, and the totals
  */
-export function account(
-  answer: LoadedContextAnswer,
-  claudeMdIds: ReadonlySet<string>,
-): AccountedContext {
+export function account(answer: LoadedContextAnswer): AccountedContext {
   // ⚠️ `bytes !== null` rather than `(bytes ?? 0)`: a row with no blob has an
   // UNKNOWN size, which is a state of its own, and a coalesced zero would quietly
   // assert it is under the cliff. It is not over it either — an unmeasured file is
   // charged nothing and counted in `unknownTokenRows`, never skipped as oversize.
   const oversizePaths = new Set(
     answer.rows
-      .filter((row) => claudeMdIds.has(row.resourceId) && row.bytes !== null && row.bytes > OVERSIZE_BYTES)
+      .filter((row) => row.bytes !== null && row.bytes > OVERSIZE_BYTES)
       .map((row) => row.path),
   );
 
@@ -151,7 +139,7 @@ export function account(
  * set — tens, not thousands.
  *
  * @param rows - Every loaded row
- * @param oversizePaths - Paths of `claude-md` members past the cliff
+ * @param oversizePaths - Paths of rows past the cliff
  * @returns The paths whose every route is broken
  */
 function brokenRoutes(
@@ -208,7 +196,7 @@ function everyRouteBroken(row: LoadedRow, broken: ReadonlySet<string>): boolean 
  * context-budget answer cannot tolerate.
  *
  * @param row - The loaded row
- * @param oversizePaths - Paths of `claude-md` members past the cliff
+ * @param oversizePaths - Paths of rows past the cliff
  * @param broken - Every path whose every import route passes through one
  * @returns The charge state
  */

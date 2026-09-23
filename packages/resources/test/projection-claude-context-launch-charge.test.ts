@@ -57,7 +57,6 @@ function imported(depth: number | null): Admission {
  * `root-rule` case and fails every row here.
  */
 const ON_DEMAND_RULES: ReadonlyArray<readonly [string, Admission]> = [
-  ['nested-rule', { kind: 'nested-rule', under: DIR }],
   ['glob-rule', { kind: 'glob-rule', pattern: `${DIR}/src/*.ts` }],
   ['glob-rule-covers-dir', { kind: 'glob-rule-covers-dir', pattern: `${DIR}/**` }],
   [

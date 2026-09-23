@@ -39,7 +39,7 @@ function key(writer, index) {
   return `markdown.${digits}`;
 }
 
-/** The `blobs` row for one key; the three child tables stay empty here. */
+/** The `blobs` row for one key; the child tables stay empty here. */
 function blobBundle(contentKey) {
   return {
     blobs: [{
@@ -49,6 +49,9 @@ function blobBundle(contentKey) {
       encodingSource: 'assumed',
       replacementCharacters: 0,
       tokenEstimate: 1,
+      claudeInjectedBytes: 1,
+      claudeInjectedTokens: 1,
+      claudePaths: null,
       frontmatter: null,
       frontmatterError: null,
       wordCount: 1,
@@ -61,6 +64,7 @@ function blobBundle(contentKey) {
     blobReferences: [],
     blobSections: [],
     blobConditions: [],
+    blobClaudeImports: [],
   };
 }
 

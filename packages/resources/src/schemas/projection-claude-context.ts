@@ -105,7 +105,7 @@ export type ClaudeContextChainRow = z.infer<typeof ClaudeContextChainRowSchema>;
  * | `import` | the closure ROOT's path |
  *
  * ⚠️ {@link tokens} and {@link bytes} are nullable and a null is UNKNOWN, never
- * zero. `blobs.tokenEstimate` is absent for a realization with no blob, and a
+ * zero. `blobs.claudeInjectedTokens` is absent for a realization with no blob, and a
  * coalesced zero would assert a free file.
  */
 export const ClaudeContextLoadRowSchema = z.object({
@@ -129,10 +129,10 @@ export const ClaudeContextLoadRowSchema = z.object({
   admissionCount: z.number().int().nonnegative()
     .describe('How many admissions this row carries — the deciding one is a summary of them, not the whole list'),
   sizeCliff: z.enum(SIZE_CLIFF_STATES)
-    .describe('The 4 MiB CLAUDE.md cliff\'s verdict on this file — NOT whether it is paid at launch; that is launchCharge. "unmeasured" means no blob, so no size'),
+    .describe('The 4 MiB memory-file cliff\'s verdict on this file — NOT whether it is paid at launch; that is launchCharge. "unmeasured" means no blob, so no size'),
   launchCharge: ClaudeContextLaunchChargeSchema,
   tokens: z.number().int().nonnegative().nullable()
-    .describe('blobs.tokenEstimate, or null when this realization has no blob. Null is UNKNOWN, never zero'),
+    .describe('blobs.claudeInjectedTokens — the text Claude Code injects, frontmatter and HTML comment blocks removed — or null when this realization has no blob. Null is UNKNOWN, never zero'),
   bytes: z.number().int().nonnegative().nullable()
     .describe('blobs.bytes, or null when this realization has no blob'),
 }).strict().describe('A row of the derived `claude_context_loads` relation');

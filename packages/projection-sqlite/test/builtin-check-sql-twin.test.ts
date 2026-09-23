@@ -236,7 +236,7 @@ describe('built-in SQL twins', () => {
     const brokenBlob = { ...sampleBlobRows(broken).blobs[0], contentKey: broken, frontmatter: null, frontmatterError: 'bad yaml' };
     const healthyBlob = { ...sampleBlobRows(healthy).blobs[0], contentKey: healthy };
     store = openEphemeralProjectionStore();
-    await store.writeBlobFacts({ blobs: [brokenBlob, healthyBlob], blobReferences: [], blobSections: [], blobConditions: [] });
+    await store.writeBlobFacts({ blobs: [brokenBlob, healthyBlob], blobReferences: [], blobSections: [], blobConditions: [], blobClaudeImports: [] });
     await store.writeExtent(KEY, rows);
 
     const fromSql = store.query(CLAUDE_RULE_FRONTMATTER_INVALID_CHECK.sqlTwin)

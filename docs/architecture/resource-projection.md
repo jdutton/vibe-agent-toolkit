@@ -50,7 +50,7 @@ generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` a
 `PROJECTION_SCHEMA_VERSION` is removed, and a *stored* projection would take a derived digest of the
 row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the pattern).
 
-**Population is ✅ real for the thirteen shipped tables.** `populate()` derives rows from `ParseFacts`
+**Population is ✅ real for the fourteen shipped tables.** `populate()` derives rows from `ParseFacts`
 and `ResourceRegistry` at runtime, and `vat resources query` writes them into a per-run in-memory
 store. What remains 🔷 proposed is the REMAINDER described below: columns the parser does not yet
 carry, and the zone modeling several tables depend on.
@@ -71,10 +71,11 @@ boundaries) that does not exist anywhere in the codebase yet — a separate, lar
 
 | table (🔷 proposed) | contents |
 |---|---|
-| `blobs` | content key, bytes, decode provenance (`encoding`, `encodingSource`, `replacementCharacters`), token estimate, frontmatter (JSON), `frontmatter_error`, word count, prose vs. code-block size counts (UTF-16 code units), link/heading/section counts |
+| `blobs` | content key, bytes, decode provenance (`encoding`, `encodingSource`, `replacementCharacters`), token estimate, the bytes and tokens Claude Code INJECTS for it as a memory file (`claudeInjectedBytes`, `claudeInjectedTokens`), the `paths:` globs it scopes the file by (`claudePaths`, JSON, read the harness's way), frontmatter (JSON), `frontmatter_error`, word count, prose vs. code-block size counts (UTF-16 code units), link/heading/section counts |
 | `blob_references` | ordinal, raw ref, text, line, column, `startOffset`/`endOffset` (UTF-16 code units), syntactic form, lexical features (extension, leading `@`, slash count, variable-expansion syntax, in-code-span, in-fence) |
 | `blob_sections` | ordinal, depth, title, slug, slug occurrence, parent, line span, bytes (UTF-8), tokens |
 | `blob_conditions` | `(blob, code, severity, message, line)` — parse-time oddities |
+| `blob_claude_imports` | ordinal, raw ref, target, line — the `@` imports Claude Code's own extractor reads ([zones.md](zones.md#blob_claude_imports-and-blobsclaudeinjected--the-harnesss-content-rules-as-blob-facts)) |
 
 **The proposed schema would store frontmatter as a JSON column, not DuckDB's `VARIANT`.** (Measured
 against `@duckdb/duckdb-wasm` v1.5.4, 2026-08 — a claim about another vendor's product, worth
@@ -515,8 +516,8 @@ which a bare commit key cannot express.
     no agent harness reads, and the other three are the skill packager's and a lens's outputs
     rather than functions of a path.
 - ✅ **Consumed as of 2026-08-23.** `resource_tags` has its first reader: the claude-context lens
-  reads the `claude-md` tag to decide which realizations set an instruction chain
-  (`packages/resources/src/projection/claude-context-regions.ts › claudeMdIdentities()`, consumed by
+  reads the `claude-md` and `rules-file` tags to decide which realizations set an instruction chain
+  (`packages/resources/src/projection/claude-context-regions.ts › instructedDirectories()`, consumed by
   both `claude-context-relations.ts` and `claude-context-cost-map.ts`). It surfaces as published rows
   — `claude_context_chains` / `claude_context_loads` via `vat resources query` / `vat resources
   check`, and a whole-tree cost map via `vat claude context` — never as a check folded into
@@ -530,6 +531,12 @@ which a bare commit key cannot express.
   for the key, the four statuses and why a witness rather than a match count. It is reachable from
   `vat resources query` and `vat resources check` only: the `scan`/`validate` lane populates under
   `CONTENT_PARSING_SKIP`, where registering a blob reader throws.
+- ✅ **Shipped: `blob_claude_imports`, the fourteenth materialised table**, and the
+  `blobs.claudeInjected*` and `blobs.claudePaths` columns beside it — Claude Code's own `@`-import
+  extractor, injected-text measure and `paths:` reader, as blob facts ([zones.md](zones.md#blob_claude_imports-and-blobsclaudeinjected--the-harnesss-content-rules-as-blob-facts)).
+  The `claude-import` closure dialect and `vat claude context` read them; the loader differential
+  (`packages/resources/test/helpers/claude-loader-differential.ts`) holds both to a reference port of
+  the binary.
 - ✅ **Shipped: the first consumer that is a RULE.** `CLAUDE_RULE_GLOB_INERT` ships as the built-in
   check `claude-rule-glob-inert` — a TypeScript predicate over `claude_rule_patterns` carrying a
   documented `sqlTwin`, run whether or not a project declares any `resources.checks`. The invariant

@@ -20,11 +20,11 @@
  *   holds its shape as the object literal it was declared with, so `.shape`'s
  *   key order *is* the declaration order — which is the order the row schemas
  *   already document and the order the generated JSON Schemas already carry.
- *   Two of the thirteen row schemas are wrapped in `.superRefine()`, so the shape
+ *   Two of the fourteen row schemas are wrapped in `.superRefine()`, so the shape
  *   lives one `ZodEffects` deep; `projectionRowShape` unwraps rather than each
  *   caller knowing that.
  * - **The SQL name is derived from the field name.** `resourceRealizations` →
- *   `resource_realizations` holds for all thirteen, and the JSON Schema filenames
+ *   `resource_realizations` holds for all fourteen, and the JSON Schema filenames
  *   (`projection-resource-realizations`) are that name with dashes. A hand-kept
  *   spelling here would be the same class of drift one table lower.
  *
@@ -44,6 +44,7 @@
 import type { z } from 'zod';
 
 import {
+  BlobClaudeImportRowSchema,
   BlobConditionRowSchema,
   BlobReferenceRowSchema,
   BlobRowSchema,
@@ -153,7 +154,7 @@ export interface ProjectionTableSpec<
 }
 
 /**
- * The thirteen tables of the resource projection.
+ * The fourteen tables of the resource projection.
  *
  * Declaration order is {@link Projection}'s own field order, which is also the
  * key order `exportProjection` emits — a document whose table order moved would
@@ -182,6 +183,7 @@ export const PROJECTION_TABLES = {
   blobReferences: table('blobReferences', 'blob', BlobReferenceRowSchema, ['blob', 'ordinal']),
   blobSections: table('blobSections', 'blob', BlobSectionRowSchema, ['blob', 'ordinal']),
   blobConditions: table('blobConditions', 'blob', BlobConditionRowSchema, ['blob', 'code', 'line', 'message']),
+  blobClaudeImports: table('blobClaudeImports', 'blob', BlobClaudeImportRowSchema, ['blob', 'ordinal']),
 } as const satisfies { readonly [Name in ProjectionTableName]: ProjectionTableSpec<Name, ProjectionRow<Name>> };
 
 /**
@@ -191,7 +193,7 @@ export const PROJECTION_TABLES = {
  * survives as a literal into {@link PROJECTION_TABLES}. That is what lets a
  * consumer split the table names by scope *in the type system* — a store's
  * blob-scoped and extent-scoped row bundles are derived from these literals,
- * so a fourteenth table joins the right bundle by declaring its scope here and
+ * so a fifteenth table joins the right bundle by declaring its scope here and
  * nowhere else.
  *
  * @param key - The {@link Projection} field these rows are carried under

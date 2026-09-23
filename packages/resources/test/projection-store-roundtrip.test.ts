@@ -84,8 +84,11 @@ const DOC_C = 'skills/foo/c.md';
  */
 const CORPUS: readonly { readonly path: string; readonly content: string }[] = [
   { path: ROOT_DOC, content: '---\nname: foo\n---\n\n# Foo\n\nSee [b](./b.md).\n' },
-  { path: DOC_B, content: '# B\n\nOn to [c](./c.md).\n' },
-  { path: DOC_C, content: '# C\n\nNothing links out of here.\n' },
+  // The `paths:` is a harness-read `blobs.claudePaths` value the round trip must bring back.
+  { path: DOC_B, content: '---\npaths: "skills/**, docs/*.md"\n---\n# B\n\nOn to [c](./c.md).\n' },
+  // The `@b.md` is no link and no closure edge here; it is a Claude import, so the
+  // blob tier carries a `blob_claude_imports` row the round trip must bring back.
+  { path: DOC_C, content: '# C\n\nNothing links out of here. See @b.md, though.\n' },
 ];
 
 /**
@@ -312,6 +315,8 @@ describe('populate through a projection store', () => {
       expect(projection.blobs.length).toBeGreaterThanOrEqual(CORPUS.length);
       expect(projection.blobReferences.length).toBeGreaterThanOrEqual(2);
       expect(projection.blobSections.length).toBeGreaterThan(0);
+      expect(projection.blobClaudeImports.length).toBeGreaterThan(0);
+      expect(projection.blobs.some((blob) => blob.claudePaths !== null)).toBe(true);
       // And the roots row the driver places itself.
       expect(projection.roots).toHaveLength(1);
     });

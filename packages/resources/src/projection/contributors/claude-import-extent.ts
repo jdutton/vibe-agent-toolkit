@@ -15,17 +15,17 @@
  * `projection-claude-import-extent.test.ts` asserts the whole object rather than
  * spot-checking it.
  *
- * - **`follow: ['at-prefixed']`.** `ExtentDeclarationSchema` defaults `follow`
- *   to the three markdown forms, and that default is wrong in the most expensive
- *   possible direction: Claude Code loads `@path`, not `[text](path)`. Following
- *   markdown links out of a `CLAUDE.md` would drag the entire linked docs tree
- *   into a budget the harness never charges.
- * - **`referenceDialect: 'claude-import'`.** The schema defaults to `href`, VAT's
- *   RFC 3986 reading, under which `@README.md` names a file literally called
- *   `@README.md`. Every import in every corpus then lands as
- *   `CLOSURE_REFERENCE_UNRESOLVED` — an under-report indistinguishable from a
- *   tree of broken links, which is exactly how it went unnoticed. See
+ * - **`referenceDialect: 'claude-import'`.** The schema defaults to `href`, which
+ *   walks `blob_references` — VAT's dialect-free reading of every candidate —
+ *   under RFC 3986. That reading and the harness's disagree in both directions:
+ *   `(@a.md)` is a candidate there and no import here, `**@a.md**` the reverse,
+ *   and a `@` in a `.ts` import's code span is a token to VAT's lexer and code
+ *   to the harness's. `claude-import` walks `blob_claude_imports` instead — the
+ *   harness's own extractor — and resolves the way the harness does. See
  *   `reference-dialect.ts`.
+ * - **`follow: []`.** Required beside `claude-import` by the schema: no
+ *   syntactic form selects a `blob_claude_imports` row, and the default — the
+ *   three markdown forms — would read as a filter that filters nothing.
  * - **`maxDepth: 4`.** The schema defaults to `'full'`. Four is
  *   vendor-documented (*"a maximum depth of four hops"*) and already cited at
  *   `projection-zones.ts`. `canDescend` is `depth < maxDepth` with the root
@@ -34,14 +34,11 @@
  * - **No refusals, no `admitPaths`.** The harness applies no exclusion cascade
  *   to imports, and inventing one here would decline files a real session loads.
  *
- * ## 🪤 `@${VAR}/path.md` is invisible to this declaration
+ * ## `@${VAR}/path.md` is not an import
  *
- * The lexer classifies a token carrying a variable expansion as `env-anchored`
- * whatever else it looks like (`reference-lexer.ts`'s `classify`), so
- * `follow: ['at-prefixed']` does not select it. Probably desirable — an
- * unexpanded variable cannot be resolved against anything — but it is silent,
- * and the `follow` line above is the one a reader would expect to cover it.
- * Pinned by a test rather than left as a comment.
+ * Not because of any VAT classification: the harness's own acceptance test
+ * wants a bare path to open with `[a-zA-Z0-9._-]`, so `@${VAR}/a.md` and
+ * `@$HOME/a.md` never reach `blob_claude_imports` at all.
  *
  * ## Id discrimination: the root-relative path
  *
@@ -89,7 +86,7 @@ export const CLAUDE_IMPORT_CONTRIBUTOR_ID_PREFIX = 'builtin:claude-import';
  * Pinned from BOTH sides in the test, because a bound asserted from one side
  * cannot tell an off-by-one from a correct one.
  */
-const CLAUDE_IMPORT_MAX_DEPTH = 4;
+export const CLAUDE_IMPORT_MAX_DEPTH = 4;
 
 /**
  * The `zone_provenance.contributorId` for one root's import extent.
@@ -114,7 +111,7 @@ export function claudeImportExtentDeclaration(rootRelativePath: string): ExtentD
   return ExtentDeclarationSchema.parse({
     kind: CLAUDE_IMPORT_KIND,
     closureFrom: rootRelativePath,
-    follow: ['at-prefixed'],
+    follow: [],
     referenceDialect: 'claude-import',
     maxDepth: CLAUDE_IMPORT_MAX_DEPTH,
     refusals: [],

@@ -171,6 +171,18 @@ HAVING SUM(p.status != 'inert') = 0
 One statement answers both halves of a rules-hygiene gate — which rule files are dead, and how big
 each rule file is — and it names no lens relation, so it costs nothing beyond the population.
 
+### `blob_claude_imports` — what a file `@`-imports, as Claude Code reads it
+
+One row per `@` import Claude Code's own extractor reads out of a blob: `rawRef` as authored,
+`target` (what it resolves — `@` dropped, `#fragment` cut, `\ ` read as a space) and `line`.
+🪤 **Never answer "what does this CLAUDE.md import" from `blob_references`.** Its `at-prefixed`
+rows are VAT's candidates, not the harness's imports: `(@a.md)` is a candidate and loads nothing,
+`@a.md.` imports a file named `a.md.`, and a `@` in a `.ts` import's code span is code. The size
+Claude Code CHARGES for a memory file is `blobs.claudeInjectedTokens` (frontmatter and HTML comment
+blocks removed, trimmed), not `blobs.tokenEstimate`; `claudeInjectedBytes = 0` means the file is
+dropped and its imports never followed. Which files it scopes by `paths:` is `blobs.claudePaths`
+(null = unscoped), read the harness's way for any extension — never `blobs.frontmatter`.
+
 ### Relations that are COMPUTED, not stored — and are skipped unless you name them
 
 Beside the materialised tables, `query` and `check` expose relations a lens computes for the run:

@@ -46,7 +46,6 @@ import { whatLoadsAt } from '../src/projection/claude-context-query.js';
 import type { Projection } from '../src/projection/projection.js';
 
 import { claudeContextFixture } from './helpers/claude-context-fixture.js';
-import { claudeMdIdsOf } from './helpers/claude-md-ids.js';
 
 /** The corpus root, as both a location and a representative. */
 const ROOT = '';
@@ -160,7 +159,7 @@ const COST_TREE_BY_TOTAL = [
 function alwaysTheLongWay(projection: Projection, directory: string): number | null {
   const answer = whatLoadsAt(projection, directory);
   if (answer.kind === 'unknown') return null;
-  return account(answer, claudeMdIdsOf(projection)).totals.alwaysTokens;
+  return account(answer).totals.alwaysTokens;
 }
 
 /**

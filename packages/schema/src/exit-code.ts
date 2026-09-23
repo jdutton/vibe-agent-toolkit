@@ -1,5 +1,6 @@
 import { inspect } from 'node:util';
 
+import type { ReportStatus } from './report.js';
 import type { SeverityCounts } from './validation-issue.js';
 
 /**
@@ -56,23 +57,37 @@ export function isExitCode(code: number): code is ExitCodeValue {
   return EXIT_CODE_VALUES.has(code);
 }
 
+/** The envelope fields an exit code is derived from (a non-envelope verb adapts to them). */
+export interface ExitDeterminingDocument {
+  readonly status: ReportStatus;
+  readonly summary: SeverityCounts;
+}
+
 /**
- * The exit code a completed run with these finding counts ends on.
+ * The ONE mapping from a published document to its exit code. `status: error`
+ * is {@link ExitCode.ERROR}; otherwise the COUNTS decide, never the status word
+ * (`findings` means only a non-empty list): errors fail, warnings only under
+ * `strict`, info never.
  *
- * Errors fail the gate; warnings do only under `strict`; informational
- * findings never do. Never answers {@link ExitCode.ERROR}: a run that produced
- * counts completed, and a completed run is not a broken one.
- *
- * @param counts - The run's per-severity counts
+ * @param report - The published document, or its adapter's reading of it
  * @param options - `strict`: treat warnings as failing
  */
-export function exitCodeForSeverityCounts(
-  counts: SeverityCounts,
+export function exitCodeForReport(
+  report: ExitDeterminingDocument,
   options: { readonly strict?: boolean } = {},
-): typeof ExitCode.OK | typeof ExitCode.FINDINGS {
-  if (counts.errors > 0) return ExitCode.FINDINGS;
-  if (options.strict === true && counts.warnings > 0) return ExitCode.FINDINGS;
+): ExitCodeValue {
+  if (report.status === 'error') return ExitCode.ERROR;
+  if (report.summary.errors > 0) return ExitCode.FINDINGS;
+  if (options.strict === true && report.summary.warnings > 0) return ExitCode.FINDINGS;
   return ExitCode.OK;
+}
+
+/**
+ * A child `vat`'s exit status as a contract code: anything off the contract (a
+ * signal's `null`, Node's abort 134) is {@link ExitCode.ERROR}.
+ */
+export function exitCodeOfChild(status: number | null): ExitCodeValue {
+  return status !== null && isExitCode(status) ? status : ExitCode.ERROR;
 }
 
 /**

@@ -5,11 +5,12 @@ import { RULE_SCOPE_TAG } from '../src/projection/agentic-tags.js';
 import {
   corpusFiles,
   declaredPatterns,
-  declaresPaths,
+  harnessPaths,
   evaluateRulePatterns,
   harnessExpansion,
   selectRules,
   type DeclaredPattern,
+  type TreeIgnores,
 } from '../src/projection/claude-context-rules.js';
 import type {
   ResourceRealizationRow,
@@ -22,6 +23,16 @@ import {
   queryRealization,
   queryTag,
 } from './helpers/context-query-rows.js';
+
+/** The numbered patterns a file with this frontmatter stores in `blobs.claudePaths`. */
+function patternsOf(frontmatter: Readonly<Record<string, unknown>>): DeclaredPattern[] {
+  return declaredPatterns(harnessPaths(frontmatter));
+}
+
+/** Does the harness scope a file with this frontmatter by its `paths:`? */
+function scopes(frontmatter: Readonly<Record<string, unknown>>): boolean {
+  return harnessPaths(frontmatter) !== null;
+}
 
 /** The `rule-scope` tag `selectRules` reads a rule's scope class from. */
 function scopeTag(path: string, value: string): ResourceTagRow {
@@ -258,7 +269,7 @@ describe('selectRules', () => {
       ],
       tags: [scopeTag(existential, PATH_SCOPED), scopeTag(universal, PATH_SCOPED)],
       // `**/*`, not `**`: a rule whose patterns are ALL `**` is always-loaded in
-      // the harness (`declaresPaths`), so it would never reach this lane scoped.
+      // the harness (`harnessPaths`), so it would never reach this lane scoped.
       blobs: [blob(existential, [TS_GLOB]), blob(universal, ['**/*'])],
       queryDir: '', queryFile: null,
     });
@@ -354,11 +365,11 @@ describe('selectRules', () => {
     ]);
   });
 
-  it('ignores a rule whose frontmatter did not parse to a paths array', () => {
+  it('ignores a rule tagged path-scoped whose blob declares no claudePaths — even with a paths: key VAT parsed', () => {
     const path = '.claude/rules/broken.md';
     const result = selectRules({
       realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [{ ...blob(path, undefined), frontmatter: { paths: 'not-an-array' } }],
+      blobs: [{ ...blob(path, undefined), frontmatter: { paths: ['src/**'] } }],
       queryDir: 'src', queryFile: 'src/x.ts',
     });
 
@@ -383,7 +394,7 @@ describe('selectRules', () => {
     const result = selectRules({
       realizations: [queryRealization(path)],
       tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [{ ...blob(path, undefined), frontmatter: { paths: ['src/**/*.ts', 123, null] } }],
+      blobs: [{ ...blob(path, undefined), claudePaths: harnessPaths({ paths: ['src/**/*.ts', 123, null] }) }],
       queryDir: 'src', queryFile: 'src/x.ts',
     });
 
@@ -406,7 +417,7 @@ function corpusOf(...paths: readonly string[]): readonly string[] {
 }
 
 /** The ignore oracle of a tree with nothing gitignored — a non-git tree, say. */
-const NOTHING_IGNORED = (): boolean => false;
+const NOTHING_IGNORED: TreeIgnores = { isIgnored: () => false, ignoredEntries: () => [] };
 
 /**
  * An ignore oracle shaped like git's answer to a `.gitignore` line `<dir>/`
@@ -416,10 +427,11 @@ const NOTHING_IGNORED = (): boolean => false;
  * @param dir - Root-relative directory the ignore line names
  * @returns The predicate, recording every path it was asked about
  */
-function ignoresBeneath(dir: string): { isIgnored: (path: string) => boolean; asked: string[] } {
+function ignoresBeneath(dir: string): TreeIgnores & { asked: string[] } {
   const asked: string[] = [];
   return {
     asked,
+    ignoredEntries: () => [],
     isIgnored: (path) => {
       asked.push(path);
       return toForwardSlash(path).startsWith(`${dir}/`);
@@ -428,8 +440,27 @@ function ignoresBeneath(dir: string): { isIgnored: (path: string) => boolean; as
 }
 
 /** A predicate the evaluator must never consult. */
-function neverAsked(path: string): boolean {
-  throw new Error(`isIgnored must not be consulted, was asked about ${path}`);
+const NEVER_ASKED: TreeIgnores = {
+  isIgnored: (path) => {
+    throw new Error(`isIgnored must not be consulted, was asked about ${path}`);
+  },
+  ignoredEntries: () => {
+    throw new Error('ignoredEntries must not be consulted');
+  },
+};
+
+/**
+ * An oracle over one existing tree: `entries` is git's collapsed listing, and a
+ * path is ignored when an entry is it or an ancestor of it.
+ *
+ * @param entries - Root-relative listing entries, directories with a trailing `/`
+ * @returns The oracle
+ */
+function listingOf(...entries: string[]): TreeIgnores {
+  return {
+    ignoredEntries: () => entries,
+    isIgnored: (path) => entries.some((entry) => (entry.endsWith('/') ? `${path}/`.startsWith(entry) : path === entry)),
+  };
 }
 
 /** A rules file in the PROJECT'S own rules directory — never re-based. */
@@ -475,7 +506,7 @@ function statusesOf(
   patterns: readonly string[],
   files: readonly string[],
 ): readonly string[] {
-  return evaluateRulePatterns({ isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(...patterns), files }).map((entry) => entry.status);
+  return evaluateRulePatterns({ ignores: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(...patterns), files }).map((entry) => entry.status);
 }
 
 describe('evaluateRulePatterns', () => {
@@ -485,7 +516,7 @@ describe('evaluateRulePatterns', () => {
     // exactly 246 admissions and one pattern each — "which of this rule's globs
     // matches nothing" was not a question the answer could be asked.
     const patterns = [TS_GLOB, CLI_MD_GLOB, OTHER_PKG_GLOB];
-    const result = evaluateRulePatterns({ isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(...patterns), files: corpusOf(SUBJECT_TS, SUBJECT_MD),
+    const result = evaluateRulePatterns({ ignores: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(...patterns), files: corpusOf(SUBJECT_TS, SUBJECT_MD),
     });
 
     expect(result.map((entry) => entry.pattern)).toEqual(patterns);
@@ -504,7 +535,7 @@ describe('evaluateRulePatterns', () => {
     // string bound `candidateRange` searches on, and the last time that was
     // misread every wholly-literal entry silently vanished from the answer.
     const pattern = 'packages/cli/src/missing.ts';
-    const result = evaluateRulePatterns({ isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(pattern), files: corpusOf(SUBJECT_TS) });
+    const result = evaluateRulePatterns({ ignores: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(pattern), files: corpusOf(SUBJECT_TS) });
 
     expect(result).toEqual([{
       ordinal: 0, pattern, literalPrefix: pattern, witnessPath: null, status: 'inert',
@@ -512,7 +543,7 @@ describe('evaluateRulePatterns', () => {
   });
 
   it('names a wholly-literal pattern ITSELF as the witness when that file exists', () => {
-    const result = evaluateRulePatterns({ isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(SUBJECT_TS), files: corpusOf(SUBJECT_TS),
+    const result = evaluateRulePatterns({ ignores: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(SUBJECT_TS), files: corpusOf(SUBJECT_TS),
     });
 
     expect(result).toEqual([{
@@ -534,7 +565,7 @@ describe('evaluateRulePatterns', () => {
     });
 
     expect(scoped.rules).toEqual([]);
-    expect(evaluateRulePatterns({ isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(OTHER_PKG_GLOB), files: corpusOf(SUBJECT_TS, OTHER_PKG_TS),
+    expect(evaluateRulePatterns({ ignores: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(OTHER_PKG_GLOB), files: corpusOf(SUBJECT_TS, OTHER_PKG_TS),
     })).toEqual([{
       ordinal: 0, pattern: OTHER_PKG_GLOB, literalPrefix: 'packages/other-pkg/src',
       witnessPath: OTHER_PKG_TS, status: 'matched',
@@ -559,7 +590,7 @@ describe('evaluateRulePatterns', () => {
     // for the harness to expand, matching no file. Without this pair, a function
     // that answered `unevaluated` for everything would pass.
     const inBudget = 'src/{a,b}/x.ts';
-    const result = evaluateRulePatterns({ isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(inBudget, TS_GLOB), files: corpusOf(SUBJECT_TS),
+    const result = evaluateRulePatterns({ ignores: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(inBudget, TS_GLOB), files: corpusOf(SUBJECT_TS),
     });
 
     expect(result.map((entry) => entry.status)).toEqual(['inert', 'matched']);
@@ -584,12 +615,12 @@ describe('evaluateRulePatterns', () => {
       resourceId: `id:${rule}`, path: rule,
       admission: { kind: MAY_FIRE, pattern: TS_GLOB, examplePath: SUBJECT_TS },
     }]);
-    expect(evaluateRulePatterns({ isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(...patterns), files: corpusOf(SUBJECT_TS, SUBJECT_MD) }))
+    expect(evaluateRulePatterns({ ignores: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(...patterns), files: corpusOf(SUBJECT_TS, SUBJECT_MD) }))
       .toHaveLength(patterns.length);
   });
 
   it('returns nothing for an empty paths list', () => {
-    expect(evaluateRulePatterns({ isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: [], files: corpusOf(SUBJECT_TS) })).toEqual([]);
+    expect(evaluateRulePatterns({ ignores: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: [], files: corpusOf(SUBJECT_TS) })).toEqual([]);
   });
 
   it('⭐ reports a ./-prefixed glob as INERT, because the harness matches nothing with it', () => {
@@ -601,7 +632,7 @@ describe('evaluateRulePatterns', () => {
     // defect behind a dialect VAT invented. The bare twin beside it is the
     // positive control — same tree, same file, one `./` apart.
     const dotted = `./${TS_GLOB}`;
-    const result = evaluateRulePatterns({ isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(dotted, TS_GLOB), files: corpusOf(SUBJECT_TS),
+    const result = evaluateRulePatterns({ ignores: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(dotted, TS_GLOB), files: corpusOf(SUBJECT_TS),
     });
 
     expect(result.map((entry) => entry.status)).toEqual(['inert', 'matched']);
@@ -621,34 +652,35 @@ describe('evaluateRulePatterns', () => {
     // is what keys `claude_rule_patterns` — and a finding names the pattern
     // VERBATIM for the author to grep. Both shapes are asserted, because the
     // scalar is the one no author-slot reading could ever have served.
-    expect(declaredPatterns({ paths: [TS_GLOB, null, 42, OTHER_PKG_GLOB] })).toEqual([
+    expect(patternsOf({ paths: [TS_GLOB, null, 42, OTHER_PKG_GLOB] })).toEqual([
       { ordinal: 0, pattern: TS_GLOB },
       { ordinal: 1, pattern: OTHER_PKG_GLOB },
     ]);
-    expect(declaredPatterns({ paths: ['a/**, b/**', 'c/**'] }).map((entry) => entry.ordinal))
+    expect(patternsOf({ paths: ['a/**, b/**', 'c/**'] }).map((entry) => entry.ordinal))
       .toEqual([0, 1, 2]);
-    expect(declaredPatterns({ paths: `${TS_GLOB}, ${OTHER_PKG_GLOB}` })).toEqual([
+    expect(patternsOf({ paths: `${TS_GLOB}, ${OTHER_PKG_GLOB}` })).toEqual([
       { ordinal: 0, pattern: TS_GLOB },
       { ordinal: 1, pattern: OTHER_PKG_GLOB },
     ]);
-    const patterns = declaredPatterns({ paths: [TS_GLOB, null, 42, OTHER_PKG_GLOB] });
-    expect(evaluateRulePatterns({ isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns, files: corpusOf(SUBJECT_TS) })
+    const patterns = patternsOf({ paths: [TS_GLOB, null, 42, OTHER_PKG_GLOB] });
+    expect(evaluateRulePatterns({ ignores: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns, files: corpusOf(SUBJECT_TS) })
       .map((entry) => [entry.ordinal, entry.status])).toEqual([[0, 'matched'], [1, 'inert']]);
   });
 
   it("finds a NESTED rule's glob relative to its own project directory", () => {
-    // ⛔ The vendor does not say which base a nested rules file's globs resolve
-    // against. Swept only against the repo root, a fixture project's glob was
-    // reported dead beside its own source file — a false CLAUDE_RULE_GLOB_INERT
-    // whose remedy deletes a working glob. Dead now means dead under BOTH
-    // candidate bases.
+    // The shipped binary's `y3` matches a rule's globs relative to
+    // `LO(LO(rulesDir))` — the directory holding that `.claude/rules` — and
+    // nothing else (docs/external/claude-code-memory-loader.md). Swept against
+    // the repo root instead, a fixture project's glob was reported dead beside
+    // its own source file — a false CLAUDE_RULE_GLOB_INERT whose remedy deletes
+    // a working glob.
     //
     // ⚠️ `src/lib/**`, not `src/**`, and the difference is FIX 1: `src/**`
     // strips to `src`, which gitignore matches at ANY depth, so it would reach
     // the fixture from the root and prove nothing about re-basing. A glob that
     // still holds a slash after the strip is the only kind that can.
     const result = evaluateRulePatterns({
-      isIgnored: NOTHING_IGNORED,
+      ignores: NOTHING_IGNORED,
       rulePath: NESTED_RULE, patterns: declared(NESTED_ANCHORED_GLOB),
       files: corpusOf(NESTED_ANCHORED_FILE),
     });
@@ -659,9 +691,9 @@ describe('evaluateRulePatterns', () => {
     expect(result[0]?.pattern).toBe(NESTED_ANCHORED_GLOB);
   });
 
-  it("still calls a nested rule's glob inert when it matches under NEITHER base", () => {
+  it("still calls a nested rule's glob inert when it matches nothing under its base", () => {
     const result = evaluateRulePatterns({
-      isIgnored: NOTHING_IGNORED,
+      ignores: NOTHING_IGNORED,
       rulePath: NESTED_RULE, patterns: declared('lib/**'),
       files: corpusOf('fixtures/sample/src/index.ts', SUBJECT_TS),
     });
@@ -693,7 +725,7 @@ describe('evaluateRulePatterns', () => {
     // As a witness it would call a dead glob matched on the strength of a file
     // nobody can open.
     const gone = { ...queryRealization(OTHER_PKG_TS), exists: false };
-    const result = evaluateRulePatterns({ isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(OTHER_PKG_GLOB), files: corpusFiles([queryRealization(SUBJECT_TS), gone]),
+    const result = evaluateRulePatterns({ ignores: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(OTHER_PKG_GLOB), files: corpusFiles([queryRealization(SUBJECT_TS), gone]),
     });
 
     expect(result.map((entry) => [entry.status, entry.witnessPath])).toEqual([['inert', null]]);
@@ -707,23 +739,23 @@ describe('evaluateRulePatterns — gitignored territory', () => {
     // build output matched nothing HERE and may fire THERE. Its remedy (delete
     // the glob) would break a working rule. `dist` itself answers NOT ignored:
     // the `.gitignore` line is `dist/`, and a directory that does not exist is
-    // not known to be one.
+    // not known to be one — so a path BENEATH it is asked too.
     const oracle = ignoresBeneath('dist');
     const result = evaluateRulePatterns({
-      isIgnored: oracle.isIgnored, rulePath: ROOT_RULE, patterns: declared('dist/**'),
+      ignores: oracle, rulePath: ROOT_RULE, patterns: declared('dist/**'),
       files: corpusOf(SUBJECT_TS),
     });
 
     expect(result).toEqual([{
       ordinal: 0, pattern: 'dist/**', literalPrefix: 'dist', witnessPath: null, status: 'gitignored',
     }]);
-    // The question was about a path BENEATH the prefix, not the bare prefix.
-    expect(oracle.asked.every((path) => toForwardSlash(path).startsWith('dist/'))).toBe(true);
+    // The bare `dist` was asked and said no; the path beneath it decided.
+    expect(oracle.asked).toEqual(['dist', 'dist/vat-territory-probe']);
   });
 
   it('keeps the positive control: the same glob over NON-ignored territory is inert', () => {
     const result = evaluateRulePatterns({
-      isIgnored: ignoresBeneath('build').isIgnored, rulePath: ROOT_RULE, patterns: declared('dist/**'),
+      ignores: ignoresBeneath('build'), rulePath: ROOT_RULE, patterns: declared('dist/**'),
       files: corpusOf(SUBJECT_TS),
     });
 
@@ -733,9 +765,12 @@ describe('evaluateRulePatterns — gitignored territory', () => {
   it('asks a wholly-literal pattern about the FILE it names', () => {
     const asked: string[] = [];
     const result = evaluateRulePatterns({
-      isIgnored: (path) => {
-        asked.push(path);
-        return path === 'generated/api.ts';
+      ignores: {
+        ignoredEntries: () => [],
+        isIgnored: (path) => {
+          asked.push(path);
+          return path === 'generated/api.ts';
+        },
       },
       rulePath: ROOT_RULE, patterns: declared('generated/api.ts'), files: corpusOf(SUBJECT_TS),
     });
@@ -744,21 +779,31 @@ describe('evaluateRulePatterns — gitignored territory', () => {
     expect(result.map((entry) => entry.status)).toEqual(['gitignored']);
   });
 
-  it('keeps a glob with an EMPTY literal prefix inert — its territory is the whole tree', () => {
-    // `**/*.gen.ts` has no prefix to ask about, and "is the root ignored" is
-    // not the question. Stays a (possibly false) inert, and the docs say so.
+  it('asks a glob with no literal prefix about a file it matches, and the listing', () => {
+    // `**/*.gen.ts` used to ask nothing — its territory is the whole tree — and
+    // stayed inert over a `.gitignore`d `*.gen.ts`. It is instantiated like any
+    // other glob now, and a generated file anywhere is in the listing.
+    const asked: string[] = [];
     const result = evaluateRulePatterns({
-      isIgnored: neverAsked, rulePath: ROOT_RULE, patterns: declared('**/*.gen.ts'), files: corpusOf(SUBJECT_TS),
+      ignores: {
+        ignoredEntries: () => ['packages/api/src/client.gen.ts'],
+        isIgnored: (path) => {
+          asked.push(path);
+          return false;
+        },
+      },
+      rulePath: ROOT_RULE, patterns: declared('**/*.gen.ts'), files: corpusOf(SUBJECT_TS),
     });
 
-    expect(result.map((entry) => entry.status)).toEqual(['inert']);
+    expect(asked).toEqual(['vat-territory-probe.gen.ts', 'vat-territory-probe.gen.ts/vat-territory-probe']);
+    expect(result.map((entry) => entry.status)).toEqual(['gitignored']);
   });
 
   it('calls a prefix that climbs out of the tree inert without asking the oracle', () => {
     // A `..` segment is dead by syntax — no path the harness asks has one — so
     // the territory question is never reached.
     const result = evaluateRulePatterns({
-      isIgnored: neverAsked, rulePath: ROOT_RULE, patterns: declared('../sibling/**'), files: corpusOf(SUBJECT_TS),
+      ignores: NEVER_ASKED, rulePath: ROOT_RULE, patterns: declared('../sibling/**'), files: corpusOf(SUBJECT_TS),
     });
 
     expect(result.map((entry) => entry.status)).toEqual(['inert']);
@@ -771,10 +816,10 @@ describe('evaluateRulePatterns — gitignored territory', () => {
     // per pattern now, so a `dist/**` beside it is evaluated on its own merits
     // and WOULD ask the oracle — which is the next test.
     expect(evaluateRulePatterns({
-      isIgnored: neverAsked, rulePath: ROOT_RULE, patterns: declared(TS_GLOB), files: corpusOf(SUBJECT_TS),
+      ignores: NEVER_ASKED, rulePath: ROOT_RULE, patterns: declared(TS_GLOB), files: corpusOf(SUBJECT_TS),
     }).map((entry) => entry.status)).toEqual(['matched']);
     expect(evaluateRulePatterns({
-      isIgnored: neverAsked, rulePath: ROOT_RULE, patterns: declared(OVER_BUDGET_PATTERN),
+      ignores: NEVER_ASKED, rulePath: ROOT_RULE, patterns: declared(OVER_BUDGET_PATTERN),
       files: corpusOf(SUBJECT_TS),
     }).map((entry) => entry.status)).toEqual(['unevaluated']);
   });
@@ -785,23 +830,116 @@ describe('evaluateRulePatterns — gitignored territory', () => {
     // `gitignored` verdict next to a neighbour the harness refused to expand.
     const oracle = ignoresBeneath('dist');
     const result = evaluateRulePatterns({
-      isIgnored: oracle.isIgnored, rulePath: ROOT_RULE,
+      ignores: oracle, rulePath: ROOT_RULE,
       patterns: declared(OVER_BUDGET_PATTERN, 'dist/**'), files: corpusOf(SUBJECT_TS),
     });
 
     expect(result.map((entry) => entry.status)).toEqual(['unevaluated', 'gitignored']);
-    expect(oracle.asked).toEqual(['dist/vat-territory-probe']);
+    expect(oracle.asked).toEqual(['dist', 'dist/vat-territory-probe']);
   });
 
   it("judges a NESTED rule's glob under its own project directory too", () => {
-    // Same two bases as the witness search: the glob may resolve against the
+    // The same one base as the witness search: the glob resolves against the
     // nested project, whose `dist/` is the ignored one.
     const result = evaluateRulePatterns({
-      isIgnored: ignoresBeneath('fixtures/sample/dist').isIgnored, rulePath: NESTED_RULE,
+      ignores: ignoresBeneath('fixtures/sample/dist'), rulePath: NESTED_RULE,
       patterns: declared('dist/**'), files: corpusOf('fixtures/sample/src/index.ts'),
     });
 
     expect(result.map((entry) => entry.status)).toEqual(['gitignored']);
+  });
+});
+
+/**
+ * The four divergence classes the extended rules differential found
+ * (`helpers/rules-differential.ts`: a gitignore oracle and strict naming). Each
+ * is the differential's own shrunk case, pinned so a regression names itself.
+ */
+describe('gitignored territory is decided on the HARNESS globs, and the listing', () => {
+  it('⭐ gives `dist`, `dist/` and `dist/**` one verdict over an unbuilt, ignored `dist/`', () => {
+    // The harness strips `dist/**` to `dist`, so the three are one glob (two,
+    // counting `dist/`'s directory-only reading). The verdict was read off the
+    // DECLARED spelling: the literal `dist` asked git about bare `dist` (not
+    // ignored while unbuilt) and read `inert`, while `dist/**` read `gitignored`.
+    const result = evaluateRulePatterns({
+      ignores: ignoresBeneath('dist'), rulePath: ROOT_RULE, patterns: declared('dist', 'dist/', 'dist/**'),
+      files: corpusOf(SUBJECT_TS),
+    });
+
+    expect(result.map((entry) => entry.status)).toEqual(['gitignored', 'gitignored', 'gitignored']);
+  });
+
+  it('⭐ gives a NESTED rule\'s `sub` and `sub/**` one verdict over a root-ignored `sub/`', () => {
+    // The differential's seed 284. The nested re-base read `sub` as unanchored
+    // (`fixtures/sample/**/sub`, prefix `fixtures/sample`) and `sub/**` as
+    // anchored, so only one of them asked about `fixtures/sample/sub/…`.
+    const result = evaluateRulePatterns({
+      ignores: ignoresBeneath('fixtures/sample/sub'), rulePath: NESTED_RULE, patterns: declared('sub', 'sub/**'),
+      files: corpusOf('fixtures/sample/src/index.ts'),
+    });
+
+    expect(result.map((entry) => entry.status)).toEqual(['gitignored', 'gitignored']);
+  });
+
+  it('⭐ calls an unanchored glob gitignored when its name is ignored BELOW the root', () => {
+    // `dist/**` strips to the unanchored `dist`, which matches
+    // `packages/a/dist/` — ignored by `/packages/*/dist/`, so no probe at the
+    // root can see it. Only the listing does.
+    const result = evaluateRulePatterns({
+      ignores: listingOf('packages/a/dist/'), rulePath: ROOT_RULE, patterns: declared('dist/**', '!dist/**'),
+      files: corpusOf('packages/a/src/x.ts'),
+    });
+
+    expect(result.map((entry) => entry.status)).toEqual(['gitignored', 'gitignored']);
+  });
+
+  it('keeps the positive control: the same glob with nothing of its name ignored is inert', () => {
+    const result = evaluateRulePatterns({
+      ignores: listingOf('packages/a/build/'), rulePath: ROOT_RULE, patterns: declared('dist/**'),
+      files: corpusOf('packages/a/src/x.ts'),
+    });
+
+    expect(result.map((entry) => entry.status)).toEqual(['inert']);
+  });
+
+  it('⚠️ stays inert — the documented blind spot — for a match strictly inside an ignored directory it does not name', () => {
+    // `docs` could match `sub/x/docs/`, but git collapses the ignored `sub/` to
+    // one entry, and seeing inside it means walking ignored territory.
+    const result = evaluateRulePatterns({
+      ignores: listingOf('sub/'), rulePath: ROOT_RULE, patterns: declared('docs'), files: corpusOf(SUBJECT_TS),
+    });
+
+    expect(result.map((entry) => entry.status)).toEqual(['inert']);
+  });
+
+  it('⭐ probes with a name satisfying the last segment, so `dist/**/*.js` over an ignored `*.js` is gitignored', () => {
+    // The extension-less probe `dist/vat-territory-probe` is not a `.js` file,
+    // so a `.gitignore` of `*.js` never matched it.
+    const asked: string[] = [];
+    const result = evaluateRulePatterns({
+      ignores: {
+        ignoredEntries: () => [],
+        isIgnored: (path) => {
+          asked.push(path);
+          return path.endsWith('.js');
+        },
+      },
+      rulePath: ROOT_RULE, patterns: declared('dist/**/*.js'), files: corpusOf(SUBJECT_TS),
+    });
+
+    expect(asked).toEqual(['dist/vat-territory-probe.js']);
+    expect(result.map((entry) => entry.status)).toEqual(['gitignored']);
+  });
+
+  it('asks nothing it cannot prove the glob matches', () => {
+    // `[!v]*` cannot be spelled by the probe name, and a probe that is not a
+    // match would answer a question about some other glob.
+    const result = evaluateRulePatterns({
+      ignores: { ignoredEntries: () => [], isIgnored: NEVER_ASKED.isIgnored },
+      rulePath: ROOT_RULE, patterns: declared('dist/[!v]*'), files: corpusOf(SUBJECT_TS),
+    });
+
+    expect(result.map((entry) => entry.status)).toEqual(['inert']);
   });
 });
 
@@ -1030,7 +1168,7 @@ describe('harnessExpansion — `N()`, transcribed', () => {
   });
 });
 
-describe('declaredPatterns — what the harness reads out of one `paths:` value', () => {
+describe('harnessPaths — what the harness reads out of one `paths:` value', () => {
   // ⭐ Ground truth is the SHIPPED harness, not the doc. Claude Code 2.1.280
   // normalises `paths:` through one function: a list is flat-mapped through it,
   // a STRING is split on commas at brace depth 0 and each part trimmed, and
@@ -1039,27 +1177,27 @@ describe('declaredPatterns — what the harness reads out of one `paths:` value'
   // and a rules file carrying one is path-scoped in the harness while VAT saw
   // no globs at all and charged the rule as always-loaded.
   it('reads a SCALAR string, comma-split, exactly as the harness does', () => {
-    expect(declaredPatterns({ paths: 'packages/**/*.ts, apps/**/*.tsx' })).toEqual([
+    expect(patternsOf({ paths: 'packages/**/*.ts, apps/**/*.tsx' })).toEqual([
       { ordinal: 0, pattern: 'packages/**/*.ts' },
       { ordinal: 1, pattern: 'apps/**/*.tsx' },
     ]);
   });
 
   it('reads a single-pattern string as one pattern', () => {
-    expect(declaredPatterns({ paths: TS_GLOB })).toEqual([{ ordinal: 0, pattern: TS_GLOB }]);
+    expect(patternsOf({ paths: TS_GLOB })).toEqual([{ ordinal: 0, pattern: TS_GLOB }]);
   });
 
   it('does not split a comma INSIDE a brace group', () => {
     // The harness tracks brace depth while splitting, because `{ts,tsx}` is one
     // pattern and splitting it yields two that match nothing.
-    expect(declaredPatterns({ paths: 'src/**/*.{ts,tsx}, docs/**' })).toEqual([
+    expect(patternsOf({ paths: 'src/**/*.{ts,tsx}, docs/**' })).toEqual([
       { ordinal: 0, pattern: 'src/**/*.{ts,tsx}' },
       { ordinal: 1, pattern: 'docs/**' },
     ]);
   });
 
   it('comma-splits a LIST entry too, because the harness flat-maps the list', () => {
-    expect(declaredPatterns({ paths: ['a/**, b/**', 'c/**'] })).toEqual([
+    expect(patternsOf({ paths: ['a/**, b/**', 'c/**'] })).toEqual([
       { ordinal: 0, pattern: 'a/**' },
       { ordinal: 1, pattern: 'b/**' },
       { ordinal: 2, pattern: 'c/**' },
@@ -1067,12 +1205,12 @@ describe('declaredPatterns — what the harness reads out of one `paths:` value'
   });
 
   it('drops an empty part rather than declaring a pattern that matches nothing', () => {
-    expect(declaredPatterns({ paths: 'a/**, ,' })).toEqual([{ ordinal: 0, pattern: 'a/**' }]);
+    expect(patternsOf({ paths: 'a/**, ,' })).toEqual([{ ordinal: 0, pattern: 'a/**' }]);
   });
 
   it('reads no pattern from a paths: that is neither a string nor a list', () => {
-    expect(declaredPatterns({ paths: 42 })).toEqual([]);
-    expect(declaredPatterns({ paths: { glob: 'a/**' } })).toEqual([]);
+    expect(patternsOf({ paths: 42 })).toEqual([]);
+    expect(patternsOf({ paths: { glob: 'a/**' } })).toEqual([]);
     expect(declaredPatterns(null)).toEqual([]);
   });
 
@@ -1083,9 +1221,9 @@ describe('declaredPatterns — what the harness reads out of one `paths:` value'
     // carrying no `paths:` at all, and was charged to every query as
     // always-loaded. The `{ glob: … }` map above is the positive control: a
     // genuine non-string still contributes nothing.
-    expect(declaredPatterns({ paths: [['src/**']] })).toEqual([{ ordinal: 0, pattern: 'src/**' }]);
-    expect(declaresPaths({ paths: [['src/**']] })).toBe(true);
-    expect(declaredPatterns({ paths: [[TS_GLOB, [OTHER_PKG_GLOB]]] }).map((entry) => entry.pattern))
+    expect(patternsOf({ paths: [['src/**']] })).toEqual([{ ordinal: 0, pattern: 'src/**' }]);
+    expect(scopes({ paths: [['src/**']] })).toBe(true);
+    expect(patternsOf({ paths: [[TS_GLOB, [OTHER_PKG_GLOB]]] }).map((entry) => entry.pattern))
       .toEqual([TS_GLOB, OTHER_PKG_GLOB]);
   });
 
@@ -1095,9 +1233,9 @@ describe('declaredPatterns — what the harness reads out of one `paths:` value'
     // pattern there. VAT clamped at zero — which reads as defensive and is the
     // thing being modelled getting it wrong differently — and declared two
     // patterns, one of which the harness never holds.
-    expect(declaredPatterns({ paths: 'a}/b,c' })).toEqual([{ ordinal: 0, pattern: 'a}/b,c' }]);
+    expect(patternsOf({ paths: 'a}/b,c' })).toEqual([{ ordinal: 0, pattern: 'a}/b,c' }]);
     // The positive control: with the brace balanced, the comma splits again.
-    expect(declaredPatterns({ paths: 'a{x}/b,c' }).map((entry) => entry.pattern))
+    expect(patternsOf({ paths: 'a{x}/b,c' }).map((entry) => entry.pattern))
       .toEqual(['a{x}/b', 'c']);
   });
 
@@ -1105,41 +1243,41 @@ describe('declaredPatterns — what the harness reads out of one `paths:` value'
   // `**`" as NO paths: at all — the rule loads every turn. A pattern reported
   // for such a rule would name a glob that decides nothing.
   it('declares NOTHING for a rule the harness loads unconditionally', () => {
-    expect(declaredPatterns({ paths: ['**'] })).toEqual([]);
-    expect(declaredPatterns({ paths: '**, **' })).toEqual([]);
-    expect(declaredPatterns({ paths: ['/**'] })).toEqual([]);
-    expect(declaredPatterns({ paths: [42] })).toEqual([]);
+    expect(patternsOf({ paths: ['**'] })).toEqual([]);
+    expect(patternsOf({ paths: '**, **' })).toEqual([]);
+    expect(patternsOf({ paths: ['/**'] })).toEqual([]);
+    expect(patternsOf({ paths: [42] })).toEqual([]);
   });
 
   it('still declares the patterns of a rule ONE of whose globs is `**`', () => {
-    expect(declaredPatterns({ paths: ['**', 'src/**'] })).toEqual([
+    expect(patternsOf({ paths: ['**', 'src/**'] })).toEqual([
       { ordinal: 0, pattern: '**' },
       { ordinal: 1, pattern: 'src/**' },
     ]);
   });
 });
 
-describe('declaresPaths — the load class the harness would give a rule', () => {
+describe('harnessPaths — the load class the harness would give a rule', () => {
   it('is path-scoped when a pattern survives normalisation', () => {
-    expect(declaresPaths({ paths: 'src/**' })).toBe(true);
-    expect(declaresPaths({ paths: ['docs/**/*.md'] })).toBe(true);
+    expect(scopes({ paths: 'src/**' })).toBe(true);
+    expect(scopes({ paths: ['docs/**/*.md'] })).toBe(true);
     // one `**` beside a real glob still scopes the rule
-    expect(declaresPaths({ paths: ['**', 'src/**'] })).toBe(true);
+    expect(scopes({ paths: ['**', 'src/**'] })).toBe(true);
   });
 
   // ⛔ The under-report direction: charged as path-scoped, a rule that actually
   // loads every turn is missing from every budget answer.
   it('⭐ is ALWAYS-LOADED when every surviving pattern is `**`', () => {
-    expect(declaresPaths({ paths: '**' })).toBe(false);
-    expect(declaresPaths({ paths: ['**', '**'] })).toBe(false);
+    expect(scopes({ paths: '**' })).toBe(false);
+    expect(scopes({ paths: ['**', '**'] })).toBe(false);
   });
 
   it('⭐ is ALWAYS-LOADED when nothing survives — including a trailing-`/**`-only glob', () => {
-    expect(declaresPaths({ paths: '/**' })).toBe(false);
-    expect(declaresPaths({ paths: [42] })).toBe(false);
-    expect(declaresPaths({ paths: [] })).toBe(false);
-    expect(declaresPaths({ paths: '  ' })).toBe(false);
-    expect(declaresPaths(null)).toBe(false);
+    expect(scopes({ paths: '/**' })).toBe(false);
+    expect(scopes({ paths: [42] })).toBe(false);
+    expect(scopes({ paths: [] })).toBe(false);
+    expect(scopes({ paths: '  ' })).toBe(false);
+    expect(scopes({})).toBe(false);
   });
 
   it('⭐ EXPANDS before it strips, so a brace group that yields only `**` is always-loaded', () => {
@@ -1148,17 +1286,17 @@ describe('declaresPaths — the load class the harness would give a rule', () =>
     // calls the rule path-scoped — charging an adopter nothing for a rule that
     // loads every turn, and reporting a "glob" nobody wrote. The harness
     // expands first: two `**`s, every survivor `**`, no `paths:` at all.
-    expect(declaresPaths({ paths: ['{**,**}'] })).toBe(false);
-    expect(declaredPatterns({ paths: ['{**,**}'] })).toEqual([]);
+    expect(scopes({ paths: ['{**,**}'] })).toBe(false);
+    expect(patternsOf({ paths: ['{**,**}'] })).toEqual([]);
     // `{/**,/**}` expands to two `/**`, each of which the strip empties.
-    expect(declaresPaths({ paths: ['{/**,/**}'] })).toBe(false);
+    expect(scopes({ paths: ['{/**,/**}'] })).toBe(false);
     // The positive control: the same shape holding one real glob still scopes.
-    expect(declaresPaths({ paths: ['{**,src/**}'] })).toBe(true);
+    expect(scopes({ paths: ['{**,src/**}'] })).toBe(true);
   });
 
   it('strips the trailing `/**` for the load class ONLY — `src/**` still scopes', () => {
-    expect(declaresPaths({ paths: 'src/**' })).toBe(true);
-    expect(declaredPatterns({ paths: 'src/**' })).toEqual([{ ordinal: 0, pattern: 'src/**' }]);
+    expect(scopes({ paths: 'src/**' })).toBe(true);
+    expect(patternsOf({ paths: 'src/**' })).toEqual([{ ordinal: 0, pattern: 'src/**' }]);
   });
 });
 
@@ -1194,7 +1332,7 @@ describe('a negation pattern is judged by what it EXCLUDES', () => {
     // inert — and CLAUDE_RULE_GLOB_INERT told the author to delete a working
     // exclusion.
     const result = evaluateRulePatterns({
-      isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(...EXCLUDING),
+      ignores: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(...EXCLUDING),
       files: corpusOf('src/a.ts', 'src/gen.ts'),
     });
 
@@ -1216,7 +1354,7 @@ describe('a negation pattern is judged by what it EXCLUDES', () => {
   it('calls a negation over gitignored territory gitignored, not inert', () => {
     const oracle = ignoresBeneath('gen');
     const result = evaluateRulePatterns({
-      isIgnored: oracle.isIgnored, rulePath: ROOT_RULE, patterns: declared('src/**', '!gen/**'),
+      ignores: oracle, rulePath: ROOT_RULE, patterns: declared('src/**', '!gen/**'),
       files: corpusOf('src/a.ts'),
     });
 
@@ -1257,7 +1395,7 @@ describe('the DIRECTORY lane answers for the whole rule, negations included', ()
 describe('a NESTED rule re-bases a pattern without changing what its prefix means', () => {
   it('⭐ anchors a leading `/` to the nested project, not to a doubled slash', () => {
     const result = evaluateRulePatterns({
-      isIgnored: NOTHING_IGNORED, rulePath: PKG_RULE, patterns: declared('/src/lib/**'),
+      ignores: NOTHING_IGNORED, rulePath: PKG_RULE, patterns: declared('/src/lib/**'),
       files: corpusOf('pkg/src/lib/a.ts'),
     });
     expect(result.map((entry) => entry.status)).toEqual(['matched']);
@@ -1267,7 +1405,7 @@ describe('a NESTED rule re-bases a pattern without changing what its prefix mean
 
   it('⭐ keeps a leading `./` dead under the nested base, as it is at the root', () => {
     const result = evaluateRulePatterns({
-      isIgnored: NOTHING_IGNORED, rulePath: PKG_RULE, patterns: declared('./docs/**'),
+      ignores: NOTHING_IGNORED, rulePath: PKG_RULE, patterns: declared('./docs/**'),
       files: corpusOf('pkg/docs/a.md'),
     });
     expect(result.map((entry) => entry.status)).toEqual(['inert']);
@@ -1281,10 +1419,10 @@ describe('a NESTED rule re-bases a pattern without changing what its prefix mean
       .toEqual([{ kind: 'glob-rule', pattern: 'lib/x/*.ts' }]);
   });
 
-  it('⭐ does not let a root-base negation exclude what the nested base loads', () => {
-    // Under the nested base the list is `pkg/lib/a.ts`, `!pkg/pkg/lib/a.ts`,
-    // which loads `pkg/lib/a.ts`. The root base's `!pkg/lib/a.ts` belongs to a
-    // different reading of the rule and must not subtract from this one.
+  it('⭐ reads a negation spelled from the ROOT relative to the nested base, where it excludes nothing', () => {
+    // Relative to `pkg` the list is `lib/a.ts`, `!pkg/lib/a.ts`: the negation
+    // names `pkg/pkg/lib/a.ts`, so `pkg/lib/a.ts` stays loaded. There is no
+    // root-relative reading for it to act in (`y3`, one base).
     const paths = ['lib/a.ts', '!pkg/lib/a.ts'];
     expect(admissionsFor(PKG_RULE, paths, [], 'pkg/lib', 'pkg/lib/a.ts'))
       .toEqual([{ kind: 'glob-rule', pattern: 'lib/a.ts' }]);
@@ -1312,7 +1450,7 @@ describe('the whole-list matcher keeps gitignore\'s last-match-wins order', () =
 
   it('⭐ calls the overridden negation inert and both positives matched — witness lane', () => {
     const result = evaluateRulePatterns({
-      isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(...REINCLUDED),
+      ignores: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(...REINCLUDED),
       files: corpusOf('src/gen.ts'),
     });
     expect(result.map((entry) => [entry.status, entry.witnessPath]))
@@ -1325,7 +1463,7 @@ describe('a pattern\'s status accounts for the patterns AFTER it', () => {
     // The rule loads nothing: the positive's only file is excluded. The
     // negation is what makes that so, so IT is the live one.
     const result = evaluateRulePatterns({
-      isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared('src/gen.ts', '!src/gen.ts'),
+      ignores: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared('src/gen.ts', '!src/gen.ts'),
       files: corpusOf('src/gen.ts'),
     });
     expect(result.map((entry) => [entry.status, entry.witnessPath]))
@@ -1350,7 +1488,7 @@ describe('a root-anchored glob locates its territory without the anchor', () => 
     // dead one and CLAUDE_RULE_GLOB_INERT told the author to delete it.
     const oracle = ignoresBeneath('dist');
     const result = evaluateRulePatterns({
-      isIgnored: oracle.isIgnored, rulePath: ROOT_RULE, patterns: declared('/dist/**', 'dist/**'),
+      ignores: oracle, rulePath: ROOT_RULE, patterns: declared('/dist/**', 'dist/**'),
       files: corpusOf(SUBJECT_TS),
     });
     expect(result.map((entry) => [entry.status, entry.literalPrefix]))
@@ -1361,13 +1499,17 @@ describe('a root-anchored glob locates its territory without the anchor', () => 
   it('asks a wholly-literal root-anchored pattern about the FILE it names', () => {
     const asked: string[] = [];
     evaluateRulePatterns({
-      isIgnored: (path) => {
-        asked.push(path);
-        return false;
+      ignores: {
+        ignoredEntries: () => [],
+        isIgnored: (path) => {
+          asked.push(path);
+          return false;
+        },
       },
       rulePath: ROOT_RULE, patterns: declared('/generated/api.ts'), files: corpusOf(SUBJECT_TS),
     });
-    expect(asked).toEqual(['generated/api.ts']);
+    // The file itself first; then a path beneath it, in case git ignores it as a directory.
+    expect(asked).toEqual(['generated/api.ts', 'generated/api.ts/vat-territory-probe']);
   });
 });
 
@@ -1394,7 +1536,7 @@ describe('a bare `!` (the stripped `!/**`) is a live negation', () => {
     // string — which matches nothing, so the one negation that excludes EVERY
     // file read inert and CLAUDE_RULE_GLOB_INERT told the author to delete it.
     const result = evaluateRulePatterns({
-      isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared('/a', '!/**'), files: corpusOf('a'),
+      ignores: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared('/a', '!/**'), files: corpusOf('a'),
     });
     expect(result.map((entry) => [entry.status, entry.witnessPath])).toEqual([['inert', null], ['matched', 'a']]);
   });
@@ -1404,7 +1546,7 @@ describe('a NESTED rule reads an UNANCHORED glob at any depth under its project'
   it('⭐ lets an unanchored nested negation exclude a file below a subdirectory — file lane', () => {
     // ⛔ The re-base anchored `!gen.ts` to `!pkg/gen.ts`, but the harness reading
     // this rule against its own base matches `gen.ts` at any depth under `pkg`,
-    // so `pkg/sub/gen.ts` is loaded under NEITHER base.
+    // so `pkg/sub/gen.ts` is not loaded.
     const paths = ['sub/*.ts', '!gen.ts'];
     expect(admissionsFor(PKG_RULE, paths, [], 'pkg/sub', 'pkg/sub/gen.ts')).toEqual([]);
     expect(admissionsFor(PKG_RULE, paths, [], 'pkg/sub', 'pkg/sub/a.ts'))
@@ -1413,25 +1555,48 @@ describe('a NESTED rule reads an UNANCHORED glob at any depth under its project'
 
   it('⭐ calls that unanchored nested negation matched, never inert — witness lane', () => {
     const result = evaluateRulePatterns({
-      isIgnored: NOTHING_IGNORED, rulePath: PKG_RULE, patterns: declared('sub/*.ts', '!gen.ts'),
+      ignores: NOTHING_IGNORED, rulePath: PKG_RULE, patterns: declared('sub/*.ts', '!gen.ts'),
       files: corpusOf('pkg/sub/a.ts', 'pkg/sub/gen.ts'),
     });
     expect(result.map((entry) => [entry.status, entry.witnessPath]))
       .toEqual([['matched', 'pkg/sub/a.ts'], ['matched', 'pkg/sub/gen.ts']]);
   });
 
-  it('⭐ judges a negation PER BASE, so one that excludes under the nested base is live', () => {
-    // The root base's `*.ts` still loads `pkg/sub/gen.ts` (`!sub/gen.ts` is
-    // anchored at the root and misses it), but under the nested base the
-    // negation takes it out. Judged against the union of bases it read inert.
+  it('⭐ judges a nested negation against the rule\'s ONE base, so it excludes what it names there', () => {
+    // `y3` asks `pkg/sub/gen.ts` as `sub/gen.ts` relative to `pkg`, where
+    // `!sub/gen.ts` takes it out. VAT used to also read the list from the root
+    // — where `!sub/gen.ts` misses and `*.ts` loads the file — and so admitted
+    // a file the harness never loads the rule for.
     const result = evaluateRulePatterns({
-      isIgnored: NOTHING_IGNORED, rulePath: PKG_RULE, patterns: declared('*.ts', '!sub/gen.ts'),
+      ignores: NOTHING_IGNORED, rulePath: PKG_RULE, patterns: declared('*.ts', '!sub/gen.ts'),
       files: corpusOf('pkg/a.ts', 'pkg/sub/gen.ts'),
     });
     expect(result.map((entry) => [entry.status, entry.witnessPath]))
       .toEqual([['matched', 'pkg/a.ts'], ['matched', 'pkg/sub/gen.ts']]);
-    expect(admissionsFor(PKG_RULE, ['*.ts', '!sub/gen.ts'], [], 'pkg/sub', 'pkg/sub/gen.ts'))
-      .toEqual([{ kind: 'glob-rule', pattern: '*.ts' }]);
+    expect(admissionsFor(PKG_RULE, ['*.ts', '!sub/gen.ts'], [], 'pkg/sub', 'pkg/sub/gen.ts')).toEqual([]);
+  });
+
+  it('⭐ never matches a nested rule against a file OUTSIDE its base', () => {
+    // `y3`: a path whose relative form starts `..` never matches. The
+    // root-relative reading VAT used to OR in loaded `src/a.ts` for a rule in
+    // `pkg/.claude/rules`, and called its glob live on that file.
+    expect(admissionsFor(PKG_RULE, ['*.ts'], [], 'src', 'src/a.ts')).toEqual([]);
+    expect(admissionsFor(PKG_RULE, ['*.ts'], ['src/a.ts'], 'src', null)).toEqual([]);
+    const result = evaluateRulePatterns({
+      ignores: NOTHING_IGNORED, rulePath: PKG_RULE, patterns: declared('*.ts'), files: corpusOf('src/a.ts'),
+    });
+    expect(result.map((entry) => entry.status)).toEqual(['inert']);
+  });
+
+  it('⭐ lets a nested `**` cover its own base, and never the corpus root above it', () => {
+    // The differential's seed 1217: ∀ at the root was answered from the
+    // root-covering globs whatever the rule's base, so a nested `**` claimed
+    // every file in the tree.
+    // ∃, not ∀: the only file it loads is one under `pkg` — the rule itself.
+    expect(admissionsFor(PKG_RULE, ['**', 'x/**'], ['x.ts'], '', null))
+      .toEqual([{ kind: MAY_FIRE, pattern: '**', examplePath: PKG_RULE }]);
+    expect(admissionsFor(PKG_RULE, ['**', 'x/**'], ['pkg/x.ts'], 'pkg', null))
+      .toEqual([{ kind: COVERS_DIR, pattern: '**' }]);
   });
 
   it('keeps the positive control: an unanchored nested positive still reaches a deep file', () => {
@@ -1446,7 +1611,7 @@ describe('a glob dead by SYNTAX is inert before its territory is asked about', (
     // `gitignored` sent the author to their .gitignore for a glob that cannot
     // fire anywhere. The oracle is never asked: the syntax already answered.
     const result = evaluateRulePatterns({
-      isIgnored: neverAsked, rulePath: ROOT_RULE,
+      ignores: NEVER_ASKED, rulePath: ROOT_RULE,
       patterns: declared('./dist/**', '/./dist/**', '//dist/**', '!./dist/**'),
       files: corpusOf(SUBJECT_TS),
     });
@@ -1456,7 +1621,7 @@ describe('a glob dead by SYNTAX is inert before its territory is asked about', (
   it('keeps the positive control: the live spelling over the same territory is gitignored', () => {
     const oracle = ignoresBeneath('dist');
     const result = evaluateRulePatterns({
-      isIgnored: oracle.isIgnored, rulePath: ROOT_RULE, patterns: declared('dist/**'),
+      ignores: oracle, rulePath: ROOT_RULE, patterns: declared('dist/**'),
       files: corpusOf(SUBJECT_TS),
     });
     expect(result.map((entry) => entry.status)).toEqual(['gitignored']);
@@ -1483,5 +1648,36 @@ describe('the pattern NAMED is the one that loads the file under last-match-wins
     // The control: with nothing re-covering after it, the negation declines ∀.
     expect(admissionsFor(TS_RULE, ['**', '!x'], ['a.ts'], '', null)[0])
       .toMatchObject({ kind: MAY_FIRE });
+  });
+});
+
+/**
+ * The strict rule: the LAST positive that still loads the path with every
+ * negation beside it. `gen.ts` is the last positive REACHING `src/gen.ts`, but
+ * the negation after it cancels it; `src` — the directory — is what loads the
+ * file. The differential's shrunk case for the class, in all three lanes.
+ */
+const DIRECTORY_LOADS_CANCELLED_NAME = ['src', 'gen.ts', '!gen.ts'];
+
+describe('the pattern NAMED is never one a later negation cancels', () => {
+  it('⭐ names the directory pattern, not the cancelled file pattern — file lane', () => {
+    expect(admissionsFor(TS_RULE, DIRECTORY_LOADS_CANCELLED_NAME, ['src/gen.ts'], 'src', 'src/gen.ts'))
+      .toEqual([{ kind: 'glob-rule', pattern: 'src' }]);
+  });
+
+  it('⭐ … ∃ lane', () => {
+    expect(admissionsFor(TS_RULE, DIRECTORY_LOADS_CANCELLED_NAME, ['src/gen.ts', 'x.md'], '', null))
+      .toEqual([{ kind: MAY_FIRE, pattern: 'src', examplePath: 'src/gen.ts' }]);
+  });
+
+  it('⭐ … ∀ lane', () => {
+    // `src/sub` would cover `src/sub/`, but `!src/sub` cancels it; `src/**` covers it.
+    expect(admissionsFor(TS_RULE, ['src/**', 'src/sub', '!src/sub'], ['src/sub/a.ts'], 'src/sub', null))
+      .toEqual([{ kind: COVERS_DIR, pattern: 'src/**' }]);
+  });
+
+  it('keeps the positive control: with no negation, the last reaching positive is named', () => {
+    expect(admissionsFor(TS_RULE, ['src', 'gen.ts'], ['src/gen.ts'], 'src', 'src/gen.ts'))
+      .toEqual([{ kind: 'glob-rule', pattern: 'gen.ts' }]);
   });
 });

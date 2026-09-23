@@ -116,7 +116,7 @@ class KeyRecordingStore implements ProjectionStore {
     if (!this.servesBlobTier) {
       throw new Error('this arm declines the blob tier and must never read it');
     }
-    return { blobs: [], blobReferences: [], blobSections: [], blobConditions: [] };
+    return { blobs: [], blobReferences: [], blobSections: [], blobConditions: [], blobClaudeImports: [] };
   }
 
   async close(): Promise<void> {

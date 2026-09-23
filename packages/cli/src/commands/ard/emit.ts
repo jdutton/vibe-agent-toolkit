@@ -17,7 +17,7 @@ import {
   writeArdManifest,
   type ShadowedArdOverrideKey,
 } from '@vibe-agent-toolkit/resources';
-import { buildReport, ExitCode, reportSchema, type Finding, type Report } from '@vibe-agent-toolkit/schema';
+import { buildReport, exitCodeForReport, reportSchema, type Finding, type Report } from '@vibe-agent-toolkit/schema';
 import { safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
@@ -194,6 +194,16 @@ export const ARD_EMIT_CODES = {
    * losing block is dead config, and an author cannot see that from the file.
    */
   OVERRIDE_KEY_SHADOWED: 'ARD_OVERRIDE_KEY_SHADOWED',
+  /**
+   * The project was read and declares no `ard:` block, so no manifest was
+   * built. A finding at `error` — exit 1 — because the PROJECT is the subject,
+   * not the invocation: it is fixed by editing config.
+   */
+  NOT_CONFIGURED: 'ARD_NOT_CONFIGURED',
+  /** A declared surface could not be derived into a conformant entry, so no manifest was written. */
+  DERIVATION_FAILED: 'ARD_DERIVATION_FAILED',
+  /** `--strict` refused a manifest that leaves a declared surface (or everything) unadvertised. */
+  STRICT_REFUSED: 'ARD_STRICT_REFUSED',
 } as const;
 
 /**
@@ -208,7 +218,8 @@ export const ARD_EMIT_CODES = {
  * declared was skipped" (`examined: N`, `entryCount: 0`) read differently too.
  */
 export const ArdEmitDataSchema = z.object({
-  outputPath: z.string(),
+  /** Where the manifest was written — `null` when the project produced none. */
+  outputPath: z.string().nullable(),
   entryCount: z.number().int().nonnegative(),
   /**
    * Counts BESIDE the findings. The count is what a CI step gates on without
@@ -290,13 +301,77 @@ function strictFailure(report: ArdEmitReport): string | undefined {
   return undefined;
 }
 
+/**
+ * The report for a project VAT read and could build no manifest for.
+ *
+ * 🚨 These endings used to publish the envelope's ERROR branch (`status:
+ * error`) and exit 1 — a document saying "could not do its job" beside a code
+ * saying "the project failed its gate". They are findings about the project,
+ * so they are published as findings and the code is derived from them.
+ *
+ * @param code - Which refusal
+ * @param message - What the operator must change
+ * @returns The report, at `error` severity, with nothing written
+ */
+function buildArdRefusalReport(
+  code: typeof ARD_EMIT_CODES.NOT_CONFIGURED | typeof ARD_EMIT_CODES.DERIVATION_FAILED,
+  message: string,
+): ArdEmitReport {
+  return buildReport<ArdEmitData>({
+    examined: 0,
+    findings: [{ code, severity: 'error', message }],
+    data: { outputPath: null, entryCount: 0, skippedCount: 0, shadowedCount: 0 },
+  });
+}
+
+/**
+ * The report `--strict` publishes: the same one, with the refusal as a finding.
+ *
+ * It used to be a stderr line beside a document that still said `status: ok`,
+ * and an exit 1 the document did not explain.
+ *
+ * @param report - What the run built
+ * @returns The report, with a `STRICT_REFUSED` error when `--strict` refuses it
+ */
+function withStrictVerdict(report: ArdEmitReport): ArdEmitReport {
+  const failure = strictFailure(report);
+  if (failure === undefined) return report;
+  return {
+    ...buildReport<ArdEmitData>({
+      examined: report.examined,
+      findings: [...report.findings, { code: ARD_EMIT_CODES.STRICT_REFUSED, severity: 'error', message: failure }],
+      data: report.data,
+    }),
+    ...(report.durationMs === undefined ? {} : { durationMs: report.durationMs }),
+  };
+}
+
 /** The human rendering: findings on stderr, the one summary line on stdout. */
 function writeArdEmitText(report: ArdEmitReport): void {
   for (const finding of report.findings) {
     process.stderr.write(`${finding.message}\n`);
   }
   const { entryCount, outputPath } = report.data;
-  process.stdout.write(`Wrote ${entryCount} ARD entr${entryCount === 1 ? 'y' : 'ies'} to ${outputPath}\n`);
+  if (outputPath !== null) {
+    process.stdout.write(`Wrote ${entryCount} ARD entr${entryCount === 1 ? 'y' : 'ies'} to ${outputPath}\n`);
+  }
+}
+
+/**
+ * Publish a report in the operator's format and end on the code it DERIVES.
+ *
+ * @param report - The document
+ * @param format - `json`, or anything else for the human rendering
+ */
+function publishArdReport(report: ArdEmitReport, format: string | undefined): never {
+  if (format === 'json') {
+    // The report carries every skipped and shadowed surface in full, so the
+    // stderr lines would be the same facts twice on two channels.
+    writeJsonOutput(report);
+  } else {
+    writeArdEmitText(report);
+  }
+  process.exit(exitCodeForReport(report));
 }
 
 /** Action handler for `vat ard emit`. */
@@ -304,19 +379,8 @@ export async function ardEmitCommand(options: ArdEmitOptions): Promise<void> {
   const logger = createLogger(options.debug === true ? { debug: true } : {});
   const startTime = Date.now();
   try {
-    const report = { ...buildArdEmitReport(await runArdEmit(options)), durationMs: Date.now() - startTime };
-    if (options.format === 'json') {
-      // The report carries every skipped and shadowed surface in full, so the
-      // stderr lines would be the same facts twice on two channels.
-      writeJsonOutput(report);
-    } else {
-      writeArdEmitText(report);
-    }
-    const failure = options.strict === true ? strictFailure(report) : undefined;
-    if (failure !== undefined) {
-      process.stderr.write(`${failure}\n`);
-      process.exit(ExitCode.FINDINGS);
-    }
+    const built = { ...buildArdEmitReport(await runArdEmit(options)), durationMs: Date.now() - startTime };
+    publishArdReport(options.strict === true ? withStrictVerdict(built) : built, options.format);
   } catch (error) {
     // 🔑 THE RULE, in one sentence: **exit 1 means VAT read this project and
     // produced no manifest by its own rules — it declares no `ard:` block, or a
@@ -347,16 +411,20 @@ export async function ardEmitCommand(options: ArdEmitOptions): Promise<void> {
     // is a spy that RETURNS, so a bare call falls through to the handler below
     // and the run records a second exit — the same reason the inline endings
     // this replaced each carried a `return`.
-    if (error instanceof ArdConfigMissingError) {
-      return handleReportExpectedFailure(
-        error.message,
-        error.absence === 'no-ard-block' ? ExitCode.FINDINGS : ExitCode.ERROR,
-        startTime,
-        options.format
+    if (error instanceof ArdConfigMissingError && error.absence === 'no-ard-block') {
+      return publishArdReport(
+        { ...buildArdRefusalReport(ARD_EMIT_CODES.NOT_CONFIGURED, error.message), durationMs: Date.now() - startTime },
+        options.format,
       );
     }
     if (error instanceof ArdDerivationError) {
-      return handleReportExpectedFailure(error.message, ExitCode.FINDINGS, startTime, options.format);
+      return publishArdReport(
+        { ...buildArdRefusalReport(ARD_EMIT_CODES.DERIVATION_FAILED, error.message), durationMs: Date.now() - startTime },
+        options.format,
+      );
+    }
+    if (error instanceof ArdConfigMissingError) {
+      return handleReportExpectedFailure(error.message, startTime, options.format);
     }
     handleReportCommandError(error, logger, startTime, 'ARD emit', options.format);
   }

@@ -29,12 +29,13 @@ import { z } from 'zod';
  *   than matched, and no matcher ever touched it. ⛔ Its live siblings are
  *   evaluated normally: this status names one entry, never a whole list.
  * - **`gitignored`** — the pattern was evaluated and matched no file VAT can
- *   see, and its territory is **gitignored** (a file beneath its literal prefix,
- *   or the file a wholly-literal pattern names, would be ignored). VAT never
- *   realizes an ignored file, but the harness reads the filesystem, so a rule
- *   scoped to `dist/**` may well fire. VAT declines to judge it rather than
- *   call it dead. A glob with an EMPTY literal prefix is never judged this way
- *   and stays `inert`.
+ *   see, and its territory is **gitignored**: a path its harness glob provably
+ *   matches (or a file beneath one) would be ignored, or it reaches an entry
+ *   of git's collapsed ignored listing. VAT never realizes an ignored file, but
+ *   the harness reads the filesystem, so a rule scoped to `dist/**` may well
+ *   fire. VAT declines to judge it rather than call it dead. A glob whose only
+ *   matches lie strictly inside an ignored directory it does not itself reach
+ *   is not seen and stays `inert`.
  *
  * 🚨 **Two states would have to read a null witness as inertness, and it is
  * not** — for an over-budget rule a null witness records a refusal to evaluate,

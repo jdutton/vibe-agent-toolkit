@@ -57,12 +57,12 @@ await store.close();
 
 ## What it stores, and where
 
-The thirteen projection tables split in two, by the `scope` each declares in
+The fourteen projection tables split in two, by the `scope` each declares in
 `PROJECTION_TABLES`:
 
 | scope | tables | keyed by | lifetime |
 |---|---|---|---|
-| `blob` | `blobs`, `blob_references`, `blob_sections`, `blob_conditions` | content key | bounded by the `blob_keys` manifest — a pure function of the bytes, shared by every tree containing them, and retained until it falls out of the newest `DEFAULT_RETAINED_BLOB_KEYS` keys |
+| `blob` | `blobs`, `blob_references`, `blob_sections`, `blob_conditions`, `blob_claude_imports` | content key | bounded by the `blob_keys` manifest — a pure function of the bytes, shared by every tree containing them, and retained until it falls out of the newest `DEFAULT_RETAINED_BLOB_KEYS` keys |
 | `extent` | the other nine, `claude_rule_patterns` among them | `(storeRootId, storeTreeHash)` | forever *for that tree* — the extent of a tree is a pure function of that tree |
 
 Extent-scoped tables carry two extra leading columns holding that key, and their

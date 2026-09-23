@@ -67,7 +67,6 @@ import {
   CLAUDE_CONTEXT_BOUNDS_STATEMENT,
   CLAUDE_CONTEXT_LIMITS,
   CLAUDE_CONTEXT_MODELLED_BEHAVIOURS,
-  CLAUDE_MD_TAG,
   discoverableFrom,
   whatLoadsAt,
   type AccountedRow,
@@ -453,14 +452,9 @@ export function answerDocument(
   projection: Projection,
   discoverable: boolean,
 ): ContextAnswerDocument {
-  // The cliff and root discovery read ONE vocabulary: these are the ids the
-  // shipped `classifyPath` tagged, not a second basename rule invented here.
-  const claudeMdIds = new Set(
-    projection.resourceTags
-      .filter((tag) => tag.tag === CLAUDE_MD_TAG)
-      .map((tag) => tag.resourceId),
-  );
-  const accounted = account(answer, claudeMdIds);
+  // The cliff applies to every memory file the harness reads, so the
+  // accounting needs no tag vocabulary from here.
+  const accounted = account(answer);
   // 🔑 `conditions`, `overBudgetRules` and `unattributedImports` live on the
   // ORIGINAL answer — `AccountedContext` is `{rows, totals}` and nothing else.
   // Reading them off the accounting result silently drops every warning.

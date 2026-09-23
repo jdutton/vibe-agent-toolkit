@@ -206,6 +206,38 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
  * tell an enumeration (`ENUM` — a `readdir`, the shape the rule exists for)
  * from a probe or a copy, and retire the enumerations first.
  */
+/** Named once: three ratchets list this file. */
+const DOCTOR_COMMAND_FILE = 'packages/cli/src/commands/doctor.ts';
+
+/**
+ * The `vat` command files that still decide an exit code by hand — the legacy
+ * half of `no-literal-process-exit`'s `derived` floor.
+ *
+ * Each names the hand decision it still makes. An entry leaves when that file
+ * exits through a derivation (`exitCodeForReport(document)`, `exitCodeOfChild`),
+ * which for most of them means its document migrating to the `Report<T>`
+ * envelope (`packages/cli/src/report-schemas.ts` lists those as `legacy`).
+ * Asserted BOTH ways by the rule: a listed file with nothing left to migrate is
+ * a `staleLegacy` error, so the list cannot hold a dead entry. Never add one.
+ */
+const EXIT_CODE_DERIVATION_RATCHET = [
+  'packages/cli/src/commands/agent/validate.ts',       // FINDINGS on the agent-config result, passed through verbatim
+  'packages/cli/src/commands/audit-settings.ts',       // FINDINGS from `SettingsFinding[]` counts
+  'packages/cli/src/commands/audit.ts',                // `refused || errors` → FINDINGS over the legacy severity-word `status`
+  'packages/cli/src/commands/build.ts',                // exitCodeForPhases, and FINDINGS on a skills gate
+  'packages/cli/src/commands/cache/clear.ts',          // `partial` → ERROR, decided beside the document
+  'packages/cli/src/commands/claude/org/helpers.ts',   // FINDINGS for a partial Admin API write
+  DOCTOR_COMMAND_FILE,                                 // FINDINGS from failed checks, no document status
+  'packages/cli/src/commands/phase-utils.ts',          // the phase orchestrators' own status→code table
+  'packages/cli/src/commands/rag/index-command.ts',    // `partial` → FINDINGS
+  'packages/cli/src/commands/skill/test/run.ts',       // forwards the harness's OK|FINDINGS
+  'packages/cli/src/commands/skills/package.ts',       // FINDINGS on the packaging gate
+  'packages/cli/src/commands/validate.ts',             // exitCodeForPhases
+  'packages/cli/src/commands/verify.ts',               // exitCodeForPhases
+  'packages/cli/src/utils/command-error.ts',           // the legacy failure documents' caller-chosen codes
+  'packages/cli/src/utils/validate-help-files.ts',     // build-time check, FINDINGS with no document
+];
+
 const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
   'packages/cli/src/commands/agent/install.ts',                       // access/mkdir/lstat/rm/symlink — install-dir mutation
   'packages/cli/src/commands/agent/installed.ts',                     // ENUM: readdir of the install dir
@@ -235,7 +267,7 @@ const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
   'packages/cli/src/commands/corpus/runner.ts',                       // writeFileSync/existsSync
   'packages/cli/src/commands/corpus/scan.ts',                         // mkdirSync/readFileSync
   'packages/cli/src/commands/corpus/seed.ts',                         // existsSync/readFileSync
-  'packages/cli/src/commands/doctor.ts',                              // readFileSync/existsSync probes
+  DOCTOR_COMMAND_FILE,                                                // readFileSync/existsSync probes
   'packages/cli/src/commands/inventory.ts',                           // existsSync probes
   'packages/cli/src/commands/resources/check-progress.ts',            // appendFileSync — cost log
   'packages/cli/src/commands/resources/check-supervisor.ts',          // stat/readFileSync/mkdtemp/rm — child supervision (audit-A §1.2)
@@ -265,7 +297,7 @@ export const NO_UNSAFE_BACKLOG = [
   'packages/agent-skills/src/skill-test/pipeline.ts', // 1
   'packages/cli/src/bin.ts', // 1
   'packages/cli/src/commands/corpus/seed.ts', // 1
-  'packages/cli/src/commands/doctor.ts', // 9
+  DOCTOR_COMMAND_FILE, // 9
   'packages/cli/src/commands/resources/validate.ts', // 1
   'packages/cli/src/utils/config-loader.ts', // 1
   'packages/cli/src/version.ts', // 3
@@ -416,11 +448,27 @@ const localRulesConfig = {
   // the day this was enabled. `allow` is not a ratchet of product code — it
   // names the three EXAMPLE scripts that are not vat verbs and would otherwise
   // take a dependency on `schema` for one line each.
-  'local/no-literal-process-exit': ['error', { allow: [
-    'packages/gateway-mcp/examples/example-helpers.ts',
-    'packages/vat-development-agents/agents/agent-generator/validate-agent.ts',
-    'packages/vat-example-cat-agents/examples/photo-analysis-demo.ts',
-  ] }],
+  //
+  // `derived` is the second floor, for the `vat` verbs: an exit code is DERIVED
+  // from the document the verb published (`exitCodeForReport`), never decided
+  // beside it — one outcome shipped with different codes in different verbs
+  // because each call site mapped it by hand. `ExitCode.FINDINGS` may not be
+  // named under `packages/cli/src/`, and an exit takes OK, ERROR or a
+  // derivation. `legacy` is a RATCHET asserted both ways by the rule itself: a
+  // listed file that stops deciding by hand is an error until it leaves the
+  // list. Each entry is a verb whose document is not yet the envelope.
+  'local/no-literal-process-exit': ['error', {
+    allow: [
+      'packages/gateway-mcp/examples/example-helpers.ts',
+      'packages/vat-development-agents/agents/agent-generator/validate-agent.ts',
+      'packages/vat-example-cat-agents/examples/photo-analysis-demo.ts',
+    ],
+    derived: {
+      paths: ['packages/cli/src/'],
+      calls: ['exitCodeForReport', 'exitCodeOfChild', 'exitCodeForCommanderEnding'],
+      legacy: EXIT_CODE_DERIVATION_RATCHET,
+    },
+  }],
   // The containment trio, from the sweep that watched a delete, a copy and an
   // uninstall walk out of their root. No backlog and no ratchet: every site
   // was fixed the day these were enabled, so the next `startsWith('..')`, the

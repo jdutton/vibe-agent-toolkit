@@ -17,7 +17,7 @@
  */
 
 import { RULE_SCOPE_TAG } from '../../src/projection/agentic-tags.js';
-import { selectRules, type RuleAdmission } from '../../src/projection/claude-context-rules.js';
+import { harnessPaths, selectRules, type RuleAdmission } from '../../src/projection/claude-context-rules.js';
 import type { BlobRow } from '../../src/schemas/projection-blobs.js';
 import type {
   ResourceRealizationRow,
@@ -80,7 +80,8 @@ export function queryTag(path: string, tag: string, value: string | null): Resou
 
 /**
  * The blob {@link queryRealization}'s content key points at, carrying a
- * `paths:` frontmatter list — the one column the rules selector reads.
+ * `paths:` list — `claudePaths`, the one column the rules selector reads, read
+ * the harness's way (`harnessPaths`), beside the frontmatter it came from.
  *
  * @param path - The rules file's root-relative path
  * @param paths - Its `paths:` entries, or undefined for a file with no frontmatter
@@ -89,7 +90,8 @@ export function queryTag(path: string, tag: string, value: string | null): Resou
 export function queryPathsBlob(path: string, paths: readonly string[] | undefined): BlobRow {
   return {
     contentKey: `key:${path}`, bytes: 100, encoding: 'utf-8', encodingSource: 'assumed',
-    replacementCharacters: 0, tokenEstimate: 25,
+    replacementCharacters: 0, tokenEstimate: 25, claudeInjectedBytes: 100, claudeInjectedTokens: 25,
+    claudePaths: paths === undefined ? null : harnessPaths({ paths: [...paths] }),
     frontmatter: paths === undefined ? null : { paths: [...paths] },
     frontmatterError: null, wordCount: 10, proseCodeUnits: 100, codeBlockCodeUnits: 0,
     linkCount: 0, headingCount: 1, sectionCount: 1,

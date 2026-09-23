@@ -2,6 +2,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { LOADING_TAG, RULE_SCOPE_TAG } from '../src/projection/agentic-tags.js';
+import { harnessPaths } from '../src/projection/claude-context-rules.js';
 import {
   CLAUDE_RULES_SCOPE_KIND,
   ClaudeRulesScopeContributor,
@@ -34,14 +35,14 @@ describe('ruleScopeFor', () => {
     // Loads at launch with the same priority as `.claude/CLAUDE.md`, and that
     // is directory-independent — a tree-global fact.
     expect(ruleScopeFor(ROOT_RULE, null)).toBe('root');
-    expect(ruleScopeFor(ROOT_RULE, { description: 'x' })).toBe('root');
+    expect(ruleScopeFor(ROOT_RULE, harnessPaths({ description: 'x' }))).toBe('root');
   });
 
   it('calls a rule carrying paths: "path-scoped", wherever it lives', () => {
     // Its predicate needs a path and this classifier has none, so this is the
     // one classification that genuinely does not depend on location.
-    expect(ruleScopeFor(SCOPED_RULE, { paths: TS_GLOBS })).toBe(PATH_SCOPED);
-    expect(ruleScopeFor('packages/cli/.claude/rules/ts.md', { paths: TS_GLOBS }))
+    expect(ruleScopeFor(SCOPED_RULE, harnessPaths({ paths: TS_GLOBS }))).toBe(PATH_SCOPED);
+    expect(ruleScopeFor('packages/cli/.claude/rules/ts.md', harnessPaths({ paths: TS_GLOBS })))
       .toBe(PATH_SCOPED);
   });
 
@@ -60,7 +61,7 @@ describe('ruleScopeFor', () => {
     // `paths: []` selects nothing, so a rule carrying it has no predicate to be
     // scoped by. Reading it as path-scoped would silently drop a rule that
     // loads — the under-report direction a budget check cannot tolerate.
-    expect(ruleScopeFor(ROOT_RULE, { paths: [] })).toBe('root');
+    expect(ruleScopeFor(ROOT_RULE, harnessPaths({ paths: [] }))).toBe('root');
   });
 
   it('⭐ calls a SCALAR string paths: path-scoped, as the harness does', () => {
@@ -68,15 +69,15 @@ describe('ruleScopeFor', () => {
     // string and comma-splits it; only the doc shows a sequence. Read as
     // paths-LESS, a rule the harness loads on demand was charged to every
     // query at launch, and its globs reached no check.
-    expect(ruleScopeFor(ROOT_RULE, { paths: 'src/**/*.ts' })).toBe(PATH_SCOPED);
-    expect(ruleScopeFor(ROOT_RULE, { paths: 'src/**, lib/**' })).toBe(PATH_SCOPED);
+    expect(ruleScopeFor(ROOT_RULE, harnessPaths({ paths: 'src/**/*.ts' }))).toBe(PATH_SCOPED);
+    expect(ruleScopeFor(ROOT_RULE, harnessPaths({ paths: 'src/**, lib/**' }))).toBe(PATH_SCOPED);
   });
 
   it('treats an empty or non-list, non-string paths value as paths-less', () => {
     // Nothing to be scoped by: a blank string declares no pattern, and a number
     // is not a predicate the harness could run either.
-    expect(ruleScopeFor(ROOT_RULE, { paths: '   ' })).toBe('root');
-    expect(ruleScopeFor(ROOT_RULE, { paths: 42 })).toBe('root');
+    expect(ruleScopeFor(ROOT_RULE, harnessPaths({ paths: '   ' }))).toBe('root');
+    expect(ruleScopeFor(ROOT_RULE, harnessPaths({ paths: 42 }))).toBe('root');
   });
 
   it('does not mistake a deeper path under the ROOT rules dir for a nested one', () => {
@@ -178,6 +179,22 @@ describe('ClaudeRulesScopeContributor', () => {
       { resourceId: idOf(SCOPED_RULE), tag: RULE_SCOPE_TAG, value: PATH_SCOPED, source: CLAUDE_RULES_SCOPE_KIND },
       { resourceId: idOf(NESTED_RULE), tag: RULE_SCOPE_TAG, value: 'nested', source: CLAUDE_RULES_SCOPE_KIND },
     ]);
+  });
+
+  it('reads a rules file whose YAML the harness cannot parse as unscoped, with no pattern rows, and leaves the parse error for CLAUDE_RULE_FRONTMATTER_INVALID', async () => {
+    // `ts` keeps the body split off and contributes no frontmatter, so `kyn`
+    // finds no `paths:` and the rule loads every turn. The defect is still
+    // reported: `blobs.frontmatterError` is VAT's parser's, and the check reads it.
+    const broken = '.claude/rules/broken.md';
+    const { base, idOf } = buildBase([{ path: broken, markdown: '---\npaths: [src/**\n---\n\n# Broken\n' }]);
+
+    const contribution = await new ClaudeRulesScopeContributor().contribute(base, null);
+
+    expect(contribution.tags).toEqual([
+      { resourceId: idOf(broken), tag: RULE_SCOPE_TAG, value: 'root', source: CLAUDE_RULES_SCOPE_KIND },
+    ]);
+    expect(contribution.claudeRulePatterns).toEqual([]);
+    expect(base.blobs.map((blob) => [blob.claudePaths, blob.frontmatterError === null])).toEqual([[null, false]]);
   });
 
   it('makes every tagged identity a member, and nothing else', async () => {

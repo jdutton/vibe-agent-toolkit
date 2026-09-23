@@ -35,7 +35,7 @@
  *
  * ## Why the two scopes are separate operations
  *
- * {@link ProjectionTableScope} splits the thirteen tables in two, and the split is
+ * {@link ProjectionTableScope} splits the fourteen tables in two, and the split is
  * a difference in *lifetime*, not a tidy grouping:
  *
  * - Blob-scoped rows are a pure function of bytes, so they are **global**. Two
@@ -77,14 +77,14 @@ import { PROJECTION_TABLES, type ProjectionRow, type ProjectionTableName } from 
 /** Hex digits kept from the shape digest. Short on purpose — it is a path component. */
 const SHAPE_DIGEST_LENGTH = 12;
 
-/** Pure and mildly expensive: thirteen schemas through the JSON Schema converter. */
+/** Pure and mildly expensive: fourteen schemas through the JSON Schema converter. */
 let memoizedShapeDigest: string | undefined;
 
 /**
  * The table names of one scope, split in the type system rather than by hand.
  *
  * Reads each entry's declared `scope` back out of {@link PROJECTION_TABLES},
- * so a fourteenth table joins the right bundle by declaring its scope in the
+ * so a fifteenth table joins the right bundle by declaring its scope in the
  * registry and nowhere else. A hand-written union here would be a second list
  * to keep in sync, which is the drift the registry exists to prevent.
  */

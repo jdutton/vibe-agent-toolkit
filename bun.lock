@@ -262,6 +262,7 @@
         "handlebars": "^4.7.8",
         "ignore": "^7.0.5",
         "markdown-link-check": "^3.14.2",
+        "marked": "15.0.6",
         "mdast-util-to-string": "^4.0.0",
         "micromark": "^4.0.2",
         "parse5": "^7.3.0",
@@ -1688,7 +1689,7 @@
 
     "markdown-table": ["markdown-table@2.0.0", "", { "dependencies": { "repeat-string": "^1.0.0" } }, "sha512-Ezda85ToJUBhM6WGaG6veasyym+Tbs3cMAw/ZhOPqXiYsr0jgocBV3j3nx+4lk47plLlIqjwuTm/ywVI+zjJ/A=="],
 
-    "marked": ["marked@18.0.9", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-/Sa4qiiHZxf0/FQdBBowr9q4r10krCwMvpK48FUBdXdUXScDxiQGR9zCPrFgRVR5LU3iySOiIjy09ZQvADir1w=="],
+    "marked": ["marked@15.0.6", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-Y07CUOE+HQXbVDCGl3LXggqJDbXDP2pArc2C1N1RRMN0ONiShoSsIInMd5Gsxupe7fKLpgimTV+HOJ9r7bA+pg=="],
 
     "math-intrinsics": ["math-intrinsics@1.1.0", "", {}, "sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g=="],
 
@@ -2463,6 +2464,8 @@
     "markdown-link-check/chalk": ["chalk@6.0.0", "", {}, "sha512-2uNTXIuTTxk7ciZgAU1BQcgnchcG0xXnrs6jzkQfj9SsRa9M2s5zE8WT96hS6KmG4MzWHSrvH43DF1m4XRkrFg=="],
 
     "markdown-link-check/commander": ["commander@15.0.0", "", {}, "sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg=="],
+
+    "markdown-link-extractor/marked": ["marked@18.0.9", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-/Sa4qiiHZxf0/FQdBBowr9q4r10krCwMvpK48FUBdXdUXScDxiQGR9zCPrFgRVR5LU3iySOiIjy09ZQvADir1w=="],
 
     "mdast-util-find-and-replace/escape-string-regexp": ["escape-string-regexp@5.0.0", "", {}, "sha512-/veY75JbMK4j1yjvuUxuVsiS/hr/4iHs9FTT6cgTexxdE0Ly/glccBAkloH/DofkjRbZU3bnoj38mOmhkZ0lHw=="],
 

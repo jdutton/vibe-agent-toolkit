@@ -102,7 +102,7 @@ async function digestUnderRegistry(tables: Record<string, unknown>): Promise<str
 }
 
 describe('table scopes', () => {
-  it('declares a scope for all thirteen tables', () => {
+  it('declares a scope for all fourteen tables', () => {
     for (const spec of Object.values(PROJECTION_TABLES)) {
       expect(['blob', 'extent'], spec.name).toContain(spec.scope);
     }
@@ -112,7 +112,7 @@ describe('table scopes', () => {
     const blobScoped = Object.values(PROJECTION_TABLES)
       .filter((spec) => spec.scope === 'blob')
       .map((spec) => spec.key);
-    expect(blobScoped).toEqual(['blobs', 'blobReferences', 'blobSections', 'blobConditions']);
+    expect(blobScoped).toEqual(['blobs', 'blobReferences', 'blobSections', 'blobConditions', 'blobClaudeImports']);
   });
 
   it('scopes every table that names an extent or a root to extent', () => {
@@ -219,6 +219,36 @@ describe('projectionShapeDigest', () => {
     });
 
     expect(withoutDecodeColumns).not.toBe(projectionShapeDigest());
+  });
+
+  it('moves across the Claude memory facts, so a store written before them is never served after', async () => {
+    // The registry as it stood before `blob_claude_imports` and the two
+    // `blobs.claudeInjected*` columns. A warm store from that build holds blob
+    // rows with neither — hydrated here, every import walk would follow nothing
+    // and every charge would read undefined. A different digest is a different
+    // directory, so that store is simply cold.
+    const before = Object.fromEntries(Object.entries(PROJECTION_TABLES).filter(([key]) => key !== 'blobClaudeImports'));
+    const beforeClaudeFacts = await digestUnderRegistry({
+      ...before,
+      blobs: {
+        ...PROJECTION_TABLES.blobs,
+        schema: BlobRowSchema.omit({ claudeInjectedBytes: true, claudeInjectedTokens: true }),
+      },
+    });
+
+    expect(beforeClaudeFacts).not.toBe(projectionShapeDigest());
+  });
+
+  it('moves across `blobs.claudePaths`, so a store whose rows carry no harness-read `paths:` is never served after', async () => {
+    // A warm store from before the column hydrates every blob with
+    // `claudePaths` undefined — every rule and every scoped import would read as
+    // unscoped and be charged at launch. The digest must send it cold.
+    const beforeClaudePaths = await digestUnderRegistry({
+      ...PROJECTION_TABLES,
+      blobs: { ...PROJECTION_TABLES.blobs, schema: BlobRowSchema.omit({ claudePaths: true }) },
+    });
+
+    expect(beforeClaudePaths).not.toBe(projectionShapeDigest());
   });
 
   it('moves when a table declares a DIFFERENT contextColumn', async () => {

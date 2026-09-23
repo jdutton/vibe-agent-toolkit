@@ -8,7 +8,7 @@ import { PROJECTION_TABLES, type ProjectionTableName } from '../src/projection/t
 const ROOT = safePath.join(normalizedTmpdir(), 'vat-table-registry');
 
 /**
- * The thirteen tables, in {@link Projection}'s declaration order.
+ * The fourteen tables, in {@link Projection}'s declaration order.
  *
  * `satisfies readonly (keyof Projection)[]` makes a renamed table a compile
  * error here; the runtime assertions below make an *added* or *removed* one a
@@ -29,6 +29,7 @@ const EXPECTED_TABLES = [
   'blobReferences',
   'blobSections',
   'blobConditions',
+  'blobClaudeImports',
 ] as const satisfies readonly (keyof Projection)[];
 
 /**
@@ -54,6 +55,7 @@ const EXPECTED_PRIMARY_KEYS: Record<ProjectionTableName, readonly string[]> = {
   blobReferences: ['blob', 'ordinal'],
   blobSections: ['blob', 'ordinal'],
   blobConditions: ['blob', 'code', 'line', 'message'],
+  blobClaudeImports: ['blob', 'ordinal'],
 };
 
 /**
@@ -76,13 +78,14 @@ const EXPECTED_SQL_NAMES: Record<ProjectionTableName, string> = {
   blobReferences: 'blob_references',
   blobSections: 'blob_sections',
   blobConditions: 'blob_conditions',
+  blobClaudeImports: 'blob_claude_imports',
 };
 
 /**
  * Full column lists for three tables, in the order their Zod schemas declare
  * them — the order a storage backend's `INSERT (<columns>)` will use.
  *
- * Three rather than thirteen, chosen for what each one can break:
+ * Three rather than fourteen, chosen for what each one can break:
  * `resourceRealizations` and `resolutionContexts` are the two row schemas
  * wrapped in `.superRefine()`, so their shape sits one `ZodEffects` deep and a
  * registry that only looked for `.shape` would report nothing for them.
@@ -159,7 +162,7 @@ function declaredColumns(schema: any): readonly string[] {
 }
 
 describe('PROJECTION_TABLES', () => {
-  it('covers exactly the thirteen tables of Projection, in declaration order', () => {
+  it('covers exactly the fourteen tables of Projection, in declaration order', () => {
     expect(Object.keys(PROJECTION_TABLES)).toStrictEqual([...EXPECTED_TABLES]);
   });
 

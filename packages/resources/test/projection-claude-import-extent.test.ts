@@ -151,16 +151,17 @@ function conditionCodes(contribution: ExtentContribution): string[] {
 }
 
 describe('claudeImportExtentDeclaration', () => {
-  it('follows ONLY at-prefixed tokens, under the claude-import dialect, to four hops', () => {
+  it('follows the harness\'s own imports, under the claude-import dialect, to four hops', () => {
     // Every field is load-bearing and every one is asserted, because each is a
     // place a default would be silently wrong: the schema's `follow` default is
-    // the three markdown forms (which the harness does not load), its
-    // `referenceDialect` default is `href` (under which no import resolves at
-    // all), and its `maxDepth` default is `'full'` (which the vendor bounds).
+    // the three markdown forms (refused beside `claude-import`, whose edges are
+    // `blob_claude_imports` rows no form selects), its `referenceDialect`
+    // default is `href` (VAT's lexer, which reads different imports), and its
+    // `maxDepth` default is `'full'` (which the vendor bounds).
     expect(claudeImportExtentDeclaration(DOCS_CLAUDE_MD)).toEqual({
       kind: CLAUDE_IMPORT_KIND,
       closureFrom: DOCS_CLAUDE_MD,
-      follow: ['at-prefixed'],
+      follow: [],
       referenceDialect: 'claude-import',
       maxDepth: 4,
       // NULL here, and the two packaging lanes declare `['markdown']` — the
@@ -382,12 +383,12 @@ describe('ClaudeImportExtentContributor — remaining §10 cases', () => {
   });
 
   it('never follows a markdown link, however inviting', async () => {
-    // `follow: ['at-prefixed']` is the load-bearing line. The schema DEFAULT is
-    // the three markdown forms, and taking it here would drag the entire linked
-    // docs tree into a budget the harness never charges.
+    // The edges are `blob_claude_imports` rows. Following markdown links out of
+    // a CLAUDE.md would drag the entire linked docs tree into a budget the
+    // harness never charges.
     const contribution = await contributeFrom(
       [
-        { path: ROOT_CLAUDE_MD, markdown: 'See [the guide](guide.md) and @real.md.\n' },
+        { path: ROOT_CLAUDE_MD, markdown: 'See [the guide](guide.md) and @real.md\n' },
         { path: 'guide.md', markdown: '# guide\n' },
         { path: 'real.md', markdown: '# real\n' },
       ],
@@ -397,11 +398,9 @@ describe('ClaudeImportExtentContributor — remaining §10 cases', () => {
     expect(memberPaths(contribution)).toEqual([ROOT_CLAUDE_MD, 'real.md']);
   });
 
-  it('does not follow @${VAR}/path.md, because the lexer calls it env-anchored', async () => {
-    // 🪤 Pinned as a BOUND, not as a wish. `reference-lexer.ts`'s `classify`
-    // gives a token carrying a variable expansion `env-anchored` whatever else
-    // it looks like, so `follow: ['at-prefixed']` never selects it. Asserting it
-    // here is what stops the day it changes from being a silent behaviour shift.
+  it('does not follow @${VAR}/path.md, because the harness does not call it an import', async () => {
+    // `Ayn` wants a bare path to open with `[a-zA-Z0-9._-]`, so a `$`-led token
+    // never becomes a `blob_claude_imports` row — and so leaves no condition.
     const contribution = await contributeFrom(
       [
         { path: ROOT_CLAUDE_MD, markdown: '@${HOME}/notes.md\n' },

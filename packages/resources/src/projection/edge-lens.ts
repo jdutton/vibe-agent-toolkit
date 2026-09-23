@@ -80,8 +80,12 @@ export interface EdgeLens {
   readonly extentContextId: string;
   /** Which syntactic forms become edges. See {@link AUTHORED_EDGE_FORMS}. */
   readonly forms: ReadonlySet<ReferenceSyntacticForm>;
-  /** How a token is read. `href` is ordinary markdown. */
-  readonly dialect: ReferenceDialect;
+  /**
+   * How a token is read. Only `href`: a lens reads `blob_references`, and the
+   * `claude-import` dialect reads a `blob_claude_imports.target` — a spelling
+   * its extractor already unescaped and cut, which a raw token is not.
+   */
+  readonly dialect: Extract<ReferenceDialect, 'href'>;
 }
 
 /**

@@ -41,6 +41,7 @@ import {
   warnUndeclaredOverrides,
   type CheckCost,
   type CheckPayloadInput,
+  type PopulatedRun,
 } from '../../src/commands/resources/check.js';
 import { createLogger, type Logger } from '../../src/utils/logger.js';
 import type { AskProjection } from '../../src/utils/projection-query.js';
@@ -286,10 +287,18 @@ function costsOf(count: number): CheckCost[] {
 }
 
 /** Findings, minus the provenance the payload builder also wants. */
-function payloadInput(overrides: Partial<CheckPayloadInput> = {}): CheckPayloadInput {
+function payloadInput(
+  overrides: Partial<Omit<CheckPayloadInput, 'populated'> & PopulatedRun> = {},
+): CheckPayloadInput {
+  // 🪤 Flat overrides, nested output: the cases below vary one population field
+  // at a time, and the builder takes the population as ONE all-or-nothing value.
+  const { issues = [], costs = [], root = '/corpus', durationMs = 5, ...population } = overrides;
+  return { issues, costs, root, durationMs, populated: { ...populatedDefaults(), ...population } };
+}
+
+/** A completed population, for every case that is not about the population. */
+function populatedDefaults(): PopulatedRun {
   return {
-    issues: [],
-    costs: [],
     population: 'derived',
     // Non-zero, for the same reason `membersEnumerated` is: a case that sets it
     // to something else is visibly asserting about the population's cost rather
@@ -306,9 +315,6 @@ function payloadInput(overrides: Partial<CheckPayloadInput> = {}): CheckPayloadI
     // corpus is a case that ran over one, so a case that sets this to 0 is
     // visibly asserting something about emptiness rather than inheriting it.
     membersEnumerated: 12,
-    root: '/corpus',
-    durationMs: 5,
-    ...overrides,
   };
 }
 

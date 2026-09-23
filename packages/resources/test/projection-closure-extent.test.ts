@@ -863,24 +863,38 @@ describe('ClosureExtentContributor', () => {
     expect(memberPaths(contribution)).toEqual([ROOT_DOC]);
   });
 
-  it('resolves a REAL lexer-produced @ token to the file it names', async () => {
-    // The regression this whole increment exists for. `@b.md` is authored the
-    // way a CLAUDE.md authors an import, parsed by the shipped lexer, and
-    // carried through `blobReferencesFor` — so `rawRef` keeps its `@` exactly as
-    // `blob-references.ts` stores it, and `leadingAt` is true because the `@` is
-    // genuinely still there.
-    //
-    // Under the `href` dialect this resolves `skills/foo/@b.md`, finds nothing,
-    // and reports CLOSURE_REFERENCE_UNRESOLVED. Under `claude-import` it must
-    // resolve `skills/foo/b.md` and admit it.
+  it('resolves a REAL harness-extracted @ import to the file it names', async () => {
+    // `@b.md` is authored the way a CLAUDE.md authors an import and extracted
+    // by the shipped `claudeMemoryFactsOf` into `blob_claude_imports`. Under
+    // `claude-import` the closure walks THAT table, and admits `skills/foo/b.md`.
     const contribution = await contributeOver(AT_TOKEN_IMPORT, declarationOf({
-      follow: ['at-prefixed'],
+      follow: [],
       referenceDialect: 'claude-import',
     }));
 
     expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
     expect(contribution.conditions).toEqual([]);
     expectContributionRowsValid(contribution);
+  });
+
+  it('walks blob_claude_imports under claude-import, never the lexer\'s candidates', async () => {
+    // `(@b.md)` is an at-prefixed candidate to VAT's lexer and no import to the
+    // harness (`Ayn` needs whitespace or a line start before the `@`). Reading
+    // `blob_references` here would admit `b.md`.
+    const contribution = await contributeOver(
+      [{ path: ROOT_DOC, refs: [], markdown: 'See (@b.md) for the rest.\n' }, { path: DOC_B, refs: [] }],
+      declarationOf({ follow: [], referenceDialect: 'claude-import' }),
+    );
+
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC]);
+    expect(contribution.conditions).toEqual([]);
+  });
+
+  it('refuses a follow list beside claude-import, which no syntactic form could apply to', async () => {
+    await expect(contributeOver(AT_TOKEN_IMPORT, declarationOf({
+      follow: ['at-prefixed'],
+      referenceDialect: 'claude-import',
+    }))).rejects.toThrow(/follow must be \[\] under referenceDialect/);
   });
 
   it('leaves an @ token unresolved under the default href dialect', async () => {

@@ -2,7 +2,8 @@ import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 import { describe, expect, it } from 'vitest';
 
 import { type ParseResult, parseMarkdownContent } from '../src/link-parser.js';
-import { blobConditionsFor, blobRowFor } from '../src/projection/blob-facts.js';
+import { blobClaudeImportsFor, blobConditionsFor, blobRowFor } from '../src/projection/blob-facts.js';
+import { claudeMemoryFactsOf } from '../src/projection/claude-memory.js';
 import { BlobRowSchema } from '../src/schemas/projection-blobs.js';
 
 // Hoisted: sonarjs/no-duplicate-string blocks a literal used 3+ times.
@@ -38,12 +39,17 @@ function decoding(overrides: Partial<TextProvenance> = {}): TextProvenance {
   return { encoding: 'utf-8', encodingSource: 'assumed', replacementCharacters: 0, ...overrides };
 }
 
+/** `blobRowFor` with the Claude facts of the parse's own text, as `blob-population.ts` passes them. */
+function rowFor(sizeBytes: number, decoded: TextProvenance, parsed: ParseResult) {
+  return blobRowFor(CONTENT_KEY, sizeBytes, decoded, parsed, claudeMemoryFactsOf(parsed.content));
+}
+
 describe('blobRowFor', () => {
   it('carries the decode provenance through to the row, unaltered', () => {
     // These three are not derivable from the parse: by the time a ParseResult
     // exists the bytes are a string and the encoding question has been answered
     // and discarded. If they are not copied here they exist nowhere.
-    const row = blobRowFor(CONTENT_KEY, 40, decoding({
+    const row = rowFor(40, decoding({
       encoding: 'utf-16le',
       encodingSource: 'bom',
     }), parseResult());
@@ -53,7 +59,7 @@ describe('blobRowFor', () => {
   });
 
   it('carries a non-zero replacement count, which is the whole signal', () => {
-    const row = blobRowFor(CONTENT_KEY, 17, decoding({ replacementCharacters: 5 }), parseResult());
+    const row = rowFor(17, decoding({ replacementCharacters: 5 }), parseResult());
     expect(row.replacementCharacters).toBe(5);
     // Positive control on the absence assertions above: the row is a real row,
     // not an empty object that would satisfy any `toBe(0)`.
@@ -64,19 +70,19 @@ describe('blobRowFor', () => {
   it('takes bytes from the caller, never from content.length', () => {
     // The two diverge on malformed UTF-8 — decoding is many-to-one — which is
     // why ParseFactRow records sizeBytes and decodedLength separately.
-    const row = blobRowFor(CONTENT_KEY, 4096, decoding(), parseResult({ content: 'ab' }));
+    const row = rowFor(4096, decoding(), parseResult({ content: 'ab' }));
     expect(row.bytes).toBe(4096);
   });
 
   it('defaults the three measures to zero when the parse omitted them', () => {
-    const row = blobRowFor(CONTENT_KEY, 8, decoding(), parseResult());
+    const row = rowFor(8, decoding(), parseResult());
     expect(row.wordCount).toBe(0);
     expect(row.proseCodeUnits).toBe(0);
     expect(row.codeBlockCodeUnits).toBe(0);
   });
 
   it('carries the measures through when the parse supplied them', () => {
-    const row = blobRowFor(CONTENT_KEY, 8, decoding(), parseResult({
+    const row = rowFor(8, decoding(), parseResult({
       contentMeasures: { wordCount: 3, proseCodeUnits: 6, codeBlockCodeUnits: 2 },
     }));
     expect(row.wordCount).toBe(3);
@@ -86,7 +92,7 @@ describe('blobRowFor', () => {
 
   it('nulls frontmatter rather than emitting an empty object', () => {
     // Null and {} are different states: no frontmatter block versus an empty one.
-    expect(blobRowFor(CONTENT_KEY, 8, decoding(), parseResult()).frontmatter).toBeNull();
+    expect(rowFor(8, decoding(), parseResult()).frontmatter).toBeNull();
   });
 
   it('⭐ calls a frontmatter block that is not a MAPPING an error, not silence', () => {
@@ -97,7 +103,7 @@ describe('blobRowFor', () => {
     // reads as declaring no `paths:`, so it looks unconditional and nothing
     // says otherwise. The column's own contract is "why frontmatter did not
     // parse TO AN OBJECT", which this is.
-    const row = blobRowFor(CONTENT_KEY, 8, decoding(), parseMarkdownContent('---\n- a\n- b\n---\n\n# T\n', 20));
+    const row = rowFor(8, decoding(), parseMarkdownContent('---\n- a\n- b\n---\n\n# T\n', 20));
 
     expect(row.frontmatter).toBeNull();
     expect(row.frontmatterError).toContain('not a YAML mapping');
@@ -107,11 +113,11 @@ describe('blobRowFor', () => {
     // The controls either side of it: absent and empty are both "nothing to
     // read", and neither is a defect. Without these the case above passes on a
     // rule that accuses every markdown file in the corpus.
-    expect(blobRowFor(CONTENT_KEY, 8, decoding(), parseMarkdownContent('# T\n', 4)).frontmatterError)
+    expect(rowFor(8, decoding(), parseMarkdownContent('# T\n', 4)).frontmatterError)
       .toBeNull();
-    expect(blobRowFor(CONTENT_KEY, 8, decoding(), parseMarkdownContent('---\n---\n\n# T\n', 12))
+    expect(rowFor(8, decoding(), parseMarkdownContent('---\n---\n\n# T\n', 12))
       .frontmatterError).toBeNull();
-    expect(blobRowFor(CONTENT_KEY, 8, decoding(), parseMarkdownContent('---\ntitle: T\n---\n\n# T\n', 21))
+    expect(rowFor(8, decoding(), parseMarkdownContent('---\ntitle: T\n---\n\n# T\n', 21))
       .frontmatterError).toBeNull();
   });
 
@@ -122,13 +128,13 @@ describe('blobRowFor', () => {
     // of decoding to "a sequence or a scalar".
     for (const block of ['# paths come later', '~', 'null']) {
       const content = `---\n${block}\n---\n\n# T\n`;
-      const row = blobRowFor(CONTENT_KEY, 8, decoding(), parseMarkdownContent(content, content.length));
+      const row = rowFor(8, decoding(), parseMarkdownContent(content, content.length));
       expect(row.frontmatterError, block).toBeNull();
     }
     // The controls that must still red: a real sequence and a real scalar.
     for (const block of ['- a', '42', 'just text']) {
       const content = `---\n${block}\n---\n\n# T\n`;
-      const row = blobRowFor(CONTENT_KEY, 8, decoding(), parseMarkdownContent(content, content.length));
+      const row = rowFor(8, decoding(), parseMarkdownContent(content, content.length));
       expect(row.frontmatterError, block).toContain('not a YAML mapping');
     }
   });
@@ -136,7 +142,7 @@ describe('blobRowFor', () => {
   it('keeps the PARSER\'s reason when the YAML did not parse at all', () => {
     // The non-mapping verdict is a fallback, never a replacement: a real YAML
     // failure still reports what the parser said.
-    const row = blobRowFor(CONTENT_KEY, 8, decoding(), parseResult({ frontmatterError: 'boom' }));
+    const row = rowFor(8, decoding(), parseResult({ frontmatterError: 'boom' }));
 
     expect(row.frontmatterError).toBe('boom');
   });
@@ -150,14 +156,14 @@ describe('blobRowFor', () => {
     const parsed = parseMarkdownContent('# Top\n\n## A\n\n### Deep\n', 24);
     expect(parsed.headings).toHaveLength(1);
 
-    const row = blobRowFor(CONTENT_KEY, 24, decoding(), parsed);
+    const row = rowFor(24, decoding(), parsed);
     expect(row.headingCount).toBe(3);
     // One section per heading — this must equal blobSectionsFor(...).length.
     expect(row.sectionCount).toBe(row.headingCount);
   });
 
   it('produces a row the shipped schema accepts', () => {
-    expect(() => BlobRowSchema.parse(blobRowFor(CONTENT_KEY, 8, decoding(), parseResult()))).not.toThrow();
+    expect(() => BlobRowSchema.parse(rowFor(8, decoding(), parseResult()))).not.toThrow();
   });
 });
 
@@ -204,5 +210,23 @@ describe('blobConditionsFor', () => {
     expect(rows.map((row) => row.severity)).toEqual(['warning', 'warning']);
     expect(rows[1]?.message).toBe('nope');
     expect(rows[1]?.line).toBe(7);
+  });
+});
+
+describe('the Claude memory facts on a blob', () => {
+  it('charges the injected text, not the file, in claudeInjected*', () => {
+    const content = '---\ntitle: T\n---\n<!-- a note -->\n\nBody.\n';
+    const row = rowFor(content.length, decoding(), parseMarkdownContent(content, content.length));
+    expect(row.claudeInjectedBytes).toBe('Body.'.length);
+    expect(row.claudeInjectedTokens).toBe(Math.ceil('Body.'.length / 4));
+    expect(row.tokenEstimate).toBe(Math.ceil(content.length / 4));
+  });
+
+  it('files one blob_claude_imports row per import, in the order the harness follows them', () => {
+    const rows = blobClaudeImportsFor(CONTENT_KEY, claudeMemoryFactsOf('See @b.md and @a.md#x\n\n@b.md\n'));
+    expect(rows).toEqual([
+      { blob: CONTENT_KEY, ordinal: 0, rawRef: '@b.md', target: 'b.md', line: 1 },
+      { blob: CONTENT_KEY, ordinal: 1, rawRef: '@a.md#x', target: 'a.md', line: 1 },
+    ]);
   });
 });

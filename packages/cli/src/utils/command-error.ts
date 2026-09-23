@@ -11,7 +11,7 @@
  */
 
 
-import { ExitCode, buildErrorReport, countBySeverity, errorDiagnostics, type ExitCodeValue, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { ExitCode, buildErrorReport, countBySeverity, errorDiagnostics, exitCodeForReport, type ExitCodeValue, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { Logger } from './logger.js';
 import { writeJsonOutput, writeYamlOutput } from './output.js';
@@ -189,28 +189,34 @@ export function handleReportCommandError(
   format?: string | undefined,
 ): never {
   const { error: message } = reportCommandError(error, logger, startTime, commandName);
-  return publishFailure(buildErrorReport(message, Date.now() - startTime), format, ExitCode.ERROR);
+  const report = buildErrorReport(message, Date.now() - startTime);
+  return publishFailure(report, format, exitCodeForReport(report));
 }
 
 /**
  * {@link handleExpectedFailure} for a command whose document is the shared
- * `Report<T>` envelope — same document as {@link handleReportCommandError},
- * with the exit code the command's own contract assigns.
+ * `Report<T>` envelope — same document as {@link handleReportCommandError}.
+ *
+ * 🔑 No exit-code parameter, deliberately. The document is the envelope's
+ * ERROR branch, so its code is {@link exitCodeForReport}'s answer for it: 2.
+ * It used to take the code from the caller, and `vat ard emit` passed 1 — a
+ * document saying "could not do its job" beside a code saying "the project
+ * failed its gate". An outcome that is a finding about the project is
+ * published as a finding, not through here.
  *
  * @param message - What went wrong, in the command's own words
- * @param exitCode - The code this command's `--help` assigns to this outcome
  * @param startTime - Command start time (from Date.now())
  * @param format - What the operator asked for: `json`, or anything else (and
  *   omitted) for YAML
  */
 export function handleReportExpectedFailure(
   message: string,
-  exitCode: ExitCodeValue,
   startTime: number,
   format?: string | undefined,
 ): never {
   process.stderr.write(`${message}\n`);
-  return publishFailure(buildErrorReport(message, Date.now() - startTime), format, exitCode);
+  const report = buildErrorReport(message, Date.now() - startTime);
+  return publishFailure(report, format, exitCodeForReport(report));
 }
 
 /** The payload a command publishes when its own validation gate stops it. */

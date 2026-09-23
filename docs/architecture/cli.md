@@ -214,10 +214,10 @@ export async function myCommand(
     // 1. Validate inputs
     // 2. Process
     // 3. Output results (YAML to stdout)
-    // 4. Exit with appropriate code — a member of `ExitCode`, never a literal
-    //    (`local/no-literal-process-exit`)
+    // 4. Exit with the code the published document DERIVES — never one
+    //    decided beside it (`local/no-literal-process-exit`, `derived`)
 
-    process.exit(ExitCode.OK);
+    process.exit(exitCodeForReport(report));
   } catch (error) {
     handleCommandError(error, logger, startTime, 'MyCommand');
   }
@@ -761,6 +761,13 @@ change's call to make.
   severity; `FINDINGS` (1) the run completed and what it examined failed its gate; `ERROR` (2) the
   command could not do its job (usage, environment, internal). A literal `process.exit(n)` is a
   lint error (`local/no-literal-process-exit`).
+- 🔑 A verb that publishes a document exits with `exitCodeForReport(document)` — the code is
+  DERIVED from the document's `status` and `summary`, never chosen beside it. Choosing it by hand
+  is how one outcome shipped with different codes in different verbs. Under `packages/cli/src/`
+  the rule's `derived` option refuses naming `ExitCode.FINDINGS` at all and any exit that is not
+  `OK`, `ERROR` or a derivation; a child's code is forwarded through `exitCodeOfChild`. The files
+  not yet migrated are the shrink-only `EXIT_CODE_DERIVATION_RATCHET` in `eslint.config.js`, and
+  `test/system/exit-code-matrix.system.test.ts` proves the derivation by running every envelope verb.
 - Always flush stdout before writing to stderr
 - Test format errors must include file:line:column
 
