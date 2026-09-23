@@ -21,6 +21,8 @@
  * mean it lands twice — or, far more likely, on one lane only.
  */
 
+import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
+
 import {
   DOCUMENT_PARSER_KINDS,
   NO_PARSER_KIND,
@@ -107,7 +109,8 @@ export type ParseTransport = 'wire' | 'cache';
  */
 export interface ParsePoolPolicy {
   /**
-   * Master switch. Defaults to **ON**; set `VAT_PARSE_POOL=0` to opt out.
+   * Master switch. Defaults to **ON**; set `VAT_PARSE_POOL=0` (or `false`/`off`/`no`)
+   * to opt out.
    *
    * ## 🔑 MEASURED, cold, A/B ALTERNATED (`vat-lab perf ab`, one instrument, two
    * environments)
@@ -149,12 +152,14 @@ export interface ParsePoolPolicy {
    *
    * ## What the escape hatch is for
    *
-   * `VAT_PARSE_POOL=0`, exactly that spelling, and an explicit `enabled: false`
-   * from a caller that has already decided. Each worker holds its own
+   * `VAT_PARSE_POOL` set to any off spelling `parseEnvBoolean` recognises (`0`,
+   * `false`, `no`, `n`, `off`, case- and whitespace-insensitive), and an explicit
+   * `enabled: false` from a caller that has already decided. Each worker holds its own
    * remark/unified heap (~730 ms to load, not shared between isolates), so a
    * host that is already running `availableParallelism()` jobs of its own has a
-   * reason to say no. Nothing else is a disable: a stray or misspelled value
-   * leaves the pool on rather than silently costing the measured speed-up.
+   * reason to say no. Nothing else is a disable: an unrecognised or misspelled
+   * value reads as `undefined` and leaves the pool on rather than silently
+   * costing the measured speed-up.
    *
    * ⚠️ The per-call-lifetime hypothesis recorded here is RETIRED, not merely
    * unconfirmed: `populateBlobs` runs ONCE per command, so a per-call dispatcher
@@ -280,16 +285,6 @@ const MS_PER_MEGABYTE: Readonly<Record<DocumentParserKind, number>> = {
 
 /** One megabyte, so the rates above can be read in the unit they were measured in. */
 const BYTES_PER_MEGABYTE = 1_048_576;
-
-/**
- * The one `VAT_PARSE_POOL` spelling that turns the pool off.
- *
- * Named rather than inlined so the disable has exactly one definition: the
- * switch is read in one place, and a second call site inventing `'false'` or
- * `'off'` would be a second contract for one decision. See
- * {@link ParsePoolPolicy.enabled}.
- */
-const POOL_DISABLED = '0';
 
 /**
  * Serial parse milliseconds one worker must displace to be worth starting.
@@ -481,10 +476,11 @@ export class ParseDispatcher {
 
   constructor(cache: ParseCache, policy: ParsePoolPolicy) {
     this.#cache = cache;
-    // Opt-OUT. `'0'` exactly, so only a deliberate disable is one — see
+    // Opt-OUT, read through the repo's one switch reader: any recognised off
+    // spelling disables, anything unreadable leaves the pool on. See
     // {@link ParsePoolPolicy.enabled} for the A/B and for why no corpus-size
     // gate accompanies this.
-    this.#enabled = policy.enabled ?? process.env['VAT_PARSE_POOL'] !== POOL_DISABLED;
+    this.#enabled = policy.enabled ?? parseEnvBoolean(process.env['VAT_PARSE_POOL']) !== false;
     // Read per construction for the same reason `enabled` is. `'cache'` exactly,
     // so the shipped behaviour is the wire protocol unless someone names the
     // other one — this switch exists to be A/B'd, not to be guessed at.

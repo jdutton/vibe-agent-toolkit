@@ -12,7 +12,7 @@
         "ordinal": {
           "type": "integer",
           "minimum": 0,
-          "description": "Index of this glob in the rule file's own `paths:` list, from 0"
+          "description": "Zero-based index among the rule's declared patterns, after the harness's comma split — not a YAML `paths:` slot"
         },
         "pattern": {
           "type": "string",
@@ -21,7 +21,7 @@
         },
         "literalPrefix": {
           "type": "string",
-          "description": "The glob-free leading segments of `pattern`; may be empty. The longest path every match lives at or below."
+          "description": "The glob-free leading segments of `pattern` as written (leading `./` removed); may be empty. Not a match bound: after the harness strips a trailing `/**`, a pattern with no other slash matches at any depth. Use it for prefix containment only when the stripped pattern contains a `/`."
         },
         "witnessPath": {
           "anyOf": [
@@ -43,7 +43,7 @@
             "unevaluated",
             "gitignored"
           ],
-          "description": "Pattern status: \"matched\" (witnessPath names a match), \"inert\" (evaluated, matched nothing), \"unevaluated\" (never run — this pattern exhausted the per-pattern expansion budget) or \"gitignored\" (matched nothing VAT can see, and its territory is gitignored — VAT declines to judge it, since the harness reads ignored files)"
+          "description": "Pattern status: \"matched\" (witnessPath names a match — for a `!` negation, a file it excludes from the patterns before it), \"inert\" (evaluated, matched nothing), \"unevaluated\" (never run — this pattern exhausted the per-pattern expansion budget) or \"gitignored\" (matched nothing VAT can see, and its territory is gitignored — VAT declines to judge it, since the harness reads ignored files)"
         }
       },
       "required": [

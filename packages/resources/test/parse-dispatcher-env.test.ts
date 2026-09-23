@@ -80,15 +80,27 @@ describe('ParsePoolPolicy.enabled — the pool is OPT-OUT', () => {
     expect(sizeFromActivation({ size: 2 }, 256, 4096)).toBe(2);
   });
 
-  it('is turned OFF by VAT_PARSE_POOL=0, and by nothing else', () => {
-    process.env[POOL_ENV] = '0';
-    expect(sizeFromActivation({ size: 2 }, 256, 4096)).toBeNull();
+  it.each(['0', 'false', 'off', 'no', 'n', 'FALSE', ' Off '])(
+    'is turned OFF by VAT_PARSE_POOL=%j — every off spelling parseEnvBoolean reads',
+    (raw) => {
+      // One switch reader for the repo. A switch whose off position is the one
+      // literal `'0'` failed open for `false`/`off`/`no` — the defect
+      // `parseEnvBoolean` exists to close.
+      process.env[POOL_ENV] = raw;
+      expect(sizeFromActivation({ size: 2 }, 256, 4096)).toBeNull();
+    },
+  );
 
-    // Exactly `'0'`. A stray value is not a disable — the escape hatch has one
-    // spelling, so a typo cannot silently cost the measured speed-up.
-    process.env[POOL_ENV] = 'off';
-    expect(sizeFromActivation({ size: 2 }, 256, 4096)).toBe(2);
-  });
+  it.each(['1', 'true', 'on', 'yes', '', 'garbage', 'disable'])(
+    'stays ON for VAT_PARSE_POOL=%j — on spellings and anything unreadable',
+    (raw) => {
+      // `parseEnvBoolean` returns `undefined` for an unrecognised value, and
+      // THIS call site reads `undefined` as "leave the pool on": a typo must not
+      // silently cost the measured speed-up.
+      process.env[POOL_ENV] = raw;
+      expect(sizeFromActivation({ size: 2 }, 256, 4096)).toBe(2);
+    },
+  );
 
   it('lets an explicit policy decision BEAT the environment, both ways', () => {
     process.env[POOL_ENV] = '0';

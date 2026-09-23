@@ -540,8 +540,10 @@ which a bare commit key cannot express.
   ones whose globs never reached the pattern table
   ([validation-codes.md](../validation-codes.md#claude_rule_frontmatter_invalid)).
 - ✅ **Shipped: a declined symlink is a row, not a silence.** The filesystem extent still realizes
-  no symlink path, but every link its enumerator met is a `realization_conditions` row
-  `EXTENT_SYMLINK_NOT_REALIZED` at the link's path
+  no symlink path, but every link its enumerator met is a `realization_conditions` row at the
+  link's path — `EXTENT_SYMLINK_NOT_REALIZED`, or `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` when the
+  target resolves outside the root, or `EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to
+  nothing; a query about declined links asks for all three
   ([validation-codes.md](../validation-codes.md#extent_symlink_not_realized)).
 - ✅ **Shipped: the store is on by default.** The extent- and blob-scoped tables now cross
   invocations without an opt-in (`VAT_PROJECTION_STORE=off`, or `VAT_CACHE=0` for every cache, is

@@ -34,6 +34,7 @@ import { describe, expect, it } from 'vitest';
 import {
   answerDocument,
   contextEnvelope,
+  renderEnvelopeText,
   type ContextAnswerDocument,
 } from '../../../src/commands/claude/context.js';
 
@@ -138,5 +139,21 @@ describe('vat claude context — the limits belong to the envelope', () => {
 
     expect(envelope.limits.length).toBeGreaterThan(0);
     expect(envelope.boundsStatement).toBe(CLAUDE_CONTEXT_BOUNDS_STATEMENT);
+  });
+});
+
+describe('vat claude context — the over-budget section', () => {
+  it('says the budget refused ONE pattern and the rule\'s other patterns still apply', () => {
+    // ⛔ The vendor's expansion budget is spent PER PATTERN, so a heading that
+    // says the whole `paths:` list exceeded it tells the reader the rule is
+    // dead when its siblings are still live.
+    const answer = { ...answerFor('a'), overBudgetRules: ['.claude/rules/huge.md'] };
+    const text = renderEnvelopeText([answerDocument(answer, emptyProjection(), false)]);
+
+    expect(text).toContain(
+      'Rules with a paths: pattern the vendor expansion budget refused (their other patterns still apply)',
+    );
+    expect(text).toContain('.claude/rules/huge.md');
+    expect(text).not.toContain('exceeded the vendor pattern budget');
   });
 });

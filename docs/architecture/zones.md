@@ -368,11 +368,12 @@ question expensive so the expensive one could be asked by nobody. The witness is
 row falsifiable by a reader, the same reason `RuleAdmission`'s `glob-rule-may-fire` carries
 `examplePath`.
 
-**`literalPrefix` is stored so SQL can do ∀ containment with no matcher.** It is the glob-free
-leading segments of `pattern` — `packages/some-pkg/src/thing*.ts` yields `packages/some-pkg/src`.
-Containment ("does this rule cover every path under `docs/`?") is then a prefix comparison over a
-column, so a query needs no glob engine and no per-row callback; recomputing it at query time would
-put picomatch's dialect inside every consumer. ⛔ A wholly literal pattern yields ITSELF — a FILE
+**`literalPrefix` is the glob-free leading segments of `pattern`, and it is NOT a match bound.**
+`packages/some-pkg/src/thing*.ts` yields `packages/some-pkg/src`. The matcher is gitignore dialect
+after the harness strips a trailing `/**`, so a pattern with no other slash matches at ANY depth —
+`src/**` reaches `packages/cli/src/x.ts`, far outside the prefix `src`. A prefix comparison over this
+column answers ∀ containment only when the stripped pattern still contains a `/`; for any other
+pattern it is a wrong answer, not a conservative one. ⛔ A wholly literal pattern yields ITSELF — a FILE
 path, not a directory, because `.` is not a glob metacharacter. Read the column as *"the longest path
 every match lives at or below"*, which a file satisfies only inclusively; `claude-context-rules.ts`
 records the silent under-report that reading it as a directory prefix already caused once.

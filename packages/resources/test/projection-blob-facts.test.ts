@@ -115,6 +115,24 @@ describe('blobRowFor', () => {
       .frontmatterError).toBeNull();
   });
 
+  it('says nothing about a block that decodes to NULL — comment-only, `~`, `null`', () => {
+    // A block holding only a comment is YAML `null`, and so are `~` and
+    // `null`: nothing was declared and nothing was ignored, exactly like an
+    // empty block. Reporting NOT_A_MAPPING here accused a comment placeholder
+    // of decoding to "a sequence or a scalar".
+    for (const block of ['# paths come later', '~', 'null']) {
+      const content = `---\n${block}\n---\n\n# T\n`;
+      const row = blobRowFor(CONTENT_KEY, 8, decoding(), parseMarkdownContent(content, content.length));
+      expect(row.frontmatterError, block).toBeNull();
+    }
+    // The controls that must still red: a real sequence and a real scalar.
+    for (const block of ['- a', '42', 'just text']) {
+      const content = `---\n${block}\n---\n\n# T\n`;
+      const row = blobRowFor(CONTENT_KEY, 8, decoding(), parseMarkdownContent(content, content.length));
+      expect(row.frontmatterError, block).toContain('not a YAML mapping');
+    }
+  });
+
   it('keeps the PARSER\'s reason when the YAML did not parse at all', () => {
     // The non-mapping verdict is a fallback, never a replacement: a real YAML
     // failure still reports what the parser said.

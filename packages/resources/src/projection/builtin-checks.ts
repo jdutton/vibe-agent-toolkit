@@ -40,6 +40,7 @@ import { nestedRuleParent } from './claude-context-rules.js';
 import {
   DECLINED_SYMLINK_CODES,
   EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
+  EXTENT_SYMLINK_TARGET_UNRESOLVED,
   isDeclinedSymlinkCode,
 } from './contributors/filesystem-extent.js';
 import { findingLocation } from './finding-location.js';
@@ -388,7 +389,7 @@ function rulesLinkKind(path: string): 'file' | 'tree' | null {
 /**
  * What Claude Code does with this link, and what the author should do about it.
  *
- * ## ⛔ The two arms are different defects, and the CODE decides which
+ * ## ⛔ The three arms are different defects, and the CODE decides which
  *
  * Read from the shipped 2.1.280 binary
  * (`docs/external/claude-code-rules-paths-behaviour.md`, "Symlinked rules"): a
@@ -398,13 +399,20 @@ function rulesLinkKind(path: string): 'file' | 'tree' | null {
  * loaded normally. In-root, a rule governs the session and nothing checked it,
  * and the remedy is to stop linking so VAT can see it. Out-of-root, the rule set
  * the author believes governs the session is in force NOWHERE, and VAT's blind
- * spot is the lesser problem beside that.
+ * spot is the lesser problem beside that. A link that resolves to nothing on
+ * this host — dangling, a loop — loads nothing either, and calling it "in
+ * force" described a rule that does not exist.
  *
  * ⚠️ This check is a pure predicate over rows and resolves no link itself. It
- * reads the verdict from {@link EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT} — the
- * condition row's own code, set where the target was resolved — and never from
- * the row's prose, which would be the *"a contract carried in text"* drift
- * class. For one release both arms shared one sentence for exactly that reason.
+ * reads the verdict from the condition row's own code
+ * ({@link EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT},
+ * {@link EXTENT_SYMLINK_TARGET_UNRESOLVED}), set where the host resolved the
+ * link, and never from the row's prose, which would be the *"a contract carried
+ * in text"* drift class.
+ *
+ * ⛔ The in-root arm never promises the row NAMES the target: a git link checked
+ * out as a plain file (`core.symlinks=false`) resolves in-root as itself, draws
+ * the same code, and its row names none.
  *
  * ⚠️ The in-root arm still hedges on ONE point, because the two directories are
  * not the same question: the harness compares against the directory the session
@@ -416,6 +424,12 @@ function rulesLinkKind(path: string): 'file' | 'tree' | null {
  * @returns The sentences that follow the blind-checks clause
  */
 function linkPositionClause(code: string): string {
+  if (code === EXTENT_SYMLINK_TARGET_UNRESOLVED) {
+    return ' It resolves to nothing on this host — the target does not exist, or the link loops or'
+      + ' cannot be resolved — so Claude Code loads nothing through it: no rule reaches the session'
+      + ' through this link. Point the link at a file that exists, or delete it. The'
+      + ' EXTENT_SYMLINK_TARGET_UNRESOLVED row at this path records the link.';
+  }
   if (code === EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT) {
     return ' Its target resolves outside the project root, so Claude Code does not load it either:'
       + ' a rules file or directory reached through such a link is skipped, and the rule set you'
@@ -429,7 +443,7 @@ function linkPositionClause(code: string): string {
     + ' the shared file from a rules file that is not a link, to make VAT check its globs and'
     + ' frontmatter. (Claude Code compares against the directory the session started in rather than'
     + ' the project root, so a session started in a subdirectory can skip this link too.) The'
-    + ' EXTENT_SYMLINK_NOT_REALIZED row at this path names the target.';
+    + ' EXTENT_SYMLINK_NOT_REALIZED row at this path says what VAT found there.';
 }
 
 /**
@@ -462,7 +476,7 @@ function linkUncheckedMessage(path: string, kind: 'file' | 'tree', code: string)
  * The declined-link row the extent records is the only trace, and at `info` with
  * a message about link targets it says nothing about rules.
  *
- * ⛔ BOTH declined-link codes, read through {@link DECLINED_SYMLINK_CODES}. The
+ * ⛔ EVERY declined-link code, read through {@link DECLINED_SYMLINK_CODES}. The
  * out-of-root arm is the one whose rule never loads at all, so a filter that
  * kept only `EXTENT_SYMLINK_NOT_REALIZED` would stay silent about the worse
  * defect of the two.
@@ -517,8 +531,8 @@ export const CLAUDE_RULE_LINK_UNCHECKED_CHECK: BuiltinCheck = {
   // adopter copies into `resources.checks`; one that selects rows the built-in
   // does not is a rule that changes meaning on being copied.
   //
-  // ⛔ BOTH declined-link codes, rendered from `DECLINED_SYMLINK_CODES` rather
-  // than typed out: a twin naming one of them would silently drop every
+  // ⛔ EVERY declined-link code, rendered from `DECLINED_SYMLINK_CODES` rather
+  // than typed out: a twin naming only some would silently drop, e.g., every
   // out-of-root link — the arm whose rule Claude Code does not load at all.
   sqlTwin:
     'SELECT DISTINCT c.path\n'

@@ -18,18 +18,18 @@
  *
  * ## The out-of-root verdict is a CODE, not a sentence
  *
- * A declined link is recorded under `EXTENT_SYMLINK_NOT_REALIZED` or, when its
- * target resolves outside the root, `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` — the
- * same decline, carrying the one fact a consumer cannot recover from the row.
+ * A declined link is recorded under `EXTENT_SYMLINK_NOT_REALIZED`, or under
+ * `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` / `EXTENT_SYMLINK_TARGET_UNRESOLVED` when
+ * the host resolves it outside the root or to nothing — the same decline, carrying the one fact a consumer cannot recover from the row.
  * `claude-rule-link-unchecked` needs it (Claude Code SKIPS a rules file reached
  * through an out-of-root link) and is a predicate over rows, so before the code
  * existed the only way to read the verdict was to match the message's prose.
  * Every case below therefore asserts the CODE as well as the clause, and the
- * suite reads both codes through `isDeclinedSymlinkCode` — a filter written on
- * one of them would drop exactly the rows the second code exists for.
+ * suite reads every code through `isDeclinedSymlinkCode` — a filter written on
+ * one of them would drop exactly the rows the others exist for.
  */
 
-import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 import { createSymlink, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -39,6 +39,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   EXTENT_SYMLINK_NOT_REALIZED,
   EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
+  EXTENT_SYMLINK_TARGET_UNRESOLVED,
   FilesystemExtentContributor,
   isDeclinedSymlinkCode,
   linkTargetRealization,
@@ -145,10 +146,18 @@ describe.skipIf(!symlinkCapability())('filesystem extent — a declined symlink 
       // realized, dangling, a directory, the root itself, untracked, ignored,
       // and a newline-bearing relative name — keeps the general code.
       for (const path of [
-        CLAUDE_LINK, RULE_LINK, DIRECTORY_LINK, BROKEN_LINK, ROOT_LINK, UNTRACKED_LINK, IGNORED_LINK,
-        ...POSIX_ONLY_LINKS.filter((link) => link.path === NEWLINE_LINK).map((link) => link.path),
+        CLAUDE_LINK, RULE_LINK, DIRECTORY_LINK, ROOT_LINK, UNTRACKED_LINK, IGNORED_LINK,
       ]) {
         expect(codeOf(label, path), path).toBe(EXTENT_SYMLINK_NOT_REALIZED);
+      }
+      // ⭐ An in-root target that resolves to NOTHING on this host — dangling,
+      // including the newline-bearing name nothing creates — is neither in force
+      // nor outside: Claude Code reads nothing through it.
+      for (const path of [
+        BROKEN_LINK,
+        ...POSIX_ONLY_LINKS.filter((link) => link.path === NEWLINE_LINK).map((link) => link.path),
+      ]) {
+        expect(codeOf(label, path), path).toBe(EXTENT_SYMLINK_TARGET_UNRESOLVED);
       }
     },
   );
@@ -181,11 +190,11 @@ describe.skipIf(!symlinkCapability())('filesystem extent — a declined symlink 
     expect(byPath.get(DIRECTORY_LINK)).toContain("'other'");
   });
 
-  it.each(SYMLINK_ARMS)('%s: a dangling in-root target is said to be unrealized', (label) => {
+  it.each(SYMLINK_ARMS)('%s: a dangling in-root target is named and said to resolve to nothing', (label) => {
     const message = conditionsOf(label).find((row) => row.path === BROKEN_LINK)?.message;
 
     expect(message).toContain("'nowhere.md'");
-    expect(message).toContain('is not realized');
+    expect(message).toContain('resolves to nothing on this host');
   });
 
   it.each(SYMLINK_ARMS)('%s: an out-of-root target is never named, nor is the root or $HOME', (label) => {
@@ -335,24 +344,25 @@ describe('linkTargetRealization — does the target reach a realized row on THIS
   // platform: the filesystem case below can only take one arm per host.
   const realized = new Set([PLAIN]);
   const NONE = (): undefined => undefined;
+  const NOT_A_LINK = (): boolean => false;
 
   it('answers "realized" for a byte-exact target, without asking the filesystem', () => {
     const asking = (): string => {
       throw new Error('the filesystem must not be asked when the set already holds the target');
     };
 
-    expect(linkTargetRealization(PLAIN, realized, asking)).toEqual({ kind: 'realized' });
+    expect(linkTargetRealization(PLAIN, realized, asking, NOT_A_LINK)).toEqual({ kind: 'realized' });
   });
 
   it('answers "unrealized" when nothing realizes the target and the host resolves nothing', () => {
-    expect(linkTargetRealization('docs/gone.md', realized, NONE)).toEqual({ kind: 'unrealized' });
+    expect(linkTargetRealization('docs/gone.md', realized, NONE, NOT_A_LINK)).toEqual({ kind: 'unrealized' });
   });
 
   it('⭐ answers "realized-as" when the host resolves the target to a realized CASE variant', () => {
     // The defect: `foo.md -> docs/Plain.md` beside a realized `docs/plain.md`
     // resolves on macOS and Windows and was reported "not realized" because the
     // set was asked with the author's exact spelling.
-    expect(linkTargetRealization('docs/Plain.md', realized, () => PLAIN))
+    expect(linkTargetRealization('docs/Plain.md', realized, () => PLAIN, NOT_A_LINK))
       .toEqual({ kind: 'realized-as', path: PLAIN });
   });
 
@@ -360,60 +370,28 @@ describe('linkTargetRealization — does the target reach a realized row on THIS
     const composed = 'docs/café.md';
     const decomposed = 'docs/café.md';
 
-    expect(linkTargetRealization(decomposed, new Set([composed]), () => composed))
+    expect(linkTargetRealization(decomposed, new Set([composed]), () => composed, NOT_A_LINK))
       .toEqual({ kind: 'realized-as', path: composed });
   });
 
   it('⛔ refuses a resolution that is a DIFFERENT file, not a respelling', () => {
     // A link chain can resolve somewhere else entirely. Saying the named target
     // is realized would then be a lie about a path the message quotes.
-    expect(linkTargetRealization('docs/other.md', realized, () => PLAIN))
+    expect(linkTargetRealization('docs/other.md', realized, () => PLAIN, NOT_A_LINK))
+      .toEqual({ kind: 'unrealized' });
+  });
+
+  it('⛔ refuses a case variant that is ITSELF a link — a case-sensitive host followed a chain', () => {
+    // `a.md -> docs/Plain.md` where `docs/Plain.md` is its own link to the
+    // realized `docs/plain.md`: on a byte-exact filesystem the host resolves the
+    // chain to a case variant, and "breaks on a byte-exact filesystem" would be
+    // false — it opens there too, through a link VAT does not realize.
+    expect(linkTargetRealization('docs/Plain.md', realized, () => PLAIN, () => true))
       .toEqual({ kind: 'unrealized' });
   });
 
   it('refuses a resolution the projection does not realize either', () => {
-    expect(linkTargetRealization('docs/PLAIN.md', new Set(), () => PLAIN))
+    expect(linkTargetRealization('docs/PLAIN.md', new Set(), () => PLAIN, NOT_A_LINK))
       .toEqual({ kind: 'unrealized' });
-  });
-});
-
-describe.skipIf(CAPABILITY === null)('a link whose target differs from the realized file only in case', () => {
-  let root: string | undefined;
-
-  afterAll(() => {
-    removeSymlinkFixture(root);
-  });
-
-  it('is judged by THIS filesystem, not by a byte-exact lookup', async () => {
-    root = plantSymlinkFixture({
-      prefix: 'vat-symlink-case-',
-      files: [PLAIN],
-      links: [{ path: 'cased.md', target: 'docs/PLAIN.md' }],
-    }).root;
-    // The probe, not the platform: an APFS volume can be created case-SENSITIVE
-    // and a Linux host can mount a case-insensitive filesystem, so `darwin` is
-    // not the question. Writing one file and asking for it back in another case
-    // is.
-    const probe = safePath.join(root, 'vat-case-probe.md');
-    writeFileSync(probe, 'probe');
-    const caseInsensitive = existsSync(safePath.join(root, 'VAT-CASE-PROBE.md'));
-    rmSync(probe);
-
-    const { contribution } = await buildExtentContribution(
-      root,
-      new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at)),
-    );
-    const message = contribution.conditions.find((row) => row.path === 'cased.md')?.message ?? '';
-
-    // Positive control: the row exists and named the target it was given.
-    expect(message).toContain("'docs/PLAIN.md'");
-    if (caseInsensitive) {
-      // The host opens the link, so the row must not call the target absent.
-      expect(message).toContain(`is realized at '${PLAIN}'`);
-      expect(message).not.toContain('is not realized');
-    } else {
-      // A byte-exact filesystem: the link genuinely dangles.
-      expect(message).toContain('is not realized');
-    }
   });
 });

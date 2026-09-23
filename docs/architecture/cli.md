@@ -572,9 +572,12 @@ frontmatter at all.
 ✅ The third is `claude-rule-link-unchecked` (`CLAUDE_RULE_LINK_UNCHECKED`), and it exists because of
 BOTH of their blind spots. VAT realizes no symbolic link's own path, so a `.claude/rules/x.md` that
 is a link — or a linked rules directory — has no realization row, no blob and no pattern row, and
-both checks above pass on a rule Claude Code loads (the vendor documents `.claude/rules/` as
-supporting symlinks). It reads the `realization_conditions` rows the extents record
-(`EXTENT_SYMLINK_NOT_REALIZED`, `info`) and reports the ones at or under a rules directory, or at a
+both checks above pass on it — while Claude Code loads it when the link's target stays inside the
+root, and skips it when the target resolves outside
+([evidence](../external/claude-code-rules-paths-behaviour.md)). It reads the `realization_conditions`
+rows the extents record under any declined-link code (`EXTENT_SYMLINK_NOT_REALIZED`,
+`EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` or `EXTENT_SYMLINK_TARGET_UNRESOLVED`, all `info`, read together through `DECLINED_SYMLINK_CODES`)
+and reports the ones at or under a rules directory, or at a
 `.claude` directory itself — which carries a rules directory with it while its own path stops short
 of the `rules` segment — which is why `BuiltinCheckInput` carries that table, REQUIRED like every
 other member.

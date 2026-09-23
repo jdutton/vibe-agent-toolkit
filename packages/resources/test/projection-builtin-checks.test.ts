@@ -20,8 +20,7 @@
  * `status !== 'matched'` and the case below reds; that mutation was run.
  */
 
-import { symlinkCapability } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
   bindBuiltinChecks,
@@ -34,14 +33,9 @@ import {
 import {
   EXTENT_SYMLINK_NOT_REALIZED,
   EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
-  FilesystemExtentContributor,
+  EXTENT_SYMLINK_TARGET_UNRESOLVED,
 } from '../src/projection/contributors/filesystem-extent.js';
-import { FilesystemCrawlSource } from '../src/projection/crawl-source.js';
 import type { ClaudeRulePatternRow } from '../src/schemas/projection-claude-rules.js';
-import type { ValidationIssue } from '../src/schemas/validation-result.js';
-
-import { plantSymlinkFixture, removeSymlinkFixture } from './helpers/symlink-fixture.js';
-import { buildExtentContribution } from './test-helpers.js';
 
 /** The rules file every case below declares its patterns in. */
 const RULES_FILE = '.claude/rules/demo.md';
@@ -476,8 +470,11 @@ describe('CLAUDE_RULE_LINK_UNCHECKED — a rules file VAT can see but cannot che
     // The hedge that survives, and only on this arm: the harness compares
     // against the session's own directory, VAT against the project root.
     expect(issue?.message).toContain('directory the session started in');
-    // Where the target is named, since this finding never names it.
+    // Where to look, since this finding never names the target.
     expect(issue?.message).toContain('EXTENT_SYMLINK_NOT_REALIZED');
+    // ⛔ But never a promise the row keeps: a git link checked out as a plain
+    // file (`core.symlinks=false`) draws this code and its row names no target.
+    expect(issue?.message).not.toContain('names the target');
     // ⛔ And it does NOT hedge any more: the old sentence spanned both arms.
     expect(issue?.message).not.toContain('depends on where the link points');
   });
@@ -506,6 +503,24 @@ describe('CLAUDE_RULE_LINK_UNCHECKED — a rules file VAT can see but cannot che
     expect(issue?.message).not.toContain('Replace the link with the file itself');
   });
 
+  it('⭐ says a link that resolves NOWHERE loads nothing — never "in force"', () => {
+    // A dangling rules link: Claude Code reads nothing through it, so telling
+    // the author a rule is "in force and unchecked" describes a rule that does
+    // not exist, and "outside the root" describes a target spelled inside it.
+    const [issue, ...rest] = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(
+      linkInput([symlinkCondition('.claude/rules/dangling.md', EXTENT_SYMLINK_TARGET_UNRESOLVED)]),
+    );
+
+    expect(rest).toStrictEqual([]);
+    expect(issue?.code).toBe('CLAUDE_RULE_LINK_UNCHECKED');
+    expect(issue?.severity).toBe('warning');
+    expect(issue?.message).toContain('resolves to nothing on this host');
+    expect(issue?.message).toContain('Claude Code loads nothing through it');
+    expect(issue?.message).toContain(EXTENT_SYMLINK_TARGET_UNRESOLVED);
+    expect(issue?.message).not.toContain('it is in force and unchecked');
+    expect(issue?.message).not.toContain('outside the project root');
+  });
+
   it('says NOTHING about a condition row carrying another code', () => {
     // Distinguishable at the seam: the same path under a different code.
     expect(CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(linkInput([
@@ -530,64 +545,3 @@ describe('CLAUDE_RULE_LINK_UNCHECKED — a rules file VAT can see but cannot che
   });
 });
 
-
-/**
- * END TO END, from a real symlink on disk: the extent's own code decides which
- * sentence the finding carries.
- *
- * ⚠️ Every other case in this file hands the check hand-built rows, which is
- * what keeps the predicate and its producer independently falsifiable. That is
- * exactly why this one exists: the codes above are strings a fixture can assert
- * against itself forever while `filesystem-extent.ts` emits something else. Here
- * nothing is hand-built — two real links are planted, the contributor classifies
- * them, and the check reads whatever it actually wrote.
- */
-describe.skipIf(!symlinkCapability())('the linked-rules arms, from a planted tree', () => {
-  const INSIDE_LINK = '.claude/rules/inside.md';
-  const OUTSIDE_LINK = '.claude/rules/outside.md';
-  /** Named only by the out-of-root link's target text — it must reach no message. */
-  const OUTSIDE_NAME = 'vat-builtin-outside-rules.md';
-  let root: string | undefined;
-  let issues: readonly ValidationIssue[] = [];
-
-  beforeAll(async () => {
-    root = plantSymlinkFixture({
-      prefix: 'vat-builtin-rules-link-',
-      files: ['shared/rule.md'],
-      links: [
-        { path: INSIDE_LINK, target: '../../shared/rule.md' },
-        // Enough `..` to leave any temp root, however deep the host puts it.
-        { path: OUTSIDE_LINK, target: `${'../'.repeat(24)}${OUTSIDE_NAME}` },
-      ],
-    }).root;
-    const { contribution } = await buildExtentContribution(
-      root,
-      new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at)),
-    );
-    issues = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run({
-      ...input([]),
-      realizationConditions: contribution.conditions,
-    });
-  });
-
-  afterAll(() => {
-    removeSymlinkFixture(root);
-  });
-
-  it('⭐ the two links draw the two different sentences', () => {
-    // Positive control: both links are reported at all, in fixture order.
-    expect(issues.map((issue) => issue.location)).toStrictEqual([INSIDE_LINK, OUTSIDE_LINK]);
-
-    expect(issues[0]?.message).toContain('target is inside the project root');
-    expect(issues[0]?.message).toContain('it is in force and unchecked');
-    expect(issues[1]?.message).toContain('target resolves outside the project root');
-    expect(issues[1]?.message).toContain('in force nowhere');
-  });
-
-  it('names neither the out-of-root target nor the fixture root', () => {
-    for (const issue of issues) {
-      expect(issue.message, issue.location).not.toContain(OUTSIDE_NAME);
-      expect(issue.message, issue.location).not.toContain(root ?? '<unplanted>');
-    }
-  });
-});

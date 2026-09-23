@@ -144,15 +144,24 @@ export function validateFrontmatterRules(
  *    instruction (`<!--`, `<![CDATA[`, `<!DOCTYPE`, `<?xml`), a closing tag
  *    (`</x>`), a self-closing tag (`<x/>`, `<x a/>`), and an opening tag that
  *    carries an ATTRIBUTE ASSIGNMENT (`<div class="x">`). Angle brackets holding
- *    prose with no `=` in them are not a tag: `<see https://example.com>` and
- *    `<y and y>` are a URL and a comparison.
+ *    prose are not a tag: `<see https://example.com>`, `<y and y>` and
+ *    `Map<K, V>` are a URL, a comparison and a generic.
  *
- * 2. AN AMBIGUOUS BARE `<word>`. `<example>` and `<env>` are the same four
- *    characters; no rule can tell a tag from a placeholder here. It therefore
- *    fires — the reading that keeps real tags firing — UNLESS it reads as part
- *    of a path or identifier (`skills/<name>/SKILL.md`, `Promise<Result>`,
- *    `repo#<n>`), and the author can mark it as quoted text with backticks,
- *    which is what the `fix:` text tells them to do. A consequence worth
+ * 2. AN AMBIGUOUS BARE `<word>` — or `<word word…>`, a run of plain
+ *    identifiers with no `and`/`or` among them. `<example>` and `<env>` are the
+ *    same four characters, and `<script async>` is the same shape as
+ *    `<skill name>`; no rule can tell a tag from a placeholder here. It
+ *    therefore fires — the reading that keeps real tags firing — UNLESS it reads
+ *    as part of a path or identifier, and the author can mark it as quoted text
+ *    with backticks, which is what the `fix:` text tells them to do. "Part of a
+ *    token" means a neighbour that BUILDS one: on the left a word character or
+ *    `/` (`Promise<Result>`, `skills/<name>`), or a `#`, `@` or `=` that itself
+ *    follows a word character or a group (`repo#<n>`, `pkg@<v>`, `--flag=<value>`,
+ *    `acme/<repo>#<n>`); on the
+ *    right a path segment (`<name>/SKILL.md`) or a `.`, `-` or `@` followed by a
+ *    word character (`<name>.md`, `<name>-skill`, `<pkg>@latest`). Sentence
+ *    punctuation joins nothing: `Done.<instructions>`, `x -<system>` and
+ *    `<system>.` all fire. A consequence worth
  *    naming: a free-standing `<owner>` in `<owner>/<repo>#<n>` fires, because it
  *    is character-for-character what `<example>/<example>` is, and that one must
  *    fire. Backticking the whole template clears it.
@@ -170,18 +179,37 @@ const INLINE_CODE_SPAN = /`[^`]*`/g;
 const MARKUP_DECLARATION = /<\?|<!(?:--|\[|[A-Za-z])/;
 
 /**
- * One `<…>` group, to be classified by {@link scanAngleGroups}. `[A-Za-z]` is a
- * single character and `[^<>]*` is the only quantifier, so the two cannot split
- * one run between them — the ambiguity that makes an adjacent pair of stars
- * quadratic. Each start position scans only as far as the next `<` or `>`.
+ * One `<…>` group, to be classified by {@link scanAngleGroups}. The name start
+ * (`[\p{L}_]`, any letter or `_`) is a single character and `[^<>]*` is the
+ * only quantifier, so the two cannot split one run between them — the ambiguity
+ * that makes an adjacent pair of stars quadratic. Each start position scans only
+ * as far as the next `<` or `>`.
  */
-const ANGLE_GROUP = /<(\/?)([A-Za-z][^<>]*)>/g;
+const ANGLE_GROUP = /<(\/?)([\p{L}_][^<>]*)>/gu;
 
 /** The tag-name prefix of a group body; the remainder is its attribute run. */
-const TAG_NAME_PREFIX = /^[A-Za-z][\w.:-]*/;
+const TAG_NAME_PREFIX = /^[\p{L}_][\p{L}\p{N}_.:-]*/u;
 
-/** A character that continues a path or identifier through a `<…>` group. */
-const TOKEN_CHAR = /[\w/.\\:#@-]/;
+/** One valueless attribute name: `async`, `src`, `data-x`. */
+const ATTRIBUTE_NAME = /^[\p{L}_][\p{L}\p{N}_-]*$/u;
+
+/** Separates the words of an attribute run. */
+const WHITESPACE_RUN = /\s+/u;
+
+/** Connectives that make an identifier run read as prose (`<y and y>`). */
+const PROSE_CONNECTIVES: ReadonlySet<string> = new Set(['and', 'or']);
+
+/** A left neighbour that builds an identifier on its own: `Promise<`, `skills/<`. */
+const IDENTIFIER_LEFT = /[\w/]/;
+
+/** A left joiner that builds one only after a word character: `repo#<`, `pkg@<`, `KEY=<`. */
+const JOINER_LEFT = /[#@=]/;
+
+/** What a left joiner must follow to be mid-token: a word character, or the `>` of a group. */
+const TOKEN_END = /[\w>]/;
+
+/** A right joiner that continues a token when a word follows: `<name>.md`, `<name>-skill`, `<pkg>@latest`. */
+const JOINER_RIGHT = /[.@-]/;
 
 /** A literal path segment — what has to follow `<name>/` for it to be a path. */
 const PATH_SEGMENT_CHAR = /[\w.]/;
@@ -199,44 +227,82 @@ export const XML_TAG_SCAN_PATTERNS: readonly RegExp[] = [
 	MARKUP_DECLARATION,
 	ANGLE_GROUP,
 	TAG_NAME_PREFIX,
+	ATTRIBUTE_NAME,
+	WHITESPACE_RUN,
 ];
 
 interface AngleScan {
 	/** Class 1 above: markup, whatever it is wrapped in. */
 	markup: boolean;
-	/** Class 2 above: a bare `<word>` that does not read as a path or identifier. */
+	/** Class 2 above: a bare `<word>` (or identifier run) that does not read as part of a token. */
 	bareTag: boolean;
 }
 
-/**
- * Whether a `<word>` at `index` reads as a tag rather than as a placeholder
- * inside a larger token.
- */
-function isBareTagInProse(text: string, index: number, length: number): boolean {
-	const before = index === 0 ? '' : text.charAt(index - 1);
-	const end = index + length;
-	const after = text.charAt(end);
-
-	// `Promise<Result>`, `skills/<name>`, `list<item>`, `repo#<n>`: a token
-	// continues on the left and the group is followed by punctuation or the end.
-	// A WORD character after `>` means the group is glued into the middle of a
-	// word (`in<thinking>mode`) — that is a tag, not a compound identifier.
-	if (before !== '' && TOKEN_CHAR.test(before) && !WORD_CHAR.test(after)) {
+/** Whether the character left of `index` builds an identifier the group joins. */
+function joinsOnLeft(text: string, index: number): boolean {
+	const before = text.charAt(index - 1);
+	if (before === '') {
 		return false;
 	}
+	if (IDENTIFIER_LEFT.test(before)) {
+		return true;
+	}
+	// `#`, `@`, `=` join only a token already under way: `repo#<n>` is one, and
+	// so is `acme/<repo>#<n>`, whose `>` closes a group judged on its own;
+	// `#<system>` and `x @<system>` are not.
+	return JOINER_LEFT.test(before) && TOKEN_END.test(text.charAt(index - 2));
+}
 
+/** Whether the text right of `end` continues the group into a larger token. */
+function continuesOnRight(text: string, end: number): boolean {
+	const after = text.charAt(end);
+	const next = text.charAt(end + 1);
 	// `<name>/SKILL.md`: the path continues with a literal segment.
 	// `<example>/<example>` continues with another group, so it is not a path —
 	// an unconditional "followed by a slash" exemption is an escape hatch for
 	// every tag.
-	if ((after === '/' || after === '\\') && PATH_SEGMENT_CHAR.test(text.charAt(end + 1))) {
+	if (after === '/' || after === '\\') {
+		return PATH_SEGMENT_CHAR.test(next);
+	}
+	// `<name>.md`, `<name>-skill`, `<pkg>@latest` — but not a sentence-ending
+	// `<system>.`, which is followed by nothing or a space.
+	return JOINER_RIGHT.test(after) && WORD_CHAR.test(next);
+}
+
+/**
+ * Whether an ambiguous group at `index` reads as a tag rather than as a
+ * placeholder inside a larger token.
+ */
+function isBareTagInProse(text: string, index: number, length: number): boolean {
+	const end = index + length;
+
+	// `Promise<Result>`, `skills/<name>`, `repo#<n>`: a token continues on the
+	// left and the group is followed by punctuation or the end. A WORD character
+	// after `>` means the group is glued into the middle of a word
+	// (`in<thinking>mode`) — that is a tag, not a compound identifier.
+	if (joinsOnLeft(text, index) && !WORD_CHAR.test(text.charAt(end))) {
 		return false;
 	}
 
-	return true;
+	return !continuesOnRight(text, end);
 }
 
-/** Classify a group body that is not a bare `<word>`. */
+/**
+ * Whether an attribute run is a list of valueless attribute names
+ * (`<script async>`, `<img src>`) rather than prose between angle brackets
+ * (`<y and y>`, `<see https://…>`, `Map<K, V>`). An empty run qualifies.
+ */
+function isIdentifierRun(attributeRun: string): boolean {
+	const trimmed = attributeRun.trim();
+	if (trimmed === '') {
+		return true;
+	}
+	return trimmed
+		.split(WHITESPACE_RUN)
+		.every((word) => ATTRIBUTE_NAME.test(word) && !PROSE_CONNECTIVES.has(word.toLowerCase()));
+}
+
+/** Classify a group body that is not ambiguous. */
 function isMarkupBody(closing: boolean, attributeRun: string): boolean {
 	if (closing) {
 		return attributeRun.trim() === '';
@@ -244,7 +310,7 @@ function isMarkupBody(closing: boolean, attributeRun: string): boolean {
 	if (attributeRun.trimEnd().endsWith('/')) {
 		return true;
 	}
-	// An attribute run with no assignment in it is prose between angle brackets.
+	// A run of prose with no assignment in it is not a tag.
 	return attributeRun.includes('=');
 }
 
@@ -254,11 +320,12 @@ function scanAngleGroups(text: string): AngleScan {
 	for (const match of text.matchAll(ANGLE_GROUP)) {
 		const body = match[2] ?? '';
 		const attributeRun = body.slice((TAG_NAME_PREFIX.exec(body)?.[0] ?? '').length);
-		if (match[1] !== '/' && attributeRun.trim() === '') {
+		const closing = match[1] === '/';
+		if (!closing && isIdentifierRun(attributeRun)) {
 			scan.bareTag ||= isBareTagInProse(text, match.index, match[0].length);
 			continue;
 		}
-		scan.markup ||= isMarkupBody(match[1] === '/', attributeRun);
+		scan.markup ||= isMarkupBody(closing, attributeRun);
 	}
 
 	return scan;

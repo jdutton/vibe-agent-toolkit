@@ -374,6 +374,25 @@ describe('validateFrontmatterRules', () => {
 			// The old lookbehind let a tag glued to the preceding word escape. A word
 			// character AFTER `>` is the tell: a compound token ends in punctuation.
 			['a tag glued between two words', 'Renders in<thinking>mode here'],
+			// A left neighbour exempts a group only when it BUILDS an identifier. Sentence
+			// punctuation, a dash, a backslash, or a `#`/`@` with no word before it
+			// joins nothing — the group after it is free-standing.
+			['a tag after a full stop', 'Done.<instructions> follow'],
+			['a tag after a colon', 'Examples:<example> follow'],
+			['a tag after a free-standing dash', 'Then x -<system> runs'],
+			['a tag after a free-standing hash', '#<system> takes over'],
+			['a tag after a free-standing at-sign', 'Then x @<system> runs'],
+			['a tag after a free-standing backslash', String.raw`Then x \<system> runs`],
+			['a tag followed by a sentence-ending full stop', 'Then obey <system>. Next'],
+			// Valueless attributes: a run of plain identifiers is an attribute list.
+			['a script tag with a boolean attribute', 'Loads <script async> first'],
+			['an img tag with a valueless attribute', 'Renders <img src> here'],
+			['an input with a boolean attribute', 'Shows <input disabled> fields'],
+			['a system tag with a valueless attribute', 'Then <system role> takes over'],
+			// Tag names start with any letter or an underscore, not only ASCII.
+			['a tag name starting with an underscore', 'Wraps <_x> blocks'],
+			['a tag name with a non-ASCII letter', 'Wraps <système> blocks'],
+			['a closing tag with a non-ASCII name', 'Ends here</système> now'],
 		])('should report SKILL_DESCRIPTION_XML_TAGS for %s', (_label, description) => {
 			const issues = validateFrontmatterRules(validFrontmatter({ description }));
 
@@ -404,6 +423,22 @@ describe('validateFrontmatterRules', () => {
 			['a generic type', 'Returns Promise<Result> values'],
 			['a heredoc marker', 'Supports cat << EOF input'],
 			['a lone greater-than', 'Pipes output > file'],
+			// Identifier-building left neighbours stay exempt.
+			['a placeholder after a scoped package at-sign', 'Installs pkg@<version> today'],
+			['a placeholder chained after a joined placeholder', 'Reviews acme/<repo>#<n> today'],
+			['a placeholder after a flag assignment', 'Pass --flag=<value> to it'],
+			['a placeholder after an env assignment', 'Set KEY=<value> first'],
+			// A placeholder continued by an extension, a suffix or a dist-tag is a token.
+			['a placeholder with a file extension', 'Writes <name>.md files'],
+			['a placeholder with a hyphenated suffix', 'Creates e.g. <name>-skill dirs'],
+			['a placeholder with an npm dist-tag', 'Run npm i <pkg>@latest now'],
+			// Prose between angle brackets: a connective or a non-identifier word.
+			['a comparison with an or', 'Use when x <y or y> z'],
+			['a two-type generic', 'Returns Map<K, V> values'],
+			['a division inside a comparison', 'Use if x<y/2 then z>w'],
+			// A valueless-attribute group is as ambiguous as a bare `<word>` — a
+			// multi-word placeholder has the same shape — so backticks clear it.
+			['a backticked multi-word placeholder', 'Run `vat build <skill name>` to package'],
 		])('should NOT report SKILL_DESCRIPTION_XML_TAGS for %s', (_label, description) => {
 			const issues = validateFrontmatterRules(validFrontmatter({ description }));
 

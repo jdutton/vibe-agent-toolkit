@@ -1,34 +1,17 @@
 ### Added
 
-- **`EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT`** (`info`): a declined symlink whose target resolves
-  outside the project root now carries its own `realization_conditions` code. A SQL query about
-  declined links must ask for both (`code IN ('EXTENT_SYMLINK_NOT_REALIZED',
-  'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT')`).
+- **`EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` and `EXTENT_SYMLINK_TARGET_UNRESOLVED`** (`info`): a
+  declined symlink that resolves outside the project root, or to nothing, carries its own
+  `realization_conditions` code. A SQL query about declined links must ask for all three codes.
 
 - **`vat resources check` reports a `.claude/rules/` file or directory that is a symlink** —
-  built-in `claude-rule-link-unchecked`, code `CLAUDE_RULE_LINK_UNCHECKED` at `warning`. VAT cannot
-  read a rule it reaches only through a link, so its globs and frontmatter go unchecked.
+  built-in `claude-rule-link-unchecked`, `CLAUDE_RULE_LINK_UNCHECKED` at `warning`. For an
+  out-of-root target Claude Code skips the rule too, so vendor those rules into the repository.
   Set `resources.validation.severity.CLAUDE_RULE_LINK_UNCHECKED: ignore` to accept the blind spot.
 
-### Changed
+- **`paths:` globs are read and matched the way Claude Code does it.** A string `paths:` is a
+  comma-separated pattern list; an empty or `**`-only `paths:` makes the rule always-loaded. A glob
+  starting `./` never matches in Claude Code and is reported by `CLAUDE_RULE_GLOB_INERT` — drop the `./`.
 
-- **`CLAUDE_RULE_LINK_UNCHECKED` says which arm it found.** An in-root link's rule is in force and
-  unchecked — replace the link with the file. An out-of-root link's rule is in force nowhere,
-  because Claude Code skips it — vendor those rules into the repository.
-
-- **A rules file's `paths:` is now read the way Claude Code reads it**, which moves the
-  always-loaded total `vat claude context` reports. A string is a pattern list (`paths: src/**`, and
-  `"a/**, b/**"` is two patterns); a `paths:` that normalises to nothing or to `**` alone makes the
-  rule always-loaded, not path-scoped.
-
-### Fixed
-
-- **`CLAUDE_RULE_GLOB_INERT` matches `paths:` globs the way Claude Code does (gitignore rules)**, so
-  it no longer calls a live glob dead. A glob starting `./` never matches in Claude Code and is now
-  reported — drop the `./`.
-
-- **A rules file whose frontmatter is valid YAML but not a mapping is reported** instead of reading
-  as "no frontmatter", which made the rule look unconditional.
-
-- **A symlink whose target differs from the realized file only in case or Unicode form is no longer
-  called unrealized** on a filesystem that opens it.
+- **`CLAUDE_RULE_FRONTMATTER_INVALID` also reports frontmatter that parses to a list or a scalar**
+  rather than a mapping; such a rule has no `paths:` at all.

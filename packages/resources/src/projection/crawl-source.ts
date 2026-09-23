@@ -306,7 +306,8 @@ export interface CrawlSource {
    * `link/CLAUDE.md` Claude Code reads through the link is absent from every row
    * with nothing saying so. `FilesystemExtentContributor` carries each as an
    * declined-link condition row — `EXTENT_SYMLINK_NOT_REALIZED`, or
-   * `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` when the target leaves the root. Both
+   * `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` when the target resolves outside the root, or
+   * `EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to nothing. Both
    * sources report the same set for the same tree, as they do for members.
    */
   readonly symlinks: readonly string[];

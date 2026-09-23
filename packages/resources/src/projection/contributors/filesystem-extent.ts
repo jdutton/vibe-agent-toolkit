@@ -110,7 +110,7 @@
  * It can be re-sourced.
  */
 
-import { existsSync, readdirSync, readlinkSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync } from 'node:fs';
 import { basename, isAbsolute } from 'node:path';
 
 import {
@@ -503,12 +503,16 @@ function unlistableDirectoryCondition(
  * with nothing saying so. `info`, not `warning`: a link is an ordinary thing to
  * commit, and the row is the record that it was not counted, not a defect.
  *
- * ⚠️ Store-sound by construction. The row states the link's TARGET TEXT
- * (classified lexically — inside or outside the root) and whether that target
- * is realized in this same extent. A tracked or untracked-unignored link's
+ * ⚠️ Store-sound by construction. The row states the link's TARGET TEXT and
+ * whether that target is realized in this same extent. A tracked or untracked-unignored link's
  * target text is its blob, so it is in the tree hash the store keys on; whether
  * the target is realized is a fact about this extent's own rows, which are
  * served together with it.
+ *
+ * ⚠️ The CODE is a fact about the HOST too: which of the three a link draws
+ * is decided by where this host resolves it (see {@link hostResolution}), and a
+ * link through a directory link or to a file outside the checkout resolves
+ * wherever that host's filesystem says.
  *
  * ⚠️ One clause is a fact about the HOST, not about the tree, and always was:
  * the message asks the filesystem whether the link opens. It did so already for
@@ -552,24 +556,50 @@ export const EXTENT_SYMLINK_NOT_REALIZED = 'EXTENT_SYMLINK_NOT_REALIZED';
  * a string comparison typecheck cannot see, which is why the set is a constant
  * and not a literal at each site.
  *
- * ⚠️ Lexical, like the clause it replaced: the target text is resolved against
- * the link's directory and compared with the root. A target that escapes the
- * root only through a symlinked PREFIX is still in-root (see
- * {@link resolvedLinkTarget}), and an absolute target spelled for another
- * platform is outside every root this host can see.
+ * ⛔ Decided by where the HOST resolves the link — `realpathSync.native`,
+ * following every link on the way — against the root's own real path, because
+ * that is what Claude Code decides by. It was lexical, and a lexical test called
+ * `.claude/rules -> ../vendor/rules` in-root when `vendor` itself leaves the
+ * root, and `chain.md -> hop.md` in-root when `hop.md` does: two rule sets the
+ * harness skips, reported as in force. The target TEXT is used only to name an
+ * in-root spelling in the message. A link that resolves nowhere takes this code
+ * only when its text already leaves the root — Claude Code loads nothing through
+ * it either way, and where it points is the fact the author can act on;
+ * otherwise it is {@link EXTENT_SYMLINK_TARGET_UNRESOLVED}.
  */
 export const EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT = 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT';
+
+/**
+ * `realization_conditions.code` for a declined link that resolves to NOTHING on
+ * this host — dangling, a loop, or a path the OS refuses to resolve — while its
+ * target text does not leave the root.
+ *
+ * ## Why a third code
+ *
+ * Neither sibling is true of it. {@link EXTENT_SYMLINK_NOT_REALIZED} is read by
+ * `claude-rule-link-unchecked` as "Claude Code loads what the link reaches, so
+ * the rule is in force and unchecked", and a dangling link reaches nothing:
+ * Claude Code reads no rule through it. {@link EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT}
+ * would say "outside the root" about a target spelled inside it. The consequence
+ * a consumer needs — nothing is loaded through this link — is carried by the
+ * code, never by the clause.
+ *
+ * ⚠️ A fact about the host, like the case-folding clause above: a link that
+ * dangles here resolves on a checkout that has the target.
+ */
+export const EXTENT_SYMLINK_TARGET_UNRESOLVED = 'EXTENT_SYMLINK_TARGET_UNRESOLVED';
 
 /**
  * Every `realization_conditions.code` a declined symbolic link is recorded
  * under — the ONE contract each consumer filters on.
  *
  * Declaration order is the order a reader meets them: the general decline
- * first, the out-of-root arm second.
+ * first, the out-of-root arm second, the resolves-nowhere arm third.
  */
 export const DECLINED_SYMLINK_CODES = [
   EXTENT_SYMLINK_NOT_REALIZED,
   EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
+  EXTENT_SYMLINK_TARGET_UNRESOLVED,
 ] as const;
 
 /** One of the codes in {@link DECLINED_SYMLINK_CODES}. */
@@ -582,7 +612,7 @@ const DECLINED_SYMLINK_CODE_SET: ReadonlySet<string> = new Set(DECLINED_SYMLINK_
  * Whether a condition row records a declined symbolic link.
  *
  * @param code - A `realization_conditions.code`
- * @returns True for either member of {@link DECLINED_SYMLINK_CODES}
+ * @returns True for any member of {@link DECLINED_SYMLINK_CODES}
  */
 export function isDeclinedSymlinkCode(code: string): boolean {
   return DECLINED_SYMLINK_CODE_SET.has(code);
@@ -615,9 +645,12 @@ function declinedSymlinkConditions(
   realized: ReadonlySet<string>,
   recordedBy: CrawlSourceKind,
 ): RealizationConditionRow[] {
+  if (links.length === 0) return [];
+  // Once per extent, and only when there is a link to judge.
+  const roots: LinkRoots = { root, realRoot: realRootOf(root) };
   return links.map((link) => {
     const path = toForwardSlash(safePath.relative(root, link));
-    const { code, clause } = linkTarget(link, root, realized, recordedBy);
+    const { code, clause } = linkTarget(link, roots, realized, recordedBy);
     return {
       extentId,
       path,
@@ -646,45 +679,202 @@ interface LinkTargetVerdict {
  * have to find the sentence below in `message`, and one reworded clause would
  * have changed a check's behaviour with no test able to see it.
  *
+ * ⛔ The code comes from {@link hostResolution} alone — one containment
+ * predicate, not a lexical one beside a real one. The target TEXT is read only
+ * to name an in-root spelling, and to place a link that resolves nowhere.
+ *
  * @param link - Absolute, forward-slashed link path
- * @param root - The corpus root
+ * @param roots - The root, as enumerated and as resolved
  * @param realized - Root-relative paths this extent realized
  * @param recordedBy - Which source met the link
  * @returns The row's code and the clause that follows "is a symbolic link"
  */
 function linkTarget(
   link: string,
-  root: string,
+  roots: LinkRoots,
   realized: ReadonlySet<string>,
   recordedBy: CrawlSourceKind,
 ): LinkTargetVerdict {
+  const host = hostResolution(link, roots.realRoot);
   let target: string;
   try {
     target = readlinkSync(link);
   } catch (error) {
     // Gone or unreadable between the enumeration and here: still a declined
-    // link, still recorded — only its target is unknown. A bug is not that.
+    // link, still recorded — only its target text is unknown. A bug is not that.
     if (!isFilesystemAccessError(error)) throw error;
-    return { code: EXTENT_SYMLINK_NOT_REALIZED, clause: unreadableTargetClause(error, recordedBy) };
+    return { code: unnamedTargetCode(host), clause: unreadableTargetClause(error, recordedBy) };
   }
   // A target absolute on SOME platform but not this one — `C:/…` or a UNC
   // `\\host\share\…` committed from Windows, read on POSIX — would resolve here
   // as a relative name under the link's directory and be quoted in full. It
   // names a place outside any root this host can see.
   const foreignAbsolute = isAbsoluteAnyPlatform(target) && !isAbsolute(target);
-  const relative = foreignAbsolute ? undefined : inRootRelative(root, safePath.resolve(link, '..', target));
-  if (relative === undefined) {
-    return {
-      code: EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
-      clause: 'whose target lies outside the project root (not named here), so it is realized nowhere in this projection',
-    };
+  const named = foreignAbsolute ? undefined : inRootRelative(roots, safePath.resolve(link, '..', target));
+  switch (host.kind) {
+    case 'inside': {
+      return { code: EXTENT_SYMLINK_NOT_REALIZED, clause: insideClause(named ?? host.path, host.path, roots, realized) };
+    }
+    case 'outside': {
+      return { code: EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT, clause: escapingClause(named) };
+    }
+    case 'nowhere': {
+      return named === undefined
+        ? { code: EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT, clause: OUTSIDE_UNNAMED_CLAUSE }
+        : { code: EXTENT_SYMLINK_TARGET_UNRESOLVED, clause: unresolvedClause(named) };
+    }
   }
-  const clause = relative === ''
-    ? 'to the project root itself'
-    : `to ${quotedPath(relative)}, ${realizationClause(
-      linkTargetRealization(relative, realized, () => resolvedLinkTarget(link, root)),
-    )}`;
-  return { code: EXTENT_SYMLINK_NOT_REALIZED, clause };
+}
+
+/**
+ * The root as the enumeration spelled it, and as the host resolves it.
+ *
+ * ⛔ Two spellings of ONE directory, each compared only with its own kind: the
+ * target TEXT resolves against the enumerated spelling, a `realpathSync.native`
+ * answer against the real one. Comparing a real path with an unresolved root —
+ * a root handed over through a link, macOS `/var` for `/private/var`, a root
+ * spelled in the wrong case — read every physical target as outside it.
+ */
+interface LinkRoots {
+  /** The corpus root as the enumeration spelled it — every row path is relative to this. */
+  readonly root: string;
+  /** Its real path, resolved once per extent. */
+  readonly realRoot: string;
+}
+
+/**
+ * The root's real path, or its own spelling when the host will not resolve it.
+ *
+ * @param root - The corpus root
+ * @returns Absolute, forward-slashed
+ */
+function realRootOf(root: string): string {
+  try {
+    return toForwardSlash(realpathSync.native(root));
+  } catch (error) {
+    if (!isFilesystemAccessError(error)) throw error;
+    return root;
+  }
+}
+
+/** Where the host says one link leads, following every link on the way. */
+type HostResolution =
+  /** Inside the root, at this root-relative real path (`''` for the root itself). */
+  | { readonly kind: 'inside'; readonly path: string }
+  /** Somewhere outside the root — never named. */
+  | { readonly kind: 'outside' }
+  /** Nowhere: dangling, a loop, or refused. */
+  | { readonly kind: 'nowhere' };
+
+/**
+ * Where the host resolves one link — the ONE containment predicate every code
+ * is chosen by.
+ *
+ * `realpathSync.native` rather than `realpathSync`: only the native call returns
+ * the canonical on-disk spelling, which {@link linkTargetRealization} needs.
+ *
+ * @param link - Absolute, forward-slashed link path
+ * @param realRoot - The root's real path
+ * @returns The resolution
+ */
+function hostResolution(link: string, realRoot: string): HostResolution {
+  let real: string;
+  try {
+    real = toForwardSlash(realpathSync.native(link));
+  } catch (error) {
+    // Dangling, looping or unreadable: the host reaches nothing, which is an
+    // answer rather than a bug. Anything that is not a filesystem refusal is.
+    if (!isFilesystemAccessError(error)) throw error;
+    return { kind: 'nowhere' };
+  }
+  const relative = toForwardSlash(safePath.relative(realRoot, real));
+  return relativeEscapesRoot(relative) ? { kind: 'outside' } : { kind: 'inside', path: relative };
+}
+
+/**
+ * The code for a link whose target text could not be read — the host's verdict
+ * alone. Resolving nowhere is {@link EXTENT_SYMLINK_TARGET_UNRESOLVED}: nothing
+ * was read, so nothing places the target outside the root.
+ *
+ * @param host - Where the host resolves the link
+ * @returns The row's code
+ */
+function unnamedTargetCode(host: HostResolution): DeclinedSymlinkCode {
+  switch (host.kind) {
+    case 'inside': {
+      return EXTENT_SYMLINK_NOT_REALIZED;
+    }
+    case 'outside': {
+      return EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT;
+    }
+    case 'nowhere': {
+      return EXTENT_SYMLINK_TARGET_UNRESOLVED;
+    }
+  }
+}
+
+/** The out-of-root clause when nothing in-root can be named. */
+const OUTSIDE_UNNAMED_CLAUSE =
+  'whose target lies outside the project root (not named here), so it is realized nowhere in this projection';
+
+/**
+ * The clause for a link the host resolves outside the root.
+ *
+ * @param named - The target text's in-root spelling, when it has one
+ * @returns The clause
+ */
+function escapingClause(named: string | undefined): string {
+  if (named === undefined || named === '') return OUTSIDE_UNNAMED_CLAUSE;
+  return `to ${quotedPath(named)}, which resolves outside the project root through a linked path (the`
+    + ' real target is not named here), so it is realized nowhere in this projection';
+}
+
+/**
+ * The clause for a link whose in-root target resolves to nothing on this host.
+ *
+ * @param named - The target text's in-root spelling
+ * @returns The clause
+ */
+function unresolvedClause(named: string): string {
+  const where = named === '' ? 'to the project root' : `to ${quotedPath(named)}`;
+  return `${where}, which resolves to nothing on this host — it does not exist, is a link loop, or`
+    + ' cannot be resolved — so nothing is read through the link and it is realized nowhere in this projection';
+}
+
+/**
+ * The clause for a link the host resolves inside the root.
+ *
+ * @param named - The in-root spelling to name — the target text's, or the
+ *   host's own path when the text cannot be placed in-root
+ * @param real - The host's root-relative resolution
+ * @param roots - The root, as enumerated and as resolved
+ * @param realized - Root-relative paths this extent realized
+ * @returns The clause
+ */
+function insideClause(named: string, real: string, roots: LinkRoots, realized: ReadonlySet<string>): string {
+  if (named === '') return 'to the project root itself';
+  return `to ${quotedPath(named)}, ${realizationClause(linkTargetRealization(
+    named,
+    realized,
+    () => real,
+    () => isSymbolicLink(safePath.resolve(roots.root, named)),
+  ))}`;
+}
+
+/**
+ * Whether a path is itself a symbolic link, by `lstat`.
+ *
+ * @param absolutePath - The path to ask about
+ * @returns True for a link; a path the host will not `lstat` answers true too,
+ *   so it can never be accepted as a respelling of a realized file
+ */
+function isSymbolicLink(absolutePath: string): boolean {
+  try {
+    return lstatSync(absolutePath).isSymbolicLink();
+  } catch (error) {
+    if (!isFilesystemAccessError(error)) throw error;
+    return true;
+  }
 }
 
 /**
@@ -729,8 +919,10 @@ function realizationClause(realization: LinkTargetRealization): string {
         + ` breaks on a byte-exact filesystem; it is realized at ${quotedPath(realization.path)}`;
     }
     case 'unrealized': {
-      return 'which is not realized in this projection either — it does not exist, is gitignored,'
-        + ' is excluded from the crawl, or is itself a link';
+      // The host resolved this link inside the root, so the target exists — a
+      // link that resolves nowhere never reaches this clause.
+      return 'which is not realized in this projection either — it is gitignored, is excluded from'
+        + ' the crawl, or is itself a link';
     }
   }
 }
@@ -757,21 +949,31 @@ function realizationClause(realization: LinkTargetRealization): string {
  * chain can resolve to an entirely different file, and calling the named target
  * realized on that evidence would be a lie about the path the message quotes.
  *
+ * 🪤 **A chain can also resolve to a case variant.** On a case-SENSITIVE
+ * volume, `a.md -> docs/Plain.md` where `docs/Plain.md` is its own link to the
+ * realized `docs/plain.md` resolves to a respelling of the target — and the
+ * target is a link, not a folded spelling of the file: the link opens on a
+ * byte-exact filesystem too. So the respelling is accepted only when the named
+ * target is not itself a link.
+ *
  * @param target - The link's target, root-relative and forward-slashed
  * @param realized - Root-relative paths this extent realized
  * @param realPathOf - The host's resolution of the link, root-relative, or
  *   undefined when it resolves nowhere inside the root
+ * @param targetIsLink - Whether the named target is itself a symbolic link on
+ *   this host; asked only when a respelling is about to be accepted
  * @returns Which of the three answers holds
  */
 export function linkTargetRealization(
   target: string,
   realized: ReadonlySet<string>,
   realPathOf: () => string | undefined,
+  targetIsLink: () => boolean,
 ): LinkTargetRealization {
   if (realized.has(target)) return { kind: 'realized' };
   const real = realPathOf();
   if (real === undefined || real === target || !realized.has(real)) return { kind: 'unrealized' };
-  return foldedKey(real) === foldedKey(target)
+  return foldedKey(real) === foldedKey(target) && !targetIsLink()
     ? { kind: 'realized-as', path: real }
     : { kind: 'unrealized' };
 }
@@ -800,43 +1002,23 @@ type LinkTargetRealization =
   | { readonly kind: 'unrealized' };
 
 /**
- * Where the host says this link actually leads, root-relative.
- *
- * `realpathSync.native` rather than `realpathSync`: only the native call returns
- * the canonical on-disk spelling, which is the whole question. It resolves every
- * link on the path, so a dangling link, a loop or an unreadable directory comes
- * back as no answer at all.
- *
- * @param link - Absolute, forward-slashed link path
- * @param root - The corpus root
- * @returns The root-relative real path, or undefined when there is none inside the root
- */
-function resolvedLinkTarget(link: string, root: string): string | undefined {
-  try {
-    return inRootRelative(root, toForwardSlash(realpathSync.native(link)));
-  } catch (error) {
-    // Dangling, looping or unreadable: the host reaches nothing, which is an
-    // answer rather than a bug. Anything that is not a filesystem refusal is.
-    if (!isFilesystemAccessError(error)) throw error;
-    return undefined;
-  }
-}
-
-/**
- * A link target's root-relative path, or undefined when it lies outside the root.
+ * A link target TEXT's in-root spelling, or undefined when it cannot be placed
+ * inside the root — used to NAME a target, never to choose a code (that is
+ * {@link hostResolution}'s alone).
  *
  * An absolute target can name an in-root file through a linked prefix — macOS
  * spells the temp root `/var/…` and its real path `/private/var/…` — so a
  * target that escapes lexically is asked again with its parent directory
- * resolved. Only the escaping case pays for the syscall, and the real path is
- * only ever used to decide containment: an outside target is never named.
+ * resolved, and compared with the REAL root: a real path set beside an
+ * unresolved root escapes it whatever it names. Only the escaping case pays for
+ * the syscall, and an outside target is never named.
  *
- * @param root - The corpus root (a real path)
+ * @param roots - The root, as enumerated and as resolved
  * @param resolved - The target, resolved against the link's directory
  * @returns Root-relative, forward-slashed; `''` for the root itself
  */
-function inRootRelative(root: string, resolved: string): string | undefined {
-  const lexical = toForwardSlash(safePath.relative(root, resolved));
+function inRootRelative(roots: LinkRoots, resolved: string): string | undefined {
+  const lexical = toForwardSlash(safePath.relative(roots.root, resolved));
   if (!relativeEscapesRoot(lexical)) return lexical;
   let parent: string;
   try {
@@ -848,7 +1030,7 @@ function inRootRelative(root: string, resolved: string): string | undefined {
     if (!isFilesystemAccessError(error)) throw error;
     return undefined;
   }
-  const real = toForwardSlash(safePath.relative(root, safePath.join(parent, basename(resolved))));
+  const real = toForwardSlash(safePath.relative(roots.realRoot, safePath.join(parent, basename(resolved))));
   return relativeEscapesRoot(real) ? undefined : real;
 }
 

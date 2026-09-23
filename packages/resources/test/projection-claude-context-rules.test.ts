@@ -311,7 +311,7 @@ describe('selectRules', () => {
       .toEqual({ kind: MAY_FIRE, pattern, examplePath: SUBJECT_CONFIG });
   });
 
-  it('matches dotfile paths, which is an ASSUMPTION the limits record', () => {
+  it('matches dotfile paths, which gitignore treats as ordinary names', () => {
     const path = '.claude/rules/dot.md';
     const result = selectRules({
       realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
@@ -1165,5 +1165,148 @@ describe('declaresPaths — the load class the harness would give a rule', () =>
   it('strips the trailing `/**` for the load class ONLY — `src/**` still scopes', () => {
     expect(declaresPaths({ paths: 'src/**' })).toBe(true);
     expect(declaredPatterns({ paths: 'src/**' })).toEqual([{ ordinal: 0, pattern: 'src/**' }]);
+  });
+});
+
+/**
+ * One path-scoped rule's selection for a query, over a set of realized files.
+ *
+ * @param rulePath - The rules file's root-relative path
+ * @param paths - Its `paths:` entries
+ * @param files - The realized files beside it
+ * @param queryDir - The query directory
+ * @param queryFile - The query file, or null for a directory query
+ * @returns The admissions the query produced
+ */
+function admissionsFor(
+  rulePath: string,
+  paths: readonly string[],
+  files: readonly string[],
+  queryDir: string,
+  queryFile: string | null,
+): readonly unknown[] {
+  return selectRules({
+    realizations: [queryRealization(rulePath), ...files.map((file) => queryRealization(file))],
+    tags: [scopeTag(rulePath, PATH_SCOPED)], blobs: [blob(rulePath, paths)], queryDir, queryFile,
+  }).rules.map((rule) => rule.admission);
+}
+
+/** A rules file one project below the root, for the re-base cases. */
+const PKG_RULE = 'pkg/.claude/rules/r.md';
+
+/** A glob with a negation after it — the exclusion cases share it. */
+const EXCLUDING = ['src/*.ts', '!src/gen.ts'];
+
+describe('the FILE lane builds its matcher from the globs the harness builds its matcher from', () => {
+  it('⭐ loads a brace-group glob, which the harness expands before matching', () => {
+    // ⛔ The file lane used to compile the DECLARED string, braces and all, so
+    // `{ts,tsx}` was literal text there while the directory lane and the
+    // per-pattern lane expanded it — three lanes, two answers.
+    const glob = 'src/**/*.{ts,tsx}';
+    expect(admissionsFor(TS_RULE, [glob], [], 'src', 'src/a.ts'))
+      .toEqual([{ kind: 'glob-rule', pattern: glob }]);
+    expect(admissionsFor(TS_RULE, [glob], [], 'src', 'src/a.md')).toEqual([]);
+  });
+
+  it('⭐ loads a deep file for `src/**`, which the harness strips to the unanchored `src`', () => {
+    expect(admissionsFor(TS_RULE, ['src/**'], [], PACKAGES_CLI_SRC, SUBJECT_TS))
+      .toEqual([{ kind: 'glob-rule', pattern: 'src/**' }]);
+    // The directory lane already said so; the two lanes now agree.
+    expect(admissionsFor(TS_RULE, ['src/**'], [SUBJECT_TS], PACKAGES_CLI_SRC, null))
+      .toEqual([{ kind: COVERS_DIR, pattern: 'src/**' }]);
+  });
+});
+
+describe('a negation pattern is judged by what it EXCLUDES', () => {
+  it('⭐ calls a negation matched when it takes a file the rule would otherwise load back out', () => {
+    // ⛔ Evaluated alone, `!src/gen.ts` matches nothing, so it was reported
+    // inert — and CLAUDE_RULE_GLOB_INERT told the author to delete a working
+    // exclusion.
+    const result = evaluateRulePatterns({
+      isIgnored: NOTHING_IGNORED, rulePath: ROOT_RULE, patterns: declared(...EXCLUDING),
+      files: corpusOf('src/a.ts', 'src/gen.ts'),
+    });
+
+    expect(result.map((entry) => [entry.status, entry.witnessPath]))
+      .toEqual([['matched', 'src/a.ts'], ['matched', 'src/gen.ts']]);
+  });
+
+  it('calls a negation inert when it excludes nothing VAT can see', () => {
+    expect(statusesOf(EXCLUDING, corpusOf('src/a.ts'))).toEqual(['matched', 'inert']);
+  });
+
+  it('calls a negation inert when nothing BEFORE it would have loaded the file', () => {
+    // The file exists, but the only positive pattern never reached it, so the
+    // negation takes nothing out.
+    expect(statusesOf(['lib/*.ts', '!src/gen.ts'], corpusOf('src/gen.ts', 'lib/a.ts')))
+      .toEqual(['matched', 'inert']);
+  });
+
+  it('calls a negation over gitignored territory gitignored, not inert', () => {
+    const oracle = ignoresBeneath('gen');
+    const result = evaluateRulePatterns({
+      isIgnored: oracle.isIgnored, rulePath: ROOT_RULE, patterns: declared('src/**', '!gen/**'),
+      files: corpusOf('src/a.ts'),
+    });
+
+    expect(result.map((entry) => entry.status)).toEqual(['matched', 'gitignored']);
+  });
+
+  it('calls a budget-refused negation unevaluated', () => {
+    expect(statusesOf(['src/**', `!${OVER_BUDGET_PATTERN}`], corpusOf('src/a.ts')))
+      .toEqual(['matched', 'unevaluated']);
+  });
+});
+
+describe('the DIRECTORY lane answers for the whole rule, negations included', () => {
+  it('⭐ never calls a rule that excludes the directory it includes covers-dir', () => {
+    expect(admissionsFor(TS_RULE, ['docs/**', '!docs/**'], ['docs/a.md'], 'docs', null)).toEqual([]);
+    // The positive control: without the negation it covers the directory.
+    expect(admissionsFor(TS_RULE, ['docs/**'], ['docs/a.md'], 'docs', null))
+      .toEqual([{ kind: COVERS_DIR, pattern: 'docs/**' }]);
+  });
+
+  it('⭐ never names an EXCLUDED file as the ∃ witness', () => {
+    expect(admissionsFor(TS_RULE, EXCLUDING, ['src/gen.ts', 'src/z.ts'], 'src', null))
+      .toEqual([{ kind: MAY_FIRE, pattern: 'src/*.ts', examplePath: 'src/z.ts' }]);
+    expect(admissionsFor(TS_RULE, EXCLUDING, ['src/gen.ts'], 'src', null)).toEqual([]);
+  });
+
+  it('declines ∀ at the ROOT when a later negation carves something out', () => {
+    // ∃, never ∀. The witness is whichever loaded file sorts first — here the
+    // rules file itself — and never one under the excluded `docs`.
+    const [admission] = admissionsFor(TS_RULE, ['**/*', '!docs/**'], ['docs/a.md', 'src/a.ts'], '', null);
+    expect(admission).toMatchObject({ kind: MAY_FIRE, pattern: '**/*' });
+    expect((admission as { examplePath: string }).examplePath).not.toMatch(/^docs\//);
+    expect(admissionsFor(TS_RULE, ['**/*'], ['docs/a.md'], '', null))
+      .toEqual([{ kind: COVERS_DIR, pattern: '**/*' }]);
+  });
+});
+
+describe('a NESTED rule re-bases a pattern without changing what its prefix means', () => {
+  it('⭐ anchors a leading `/` to the nested project, not to a doubled slash', () => {
+    const result = evaluateRulePatterns({
+      isIgnored: NOTHING_IGNORED, rulePath: PKG_RULE, patterns: declared('/src/lib/**'),
+      files: corpusOf('pkg/src/lib/a.ts'),
+    });
+    expect(result.map((entry) => entry.status)).toEqual(['matched']);
+    expect(admissionsFor(PKG_RULE, ['/src/lib/**'], [], 'pkg/src/lib', 'pkg/src/lib/a.ts'))
+      .toEqual([{ kind: 'glob-rule', pattern: '/src/lib/**' }]);
+  });
+
+  it('⭐ keeps a leading `./` dead under the nested base, as it is at the root', () => {
+    const result = evaluateRulePatterns({
+      isIgnored: NOTHING_IGNORED, rulePath: PKG_RULE, patterns: declared('./docs/**'),
+      files: corpusOf('pkg/docs/a.md'),
+    });
+    expect(result.map((entry) => entry.status)).toEqual(['inert']);
+    expect(admissionsFor(PKG_RULE, ['./docs/**'], [], 'pkg/docs', 'pkg/docs/a.md')).toEqual([]);
+  });
+
+  it('⭐ keeps a leading `!` at the FRONT, so a nested exclusion still excludes', () => {
+    const paths = ['lib/x/*.ts', '!lib/x/gen.ts'];
+    expect(admissionsFor(PKG_RULE, paths, [], 'pkg/lib/x', 'pkg/lib/x/gen.ts')).toEqual([]);
+    expect(admissionsFor(PKG_RULE, paths, [], 'pkg/lib/x', 'pkg/lib/x/a.ts'))
+      .toEqual([{ kind: 'glob-rule', pattern: 'lib/x/*.ts' }]);
   });
 });

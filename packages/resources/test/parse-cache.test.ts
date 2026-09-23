@@ -810,6 +810,54 @@ describe('ParseCache fail-soft writes', () => {
       expect(fresh.stats.writeFailures).toBe(1);
     },
   );
+
+  it.skipIf(isWindows)('memoizes an ownership-unsafe shard as refused for the run', async () => {
+    // The other half of the memo's contract: an unsafe shard is unsafe for the
+    // run, so making it safe mid-run is not re-asked. Pins that the eviction
+    // below is scoped to an errno, not to every `false`.
+    const cacheDir = safePath.join(suite.dir(), 'cache');
+    const cache = suite.makeCache({ cacheDir });
+    const keyed = keyedFromText(SIMPLE_DOC);
+    const shardDir = safePath.join(cacheDir, keyed.key.slice(-SHARD_LENGTH));
+    await fs.mkdir(shardDir, { recursive: true, mode: MODE_WORLD_WRITABLE });
+    await fs.chmod(shardDir, MODE_WORLD_WRITABLE);
+
+    expect(await cache.set(keyed, freshParse(keyed))).toBe(false);
+
+    await fs.chmod(shardDir, MODE_RW_OWNER);
+
+    expect(await cache.set(keyed, freshParse(keyed))).toBe(false);
+    expect(cache.stats.writeFailures).toBe(2);
+
+    // Positive control: the shard IS safe now, to a cache that never judged it.
+    expect(await suite.makeCache({ cacheDir }).set(keyed, freshParse(keyed))).toBe(true);
+  });
+
+  it.each([
+    { syscall: 'mkdir', code: 'EMFILE' },
+    { syscall: 'mkdir', code: 'EAGAIN' },
+    { syscall: 'lstat', code: 'EBUSY' },
+  ] as const)(
+    'retries a shard whose $syscall failed with a transient $code, instead of refusing it for the run',
+    async ({ syscall, code }) => {
+      // 🪤 A descriptor shortage mid-run is not a verdict about the directory.
+      // Memoizing it as `false` turned one EMFILE into every later entry in that
+      // shard going uncached for the whole run. (`lstat` runs only on POSIX.)
+      if (syscall === 'lstat' && isWindows) return;
+      const cache = suite.makeCache({ cacheDir: safePath.join(suite.dir(), 'cache') });
+      const keyed = keyedFromText(SIMPLE_DOC);
+      const refusal = Object.assign(new Error(`${code}: transient`), { code });
+      const spy = vi.spyOn(fs, syscall).mockRejectedValueOnce(refusal);
+      try {
+        expect(await cache.set(keyed, freshParse(keyed))).toBe(false);
+        expect(await cache.set(keyed, freshParse(keyed))).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(cache.stats.writeFailures).toBe(1);
+      expect(await cache.get(keyed)).not.toBeNull();
+    },
+  );
 });
 
 describe('ParseCache enable toggle', () => {

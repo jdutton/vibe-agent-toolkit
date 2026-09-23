@@ -356,7 +356,7 @@ describe('the stated limits', () => {
       .toContain('applies whether or not the unknown-size, skipped and pruned counters are zero');
   });
 
-  it('states 23 limits covering all four directions', () => {
+  it('states 22 limits covering all four directions', () => {
     // Spec §11's fifteen, plus the nested-rule trigger D-B6 introduced, plus the
     // unresolved-conditions collapse a reviewer confirmed after that, plus the
     // four the final review found missing — the token estimator, the unfollowed
@@ -368,7 +368,7 @@ describe('the stated limits', () => {
     // grows or shrinks, which is what caught a draft that reused a published
     // slot. It cannot see an assumption made elsewhere in the lane and never
     // written down — see the by-name assertions below for what it is paired with.
-    // The id SET rather than a count of 23: a count still reads 23 when a
+    // The id SET rather than a count of 22: a count still reads 22 when a
     // draft reuses a published slot, which is the very change this caught.
     expect(CLAUDE_CONTEXT_LIMITS.map((limit) => limit.id)).toEqual([
       'claude-md-excludes',
@@ -392,7 +392,6 @@ describe('the stated limits', () => {
       'cliff-scope',
       'token-estimate',
       'root-claude-md-order',
-      'dot-matching',
       'nested-rule-trigger',
       'nested-rule-glob-base',
     ]);

@@ -102,10 +102,11 @@ SELECT path FROM resource_realizations
 `link/CLAUDE.md` Claude Code reads through the link counts in no size, chain or rules-pattern
 query. It is not silently absent: each link is a `realization_conditions` row —
 `EXTENT_SYMLINK_NOT_REALIZED` when the target is in-root, naming it and whether it is realized, or
-`EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` when the target leaves the root, which is never named. Ask for
-both codes or the out-of-root links are missing from the answer:
+`EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` when the target resolves outside the root (never named), or
+`EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to nothing. Ask for all three codes or links
+are missing from the answer:
 `SELECT path, message FROM realization_conditions
-  WHERE code IN ('EXTENT_SYMLINK_NOT_REALIZED', 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT')`
+  WHERE code IN ('EXTENT_SYMLINK_NOT_REALIZED', 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT', 'EXTENT_SYMLINK_TARGET_UNRESOLVED')`
 lists them.
 
 **Read `population` in the output before you trust a timing.** It is `derived` or `store` — whether
@@ -134,8 +135,10 @@ cheap and is never itself queried.
 ### `claude_rule_patterns` — what each `.claude/rules` glob scopes
 
 One row per `paths:` glob of one rules file: `pattern`, `literalPrefix` (its glob-free leading
-segments, so "does this rule cover everything under `docs/`?" is a prefix comparison needing no
-glob engine), `witnessPath` (the first file it matched, or null) and `status`.
+segments), `witnessPath` (the first file it matched, or null) and `status`. ⚠️ `literalPrefix` is
+NOT a match bound: Claude Code matches with gitignore rules after stripping a trailing `/**`, so a
+pattern with no other slash (`src/**`) matches at any depth (`packages/cli/src/x.ts`). Use it for
+prefix containment only when the stripped pattern still contains a `/`.
 
 ⚠️ **Four statuses, and the last two are traps.** `matched` and `inert` are the plain cases.
 `unevaluated` means VAT never ran the matcher for that ONE pattern, because it is the entry that
@@ -218,8 +221,9 @@ A project that declares nothing still gets the **default set** — today three c
   first check cannot see them.
 - `claude-rule-link-unchecked`, emitting [`CLAUDE_RULE_LINK_UNCHECKED`](../../../../docs/validation-codes.md#claude_rule_link_unchecked)
   at `warning` for a rules file or rules directory that is a **symlink**. VAT realizes no link
-  path, so such a rule has no pattern rows and no blob at all and the two checks above pass on it
-  while Claude Code loads it.
+  path, so such a rule has no pattern rows and no blob at all and the two checks above pass on it.
+  Claude Code loads it when the link's target stays inside the root and skips it when the target
+  resolves outside; the finding says which.
 
 Config only **adds** to that set or moves a severity in it; a directory with no
 `vibe-agent-toolkit.config.yaml` runs exactly the same built-ins, which is what makes "default-on"

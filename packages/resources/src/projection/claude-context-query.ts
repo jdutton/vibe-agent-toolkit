@@ -783,7 +783,7 @@ function importsFromAlwaysRoot(
  *
  * A declined-link row (either code {@link isDeclinedSymlinkCode} accepts) is
  * base-extent and so tree-global too, and is scoped the same way — see
- * {@link linkBearsOn}. ⛔ Both codes, never one: an out-of-root link is recorded
+ * {@link linkBearsOn}. ⛔ Every declined-link code, never one: an out-of-root link is recorded
  * under its own code and is exactly as absent from the answer as any other.
  *
  * @param projection - The populated projection, for `realization_conditions`

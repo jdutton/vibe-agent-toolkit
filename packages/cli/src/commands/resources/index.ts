@@ -304,8 +304,8 @@ Asking a built-in's question yourself:
 ${builtinSqlTwins()}
 
   Note \`status = 'inert'\` and not \`status != 'matched'\`: 'unevaluated'
-  means vat never ran the matcher (the rule's paths: list blew the expansion
-  budget), and 'gitignored' means the glob covers ignored files vat never
+  means vat never ran the matcher for that one pattern (it exhausted the
+  expansion budget; the rule's other patterns are still evaluated), and 'gitignored' means the glob covers ignored files vat never
   reads but Claude Code does. Neither status means the glob is dead.
 
 ${DERIVED_RELATIONS_HELP}

@@ -20,21 +20,26 @@
  * needs it rather than speculatively. That second package arrived:
  * `packages/cli`'s `projectionStoreSelected()` reads the same `VAT_CACHE` the
  * `resources` parse cache does, and two independent readings of one variable is
- * the defect, not the fix. The four consumers today:
+ * the defect, not the fix. The consumers today:
  *
  * | Caller | Variable | Reads `undefined` as | Why |
  * |---|---|---|---|
- * | `link-auth/resolve-token.ts` | `VAT_LINKAUTH_ALLOW_COMMAND` | **deny** | gates a capability — fail closed |
+ * | `resources/link-auth/resolve-token.ts` | `VAT_LINKAUTH_ALLOW_COMMAND` | **deny** | gates a capability — fail closed |
  * | `resources/parse-cache.ts` | `VAT_CACHE` | cache stays on | gates a cache — an unreadable value must not silently change behaviour |
  * | `cli/utils/projection-store.ts` | `VAT_CACHE` | not a veto | same variable, same reading, one implementation |
  * | `cli/utils/projection-store.ts` | `VAT_PROJECTION_STORE` | not a veto | the projection store is ON by default; only an explicit off spelling (or an empty value, which that call site handles before asking) turns it off |
+ * | `resources/parse-dispatcher.ts` | `VAT_PARSE_POOL` | pool stays on | gates a measured speed-up — only an explicit off spelling disables it; a typo must not silently cost it |
  *
  * Same parser, different safe sides, each chosen at its own call site. That is
  * the contract; do not move a default in here.
  *
- * 🔑 The last two rows are the interesting pair: one variable defaults OFF and
- * the other defaults ON, and both are still read through this one function,
- * because what it answers is not "is this on" but "did the operator say no".
+ * 🔑 The two `projection-store.ts` rows are the interesting pair: one variable
+ * defaults OFF and the other defaults ON, and both are still read through this
+ * one function, because what it answers is not "is this on" but "did the
+ * operator say no".
+ *
+ * The table is asserted both ways against every `parseEnvBoolean(` call in
+ * every package's `src` by `test/env-flag.test.ts`.
  */
 
 const TRUE_SPELLINGS: ReadonlySet<string> = new Set(['1', 'true', 'yes', 'y', 'on']);

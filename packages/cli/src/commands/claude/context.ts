@@ -591,7 +591,7 @@ function documentFor(
  * @param documents - The answers, in requested order
  * @returns The text rendering, newline-terminated
  */
-function renderEnvelopeText(
+export function renderEnvelopeText(
   documents: readonly (ContextAnswerDocument | ContextUnknownDocument)[],
 ): string {
   const bodies = documents.map((document) =>
@@ -998,7 +998,7 @@ function renderAnswerText(document: ContextAnswerDocument): string {
     ...rowSection('Loaded at launch (always)', document.rows, 'always'),
     ...rowSection('Loaded on demand', document.rows, 'on-demand'),
     ...listSection('Conditions', document.conditions.map(conditionLine)),
-    ...listSection('Rules whose paths: list exceeded the vendor pattern budget', document.overBudgetRules),
+    ...listSection('Rules with a paths: pattern the vendor expansion budget refused (their other patterns still apply)', document.overBudgetRules),
     ...listSection('Imported files no importer could be attributed to', document.unattributedImports),
     ...discoverySection(document.discoverable),
   ];

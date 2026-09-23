@@ -100,23 +100,23 @@
  * The harness normalises `paths:`, **strips a trailing `/**` from every
  * pattern**, and then hands the survivors to `node-ignore`:
  * `ignore().add(globs).ignores(relativePath)`. So the dialect is gitignore's,
- * not picomatch's, and this module compiles the same library over the same
- * stripped strings. The differences that reach a rules file, each pinned by a
- * test in `projection-claude-context-rules.test.ts`:
+ * and this module compiles the same library over the same stripped strings.
+ * The shapes that surprise a reader used to shell-glob dialects, each pinned by
+ * a test in `projection-claude-context-rules.test.ts`:
  *
- * | shape | gitignore (harness, and now here) | picomatch (what this used to do) |
- * |---|---|---|
- * | `src/**` vs `packages/cli/src/index.ts` | matches — stripped to `src`, which has no slash and is therefore UNANCHORED | no match |
- * | a matched directory | drags its whole subtree, so `a/*` matches `a/b/c` | no match |
- * | `README.md` vs `docs/atlas/README.md` | matches at any depth | no match |
- * | a slash in the middle (`packages/**\/ports*`) | ANCHORED to the root | anchored too, but `**` spans differently |
- * | a leading `/` | anchors and is otherwise dropped | a root-absolute path |
- * | a trailing `/` | matches a DIRECTORY only | matches nothing |
- * | a leading `!` | negates, within the rule's whole list | a literal, or picomatch's own negation |
- * | `{a,b}` | LITERAL braces — gitignore has no brace expansion, so the harness expands them ITSELF, before the strip | expanded by the matcher |
- * | `+(a|b)` | literal — no extglobs | an extglob |
- * | `./docs/**` | matches NOTHING: `./` is not gitignore syntax | matches `docs/…` |
- * | a dotfile | ordinary; there is no `dot` option to set | needs `dot: true` |
+ * | shape | what the harness (and this module) does |
+ * |---|---|
+ * | `src/**` vs `packages/cli/src/index.ts` | matches — stripped to `src`, which has no slash and is therefore UNANCHORED |
+ * | a matched directory | drags its whole subtree, so `a/*` matches `a/b/c` |
+ * | `README.md` vs `docs/atlas/README.md` | matches at any depth |
+ * | a slash in the middle (`packages/**\/ports*`) | ANCHORED to the root |
+ * | a leading `/` | anchors and is otherwise dropped |
+ * | a trailing `/` | matches a DIRECTORY only |
+ * | a leading `!` | excludes what the patterns before it matched — but never beneath a matched directory |
+ * | `{a,b}` | gitignore has no brace expansion, so the harness expands braces ITSELF, before the strip |
+ * | `+(a|b)` | literal — no extglobs |
+ * | `./docs/**` | matches NOTHING: `./` is not gitignore syntax |
+ * | a dotfile | an ordinary name; there is no `dot` option |
  *
  * ⛔ A pattern `node-ignore` cannot compile — `src/a[/`, an unterminated
  * character class — THROWS at match time, not at `add()` time. The harness asks
@@ -185,12 +185,14 @@ const UNIVERSAL_TAIL = '/**';
 const ROOT_COVERING_GLOBS = new Set(['**', '**/*']);
 
 /**
- * Characters that make a path segment a pattern rather than a literal.
+ * Characters that end {@link literalPrefix}'s walk: a segment holding one is
+ * not a literal path segment the author wrote.
  *
- * `!` is here even though it only negates in leading position: a `paths:` list
- * containing a negation is a predicate this module's OR-over-patterns does not
- * model, and refusing to call such a pattern universal is the conservative
- * direction. `(` and `)` cover picomatch's extglobs.
+ * Its sole use. `!` is here so a negation's `literalPrefix` column is empty
+ * rather than a `!`-prefixed non-path, and {@link territoryIgnored} strips the
+ * `!` itself before asking. `{` and `}` stop the walk at an unexpanded brace
+ * group; `(` and `)` are literal to gitignore and are here only so the column
+ * never reports a segment that merely looks like a directory.
  */
 const GLOB_META = /[*?[\]{}()!]/;
 
@@ -235,11 +237,15 @@ export interface RuleSelectionResult {
  * while meaning something other than inertness, so folding either into `inert`
  * reports a blind spot as a defect. See `docs/architecture/zones.md` §4.
  *
- * - `matched` — some realized file matches; `witnessPath` names it.
- * - `inert` — evaluated against every candidate and matched none. The defect
- *   signal: a glob naming a moved, renamed or never-created path.
- * - `unevaluated` — the rule's `paths:` list blew the shared expansion or byte
- *   budget, so no matcher ran. One over-budget entry refuses the whole list.
+ * - `matched` — some realized file matches; `witnessPath` names it. For a
+ *   NEGATION (`!…`), some realized file the preceding patterns load is excluded
+ *   by it, and `witnessPath` names that file.
+ * - `inert` — evaluated against every candidate and matched none (for a
+ *   negation: excluded none). The defect signal: a glob naming a moved, renamed
+ *   or never-created path.
+ * - `unevaluated` — THIS pattern exhausted the running expansion or byte
+ *   budget, so no matcher ran for it. Refusal is per pattern: its siblings are
+ *   evaluated normally.
  * - `gitignored` — evaluated and matched nothing VAT can see, and its
  *   territory is gitignored ({@link territoryIgnored}). VAT never realizes an
  *   ignored file while the harness reads the filesystem, so the glob may well
@@ -256,10 +262,10 @@ interface RulePatternEvaluation {
   /** The pattern exactly as declared — never normalised. */
   readonly pattern: string;
   /**
-   * The longest path every match must live at or below.
-   *
-   * ⛔ A wholly-literal pattern yields ITSELF, a FILE rather than a directory —
-   * see {@link literalPrefix}. Read it as "at or below", inclusively.
+   * The glob-free leading segments of `pattern` as written (leading `./`
+   * removed); may be empty. Not a match bound: after the harness strips a
+   * trailing `/**`, a pattern with no other slash matches at any depth. Use it
+   * for prefix containment only when the stripped pattern contains a `/`.
    */
   readonly literalPrefix: string;
   /** The file that proves the pattern live, or null for every other state. */
@@ -439,13 +445,23 @@ interface CompiledForm {
   /** The form as spelled — what {@link territoryIgnored} asks its prefix about. */
   readonly form: string;
   /**
+   * The globs the harness adds for this form: expanded, `/**`-stripped, re-based.
+   *
+   * ⛔ What {@link CompiledRule.loads} is built from — never {@link form}. The
+   * declared spelling still carries its braces and its `/**`, and a matcher
+   * compiled over it is not the one the harness builds: `src/**\/*.{ts,tsx}`
+   * would match nothing and `src/**` would stay anchored. A budget-REFUSED
+   * pattern contributes its unexpanded-but-stripped self, as the harness does.
+   */
+  readonly globs: readonly string[];
+  /**
    * The subtree every match lives at or below, or `''` when there is no bound.
    *
-   * ⛔ `''` is the ORDINARY answer now, not the corner case: under gitignore a
+   * ⛔ `''` is the ORDINARY answer, not the corner case: under gitignore a
    * pattern with no slash matches at any depth, so `pom.xml` and `src` bound
    * nothing and must be swept against the whole file list. A bound taken from
    * the declared string — which is what {@link literalPrefix} returns — would
-   * prune away every match of exactly the patterns FIX 1 exists to find.
+   * prune away every match of exactly the unanchored patterns.
    */
   readonly bound: string;
   /** Does this form reach `path`? A trailing `/` asks about a directory. */
@@ -458,6 +474,13 @@ interface CompiledPattern {
   /** The author's spelling, reported verbatim and never normalised. */
   readonly pattern: string;
   readonly refused: boolean;
+  /**
+   * Is this entry a gitignore NEGATION (`!…`)?
+   *
+   * A negation reaches nothing on its own, so its liveness is what it takes
+   * back out of the patterns before it — see {@link negationWitness}.
+   */
+  readonly negation: boolean;
   /** The root form, plus the re-based one when the rule is nested. */
   readonly forms: readonly CompiledForm[];
   /** Does some form of this pattern cover the corpus ROOT, and so every path? */
@@ -500,12 +523,23 @@ function compileRule(
     entry,
     expanded[index] ?? { globs: [], refused: false },
   ));
-  // ⚠️ A refused pattern contributes its UNEXPANDED self, which is what the
-  // harness adds: braces are literal gitignore characters there, so it matches
-  // essentially nothing without being silently absent from the rule's list.
-  const all = patterns.flatMap((pattern) => pattern.forms.map((form) => form.form));
-  const loads = gitignoreMatcher([...new Set(all)]);
-  return { patterns, loads };
+  return { patterns, loads: listMatcher(patterns) };
+}
+
+/**
+ * One `ignore()` instance over every glob of every given pattern, in order.
+ *
+ * The harness's own shape. ⚠️ A refused pattern contributes its UNEXPANDED
+ * (but stripped) self, which is what the harness adds: braces are literal
+ * gitignore characters there, so it matches essentially nothing without being
+ * silently absent from the rule's list.
+ *
+ * @param patterns - Compiled patterns, in declaration order
+ * @returns A predicate over root-relative paths
+ */
+function listMatcher(patterns: readonly CompiledPattern[]): (path: string) => boolean {
+  const all = patterns.flatMap((pattern) => pattern.forms.flatMap((form) => form.globs));
+  return gitignoreMatcher([...new Set(all)]);
 }
 
 /**
@@ -527,6 +561,7 @@ function compilePattern(
     const globs = expansion.globs.map((glob) => rebase(glob, under));
     return {
       form: rebase(declared.pattern, under),
+      globs,
       bound: matchBound(globs),
       reaches: gitignoreMatcher(globs),
     };
@@ -535,6 +570,7 @@ function compilePattern(
     ordinal: declared.ordinal,
     pattern: declared.pattern,
     refused: expansion.refused,
+    negation: declared.pattern.startsWith('!'),
     forms,
     coversRoot: expansion.globs.some((glob) => ROOT_COVERING_GLOBS.has(glob)),
   };
@@ -543,12 +579,29 @@ function compilePattern(
 /**
  * One glob under one base — itself at the root, or below a nested rule's project.
  *
+ * Re-basing prefixes the nested project directory and changes nothing else the
+ * prefix of the glob means:
+ *
+ * - **A leading `!`** stays at the FRONT (`!x` → `!pkg/x`). Spliced after the
+ *   base it would become a literal `!` in a path segment, and the exclusion
+ *   would silently become an inclusion of nothing.
+ * - **A leading `/`** anchors to the base it is resolved against, so it is
+ *   absorbed by the base (`/src` → `pkg/src`) rather than doubled (`pkg//src`).
+ * - **A leading `./`** is KEPT. The harness never matches it at the root —
+ *   `./` is not gitignore syntax — and stripping it here would make the same
+ *   glob live under the nested base while dead under the root one. Kept, the
+ *   re-based form (`pkg/./docs`) is dead too, which is the root's answer.
+ *
  * @param glob - The glob, or the declared pattern it came from
  * @param under - The nested rule's project directory, or null for the root
  * @returns The re-based glob
  */
 function rebase(glob: string, under: string | null): string {
-  return under === null ? glob : `${under}/${withoutLeadingDotSegments(glob)}`;
+  if (under === null) return glob;
+  const negated = glob.startsWith('!');
+  const body = negated ? glob.slice(1) : glob;
+  const relative = body.startsWith('/') ? body.slice(1) : body;
+  return `${negated ? '!' : ''}${under}/${relative}`;
 }
 
 /**
@@ -724,7 +777,8 @@ export function evaluateRulePatterns(input: {
   readonly files: readonly string[];
   readonly isIgnored: (path: string) => boolean;
 }): readonly RulePatternEvaluation[] {
-  return compileRule(input.rulePath, input.patterns).patterns.map((compiled) => {
+  const { patterns } = compileRule(input.rulePath, input.patterns);
+  return patterns.map((compiled, index) => {
     const { ordinal, pattern } = compiled;
     const prefix = literalPrefix(pattern);
     // ⚠️ No file is swept on this branch. That is the claim `unevaluated`
@@ -733,9 +787,11 @@ export function evaluateRulePatterns(input: {
     if (compiled.refused) {
       return { ordinal, pattern, literalPrefix: prefix, witnessPath: null, status: 'unevaluated' };
     }
-    const witness = compiled.forms
-      .map((form) => firstMatchUnder(form, '', input.files))
-      .find((match) => match !== undefined);
+    const witness = compiled.negation
+      ? negationWitness(patterns, index, input.files)
+      : compiled.forms
+        .map((form) => firstMatchUnder(form, '', input.files))
+        .find((match) => match !== undefined);
     if (witness !== undefined) {
       return { ordinal, pattern, literalPrefix: prefix, witnessPath: witness, status: 'matched' };
     }
@@ -748,6 +804,40 @@ export function evaluateRulePatterns(input: {
       status: ignored ? 'gitignored' : 'inert',
     };
   });
+}
+
+/**
+ * The first file a NEGATION pattern takes back out of the rule, if any.
+ *
+ * ⛔ Evaluated alone, `!src/gen.ts` matches nothing — `ignore()` over a lone
+ * negation ignores no path — so the positive-pattern question reports every
+ * negation `inert`, and CLAUDE_RULE_GLOB_INERT tells the author to delete a
+ * working exclusion. A negation's liveness is what it EXCLUDES: a file the
+ * rule's preceding patterns load and the list through this negation does not.
+ * None ⇒ it excludes nothing VAT can see, which is genuinely dead.
+ *
+ * Swept only over each form's own territory ({@link matchBound} reads a
+ * negation's bound off its positive half): a file outside it cannot be one the
+ * negation took out.
+ *
+ * @param patterns - The rule's compiled patterns, in declaration order
+ * @param index - The negation's position among them
+ * @param files - {@link corpusFiles}' output
+ * @returns The excluded witness, or undefined
+ */
+function negationWitness(
+  patterns: readonly CompiledPattern[],
+  index: number,
+  files: readonly string[],
+): string | undefined {
+  const before = listMatcher(patterns.slice(0, index));
+  const through = listMatcher(patterns.slice(0, index + 1));
+  const excluded = (path: string): boolean => before(path) && !through(path);
+  for (const form of patterns[index]?.forms ?? []) {
+    const witness = firstMatchUnder({ bound: form.bound, reaches: excluded }, '', files);
+    if (witness !== undefined) return witness;
+  }
+  return undefined;
 }
 
 /**
@@ -782,7 +872,10 @@ const TERRITORY_PROBE = 'vat-territory-probe';
  * @param isIgnored - The tree's ignore oracle
  * @returns True when a file the form could match would be gitignored
  */
-function territoryIgnored(form: string, isIgnored: (path: string) => boolean): boolean {
+function territoryIgnored(spelled: string, isIgnored: (path: string) => boolean): boolean {
+  // A negation's territory is its positive half's: `!gen/**` excludes files
+  // under `gen`, and whether git can see them is the same question.
+  const form = spelled.startsWith('!') ? spelled.slice(1) : spelled;
   const prefix = literalPrefix(form);
   if (prefix === '') return false;
   const wholeForm = withoutLeadingDotSegments(form);
@@ -864,9 +957,14 @@ function namingPattern(rule: CompiledRule, path: string): string {
 /**
  * A directory query's answer for one path-scoped rule: ∀, ∃, or absent.
  *
- * ∀ is tested first and across every pattern before any ∃ work, because it is
- * the stronger claim and free — a rule that covers the directory is reported as
- * covering it even when a second pattern would also have produced a witness.
+ * ∀ is tested first, before any ∃ work, because it is the stronger claim and
+ * free — a rule that covers the directory is reported as covering it even when a
+ * pattern would also have produced a witness.
+ *
+ * ⛔ Both halves answer for the WHOLE rule, negations included. Asked per
+ * pattern, `["docs/**", "!docs/**"]` covered `docs` while loading nothing
+ * there, and `["src/*.ts", "!src/gen.ts"]` could name `src/gen.ts` — the one
+ * file the rule excludes — as the file that proves it fires.
  *
  * @param rule - The rule's compiled patterns
  * @param queryDir - Root-relative directory of the query
@@ -878,12 +976,14 @@ function directoryAdmission(
   queryDir: string,
   dirFiles: readonly string[],
 ): RuleAdmission | undefined {
-  const covering = rule.patterns.find((pattern) => coversDirectory(pattern, queryDir));
-  if (covering !== undefined) return { kind: 'glob-rule-covers-dir', pattern: covering.pattern };
+  const covering = coveringPattern(rule, queryDir);
+  if (covering !== undefined) return { kind: 'glob-rule-covers-dir', pattern: covering };
 
   for (const pattern of rule.patterns) {
     for (const form of pattern.forms) {
-      const examplePath = firstMatchUnder(form, queryDir, dirFiles);
+      // The form's own bound still prunes; the whole list decides the witness.
+      const loadedHere = { bound: form.bound, reaches: (path: string) => form.reaches(path) && rule.loads(path) };
+      const examplePath = firstMatchUnder(loadedHere, queryDir, dirFiles);
       if (examplePath !== undefined) {
         return { kind: 'glob-rule-may-fire', pattern: pattern.pattern, examplePath };
       }
@@ -893,26 +993,32 @@ function directoryAdmission(
 }
 
 /**
- * Does this one pattern match EVERY path under `queryDir`?
+ * The pattern to name when the whole rule matches EVERY path under `queryDir`.
  *
- * ⭐ EXACT now, where it used to be a deliberately narrow guess. Gitignore
- * carries a matched DIRECTORY's whole subtree — `node-ignore`'s own `_t` returns
- * an ignored ancestor's verdict before consulting the path itself, so not even a
- * `!` can re-include underneath one — which makes *"does the matcher match the
- * query directory"* the ∀ question rather than an approximation of it. The old
- * shape-matching (`a glob-free prefix plus /**`) declined `docs` and `src/`
- * and every unanchored spelling of the same claim.
+ * ⭐ EXACT for every directory but the root. Gitignore carries a matched
+ * DIRECTORY's whole subtree — `node-ignore`'s own `_t` returns an ignored
+ * ancestor's verdict before consulting the path itself, so not even a `!` can
+ * re-include underneath one — which makes *"does the rule's whole list match
+ * the query directory"* the ∀ question rather than an approximation of it. The
+ * whole list, because a later `!` can un-match the directory itself.
  *
  * The corpus ROOT is the one directory that cannot be asked, and
- * {@link ROOT_COVERING_GLOBS} says what is accepted there and why.
+ * {@link ROOT_COVERING_GLOBS} says what is accepted there and why — and only
+ * when no NEGATION follows the covering pattern, since one would carve some of
+ * the tree back out.
  *
- * @param pattern - One compiled `paths:` entry
+ * @param rule - The compiled rule
  * @param queryDir - Root-relative directory of the query
- * @returns True when every path under `queryDir` matches
+ * @returns The covering pattern's spelling, or undefined when the rule does not cover it
  */
-function coversDirectory(pattern: CompiledPattern, queryDir: string): boolean {
-  if (queryDir === '') return pattern.coversRoot;
-  return pattern.forms.some((form) => form.reaches(`${queryDir}/`));
+function coveringPattern(rule: CompiledRule, queryDir: string): string | undefined {
+  if (queryDir === '') {
+    const index = rule.patterns.findIndex((pattern) => pattern.coversRoot);
+    if (index < 0 || rule.patterns.slice(index + 1).some((pattern) => pattern.negation)) return undefined;
+    return rule.patterns[index]?.pattern;
+  }
+  const directory = `${queryDir}/`;
+  return rule.loads(directory) ? namingPattern(rule, directory) : undefined;
 }
 
 /**
@@ -928,7 +1034,7 @@ function coversDirectory(pattern: CompiledPattern, queryDir: string): boolean {
  * @returns The witness path, or undefined when the form matches nothing here
  */
 function firstMatchUnder(
-  form: CompiledForm,
+  form: Pick<CompiledForm, 'bound' | 'reaches'>,
   queryDir: string,
   dirFiles: readonly string[],
 ): string | undefined {
@@ -954,7 +1060,7 @@ function firstMatchUnder(
  * wholly literal pattern yields ITSELF — a FILE path, not a directory — because
  * `.` is not in {@link GLOB_META}.
  *
- * ⛔ This is NOT a matching bound, and calling it one is the bug FIX 1 closed.
+ * ⛔ This is NOT a matching bound.
  * Under gitignore a pattern with no slash matches at ANY depth, so
  * `literalPrefix('README.md')` is `README.md` while the pattern's real reach is
  * the whole tree. {@link matchBound} is the bound; this is the `literalPrefix`
@@ -983,7 +1089,7 @@ function literalPrefix(pattern: string): string {
  * column and {@link territoryIgnored}'s question — never for matching. The
  * harness's matcher does NOT accept `./docs` against `docs/guide.md` (`./` is
  * not gitignore syntax; measured against the binary's own `node-ignore`), so a
- * `./`-prefixed glob is genuinely dead there and this module now reports it so.
+ * `./`-prefixed glob is genuinely dead there and this module reports it so.
  * Stripping it for the match would hide a real defect; stripping it here keeps
  * the territory question pointed at the directory the author meant. The
  * reported `pattern` stays the author's spelling either way.
