@@ -567,14 +567,37 @@ interface CompiledRule {
   readonly soloLoads: (index: number) => (path: string) => boolean;
 }
 
+/** Compiled rules by declared list, then by base (`null` spelled as the key below). */
+const compiledMemo = new WeakMap<readonly DeclaredPattern[], Map<string, CompiledRule>>();
+const ROOT_BASE_KEY = String.fromCodePoint(0);
+
 /**
- * Compile one rule's declared patterns under one base.
+ * Compile one rule's declared patterns under one base — once per list and base:
+ * the result is a pure function of both, so a hit can never be stale.
  *
  * @param under - The directory the globs are read under ({@link nestedRuleParent})
  * @param declared - Its `paths:` entries, in declaration order
  * @returns The per-pattern matchers and the whole-list one
  */
 function compileRule(
+  under: string | null,
+  declared: readonly DeclaredPattern[],
+): CompiledRule {
+  let byBase = compiledMemo.get(declared);
+  if (byBase === undefined) {
+    byBase = new Map();
+    compiledMemo.set(declared, byBase);
+  }
+  const key = under ?? ROOT_BASE_KEY;
+  let rule = byBase.get(key);
+  if (rule === undefined) {
+    rule = compileRuleUncached(under, declared);
+    byBase.set(key, rule);
+  }
+  return rule;
+}
+
+function compileRuleUncached(
   under: string | null,
   declared: readonly DeclaredPattern[],
 ): CompiledRule {
@@ -1579,12 +1602,25 @@ export function harnessPaths(frontmatter: Readonly<Record<string, unknown>>): st
  * number one declaration one way — a second numbering would surface as a
  * stored row describing a predicate the query never applies.
  *
+ * Memoized on the `claudePaths` array, so every query over one projection hands
+ * {@link compileRule} the same list and a rule compiles once, not once per
+ * query directory.
+ *
  * @param paths - The blob's `claudePaths`, or null/undefined when it has none or no blob
  * @returns The declared patterns in declaration order, or an empty list
  */
-export function declaredPatterns(paths: readonly string[] | null | undefined): DeclaredPattern[] {
-  return (paths ?? []).map((pattern, ordinal) => ({ ordinal, pattern }));
+export function declaredPatterns(paths: readonly string[] | null | undefined): readonly DeclaredPattern[] {
+  if (paths === null || paths === undefined) return NO_PATTERNS;
+  let declared = declaredMemo.get(paths);
+  if (declared === undefined) {
+    declared = paths.map((pattern, ordinal) => ({ ordinal, pattern }));
+    declaredMemo.set(paths, declared);
+  }
+  return declared;
 }
+
+const NO_PATTERNS: readonly DeclaredPattern[] = [];
+const declaredMemo = new WeakMap<readonly string[], readonly DeclaredPattern[]>();
 
 /**
  * `C()`: one `paths:` value flattened to the harness's pattern list.
@@ -1670,8 +1706,8 @@ export interface DeclaredPattern {
 function pathsOf(
   row: ResourceRealizationRow,
   blobByKey: ReadonlyMap<string, BlobRow>,
-): DeclaredPattern[] {
-  return row.contentKey === null ? [] : declaredPatterns(blobByKey.get(row.contentKey)?.claudePaths);
+): readonly DeclaredPattern[] {
+  return row.contentKey === null ? NO_PATTERNS : declaredPatterns(blobByKey.get(row.contentKey)?.claudePaths);
 }
 
 /**
