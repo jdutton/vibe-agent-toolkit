@@ -942,10 +942,13 @@ async function readStoredExtent(
     // what they claimed and the tree is asked whether it is still so. See
     // `unlistableRowStillHolds` for the staleness this closes.
     if (!unlistableRowsStillHold(extent.realizationConditions, options.root)) return undefined;
-    // Same shape for a declined link: its code is where the HOST resolves it,
-    // through targets no tree hash covers (a gitignored `build/gen.md`), so a
-    // changed code is a miss. See `declinedSymlinkRowsStillHold`.
-    if (!declinedSymlinkRowsStillHold(extent.realizationConditions, options.root)) return undefined;
+    // Same shape for a declined link: its row — code and message — is where
+    // the HOST resolves it, through targets no tree hash covers (a gitignored
+    // `build/gen.md`, an out-of-root hop), so a changed row is a miss. See
+    // `declinedSymlinkRowsStillHold`.
+    if (!declinedSymlinkRowsStillHold(extent.realizationConditions, extent.resourceRealizations, options.root)) {
+      return undefined;
+    }
     return extent;
   } finally {
     // Filed whether this hit or missed, and that is the point: a hit runs no
@@ -1013,13 +1016,12 @@ export async function readStoredRealizations(
  * tree — the gate that turns a key match into a real hit.
  *
  * One of two such gates; the other is `declinedSymlinkRowsStillHold`, which
- * re-resolves every declined-link row (any of the three codes
+ * re-derives every declined-link row (any of the three codes
  * `EXTENT_SYMLINK_NOT_REALIZED` / `_TARGET_OUTSIDE_ROOT` / `_TARGET_UNRESOLVED`)
- * because its code depends on targets the tree hash does not cover. Only its
- * CODE is re-checked: a row whose `readlink` failed transiently keeps saying
- * "whose target could not be read" until the tree hash changes — `info`, and
- * repairing a clause is not worth a second syscall per link. The remaining
- * condition rows describe content the tree hash already covers. One probe per
+ * and compares the WHOLE row, code and message, because both depend on targets
+ * the tree hash does not cover — the message names the in-root path a link
+ * resolves through, which an out-of-root hop can move under an unchanged code.
+ * The remaining condition rows describe content the tree hash already covers. One probe per
  * stored refusal, not per path — so a tree with none pays one filter over the
  * conditions table and no syscall.
  *

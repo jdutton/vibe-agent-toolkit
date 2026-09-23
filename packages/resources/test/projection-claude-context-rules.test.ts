@@ -760,13 +760,13 @@ describe('evaluateRulePatterns — gitignored territory', () => {
     expect(result.map((entry) => entry.status)).toEqual(['inert']);
   });
 
-  it('leaves a prefix that climbs out of the tree to the oracle, which owns the root', () => {
-    const oracle = ignoresBeneath('dist');
+  it('calls a prefix that climbs out of the tree inert without asking the oracle', () => {
+    // A `..` segment is dead by syntax — no path the harness asks has one — so
+    // the territory question is never reached.
     const result = evaluateRulePatterns({
-      isIgnored: oracle.isIgnored, rulePath: ROOT_RULE, patterns: declared('../sibling/**'), files: corpusOf(SUBJECT_TS),
+      isIgnored: neverAsked, rulePath: ROOT_RULE, patterns: declared('../sibling/**'), files: corpusOf(SUBJECT_TS),
     });
 
-    expect(oracle.asked).toHaveLength(1);
     expect(result.map((entry) => entry.status)).toEqual(['inert']);
   });
 
@@ -1397,5 +1397,91 @@ describe('a root-anchored glob locates its territory without the anchor', () => 
       rulePath: ROOT_RULE, patterns: declared('/generated/api.ts'), files: corpusOf(SUBJECT_TS),
     });
     expect(asked).toEqual(['generated/api.ts']);
+  });
+});
+
+describe('a NESTED rule reads an UNANCHORED glob at any depth under its project', () => {
+  it('⭐ lets an unanchored nested negation exclude a file below a subdirectory — file lane', () => {
+    // ⛔ The re-base anchored `!gen.ts` to `!pkg/gen.ts`, but the harness reading
+    // this rule against its own base matches `gen.ts` at any depth under `pkg`,
+    // so `pkg/sub/gen.ts` is loaded under NEITHER base.
+    const paths = ['sub/*.ts', '!gen.ts'];
+    expect(admissionsFor(PKG_RULE, paths, [], 'pkg/sub', 'pkg/sub/gen.ts')).toEqual([]);
+    expect(admissionsFor(PKG_RULE, paths, [], 'pkg/sub', 'pkg/sub/a.ts'))
+      .toEqual([{ kind: 'glob-rule', pattern: 'sub/*.ts' }]);
+  });
+
+  it('⭐ calls that unanchored nested negation matched, never inert — witness lane', () => {
+    const result = evaluateRulePatterns({
+      isIgnored: NOTHING_IGNORED, rulePath: PKG_RULE, patterns: declared('sub/*.ts', '!gen.ts'),
+      files: corpusOf('pkg/sub/a.ts', 'pkg/sub/gen.ts'),
+    });
+    expect(result.map((entry) => [entry.status, entry.witnessPath]))
+      .toEqual([['matched', 'pkg/sub/a.ts'], ['matched', 'pkg/sub/gen.ts']]);
+  });
+
+  it('⭐ judges a negation PER BASE, so one that excludes under the nested base is live', () => {
+    // The root base's `*.ts` still loads `pkg/sub/gen.ts` (`!sub/gen.ts` is
+    // anchored at the root and misses it), but under the nested base the
+    // negation takes it out. Judged against the union of bases it read inert.
+    const result = evaluateRulePatterns({
+      isIgnored: NOTHING_IGNORED, rulePath: PKG_RULE, patterns: declared('*.ts', '!sub/gen.ts'),
+      files: corpusOf('pkg/a.ts', 'pkg/sub/gen.ts'),
+    });
+    expect(result.map((entry) => [entry.status, entry.witnessPath]))
+      .toEqual([['matched', 'pkg/a.ts'], ['matched', 'pkg/sub/gen.ts']]);
+    expect(admissionsFor(PKG_RULE, ['*.ts', '!sub/gen.ts'], [], 'pkg/sub', 'pkg/sub/gen.ts'))
+      .toEqual([{ kind: 'glob-rule', pattern: '*.ts' }]);
+  });
+
+  it('keeps the positive control: an unanchored nested positive still reaches a deep file', () => {
+    expect(admissionsFor(PKG_RULE, ['gen.ts'], [], 'pkg/a/b', 'pkg/a/b/gen.ts'))
+      .toEqual([{ kind: 'glob-rule', pattern: 'gen.ts' }]);
+  });
+});
+
+describe('a glob dead by SYNTAX is inert before its territory is asked about', () => {
+  it('⭐ calls a leading-`./` glob over gitignored territory inert, never gitignored', () => {
+    // ⛔ The harness matches nothing with `./dist/**` or `/./dist/**`, so
+    // `gitignored` sent the author to their .gitignore for a glob that cannot
+    // fire anywhere. The oracle is never asked: the syntax already answered.
+    const result = evaluateRulePatterns({
+      isIgnored: neverAsked, rulePath: ROOT_RULE,
+      patterns: declared('./dist/**', '/./dist/**', '//dist/**', '!./dist/**'),
+      files: corpusOf(SUBJECT_TS),
+    });
+    expect(result.map((entry) => entry.status)).toEqual(['inert', 'inert', 'inert', 'inert']);
+  });
+
+  it('keeps the positive control: the live spelling over the same territory is gitignored', () => {
+    const oracle = ignoresBeneath('dist');
+    const result = evaluateRulePatterns({
+      isIgnored: oracle.isIgnored, rulePath: ROOT_RULE, patterns: declared('dist/**'),
+      files: corpusOf(SUBJECT_TS),
+    });
+    expect(result.map((entry) => entry.status)).toEqual(['gitignored']);
+  });
+});
+
+/** A positive the negation after it cancels, then a later positive that wins. */
+const CANCELLED_THEN_LOADED = ['src/gen.ts', '!src/gen.ts', '*.ts'];
+
+describe('the pattern NAMED is the one that loads the file under last-match-wins', () => {
+  it('⭐ names the LAST matching positive — file lane', () => {
+    expect(admissionsFor(TS_RULE, CANCELLED_THEN_LOADED, [], 'src', 'src/gen.ts'))
+      .toEqual([{ kind: 'glob-rule', pattern: '*.ts' }]);
+  });
+
+  it('⭐ names the LAST matching positive — directory lane', () => {
+    expect(admissionsFor(TS_RULE, CANCELLED_THEN_LOADED, ['src/gen.ts'], 'src', null))
+      .toEqual([{ kind: MAY_FIRE, pattern: '*.ts', examplePath: 'src/gen.ts' }]);
+  });
+
+  it('⭐ covers the ROOT when the LAST covering pattern follows the negation', () => {
+    expect(admissionsFor(TS_RULE, ['**', '!x', '**'], ['a.ts'], '', null))
+      .toEqual([{ kind: COVERS_DIR, pattern: '**' }]);
+    // The control: with nothing re-covering after it, the negation declines ∀.
+    expect(admissionsFor(TS_RULE, ['**', '!x'], ['a.ts'], '', null)[0])
+      .toMatchObject({ kind: MAY_FIRE });
   });
 });

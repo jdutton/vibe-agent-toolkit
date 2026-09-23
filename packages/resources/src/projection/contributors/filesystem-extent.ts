@@ -124,7 +124,6 @@ import {
   transientRefusalClause,
 } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
-import { normalizePath } from '@vibe-agent-toolkit/utils/fs';
 import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import {
@@ -141,7 +140,7 @@ import type {
   ExtentContribution,
   ExtentContributor,
 } from '../contributor.js';
-import { crawlSourceFor, type CrawlSource, type CrawlSourceKind } from '../crawl-source.js';
+import { crawlSourceFor, gitExtentSelected, type CrawlSource, type CrawlSourceKind } from '../crawl-source.js';
 import type { ProjectionBase } from '../projection.js';
 import { collectRealization, type ContentDemand } from '../realizations.js';
 
@@ -503,16 +502,14 @@ function unlistableDirectoryCondition(
  * with nothing saying so. `info`, not `warning`: a link is an ordinary thing to
  * commit, and the row is the record that it was not counted, not a defect.
  *
- * ⚠️ The TEXT is store-sound; the CODE is not, and is re-checked on every hit.
- * The row states the link's target text and whether that target is realized in
- * this same extent. A tracked or untracked-unignored link's target text is its
- * blob, so it is in the tree hash the store keys on; whether the target is
- * realized is a fact about this extent's own rows, which are served with it.
- * Which of the three codes a link draws is decided by where this host resolves
- * it (see {@link hostResolution}) — through a gitignored target, a directory
- * link or a file outside the checkout, none of which the tree hash covers — so
- * the store driver re-resolves every stored link row on a hit and treats a
- * changed code as a miss ({@link declinedSymlinkRowsStillHold}).
+ * ⚠️ Neither the code nor the message is store-sound, so the whole row is
+ * re-derived on every hit. Which of the three codes a link draws is decided by
+ * where this host resolves it (see {@link hostResolution}) — through a
+ * gitignored target, a directory link or a file outside the checkout, none of
+ * which the tree hash covers — and the message names the in-root path the host
+ * resolved through, which an out-of-root hop can move under an unchanged code.
+ * So the store driver re-derives every stored link row on a hit and treats any
+ * difference as a miss ({@link declinedSymlinkRowsStillHold}).
  *
  * ⚠️ One clause is a fact about the HOST, not about the tree, and always was:
  * the message asks the filesystem whether the link opens. It did so already for
@@ -648,19 +645,39 @@ function declinedSymlinkConditions(
   if (links.length === 0) return [];
   // Once per extent, and only when there is a link to judge.
   const roots: LinkRoots = { root, realRoot: realRootOf(root) };
-  return links.map((link) => {
-    const path = toForwardSlash(safePath.relative(root, link));
-    const { code, clause } = linkTarget(link, roots, realized, recordedBy);
-    return {
-      extentId,
-      path,
-      code,
-      severity: 'info',
-      message: `'${path}' is a symbolic link ${clause}. ${NOT_COUNTED_CLAUSE}`,
-      resourceId: null,
-      ...CONDITION_WITHOUT_REFERENCE,
-    };
-  });
+  return links.map((link) => declinedSymlinkRow(link, roots, extentId, realized, () => recordedBy));
+}
+
+/**
+ * The ONE derivation of a declined link's row — shared by the enumeration that
+ * writes it and the store hit that re-checks it
+ * ({@link declinedSymlinkRowsStillHold}), so the two cannot drift apart.
+ *
+ * @param link - Absolute, forward-slashed link path
+ * @param roots - The root, as enumerated and as resolved
+ * @param extentId - This extent
+ * @param realized - Root-relative paths this extent realized
+ * @param recordedBy - Which source met the link; asked only when its target text is unreadable
+ * @returns The row
+ */
+function declinedSymlinkRow(
+  link: string,
+  roots: LinkRoots,
+  extentId: string,
+  realized: ReadonlySet<string>,
+  recordedBy: () => CrawlSourceKind,
+): RealizationConditionRow {
+  const path = toForwardSlash(safePath.relative(roots.root, link));
+  const { code, clause } = linkTarget(link, roots, realized, recordedBy);
+  return {
+    extentId,
+    path,
+    code,
+    severity: 'info',
+    message: `'${path}' is a symbolic link ${clause}. ${NOT_COUNTED_CLAUSE}`,
+    resourceId: null,
+    ...CONDITION_WITHOUT_REFERENCE,
+  };
 }
 
 /** Where one link points: the code that carries the verdict, and the prose that states it. */
@@ -686,21 +703,21 @@ interface LinkTargetVerdict {
  * @param link - Absolute, forward-slashed link path
  * @param roots - The root, as enumerated and as resolved
  * @param realized - Root-relative paths this extent realized
- * @param recordedBy - Which source met the link
+ * @param recordedBy - Which source met the link; asked only when its target text is unreadable
  * @returns The row's code and the clause that follows "is a symbolic link"
  */
 function linkTarget(
   link: string,
   roots: LinkRoots,
   realized: ReadonlySet<string>,
-  recordedBy: CrawlSourceKind,
+  recordedBy: () => CrawlSourceKind,
 ): LinkTargetVerdict {
   const host = hostResolution(link, roots.realRoot);
   const text = readTargetText(link);
   const code = declinedCode(host, link, roots, text);
   // Gone or unreadable between the enumeration and here: still a declined
   // link, still recorded — only its target text is unknown.
-  if (!text.readable) return { code, clause: unreadableTargetClause(text.error, recordedBy) };
+  if (!text.readable) return { code, clause: unreadableTargetClause(text.error, recordedBy()) };
   const named = namedInRoot(link, roots, text.target);
   switch (host.kind) {
     case 'inside': {
@@ -754,9 +771,8 @@ function namedInRoot(link: string, roots: LinkRoots, target: string): string | u
 }
 
 /**
- * The ONE decision of a declined link's code — shared by the enumeration that
- * writes the row and the store hit that re-checks it
- * ({@link declinedSymlinkRowsStillHold}), so the two cannot drift apart.
+ * The ONE decision of a declined link's code, reached only through
+ * {@link declinedSymlinkRow}.
  *
  * The host's resolution decides. The target text only places a link that
  * resolves nowhere: outside the root when the text was readable and leaves it.
@@ -775,7 +791,7 @@ function declinedCode(host: HostResolution, link: string, roots: LinkRoots, text
 }
 
 /**
- * Whether every stored declined-link row still carries the code the host gives
+ * Whether every stored declined-link row is still the row the host derives for
  * its link NOW — the gate beside {@link unlistableRowStillHolds} that turns a
  * key match into a real hit.
  *
@@ -784,32 +800,53 @@ function declinedCode(host: HostResolution, link: string, roots: LinkRoots, text
  * hash does not cover — a gitignored target (`.claude/rules/gen.md ->
  * ../../build/gen.md` before and after a build) or anything outside the root.
  * A served row would then say Claude Code loads nothing through a link it now
- * loads a rule through, or the reverse. The cost is one `realpath` per stored
- * link ROW (plus a `readlink` for one that resolves nowhere), never per path;
- * a tree with no declined link pays one filter.
+ * loads a rule through, or the reverse.
  *
- * Only the CODE is compared. The clause also says whether an in-root target is
- * realized, and realization of a non-ignored path is what the tree hash covers.
+ * ⛔ The whole row is compared — code AND message — never the code alone. The
+ * message names what the host resolved: the in-root spelling a target reaches
+ * through an out-of-root hop (`a.md -> <outside>/hop/a.md` with `hop -> docsA`
+ * names `docsA/a.md`), and whether that path is realized. Retarget `hop` to
+ * `docsB` and the code is unchanged while the message is stale; a code-only
+ * re-check served it. Re-deriving through {@link declinedSymlinkRow} — the very
+ * function that wrote the row — is what keeps the two from drifting.
+ *
+ * The cost is one derivation per stored link ROW (a `realpath` and a `readlink`,
+ * plus a `realpath` of the target's nearest ancestor when its text leaves the
+ * root lexically), never per path; building the realized-path set is one pass
+ * over the stored rows, in memory. A tree with no declined link pays one filter.
+ *
+ * ⚠️ Which source recorded the link is asked of the same selector the crawl
+ * uses ({@link gitExtentSelected}), and only for a link whose target text cannot
+ * be read — the one clause that depends on it.
  *
  * @param conditions - The stored extent's `realization_conditions`
+ * @param realizations - The stored extent's `resource_realizations` — what
+ *   "realized" means in the re-derived message
  * @param root - The corpus root the rows' paths are relative to
- * @returns True when every declined-link row's code still holds
+ * @returns True when every declined-link row still holds exactly
  */
-export function declinedSymlinkRowsStillHold(conditions: readonly RealizationConditionRow[], root: string): boolean {
+export function declinedSymlinkRowsStillHold(
+  conditions: readonly RealizationConditionRow[],
+  realizations: readonly ResourceRealizationRow[],
+  root: string,
+): boolean {
   const rows = conditions.filter((row) => isDeclinedSymlinkCode(row.code));
   if (rows.length === 0) return true;
   const roots: LinkRoots = { root, realRoot: realRootOf(root) };
+  const recordedBy = (): CrawlSourceKind => (gitExtentSelected(root) ? 'git' : 'filesystem');
+  const realizedByExtent = new Map<string, Set<string>>();
+  for (const { extentId, path } of realizations) {
+    const paths = realizedByExtent.get(extentId) ?? new Set<string>();
+    paths.add(path);
+    realizedByExtent.set(extentId, paths);
+  }
   return rows.every((row) => {
+    const realized = realizedByExtent.get(row.extentId) ?? new Set<string>();
     const link = toForwardSlash(safePath.resolve(root, row.path));
-    const host = hostResolution(link, roots.realRoot);
-    // The text is read only where it can change the code.
-    const text = host.kind === 'nowhere' ? readTargetText(link) : UNREAD_TARGET;
-    return declinedCode(host, link, roots, text) === row.code;
+    const fresh = declinedSymlinkRow(link, roots, row.extentId, realized, recordedBy);
+    return fresh.code === row.code && fresh.message === row.message;
   });
 }
-
-/** Stands in for a target text the decision does not need. */
-const UNREAD_TARGET: TargetText = { readable: false, error: undefined };
 
 /**
  * The root as the enumeration spelled it, and as the host resolves it.
@@ -1093,10 +1130,11 @@ type LinkTargetRealization =
  *
  * An absolute target can name an in-root file through a linked prefix — macOS
  * spells the temp root `/var/…` and its real path `/private/var/…` — so a
- * target that escapes lexically is asked again with its parent directory
- * resolved, and compared with the REAL root: a real path set beside an
- * unresolved root escapes it whatever it names. Only the escaping case pays for
- * the syscall, and an outside target is never named.
+ * target that escapes lexically is asked again with its nearest EXISTING
+ * ancestor resolved ({@link realThroughNearestAncestor}), and compared with the
+ * REAL root: a real path set beside an unresolved root escapes it whatever it
+ * names. Only the escaping case pays for the syscalls, and an outside target is
+ * never named.
  *
  * @param roots - The root, as enumerated and as resolved
  * @param resolved - The target, resolved against the link's directory
@@ -1105,18 +1143,42 @@ type LinkTargetRealization =
 function inRootRelative(roots: LinkRoots, resolved: string): string | undefined {
   const lexical = toForwardSlash(safePath.relative(roots.root, resolved));
   if (!relativeEscapesRoot(lexical)) return lexical;
-  let parent: string;
-  try {
-    // An absent parent comes back as its own spelling, which still escapes.
-    parent = normalizePath(safePath.resolve(resolved, '..'));
-  } catch (error) {
-    // A directory the OS will not resolve: it cannot be shown to be inside
-    // the root, so it is reported as outside, and never named.
-    if (!isFilesystemAccessError(error)) throw error;
-    return undefined;
-  }
-  const real = toForwardSlash(safePath.relative(roots.realRoot, safePath.join(parent, basename(resolved))));
+  const realSpelling = realThroughNearestAncestor(resolved);
+  if (realSpelling === undefined) return undefined;
+  const real = toForwardSlash(safePath.relative(roots.realRoot, realSpelling));
   return relativeEscapesRoot(real) ? undefined : real;
+}
+
+/**
+ * A path with its nearest EXISTING ancestor directory resolved by the host and
+ * the missing tail re-appended as spelled.
+ *
+ * 🪤 Resolving only the immediate parent is not enough: a dangling
+ * `<alias-of-root>/nodir/x.md` has no `nodir`, so the parent came back in its
+ * alias spelling, escaped the real root, and a target spelled inside the root
+ * was called outside it. The path's own last segment is never resolved — the
+ * message names the spelling the link wrote, not where a further link leads.
+ *
+ * @param path - Absolute path
+ * @returns The respelled path, or `undefined` when an ancestor exists but the
+ *   OS will not resolve it — it cannot be shown to be inside the root, so it is
+ *   reported as outside, and never named
+ */
+function realThroughNearestAncestor(path: string): string | undefined {
+  const tail = [basename(path)];
+  let directory = safePath.resolve(path, '..');
+  for (;;) {
+    try {
+      return safePath.join(realpathSync.native(directory), ...tail);
+    } catch (error) {
+      if (!isFilesystemAccessError(error)) throw error;
+      if (!isPathAbsentError(error)) return undefined;
+    }
+    const up = safePath.resolve(directory, '..');
+    if (up === directory) return undefined;
+    tail.unshift(basename(directory));
+    directory = up;
+  }
 }
 
 /**

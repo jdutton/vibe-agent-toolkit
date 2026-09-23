@@ -153,3 +153,39 @@ describe.skipIf(CAPABILITY === null)('a root reached through a symbolic link', (
     }
   });
 });
+
+/**
+ * A dangling target spelled through an ALIAS of the root, whose parent directory
+ * is missing too. Only the nearest EXISTING ancestor can be resolved; the tail
+ * beneath it is re-appended. Resolving only the immediate parent left the alias
+ * spelling in place, which escapes the real root lexically — and a target
+ * spelled inside the root was called outside it.
+ */
+describe.skipIf(CAPABILITY === null)('a dangling target spelled through a root alias with a missing parent', () => {
+  let real: string | undefined;
+  let aliasHome: string | undefined;
+
+  afterAll(() => {
+    removeSymlinkFixture(real);
+    removeSymlinkFixture(aliasHome);
+  });
+
+  it('is unresolved and named in-root, not outside the root', async () => {
+    if (CAPABILITY === null) throw new Error('unreachable — the suite is skipped without the capability');
+    real = plantSymlinkFixture({ prefix: 'vat-symlink-nodir-', files: [PLAIN], links: [] }).root;
+    aliasHome = plantSymlinkFixture({ prefix: 'vat-symlink-nodiralias-', files: ['placeholder.md'], links: [] }).root;
+    const alias = `${aliasHome}/alias`;
+    createSymlink(CAPABILITY, real, alias, 'dir');
+    // `nodir/` exists nowhere, so the immediate parent cannot be resolved.
+    createSymlink(CAPABILITY, `${alias}/nodir/x.md`, safePath.join(real, 'alias-nodir.md'));
+    // Control: the same dangling target spelled through the REAL root.
+    createSymlink(CAPABILITY, `${real}/nodir/x.md`, safePath.join(real, 'real-nodir.md'));
+
+    const rowAt = await walkConditionAt(real);
+
+    for (const path of ['alias-nodir.md', 'real-nodir.md']) {
+      expect(rowAt(path)?.code, path).toBe(EXTENT_SYMLINK_TARGET_UNRESOLVED);
+      expect(rowAt(path)?.message, path).toContain("to 'nodir/x.md', which resolves to nothing on this host");
+    }
+  });
+});

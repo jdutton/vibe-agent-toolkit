@@ -59,11 +59,12 @@ const CEILINGS: Readonly<Record<string, number>> = {
   // +1 each: `clean-build.ts` is the build script of `utils` itself and
   // cannot import the wrappers from a `dist/` it has not produced.
   'local/no-fs-mkdirSync': 5,
-  // +3: two in `claude-context-rules.ts` split `paths:` globs, whose separator
-  // is the gitignore dialect's `/` on every host — and a `\` there is an
-  // ESCAPE, so normalising it would change the glob; one in `builtin-checks.ts`
+  // One in `claude-context-rules.ts` (`globSegments`, its only split) splits
+  // `paths:` globs, whose separator is the gitignore dialect's `/` on every
+  // host — and a `\` there is an ESCAPE, so normalising it would change the
+  // glob; one in `builtin-checks.ts`
   // splits a `realization_conditions.path`, forward-slashed by `relativize()`.
-  'local/no-hardcoded-path-split': 12,
+  'local/no-hardcoded-path-split': 10,
   // `path-core.ts`: `toForwardSlashAnyPlatform` is the converter the rule's
   // autofix writes, so its own body is the one hand-rolled replace.
   'local/no-manual-path-normalize': 1,

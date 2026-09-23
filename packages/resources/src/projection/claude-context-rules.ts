@@ -489,6 +489,15 @@ interface CompiledPattern {
   readonly forms: readonly CompiledForm[];
   /** Does some form of this pattern cover the corpus ROOT, and so every path? */
   readonly coversRoot: boolean;
+  /**
+   * Can no path the harness asks about ever match this pattern, by its
+   * SPELLING alone? See {@link deadBySyntax}.
+   *
+   * ⛔ Decided before the territory question, never after it: `./dist/**` over a
+   * gitignored `dist/` is dead everywhere, and calling it `gitignored` sent the
+   * author to their `.gitignore` for a glob that cannot fire in any checkout.
+   */
+  readonly deadBySyntax: boolean;
 }
 
 /**
@@ -509,6 +518,16 @@ interface CompiledRule {
   readonly patterns: readonly CompiledPattern[];
   /** Does the whole list admit `path`? Negations included, in declaration order. */
   readonly loads: (path: string) => boolean;
+  /**
+   * The same question under ONE base each, indexed like every pattern's
+   * {@link CompiledPattern.forms}; {@link loads} is their OR.
+   *
+   * Exposed because two questions are per-base by nature: which pattern loaded
+   * a file ({@link namingPattern}) and what a negation took out
+   * ({@link negationWitness}). Asked of the OR, a nested-base exclusion hid
+   * behind the root base still loading the file.
+   */
+  readonly byBase: readonly ((path: string) => boolean)[];
 }
 
 /**
@@ -528,12 +547,13 @@ function compileRule(
     entry,
     expanded[index] ?? { globs: [], refused: false },
   ));
-  return { patterns, loads: listMatcher(patterns) };
+  const byBase = baseMatchers(patterns);
+  return { patterns, byBase, loads: (path) => byBase.some((loads) => loads(path)) };
 }
 
 /**
  * One `ignore()` instance per base over every glob of every given pattern, in
- * order, OR'd across bases.
+ * order — the caller ORs them across bases.
  *
  * The harness's own shape, once per base. ⚠️ A refused pattern contributes its
  * UNEXPANDED (but stripped) self, which is what the harness adds: braces are
@@ -552,13 +572,12 @@ function compileRule(
  *
  * @param patterns - Compiled patterns, in declaration order; every one carries
  *   the same bases, in the same order
- * @returns A predicate over root-relative paths
+ * @returns One predicate over root-relative paths per base, in base order
  */
-function listMatcher(patterns: readonly CompiledPattern[]): (path: string) => boolean {
+function baseMatchers(patterns: readonly CompiledPattern[]): readonly ((path: string) => boolean)[] {
   const baseCount = patterns[0]?.forms.length ?? 0;
-  const perBase = Array.from({ length: baseCount }, (_, base) =>
+  return Array.from({ length: baseCount }, (_, base) =>
     gitignoreMatcher(patterns.flatMap((pattern) => pattern.forms[base]?.globs ?? [])));
-  return (path) => perBase.some((loads) => loads(path));
 }
 
 /**
@@ -592,7 +611,41 @@ function compilePattern(
     negation: declared.pattern.startsWith('!'),
     forms,
     coversRoot: expansion.globs.some((glob) => ROOT_COVERING_GLOBS.has(glob)),
+    deadBySyntax: expansion.globs.every((glob) => deadBySyntax(glob)),
   };
+}
+
+/**
+ * Does this glob's spelling alone guarantee it matches no path the harness asks?
+ *
+ * The harness hands `node-ignore` normalised, root-relative paths, so no path it
+ * asks about has an empty segment or a `.` / `..` one. A glob that REQUIRES one
+ * — `./dist`, `/./dist`, `//dist`, `a/../b`, a bare `/` — therefore matches
+ * nothing in any checkout (measured against the binary's own `node-ignore`).
+ * One leading `/` (it anchors) and one trailing `/` (directory-only) are
+ * syntax, not segments, and are set aside first.
+ *
+ * @param glob - One expanded, stripped glob, possibly negated
+ * @returns True when no normalised path can match it
+ */
+function deadBySyntax(glob: string): boolean {
+  const positive = glob.startsWith('!') ? glob.slice(1) : glob;
+  const unanchored = positive.startsWith('/') ? positive.slice(1) : positive;
+  const body = unanchored.endsWith('/') ? unanchored.slice(0, -1) : unanchored;
+  return globSegments(body).some((segment) => segment === '' || segment === '.' || segment === '..');
+}
+
+/**
+ * The `/`-separated segments of a `paths:` glob or a glob-derived path. The one
+ * place this module splits on a literal `/`: the separator is the vendor
+ * dialect's, never the platform's.
+ *
+ * @param glob - A forward-slashed glob or path
+ * @returns Its segments, empty ones included
+ */
+function globSegments(glob: string): string[] {
+  // eslint-disable-next-line local/no-hardcoded-path-split -- `paths:` globs are forward-slashed by the vendor's own dialect, never platform-separated
+  return glob.split('/');
 }
 
 /**
@@ -610,6 +663,12 @@ function compilePattern(
  *   `./` is not gitignore syntax — and stripping it here would make the same
  *   glob live under the nested base while dead under the root one. Kept, the
  *   re-based form (`pkg/./docs`) is dead too, which is the root's answer.
+ * - **An UNANCHORED glob stays unanchored** below the base (`gen.ts` →
+ *   `pkg/**\/gen.ts`). Gitignore anchors a glob only when it has a `/` before
+ *   its last character; otherwise it matches at ANY depth under the base it is
+ *   read against. ⛔ Spliced as `pkg/gen.ts` it became anchored, so a nested
+ *   `!gen.ts` missed `pkg/sub/gen.ts` — the file the harness excludes under
+ *   both bases — and VAT loaded it and called the negation inert.
  *
  * @param glob - The glob, or the declared pattern it came from
  * @param under - The nested rule's project directory, or null for the root
@@ -619,8 +678,9 @@ function rebase(glob: string, under: string | null): string {
   if (under === null) return glob;
   const negated = glob.startsWith('!');
   const body = negated ? glob.slice(1) : glob;
+  const anchored = body.startsWith('/') || body.slice(0, -1).includes('/');
   const relative = body.startsWith('/') ? body.slice(1) : body;
-  return `${negated ? '!' : ''}${under}/${relative}`;
+  return `${negated ? '!' : ''}${under}/${anchored ? '' : '**/'}${relative}`;
 }
 
 /**
@@ -660,10 +720,8 @@ function matchBound(globs: readonly string[]): string {
  * @returns Their common directory, possibly `''`
  */
 function commonPrefixDirectory(left: string, right: string): string {
-  // eslint-disable-next-line local/no-hardcoded-path-split -- `paths:` globs are forward-slashed by the vendor's own dialect, never platform-separated
-  const leftSegments = left.split('/');
-  // eslint-disable-next-line local/no-hardcoded-path-split -- same: a glob's separator is the dialect's, not the platform's
-  const rightSegments = right.split('/');
+  const leftSegments = globSegments(left);
+  const rightSegments = globSegments(right);
   const shared: string[] = [];
   for (let index = 0; index < Math.min(leftSegments.length, rightSegments.length); index += 1) {
     if (leftSegments[index] !== rightSegments[index]) break;
@@ -814,7 +872,8 @@ export function evaluateRulePatterns(input: {
     if (witness !== undefined) {
       return { ordinal, pattern, literalPrefix: prefix, witnessPath: witness, status: 'matched' };
     }
-    const ignored = compiled.forms.some((form) => territoryIgnored(form.form, input.isIgnored));
+    const ignored = !compiled.deadBySyntax
+      && compiled.forms.some((form) => territoryIgnored(form.form, input.isIgnored));
     return {
       ordinal,
       pattern,
@@ -859,10 +918,20 @@ function loadedThrough(
  * entry re-includes everything the negation took out, and a prefix-only test
  * called it live.
  *
- * Swept only over each form's own territory ({@link matchBound} reads a
- * negation's bound off its positive half): a file outside it cannot be one the
- * negation took out. Two compiled matchers, each asked once per swept file, so
- * the sweep stays linear in the tree.
+ * ⛔ PER BASE, never against the OR of bases. A nested rule is two gitignore
+ * lists, and `["*.ts", "!sub/gen.ts"]` in `pkg/` takes `pkg/sub/gen.ts` out of
+ * the nested-base reading while the root-base reading (whose `!sub/gen.ts` is
+ * anchored at the root) still loads it. Against the OR the file stayed loaded
+ * and the negation read inert; it is live if it excludes a file under ANY base.
+ *
+ * Cheap before exact, because the exact test compiles a second whole-list
+ * matcher per negation — patterns² × files on a long list. A negation can only
+ * change the verdict for a path it (or an ancestor directory of it) matches,
+ * and only when some EARLIER positive could have matched it first; so a
+ * negation with no positive before it is skipped outright, each swept file must
+ * first match the negation's own positive half, and the `without` matcher is
+ * built only once such a file turns up. Swept only over each form's own
+ * territory ({@link matchBound} reads a negation's bound off its positive half).
  *
  * @param rule - The compiled rule
  * @param index - The negation's position among its patterns
@@ -874,9 +943,17 @@ function negationWitness(
   index: number,
   files: readonly string[],
 ): string | undefined {
-  const without = listMatcher(rule.patterns.filter((_, other) => other !== index));
-  const excluded = (path: string): boolean => without(path) && !rule.loads(path);
-  for (const form of rule.patterns[index]?.forms ?? []) {
+  if (!rule.patterns.slice(0, index).some((pattern) => !pattern.negation)) return undefined;
+  let without: readonly ((path: string) => boolean)[] | undefined;
+  const forms = rule.patterns[index]?.forms ?? [];
+  for (const [base, form] of forms.entries()) {
+    const touches = gitignoreMatcher(form.globs.map((glob) => glob.replace(/^!/, '')));
+    const loads = rule.byBase[base];
+    const excluded = (path: string): boolean => {
+      if (loads === undefined || !touches(path) || loads(path)) return false;
+      without ??= baseMatchers(rule.patterns.filter((_, other) => other !== index));
+      return without[base]?.(path) ?? false;
+    };
     const witness = firstMatchUnder({ bound: form.bound, reaches: excluded }, '', files);
     if (witness !== undefined) return witness;
   }
@@ -908,8 +985,8 @@ const TERRITORY_PROBE = 'vat-territory-probe';
  *   root ignored" is not a question worth asking — never judged, so such a
  *   glob stays `inert` (a documented blind spot).
  *
- * A prefix that climbs out of the tree is passed through as spelled; the
- * oracle owns the root, so it is the one that answers "outside" (not ignored).
+ * Never asked about a pattern {@link deadBySyntax} already answered: a `./`,
+ * `..` or empty segment cannot fire in any checkout, ignored or not.
  *
  * @param form - One matching form of a `paths:` entry
  * @param isIgnored - The tree's ignore oracle
@@ -984,17 +1061,26 @@ function admissionFor(
  *
  * ⛔ The yes/no is the whole list's — a `!` pattern only means anything beside
  * the patterns it subtracts from — but a finding has to point at something the
- * author can grep for. The first pattern that reaches the file on its own is
- * that something; the first declared pattern is the fallback, which is reached
- * only when the admission came from an interaction no single pattern carries.
+ * author can grep for. Gitignore is last-match-wins, so that something is the
+ * LAST positive pattern reaching the file, under a base that loads it. ⛔ The
+ * FIRST one named `src/gen.ts` in `["src/gen.ts", "!src/gen.ts", "*.ts"]`,
+ * where the negation cancels it and `*.ts` is what loads the file. The first
+ * declared pattern is the fallback, reached only when the admission came from
+ * an interaction no single pattern carries.
  *
  * @param rule - The compiled rule, already known to admit `path`
  * @param path - The admitted file
  * @returns The pattern to name, verbatim
  */
 function namingPattern(rule: CompiledRule, path: string): string {
-  const named = rule.patterns.find((pattern) => pattern.forms.some((form) => form.reaches(path)));
-  return (named ?? rule.patterns[0])?.pattern ?? '';
+  for (const [base, loads] of rule.byBase.entries()) {
+    if (!loads(path)) continue;
+    const named = rule.patterns.findLast(
+      (pattern) => !pattern.negation && (pattern.forms[base]?.reaches(path) ?? false),
+    );
+    if (named !== undefined) return named.pattern;
+  }
+  return rule.patterns[0]?.pattern ?? '';
 }
 
 /**
@@ -1026,8 +1112,10 @@ function directoryAdmission(
     for (const form of pattern.forms) {
       // The form's own bound still prunes; the whole list decides the witness.
       const examplePath = firstMatchUnder(loadedThrough(form, rule), queryDir, dirFiles);
+      // The pattern whose sweep found the witness is not necessarily the one
+      // that loads it; the file lane's naming answers that, so both lanes agree.
       if (examplePath !== undefined) {
-        return { kind: 'glob-rule-may-fire', pattern: pattern.pattern, examplePath };
+        return { kind: 'glob-rule-may-fire', pattern: namingPattern(rule, examplePath), examplePath };
       }
     }
   }
@@ -1061,7 +1149,9 @@ function directoryAdmission(
  */
 function coveringPattern(rule: CompiledRule, queryDir: string): string | undefined {
   if (queryDir === '') {
-    const index = rule.patterns.findIndex((pattern) => pattern.coversRoot);
+    // The LAST covering pattern: last-match-wins, so in `["**", "!x", "**"]`
+    // the second `**` re-covers everything the negation carved out.
+    const index = rule.patterns.findLastIndex((pattern) => pattern.coversRoot);
     if (index < 0 || rule.patterns.slice(index + 1).some((pattern) => pattern.negation)) return undefined;
     return rule.patterns[index]?.pattern;
   }
@@ -1127,8 +1217,7 @@ function firstMatchUnder(
  * @returns The literal prefix, possibly empty
  */
 function literalPrefix(pattern: string): string {
-  // eslint-disable-next-line local/no-hardcoded-path-split -- `paths:` globs are forward-slashed by the vendor's own dialect, never platform-separated
-  const segments = locatableSpelling(pattern).split('/');
+  const segments = globSegments(locatableSpelling(pattern));
   const literal: string[] = [];
   for (const segment of segments) {
     if (GLOB_META.test(segment)) break;
@@ -1147,7 +1236,8 @@ function literalPrefix(pattern: string): string {
  * not gitignore syntax; measured against the binary's own `node-ignore`), so a
  * `./`-prefixed glob is genuinely dead there and this module reports it so.
  * Stripping it for the match would hide a real defect; stripping it here keeps
- * the territory question pointed at the directory the author meant. A leading
+ * the `literalPrefix` column pointed at the directory the author meant (the
+ * territory question never reaches such a glob — {@link deadBySyntax}). A leading
  * `/` is live gitignore syntax — it anchors — but it is not part of any path,
  * so the ignore oracle must never be asked about it. The reported `pattern`
  * stays the author's spelling either way.
