@@ -169,6 +169,41 @@ function FOn(e){let t=[],r=[];for(let o of e){if(o.type==="AutoMemPinned"){r.pus
 
 The charged text of one file is `q7e`'s content, `trim()`med, behind a one-line header.
 
+## Observed on a live binary: imports are followed from ANY loaded file
+
+The excerpts above say `$q` extracts and follows imports for every file it loads, not only
+`CLAUDE.md`. That was confirmed against Claude Code **2.1.281** on 2026-09-24 by watching the
+loader itself — the `InstructionsLoaded` hook, which reports each injected file with its
+`load_reason` and `parent_file_path` — rather than asking the model what it saw. The fixture's
+`CLAUDE.md` imported a wiki page written with no Claude conventions in mind:
+
+```markdown
+- Pediatrics: @doogie.howser.md
+- Surgery: @hawkeye.pierce (no extension)
+- Cardiology: @missing.person.md (no such file)
+- Contact: jeff@doogie.howser.md
+- Code span: `@codespan.md`
+- Parenthesised: (@paren.md)
+```
+
+| Token in the wiki page | Loaded? | Why |
+|---|---|---|
+| `@doogie.howser.md` (exists) | **yes**, `include` ← `wiki/doctors.md` | a username-shaped token IS an import when the file exists |
+| `@deep.md` inside `doogie.howser.md` | **yes**, one hop further | recursion continues through a non-memory page |
+| `@hawkeye.pierce` (exists) | no | extension `.pierce` is not in `Syn` |
+| `@missing.person.md` | no, silently | no file, no event, no error |
+| `jeff@doogie.howser.md` | no | `@` not at token start or after whitespace |
+| `` `@codespan.md` `` | no | code spans are never scanned |
+| `(@paren.md)` | no | `@` preceded by `(` |
+
+A separate chain `CLAUDE.md → chain1 → … → chain5` loaded `chain1`–`chain4` and not `chain5`:
+four hops, as `Pyn=5` says. So "a file is instruction content because an instruction file
+imports it" is the harness's own rule, applied by code, whatever the file was written for.
+
+What this does NOT cover: the MODEL may later choose to read a file a loaded text merely
+mentions — a broken `@../x.md`, a bare path — by inference. That is a tool call at the model's
+discretion, not a load, and nothing about it is deterministic.
+
 ## `AGENTS.md` — a flag-gated plugin, not the loader
 
 `AGENTS.md` is not read by `$yn`. It is the `agents-md` built-in plugin, and its availability is a
