@@ -98,7 +98,9 @@ const ABSOLUTE_PREFIX = '/';
 function resolveClaudeImport(target: string, sourceFilePath: string): ResolveLocalHrefResult {
   const trimmed = target.trim();
   if (trimmed === '') return { kind: 'anchor_only' };
-  if (trimmed === HOME) return resolvedAt(homedir());
+  // `safePath` for the separators: a raw `homedir()` is backslashed on Windows,
+  // and every other branch here already returns forward slashes.
+  if (trimmed === HOME) return resolvedAt(safePath.resolve(homedir()));
   if (trimmed.startsWith(`${HOME}/`)) return resolvedAt(safePath.join(homedir(), trimmed.slice(HOME.length + 1)));
   if (trimmed.startsWith(ABSOLUTE_PREFIX)) return resolvedAt(safePath.resolve(trimmed));
   return resolvedAt(safePath.resolve(dirname(sourceFilePath), trimmed));

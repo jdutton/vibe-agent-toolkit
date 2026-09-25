@@ -383,7 +383,9 @@ describe('whatLoadsAt', () => {
     expect(outside[0]?.path).toBe('CLAUDE.md');
     expect(outside[0]?.subject).not.toBeNull();
     expect(outside[0]?.subject).not.toBe(outside[0]?.path);
-    expect(outside[0]?.subject?.startsWith('../')).toBe(true);
+    // The target is the home file, not a sibling of the root: `../…` where home
+    // shares the root's drive, a drive-absolute path where it does not (Windows CI).
+    expect(outside[0]?.subject?.endsWith('.claude/shared.md')).toBe(true);
   });
 
   it('keeps one finding per REFERRER when two members of one closure import the same target on the same line', async () => {
