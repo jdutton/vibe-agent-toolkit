@@ -24,11 +24,12 @@
  * ## 🪤 A nullable primary-key column does NOT make SQLite reject a duplicate
  *
  * Three tables key on a column that is legitimately nullable —
- * `resource_tags.value`, `realization_conditions.resourceId` and
- * `blob_conditions.line`. SQLite permits NULL in a `PRIMARY KEY` column of an
- * ordinary rowid table, and its unique index treats two NULLs as *distinct*, so
- * two rows differing only by a NULL key column both insert and neither
- * conflicts.
+ * `resource_tags.value`, `blob_conditions.line`, and `realization_conditions`,
+ * whose key carries four (`resourceId`, `sourcePath`, `sourceLine`, `sourceRef` — a
+ * condition no reference provoked states none of them). SQLite permits NULL in
+ * a `PRIMARY KEY` column of an ordinary rowid table, and its unique index
+ * treats two NULLs as *distinct*, so two rows differing only by a NULL key
+ * column both insert and neither conflicts.
  *
  * So this store never relies on a conflict clause to keep a write idempotent.
  * Every write deletes the space it is about to fill and inserts into it (see
@@ -196,6 +197,12 @@ export interface StoredTableSpec extends ProjectionColumnTypeSource {
    * than one extent's view of it, which are merged instead.
    */
   readonly contextColumn?: string | undefined;
+  /**
+   * For a blob-scoped table derived per `(blob, <this column>)`, the column a
+   * write is scoped by with the blob — see {@link deleteBlobPartitionSql}.
+   * Absent for every table one derivation produces in full.
+   */
+  readonly partitionColumn?: string | undefined;
 }
 
 /**
@@ -461,6 +468,23 @@ export function deleteBlobFactsSql(spec: StoredTableSpec, keyCount: number): str
 }
 
 /**
+ * The `DELETE` that removes one partitioned blob-scoped table's rows for ONE
+ * `(blob, partition)` pair — what a write clears in a table whose rows are
+ * derived per pair, so a run that did not derive a pair leaves it alone.
+ *
+ * @param spec - A blob-scoped table's registry entry, declaring `partitionColumn`
+ * @returns A `DELETE … WHERE <key column> = ? AND <partition column> = ?` statement
+ * @throws TypeError When the table declares no partition column
+ */
+export function deleteBlobPartitionSql(spec: StoredTableSpec): string {
+  if (spec.partitionColumn === undefined) {
+    throw new TypeError(`Table "${spec.name}" declares no partition column to scope a delete by`);
+  }
+  return `DELETE FROM ${quoteIdentifier(spec.name)} WHERE ${quoteIdentifier(blobKeyColumn(spec))} = ?`
+    + ` AND ${quoteIdentifier(spec.partitionColumn)} = ?`;
+}
+
+/**
  * The column a blob-scoped table joins to `blobs.contentKey` through.
  *
  * It is the table's *first* key column in every case — `contentKey` on `blobs`
@@ -486,7 +510,7 @@ export function blobKeyColumn(spec: StoredTableSpec): string {
  * SQLite would reject the `CREATE TABLE` with `duplicate column name`, which
  * names the column but not the reason — and the reason matters, because the
  * repair is never "drop one of them": the two are different facts (see
- * {@link EXTENT_KEY_COLUMNS}). A fourteenth table taking one of these names
+ * {@link EXTENT_KEY_COLUMNS}). A new table taking one of these names
  * should fail here, saying so.
  *
  * @param spec - An extent-scoped table's registry entry

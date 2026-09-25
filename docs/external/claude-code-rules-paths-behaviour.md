@@ -9,9 +9,9 @@
 >
 > **Refresh policy:** re-read on adopting a Claude Code release that changes rules loading, or
 > every ~90 days, whichever is sooner. VAT's model of this behaviour is
-> `harnessPaths` (stored per blob as `blobs.claudePaths` by `claude-memory.ts`) / the pattern
-> matcher in `packages/resources/src/projection/claude-context-rules.ts`; this file is the only evidence for
-> it, so the two are updated together or the model is unsourced.
+> `harnessPaths` (stored per `(blob, harness)` as `harness_blob_facts.paths` by `claude-memory.ts`) /
+> the pattern matcher in `packages/resources/src/projection/claude-context-rules.ts`; this file is
+> the only evidence for it, so the two are updated together or the model is unsourced.
 
 ## Why this cache exists
 

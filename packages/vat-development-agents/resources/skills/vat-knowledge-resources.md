@@ -171,17 +171,29 @@ HAVING SUM(p.status != 'inert') = 0
 One statement answers both halves of a rules-hygiene gate — which rule files are dead, and how big
 each rule file is — and it names no lens relation, so it costs nothing beyond the population.
 
-### `blob_claude_imports` — what a file `@`-imports, as Claude Code reads it
+### `harness_blob_facts` / `harness_blob_imports` — what a file `@`-imports, as the harness reads it
 
-One row per `@` import Claude Code's own extractor reads out of a blob: `rawRef` as authored,
-`target` (what it resolves — `@` dropped, `#fragment` cut, `\ ` read as a space) and `line`.
+Facts exist only for blobs the harness reaches (its entry points and their imports, its
+declared-dialect extents), never for every blob VAT parses — join `harness = 'claude-code'` and read
+an absent row as "not reached", never as zero:
+
+```sql
+SELECT b.contentKey, f.injectedBytes, f.injectedTokens, f.paths
+  FROM blobs b
+  JOIN harness_blob_facts f ON f.blob = b.contentKey AND f.harness = 'claude-code'
+```
+
+`harness_blob_imports` is one row per `@` import the harness's own extractor reads out of a blob,
+keyed `(blob, harness, ordinal)`: `rawRef` as authored, `target` (what it resolves — `@` dropped,
+`#fragment` cut, `\ ` read as a space) and `line`.
 🪤 **Never answer "what does this CLAUDE.md import" from `blob_references`.** Its `at-prefixed`
 rows are VAT's candidates, not the harness's imports: `(@a.md)` is a candidate and loads nothing,
 `@a.md.` imports a file named `a.md.`, and a `@` in a `.ts` import's code span is code. The size
-Claude Code CHARGES for a memory file is `blobs.claudeInjectedTokens` (frontmatter and HTML comment
-blocks removed, trimmed), not `blobs.tokenEstimate`; `claudeInjectedBytes = 0` means the file is
-dropped and its imports never followed. Which files it scopes by `paths:` is `blobs.claudePaths`
-(null = unscoped), read the harness's way for any extension — never `blobs.frontmatter`.
+Claude Code CHARGES for a memory file is `harness_blob_facts.injectedTokens` (frontmatter and HTML
+comment blocks removed, trimmed), not `blobs.tokenEstimate`; `injectedBytes = 0` means the file is
+dropped and its imports never followed. Which files it scopes by `paths:` is
+`harness_blob_facts.paths` (null = unscoped), read the harness's way for any extension — never
+`blobs.frontmatter`.
 
 ### Relations that are COMPUTED, not stored — and are skipped unless you name them
 
@@ -204,11 +216,22 @@ also holds every path-scoped rule and every file that is not paid at launch; on 
 unfiltered sum was wrong by **725,714 bytes** against a worst real chain of 86,720. `sizeCliff` is
 not the filter — it is the 4 MiB `CLAUDE.md` cliff's verdict, and `'loaded'` covers rows no launch
 charges. `SUM()` also skips NULL, and an `'unknown-size'` row has no `bytes`, so count those beside
-the sum:
+the sum — and a chain with no charged row sums to NULL, not 0, so wrap the sum in `COALESCE(…, 0)`.
+
+🚨 **A TOKEN sum also needs `headerTokens` and the chain's own `preambleTokens`.** Claude Code
+renders a one-line header (`Contents of <absolute path>(<kind>):`) before every charged file's
+content, and a once-per-launch preamble before the first one — both real, both never in `bytes` or
+`tokens` alone. `headerTokens` is a `claude_context_loads` column (per row); `preambleTokens` is a
+`claude_context_chains` column (per CHAIN — it is charged once however many rows the chain loads, so
+it is not repeated onto every load row). Reach it by correlated subquery, the same rule
+`claude_context_chains`' one-row-per-location shape already forces:
 
 ```sql
 SELECT l.chainId,
-       SUM(CASE WHEN l.launchCharge = 'charged' THEN l.bytes END) AS bytes,
+       COALESCE(SUM(CASE WHEN l.launchCharge = 'charged' THEN l.bytes END), 0) AS bytes,
+       COALESCE(SUM(CASE WHEN l.launchCharge = 'charged' THEN l.tokens + l.headerTokens END), 0)
+         + (SELECT c.preambleTokens FROM claude_context_chains c
+             WHERE c.chainId = l.chainId LIMIT 1) AS tokens,
        SUM(l.launchCharge = 'unknown-size') AS unsized
   FROM claude_context_loads l
  GROUP BY l.chainId

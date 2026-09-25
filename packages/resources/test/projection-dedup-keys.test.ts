@@ -2,7 +2,7 @@
  * The builder's de-duplication keys are the registry's primary keys.
  *
  * `PROJECTION_TABLES` declares each table's primary key as data;
- * `ProjectionBuilder` states the same thirteen keys again as `ProjectionTable`
+ * `ProjectionBuilder` states the same keys again as `ProjectionTable`
  * closures, and nothing in the production code makes the two agree. A
  * divergence there is not an ordering wobble — it changes which rows are
  * **de-duplicated**, so the projection would carry a different row set.
@@ -49,12 +49,14 @@
 
 import { describe, expect, it } from 'vitest';
 
+import type { HarnessId } from '../src/projection/harness/profile.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 import {
   PROJECTION_TABLES,
   type ProjectionRow,
   type ProjectionTableName,
 } from '../src/projection/table-registry.js';
+import { HarnessIdSchema } from '../src/schemas/projection-harness.js';
 
 /** A corpus root. Nothing here touches disk; the builder only needs a string. */
 const ROOT = '/vat-corpus/dedup';
@@ -83,7 +85,20 @@ interface TableFixture {
    * @returns How many rows of this table survived
    */
   readonly rowsAfterPair: (overrides: RowRecord) => number;
+  /**
+   * Columns whose {@link alt} value is a PROBE outside the schema's vocabulary,
+   * because that vocabulary has exactly one member and no schema-valid second
+   * row can differ there. Empty for every table but the two harness tables.
+   */
+  readonly probeColumns: readonly string[];
 }
+
+/**
+ * A harness id no profile declares — the only way to vary `harness` while
+ * {@link HarnessIdSchema} has a single member. The builder keys on the string,
+ * so the probe still proves the column is in its key.
+ */
+const PROBE_HARNESS = 'probe-harness' as HarnessId;
 
 /**
  * Read a row as an untyped record.
@@ -117,6 +132,7 @@ function fixture<Name extends ProjectionTableName>(
     name,
     base: asRecord(base),
     alt: asRecord(alt),
+    probeColumns: [],
     rowsAfterPair(overrides: RowRecord): number {
       const builder = new ProjectionBuilder({ root: ROOT });
       add(builder, base);
@@ -124,6 +140,33 @@ function fixture<Name extends ProjectionTableName>(
       return builder.build()[name].length;
     },
   };
+}
+
+/**
+ * Mark a harness table's fixture: its `alt.harness` is {@link PROBE_HARNESS}.
+ *
+ * Both ways: this reds the moment {@link HarnessIdSchema} gains a second
+ * member, at which point the probe must give way to that real, schema-valid id.
+ *
+ * @param entry - A harness table's fixture
+ * @returns The same fixture, with `harness` declared a probe column
+ */
+function harnessFixture(entry: TableFixture): TableFixture {
+  if (HarnessIdSchema.options.length !== 1) {
+    throw new Error('HarnessIdSchema has a second member: use it as the alt harness instead of PROBE_HARNESS.');
+  }
+  return { ...entry, probeColumns: ['harness'] };
+}
+
+/**
+ * A subset of a row's columns.
+ *
+ * @param row - The row to take values from
+ * @param columns - The columns to take
+ * @returns A record covering exactly those columns
+ */
+function pick(row: RowRecord, columns: readonly string[]): RowRecord {
+  return Object.fromEntries(columns.map((column) => [column, row[column]]));
 }
 
 /**
@@ -283,9 +326,6 @@ const FIXTURES: readonly TableFixture[] = [
       encodingSource: 'assumed',
       replacementCharacters: 0,
       tokenEstimate: 30,
-      claudeInjectedBytes: 120,
-      claudeInjectedTokens: 30,
-      claudePaths: null,
       frontmatter: null,
       frontmatterError: null,
       wordCount: 20,
@@ -302,9 +342,6 @@ const FIXTURES: readonly TableFixture[] = [
       encodingSource: 'bom',
       replacementCharacters: 7,
       tokenEstimate: 60,
-      claudeInjectedBytes: 240,
-      claudeInjectedTokens: 60,
-      claudePaths: ['alt/**'],
       frontmatter: { title: 'alt' },
       frontmatterError: 'frontmatter is not a mapping',
       wordCount: 40,
@@ -389,12 +426,18 @@ const FIXTURES: readonly TableFixture[] = [
     { blob: BLOB_BASE, code: 'PARSE_ODDITY', severity: 'info', message: 'base oddity', line: 4 },
     { blob: BLOB_ALT, code: 'FRONTMATTER_UNPARSED', severity: 'error', message: 'alt oddity', line: null },
   ),
-  fixture(
-    'blobClaudeImports',
-    (builder, row) => builder.addBlobClaudeImport(row),
-    { blob: BLOB_BASE, ordinal: 0, rawRef: '@base.md', target: 'base.md', line: 2 },
-    { blob: BLOB_ALT, ordinal: 7, rawRef: String.raw`@alt\ doc.md#top`, target: 'alt doc.md', line: 12 },
-  ),
+  harnessFixture(fixture(
+    'harnessBlobFacts',
+    (builder, row) => builder.addHarnessBlobFacts(row),
+    { blob: BLOB_BASE, harness: 'claude-code', injectedBytes: 120, injectedTokens: 30, paths: null },
+    { blob: BLOB_ALT, harness: PROBE_HARNESS, injectedBytes: 240, injectedTokens: 60, paths: ['alt/**'] },
+  )),
+  harnessFixture(fixture(
+    'harnessBlobImports',
+    (builder, row) => builder.addHarnessBlobImport(row),
+    { blob: BLOB_BASE, harness: 'claude-code', ordinal: 0, rawRef: '@base.md', target: 'base.md', line: 2 },
+    { blob: BLOB_ALT, harness: PROBE_HARNESS, ordinal: 7, rawRef: String.raw`@alt\ doc.md#top`, target: 'alt doc.md', line: 12 },
+  )),
 ];
 
 /**
@@ -417,12 +460,12 @@ function nonKeyColumns(name: ProjectionTableName): readonly string[] {
  * @returns An override record covering exactly those columns
  */
 function altValues(entry: TableFixture, columns: readonly string[]): RowRecord {
-  return Object.fromEntries(columns.map((column) => [column, entry.alt[column]]));
+  return pick(entry.alt, columns);
 }
 
 describe('ProjectionBuilder de-duplication keys', () => {
   it('are exercised for every table the registry declares', () => {
-    // A fourteenth table would otherwise be silently unguarded: it would compile,
+    // A new table would otherwise be silently unguarded: it would compile,
     // and no assertion below would ever mention it.
     expect(FIXTURES.map((entry) => entry.name)).toStrictEqual(Object.keys(PROJECTION_TABLES));
   });
@@ -433,9 +476,10 @@ describe.each(FIXTURES)('$name de-duplication', (entry) => {
 
   it('is fixtured with two rows its own schema accepts', () => {
     // `.strict()` on every row schema makes this pin the column set too: a fixture
-    // that missed a new column, or invented one, cannot parse.
+    // that missed a new column, or invented one, cannot parse. A probe column
+    // takes the base's (valid) value for this check only.
     expect(() => spec.schema.parse(entry.base)).not.toThrow();
-    expect(() => spec.schema.parse(entry.alt)).not.toThrow();
+    expect(() => spec.schema.parse({ ...entry.alt, ...pick(entry.base, entry.probeColumns) })).not.toThrow();
   });
 
   it.each([...spec.columns])('varies %s independently between the two rows', (column) => {

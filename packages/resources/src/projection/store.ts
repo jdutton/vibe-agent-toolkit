@@ -35,7 +35,7 @@
  *
  * ## Why the two scopes are separate operations
  *
- * {@link ProjectionTableScope} splits the fourteen tables in two, and the split is
+ * {@link ProjectionTableScope} splits the tables in two, and the split is
  * a difference in *lifetime*, not a tidy grouping:
  *
  * - Blob-scoped rows are a pure function of bytes, so they are **global**. Two
@@ -77,14 +77,14 @@ import { PROJECTION_TABLES, type ProjectionRow, type ProjectionTableName } from 
 /** Hex digits kept from the shape digest. Short on purpose — it is a path component. */
 const SHAPE_DIGEST_LENGTH = 12;
 
-/** Pure and mildly expensive: fourteen schemas through the JSON Schema converter. */
+/** Pure and mildly expensive: fifteen schemas through the JSON Schema converter. */
 let memoizedShapeDigest: string | undefined;
 
 /**
  * The table names of one scope, split in the type system rather than by hand.
  *
  * Reads each entry's declared `scope` back out of {@link PROJECTION_TABLES},
- * so a fifteenth table joins the right bundle by declaring its scope in the
+ * so a new table joins the right bundle by declaring its scope in the
  * registry and nowhere else. A hand-written union here would be a second list
  * to keep in sync, which is the drift the registry exists to prevent.
  */
@@ -162,7 +162,14 @@ export interface ProjectionStore {
    * without any coordination — the worst case is duplicated work, never
    * disagreeing data.
    *
-   * @param rows - The four blob-scoped tables; any of them may be empty
+   * ⛔ **A partitioned table is written per `(blob, partition)` pair**
+   * (`ProjectionTableSpec.partitionColumn` — the harness tables). Their rows
+   * are derived lazily, only for what one tree reaches, so one write can carry
+   * a key's `blobs` row and none of its harness facts. A write must never
+   * remove a pair it carries no rows for; a pair it does carry replaces what
+   * the store held for that pair.
+   *
+   * @param rows - The blob-scoped tables; any of them may be empty
    */
   writeBlobFacts(rows: BlobScopedRows): Promise<void>;
 
@@ -270,7 +277,7 @@ export interface ProjectionStore {
  * old one is cold, and the OS tmpdir purge that already owns this cache's
  * eviction reclaims it. That is the whole mechanism.
  *
- * Four inputs, because all four change what is stored:
+ * Every input below changes what is stored:
  *
  * - each table's **row schema shape**, prose stripped, so rewording a
  *   `.describe()` cannot cool the cache while adding an optional field does;
@@ -281,7 +288,9 @@ export interface ProjectionStore {
  * - its **context column**, which decides what a write replaces. Rows already
  *   filed under one partitioning would survive a write that partitions
  *   differently, so a store written before the change and read after it holds
- *   rows this build would never have kept.
+ *   rows this build would never have kept;
+ * - its **partition column** (the harness tables' `harness`), which decides
+ *   what a lazy blob-tier write replaces, for the same reason.
  *
  * @returns Twelve lowercase hex digits, stable across processes and rebuilds
  *
@@ -298,7 +307,7 @@ export function projectionShapeDigest(): string {
   for (const spec of Object.values(PROJECTION_TABLES)) {
     hash.update(
       `\0${spec.name}\0${spec.scope}\0${spec.primaryKey.join(',')}`
-      + `\0${spec.contextColumn ?? ''}\0${schemaShapeSource(spec.schema)}`,
+      + `\0${spec.contextColumn ?? ''}\0${spec.partitionColumn ?? ''}\0${schemaShapeSource(spec.schema)}`,
     );
   }
   memoizedShapeDigest = hash.digest('hex').slice(0, SHAPE_DIGEST_LENGTH);

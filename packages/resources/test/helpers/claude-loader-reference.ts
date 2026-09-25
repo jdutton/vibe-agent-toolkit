@@ -34,7 +34,7 @@ import ignore from 'ignore';
 import { Lexer, type Token } from 'marked';
 import { parseDocument } from 'yaml';
 
-import { isMemoryTextPath } from '../../src/projection/claude-memory-text-path.js';
+import { isMemoryTextPath } from '../../src/projection/harness/claude-code.js';
 
 /** `g3` — every memory file larger than this many bytes is skipped whole. */
 export const LOADER_SIZE_CLIFF = 4_194_304;
@@ -54,7 +54,7 @@ export interface LoadedMemoryFile {
   readonly type: LoaderType;
   /** `q7e`'s content: frontmatter and block HTML comments removed. */
   readonly content: string;
-  /** What `FOn` renders under the file's header — `content.trim()`. */
+  /** What `s1n` renders (launch) under the file's header — `content.trim()`. */
   readonly injected: string;
   /** `kyn`'s surviving `paths:` globs, or undefined when the file declares none. */
   readonly globs: readonly string[] | undefined;

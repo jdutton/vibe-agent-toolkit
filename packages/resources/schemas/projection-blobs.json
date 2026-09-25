@@ -41,33 +41,7 @@
         "tokenEstimate": {
           "type": "integer",
           "minimum": 0,
-          "description": "Estimated token count for LLM context — over the WHOLE decoded text. What Claude Code charges for this blob as a memory file is claudeInjectedTokens"
-        },
-        "claudeInjectedBytes": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "UTF-8 bytes of the text Claude Code INJECTS when it reads this blob as a memory file (CLAUDE.md, a rules file or an @ import): the body after its frontmatter block, with every block-level HTML comment removed, trimmed — the shipped reader's own rule (`q7e`, then `FOn`'s trim; docs/external/claude-code-memory-loader.md). 0 means the harness injects NOTHING for it and follows none of its imports. Path-independent: whether the harness reads the path at all (its extension, the 4 MiB cliff on `bytes`) is decided by the reader of the path, not here"
-        },
-        "claudeInjectedTokens": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "The token estimate (UTF-16 code units / 4, rounded up) of that same injected text — what `vat claude context` charges for this blob"
-        },
-        "claudePaths": {
-          "anyOf": [
-            {
-              "type": "array",
-              "items": {
-                "type": "string",
-                "minLength": 1
-              },
-              "minItems": 1
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "The `paths:` globs Claude Code scopes this blob by when it reads it as a memory file, or null when it scopes it by none (it then loads unconditionally wherever it is reached). Read the harness's way, whatever the file's extension — NOT from `frontmatter`, which is VAT's parser's answer and is absent for a file routed to no parser: its own frontmatter splitter and YAML parse (a block that fails to parse declares nothing), `paths:` normalised (arrays flattened, strings split on commas at brace depth zero, other values dropped), and null when every survivor of brace expansion and the trailing-`/**` strip is empty or `**` (`kyn`; docs/external/claude-code-rules-paths-behaviour.md). The patterns are VERBATIM, in declaration order; their index is `claude_rule_patterns.ordinal`"
+          "description": "Estimated token count for LLM context — over the WHOLE decoded text. What a harness charges for this blob as a memory file is `harness_blob_facts.injectedTokens`"
         },
         "frontmatter": {
           "anyOf": [
@@ -150,9 +124,6 @@
         "encodingSource",
         "replacementCharacters",
         "tokenEstimate",
-        "claudeInjectedBytes",
-        "claudeInjectedTokens",
-        "claudePaths",
         "frontmatter",
         "frontmatterError",
         "wordCount",

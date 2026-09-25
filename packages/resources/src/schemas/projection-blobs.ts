@@ -72,13 +72,7 @@ export const BlobRowSchema = z.object({
     .describe('"bom" when a byte-order mark stated the encoding, "assumed" when there was none and UTF-8 was the default. "assumed" is the common case and is NOT by itself a problem — it is the case in which a wrong answer is possible at all, and encodingSource === "assumed" AND encoding !== "utf-8" is unreachable today, since nothing but a BOM ever selects a non-UTF-8 encoding'),
   replacementCharacters: z.number().int().nonnegative()
     .describe('How many U+FFFD REPLACEMENT CHARACTERs the decode produced — a count of characters, not of malformed bytes, and one malformed run can collapse to a single U+FFFD. 0 for a clean decode, INCLUDING a document whose own text legitimately contains U+FFFD (the decode is attempted in fatal mode first, so valid input is never accused). Greater than 0 is proof the bytes are not valid in `encoding` — that much of this blob\'s indexed text is already garbage'),
-  tokenEstimate: z.number().int().nonnegative().describe('Estimated token count for LLM context — over the WHOLE decoded text. What Claude Code charges for this blob as a memory file is claudeInjectedTokens'),
-  claudeInjectedBytes: z.number().int().nonnegative()
-    .describe('UTF-8 bytes of the text Claude Code INJECTS when it reads this blob as a memory file (CLAUDE.md, a rules file or an @ import): the body after its frontmatter block, with every block-level HTML comment removed, trimmed — the shipped reader\'s own rule (`q7e`, then `FOn`\'s trim; docs/external/claude-code-memory-loader.md). 0 means the harness injects NOTHING for it and follows none of its imports. Path-independent: whether the harness reads the path at all (its extension, the 4 MiB cliff on `bytes`) is decided by the reader of the path, not here'),
-  claudeInjectedTokens: z.number().int().nonnegative()
-    .describe('The token estimate (UTF-16 code units / 4, rounded up) of that same injected text — what `vat claude context` charges for this blob'),
-  claudePaths: z.array(z.string().min(1)).min(1).nullable()
-    .describe('The `paths:` globs Claude Code scopes this blob by when it reads it as a memory file, or null when it scopes it by none (it then loads unconditionally wherever it is reached). Read the harness\'s way, whatever the file\'s extension — NOT from `frontmatter`, which is VAT\'s parser\'s answer and is absent for a file routed to no parser: its own frontmatter splitter and YAML parse (a block that fails to parse declares nothing), `paths:` normalised (arrays flattened, strings split on commas at brace depth zero, other values dropped), and null when every survivor of brace expansion and the trailing-`/**` strip is empty or `**` (`kyn`; docs/external/claude-code-rules-paths-behaviour.md). The patterns are VERBATIM, in declaration order; their index is `claude_rule_patterns.ordinal`'),
+  tokenEstimate: z.number().int().nonnegative().describe('Estimated token count for LLM context — over the WHOLE decoded text. What a harness charges for this blob as a memory file is `harness_blob_facts.injectedTokens`'),
   frontmatter: z.record(z.string(), JsonValueSchema).nullable()
     .describe('Parsed frontmatter as JSON, or null when the blob has no frontmatter block'),
   frontmatterError: z.string().nullable()
@@ -331,39 +325,6 @@ export const BlobSectionRowSchema = z.object({
 }).strict().describe('A row of the blob-keyed `blob_sections` table');
 
 export type BlobSectionRow = z.infer<typeof BlobSectionRowSchema>;
-
-/**
- * A row of the `blob_claude_imports` table — one `@` import Claude Code reads
- * out of a blob when it loads it as a memory file.
- *
- * NOT a subset of `blob_references`. That table is VAT's dialect-free reading
- * of every reference candidate; this one is the harness's own extractor
- * (`Ayn` in the shipped binary, transcribed in
- * `docs/external/claude-code-memory-loader.md`): `marked` 15.0.6 lexing the
- * frontmatter-stripped body with `gfm: false`, the `@` token scanned only in
- * TEXT tokens (never a code span, a code block or non-comment HTML), `\ `
- * unescaped, the `#` fragment cut, and the vendor's acceptance test applied.
- * The two disagree in both directions — `(@a.md)` and `@a.md.` are candidates
- * there and no import here (or a different one), `**@a.md**` the reverse — so
- * the Claude import walk reads THIS table and nothing else.
- *
- * Path-independent, like every blob fact: `target` is the spelling the harness
- * resolves against the importing file's directory, and resolution — which
- * needs a path — is the reader's.
- */
-export const BlobClaudeImportRowSchema = z.object({
-  blob: ContentKeySchema.describe(BLOB_FK_DESC),
-  ordinal: z.number().int().nonnegative()
-    .describe('0-based document order of the FIRST occurrence of this target — the order the harness follows imports in'),
-  rawRef: z.string().min(2)
-    .describe('The token as authored, @ included and nothing unescaped or cut — what a condition row reports back to an author'),
-  target: z.string().min(1)
-    .describe('The path the harness resolves: rawRef without its @, its #fragment cut and every `\\ ` read as a space. Unique within a blob — a repeated spelling is one import'),
-  line: z.number().int().positive()
-    .describe('1-based line of the @ in the blob. Exact wherever the enclosing markdown tokens\' source text is verbatim; inside a construct marked rewrites before lexing its content (a blockquote\'s continuation lines, a comment block\'s residue) it is the line that construct starts on'),
-}).strict().describe('A row of the blob-keyed `blob_claude_imports` table');
-
-export type BlobClaudeImportRow = z.infer<typeof BlobClaudeImportRowSchema>;
 
 /**
  * A row of the `blob_conditions` table — parse-time oddities.

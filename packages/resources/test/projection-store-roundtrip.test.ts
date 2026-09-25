@@ -11,7 +11,7 @@
  * varies, so a hydrated projection and a freshly populated one are either the
  * same document or they are not. Every hit assertion below is therefore
  * `serializeProjection(hydrated) === serializeProjection(populated)` — one
- * comparison over thirteen tables, which no per-table deep-equal could match for
+ * comparison over every table, which no per-table deep-equal could match for
  * either coverage or honesty. A bespoke comparison would have to *choose* which
  * columns to compare, and the columns a hydration bug drops are exactly the ones
  * nobody thinks to list.
@@ -48,7 +48,7 @@ import { serializeProjection } from '../src/projection/export.js';
 import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type { ContentDemand } from '../src/projection/realizations.js';
-import type { BlobScopedRows, ExtentScopedRows, ProjectionStore } from '../src/projection/store.js';
+import type { BlobScopedRows, ExtentKey, ExtentScopedRows, ProjectionStore } from '../src/projection/store.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
 import { FakeProjectionStore } from './fake-projection-store.js';
@@ -84,11 +84,15 @@ const DOC_C = 'skills/foo/c.md';
  */
 const CORPUS: readonly { readonly path: string; readonly content: string }[] = [
   { path: ROOT_DOC, content: '---\nname: foo\n---\n\n# Foo\n\nSee [b](./b.md).\n' },
-  // The `paths:` is a harness-read `blobs.claudePaths` value the round trip must bring back.
+  // The `paths:` is a harness-read `harness_blob_facts.paths` value the round trip must bring back.
   { path: DOC_B, content: '---\npaths: "skills/**, docs/*.md"\n---\n# B\n\nOn to [c](./c.md).\n' },
   // The `@b.md` is no link and no closure edge here; it is a Claude import, so the
-  // blob tier carries a `blob_claude_imports` row the round trip must bring back.
+  // blob tier carries a `harness_blob_imports` row the round trip must bring back.
   { path: DOC_C, content: '# C\n\nNothing links out of here. See @b.md, though.\n' },
+  // The harness facts are derived only for what Claude Code REACHES, so a memory
+  // file has to reach B and C for the blob tier to carry any `harness_blob_*`
+  // rows for the round trip to bring back.
+  { path: 'CLAUDE.md', content: '# Acme widgets\n\n@skills/foo/b.md\n\n@skills/foo/c.md\n' },
 ];
 
 /**
@@ -157,6 +161,51 @@ class BrokenProjectionStore implements ProjectionStore {
   }
 }
 
+/**
+ * A store holding every blob row but the harness tables' — the state another
+ * root's run leaves behind when it filed the same bytes without reaching them.
+ * Delegates everything else to a real double.
+ */
+class HarnesslessProjectionStore implements ProjectionStore {
+  /**
+   * @param inner - The store whose answers are served, minus the harness rows
+   */
+  constructor(private readonly inner: ProjectionStore) {}
+
+  /** @param rows - Passed through */
+  writeBlobFacts(rows: BlobScopedRows): Promise<void> {
+    return this.inner.writeBlobFacts(rows);
+  }
+
+  /**
+   * @param contentKeys - The keys to look up
+   * @returns What the inner store holds, with both harness tables empty
+   */
+  async readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
+    return { ...(await this.inner.readBlobFacts(contentKeys)), harnessBlobFacts: [], harnessBlobImports: [] };
+  }
+
+  /**
+   * @param key - Passed through
+   * @param rows - Passed through
+   */
+  writeExtent(key: ExtentKey, rows: ExtentScopedRows): Promise<void> {
+    return this.inner.writeExtent(key, rows);
+  }
+
+  /**
+   * @param key - Passed through
+   * @returns The inner store's extent
+   */
+  readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
+    return this.inner.readExtent(key);
+  }
+
+  /** @returns The inner store's close */
+  close(): Promise<void> {
+    return this.inner.close();
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Driving the corpus
@@ -315,8 +364,8 @@ describe('populate through a projection store', () => {
       expect(projection.blobs.length).toBeGreaterThanOrEqual(CORPUS.length);
       expect(projection.blobReferences.length).toBeGreaterThanOrEqual(2);
       expect(projection.blobSections.length).toBeGreaterThan(0);
-      expect(projection.blobClaudeImports.length).toBeGreaterThan(0);
-      expect(projection.blobs.some((blob) => blob.claudePaths !== null)).toBe(true);
+      expect(projection.harnessBlobImports.length).toBeGreaterThan(0);
+      expect(projection.harnessBlobFacts.some((row) => row.paths !== null)).toBe(true);
       // And the roots row the driver places itself.
       expect(projection.roots).toHaveLength(1);
     });
@@ -612,6 +661,21 @@ describe('populate through a projection store', () => {
   });
 
   describe('blob coverage', () => {
+    it('misses a blob tier that covers every key but lacks a reached blob\'s harness facts', async () => {
+      // The harness facts are derived lazily and written per `(blob, harness)`,
+      // so a blob tier can hold every key's `blobs` row and still lack the
+      // facts of a blob THIS tree reaches. Served, that absence would throw at
+      // the first strict reader; `blobFactsCover` alone calls it a hit.
+      const store = new FakeProjectionStore();
+      const populated = await run({ registry: filesystemAndClosure(), store });
+      expect(populated.projection.harnessBlobFacts.length).toBeGreaterThan(0);
+
+      const second = await run({ registry: filesystemAndClosure(), store: new HarnesslessProjectionStore(store) });
+
+      expect(second.contributorRuns).toContain(`${FILESYSTEM_ID}@1`);
+      expect(second.document).toBe(populated.document);
+    });
+
     it('misses an extent stored by a run that declined to derive blobs', async () => {
       // A `'skip'` run still writes its extent — that is what lets the next
       // command share the enumeration — but that extent names content keys the

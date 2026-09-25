@@ -68,6 +68,7 @@ import {
   CLAUDE_CONTEXT_LIMITS,
   CLAUDE_CONTEXT_MODELLED_BEHAVIOURS,
   discoverableFrom,
+  HarnessFactsAbsentError,
   whatLoadsAt,
   type AccountedRow,
   type Admission,
@@ -84,7 +85,7 @@ import {
   type StatedLimit,
 } from '@vibe-agent-toolkit/resources';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, isVatError } from '@vibe-agent-toolkit/utils';
 import { Command, Option } from 'commander';
 
 import { handleCommandError } from '../../utils/command-error.js';
@@ -367,7 +368,8 @@ Output:
 Exit Codes:
   0 - An answer was produced (there is no threshold and no gate)
   1 - Invalid usage (unknown option, or an unsupported --format value)
-  2 - System error (a path outside the corpus root, unreadable tree)
+  2 - System error (a path outside the corpus root, unreadable tree, or a
+      VAT bug: a memory file reached with no derived harness facts)
 
 Example:
   $ vat claude context src/index.ts docs/ README.md   # one scan, three answers
@@ -423,8 +425,25 @@ export async function claudeContextCommand(
     // process ends rather than waiting on whatever the population left behind.
     process.exit(ExitCode.OK);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'claude context', options.format);
+    const label = failureLabel(error);
+    handleCommandError(error, logger, startTime, label, options.format);
   }
+}
+
+/**
+ * How a failure names itself on stderr — with its `code` when it is the
+ * producer bug the query refuses to answer through.
+ *
+ * ⛔ Recognised by `code`, never by message. A reached memory file with no
+ * derived harness facts means the answer would be wrong, so there is no answer:
+ * it takes the same exit-2 ending as every other failure, and the code in the
+ * label is what tells an operator (and a bug report) it is VAT's, not the tree's.
+ *
+ * @param error - The value that was thrown
+ * @returns The command name `handleCommandError` prints before the message
+ */
+function failureLabel(error: unknown): string {
+  return isVatError(error, HarnessFactsAbsentError.code) ? `claude context (${error.code})` : 'claude context';
 }
 
 /**
@@ -1079,6 +1098,11 @@ function estimateLines(totals: ContextTotals): string[] {
     'Token estimate',
     `  always-loaded         ${groupDigits(totals.alwaysTokens)} tokens`,
     `  on-demand             ${groupDigits(totals.onDemandTokens)} tokens`,
+    // Already folded into the two lines above — every row's own header, and the
+    // once-per-launch preamble on top of them — printed separately so a reader
+    // sees how much of the total is RENDERING rather than content.
+    `  of which: headers     ${groupDigits(totals.headerTokens)} tokens`
+    + ` · preamble ${groupDigits(totals.preambleTokens)} tokens (both already counted above)`,
     // ⛔ UNCONDITIONAL here, unlike a region's — see {@link quietCounterLines}.
     // A single-path answer has no tree-level roll-up to fall back on, so these
     // three lines are its only statement that the rows were counted at all.
@@ -1198,27 +1222,45 @@ function describeImport(admission: Extract<Admission, { kind: 'import' }>): stri
 }
 
 /**
- * One condition, in the compact `severity code at location: message` shape.
+ * One condition — the compact `severity code at location: message` line, an
+ * indented `subject:` naming the refused or escaping TARGET when one differs
+ * from `location` (never for `CLOSURE_REFERENCE_UNRESOLVED`, which has none),
+ * an indented `why:` explaining which harness loader rule makes it so, and,
+ * when {@link GradedCondition.affects} names one, a `reached from:` line
+ * tracing the import chain that reaches it.
+ *
+ * Exported for `context-condition-line.test.ts`, the same reason
+ * {@link chargeText} is: the only code that renders these lines, so it is what
+ * a unit test pins rather than a system assertion over a real tree's own
+ * conditions (which may carry none of the shapes this needs to distinguish).
  *
  * @param condition - The graded condition
- * @returns The line
+ * @returns The lines, newline-joined — one {@link listSection} entry
  */
-function conditionLine(condition: GradedCondition): string {
-  const reference = condition.sourceRef === null ? '' : ` [${condition.sourceRef}]`;
-  return `  ${condition.severity.padEnd(7)} ${condition.code}`
-    + ` at ${conditionLocation(condition)}${reference}: ${condition.message}`;
+export function conditionLine(condition: GradedCondition): string {
+  const reference = condition.ref === null ? '' : ` [${condition.ref}]`;
+  const lines = [
+    `  ${condition.severity.padEnd(7)} ${condition.code}`
+    + ` at ${conditionLocation(condition)}${reference}: ${condition.message}`,
+  ];
+  if (condition.subject !== null) {
+    lines.push(`      subject: ${condition.subject}`);
+  }
+  lines.push(`      why: ${condition.why}`);
+  if (condition.affects !== null) {
+    lines.push(`      reached from: ${condition.affects.chain.join(' → ')} (hop ${condition.affects.hop})`);
+  }
+  return lines.join('\n');
 }
 
 /**
- * Where a condition points, using the most specific provenance it carries.
+ * Where a condition points.
  *
  * @param condition - The graded condition
  * @returns A path, or a `path:line`
  */
 function conditionLocation(condition: GradedCondition): string {
-  if (condition.sourcePath === null) return condition.path;
-  if (condition.sourceLine === null) return condition.sourcePath;
-  return `${condition.sourcePath}:${condition.sourceLine}`;
+  return condition.line === null ? condition.path : `${condition.path}:${condition.line}`;
 }
 
 /**

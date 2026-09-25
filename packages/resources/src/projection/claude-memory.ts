@@ -3,12 +3,12 @@
  * file — `CLAUDE.md`, a rules file, an `@` import of any extension: the text it
  * injects, the `@` imports it follows, and the `paths:` globs it scopes the
  * file by. All three are functions of the bytes alone, so all three are blob
- * facts (`blobs.claudeInjected*`, `blob_claude_imports`, `blobs.claudePaths`);
+ * facts (`harness_blob_facts.injected*`, `harness_blob_imports`, `harness_blob_facts.paths`);
  * which PATHS the harness reads at all, and which read a glob admits, is the
  * walk's question, never this module's.
  *
  * Transcribed from the shipped reader — `q7e` (content), `kyn`/`ts` (the
- * frontmatter split and its `paths:`), `Sge` (comment blocks), `Ayn` (imports) and `FOn`'s
+ * frontmatter split and its `paths:`), `Sge` (comment blocks), `Ayn` (imports) and `s1n`'s
  * `trim()` — in [`docs/external/claude-code-memory-loader.md`](../../../../docs/external/claude-code-memory-loader.md).
  * The lexer is the one the binary bundles, `marked` 15.0.6, pinned exactly, with
  * `gfm: false` as the loader asks for it.
@@ -51,28 +51,8 @@ import { parseDocument } from 'yaml';
 import { estimateTokens } from '../link-classify.js';
 
 import { harnessPaths } from './claude-context-rules.js';
-
-/** One `@` import, before anything resolves it against a path. */
-interface ClaudeImport {
-  /** The token as authored, `@` included. */
-  readonly rawRef: string;
-  /** The spelling the harness resolves: unescaped, fragment cut. */
-  readonly target: string;
-  /** 1-based line of the `@` — see `BlobClaudeImportRowSchema.line` for where it is approximate. */
-  readonly line: number;
-}
-
-/** What the harness does with one blob's content. */
-export interface ClaudeMemoryFacts {
-  /** UTF-8 bytes of the injected text; 0 when the harness injects nothing. */
-  readonly injectedBytes: number;
-  /** The token estimate of the injected text. */
-  readonly injectedTokens: number;
-  /** Every import, first occurrence of each target, in document order. */
-  readonly imports: readonly ClaudeImport[];
-  /** `kyn`'s `paths:` globs, verbatim — null when the harness scopes the file by none. */
-  readonly paths: readonly string[] | null;
-}
+// Type-only: erased at runtime, so it adds no edge to the claude-code.ts → claude-memory.ts cycle guard.
+import type { HarnessContentFacts, HarnessImport } from './harness/profile.js';
 
 /** One JS `\s` character. */
 const WHITESPACE = /\s/;
@@ -119,7 +99,7 @@ const BOM = 0xfe_ff;
  * @param raw - The decoded text of the blob
  * @returns The injected measure and the imports
  */
-export function claudeMemoryFactsOf(raw: string): ClaudeMemoryFacts {
+export function claudeMemoryFactsOf(raw: string): HarnessContentFacts {
   const { body, firstLine, block } = memoryBody(raw);
   const hasComment = body.includes('<!--');
   // `q7e` lexes only when there is a comment to strip or an `@` to read.
@@ -223,7 +203,7 @@ interface Located {
 
 /** One `Ayn` walk's state: the imports found so far, keyed by target, and the body's line index. */
 interface ImportScan {
-  readonly found: Map<string, ClaudeImport>;
+  readonly found: Map<string, HarnessImport>;
   readonly lineOf: (offset: number) => number;
 }
 
@@ -234,7 +214,7 @@ interface ImportScan {
  * same way keeps the same first occurrences in the same order, and the reader
  * that resolves them drops a second spelling of one file as the harness does.
  */
-function extractImports(tokens: readonly Token[], body: string, firstLine: number): ClaudeImport[] {
+function extractImports(tokens: readonly Token[], body: string, firstLine: number): HarnessImport[] {
   const scan: ImportScan = { found: new Map(), lineOf: lineIndex(body, firstLine) };
   walkTokens(scan, tokens, body, { offset: 0, exact: true });
   return [...scan.found.values()];

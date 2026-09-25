@@ -27,7 +27,6 @@
 import {
   CLAUDE_CONTEXT_BOUNDS_STATEMENT,
   type LoadedContextAnswer,
-  type Projection,
 } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
@@ -37,37 +36,10 @@ import {
   renderEnvelopeText,
   type ContextAnswerDocument,
 } from '../../../src/commands/claude/context.js';
+import { emptyClaudeContextProjection } from '../../helpers/empty-claude-context-projection.js';
 
 /** The three fields that belong to the run, not to a path. */
 const RUN_SCOPED_FIELDS = ['limits', 'modelledBehaviours', 'boundsStatement'] as const;
-
-/**
- * An empty projection — thirteen empty tables.
- *
- * The document's SHAPE is what is under test, and shape does not depend on the
- * rows: `account()` over no rows still produces totals, and its correctness is
- * pinned in `@vibe-agent-toolkit/resources` where it lives. Populating a tree
- * here would buy nothing and make this a slow test of somebody else's code.
- *
- * @returns A projection with every table empty
- */
-function emptyProjection(): Projection {
-  return {
-    roots: [],
-    resources: [],
-    resourceRealizations: [],
-    resourceExtents: [],
-    resourceTags: [],
-    realizationConditions: [],
-    resolutionContexts: [],
-    zoneProvenance: [],
-    blobs: [],
-    blobReferences: [],
-    blobSections: [],
-    blobConditions: [],
-    blobClaudeImports: [],
-  };
-}
 
 /**
  * An answer for one path, with nothing loaded at it.
@@ -95,7 +67,7 @@ function answerFor(input: string): LoadedContextAnswer {
  * @returns One answer document per path
  */
 function sweep(inputs: readonly string[]): ContextAnswerDocument[] {
-  const projection = emptyProjection();
+  const projection = emptyClaudeContextProjection();
   return inputs.map((input) => answerDocument(answerFor(input), projection, false));
 }
 
@@ -149,7 +121,7 @@ describe('vat claude context — the over-budget section', () => {
     // says the whole `paths:` list exceeded it tells the reader the rule is
     // dead when its siblings are still live.
     const answer = { ...answerFor('a'), overBudgetRules: ['.claude/rules/huge.md'] };
-    const text = renderEnvelopeText([answerDocument(answer, emptyProjection(), false)]);
+    const text = renderEnvelopeText([answerDocument(answer, emptyClaudeContextProjection(), false)]);
 
     expect(text).toContain(
       'Rules with a paths: pattern the vendor expansion budget refused (their other patterns still apply)',

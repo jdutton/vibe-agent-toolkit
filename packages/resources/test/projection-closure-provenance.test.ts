@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import { claudeImportExtentDeclaration } from '../src/projection/contributors/claude-import-extent.js';
 import {
+  closureHopsFrom,
   closureProvenance,
   type ClosureProvenanceInput,
 } from '../src/projection/contributors/closure-extent.js';
+import { HarnessFactsAbsentError } from '../src/projection/harness/facts-index.js';
 
 import { closureFixtureFrom } from './helpers/claude-context-fixture.js';
 
@@ -20,8 +22,10 @@ function inputFor(files: Record<string, string>, rootFile: string): ClosureProve
   return {
     root: ABSENT_ROOT,
     resourceRealizations: fixture.resourceRealizations,
+    blobs: fixture.blobs,
     blobReferences: fixture.blobReferences,
-    blobClaudeImports: fixture.blobClaudeImports,
+    harnessBlobFacts: fixture.harnessBlobFacts,
+    harnessBlobImports: fixture.harnessBlobImports,
     declaration: claudeImportExtentDeclaration(rootFile),
   };
 }
@@ -77,6 +81,16 @@ describe('closureProvenance', () => {
     // string ordering ('CLAUDE.md' before 'a.md'), and locale collation would
     // reorder it case-insensitively.
     expect([...map.keys()].sort((left, right) => (left < right ? -1 : 1))).toEqual(['CLAUDE.md', 'a.md']);
+  });
+
+  it('throws a coded error, never "no edges", when a reached blob has no harness facts', () => {
+    // Outside the fixpoint the edge source is STRICT. The frontier twin, inside
+    // it, is in `projection-closure-extent.test.ts`.
+    const base = inputFor({ 'CLAUDE.md': '@a.md\n', 'a.md': 'x\n' }, 'CLAUDE.md');
+    const underived: ClosureProvenanceInput = { ...base, harnessBlobFacts: [] };
+
+    expect(() => closureProvenance(underived)).toThrow(HarnessFactsAbsentError);
+    expect(() => closureHopsFrom(underived)).toThrow(HarnessFactsAbsentError);
   });
 
   it('refuses a declaration carrying refusal rules rather than answering approximately', () => {

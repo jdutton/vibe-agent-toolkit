@@ -20,16 +20,16 @@
  *   under RFC 3986. That reading and the harness's disagree in both directions:
  *   `(@a.md)` is a candidate there and no import here, `**@a.md**` the reverse,
  *   and a `@` in a `.ts` import's code span is a token to VAT's lexer and code
- *   to the harness's. `claude-import` walks `blob_claude_imports` instead — the
+ *   to the harness's. `claude-import` walks `harness_blob_imports` instead — the
  *   harness's own extractor — and resolves the way the harness does. See
  *   `reference-dialect.ts`.
  * - **`follow: []`.** Required beside `claude-import` by the schema: no
- *   syntactic form selects a `blob_claude_imports` row, and the default — the
+ *   syntactic form selects a `harness_blob_imports` row, and the default — the
  *   three markdown forms — would read as a filter that filters nothing.
- * - **`maxDepth: 4`.** The schema defaults to `'full'`. Four is
- *   vendor-documented (*"a maximum depth of four hops"*) and already cited at
- *   `projection-zones.ts`. `canDescend` is `depth < maxDepth` with the root
- *   seeded at depth 0, so four hops are admitted and the fifth becomes a
+ * - **`maxDepth: CLAUDE_IMPORT_MAX_DEPTH`.** The schema defaults to `'full'`.
+ *   Four is vendor-documented (*"a maximum depth of four hops"*) and already
+ *   cited at `projection-zones.ts`. `canDescend` is `depth < maxDepth` with the
+ *   root seeded at depth 0, so four hops are admitted and the fifth becomes a
  *   `CLOSURE_DEPTH_EXCEEDED` row.
  * - **No refusals, no `admitPaths`.** The harness applies no exclusion cascade
  *   to imports, and inventing one here would decline files a real session loads.
@@ -38,7 +38,7 @@
  *
  * Not because of any VAT classification: the harness's own acceptance test
  * wants a bare path to open with `[a-zA-Z0-9._-]`, so `@${VAR}/a.md` and
- * `@$HOME/a.md` never reach `blob_claude_imports` at all.
+ * `@$HOME/a.md` never reach `harness_blob_imports` at all.
  *
  * ## Id discrimination: the root-relative path
  *
@@ -68,6 +68,7 @@ import type { ResourceRealizationRow } from '../../schemas/projection-resources.
 import type { JsonValue } from '../../schemas/projection-shared.js';
 import { CLAUDE_MD_TAG, RULES_FILE_TAG, classifyPath, pluginRootsFrom } from '../agentic-tags.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../contributor.js';
+import { CLAUDE_IMPORT_MAX_DEPTH } from '../harness/claude-code.js';
 import type { ProjectionBase } from '../projection.js';
 
 import { ClosureExtentContributor } from './closure-extent.js';
@@ -77,16 +78,6 @@ export const CLAUDE_IMPORT_KIND = 'claude-import';
 
 /** `zone_provenance.contributorId` prefix for a Claude import extent. */
 export const CLAUDE_IMPORT_CONTRIBUTOR_ID_PREFIX = 'builtin:claude-import';
-
-/**
- * The hop budget the vendor documents for `@` imports.
- *
- * *"a maximum depth of four hops"* — and `canDescend` is `depth < maxDepth` with
- * the root seeded at depth 0, so this admits four hops and refuses the fifth.
- * Pinned from BOTH sides in the test, because a bound asserted from one side
- * cannot tell an off-by-one from a correct one.
- */
-export const CLAUDE_IMPORT_MAX_DEPTH = 4;
 
 /**
  * The `zone_provenance.contributorId` for one root's import extent.

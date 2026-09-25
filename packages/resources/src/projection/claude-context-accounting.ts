@@ -25,7 +25,7 @@
  * with `estimateTokens` at ONE import level and is uncalibrated at four hops; a
  * gate that fires wrongly teaches people to ignore it.
  *
- * The tokens a row carries are `blobs.claudeInjectedTokens` — the text the
+ * The tokens a row carries are `harness_blob_facts.injectedTokens` — the text the
  * harness injects, frontmatter and block-level comments removed and trimmed —
  * while the cliff below reads `blobs.bytes`, the file's own size, because the
  * harness skips on the size it `stat`s, before it reads a byte.
@@ -39,16 +39,10 @@
  * sum that silently absorbed them would read as complete.
  */
 
-import type { LoadedContextAnswer, LoadedRow } from './claude-context-query.js';
+import { estimateTokens } from '../link-classify.js';
 
-/**
- * The harness's memory-file size cliff, in bytes — `g3` in the shipped reader.
- *
- * A transcribed vendor quantity cited at its use, not a VAT constant anyone bumps.
- * The comparison against it is strictly greater-than: the vendor loads a file of
- * *up to* 4 MiB in full, so a file measuring exactly this is charged.
- */
-export const OVERSIZE_BYTES = 4 * 1024 * 1024;
+import type { LoadedContextAnswer, LoadedRow } from './claude-context-query.js';
+import { CLAUDE_CODE, CLAUDE_OVERSIZE_BYTES } from './harness/claude-code.js';
 
 /** Why a row does or does not contribute to a total. */
 export const SIZE_CLIFF_STATES = ['loaded', 'oversize-skipped', 'pruned-by-oversize', 'unmeasured'] as const;
@@ -74,13 +68,72 @@ export interface AccountedRow extends LoadedRow {
  * The sums, with the unchargeable rows COUNTED rather than folded into zero.
  *
  * `unknownTokenRows > 0` is what stops a total being read as complete.
+ *
+ * 🔑 `alwaysTokens` is `preambleTokens + Σ(tokens + headerTokens)` over every
+ * `loaded` always-class row — the once-per-launch preamble, charged at most
+ * once, plus each rendered file's own header beside its content. `onDemandTokens`
+ * is `Σ(tokens + headerTokens)` over every `loaded` on-demand row: an on-read
+ * attachment carries no preamble and no kind suffix, but it still carries its
+ * own one-line header.
  */
 export interface ContextTotals {
   readonly alwaysTokens: number;
   readonly onDemandTokens: number;
+  /**
+   * `CLAUDE_CODE.launchPreamble`, estimated, charged AT MOST ONCE — when at
+   * least one row is `launchCharge === 'charged'` — and `0` for a launch that
+   * loads nothing (`hve`'s `t===""` short-circuit:
+   * `docs/external/claude-code-memory-loader.md`). Already folded into
+   * {@link alwaysTokens}; published separately so a reader can see the
+   * once-per-launch share rather than only the total it is part of.
+   *
+   * Derived by {@link preambleTokensOf}, the ONE function this also drives
+   * `claude_context_chains.preambleTokens` (`claude-context-relations.ts`) —
+   * so the per-query total here and the per-chain fact published on the
+   * relation are the same computation under two names, never two derivations
+   * of it free to disagree.
+   */
+  readonly preambleTokens: number;
+  /**
+   * Σ `headerTokens` over every `loaded` row, EITHER load class — the render
+   * overhead already folded into {@link alwaysTokens} and {@link onDemandTokens}
+   * above, published separately (beside {@link preambleTokens}) so a reader can
+   * see how much of the total is rendering rather than content.
+   */
+  readonly headerTokens: number;
   readonly unknownTokenRows: number;
   readonly skippedOversizeRows: number;
   readonly prunedRows: number;
+}
+
+/**
+ * Whether at least one row is genuinely CHARGED — `loaded` and `always` — the
+ * one condition `hve` (the shipped renderer) charges its once-per-launch
+ * preamble under.
+ *
+ * @param rows - Rows to test, accounted or not — only `loadClass`/`sizeCliff`
+ *   are read
+ * @returns True when at least one row would render at launch
+ */
+function anyRowCharged(rows: readonly Pick<AccountedRow, 'loadClass' | 'sizeCliff'>[]): boolean {
+  return rows.some((row) => row.loadClass === 'always' && row.sizeCliff === LOADED);
+}
+
+/**
+ * The once-per-launch preamble's charge for a set of accounted rows.
+ *
+ * The ONE function two callers derive this fact through, rather than two
+ * copies of `anyCharged ? estimateTokens(…) : 0` free to disagree the moment
+ * one is edited and the other is not: `totalsOf` (this module, `alwaysTokens`'
+ * own share) and `claude-context-relations.ts` (`claude_context_chains.
+ * preambleTokens`, published once per CHAIN rather than once per query).
+ *
+ * @param rows - The chain's or query's accounted rows
+ * @returns `CLAUDE_CODE.launchPreamble`, estimated, or `0` when nothing here
+ *   is charged
+ */
+export function preambleTokensOf(rows: readonly Pick<AccountedRow, 'loadClass' | 'sizeCliff'>[]): number {
+  return anyRowCharged(rows) ? estimateTokens(CLAUDE_CODE.launchPreamble) : 0;
 }
 
 /** The accounted answer. */
@@ -107,7 +160,7 @@ export function account(answer: LoadedContextAnswer): AccountedContext {
   // charged nothing and counted in `unknownTokenRows`, never skipped as oversize.
   const oversizePaths = new Set(
     answer.rows
-      .filter((row) => row.bytes !== null && row.bytes > OVERSIZE_BYTES)
+      .filter((row) => row.bytes !== null && row.bytes > CLAUDE_OVERSIZE_BYTES)
       .map((row) => row.path),
   );
 
@@ -221,8 +274,9 @@ function sizeCliffOf(
  * @returns The totals
  */
 function totalsOf(rows: readonly AccountedRow[]): ContextTotals {
-  let alwaysTokens = 0;
+  let chargedTokens = 0;
   let onDemandTokens = 0;
+  let headerTokens = 0;
   let unknownTokenRows = 0;
   let skippedOversizeRows = 0;
   let prunedRows = 0;
@@ -235,9 +289,28 @@ function totalsOf(rows: readonly AccountedRow[]): ContextTotals {
     if (row.sizeCliff === UNMEASURED) unknownTokenRows += 1;
     else if (row.sizeCliff === OVERSIZE_SKIPPED) skippedOversizeRows += 1;
     else if (row.sizeCliff === PRUNED_BY_OVERSIZE) prunedRows += 1;
-    else if (row.loadClass === 'always') alwaysTokens += row.tokens ?? 0;
-    else onDemandTokens += row.tokens ?? 0;
+    else if (row.loadClass === 'always') {
+      chargedTokens += (row.tokens ?? 0) + row.headerTokens;
+      headerTokens += row.headerTokens;
+    } else {
+      onDemandTokens += (row.tokens ?? 0) + row.headerTokens;
+      headerTokens += row.headerTokens;
+    }
   }
 
-  return { alwaysTokens, onDemandTokens, unknownTokenRows, skippedOversizeRows, prunedRows };
+  // The once-per-launch preamble is charged at most once — never per row — and
+  // only when the launch actually rendered something: `hve`'s own `t===""`
+  // short-circuit (`docs/external/claude-code-memory-loader.md`). The SAME
+  // function drives `claude_context_chains.preambleTokens` — see its docstring.
+  const preambleTokens = preambleTokensOf(rows);
+
+  return {
+    alwaysTokens: preambleTokens + chargedTokens,
+    onDemandTokens,
+    preambleTokens,
+    headerTokens,
+    unknownTokenRows,
+    skippedOversizeRows,
+    prunedRows,
+  };
 }

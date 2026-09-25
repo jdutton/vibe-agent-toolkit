@@ -19,16 +19,20 @@
  *
  * ## The sum is `vat claude context`'s `alwaysTokens`, exactly
  *
- * `SUM(tokens) WHERE launchCharge = 'charged'` over one chain is the same
- * arithmetic `account()`'s `totalsOf` performs for `alwaysTokens`, and
- * `projection-claude-context-chains-oracle.test.ts` holds the two equal for every
- * working location. ⛔ That equality is the contract. An import is charged at
- * EVERY hop the closure admits, and an import VAT could not attribute to an
- * importer is charged too — its load class comes from its closure root, which is
- * known, so the harness loads it at launch whatever its depth. An earlier version
- * of this module charged only one hop, because a since-deleted token threshold
- * had been calibrated there; that was a property of the threshold, never of what
- * the harness loads.
+ * `SUM(tokens + headerTokens) WHERE launchCharge = 'charged'`, plus the
+ * chain's `preambleTokens` once, is the same arithmetic `account()`'s
+ * `totalsOf` performs for `alwaysTokens` — `tokens` alone is no longer the
+ * whole charge: it also carries the per-file render header and the
+ * once-per-launch preamble, both of which the harness genuinely renders around a launched file
+ * and neither of which `harness_blob_facts.injectedTokens` measures.
+ * `projection-claude-context-chains-oracle.test.ts` holds the two equal for
+ * every working location. ⛔ That equality is the contract. An import is
+ * charged at EVERY hop the closure admits, and an import VAT could not
+ * attribute to an importer is charged too — its load class comes from its
+ * closure root, which is known, so the harness loads it at launch whatever its
+ * depth. An earlier version of this module charged only one hop, because a
+ * since-deleted token threshold had been calibrated there; that was a property
+ * of the threshold, never of what the harness loads.
  */
 
 import type { AccountedRow } from './claude-context-accounting.js';

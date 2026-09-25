@@ -12,7 +12,7 @@
  * witness, a negation's liveness, the nested rule's base, a directory's ∀/∃
  * admission, the pattern a finding names — was hand-written, and five
  * adversarial review rounds each found a new divergence in one of them. Pinning
- * the reviewer's instance never closed the class, so this checks all of them at
+ * the one instance found never closed the class, so this checks all of them at
  * once, on seeded random trees, rules AND `.gitignore` files, against a
  * reference that shares no code with the module under test.
  *

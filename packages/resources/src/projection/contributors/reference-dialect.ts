@@ -3,7 +3,7 @@
  *
  * Two readers genuinely disagree about what a reference means. VAT's own link
  * validation reads a `blob_references` token as an href under RFC 3986; Claude
- * Code reads an `@` import — a `blob_claude_imports` row, produced by the
+ * Code reads an `@` import — a `harness_blob_imports` row, produced by the
  * harness's own extractor — the way its `et` resolves a path. The dialect names
  * the reader, and the closure picks the edge table from it
  * (`closure-extent.ts`'s `edgeSourceFor`), so one field decides both what an
@@ -25,52 +25,36 @@
  *
  * ## The two readings
  *
- * | Edge | `href` (a `blob_references.rawRef`) | `claude-import` (a `blob_claude_imports.target`) |
+ * | Edge | `href` (a `blob_references.rawRef`) | `claude-import` (a `harness_blob_imports.target`) |
  * |---|---|---|
  * | `b.md` | relative, percent-decoded | relative, taken literally |
  * | `/x/y.md` | root-relative — resolves INSIDE the corpus | filesystem-absolute |
  * | `~/x.md` | a directory literally named `~` | the user's home directory |
  *
- * `href` is {@link resolveLocalHref}, unchanged. `claude-import` is the binary's
+ * `href` is {@link resolveLocalHref}, unchanged. `claude-import` is now the
+ * declared dialect's own {@link HarnessProfile.resolveImport} — the binary's
  * `et` (trim; `~` and `~/` expand; an absolute path stays; anything else is
- * `path.resolve`d against the importing file's directory) — transcribed in
- * `docs/external/claude-code-memory-loader.md`. It does not delegate to
- * {@link resolveLocalHref} because no branch of that resolver is `et`'s: the
- * harness percent-decodes nothing and treats a leading `/` as absolute. The
- * `@`, the `#` fragment and the `\ ` escape were already dealt with by the
- * extractor that produced the row, so none of them reaches this function.
+ * `path.resolve`d against the importing file's directory), transcribed in
+ * `docs/external/claude-code-memory-loader.md` and held by `harness/claude-code.ts`
+ * rather than by this module. It does not delegate to {@link resolveLocalHref}
+ * because no branch of that resolver is `et`'s: the harness percent-decodes
+ * nothing and treats a leading `/` as absolute. The `@`, the `#` fragment and
+ * the `\ ` escape were already dealt with by the extractor that produced the
+ * row, so none of them reaches it.
  *
- * ## 🪤 {@link homedir} makes `~/` resolution environment-dependent
- *
- * Two runs under different `HOME` values resolve the same token to different
- * paths. The dialect is in the store's reuse key; `HOME` is not. A `~/` import
- * is reported `CLOSURE_REFERENCE_OUTSIDE_ROOT` and never charged, so the
- * divergence cannot change a token count — but it can change a reported target
- * path, which is why it is recorded here and not left to be found.
- *
- * @vendor-claim reviewed=2026-09-23 verify=Re-extract `et` from the current Claude Code binary per docs/external/claude-code-memory-loader.md and diff it against resolveClaudeImport
+ * @vendor-claim reviewed=2026-09-23 verify=Re-extract `et` from the current Claude Code binary per docs/external/claude-code-memory-loader.md and diff it against harness/claude-code.ts's resolveClaudeImport
  */
-
-import { homedir } from 'node:os';
-import { dirname } from 'node:path';
-
-import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ReferenceDialect } from '../../schemas/project-config.js';
 import { resolveLocalHref, type ResolveLocalHrefResult } from '../../utils.js';
-
-/** The token `et` expands to the home directory, alone or as a `~/` prefix. */
-const HOME = '~';
-
-/** The prefix the harness reads as filesystem-absolute and RFC 3986 reads as root-relative. */
-const ABSOLUTE_PREFIX = '/';
+import { harnessForDialect } from '../harness/profile.js';
 
 /**
  * Resolve one edge under a declared dialect.
  *
  * @param dialect - The declaration's {@link ReferenceDialect}
  * @param token - A `blob_references.rawRef` under `href`, a
- *   `blob_claude_imports.target` under `claude-import`
+ *   `harness_blob_imports.target` under `claude-import`
  * @param sourceFilePath - Absolute path of the file holding the reference
  * @param projectRoot - Absolute corpus root, for the `href` root-relative branch
  * @returns The same discriminated union {@link resolveLocalHref} returns, so
@@ -84,35 +68,5 @@ export function resolveDialectRef(
   projectRoot: string,
 ): ResolveLocalHrefResult {
   if (dialect === 'href') return resolveLocalHref(token, sourceFilePath, projectRoot);
-  return resolveClaudeImport(token, sourceFilePath);
-}
-
-/**
- * `et` — the harness's own resolution of one import target.
- *
- * An empty target (only whitespace survived the trim) names no file: `et`
- * answers the importing directory, which the reader skips as not a regular
- * file, so `anchor_only` keeps a directory out of the extent.
- *
- * @param target - A `blob_claude_imports.target`
- * @param sourceFilePath - Absolute path of the importing file
- * @returns The resolution outcome
- */
-function resolveClaudeImport(target: string, sourceFilePath: string): ResolveLocalHrefResult {
-  const trimmed = target.trim();
-  if (trimmed === '') return { kind: 'anchor_only' };
-  if (trimmed === HOME) return resolvedAt(homedir());
-  if (trimmed.startsWith(`${HOME}/`)) return resolvedAt(safePath.join(homedir(), trimmed.slice(HOME.length + 1)));
-  if (trimmed.startsWith(ABSOLUTE_PREFIX)) return resolvedAt(safePath.resolve(trimmed));
-  return resolvedAt(safePath.resolve(dirname(sourceFilePath), trimmed));
-}
-
-/**
- * A resolved outcome with no fragment — the extractor already cut it.
- *
- * @param resolvedPath - The absolute target
- * @returns The outcome
- */
-function resolvedAt(resolvedPath: string): ResolveLocalHrefResult {
-  return { kind: 'resolved', resolvedPath, anchor: undefined };
+  return harnessForDialect(dialect).resolveImport(token, sourceFilePath);
 }

@@ -1,5 +1,8 @@
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { estimateTokens } from '../src/link-classify.js';
+import { account } from '../src/projection/claude-context-accounting.js';
 import { claudeAncestry } from '../src/projection/claude-context-ancestry.js';
 import {
   whatLoadsAt,
@@ -12,11 +15,14 @@ import {
   EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
   isDeclinedSymlinkCode,
 } from '../src/projection/contributors/filesystem-extent.js';
+import { CLAUDE_CODE } from '../src/projection/harness/claude-code.js';
+import { HarnessFactsAbsentError } from '../src/projection/harness/facts-index.js';
+import type { MemoryKind } from '../src/projection/harness/profile.js';
 import type { Projection } from '../src/projection/projection.js';
 import { ExtentDeclarationSchema } from '../src/schemas/project-config.js';
 import type { RealizationConditionRow } from '../src/schemas/projection-resources.js';
 
-import { claudeContextFixture } from './helpers/claude-context-fixture.js';
+import { CLAUDE_CONTEXT_FIXTURE_ROOT, claudeContextFixture } from './helpers/claude-context-fixture.js';
 
 /**
  * Assert a result IS an answer, and narrow it.
@@ -145,6 +151,48 @@ const DEPTH_CAPPED_CHAIN: Record<string, string> = {
   [NESTED_RULE_HELPER]: 'helper\n',
 };
 
+/**
+ * A root rules file whose own NAME collides with the `CLAUDE.local.md` slot
+ * name — a rules file is ALWAYS `Project` in the vendor's own model, however
+ * it happens to be named, and a `kind` test that re-derives from the basename
+ * alone mislabels this one `Local`.
+ */
+const MISNAMED_RULES_FILE = '.claude/rules/CLAUDE.local.md';
+
+/**
+ * `acme/CLAUDE.md` (importing `acme/docs/a.md`) plus `acme/CLAUDE.local.md`
+ * (importing `acme/docs/b.md`), plus a root rules file literally NAMED
+ * `CLAUDE.local.md` — launched at `acme`. Exercises every source
+ * `headerTokensFor`'s `kind` reads: a `Project` ancestry file, a `Project`
+ * import, a `Local` ancestry file, a `Local`-BY-INHERITANCE import (an import
+ * rooted at the LOCAL file inherits `Local`, not re-derived from its own
+ * basename — `acme/docs/b.md` names nothing `.local`), and a rules file whose
+ * name collides with the `Local` slot but stays `Project` regardless
+ * ({@link MISNAMED_RULES_FILE}).
+ */
+const HEADER_TREE: Record<string, string> = {
+  'acme/CLAUDE.md': '@docs/a.md\n\nRoot instructions for acme.\n',
+  'acme/docs/a.md': 'Imported handbook content.\n',
+  'acme/CLAUDE.local.md': '@docs/b.md\n\nLocal, uncommitted instructions.\n',
+  'acme/docs/b.md': 'Locally imported content.\n',
+  [MISNAMED_RULES_FILE]: 'An unscoped rule, oddly named like the Local slot. Always Project.\n',
+};
+
+/**
+ * Every {@link HEADER_TREE} path's expected `kind` — the mutation-guard table
+ * the loop below checks. `chainRoot = path` (ignoring an import's `rootPath`)
+ * passes `acme/CLAUDE.md` and `acme/docs/a.md` either way (both are `Project`
+ * under either rule) but fails `acme/docs/b.md` (whose own basename is not
+ * `.local`), which is exactly why that row is in the table.
+ */
+const HEADER_TREE_KIND: ReadonlyMap<string, MemoryKind> = new Map([
+  ['acme/CLAUDE.md', 'Project'],
+  ['acme/docs/a.md', 'Project'],
+  ['acme/CLAUDE.local.md', 'Local'],
+  ['acme/docs/b.md', 'Local'],
+  [MISNAMED_RULES_FILE, 'Project'],
+]);
+
 describe('whatLoadsAt', () => {
   it('returns a distinguishable unknown for a path the projection never realized', async () => {
     const projection = await claudeContextFixture({ 'CLAUDE.md': 'root\n' });
@@ -154,6 +202,14 @@ describe('whatLoadsAt', () => {
       input: 'not/here',
       reason: 'path-not-realized',
     });
+  });
+
+  it('throws a coded error — never charges nothing — when a walked blob has no harness facts', async () => {
+    const projection = await claudeContextFixture({ 'CLAUDE.md': 'root\n' });
+    // The same tables with the facts row gone: a producer that forgot to derive it.
+    const underived: Projection = { ...projection, harnessBlobFacts: [] };
+
+    expect(() => whatLoadsAt(underived, '')).toThrow(HarnessFactsAbsentError);
   });
 
   it('answers zero rows — not unknown — for a realized directory with no instruction files', async () => {
@@ -212,7 +268,7 @@ describe('whatLoadsAt', () => {
     // The root is in the answer by ANCESTRY and by nothing else: it was seeded
     // into its own traversal rather than reached by a reference, so an `import`
     // admission here would name a hop that never happened.
-    expect(rowAt(answer, 'CLAUDE.md')?.admissions).toEqual([{ kind: 'ancestry', dir: '' }]);
+    expect(rowAt(answer, 'CLAUDE.md')?.admissions).toEqual([{ kind: 'ancestry', dir: '', local: false }]);
   });
 
   it('does not charge a closure rooted at a CLAUDE.md this query never reached', async () => {
@@ -294,18 +350,17 @@ describe('whatLoadsAt', () => {
   });
 
   it('escalates a PATH-SHAPED unresolved import to warning and leaves a bare @token at info', async () => {
-    // ⚠️ The two tokens are in DIFFERENT files on purpose.
-    // `realization_conditions` is keyed `(extentId, path, code, resourceId)`
-    // (`projection.ts`), so two unresolved references out of ONE file collapse
-    // to a single stored row — see the task report's finding. Splitting them
-    // keeps both rows, which is what this case is actually about.
+    // Both tokens are unresolved references out of ONE file, at two distinct
+    // lines: `realization_conditions` keys on `(extentId, path, code,
+    // resourceId, sourcePath, sourceLine, sourceRef)`, so the two positions record two
+    // rows rather than one collapsing the other.
     const answer = await answerAt(
-      { 'CLAUDE.md': '@docs/missing.md\n@notes.md\n', 'notes.md': 'thanks @jeff\n' },
+      { 'CLAUDE.md': '@docs/missing.md\n@jeff\n' },
       '',
     );
 
-    expect(answer.conditions.find((c) => c.sourceRef === '@docs/missing.md')?.severity).toBe('warning');
-    expect(answer.conditions.find((c) => c.sourceRef === '@jeff')?.severity).toBe('info');
+    expect(answer.conditions.find((c) => c.ref === '@docs/missing.md')?.severity).toBe('warning');
+    expect(answer.conditions.find((c) => c.ref === '@jeff')?.severity).toBe('info');
   });
 
   it('never escalates an escaping import, however path-shaped', async () => {
@@ -316,7 +371,129 @@ describe('whatLoadsAt', () => {
     expect(outside[0]?.severity).toBe('info');
     // The token is as path-shaped as they come — an extension and two slashes —
     // so a grader that escalated on shape alone would fire here.
-    expect(outside[0]?.sourceRef).toBe('@~/.claude/shared.md');
+    expect(outside[0]?.ref).toBe('@~/.claude/shared.md');
+    // WHY names the loader rule, never a restatement of `message` — the vendor
+    // gates an escaping import on external-includes approval, a per-user
+    // decision this tree cannot show.
+    expect(outside[0]?.why).toMatch(/external includes|hasClaudeMdExternalIncludesApproved/);
+    expect(outside[0]?.harness).toBe('claude-code');
+    // `subject` is the escaping TARGET — realization_conditions.path, which
+    // this code anchors to the target rather than the referrer — distinct from
+    // `path` above (the referrer, CLAUDE.md, where an author would look).
+    expect(outside[0]?.path).toBe('CLAUDE.md');
+    expect(outside[0]?.subject).not.toBeNull();
+    expect(outside[0]?.subject).not.toBe(outside[0]?.path);
+    expect(outside[0]?.subject?.startsWith('../')).toBe(true);
+  });
+
+  it('keeps one finding per REFERRER when two members of one closure import the same target on the same line', async () => {
+    // `a.md` and `b.md` sit in the same closure (both imported by CLAUDE.md)
+    // and each imports the SAME escaping token on ITS line 1. The STORED row
+    // anchors `path` to the escaping target, so the two rows agree on
+    // `(extentId, path, code, resourceId, sourceLine, sourceRef)` and differ
+    // only in `sourcePath` — a key without it keeps whichever referrer the walk
+    // reached first and silently drops the other. The ANSWER's `path` is
+    // `sourcePath ?? path` (the file an author opens), which is why the
+    // assertion below reads the two referrers, and `subject` the shared target.
+    const answer = await answerAt(
+      {
+        'acme/CLAUDE.md': '@widgets/a.md\n@widgets/b.md\n',
+        'acme/widgets/a.md': '@~/.claude/shared.md\n',
+        'acme/widgets/b.md': '@~/.claude/shared.md\n',
+      },
+      'acme',
+    );
+    const outside = answer.conditions.filter((c) => c.code === 'CLOSURE_REFERENCE_OUTSIDE_ROOT');
+
+    expect(outside.map((c) => c.path).sort((left, right) => left.localeCompare(right)))
+      .toEqual(['acme/widgets/a.md', 'acme/widgets/b.md']);
+    expect(outside.every((c) => c.line === 1 && c.ref === '@~/.claude/shared.md')).toBe(true);
+    // Same subject for both — the rows differ ONLY by their referrer.
+    expect(new Set(outside.map((c) => c.subject)).size).toBe(1);
+  });
+
+  it('reports the import chain and the loader-rule WHY for an unresolved import, graded by shape', async () => {
+    // The vendor-observation fixture (docs/external/claude-code-memory-loader.md):
+    // a wiki page importing a doctor that names no file. Both tokens live in
+    // `wiki/doctors.md`, one hop off the entry point — two distinct positions
+    // in the same file, which the widened `realization_conditions` key now
+    // keeps as two separate findings.
+    const answer = await answerAt(
+      {
+        'acme/CLAUDE.md': '@wiki/doctors.md\n',
+        'acme/wiki/doctors.md': '@doogie.howser.md\n@docs/missing.md\n',
+      },
+      'acme',
+    );
+
+    // EXACTLY two: fewer is a finding lost to a narrow key, more is one
+    // duplicated by the fixpoint's re-emission.
+    const unresolved = answer.conditions.filter(
+      (c) => c.code === 'CLOSURE_REFERENCE_UNRESOLVED' && c.path === 'acme/wiki/doctors.md',
+    );
+    expect(unresolved).toHaveLength(2);
+
+    const bare = unresolved.find((c) => c.ref === '@doogie.howser.md');
+    const pathShaped = unresolved.find((c) => c.ref === '@docs/missing.md');
+    if (bare === undefined || pathShaped === undefined) throw new Error('fixture did not land both conditions');
+
+    expect(bare.code).toBe('CLOSURE_REFERENCE_UNRESOLVED');
+    expect(bare.severity).toBe('info');
+    expect(pathShaped.severity).toBe('warning');
+
+    for (const condition of [bare, pathShaped]) {
+      // WHAT — the file an author opens, and the token, by name and line.
+      expect(condition.path).toBe('acme/wiki/doctors.md');
+      expect(condition.line).toBe(condition.ref === '@doogie.howser.md' ? 1 : 2);
+      expect(condition.message).toContain(condition.ref);
+      expect(condition.subject).toBeNull();
+      // WHY — the harness's own loader rule, not a copy of `message`.
+      expect(condition.harness).toBe('claude-code');
+      expect(condition.why).toMatch(/absent|silently skipped/);
+      expect(condition.why).not.toBe(condition.message);
+      // WHAT IT AFFECTS — the chain from the entry point through the one hop
+      // that holds the reference.
+      expect(condition.affects).toEqual({ chain: ['acme/CLAUDE.md', 'acme/wiki/doctors.md'], hop: 1 });
+    }
+  });
+
+  it('never demotes a STORED warning, however bare the shape', async () => {
+    // §9.1 escalates; it must never do the opposite. A bare `@jeff` graded on
+    // shape alone computes `info` — the control that proves the surviving
+    // `warning` came from the STORED severity, not from a grader that quietly
+    // agrees with whatever it is given. The fixture's own content names no `@`
+    // token at all, so the only `@jeff` condition in the answer is the one this
+    // test injects — a real, naturally-produced `@jeff` row would also grade
+    // `info` and be indistinguishable from a demoted `warning`.
+    const projection = await claudeContextFixture({ 'CLAUDE.md': 'root, no imports here\n' });
+    const realization = projection.resourceRealizations.find((row) => row.path === 'CLAUDE.md');
+    if (realization === undefined) throw new Error('fixture is missing its CLAUDE.md');
+    const storedWarning: RealizationConditionRow = {
+      extentId: realization.extentId,
+      path: 'CLAUDE.md',
+      code: 'CLOSURE_REFERENCE_UNRESOLVED',
+      severity: 'warning',
+      message: 'a bare unresolved import, stored at warning by this test\'s own doing',
+      resourceId: realization.resourceId,
+      sourcePath: 'CLAUDE.md',
+      sourceLine: 1,
+      sourceRef: '@jeff',
+      targetExists: null,
+      matchedPattern: null,
+      matchedPayload: null,
+    };
+    const answer = narrowed(whatLoadsAt(withCondition(projection, storedWarning), ''));
+
+    expect(answer.conditions.find((c) => c.ref === '@jeff')?.severity).toBe('warning');
+  });
+
+  it('affects is null for a base-extent condition — no import closure to attribute a chain from', async () => {
+    const projection = await claudeContextFixture({ 'CLAUDE.md': 'root\n' });
+    const answer = narrowed(whatLoadsAt(withCondition(projection, rootAbsentRow(projection)), ''));
+    const condition = answer.conditions.find((c) => c.code === 'CLOSURE_ROOT_ABSENT');
+
+    expect(condition?.affects).toBeNull();
+    expect(condition?.harness).toBe('claude-code');
   });
 
   it('reports tokens as unknown, never 0, when the member has no blob', async () => {
@@ -463,6 +640,23 @@ describe('whatLoadsAt', () => {
     expect(rowAt(answer, NESTED_RULE_HELPER)?.loadClass).toBe('always');
   });
 
+  it('exposes the refused target as `subject` for CLOSURE_DEPTH_EXCEEDED, citing the loader\'s depth bound', async () => {
+    // The ROOT closure's own walk overruns its 4-hop budget one hop into
+    // `NESTED_RULE`'s `@helper.md` — `NESTED_RULE_HELPER` loads anyway (the
+    // PREVIOUS test), but only via `NESTED_RULE`'s own closure; the ROOT
+    // closure's walk records the refusal, anchored to the REFERRER
+    // (`NESTED_RULE`, whose reference overran the budget).
+    const answer = await answerAt(DEPTH_CAPPED_CHAIN, 'sub');
+    const depthExceeded = answer.conditions.find((c) => c.code === 'CLOSURE_DEPTH_EXCEEDED');
+    if (depthExceeded === undefined) throw new Error('fixture did not land a CLOSURE_DEPTH_EXCEEDED condition');
+
+    expect(depthExceeded.path).toBe(NESTED_RULE);
+    // `subject` is the refused TARGET — what `path` alone would otherwise drop.
+    expect(depthExceeded.subject).toBe(NESTED_RULE_HELPER);
+    expect(depthExceeded.harness).toBe('claude-code');
+    expect(depthExceeded.why).toMatch(/Pyn|oQe/);
+  });
+
   it('keeps the provenance map a SUBSET of the extent membership it labels', async () => {
     const projection = await claudeContextFixture({ ...DIAMOND, 'unreferenced.md': 'y\n' });
     const provenanceRow = projection.zoneProvenance[0];
@@ -472,8 +666,10 @@ describe('whatLoadsAt', () => {
     const provenance = closureProvenance({
       root: projection.roots[0]?.path ?? '',
       resourceRealizations: projection.resourceRealizations,
+      blobs: projection.blobs,
       blobReferences: projection.blobReferences,
-      blobClaudeImports: projection.blobClaudeImports,
+      harnessBlobFacts: projection.harnessBlobFacts,
+      harnessBlobImports: projection.harnessBlobImports,
       declaration: ExtentDeclarationSchema.parse(provenanceRow.parameterSet),
     });
 
@@ -503,6 +699,54 @@ describe('whatLoadsAt', () => {
     expect(
       claudeAncestry(projection.resourceRealizations, projection.resourceTags, 'a/b').map((e) => e.path),
     ).toEqual(['CLAUDE.md', 'a/CLAUDE.md', 'a/b/CLAUDE.md']);
+  });
+
+  describe('headerTokens — the render header Claude Code prints before each file', () => {
+    it('charges the launch header, kind Project or Local by the row\'s own chain root — never by a filename alone', async () => {
+      const answer = await answerAt(HEADER_TREE, 'acme');
+
+      for (const [path, kind] of HEADER_TREE_KIND) {
+        const row = rowAt(answer, path);
+        expect(row?.loadClass, path).toBe('always');
+        expect(row?.headerTokens, path).toBe(
+          estimateTokens(CLAUDE_CODE.renderHeader(safePath.join(CLAUDE_CONTEXT_FIXTURE_ROOT, path), kind, 'launch')),
+        );
+      }
+    });
+
+    it('charges the launch preamble once, and adds it and every header into alwaysTokens', async () => {
+      const answer = await answerAt(HEADER_TREE, 'acme');
+      const accounted = account(answer);
+
+      expect(accounted.totals.preambleTokens).toBe(estimateTokens(CLAUDE_CODE.launchPreamble));
+      const headerSum = accounted.rows.reduce((total, row) => total + row.headerTokens, 0);
+      expect(accounted.totals.headerTokens).toBe(headerSum);
+      const alwaysSum = accounted.rows
+        .filter((row) => row.loadClass === 'always')
+        .reduce((total, row) => total + (row.tokens ?? 0) + row.headerTokens, 0);
+      expect(accounted.totals.alwaysTokens).toBe(accounted.totals.preambleTokens + alwaysSum);
+    });
+
+    it('charges NO preamble for a launch that loads nothing', async () => {
+      const answer = await answerAt({ 'src/index.ts': 'x\n' }, 'src');
+      const accounted = account(answer);
+
+      expect(accounted.rows).toEqual([]);
+      expect(accounted.totals.preambleTokens).toBe(0);
+      expect(accounted.totals.alwaysTokens).toBe(0);
+    });
+
+    it('charges the ON-READ header — no kind suffix — for a file loaded by reading it', async () => {
+      const answer = await answerAt(SCOPED_RULE_TREE, SCOPED_RULE_SUBJECT);
+      const row = rowAt(answer, SCOPED_RULE);
+
+      expect(row?.loadClass).toBe('on-demand');
+      expect(row?.headerTokens).toBe(
+        estimateTokens(
+          CLAUDE_CODE.renderHeader(safePath.join(CLAUDE_CONTEXT_FIXTURE_ROOT, SCOPED_RULE), 'Project', 'read'),
+        ),
+      );
+    });
   });
 });
 

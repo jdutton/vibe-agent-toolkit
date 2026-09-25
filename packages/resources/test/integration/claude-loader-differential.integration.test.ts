@@ -1,6 +1,7 @@
 /**
  * Randomized DIFFERENTIAL test of `vat claude context` against a reference port
- * of Claude Code's memory loader — the WIDE tier: a disjoint seed range, the
+ * of Claude Code's memory loader — the WIDE tier: seeds 9–508, continuing the
+ * unit tier's 1–8 so the two together sweep one contiguous prefix, the
  * 4 MiB size-cliff cases the unit tier cannot afford, a sweep through REAL
  * on-disk trees populated by `buildClaudeContextPopulation`, with the on-disk
  * lane's own regressions pinned.
@@ -42,13 +43,13 @@ const FAST_SETTLED = new Set(SETTLED_FEATURES.filter((feature) => feature !== 'o
 const OVERSIZE_BODY = `\n\`\`\`\n${'x'.repeat(LOADER_SIZE_CLIFF)}\n\`\`\`\n`;
 
 describe('vat claude context agrees with a reference port of the Claude Code loader (wide sweep)', () => {
-  it('in memory, across 300 seeded random trees', async () => {
-    const failures = await loaderDifferentialFailures(loaderSweepSeeds(1001, 300), FAST_SETTLED, inMemory);
+  it('in memory, across 300 seeded random trees (seeds 9–308)', async () => {
+    const failures = await loaderDifferentialFailures(loaderSweepSeeds(9, 300), FAST_SETTLED, inMemory);
     expect(failures, failures.join('\n')).toEqual([]);
   });
 
-  it('on disk, through the production population lane', async () => {
-    const failures = await loaderDifferentialFailures(loaderSweepSeeds(2001, 200), FAST_SETTLED, onDisk);
+  it('on disk, through the production population lane (seeds 309–508)', async () => {
+    const failures = await loaderDifferentialFailures(loaderSweepSeeds(309, 200), FAST_SETTLED, onDisk);
     expect(failures, failures.join('\n')).toEqual([]);
   }, 60_000);
 });
@@ -57,7 +58,7 @@ describe('the on-disk lane reads imports and injected text as the harness does',
   it('lexes a `.ts` import with the same lexer, so a `@` in its code span imports nothing (seed 2006)', async () => {
     // On disk a `.ts` file is routed to no parser, so VAT's generic lexer used
     // to read `` `@../x.md` `` as an import there while the in-memory lane read
-    // it as markdown. `blob_claude_imports` is one extractor for both.
+    // it as markdown. `harness_blob_imports` is one extractor for both.
     const files = { 'CLAUDE.md': '@src/index.ts\n', 'src/index.ts': 'export {};\n\n`@../x.md`\n', 'x.md': 'x\n' };
     expect(await loaderDivergences({ seed: 0, files, queries: ['CLAUDE.md'] }, onDisk)).toEqual([]);
   });
@@ -66,7 +67,7 @@ describe('the on-disk lane reads imports and injected text as the harness does',
     // On disk a `.ts` file is routed to no parser and had no `blobs.frontmatter`,
     // so its `paths:` went unread: VAT charged it at launch under an unscoped
     // rule, and missed it on a matching read, while the in-memory lane — parsing
-    // it as markdown — agreed with the harness. `blobs.claudePaths` is one reader.
+    // it as markdown — agreed with the harness. `harness_blob_facts.paths` is one reader.
     const files = {
       '.claude/rules/style.md': 'See @../../src/index.ts\n',
       'src/index.ts': '---\npaths:\n  - "src/**"\n---\nexport {};\n',

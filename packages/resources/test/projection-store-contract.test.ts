@@ -3,7 +3,7 @@
  * shape digest, and identifier quoting.
  *
  * No backend is involved. What is being pinned here is that the *interface*
- * derives everything from the registry — so a fourteenth table joins the right
+ * derives everything from the registry — so a new table joins the right
  * bundle, and a schema edit moves the digest, without anyone editing a second
  * list.
  */
@@ -15,6 +15,7 @@ import { quoteIdentifier } from '../src/projection/sql-identifiers.js';
 import { projectionShapeDigest, splitProjectionByScope } from '../src/projection/store.js';
 import { PROJECTION_TABLES, type ProjectionTableName } from '../src/projection/table-registry.js';
 import { BlobRowSchema } from '../src/schemas/projection-blobs.js';
+import { HarnessBlobFactsRowSchema } from '../src/schemas/projection-harness.js';
 
 /** The specifier both the digest harness and the no-constant test reach for. */
 const TABLE_REGISTRY_MODULE = '../src/projection/table-registry.js';
@@ -35,7 +36,7 @@ const EXPECTED_CONTEXT_COLUMNS: Partial<Record<ProjectionTableName, string>> = {
   zoneProvenance: 'contextId',
 };
 
-/** An empty projection — thirteen tables, no rows. */
+/** An empty projection — every table, no rows. */
 function emptyProjection(): Projection {
   const tables: Record<string, readonly unknown[]> = {};
   for (const spec of Object.values(PROJECTION_TABLES)) {
@@ -45,28 +46,31 @@ function emptyProjection(): Projection {
 }
 
 /**
- * The registry with one table's `contextColumn` rewritten, or removed.
+ * The registry with one table's `contextColumn` or `partitionColumn` rewritten,
+ * or removed.
  *
  * Every other fact — schema object, primary key, scope, SQL name, declaration
  * order — is the real registry's, so a digest that moves under this moved
- * because of the context column and nothing else.
+ * because of that one column declaration and nothing else.
  *
  * @param table - Which table to perturb
- * @param contextColumn - The column to declare, or `undefined` to declare none
+ * @param field - Which column declaration to perturb
+ * @param column - The column to declare, or `undefined` to declare none
  * @returns A registry-shaped object for the mock to serve
  */
-function registryWithContextColumn(
+function registryWithColumn(
   table: ProjectionTableName,
-  contextColumn: string | undefined,
+  field: 'contextColumn' | 'partitionColumn',
+  column: string | undefined,
 ): Record<string, unknown> {
   const spec: Record<string, unknown> = { ...PROJECTION_TABLES[table] };
-  if (contextColumn === undefined) {
+  if (column === undefined) {
     // The absent key, not a key holding `undefined` — `exactOptionalPropertyTypes`
-    // makes those different values, and "this table has no context column" is
+    // makes those different values, and "this table declares no such column" is
     // the absence.
-    delete spec['contextColumn'];
+    delete spec[field];
   } else {
-    spec['contextColumn'] = contextColumn;
+    spec[field] = column;
   }
   return { ...PROJECTION_TABLES, [table]: spec };
 }
@@ -102,7 +106,7 @@ async function digestUnderRegistry(tables: Record<string, unknown>): Promise<str
 }
 
 describe('table scopes', () => {
-  it('declares a scope for all fourteen tables', () => {
+  it('declares a scope for every table', () => {
     for (const spec of Object.values(PROJECTION_TABLES)) {
       expect(['blob', 'extent'], spec.name).toContain(spec.scope);
     }
@@ -112,7 +116,7 @@ describe('table scopes', () => {
     const blobScoped = Object.values(PROJECTION_TABLES)
       .filter((spec) => spec.scope === 'blob')
       .map((spec) => spec.key);
-    expect(blobScoped).toEqual(['blobs', 'blobReferences', 'blobSections', 'blobConditions', 'blobClaudeImports']);
+    expect(blobScoped).toEqual(['blobs', 'blobReferences', 'blobSections', 'blobConditions', 'harnessBlobFacts', 'harnessBlobImports']);
   });
 
   it('scopes every table that names an extent or a root to extent', () => {
@@ -221,34 +225,32 @@ describe('projectionShapeDigest', () => {
     expect(withoutDecodeColumns).not.toBe(projectionShapeDigest());
   });
 
-  it('moves across the Claude memory facts, so a store written before them is never served after', async () => {
-    // The registry as it stood before `blob_claude_imports` and the two
-    // `blobs.claudeInjected*` columns. A warm store from that build holds blob
-    // rows with neither — hydrated here, every import walk would follow nothing
-    // and every charge would read undefined. A different digest is a different
-    // directory, so that store is simply cold.
-    const before = Object.fromEntries(Object.entries(PROJECTION_TABLES).filter(([key]) => key !== 'blobClaudeImports'));
-    const beforeClaudeFacts = await digestUnderRegistry({
-      ...before,
-      blobs: {
-        ...PROJECTION_TABLES.blobs,
-        schema: BlobRowSchema.omit({ claudeInjectedBytes: true, claudeInjectedTokens: true }),
+  it('moves across the harness tables, so a store written before them is never served after', async () => {
+    // The registry without `harness_blob_facts` and `harness_blob_imports`. A
+    // warm store from that build holds no harness facts at all — hydrated here,
+    // every reached memory file would be a HarnessFactsAbsentError. A different
+    // digest is a different directory, so that store is simply cold.
+    const before = Object.fromEntries(
+      Object.entries(PROJECTION_TABLES).filter(([key]) => key !== 'harnessBlobFacts' && key !== 'harnessBlobImports'),
+    );
+    const beforeHarnessTables = await digestUnderRegistry(before);
+
+    expect(beforeHarnessTables).not.toBe(projectionShapeDigest());
+  });
+
+  it('moves across `harness_blob_facts.paths`, so a store whose rows carry no harness-read `paths:` is never served after', async () => {
+    // A warm store from before the column hydrates every facts row with
+    // `paths` undefined — every rule and every scoped import would read as
+    // unscoped and be charged at launch. The digest must send it cold.
+    const beforePaths = await digestUnderRegistry({
+      ...PROJECTION_TABLES,
+      harnessBlobFacts: {
+        ...PROJECTION_TABLES.harnessBlobFacts,
+        schema: HarnessBlobFactsRowSchema.omit({ paths: true }),
       },
     });
 
-    expect(beforeClaudeFacts).not.toBe(projectionShapeDigest());
-  });
-
-  it('moves across `blobs.claudePaths`, so a store whose rows carry no harness-read `paths:` is never served after', async () => {
-    // A warm store from before the column hydrates every blob with
-    // `claudePaths` undefined — every rule and every scoped import would read as
-    // unscoped and be charged at launch. The digest must send it cold.
-    const beforeClaudePaths = await digestUnderRegistry({
-      ...PROJECTION_TABLES,
-      blobs: { ...PROJECTION_TABLES.blobs, schema: BlobRowSchema.omit({ claudePaths: true }) },
-    });
-
-    expect(beforeClaudePaths).not.toBe(projectionShapeDigest());
+    expect(beforePaths).not.toBe(projectionShapeDigest());
   });
 
   it('moves when a table declares a DIFFERENT contextColumn', async () => {
@@ -258,7 +260,7 @@ describe('projectionShapeDigest', () => {
     // never have kept — and nothing in the rows themselves says so. Sharing a
     // directory across the change is the failure; a different digit in the path
     // is the whole prevention.
-    const moved = await digestUnderRegistry(registryWithContextColumn('resourceRealizations', 'resourceId'));
+    const moved = await digestUnderRegistry(registryWithColumn('resourceRealizations', 'contextColumn', 'resourceId'));
 
     expect(moved).not.toBe(projectionShapeDigest());
   });
@@ -267,7 +269,23 @@ describe('projectionShapeDigest', () => {
     // The other direction, and not the same edit: dropping the column turns a
     // per-context replace into a whole-key-range replace, which is how the
     // narrow run silently deletes the broad run's closure extents.
-    const dropped = await digestUnderRegistry(registryWithContextColumn('resourceRealizations', undefined));
+    const dropped = await digestUnderRegistry(registryWithColumn('resourceRealizations', 'contextColumn', undefined));
+
+    expect(dropped).not.toBe(projectionShapeDigest());
+  });
+
+  it('moves when a harness table declares a DIFFERENT partitionColumn', async () => {
+    // The partition column decides which rows a lazy harness write replaces, the
+    // same way `contextColumn` does for an extent write: a store partitioned on
+    // one column and read by a build partitioning on another keeps rows this
+    // build would have replaced.
+    const moved = await digestUnderRegistry(registryWithColumn('harnessBlobFacts', 'partitionColumn', 'blob'));
+
+    expect(moved).not.toBe(projectionShapeDigest());
+  });
+
+  it('moves when a harness table stops declaring a partitionColumn', async () => {
+    const dropped = await digestUnderRegistry(registryWithColumn('harnessBlobImports', 'partitionColumn', undefined));
 
     expect(dropped).not.toBe(projectionShapeDigest());
   });

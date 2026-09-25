@@ -82,7 +82,7 @@ export interface EdgeLens {
   readonly forms: ReadonlySet<ReferenceSyntacticForm>;
   /**
    * How a token is read. Only `href`: a lens reads `blob_references`, and the
-   * `claude-import` dialect reads a `blob_claude_imports.target` — a spelling
+   * `claude-import` dialect reads a `harness_blob_imports.target` — a spelling
    * its extractor already unescaped and cut, which a raw token is not.
    */
   readonly dialect: Extract<ReferenceDialect, 'href'>;

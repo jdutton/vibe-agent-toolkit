@@ -1,7 +1,7 @@
 /**
  * The `Projection` container and the mutable builder that populates it.
  *
- * A projection is nothing but rows: fourteen tables, each a flat array, produced
+ * A projection is nothing but rows: the tables `PROJECTION_TABLES` declares, each a flat array, produced
  * by contributors that never interpret one another's output. This module owns
  * two things and deliberately nothing else — the shape of that row set, and the
  * single **population** invariant no individual row can observe.
@@ -35,13 +35,13 @@ import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 import type { KeyedContent, ParserKind } from '../content-key.js';
 import { parserKindForMimeType } from '../mime-type.js';
 import type {
-  BlobClaudeImportRow,
   BlobConditionRow,
   BlobReferenceRow,
   BlobRow,
   BlobSectionRow,
 } from '../schemas/projection-blobs.js';
 import type { ClaudeRulePatternRow } from '../schemas/projection-claude-rules.js';
+import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../schemas/projection-harness.js';
 import { CONDITION_WITHOUT_REFERENCE } from '../schemas/projection-resources.js';
 import type {
   ContentState,
@@ -97,7 +97,7 @@ const NO_PARSER_KIND: ParserKind = 'none';
 const KEY_SEPARATOR = '\u0000';
 
 /**
- * The fourteen materialised tables of the resource projection.
+ * The fifteen materialised tables of the resource projection.
  *
  * `edges`, `edge_resolutions` and `lens_entry_points` are absent on purpose:
  * zones.md §2 places them in the derived-per-lens column, so they are the
@@ -143,8 +143,14 @@ export interface Projection {
   readonly blobSections: readonly BlobSectionRow[];
   /** Blob-keyed parse conditions. */
   readonly blobConditions: readonly BlobConditionRow[];
-  /** Blob-keyed Claude Code `@` imports — the harness's own extractor, not VAT's lexer. */
-  readonly blobClaudeImports: readonly BlobClaudeImportRow[];
+  /**
+   * `(blob, harness)`-keyed: what a harness injects for a blob, and the
+   * `paths:` globs it scopes it by. Absent = not derived, never zero — read it
+   * through `harnessFactsIndex`.
+   */
+  readonly harnessBlobFacts: readonly HarnessBlobFactsRow[];
+  /** `(blob, harness)`-keyed imports — each harness's own extractor, not VAT's lexer. */
+  readonly harnessBlobImports: readonly HarnessBlobImportRow[];
 }
 
 /**
@@ -158,7 +164,7 @@ export interface Projection {
  *
  * The arrays are **live**, not snapshots: the merge driver hands the same base
  * to successive strata, and a closure contributor must see what the base
- * stratum contributed. Copying fourteen tables per contributor per fixpoint
+ * stratum contributed. Copying every table per contributor per fixpoint
  * iteration would be the alternative, and it buys nothing the `readonly` types
  * do not already state.
  */
@@ -217,7 +223,7 @@ type RowKey<T> = (row: T) => string;
 /**
  * One table: insertion-ordered rows plus a key index.
  *
- * Fourteen near-identical `add` implementations would be fourteen places for the
+ * Fifteen near-identical `add` implementations would be fifteen places for the
  * de-duplication rule to drift, so there is one, parameterised by the key.
  */
 class ProjectionTable<T> {
@@ -345,8 +351,17 @@ export class ProjectionBuilder {
   readonly #tags = new ProjectionTable<ResourceTagRow>(
     (row) => compositeKey(row.resourceId, row.tag, row.value, row.source),
   );
+  // `sourcePath`/`sourceLine`/`sourceRef` are IN the key, not merely carried:
+  // two DIFFERENT unresolved `@` references in the same file share `(extentId,
+  // path, code, resourceId)` (`CLOSURE_REFERENCE_UNRESOLVED` anchors `path` to
+  // the REFERRER, so it cannot distinguish them either), and two members of one
+  // closure refused through the same target on the same line with the same
+  // spelling share everything but `sourcePath`. Any narrower key keeps only
+  // the first-encountered reference and drops the rest. The fixpoint's own
+  // re-emission of the SAME reference is still a no-op: it re-derives an
+  // identical `(sourcePath, line, rawRef)` triple every pass.
   readonly #realizationConditions = new ProjectionTable<RealizationConditionRow>(
-    (row) => compositeKey(row.extentId, row.path, row.code, row.resourceId),
+    (row) => compositeKey(row.extentId, row.path, row.code, row.resourceId, row.sourcePath, row.sourceLine, row.sourceRef),
   );
   // Keyed on the IDENTITY and the glob's slot in its own `paths:` list, never on
   // an extent: a rules file is re-realized under every import closure that
@@ -374,8 +389,11 @@ export class ProjectionBuilder {
   readonly #blobConditions = new ProjectionTable<BlobConditionRow>(
     (row) => compositeKey(row.blob, row.code, row.line, row.message),
   );
-  readonly #blobClaudeImports = new ProjectionTable<BlobClaudeImportRow>(
-    (row) => compositeKey(row.blob, row.ordinal),
+  readonly #harnessBlobFacts = new ProjectionTable<HarnessBlobFactsRow>(
+    (row) => compositeKey(row.blob, row.harness),
+  );
+  readonly #harnessBlobImports = new ProjectionTable<HarnessBlobImportRow>(
+    (row) => compositeKey(row.blob, row.harness, row.ordinal),
   );
 
   readonly #gitTracker: GitTracker | undefined;
@@ -668,7 +686,8 @@ export class ProjectionBuilder {
    * Record a population-time condition.
    *
    * @param row - The condition row
-   * @returns True when recorded, false when this exact condition was already present
+   * @returns True when recorded, false when a row already occupies this key
+   *   (`extentId`, `path`, `code`, `resourceId`, `sourceLine`, `sourceRef`)
    */
   addCondition(row: RealizationConditionRow): boolean {
     return this.#realizationConditions.add(row) === undefined;
@@ -749,13 +768,23 @@ export class ProjectionBuilder {
   }
 
   /**
-   * Record one Claude Code `@` import.
+   * Record what one harness does with one blob's bytes.
+   *
+   * @param row - The facts row
+   * @returns True when recorded, false when this `(blob, harness)` was already present
+   */
+  addHarnessBlobFacts(row: HarnessBlobFactsRow): boolean {
+    return this.#harnessBlobFacts.add(row) === undefined;
+  }
+
+  /**
+   * Record one import a harness reads out of a blob.
    *
    * @param row - The import row
-   * @returns True when recorded, false when this `(blob, ordinal)` was already present
+   * @returns True when recorded, false when this `(blob, harness, ordinal)` was already present
    */
-  addBlobClaudeImport(row: BlobClaudeImportRow): boolean {
-    return this.#blobClaudeImports.add(row) === undefined;
+  addHarnessBlobImport(row: HarnessBlobImportRow): boolean {
+    return this.#harnessBlobImports.add(row) === undefined;
   }
 
   /**
@@ -812,7 +841,8 @@ export class ProjectionBuilder {
       blobReferences: this.#blobReferences.rows,
       blobSections: this.#blobSections.rows,
       blobConditions: this.#blobConditions.rows,
-      blobClaudeImports: this.#blobClaudeImports.rows,
+      harnessBlobFacts: this.#harnessBlobFacts.rows,
+      harnessBlobImports: this.#harnessBlobImports.rows,
     };
     return this.#base;
   }
@@ -840,7 +870,8 @@ export class ProjectionBuilder {
       blobReferences: this.#blobReferences.snapshot(),
       blobSections: this.#blobSections.snapshot(),
       blobConditions: this.#blobConditions.snapshot(),
-      blobClaudeImports: this.#blobClaudeImports.snapshot(),
+      harnessBlobFacts: this.#harnessBlobFacts.snapshot(),
+      harnessBlobImports: this.#harnessBlobImports.snapshot(),
     });
   }
 }

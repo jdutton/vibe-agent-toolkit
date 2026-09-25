@@ -86,6 +86,13 @@ import {
 } from './contributors/filesystem-extent.js';
 import { crawlSourceSelector } from './crawl-source.js';
 import { canonicalJson, extentDigest } from './digest.js';
+import {
+  assertHarnessSettled,
+  diskHarnessContentReader,
+  harnessSettled,
+  runHarnessPass,
+} from './harness/harness-pass.js';
+import { HARNESS_PROFILES, type HarnessProfile } from './harness/profile.js';
 import { rootIdFor } from './identity.js';
 import { ProjectionBuilder, type Projection } from './projection.js';
 import {
@@ -647,11 +654,21 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
   // from nobody having asked.
   const attemptsBeforeClosure = builder.contentPromotionAttempts;
 
+  // The harness facts, LAZILY: derived only for what a harness reaches. Before
+  // the closure stratum, because its contributors read them (in `frontier`
+  // mode, where a blob with no facts yet contributes nothing that pass); inside
+  // every fixpoint iteration, because a declared closure's members arrive
+  // there; and once more after the promotion, which can key a reachable path.
+  // Under `'skip'` no blob has a `blobs` row, so there is nothing to reach.
+  const harness = harnessStageFor(builder);
+  await harness.run();
+
   await iterateClosure(
     registry.byStratum('closure'),
     builder,
     parameterSetFor,
     maxIterations,
+    harness,
     options.onContributorTiming,
   );
 
@@ -664,6 +681,10 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
     // absence.
     options.onBlobPopulation({ ...blobPopulation, ...promoted });
   }
+  await harness.run();
+  // A reached blob with no facts after the last pass is a producer bug: every
+  // strict reader of this projection would throw on it later, far from here.
+  harness.assertSettled();
 
   // AFTER every contributor, and the reason is the CLOSURE stratum's extra
   // realization ROWS, not extra conflicts. ⚠️ It is not that "a closure
@@ -898,7 +919,12 @@ async function readCachedProjection(
   // reduce every closure extent to its own root while reporting success.
   if (!blobFactsCover(blobs, contentKeys)) return undefined;
 
-  return assembleProjection(extent, blobs);
+  // The harness facts are derived lazily and stored per `(blob, harness)`, so
+  // a blob tier that covers every key can still lack a reached blob's facts —
+  // another root's run filed those bytes without reaching them. Served, that
+  // absence would throw at the first strict reader; a miss re-derives it.
+  const projection = assembleProjection(extent, blobs);
+  return harnessSettled(projection, HARNESS_PROFILE_LIST) ? projection : undefined;
 }
 
 /**
@@ -1217,13 +1243,58 @@ export async function afterClosurePromotion(
   return { afterClosurePromotion: result };
 }
 
+/** Every harness a population derives facts for. */
+const HARNESS_PROFILE_LIST: readonly HarnessProfile[] = Object.values(HARNESS_PROFILES);
+
+/**
+ * The pseudo contributor id {@link ClosureNonConvergenceError} names when the
+ * harness pass is what kept the fixpoint moving.
+ */
+const HARNESS_PASS_ID = 'harness-pass';
+
+/** One population's harness pass, bound to its builder and reader. */
+interface HarnessStage {
+  /** Run the pass to exhaustion; resolves to the facts rows it added. */
+  run(): Promise<number>;
+  /** Throw `HarnessFactsAbsentError` for a reached blob with no facts, excusing only what a pass could not read. */
+  assertSettled(): void;
+}
+
+/**
+ * Bind the harness pass to one population: every harness, the run's content
+ * cache as the reader, and the keys any pass could not read.
+ *
+ * @param builder - The population's builder
+ * @returns The stage
+ */
+function harnessStageFor(builder: ProjectionBuilder): HarnessStage {
+  const reader = diskHarnessContentReader(builder.base().contentCache);
+  const unreadable = new Set<string>();
+  return {
+    run: async () => {
+      const result = await runHarnessPass(builder, HARNESS_PROFILE_LIST, reader);
+      for (const key of result.unreadableKeys) unreadable.add(key);
+      return result.derived;
+    },
+    assertSettled: () => {
+      assertHarnessSettled(builder.base(), HARNESS_PROFILE_LIST, unreadable);
+    },
+  };
+}
+
 /**
  * Iterate the closure stratum to a fixed point.
+ *
+ * The harness pass runs after every iteration's contributors and counts as
+ * moving when it derives anything: the closure contributors read harness facts
+ * in `frontier` mode, so a member whose facts arrive now is followed only on
+ * the next iteration.
  *
  * @param closure - The closure contributors, possibly empty
  * @param builder - The builder every contribution merges into
  * @param parameterSetFor - Resolves a contributor's parameter set
  * @param maxIterations - Passes allowed before failing
+ * @param harness - The population's harness pass
  * @param onTiming - Receives one record per contributor invocation, per pass
  * @throws {@link ClosureNonConvergenceError} when the cap is reached while moving
  * @throws {@link RangeError} when the cap is below one, which could only ever fail
@@ -1233,10 +1304,12 @@ async function iterateClosure(
   builder: ProjectionBuilder,
   parameterSetFor: (contributor: ExtentContributor) => JsonValue,
   maxIterations: number,
+  harness: HarnessStage,
   onTiming?: ((timing: ContributorTiming) => void) | undefined,
 ): Promise<void> {
   // Ordinary and cheap, unlike a kind with no contributor: a corpus whose
   // configuration declares no closure-defined extents has nothing to iterate.
+  // The harness pass needs no iteration then — `populate` ran it before this.
   if (closure.length === 0) {
     return;
   }
@@ -1273,6 +1346,7 @@ async function iterateClosure(
         moving.push(contributor.id);
       }
     }
+    if (await harness.run() > 0) moving.push(HARNESS_PASS_ID);
     if (moving.length === 0) {
       return;
     }

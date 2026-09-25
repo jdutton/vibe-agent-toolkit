@@ -49,9 +49,6 @@ function blobBundle(contentKey) {
       encodingSource: 'assumed',
       replacementCharacters: 0,
       tokenEstimate: 1,
-      claudeInjectedBytes: 1,
-      claudeInjectedTokens: 1,
-      claudePaths: null,
       frontmatter: null,
       frontmatterError: null,
       wordCount: 1,
@@ -64,7 +61,8 @@ function blobBundle(contentKey) {
     blobReferences: [],
     blobSections: [],
     blobConditions: [],
-    blobClaudeImports: [],
+    harnessBlobFacts: [{ blob: contentKey, harness: 'claude-code', injectedBytes: 1, injectedTokens: 1, paths: null }],
+    harnessBlobImports: [],
   };
 }
 

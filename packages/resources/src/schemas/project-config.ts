@@ -338,7 +338,7 @@ export type SkillExecutableEntry = z.infer<typeof SkillExecutableEntrySchema>;
 /**
  * A typed "skill source" descriptor as it appears in vibe-agent-toolkit.config.yaml.
  *
- * This is the CONFIG representation. Task 13's staging maps it onto Plan 1's
+ * This is the CONFIG representation. Staging maps it onto the
  * runtime `SkillSource` union before calling `resolveSkillSource`. Kept here so
  * `configure`/`run` parse a single strict source of truth.
  */
@@ -592,9 +592,9 @@ export const ExtentDeclarationSchema = z.object({
   closureFrom: z.string().min(1)
     .describe('Root-relative path of the extent root — the one member admitted unconditionally, before any traversal. A reference that resolves BACK to it is skipped in silence: the root is a member by declaration, so a self-link has nothing left to refuse and nothing for the hop budget to hold back, and a row about it would contradict the admission. That is the same verdict walk-link-graph.ts gives a link back to its own skillRootPath.'),
   follow: z.array(ReferenceSyntacticFormSchema).default(['markdown-link', 'markdown-link-reference', 'markdown-definition'])
-    .describe('Which blob_references syntactic forms the closure traverses under the "href" dialect. Defaults to the three markdown forms; an @-prefixed or bare token is ambiguous at the blob layer, so following one is an explicit choice. MUST be [] under "claude-import", whose edges are blob_claude_imports rather than blob_references — a form list there would read as a filter that filters nothing.'),
+    .describe('Which blob_references syntactic forms the closure traverses under the "href" dialect. Defaults to the three markdown forms; an @-prefixed or bare token is ambiguous at the blob layer, so following one is an explicit choice. MUST be [] under "claude-import", whose edges are harness_blob_imports rather than blob_references — a form list there would read as a filter that filters nothing.'),
   referenceDialect: ReferenceDialectSchema.default('href')
-    .describe('Which edges this closure follows and how it INTERPRETS them. Defaults to "href": blob_references rows of the follow forms, resolved under RFC 3986 through resolveLocalHref. "claude-import" is Claude Code\'s own @-import reading of a CLAUDE.md, rules file or anything they import: the edges are blob_claude_imports rows — the harness\'s extractor, not VAT\'s lexer — resolved as the harness resolves them: ~ and ~/ expand to the home directory (landing OUTSIDE the corpus, which is the healthy state the vendor recommends for sharing instructions across worktrees), a leading / is filesystem-absolute, anything else is relative to the importing file\'s directory, with no percent-decoding. Inert data, so it rides onto zone_provenance.parameterSet verbatim and the store correctly treats two runs over one tree under different dialects as two different questions.'),
+    .describe('Which edges this closure follows and how it INTERPRETS them. Defaults to "href": blob_references rows of the follow forms, resolved under RFC 3986 through resolveLocalHref. "claude-import" is Claude Code\'s own @-import reading of a CLAUDE.md, rules file or anything they import: the edges are harness_blob_imports rows — the harness\'s extractor, not VAT\'s lexer — resolved as the harness resolves them: ~ and ~/ expand to the home directory (landing OUTSIDE the corpus, which is the healthy state the vendor recommends for sharing instructions across worktrees), a leading / is filesystem-absolute, anything else is relative to the importing file\'s directory, with no percent-decoding. Inert data, so it rides onto zone_provenance.parameterSet verbatim and the store correctly treats two runs over one tree under different dialects as two different questions.'),
   maxDepth: z.union([z.number().int().min(0), z.literal('full')]).default('full')
     .describe('Reference hops from the root, or "full" for an unbounded closure. Same union as skills packaging linkFollowDepth, so one concept has one spelling.'),
   traverseGlobs: z.array(z.string().min(1)).min(1).nullable().default(null)
@@ -610,7 +610,7 @@ export const ExtentDeclarationSchema = z.object({
     context.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['follow'],
-      message: 'follow must be [] under referenceDialect "claude-import": its edges are blob_claude_imports rows, which no syntactic form selects',
+      message: 'follow must be [] under referenceDialect "claude-import": its edges are harness_blob_imports rows, which no syntactic form selects',
     });
   }
 }).describe('A closure-defined extent declaration (zones.md §7.3)');

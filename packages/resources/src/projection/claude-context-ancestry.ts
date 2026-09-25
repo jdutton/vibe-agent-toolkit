@@ -48,12 +48,13 @@ import type {
 } from '../schemas/projection-resources.js';
 
 import { CLAUDE_MD_TAG } from './agentic-tags.js';
+import { CLAUDE_CODE_DOT_CLAUDE, CLAUDE_CODE_ENTRY_NAMES } from './harness/claude-code-entry-names.js';
 
 /** The second project location's directory segment. */
-const DOT_CLAUDE = '.claude';
+const DOT_CLAUDE = CLAUDE_CODE_DOT_CLAUDE;
 
 /** The `CLAUDE.local.md` basename, lowercased the way the realization column is. */
-const LOCAL_BASENAME = 'claude.local.md';
+const LOCAL_BASENAME = CLAUDE_CODE_ENTRY_NAMES.local.toLowerCase();
 
 /**
  * One `CLAUDE.md`-family file in a directory's chain.

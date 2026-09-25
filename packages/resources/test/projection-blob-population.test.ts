@@ -395,6 +395,40 @@ describe('populateBlobs', () => {
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
 
+  it('derives no harness facts, so a source file no loader reaches is never lexed as a memory file', async () => {
+    // `@param` is exactly the token the harness's `@` extractor would read an
+    // import out of — the eager stage used to lex every blob for it.
+    await writeCorpus([{ path: 'src/a.ts', content: '/** @param widgets - the acme widgets */\nexport const a = 1;\n' }], ['src']);
+    const builder = await baseBuilderFor();
+
+    await populateBlobs(builder, { parseCache: NO_CACHE });
+
+    expect(builder.base().blobs).toHaveLength(1);
+    expect(builder.base().harnessBlobFacts).toHaveLength(0);
+    expect(builder.base().harnessBlobImports).toHaveLength(0);
+  });
+
+  it('derives harness facts through populate() for exactly what a memory file reaches, read from disk', async () => {
+    await writeCorpus([
+      { path: 'CLAUDE.md', content: '# Acme\n\n@src/a.ts\n' },
+      { path: 'src/a.ts', content: '/** @param widgets - the acme widgets */\nexport const a = 1;\n' },
+      { path: 'src/b.ts', content: '/** @param gadgets - never imported */\nexport const b = 1;\n' },
+    ], ['src']);
+    const registry = new ContributorRegistry();
+    registry.register(new FilesystemExtentContributor());
+
+    const projection = await populate({ root: suite.tempDir, registry, onBlobPopulation: () => undefined });
+
+    const keyOf = (path: string): string => {
+      const key = projection.resourceRealizations.find((row) => row.path === path)?.contentKey;
+      if (typeof key !== 'string') throw new TypeError(`fixture: ${path} was not keyed`);
+      return key;
+    };
+    const derived = new Set(projection.harnessBlobFacts.map((row) => row.blob));
+    expect([...derived].sort(byCodeUnit)).toEqual([keyOf('CLAUDE.md'), keyOf('src/a.ts')].sort(byCodeUnit));
+    expect(derived.has(keyOf('src/b.ts'))).toBe(false);
+  });
+
   it('derives once per distinct content key, not once per realization', async () => {
     await writeCorpus([
       { path: DOC_A, content: DOC_A_CONTENT },

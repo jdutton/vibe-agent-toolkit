@@ -17,7 +17,7 @@ import {
 import { ProjectionBuilder, type ProjectionBase } from '../src/projection/projection.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
-import { addFile } from './helpers/claude-context-fixture.js';
+import { addFileWithFacts } from './helpers/claude-context-fixture.js';
 import { projectionRealizationRow } from './test-helpers.js';
 
 /**
@@ -123,7 +123,7 @@ function buildBase(files: readonly FixtureFile[]): ProjectionBase {
       addDirectory(builder, file.path);
       continue;
     }
-    addFile(builder, { path: file.path, refs: [], markdown: file.markdown }, ROOT);
+    addFileWithFacts(builder, { path: file.path, refs: [], markdown: file.markdown }, ROOT);
   }
   return builder.base();
 }
@@ -155,7 +155,7 @@ describe('claudeImportExtentDeclaration', () => {
     // Every field is load-bearing and every one is asserted, because each is a
     // place a default would be silently wrong: the schema's `follow` default is
     // the three markdown forms (refused beside `claude-import`, whose edges are
-    // `blob_claude_imports` rows no form selects), its `referenceDialect`
+    // `harness_blob_imports` rows no form selects), its `referenceDialect`
     // default is `href` (VAT's lexer, which reads different imports), and its
     // `maxDepth` default is `'full'` (which the vendor bounds).
     expect(claudeImportExtentDeclaration(DOCS_CLAUDE_MD)).toEqual({
@@ -383,7 +383,7 @@ describe('ClaudeImportExtentContributor — remaining §10 cases', () => {
   });
 
   it('never follows a markdown link, however inviting', async () => {
-    // The edges are `blob_claude_imports` rows. Following markdown links out of
+    // The edges are `harness_blob_imports` rows. Following markdown links out of
     // a CLAUDE.md would drag the entire linked docs tree into a budget the
     // harness never charges.
     const contribution = await contributeFrom(
@@ -400,7 +400,7 @@ describe('ClaudeImportExtentContributor — remaining §10 cases', () => {
 
   it('does not follow @${VAR}/path.md, because the harness does not call it an import', async () => {
     // `Ayn` wants a bare path to open with `[a-zA-Z0-9._-]`, so a `$`-led token
-    // never becomes a `blob_claude_imports` row — and so leaves no condition.
+    // never becomes a `harness_blob_imports` row — and so leaves no condition.
     const contribution = await contributeFrom(
       [
         { path: ROOT_CLAUDE_MD, markdown: '@${HOME}/notes.md\n' },

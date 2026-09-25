@@ -23,8 +23,8 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { estimateTokens } from '../src/link-classify.js';
 import {
-  OVERSIZE_BYTES,
   account,
   type AccountedContext,
   type SizeCliffState,
@@ -40,9 +40,18 @@ import type {
   LoadedContextAnswer,
   LoadedRow,
 } from '../src/projection/claude-context-query.js';
+import { CLAUDE_CODE, CLAUDE_OVERSIZE_BYTES } from '../src/projection/harness/claude-code.js';
 
 /** The closure root every fixture here is rooted at. */
 const ROOT_CLAUDE_MD = 'CLAUDE.md';
+
+/**
+ * The once-per-launch preamble's token cost, charged at most once whenever
+ * any row here is actually `launchCharge === 'charged'`. Every row this file
+ * hand-builds carries `headerTokens: 0` (the `row()` default), so this is the
+ * ONLY correction every `alwaysTokens` expectation below needs.
+ */
+const PREAMBLE_TOKENS = estimateTokens(CLAUDE_CODE.launchPreamble);
 
 /**
  * The one signed direction this file names three times — as a member of the
@@ -68,7 +77,7 @@ const PRUNED = 'pruned-by-oversize';
 function row(overrides: Partial<LoadedRow> & Pick<LoadedRow, 'path'>): LoadedRow {
   return {
     resourceId: `id:${overrides.path}`, tokens: 100, bytes: 400, loadClass: 'always',
-    admissions: [{ kind: 'ancestry', dir: '' }], ...overrides,
+    admissions: [{ kind: 'ancestry', dir: '', local: false }], headerTokens: 0, ...overrides,
   };
 }
 
@@ -86,7 +95,7 @@ function imported(viaPath: string | null, depth: number | null): Admission {
 
 /** One row past the cliff — big enough to skip. */
 function oversizeRow(path: string, admissions?: readonly Admission[]): LoadedRow {
-  const base = { path, bytes: OVERSIZE_BYTES + 1, tokens: 2_000_000 };
+  const base = { path, bytes: CLAUDE_OVERSIZE_BYTES + 1, tokens: 2_000_000 };
   return row(admissions === undefined ? base : { ...base, admissions });
 }
 
@@ -114,7 +123,7 @@ describe('account', () => {
     const result = account(answer([row({ path: ROOT_CLAUDE_MD })]));
 
     expect(result.rows[0]?.sizeCliff).toBe('loaded');
-    expect(result.totals.alwaysTokens).toBe(100);
+    expect(result.totals.alwaysTokens).toBe(100 + PREAMBLE_TOKENS);
   });
 
   it('charges a >4 MiB CLAUDE.md ZERO — a cliff, not a truncation', () => {
@@ -126,11 +135,11 @@ describe('account', () => {
   });
 
   it('charges a CLAUDE.md of EXACTLY 4 MiB in full — the cliff is strictly above', () => {
-    const exact = row({ path: ROOT_CLAUDE_MD, bytes: OVERSIZE_BYTES, tokens: 1_000_000 });
+    const exact = row({ path: ROOT_CLAUDE_MD, bytes: CLAUDE_OVERSIZE_BYTES, tokens: 1_000_000 });
     const result = account(answer([exact]));
 
     expect(result.rows[0]?.sizeCliff).toBe('loaded');
-    expect(result.totals.alwaysTokens).toBe(1_000_000);
+    expect(result.totals.alwaysTokens).toBe(1_000_000 + PREAMBLE_TOKENS);
     expect(result.totals.skippedOversizeRows).toBe(0);
   });
 
@@ -155,7 +164,7 @@ describe('account', () => {
     );
 
     expect(sizeCliffAt(result, 'shared.md')).toBe('loaded');
-    expect(result.totals.alwaysTokens).toBe(40);
+    expect(result.totals.alwaysTokens).toBe(40 + PREAMBLE_TOKENS);
   });
 
   it('does NOT prune an import whose route is unattributed and whose root is intact', () => {
@@ -167,7 +176,7 @@ describe('account', () => {
     );
 
     expect(sizeCliffAt(result, 'orphan.md')).toBe('loaded');
-    expect(result.totals.alwaysTokens).toBe(17);
+    expect(result.totals.alwaysTokens).toBe(17 + PREAMBLE_TOKENS);
   });
 
   it('applies the cliff to EVERY file the harness reads — a rules file and an import too', () => {
@@ -179,7 +188,7 @@ describe('account', () => {
 
     expect(sizeCliffAt(result, '.claude/rules/huge.md')).toBe('oversize-skipped');
     expect(sizeCliffAt(result, 'docs/huge.md')).toBe('oversize-skipped');
-    expect(result.totals.alwaysTokens).toBe(5);
+    expect(result.totals.alwaysTokens).toBe(5 + PREAMBLE_TOKENS);
   });
 
   it('counts a member with no blob as unknown, contributing nothing to either total', () => {
@@ -201,7 +210,7 @@ describe('account', () => {
       ])
     );
 
-    expect(result.totals).toMatchObject({ alwaysTokens: 10, onDemandTokens: 7 });
+    expect(result.totals).toMatchObject({ alwaysTokens: 10 + PREAMBLE_TOKENS, onDemandTokens: 7 });
   });
 
   it('charges a row carrying NO admission at all — an empty route list is not a broken one', () => {
@@ -214,7 +223,7 @@ describe('account', () => {
 
     expect(result.rows[0]?.sizeCliff).toBe('loaded');
     expect(result.totals.prunedRows).toBe(0);
-    expect(result.totals.alwaysTokens).toBe(9);
+    expect(result.totals.alwaysTokens).toBe(9 + PREAMBLE_TOKENS);
   });
 
   it('prunes a THREE-hop descendant of a skipped CLAUDE.md', () => {
@@ -247,7 +256,7 @@ describe('account', () => {
     expect(sizeCliffAt(result, MIDDLE_CHILD)).toBe(PRUNED);
     expect(sizeCliffAt(result, 'docs/deeper.md')).toBe(PRUNED);
     expect(result.totals).toMatchObject({
-      alwaysTokens: 5,
+      alwaysTokens: 5 + PREAMBLE_TOKENS,
       prunedRows: 2,
       skippedOversizeRows: 1,
     });
@@ -270,7 +279,7 @@ describe('account', () => {
 
     expect(sizeCliffAt(result, RESCUED)).toBe('loaded');
     expect(sizeCliffAt(result, 'docs/below.md')).toBe('loaded');
-    expect(result.totals).toMatchObject({ alwaysTokens: 18, prunedRows: 1 });
+    expect(result.totals).toMatchObject({ alwaysTokens: 18 + PREAMBLE_TOKENS, prunedRows: 1 });
   });
 
   it('reports an unknown-size row that is ALSO pruned as unknown, never as charged', () => {
@@ -347,8 +356,8 @@ describe('the stated limits', () => {
 
   it('states 23 limits covering all four directions', () => {
     // Spec §11's fifteen, plus the nested-rule trigger D-B6 introduced, plus the
-    // unresolved-conditions collapse a reviewer confirmed after that, plus the
-    // four the final review found missing — the token estimator, the unfollowed
+    // unresolved-conditions collapse, plus the
+    // four a later review found missing — the token estimator, the unfollowed
     // variable import, the overall context-window scope, and the pattern-budget check a
     // directory query skips — plus the gitignored half this lane stopped
     // realizing. The loader oracle then retired four the binary answers and VAT
@@ -414,10 +423,10 @@ describe('the stated limits', () => {
     }
   });
 
-  it('publishes the unresolved-conditions collapse a reviewer confirmed', () => {
-    // The seventeenth. A `toHaveLength` count alone cannot catch a duplicated or
-    // dropped id — this pins the new limit by name, the same defense used above
-    // for the sixteenth.
+  it('publishes the unresolved-conditions collapse limit', () => {
+    // A `toHaveLength` count alone cannot catch a duplicated or dropped id —
+    // this pins the limit by name, the same defense used above for the
+    // nested-rule trigger.
     const ids = new Set(CLAUDE_CONTEXT_LIMITS.map((limit) => limit.id));
     expect(ids.has('unresolved-conditions-collapse')).toBe(true);
   });

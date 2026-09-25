@@ -118,10 +118,9 @@ import { type CodeContextRanges, findLexicalReferences } from '../reference-lexe
 import type { BlobConditionRow } from '../schemas/projection-blobs.js';
 import type { ResourceRealizationRow } from '../schemas/projection-resources.js';
 
-import { blobClaudeImportsFor, blobConditionsFor, blobRowFor, measureContent } from './blob-facts.js';
+import { blobConditionsFor, blobRowFor, measureContent } from './blob-facts.js';
 import { blobReferencesFor } from './blob-references.js';
 import { blobSectionsFor, flattenHeadings } from './blob-sections.js';
-import { claudeMemoryFactsOf } from './claude-memory.js';
 import { readKeyedContent } from './content-cache.js';
 import { errorLabel } from './error-label.js';
 import type { ProjectionBase, ProjectionBuilder } from './projection.js';
@@ -1096,16 +1095,13 @@ function emitBlobRows(
 ): void {
   const { contentKey } = target;
 
-  // Every derived blob, whatever its parser kind: Claude Code reads a `.ts`
-  // import with the same extractor as a `.md` one (`claude-memory.ts`).
-  const claude = claudeMemoryFactsOf(keyed.content);
-
   // `byteLength`, never `content.length`: decoding is many-to-one on malformed
   // UTF-8, so the decoded string's length is not the on-disk byte count.
-  builder.addBlob(blobRowFor(contentKey, keyed.byteLength, keyed.decoding, parsed, claude));
-  for (const row of blobClaudeImportsFor(contentKey, claude)) {
-    builder.addBlobClaudeImport(row);
-  }
+  builder.addBlob(blobRowFor(contentKey, keyed.byteLength, keyed.decoding, parsed));
+
+  // No harness facts here: they are derived LAZILY, for the blobs a harness
+  // reaches, by `harness/harness-pass.ts` — nearly every blob is a source file
+  // no loader ever opens.
   countDecoding(keyed.decoding, counts);
 
   for (const row of blobConditionsFor(contentKey, parsed)) {

@@ -20,11 +20,11 @@
  *   holds its shape as the object literal it was declared with, so `.shape`'s
  *   key order *is* the declaration order — which is the order the row schemas
  *   already document and the order the generated JSON Schemas already carry.
- *   Two of the fourteen row schemas are wrapped in `.superRefine()`, so the shape
+ *   Two of the fifteen row schemas are wrapped in `.superRefine()`, so the shape
  *   lives one `ZodEffects` deep; `projectionRowShape` unwraps rather than each
  *   caller knowing that.
  * - **The SQL name is derived from the field name.** `resourceRealizations` →
- *   `resource_realizations` holds for all fourteen, and the JSON Schema filenames
+ *   `resource_realizations` holds for all fifteen, and the JSON Schema filenames
  *   (`projection-resource-realizations`) are that name with dashes. A hand-kept
  *   spelling here would be the same class of drift one table lower.
  *
@@ -44,13 +44,13 @@
 import type { z } from 'zod';
 
 import {
-  BlobClaudeImportRowSchema,
   BlobConditionRowSchema,
   BlobReferenceRowSchema,
   BlobRowSchema,
   BlobSectionRowSchema,
 } from '../schemas/projection-blobs.js';
 import { ClaudeRulePatternRowSchema } from '../schemas/projection-claude-rules.js';
+import { HarnessBlobFactsRowSchema, HarnessBlobImportRowSchema } from '../schemas/projection-harness.js';
 import {
   RealizationConditionRowSchema,
   ResourceExtentRowSchema,
@@ -151,10 +151,26 @@ export interface ProjectionTableSpec<
    * says which of a row's string columns is the one a store partitions on.
    */
   readonly contextColumn?: ColumnOf<Row> | undefined;
+  /**
+   * For a blob-scoped table whose rows are one DERIVED answer per `(blob,
+   * <this column>)`, the column that — with the blob — scopes a write.
+   *
+   * The harness tables are the case: `harness_blob_facts` is derived LAZILY,
+   * only for the blobs a harness reaches in the tree being populated, so one
+   * run's blob tier holds `blobs` rows for keys whose harness facts it never
+   * derived. Clearing a write's whole key range would let a run over one root
+   * delete the facts another root's run derived for the same bytes, and the
+   * absence would then read as "not derived" on every later hit. A write
+   * therefore replaces only the `(blob, partition)` pairs it carries rows for.
+   * Eviction still reclaims a whole key.
+   *
+   * Absent for every table whose rows one derivation produces in full.
+   */
+  readonly partitionColumn?: ColumnOf<Row> | undefined;
 }
 
 /**
- * The fourteen tables of the resource projection.
+ * The tables of the resource projection — the one list; count its keys, never a prose ordinal.
  *
  * Declaration order is {@link Projection}'s own field order, which is also the
  * key order `exportProjection` emits — a document whose table order moved would
@@ -166,11 +182,19 @@ export const PROJECTION_TABLES = {
   resourceRealizations: table('resourceRealizations', 'extent', ResourceRealizationRowSchema, ['extentId', 'path'], 'extentId'),
   resourceExtents: table('resourceExtents', 'extent', ResourceExtentRowSchema, ['resourceId', 'extentId'], 'extentId'),
   resourceTags: table('resourceTags', 'extent', ResourceTagRowSchema, ['resourceId', 'tag', 'value', 'source']),
+  // `sourcePath`/`sourceLine`/`sourceRef` are in the key so two distinguishable
+  // references provoking the same code at the same path — from two referrers,
+  // or at two positions in one (`CLOSURE_REFERENCE_UNRESOLVED` anchors `path`
+  // to the referrer) — record two rows, not one — see
+  // `ProjectionBuilder`'s `#realizationConditions` table in `projection.ts`.
   realizationConditions: table('realizationConditions', 'extent', RealizationConditionRowSchema, [
     'extentId',
     'path',
     'code',
     'resourceId',
+    'sourcePath',
+    'sourceLine',
+    'sourceRef',
   ], 'extentId'),
   // No context column, for the same reason `resources` and `resource_tags` have
   // none: a `paths:` glob is a fact about the rules file's IDENTITY, not about
@@ -183,7 +207,11 @@ export const PROJECTION_TABLES = {
   blobReferences: table('blobReferences', 'blob', BlobReferenceRowSchema, ['blob', 'ordinal']),
   blobSections: table('blobSections', 'blob', BlobSectionRowSchema, ['blob', 'ordinal']),
   blobConditions: table('blobConditions', 'blob', BlobConditionRowSchema, ['blob', 'code', 'line', 'message']),
-  blobClaudeImports: table('blobClaudeImports', 'blob', BlobClaudeImportRowSchema, ['blob', 'ordinal']),
+  // ⛔ `blob` FIRST in both keys: a store keys every blob-tier select, delete
+  // and eviction on a blob-scoped table's first primary-key column.
+  // Partitioned by `harness`: derived lazily, per `(blob, harness)` a run reaches.
+  harnessBlobFacts: table('harnessBlobFacts', 'blob', HarnessBlobFactsRowSchema, ['blob', 'harness'], undefined, 'harness'),
+  harnessBlobImports: table('harnessBlobImports', 'blob', HarnessBlobImportRowSchema, ['blob', 'harness', 'ordinal'], undefined, 'harness'),
 } as const satisfies { readonly [Name in ProjectionTableName]: ProjectionTableSpec<Name, ProjectionRow<Name>> };
 
 /**
@@ -193,7 +221,7 @@ export const PROJECTION_TABLES = {
  * survives as a literal into {@link PROJECTION_TABLES}. That is what lets a
  * consumer split the table names by scope *in the type system* — a store's
  * blob-scoped and extent-scoped row bundles are derived from these literals,
- * so a fifteenth table joins the right bundle by declaring its scope here and
+ * so a new table joins the right bundle by declaring its scope here and
  * nowhere else.
  *
  * @param key - The {@link Projection} field these rows are carried under
@@ -203,6 +231,9 @@ export const PROJECTION_TABLES = {
  * @param contextColumn - The column naming the row's resolution context, for a
  *   table whose rows belong to one; omitted for the four that describe the tree
  *   or an identity rather than one extent's view of it
+ * @param partitionColumn - For a blob-scoped table derived per `(blob, column)`,
+ *   the column a write is scoped by with the blob — see
+ *   {@link ProjectionTableSpec.partitionColumn}
  * @returns The table's specification
  */
 function table<Name extends ProjectionTableName, Scope extends ProjectionTableScope>(
@@ -211,6 +242,7 @@ function table<Name extends ProjectionTableName, Scope extends ProjectionTableSc
   schema: RowSchema<ProjectionRow<Name>>,
   primaryKey: readonly ColumnOf<ProjectionRow<Name>>[],
   contextColumn?: ColumnOf<ProjectionRow<Name>>,
+  partitionColumn?: ColumnOf<ProjectionRow<Name>>,
 ): ProjectionTableSpec<Name, ProjectionRow<Name>, Scope> {
   return {
     key,
@@ -223,6 +255,7 @@ function table<Name extends ProjectionTableName, Scope extends ProjectionTableSc
     // `undefined` different values, and "this table has no context column" is
     // the absence.
     ...(contextColumn !== undefined && { contextColumn }),
+    ...(partitionColumn !== undefined && { partitionColumn }),
     // `Object.keys` of a Zod shape is the shape literal's key order, and the
     // cast only re-states what that shape is already typed as one level up.
     columns: Object.keys(projectionRowShape(schema)) as ColumnOf<ProjectionRow<Name>>[],

@@ -40,7 +40,8 @@
  *
  * WHICH table is the declaration's `referenceDialect`: `href` walks
  * `blob_references`, filtered by `follow`; `claude-import` walks
- * `blob_claude_imports` — Claude Code's own `@` extractor, whose rows are
+ * `harness_blob_imports` for the harness that reads that dialect — Claude
+ * Code's own `@` extractor under `claude-import` — whose rows are
  * imports by the harness's definition, so no syntactic-form filter applies and
  * the schema refuses a `follow` list beside it.
  *
@@ -120,8 +121,10 @@ import {
   ExtentDeclarationSchema,
   type ExtentDeclaration,
   type ExtentRefusalRule,
+  type ReferenceDialect,
 } from '../../schemas/project-config.js';
-import type { BlobClaudeImportRow, BlobReferenceRow } from '../../schemas/projection-blobs.js';
+import type { BlobReferenceRow, BlobRow } from '../../schemas/projection-blobs.js';
+import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../../schemas/projection-harness.js';
 import { CONDITION_WITHOUT_REFERENCE } from '../../schemas/projection-resources.js';
 import type {
   RealizationConditionRow,
@@ -132,6 +135,8 @@ import type {
 import type { JsonValue } from '../../schemas/projection-shared.js';
 import type { ResolutionContextRow } from '../../schemas/projection-zones.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../contributor.js';
+import { harnessFactsIndex } from '../harness/facts-index.js';
+import { harnessForDialect } from '../harness/profile.js';
 import type { Projection, ProjectionBase } from '../projection.js';
 import { isNonLocalRef, resolveReferencePath } from '../reference-resolution.js';
 
@@ -212,8 +217,12 @@ interface WalkContext {
   readonly extentId: string;
   /** Root-relative path → the realizations the base holds for it, in base order. */
   readonly byPath: ReadonlyMap<string, readonly ResourceRealizationRow[]>;
-  /** `blobs.contentKey` → the edges this declaration follows out of it, in ordinal order. */
-  readonly edgesOf: (contentKey: string) => readonly ClosureEdge[];
+  /**
+   * `blobs.contentKey` → the edges this declaration follows out of it, in
+   * ordinal order. `path` is where the walk reached the blob — named by the
+   * error a strict source throws for a blob with no harness facts.
+   */
+  readonly edgesOf: (contentKey: string, path: string) => readonly ClosureEdge[];
   /**
    * The FIRST `refusals` rule that catches this candidate, or `undefined` when
    * the declaration admits it.
@@ -349,7 +358,8 @@ export class ClosureExtentContributor implements ExtentContributor {
       declaration,
       extentId,
       byPath: realizationsByPathFor(base),
-      edgesOf: edgeSourceFor(base, declaration),
+      // Inside the closure fixpoint: a blob with no harness facts is frontier.
+      edgesOf: edgeSourceFor(base, declaration, 'frontier'),
       refusalOf: refusalMatcher(declaration, base),
       isDoor: doorMatcher(declaration.traverseGlobs),
     });
@@ -499,8 +509,12 @@ export interface ClosureProvenanceInput {
   /** Absolute, already-resolved corpus root — `roots[0].path`. */
   readonly root: string;
   readonly resourceRealizations: readonly ResourceRealizationRow[];
+  /** Which content keys have content at all — a key with none has no facts to require. */
+  readonly blobs: readonly BlobRow[];
   readonly blobReferences: readonly BlobReferenceRow[];
-  readonly blobClaudeImports: readonly BlobClaudeImportRow[];
+  /** The harness tables — passed whole (identity-stable), so the memos below can serve them. */
+  readonly harnessBlobFacts: readonly HarnessBlobFactsRow[];
+  readonly harnessBlobImports: readonly HarnessBlobImportRow[];
   /** The declaration the extent ran under — `zone_provenance.parameterSet`. */
   readonly declaration: ExtentDeclaration;
 }
@@ -561,8 +575,10 @@ const provenanceBaseMemo = new WeakMap<readonly ResourceRealizationRow[], Proven
  */
 function servesProvenanceInput(base: ProvenanceBase, input: ClosureProvenanceInput): boolean {
   return base.root === input.root
+    && base.blobs === input.blobs
     && base.blobReferences === input.blobReferences
-    && base.blobClaudeImports === input.blobClaudeImports;
+    && base.harnessBlobFacts === input.harnessBlobFacts
+    && base.harnessBlobImports === input.harnessBlobImports;
 }
 
 /**
@@ -577,8 +593,10 @@ function provenanceBaseFor(input: ClosureProvenanceInput): ProvenanceBase {
   const base: ProvenanceBase = {
     root: input.root,
     resourceRealizations: input.resourceRealizations,
+    blobs: input.blobs,
     blobReferences: input.blobReferences,
-    blobClaudeImports: input.blobClaudeImports,
+    harnessBlobFacts: input.harnessBlobFacts,
+    harnessBlobImports: input.harnessBlobImports,
   };
   provenanceBaseMemo.set(input.resourceRealizations, base);
   return base;
@@ -667,7 +685,11 @@ function queryWalkFor(input: ClosureProvenanceInput): WalkContext {
     // cannot mistake it for a real extent this map belongs to.
     extentId: PROVENANCE_ONLY_EXTENT_ID,
     byPath: realizationsByPathFor(partialBase),
-    edgesOf: edgeSourceFor(partialBase, input.declaration),
+    // Outside the fixpoint — the query and the launch walk — so strict: a
+    // reached blob with no harness facts is a producer bug, never "no edges".
+    // Hardcoded rather than a caller's choice, because no caller of
+    // `closureProvenance`/`closureHopsFrom` is ever inside the fixpoint.
+    edgesOf: edgeSourceFor(partialBase, input.declaration, 'strict'),
     // Sound only under the guard above.
     refusalOf: () => undefined,
     isDoor: doorMatcher(input.declaration.traverseGlobs),
@@ -701,7 +723,7 @@ function outboundHops(
   for (const row of rows) {
     if (row.contentKey === null || seenBlobs.has(row.contentKey)) continue;
     seenBlobs.add(row.contentKey);
-    for (const edge of walk.edgesOf(row.contentKey)) {
+    for (const edge of walk.edgesOf(row.contentKey, row.path)) {
       const hop = hopFor(edge, path, depth, row.resourceId, walk, conditions);
       if (hop !== undefined) hops.push(hop);
     }
@@ -851,10 +873,10 @@ function shouldFollow(reference: BlobReferenceRow, declaration: ExtentDeclaratio
 
 /**
  * One edge the walk follows: a `blob_references` row under `href`, a
- * `blob_claude_imports` row under `claude-import`. Both carry `rawRef` and
+ * `harness_blob_imports` row under a harness dialect (`claude-import`). Both carry `rawRef` and
  * `line`, which is all a condition row reports.
  */
-type ClosureEdge = BlobReferenceRow | BlobClaudeImportRow;
+type ClosureEdge = BlobReferenceRow | HarnessBlobImportRow;
 
 /**
  * The spelling resolution reads: an href's `rawRef` as authored, or a Claude
@@ -868,17 +890,35 @@ function resolutionTokenOf(edge: ClosureEdge): string {
 }
 
 /**
+ * How an edge source reads a blob that has no harness facts row.
+ *
+ * - `frontier` — ONLY the closure contributor, running inside the fixpoint: a
+ *   blob the stratum has only just reached has not had its facts derived YET,
+ *   and a later pass derives them before the fixpoint settles. No edges this pass.
+ * - `strict` — everything outside the fixpoint: the harness reached the blob, so
+ *   an absent row is a producer bug and throws `HarnessFactsAbsentError`.
+ *
+ * A required parameter of {@link edgeSourceFor}, never defaulted: omitting it
+ * must not compile, because the default would be a silent `[]`.
+ */
+type HarnessFactsStrictness = 'frontier' | 'strict';
+
+/**
  * The edges a declaration follows out of one blob — the ONE place the dialect
  * picks its table.
  *
  * @param base - The tables the edges come from
  * @param declaration - The extent declaration
+ * @param strictness - How a blob with no harness facts reads; see {@link HarnessFactsStrictness}
  * @returns `contentKey` → its followed edges, in ordinal order
  */
-function edgeSourceFor(base: IndexableBase, declaration: ExtentDeclaration): (contentKey: string) => readonly ClosureEdge[] {
-  if (declaration.referenceDialect === 'claude-import') {
-    const imports = claudeImportsByBlobFor(base);
-    return (contentKey) => imports.get(contentKey) ?? [];
+function edgeSourceFor(
+  base: IndexableBase,
+  declaration: ExtentDeclaration,
+  strictness: HarnessFactsStrictness,
+): (contentKey: string, path: string) => readonly ClosureEdge[] {
+  if (declaration.referenceDialect !== 'href') {
+    return harnessImportsByBlobFor(base, declaration.referenceDialect, strictness);
   }
   const references = referencesByBlobFor(base);
   return (contentKey) => (references.get(contentKey) ?? []).filter((reference) => shouldFollow(reference, declaration));
@@ -1387,8 +1427,11 @@ function outsideRootCondition(
  * Emitted **once per refused reference**, not once per refused path, matching
  * both {@link unresolvedCondition} and `walkLinkGraph`'s own
  * `excludedReferences` — a target linked from three documents was refused three
- * times. The rows are identical, and `ProjectionBuilder`'s condition table keys
- * on `(extentId, path, code, resourceId)`, so a population records one.
+ * times. `ProjectionBuilder`'s condition table keys on `(extentId, path, code,
+ * resourceId, sourcePath, sourceLine, sourceRef)`, so a population records one
+ * row per distinguishable reference — three DIFFERENT referring lines, in one
+ * file or in three, survive as three rows, and only an identical re-emission (the fixpoint re-deriving the same
+ * reference) collapses.
  *
  * ## The refusal's PROVENANCE, which is the rest of what `LinkResolution` carries
  *
@@ -1413,11 +1456,15 @@ function outsideRootCondition(
  *   contributes no vocabulary here either: it neither reads nor validates it,
  *   exactly as it neither reads nor validates `label`.
  *
- * ⚠️ One row per refused REFERENCE is emitted, but `ProjectionBuilder` keys the
- * condition table on `(extentId, path, code, resourceId)` — so a target refused
- * through three references records ONE row, carrying the FIRST reference's
- * provenance. The witness is a witness, not the list; `blob_references` is where
- * the list lives.
+ * ⚠️ One row per refused REFERENCE is emitted, and `ProjectionBuilder` keys the
+ * condition table on `(extentId, path, code, resourceId, sourcePath,
+ * sourceLine, sourceRef)` — so a target refused through three references AT
+ * THREE POSITIONS records three rows, whether the positions lie in one
+ * referring file or in three. Two references collapse to one only when they
+ * share a position exactly (an identical re-emission, or two identical
+ * references on one line of one file), and the survivor carries the first
+ * one's provenance. `blob_references` is where the complete list lives
+ * regardless.
  *
  * @param extentId - The closure extent
  * @param target - The refused candidate's realization row
@@ -1466,10 +1513,10 @@ function refusedCondition(
  * attaches `matchedRule` only for `pattern-matched`).
  *
  * ⚠️ Emitted once per REFERENCE, like every other closure condition, and
- * `ProjectionBuilder` keys the condition table on
- * `(extentId, path, code, resourceId)` — so a target held back at the boundary
- * through three references records one row carrying the first reference's
- * provenance.
+ * `ProjectionBuilder` keys the condition table on `(extentId, path, code,
+ * resourceId, sourcePath, sourceLine, sourceRef)` — so a target held back at the boundary
+ * through three references AT THREE POSITIONS records three rows, collapsing
+ * only where two references share a position exactly.
  *
  * A path can never carry both this code and a refusal label: {@link refusalOf}
  * is a function of the candidate ROW, and {@link resolveReference} always
@@ -1535,7 +1582,10 @@ function rootAbsentCondition(extentId: string, rootPath: string): RealizationCon
  * `ProjectionBase` nor a `Projection`, only these two materialised tables plus
  * the root `WalkContext.base` separately needs.
  */
-type IndexableBase = Pick<Projection, 'resourceRealizations' | 'blobReferences' | 'blobClaudeImports'>;
+type IndexableBase = Pick<
+  Projection,
+  'resourceRealizations' | 'blobs' | 'blobReferences' | 'harnessBlobFacts' | 'harnessBlobImports'
+>;
 
 /**
  * One memo entry: an index, plus the row count that was its whole premise.
@@ -1669,25 +1719,48 @@ function referencesByBlobFor(base: IndexableBase): ReadonlyMap<string, readonly 
   );
 }
 
-/** Per-run memo of the `blob_claude_imports` index, on {@link referencesByBlobMemo}'s terms. */
-const claudeImportsByBlobMemo = new WeakMap<
-  IndexableBase,
-  MemoizedIndex<ReadonlyMap<string, readonly BlobClaudeImportRow[]>>
->();
-
 /**
- * The base's Claude import index, built once per run rather than once per call.
+ * The imports the harness reading `dialect` follows out of one blob, through
+ * the harness facts index (memoized per base and row counts, on
+ * {@link referencesByBlobMemo}'s terms).
+ *
+ * A key with no `blobs` row at all (unreadable, or refused as not text) has no
+ * content to have facts OF, and follows nothing in either mode — a question
+ * about content, not facts, answered as it always was.
+ *
+ * ⚠️ A blob that EXISTS with no facts row reads per `strictness`: `frontier`
+ * gives no edges — "not yet", not zero, because the closure contributor runs
+ * inside the fixpoint where a later pass derives it; `strict` throws.
  *
  * @param base - The projection built so far
+ * @param dialect - The harness dialect the extent declares
+ * @param strictness - How a blob with no harness facts reads
  * @returns `contentKey` → its import rows, ordinal-ordered
  */
-function claudeImportsByBlobFor(base: IndexableBase): ReadonlyMap<string, readonly BlobClaudeImportRow[]> {
-  return memoizedIndexFor(
-    claudeImportsByBlobMemo,
-    base,
-    base.blobClaudeImports.length,
-    () => indexByBlob(base.blobClaudeImports),
-  );
+function harnessImportsByBlobFor(
+  base: IndexableBase,
+  dialect: Exclude<ReferenceDialect, 'href'>,
+  strictness: HarnessFactsStrictness,
+): (contentKey: string, path: string) => readonly HarnessBlobImportRow[] {
+  const index = harnessFactsIndex(base, harnessForDialect(dialect).id);
+  if (strictness === 'frontier') {
+    return (contentKey) => index.factsOf(contentKey) === undefined ? [] : index.requireImports(contentKey, null);
+  }
+  const derived = blobKeysFor(base);
+  return (contentKey, path) => derived.has(contentKey) ? index.requireImports(contentKey, path) : [];
+}
+
+/** Per-run memo of the `blobs` key set, on {@link referencesByBlobMemo}'s terms. */
+const blobKeysMemo = new WeakMap<IndexableBase, MemoizedIndex<ReadonlySet<string>>>();
+
+/**
+ * Every content key with a `blobs` row, built once per table state.
+ *
+ * @param base - The projection built so far
+ * @returns The derived content keys
+ */
+function blobKeysFor(base: IndexableBase): ReadonlySet<string> {
+  return memoizedIndexFor(blobKeysMemo, base, base.blobs.length, () => new Set(base.blobs.map((row) => row.contentKey)));
 }
 
 /**
@@ -1697,7 +1770,7 @@ function claudeImportsByBlobFor(base: IndexableBase): ReadonlyMap<string, readon
  * edges, and the table's insertion order is whatever the derivation stage
  * happened to add rows in.
  *
- * @param rows - `blob_references` or `blob_claude_imports`
+ * @param rows - A blob-keyed edge table
  * @returns `contentKey` → its rows, ordinal-ordered
  */
 function indexByBlob<Row extends { readonly blob: string; readonly ordinal: number }>(

@@ -2,9 +2,10 @@ import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 import { describe, expect, it } from 'vitest';
 
 import { type ParseResult, parseMarkdownContent } from '../src/link-parser.js';
-import { blobClaudeImportsFor, blobConditionsFor, blobRowFor } from '../src/projection/blob-facts.js';
-import { claudeMemoryFactsOf } from '../src/projection/claude-memory.js';
+import { blobConditionsFor, blobRowFor, harnessRowsFor } from '../src/projection/blob-facts.js';
+import { CLAUDE_CODE } from '../src/projection/harness/claude-code.js';
 import { BlobRowSchema } from '../src/schemas/projection-blobs.js';
+import { HarnessBlobFactsRowSchema, HarnessBlobImportRowSchema } from '../src/schemas/projection-harness.js';
 
 // Hoisted: sonarjs/no-duplicate-string blocks a literal used 3+ times.
 const CONTENT_KEY = `markdown.${'a'.repeat(64)}`;
@@ -41,7 +42,7 @@ function decoding(overrides: Partial<TextProvenance> = {}): TextProvenance {
 
 /** `blobRowFor` with the Claude facts of the parse's own text, as `blob-population.ts` passes them. */
 function rowFor(sizeBytes: number, decoded: TextProvenance, parsed: ParseResult) {
-  return blobRowFor(CONTENT_KEY, sizeBytes, decoded, parsed, claudeMemoryFactsOf(parsed.content));
+  return blobRowFor(CONTENT_KEY, sizeBytes, decoded, parsed);
 }
 
 describe('blobRowFor', () => {
@@ -213,20 +214,27 @@ describe('blobConditionsFor', () => {
   });
 });
 
-describe('the Claude memory facts on a blob', () => {
-  it('charges the injected text, not the file, in claudeInjected*', () => {
+describe('the Claude Code harness rows for a blob', () => {
+  it('charges the injected text, not the file, in harness_blob_facts', () => {
     const content = '---\ntitle: T\n---\n<!-- a note -->\n\nBody.\n';
+    const { facts } = harnessRowsFor(CONTENT_KEY, CLAUDE_CODE.id, CLAUDE_CODE.factsOf(content));
+    expect(HarnessBlobFactsRowSchema.parse(facts)).toEqual({
+      blob: CONTENT_KEY,
+      harness: 'claude-code',
+      injectedBytes: 'Body.'.length,
+      injectedTokens: Math.ceil('Body.'.length / 4),
+      paths: null,
+    });
+    // `blobs.tokenEstimate` stays the WHOLE text — the harness's charge is its own table.
     const row = rowFor(content.length, decoding(), parseMarkdownContent(content, content.length));
-    expect(row.claudeInjectedBytes).toBe('Body.'.length);
-    expect(row.claudeInjectedTokens).toBe(Math.ceil('Body.'.length / 4));
     expect(row.tokenEstimate).toBe(Math.ceil(content.length / 4));
   });
 
-  it('files one blob_claude_imports row per import, in the order the harness follows them', () => {
-    const rows = blobClaudeImportsFor(CONTENT_KEY, claudeMemoryFactsOf('See @b.md and @a.md#x\n\n@b.md\n'));
-    expect(rows).toEqual([
-      { blob: CONTENT_KEY, ordinal: 0, rawRef: '@b.md', target: 'b.md', line: 1 },
-      { blob: CONTENT_KEY, ordinal: 1, rawRef: '@a.md#x', target: 'a.md', line: 1 },
+  it('files one harness_blob_imports row per import, in the order the harness follows them', () => {
+    const { imports } = harnessRowsFor(CONTENT_KEY, CLAUDE_CODE.id, CLAUDE_CODE.factsOf('See @b.md and @a.md#x\n\n@b.md\n'));
+    expect(imports.map((row) => HarnessBlobImportRowSchema.parse(row))).toEqual([
+      { blob: CONTENT_KEY, harness: 'claude-code', ordinal: 0, rawRef: '@b.md', target: 'b.md', line: 1 },
+      { blob: CONTENT_KEY, harness: 'claude-code', ordinal: 1, rawRef: '@a.md#x', target: 'a.md', line: 1 },
     ]);
   });
 });

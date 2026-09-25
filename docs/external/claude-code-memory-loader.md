@@ -1,12 +1,12 @@
 # Claude Code — the memory-file loader (`CLAUDE.md`, `.claude/rules`, `@` imports)
 
-> **Source:** the shipped Claude Code binary, version 2.1.280
-> (`~/.local/share/claude/versions/2.1.280`, a Bun single-file bundle), read with `strings -n 6`.
-> Every block below is a VERBATIM excerpt of minified source, except that elided spans are
-> marked `/* … */`. Anthropic documents none of the behaviour below at this level.
-> **Read:** 2026-09-23
+> **Source:** the shipped Claude Code binary, versions 2.1.280 and 2.1.281
+> (`~/.local/share/claude/versions/2.1.280`, `2.1.281`, Bun single-file bundles), read with
+> `strings -n 6`. Every block below is a VERBATIM excerpt of minified source, except that elided
+> spans are marked `/* … */`. Anthropic documents none of the behaviour below at this level.
+> **Read:** 2026-09-23 (2.1.280); 2026-09-24 (2.1.281, the rendering section)
 >
-> @vendor-claim reviewed=2026-09-23 verify=Install the current Claude Code, run `strings -n 6` over its binary, re-find each function below by the quoted anchor string (`4194304`, `Skipping non-text file in @include`, `(?:^|\s)@((?:[^\s\\]|\\ )+)`, `conditionalRule:!0`, `tengu_agents_md_mod`), diff against the excerpts, and update this file and `packages/resources/test/helpers/claude-loader-reference.ts` together
+> @vendor-claim reviewed=2026-09-24 verify=Install the current Claude Code, run `strings -n 6` over its binary, re-find each function below by the quoted anchor string (`4194304`, `Skipping non-text file in @include`, `(?:^|\s)@((?:[^\s\\]|\\ )+)`, `conditionalRule:!0`, `tengu_agents_md_mod`, `Codebase and user instructions are shown below`, `nested_memory:(e)=>`), diff against the excerpts, and update this file and `packages/resources/test/helpers/claude-loader-reference.ts` together
 >
 > **Refresh policy:** re-read on adopting a Claude Code release that changes memory loading, or
 > every ~90 days, whichever is sooner. The executable transcription of this file is
@@ -159,15 +159,47 @@ async function sNe(e,n,r){let s=[],g=wvn();for(let h of e){if(n.loadedNestedMemo
   consulted.
 - A file already in context (launch, or an earlier read) is not injected again (`sNe`).
 
-## How a loaded file is rendered: `FOn`
+## How loaded files are rendered (2.1.281)
+
+Superseding the 2.1.280 `FOn` excerpt below (same shape, renamed in 2.1.281 and now transcribed
+alongside the once-per-launch preamble and the on-read attachment header it shares nothing with):
 
 ```js
-function FOn(e){let t=[],r=[];for(let o of e){if(o.type==="AutoMemPinned"){r.push(o);continue}if(r.length>0)t.push(Jt(r)),r=[];t.push(`Contents of ${o.path}${Zr(o.type)}:
-`+o.content.trim())}if(r.length>0)t.push(Jt(r));return t.join(`
-`)}
+var Zr="Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.";function en(e){switch(e){case"Project":return" (project instructions, checked into the codebase)";case"Local":return" (user's private project instructions, not checked in)";case"AutoMem":case"AutoMemPinned":return" (user's auto-memory, persists across conversations)";case"Managed":return" (organization-managed policy instructions)";case"User":return" (user's private global instructions for all projects)"}}
+function s1n(e){let t=[],o=[];for(let r of e){if(r.type==="AutoMemPinned"){o.push(r);continue}if(o.length>0)t.push(Ro(o)),o=[];t.push(`Contents of ${r.path}${en(r.type)}:
+`+r.content.trim())}if(o.length>0)t.push(Ro(o));return t.join(`
+`)}function hve(e){let t=s1n(e);return t===""?"":`${Zr}
+${t}`}
+nested_memory:(e)=>Si([ke({content:`Contents of ${e.content.path}:
+${e.content.content}`,isMeta:!0})]),
 ```
 
-The charged text of one file is `q7e`'s content, `trim()`med, behind a one-line header.
+`en` (`Zr` in the 2.1.280 excerpt, renamed) is the per-kind suffix; `Zr` here is the once-per-launch
+preamble, prepended by `hve` exactly once, and only when the launch loaded at least one file
+(`t===""` short-circuits to `""`). An import inherits its importer's `type` (`$q(Ee,n,…)` passes
+`n` down every hop), so everything reached from `CLAUDE.local.md` renders `Local` and everything
+else renders `Project` — an imported file is never its own kind. `o.path` is the absolute path the
+launch walk opened, not symlink-resolved. The on-read attachment (`nested_memory`) carries no
+per-kind suffix and no preamble: `Contents of <path>:\n<content>`, where `content` here is the
+UNTRIMMED `q7e` content — `s1n`'s `.content.trim()` does not run on this branch.
+
+The charged text of one file is `q7e`'s content, `trim()`med (launch) or untrimmed (on-read),
+behind a one-line header naming the absolute path.
+
+### Two known sub-token divergences against VAT's accounting
+
+- **The `s1n` join is `t.join('\n')`, an `n − 1` single-newline separator between rendered
+  entries** (and around each `AutoMemPinned` batch `Jt`/`Ro` groups together) — genuinely part of
+  what a launch charges, and genuinely NOT one `vat claude context` charges: `CLAUDE_CODE.renderHeader`
+  answers the header line alone, with no inter-file joiner, so VAT's total under-counts a real
+  launch by at most one character per loaded file. Ruled out of scope rather than modelled, because
+  it is bounded, one-directional, and its exact value depends on `AutoMemPinned` batching VAT's
+  harness profile does not represent.
+- **The on-read attachment's content is untrimmed** (`nested_memory` above), while VAT's
+  `harness_blob_facts.injectedTokens` is always the trimmed measure — the launch-path number,
+  reused for an on-demand row rather than adding a second harness measurement for the untrimmed
+  case. Bounded by the file's own leading/trailing whitespace, which the harness's own `trim()` on
+  the launch path shows is not meant to be charged content in the first place.
 
 ## Observed on a live binary: imports are followed from ANY loaded file
 

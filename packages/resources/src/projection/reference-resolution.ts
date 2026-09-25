@@ -100,7 +100,7 @@ export type ReferencePathResolution =
  *
  * @param dialect - How the token is to be read (`href`, `claude-import`)
  * @param rawRef - A `blob_references.rawRef` exactly as authored under `href`;
- *   a `blob_claude_imports.target` under `claude-import`
+ *   a `harness_blob_imports.target` under `claude-import`
  * @param fromPath - Root-relative path of the file holding the reference;
  *   resolution is relative to the REFERRING file, never to the root
  * @param root - Absolute corpus root

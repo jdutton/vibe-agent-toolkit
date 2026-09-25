@@ -393,9 +393,12 @@ describe('the per-projection context-query index', () => {
       expect(rowAt(SCOPED_RULE)?.admissions).toEqual([
         { kind: 'glob-rule', pattern: SCOPED_RULE_PATTERN },
       ]);
+      // `info`, not `warning`: an import's shape is the harness's own rule
+      // (`CLAUDE_CODE.importShape` — a directory component makes it a path), so
+      // a bare `@missing.md` is bare whatever its extension.
       expect(
-        answer.conditions.filter((row) => row.sourceRef === '@missing.md').map((row) => row.severity),
-      ).toEqual(['warning']);
+        answer.conditions.filter((row) => row.ref === '@missing.md').map((row) => row.severity),
+      ).toEqual(['info']);
     });
   });
 });

@@ -73,7 +73,7 @@
         "launchCharge": {
           "type": "string",
           "minLength": 1,
-          "description": "Whether this row's bytes are paid when a session starts — sum tokens or bytes WHERE this is \"charged\". Open vocabulary: \"charged\", \"unknown-size\", \"oversize\", \"not-always\""
+          "description": "Whether this row's bytes are paid when a session starts — SUM(tokens + headerTokens) WHERE this is \"charged\", plus the chain's own claude_context_chains.preambleTokens (charged at most once per chain, not per row), is the launch total. Open vocabulary: \"charged\", \"unknown-size\", \"oversize\", \"not-always\""
         },
         "tokens": {
           "anyOf": [
@@ -85,7 +85,7 @@
               "type": "null"
             }
           ],
-          "description": "blobs.claudeInjectedTokens — the text Claude Code injects, frontmatter and HTML comment blocks removed — or null when this realization has no blob. Null is UNKNOWN, never zero"
+          "description": "harness_blob_facts.injectedTokens — the text Claude Code injects, frontmatter and HTML comment blocks removed — or null when this realization has no blob. Null is UNKNOWN, never zero"
         },
         "bytes": {
           "anyOf": [
@@ -98,6 +98,11 @@
             }
           ],
           "description": "blobs.bytes, or null when this realization has no blob"
+        },
+        "headerTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Tokens of the header line Claude Code renders immediately before this file's content — `Contents of <absolute path>(<kind>):\\n` at launch, `Contents of <absolute path>:\\n` on read; no inter-file joiner. Machine-dependent because the path is absolute, but always known: it depends only on the path, the kind (Project/Local) and the trigger (launch/read), never on the content, so it is never null"
         }
       },
       "required": [
@@ -112,7 +117,8 @@
         "sizeCliff",
         "launchCharge",
         "tokens",
-        "bytes"
+        "bytes",
+        "headerTokens"
       ],
       "additionalProperties": false,
       "description": "A row of the derived `claude_context_loads` relation"

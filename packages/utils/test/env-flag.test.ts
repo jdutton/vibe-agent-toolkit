@@ -220,7 +220,30 @@ function callerPairs(file: string, text: string): string[] {
 
 const byName = (a: string, b: string): number => a.localeCompare(b);
 
+/**
+ * Every pair `callerPairs` emits hangs off an identifier or string literal whose
+ * text is the parser's name, so a file whose source never spells it cannot yield
+ * one — unless it spells it through a unicode escape, which the second test keeps.
+ * Skipping the TypeScript parse for the rest keeps the monorepo sweep in budget.
+ */
+function mayMentionParser(text: string): boolean {
+  return text.includes(PARSER_NAME) || text.includes(String.raw`\u`);
+}
+
 describe('callerPairs — the scanner the caller-table test trusts', () => {
+  it('never lets the text prefilter skip a file the scanner would report', () => {
+    const escaped = [
+      String.raw`import { parse\u0045nvBoolean } from '@vibe-agent-toolkit/utils';`,
+      String.raw`parse\u0045nvBoolean(process.env.VAT_E);`,
+    ].join('\n');
+    const unrelated = `import { other } from '@vibe-agent-toolkit/utils';\nother(process.env.VAT_F);`;
+
+    expect(callerPairs('e.ts', escaped)).toEqual(['e.ts | VAT_E']);
+    expect(mayMentionParser(escaped)).toBe(true);
+    expect(callerPairs('u.ts', unrelated)).toEqual([]);
+    expect(mayMentionParser(unrelated)).toBe(false);
+  });
+
   it('sees an aliased import, a namespace import, a constant, a parameter and an unresolvable argument', () => {
     const text = [
       `import { parseEnvBoolean as readFlag } from '@vibe-agent-toolkit/utils';`,
@@ -304,8 +327,10 @@ describe('parseEnvBoolean caller table', () => {
       const srcDir = safePath.join(packagesDir, pkg, 'src');
       if (!existsSync(srcDir)) continue;
       for (const file of tsFilesUnder(srcDir)) {
+        const text = readFileSync(file, 'utf8');
+        if (!mayMentionParser(text)) continue;
         const relative = `${pkg}/${safePath.relative(srcDir, file)}`;
-        for (const pair of callerPairs(relative, readFileSync(file, 'utf8'))) callers.add(pair);
+        for (const pair of callerPairs(relative, text)) callers.add(pair);
       }
     }
     const docblock = readFileSync(safePath.join(packagesDir, 'utils', 'src', 'env-flag.ts'), 'utf8');

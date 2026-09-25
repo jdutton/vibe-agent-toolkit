@@ -35,9 +35,6 @@ export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
       encodingSource: 'bom',
       replacementCharacters: 4,
       tokenEstimate: 12,
-      claudeInjectedBytes: 48,
-      claudeInjectedTokens: 12,
-      claudePaths: ['src/**', 'docs/*.md'],
       frontmatter: { title: 'x', tags: ['a', 'b'], nested: { deep: null } },
       frontmatterError: null,
       wordCount: 3,
@@ -87,8 +84,16 @@ export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
       message: '',
       line: null,
     }],
-    blobClaudeImports: [{
+    harnessBlobFacts: [{
       blob: key,
+      harness: 'claude-code',
+      injectedBytes: 48,
+      injectedTokens: 12,
+      paths: ['src/**', 'docs/*.md'],
+    }],
+    harnessBlobImports: [{
+      blob: key,
+      harness: 'claude-code',
       ordinal: 0,
       rawRef: String.raw`@my\ other.md#top`,
       target: 'my other.md',

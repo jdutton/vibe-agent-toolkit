@@ -1193,7 +1193,7 @@
                   "markdown-link-reference",
                   "markdown-definition"
                 ],
-                "description": "Which blob_references syntactic forms the closure traverses under the \"href\" dialect. Defaults to the three markdown forms; an @-prefixed or bare token is ambiguous at the blob layer, so following one is an explicit choice. MUST be [] under \"claude-import\", whose edges are blob_claude_imports rather than blob_references — a form list there would read as a filter that filters nothing."
+                "description": "Which blob_references syntactic forms the closure traverses under the \"href\" dialect. Defaults to the three markdown forms; an @-prefixed or bare token is ambiguous at the blob layer, so following one is an explicit choice. MUST be [] under \"claude-import\", whose edges are harness_blob_imports rather than blob_references — a form list there would read as a filter that filters nothing."
               },
               "referenceDialect": {
                 "type": "string",
@@ -1201,7 +1201,7 @@
                   "href",
                   "claude-import"
                 ],
-                "description": "Which edges this closure follows and how it INTERPRETS them. Defaults to \"href\": blob_references rows of the follow forms, resolved under RFC 3986 through resolveLocalHref. \"claude-import\" is Claude Code's own @-import reading of a CLAUDE.md, rules file or anything they import: the edges are blob_claude_imports rows — the harness's extractor, not VAT's lexer — resolved as the harness resolves them: ~ and ~/ expand to the home directory (landing OUTSIDE the corpus, which is the healthy state the vendor recommends for sharing instructions across worktrees), a leading / is filesystem-absolute, anything else is relative to the importing file's directory, with no percent-decoding. Inert data, so it rides onto zone_provenance.parameterSet verbatim and the store correctly treats two runs over one tree under different dialects as two different questions.",
+                "description": "Which edges this closure follows and how it INTERPRETS them. Defaults to \"href\": blob_references rows of the follow forms, resolved under RFC 3986 through resolveLocalHref. \"claude-import\" is Claude Code's own @-import reading of a CLAUDE.md, rules file or anything they import: the edges are harness_blob_imports rows — the harness's extractor, not VAT's lexer — resolved as the harness resolves them: ~ and ~/ expand to the home directory (landing OUTSIDE the corpus, which is the healthy state the vendor recommends for sharing instructions across worktrees), a leading / is filesystem-absolute, anything else is relative to the importing file's directory, with no percent-decoding. Inert data, so it rides onto zone_provenance.parameterSet verbatim and the store correctly treats two runs over one tree under different dialects as two different questions.",
                 "default": "href"
               },
               "maxDepth": {

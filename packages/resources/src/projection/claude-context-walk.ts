@@ -24,7 +24,7 @@
  *   comment blocks are gone, and follows none of their imports.
  *
  * So the walk is the authority on what loads at launch, and it runs over the
- * harness's own import edges — `blob_claude_imports`, through
+ * harness's own import edges — `harness_blob_imports`, through
  * {@link closureHopsFrom} (the closure primitive's resolver, asked one file at
  * a time) — which keeps "which `@` token is an import" a single question with a
  * single answer in this package: the shipped `Ayn`'s.
@@ -40,25 +40,23 @@
  * assuming it is the over-report direction. `readdir` order is code-point
  * order per directory; the harness uses whatever the filesystem returns.
  *
- * @vendor-claim reviewed=2026-09-23 verify=Re-extract `$yn`, `$q`, `Lke`, `y3`, `dQe`, `q7e` and `Syn` from the current Claude Code binary per docs/external/claude-code-memory-loader.md and diff them against this walk and `claude-memory-text-path.ts`
+ * @vendor-claim reviewed=2026-09-23 verify=Re-extract `$yn`, `$q`, `Lke`, `y3`, `dQe`, `q7e` and `Syn` from the current Claude Code binary per docs/external/claude-code-memory-loader.md and diff them against this walk and `harness/claude-code.ts`
  */
 
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import type { BlobRow } from '../schemas/projection-blobs.js';
+import type { HarnessBlobFactsRow } from '../schemas/projection-harness.js';
 import type { ResourceRealizationRow, ResourceTagRow } from '../schemas/projection-resources.js';
 
 import { RULES_FILE_TAG } from './agentic-tags.js';
-import { OVERSIZE_BYTES } from './claude-context-accounting.js';
 import { ancestorDirectories, claudeAncestry } from './claude-context-ancestry.js';
 import type { Admission } from './claude-context-query.js';
 import { declaredPatterns, pathScopedMatch } from './claude-context-rules.js';
-import { isMemoryTextPath } from './claude-memory-text-path.js';
-import {
-  CLAUDE_IMPORT_MAX_DEPTH,
-  claudeImportExtentDeclaration,
-} from './contributors/claude-import-extent.js';
+import { claudeImportExtentDeclaration } from './contributors/claude-import-extent.js';
 import { closureHopsFrom } from './contributors/closure-extent.js';
+import { CLAUDE_CODE, CLAUDE_IMPORT_MAX_DEPTH, CLAUDE_OVERSIZE_BYTES, isMemoryTextPath } from './harness/claude-code.js';
+import { harnessFactsIndex, type HarnessFactsIndex } from './harness/facts-index.js';
 import type { Projection } from './projection.js';
 import { isAtOrBelow } from './root-relative-path.js';
 
@@ -90,6 +88,7 @@ interface WalkIndex {
   readonly projection: Projection;
   readonly fileByPath: ReadonlyMap<string, ResourceRealizationRow>;
   readonly blobByKey: ReadonlyMap<string, BlobRow>;
+  readonly facts: HarnessFactsIndex;
   /** Every rules file, grouped under the directory holding its `.claude/rules`. */
   readonly rulesByHolder: ReadonlyMap<string, readonly string[]>;
   readonly hops: Map<string, readonly string[]>;
@@ -108,6 +107,7 @@ function walkIndexFor(projection: Projection): WalkIndex {
     projection,
     fileByPath,
     blobByKey: new Map(projection.blobs.map((row) => [row.contentKey, row])),
+    facts: harnessFactsIndex(projection, CLAUDE_CODE.id),
     rulesByHolder: rulesByHolder(fileByPath, projection.resourceTags),
     hops: new Map(),
   };
@@ -175,23 +175,42 @@ function skipOf(index: WalkIndex, row: ResourceRealizationRow | undefined): Skip
   if (row === undefined) return 'absent';
   if (!isMemoryTextPath(row.path)) return 'not-text';
   const blob = row.contentKey === null ? undefined : index.blobByKey.get(row.contentKey);
-  if (blob !== undefined && blob.bytes > OVERSIZE_BYTES) return 'oversize';
-  return blob?.claudeInjectedBytes === 0 ? 'injects-nothing' : undefined;
+  // ⛔ The size cliff is NOT a reach rule. The loader still stats an oversize
+  // file and `prunedBehind` follows its imports, so its harness facts must
+  // exist: `hopsOf` reads them STRICTLY (a missing row throws), and when the
+  // file becomes an answer row `rowsFor`'s `requireFacts` holds for the same
+  // reason. Only the injected-bytes question is skipped here, not the facts.
+  if (blob !== undefined && blob.bytes > CLAUDE_OVERSIZE_BYTES) return 'oversize';
+  return factsOfReached(index, row)?.injectedBytes === 0 ? 'injects-nothing' : undefined;
 }
 
 /**
- * A realization's `kyn` globs — `blobs.claudePaths`, the harness's own read of
- * ANY memory file's `paths:` — or null when it has none or no blob. Never
- * `blobs.frontmatter`: that is VAT's parser's answer, and a file routed to no
- * parser (an imported `.ts`) has none.
+ * The harness facts of a file the walk reached, or undefined when it has no
+ * blob to have facts OF (unkeyed, or a key with no `blobs` row — a question
+ * about content, not facts, and answered as it always was).
+ *
+ * ⛔ A blob that exists and has no facts row THROWS (`HarnessFactsAbsentError`):
+ * the walk reached it, so an absent row is a producer bug — reading it as
+ * "injects nothing" or "scoped by nothing" would be a silent wrong answer.
  */
-function claudePathsOf(index: WalkIndex, row: ResourceRealizationRow): BlobRow['claudePaths'] {
-  return row.contentKey === null ? null : index.blobByKey.get(row.contentKey)?.claudePaths ?? null;
+function factsOfReached(index: WalkIndex, row: ResourceRealizationRow): HarnessBlobFactsRow | undefined {
+  if (row.contentKey === null || !index.blobByKey.has(row.contentKey)) return undefined;
+  return index.facts.requireFacts(row.contentKey, row.path);
+}
+
+/**
+ * A realization's `kyn` globs — `harness_blob_facts.paths`, the harness's own
+ * read of ANY memory file's `paths:` — or null when it has none or no blob.
+ * Never `blobs.frontmatter`: that is VAT's parser's answer, and a file routed
+ * to no parser (an imported `.ts`) has none.
+ */
+function harnessPathsOf(index: WalkIndex, row: ResourceRealizationRow): HarnessBlobFactsRow['paths'] {
+  return factsOfReached(index, row)?.paths ?? null;
 }
 
 /** Does this file declare `paths:` the harness keeps? `kyn`'s `globs`. */
 function isScoped(index: WalkIndex, row: ResourceRealizationRow): boolean {
-  return claudePathsOf(index, row) !== null;
+  return harnessPathsOf(index, row) !== null;
 }
 
 /** One file's import targets, through the closure primitive's own resolver. */
@@ -205,8 +224,10 @@ function hopsOf(index: WalkIndex, path: string): readonly string[] {
   const hops = closureHopsFrom({
     root,
     resourceRealizations: index.projection.resourceRealizations,
+    blobs: index.projection.blobs,
     blobReferences: index.projection.blobReferences,
-    blobClaudeImports: index.projection.blobClaudeImports,
+    harnessBlobFacts: index.projection.harnessBlobFacts,
+    harnessBlobImports: index.projection.harnessBlobImports,
     declaration: claudeImportExtentDeclaration(path),
   });
   index.hops.set(path, hops);
@@ -280,10 +301,15 @@ export function launchWalk(projection: Projection, directory: string): LaunchWal
   const chain = claudeAncestry(projection.resourceRealizations, projection.resourceTags, directory);
   for (const holder of ancestorDirectories(directory)) {
     const own = chain.filter((entry) => entry.holder === holder);
-    for (const entry of own.filter((candidate) => !candidate.local)) run(entry.path, { kind: 'ancestry', dir: entry.dir }, keepAll);
+    // `local: entry.local` carries the slot the walk already knows onto the
+    // admission itself — the ONE place that decides Project vs Local — rather
+    // than leaving a later reader (the render header) to re-derive it from a
+    // filename, which a rules file sharing the `CLAUDE.local.md` basename would
+    // answer wrong (`claude-context-query.ts`'s `localAncestryRootPaths`).
+    for (const entry of own.filter((candidate) => !candidate.local)) run(entry.path, { kind: 'ancestry', dir: entry.dir, local: entry.local }, keepAll);
     const ruleAdmission: Admission = holder === '' ? { kind: 'root-rule' } : { kind: 'nested-rule', under: holder };
     for (const rule of index.rulesByHolder.get(holder) ?? []) run(rule, ruleAdmission, keepUnscoped);
-    for (const entry of own.filter((candidate) => candidate.local)) run(entry.path, { kind: 'ancestry', dir: entry.dir }, keepAll);
+    for (const entry of own.filter((candidate) => candidate.local)) run(entry.path, { kind: 'ancestry', dir: entry.dir, local: entry.local }, keepAll);
   }
   return { reached, pruned: prunedBehind(index, oversize, processed), roots };
 }
@@ -335,7 +361,7 @@ export function readWalk(projection: Projection, directory: string, file: string
 function loadedOnRead(index: WalkIndex, holder: string, entry: WalkEntry, file: string): WalkEntry | undefined {
   const row = index.fileByPath.get(entry.path);
   if (row === undefined) return undefined;
-  const pattern = pathScopedMatch(holder, declaredPatterns(claudePathsOf(index, row)), file);
+  const pattern = pathScopedMatch(holder, declaredPatterns(harnessPathsOf(index, row)), file);
   if (pattern === undefined) return undefined;
   const admission: Admission = entry.admission.kind === 'import' ? entry.admission : { kind: 'glob-rule', pattern };
   return { resourceId: entry.resourceId, path: entry.path, admission };

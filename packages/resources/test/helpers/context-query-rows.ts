@@ -1,5 +1,5 @@
 /**
- * Minimal `resource_realizations` / `resource_tags` / `blobs` row builders for the
+ * Minimal `resource_realizations` / `resource_tags` / `harness_blob_facts` row builders for the
  * Claude-context SELECTOR suites — `projection-claude-context-ancestry.test.ts`
  * and `projection-claude-context-rules.test.ts`.
  *
@@ -18,7 +18,8 @@
 
 import { RULE_SCOPE_TAG } from '../../src/projection/agentic-tags.js';
 import { harnessPaths, selectRules, type RuleAdmission } from '../../src/projection/claude-context-rules.js';
-import type { BlobRow } from '../../src/schemas/projection-blobs.js';
+import { harnessFactsIndex, type HarnessFactsIndex } from '../../src/projection/harness/facts-index.js';
+import type { HarnessBlobFactsRow } from '../../src/schemas/projection-harness.js';
 import type {
   ResourceRealizationRow,
   ResourceTagRow,
@@ -29,7 +30,7 @@ import type {
  *
  * ⚠️ Deliberately NOT a schema-valid content key (`key:<path>`, not
  * `<parserKind>.<sha256>`): these rows are never validated, and a recognisable
- * key makes the `blobs` join in the rules suite readable at a glance. Every
+ * key makes the facts join in the rules suite readable at a glance. Every
  * other column is either derived from `path` or the quiet default, so a suite
  * that cares about one of them overrides it at the call site and the override is
  * visible in the test rather than buried here.
@@ -79,23 +80,32 @@ export function queryTag(path: string, tag: string, value: string | null): Resou
 }
 
 /**
- * The blob {@link queryRealization}'s content key points at, carrying a
- * `paths:` list — `claudePaths`, the one column the rules selector reads, read
- * the harness's way (`harnessPaths`), beside the frontmatter it came from.
+ * The Claude Code facts row {@link queryRealization}'s content key points at,
+ * carrying a `paths:` list — `paths`, the one column the rules selector reads,
+ * read the harness's way (`harnessPaths`).
  *
  * @param path - The rules file's root-relative path
  * @param paths - Its `paths:` entries, or undefined for a file with no frontmatter
- * @returns The blob row
+ * @returns The facts row
  */
-export function queryPathsBlob(path: string, paths: readonly string[] | undefined): BlobRow {
+export function queryPathsBlob(path: string, paths: readonly string[] | undefined): HarnessBlobFactsRow {
   return {
-    contentKey: `key:${path}`, bytes: 100, encoding: 'utf-8', encodingSource: 'assumed',
-    replacementCharacters: 0, tokenEstimate: 25, claudeInjectedBytes: 100, claudeInjectedTokens: 25,
-    claudePaths: paths === undefined ? null : harnessPaths({ paths: [...paths] }),
-    frontmatter: paths === undefined ? null : { paths: [...paths] },
-    frontmatterError: null, wordCount: 10, proseCodeUnits: 100, codeBlockCodeUnits: 0,
-    linkCount: 0, headingCount: 1, sectionCount: 1,
+    blob: `key:${path}`,
+    harness: 'claude-code',
+    injectedBytes: 100,
+    injectedTokens: 25,
+    paths: paths === undefined ? null : harnessPaths({ paths: [...paths] }),
   };
+}
+
+/**
+ * The facts index `selectRules` reads, over hand-built facts rows.
+ *
+ * @param rows - The facts rows, one per rule
+ * @returns Claude Code's index over them
+ */
+export function queryFacts(rows: readonly HarnessBlobFactsRow[]): HarnessFactsIndex {
+  return harnessFactsIndex({ harnessBlobFacts: rows, harnessBlobImports: [] }, 'claude-code');
 }
 
 /**
@@ -118,6 +128,6 @@ export function pathScopedAdmissions(
   return selectRules({
     realizations: [queryRealization(rulePath), ...files.map((file) => queryRealization(file))],
     tags: [queryTag(rulePath, RULE_SCOPE_TAG, 'path-scoped')],
-    blobs: [queryPathsBlob(rulePath, paths)], queryDir, queryFile,
+    facts: queryFacts([queryPathsBlob(rulePath, paths)]), queryDir, queryFile,
   }).rules.map((rule) => rule.admission);
 }

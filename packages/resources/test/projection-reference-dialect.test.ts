@@ -54,7 +54,7 @@ describe('resolveDialectRef — href dialect', () => {
 });
 
 describe('resolveDialectRef — claude-import dialect', () => {
-  // The token is a `blob_claude_imports.target`: the harness's extractor has
+  // The token is a `harness_blob_imports.target`: the harness's extractor has
   // already dropped the `@`, cut the fragment and unescaped `\ `. What is left
   // is the binary's `et`.
 

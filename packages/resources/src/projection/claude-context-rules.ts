@@ -139,7 +139,6 @@
 
 import ignore from 'ignore';
 
-import type { BlobRow } from '../schemas/projection-blobs.js';
 import type { ClaudeRulePatternStatus } from '../schemas/projection-claude-rules.js';
 import type {
   ResourceRealizationRow,
@@ -147,6 +146,8 @@ import type {
 } from '../schemas/projection-resources.js';
 
 import { RULE_SCOPE_TAG, type RuleScope } from './agentic-tags.js';
+import { CLAUDE_CODE_ENTRY_NAMES } from './harness/claude-code-entry-names.js';
+import type { HarnessFactsIndex } from './harness/facts-index.js';
 import { isAtOrBelow } from './root-relative-path.js';
 
 /**
@@ -163,7 +164,7 @@ const EXPANDED_PATTERN_BUDGET = 1000;
 const PATTERN_BYTE_BUDGET = 4 * 1024 * 1024;
 
 /** The `.claude/rules` segment a nested rules directory hangs below. */
-const RULES_SEGMENT = '/.claude/rules/';
+const RULES_SEGMENT = `/${CLAUDE_CODE_ENTRY_NAMES.rulesDirectory}/`;
 
 /** The trailing tail `kyn` strips from every normalised pattern. */
 const UNIVERSAL_TAIL = '/**';
@@ -791,7 +792,8 @@ function commonPrefixDirectory(left: string, right: string): string {
  * @param input - The projection's rows plus the query's directory and file
  * @param input.realizations - Every realization the projection holds
  * @param input.tags - Every `resource_tags` row; rules are the {@link RULE_SCOPE_TAG} rows
- * @param input.blobs - Every blob row, for their `claudePaths`
+ * @param input.facts - Claude Code's facts index, for each rule's `paths:`.
+ *   A keyed rule file with no facts row throws `HarnessFactsAbsentError`
  * @param input.queryDir - Root-relative directory of the query
  * @param input.queryFile - Root-relative file, or null for a directory query.
  *   Null is what makes a glob rule inexact — the exactness only holds when
@@ -801,7 +803,7 @@ function commonPrefixDirectory(left: string, right: string): string {
 export function selectRules(input: {
   readonly realizations: readonly ResourceRealizationRow[];
   readonly tags: readonly ResourceTagRow[];
-  readonly blobs: readonly BlobRow[];
+  readonly facts: HarnessFactsIndex;
   readonly queryDir: string;
   readonly queryFile: string | null;
 }): RuleSelectionResult {
@@ -811,7 +813,6 @@ export function selectRules(input: {
       scopeOf.set(row.resourceId, row.value as RuleScope);
     }
   }
-  const blobByKey = new Map(input.blobs.map((row) => [row.contentKey, row]));
   // Computed ONCE for the whole selection, not per rule: it is a function of the
   // query alone, and 116 rules rebuilding one adopter's file list is the shape of
   // cost that made the naive ∃ pass look unaffordable in the first place. Empty
@@ -838,7 +839,7 @@ export function selectRules(input: {
     const scope = scopeOf.get(row.resourceId);
     if (scope === undefined || row.isDirectory || seen.has(row.resourceId)) continue;
     seen.add(row.resourceId);
-    const admission = admissionFor(scope, row, { ...input, dirFiles }, blobByKey, overBudget);
+    const admission = admissionFor(scope, row, { ...input, dirFiles }, input.facts, overBudget);
     if (admission !== undefined) {
       rules.push({ resourceId: row.resourceId, path: row.path, admission });
     }
@@ -1154,7 +1155,7 @@ function instantiatedSegment(segment: string): string {
  * @param row - The rule's realization
  * @param input - The query, as {@link selectRules} received it, plus the
  *   path-sorted files under the query directory
- * @param blobByKey - `contentKey` → blob, for their `claudePaths`
+ * @param facts - Claude Code's facts index, for each rule's `paths:`
  * @param overBudget - Collector for rules whose `paths:` list blew the budget
  * @returns The admission, or undefined
  */
@@ -1166,7 +1167,7 @@ function admissionFor(
     readonly queryFile: string | null;
     readonly dirFiles: readonly string[];
   },
-  blobByKey: ReadonlyMap<string, BlobRow>,
+  facts: HarnessFactsIndex,
   overBudget: string[],
 ): RuleAdmission | undefined {
   if (scope === 'root') return { kind: 'root-rule' };
@@ -1183,7 +1184,7 @@ function admissionFor(
   // silently inherit glob semantics nobody chose for it.
   if (scope !== 'path-scoped') return undefined;
 
-  const declared = pathsOf(row, blobByKey);
+  const declared = pathsOf(row, facts);
   if (declared.length === 0) return undefined;
   const rule = compileRule(nestedRuleParent(row.path), declared);
   // ⚠️ Reported, never used to DROP the rule, and that changed with the budget
@@ -1534,7 +1535,7 @@ function filesUnder(
  *
  * Its only caller is `claudeMemoryFactsOf` (`claude-memory.ts`), which hands it
  * the harness's own frontmatter — `gB`'s block through the YAML parser, for ANY
- * file, whatever its extension — and stores the answer as `blobs.claudePaths`.
+ * file, whatever its extension — and stores the answer as `harness_blob_facts.paths`.
  * Every consumer (the launch and read walks, the rules-scope contributor, this
  * module's query lane) reads that column and never a frontmatter. It used to be
  * asked of `blobs.frontmatter`, which is VAT's PARSER's answer: an imported
@@ -1595,18 +1596,18 @@ export function harnessPaths(frontmatter: Readonly<Record<string, unknown>>): st
 }
 
 /**
- * A file's stored `paths:` globs (`blobs.claudePaths`), each with its pattern index.
+ * A file's stored `paths:` globs (`harness_blob_facts.paths`), each with its pattern index.
  *
  * ⛔ Exported so the PRODUCER of `claude_rule_patterns`
  * (`ClaudeRulesScopeContributor`), the walks and this module's query lane
  * number one declaration one way — a second numbering would surface as a
  * stored row describing a predicate the query never applies.
  *
- * Memoized on the `claudePaths` array, so every query over one projection hands
+ * Memoized on the stored `paths` array, so every query over one projection hands
  * {@link compileRule} the same list and a rule compiles once, not once per
  * query directory.
  *
- * @param paths - The blob's `claudePaths`, or null/undefined when it has none or no blob
+ * @param paths - The blob's stored `paths`, or null/undefined when it has none or no blob
  * @returns The declared patterns in declaration order, or an empty list
  */
 export function declaredPatterns(paths: readonly string[] | null | undefined): readonly DeclaredPattern[] {
@@ -1700,14 +1701,15 @@ export interface DeclaredPattern {
  * A rule's `paths:` list, or empty when it has none or it normalises away.
  *
  * @param row - The rule's realization
- * @param blobByKey - `contentKey` → blob
+ * @param facts - Claude Code's facts index
  * @returns The declared patterns, or an empty list
+ * @throws {HarnessFactsAbsentError} When the rule is keyed and has no facts row
  */
 function pathsOf(
   row: ResourceRealizationRow,
-  blobByKey: ReadonlyMap<string, BlobRow>,
+  facts: HarnessFactsIndex,
 ): readonly DeclaredPattern[] {
-  return row.contentKey === null ? NO_PATTERNS : declaredPatterns(blobByKey.get(row.contentKey)?.claudePaths);
+  return row.contentKey === null ? NO_PATTERNS : declaredPatterns(facts.requireFacts(row.contentKey, row.path).paths);
 }
 
 /**

@@ -15,8 +15,8 @@ import { describe, expect, it } from 'vitest';
 
 import { differentialFailures, sweepSeeds } from '../helpers/rules-differential.js';
 
-/** Seeds 1,001–2,000: disjoint from the unit tier's range. */
-const INTEGRATION_SEEDS = sweepSeeds(1001, 1000);
+/** Seeds 46–1,045: continuing the unit tier's 1–45, so the two tiers sweep one contiguous prefix. */
+const INTEGRATION_SEEDS = sweepSeeds(46, 1000);
 
 describe('claude-context-rules agrees with a brute-force node-ignore reference (wide sweep)', () => {
   it('on every derived answer, across 1,000 seeded random trees and rules', () => {

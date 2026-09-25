@@ -1,13 +1,20 @@
 {
-  "$ref": "#/definitions/projection-blob-claude-imports",
+  "$ref": "#/definitions/projection-harness-blob-imports",
   "definitions": {
-    "projection-blob-claude-imports": {
+    "projection-harness-blob-imports": {
       "type": "object",
       "properties": {
         "blob": {
           "type": "string",
           "pattern": "^(?:markdown|html|none)\\.[0-9a-f]{64}$",
           "description": "Foreign key to blobs.contentKey"
+        },
+        "harness": {
+          "type": "string",
+          "enum": [
+            "claude-code"
+          ],
+          "description": "The coding harness whose reading of the blob this row records"
         },
         "ordinal": {
           "type": "integer",
@@ -16,13 +23,12 @@
         },
         "rawRef": {
           "type": "string",
-          "minLength": 2,
+          "minLength": 1,
           "description": "The token as authored, @ included and nothing unescaped or cut — what a condition row reports back to an author"
         },
         "target": {
           "type": "string",
-          "minLength": 1,
-          "description": "The path the harness resolves: rawRef without its @, its #fragment cut and every `\\ ` read as a space. Unique within a blob — a repeated spelling is one import"
+          "description": "The path the harness resolves: rawRef without its @, its #fragment cut and every `\\ ` read as a space. Unique within a (blob, harness) — a repeated spelling is one import"
         },
         "line": {
           "type": "integer",
@@ -32,13 +38,14 @@
       },
       "required": [
         "blob",
+        "harness",
         "ordinal",
         "rawRef",
         "target",
         "line"
       ],
       "additionalProperties": false,
-      "description": "A row of the blob-keyed `blob_claude_imports` table"
+      "description": "A row of the blob-keyed `harness_blob_imports` table"
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#"

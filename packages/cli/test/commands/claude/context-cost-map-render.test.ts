@@ -70,8 +70,9 @@ function rowOf(overrides: Partial<AccountedRow> = {}): AccountedRow {
     tokens: 1200,
     bytes: 4800,
     loadClass: 'always',
-    admissions: [{ kind: 'ancestry', dir: '' }],
+    admissions: [{ kind: 'ancestry', dir: '', local: false }],
     sizeCliff: 'loaded',
+    headerTokens: 0,
     ...overrides,
   };
 }

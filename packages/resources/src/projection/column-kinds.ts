@@ -148,7 +148,7 @@ function kindOf(column: string, inner: z.ZodTypeAny): ProjectionColumnKind {
  * Two of the thirteen row schemas are wrapped in `.superRefine()`, so their shape
  * lives one `ZodEffects` deep and they have no `.shape` of their own.
  * Unwrapping here rather than at each call site is the difference between a
- * caller that covers all thirteen tables and one that silently reports no columns
+ * caller that covers every table and one that silently reports no columns
  * for those two.
  *
  * @param schema - A row schema, possibly wrapped in refinements

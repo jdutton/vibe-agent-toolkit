@@ -10,7 +10,7 @@ import {
 } from '../src/projection/contributors/claude-rules-scope.js';
 import { ProjectionBuilder, type ProjectionBase } from '../src/projection/projection.js';
 
-import { addFile } from './helpers/claude-context-fixture.js';
+import { addFileWithFacts } from './helpers/claude-context-fixture.js';
 
 /** A root that is never touched on disk — this classifier reads rows, not files. */
 const ROOT = '/vat-corpus/rules-scope-fixture';
@@ -130,7 +130,7 @@ function buildBase(files: readonly FixtureFile[], extraExtents: readonly string[
   const ids = new Map<string, string>();
   for (const file of files) {
     ids.set(file.path, builder.identities.idFor(safePath.join(ROOT, file.path)));
-    addFile(
+    addFileWithFacts(
       builder,
       { path: file.path, refs: [], markdown: file.markdown, deferred: file.deferred ?? false },
       ROOT,
@@ -194,7 +194,22 @@ describe('ClaudeRulesScopeContributor', () => {
       { resourceId: idOf(broken), tag: RULE_SCOPE_TAG, value: 'root', source: CLAUDE_RULES_SCOPE_KIND },
     ]);
     expect(contribution.claudeRulePatterns).toEqual([]);
-    expect(base.blobs.map((blob) => [blob.claudePaths, blob.frontmatterError === null])).toEqual([[null, false]]);
+    expect(base.harnessBlobFacts.map((row) => row.paths)).toEqual([null]);
+    expect(base.blobs.map((blob) => blob.frontmatterError === null)).toEqual([false]);
+  });
+
+  it('contributes nothing for a rules file whose blob has no facts row yet — frontier, never unscoped', async () => {
+    // Inside the fixpoint an absent facts row is "not derived yet", so no scope
+    // is guessed from it: reading it as paths-less would tag a path-scoped rule
+    // `root` and charge it on every turn.
+    const scoped = '.claude/rules/scoped.md';
+    const { base } = buildBase([{ path: scoped, markdown: '---\npaths: src/**\n---\n\n# Scoped\n' }]);
+
+    const contribution = await new ClaudeRulesScopeContributor().contribute({ ...base, harnessBlobFacts: [] }, null);
+
+    expect(contribution.tags).toEqual([]);
+    expect(contribution.memberships).toEqual([]);
+    expect(contribution.claudeRulePatterns).toEqual([]);
   });
 
   it('makes every tagged identity a member, and nothing else', async () => {

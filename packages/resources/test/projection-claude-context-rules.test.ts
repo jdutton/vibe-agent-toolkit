@@ -12,6 +12,7 @@ import {
   type DeclaredPattern,
   type TreeIgnores,
 } from '../src/projection/claude-context-rules.js';
+import { HarnessFactsAbsentError } from '../src/projection/harness/facts-index.js';
 import type {
   ResourceRealizationRow,
   ResourceTagRow,
@@ -19,12 +20,13 @@ import type {
 
 import {
   pathScopedAdmissions as admissionsFor,
+  queryFacts,
   queryPathsBlob as blob,
   queryRealization,
   queryTag,
 } from './helpers/context-query-rows.js';
 
-/** The numbered patterns a file with this frontmatter stores in `blobs.claudePaths`. */
+/** The numbered patterns a file with this frontmatter stores in `harness_blob_facts.paths`. */
 function patternsOf(frontmatter: Readonly<Record<string, unknown>>): DeclaredPattern[] {
   return declaredPatterns(harnessPaths(frontmatter));
 }
@@ -99,7 +101,7 @@ describe('selectRules', () => {
     const path = '.claude/rules/style.md';
     const result = selectRules({
       realizations: [queryRealization(path)], tags: [scopeTag(path, 'root')],
-      blobs: [blob(path, undefined)], queryDir: PACKAGES_CLI, queryFile: null,
+      facts: queryFacts([blob(path, undefined)]), queryDir: PACKAGES_CLI, queryFile: null,
     });
 
     expect(result.rules).toEqual([{ resourceId: `id:${path}`, path, admission: { kind: 'root-rule' } }]);
@@ -109,7 +111,7 @@ describe('selectRules', () => {
     const path = 'packages/cli/.claude/rules/local.md';
     const input = {
       realizations: [queryRealization(path)], tags: [scopeTag(path, 'nested')],
-      blobs: [blob(path, undefined)], queryFile: null,
+      facts: queryFacts([blob(path, undefined)]), queryFile: null,
     };
 
     expect(selectRules({ ...input, queryDir: PACKAGES_CLI_SRC }).rules[0]?.admission)
@@ -121,7 +123,7 @@ describe('selectRules', () => {
     const path = TS_RULE;
     const input = {
       realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, [TS_GLOB])], queryDir: PACKAGES_CLI_SRC,
+      facts: queryFacts([blob(path, [TS_GLOB])]), queryDir: PACKAGES_CLI_SRC,
     };
 
     expect(selectRules({ ...input, queryFile: 'packages/cli/src/index.ts' }).rules[0]?.admission)
@@ -134,7 +136,7 @@ describe('selectRules', () => {
     const result = selectRules({
       realizations: [queryRealization(path), queryRealization(SUBJECT_TS)],
       tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, [TS_GLOB])], queryDir: PACKAGES_CLI_SRC, queryFile: null,
+      facts: queryFacts([blob(path, [TS_GLOB])]), queryDir: PACKAGES_CLI_SRC, queryFile: null,
     });
 
     expect(result.rules[0]?.admission)
@@ -152,7 +154,7 @@ describe('selectRules', () => {
     const result = selectRules({
       realizations: [queryRealization(path), queryRealization(SUBJECT_TS)],
       tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, ['packages/other-pkg/src/thing*.ts'])],
+      facts: queryFacts([blob(path, ['packages/other-pkg/src/thing*.ts'])]),
       queryDir: PACKAGES_CLI_SRC, queryFile: null,
     });
 
@@ -172,7 +174,7 @@ describe('selectRules', () => {
     const input = {
       realizations: [queryRealization(path), queryRealization(SUBJECT_TS)],
       tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, [SUBJECT_TS])],
+      facts: queryFacts([blob(path, [SUBJECT_TS])]),
       queryDir: PACKAGES_CLI_SRC,
     };
 
@@ -197,7 +199,7 @@ describe('selectRules', () => {
         queryRealization(path), queryRealization('docs/foo.bak'), queryRealization(witness),
       ],
       tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, [pattern])], queryDir: 'docs', queryFile: null,
+      facts: queryFacts([blob(path, [pattern])]), queryDir: 'docs', queryFile: null,
     });
 
     expect(result.rules[0]?.admission).toEqual({ kind: MAY_FIRE, pattern, examplePath: witness });
@@ -211,7 +213,7 @@ describe('selectRules', () => {
     const path = '.claude/rules/everything.md';
     const result = selectRules({
       realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, [`${PACKAGES_CLI}/**`])],
+      facts: queryFacts([blob(path, [`${PACKAGES_CLI}/**`])]),
       queryDir: PACKAGES_CLI_SRC, queryFile: null,
     });
 
@@ -229,7 +231,7 @@ describe('selectRules', () => {
     const result = selectRules({
       realizations: [queryRealization(path), queryRealization(SUBJECT_MD), queryRealization(SUBJECT_TS)],
       tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, [pattern])], queryDir: PACKAGES_CLI_SRC, queryFile: null,
+      facts: queryFacts([blob(path, [pattern])]), queryDir: PACKAGES_CLI_SRC, queryFile: null,
     });
 
     expect(result.rules[0]?.admission)
@@ -247,7 +249,7 @@ describe('selectRules', () => {
       realizations: [queryRealization(path), queryRealization(SUBJECT_TS)],
       tags: [scopeTag(path, PATH_SCOPED)],
       // ∃-only pattern FIRST, so a naive first-match loop would return it.
-      blobs: [blob(path, [TS_GLOB, covering])],
+      facts: queryFacts([blob(path, [TS_GLOB, covering])]),
       queryDir: PACKAGES_CLI_SRC, queryFile: null,
     });
 
@@ -270,7 +272,7 @@ describe('selectRules', () => {
       tags: [scopeTag(existential, PATH_SCOPED), scopeTag(universal, PATH_SCOPED)],
       // `**/*`, not `**`: a rule whose patterns are ALL `**` is always-loaded in
       // the harness (`harnessPaths`), so it would never reach this lane scoped.
-      blobs: [blob(existential, [TS_GLOB]), blob(universal, ['**/*'])],
+      facts: queryFacts([blob(existential, [TS_GLOB]), blob(universal, ['**/*'])]),
       queryDir: '', queryFile: null,
     });
 
@@ -289,7 +291,7 @@ describe('selectRules', () => {
     const result = selectRules({
       realizations: [queryRealization(path), queryRealization(SUBJECT_TS)],
       tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, [OVER_BUDGET_PATTERN])], queryDir: PACKAGES_CLI_SRC, queryFile: null,
+      facts: queryFacts([blob(path, [OVER_BUDGET_PATTERN])]), queryDir: PACKAGES_CLI_SRC, queryFile: null,
     });
 
     expect(result.rules).toEqual([]);
@@ -309,7 +311,7 @@ describe('selectRules', () => {
     const result = selectRules({
       realizations: [queryRealization(path), directoryRow, queryRealization(SUBJECT_CONFIG)],
       tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, [pattern])], queryDir: PACKAGES_CLI, queryFile: null,
+      facts: queryFacts([blob(path, [pattern])]), queryDir: PACKAGES_CLI, queryFile: null,
     });
 
     expect(result.rules[0]?.admission)
@@ -320,7 +322,7 @@ describe('selectRules', () => {
     const path = '.claude/rules/dot.md';
     const result = selectRules({
       realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, ['**/*.md'])], queryDir: '.claude', queryFile: '.claude/notes.md',
+      facts: queryFacts([blob(path, ['**/*.md'])]), queryDir: '.claude', queryFile: '.claude/notes.md',
     });
 
     expect(result.rules).toHaveLength(1);
@@ -330,7 +332,7 @@ describe('selectRules', () => {
     const path = HUGE_RULE;
     const result = selectRules({
       realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, [OVER_BUDGET_PATTERN])], queryDir: 'src/a/a/a', queryFile: 'src/a/a/a/x.ts',
+      facts: queryFacts([blob(path, [OVER_BUDGET_PATTERN])]), queryDir: 'src/a/a/a', queryFile: 'src/a/a/a/x.ts',
     });
 
     // picomatch would expand and match. The harness would not.
@@ -342,7 +344,7 @@ describe('selectRules', () => {
     const path = HUGE_RULE;
     const result = selectRules({
       realizations: realizedInThreeExtents(path), tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, [OVER_BUDGET_PATTERN])], queryDir: 'src/a/a/a', queryFile: 'src/a/a/a/x.ts',
+      facts: queryFacts([blob(path, [OVER_BUDGET_PATTERN])]), queryDir: 'src/a/a/a', queryFile: 'src/a/a/a/x.ts',
     });
 
     // `overBudget` leaves through the same row loop the admissions do, so a
@@ -355,7 +357,7 @@ describe('selectRules', () => {
     const path = 'packages/cli/.claude/rules/local.md';
     const result = selectRules({
       realizations: realizedInThreeExtents(path), tags: [scopeTag(path, 'nested')],
-      blobs: [blob(path, undefined)], queryDir: PACKAGES_CLI_SRC, queryFile: null,
+      facts: queryFacts([blob(path, undefined)]), queryDir: PACKAGES_CLI_SRC, queryFile: null,
     });
 
     // Three identical entries would say three predicates admitted the file when
@@ -365,15 +367,27 @@ describe('selectRules', () => {
     ]);
   });
 
-  it('ignores a rule tagged path-scoped whose blob declares no claudePaths — even with a paths: key VAT parsed', () => {
+  it('ignores a rule tagged path-scoped whose facts declare no paths', () => {
+    // VAT's own parsed frontmatter is not even an input any more: the selector
+    // reads the harness's `paths` and nothing else.
     const path = '.claude/rules/broken.md';
     const result = selectRules({
       realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [{ ...blob(path, undefined), frontmatter: { paths: ['src/**'] } }],
+      facts: queryFacts([blob(path, undefined)]),
       queryDir: 'src', queryFile: 'src/x.ts',
     });
 
     expect(result.rules).toEqual([]);
+  });
+
+  it('throws a coded error for a path-scoped rule whose blob has no facts row, never reading it as unscoped', () => {
+    const path = '.claude/rules/underived.md';
+    const run = (): unknown => selectRules({
+      realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
+      facts: queryFacts([]), queryDir: 'src', queryFile: 'src/x.ts',
+    });
+
+    expect(run).toThrow(HarnessFactsAbsentError);
   });
 
   it('ignores a rule-scope value outside the closed vocabulary rather than treating it as path-scoped', () => {
@@ -382,7 +396,7 @@ describe('selectRules', () => {
       realizations: [queryRealization(path)],
       // A config-declared tag, not the shipped producer's vocabulary.
       tags: [scopeTag(path, 'something-else')],
-      blobs: [blob(path, ['**/*.ts'])],
+      facts: queryFacts([blob(path, ['**/*.ts'])]),
       queryDir: 'src', queryFile: 'src/x.ts',
     });
 
@@ -394,7 +408,7 @@ describe('selectRules', () => {
     const result = selectRules({
       realizations: [queryRealization(path)],
       tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [{ ...blob(path, undefined), claudePaths: harnessPaths({ paths: ['src/**/*.ts', 123, null] }) }],
+      facts: queryFacts([{ ...blob(path, undefined), paths: harnessPaths({ paths: ['src/**/*.ts', 123, null] }) }]),
       queryDir: 'src', queryFile: 'src/x.ts',
     });
 
@@ -560,7 +574,7 @@ describe('evaluateRulePatterns', () => {
     const rule = '.claude/rules/elsewhere.md';
     const scoped = selectRules({
       realizations: [queryRealization(rule), queryRealization(OTHER_PKG_TS)],
-      tags: [scopeTag(rule, PATH_SCOPED)], blobs: [blob(rule, [OTHER_PKG_GLOB])],
+      tags: [scopeTag(rule, PATH_SCOPED)], facts: queryFacts([blob(rule, [OTHER_PKG_GLOB])]),
       queryDir: PACKAGES_CLI_SRC, queryFile: null,
     });
 
@@ -607,7 +621,7 @@ describe('evaluateRulePatterns', () => {
     const patterns = [TS_GLOB, CLI_MD_GLOB, OTHER_PKG_GLOB];
     const scoped = selectRules({
       realizations: [queryRealization(rule), queryRealization(SUBJECT_TS), queryRealization(SUBJECT_MD)],
-      tags: [scopeTag(rule, PATH_SCOPED)], blobs: [blob(rule, patterns)],
+      tags: [scopeTag(rule, PATH_SCOPED)], facts: queryFacts([blob(rule, patterns)]),
       queryDir: PACKAGES_CLI_SRC, queryFile: null,
     });
 
@@ -713,7 +727,7 @@ describe('evaluateRulePatterns', () => {
     // calls the glob live while `claude context` leaves the rule out.
     const scoped = selectRules({
       realizations: [queryRealization(NESTED_RULE), queryRealization('fixtures/sample/src/index.ts')],
-      tags: [scopeTag(NESTED_RULE, PATH_SCOPED)], blobs: [blob(NESTED_RULE, ['src/**'])],
+      tags: [scopeTag(NESTED_RULE, PATH_SCOPED)], facts: queryFacts([blob(NESTED_RULE, ['src/**'])]),
       queryDir: 'fixtures/sample/src', queryFile: null,
     });
 
@@ -1028,7 +1042,7 @@ describe('the matcher is gitignore, not picomatch', () => {
     const included = 'src/**/*.ts';
     const input = {
       realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, [included, '!src/gen/*.ts'])], queryDir: 'src',
+      facts: queryFacts([blob(path, [included, '!src/gen/*.ts'])]), queryDir: 'src',
     };
 
     expect(selectRules({ ...input, queryFile: 'src/a.ts' }).rules[0]?.admission)
@@ -1036,7 +1050,7 @@ describe('the matcher is gitignore, not picomatch', () => {
     expect(selectRules({ ...input, queryFile: 'src/gen/a.ts' }).rules).toEqual([]);
     // The positive control on the exclusion: without it, the same file loads.
     expect(selectRules({
-      ...input, blobs: [blob(path, [included])], queryFile: 'src/gen/a.ts',
+      ...input, facts: queryFacts([blob(path, [included])]), queryFile: 'src/gen/a.ts',
     }).rules[0]?.admission).toEqual({ kind: 'glob-rule', pattern: included });
   });
 
@@ -1051,7 +1065,7 @@ describe('the matcher is gitignore, not picomatch', () => {
     const path = '.claude/rules/futile-negation.md';
     const result = selectRules({
       realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, ['src/**', '!src/gen/**'])],
+      facts: queryFacts([blob(path, ['src/**', '!src/gen/**'])]),
       queryDir: 'src', queryFile: 'src/gen/a.ts',
     });
 
@@ -1068,7 +1082,7 @@ describe('the matcher is gitignore, not picomatch', () => {
     const path = '.claude/rules/covering.md';
     const result = selectRules({
       realizations: [queryRealization(path)], tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, ['cli/**'])], queryDir: PACKAGES_CLI_SRC, queryFile: null,
+      facts: queryFacts([blob(path, ['cli/**'])]), queryDir: PACKAGES_CLI_SRC, queryFile: null,
     });
 
     expect(result.rules[0]?.admission).toEqual({ kind: COVERS_DIR, pattern: 'cli/**' });
@@ -1081,7 +1095,7 @@ describe('the matcher is gitignore, not picomatch', () => {
     const result = selectRules({
       realizations: [queryRealization(path), queryRealization(SUBJECT_MD), queryRealization(SUBJECT_TS)],
       tags: [scopeTag(path, PATH_SCOPED)],
-      blobs: [blob(path, ['*.md'])], queryDir: PACKAGES_CLI_SRC, queryFile: null,
+      facts: queryFacts([blob(path, ['*.md'])]), queryDir: PACKAGES_CLI_SRC, queryFile: null,
     });
 
     expect(result.rules[0]?.admission)

@@ -6,9 +6,10 @@
  *
  * The engine and generator live in `helpers/claude-loader-differential.ts`, the
  * reference in `helpers/claude-loader-reference.ts`; their headers say what is
- * compared and why. This sweeps seeds 1–40 WITHOUT the `oversize` group — a
+ * compared and why. This sweeps seeds 1–8 WITHOUT the `oversize` group — a
  * 4 MiB file costs VAT's parser most of a second — and the integration tier
- * sweeps a wider, disjoint range, the oversize cases, and real trees on disk.
+ * continues from seed 9 (300 in memory, then 200 on real trees on disk), so
+ * the two tiers together sweep one contiguous prefix, plus the oversize cases.
  * Re-run one failing seed with `LOADER_DIFFERENTIAL_SEED=<n>`.
  */
 
@@ -25,8 +26,8 @@ import {
 } from './helpers/claude-loader-differential.js';
 import { filesOnRead, launchFiles, type LoadedMemoryFile } from './helpers/claude-loader-reference.js';
 
-/** Seeds 1–40: the smoke range; the integration tier is the sweep. */
-const UNIT_SEEDS = loaderSweepSeeds(1, 40);
+/** Seeds 1–8: the smoke range, inside the unit per-file budget under coverage; the integration tier is the sweep. */
+const UNIT_SEEDS = loaderSweepSeeds(1, 8);
 
 /** The settled groups this tier can afford: all but the 4 MiB files. */
 const UNIT_FEATURES = new Set(SETTLED_FEATURES.filter((feature) => feature !== 'oversize'));

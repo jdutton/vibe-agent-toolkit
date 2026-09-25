@@ -139,6 +139,12 @@ export {
   type VariableExpansionSyntax,
 } from './schemas/projection-blobs.js';
 
+export type { HarnessBlobFactsRow, HarnessBlobImportRow } from './schemas/projection-harness.js';
+
+// A reached blob with no harness facts — a producer bug. Exported so a command
+// can name it by code (never by message) on its "could not do its job" exit.
+export { HarnessFactsAbsentError } from './projection/harness/facts-index.js';
+
 export {
   ClaudeRulePatternRowSchema,
   ClaudeRulePatternStatusSchema,
@@ -152,9 +158,11 @@ export {
 // materialises them.
 export {
   ClaudeContextChainRowSchema,
+  ClaudeContextFindingSchema,
   ClaudeContextLaunchChargeSchema,
   ClaudeContextLoadRowSchema,
   type ClaudeContextChainRow,
+  type ClaudeContextFinding,
   type ClaudeContextLoadRow,
 } from './schemas/projection-claude-context.js';
 
@@ -750,10 +758,11 @@ export {
 // What the harness actually CHARGES for what the query says is loaded — the
 // 4 MiB `CLAUDE.md` cliff, the subtree it prunes behind it, and the counters that
 // stop a sum being read as the whole story.
-// `OVERSIZE_BYTES` is deliberately NOT among them: the cliff is `account`'s to
-// apply, no consumer re-derives it, and the one test that needs the boundary
-// imports it from the module directly. Pre-1.0, an unexported symbol costs
-// nothing while a published one is a contract.
+// `CLAUDE_OVERSIZE_BYTES` is deliberately NOT among them: it is the harness
+// profile's own quantity (`harness/claude-code.ts`), `account` is merely a
+// consumer of it, and the one test that needs the boundary imports it from
+// there directly. Pre-1.0, an unexported symbol costs nothing while a
+// published one is a contract.
 export {
   account,
   type AccountedContext,

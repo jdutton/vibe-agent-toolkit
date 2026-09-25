@@ -23,7 +23,7 @@
  *   estimator over the text the harness INJECTS (frontmatter and comment blocks
  *   removed, trimmed), not over the file;
  * - **imports** — for every file the harness would read, the targets VAT's
- *   `blob_claude_imports` rows resolve to (in order, first occurrence of each,
+ *   `harness_blob_imports` rows resolve to (in order, first occurrence of each,
  *   outside-the-tree targets dropped) equal the reference's `Ayn` over it. The
  *   load sets alone could agree while the import sets differ — an import to a
  *   file some other route loads anyway is invisible to them.
@@ -46,6 +46,8 @@
 import { estimateTokens } from '../../src/link-classify.js';
 import { account, type AccountedRow } from '../../src/projection/claude-context-accounting.js';
 import { whatLoadsAt } from '../../src/projection/claude-context-query.js';
+import { CLAUDE_CODE } from '../../src/projection/harness/claude-code.js';
+import { harnessFactsIndex } from '../../src/projection/harness/facts-index.js';
 import type { Projection } from '../../src/projection/projection.js';
 import { resolveReferencePath } from '../../src/projection/reference-resolution.js';
 
@@ -290,18 +292,39 @@ function queryDivergences(projection: Projection, tree: LoaderTree, query: strin
 }
 
 /**
- * The in-tree targets VAT's `blob_claude_imports` rows for one file resolve to,
- * in ordinal order, first occurrence of each — the shape `Ayn`'s `Set` has.
+ * The in-tree targets VAT's import extraction for one file resolves to, in
+ * ordinal order, first occurrence of each — the shape `Ayn`'s `Set` has.
+ *
+ * A file the harness reaches is read off its `harness_blob_imports` rows — the
+ * table the walk reads. A file it does not reach has no rows by design (the
+ * facts are derived lazily, for the reached set only), so its extraction is
+ * asked of the SAME extractor directly: the reference's import set is an
+ * oracle for the extractor over every file, and narrowing it to the reached
+ * ones would quietly shrink what this sweep proves. Whether VAT reaches what
+ * the reference loads is the query comparison's question, and a reached blob
+ * with no rows throws there.
  */
-function vatImports(projection: Projection, path: string): string[] {
+function vatImports(projection: Projection, tree: LoaderTree, path: string): string[] {
   const root = projection.roots[0]?.path ?? '';
   const contentKey = projection.resourceRealizations.find((row) => row.path === path)?.contentKey;
-  const targets = projection.blobClaudeImports
-    .filter((row) => row.blob === contentKey)
-    .sort((left, right) => left.ordinal - right.ordinal)
+  const targets = importRowsOf(projection, tree, path, contentKey)
     .map((row) => resolveReferencePath('claude-import', row.target, path, root))
     .flatMap((resolution) => (resolution.kind === 'inside-root' ? [resolution.path] : []));
   return [...new Set(targets)];
+}
+
+/** One file's import rows, in ordinal order: stored when derived, extracted when not, none without content. */
+function importRowsOf(
+  projection: Projection,
+  tree: LoaderTree,
+  path: string,
+  contentKey: string | null | undefined,
+): readonly { readonly target: string }[] {
+  if (contentKey === null || contentKey === undefined) return [];
+  if (!projection.blobs.some((row) => row.contentKey === contentKey)) return [];
+  const facts = harnessFactsIndex(projection, CLAUDE_CODE.id);
+  if (facts.factsOf(contentKey) !== undefined) return facts.requireImports(contentKey, path);
+  return CLAUDE_CODE.factsOf(tree.get(path) ?? '').imports;
 }
 
 /** Every file whose import set VAT reads differently from the harness. */
@@ -310,7 +333,7 @@ function importDivergences(projection: Projection, tree: LoaderTree): string[] {
     const reference = memoryImports(tree, path);
     if (reference === null) return [];
     const expected = reference.filter((target): target is string => target !== null);
-    const actual = vatImports(projection, path);
+    const actual = vatImports(projection, tree, path);
     return JSON.stringify(expected) === JSON.stringify(actual)
       ? []
       : [`imports: ${path} imports ${JSON.stringify(expected)}, VAT reads ${JSON.stringify(actual)}`];

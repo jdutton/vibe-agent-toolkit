@@ -23,7 +23,7 @@ import type {
   ClaudeContextLoadRow,
 } from '../schemas/projection-claude-context.js';
 
-import { account, type AccountedRow } from './claude-context-accounting.js';
+import { account, preambleTokensOf, type AccountedRow } from './claude-context-accounting.js';
 import { admissionLoadsAtLaunch, launchCharge } from './claude-context-launch-charge.js';
 import type { Admission } from './claude-context-query.js';
 import { whatLoadsAt } from './claude-context-query.js';
@@ -58,6 +58,12 @@ interface ContextChain {
    * this is the absence of one.
    */
   readonly loads: readonly ClaudeContextLoadRow[] | null;
+  /**
+   * `claude_context_chains.preambleTokens` — {@link preambleTokensOf} over this
+   * chain's own accounted rows. `0` when {@link loads} is `null`; irrelevant
+   * there, since an unrealized representative publishes no chain row at all.
+   */
+  readonly preambleTokens: number;
 }
 
 /** The two relations, keyed by `DERIVED_TABLES`' own keys. */
@@ -101,14 +107,21 @@ function contextChains(projection: Projection): readonly ContextChain[] {
   return contextRegions(projection).map((region) => {
     const chainId = contextChainId(region.representative);
     const answer = whatLoadsAt(projection, region.representative);
+    if (answer.kind !== 'answer') {
+      return {
+        chainId, representative: region.representative, locations: region.locations, loads: null, preambleTokens: 0,
+      };
+    }
+    const accounted = account(answer);
     return {
       chainId,
       representative: region.representative,
       locations: region.locations,
-      loads:
-        answer.kind === 'answer'
-          ? account(answer).rows.map((row) => loadRow(chainId, row))
-          : null,
+      loads: accounted.rows.map((row) => loadRow(chainId, row)),
+      // The SAME function `totalsOf` uses for this query's own `preambleTokens`
+      // — see its docstring. A chain's preamble is a fact of what THIS chain
+      // charges, not of any one location that inherits it.
+      preambleTokens: preambleTokensOf(accounted.rows),
     };
   });
 }
@@ -128,7 +141,9 @@ export function claudeContextRelations(projection: Projection): ClaudeContextRel
     // without the loads would publish a chain that appears to load nothing.
     if (chain.loads === null) continue;
     for (const directory of chain.locations) {
-      chains.push({ chainId: chain.chainId, directory, representative: chain.representative });
+      chains.push({
+        chainId: chain.chainId, directory, representative: chain.representative, preambleTokens: chain.preambleTokens,
+      });
     }
     loads.push(...chain.loads);
   }
@@ -158,6 +173,7 @@ function loadRow(chainId: string, row: AccountedRow): ClaudeContextLoadRow {
     launchCharge: launchCharge(row),
     tokens: row.tokens,
     bytes: row.bytes,
+    headerTokens: row.headerTokens,
   };
 }
 

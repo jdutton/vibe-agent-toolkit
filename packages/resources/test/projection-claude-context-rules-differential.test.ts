@@ -4,7 +4,8 @@
  *
  * The engine, the reference and the generator live in
  * `helpers/rules-differential.ts`, whose header says what is compared and why.
- * This sweeps seeds 1–150; the integration tier sweeps a wider, disjoint range.
+ * This sweeps seeds 1–45; the integration tier continues from 46 for 1,000
+ * more, so the two tiers together sweep one contiguous prefix.
  * Re-run one failing seed with `RULES_DIFFERENTIAL_SEED=<n>`.
  */
 
@@ -21,8 +22,8 @@ import {
   type DifferentialCase,
 } from './helpers/rules-differential.js';
 
-/** Seeds 1–150: the smoke range, inside the unit per-file budget; the integration tier is the sweep. */
-const UNIT_SEEDS = sweepSeeds(1, 150);
+/** Seeds 1–45: the smoke range, inside the unit per-file budget under coverage; the integration tier is the sweep. */
+const UNIT_SEEDS = sweepSeeds(1, 45);
 
 /** A root rule's path, for the hand-built control cases. */
 const ROOT_RULE = '.claude/rules/r.md';
