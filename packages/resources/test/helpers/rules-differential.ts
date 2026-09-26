@@ -3,7 +3,7 @@
  * `claude-context-rules.ts` derives from a rule's `paths:` list, against a
  * brute-force reference. Two tiers sweep disjoint seed ranges through it:
  * `projection-claude-context-rules-differential.test.ts` (unit, small) and
- * `integration/claude-context-rules-differential.integration.test.ts` (wide).
+ * `integration/claude-context-rules-differential-{a,b}.integration.test.ts` (wide).
  *
  * ## Why this exists
  *

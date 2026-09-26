@@ -1,9 +1,9 @@
 /**
  * Randomized DIFFERENTIAL test of `vat claude context` against a reference port
- * of Claude Code's memory loader — the WIDE tier, on disk: seeds 309–508 through
- * REAL temp trees populated by `buildClaudeContextPopulation` (the production
- * lane), with the on-disk lane's own regressions pinned. Seeds 9–308 run in
- * memory in `claude-loader-differential.integration.test.ts`.
+ * of Claude Code's memory loader — the WIDE tier, on disk through the production population lane: seeds 309–408.
+ * The integration tier sweeps seeds 9–508 in four files (in-memory-a/b, on-disk-a/b), continuing
+ * the unit tier's 1–8 so the tiers together sweep one contiguous prefix; it is
+ * split only so each file fits the tier's per-file budget.
  *
  * The engine is `../helpers/claude-loader-differential.ts`; its header says
  * what is compared. Re-run one failing seed with `LOADER_DIFFERENTIAL_SEED=<n>`.
@@ -11,32 +11,19 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { claudeContextFixture } from '../helpers/claude-context-fixture.js';
 import {
+  FAST_SETTLED_FEATURES,
+  inMemoryProjection,
   loaderDifferentialFailures,
   loaderDivergences,
   loaderSweepSeeds,
-  SETTLED_FEATURES,
 } from '../helpers/claude-loader-differential.js';
 
-import { buildClaudeContextTree, removeClaudeContextTree } from './claude-context-tree.js';
-
-/** VAT's projection, built in memory through the shipped contributors. */
-const inMemory = (files: Readonly<Record<string, string>>) => claudeContextFixture({ ...files });
-
-/** VAT's projection, populated from a real temp tree on disk — the production lane. */
-async function onDisk(files: Readonly<Record<string, string>>) {
-  const tree = await buildClaudeContextTree(files);
-  await removeClaudeContextTree(tree.dir);
-  return tree.projection;
-}
-
-/** The settled groups without the 4 MiB files, which cost VAT's parser most of a second each. */
-const FAST_SETTLED = new Set(SETTLED_FEATURES.filter((feature) => feature !== 'oversize'));
+import { onDiskProjection } from './claude-context-tree.js';
 
 describe('vat claude context agrees with a reference port of the Claude Code loader (wide sweep, on disk)', () => {
-  it('through the production population lane (seeds 309–508)', async () => {
-    const failures = await loaderDifferentialFailures(loaderSweepSeeds(309, 200), FAST_SETTLED, onDisk);
+  it('across 100 seeded random trees (seeds 309–408)', async () => {
+    const failures = await loaderDifferentialFailures(loaderSweepSeeds(309, 100), FAST_SETTLED_FEATURES, onDiskProjection);
     expect(failures, failures.join('\n')).toEqual([]);
   }, 60_000);
 });
@@ -47,7 +34,7 @@ describe('the on-disk lane reads imports and injected text as the harness does',
     // to read `` `@../x.md` `` as an import there while the in-memory lane read
     // it as markdown. `harness_blob_imports` is one extractor for both.
     const files = { 'CLAUDE.md': '@src/index.ts\n', 'src/index.ts': 'export {};\n\n`@../x.md`\n', 'x.md': 'x\n' };
-    expect(await loaderDivergences({ seed: 0, files, queries: ['CLAUDE.md'] }, onDisk)).toEqual([]);
+    expect(await loaderDivergences({ seed: 0, files, queries: ['CLAUDE.md'] }, onDiskProjection)).toEqual([]);
   });
 
   it('reads `paths:` off a `.ts` import the harness way, so a rule does not charge it at launch (seeds 2074, 2099, 2151)', async () => {
@@ -61,8 +48,8 @@ describe('the on-disk lane reads imports and injected text as the harness does',
       'docs/a.md': 'a\n',
     };
     const testCase = { seed: 0, files, queries: ['docs/a.md', 'src/index.ts'] };
-    expect(await loaderDivergences(testCase, onDisk)).toEqual([]);
-    expect(await loaderDivergences(testCase, inMemory)).toEqual([]);
+    expect(await loaderDivergences(testCase, onDiskProjection)).toEqual([]);
+    expect(await loaderDivergences(testCase, inMemoryProjection)).toEqual([]);
   });
 
   it('charges the injected text and drops a file that injects nothing', async () => {
@@ -70,6 +57,6 @@ describe('the on-disk lane reads imports and injected text as the harness does',
       'CLAUDE.md': '---\ndescription: d\n---\n(@skip.md) @a.md **@c.md**\n<!-- note -->\n',
       'a.md': '<!-- @b.md -->\n', 'b.md': 'b\n', 'c.md': 'c\n', 'skip.md': 's\n',
     };
-    expect(await loaderDivergences({ seed: 0, files, queries: ['CLAUDE.md'] }, onDisk)).toEqual([]);
+    expect(await loaderDivergences({ seed: 0, files, queries: ['CLAUDE.md'] }, onDiskProjection)).toEqual([]);
   });
 });

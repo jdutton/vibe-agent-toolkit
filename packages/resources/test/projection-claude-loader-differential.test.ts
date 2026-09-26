@@ -17,12 +17,12 @@ import { describe, expect, it } from 'vitest';
 
 import { whatLoadsAt, type LoadedContextAnswer } from '../src/projection/claude-context-query.js';
 
-import { claudeContextFixture } from './helpers/claude-context-fixture.js';
 import {
+  FAST_SETTLED_FEATURES,
+  inMemoryProjection as inMemory,
   loaderDifferentialFailures,
   loaderDivergences,
   loaderSweepSeeds,
-  SETTLED_FEATURES,
 } from './helpers/claude-loader-differential.js';
 import { filesOnRead, launchFiles, type LoadedMemoryFile } from './helpers/claude-loader-reference.js';
 
@@ -30,10 +30,7 @@ import { filesOnRead, launchFiles, type LoadedMemoryFile } from './helpers/claud
 const UNIT_SEEDS = loaderSweepSeeds(1, 8);
 
 /** The settled groups this tier can afford: all but the 4 MiB files. */
-const UNIT_FEATURES = new Set(SETTLED_FEATURES.filter((feature) => feature !== 'oversize'));
-
-/** VAT's projection, built in memory through the shipped contributors. */
-const inMemory = (files: Readonly<Record<string, string>>) => claudeContextFixture({ ...files });
+const UNIT_FEATURES = FAST_SETTLED_FEATURES;
 
 /** A path-scoped root rule, its `paths:` spelled once. */
 const SCOPED = "---\npaths: ['src/**']\n---\n";

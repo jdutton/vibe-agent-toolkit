@@ -10,12 +10,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { claudeContextFixture } from '../helpers/claude-context-fixture.js';
-import { loaderDivergences } from '../helpers/claude-loader-differential.js';
+import { inMemoryProjection as inMemory, loaderDivergences } from '../helpers/claude-loader-differential.js';
 import { LOADER_SIZE_CLIFF } from '../helpers/claude-loader-reference.js';
-
-/** VAT's projection, built in memory through the shipped contributors. */
-const inMemory = (files: Readonly<Record<string, string>>) => claudeContextFixture({ ...files });
 
 /**
  * A body past the size cliff, in the shape VAT's parser gets through fastest

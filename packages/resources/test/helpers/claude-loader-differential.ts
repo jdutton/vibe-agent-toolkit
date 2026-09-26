@@ -4,9 +4,10 @@
  * reference port of Claude Code's own loader (`claude-loader-reference.ts`).
  * Two tiers sweep disjoint seed ranges through it:
  * `projection-claude-loader-differential.test.ts` (unit, in-memory projection)
- * and the integration tier — `integration/claude-loader-differential.integration.test.ts`
- * (in memory) and `integration/claude-loader-differential-on-disk.integration.test.ts`
- * (real trees on disk through `buildClaudeContextPopulation`).
+ * and the integration tier — `integration/claude-loader-differential-in-memory-{a,b}`
+ * (in memory) and `integration/claude-loader-differential-on-disk-{a,b}` (real
+ * trees on disk through `buildClaudeContextPopulation`), each split in two so
+ * every file fits the integration tier's per-file budget.
  *
  * ## What is compared
  *
@@ -52,6 +53,7 @@ import { harnessFactsIndex } from '../../src/projection/harness/facts-index.js';
 import type { Projection } from '../../src/projection/projection.js';
 import { resolveReferencePath } from '../../src/projection/reference-resolution.js';
 
+import { claudeContextFixture } from './claude-context-fixture.js';
 import {
   filesOnRead,
   launchFiles,
@@ -91,6 +93,11 @@ export const SETTLED_FEATURES: readonly LoaderFeature[] = [
   'oversize',
   'names',
 ];
+
+/** The settled groups without the 4 MiB files, which cost VAT's parser most of a second each. */
+export const FAST_SETTLED_FEATURES: ReadonlySet<LoaderFeature> = new Set(
+  SETTLED_FEATURES.filter((feature) => feature !== 'oversize'),
+);
 
 /** One generated scenario: the tree, and the files a session reads. */
 export interface LoaderCase {
@@ -343,6 +350,9 @@ function importDivergences(projection: Projection, tree: LoaderTree): string[] {
 
 /** Builds VAT's projection for a `{path: content}` tree — in memory, or on disk. */
 export type ProjectionFor = (files: Readonly<Record<string, string>>) => Promise<Projection>;
+
+/** VAT's projection, built in memory through the shipped contributors. */
+export const inMemoryProjection: ProjectionFor = (files) => claudeContextFixture({ ...files });
 
 /**
  * Every divergence for one case.
