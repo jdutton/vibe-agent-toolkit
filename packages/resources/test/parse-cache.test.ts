@@ -774,6 +774,90 @@ describe('ParseCache fail-soft writes', () => {
       expect(await cache.get(keyed)).toBeNull();
     },
   );
+
+  it.skipIf(isWindows)(
+    'asks the shard-safety question ONCE per directory, not once per entry',
+    async () => {
+      // The observable face of the memo in `prepareShard`: the safety `stat`
+      // and the `mkdir` are per-DIRECTORY questions that a cold run was asking
+      // per-ENTRY — measured at 1,640 ms of `cache-write` for 2,157 entries on
+      // a 12.6k-file adopter, two of its four syscalls apiece.
+      //
+      // One entry written twice, so the two writes share a shard by
+      // construction: the shard is the key's last two characters and the key is
+      // a hash of the content, so two DIFFERENT documents would collide only by
+      // luck and the case would silently stop testing anything.
+      const cacheDir = safePath.join(suite.dir(), 'cache');
+      const cache = suite.makeCache({ cacheDir });
+      const keyed = keyedFromText(SIMPLE_DOC);
+      const shardDir = safePath.join(cacheDir, keyed.key.slice(-SHARD_LENGTH));
+
+      expect(await cache.set(keyed, freshParse(keyed))).toBe(true);
+
+      // Another local user opens the shard wide AFTER this run prepared it. The
+      // documented trade: the answer is the run's, so the second write is not
+      // re-asked and succeeds. Re-`stat`ing per entry is what this refuses.
+      await fs.chmod(shardDir, MODE_WORLD_WRITABLE);
+
+      expect(await cache.set(keyed, freshParse(keyed))).toBe(true);
+      expect(cache.stats.writeFailures).toBe(0);
+
+      // The positive control on the paragraph above: a cache that has NOT
+      // prepared this shard still refuses it, so the pass is the memo rather
+      // than the safety check having stopped working.
+      const fresh = suite.makeCache({ cacheDir });
+      expect(await fresh.set(keyed, freshParse(keyed))).toBe(false);
+      expect(fresh.stats.writeFailures).toBe(1);
+    },
+  );
+
+  it.skipIf(isWindows)('memoizes an ownership-unsafe shard as refused for the run', async () => {
+    // The other half of the memo's contract: an unsafe shard is unsafe for the
+    // run, so making it safe mid-run is not re-asked. Pins that the eviction
+    // below is scoped to an errno, not to every `false`.
+    const cacheDir = safePath.join(suite.dir(), 'cache');
+    const cache = suite.makeCache({ cacheDir });
+    const keyed = keyedFromText(SIMPLE_DOC);
+    const shardDir = safePath.join(cacheDir, keyed.key.slice(-SHARD_LENGTH));
+    await fs.mkdir(shardDir, { recursive: true, mode: MODE_WORLD_WRITABLE });
+    await fs.chmod(shardDir, MODE_WORLD_WRITABLE);
+
+    expect(await cache.set(keyed, freshParse(keyed))).toBe(false);
+
+    await fs.chmod(shardDir, MODE_RW_OWNER);
+
+    expect(await cache.set(keyed, freshParse(keyed))).toBe(false);
+    expect(cache.stats.writeFailures).toBe(2);
+
+    // Positive control: the shard IS safe now, to a cache that never judged it.
+    expect(await suite.makeCache({ cacheDir }).set(keyed, freshParse(keyed))).toBe(true);
+  });
+
+  it.each([
+    { syscall: 'mkdir', code: 'EMFILE' },
+    { syscall: 'mkdir', code: 'EAGAIN' },
+    { syscall: 'lstat', code: 'EBUSY' },
+  ] as const)(
+    'retries a shard whose $syscall failed with a transient $code, instead of refusing it for the run',
+    async ({ syscall, code }) => {
+      // 🪤 A descriptor shortage mid-run is not a verdict about the directory.
+      // Memoizing it as `false` turned one EMFILE into every later entry in that
+      // shard going uncached for the whole run. (`lstat` runs only on POSIX.)
+      if (syscall === 'lstat' && isWindows) return;
+      const cache = suite.makeCache({ cacheDir: safePath.join(suite.dir(), 'cache') });
+      const keyed = keyedFromText(SIMPLE_DOC);
+      const refusal = Object.assign(new Error(`${code}: transient`), { code });
+      const spy = vi.spyOn(fs, syscall).mockRejectedValueOnce(refusal);
+      try {
+        expect(await cache.set(keyed, freshParse(keyed))).toBe(false);
+        expect(await cache.set(keyed, freshParse(keyed))).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(cache.stats.writeFailures).toBe(1);
+      expect(await cache.get(keyed)).not.toBeNull();
+    },
+  );
 });
 
 describe('ParseCache enable toggle', () => {

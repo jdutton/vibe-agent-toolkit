@@ -270,15 +270,17 @@ describe('command-error utilities', () => {
       expect(mockProcessExit).toHaveBeenCalledWith(ExitCode.ERROR);
     });
 
-    it('handleReportExpectedFailure publishes the same envelope at the code the command assigns, YAML by default', () => {
-      expect(() => handleReportExpectedFailure('no ard block', ExitCode.FINDINGS, Date.now()))
+    it('handleReportExpectedFailure publishes the error envelope at the code it DERIVES — ERROR — YAML by default', () => {
+      // 🚨 It took the code from the caller, and `vat ard emit` passed FINDINGS
+      // beside a document whose status said the command could not do its job.
+      expect(() => handleReportExpectedFailure('no config file', Date.now()))
         .toThrow(PROCESS_EXIT_ERROR_MESSAGE);
 
       const yamlOutput = getYamlOutput(mockStdoutWrite);
       expect(yamlOutput).toContain(STATUS_ERROR_LINE);
-      expect(yamlOutput).toContain('error: no ard block');
+      expect(yamlOutput).toContain('error: no config file');
       expect(yamlOutput).toContain('data: null');
-      expect(mockProcessExit).toHaveBeenCalledWith(ExitCode.FINDINGS);
+      expect(mockProcessExit).toHaveBeenCalledWith(ExitCode.ERROR);
     });
   });
 });

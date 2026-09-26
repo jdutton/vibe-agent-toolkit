@@ -52,7 +52,6 @@
 import { account, type AccountedContext, type AccountedRow } from './claude-context-accounting.js';
 import { whatLoadsAt } from './claude-context-query.js';
 import {
-  claudeMdIdentities,
   comparePaths,
   contextRegions,
   type ContextRegion,
@@ -227,7 +226,6 @@ export interface ContextCostMap {
 export function buildContextCostMap(projection: Projection): ContextCostMap {
   const state: MapState = {
     projection,
-    claudeMdIds: claudeMdIdentities(projection),
     answers: new Map(),
     queries: 0,
   };
@@ -270,7 +268,6 @@ export function buildContextCostMap(projection: Projection): ContextCostMap {
  */
 interface MapState {
   readonly projection: Projection;
-  readonly claudeMdIds: ReadonlySet<string>;
   /**
    * Directory → its accounted answer.
    *
@@ -300,7 +297,7 @@ function accountOnce(state: MapState, directory: string): AccountedContext | nul
 
   state.queries += 1;
   const answer = whatLoadsAt(state.projection, directory);
-  const accounted = answer.kind === 'unknown' ? null : account(answer, state.claudeMdIds);
+  const accounted = answer.kind === 'unknown' ? null : account(answer);
   state.answers.set(directory, accounted);
   return accounted;
 }

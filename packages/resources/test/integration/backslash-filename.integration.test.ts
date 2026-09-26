@@ -126,7 +126,7 @@ function expectBackslashNamesKept(projection: Projection): void {
 
   const issues = CLAUDE_RULE_GLOB_INERT_CHECK.run(projection);
   expect(issues.map((issue) => [issue.code, issue.location, issue.field])).toEqual([
-    ['CLAUDE_RULE_GLOB_INERT', BACKSLASH_RULE, 'paths[0]'],
+    ['CLAUDE_RULE_GLOB_INERT', BACKSLASH_RULE, 'paths'],
   ]);
 }
 

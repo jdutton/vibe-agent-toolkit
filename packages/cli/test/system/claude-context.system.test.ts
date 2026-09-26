@@ -227,8 +227,8 @@ describe.skipIf(process.platform === 'win32')('vat claude context', () => {
     expect(envelope.boundsStatement).toContain(BOUNDS_PHRASE);
     // Looked up by id, never by position: the list is grouped by direction, so
     // every entry added to a group shifts the ones after it.
-    const cliff = envelope.limits?.find((limit) => limit.id === 'cliff-scope');
-    expect(cliff?.direction).toBe('scope');
+    const scope = envelope.limits?.find((limit) => limit.id === 'main-conversation-only');
+    expect(scope?.direction).toBe('scope');
     expect(envelope.modelledBehaviours?.length).toBeGreaterThan(0);
     // ⛔ And NOT on the answer. The limits bound the method, so a per-answer copy
     // is both a lie about scope and, on a sweep, tens of megabytes of one
@@ -487,7 +487,7 @@ describe.skipIf(process.platform === 'win32')('vat claude context --all', () => 
 
   it('carries the limits on the ENVELOPE and on no region', () => {
     expect(envelope.boundsStatement).toContain(BOUNDS_PHRASE);
-    expect(envelope.limits?.find((limit) => limit.id === 'cliff-scope')?.direction).toBe('scope');
+    expect(envelope.limits?.find((limit) => limit.id === 'main-conversation-only')?.direction).toBe('scope');
     expect(envelope.modelledBehaviours?.length).toBeGreaterThan(0);
 
     for (const region of envelope.costMap?.regions ?? []) {

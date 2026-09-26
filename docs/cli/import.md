@@ -106,7 +106,7 @@ The import command validates SKILL.md before conversion:
 - **Required fields** - name and description must be present
 - **Name format** - lowercase alphanumeric with hyphens
 - **Description length** - 1024 characters max
-- **No XML tags** - < and > not allowed in name or description
+- **No XML tags** - no markup (`</x>`, `<x/>`, `<x a="b">`, `<!--`), no free-standing `<word>` placeholder outside backticks, and no prompt-channel name such as `<system>` or `<invoke>` in name or description; a comparison like `a < b` is fine (see [`SKILL_DESCRIPTION_XML_TAGS`](../validation-codes.md#structural-prerequisites-never-overridable))
 - **No reserved words** - "anthropic" and "claude" not allowed in name
 
 See [`vat audit`](../../packages/cli/docs/audit.md) for complete validation rules.

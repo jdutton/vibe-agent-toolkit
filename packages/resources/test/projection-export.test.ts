@@ -42,7 +42,7 @@ const HIGH_ORDINAL = 10;
 const LOW_ORDINAL = 2;
 
 /**
- * The thirteen tables, taken from {@link Projection} itself so the compiler
+ * The tables, taken from {@link Projection} itself so the compiler
  * rejects this list the moment a table is added or renamed.
  */
 const EXPECTED_TABLES = [
@@ -59,6 +59,8 @@ const EXPECTED_TABLES = [
   'blobReferences',
   'blobSections',
   'blobConditions',
+  'harnessBlobFacts',
+  'harnessBlobImports',
 ] as const satisfies readonly (keyof Projection)[];
 
 /** One side of the fixture — every table gets a row keyed on this side's ids. */
@@ -127,7 +129,7 @@ function referenceRow(blob: string): BlobReferenceRow {
   return { ...row, ordinal: 0 };
 }
 
-/** Contribute one side's rows to every one of the thirteen tables. */
+/** Contribute one side's rows to every table. */
 function contribute(builder: ProjectionBuilder, side: Side): void {
   builder.addRoot({ id: side.rootId, path: side.rootPath });
   builder.addResource({
@@ -231,6 +233,8 @@ function contribute(builder: ProjectionBuilder, side: Side): void {
     message: 'fixture oddity',
     line: null,
   });
+  builder.addHarnessBlobFacts({ blob: side.blob, harness: 'claude-code', injectedBytes: 12, injectedTokens: 3, paths: null });
+  builder.addHarnessBlobImport({ blob: side.blob, harness: 'claude-code', ordinal: 0, rawRef: '@other.md', target: 'other.md', line: 1 });
 }
 
 /**
@@ -254,11 +258,11 @@ describe('exportProjection', () => {
   it('emits the tables and no metadata beside them', () => {
     // The document used to carry a `schemaVersion` no reader branched on. A
     // consumer enumerating the document must find tables only, so a future
-    // metadata key cannot be mistaken for a fourteenth table.
+    // metadata key cannot be mistaken for a new table.
     expect(Object.keys(exportProjection(buildFixture('forward')))).toStrictEqual(['tables']);
   });
 
-  it('carries all thirteen tables as keys even when every one is empty', () => {
+  it('carries every table as keys even when every one is empty', () => {
     // A missing key and an empty array are different claims. A consumer must not
     // have to guess which one an absent table meant.
     const tables = exportProjection(new ProjectionBuilder({ root: TMP_ROOT_A }).build()).tables;
@@ -341,9 +345,9 @@ describe('the key order of an exported row', () => {
     }
   });
 
-  it('is the registry column order for every row of all thirteen tables', () => {
+  it('is the registry column order for every row of every table', () => {
     // Uniform across the registry rather than patched at the one producer known
-    // to be wrong: any of the thirteen can grow a producer that builds a row by
+    // to be wrong: any of the fifteen can grow a producer that builds a row by
     // spreading, and none of them should have to know that it must not.
     const tables = exportProjection(buildFixture('reverse')).tables;
 

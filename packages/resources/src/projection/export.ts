@@ -5,7 +5,7 @@
  * This module emits rows. It does not index them, does not join them, does not
  * filter them, and accepts no query. Anything that reads like a query is a
  * lens's job, over the projection, and belongs nowhere near here — the whole
- * point of materialising thirteen flat tables is that the consumer chooses the
+ * point of materialising fifteen flat tables is that the consumer chooses the
  * engine (DuckDB, a JSON reader, a golden diff) rather than inheriting one.
  *
  * ## Two properties the emitted document must have
@@ -43,7 +43,7 @@
  *
  * Chasing that through the producers would mean every future producer having to
  * know it must not spread, which is a rule nothing can enforce and one nobody
- * would think to apply to the twelfth table. So the order is imposed here,
+ * would think to apply to a newly added table. So the order is imposed here,
  * uniformly, out of {@link PROJECTION_TABLES} — the same declaration a storage
  * backend rebuilds rows from. A cold export and a store-hydrated export of the
  * same corpus agree by construction rather than by both happening to be right.
@@ -69,12 +69,12 @@ import {
 export const ROOT_PATH_PLACEHOLDER = '<root>';
 
 /**
- * An exported projection: the thirteen tables, and nothing else.
+ * An exported projection: every table of {@link PROJECTION_TABLES}, and nothing else.
  *
  * The tables stay nested under one key rather than spread across the document
  * so a consumer can enumerate exactly the tables without filtering metadata out
  * of the same object. `tables` is typed as {@link Projection} itself, so adding
- * a fourteenth table is a compile error here rather than a silently unexported
+ * a table is a compile error here rather than a silently unexported
  * one.
  *
  * `tables.roots` still satisfies `RootRowSchema` — the placeholder is a
@@ -87,7 +87,7 @@ export const ROOT_PATH_PLACEHOLDER = '<root>';
  * *stored* rather than returned in-process.
  */
 export interface ProjectionDocument {
-  /** The thirteen tables, each sorted by its primary key. */
+  /** Every table, each sorted by its primary key. */
   readonly tables: Projection;
 }
 
@@ -137,7 +137,7 @@ export class UnregisteredProjectionColumnError extends VatError {
  * Emit a projection as a deterministic, path-free document.
  *
  * Every table is named once, and the object literal is checked against
- * {@link Projection}, so a fourteenth table is still a compile error here. What
+ * {@link Projection}, so a new table is still a compile error here. What
  * is no longer restated is the **primary keys** or the **column order**: both
  * are read out of {@link PROJECTION_TABLES}, which is the same declaration a
  * storage backend and the JSON Schema generator read. A key that disagreed
@@ -150,7 +150,7 @@ export class UnregisteredProjectionColumnError extends VatError {
  * order the emitter just imposed.
  *
  * @param projection - The projection to emit
- * @returns The document: thirteen primary-key-sorted tables, roots redacted
+ * @returns The document: fifteen primary-key-sorted tables, roots redacted
  * @throws {UnregisteredProjectionColumnError} If a row carries a column the
  *   table registry does not declare
  */
@@ -170,6 +170,8 @@ export function exportProjection(projection: Projection): ProjectionDocument {
       blobReferences: emitTable(projection, 'blobReferences'),
       blobSections: emitTable(projection, 'blobSections'),
       blobConditions: emitTable(projection, 'blobConditions'),
+      harnessBlobFacts: emitTable(projection, 'harnessBlobFacts'),
+      harnessBlobImports: emitTable(projection, 'harnessBlobImports'),
     },
   };
 }

@@ -375,6 +375,14 @@ export class ParseCache {
    */
   private hitCount = 0;
   private missCount = 0;
+
+  /**
+   * One in-flight or settled shard preparation per directory — see
+   * {@link prepareShard}. Per INSTANCE, never module-level: two caches may be
+   * rooted at two directories, and a shared map would answer one's question
+   * with the other's directory.
+   */
+  private readonly preparedShards = new Map<string, Promise<boolean>>();
   private writeFailureCount = 0;
 
   constructor(options: ParseCacheOptions = {}) {
@@ -540,12 +548,7 @@ export class ParseCache {
   private async write(key: string, result: ParseResult): Promise<boolean> {
     const shardDir = this.shardDir(key);
 
-    // POSIX hardening: a predictable, world-readable cache root means another
-    // local user on a shared box could pre-create `shardDir` before VAT ever
-    // touches it. `mkdir` below does NOT chmod a directory that already
-    // exists, so without this check a hostile pre-created directory would be
-    // silently written into. Meaningless on Windows — see the class docblock.
-    if (process.platform !== 'win32' && !(await isSafeShardDir(shardDir))) {
+    if (!(await this.prepareShard(shardDir))) {
       this.writeFailureCount += 1;
       return false;
     }
@@ -558,7 +561,6 @@ export class ParseCache {
     const entry: StoredEntry = { facts: dehydrate(result) };
 
     try {
-      await fs.mkdir(shardDir, { recursive: true, mode: CACHE_DIR_MODE });
       await fs.writeFile(tempPath, JSON.stringify(entry), 'utf-8');
       await fs.rename(tempPath, this.entryPath(key));
     } catch (error) {
@@ -577,6 +579,67 @@ export class ParseCache {
   }
 
   /**
+   * Make one shard directory fit to write into — **once per cache instance**.
+   *
+   * ## 🔑 Why this is memoized and the write is not
+   *
+   * The safety `stat` and the `mkdir` are per-DIRECTORY questions that
+   * {@link write} was asking per-ENTRY, and a cold run answers them thousands of
+   * times over 256 directories. Measured on a 12.6k-file adopter, cold `vat
+   * claude context`: `cache-write` is **1,640 ms for 2,157 entries** on the one
+   * thread that cannot be parallelized, and two of its four syscalls per entry
+   * are these. Asking them once per shard removes ~2 x (entries − shards) of
+   * them — on that run, roughly 3,800 of 8,600 syscalls.
+   *
+   * The *promise* is memoized rather than its result, so concurrent writers
+   * into one shard — which is exactly what a pooled run produces — share a
+   * single preparation instead of racing to create the directory each for
+   * themselves.
+   *
+   * ⚠️ **A memoized `true` can go stale, and that is handled by the write
+   * failing rather than by re-checking.** If the directory is removed mid-run
+   * (a concurrent `vat cache clear`, an OS tmpdir purge) the `writeFile` below
+   * raises `ENOENT`, which is a filesystem access error, so the entry is counted
+   * in `writeFailures` and the run keeps its fresh result — and so does every
+   * later entry filed under that shard, because the memo is not re-asked.
+   * Re-checking per entry to close that window is the trade this method exists
+   * to refuse: a directory deleted under a running command is rare, and the
+   * cost is uncached entries in one shard for the rest of the run, never a
+   * wrong answer.
+   *
+   * ⛔ An OWNERSHIP verdict of `false` is memoized too, and just as
+   * deliberately: an unsafe shard is unsafe for the run, and re-`stat`ing it per
+   * entry would pay the full cost back to discover the same answer.
+   *
+   * 🪤 An ERRNO is not a verdict, so it is not memoized. `EMFILE`, `EAGAIN` or
+   * `EBUSY` from the `lstat` or the `mkdir` says the process was short of
+   * something at that instant, not that the directory is bad; memoizing it
+   * would turn one transient refusal into every later entry in the shard going
+   * uncached. The entry is evicted, so the next write into the shard asks
+   * again. A persistent refusal (`EACCES`, `EROFS`) is therefore re-asked per
+   * write — two syscalls per entry, on a run whose writes are all failing
+   * anyway.
+   *
+   * @param shardDir - The directory {@link write} is about to write into
+   * @returns True when it is safe and present
+   */
+  private async prepareShard(shardDir: string): Promise<boolean> {
+    const prepared = this.preparedShards.get(shardDir);
+    if (prepared !== undefined) return prepared;
+
+    const preparing = prepareShardDir(shardDir).then((outcome) => {
+      // Evict only the promise this call stored: a `clear()` in between may
+      // already have replaced it.
+      if (outcome === 'refused' && this.preparedShards.get(shardDir) === preparing) {
+        this.preparedShards.delete(shardDir);
+      }
+      return outcome === 'ready';
+    });
+    this.preparedShards.set(shardDir, preparing);
+    return preparing;
+  }
+
+  /**
    * Delete this cache's entire tree.
    *
    * Runs regardless of {@link enabled}: turning reads off must not disarm an
@@ -586,6 +649,9 @@ export class ParseCache {
    * gone is not a failure (`force`).
    */
   async clear(): Promise<void> {
+    // FIRST, so a concurrent writer that re-prepares mid-`rm` loses its
+    // directory rather than keeping a memo of one that is being removed.
+    this.preparedShards.clear();
     await fs.rm(this.directory, { force: true, recursive: true });
   }
 
@@ -1098,6 +1164,51 @@ function readFacts(raw: string): ParseFacts | null {
 }
 
 /**
+ * How a shard preparation ended. `unsafe` is a verdict about the directory —
+ * it exists and someone else owns it or can write to it — and holds for the
+ * run. `refused` is an errno from the filesystem, which may not hold a moment
+ * later.
+ */
+type ShardPreparation = 'ready' | 'unsafe' | 'refused';
+
+/**
+ * Make one shard directory safe and present, or report why it is not.
+ *
+ * The two per-directory syscalls {@link ParseCache.prepareShard} memoizes, in
+ * the order they have always run: the POSIX ownership check answers about a
+ * directory that ALREADY exists, so it has to precede the `mkdir` that would
+ * otherwise create one and make the question moot.
+ *
+ * A free function because it holds nothing — the memo is the instance's, the
+ * decision is not.
+ *
+ * @param shardDir - The directory to prepare
+ * @returns `ready` when it is safe to write into; see {@link ShardPreparation}
+ */
+async function prepareShardDir(shardDir: string): Promise<ShardPreparation> {
+  // POSIX hardening: a predictable, world-readable cache root means another
+  // local user on a shared box could pre-create `shardDir` before VAT ever
+  // touches it. `mkdir` below does NOT chmod a directory that already exists,
+  // so without this check a hostile pre-created directory would be silently
+  // written into. Meaningless on Windows — see the `ParseCache` docblock.
+  if (process.platform !== 'win32') {
+    const safety = await shardDirSafety(shardDir);
+    if (safety !== 'ready') return safety;
+  }
+
+  try {
+    await fs.mkdir(shardDir, { recursive: true, mode: CACHE_DIR_MODE });
+  } catch (error) {
+    // Fail-soft on exactly the errors the write itself is fail-soft on —
+    // EACCES, EROFS, ENOSPC. Anything else is a bug in this module and stays
+    // loud, which is the same split `write` keeps.
+    if (!isFilesystemAccessError(error)) throw error;
+    return 'refused';
+  }
+  return 'ready';
+}
+
+/**
  * Bits that make a directory writable by anyone other than its owner:
  * group-write (`0o020`) and other-write (`0o002`).
  */
@@ -1118,26 +1229,28 @@ const UNSAFE_WRITE_BITS = 0o022;
  * the class docblock).
  *
  * @param dir - The shard directory `set()` is about to `mkdir`/write into
- * @returns `true` if `dir` is absent, or present and safe to reuse
+ * @returns `ready` if `dir` is absent, or present and safe to reuse; `unsafe`
+ *   if it is present and not; `refused` if the OS would not describe it
  */
-async function isSafeShardDir(dir: string): Promise<boolean> {
+async function shardDirSafety(dir: string): Promise<ShardPreparation> {
   let stats: Stats;
   try {
     stats = await fs.lstat(dir);
   } catch (error) {
     // Absent: `mkdir` will create it fresh, owned by this process.
-    if (isPathAbsentError(error)) return true;
-    // Present but the OS will not describe it (EACCES on the parent, ELOOP):
-    // a directory whose owner and mode cannot be checked is not one to write
-    // into. The caller counts this as a write failure, which it is.
-    if (isFilesystemAccessError(error)) return false;
+    if (isPathAbsentError(error)) return 'ready';
+    // The OS will not describe it (EACCES on the parent, ELOOP, EMFILE): a
+    // directory whose owner and mode cannot be checked is not one to write
+    // into NOW. The caller counts this as a write failure, which it is, and
+    // does not memoize it — an errno is not a verdict about the directory.
+    if (isFilesystemAccessError(error)) return 'refused';
     throw error;
   }
 
   const uid = process.getuid?.();
   const ownedByThisProcess = uid === undefined || stats.uid === uid;
   const notGroupOrOtherWritable = (stats.mode & UNSAFE_WRITE_BITS) === 0;
-  return ownedByThisProcess && notGroupOrOtherWritable;
+  return ownedByThisProcess && notGroupOrOtherWritable ? 'ready' : 'unsafe';
 }
 
 /**

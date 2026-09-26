@@ -21,6 +21,12 @@
  * construction.
  */
 
+import { GitTracker } from '@vibe-agent-toolkit/utils/git';
+
+import { ContributorRegistry } from '../src/projection/contributor.js';
+import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
+import type { Projection } from '../src/projection/projection.js';
 import type {
   BlobScopedRows,
   ExtentKey,
@@ -36,12 +42,12 @@ type RowBundle = Record<string, readonly Record<string, unknown>[]>;
 /** {@link ProjectionTableSpec.scope} for the content-keyed half. */
 const BLOB_SCOPE = 'blob';
 
-/** The column three of the four blob-scoped tables name their key in. */
+/** The column every blob-scoped table but `blobs` names its key in. */
 const BLOB_COLUMN = 'blob';
 
 /**
  * The blob-scoped tables, read off the registry rather than written out, so a
- * fourteenth one is stored rather than silently dropped on the floor.
+ * further one is stored rather than silently dropped on the floor.
  */
 const BLOB_TABLES: readonly string[] = Object.values(PROJECTION_TABLES)
   .filter((spec) => spec.scope === BLOB_SCOPE)
@@ -53,12 +59,14 @@ const BLOB_KEY_COLUMNS: Readonly<Record<string, string>> = {
   blobReferences: BLOB_COLUMN,
   blobSections: BLOB_COLUMN,
   blobConditions: BLOB_COLUMN,
+  harnessBlobFacts: BLOB_COLUMN,
+  harnessBlobImports: BLOB_COLUMN,
 };
 
 /**
  * The key column of one blob-scoped table.
  *
- * Throws rather than defaulting: a fourteenth blob table whose rows this double
+ * Throws rather than defaulting: a further blob table whose rows this double
  * filed under `undefined` would make every coverage check pass by accident,
  * which is the shape of bug this whole file is written to catch.
  *
@@ -74,6 +82,42 @@ function blobKeyColumn(table: string): string {
     );
   }
   return column;
+}
+
+/**
+ * The partitioned blob tables and the column each is partitioned by — read off
+ * the registry, as {@link BLOB_TABLES} is.
+ */
+const PARTITION_COLUMNS: ReadonlyMap<string, string> = new Map(
+  Object.values(PROJECTION_TABLES).flatMap((spec) => {
+    const column: string | undefined = 'partitionColumn' in spec ? spec.partitionColumn : undefined;
+    return spec.scope === BLOB_SCOPE && column !== undefined ? [[spec.key, column] as const] : [];
+  }),
+);
+
+/**
+ * One held key's bundle with a later write's partitioned rows applied: the
+ * partitions that write carries replace what was held for them, and every
+ * other row — every unpartitioned table, every partition it does not carry —
+ * stays, as the real store's pair-scoped delete leaves it.
+ *
+ * @param held - What the double holds for the key
+ * @param incoming - What the later write carries for it
+ * @returns The merged bundle
+ */
+function withPartitionsOf(held: RowBundle, incoming: RowBundle): RowBundle {
+  const carried = new Set<string>();
+  for (const [table, column] of PARTITION_COLUMNS) {
+    for (const row of incoming[table] ?? []) carried.add(JSON.stringify(row[column]));
+  }
+  const merged: RowBundle = { ...held };
+  for (const [table, column] of PARTITION_COLUMNS) {
+    merged[table] = [
+      ...(held[table] ?? []).filter((row) => !carried.has(JSON.stringify(row[column]))),
+      ...(incoming[table] ?? []),
+    ];
+  }
+  return merged;
 }
 
 /**
@@ -122,7 +166,9 @@ export class FakeProjectionStore implements ProjectionStore {
    * promise — and not merely for fidelity: appending instead would duplicate
    * every row on the second write, and a hydration carrying doubled rows would
    * fail the byte-identical oracle for a reason that is the double's fault
-   * rather than the driver's.
+   * rather than the driver's. Except its PARTITIONED rows (the harness tables):
+   * those are written per `(blob, partition)`, as the interface requires — see
+   * {@link withPartitionsOf}.
    *
    * @param rows - The four blob-scoped tables
    */
@@ -145,7 +191,8 @@ export class FakeProjectionStore implements ProjectionStore {
       }
     }
     for (const [key, bundle] of incoming) {
-      if (!this.#blobs.has(key)) this.#blobs.set(key, bundle);
+      const held = this.#blobs.get(key);
+      this.#blobs.set(key, held === undefined ? bundle : withPartitionsOf(held, bundle));
     }
   }
 
@@ -216,4 +263,33 @@ export class FakeProjectionStore implements ProjectionStore {
  */
 export function extentKeyOf(key: ExtentKey): string {
   return `${key.rootId} ${key.treeHash}`;
+}
+
+/**
+ * One filesystem-extent population of `root` through `store`, with the tree
+ * reported unchanged under a CONSTANT `treeHash` — the shape every store-freshness
+ * suite needs, since the hazard it pins is a fact the tree hash does not cover.
+ * Reports whether a contributor ran, i.e. whether the store hit was refused.
+ */
+export async function populateExtentThrough(
+  root: string,
+  store: FakeProjectionStore,
+  treeHash: string,
+): Promise<{ projection: Projection; contributorRan: boolean }> {
+  const tracker = new GitTracker(root);
+  await tracker.initialize();
+  const registry = new ContributorRegistry();
+  registry.register(new FilesystemExtentContributor());
+  let contributorRan = false;
+  const projection = await populate({
+    root,
+    registry,
+    gitTracker: tracker,
+    onBlobPopulation: DISCARD_BLOB_POPULATION,
+    onContributorTiming: () => {
+      contributorRan = true;
+    },
+    cache: { store, treeUnchanged: () => true, treeHash },
+  });
+  return { projection, contributorRan };
 }

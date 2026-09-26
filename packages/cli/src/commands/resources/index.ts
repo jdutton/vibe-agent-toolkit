@@ -270,10 +270,13 @@ Description:
 Built-in checks (run with or without a config file):
 ${builtinCheckList()}
 
-  A rules file whose frontmatter does not parse puts no glob in
-  claude_rule_patterns, so the inert check cannot see its globs -- that is
-  what the frontmatter check is for. The usual cause is an unquoted glob
-  starting with * (a YAML alias).
+  Each later check covers the one before it. A rules file whose frontmatter
+  VAT cannot read puts no glob in claude_rule_patterns, so the inert check
+  cannot see its globs -- that is what the frontmatter check is for (the
+  usual cause is an unquoted glob starting with * , a YAML alias). A rules
+  file reached through a SYMLINK is realized at no path at all, so it has
+  neither pattern rows nor a blob and both of those checks pass on it --
+  that is what the link check is for.
 
   They are TypeScript predicates over the projection's rows, never SQL, so
   adding one never makes a query engine part of anybody's gate. Config only
@@ -301,8 +304,8 @@ Asking a built-in's question yourself:
 ${builtinSqlTwins()}
 
   Note \`status = 'inert'\` and not \`status != 'matched'\`: 'unevaluated'
-  means vat never ran the matcher (the rule's paths: list blew the expansion
-  budget), and 'gitignored' means the glob covers ignored files vat never
+  means vat never ran the matcher for that one pattern (it exhausted the
+  expansion budget; the rule's other patterns are still evaluated), and 'gitignored' means the glob covers ignored files vat never
   reads but Claude Code does. Neither status means the glob is dead.
 
 ${DERIVED_RELATIONS_HELP}
@@ -395,10 +398,11 @@ A run that HANGS is killed and reported, not waited on:
   So the work runs in a child process and --budget <seconds> bounds it.
 
   The budget is time WITHOUT PROGRESS, not total runtime: the clock resets
-  every time the run finishes a unit (the population, then each check, then
-  once more when the checks are done and the document is being built). So a
-  large repository with many rules is never at risk while its rules keep
-  finishing. Default 300.
+  every time the run finishes a unit (the child's startup, the population,
+  then each check, then once more when the checks are done and the document
+  is being built). So a large repository with many rules is never at risk
+  while its rules keep finishing, and a slow boot on a loaded machine is not
+  charged to the population. Default 300.
 
   That per-unit property holds for the CHECKS. It does NOT hold for the
   population, which reports progress only when it FINISHES -- so for that one
@@ -414,23 +418,27 @@ A run that HANGS is killed and reported, not waited on:
   ways to be interrupted and they are reported differently:
 
     Killed by the budget -- exit 1, status: findings, and a
-    RESOURCE_CHECK_BROKEN finding naming the check that was in flight and the bound that was blown.
+    RESOURCE_CHECK_BROKEN finding naming the unit that was in flight (a named
+    check, or the document being built) and the bound that was blown.
 
     Died -- the child ran out of memory materialising a result set (Node aborts
     with SIGABRT), or something outside killed it (a runner's OOM killer sends
     SIGKILL, a step timeout or a cancelled job sends SIGTERM), or it crashed in
-    native code (SIGSEGV), or it could not be started at all. Also exit 1,
-    status: findings, RESOURCE_CHECK_BROKEN -- naming what ended it, with the
-    remedy that ending actually earns, and saying plainly that raising --budget
-    is not it.
+    native code (SIGSEGV), or it could not be started at all. Once the
+    population is in, also exit 1, status: findings, RESOURCE_CHECK_BROKEN --
+    naming what ended it, with the remedy that ending actually earns, and
+    saying plainly that raising --budget is not it.
 
   Either way the checks that COMPLETED keep their entry under checks (including
   rows), but their individual violations are NOT in issues -- the progress the
   child records is costs, not findings. Read that issue list as incomplete.
 
-  Interrupted before the population finished, there is no projection and no
-  honest document: that is an operator error (exit 2) saying which of the two
-  happened.
+  Interrupted before the population finished -- killed or dead during the
+  child's startup or its population -- nothing was examined, so the command
+  could not do its job: exit 2, status: error. The document is still
+  published, with data.population, populationSecs, lensSecs and
+  lensesEvaluated null, examined 0, and \`error\` naming the phase and which
+  of the two happened.
 
   --budget cannot be combined with --cost-log (exit 2): --cost-log means the
   work runs in this process, where the budget could not be enforced.
@@ -472,7 +480,9 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
              What the shared population cost, and where it came from. NOT
              charged to any check: every check's durationSecs is its own
              statement and nothing else, so populationSecs + lensSecs are the
-             terms that reconcile them against durationMs
+             terms that reconcile them against durationMs. Null (all of them,
+             with lensesEvaluated) only on a run interrupted before its
+             population completed
   data.lensesEvaluated:
              Which lenses lensSecs covers -- those whose relations some check
              names. Empty means no check read a derived relation
@@ -480,12 +490,14 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
 Exit Codes:
   0 - No error-severity findings
   1 - At least one (a violation, a broken check, an empty corpus, no check
-      having run at all, a run killed for making no progress within --budget,
-      or a run whose child DIED)
+      having run at all, or a run killed by --budget or DEAD while a check
+      was running or its document was being built)
   2 - System error, an unknown --check name, a [path] that names no directory,
       an unusable --budget (an empty one, one that means zero without being
-      written 0, or one passed with --cost-log), or a run interrupted before
-      its population completed
+      written 0, or one passed with --cost-log), or a run killed or dead
+      before its population completed
+  The code is derived from the document's status and summary, never chosen
+  beside it: status error is 2, error-severity findings are 1.
 
 Examples:
   $ vat resources check

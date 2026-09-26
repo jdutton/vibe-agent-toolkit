@@ -10,7 +10,10 @@ is now ✅ partly built: `resolveEdges()` COMPUTES `edges` and `edge_resolutions
 relations over a per-run in-memory database. A second lens ships beside it: `claude_context_chains`
 and `claude_context_loads` compute the always-loaded instruction chain and publish it as rows — VAT
 ships no threshold or verdict of its own; an adopter checks them with their own `resources.checks`
-SQL, summing `tokens` `WHERE launchCharge = 'charged'`. ⚠️ All five are computed, never materialised: nothing *populates* them and nothing
+SQL, summing `tokens + headerTokens` `WHERE launchCharge = 'charged'` and adding the chain's own
+`claude_context_chains.preambleTokens` once — the once-per-launch preamble is a fact of the CHAIN,
+not of any one loaded row, so it lives on the chains relation rather than being repeated onto every
+load row it charges for. ⚠️ All five are computed, never materialised: nothing *populates* them and nothing
 persists them, which is a different statement from "nothing implements them". ✅ **A lens is
 evaluated only when one of the statements a run DECLARED names one of its relations** — the
 claude-context lens runs a population of its own, so an unconditional evaluation would charge every
@@ -344,16 +347,25 @@ rather than partitioned per context. It is nonetheless **extent-scoped**, not bl
 have different witnesses, and a blob-scoped row would serve one corpus's witness as the other's.
 
 🚨 **Why four statuses and not two.** `matched` and `inert` are the evaluated cases; `unevaluated`
-means the matcher was NEVER RUN, because the rule's whole `paths:` list blew the vendor's shared
-expansion budget (`EXPANDED_PATTERN_BUDGET` / `PATTERN_BYTE_BUDGET` in `claude-context-rules.ts`) and
-the harness uses it unexpanded. A two-state column would have to read a null witness as inertness,
-and it is not: for an over-budget rule a null witness records a **refusal to evaluate**, and
+means the matcher was NEVER RUN for THAT ONE PATTERN, because it is the entry that exhausted the
+vendor's expansion budget (`EXPANDED_PATTERN_BUDGET` / `PATTERN_BYTE_BUDGET` in
+`claude-context-rules.ts`) — which is spent per pattern as the list is walked, so the harness uses
+that entry unexpanded while a live glob beside it is evaluated and reported normally. A two-state
+column would have to read a null witness as inertness,
+and it is not: for an over-budget pattern a null witness records a **refusal to evaluate**, and
 collapsing the two would report VAT's own declined work as a defect in the adopter's rule. That is
 the *"a guard that returns the reassuring value"* shape — refused reads as absent — and the fix is to
 make the refusal representable, not to widen what `inert` means. `gitignored` is the same move for
 the other thing VAT declines: the glob matched no file VAT can see and its territory is gitignored,
 which VAT never realizes while Claude Code reads the filesystem — so no verdict is given, and the
 built-in check reports `inert` alone.
+
+**A witness is judged against the WHOLE list, never against the pattern alone.** gitignore is
+last-match-wins, so a later pattern can undo an earlier one. A positive pattern is `matched` only
+by a file the whole rule loads — `["src/gen.ts", "!src/gen.ts"]` loads nothing, so its first
+pattern is `inert`. A `!` pattern is `matched` by a file the list without it would load and the
+whole list does not — a negation whose every exclusion a later pattern re-includes has no effect,
+and is `inert`.
 
 🚨 **Why a witness and not a `matchCount`.** Counting every path a pattern matches is O(files) **per
 pattern**, and the shipped prune stops at the FIRST hit: `firstMatchUnder` compiles the matcher once,
@@ -366,14 +378,84 @@ question expensive so the expensive one could be asked by nobody. The witness is
 row falsifiable by a reader, the same reason `RuleAdmission`'s `glob-rule-may-fire` carries
 `examplePath`.
 
-**`literalPrefix` is stored so SQL can do ∀ containment with no matcher.** It is the glob-free
-leading segments of `pattern` — `packages/some-pkg/src/thing*.ts` yields `packages/some-pkg/src`.
-Containment ("does this rule cover every path under `docs/`?") is then a prefix comparison over a
-column, so a query needs no glob engine and no per-row callback; recomputing it at query time would
-put picomatch's dialect inside every consumer. ⛔ A wholly literal pattern yields ITSELF — a FILE
+**`literalPrefix` is the glob-free leading segments of `pattern`, and it is NOT a match bound.**
+`packages/some-pkg/src/thing*.ts` yields `packages/some-pkg/src`. The matcher is gitignore dialect
+after the harness strips a trailing `/**`, so a pattern with no `/` before its last character matches
+at ANY depth — `src/**` and `src/` reach `packages/cli/src/x.ts`, far outside the prefix `src`. A
+leading `/` anchors the pattern and is dropped from the prefix (`/dist/**` yields `dist`). A prefix
+comparison over this column answers ∀ containment only when the stripped pattern still has a `/`
+before its last character; for any other
+pattern it is a wrong answer, not a conservative one. ⛔ A wholly literal pattern yields ITSELF — a FILE
 path, not a directory, because `.` is not a glob metacharacter. Read the column as *"the longest path
 every match lives at or below"*, which a file satisfies only inclusively; `claude-context-rules.ts`
 records the silent under-report that reading it as a directory prefix already caused once.
+
+### `harness_blob_facts` and `harness_blob_imports` — a harness's content rules, derived on reach
+
+Three things Claude Code does with a memory file depend on its bytes and nothing else, so all three
+are **blob-scoped**, but keyed `(blob, harness)` rather than `blob` alone — a second harness adds
+rows under its own id, never a second set of columns
+(`packages/resources/src/schemas/projection-harness.ts`, transcribed from the shipped reader in
+[`claude-code-memory-loader.md`](../external/claude-code-memory-loader.md)):
+
+- **`harness_blob_facts`** — one row per `(blob, harness)`: `injectedBytes` / `injectedTokens`, the
+  size of the text the harness INJECTS (frontmatter and block-level HTML comments removed, trimmed;
+  `0` means the file is dropped and its imports never followed), and `paths`, the `paths:` globs the
+  harness scopes the file by, read ITS way (`kyn`) — its own frontmatter split and YAML parse, for
+  any extension, then the `paths:` normaliser; null when it scopes the file by none. The launch and
+  read walks and `ClaudeRulesScopeContributor` read path-scoping from this column only — never from
+  `blobs.frontmatter`, which is VAT's parser's answer and is absent for a `.ts` import routed to no
+  parser. `blobs.frontmatterError` stays the parser's, and is what `CLAUDE_RULE_FRONTMATTER_INVALID`
+  reports.
+- **`harness_blob_imports`** — one row per `@` import the harness reads out of the blob, keyed
+  `(blob, harness, ordinal)`: `rawRef` as authored, `target` (the spelling the harness resolves —
+  `@` dropped, `#fragment` cut, `\ ` unescaped, unique per `(blob, harness)`), and the `line` of the
+  `@`. Produced by the binary's own extractor — `marked` 15.0.6 with `gfm: false`, text tokens only.
+
+**Derived lazily, never eagerly, and only for what the harness reaches.** Unlike every other blob
+fact, these are not produced for every blob the blob stage parses — a markdown lex per blob for
+files nothing ever loads would cost real time on a real tree for no reader. Instead `populate()`'s
+closure fixpoint (`merge.ts`) runs a harness pass (`harness/harness-pass.ts`) after every stage that
+can add a reachable blob, asking `harnessFrontier` (`harness/reach.ts`) for the reached blobs with
+no facts yet, until none remain. "Reached" is the union of two lanes: (a) every realized entry point
+(`CLAUDE.md`, `CLAUDE.local.md`, `.claude/CLAUDE.md`, `.claude/rules/**/*.md`, matched
+case-insensitively as a superset) followed through its own imports for up to `maxImportDepth` (4)
+hops, breadth-first, applying the loader's own gates (not a text path ⇒ not read; `injectedBytes ===
+0` ⇒ imports not followed); and (b) every member of an extent declared with the harness's dialect
+(`claude-import`), followed from its `closureFrom` to its declared `maxDepth`, with none of the
+loader's gates. The 4 MiB size cliff on `blobs.bytes` is NOT a reach rule — an oversize reached file
+still gets facts; skipping it at launch time is the walk's judgement, not the harness pass's.
+
+**An absent row means "not reached", never zero.** Every reader outside the closure fixpoint reads a
+reached blob's facts strictly (`requireFacts`/`requireImports` throw `HarnessFactsAbsentError`,
+surfacing at the CLI as exit 2 through the coded `HARNESS_FACTS_ABSENT` error, never a message
+match). `assertHarnessSettled` proves this holds for every profile before a population is returned,
+excusing only blobs a reader could not read (deleted since keyed).
+
+**The store deletes by the `(blob, harness)` pair; a read is by content key alone, and the pair is
+narrowed in memory.** `writeBlobFacts` clears a partitioned table's rows scoped to exactly the
+`(blob, harness)` pairs the write carries — never every row for a content key the bundle merely
+mentions — because these rows are derived per tree-reach, and a run over another root that holds the
+same bytes without reaching them must not delete facts a different run derived. `readBlobFacts` does
+NOT mirror that: its `SELECT` filters by content key only (`blobKeyPredicate`, `WHERE "blob" IN
+(…)`), so a read hands back every harness's rows for the keys asked for — the `(blob, harness)`
+narrowing happens afterward, in memory, in `harnessFactsIndex` / `harnessFrontier`. Symmetrically, a
+stored extent whose blob tier covers every content key it names can still be missing a reached
+blob's harness facts (another root's run filed the bytes without reaching them); reading it back
+treats that as a miss, never a served gap — a store hit requires an empty harness frontier, computed
+in memory over what the read returned, or the read is discarded and the caller re-derives.
+
+**Not a subset of `blob_references`, and never read beside it for this question.**
+`blob_references` is VAT's dialect-free record of every reference *candidate*; the two disagree in
+both directions (`(@a.md)` is a candidate and no import; `**@a.md**` is an import the lexer's
+candidate filters differ on; a `@` in a `.ts` code span is a candidate on the no-parser route and code
+to the harness). The `claude-import` closure dialect walks `harness_blob_imports` and nothing else,
+filtered to `harness = 'claude-code'`, and the schema refuses a `follow` list beside it — one table,
+one extractor, for the in-memory fixture and the on-disk lane alike.
+
+**What stays OFF the blob.** Whether the harness reads a PATH at all — its extension (`Syn`) and the
+4 MiB cliff on `blobs.bytes` — is the walk's judgement (`claude-context-walk.ts`), because a blob is
+shared by every path holding its bytes.
 
 ## 5. References and edges
 

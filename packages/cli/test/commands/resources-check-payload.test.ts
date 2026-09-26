@@ -41,6 +41,7 @@ import {
   warnUndeclaredOverrides,
   type CheckCost,
   type CheckPayloadInput,
+  type PopulatedRun,
 } from '../../src/commands/resources/check.js';
 import { createLogger, type Logger } from '../../src/utils/logger.js';
 import type { AskProjection } from '../../src/utils/projection-query.js';
@@ -81,6 +82,8 @@ const FAKE_BUILTIN_NAMES: readonly string[] = [FAKE_BUILTIN_NAME];
 const INERT_CHECK_NAME = 'claude-rule-glob-inert';
 /** The second built-in; over {@link INERT_PROJECTION} it runs and finds nothing. */
 const FRONTMATTER_CHECK_NAME = 'claude-rule-frontmatter-invalid';
+/** The third; over {@link INERT_PROJECTION} it runs and finds nothing either. */
+const LINK_CHECK_NAME = 'claude-rule-link-unchecked';
 /** The rules file the inert pattern below is declared in. */
 const RULES_FILE = '.claude/rules/demo.md';
 
@@ -105,6 +108,9 @@ const INERT_PROJECTION = {
   resourceRealizations: [{ resourceId: 'res-rules', path: RULES_FILE, contentKey: null }],
   resourceTags: [],
   blobs: [],
+  // The third built-in reads this table; empty is the healthy tree, and the
+  // case above is about the inert glob rather than about links.
+  realizationConditions: [],
 };
 
 /**
@@ -281,10 +287,18 @@ function costsOf(count: number): CheckCost[] {
 }
 
 /** Findings, minus the provenance the payload builder also wants. */
-function payloadInput(overrides: Partial<CheckPayloadInput> = {}): CheckPayloadInput {
+function payloadInput(
+  overrides: Partial<Omit<CheckPayloadInput, 'populated'> & PopulatedRun> = {},
+): CheckPayloadInput {
+  // 🪤 Flat overrides, nested output: the cases below vary one population field
+  // at a time, and the builder takes the population as ONE all-or-nothing value.
+  const { issues = [], costs = [], root = '/corpus', durationMs = 5, ...population } = overrides;
+  return { issues, costs, root, durationMs, populated: { ...populatedDefaults(), ...population } };
+}
+
+/** A completed population, for every case that is not about the population. */
+function populatedDefaults(): PopulatedRun {
   return {
-    issues: [],
-    costs: [],
     population: 'derived',
     // Non-zero, for the same reason `membersEnumerated` is: a case that sets it
     // to something else is visibly asserting about the population's cost rather
@@ -301,9 +315,6 @@ function payloadInput(overrides: Partial<CheckPayloadInput> = {}): CheckPayloadI
     // corpus is a case that ran over one, so a case that sets this to 0 is
     // visibly asserting something about emptiness rather than inheriting it.
     membersEnumerated: 12,
-    root: '/corpus',
-    durationMs: 5,
-    ...overrides,
   };
 }
 
@@ -1373,7 +1384,8 @@ describe('the built-in check set runs without any config', () => {
       membersEnumerated: POPULATED,
     });
 
-    expect(costs.map((cost) => cost.name)).toStrictEqual([INERT_CHECK_NAME, FRONTMATTER_CHECK_NAME]);
+    expect(costs.map((cost) => cost.name))
+      .toStrictEqual([INERT_CHECK_NAME, FRONTMATTER_CHECK_NAME, LINK_CHECK_NAME]);
     expect(issues.map((issue) => [issue.code, issue.severity]))
       .toStrictEqual([['CLAUDE_RULE_GLOB_INERT', 'info']]);
     // Quotes the dead glob, and anchors to the file that declares it.
@@ -1393,11 +1405,11 @@ describe('the built-in check set runs without any config', () => {
     });
 
     expect(costs.map((cost) => cost.name))
-      .toStrictEqual([INERT_CHECK_NAME, FRONTMATTER_CHECK_NAME, FIRST, SECOND]);
+      .toStrictEqual([INERT_CHECK_NAME, FRONTMATTER_CHECK_NAME, LINK_CHECK_NAME, FIRST, SECOND]);
     // 🔑 One cost record per check that ran, whichever set it came from — the
     // denominator `checksRun` is derived from. A built-in that skipped the
     // pricing would be a rule running outside the accounting.
-    expect(costs.map((cost) => cost.durationMs)).toStrictEqual([2, 2, 2, 2]);
+    expect(costs.map((cost) => cost.durationMs)).toStrictEqual([2, 2, 2, 2, 2]);
     expect(issues.map((issue) => issue.code))
       .toStrictEqual(['CLAUDE_RULE_GLOB_INERT', FIRST_CODE, SECOND_CODE]);
   });
@@ -1433,7 +1445,8 @@ describe('the built-in check set runs without any config', () => {
     expect(issues).toStrictEqual([]);
     // Ignored means EXECUTED and then dropped. `checksRun` is what keeps that
     // distinguishable from "never ran", and it must not move.
-    expect(costs.map((cost) => cost.name)).toStrictEqual([INERT_CHECK_NAME, FRONTMATTER_CHECK_NAME]);
+    expect(costs.map((cost) => cost.name))
+      .toStrictEqual([INERT_CHECK_NAME, FRONTMATTER_CHECK_NAME, LINK_CHECK_NAME]);
   });
 
   it('PROMOTES the built-in when the adopter asks it to fail the build', () => {
@@ -1488,10 +1501,11 @@ describe('the built-in check set runs without any config', () => {
     });
     const payload = buildCheckOutputData(payloadInput({ issues, costs }));
 
-    expect(payload.data.checksRun).toBe(4);
+    expect(payload.data.checksRun).toBe(5);
     expect(payload.data.checks as PublishedCheck[]).toStrictEqual([
       { name: INERT_CHECK_NAME, durationSecs: 0.001, rows: 1, builtin: true },
       { name: FRONTMATTER_CHECK_NAME, durationSecs: 0.001, rows: 0, builtin: true },
+      { name: LINK_CHECK_NAME, durationSecs: 0.001, rows: 0, builtin: true },
       // 🪤 ABSENT on a declared rule, never `false` — the key's presence is the
       // whole claim.
       { name: FIRST, durationSecs: 0.001, rows: 0 },
@@ -1542,6 +1556,8 @@ describe('the built-in check set runs without any config', () => {
       { kind: 'check', name: INERT_CHECK_NAME, durationMs: 1, rows: 1, builtin: true },
       { kind: 'start', name: FRONTMATTER_CHECK_NAME },
       { kind: 'check', name: FRONTMATTER_CHECK_NAME, durationMs: 1, rows: 0, builtin: true },
+      { kind: 'start', name: LINK_CHECK_NAME },
+      { kind: 'check', name: LINK_CHECK_NAME, durationMs: 1, rows: 0, builtin: true },
       { kind: 'checks-complete' },
     ]);
   });

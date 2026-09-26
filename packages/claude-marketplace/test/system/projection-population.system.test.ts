@@ -11,6 +11,13 @@
  * `resources`, `schema` and `utils`, so it is the only package that can hold all
  * six in one registry.
  *
+ * ## Why it is in the system tier
+ *
+ * Its whole cost is one population of the live repository, so it grows with
+ * the repository rather than with anything the file does: it crossed the
+ * integration tier's 5 s per-file budget on the CI floor by merely existing
+ * (5,047 ms on main, 2026-09-22). A corpus-scale run is system-shaped work.
+ *
  * ## What it asserts, and what it deliberately does not
  *
  * **Structural invariants only.** Every assertion here is a statement of the

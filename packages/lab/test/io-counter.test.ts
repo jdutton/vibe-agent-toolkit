@@ -730,6 +730,11 @@ function spawnAll(list) {
 }
 
 async function main() {
+  // A call with no frame in this program: Node's timers invoke the fs function
+  // directly, which is what loader traffic looks like to the counter. Node's own
+  // CJS loader stopped reaching the public fs API on Windows at 24.21, so the
+  // loader bucket is exercised on purpose rather than left to the Node version.
+  setImmediate(fs.statSync, a);
   readAllSync([a, a, a, b, c]);
   await readAllAsync([a, a, b]);
   await fs.promises.readFile(c);
@@ -942,13 +947,12 @@ describe('end to end: injected into a real node process', () => {
     const dump = readDump(logDir, runChild(true, logDir).pid);
     const loaderRows = dump.rows.filter((row) => row.cls === 'loader');
 
-    // There IS loader traffic — Node's CJS loader reads and realpaths the child
-    // script through the public fs API — and the dump says so out loud. Two
-    // mutations die here: classifying everything as `user` (this drops to 0),
-    // and dropping loader rows entirely (same). If a future Node routes all
-    // loader I/O through internal bindings this goes to 0 legitimately, and the
-    // right response is to say so in the facet docs, not to delete the gate.
-    expect(loaderRows.length).toBeGreaterThan(0);
+    // There IS loader traffic — the child's `setImmediate(fs.statSync, …)` has no
+    // frame in the program, and on most Node versions the CJS loader's own reads
+    // add more — and the dump says so out loud. Two mutations die here:
+    // classifying everything as `user` (this drops to 0), and dropping loader
+    // rows entirely (same).
+    expect(loaderRows.some((row) => row.method === 'fs.statSync')).toBe(true);
 
     // Every loader row aggregates per method (empty site) and takes no
     // distinct-argument reading at all — `null`, not the `0` that would read as

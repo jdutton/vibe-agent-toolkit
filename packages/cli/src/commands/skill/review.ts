@@ -23,7 +23,7 @@ import {
   buildReport,
   calculateValidationStatus,
   countBySeverity,
-  exitCodeForSeverityCounts,
+  exitCodeForReport,
   reportSchema,
   toFindings,
   type Report,
@@ -329,8 +329,9 @@ export async function reviewCommand(
 
     const grouped = groupIssuesBySection(result.allErrors);
 
+    const report = buildReviewReport(result, skillPath, grouped);
     if (options.yaml) {
-      writeYamlOutput({ ...buildReviewReport(result, skillPath, grouped), durationMs: Date.now() - startTime });
+      writeYamlOutput({ ...report, durationMs: Date.now() - startTime });
     } else {
       renderHumanReport(result, skillPath, grouped, logger);
     }
@@ -341,7 +342,7 @@ export async function reviewCommand(
     // construction. Errors fail; warnings fail only under `--strict` — this
     // used to exit 1 on a warning while every sibling exited 1 on errors only,
     // so the one verb meant for a human's review was the strictest gate.
-    process.exit(exitCodeForSeverityCounts(countBySeverity(result.allErrors), { strict: options.strict === true }));
+    process.exit(exitCodeForReport(report, { strict: options.strict === true }));
   } catch (error) {
     handleReportCommandError(error, logger, startTime, 'SkillReview');
   }

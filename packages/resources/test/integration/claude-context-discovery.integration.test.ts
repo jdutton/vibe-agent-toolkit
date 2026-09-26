@@ -95,9 +95,6 @@ describe('discoverableFrom over a real tree', () => {
     const loaded = new Set(answer.rows.map((row) => row.path));
     expect(lens.rows.filter((row) => loaded.has(row.path))).toEqual([]);
 
-    const claudeMdIds = new Set(
-      tree.projection().resourceTags.filter((row) => row.tag === 'claude-md').map((row) => row.resourceId),
-    );
-    expect(Object.keys(account(answer, claudeMdIds).totals)).not.toContain('discoverableTokens');
+    expect(Object.keys(account(answer).totals)).not.toContain('discoverableTokens');
   });
 });

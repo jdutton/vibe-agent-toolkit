@@ -2,6 +2,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { LOADING_TAG, RULE_SCOPE_TAG } from '../src/projection/agentic-tags.js';
+import { harnessPaths } from '../src/projection/claude-context-rules.js';
 import {
   CLAUDE_RULES_SCOPE_KIND,
   ClaudeRulesScopeContributor,
@@ -9,7 +10,7 @@ import {
 } from '../src/projection/contributors/claude-rules-scope.js';
 import { ProjectionBuilder, type ProjectionBase } from '../src/projection/projection.js';
 
-import { addFile } from './helpers/claude-context-fixture.js';
+import { addFileWithFacts } from './helpers/claude-context-fixture.js';
 
 /** A root that is never touched on disk — this classifier reads rows, not files. */
 const ROOT = '/vat-corpus/rules-scope-fixture';
@@ -34,14 +35,14 @@ describe('ruleScopeFor', () => {
     // Loads at launch with the same priority as `.claude/CLAUDE.md`, and that
     // is directory-independent — a tree-global fact.
     expect(ruleScopeFor(ROOT_RULE, null)).toBe('root');
-    expect(ruleScopeFor(ROOT_RULE, { description: 'x' })).toBe('root');
+    expect(ruleScopeFor(ROOT_RULE, harnessPaths({ description: 'x' }))).toBe('root');
   });
 
   it('calls a rule carrying paths: "path-scoped", wherever it lives', () => {
     // Its predicate needs a path and this classifier has none, so this is the
     // one classification that genuinely does not depend on location.
-    expect(ruleScopeFor(SCOPED_RULE, { paths: TS_GLOBS })).toBe(PATH_SCOPED);
-    expect(ruleScopeFor('packages/cli/.claude/rules/ts.md', { paths: TS_GLOBS }))
+    expect(ruleScopeFor(SCOPED_RULE, harnessPaths({ paths: TS_GLOBS }))).toBe(PATH_SCOPED);
+    expect(ruleScopeFor('packages/cli/.claude/rules/ts.md', harnessPaths({ paths: TS_GLOBS })))
       .toBe(PATH_SCOPED);
   });
 
@@ -60,11 +61,23 @@ describe('ruleScopeFor', () => {
     // `paths: []` selects nothing, so a rule carrying it has no predicate to be
     // scoped by. Reading it as path-scoped would silently drop a rule that
     // loads — the under-report direction a budget check cannot tolerate.
-    expect(ruleScopeFor(ROOT_RULE, { paths: [] })).toBe('root');
+    expect(ruleScopeFor(ROOT_RULE, harnessPaths({ paths: [] }))).toBe('root');
   });
 
-  it('treats a non-array paths value as paths-less rather than guessing', () => {
-    expect(ruleScopeFor(ROOT_RULE, { paths: 'not-a-list' })).toBe('root');
+  it('⭐ calls a SCALAR string paths: path-scoped, as the harness does', () => {
+    // The harness normalises `paths:` through one function that accepts a
+    // string and comma-splits it; only the doc shows a sequence. Read as
+    // paths-LESS, a rule the harness loads on demand was charged to every
+    // query at launch, and its globs reached no check.
+    expect(ruleScopeFor(ROOT_RULE, harnessPaths({ paths: 'src/**/*.ts' }))).toBe(PATH_SCOPED);
+    expect(ruleScopeFor(ROOT_RULE, harnessPaths({ paths: 'src/**, lib/**' }))).toBe(PATH_SCOPED);
+  });
+
+  it('treats an empty or non-list, non-string paths value as paths-less', () => {
+    // Nothing to be scoped by: a blank string declares no pattern, and a number
+    // is not a predicate the harness could run either.
+    expect(ruleScopeFor(ROOT_RULE, harnessPaths({ paths: '   ' }))).toBe('root');
+    expect(ruleScopeFor(ROOT_RULE, harnessPaths({ paths: 42 }))).toBe('root');
   });
 
   it('does not mistake a deeper path under the ROOT rules dir for a nested one', () => {
@@ -117,7 +130,7 @@ function buildBase(files: readonly FixtureFile[], extraExtents: readonly string[
   const ids = new Map<string, string>();
   for (const file of files) {
     ids.set(file.path, builder.identities.idFor(safePath.join(ROOT, file.path)));
-    addFile(
+    addFileWithFacts(
       builder,
       { path: file.path, refs: [], markdown: file.markdown, deferred: file.deferred ?? false },
       ROOT,
@@ -166,6 +179,37 @@ describe('ClaudeRulesScopeContributor', () => {
       { resourceId: idOf(SCOPED_RULE), tag: RULE_SCOPE_TAG, value: PATH_SCOPED, source: CLAUDE_RULES_SCOPE_KIND },
       { resourceId: idOf(NESTED_RULE), tag: RULE_SCOPE_TAG, value: 'nested', source: CLAUDE_RULES_SCOPE_KIND },
     ]);
+  });
+
+  it('reads a rules file whose YAML the harness cannot parse as unscoped, with no pattern rows, and leaves the parse error for CLAUDE_RULE_FRONTMATTER_INVALID', async () => {
+    // `ts` keeps the body split off and contributes no frontmatter, so `kyn`
+    // finds no `paths:` and the rule loads every turn. The defect is still
+    // reported: `blobs.frontmatterError` is VAT's parser's, and the check reads it.
+    const broken = '.claude/rules/broken.md';
+    const { base, idOf } = buildBase([{ path: broken, markdown: '---\npaths: [src/**\n---\n\n# Broken\n' }]);
+
+    const contribution = await new ClaudeRulesScopeContributor().contribute(base, null);
+
+    expect(contribution.tags).toEqual([
+      { resourceId: idOf(broken), tag: RULE_SCOPE_TAG, value: 'root', source: CLAUDE_RULES_SCOPE_KIND },
+    ]);
+    expect(contribution.claudeRulePatterns).toEqual([]);
+    expect(base.harnessBlobFacts.map((row) => row.paths)).toEqual([null]);
+    expect(base.blobs.map((blob) => blob.frontmatterError === null)).toEqual([false]);
+  });
+
+  it('contributes nothing for a rules file whose blob has no facts row yet — frontier, never unscoped', async () => {
+    // Inside the fixpoint an absent facts row is "not derived yet", so no scope
+    // is guessed from it: reading it as paths-less would tag a path-scoped rule
+    // `root` and charge it on every turn.
+    const scoped = '.claude/rules/scoped.md';
+    const { base } = buildBase([{ path: scoped, markdown: '---\npaths: src/**\n---\n\n# Scoped\n' }]);
+
+    const contribution = await new ClaudeRulesScopeContributor().contribute({ ...base, harnessBlobFacts: [] }, null);
+
+    expect(contribution.tags).toEqual([]);
+    expect(contribution.memberships).toEqual([]);
+    expect(contribution.claudeRulePatterns).toEqual([]);
   });
 
   it('makes every tagged identity a member, and nothing else', async () => {
@@ -264,11 +308,13 @@ const PATTERN_FRONTMATTER = [
 ].join('\n');
 
 /**
- * A `paths:` list the vendor's shared expansion budget refuses.
+ * A `paths:` list whose SECOND entry the vendor's expansion budget refuses.
  *
- * Four brace groups of six alternatives expand to 1,296 patterns against a
- * 1,000-pattern budget. The FIRST entry is an obviously-live glob: the budget is
- * shared across the whole list, so it has to come back `unevaluated` too.
+ * Four brace groups of six alternatives expand to 1,296 globs against a
+ * 1,000-glob budget. The FIRST entry is an obviously-live glob, and it is there
+ * to prove the budget is spent PER PATTERN: `N()` early-returns a brace-free
+ * entry before touching the allowance, so `docs/**\/*.md` is expanded, matched,
+ * and comes back `matched` beside its refused neighbour.
  */
 const OVER_BUDGET_FRONTMATTER = [
   '---',
@@ -364,11 +410,14 @@ describe('ClaudeRulesScopeContributor — claude_rule_patterns rows', () => {
     expect(contribution.claudeRulePatterns.at(-1)?.status).toBe('inert');
   });
 
-  it('reports every glob of an over-budget rule as unevaluated, live ones included', async () => {
-    // The vendor spends the 1,000-pattern budget across a rule's whole `paths:`
-    // list at once, so one oversized entry means NONE of them are expanded.
-    // Reporting `docs/**/*.md` as `inert` here would name a defect the rule does
-    // not have and hide the one it does.
+  it('⭐ reports ONLY the over-budget glob as unevaluated, and its live sibling as matched', async () => {
+    // ⛔ This asserted the opposite, on an invented whole-list budget. The
+    // shipped expander spends the allowance as it goes and returns the ONE
+    // pattern that exhausts it unexpanded, so the rest of the list is evaluated
+    // normally — a brace-free entry before or after the exhaustion point costs
+    // nothing at all. Refusing the live sibling with its neighbour reported
+    // VAT's own declined work as something the adopter could not act on, over a
+    // glob that was fine.
     const { base } = buildBase([
       { path: PATTERN_RULE, markdown: OVER_BUDGET_FRONTMATTER },
       { path: 'docs/guide.md', markdown: '# Guide\n' },
@@ -377,8 +426,9 @@ describe('ClaudeRulesScopeContributor — claude_rule_patterns rows', () => {
     const contribution = await new ClaudeRulesScopeContributor().contribute(base, null);
 
     expect(contribution.claudeRulePatterns.map((row) => row.status))
-      .toEqual(['unevaluated', 'unevaluated']);
-    expect(contribution.claudeRulePatterns.map((row) => row.witnessPath)).toEqual([null, null]);
+      .toEqual(['matched', 'unevaluated']);
+    expect(contribution.claudeRulePatterns.map((row) => row.witnessPath))
+      .toEqual(['docs/guide.md', null]);
   });
 
   it('still tags the over-budget rule path-scoped — the refusal is about evaluation', async () => {

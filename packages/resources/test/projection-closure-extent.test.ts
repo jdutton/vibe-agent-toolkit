@@ -15,7 +15,7 @@ import { ExtentDeclarationSchema, ProjectConfigSchema } from '../src/schemas/pro
 import { CONDITION_WITHOUT_REFERENCE } from '../src/schemas/projection-resources.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
-import { addFile, MARKDOWN_LINK, type FixtureFile } from './helpers/claude-context-fixture.js';
+import { addFileWithFacts, MARKDOWN_LINK, type FixtureFile } from './helpers/claude-context-fixture.js';
 import { expectContributionRowsValid } from './test-helpers.js';
 
 /**
@@ -112,14 +112,14 @@ function refusalRule(label: string, matchers: Record<string, JsonValue>): Record
  * `.test.ts` runs it. Shared fixtures go in `test/helpers/`.
  *
  * This suite still owns everything downstream: the fixture graphs below, and
- * `buildBase`, which calls the imported `addFile`.
+ * `buildBase`, which calls the imported `addFileWithFacts`.
  */
 
 /** A base projection holding exactly these files and their reference candidates. */
 function buildBase(files: readonly FixtureFile[]): ProjectionBase {
   const builder = new ProjectionBuilder({ root: ROOT });
   for (const file of files) {
-    addFile(builder, file, ROOT);
+    addFileWithFacts(builder, file, ROOT);
   }
   return builder.base();
 }
@@ -662,12 +662,12 @@ describe('ClosureExtentContributor', () => {
   it('emits ONE refusal row per refused reference, each naming ITS OWN referrer', async () => {
     // Two documents link the same hub, so the refusal is reached twice and both
     // rows are emitted, matching `walkLinkGraph`'s per-reference
-    // `excludedReferences`. The rows agree on the VERDICT — same path, same code,
-    // same identity, which is `ProjectionBuilder`'s
-    // `(extentId, path, code, resourceId)` key — and differ on the PROVENANCE,
-    // because they were reached through different references. So a population
-    // collapses them to one row and that row names the FIRST referrer; the
-    // witness is a witness, not the list.
+    // `excludedReferences`. The rows agree on the VERDICT — same path, same
+    // code, same identity — and, by construction here, on POSITION too: each
+    // is the referring file's FIRST reference, so both sit at line 1 with the
+    // identical `Readme.md` spelling. `ProjectionBuilder`'s condition table
+    // keys on `(extentId, path, code, resourceId, sourcePath, sourceLine,
+    // sourceRef)`, so `sourcePath` alone keeps the pair apart once built.
     const twoReferrers: readonly FixtureFile[] = [
       { path: ROOT_DOC, refs: [{ rawRef: README_REF }, { rawRef: 'b.md' }] },
       { path: DOC_B, refs: [{ rawRef: README_REF }] },
@@ -863,24 +863,54 @@ describe('ClosureExtentContributor', () => {
     expect(memberPaths(contribution)).toEqual([ROOT_DOC]);
   });
 
-  it('resolves a REAL lexer-produced @ token to the file it names', async () => {
-    // The regression this whole increment exists for. `@b.md` is authored the
-    // way a CLAUDE.md authors an import, parsed by the shipped lexer, and
-    // carried through `blobReferencesFor` — so `rawRef` keeps its `@` exactly as
-    // `blob-references.ts` stores it, and `leadingAt` is true because the `@` is
-    // genuinely still there.
-    //
-    // Under the `href` dialect this resolves `skills/foo/@b.md`, finds nothing,
-    // and reports CLOSURE_REFERENCE_UNRESOLVED. Under `claude-import` it must
-    // resolve `skills/foo/b.md` and admit it.
+  it('resolves a REAL harness-extracted @ import to the file it names', async () => {
+    // `@b.md` is authored the way a CLAUDE.md authors an import and extracted
+    // by the shipped `claudeMemoryFactsOf` into `harness_blob_imports`. Under
+    // `claude-import` the closure walks THAT table, and admits `skills/foo/b.md`.
     const contribution = await contributeOver(AT_TOKEN_IMPORT, declarationOf({
-      follow: ['at-prefixed'],
+      follow: [],
       referenceDialect: 'claude-import',
     }));
 
     expect(memberPaths(contribution)).toEqual([ROOT_DOC, DOC_B]);
     expect(contribution.conditions).toEqual([]);
     expectContributionRowsValid(contribution);
+  });
+
+  it('follows no import out of a blob with no harness facts yet — frontier inside the fixpoint, never a throw', async () => {
+    // The import rows are there; the facts row is not. Inside the fixpoint that
+    // is "not derived yet": the contributor must neither throw nor read the
+    // blob's imports as settled — a later pass derives the facts. Its strict
+    // twin, outside the fixpoint, is in `projection-closure-provenance.test.ts`.
+    const base = buildBase(AT_TOKEN_IMPORT);
+    const contributor = new ClosureExtentContributor(EXTENT_NAME, SKILL_KIND);
+    const contribution = await contributor.contribute(
+      { ...base, harnessBlobFacts: [] },
+      declarationOf({ follow: [], referenceDialect: 'claude-import' }),
+    );
+
+    expect(base.harnessBlobImports.length).toBeGreaterThan(0);
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC]);
+  });
+
+  it('walks harness_blob_imports under claude-import, never the lexer\'s candidates', async () => {
+    // `(@b.md)` is an at-prefixed candidate to VAT's lexer and no import to the
+    // harness (`Ayn` needs whitespace or a line start before the `@`). Reading
+    // `blob_references` here would admit `b.md`.
+    const contribution = await contributeOver(
+      [{ path: ROOT_DOC, refs: [], markdown: 'See (@b.md) for the rest.\n' }, { path: DOC_B, refs: [] }],
+      declarationOf({ follow: [], referenceDialect: 'claude-import' }),
+    );
+
+    expect(memberPaths(contribution)).toEqual([ROOT_DOC]);
+    expect(contribution.conditions).toEqual([]);
+  });
+
+  it('refuses a follow list beside claude-import, which no syntactic form could apply to', async () => {
+    await expect(contributeOver(AT_TOKEN_IMPORT, declarationOf({
+      follow: ['at-prefixed'],
+      referenceDialect: 'claude-import',
+    }))).rejects.toThrow(/follow must be \[\] under referenceDialect/);
   });
 
   it('leaves an @ token unresolved under the default href dialect', async () => {

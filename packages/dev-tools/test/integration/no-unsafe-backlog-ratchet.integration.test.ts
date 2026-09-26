@@ -31,9 +31,14 @@ async function cleanWithoutExemption(files: readonly string[]): Promise<string[]
     cwd: REPO_ROOT,
     overrideConfig: [{
       files: [...files],
-      // The repo config names its tsconfig relative to `tsconfigRootDir`, which
-      // typescript-eslint defaults to the PROCESS cwd — the package dir here.
-      languageOptions: { parserOptions: { tsconfigRootDir: REPO_ROOT } },
+      // `tsconfigRootDir` because typescript-eslint defaults it to the PROCESS cwd
+      // — the package dir here. `projectService` instead of the repo config's
+      // `tsconfig.eslint.json`: that config includes every `.ts` file of every
+      // package, so linting even one file builds a whole-monorepo program that
+      // grows with every change and crossed the integration tier's 1024MB heap
+      // cap (measured 1.10GB peak). Each file's own package tsconfig answers the
+      // same type question — the same 23/23 files trip the pair — at 0.77GB.
+      languageOptions: { parserOptions: { tsconfigRootDir: REPO_ROOT, project: null, projectService: true } },
       rules: Object.fromEntries(RULES.map((rule) => [rule, 'error'])),
     }],
   });

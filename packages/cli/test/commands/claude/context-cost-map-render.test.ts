@@ -70,8 +70,9 @@ function rowOf(overrides: Partial<AccountedRow> = {}): AccountedRow {
     tokens: 1200,
     bytes: 4800,
     loadClass: 'always',
-    admissions: [{ kind: 'ancestry', dir: '' }],
+    admissions: [{ kind: 'ancestry', dir: '', local: false }],
     sizeCliff: 'loaded',
+    headerTokens: 0,
     ...overrides,
   };
 }
@@ -393,7 +394,7 @@ describe('vat claude context --all — the machine-readable envelope', () => {
 
     expect(envelope.kind).toBe('context-cost-map');
     expect(envelope.boundsStatement).toBe(CLAUDE_CONTEXT_BOUNDS_STATEMENT);
-    expect(envelope.limits.find((limit) => limit.id === 'cliff-scope')?.direction).toBe('scope');
+    expect(envelope.limits.find((limit) => limit.id === 'main-conversation-only')?.direction).toBe('scope');
     expect(envelope.modelledBehaviours.length).toBeGreaterThan(0);
   });
 

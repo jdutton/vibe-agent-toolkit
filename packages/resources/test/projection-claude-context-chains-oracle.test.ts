@@ -50,7 +50,6 @@ import type { Projection } from '../src/projection/projection.js';
 import type { ClaudeContextLoadRow } from '../src/schemas/projection-claude-context.js';
 
 import { claudeContextFixture } from './helpers/claude-context-fixture.js';
-import { claudeMdIdsOf } from './helpers/claude-md-ids.js';
 
 /** The corpus root, as both a location and a representative. */
 const ROOT = '';
@@ -196,7 +195,7 @@ function costTheLongWay(projection: Projection, directory: string): LaunchCost {
   const answer = whatLoadsAt(projection, directory);
   expect(answer.kind, `oracle refused ${JSON.stringify(directory)}`).toBe('answer');
   if (answer.kind !== 'answer') throw new Error('unreachable — asserted above');
-  const accounted = account(answer, claudeMdIdsOf(projection));
+  const accounted = account(answer);
   const rows = accounted.rows.map((row) => ({ path: row.path, charge: launchCharge(row) }));
   return {
     charged: pathsCharged(rows, 'charged'),
@@ -208,19 +207,30 @@ function costTheLongWay(projection: Projection, directory: string): LaunchCost {
 /**
  * The same cost read off the relation, the way a statement would.
  *
+ * ⚠️ `preambleTokens` is READ off `claude_context_chains`, never re-derived
+ * from `CLAUDE_CODE.launchPreamble` here: `preambleTokensOf` is the one
+ * function both `totalsOf` (`account()`'s own `alwaysTokens`) and
+ * `claudeContextRelations` (this column) call, so a second computation in
+ * this test would be a THIRD copy of the same fact, free to agree by
+ * coincidence rather than by construction.
+ *
  * @param loads - Every `claude_context_loads` row
  * @param chainId - The chain the location maps to
+ * @param preambleTokens - `claude_context_chains.preambleTokens` for this chain
  * @returns Its charged and unsized paths, and the charged token sum
  */
-function costFromRelation(loads: readonly ClaudeContextLoadRow[], chainId: string): LaunchCost {
+function costFromRelation(
+  loads: readonly ClaudeContextLoadRow[],
+  chainId: string,
+  preambleTokens: number,
+): LaunchCost {
   const rows = loads.filter((row) => row.chainId === chainId);
   const charges = rows.map((row) => ({ path: row.path, charge: row.launchCharge }));
+  const charged = rows.filter((row) => row.launchCharge === 'charged');
   return {
     charged: pathsCharged(charges, 'charged'),
     unknown: pathsCharged(charges, 'unknown-size'),
-    tokens: rows
-      .filter((row) => row.launchCharge === 'charged')
-      .reduce((sum, row) => sum + (row.tokens ?? 0), 0),
+    tokens: preambleTokens + charged.reduce((sum, row) => sum + (row.tokens ?? 0) + row.headerTokens, 0),
   };
 }
 
@@ -234,8 +244,8 @@ function costFromRelation(loads: readonly ClaudeContextLoadRow[], chainId: strin
 function expectOracleAgreement(projection: Projection): readonly string[] {
   const { claudeContextChains, claudeContextLoads } = claudeContextRelations(projection);
   expect(claudeContextChains.length).toBeGreaterThan(0);
-  for (const { directory, chainId } of claudeContextChains) {
-    expect({ directory, ...costFromRelation(claudeContextLoads, chainId) })
+  for (const { directory, chainId, preambleTokens } of claudeContextChains) {
+    expect({ directory, ...costFromRelation(claudeContextLoads, chainId, preambleTokens) })
       .toEqual({ directory, ...costTheLongWay(projection, directory) });
   }
   // A collapse that degraded to one chain per location would still agree. This
@@ -259,6 +269,21 @@ function chargedTokensAt(projection: Projection, directory: string, path: string
   return claudeContextLoads.find(
     (row) => row.chainId === chainId && row.path === path && row.launchCharge === 'charged',
   )?.tokens;
+}
+
+/**
+ * `claude_context_chains.preambleTokens` for one chain — the value
+ * {@link costFromRelation} reads rather than re-derives.
+ *
+ * @param projection - The populated projection
+ * @param chainId - The chain
+ * @returns Its `preambleTokens`, or `0` when no chain row names it (a chain
+ *   `expectOracleAgreement` never reaches, so the oracle's own equality check
+ *   is what would fail here, not this lookup)
+ */
+function preambleTokensAt(projection: Projection, chainId: string): number {
+  return claudeContextRelations(projection).claudeContextChains
+    .find((row) => row.chainId === chainId)?.preambleTokens ?? 0;
 }
 
 /**
@@ -361,6 +386,7 @@ describe('claudeContextRelations — the per-chain collapse', () => {
       const { unknown } = costFromRelation(
         claudeContextRelations(projection).claudeContextLoads,
         contextChainId(CLI),
+        preambleTokensAt(projection, contextChainId(CLI)),
       );
       expect(unknown).toContain('packages/cli/CLAUDE.md');
       expectOracleAgreement(projection);
@@ -400,7 +426,7 @@ describe('claudeContextRelations — the per-chain collapse', () => {
       const projection = withGitignored(await claudeContextFixture(TREE), ['packages/cli/CLAUDE.md']);
       expect(representativeOf(projection, CLI_SRC)).toBe(CLI);
       const { claudeContextLoads } = claudeContextRelations(projection);
-      expect(costFromRelation(claudeContextLoads, contextChainId(CLI)).tokens)
+      expect(costFromRelation(claudeContextLoads, contextChainId(CLI), preambleTokensAt(projection, contextChainId(CLI))).tokens)
         .toBe(costTheLongWay(projection, CLI_SRC).tokens);
     });
   });

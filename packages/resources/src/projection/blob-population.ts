@@ -1,6 +1,6 @@
 /**
  * The blob-derivation stage: the step that turns the base stratum's
- * `contentKey` columns into the four blob-keyed tables.
+ * `contentKey` columns into the blob-keyed tables.
  *
  * ## Why this exists as its own stage
  *
@@ -1098,6 +1098,10 @@ function emitBlobRows(
   // `byteLength`, never `content.length`: decoding is many-to-one on malformed
   // UTF-8, so the decoded string's length is not the on-disk byte count.
   builder.addBlob(blobRowFor(contentKey, keyed.byteLength, keyed.decoding, parsed));
+
+  // No harness facts here: they are derived LAZILY, for the blobs a harness
+  // reaches, by `harness/harness-pass.ts` — nearly every blob is a source file
+  // no loader ever opens.
   countDecoding(keyed.decoding, counts);
 
   for (const row of blobConditionsFor(contentKey, parsed)) {

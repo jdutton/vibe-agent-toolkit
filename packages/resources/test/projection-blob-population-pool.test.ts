@@ -189,11 +189,12 @@ async function derive(
   const builder = await baseBuilderForRoot(suite.tempDir);
   const counts = await populateBlobs(builder, {
     parseCache: NO_CACHE,
-    // `enabled` is stated on BOTH arms, never inherited. The pool ships OFF by
-    // default (while its shape is reworked — the "6.5x regression" that first
-    // set that default was an instrument artifact, see `ParsePoolPolicy`), so a
-    // pooled test that omitted it would silently become an unpooled test and
-    // keep passing — asserting nothing about the pool while looking like it did.
+    // `enabled` is stated on BOTH arms, never inherited. The pool ships ON and
+    // declines a corpus too small to pay for a thread (see `ParsePoolPolicy`),
+    // so a pooled test that omitted it would silently become an unpooled test
+    // and keep passing — asserting nothing about the pool while looking like it
+    // did — and an unpooled test that omitted it would be whatever this
+    // fixture's size happened to buy.
     parsePool:
       pool === undefined
         ? { enabled: false }

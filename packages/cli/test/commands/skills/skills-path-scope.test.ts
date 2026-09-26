@@ -27,7 +27,8 @@ import { writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import type { Command } from 'commander';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 
 import { createBuildCommand } from '../../../src/commands/skills/build.js';
 import { CONFIG_FILENAME, unscopableSkillsPath } from '../../../src/commands/skills/scope-guard.js';
@@ -165,6 +166,27 @@ describe.each(SCOPED_COMMANDS)(
       expect(exited).toBe(2);
       expect(stderr).not.toContain(silentBanner);
       expect(stderr).toContain('cannot scope to');
+    });
+
+    it('publishes a status: error document on stdout, not just a stderr line', async () => {
+      // Every document verb publishes its document on failure too, so a CI
+      // wrapper reading stdout gets the reason rather than zero bytes beside a
+      // bare exit 2.
+      let stdout = '';
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+        stdout += String(chunk);
+        return true;
+      });
+      try {
+        const { exited } = await runCommand(create(), [mistypedSubdirOfProject()]);
+        expect(exited).toBe(2);
+      } finally {
+        stdoutSpy.mockRestore();
+      }
+
+      const document = parseYaml(stdout) as { status?: string; error?: string } | null;
+      expect(document?.status).toBe('error');
+      expect(document?.error).toContain('cannot scope to');
     });
 
     it('names the path, the command, and what a path is supposed to point at', async () => {

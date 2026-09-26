@@ -36,8 +36,9 @@ function accountedRow(overrides: Partial<AccountedRow>): AccountedRow {
     tokens: 100,
     bytes: 400,
     loadClass: 'always',
-    admissions: [{ kind: 'ancestry', dir: '' }],
+    admissions: [{ kind: 'ancestry', dir: '', local: false }],
     sizeCliff: 'loaded',
+    headerTokens: 0,
     ...overrides,
   };
 }

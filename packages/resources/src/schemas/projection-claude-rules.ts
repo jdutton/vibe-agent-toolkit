@@ -14,22 +14,28 @@ import { z } from 'zod';
  * witness that does NOT mean the glob is dead:
  *
  * - **`matched`** — the pattern was evaluated against the tree and
- *   {@link ClaudeRulePatternRowSchema.witnessPath} names a path it matched.
+ *   {@link ClaudeRulePatternRowSchema.witnessPath} names a path it matched. A
+ *   `!` NEGATION matches nothing on its own, so for one this means it EXCLUDES
+ *   a realized file the rule's preceding patterns load, and the witness is
+ *   that file; `inert` means it excludes nothing.
  * - **`inert`** — the pattern was evaluated against the tree and matched
  *   nothing. The rule declares a scope no file in this tree occupies, so it can
  *   never fire here. This is the defect the table exists to make queryable.
- * - **`unevaluated`** — the pattern was **never run**. A rule whose whole
- *   `paths:` list blows the vendor's shared expansion budget
- *   (`EXPANDED_PATTERN_BUDGET` / `PATTERN_BYTE_BUDGET` in
- *   `claude-context-rules.ts`) is used unexpanded by the harness and is skipped
- *   here rather than matched, so no matcher ever touched it.
+ * - **`unevaluated`** — the pattern was **never run**. The vendor's expansion
+ *   budget (`EXPANDED_PATTERN_BUDGET` / `PATTERN_BYTE_BUDGET` in
+ *   `claude-context-rules.ts`) is spent PER PATTERN as a `paths:` list is
+ *   walked, and the entry that exhausts it is used unexpanded by the harness —
+ *   braces literal, matching essentially nothing — so it is skipped here rather
+ *   than matched, and no matcher ever touched it. ⛔ Its live siblings are
+ *   evaluated normally: this status names one entry, never a whole list.
  * - **`gitignored`** — the pattern was evaluated and matched no file VAT can
- *   see, and its territory is **gitignored** (a file beneath its literal prefix,
- *   or the file a wholly-literal pattern names, would be ignored). VAT never
- *   realizes an ignored file, but the harness reads the filesystem, so a rule
- *   scoped to `dist/**` may well fire. VAT declines to judge it rather than
- *   call it dead. A glob with an EMPTY literal prefix is never judged this way
- *   and stays `inert`.
+ *   see, and its territory is **gitignored**: a path its harness glob provably
+ *   matches (or a file beneath one) would be ignored, or it reaches an entry
+ *   of git's collapsed ignored listing. VAT never realizes an ignored file, but
+ *   the harness reads the filesystem, so a rule scoped to `dist/**` may well
+ *   fire. VAT declines to judge it rather than call it dead. A glob whose only
+ *   matches lie strictly inside an ignored directory it does not itself reach
+ *   is not seen and stays `inert`.
  *
  * 🚨 **Two states would have to read a null witness as inertness, and it is
  * not** — for an over-budget rule a null witness records a refusal to evaluate,
@@ -40,7 +46,7 @@ import { z } from 'zod';
  * table — four statuses, one witness".
  */
 export const ClaudeRulePatternStatusSchema = z.enum(['matched', 'inert', 'unevaluated', 'gitignored'])
-  .describe('Pattern status: "matched" (witnessPath names a match), "inert" (evaluated, matched nothing), "unevaluated" (never run — the paths: list blew the expansion budget) or "gitignored" (matched nothing VAT can see, and its territory is gitignored — VAT declines to judge it, since the harness reads ignored files)');
+  .describe('Pattern status: "matched" (witnessPath names a match — for a `!` negation, a file it excludes from the patterns before it), "inert" (evaluated, matched nothing), "unevaluated" (never run — this pattern exhausted the per-pattern expansion budget) or "gitignored" (matched nothing VAT can see, and its territory is gitignored — VAT declines to judge it, since the harness reads ignored files)');
 
 export type ClaudeRulePatternStatus = z.infer<typeof ClaudeRulePatternStatusSchema>;
 
@@ -49,21 +55,22 @@ export type ClaudeRulePatternStatus = z.infer<typeof ClaudeRulePatternStatusSche
  * `.claude/rules` file, and what it scopes in this tree.
  *
  * Keyed `(resourceId, ordinal)` — on the identity, not on an extent — and
- * extent-scoped rather than blob-scoped. `literalPrefix` is stored so SQL can do
- * ∀ containment with no matcher; ⛔ a wholly literal pattern yields ITSELF, a
- * FILE path and not a directory, so read the column as *"the longest path every
- * match lives at or below"*. Why each of those: `docs/architecture/zones.md` §4,
+ * extent-scoped rather than blob-scoped. `literalPrefix` is the glob-free leading
+ * segments of `pattern` as written (a leading `./` or `/` removed), and it is NOT a
+ * match bound: after the harness strips a trailing `/**`, a pattern with no `/`
+ * before its last character matches at any depth. Use it for prefix containment
+ * only when the stripped pattern has a `/` before its last character. Why each of those: `docs/architecture/zones.md` §4,
  * "The `claude_rule_patterns` table — four statuses, one witness".
  */
 export const ClaudeRulePatternRowSchema = z.object({
   resourceId: z.string().min(1)
     .describe('Foreign key to resources.resourceId — the `.claude/rules` file that declares this pattern'),
   ordinal: z.number().int().nonnegative()
-    .describe('Index of this glob in the rule file\'s own `paths:` list, from 0'),
+    .describe('Zero-based index among the rule\'s declared patterns, after the harness\'s comma split — not a YAML `paths:` slot'),
   pattern: z.string().min(1)
     .describe('The `paths:` glob verbatim, exactly as the rule file declares it'),
   literalPrefix: z.string()
-    .describe('The glob-free leading segments of `pattern`; may be empty. The longest path every match lives at or below.'),
+    .describe('The glob-free leading segments of `pattern` as written (a leading `./` or `/` removed); may be empty. Not a match bound: after the harness strips a trailing `/**`, a pattern with no `/` before its last character matches at any depth. Use it for prefix containment only when the stripped pattern has a `/` before its last character.'),
   witnessPath: z.string().min(1).nullable()
     .describe('First tree path this pattern matches — non-null exactly when status is "matched". Pinned by a superRefine that is NOT encoded in the generated JSON Schema'),
   status: ClaudeRulePatternStatusSchema,

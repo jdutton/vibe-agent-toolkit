@@ -200,7 +200,7 @@ describe('blob facts', () => {
     await store.writeBlobFacts(written);
 
     const read = await store.readBlobFacts([FIRST_BLOB]) as unknown as Record<string, readonly unknown[]>;
-    expectSchemaValid(read, ['blobs', 'blobReferences', 'blobSections', 'blobConditions']);
+    expectSchemaValid(read, ['blobs', 'blobReferences', 'blobSections', 'blobConditions', 'harnessBlobFacts', 'harnessBlobImports']);
     expect(read).toEqual(written);
   });
 
@@ -214,7 +214,7 @@ describe('blob facts', () => {
     // A blob with no references legitimately has zero `blobReferences` rows;
     // a caller inferring "not cached" from that would re-parse it forever.
     const bare = sampleBlobRows();
-    await store.writeBlobFacts({ ...bare, blobReferences: [], blobSections: [], blobConditions: [] });
+    await store.writeBlobFacts({ ...bare, blobReferences: [], blobSections: [], blobConditions: [], harnessBlobFacts: [], harnessBlobImports: [] });
 
     const read = await store.readBlobFacts([FIRST_BLOB]);
     expect(read.blobs).toHaveLength(1);
@@ -230,6 +230,37 @@ describe('blob facts', () => {
     // The interesting one: `blob_conditions` keys on a nullable `line`, so a
     // conflict clause would NOT have deduplicated this row.
     expect(read.blobConditions).toHaveLength(1);
+  });
+
+  it('keeps a key\'s harness facts when a later write of that key carries none', async () => {
+    // Root A's run reached the blob and derived its harness facts; root B's run
+    // holds the same bytes without reaching them, so it writes the key's blob
+    // rows and no harness rows. Clearing the whole key would delete A's facts,
+    // and every later hit on A would read the absence as "never derived".
+    const rootA = sampleBlobRows();
+    expect(rootA.harnessBlobFacts.length).toBeGreaterThan(0);
+    expect(rootA.harnessBlobImports.length).toBeGreaterThan(0);
+    await store.writeBlobFacts(rootA);
+
+    await store.writeBlobFacts({ ...rootA, harnessBlobFacts: [], harnessBlobImports: [] });
+
+    const read = await store.readBlobFacts([FIRST_BLOB]);
+    expect(read.blobs).toHaveLength(1);
+    expect(read.harnessBlobFacts).toEqual(rootA.harnessBlobFacts);
+    expect(read.harnessBlobImports).toEqual(rootA.harnessBlobImports);
+  });
+
+  it('replaces a key\'s harness facts for a pair a later write carries', async () => {
+    const first = sampleBlobRows();
+    await store.writeBlobFacts(first);
+    const [facts] = first.harnessBlobFacts;
+    if (facts === undefined) throw new Error('fixture: sampleBlobRows carries no harness facts');
+
+    await store.writeBlobFacts({ ...first, harnessBlobFacts: [{ ...facts, injectedTokens: facts.injectedTokens + 1 }], harnessBlobImports: [] });
+
+    const read = await store.readBlobFacts([FIRST_BLOB]);
+    expect(read.harnessBlobFacts.map((row) => row.injectedTokens)).toEqual([facts.injectedTokens + 1]);
+    expect(read.harnessBlobImports).toEqual([]);
   });
 
   it('keeps one blob\'s facts when another is rewritten', async () => {
@@ -257,7 +288,7 @@ describe('blob facts', () => {
   it('accepts an empty bundle', async () => {
     const empty = sampleBlobRows();
     await expect(store.writeBlobFacts({
-      ...empty, blobs: [], blobReferences: [], blobSections: [], blobConditions: [],
+      ...empty, blobs: [], blobReferences: [], blobSections: [], blobConditions: [], harnessBlobFacts: [], harnessBlobImports: [],
     })).resolves.toBeUndefined();
   });
 
@@ -818,9 +849,11 @@ describe('the blob tier is bounded', () => {
     await evicting.close();
 
     expect(beforeEviction).toBeGreaterThan(0);
-    // Every table, not the total: a prune that cleared three of the four would
+    // Every table, not the total: a prune that cleared all but one would
     // leave a growing tier behind a green sum.
-    expect(blobRowCounts(oldest)).toEqual({ blobs: 0, blob_references: 0, blob_sections: 0, blob_conditions: 0 });
+    expect(blobRowCounts(oldest)).toEqual({
+      blobs: 0, blob_references: 0, blob_sections: 0, blob_conditions: 0, harness_blob_facts: 0, harness_blob_imports: 0,
+    });
     expect(trackedBlobKeys()).toBe(2);
     // And the survivors really did survive — an eviction that emptied the tier
     // would pass the line above and be a cache that cannot hit.
@@ -866,7 +899,7 @@ describe('the blob tier is bounded', () => {
     const evicting = openWithBlobWindow(3);
     const keys = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'].map((seed) => contentKey(seed));
     await evicting.writeBlobFacts({
-      blobs: [], blobReferences: [], blobSections: [],
+      blobs: [], blobReferences: [], blobSections: [], harnessBlobFacts: [], harnessBlobImports: [],
       blobConditions: keys.flatMap((key) => declinedBlobRows(key).blobConditions),
     });
     const held = await evicting.readBlobFacts(keys);
@@ -880,7 +913,7 @@ describe('the blob tier is bounded', () => {
     // reclaims the surplus — so the bound is still a bound.
     const evicting = openWithBlobWindow(2);
     await evicting.writeBlobFacts({
-      blobs: [], blobReferences: [], blobSections: [],
+      blobs: [], blobReferences: [], blobSections: [], harnessBlobFacts: [], harnessBlobImports: [],
       blobConditions: ['a', 'b', 'c', 'd'].flatMap((seed) => declinedBlobRows(contentKey(seed)).blobConditions),
     });
     expect(trackedBlobKeys()).toBe(4);

@@ -131,6 +131,294 @@ export function validateFrontmatterRules(
 	return anchoredTo(location, issues);
 }
 
+/**
+ * The vendor rule is "Cannot contain XML tags"
+ * (docs/external/anthropic-skill-authoring-best-practices.md:21,27), and those
+ * docs never define "XML tag" nor mention angle brackets. This module's reading,
+ * stated so it can be argued with:
+ *
+ * **A tag is markup, not an angle bracket** — and the corpus splits in three.
+ *
+ * 1. UNAMBIGUOUS MARKUP. Nothing in prose is shaped like it, so it fires
+ *    wherever it appears, backticks included: a markup declaration or processing
+ *    instruction (`<!--`, `<![CDATA[`, `<!DOCTYPE`, `<?xml`), a closing tag
+ *    (`</x>`), a self-closing tag (`<x/>`, `<x a/>`), and an opening tag that
+ *    carries an ATTRIBUTE ASSIGNMENT (`<div class="x">`). Angle brackets holding
+ *    prose are not a tag: `<see https://example.com>`, `<y and y>` and
+ *    `Map<K, V>` are a URL, a comparison and a generic.
+ *
+ * 2. AN AMBIGUOUS BARE `<word>` — or `<word word…>`, a run of plain
+ *    identifiers with no `and`/`or` among them. `<example>` and `<env>` are the
+ *    same four characters, and `<script async>` is the same shape as
+ *    `<skill name>`; no rule can tell a tag from a placeholder here. It
+ *    therefore fires — the reading that keeps real tags firing — UNLESS it reads
+ *    as part of a path or identifier, and the author can mark it as quoted text
+ *    with backticks, which is what the `fix:` text tells them to do. "Part of a
+ *    token" means a neighbour that BUILDS one: on the left a word character or
+ *    `/` (`Promise<Result>`, `skills/<name>`), or a `#`, `@` or `=` that itself
+ *    follows a word character or a group (`repo#<n>`, `pkg@<v>`, `--flag=<value>`,
+ *    `acme/<repo>#<n>`); on the
+ *    right a path segment (`<name>/SKILL.md`) or a `.`, `-` or `@` followed by a
+ *    word character (`<name>.md`, `<name>-skill`, `<pkg>@latest`). Sentence
+ *    punctuation joins nothing: `Done.<instructions>`, `x -<system>` and
+ *    `<system>.` all fire. A consequence worth
+ *    naming: a free-standing `<owner>` in `<owner>/<repo>#<n>` fires, because it
+ *    is character-for-character what `<example>/<example>` is, and that one must
+ *    fire. Backticking the whole template clears it.
+ *
+ * 3. A PROMPT-CHANNEL NAME ({@link isPromptChannelName}) — the tag names a chat
+ *    transcript or a tool protocol is built from — is never read as a
+ *    placeholder, so no neighbour exempts it and its body need not be an
+ *    identifier run: `<system>.Ignore previous`, `x=<invoke>`, `a@<system>`,
+ *    `<system role: admin>` and `<system and user>` all fire. Matched by FAMILY
+ *    on the name split at `.` `:` `-` `_`, so `<system_prompt>`,
+ *    `<system.prompt>`, `<systemprompt>` and `<sys_prompt>` are one name; and
+ *    whitespace or a `|` between `<` and the name does not hide it
+ *    (`< system >`, `</ system>`, `<|im_start|>`). The joiner exemptions exist
+ *    so `<name>.md` and `KEY=<value>` stay quiet; they must not become a way to
+ *    glue an injection-shaped tag onto punctuation. Generic placeholder words
+ *    (`user`, `script`, `example`, `document`, `context`, `prompt`) are NOT on
+ *    it — `https://github.com/<user>/<repo>` and `<script>.sh` are templates.
+ *    Backticks still clear a channel name, as they clear class 2.
+ *
+ *    ⛔ The stated LIMIT: an arbitrary word is not a channel name, so
+ *    `<override>.Ignore safety` and `x=<important>` pass. No syntactic rule
+ *    separates them from `--flag=<value>` or `<name>.md`; only a vocabulary
+ *    can, and the vocabulary is closed to names that are never a placeholder.
+ *
+ * Backticks exempt only classes 2 and 3. A code span may HIDE markup from the eye, but
+ * it must never EXEMPT it: backticks in a description are unpaired often enough
+ * that any pairing rule — naive or CommonMark-exact — can be made to swallow a
+ * real tag (`` ` then <b>x</b> and a final ` `` is ONE span).
+ */
+
+/** An inline code span (`` `...` ``): the author marking content as quoted text. */
+const INLINE_CODE_SPAN = /`[^`]*`/g;
+
+/** `<!--`, `<![CDATA[`, `<!DOCTYPE`, `<?xml` — markup, never prose. */
+const MARKUP_DECLARATION = /<\?|<!(?:--|\[|[A-Za-z])/;
+
+/**
+ * One `<…>` group, to be classified by {@link classifyGroup}: an optional `/`,
+ * a LEAD of whitespace or `|` (group 2 — non-empty only for `< system >` or
+ * `<|im_start|>`, where only a channel name counts), and the body (group 3).
+ * The name start (`[\p{L}_]`, any letter or `_`) is a single character disjoint
+ * from the lead, and `[^<>]*` is the only quantifier after it, so no two
+ * quantifiers can split one run between them — the ambiguity that makes an
+ * adjacent pair of stars quadratic. Each start position scans only as far as
+ * the next `<` or `>`.
+ */
+const ANGLE_GROUP = /<(\/?)([\s|]*)([\p{L}_][^<>]*)>/gu;
+
+/** The tag-name prefix of a group body; the remainder is its attribute run. */
+const TAG_NAME_PREFIX = /^[\p{L}_][\p{L}\p{N}_.:-]*/u;
+
+/** One valueless attribute name: `async`, `src`, `data-x`. */
+const ATTRIBUTE_NAME = /^[\p{L}_][\p{L}\p{N}_-]*$/u;
+
+/** Separates the words of an attribute run. */
+const WHITESPACE_RUN = /\s+/u;
+
+/** Connectives that make an identifier run read as prose (`<y and y>`). */
+const PROSE_CONNECTIVES: ReadonlySet<string> = new Set(['and', 'or']);
+
+/** The separators a tag name is split at into words: `system_prompt`, `system.prompt`, `system:prompt`. */
+const NAME_SEPARATOR = /[.:_-]/gu;
+
+/** Channel families recognised by the FIRST word of the name: `<sys_prompt>`, `<invoke>`, `<thinking>`. */
+const CHANNEL_FIRST_WORDS: ReadonlySet<string> = new Set([
+	'sys',
+	'invoke',
+	'instruction',
+	'instructions',
+	'thinking',
+]);
+
+/**
+ * Channel families recognised on the name with its separators removed:
+ * `system*` (`system-reminder`, `systemprompt`), `assistant*`, `human*`,
+ * `antml*`, a tool or function call/result (`tool_use`, `function_results`),
+ * and the ChatML markers `im_start`/`im_end`. `<tool-name>` and
+ * `<function_name>` are placeholders and do not match. Anchored alternation of
+ * literals: linear on any input.
+ */
+const CHANNEL_JOINED_NAME =
+	/^(?:system|assistant|human|antml|(?:tool|function)(?:use|call|result|response|output)|im(?:start|end)$)/u;
+
+/**
+ * Whether a tag name is a prompt CHANNEL — a role, section or tool-protocol
+ * name a chat transcript is built from, and never a sensible placeholder.
+ * Class 3 in the module docblock. Case-insensitive; `<username>` is not a
+ * channel name, and neither is `<user>`, which is an everyday placeholder.
+ */
+function isPromptChannelName(tagName: string): boolean {
+	const lowered = tagName.toLowerCase();
+	const firstWord = lowered.split(NAME_SEPARATOR)[0] ?? '';
+	return (
+		CHANNEL_FIRST_WORDS.has(firstWord) ||
+		CHANNEL_JOINED_NAME.test(lowered.replaceAll(NAME_SEPARATOR, ''))
+	);
+}
+
+/** A left neighbour that builds an identifier on its own: `Promise<`, `skills/<`. */
+const IDENTIFIER_LEFT = /[\w/]/;
+
+/** A left joiner that builds one only after a word character: `repo#<`, `pkg@<`, `KEY=<`. */
+const JOINER_LEFT = /[#@=]/;
+
+/** What a left joiner must follow to be mid-token: a word character, or the `>` of a group. */
+const TOKEN_END = /[\w>]/;
+
+/** A right joiner that continues a token when a word follows: `<name>.md`, `<name>-skill`, `<pkg>@latest`. */
+const JOINER_RIGHT = /[.@-]/;
+
+/** A literal path segment — what has to follow `<name>/` for it to be a path. */
+const PATH_SEGMENT_CHAR = /[\w.]/;
+
+const WORD_CHAR = /\w/;
+
+/**
+ * Every pattern that scans unbounded author text. Exported for the backtracking
+ * guard in `test/validators/frontmatter-validation.test.ts`, which runs each one
+ * under a deadline `node:vm` can enforce — a guard that reads the list cannot go
+ * blind to a pattern added later.
+ */
+export const XML_TAG_SCAN_PATTERNS: readonly RegExp[] = [
+	INLINE_CODE_SPAN,
+	MARKUP_DECLARATION,
+	ANGLE_GROUP,
+	TAG_NAME_PREFIX,
+	NAME_SEPARATOR,
+	CHANNEL_JOINED_NAME,
+	ATTRIBUTE_NAME,
+	WHITESPACE_RUN,
+];
+
+interface AngleScan {
+	/** Class 1 above: markup, whatever it is wrapped in. */
+	markup: boolean;
+	/** Classes 2 and 3 above: a bare `<word>` not joined into a token, or a channel name. Backticks clear it. */
+	bareTag: boolean;
+}
+
+/** Whether the character left of `index` builds an identifier the group joins. */
+function joinsOnLeft(text: string, index: number): boolean {
+	const before = text.charAt(index - 1);
+	if (before === '') {
+		return false;
+	}
+	if (IDENTIFIER_LEFT.test(before)) {
+		return true;
+	}
+	// `#`, `@`, `=` join only a token already under way: `repo#<n>` is one, and
+	// so is `acme/<repo>#<n>`, whose `>` closes a group judged on its own;
+	// `#<system>` and `x @<system>` are not.
+	return JOINER_LEFT.test(before) && TOKEN_END.test(text.charAt(index - 2));
+}
+
+/** Whether the text right of `end` continues the group into a larger token. */
+function continuesOnRight(text: string, end: number): boolean {
+	const after = text.charAt(end);
+	const next = text.charAt(end + 1);
+	// `<name>/SKILL.md`: the path continues with a literal segment.
+	// `<example>/<example>` continues with another group, so it is not a path —
+	// an unconditional "followed by a slash" exemption is an escape hatch for
+	// every tag.
+	if (after === '/' || after === '\\') {
+		return PATH_SEGMENT_CHAR.test(next);
+	}
+	// `<name>.md`, `<name>-skill`, `<pkg>@latest` — but not a sentence-ending
+	// `<system>.`, which is followed by nothing or a space.
+	return JOINER_RIGHT.test(after) && WORD_CHAR.test(next);
+}
+
+/**
+ * Whether an ambiguous group at `index` reads as a tag rather than as a
+ * placeholder inside a larger token.
+ */
+function isBareTagInProse(text: string, index: number, length: number): boolean {
+	const end = index + length;
+
+	// `Promise<Result>`, `skills/<name>`, `repo#<n>`: a token continues on the
+	// left and the group is followed by punctuation or the end. A WORD character
+	// after `>` means the group is glued into the middle of a word
+	// (`in<thinking>mode`) — that is a tag, not a compound identifier.
+	if (joinsOnLeft(text, index) && !WORD_CHAR.test(text.charAt(end))) {
+		return false;
+	}
+
+	return !continuesOnRight(text, end);
+}
+
+/**
+ * Whether an attribute run is a list of valueless attribute names
+ * (`<script async>`, `<img src>`) rather than prose between angle brackets
+ * (`<y and y>`, `<see https://…>`, `Map<K, V>`). An empty run qualifies.
+ */
+function isIdentifierRun(attributeRun: string): boolean {
+	const trimmed = attributeRun.trim();
+	if (trimmed === '') {
+		return true;
+	}
+	return trimmed
+		.split(WHITESPACE_RUN)
+		.every((word) => ATTRIBUTE_NAME.test(word) && !PROSE_CONNECTIVES.has(word.toLowerCase()));
+}
+
+/** Classify a group body that is not ambiguous. */
+function isMarkupBody(closing: boolean, attributeRun: string): boolean {
+	if (closing) {
+		return attributeRun.trim() === '';
+	}
+	if (attributeRun.trimEnd().endsWith('/')) {
+		return true;
+	}
+	// A run of prose with no assignment in it is not a tag.
+	return attributeRun.includes('=');
+}
+
+/** Classify one {@link ANGLE_GROUP} match into the lanes of the module docblock. */
+function classifyGroup(text: string, match: RegExpExecArray): AngleScan {
+	const body = match[3] ?? '';
+	const tagName = TAG_NAME_PREFIX.exec(body)?.[0] ?? '';
+	const channel = isPromptChannelName(tagName);
+	if (match[2] !== '') {
+		// `< system >`, `<|im_start|>`, `a < b and c > d`: a spaced or piped group
+		// is a tag only when it names a channel.
+		return { markup: false, bareTag: channel };
+	}
+	const attributeRun = body.slice(tagName.length);
+	const closing = match[1] === '/';
+	if (!closing && isIdentifierRun(attributeRun)) {
+		return { markup: false, bareTag: channel || isBareTagInProse(text, match.index, match[0].length) };
+	}
+	// `<system role: admin>` is prose-shaped, which is no excuse for a channel name.
+	return { markup: isMarkupBody(closing, attributeRun), bareTag: channel };
+}
+
+function scanAngleGroups(text: string): AngleScan {
+	const scan: AngleScan = { markup: MARKUP_DECLARATION.test(text), bareTag: false };
+
+	for (const match of text.matchAll(ANGLE_GROUP)) {
+		const group = classifyGroup(text, match);
+		scan.markup ||= group.markup;
+		scan.bareTag ||= group.bareTag;
+	}
+
+	return scan;
+}
+
+function containsXmlTag(text: string): boolean {
+	const raw = scanAngleGroups(text);
+	if (raw.markup) {
+		return true;
+	}
+	if (!text.includes('`')) {
+		return raw.bareTag;
+	}
+	return scanAngleGroups(text.replaceAll(INLINE_CODE_SPAN, ' ')).bareTag;
+}
+
 function validateNameRules(name: string): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
 	const lowered = name.toLowerCase();
@@ -147,13 +435,13 @@ function validateNameRules(name: string): ValidationIssue[] {
 		});
 	}
 
-	if (/[<>]/.test(name)) {
+	if (containsXmlTag(name)) {
 		issues.push({
 			severity: 'error',
 			code: 'SKILL_NAME_XML_TAGS',
 			message: 'Name contains XML tags',
 			field: FRONTMATTER_NAME_FIELD,
-			fix: 'Remove < and > characters from name',
+			fix: 'Remove the XML/HTML tag from the name',
 		});
 	}
 
@@ -163,13 +451,13 @@ function validateNameRules(name: string): ValidationIssue[] {
 function validateDescriptionRules(description: string): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
 
-	if (/[<>]/.test(description)) {
+	if (containsXmlTag(description)) {
 		issues.push({
 			severity: 'error',
 			code: 'SKILL_DESCRIPTION_XML_TAGS',
 			message: 'Description contains XML tags',
 			field: FRONTMATTER_DESC_FIELD,
-			fix: 'Remove < and > characters from description',
+			fix: 'Remove the XML/HTML tag from the description. If it is a literal placeholder such as `<env>` or `<owner>/<repo>`, or a prompt-channel name you are quoting on purpose (`<system>`), wrap it in backticks to mark it as quoted text — backticks do not exempt real markup (`</x>`, `<x/>`, `<x a="b">`, `<!--`, `<?`), which must be removed.',
 		});
 	}
 

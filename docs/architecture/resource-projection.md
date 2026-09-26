@@ -50,7 +50,7 @@ generated JSON Schema — `packages/resources/src/schemas/projection-blobs.ts` a
 `PROJECTION_SCHEMA_VERSION` is removed, and a *stored* projection would take a derived digest of the
 row schemas' shape instead (the parse cache's `parseFactsShapeSource()` is the pattern).
 
-**Population is ✅ real for the thirteen shipped tables.** `populate()` derives rows from `ParseFacts`
+**Population is ✅ real for the fifteen shipped tables.** `populate()` derives rows from `ParseFacts`
 and `ResourceRegistry` at runtime, and `vat resources query` writes them into a per-run in-memory
 store. What remains 🔷 proposed is the REMAINDER described below: columns the parser does not yet
 carry, and the zone modeling several tables depend on.
@@ -75,6 +75,8 @@ boundaries) that does not exist anywhere in the codebase yet — a separate, lar
 | `blob_references` | ordinal, raw ref, text, line, column, `startOffset`/`endOffset` (UTF-16 code units), syntactic form, lexical features (extension, leading `@`, slash count, variable-expansion syntax, in-code-span, in-fence) |
 | `blob_sections` | ordinal, depth, title, slug, slug occurrence, parent, line span, bytes (UTF-8), tokens |
 | `blob_conditions` | `(blob, code, severity, message, line)` — parse-time oddities |
+| `harness_blob_facts` | `(blob, harness)`, the bytes and tokens the harness INJECTS for it as a memory file (`injectedBytes`, `injectedTokens`), the `paths:` globs it scopes the file by (`paths`, JSON, read the harness's way) — derived lazily, only for blobs the harness reaches ([zones.md](zones.md#harness_blob_facts-and-harness_blob_imports--a-harnesss-content-rules-derived-on-reach)) |
+| `harness_blob_imports` | `(blob, harness, ordinal)`, raw ref, target, line — the `@` imports the named harness's own extractor reads ([zones.md](zones.md#harness_blob_facts-and-harness_blob_imports--a-harnesss-content-rules-derived-on-reach)) |
 
 **The proposed schema would store frontmatter as a JSON column, not DuckDB's `VARIANT`.** (Measured
 against `@duckdb/duckdb-wasm` v1.5.4, 2026-08 — a claim about another vendor's product, worth
@@ -205,10 +207,13 @@ than against taste** (`packages/resources/src/projection/agentic-tags.ts` carrie
   stricter than the vendor, because an unscoped rule is charged to every session whether or not the
   work touches what it guards, and that cost is precisely what `launchCharge` exists to surface.
   Second, the design's
-  instruction to **exclude rules files from the always-loaded chain sum is right only for rules
-  that carry `paths:`**. A rule that omits it *is* always-loaded, and excluding it under-reports
-  exactly the file whose cost is worst — the same direction of error the `loading` rank rule exists
-  to prevent. The rule is `paths:` present → `selected` (excluded), absent → `always` (charged).
+  instruction to **exclude rules files from the always-loaded chain sum is right only for rules the
+  harness actually scopes by their patterns**. A rule that omits `paths:` *is* always-loaded, and
+  excluding it under-reports exactly the file whose cost is worst — the same direction of error the
+  `loading` rank rule exists to prevent. The test is `declaresPaths`, not the presence of the key:
+  a `paths:` that normalises to nothing, or to `**` alone, leaves the rule always-loaded in the
+  harness too ([evidence](../external/claude-code-rules-paths-behaviour.md)). Scoped → `selected`
+  (excluded), otherwise → `always` (charged).
 
   ⭐ **The magnitude, so nobody "simplifies" the rule back to a class-wide answer.** The same
   refusal to read frontmatter fails in the other direction too, and that direction has a measured
@@ -512,8 +517,8 @@ which a bare commit key cannot express.
     no agent harness reads, and the other three are the skill packager's and a lens's outputs
     rather than functions of a path.
 - ✅ **Consumed as of 2026-08-23.** `resource_tags` has its first reader: the claude-context lens
-  reads the `claude-md` tag to decide which realizations set an instruction chain
-  (`packages/resources/src/projection/claude-context-regions.ts › claudeMdIdentities()`, consumed by
+  reads the `claude-md` and `rules-file` tags to decide which realizations set an instruction chain
+  (`packages/resources/src/projection/claude-context-regions.ts › instructedDirectories()`, consumed by
   both `claude-context-relations.ts` and `claude-context-cost-map.ts`). It surfaces as published rows
   — `claude_context_chains` / `claude_context_loads` via `vat resources query` / `vat resources
   check`, and a whole-tree cost map via `vat claude context` — never as a check folded into
@@ -527,6 +532,16 @@ which a bare commit key cannot express.
   for the key, the four statuses and why a witness rather than a match count. It is reachable from
   `vat resources query` and `vat resources check` only: the `scan`/`validate` lane populates under
   `CONTENT_PARSING_SKIP`, where registering a blob reader throws.
+- ✅ **Shipped: `harness_blob_facts` and `harness_blob_imports`, the fourteenth and fifteenth
+  materialised tables** — a coding harness's own `@`-import extractor, injected-text measure and
+  `paths:` reader, as content-keyed facts partitioned by `harness`
+  ([zones.md](zones.md#harness_blob_facts-and-harness_blob_imports--a-harnesss-content-rules-derived-on-reach)).
+  Unlike the other blob facts, these are derived lazily — only for the blobs one harness's entry
+  points and declared import extents reach — by a harness pass inside `populate()`'s closure
+  fixpoint; an absent row means "not reached", never zero, and a strict reader throws rather than
+  coercing it. The `claude-import` closure dialect and `vat claude context` read them; the loader
+  differential (`packages/resources/test/helpers/claude-loader-differential.ts`) holds both to a
+  reference port of the binary.
 - ✅ **Shipped: the first consumer that is a RULE.** `CLAUDE_RULE_GLOB_INERT` ships as the built-in
   check `claude-rule-glob-inert` — a TypeScript predicate over `claude_rule_patterns` carrying a
   documented `sqlTwin`, run whether or not a project declares any `resources.checks`. The invariant
@@ -537,8 +552,10 @@ which a bare commit key cannot express.
   ones whose globs never reached the pattern table
   ([validation-codes.md](../validation-codes.md#claude_rule_frontmatter_invalid)).
 - ✅ **Shipped: a declined symlink is a row, not a silence.** The filesystem extent still realizes
-  no symlink path, but every link its enumerator met is a `realization_conditions` row
-  `EXTENT_SYMLINK_NOT_REALIZED` at the link's path
+  no symlink path, but every link its enumerator met is a `realization_conditions` row at the
+  link's path — `EXTENT_SYMLINK_NOT_REALIZED`, or `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` when the
+  target resolves outside the root, or `EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to
+  nothing; a query about declined links asks for all three
   ([validation-codes.md](../validation-codes.md#extent_symlink_not_realized)).
 - ✅ **Shipped: the store is on by default.** The extent- and blob-scoped tables now cross
   invocations without an opt-in (`VAT_PROJECTION_STORE=off`, or `VAT_CACHE=0` for every cache, is

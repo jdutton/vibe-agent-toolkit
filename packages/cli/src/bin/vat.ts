@@ -22,7 +22,7 @@ import { createRequire } from 'node:module';
 import {  dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ExitCode, installLastResortExit } from '@vibe-agent-toolkit/schema';
+import { exitCodeOfChild, installLastResortExit } from '@vibe-agent-toolkit/schema';
 import {
   findNodeWorkspaceRoot,
   isPathAbsentError,
@@ -76,8 +76,10 @@ function spawnCli(binPath: string, context: Context, contextPath?: string): neve
     env,
   });
 
-  // A child that died of a signal has no status; that is not a finding.
-  process.exit(result.status ?? ExitCode.ERROR);
+  // The child derived its code from its own document. A signal death has no
+  // status, and a code off the contract (an older build's, Node's abort) is not
+  // a verdict the child published, so neither is forwarded verbatim.
+  process.exit(exitCodeOfChild(result.status));
 }
 
 /**

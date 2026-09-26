@@ -57,7 +57,6 @@ function imported(depth: number | null): Admission {
  * `root-rule` case and fails every row here.
  */
 const ON_DEMAND_RULES: ReadonlyArray<readonly [string, Admission]> = [
-  ['nested-rule', { kind: 'nested-rule', under: DIR }],
   ['glob-rule', { kind: 'glob-rule', pattern: `${DIR}/src/*.ts` }],
   ['glob-rule-covers-dir', { kind: 'glob-rule-covers-dir', pattern: `${DIR}/**` }],
   [
@@ -80,7 +79,8 @@ function makeRow(overrides: Partial<AccountedRow> = {}): AccountedRow {
     bytes: 400,
     loadClass: 'always',
     sizeCliff: 'loaded',
-    admissions: [{ kind: 'ancestry', dir: DIR }],
+    admissions: [{ kind: 'ancestry', dir: DIR, local: false }],
+    headerTokens: 0,
     ...overrides,
   };
 }
@@ -138,7 +138,7 @@ describe('launchCharge', () => {
 
 describe('admissionLoadsAtLaunch', () => {
   it.each([
-    ['ancestry', { kind: 'ancestry', dir: DIR }],
+    ['ancestry', { kind: 'ancestry', dir: DIR, local: false }],
     ['root-rule', { kind: 'root-rule' }],
     ['import', imported(3)],
     ['unattributed import', imported(null)],

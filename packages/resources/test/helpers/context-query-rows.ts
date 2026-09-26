@@ -1,5 +1,5 @@
 /**
- * Minimal `resource_realizations` / `resource_tags` row builders for the two
+ * Minimal `resource_realizations` / `resource_tags` / `harness_blob_facts` row builders for the
  * Claude-context SELECTOR suites — `projection-claude-context-ancestry.test.ts`
  * and `projection-claude-context-rules.test.ts`.
  *
@@ -16,6 +16,10 @@
  * minimum row instead, and it is built here once rather than once per suite.
  */
 
+import { RULE_SCOPE_TAG } from '../../src/projection/agentic-tags.js';
+import { harnessPaths, selectRules, type RuleAdmission } from '../../src/projection/claude-context-rules.js';
+import { harnessFactsIndex, type HarnessFactsIndex } from '../../src/projection/harness/facts-index.js';
+import type { HarnessBlobFactsRow } from '../../src/schemas/projection-harness.js';
 import type {
   ResourceRealizationRow,
   ResourceTagRow,
@@ -26,7 +30,7 @@ import type {
  *
  * ⚠️ Deliberately NOT a schema-valid content key (`key:<path>`, not
  * `<parserKind>.<sha256>`): these rows are never validated, and a recognisable
- * key makes the `blobs` join in the rules suite readable at a glance. Every
+ * key makes the facts join in the rules suite readable at a glance. Every
  * other column is either derived from `path` or the quiet default, so a suite
  * that cares about one of them overrides it at the call site and the override is
  * visible in the test rather than buried here.
@@ -73,4 +77,57 @@ export function queryRealization(path: string): ResourceRealizationRow {
  */
 export function queryTag(path: string, tag: string, value: string | null): ResourceTagRow {
   return { resourceId: `id:${path}`, tag, value, source: 'builtin' };
+}
+
+/**
+ * The Claude Code facts row {@link queryRealization}'s content key points at,
+ * carrying a `paths:` list — `paths`, the one column the rules selector reads,
+ * read the harness's way (`harnessPaths`).
+ *
+ * @param path - The rules file's root-relative path
+ * @param paths - Its `paths:` entries, or undefined for a file with no frontmatter
+ * @returns The facts row
+ */
+export function queryPathsBlob(path: string, paths: readonly string[] | undefined): HarnessBlobFactsRow {
+  return {
+    blob: `key:${path}`,
+    harness: 'claude-code',
+    injectedBytes: 100,
+    injectedTokens: 25,
+    paths: paths === undefined ? null : harnessPaths({ paths: [...paths] }),
+  };
+}
+
+/**
+ * The facts index `selectRules` reads, over hand-built facts rows.
+ *
+ * @param rows - The facts rows, one per rule
+ * @returns Claude Code's index over them
+ */
+export function queryFacts(rows: readonly HarnessBlobFactsRow[]): HarnessFactsIndex {
+  return harnessFactsIndex({ harnessBlobFacts: rows, harnessBlobImports: [] }, 'claude-code');
+}
+
+/**
+ * One path-scoped rule's selection for a query, over a set of realized files.
+ *
+ * @param rulePath - The rules file's root-relative path
+ * @param paths - Its `paths:` entries
+ * @param files - The realized files beside it
+ * @param queryDir - The query directory
+ * @param queryFile - The query file, or null for a directory query
+ * @returns The admissions the query produced
+ */
+export function pathScopedAdmissions(
+  rulePath: string,
+  paths: readonly string[],
+  files: readonly string[],
+  queryDir: string,
+  queryFile: string | null,
+): readonly RuleAdmission[] {
+  return selectRules({
+    realizations: [queryRealization(rulePath), ...files.map((file) => queryRealization(file))],
+    tags: [queryTag(rulePath, RULE_SCOPE_TAG, 'path-scoped')],
+    facts: queryFacts([queryPathsBlob(rulePath, paths)]), queryDir, queryFile,
+  }).rules.map((rule) => rule.admission);
 }

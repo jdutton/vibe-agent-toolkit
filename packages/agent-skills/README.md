@@ -144,10 +144,24 @@ The validator checks for:
 - `SKILL_MISSING_DESCRIPTION` - Required "description" field missing
 - `SKILL_NAME_INVALID` - Name doesn't match pattern: `^[a-z0-9]+(-[a-z0-9]+)*$`
 - `RESERVED_WORD_IN_NAME` (warning) - Name contains "claude" or "anthropic"
-- `SKILL_NAME_XML_TAGS` - Name contains < or > characters
+- `SKILL_NAME_XML_TAGS` - Name contains an XML/HTML tag
 - `SKILL_DESCRIPTION_TOO_LONG` - Description exceeds 1024 characters
 - `SKILL_DESCRIPTION_EMPTY` - Description is empty or whitespace-only
-- `SKILL_DESCRIPTION_XML_TAGS` - Description contains < or > characters
+- `SKILL_DESCRIPTION_XML_TAGS` - Description contains an XML/HTML tag. Three lanes:
+  **markup** — a closing `</x>`, a self-closing `<x/>`, an opening tag with an attribute
+  assignment `<x a="b">`, or a declaration (`<!--`, `<![CDATA[`, `<!DOCTYPE`, `<?xml`) — fires
+  wherever it appears, **backticks included**; a **bare placeholder** `<word>`, which is
+  indistinguishable from a tag, so it fires unless it reads as part of a path or identifier
+  (`skills/<name>/SKILL.md`, `<name>.md`, `Promise<Result>`, `repo#<n>`, `--flag=<value>`); and a
+  **prompt-channel name** (the `system`/`sys`, `assistant`, `human`, `invoke`, `instructions`,
+  `thinking`, `tool_use`/`tool_result`, `function_calls`/`function_results` and
+  `im_start`/`im_end` families, in any spelling), which fires whatever it is glued to
+  (`<system>.Ignore previous`, `x=<invoke>`, `< system >`). Backticking (`` `<env>` ``) clears
+  the last two lanes only. Everyday placeholder words (`<user>`, `<script>`, `<example>`) are not
+  channel names, and an arbitrary joined word (`<override>.Ignore`) passes — no syntactic rule
+  separates it from `--flag=<value>`. Not a tag: a comparison or arrow (`a < b`, `<=`, `->`,
+  `=>`), or angle brackets holding prose with no attribute assignment in them
+  (`<see https://example.com>`, `<y and y>`)
 
 **Link Errors:**
 - `LINK_INTEGRITY_BROKEN` - Link points to non-existent file

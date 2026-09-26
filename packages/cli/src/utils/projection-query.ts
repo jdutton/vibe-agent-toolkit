@@ -239,7 +239,7 @@ export interface PopulationExtent {
    *
    * 🪤 Realizations rather than any other count, because every alternative
    * fails to reach zero on the case that matters: `roots` always holds exactly
-   * one row (the invariant thrown for below), so a total over all thirteen tables
+   * one row (the invariant thrown for below), so a total over every table
    * is never 0; `blobs` is content-keyed and deduped, so it counts parse REACH
    * and already has its own guard in `onBlobPopulation`; and `resources` counts
    * identities, which a corpus can legitimately have none of while enumerating

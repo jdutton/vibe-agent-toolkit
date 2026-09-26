@@ -41,7 +41,7 @@
         "tokenEstimate": {
           "type": "integer",
           "minimum": 0,
-          "description": "Estimated token count for LLM context"
+          "description": "Estimated token count for LLM context — over the WHOLE decoded text. What a harness charges for this blob as a memory file is `harness_blob_facts.injectedTokens`"
         },
         "frontmatter": {
           "anyOf": [
