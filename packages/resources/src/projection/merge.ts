@@ -137,7 +137,7 @@ const BASE_STRATUM_PASS = 1;
  * shipped contributors registered — 61 skill extents, plus plugin and
  * marketplace, 66 contributors in total — reached its fixed point on **pass 2**:
  * one productive pass, then one confirming pass in which no digest moved. No
- * contributor needed a third. (`projection-population.integration.test.ts`,
+ * contributor needed a third. (`projection-population.system.test.ts`,
  * which re-runs the probe and fails if the depth ever regresses.)
  *
  * Depth 2 is the *structural* answer, not a property of corpus size: a closure

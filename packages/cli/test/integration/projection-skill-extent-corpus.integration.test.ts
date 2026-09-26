@@ -160,7 +160,7 @@
  *   with the options `skill-packager.ts:600` assembles.
  * - **Closure arm.** One `populate()` per corpus, with the filesystem extent and
  *   one `SkillExtentContributor` per skill, exactly as
- *   `projection-population.integration.test.ts` registers them. Not a
+ *   `projection-population.system.test.ts` registers them. Not a
  *   hand-assembled base: the closure stratum's fixpoint, the blob stage and
  *   `blob_references` all come from the driver.
  *
