@@ -108,12 +108,12 @@ const PARTITION_COLUMNS: ReadonlyMap<string, string> = new Map(
 function withPartitionsOf(held: RowBundle, incoming: RowBundle): RowBundle {
   const carried = new Set<string>();
   for (const [table, column] of PARTITION_COLUMNS) {
-    for (const row of incoming[table] ?? []) carried.add(String(row[column]));
+    for (const row of incoming[table] ?? []) carried.add(JSON.stringify(row[column]));
   }
   const merged: RowBundle = { ...held };
   for (const [table, column] of PARTITION_COLUMNS) {
     merged[table] = [
-      ...(held[table] ?? []).filter((row) => !carried.has(String(row[column]))),
+      ...(held[table] ?? []).filter((row) => !carried.has(JSON.stringify(row[column]))),
       ...(incoming[table] ?? []),
     ];
   }

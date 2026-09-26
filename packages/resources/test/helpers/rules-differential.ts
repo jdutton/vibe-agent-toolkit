@@ -295,7 +295,7 @@ export function referenceOf(testCase: DifferentialCase): Reference {
     return undefined;
   };
   return {
-    alwaysLoaded: survivors.length === 0 || survivors.every((glob) => glob === '**'),
+    alwaysLoaded: survivors.every((glob) => glob === '**'),
     loads: (path) => listLoads(-1, path),
     aloneMatches: (index, path) => ignoredUnder(perPattern[index] ?? [], base, path),
     touches: (index, path) => ignoredUnder((perPattern[index] ?? []).map(positiveOf), base, path),

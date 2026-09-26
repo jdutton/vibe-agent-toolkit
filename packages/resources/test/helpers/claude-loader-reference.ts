@@ -199,7 +199,7 @@ function readGlobs(raw: string): { content: string; globs: string[] | undefined 
   const globs = normalisePaths(frontmatter['paths'])
     .map((glob) => (glob.endsWith('/**') ? glob.slice(0, -3) : glob))
     .filter((glob) => glob.length > 0);
-  if (globs.length === 0 || globs.every((glob) => glob === '**')) return { content, globs: undefined };
+  if (globs.every((glob) => glob === '**')) return { content, globs: undefined };
   return { content, globs };
 }
 
@@ -246,6 +246,13 @@ function scanText(text: string, fromDir: string, found: Set<string | null>): voi
   }
 }
 
+/** An HTML token's `@` imports: only a comment block's text outside its comments is read. */
+function scanHtml(token: Token, fromDir: string, found: Set<string | null>): void {
+  if (!isCommentBlock(token)) return;
+  const residue = token.raw.replaceAll(COMMENT, '');
+  if (residue.trim().length > 0) scanText(residue, fromDir, found);
+}
+
 /** `Ayn` — every `@` import, in document order, as root-relative targets (null: outside the tree). */
 function extractImports(tokens: readonly Token[], fromDir: string): Array<string | null> {
   const found = new Set<string | null>();
@@ -253,10 +260,7 @@ function extractImports(tokens: readonly Token[], fromDir: string): Array<string
     for (const token of list) {
       if (token.type === 'code' || token.type === 'codespan') continue;
       if (token.type === 'html') {
-        if (isCommentBlock(token)) {
-          const residue = token.raw.replaceAll(COMMENT, '');
-          if (residue.trim().length > 0) scanText(residue, fromDir, found);
-        }
+        scanHtml(token, fromDir, found);
         continue;
       }
       if (token.type === 'text') scanText((token as { text?: string }).text ?? '', fromDir, found);
@@ -431,8 +435,7 @@ function nestedDirectory(walk: Walk, dir: string, file: string): LoadedMemoryFil
     ...loadWithImports(walk, joinPath(dir, 'CLAUDE.local.md'), 'Local', false),
   ];
   const copy: Walk = { ...walk, processed: new Set(walk.processed) };
-  loaded.push(...rulesWalk(copy, joinPath(dir, '.claude/rules'), false, false));
-  loaded.push(...conditionalRules(walk, dir, file));
+  loaded.push(...rulesWalk(copy, joinPath(dir, '.claude/rules'), false, false), ...conditionalRules(walk, dir, file));
   for (const path of copy.processed) walk.processed.add(path);
   return loaded;
 }
