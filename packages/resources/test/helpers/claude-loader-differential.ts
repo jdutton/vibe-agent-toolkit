@@ -4,8 +4,9 @@
  * reference port of Claude Code's own loader (`claude-loader-reference.ts`).
  * Two tiers sweep disjoint seed ranges through it:
  * `projection-claude-loader-differential.test.ts` (unit, in-memory projection)
- * and `integration/claude-loader-differential.integration.test.ts` (real
- * trees on disk through `buildClaudeContextPopulation`).
+ * and the integration tier — `integration/claude-loader-differential.integration.test.ts`
+ * (in memory) and `integration/claude-loader-differential-on-disk.integration.test.ts`
+ * (real trees on disk through `buildClaudeContextPopulation`).
  *
  * ## What is compared
  *
