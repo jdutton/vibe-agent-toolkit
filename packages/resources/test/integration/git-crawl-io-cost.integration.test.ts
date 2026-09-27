@@ -84,6 +84,14 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 /**
+ * Every way a file's bytes are read. A read that goes through a handle
+ * (`readDecodableBytes` opens, `fstat`s and reads the handle) shows up only as
+ * its `open` — the counter does not see `FileHandle` methods — so an `open` is a
+ * read here, or a per-path read would vanish from both cases that count them.
+ */
+const READ_METHODS = ['fs.readFileSync', 'fs.promises.readFile', 'fs.openSync', 'fs.promises.open'] as const;
+
+/**
  * Files the fixture starts with.
  *
  * Three hundred rather than a handful, and the user's own caveat is the reason:
@@ -480,7 +488,7 @@ describe('GitCrawlSource.enumerate costs a constant, not a per-file toll', () =>
   it('never stats or reads a file per path', () => {
     // Named explicitly, because "the total did not move" would also hold for an
     // implementation that traded 900 stats for 900 reads.
-    for (const method of [LSTAT, 'fs.statSync', 'fs.readFileSync', 'fs.promises.readFile']) {
+    for (const method of [LSTAT, 'fs.statSync', ...READ_METHODS]) {
       expect(grownCrawl.perMethod.get(method) ?? 0, `${method}: ${describeMeasurement(grownCrawl)}`)
         .toBeLessThan(BASE_FILE_COUNT / 4);
     }
@@ -552,8 +560,7 @@ describe('the extent built on the git source has not inherited its cost model', 
     // The negative control for the two cases above: they must not be passing
     // because the extent silently stopped doing per-path work altogether.
     const reads = (measurement: Measurement): number =>
-      (measurement.perMethod.get('fs.promises.readFile') ?? 0)
-      + (measurement.perMethod.get('fs.readFileSync') ?? 0);
+      READ_METHODS.reduce((sum, method) => sum + (measurement.perMethod.get(method) ?? 0), 0);
 
     expect(reads(grownExtent) - reads(smallExtent), describeMeasurement(grownExtent))
       .toBeGreaterThanOrEqual(GROWTH_FILE_COUNT);

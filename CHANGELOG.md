@@ -779,6 +779,9 @@ with a regression test.
 
 ### Fixed
 
+- **A file too large to decode as text (over ~512 MiB) no longer crashes a whole run.** It is
+  refused by size without being read: `vat resources` reports it as `RESOURCE_UNREADABLE
+  (TEXT_TOO_LARGE)`, and a projection records it as `contentState: 'oversize'`. No action needed.
 - **`vat verify` now reads a plugin-local skill's `skills.config` entry exactly as the plugin build
   does** (declared name, then directory path, then its last segment) when checking its plugin-tree
   copy — including a skill no `skills.include` glob reaches. A skill whose directory is not named

@@ -34,7 +34,7 @@ import {
   type UnreadablePolicy,
 } from '@vibe-agent-toolkit/utils/crawl';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
-import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
+import { decodeTextContent, TextTooLargeError } from '@vibe-agent-toolkit/utils/text';
 
 import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
@@ -130,6 +130,12 @@ const READ_FAILURE_CODES: ReadonlySet<string> = new Set([
   'ENOENT',
   'ENOTDIR',
   'EPERM',
+  // Not an errno: the file is past what one JS string can hold, refused by size
+  // before any read. Admitted here because the consequence is the same — the
+  // file is enumerated and cannot be admitted — and it reaches the finding as
+  // its own code, `(TEXT_TOO_LARGE)`, so no reader goes looking for a
+  // permissions problem.
+  TextTooLargeError.code,
 ]);
 
 /**

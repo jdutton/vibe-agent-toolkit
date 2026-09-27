@@ -311,10 +311,12 @@ Consequences:
 `symlinkResolves`, `dir`, `depth`, `ext`, `pathLower`, `basenameLower` are all properties of *a path
 in a zone*, not of an identity. `resources` keeps `(resourceId, kind, origin, observed, vatId)`.
 
-`contentState` (`keyed` | `deferred` | `unreadable` | `none`) exists because a null `contentKey`
+`contentState` (`keyed` | `deferred` | `unreadable` | `oversize` | `none`) exists because a null `contentKey`
 answers four different questions at once, and demand-driven keying adds a fifth. A file that could
 not be read and a file nobody has asked about are not the same fact, and letting them share a
-spelling is the completeness failure `zone_provenance.extentDigest` exists to prevent. The pairing
+spelling is the completeness failure `zone_provenance.extentDigest` exists to prevent. Nor is a file
+too large to decode into a JS string (`oversize`, refused by size and never read) an unreadable one:
+its permissions are fine, and a reader told otherwise would look in the wrong place. The pairing
 is pinned by a schema refinement in both directions, so a key without the state — or a state without
 the key — fails to parse rather than being merged into the projection.
 

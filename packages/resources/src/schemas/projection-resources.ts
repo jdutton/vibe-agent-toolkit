@@ -112,12 +112,17 @@ export type ResourceRow = z.infer<typeof ResourceRowSchema>;
  * - `deferred` — this path has bytes, but no consumer has asked for them yet,
  *   so they were never read. **This is not a failure**, and it is the only
  *   member that a later pass can legitimately turn into `keyed`.
- * - `unreadable` — a read was attempted and it threw. A fact about the corpus
- *   (a permissions quirk, a vanished file), never an error in the harness.
+ * - `unreadable` — a read was attempted and the filesystem refused it. A fact
+ *   about the corpus (a permissions quirk, a vanished file), never an error in
+ *   the harness — and never anything but the filesystem's refusal.
+ * - `oversize` — the file is too large to decode into a JS string (past
+ *   `MAX_DECODABLE_BYTES`, V8's string-length limit), so it was refused by size
+ *   and never read. Not `unreadable`: nothing is wrong with the file's
+ *   permissions, and a reader sent to check them would find nothing.
  * - `none` — there are no bytes here to key at all: the path is absent, or a
  *   directory, or a dangling symlink.
  */
-export const ContentStateSchema = z.enum(['keyed', 'deferred', 'unreadable', 'none'])
+export const ContentStateSchema = z.enum(['keyed', 'deferred', 'unreadable', 'oversize', 'none'])
   .describe('Why this realization does or does not carry a content key');
 
 export type ContentState = z.infer<typeof ContentStateSchema>;

@@ -44,6 +44,7 @@ function runOf(overrides: Partial<BlobPopulationResult> = {}): BlobPopulationRes
     realizationsSkippedAbsent: 0,
     realizationsSkippedDanglingSymlink: 0,
     realizationsSkippedUnkeyed: 0,
+    realizationsSkippedOversize: 0,
     realizationsContentDeferred: 0,
     // Losses inside a blob that WAS derived — no row exists to carry them.
     headingsSkippedForMissingLine: 0,
@@ -109,6 +110,23 @@ describe('describeBlobRefusals', () => {
     const line = describeBlobRefusals(reportOf({ realizationsSkippedUnkeyed: 4 }));
 
     expect(line).toContain('could not key 4 realization(s)');
+  });
+
+  it('reports a realization too large to decode as its own bucket, never as unreadable', () => {
+    // `oversize` is not the filesystem refusing the bytes — the file read fine
+    // and is simply past what a JS string can hold. Naming it apart is the
+    // whole point of the state; folding it into "unreadable" would send a
+    // reader to check permissions on a file that has none wrong.
+    const line = describeBlobRefusals(reportOf({ realizationsSkippedUnkeyed: 2, realizationsSkippedOversize: 1 }));
+
+    expect(line).toContain('could not key 3 realization(s) (2 unreadable, 1 too large to decode)');
+  });
+
+  it('reports an oversize realization alone, with no unreadable count beside it', () => {
+    const line = describeBlobRefusals(reportOf({ realizationsSkippedOversize: 1 }));
+
+    expect(line).toContain('could not key 1 realization(s) (1 too large to decode)');
+    expect(line).not.toContain('unreadable');
   });
 
   it('stays silent for the ordinary shapes of a tree, which are not refusals', () => {

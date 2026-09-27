@@ -12,6 +12,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { isVatError } from '../src/errors/vat-error.js';
 import type { decodeTextContent as DecodeTextContent } from '../src/text-content.js';
 
 /** A `TextDecoder` whose fatal mode throws `failure`, and whose lenient mode answers `lenient`. */
@@ -49,6 +50,23 @@ describe('decodeTextContent: only a fatal-decoder TypeError means "retry lenient
       encodingSource: 'assumed',
       replacementCharacters: 1,
     });
+  });
+
+  it('turns the engine refusing to build the string into TextTooLargeError, carrying the byte length', async () => {
+    // What Node's `TextDecoder` throws for input past V8's string-length limit —
+    // a plain Error whose `code` says so. The code is the contract, not the prose.
+    stubbedDecoder(() => Object.assign(new Error('injected'), { code: 'ERR_STRING_TOO_LONG' }), 'never');
+    const decodeTextContent = await freshDecodeTextContent();
+    const { TextTooLargeError } = await import('../src/text-content.js');
+
+    let thrown: unknown;
+    try {
+      decodeTextContent(new Uint8Array([0x61, 0x62]));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(isVatError(thrown, TextTooLargeError.code)).toBe(true);
+    expect((thrown as InstanceType<typeof TextTooLargeError>).byteLength).toBe(2);
   });
 
   it('lets anything else thrown from inside the decode stay loud', async () => {

@@ -377,6 +377,17 @@ export interface BlobPopulationResult {
    */
   readonly realizationsSkippedUnkeyed: number;
   /**
+   * `contentState: 'oversize'` rows — a file too large to decode into a JS
+   * string, refused by size and never read.
+   *
+   * Its own bucket rather than a share of {@link realizationsSkippedUnkeyed}: the
+   * file is readable, and reporting it as "unreadable" would send a reader to
+   * check permissions on a file whose only problem is its size. A refusal all
+   * the same — the file is in the corpus and has no blob — so
+   * `describeBlobRefusals` reports it beside the unreadable count.
+   */
+  readonly realizationsSkippedOversize: number;
+  /**
    * `contentState: 'deferred'` rows — bytes that exist and were deliberately
    * **not** read.
    *
@@ -622,6 +633,7 @@ function emptyCounts(): MutableCounts {
     realizationsSkippedAbsent: 0,
     realizationsSkippedDanglingSymlink: 0,
     realizationsSkippedUnkeyed: 0,
+    realizationsSkippedOversize: 0,
     realizationsContentDeferred: 0,
     headingsSkippedForMissingLine: 0,
     referencesSkippedForMissingLine: 0,
@@ -671,6 +683,10 @@ function countUnkeyedRealization(row: ResourceRealizationRow, counts: MutableCou
     }
     case 'unreadable': {
       counts.realizationsSkippedUnkeyed += 1;
+      break;
+    }
+    case 'oversize': {
+      counts.realizationsSkippedOversize += 1;
       break;
     }
     case 'deferred': {

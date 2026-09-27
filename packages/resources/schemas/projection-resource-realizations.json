@@ -66,6 +66,7 @@
             "keyed",
             "deferred",
             "unreadable",
+            "oversize",
             "none"
           ],
           "description": "Why contentKey is or is not set. Pinned to contentKey in BOTH directions by a superRefine (keyed ⟺ non-null); like symlinkResolves, that constraint is NOT encoded in the generated JSON Schema"

@@ -27,7 +27,7 @@ import { createTwoFilesWithSameContent } from './test-helpers.js';
  * spy on the default export object would never reach. Replacing the module is
  * the only interception that covers all of them.
  */
-const fsCalls = vi.hoisted(() => ({ readFile: [] as string[], stat: [] as string[] }));
+const fsCalls = vi.hoisted(() => ({ readFile: [] as string[], open: [] as string[], stat: [] as string[] }));
 
 /**
  * A `PathLike` argument as a path string.
@@ -49,6 +49,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     readFile: (...args: Parameters<typeof actual.readFile>) => {
       fsCalls.readFile.push(pathOf(args[0]));
       return actual.readFile(...args);
+    },
+    // A read can also go open → `FileHandle.readFile`, which no module-level
+    // `readFile` mock sees: `readDecodableBytes` (utils) reads that way so its
+    // size check is an `fstat` of the very handle it then reads. An open of the
+    // subject is therefore counted as a read of it.
+    open: (...args: Parameters<typeof actual.open>) => {
+      fsCalls.open.push(pathOf(args[0]));
+      return actual.open(...args);
     },
     stat: (...args: Parameters<typeof actual.stat>) => {
       fsCalls.stat.push(pathOf(args[0]));
@@ -119,6 +127,7 @@ describe('ResourceRegistry with checksum', () => {
     // routes, so an extra read is caught whichever one it comes through.
     const legacyReadFile = vi.spyOn(fs, 'readFile');
     fsCalls.readFile.length = 0;
+    fsCalls.open.length = 0;
     fsCalls.stat.length = 0;
 
     await registry.addResource(testFile);
@@ -130,7 +139,7 @@ describe('ResourceRegistry with checksum', () => {
     // reads of this document. See the note on `fsCalls`.
     const subject = safePath.resolve(testFile);
     const isSubject = (candidate: string): boolean => safePath.resolve(candidate) === subject;
-    const totalReads = [...fsCalls.readFile, ...legacyPaths].filter(isSubject).length;
+    const totalReads = [...fsCalls.readFile, ...fsCalls.open, ...legacyPaths].filter(isSubject).length;
     const totalStats = fsCalls.stat.filter(isSubject).length;
 
     // One assertion, not two, so a failure reports BOTH numbers — the read and

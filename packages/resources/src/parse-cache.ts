@@ -1118,7 +1118,8 @@ export function defaultParseCache(): ParseCache {
  * @param cache - Store to use; defaults to the process-wide instance
  * @returns The parse result, from an entry or from the parser
  * @throws Whatever `readFile` throws — a read failure is the caller's to handle,
- *   exactly as it was with `parseMarkdown`
+ *   exactly as it was with `parseMarkdown` — and `TextTooLargeError` for a file
+ *   too large to decode, as `readContentWithKey` does
  */
 export async function parseFileCached(
   filePath: string,

@@ -29,7 +29,7 @@
  * *different* identity.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isVatError, safePath, TextTooLargeError } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { KeyedContent, ParserKind } from '../content-key.js';
@@ -331,7 +331,7 @@ class ProjectionTable<T> {
  *
  * {@link ProjectionBuilder.ensureContentKey} is the one method that **rewrites**
  * a row rather than adding one, and it is confined to a single transition:
- * `deferred` → `keyed`/`unreadable` on `resource_realizations`. No other column
+ * `deferred` → `keyed`/`unreadable`/`oversize` on `resource_realizations`. No other column
  * moves, and no row is created — so the `(extentId, path)` invariant above is
  * untouched by it.
  */
@@ -569,6 +569,9 @@ export class ProjectionBuilder {
    *   to make the failure indistinguishable from the deliberate no-op — the
    *   state column said `unreadable`, but no row said why and no counter said
    *   anyone had tried.
+   * - A file too large to decode rewrites the rows to `oversize` with a null key
+   *   and no condition — the same state, and the same silence, as the eager
+   *   path in `keyOrState` — and still counts as an attempt.
    *
    * ## Idempotent, and observably so
    *
@@ -629,6 +632,13 @@ export class ProjectionBuilder {
         this.#contentCache,
       );
     } catch (error) {
+      // Too large to decode: the same `oversize` the eager path (`keyOrState`)
+      // records, and like it no condition row — the state column IS the fact,
+      // and nothing about the file needs explaining beyond its size.
+      if (isVatError(error, TextTooLargeError.code)) {
+        this.#rewriteRealizations(deferred, null, 'oversize');
+        return null;
+      }
       // A row per extent that deferred this path, not one row for the path: a
       // condition is keyed on `(extentId, path)` like the realization it is
       // about, and a single row would leave the other extents' realizations
