@@ -58,6 +58,7 @@ import {
   type LanceDBRow,
   type SerializedMetadata,
 } from './schema.js';
+import { listAllTableNames } from './table-names.js';
 
 /**
  * Configuration for LanceDBRAGProvider (generic over metadata type)
@@ -320,7 +321,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // the same buffer-lifecycle hazard this reconnect exists to avoid.
     this.documentsTable = null;
 
-    const tableNames = await connection.tableNames();
+    const tableNames = await listAllTableNames(connection);
     if (tableNames.includes(TABLE_NAME)) {
       this.table = await connection.openTable(TABLE_NAME);
     } else {
@@ -720,7 +721,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // Null means "no such table" and nothing else: a released connection is
     // reopened, not read as an absent table.
     const connection = await this.connected();
-    const tableNames = await connection.tableNames();
+    const tableNames = await listAllTableNames(connection);
     if (!tableNames.includes(DOCUMENTS_TABLE_NAME)) {
       return null;
     }

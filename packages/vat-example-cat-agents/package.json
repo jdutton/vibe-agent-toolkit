@@ -40,14 +40,14 @@
   },
   "devDependencies": {
     "@ai-sdk/openai": "^3.0.18",
-    "@anthropic-ai/sdk": "^0.36.0",
+    "@anthropic-ai/sdk": "^0.127.0",
     "@langchain/openai": "^1.5.11",
     "@vibe-agent-toolkit/resource-compiler": "workspace:*",
     "@vibe-agent-toolkit/runtime-claude-agent-sdk": "workspace:*",
     "@vibe-agent-toolkit/runtime-langchain": "workspace:*",
     "@vibe-agent-toolkit/runtime-openai": "workspace:*",
     "ai": "^6.0.48",
-    "openai": "^4.77.3"
+    "openai": "^6.49.0"
   },
   "vat": {
     "version": "1.0",

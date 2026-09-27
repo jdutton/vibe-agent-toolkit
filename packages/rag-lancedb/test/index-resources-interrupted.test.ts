@@ -197,7 +197,7 @@ vi.mock('@lancedb/lancedb', () => {
     // build writes, and compares the stored table against that answer.
     makeArrowTable: (rows: Record<string, unknown>[]) => ({ schema: { fields: fieldsOf(rows[0] ?? {}) } }),
     connect: async () => ({
-      tableNames: async () => [...store.tables.keys()],
+      listTables: async () => ({ tables: [...store.tables.keys()] }),
       createTable: async (
         name: string,
         rows: Record<string, unknown>[],

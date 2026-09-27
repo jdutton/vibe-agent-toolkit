@@ -87,6 +87,31 @@ function createDocumentRecordAtV0_1_42(
 }
 
 /**
+ * The rows as the v0.1.42-era LanceDB stored them: each column's type was
+ * inferred from the FIRST row, and a later row whose value had another type was
+ * stored as null. Current LanceDB refuses such a batch outright ("Previously
+ * inferred type Float64 but found Utf8"), so the fixture applies the old
+ * coercion itself rather than depending on the library still doing it.
+ *
+ * @param rows - Records in the old writer's shape
+ * @returns The same records, with every value that disagrees with the first row's type nulled
+ */
+function asInferredByTheOldWriter<T extends object>(rows: T[]): T[] {
+  const [first] = rows;
+  if (first === undefined) return rows;
+  const firstTypes = new Map(Object.entries(first).map(([key, value]) => [key, typeof value]));
+  return rows.map((row, index) => {
+    if (index === 0) return row;
+    const coerced = Object.entries(row).map(([key, value]) => {
+      const inferred = firstTypes.get(key);
+      const disagrees = value !== null && inferred !== undefined && inferred !== 'object' && typeof value !== inferred;
+      return [key, disagrees ? null : value];
+    });
+    return Object.fromEntries(coerced) as T;
+  });
+}
+
+/**
  * Rewrite the suite's documents table in the shape v0.1.42 wrote, keeping the
  * content, hash and chunk count this build recorded so change detection reads
  * the chunk rows and the document rows as one consistent index.
@@ -117,7 +142,7 @@ async function downgradeDocumentsTable(
     );
   });
   await connection.dropTable(DOCUMENTS_TABLE);
-  const rewritten = await connection.createTable(DOCUMENTS_TABLE, oldRows);
+  const rewritten = await connection.createTable(DOCUMENTS_TABLE, asInferredByTheOldWriter(oldRows));
   const columns = (await rewritten.schema()).fields.map((field) => field.name);
   connection.close();
   return columns;
