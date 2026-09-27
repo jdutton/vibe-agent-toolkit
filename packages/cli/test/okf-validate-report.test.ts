@@ -7,11 +7,14 @@
  * (`okf.bundle:`, `okf.Bundles:`) therefore read as a clean bill of health,
  * which is the *green-without-running* shape this repo keeps finding.
  *
- * The report envelope's REQUIRED `examined` is what closes it now: a run that
- * checked nothing says `examined: 0`, and the notice says why. Exit code stays
- * 0 on purpose: nothing failed.
+ * A run that examined nothing is refused: one non-overridable
+ * `RESOURCE_CHECK_BROKEN` at `error` (the run-integrity mechanism every other
+ * gate uses), so `status: findings` and exit 1, with the notice saying why.
+ * `examined: 0` beside `status: ok` read as a pass to every consumer that
+ * gates on the status or the exit code rather than on the denominator.
  */
 import type { OkfFinding } from '@vibe-agent-toolkit/resources';
+import { exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -77,13 +80,14 @@ function validateSubcommand() {
 }
 
 describe('summarizeOkfBundles', () => {
-  it('examined zero, not passed, when nothing was declared', () => {
+  it('refuses the run as RESOURCE_CHECK_BROKEN, exit 1, when nothing was declared', () => {
     const summary = summarize([]);
 
-    expect(summary.status).toBe('ok');
+    expect(summary.status).toBe('findings');
     expect(summary.examined).toBe(0);
-    expect(summary.findings).toEqual([]);
-    expect(summary.summary).toEqual({ errors: 0, warnings: 0, info: 0 });
+    expect(summary.findings.map((f) => [f.code, f.severity])).toEqual([['RESOURCE_CHECK_BROKEN', 'error']]);
+    expect(summary.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(exitCodeForReport(summary)).toBe(1);
     expect(summary.data.bundles).toEqual([]);
   });
 
@@ -176,7 +180,7 @@ describe('summarizeOkfBundles', () => {
     // checked result. Both examine zero; the rows and the notice tell them apart.
     const summary = summarize([emptyReport('empty-but-declared')]);
 
-    expect(summary.status).toBe('ok');
+    expect(summary.status).toBe('findings');
     expect(summary.examined).toBe(0);
     expect(summary.data.bundles).toHaveLength(1);
   });
@@ -187,15 +191,37 @@ describe('summarizeOkfBundles', () => {
     // that nothing was read. That is the same green-without-running shape the
     // `no-bundles` notice was added for, one level down: a `root:` typo landing
     // on a real-but-wrong directory, or a root one level too deep, reads as a
-    // clean bill of health. The status word and the exit code do not move —
-    // nothing failed — but the report now says so out loud.
+    // clean bill of health. A run whose EVERY bundle is empty examined nothing
+    // and is refused like the empty declaration; the notice names the bundles.
 
     it('says so in the notice, naming the bundle', () => {
       const summary = summarize([emptyReport('empty')]);
 
       expect(summary.data.notice).toBeDefined();
       expect(summary.data.notice).toContain("'empty'");
+      expect(summary.status).toBe('findings');
+      expect(summary.findings.map((f) => f.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
+      expect(summary.findings[0]?.message).toContain("'empty'");
+      expect(exitCodeForReport(summary)).toBe(1);
+    });
+
+    it('does not refuse a run where another bundle WAS read — the notice alone names the empty one', () => {
+      const summary = summarize([emptyReport('empty'), report('knowledge')]);
+
       expect(summary.status).toBe('ok');
+      expect(summary.data.notice).toContain("'empty'");
+      expect(exitCodeForReport(summary)).toBe(0);
+    });
+
+    it('adds no second report when the root was unreadable — that finding already fails the run', () => {
+      const unreadable = emptyReport('gone');
+      const summary = summarize([{
+        ...unreadable,
+        report: { ...unreadable.report, findings: [finding('error', '.')], hasErrors: true },
+      }]);
+
+      expect(summary.findings.map((f) => f.code)).toEqual(['OKF_FRONTMATTER_MISSING']);
+      expect(exitCodeForReport(summary)).toBe(1);
     });
 
     it('names every empty bundle, not just the first', () => {

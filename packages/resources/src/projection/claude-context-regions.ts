@@ -14,10 +14,12 @@
  *
  * ## The collapse, and why it is sound
  *
- * A directory's always-loaded set is every `claude-md`-tagged file in its
- * ancestors (inclusive), any unscoped root rule, and their `@` import closures. So **a directory
- * containing no `claude-md` file of its own pays exactly what its nearest
- * instructed ancestor pays**, falling back to the corpus root. Measured on VAT's
+ * A directory's always-loaded set is what the launch walk reads in its
+ * ancestors (inclusive): each one's `CLAUDE.md`, `.claude/CLAUDE.md`,
+ * `.claude/rules` and `CLAUDE.local.md`, and their `@` import closures
+ * (`claude-context-walk.ts`). So **a directory holding none of those pays
+ * exactly what its nearest instructed ancestor pays**, falling back to the
+ * corpus root. Measured on VAT's
  * own tree: 589 working locations, **9** distinct chains.
  *
  * The three things that look like they should break it — an unscoped root rule,
@@ -48,8 +50,9 @@
  * `collectRealization`'s column ever drift.
  */
 
-import { CLAUDE_MD_TAG } from './agentic-tags.js';
-import { ancestorDirectories } from './claude-context-ancestry.js';
+import { CLAUDE_MD_TAG, RULES_FILE_TAG } from './agentic-tags.js';
+import { ancestorDirectories, secondLocationHolder } from './claude-context-ancestry.js';
+import { rulesHolder } from './claude-context-walk.js';
 import type { Projection } from './projection.js';
 
 /** One region of the tree: every working location that inherits one instruction chain. */
@@ -69,7 +72,7 @@ export interface ContextRegion {
  *   location appears in exactly one region
  */
 export function contextRegions(projection: Projection): readonly ContextRegion[] {
-  const instructedDirs = instructedDirectories(projection, claudeMdIdentities(projection));
+  const instructedDirs = instructedDirectories(projection);
   const grouped = new Map<string, string[]>();
 
   // `workingLocations` is already code-point sorted, so each group is built in
@@ -94,18 +97,15 @@ export function contextRegions(projection: Projection): readonly ContextRegion[]
  * ONE vocabulary — the shipped `classifyPath`'s — and a second basename rule here
  * would be free to disagree with it the moment either changed.
  *
- * Exported because `account` takes the same set: a consumer that has already
- * built the regions must not build a second, differently-derived set to charge
- * their rows with.
- *
  * @param projection - The populated projection
- * @returns Every `resourceId` carrying {@link CLAUDE_MD_TAG}
+ * @param tag - The tag to collect
+ * @returns Every `resourceId` carrying it
  */
-export function claudeMdIdentities(projection: Projection): ReadonlySet<string> {
+function taggedIdentities(projection: Projection, tag: string): ReadonlySet<string> {
   return new Set(
     projection.resourceTags
-      .filter((tag) => tag.tag === CLAUDE_MD_TAG)
-      .map((tag) => tag.resourceId),
+      .filter((row) => row.tag === tag)
+      .map((row) => row.resourceId),
   );
 }
 
@@ -128,24 +128,30 @@ export function comparePaths(left: string, right: string): number {
 }
 
 /**
- * Every directory holding at least one `claude-md` file — the candidate
- * representatives.
+ * Every directory whose launch-walk step reads something — the candidate
+ * representatives: one holding a `claude-md` file, one whose `.claude/` holds a
+ * `CLAUDE.md`, and one whose `.claude/rules` holds a rules file (a scoped rule
+ * too: its unscoped imports load at launch).
  *
  * ⚠️ Derived from ALL realizations, deliberately WITHOUT the `gitignored` filter
  * {@link workingLocations} applies — see the module docstring for why that
  * asymmetry is the correct one.
  *
  * @param projection - The populated projection
- * @param claudeMdIds - The `claude-md`-tagged identities
  * @returns The directories, as `resource_realizations.dir` spells them
  */
-function instructedDirectories(
-  projection: Projection,
-  claudeMdIds: ReadonlySet<string>,
-): ReadonlySet<string> {
+function instructedDirectories(projection: Projection): ReadonlySet<string> {
+  const claudeMdIds = taggedIdentities(projection, CLAUDE_MD_TAG);
+  const ruleIds = taggedIdentities(projection, RULES_FILE_TAG);
   const dirs = new Set<string>();
   for (const row of projection.resourceRealizations) {
-    if (!row.isDirectory && claudeMdIds.has(row.resourceId)) dirs.add(row.dir);
+    if (row.isDirectory) continue;
+    const holders = [
+      claudeMdIds.has(row.resourceId) ? row.dir : null,
+      claudeMdIds.has(row.resourceId) ? secondLocationHolder(row.dir) : null,
+      ruleIds.has(row.resourceId) ? rulesHolder(row.path) : null,
+    ];
+    for (const holder of holders) if (holder !== null) dirs.add(holder);
   }
   return dirs;
 }

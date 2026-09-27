@@ -131,6 +131,61 @@
  * `resources`' `content-key.ts`.
  */
 
+import { VatError } from './errors/vat-error.js';
+
+/**
+ * Thrown when bytes are too many to become one JS string — the engine's refusal,
+ * made a coded error so a caller can treat it as a fact about a file.
+ *
+ * The limit is the engine's, not VAT's: V8 caps a string at
+ * `buffer.constants.MAX_STRING_LENGTH` (0x1fffffe8) UTF-16 code units, and
+ * decoding past it throws. One near-gigabyte CSV in a corpus used to abort a
+ * whole projection population on that throw.
+ *
+ * Two places raise it, and they agree by construction rather than by a shared
+ * literal. The `./fs` read path (`readDecodableBytes` in `text-file.ts`) refuses
+ * by `stat` BEFORE reading, against `MAX_DECODABLE_BYTES`, so half a gigabyte is
+ * never pulled into memory only to be refused. {@link decodeTextContent} — pure,
+ * so it cannot ask `node:buffer` for the limit (`subpath-purity.test.ts`) —
+ * translates the engine's own refusal for bytes that arrive by any other route.
+ * Dispatch with `isVatError(error, TextTooLargeError.code)`, never on the message.
+ */
+export class TextTooLargeError extends VatError {
+  /** The code every instance carries, for `isVatError(error, TextTooLargeError.code)`. */
+  static readonly code = 'TEXT_TOO_LARGE';
+
+  /**
+   * @param byteLength - How many bytes the refused content holds
+   * @param options - `cause`, when an engine refusal is being translated
+   */
+  constructor(
+    readonly byteLength: number,
+    options?: ErrorOptions,
+  ) {
+    super(
+      TextTooLargeError.code,
+      `${byteLength} bytes is too large to decode into a JavaScript string`,
+      options,
+    );
+  }
+}
+
+/**
+ * The code Node's `TextDecoder` attaches when the decoded string would pass the
+ * engine's string-length limit. Matched as a `code`, never as its message.
+ */
+const ENGINE_STRING_TOO_LONG = 'ERR_STRING_TOO_LONG';
+
+/**
+ * Whether `error` is the engine refusing to build a string that long.
+ *
+ * @param error - What a decode threw
+ * @returns True for Node's `ERR_STRING_TOO_LONG`
+ */
+function isEngineStringTooLong(error: unknown): boolean {
+  return error instanceof Error && (error as { code?: unknown }).code === ENGINE_STRING_TOO_LONG;
+}
+
 /** An encoding this module can decode. */
 export type TextEncoding = 'utf-8' | 'utf-16le' | 'utf-16be' | 'utf-32le' | 'utf-32be';
 
@@ -365,6 +420,7 @@ function countReplacementCharacters(text: string): number {
  * @param bytes - The exact bytes read from disk
  * @returns The decoded text, the encoding used, whether that was a fact, and how
  *   many characters the decode had to replace
+ * @throws {@link TextTooLargeError} when the engine refuses a string that long
  *
  * @example
  * ```typescript
@@ -375,6 +431,23 @@ function countReplacementCharacters(text: string): number {
  * ```
  */
 export function decodeTextContent(bytes: Uint8Array): DecodedText {
+  try {
+    return decodeWithinEngineLimits(bytes);
+  } catch (error) {
+    if (isEngineStringTooLong(error)) throw new TextTooLargeError(bytes.byteLength, { cause: error });
+    throw error;
+  }
+}
+
+/**
+ * {@link decodeTextContent} without the translation of the engine's
+ * string-length refusal — split out so the translation wraps BOTH decodes, the
+ * fatal first pass and the lenient retry, either of which can reach the limit.
+ *
+ * @param bytes - The exact bytes read from disk
+ * @returns The decoded text and its provenance
+ */
+function decodeWithinEngineLimits(bytes: Uint8Array): DecodedText {
   const bom = bomAt(bytes);
   const encoding = bom?.encoding ?? 'utf-8';
   const body = bom === null ? bytes : bytes.subarray(bom.length);

@@ -229,11 +229,11 @@ export function keyedContentKeys(extent: ExtentScopedRows): readonly string[] {
 }
 
 /**
- * Assemble the thirteen tables into a projection.
+ * Assemble every table of {@link PROJECTION_TABLES} into a projection.
  *
  * The two halves are disjoint and exhaustive over {@link Projection} by
  * construction — that is what {@link ProjectionTableScope} partitions — so this
- * is a spread rather than a merge, and a fourteenth table joins whichever half
+ * is a spread rather than a merge, and a new table joins whichever half
  * its scope declares without touching this line.
  *
  * Frozen for the same reason {@link ProjectionBuilder.build} freezes: a
@@ -254,9 +254,9 @@ export function assembleProjection(extent: ExtentScopedRows, blobs: BlobScopedRo
  * derive blobs hydrates with.
  *
  * Built from the registry rather than written out, so it cannot fall behind a
- * fourteenth blob-scoped table.
+ * further blob-scoped table.
  *
- * @returns Four empty tables
+ * @returns Every blob-scoped table, empty
  */
 export function emptyBlobRows(): BlobScopedRows {
   const empty: RowBundle = {};

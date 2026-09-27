@@ -106,7 +106,10 @@
               "type": "object",
               "properties": {
                 "outputPath": {
-                  "type": "string"
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 },
                 "entryCount": {
                   "type": "integer",

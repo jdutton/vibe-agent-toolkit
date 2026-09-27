@@ -61,10 +61,24 @@ describe('claudeAncestry', () => {
       .toEqual(['CLAUDE.md', ROOT_DOT_CLAUDE_CLAUDE_MD, 'CLAUDE.local.md']);
   });
 
-  it('does NOT admit a nested .claude/CLAUDE.md as an ancestor of its sibling tree', () => {
-    const { realizations, tags } = fixture([`${CLI_DIR}/.claude/CLAUDE.md`]);
+  it('admits .claude/CLAUDE.md in EVERY directory on the walk, not only the root', () => {
+    // The launch walk (`$yn`, docs/external/claude-code-memory-loader.md) reads
+    // `CLAUDE.md` then `.claude/CLAUDE.md` in every directory from the root down.
+    const { realizations, tags } = fixture([
+      `${CLI_DIR}/CLAUDE.local.md`, `${CLI_DIR}/.claude/CLAUDE.md`, CLI_CLAUDE_MD, 'packages/.claude/CLAUDE.md',
+    ]);
 
-    // dir is `packages/cli/.claude`, which is not an ancestor of `packages/cli`.
+    expect(claudeAncestry(realizations, tags, CLI_DIR).map((e) => [e.path, e.holder, e.local])).toEqual([
+      ['packages/.claude/CLAUDE.md', 'packages', false],
+      [CLI_CLAUDE_MD, CLI_DIR, false],
+      [`${CLI_DIR}/.claude/CLAUDE.md`, CLI_DIR, false],
+      [`${CLI_DIR}/CLAUDE.local.md`, CLI_DIR, true],
+    ]);
+  });
+
+  it('never reads a .claude/CLAUDE.local.md for the directory above it', () => {
+    const { realizations, tags } = fixture([`${CLI_DIR}/.claude/CLAUDE.local.md`]);
+
     expect(claudeAncestry(realizations, tags, CLI_DIR)).toEqual([]);
   });
 

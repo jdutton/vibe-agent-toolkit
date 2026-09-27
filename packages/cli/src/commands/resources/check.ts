@@ -43,7 +43,8 @@ import {
 import {
   buildReport,
   CUSTOM_CHECK_CODE_PREFIX,
-  ExitCode,
+  exitCodeForReport,
+  exitCodeOfChild,
   isCustomCheckCode,
   reportSchema,
   toFindings,
@@ -156,9 +157,27 @@ interface CheckOutcome extends ProjectionProvenance, PopulationExtent {
   costs: readonly CheckCost[];
 }
 
-export interface CheckPayloadInput extends CheckOutcome {
+/** What a completed population reported: where it came from, what it cost, what it covered. */
+export type PopulatedRun = ProjectionProvenance & PopulationExtent;
+
+export interface CheckPayloadInput {
   root: string;
   durationMs: number;
+  issues: readonly ValidationIssue[];
+  /** One record per check that EXECUTED — see {@link CheckOutcome.costs}. */
+  costs: readonly CheckCost[];
+  /**
+   * The population, or `null` when the run was interrupted before it completed.
+   *
+   * 🔑 Required, and ONE field rather than five nullable ones. A run either has
+   * a projection or it does not, so the population's origin, costs, lenses and
+   * extent are null together or present together — five independently nullable
+   * fields would make half a population representable. `null` is what an
+   * interrupted run publishes when its child never wrote the population line:
+   * every value here would otherwise have to be invented, and
+   * `membersEnumerated: 0` or `lensesEvaluated: []` already MEAN something else.
+   */
+  populated: PopulatedRun | null;
 }
 
 /** What one rule cost, as the document publishes it. */
@@ -217,20 +236,28 @@ const StatedLimitSchema = z.object({
  */
 export const CheckDataSchema = z.object({
   root: z.string(),
-  /** Whether the projection was derived this run or read from the store. */
-  population: z.enum(['derived', 'store']),
-  /** What the population cost — charged to no check, see `CheckCost`. */
-  populationSecs: z.number().nonnegative(),
-  /** What evaluating the lenses cost, paid before the first statement ran. */
-  lensSecs: z.number().nonnegative(),
+  /**
+   * Whether the projection was derived this run or read from the store.
+   *
+   * 🔑 `null` — together with `populationSecs`, `lensSecs` and
+   * `lensesEvaluated` — exactly when the run was interrupted before its
+   * population completed. There was no projection, so there is no origin, cost
+   * or lens set to report, and a `RESOURCE_CHECK_BROKEN` finding says why.
+   */
+  population: z.enum(['derived', 'store']).nullable(),
+  /** What the population cost — charged to no check, see `CheckCost`. Null as `population` is. */
+  populationSecs: z.number().nonnegative().nullable(),
+  /** What evaluating the lenses cost, paid before the first statement ran. Null as `population` is. */
+  lensSecs: z.number().nonnegative().nullable(),
   /**
    * Which lenses that covers — the derived relations this run's checks could
    * actually read. 🔑 An empty list says "no check asked for a derived relation"
    * rather than "a lens stopped running"; without it `lensSecs: 0` is the same
    * document either way, and a gate whose rules silently read empty relations is
-   * a gate that cannot fail.
+   * a gate that cannot fail. Null as `population` is — `[]` would claim "no
+   * check asked", about a run that never got far enough to ask.
    */
-  lensesEvaluated: z.array(z.string()),
+  lensesEvaluated: z.array(z.string()).nullable(),
   /**
    * The prose frame {@link CheckDataSchema.limits} is read under. Present
    * exactly when a lens with stated bounds was evaluated.
@@ -340,6 +367,13 @@ function noCheckRanFinding(
  * passes through, so deriving the refusal in it is what makes "checked nothing,
  * status clean" unrepresentable rather than merely unwritten.
  *
+ * 🔑 **A run with no population is `status: error`, and that is decided HERE.**
+ * Nothing was examined, so it is not a gate that failed (exit 1) but a command
+ * that could not do its job (exit 2) — the exit code follows from the document
+ * through `exitCodeForReport`, so no caller can publish one and exit the other.
+ * The document is still published, with the population fields `null`, and the
+ * reason moves from `findings` to `error` as the envelope's error branch requires.
+ *
  * 🪤 The findings are NOT run through `relativizePathEntries`. Every other
  * payload builder re-bases here because its producer keeps absolute paths
  * internally; these arrive project-relative instead, and re-basing an
@@ -356,35 +390,18 @@ function noCheckRanFinding(
  */
 export function buildCheckOutputData(input: CheckPayloadInput): CheckReport {
   const issues = [...noCheckRanFinding(input.costs, input.issues), ...input.issues];
-  return buildReport<CheckData>({
+  const { populated } = input;
+  const report = buildReport<CheckData>({
     // The OTHER denominator, and the one whose absence shipped a green gate over
     // an empty repository. `checksRun` counts rules; this counts what they ran
-    // against.
-    examined: input.membersEnumerated,
+    // against. 🔑 0 for a run with no population is not a placeholder: nothing
+    // WAS examined, and the interrupted run's own finding says why.
+    examined: populated === null ? 0 : populated.membersEnumerated,
     findings: toFindings(issues),
     durationMs: input.durationMs,
     data: {
       root: input.root,
-      population: input.population,
-      // Beside the origin, because a `population: store` a reader cannot price is
-      // a label taken on faith. Charged to no check — see {@link CheckCost}.
-      populationSecs: formatDurationSecs(input.populationMs),
-      // Published here too, and not only by `query`, because this verb pays it
-      // identically — the lens is evaluated before the first statement runs. A
-      // document that priced the population but not the lens would attribute the
-      // lens's cost to whichever rule the reader happened to be looking at, which
-      // is the same defect `populationSecs` exists to prevent.
-      lensSecs: formatDurationSecs(input.lensMs),
-      // What that number covers — see `CheckDataSchema.lensesEvaluated`. Copied
-      // into a plain array so the published document owns no reference into the
-      // run's own state.
-      lensesEvaluated: [...input.lensesEvaluated],
-      // The bounds of the rows those lenses produced, stated ONCE and only when
-      // a bounded lens ran. This is the verb an adopter makes GATE, so it is the
-      // one that most owes them — `utils/relation-limits.ts` carries why.
-      // Copied out of the readonly registry lists: the published document owns
-      // no reference into module state a later render could mutate.
-      ...structuredBounds(input.lensesEvaluated),
+      ...populationData(populated),
       // The denominator of rules. Derived from `checks`, never carried beside it.
       checksRun: input.costs.length,
       // What each rule cost, directly under the denominator it is a breakdown
@@ -410,6 +427,65 @@ export function buildCheckOutputData(input: CheckPayloadInput): CheckReport {
       })),
     },
   });
+  return populated === null ? couldNotRun(report) : report;
+}
+
+/**
+ * The error branch of the envelope, for a run that never had a population.
+ *
+ * `status: error`, nothing in `findings`, zero `summary`, and the reason in
+ * `error` — the shape `buildErrorReport` gives every other run that could not
+ * do its job — but `data` is KEPT: it names the root and says, with `null`,
+ * that there was no projection, which is more than `data: null` could.
+ *
+ * @param report - The document as the findings would have built it
+ * @returns The same document on the error branch
+ */
+function couldNotRun(report: CheckReport): CheckReport {
+  return {
+    ...report,
+    status: 'error',
+    error: report.findings.map((finding) => finding.message).join('\n'),
+    findings: [],
+    summary: { errors: 0, warnings: 0, info: 0 },
+  };
+}
+
+/**
+ * The document's population fields — all present, or all `null`.
+ *
+ * @param populated - What the population reported, or null when it never completed
+ * @returns The fields to spread into `data`
+ */
+function populationData(populated: PopulatedRun | null): Pick<
+  CheckData,
+  'population' | 'populationSecs' | 'lensSecs' | 'lensesEvaluated' | 'boundsStatement' | 'limits'
+> {
+  if (populated === null) {
+    return { population: null, populationSecs: null, lensSecs: null, lensesEvaluated: null };
+  }
+  return {
+    population: populated.population,
+    // Beside the origin, because a `population: store` a reader cannot price is
+    // a label taken on faith. Charged to no check — see {@link CheckCost}.
+    populationSecs: formatDurationSecs(populated.populationMs),
+    // Published here too, and not only by `query`, because this verb pays it
+    // identically — the lens is evaluated before the first statement runs. A
+    // document that priced the population but not the lens would attribute the
+    // lens's cost to whichever rule the reader happened to be looking at, which
+    // is the same defect `populationSecs` exists to prevent.
+    lensSecs: formatDurationSecs(populated.lensMs),
+    // What that number covers — see `CheckDataSchema.lensesEvaluated`. Copied
+    // into a plain array so the published document owns no reference into the
+    // run's own state.
+    lensesEvaluated: [...populated.lensesEvaluated],
+    // The bounds of the rows those lenses produced, stated ONCE and only when
+    // a bounded lens ran. This is the verb an adopter makes GATE, so it is the
+    // one that most owes them — `utils/relation-limits.ts` carries why.
+    // Copied out of the readonly registry lists: the published document owns
+    // no reference into module state a later render could mutate.
+    ...structuredBounds(populated.lensesEvaluated),
+  };
 }
 
 /**
@@ -844,6 +920,8 @@ export type CheckRunEnding =
  * @returns A clause naming the unit
  */
 function inFlightPhrase(inFlight: UnitInFlight): string {
+  if (inFlight.kind === 'startup') return 'before the child process had finished starting';
+  if (inFlight.kind === 'population') return 'before its population completed';
   if (inFlight.kind === 'check') return `while the check "${inFlight.name}" was running`;
   if (inFlight.kind === 'reporting') {
     return 'after the last check had finished, while its document was being assembled';
@@ -1081,6 +1159,9 @@ const WATCHDOG_UNINVOLVED
 /**
  * The sentence that says what this document does NOT contain.
  *
+ * @param checksCompleted - How many checks filed a cost before the run stopped
+ * @returns The sentence
+ *
  * 🚨 Load-bearing, and shared by both endings. The progress log records COSTS,
  * not findings: a check that completed contributes its `rows` (how many rows its
  * statement selected) but not the violations those rows would have become,
@@ -1088,10 +1169,18 @@ const WATCHDOG_UNINVOLVED
  * issue list as the complete account would conclude the finished rules found
  * nothing.
  */
-const INCOMPLETE_NOTICE
-  = ' ⚠️ The checks listed under `checks` DID complete and `rows` is what each'
-  + ' statement selected, but their individual violations are NOT in `issues`: the'
-  + ' progress log records costs, not findings. Read that list as incomplete.';
+function incompleteNotice(checksCompleted: number): string {
+  // 🚨 Only when something completed. It used to be appended unconditionally,
+  // so a run killed before its first statement told the operator that the
+  // checks under an EMPTY `checks` list "DID complete".
+  if (checksCompleted === 0) {
+    return ' No check completed before the run stopped, so `checks` is empty and no result'
+      + ' of this run is missing from `issues` — there were none.';
+  }
+  return ' ⚠️ The checks listed under `checks` DID complete and `rows` is what each'
+    + ' statement selected, but their individual violations are NOT in `issues`: the'
+    + ' progress log records costs, not findings. Read that list as incomplete.';
+}
 
 /**
  * The finding for a run that was interrupted, however it was interrupted.
@@ -1109,9 +1198,14 @@ const INCOMPLETE_NOTICE
  *
  * @param inFlight - What the run was doing when the log stopped growing
  * @param ending - Which way the run ended, and what the operator can do
+ * @param checksCompleted - How many checks filed a cost before it stopped
  * @returns The run-integrity finding
  */
-function interruptedRunFinding(inFlight: UnitInFlight, ending: CheckRunEnding): ValidationIssue {
+function interruptedRunFinding(
+  inFlight: UnitInFlight,
+  ending: CheckRunEnding,
+  checksCompleted: number,
+): ValidationIssue {
   const where = inFlightPhrase(inFlight);
   const message = ending.kind === 'budget'
     ? budgetKillMessage(inFlight, ending.budgetSecs, where)
@@ -1119,7 +1213,7 @@ function interruptedRunFinding(inFlight: UnitInFlight, ending: CheckRunEnding): 
       + ' after it never executed and this document is not a verdict.'
       + deathRemedy(ending.death);
 
-  return runIntegrityFinding(message + INCOMPLETE_NOTICE);
+  return runIntegrityFinding(message + incompleteNotice(checksCompleted));
 }
 
 /**
@@ -1145,6 +1239,12 @@ function interruptedRunFinding(inFlight: UnitInFlight, ending: CheckRunEnding): 
  * @returns The message body
  */
 function budgetKillMessage(inFlight: UnitInFlight, budgetSecs: number, where: string): string {
+  if (inFlight.kind === 'startup' || inFlight.kind === 'population') {
+    return `This run made no progress for ${budgetSecs}s and was killed ${where}, so no`
+      + ' check ran and this document is not a verdict. There is no projection, so the'
+      + ' population fields in `data` are null and `examined` is 0.'
+      + (inFlight.kind === 'startup' ? STARTUP_REMEDY : POPULATION_REMEDY);
+  }
   if (inFlight.kind === 'reporting') {
     return `This run made no progress for ${budgetSecs}s and was killed ${where}.`
       + ' Every declared check had already finished and filed its cost, so no statement was'
@@ -1164,30 +1264,31 @@ function budgetKillMessage(inFlight: UnitInFlight, budgetSecs: number, where: st
 }
 
 /**
- * The refusal when there is no population line to build a document from.
+ * What to do about a kill that landed before the child had BOOTED.
  *
- * Separate wording per ending for the same reason the finding is: telling an
- * operator whose child was OOM-killed to raise `--budget` sends them to change
- * the one thing that had nothing to do with it.
- *
- * @param ending - Which way the run ended
- * @returns The operator-error message
+ * Nothing had touched the tree yet — Node and the CLI were still loading — so
+ * sizing the budget against the population would be advice about a unit that
+ * never began. A boot that outlasts the budget is a saturated machine or a bound
+ * too small to be one.
  */
-function noPopulationMessage(ending: CheckRunEnding): string {
-  const tail = ' There is no projection to report on and no honest document to publish.';
-  if (ending.kind === 'abnormal') {
-    return `This run DIED before its population completed: ${deathPhrase(ending.death)}.`
-      + tail + deathRemedy(ending.death);
-  }
-  return `The run made no progress for ${ending.budgetSecs}s and was killed before its`
-    + ' population completed.' + tail
-    + ' Population is legitimately slow on a large tree, and it reports progress only when it'
-    + ' FINISHES, so the budget is a total bound for that one unit — raise it with'
-    + ' `--budget <seconds>` before assuming the crawl is stuck.'
-    + ' For scale, two MEASURED trees, neither of them yours: VAT\'s own repository is ~1.2s'
-    + ' warm and 33-35s with a cold parse cache; a 10,000-file adopter tree is ~5s warm and'
-    + ' 16.5s cold. Your tree is a third number.';
-}
+const STARTUP_REMEDY
+  = ' Node and vat were still loading, so neither your tree nor your SQL is implicated: a'
+  + ' boot that outlasts the bound means a heavily loaded machine or a bound far smaller than'
+  + ' any run can meet. Raise it with `--budget <seconds>`.';
+
+/**
+ * What to do about a kill that landed during the population.
+ *
+ * 🔑 The measured numbers are labelled as someone else's trees. An operator
+ * given one number reads it as a promise about theirs.
+ */
+const POPULATION_REMEDY
+  = ' Population is legitimately slow on a large tree, and it reports progress only when it'
+  + ' FINISHES, so the budget is a total bound for that one unit — raise it with'
+  + ' `--budget <seconds>` before assuming the crawl is stuck.'
+  + ' For scale, two MEASURED trees, neither of them yours: VAT\'s own repository is ~1.2s'
+  + ' warm and 33-35s with a cold parse cache; a 10,000-file adopter tree is ~5s warm and'
+  + ' 16.5s cold. Your tree is a third number.';
 
 /**
  * Rebuild the document from what an INTERRUPTED run left on disk.
@@ -1202,12 +1303,15 @@ function noPopulationMessage(ending: CheckRunEnding): string {
  * keep in step with every future field — and the failure mode is silent, because
  * nobody reads an interrupted run's document until the day they need it.
  *
- * 🚨 **A run interrupted during POPULATION gets no document at all.** There is no
- * projection, so `population`, `populationSecs` and `membersEnumerated` have no
- * honest value — and inventing `membersEnumerated: 0` would be worse than a
- * blank, because that value already MEANS "this gate ran over an empty corpus",
- * which is a different and wrong claim. The throw becomes an operator error
- * (exit 2) through the same `handleReportCommandError` path everything else here uses.
+ * 🚨 **The exit code follows the CAUSE, and the cause is what was in flight.**
+ * A run killed or dead while a check's statement ran examined the tree, and
+ * that check is broken: `status: findings`, `RESOURCE_CHECK_BROKEN`, exit 1. A
+ * run stopped during STARTUP or POPULATION examined nothing: it is a command
+ * that could not do its job — `status: error`, exit 2 — decided by
+ * {@link buildCheckOutputData} from `populated: null`, never by the caller. It
+ * used to THROW there, which lost the document; now the document is published,
+ * with the population's fields `null` rather than invented, and the reason in
+ * `error`.
  *
  * @param options - The wreckage
  * @param options.entries - What `parseProgressLog` recovered
@@ -1215,7 +1319,6 @@ function noPopulationMessage(ending: CheckRunEnding): string {
  * @param options.ending - Which way the run was interrupted
  * @param options.durationMs - Wall time from spawn to ending
  * @returns The input to {@link buildCheckOutputData}
- * @throws When the child never reported a completed population
  */
 export function buildInterruptedCheckInput(options: {
   entries: readonly ProgressEntry[];
@@ -1225,29 +1328,33 @@ export function buildInterruptedCheckInput(options: {
 }): CheckPayloadInput {
   const { entries, root, ending, durationMs } = options;
   const population = entries.find((entry) => entry.kind === 'population');
-  if (population === undefined) throw new Error(noPopulationMessage(ending));
+  // 🪤 Rebuilt field by field rather than passed through. The log's check
+  // entry carries a `kind` discriminator that `CheckCost` does not, and the
+  // conditional spreads keep `rows`/`broken` ABSENT rather than `undefined` —
+  // which is what makes `rows: 0` on a statement that never returned
+  // impossible, exactly as it is on the completed path.
+  const costs = entries.filter((entry) => entry.kind === 'check').map((entry) => ({
+    name: entry.name,
+    durationMs: entry.durationMs,
+    ...(entry.rows === undefined ? {} : { rows: entry.rows }),
+    ...(entry.broken === undefined ? {} : { broken: entry.broken }),
+    ...(entry.builtin === undefined ? {} : { builtin: entry.builtin }),
+  }));
 
   return {
     root,
     durationMs,
-    population: population.population,
-    populationMs: population.populationMs,
-    lensMs: population.lensMs,
-    lensesEvaluated: population.lensesEvaluated,
-    membersEnumerated: population.membersEnumerated,
-    issues: [interruptedRunFinding(unitInFlight(entries), ending)],
-    // 🪤 Rebuilt field by field rather than passed through. The log's check
-    // entry carries a `kind` discriminator that `CheckCost` does not, and the
-    // conditional spreads keep `rows`/`broken` ABSENT rather than `undefined` —
-    // which is what makes `rows: 0` on a statement that never returned
-    // impossible, exactly as it is on the completed path.
-    costs: entries.filter((entry) => entry.kind === 'check').map((entry) => ({
-      name: entry.name,
-      durationMs: entry.durationMs,
-      ...(entry.rows === undefined ? {} : { rows: entry.rows }),
-      ...(entry.broken === undefined ? {} : { broken: entry.broken }),
-      ...(entry.builtin === undefined ? {} : { builtin: entry.builtin }),
-    })),
+    populated: population === undefined
+      ? null
+      : {
+        population: population.population,
+        populationMs: population.populationMs,
+        lensMs: population.lensMs,
+        lensesEvaluated: population.lensesEvaluated,
+        membersEnumerated: population.membersEnumerated,
+      },
+    issues: [interruptedRunFinding(unitInFlight(entries), ending, costs.length)],
+    costs,
   };
 }
 
@@ -1415,7 +1522,6 @@ type SupervisedEnding =
  * @param options.options - What the operator passed
  * @param options.budgetSecs - The bound, in seconds
  * @returns What to publish, and with what exit code
- * @throws When the child was killed before its population completed
  */
 async function superviseCheckRun(options: {
   pathArg: string | undefined;
@@ -1523,16 +1629,26 @@ export async function checkCommand(
         // reader would attribute to whichever rule they were looking at — the
         // exact defect `CheckCost` documents.
         writeStdoutSync(ending.forward);
-        process.exit(ending.code);
+        // The child derived its code from its own document; a code off the
+        // contract is not a verdict it published and is not forwarded.
+        process.exit(exitCodeOfChild(ending.code));
       }
       emitCheckDocument(ending.payload, options.format);
-      // ⛔ Never OK. A run that did not finish — killed by the watchdog OR dead of
-      // its own memory — must not look like a pass. FINDINGS, because the
-      // document it just published says `status: findings` with the killed
-      // check named as one: the checks that completed are kept, and the exit
-      // code follows the document, as everywhere else.
-      process.exit(ExitCode.FINDINGS);
+      // ⛔ Never OK, and never decided here. A run that did not finish carries a
+      // RUN_INTEGRITY finding (a check was in flight: exit 1) or is on the error
+      // branch (nothing was examined: exit 2) — the document says which, and
+      // the code is derived from it, as everywhere else.
+      process.exit(exitCodeForReport(ending.payload));
     }
+
+    // 🔑 FIRST, before anything that touches the tree: the child has booted.
+    // The watchdog's clock started at the spawn, so without this line Node's
+    // startup and the CLI's import were charged to the population — the one
+    // unit the budget is already a total bound for. See `StartedEntrySchema`.
+    const onProgress = options.costLog === undefined
+      ? undefined
+      : createProgressWriter(options.costLog);
+    onProgress?.({ kind: 'started' });
 
     const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
     const config = loadConfigCached(projectRoot);
@@ -1567,18 +1683,19 @@ export async function checkCommand(
       only: options.check,
       logger,
       validation: config?.resources?.validation,
-      onProgress: options.costLog === undefined
-        ? undefined
-        : createProgressWriter(options.costLog),
+      onProgress,
     });
+    const { issues, costs, ...populated } = outcome;
     const payload = buildCheckOutputData({
-      ...outcome,
+      issues,
+      costs,
+      populated,
       root: projectRoot,
       durationMs: Date.now() - startTime,
     });
     emitCheckDocument(payload, options.format);
 
-    process.exit(payload.summary.errors > 0 ? ExitCode.FINDINGS : ExitCode.OK);
+    process.exit(exitCodeForReport(payload));
   } catch (error) {
     handleReportCommandError(error, logger, startTime, 'Check', options.format);
   }

@@ -133,6 +133,7 @@ import {
   createDerivedTableSql,
   createTableSql,
   deleteBlobFactsSql,
+  deleteBlobPartitionSql,
   deleteExtentContextSql,
   deleteExtentSql,
   deleteRowByKeySql,
@@ -1360,6 +1361,12 @@ class SqliteProjectionStore implements SqlQueryableStore {
    * The range this write clears is the union of the content keys **all four**
    * tables name, not the keys `blobs` alone names — see
    * {@link uniqueContentKeys} for why the difference is the whole feature.
+   *
+   * ⛔ Except in a PARTITIONED table (`partitionColumn` — the harness tables),
+   * where it clears only the `(blob, partition)` pairs this write carries rows
+   * for: those rows are derived lazily, for what one tree reaches, so a run
+   * over another root that holds the same bytes without reaching them must not
+   * delete the facts this one derived.
    */
   async writeBlobFacts(rows: BlobScopedRows): Promise<void> {
     this.#assertOpen();
@@ -1369,7 +1376,7 @@ class SqliteProjectionStore implements SqlQueryableStore {
 
     let evicted = 0;
     this.#transaction(() => {
-      this.#forgetBlobKeys(contentKeys);
+      this.#clearSpaceForBlobs(bundle, contentKeys);
       this.#insertBundle(bundle, 'blob', []);
       // AFTER the rows, and BEFORE the eviction, for the reason `writeExtent`
       // records its manifest row before evicting: a key not yet in the ordering
@@ -1382,6 +1389,25 @@ class SqliteProjectionStore implements SqlQueryableStore {
     // Outside the transaction, because SQLite refuses `incremental_vacuum`
     // inside one — the same arrangement, and the same reason, as `writeExtent`.
     if (evicted > 0) this.#database.exec('PRAGMA incremental_vacuum');
+  }
+
+  /**
+   * Clear what one blob write replaces: every key it names in an unpartitioned
+   * table, and only the pairs it carries in a partitioned one.
+   *
+   * @param bundle - The write's rows
+   * @param contentKeys - {@link uniqueContentKeys} of the same rows
+   */
+  #clearSpaceForBlobs(bundle: Record<string, readonly Record<string, unknown>[]>, contentKeys: readonly string[]): void {
+    const pairs = partitionPairs(bundle);
+    for (const { spec } of this.#plansOfScope('blob')) {
+      if (spec.partitionColumn === undefined) {
+        for (const batch of batched(contentKeys)) this.#blobStatement('delete', spec, batch.length).run(...batch);
+        continue;
+      }
+      const statement = this.#partitionStatement(spec);
+      for (const [blob, partition] of pairs) statement.run(blob, partition);
+    }
   }
 
   /**
@@ -1856,6 +1882,21 @@ class SqliteProjectionStore implements SqlQueryableStore {
   }
 
   /**
+   * The cached pair-scoped `DELETE` for one partitioned blob table.
+   *
+   * @param spec - A blob-scoped table declaring `partitionColumn`
+   * @returns The prepared statement
+   */
+  #partitionStatement(spec: StoredTableSpec): StatementSync {
+    const cacheKey = `delete-partition:${spec.name}`;
+    const cached = this.#blobStatements.get(cacheKey);
+    if (cached !== undefined) return cached;
+    const statement = this.#database.prepare(deleteBlobPartitionSql(spec));
+    this.#blobStatements.set(cacheKey, statement);
+    return statement;
+  }
+
+  /**
    * @throws Error When the store has been closed
    */
   #assertOpen(): void {
@@ -1961,7 +2002,7 @@ function decodeRows(plan: TablePlan, raw: readonly unknown[]): readonly Record<s
  * anywhere under a root made every `writeBlobFacts` throw. Measured on a real
  * adopter plugin inside a large monorepo: 31 declined blobs against 8,076
  * parsed ones, enough to leave the store at its empty schema with **zero rows
- * in all thirteen tables** where it now holds 193,021 — while the command
+ * in every table** where it now holds 193,021 — while the command
  * exited 0 throughout and a warm run stayed a full cold re-derivation.
  *
  * The concern that guard was defending is real and is what the union answers:
@@ -1983,6 +2024,28 @@ function uniqueContentKeys(bundle: Record<string, readonly Record<string, unknow
     for (const row of bundle[spec.key] ?? []) keys.add(String(row[column]));
   }
   return [...keys];
+}
+
+/**
+ * Every `(blob, partition)` pair a write's partitioned tables carry rows for —
+ * the union across them, so a pair whose facts row arrived without import rows
+ * still clears the stale import rows of that pair.
+ *
+ * @param bundle - Table key to rows, as the caller handed them over
+ * @returns The pairs, deduplicated
+ */
+function partitionPairs(bundle: Record<string, readonly Record<string, unknown>[]>): readonly (readonly [string, string])[] {
+  const pairs = new Map<string, readonly [string, string]>();
+  for (const spec of allSpecs()) {
+    const partition = spec.partitionColumn;
+    if (spec.scope !== 'blob' || partition === undefined) continue;
+    const column = blobKeyColumn(spec);
+    for (const row of bundle[spec.key] ?? []) {
+      const pair = [String(row[column]), String(row[partition])] as const;
+      pairs.set(`${pair[0]}\0${pair[1]}`, pair);
+    }
+  }
+  return [...pairs.values()];
 }
 
 /**

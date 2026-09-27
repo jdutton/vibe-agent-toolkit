@@ -1,5 +1,5 @@
 /**
- * The producer `.claude/rules` files lacked: their SCOPE, read off frontmatter.
+ * The producer `.claude/rules` files lacked: their SCOPE, read off the harness's own `paths:` (`harness_blob_facts.paths`).
  *
  * `agentic-tags.ts` gives `rules-file` `loading: null` and says why — a path
  * classifier cannot read frontmatter, and `paths:` frontmatter is what decides
@@ -34,14 +34,14 @@
  * ## Why `closure`, and what that costs
  *
  * ⚠️ **It cannot be a `base` contributor.** `populateBlobs` runs BETWEEN the
- * strata, so no base-stratum contributor can read `blobs.frontmatter` — the
- * table does not exist yet when base runs. That is precisely why
+ * strata, so no base-stratum contributor can read `harness_blob_facts.paths` —
+ * the table does not exist yet when base runs. That is precisely why
  * `agentic-convention.ts` is `base` + `readsBlobs: false` while
  * `ClosureExtentContributor` is `closure` + `readsBlobs: true`.
  *
  * ⚠️ `populateBlobs` runs **twice**, not once, when the closure stratum promotes
  * a `deferred` realization, and the fixpoint needs ≥2 passes — so this
- * classifier re-reads frontmatter at least twice per population. A cost, not a
+ * classifier re-reads the stored `paths` at least twice per population. A cost, not a
  * correctness problem: the read is a map lookup over an already-derived table.
  *
  * ⚠️ **`readsBlobs: true` does not scope what gets PARSED.** It decides only
@@ -52,7 +52,7 @@
  * reader would otherwise assume from how small this contributor is.
  *
  * ⇒ The repo therefore has **two `resource_tags` producers in different
- * strata**: the path classifier in `base`, and this frontmatter classifier in
+ * strata**: the path classifier in `base`, and this `paths:` classifier in
  * `closure`. That is legal — `ExtentContribution` carries `tags`, and
  * `walkClosure` already returns `tags: []` — but it must be stated, because a
  * reader who assumes tags come from one place will not find this one.
@@ -71,7 +71,7 @@
  * ⚠️ **The corpus holds no gitignored file, the harness reads them all.** A glob
  * that matches nothing here but whose territory is ignored is `gitignored`, not
  * `inert`; the ignore question goes to {@link ProjectionBase.gitTracker}
- * through {@link ignoreOracle}, and only for would-be `inert` globs.
+ * through {@link treeIgnores}, and only for would-be `inert` globs.
  *
  * ⛔ Emitted under the same identity dedup as the tag, and for a stronger
  * reason: `claude_rule_patterns` is keyed `(resourceId, ordinal)`, so a
@@ -79,9 +79,11 @@
  * collapsed by the builder while still costing a full glob sweep apiece.
  */
 
-import { relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { gitFindRoot, gitLsOthers } from '@vibe-agent-toolkit/utils/git';
 
 import type { ClaudeRulePatternRow } from '../../schemas/projection-claude-rules.js';
+import type { HarnessBlobFactsRow } from '../../schemas/projection-harness.js';
 import type {
   ResourceExtentRow,
   ResourceTagRow,
@@ -95,47 +97,105 @@ import {
   classifyPath,
   pluginRootsFrom,
 } from '../agentic-tags.js';
-import { corpusFiles, declaredPatterns, evaluateRulePatterns } from '../claude-context-rules.js';
+import {
+  corpusFiles,
+  declaredPatterns,
+  evaluateRulePatterns,
+  type TreeIgnores,
+} from '../claude-context-rules.js';
 import type { ContributorStratum, ExtentContribution, ExtentContributor } from '../contributor.js';
+import { CLAUDE_CODE_ENTRY_NAMES } from '../harness/claude-code-entry-names.js';
+import { harnessFactsIndex, type HarnessFactsIndex } from '../harness/facts-index.js';
+import type { HarnessId } from '../harness/profile.js';
 import type { ProjectionBase } from '../projection.js';
+import { isAtOrBelow } from '../root-relative-path.js';
 
 import { extentContextId } from './context-id.js';
 
 /** This contributor's `resolution_contexts.kind`, and its id. */
 export const CLAUDE_RULES_SCOPE_KIND = 'claude-rules-scope';
 
-/** The frontmatter key whose presence makes a rule path-scoped. */
-const PATHS_KEY = 'paths';
-
 /** The PROJECT-ROOT rules directory — the only location that is `root`-scoped. */
-const ROOT_RULES_DIR = '.claude/rules/';
+const ROOT_RULES_DIR = CLAUDE_CODE_ENTRY_NAMES.rulesDirectory;
 
 /**
  * Classify one rules file.
  *
- * ⚠️ **An empty or non-array `paths:` reads as paths-LESS**, deliberately.
- * `paths: []` selects no files, so a rule carrying it has no predicate to be
- * scoped by, and a non-list value is malformed rather than informative. Reading
- * either as `path-scoped` would silently drop a rule that actually loads — the
- * under-report direction, which is the one a budget check cannot tolerate.
+ * ⚠️ **A `paths:` that normalises to nothing reads as paths-LESS**, and so does
+ * one whose surviving patterns are every one `**` — the harness's own rule,
+ * held by `harnessPaths` (`claude-context-rules.ts`), which stores null in
+ * `harness_blob_facts.paths` for all of them. `paths: []`, a blank string, `paths: [42]`,
+ * `paths: "/**"` and `paths: "**"` all leave the rule loading on every turn.
+ * Reading any of them as `path-scoped` silently drops a rule that actually
+ * loads — the under-report direction, which is the one a budget check cannot
+ * tolerate.
+ *
+ * ⭐ **A SCALAR string counts, and so does a NESTED list.** The harness
+ * normalises `paths:` through one function that comma-splits a string and
+ * recurses into an array (see `harnessPaths`; the transcription and
+ * its re-verification clock are in
+ * `docs/external/claude-code-rules-paths-behaviour.md`), so both `paths: src/**`
+ * and `paths: [["src/**"]]` are path-scoped there. Classified as paths-less —
+ * which is what an array-of-strings-only read produced — such a rule was
+ * charged to every query as always-loaded and none of its globs reached
+ * `claude_rule_patterns`.
  *
  * A path *deeper* under the root rules directory (`.claude/rules/lang/ts.md`) is
  * still `root`: "nested" means a second `.claude/` further down the TREE, not a
  * subdirectory of the project's own rules folder.
  *
+ * ⛔ Decided from `harness_blob_facts.paths` — the harness's own read of the file's
+ * `paths:` — never from `blobs.frontmatter`, VAT's parser's answer. Two
+ * readers of one declaration is how the walk and this tag disagreed.
+ *
  * @param path - Root-relative, forward-slashed path of the rules file
- * @param frontmatter - The blob's parsed frontmatter, or null when it has none
- *   or was never keyed
+ * @param paths - The blob's stored `paths`, or null when it has none or was
+ *   never keyed
  * @returns The rule's scope
  */
-export function ruleScopeFor(
-  path: string,
-  frontmatter: Readonly<Record<string, JsonValue>> | null,
-): RuleScope {
-  const paths = frontmatter?.[PATHS_KEY];
-  if (Array.isArray(paths) && paths.length > 0) return 'path-scoped';
-  // eslint-disable-next-line local/no-path-startswith -- `resource_realizations.path` is forward-slashed and root-relative by `relativize()` before any consumer sees it, which is the precondition this rule enforces
-  return path.startsWith(ROOT_RULES_DIR) ? 'root' : 'nested';
+export function ruleScopeFor(path: string, paths: HarnessBlobFactsRow['paths']): RuleScope {
+  if (paths !== null) return 'path-scoped';
+  return isAtOrBelow(path, ROOT_RULES_DIR) ? 'root' : 'nested';
+}
+
+/**
+ * The harness whose `paths:` this contributor reads — spelled as the literal,
+ * typed through {@link HarnessId}, because this module sits on the
+ * `claude-code.ts → claude-memory.ts → claude-context-rules.ts` chain and must
+ * not import the profile itself.
+ */
+const CLAUDE_CODE_HARNESS: HarnessId = 'claude-code';
+
+/** A rules file whose facts are not derived YET — see {@link rulePathsOf}. */
+const FRONTIER = Symbol('frontier');
+
+/**
+ * One rules file's stored `paths`, or {@link FRONTIER} when its blob has not
+ * had its facts derived yet.
+ *
+ * ⚠️ This is the ONE place an absent facts row is legitimately "not yet"
+ * rather than a bug: this contributor runs INSIDE the closure fixpoint, where
+ * a blob the stratum has only just reached is frontier whose facts a later
+ * pass derives before the fixpoint settles. So it contributes nothing for that
+ * file this pass — never a scope guessed from the absence. Every reader outside
+ * the fixpoint uses `requireFacts`, which throws.
+ *
+ * A key with no `blobs` row at all (unreadable, or refused as not text) has no
+ * content to have facts OF, and reads as declaring no `paths:`, as it always did.
+ *
+ * @param contentKey - The rules file's content key, or null when unkeyed
+ * @param derivedBlobs - Every content key with a `blobs` row
+ * @param facts - Claude Code's facts index over the base
+ * @returns The stored `paths`, null, or {@link FRONTIER}
+ */
+function rulePathsOf(
+  contentKey: string | null,
+  derivedBlobs: ReadonlySet<string>,
+  facts: HarnessFactsIndex,
+): HarnessBlobFactsRow['paths'] | typeof FRONTIER {
+  if (contentKey === null || !derivedBlobs.has(contentKey)) return null;
+  const row = facts.factsOf(contentKey);
+  return row === undefined ? FRONTIER : row.paths;
 }
 
 /**
@@ -159,7 +219,7 @@ function lazyCorpusFiles(base: ProjectionBase): () => readonly string[] {
 }
 
 /**
- * Tags every `.claude/rules` file with the scope its frontmatter implies, and
+ * Tags every `.claude/rules` file with the scope its `paths:` imply, and
  * records what each of its declared `paths:` globs reaches in this tree.
  *
  * `closure` stratum and `readsBlobs: true` — see the header for both, and for
@@ -172,14 +232,14 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
 
   readonly stratum: ContributorStratum = 'closure';
 
-  /** Frontmatter lives on `blobs`, which does not exist until after the base stratum. */
+  /** `paths` lives on `harness_blob_facts`, which does not exist until after the base stratum. */
   readonly readsBlobs = true;
 
   /**
    * Classify every realized rules file, and evaluate every glob it declares.
    *
-   * @param base - Read-only projection view; `resourceRealizations` and `blobs`
-   *   are the inputs
+   * @param base - Read-only projection view; `resourceRealizations`, `blobs`
+   *   and `harnessBlobFacts` are the inputs
    * @param _parameters - Unused. A tree's rules are the same question however
    *   the caller narrowed the crawl
    * @returns One extent, its members, their `rule-scope` tags, and one
@@ -197,9 +257,8 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
       role: null,
     };
 
-    const frontmatterByKey = new Map(
-      base.blobs.map((blob) => [blob.contentKey, blob.frontmatter] as const),
-    );
+    const facts = harnessFactsIndex(base, CLAUDE_CODE_HARNESS);
+    const derivedBlobs = new Set(base.blobs.map((blob) => blob.contentKey));
     // Derived from the whole path set before any path is classified: a plugin
     // root is a fact about the TREE, and asking it per-path would make the
     // answer depend on iteration order. Same reasoning as `agentic-convention.ts`.
@@ -209,7 +268,7 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
     const memberships: ResourceExtentRow[] = [];
     const claudeRulePatterns: ClaudeRulePatternRow[] = [];
     const filesOf = lazyCorpusFiles(base);
-    const isIgnored = ignoreOracle(base);
+    const ignores = treeIgnores(base);
     const seen = new Set<string>();
 
     for (const row of base.resourceRealizations) {
@@ -236,16 +295,15 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
       // directory in the first place (`crawl-source.ts`). The dedup stands on the
       // multi-extent case above, which is measured every run.
       if (seen.has(row.resourceId)) continue;
-      seen.add(row.resourceId);
 
-      const frontmatter = row.contentKey === null
-        ? null
-        : frontmatterByKey.get(row.contentKey) ?? null;
+      const paths = rulePathsOf(row.contentKey, derivedBlobs, facts);
+      if (paths === FRONTIER) continue;
+      seen.add(row.resourceId);
       memberships.push({ resourceId: row.resourceId, extentId });
       tags.push({
         resourceId: row.resourceId,
         tag: RULE_SCOPE_TAG,
-        value: ruleScopeFor(row.path, frontmatter),
+        value: ruleScopeFor(row.path, paths),
         source: this.id,
       });
       // Under the SAME identity dedup as the tag above, and for a stronger
@@ -253,7 +311,7 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
       // builder would silently collapse the second and third emission of an
       // identity realized under three extents — the duplicate work would stay,
       // invisible, at one tree-wide glob sweep per extra realization per pass.
-      for (const evaluation of this.#patternsOf(row.path, frontmatter, filesOf, isIgnored)) {
+      for (const evaluation of this.#patternsOf(row.path, paths, filesOf, ignores)) {
         claudeRulePatterns.push({ resourceId: row.resourceId, ...evaluation });
       }
     }
@@ -286,26 +344,33 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
    * is deliberately left untouched.
    *
    * @param rulePath - The rules file's root-relative path
-   * @param frontmatter - The rules file's parsed frontmatter, or null when its
-   *   blob was never keyed
+   * @param paths - The rules file's stored `paths`, or null when it declares
+   *   none or its blob was never keyed
    * @param filesOf - The sweep's shared, lazily-built corpus file list
    * @returns One evaluation per declared glob, in declaration order
    */
   #patternsOf(
     rulePath: string,
-    frontmatter: Readonly<Record<string, JsonValue>> | null,
+    paths: HarnessBlobFactsRow['paths'],
     filesOf: () => readonly string[],
-    isIgnored: (path: string) => boolean,
+    ignores: TreeIgnores,
   ): readonly Omit<ClaudeRulePatternRow, 'resourceId'>[] {
-    const patterns = declaredPatterns(frontmatter);
+    const patterns = declaredPatterns(paths);
     if (patterns.length === 0) return [];
-    return evaluateRulePatterns({ rulePath, patterns, files: filesOf(), isIgnored });
+    return evaluateRulePatterns({ rulePath, patterns, files: filesOf(), ignores });
   }
 }
 
 /**
- * The tree's ignore oracle, over root-relative paths — or one that ignores
- * nothing when there is no usable tracker.
+ * What the tree ignores, as `evaluateRulePatterns` asks it — or nothing at all
+ * when there is no usable tracker.
+ *
+ * Two questions, one seam ({@link TreeIgnores}). `isIgnored` (below) answers a
+ * probe path, existing or not. `ignoredEntries` is git's COLLAPSED ignored
+ * listing, which is the only way to learn that an unanchored glob's name sits
+ * ignored somewhere below the root (`dist/**` beside `packages/a/dist/`). It is
+ * one `ls-files -o -i --directory` spawn, fetched lazily — only when some rule
+ * has a pattern with no visible witness — and once per sweep.
  *
  * Outside a repository nothing is ignored, and a tracker git never answered for
  * is an empty shell whose "not ignored" is not a verdict — both yield the
@@ -326,12 +391,47 @@ export class ClaudeRulesScopeContributor implements ExtentContributor {
  * @param base - The projection so far
  * @returns A predicate over root-relative, forward-slashed paths
  */
-function ignoreOracle(base: ProjectionBase): (path: string) => boolean {
+function treeIgnores(base: ProjectionBase): TreeIgnores {
   const tracker = base.gitTracker;
-  if (!tracker?.isUsable()) return () => false;
-  return (path) => {
-    const absolute = safePath.resolve(base.root, path);
-    if (relativeEscapesRoot(safePath.relative(base.root, absolute))) return false;
-    return tracker.isIgnoredByActiveSet(absolute);
+  if (!tracker?.isUsable()) return { isIgnored: () => false, ignoredEntries: () => [] };
+  let entries: readonly string[] | undefined;
+  return {
+    isIgnored: (path) => {
+      const absolute = safePath.resolve(base.root, path);
+      if (relativeEscapesRoot(safePath.relative(base.root, absolute))) return false;
+      return tracker.isIgnoredByActiveSet(absolute);
+    },
+    ignoredEntries: () => (entries ??= ignoredListing(base.root)),
   };
+}
+
+/**
+ * git's collapsed ignored listing, re-rooted at the corpus root.
+ *
+ * `ls-files` spells paths relative to the REPOSITORY root, which is above the
+ * corpus root whenever the corpus is a subdirectory, so each entry is resolved
+ * there and made corpus-relative; an entry outside the corpus is dropped. A
+ * directory keeps its trailing `/`, the one signal that it stands for its
+ * whole subtree.
+ *
+ * ⚠️ A directory git could not open is `degrade`d here without a record: the
+ * crawl source runs this same listing for the same tree during population and
+ * is where such a refusal is reported. A listing git did not answer at all is
+ * empty, which leaves a would-be `inert` glob `inert` — the non-git answer.
+ *
+ * @param root - Absolute corpus root
+ * @returns Root-relative entries, directories spelled with a trailing `/`
+ */
+function ignoredListing(root: string): string[] {
+  const listing = gitLsOthers({ cwd: root, ignored: true, directory: true, unreadable: { degrade: () => undefined } });
+  if (listing === null) return [];
+  const repositoryRoot = gitFindRoot(root) ?? root;
+  const entries: string[] = [];
+  for (const entry of listing) {
+    const isDirectory = entry.endsWith('/');
+    const relative = toForwardSlash(safePath.relative(root, safePath.resolve(repositoryRoot, entry)));
+    if (relative === '' || relativeEscapesRoot(relative)) continue;
+    entries.push(isDirectory ? `${relative}/` : relative);
+  }
+  return entries;
 }

@@ -9,12 +9,15 @@
 
 import type { TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
+import { frontmatterIsNonMapping } from '../frontmatter-source.js';
 import type { ParseResult } from '../link-parser.js';
 import type { OffsetRange } from '../reference-lexer.js';
 import type { ContentMeasures } from '../schemas/parse-facts.js';
 import type { BlobConditionRow, BlobRow } from '../schemas/projection-blobs.js';
+import type { HarnessBlobFactsRow, HarnessBlobImportRow } from '../schemas/projection-harness.js';
 
 import { flattenHeadings } from './blob-sections.js';
+import type { HarnessContentFacts, HarnessId } from './harness/profile.js';
 
 // `ContentMeasures` is defined by `ContentMeasuresSchema`
 // (`schemas/parse-facts.ts`), not here: the parse cache persists these three
@@ -160,7 +163,7 @@ export function blobRowFor(
     // schema is the enforcement point for that, not this assembler: narrowing
     // here would have to either drop or invent values.
     frontmatter: (parsed.frontmatter ?? null) as BlobRow['frontmatter'],
-    frontmatterError: parsed.frontmatterError ?? null,
+    frontmatterError: frontmatterErrorFor(parsed),
     wordCount: measures?.wordCount ?? 0,
     proseCodeUnits: measures?.proseCodeUnits ?? 0,
     codeBlockCodeUnits: measures?.codeBlockCodeUnits ?? 0,
@@ -169,6 +172,53 @@ export function blobRowFor(
     sectionCount: headingCount,
   };
 }
+
+/**
+ * What `blobs.frontmatterError` says about one parse — *why the frontmatter did
+ * not parse to an object*, which is two questions and not one.
+ *
+ * The YAML parser's own failure is the first and is passed through verbatim.
+ * The second is the silent one: a block that is valid YAML and decodes to a
+ * **sequence or a scalar** (`---\n- a\n- b\n---`). `parseFrontmatterSource`
+ * ignores such a value by design — its acceptance rules are behaviour-preserving
+ * for every lane that reads `frontmatter` — so the parse reports neither an
+ * object nor an error, and the row that came out was byte-identical to one for a
+ * file with no frontmatter at all. A `.claude/rules/` file in that state reads
+ * as declaring no `paths:`, so it is counted as an unconditional rule and no
+ * check can tell it from one.
+ *
+ * ⚠️ Decided from `frontmatterSource`, which a cache HIT carries and re-parses
+ * through the same function the cold path runs (`parse-cache.ts`'s
+ * `deriveFrontmatter`), so warm and cold cannot disagree here.
+ *
+ * 🪤 **A block that decodes to YAML `null` declares nothing — it is not a
+ * non-mapping value.** a comment-only block, `~` and `null` all decode to `null`,
+ * which `parseFrontmatterSource` drops exactly as it drops a sequence, so
+ * "no object and no error" cannot tell a placeholder from a `- a` list. Only
+ * the decoded value can; `frontmatterIsNonMapping` is the one statement of that
+ * rule, shared with the OKF judges. The KIND of a real non-mapping value is
+ * still not named: the author is sent to the block either way.
+ *
+ * @param parsed - The parse this row describes
+ * @returns The reason, or null when the frontmatter parsed (including "no block")
+ */
+function frontmatterErrorFor(parsed: ParseResult): string | null {
+  if (parsed.frontmatterError !== undefined) return parsed.frontmatterError;
+  if (parsed.frontmatter !== undefined) return null;
+  // Absent, blank, or declaring nothing (`~`, comment-only): not a value that
+  // was ignored, and not a defect.
+  return frontmatterIsNonMapping(parsed.frontmatterSource) ? NOT_A_MAPPING : null;
+}
+
+/**
+ * What a frontmatter block that is valid YAML but not a mapping says.
+ *
+ * Content, never a path: it is stored on a content-addressed row and repeated by
+ * every finding that reads the column.
+ */
+const NOT_A_MAPPING =
+  'the frontmatter block is valid YAML but not a YAML mapping — it decodes to a sequence or a'
+  + ' scalar, so it declares no keys at all';
 
 /**
  * Build the `blob_conditions` rows for one parse.
@@ -212,6 +262,40 @@ export function blobConditionsFor(contentKey: string, parsed: ParseResult): Blob
   }
 
   return rows;
+}
+
+/**
+ * Build one blob's rows in the two harness tables — what `harness` injects for
+ * it and the imports it follows out of it, in the order it follows them.
+ *
+ * @param contentKey - The blob's key, written into every row's `blob` column
+ * @param harness - The harness these facts are the reading of
+ * @param facts - That harness's `factsOf` over the blob's decoded text
+ * @returns The `harness_blob_facts` row and one `harness_blob_imports` row per
+ *   distinct import target
+ */
+export function harnessRowsFor(
+  contentKey: string,
+  harness: HarnessId,
+  facts: HarnessContentFacts,
+): { facts: HarnessBlobFactsRow; imports: HarnessBlobImportRow[] } {
+  return {
+    facts: {
+      blob: contentKey,
+      harness,
+      injectedBytes: facts.injectedBytes,
+      injectedTokens: facts.injectedTokens,
+      paths: facts.paths === null ? null : [...facts.paths],
+    },
+    imports: facts.imports.map((entry, ordinal) => ({
+      blob: contentKey,
+      harness,
+      ordinal,
+      rawRef: entry.rawRef,
+      target: entry.target,
+      line: entry.line,
+    })),
+  };
 }
 
 /**

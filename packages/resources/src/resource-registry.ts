@@ -34,7 +34,7 @@ import {
   type UnreadablePolicy,
 } from '@vibe-agent-toolkit/utils/crawl';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
-import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
+import { decodeTextContent, TextTooLargeError } from '@vibe-agent-toolkit/utils/text';
 
 import { calculateChecksumFromContent } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
@@ -59,7 +59,7 @@ import { ParseDispatcher, type ParsePoolPolicy, driveInOrder, tallyParsable } fr
 // A value import, and acyclic: `crawl-source.ts` reaches only `utils` and a
 // type from `realizations.ts`, never back into the registry. The remedy is
 // shared so the walk lane refuses with the projection's exact sentence.
-import { EXTENT_SYMLINK_NOT_REALIZED } from './projection/contributors/filesystem-extent.js';
+import { isDeclinedSymlinkCode } from './projection/contributors/filesystem-extent.js';
 import { listingRefusalRemedy } from './projection/crawl-source.js';
 import {
   collectionMimeConflictFinding,
@@ -130,6 +130,12 @@ const READ_FAILURE_CODES: ReadonlySet<string> = new Set([
   'ENOENT',
   'ENOTDIR',
   'EPERM',
+  // Not an errno: the file is past what one JS string can hold, refused by size
+  // before any read. Admitted here because the consequence is the same — the
+  // file is enumerated and cannot be admitted — and it reaches the finding as
+  // its own code, `(TEXT_TOO_LARGE)`, so no reader goes looking for a
+  // permissions problem.
+  TextTooLargeError.code,
 ]);
 
 /**
@@ -365,7 +371,7 @@ export interface ResourceRegistryOptions {
   /**
    * How, and whether, to move this registry's parsing off the main thread.
    *
-   * Defaults are what a command gets — OFF, unless `VAT_PARSE_POOL=1` — and the
+   * Defaults are what a command gets — ON, unless `VAT_PARSE_POOL=0` — and the
    * meaning of every field is {@link ParsePoolPolicy}'s, shared verbatim with
    * the projection lane so the two cannot reach different verdicts about a
    * switch that has already been measured once.
@@ -1471,7 +1477,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // (`.claude/rules/shared -> ~/shared-rules`).
     const notExcluded = crawlPathFilter(['**/*'], exclude);
     this.populationConditions = conditions.filter(
-      (row) => row.code !== EXTENT_SYMLINK_NOT_REALIZED || notExcluded(row.path),
+      (row) => !isDeclinedSymlinkCode(row.code) || notExcluded(row.path),
     );
     const admitted: string[] = [];
     for (const absolutePath of paths) {

@@ -171,8 +171,12 @@ interface Convention {
   readonly tag: string;
   /** Null where a path cannot answer the loading question — see the header. */
   readonly loading: TagLoading | null;
-  /** Answers "is this path this convention?" given its lowercased basename and root-relative path. */
-  readonly matches: (basenameLower: string, pathLower: string, pluginRoots: PluginRoots) => boolean;
+  /**
+   * Answers "is this path this convention?" given its lowercased basename, its
+   * lowercased root-relative path, the plugin roots, and its basename AS SPELLED
+   * — for the one test the harness makes on the name's own case.
+   */
+  readonly matches: (basenameLower: string, pathLower: string, pluginRoots: PluginRoots, basename: string) => boolean;
 }
 
 /**
@@ -323,11 +327,15 @@ const CONVENTIONS: readonly Convention[] = [
   { tag: 'skill-md', loading: 'selected', matches: (b) => b === 'skill.md' },
 
   // Tagged, but NOT charged — `paths:` frontmatter decides, and this classifier
-  // does not read frontmatter. See the header.
+  // does not read frontmatter. See the header. ⛔ The extension is matched on
+  // the name AS SPELLED: the harness's rules walk tests `name.endsWith(".md")`
+  // on the `readdir` entry (`Lke`, docs/external/claude-code-memory-loader.md),
+  // so `LOUD.MD` is never read, on any filesystem. The DIRECTORY is looked up by
+  // name, which is the filesystem's business, and stays case-folded.
   {
     tag: RULES_FILE_TAG,
     loading: null,
-    matches: (b, p) => b.endsWith('.md') && underDirectory(p, '.claude/rules'),
+    matches: (_b, p, _roots, basename) => basename.endsWith('.md') && underDirectory(p, '.claude/rules'),
   },
 
   // Both component conventions reach their files by two routes: under
@@ -433,12 +441,14 @@ export function classifyPath(
   // Normalised here, once, so every matcher below can compare separators
   // literally. A Windows-shaped path reaching a matcher would silently classify
   // nothing — the quiet failure this single call exists to make impossible.
-  const pathLower = toForwardSlash(path).toLowerCase();
+  const forward = toForwardSlash(path);
+  const pathLower = forward.toLowerCase();
+  const basename = forward.slice(forward.lastIndexOf('/') + 1);
   const tags: AgenticTag[] = [];
   const matched: TagLoading[] = [];
 
   for (const convention of CONVENTIONS) {
-    if (!convention.matches(basenameLower, pathLower, pluginRoots)) continue;
+    if (!convention.matches(basenameLower, pathLower, pluginRoots, basename)) continue;
     tags.push({ tag: convention.tag, value: null });
     if (convention.loading !== null) matched.push(convention.loading);
   }

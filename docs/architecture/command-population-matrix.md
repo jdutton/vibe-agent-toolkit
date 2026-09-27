@@ -183,8 +183,9 @@ and nothing declares which route a new command should reach for.
 
 **The win is once-per-lifecycle-phase, not incrementality, and the doubled `populate()` in the
 `vat claude context` row above is bounded by that rather than excused by it.** A projection built once and
-read many times beats a walk per check, and that is the whole of the claim. Of the thirteen tables only
-the four blob-scoped ones (`blobs`, `blob_references`, `blob_sections`, `blob_conditions`) are keyed
+read many times beats a walk per check, and that is the whole of the claim. Of the projection's tables only
+the six blob-scoped ones (`blobs`, `blob_references`, `blob_sections`, `blob_conditions`,
+`harness_blob_facts`, `harness_blob_imports`) are keyed
 on content and so survive an edit elsewhere in the tree — and content-keyed reuse of parse work is
 not new work: the cross-process parse cache has shipped it since stage 2 (2026-08-10, `c2a05547`),
 measuring 45× warm over cold on VAT's own 265 tracked markdown files, and
@@ -265,8 +266,8 @@ no blob stage — it reads and parses each admitted resource directly, charged a
 | lane | `contentDemand` at enumeration | resulting `contentState` | blob stage (`contentParsing`) |
 |---|---|---|---|
 | resources projection (`vat resources scan/validate`, `vat rag index`, and the packaging registries — the default lane, per [§2](#2-the-three-selectors-and-the-opt-outs-they-answer-to)) | `deferred` — enumerate every path, read none of them ([the filesystem extent keys lazily](#the-filesystem-extent-keys-lazily)) | `deferred` for every file row, `none` for a directory. `contentKey` is always null | **`CONTENT_PARSING_SKIP`** — the stage is ~90% of this lane's cold cost and not one blob row is read ([the blob stage default and its refusal](#the-blob-stage-default-and-its-refusal)) |
-| resources query (`vat resources query`, `vat resources check`) | `deferGitignored` — the default, stated at the call. Same registry as the row above; the two differ **only** here, in the blob stage, and in `classifyClaudeRules` | `keyed`, or `deferred` for an ignored row, or `none`/`unreadable` | **`CONTENT_PARSING_DERIVE`** (the default). Not optional in spirit: the verb exists to answer questions about blob-keyed tables, and a skipped stage would return zero rows and report success |
-| inventory projection (`vat inventory`, plugin dir) | `deferGitignored`, from the same contributor — key eagerly, except where the row's own `gitignored` column is true | `keyed`, or `deferred` for an ignored row, or `none`/`unreadable` | **`CONTENT_PARSING_DERIVE`** (the default). Mandatory here, not a choice: the closure contributor reads the blob-keyed tables, and `populate()` **throws** rather than silently reducing every extent to its own root |
+| resources query (`vat resources query`, `vat resources check`) | `deferGitignored` — the default, stated at the call. Same registry as the row above; the two differ **only** here, in the blob stage, and in `classifyClaudeRules` | `keyed`, or `deferred` for an ignored row, or `none`/`unreadable`/`oversize` | **`CONTENT_PARSING_DERIVE`** (the default). Not optional in spirit: the verb exists to answer questions about blob-keyed tables, and a skipped stage would return zero rows and report success |
+| inventory projection (`vat inventory`, plugin dir) | `deferGitignored`, from the same contributor — key eagerly, except where the row's own `gitignored` column is true | `keyed`, or `deferred` for an ignored row, or `none`/`unreadable`/`oversize` | **`CONTENT_PARSING_DERIVE`** (the default). Mandatory here, not a choice: the closure contributor reads the blob-keyed tables, and `populate()` **throws** rather than silently reducing every extent to its own root |
 
 **One table is reachable from the query lane ONLY, and that is forced rather than chosen.**
 `claude_rule_patterns` is produced by `ClaudeRulesScopeContributor`, which declares `readsBlobs:

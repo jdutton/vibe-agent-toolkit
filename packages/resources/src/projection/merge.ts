@@ -80,11 +80,19 @@ import { populateBlobs, storableBlobFacts, type BlobPopulationResult } from './b
 import { RunContentCache } from './content-cache.js';
 import type { ContributorRegistry, ExtentContribution, ExtentContributor } from './contributor.js';
 import {
+  declinedSymlinkRowsStillHold,
   EXTENT_DIRECTORY_UNLISTABLE,
   unlistableRowStillHolds,
 } from './contributors/filesystem-extent.js';
 import { crawlSourceSelector } from './crawl-source.js';
 import { canonicalJson, extentDigest } from './digest.js';
+import {
+  assertHarnessSettled,
+  diskHarnessContentReader,
+  harnessSettled,
+  runHarnessPass,
+} from './harness/harness-pass.js';
+import { HARNESS_PROFILES, type HarnessProfile } from './harness/profile.js';
 import { rootIdFor } from './identity.js';
 import { ProjectionBuilder, type Projection } from './projection.js';
 import {
@@ -101,7 +109,12 @@ import {
   selectRequestedRows,
   type RequestedContributor,
 } from './store-hydration.js';
-import { splitProjectionByScope, type ExtentKey, type ProjectionStore } from './store.js';
+import {
+  splitProjectionByScope,
+  type ExtentKey,
+  type ExtentScopedRows,
+  type ProjectionStore,
+} from './store.js';
 
 /**
  * The pass number every driver-placed row in the `base` stratum carries.
@@ -124,7 +137,7 @@ const BASE_STRATUM_PASS = 1;
  * shipped contributors registered — 61 skill extents, plus plugin and
  * marketplace, 66 contributors in total — reached its fixed point on **pass 2**:
  * one productive pass, then one confirming pass in which no digest moved. No
- * contributor needed a third. (`projection-population.integration.test.ts`,
+ * contributor needed a third. (`projection-population.system.test.ts`,
  * which re-runs the probe and fails if the depth ever regresses.)
  *
  * Depth 2 is the *structural* answer, not a property of corpus size: a closure
@@ -641,11 +654,21 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
   // from nobody having asked.
   const attemptsBeforeClosure = builder.contentPromotionAttempts;
 
+  // The harness facts, LAZILY: derived only for what a harness reaches. Before
+  // the closure stratum, because its contributors read them (in `frontier`
+  // mode, where a blob with no facts yet contributes nothing that pass); inside
+  // every fixpoint iteration, because a declared closure's members arrive
+  // there; and once more after the promotion, which can key a reachable path.
+  // Under `'skip'` no blob has a `blobs` row, so there is nothing to reach.
+  const harness = harnessStageFor(builder);
+  await harness.run();
+
   await iterateClosure(
     registry.byStratum('closure'),
     builder,
     parameterSetFor,
     maxIterations,
+    harness,
     options.onContributorTiming,
   );
 
@@ -658,6 +681,10 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
     // absence.
     options.onBlobPopulation({ ...blobPopulation, ...promoted });
   }
+  await harness.run();
+  // A reached blob with no facts after the last pass is a producer bug: every
+  // strict reader of this projection would throw on it later, far from here.
+  harness.assertSettled();
 
   // AFTER every contributor, and the reason is the CLOSURE stratum's extra
   // realization ROWS, not extra conflicts. ⚠️ It is not that "a closure
@@ -871,12 +898,67 @@ async function readCachedProjection(
   const cache = options.cache;
   if (cache === undefined) return undefined;
 
+  const extent = await readStoredExtent(
+    options,
+    rootId,
+    routing,
+    requestedContributors(options),
+  );
+  if (extent === undefined) return undefined;
+
+  // A run that declined to derive the blob tier must also decline to read it
+  // back, or a hit would hand it four tables a populate would have left empty
+  // — and `'skip'` is a claim about what the caller reads, so honouring it on
+  // both paths is what keeps hydrated and populated indistinguishable.
+  if (!parseContent) return assembleProjection(extent, emptyBlobRows());
+
+  const contentKeys = keyedContentKeys(extent);
+  const blobs = await cache.store.readBlobFacts(contentKeys);
+  // See `store-hydration.ts`: an extent written by a run that skipped blob
+  // derivation names keys the blob tier does not hold, and accepting it would
+  // reduce every closure extent to its own root while reporting success.
+  if (!blobFactsCover(blobs, contentKeys)) return undefined;
+
+  // The harness facts are derived lazily and stored per `(blob, harness)`, so
+  // a blob tier that covers every key can still lack a reached blob's facts —
+  // another root's run filed those bytes without reaching them. Served, that
+  // absence would throw at the first strict reader; a miss re-derives it.
+  const projection = assembleProjection(extent, blobs);
+  return harnessSettled(projection, HARNESS_PROFILE_LIST) ? projection : undefined;
+}
+
+/**
+ * The extent half of a store hit: key, reuse rule, narrowing, staleness gate.
+ *
+ * Split out of {@link readCachedProjection} because one caller needs exactly
+ * this and nothing after it — see {@link readStoredRealizations} — and two
+ * copies of the four steps is how one of them would lose the unlistable gate.
+ * The blob tier is deliberately NOT here: it belongs to the run that reads blob
+ * tables, and a caller asking only *which paths are in this tree* has no use
+ * for it and should not pay a `readBlobFacts`.
+ *
+ * @param options - The run's options, including its cache
+ * @param rootId - This run's corpus root id
+ * @param routing - The run's parse routing, whose fingerprint is part of the key
+ * @param requested - The contributors whose provenance the store must hold
+ * @returns The stored rows narrowed to those contributors' contexts, or
+ *   `undefined` on any kind of miss
+ */
+async function readStoredExtent(
+  options: PopulateOptions,
+  rootId: string,
+  routing: CollectionMimeResolver,
+  requested: readonly RequestedContributor[],
+): Promise<ExtentScopedRows | undefined> {
+  const cache = options.cache;
+  if (cache === undefined) return undefined;
+
   const startedAt = crawlTimingStart();
   try {
     const stored = await cache.store.readExtent(storeKeyFor(options, rootId, cache, routing));
     if (stored === undefined) return undefined;
 
-    const contexts = selectRequestedContexts(stored, requestedContributors(options));
+    const contexts = selectRequestedContexts(stored, requested);
     if (contexts === undefined) return undefined;
 
     const extent = selectRequestedRows(stored, { contexts, rootId });
@@ -886,20 +968,14 @@ async function readCachedProjection(
     // what they claimed and the tree is asked whether it is still so. See
     // `unlistableRowStillHolds` for the staleness this closes.
     if (!unlistableRowsStillHold(extent.realizationConditions, options.root)) return undefined;
-    // A run that declined to derive the blob tier must also decline to read it
-    // back, or a hit would hand it four tables a populate would have left empty
-    // — and `'skip'` is a claim about what the caller reads, so honouring it on
-    // both paths is what keeps hydrated and populated indistinguishable.
-    if (!parseContent) return assembleProjection(extent, emptyBlobRows());
-
-    const contentKeys = keyedContentKeys(extent);
-    const blobs = await cache.store.readBlobFacts(contentKeys);
-    // See `store-hydration.ts`: an extent written by a run that skipped blob
-    // derivation names keys the blob tier does not hold, and accepting it would
-    // reduce every closure extent to its own root while reporting success.
-    if (!blobFactsCover(blobs, contentKeys)) return undefined;
-
-    return assembleProjection(extent, blobs);
+    // Same shape for a declined link: its row — code and message — is where
+    // the HOST resolves it, through targets no tree hash covers (a gitignored
+    // `build/gen.md`, an out-of-root hop), so a changed row is a miss. See
+    // `declinedSymlinkRowsStillHold`.
+    if (!declinedSymlinkRowsStillHold(extent.realizationConditions, extent.resourceRealizations, options.root)) {
+      return undefined;
+    }
+    return extent;
   } finally {
     // Filed whether this hit or missed, and that is the point: a hit runs no
     // contributor, so without this row a dump cannot tell a served population
@@ -909,17 +985,71 @@ async function readCachedProjection(
 }
 
 /**
+ * What the store already knows this tree REALIZES, for a subset of the run's
+ * contributors — without populating anything.
+ *
+ * ## Why a lane would ask this instead of populating
+ *
+ * A lane whose contributor set is not known until something about the tree has
+ * been read has to read the tree twice: once to find out what to register, and
+ * once for real. `buildClaudeContextPopulation` is that lane — it needs every
+ * `CLAUDE.md` and `.claude/rules` path before it can register one
+ * `ClaudeImportExtentContributor` per root — and the discovery half cost a
+ * measured **341.7 ms** of a 794.6 ms warm crawl on a 12.6k-file adopter, every
+ * run, for a list the store was already holding. This answers it from the rows
+ * instead.
+ *
+ * ## ⛔ The key is the CALLER'S, and that is a requirement, not a convenience
+ *
+ * `options` must be the **same object** the caller will hand {@link populate},
+ * so both reads compute {@link storeKeyFor} from one registry and one parameter
+ * map and cannot drift apart. A caller registering more contributors afterwards
+ * (which is the whole point) changes the key only if one of them declares an
+ * {@link ExtentContributor.registrationQuestion} — none does today, and if one
+ * ever did, this read would simply stop hitting and the caller would fall back
+ * to deriving the list. Fail-safe in the direction that costs time rather than
+ * correctness.
+ *
+ * ⚠️ **`requested` must be a subset the store can answer ALONE.** Asking for a
+ * contributor the caller has not registered yet is not a hit it would otherwise
+ * have got — it is a guarantee of a miss, because nothing has ever written that
+ * provenance under this key.
+ *
+ * @param options - The options the caller will populate with, unmodified
+ * @param requested - The already-known contributors whose contexts must be
+ *   stored, each with the parameter set `options.parameters` gives it
+ * @returns The realization rows of exactly those contributors' contexts, or
+ *   `undefined` when the store cannot answer — in which case the caller derives
+ *   the list the way it always did
+ */
+export async function readStoredRealizations(
+  options: PopulateOptions,
+  requested: readonly RequestedContributor[],
+): Promise<readonly ResourceRealizationRow[] | undefined> {
+  if (options.cache === undefined) return undefined;
+
+  // The two values `populate` derives before it asks the store, derived the same
+  // way. The resolver is built and discarded here: only its `fingerprint` is
+  // read, and the conflicts it would accumulate belong to the run's own
+  // instance, which `populate` builds for itself.
+  const routing = createCollectionMimeResolver(options.collections);
+  const extent = await readStoredExtent(options, rootIdFor(options.root), routing, requested);
+  return extent?.resourceRealizations;
+}
+
+/**
  * Whether every stored `EXTENT_DIRECTORY_UNLISTABLE` row is still true of the
  * tree — the gate that turns a key match into a real hit.
  *
- * Only those rows are re-verified. The other condition rows describe content
- * the tree hash already covers, with one exception served as stored: an
- * `EXTENT_SYMLINK_NOT_REALIZED` row whose `readlink` failed transiently says
- * "whose target could not be read" until the tree hash changes. It is `info`,
- * it still records the link, and re-reading every stored link on each hit would
- * cost a syscall per link to repair a clause. Rare by construction —
- * one probe per stored refusal, not per path — so a tree with none pays one
- * filter over the conditions table and no syscall.
+ * One of two such gates; the other is `declinedSymlinkRowsStillHold`, which
+ * re-derives every declined-link row (any of the three codes
+ * `EXTENT_SYMLINK_NOT_REALIZED` / `_TARGET_OUTSIDE_ROOT` / `_TARGET_UNRESOLVED`)
+ * and compares the WHOLE row, code and message, because both depend on targets
+ * the tree hash does not cover — the message names the in-root path a link
+ * resolves through, which an out-of-root hop can move under an unchanged code.
+ * The remaining condition rows describe content the tree hash already covers. One probe per
+ * stored refusal, not per path — so a tree with none pays one filter over the
+ * conditions table and no syscall.
  *
  * @param conditions - The stored extent's `realization_conditions`
  * @param root - The corpus root the rows' paths are relative to
@@ -1113,13 +1243,58 @@ export async function afterClosurePromotion(
   return { afterClosurePromotion: result };
 }
 
+/** Every harness a population derives facts for. */
+const HARNESS_PROFILE_LIST: readonly HarnessProfile[] = Object.values(HARNESS_PROFILES);
+
+/**
+ * The pseudo contributor id {@link ClosureNonConvergenceError} names when the
+ * harness pass is what kept the fixpoint moving.
+ */
+const HARNESS_PASS_ID = 'harness-pass';
+
+/** One population's harness pass, bound to its builder and reader. */
+interface HarnessStage {
+  /** Run the pass to exhaustion; resolves to the facts rows it added. */
+  run(): Promise<number>;
+  /** Throw `HarnessFactsAbsentError` for a reached blob with no facts, excusing only what a pass could not read. */
+  assertSettled(): void;
+}
+
+/**
+ * Bind the harness pass to one population: every harness, the run's content
+ * cache as the reader, and the keys any pass could not read.
+ *
+ * @param builder - The population's builder
+ * @returns The stage
+ */
+function harnessStageFor(builder: ProjectionBuilder): HarnessStage {
+  const reader = diskHarnessContentReader(builder.base().contentCache);
+  const unreadable = new Set<string>();
+  return {
+    run: async () => {
+      const result = await runHarnessPass(builder, HARNESS_PROFILE_LIST, reader);
+      for (const key of result.unreadableKeys) unreadable.add(key);
+      return result.derived;
+    },
+    assertSettled: () => {
+      assertHarnessSettled(builder.base(), HARNESS_PROFILE_LIST, unreadable);
+    },
+  };
+}
+
 /**
  * Iterate the closure stratum to a fixed point.
+ *
+ * The harness pass runs after every iteration's contributors and counts as
+ * moving when it derives anything: the closure contributors read harness facts
+ * in `frontier` mode, so a member whose facts arrive now is followed only on
+ * the next iteration.
  *
  * @param closure - The closure contributors, possibly empty
  * @param builder - The builder every contribution merges into
  * @param parameterSetFor - Resolves a contributor's parameter set
  * @param maxIterations - Passes allowed before failing
+ * @param harness - The population's harness pass
  * @param onTiming - Receives one record per contributor invocation, per pass
  * @throws {@link ClosureNonConvergenceError} when the cap is reached while moving
  * @throws {@link RangeError} when the cap is below one, which could only ever fail
@@ -1129,10 +1304,12 @@ async function iterateClosure(
   builder: ProjectionBuilder,
   parameterSetFor: (contributor: ExtentContributor) => JsonValue,
   maxIterations: number,
+  harness: HarnessStage,
   onTiming?: ((timing: ContributorTiming) => void) | undefined,
 ): Promise<void> {
   // Ordinary and cheap, unlike a kind with no contributor: a corpus whose
   // configuration declares no closure-defined extents has nothing to iterate.
+  // The harness pass needs no iteration then — `populate` ran it before this.
   if (closure.length === 0) {
     return;
   }
@@ -1169,6 +1346,7 @@ async function iterateClosure(
         moving.push(contributor.id);
       }
     }
+    if (await harness.run() > 0) moving.push(HARNESS_PASS_ID);
     if (moving.length === 0) {
       return;
     }

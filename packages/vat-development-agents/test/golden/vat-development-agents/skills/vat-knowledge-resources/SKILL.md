@@ -104,9 +104,13 @@ SELECT path FROM resource_realizations
 
 ⚠️ **A symbolic link is never realized** — no row sits at a link's own path, so a
 `link/CLAUDE.md` Claude Code reads through the link counts in no size, chain or rules-pattern
-query. It is not silently absent: each link is a `realization_conditions` row with code
-`EXTENT_SYMLINK_NOT_REALIZED`, naming an in-root target and whether that target is realized.
-`SELECT path, message FROM realization_conditions WHERE code = 'EXTENT_SYMLINK_NOT_REALIZED'`
+query. It is not silently absent: each link is a `realization_conditions` row —
+`EXTENT_SYMLINK_NOT_REALIZED` when the target is in-root, naming it and whether it is realized, or
+`EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` when the target resolves outside the root (never named), or
+`EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to nothing. Ask for all three codes or links
+are missing from the answer:
+`SELECT path, message FROM realization_conditions
+  WHERE code IN ('EXTENT_SYMLINK_NOT_REALIZED', 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT', 'EXTENT_SYMLINK_TARGET_UNRESOLVED')`
 lists them.
 
 **Read `population` in the output before you trust a timing.** It is `derived` or `store` — whether
@@ -135,22 +139,27 @@ cheap and is never itself queried.
 ### `claude_rule_patterns` — what each `.claude/rules` glob scopes
 
 One row per `paths:` glob of one rules file: `pattern`, `literalPrefix` (its glob-free leading
-segments, so "does this rule cover everything under `docs/`?" is a prefix comparison needing no
-glob engine), `witnessPath` (the first file it matched, or null) and `status`.
+segments), `witnessPath` (the first file it matched, or null) and `status`. ⚠️ `literalPrefix` is
+NOT a match bound: Claude Code matches with gitignore rules after stripping a trailing `/**`, so a
+pattern with no `/` before its last character (`src/**`, `src/`) matches at any depth
+(`packages/cli/src/x.ts`). Use it for prefix containment only when the stripped pattern still has a
+`/` before its last character.
 
 ⚠️ **Four statuses, and the last two are traps.** `matched` and `inert` are the plain cases.
-`unevaluated` means VAT never ran the matcher, because the rule's whole `paths:` list blew Claude
-Code's shared 1,000-pattern / 4 MiB expansion budget. `gitignored` means the glob matched nothing
-VAT can see and covers gitignored territory (`dist/**`). VAT never reads those files, but Claude
+`unevaluated` means VAT never ran the matcher for that ONE pattern, because it is the entry that
+exhausted Claude Code's 1,000-pattern / 4 MiB budget, which is spent per pattern as the list is
+walked — so a live glob beside a refused one is evaluated and reported normally. A brace-free
+pattern costs nothing, and there is no `{1..n}` range expansion. `gitignored` means the glob
+matched nothing VAT can see and covers gitignored territory (`dist/**`). VAT never reads those files, but Claude
 Code does, so the rule may still load. **Filter `status = 'inert'`, never
 `status != 'matched'`** — the latter reports a VAT blind spot as the author's dead glob, and
 deleting that glob could break a rule that still loads.
 
 🪤 **"Which rule FILES fire on nothing?" is not an anti-join.** The intuitive query — rules files
 with no row in `claude_context_loads` — is `status != 'matched'` wearing a `LEFT JOIN`: that table
-holds one row per glob that CAN fire, so a rule refused by the expansion budget has no row there
-either and reads as dead while firing perfectly well. Ask the pattern table instead: a file is dead
-only when every one of its globs is `inert`. Take the size
+holds one row per glob that CAN fire, so a pattern refused by the expansion budget has no row there
+either, and a rule whose globs were all refused reads as dead while firing perfectly well. Ask the
+pattern table instead: a file is dead only when every one of its globs is `inert`. Take the size
 from `blobs` — `resource_realizations` carries no size column, and `claude_context_loads` carries
 `bytes` but cannot see the file you are looking for:
 
@@ -165,6 +174,30 @@ HAVING SUM(p.status != 'inert') = 0
 
 One statement answers both halves of a rules-hygiene gate — which rule files are dead, and how big
 each rule file is — and it names no lens relation, so it costs nothing beyond the population.
+
+### `harness_blob_facts` / `harness_blob_imports` — what a file `@`-imports, as the harness reads it
+
+Facts exist only for blobs the harness reaches (its entry points and their imports, its
+declared-dialect extents), never for every blob VAT parses — join `harness = 'claude-code'` and read
+an absent row as "not reached", never as zero:
+
+```sql
+SELECT b.contentKey, f.injectedBytes, f.injectedTokens, f.paths
+  FROM blobs b
+  JOIN harness_blob_facts f ON f.blob = b.contentKey AND f.harness = 'claude-code'
+```
+
+`harness_blob_imports` is one row per `@` import the harness's own extractor reads out of a blob,
+keyed `(blob, harness, ordinal)`: `rawRef` as authored, `target` (what it resolves — `@` dropped,
+`#fragment` cut, `\ ` read as a space) and `line`.
+🪤 **Never answer "what does this CLAUDE.md import" from `blob_references`.** Its `at-prefixed`
+rows are VAT's candidates, not the harness's imports: `(@a.md)` is a candidate and loads nothing,
+`@a.md.` imports a file named `a.md.`, and a `@` in a `.ts` import's code span is code. The size
+Claude Code CHARGES for a memory file is `harness_blob_facts.injectedTokens` (frontmatter and HTML
+comment blocks removed, trimmed), not `blobs.tokenEstimate`; `injectedBytes = 0` means the file is
+dropped and its imports never followed. Which files it scopes by `paths:` is
+`harness_blob_facts.paths` (null = unscoped), read the harness's way for any extension — never
+`blobs.frontmatter`.
 
 ### Relations that are COMPUTED, not stored — and are skipped unless you name them
 
@@ -187,11 +220,22 @@ also holds every path-scoped rule and every file that is not paid at launch; on 
 unfiltered sum was wrong by **725,714 bytes** against a worst real chain of 86,720. `sizeCliff` is
 not the filter — it is the 4 MiB `CLAUDE.md` cliff's verdict, and `'loaded'` covers rows no launch
 charges. `SUM()` also skips NULL, and an `'unknown-size'` row has no `bytes`, so count those beside
-the sum:
+the sum — and a chain with no charged row sums to NULL, not 0, so wrap the sum in `COALESCE(…, 0)`.
+
+🚨 **A TOKEN sum also needs `headerTokens` and the chain's own `preambleTokens`.** Claude Code
+renders a one-line header (`Contents of <absolute path>(<kind>):`) before every charged file's
+content, and a once-per-launch preamble before the first one — both real, both never in `bytes` or
+`tokens` alone. `headerTokens` is a `claude_context_loads` column (per row); `preambleTokens` is a
+`claude_context_chains` column (per CHAIN — it is charged once however many rows the chain loads, so
+it is not repeated onto every load row). Reach it by correlated subquery, the same rule
+`claude_context_chains`' one-row-per-location shape already forces:
 
 ```sql
 SELECT l.chainId,
-       SUM(CASE WHEN l.launchCharge = 'charged' THEN l.bytes END) AS bytes,
+       COALESCE(SUM(CASE WHEN l.launchCharge = 'charged' THEN l.bytes END), 0) AS bytes,
+       COALESCE(SUM(CASE WHEN l.launchCharge = 'charged' THEN l.tokens + l.headerTokens END), 0)
+         + (SELECT c.preambleTokens FROM claude_context_chains c
+             WHERE c.chainId = l.chainId LIMIT 1) AS tokens,
        SUM(l.launchCharge = 'unknown-size') AS unsized
   FROM claude_context_loads l
  GROUP BY l.chainId
@@ -205,14 +249,23 @@ check is violated.
 
 ### VAT's built-in checks run first, with or without a config file
 
-A project that declares nothing still gets the **default set** — today two checks over
-`.claude/rules/`: `claude-rule-glob-inert`, emitting `CLAUDE_RULE_GLOB_INERT`
-at `info` for every `paths:` glob that matches no file in the tree, and
-`claude-rule-frontmatter-invalid`, emitting `CLAUDE_RULE_FRONTMATTER_INVALID`
-at `warning` for every rules file whose YAML frontmatter does not parse — its globs never reach
-`claude_rule_patterns`, so the first check cannot see them (an unquoted `- **/x/*.ts` is a YAML
-alias, the usual cause). Config
-only **adds** to that set or moves a severity in it; a directory with no
+A project that declares nothing still gets the **default set** — today three checks over
+`.claude/rules/`, each covering the one before it:
+
+- `claude-rule-glob-inert`, emitting `CLAUDE_RULE_GLOB_INERT`
+  at `info` for every `paths:` glob that matches no file in the tree.
+- `claude-rule-frontmatter-invalid`, emitting `CLAUDE_RULE_FRONTMATTER_INVALID`
+  at `warning` for every rules file whose YAML frontmatter VAT could not read — it does not parse
+  (an unquoted `- **/x/*.ts` is a YAML alias, the usual cause), or it parses to a sequence or a
+  scalar rather than a mapping. Either way its globs never reach `claude_rule_patterns`, so the
+  first check cannot see them.
+- `claude-rule-link-unchecked`, emitting `CLAUDE_RULE_LINK_UNCHECKED`
+  at `warning` for a rules file or rules directory that is a **symlink**. VAT realizes no link
+  path, so such a rule has no pattern rows and no blob at all and the two checks above pass on it.
+  Claude Code loads it when the link's target stays inside the root, skips it when the target
+  resolves outside, and loads nothing when the link resolves to nothing; the finding says which.
+
+Config only **adds** to that set or moves a severity in it; a directory with no
 `vibe-agent-toolkit.config.yaml` runs exactly the same built-ins, which is what makes "default-on"
 mean anything.
 

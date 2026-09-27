@@ -455,9 +455,29 @@ export const CODE_REGISTRY = {
   // did not count the file, it does not say the author did anything wrong.
   EXTENT_SYMLINK_NOT_REALIZED: entry(
     'info',
-    'A symbolic link in the tree is not realized: VAT never realizes a link\'s own path, so nothing in the projection is at that path and no size, Claude context chain or load, or claude_rule_patterns row counts it — although Claude Code reads a CLAUDE.md or rules file through a link. The finding names the target when it is inside the project root and says whether the target is realized at its own path; a target outside the root is described, never named.',
+    'A symbolic link in the tree is not realized: VAT never realizes a link\'s own path, so nothing in the projection is at that path and no size, Claude context chain or load, or claude_rule_patterns row counts it — although Claude Code reads a CLAUDE.md or rules file through a link. The finding names the target, root-relative, and says whether it is realized at its own path. A link whose target resolves outside the project root draws EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT instead, and one that resolves to nothing draws EXTENT_SYMLINK_TARGET_UNRESOLVED, so a query about declined links asks for all three codes.',
     'Nothing to fix when the target is realized at its own path and nothing needs to count the link. If the link is a CLAUDE.md or rules file whose load matters to a budget or rules check, replace the link with the file (or an @ import of it) so VAT sees it at that path. Set severity.EXTENT_SYMLINK_NOT_REALIZED to ignore to silence it.',
     'extent_symlink_not_realized',
+  ),
+  // The same decline as the code above, under its own name because WHERE the
+  // link points must not be carried in message text. A second code, not a
+  // nullable column that only links would fill. `info` like its siblings; all
+  // three (with EXTENT_SYMLINK_TARGET_UNRESOLVED) are always read together
+  // through `DECLINED_SYMLINK_CODES`.
+  EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT: entry(
+    'info',
+    'A symbolic link in the tree is not realized and its target resolves outside the project root, so the target is realized nowhere in this projection and is never named — its text can carry a home directory or any absolute path. Everything EXTENT_SYMLINK_NOT_REALIZED says about the link applies; this code adds only where the target lies, which decides whether Claude Code loads a linked rules file at all.',
+    'Nothing to fix when nothing needs to count the link. If the link is a rules file or rules directory, Claude Code skips it too — it loads one reached through a link only when the target stays inside the directory the session started in — so copy or vendor the content into the repository rather than linking it in. What Claude Code does with a CLAUDE.md linked from outside the root is not sourced. Set severity.EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT to ignore to silence it.',
+    'extent_symlink_target_outside_root',
+  ),
+  // The third member of `DECLINED_SYMLINK_CODES`: the host resolves the link to
+  // nothing. Neither sibling can say that truthfully — NOT_REALIZED means the
+  // link reaches something, OUTSIDE_ROOT would call an in-root spelling outside.
+  EXTENT_SYMLINK_TARGET_UNRESOLVED: entry(
+    'info',
+    'A symbolic link in the tree is not realized and resolves to nothing on this host — its target does not exist, the link loops, or it cannot be resolved — while its target text stays inside the project root. Everything EXTENT_SYMLINK_NOT_REALIZED says about the link applies; this code adds that Claude Code reads nothing through it.',
+    'Point the link at a file that exists, or delete it. A link that dangles only on this host (its target is generated or checked out elsewhere) resolves where the target exists. Set severity.EXTENT_SYMLINK_TARGET_UNRESOLVED to ignore to silence it.',
+    'extent_symlink_target_unresolved',
   ),
   SKILL_LENGTH_EXCEEDS_RECOMMENDED: entry(
     'warning',
@@ -884,13 +904,13 @@ export const CODE_REGISTRY = {
   ),
 
   // Projection path — a path-scoped Claude rule nothing can trigger.
-  // `info` because the observed population of inert globs is still empty, and
+  // `info` because no inert-glob population has been observed yet, and
   // because an inert glob can be deliberate: docs/validation-rule-design.md,
   // "Worked case: CLAUDE_RULE_GLOB_INERT ships at info".
   CLAUDE_RULE_GLOB_INERT: entry(
     'info',
-    'A path-scoped rules file under .claude/rules/ declares a paths: glob that matches no file VAT can see — tracked files, and untracked files git does not ignore — so no such file can load that rule. Reported per inert pattern, not per rule: a rule whose other patterns still match is reported only for the dead one.',
-    'First check whether the glob is one of the two shapes above and covers ignored or generated output. If it does, keep it. Otherwise delete the dead glob, or correct it to the path it meant — VAT reports the pattern and never rewrites it. The usual causes are a directory renamed or moved out from under the pattern, a missing ** between segments, and a pattern written against the repo root when rules match repository-relative paths. If the glob is deliberately ahead of its files, or scopes ignored output, set resources.validation.severity.CLAUDE_RULE_GLOB_INERT to ignore.',
+    'A path-scoped rules file under .claude/rules/ declares a paths: glob that matches no file VAT can see — tracked files, and untracked files git does not ignore — so no such file can load that rule. Reported per inert pattern, not per rule: a rule whose other patterns still match is reported only for the dead one. A ! pattern is reported when it excludes no file the rule would otherwise load, so it has no effect.',
+    'First check whether the glob covers ignored or generated output that VAT cannot see (a glob whose only matches would sit inside an ignored directory it does not itself name, or files an ignore line names that have not been generated yet). If it does, keep it. Otherwise delete the dead glob, or correct it to the path it meant — VAT reports the pattern and never rewrites it. The usual causes are a directory renamed or moved out from under the pattern, a missing ** between segments, or a leading ./ (Claude Code never matches ./docs/**; write docs/**). If the glob is deliberately ahead of its files, or scopes ignored output, set resources.validation.severity.CLAUDE_RULE_GLOB_INERT to ignore.',
     'claude_rule_glob_inert',
   ),
   // Projection path — a rules file whose frontmatter did not parse, so its
@@ -902,9 +922,22 @@ export const CODE_REGISTRY = {
   // otherwise (docs/validation-rule-design.md). The doc entry says so.
   CLAUDE_RULE_FRONTMATTER_INVALID: entry(
     'warning',
-    'A rules file under .claude/rules/ has YAML frontmatter that does not parse, so VAT read no paths: from it: the rule is counted as if it had no paths: (a project-root rule at launch, a nested one on demand), and claude_rule_patterns holds no row for any glob it declares — which is why CLAUDE_RULE_GLOB_INERT cannot report them. What Claude Code does with such a file is not documented.',
-    'Fix the YAML. The usual cause is a glob that starts with * left unquoted — YAML reads a leading * as an alias — so quote every paths: entry ("**/x/*.ts"); a value containing ": " needs quoting for the same reason. Set resources.validation.severity.CLAUDE_RULE_FRONTMATTER_INVALID to ignore to silence it.',
+    'A rules file under .claude/rules/ has YAML frontmatter VAT could not read — it does not parse, or it parses to a sequence or a scalar rather than a mapping — so VAT read no paths: from it: the rule is counted as if it had no paths: (a project-root rule at launch, a nested one on demand), and claude_rule_patterns holds no row for any glob it declares — which is why CLAUDE_RULE_GLOB_INERT cannot report them. What Claude Code does with such a file is not documented.',
+    'Fix the YAML. The usual cause is a glob that starts with * left unquoted — YAML reads a leading * as an alias — so quote every paths: entry ("**/x/*.ts"); a value containing ": " needs quoting for the same reason. A block that is valid YAML but decodes to a sequence or a scalar draws the same code: frontmatter has to be a mapping for paths: to exist at all. Set resources.validation.severity.CLAUDE_RULE_FRONTMATTER_INVALID to ignore to silence it.',
     'claude_rule_frontmatter_invalid',
+  ),
+  // Projection path — a `.claude/rules/` file or directory that is ITSELF a
+  // symlink is realized at no path, so BOTH rule checks above are blind to it.
+  // ⛔ ONE code and ONE severity across all three arms — the MESSAGE splits,
+  // read from the condition row's code (EXTENT_SYMLINK_NOT_REALIZED /
+  // EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT / EXTENT_SYMLINK_TARGET_UNRESOLVED), never
+  // its prose: one concern, one severity entry, the same size of defect each
+  // way. Not `error` (the link is legitimate), not `info` (VAT is not guessing).
+  CLAUDE_RULE_LINK_UNCHECKED: entry(
+    'warning',
+    'A .claude directory, a .claude/rules/ directory, or a file under one is itself a symbolic link. VAT realizes no link path, so the linked rule is in no claude_rule_patterns row and in no blobs row at that path — CLAUDE_RULE_GLOB_INERT cannot see its paths: globs and CLAUDE_RULE_FRONTMATTER_INVALID cannot see its frontmatter. Whether the rule is in force depends on where the link points, and the finding says which of three arms applies: Claude Code loads a rules file or directory reached through a link whose target stays inside the directory the session started in, skips one whose target resolves outside it, and loads nothing through a link that resolves to nothing.',
+    'For a target inside the project root the rule is in force and unchecked: replace the link with the file itself, or with an @ import of the shared file from a rules file that is not a link, if you want VAT to check its globs and frontmatter. For a target outside it the rule is in force nowhere, because Claude Code skips the link too — copy or vendor those rules into the repository, since sharing one rule set across repositories by symlink does not work. For a link that resolves to nothing no rule is loaded through it: point it at a file that exists or delete it. Keep the link and set resources.validation.severity.CLAUDE_RULE_LINK_UNCHECKED to ignore to accept the blind spot.',
+    'claude_rule_link_unchecked',
   ),
 } as const satisfies Record<string, CodeRegistryEntry>;
 

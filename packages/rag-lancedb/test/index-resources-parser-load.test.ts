@@ -86,7 +86,7 @@ vi.mock('@lancedb/lancedb', () => {
   };
   return {
     connect: async () => ({
-      tableNames: async () => [],
+      listTables: async () => ({ tables: [] }),
       createTable: async () => table,
       openTable: async () => table,
       close: () => undefined,

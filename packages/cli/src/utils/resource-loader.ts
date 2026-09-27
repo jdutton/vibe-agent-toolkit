@@ -213,9 +213,11 @@ export const RESOURCES_CRAWL_WALK = 'walk';
  * `LINK_BROKEN_FILE` is not reported on this lane.** That is a real loss, it is
  * known, and it is the cost this default was accepted at; closing it is its own
  * change (teaching an extent to admit `120000` entries as their own paths).
- * The omission is no longer SILENT — each declined link is an `info`
- * `EXTENT_SYMLINK_NOT_REALIZED` row, and a dangling in-root target is named
- * there as unrealized — but that row is not a `LINK_BROKEN_FILE` finding.
+ * The omission is no longer SILENT — each declined link is an `info` row under
+ * one of the three declined-link codes (`EXTENT_SYMLINK_NOT_REALIZED`,
+ * `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT`, `EXTENT_SYMLINK_TARGET_UNRESOLVED` — the
+ * last is a dangling in-root target) — but no such row is a `LINK_BROKEN_FILE`
+ * finding.
  * {@link RESOURCES_CRAWL_WALK} is the one-value escape hatch meanwhile.
  *
  * Read from the environment at each call rather than memoized at module load:

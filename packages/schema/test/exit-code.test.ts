@@ -15,12 +15,24 @@ import { describe, expect, it } from 'vitest';
 import {
   ExitCode,
   errorDiagnostics,
-  exitCodeForSeverityCounts,
+  exitCodeForReport,
+  exitCodeOfChild,
   isExitCode,
+  type ReportStatus,
   type SeverityCounts,
 } from '../src/index.js';
 
 const counts = (errors: number, warnings: number, info = 0): SeverityCounts => ({ errors, warnings, info });
+
+/** A completed document with these counts — the status derived as `buildReport` derives it. */
+function completed(summary: SeverityCounts): { status: ReportStatus; summary: SeverityCounts } {
+  const total = summary.errors + summary.warnings + summary.info;
+  return { status: total === 0 ? 'ok' : 'findings', summary };
+}
+
+/** The same counts, as if exitCodeForReport were a severity-count mapping. */
+const exitCodeForSeverityCounts = (summary: SeverityCounts, options: { strict?: boolean } = {}): number =>
+  exitCodeForReport(completed(summary), options);
 
 describe('ExitCode', () => {
   it('is exactly the three-way contract: 0 ok, 1 findings, 2 error', () => {
@@ -42,7 +54,7 @@ describe('isExitCode', () => {
   });
 });
 
-describe('exitCodeForSeverityCounts', () => {
+describe('exitCodeForReport — a COMPLETED document', () => {
   it('is OK when nothing is at error severity', () => {
     expect(exitCodeForSeverityCounts(counts(0, 0))).toBe(ExitCode.OK);
     expect(exitCodeForSeverityCounts(counts(0, 3, 9))).toBe(ExitCode.OK);
@@ -61,6 +73,45 @@ describe('exitCodeForSeverityCounts', () => {
     for (const c of [counts(0, 0), counts(9, 9, 9), counts(0, 9)]) {
       expect(exitCodeForSeverityCounts(c, { strict: true })).not.toBe(ExitCode.ERROR);
     }
+  });
+});
+
+describe('exitCodeForReport — the document decides, not the call site', () => {
+  it('is ERROR for a document whose status is `error`, whatever its counts say', () => {
+    // 🔑 `error` means the command could not do its job. A verb that published
+    // that and exited 1 told a CI wrapper "the tree failed its gate" about a
+    // run that never examined the tree.
+    expect(exitCodeForReport({ status: 'error', summary: counts(0, 0) })).toBe(ExitCode.ERROR);
+    expect(exitCodeForReport({ status: 'error', summary: counts(3, 0) })).toBe(ExitCode.ERROR);
+  });
+
+  it('is OK for `findings` that are all warnings — status is literal, the gate is the counts', () => {
+    // 🪤 `findings` means the list is non-empty, not that the gate failed. A
+    // straight `findings → 1` table would fail every run with one warning.
+    expect(exitCodeForReport({ status: 'findings', summary: counts(0, 2) })).toBe(ExitCode.OK);
+    expect(exitCodeForReport({ status: 'findings', summary: counts(0, 2) }, { strict: true }))
+      .toBe(ExitCode.FINDINGS);
+  });
+
+  it('answers each of the three values for exactly one kind of document', () => {
+    const answers = [
+      exitCodeForReport({ status: 'ok', summary: counts(0, 0) }),
+      exitCodeForReport({ status: 'findings', summary: counts(1, 0) }),
+      exitCodeForReport({ status: 'error', summary: counts(0, 0) }),
+    ];
+    expect(answers).toStrictEqual([ExitCode.OK, ExitCode.FINDINGS, ExitCode.ERROR]);
+  });
+});
+
+describe('exitCodeOfChild', () => {
+  it('forwards a child that ended on the contract', () => {
+    expect([0, 1, 2].map((code) => exitCodeOfChild(code))).toStrictEqual([0, 1, 2]);
+  });
+
+  it('reads anything else — a signal death, an abort code — as ERROR, never forwarded verbatim', () => {
+    // 🚨 134 is Node's own fatal abort. Forwarded verbatim it is a fourth exit
+    // code, and `null` (a signal) coerced to 0 is a crash that reads as a pass.
+    for (const code of [null, 134, 3, -1]) expect(exitCodeOfChild(code)).toBe(ExitCode.ERROR);
   });
 });
 

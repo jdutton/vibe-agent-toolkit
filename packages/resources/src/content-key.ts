@@ -126,8 +126,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 
+import { readDecodableBytes } from '@vibe-agent-toolkit/utils/fs';
 import { decodeTextContent, type TextProvenance } from '@vibe-agent-toolkit/utils/text';
 
 import { type DocumentParserKind, mimeTypeForPath, parserKindForMimeType } from './mime-type.js';
@@ -364,7 +364,9 @@ export function isParsableContent(keyed: KeyedContent): keyed is ParsableContent
  *   Callers that route by extension pass `parserKindForPath(filePath)`.
  * @returns The content, its key, and the parser it routes to
  * @throws Whatever `readFile` throws — callers decide whether a read failure is
- *   fatal or a miss
+ *   fatal or a miss — and `TextTooLargeError` (`TEXT_TOO_LARGE`) for a file too
+ *   large to decode, which is neither: the bytes are readable, just not as one
+ *   string
  */
 export async function readContentWithKey<K extends ParserKind>(
   filePath: string,
@@ -373,7 +375,11 @@ export async function readContentWithKey<K extends ParserKind>(
   // Read as bytes and decode here, rather than letting readFile decode: the key
   // must be over what was on disk, the decode is lossy, and `readFile(path,
   // 'utf-8')` offers no BOM or encoding handling at all.
-  const bytes = await readFile(filePath);
+  //
+  // `readDecodableBytes`, not a bare `readFile`: a file too large to become a
+  // string is refused by `fstat` with `TextTooLargeError` before a byte is read,
+  // rather than read whole (up to 2 GiB) only for the decode below to refuse it.
+  const bytes = await readDecodableBytes(filePath);
   // `decodeTextContent` is the ONE decoder — see `utils`' text-content.ts. The
   // bytes handed to `computeContentKey` are the same ones, undecoded, on purpose:
   // this function COMPOSES a decode with a raw-bytes key.

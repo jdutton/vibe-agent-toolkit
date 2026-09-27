@@ -19,4 +19,5 @@ export {
   type EncodingSource,
   type TextEncoding,
   type TextProvenance,
+  TextTooLargeError,
 } from './text-content.js';

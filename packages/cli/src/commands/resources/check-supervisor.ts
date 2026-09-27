@@ -51,6 +51,20 @@
  * check's budget. A gate that can hang forever is the thing being fixed, and
  * that includes hanging before the first statement.
  *
+ * 🔑 **The clock starts at the spawn, and the child's first line is `started`.**
+ * The spawn is the only instant this process can observe, so the child's own
+ * boot — Node's startup and the CLI's module graph — is a unit like any other:
+ * bounded by the budget, and closed by the `started` line the child writes
+ * before it touches the tree. Without that line the boot was charged to the
+ * population, and a loaded runner's slower boot killed a population that was
+ * fine. {@link WatchdogState}'s `quietSince` is therefore `startedAt`, and must
+ * stay so: starting the clock at the first line instead would leave a child
+ * that hangs while booting with no bound at all.
+ *
+ * Wherever a kill lands — startup, population, a check, the document — the
+ * parent publishes the same kind of document and exits 1. A kill is one outcome
+ * and gets one exit code; see `buildInterruptedCheckInput`.
+ *
  * ⚠️ **That property holds for the CHECKS. It does NOT hold for the population,
  * and the difference is not a detail.** The population emits exactly ONE line,
  * at its end, so for the single longest unit in a cold run the budget degrades

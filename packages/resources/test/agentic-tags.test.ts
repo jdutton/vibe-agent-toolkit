@@ -262,6 +262,14 @@ describe('classifyPath — normalisation', () => {
     expect(tagsOf('.CLAUDE/RULES/x.md', 'x.md')).toContain(RULES_FILE);
     expect(tagsOf('Packages/CLI/.Claude/Agents/A.md', 'a.md')).toContain(SUBAGENT);
   });
+
+  // The directory is looked up by name, so its case is the filesystem's; the
+  // extension is a string test on the `readdir` name (`Le.name.endsWith(".md")`
+  // in `Lke`, docs/external/claude-code-memory-loader.md), exact on every OS.
+  it('never classifies a rules file whose extension is not exactly `.md`', () => {
+    expect(tagsOf('.claude/rules/LOUD.MD', 'loud.md')).not.toContain(RULES_FILE);
+    expect(tagsOf('.claude/rules/Mixed.Md', 'mixed.md')).not.toContain(RULES_FILE);
+  });
 });
 
 describe('loading classes', () => {

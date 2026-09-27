@@ -39,7 +39,7 @@ function key(writer, index) {
   return `markdown.${digits}`;
 }
 
-/** The `blobs` row for one key; the three child tables stay empty here. */
+/** The `blobs` row for one key; the child tables stay empty here. */
 function blobBundle(contentKey) {
   return {
     blobs: [{
@@ -61,6 +61,8 @@ function blobBundle(contentKey) {
     blobReferences: [],
     blobSections: [],
     blobConditions: [],
+    harnessBlobFacts: [{ blob: contentKey, harness: 'claude-code', injectedBytes: 1, injectedTokens: 1, paths: null }],
+    harnessBlobImports: [],
   };
 }
 

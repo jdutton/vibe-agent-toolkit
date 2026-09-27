@@ -109,25 +109,53 @@
                   "type": "string"
                 },
                 "population": {
-                  "type": "string",
-                  "enum": [
-                    "derived",
-                    "store"
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "derived",
+                        "store"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
                   ]
                 },
                 "populationSecs": {
-                  "type": "number",
-                  "minimum": 0
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "lensSecs": {
-                  "type": "number",
-                  "minimum": 0
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "lensesEvaluated": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
+                  "anyOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
                 },
                 "boundsStatement": {
                   "type": "string"

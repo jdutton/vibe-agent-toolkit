@@ -11,7 +11,7 @@
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { isUnderRoot } from '../../src/path-containment.js';
+import { canonicalPath, isUnderRoot } from '../../src/path-containment.js';
 import { safePath } from '../../src/path-utils.js';
 import { HOSTILE_NAMES, type HostileTree, hostileTreePerTest } from '../../src/testing/hostile-tree.js';
 
@@ -119,5 +119,24 @@ describe('isUnderRoot', () => {
     // The unreadable directory itself has a realpath (its parent can be read);
     // a child of it cannot be examined at all.
     expect(() => isUnderRoot(tree().root, safePath.join(tree().unreadable, 'child'))).toThrow(/EACCES/);
+  });
+});
+
+describe('canonicalPath', () => {
+  const hostile = hostileTreePerTest('canonical-path-');
+  beforeEach(hostile.plant);
+  afterEach(hostile.clear);
+  const tree = (): HostileTree => hostile.tree();
+
+  it('spells a path reached through a link to the root exactly as the root\'s own members', ({ skip }) => {
+    const alias = tree().rootAlias;
+    if (alias === null) skip('host cannot create symlinks');
+    expect(canonicalPath(safePath.join(alias, 'member'))).toBe(canonicalPath(tree().member));
+  });
+
+  it('canonicalizes a missing path from its deepest existing ancestor, keeping the missing tail', ({ skip }) => {
+    const alias = tree().rootAlias;
+    if (alias === null) skip('host cannot create symlinks');
+    expect(canonicalPath(safePath.join(alias, 'not', 'there'))).toBe(`${canonicalPath(tree().root)}/not/there`);
   });
 });

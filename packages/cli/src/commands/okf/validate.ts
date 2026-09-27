@@ -17,13 +17,21 @@ import {
   type OkfBundleReport,
   type OkfFinding,
 } from '@vibe-agent-toolkit/resources';
-import { buildReport, exitCodeForSeverityCounts, reportSchema, type Finding, type Report } from '@vibe-agent-toolkit/schema';
+import {
+  buildReport,
+  exitCodeForReport,
+  reportSchema,
+  toFindings,
+  type Finding,
+  type Report,
+} from '@vibe-agent-toolkit/schema';
 import { findConfigFile, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { handleReportCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeStructuredOutput } from '../../utils/output.js';
+import { nothingCheckedFinding } from '../../utils/run-integrity.js';
 
 export interface OkfValidateOptions {
   format?: 'yaml' | 'json';
@@ -55,9 +63,11 @@ export const OkfValidateDataSchema = z.object({
    * project declared no `okf.bundles` at all — a report indistinguishable from
    * a bundle read in full and found conformant, so a mistyped key
    * (`okf.bundle:`, `okf.Bundles:`) read as a clean bill of health. The
-   * envelope's REQUIRED `examined` now says `0` in that case, and this sentence
-   * says why. The exit code stays 0: nothing failed, and failing a build for a
-   * feature the project never opted into would be worse.
+   * envelope's REQUIRED `examined` now says `0` in that case, this sentence
+   * says why, and the run is refused (`RESOURCE_CHECK_BROKEN`, exit 1): a gate
+   * that examined nothing must not read as a pass to a consumer gating on the
+   * status or the exit code. A project that declares no bundles has no reason
+   * to run this verb.
    */
   notice: z.string().optional(),
 }).strict();
@@ -178,10 +188,17 @@ export function summarizeOkfBundles(
     0,
   );
   const notice = noticeFor(bundles);
+  // A run that examined nothing is refused through the shared run-integrity
+  // mechanism. It stands down when the run already carries a finding: the only
+  // way to examine zero AND find something is an unreadable root, whose own
+  // `error` finding already fails the run and says the truer thing.
+  const refusal = findings.length > 0
+    ? []
+    : toFindings(nothingCheckedFinding(examined, [], () => notice ?? NO_BUNDLES_NOTICE));
 
   return buildReport<OkfValidateData>({
     examined,
-    findings,
+    findings: [...refusal, ...findings],
     data: {
       bundles: bundles.map((report) => ({
         bundle: report.bundle,
@@ -238,10 +255,9 @@ export async function okfValidateCommand(
   try {
     const report = { ...(await okfValidateReport(bundleArg, options)), durationMs: Date.now() - startTime };
     writeStructuredOutput(report, options.format);
-    // Read from the counts the report PUBLISHES, not from the status word: an
-    // adopter who promotes or lowers a bundle's severity then gates on exactly
-    // the number a reader can see.
-    process.exit(exitCodeForSeverityCounts(report.summary));
+    // Derived from the report it just PUBLISHED: an adopter who promotes or
+    // lowers a bundle's severity then gates on exactly the number a reader sees.
+    process.exit(exitCodeForReport(report));
   } catch (error) {
     handleReportCommandError(error, logger, startTime, 'OKF validate', options.format);
   }

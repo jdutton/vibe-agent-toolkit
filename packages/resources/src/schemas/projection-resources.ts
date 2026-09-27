@@ -112,12 +112,17 @@ export type ResourceRow = z.infer<typeof ResourceRowSchema>;
  * - `deferred` — this path has bytes, but no consumer has asked for them yet,
  *   so they were never read. **This is not a failure**, and it is the only
  *   member that a later pass can legitimately turn into `keyed`.
- * - `unreadable` — a read was attempted and it threw. A fact about the corpus
- *   (a permissions quirk, a vanished file), never an error in the harness.
+ * - `unreadable` — a read was attempted and the filesystem refused it. A fact
+ *   about the corpus (a permissions quirk, a vanished file), never an error in
+ *   the harness — and never anything but the filesystem's refusal.
+ * - `oversize` — the file is too large to decode into a JS string (past
+ *   `MAX_DECODABLE_BYTES`, V8's string-length limit), so it was refused by size
+ *   and never read. Not `unreadable`: nothing is wrong with the file's
+ *   permissions, and a reader sent to check them would find nothing.
  * - `none` — there are no bytes here to key at all: the path is absent, or a
  *   directory, or a dangling symlink.
  */
-export const ContentStateSchema = z.enum(['keyed', 'deferred', 'unreadable', 'none'])
+export const ContentStateSchema = z.enum(['keyed', 'deferred', 'unreadable', 'oversize', 'none'])
   .describe('Why this realization does or does not carry a content key');
 
 export type ContentState = z.infer<typeof ContentStateSchema>;
@@ -289,9 +294,12 @@ export type ResourceExtentRow = z.infer<typeof ResourceExtentRowSchema>;
  * the issue the shipped walker produces.
  *
  * **Columns, not a sibling table.** The relation is 1:1 with the row: the
- * table's key is `(extentId, path, code, resourceId)`, so a target refused
- * through three references records ONE row, and a sibling table would be a
- * one-to-one join keyed on a four-column composite — a join that buys nothing
+ * table's key is `(extentId, path, code, resourceId, sourcePath, sourceLine,
+ * sourceRef)`, so two references that provoke the SAME code at the SAME path
+ * but sit at different positions — a different referring file, a different
+ * line, or the same line spelled differently — each record their own row; a
+ * sibling table would be a one-to-one join keyed on a seven-column composite —
+ * a join that buys nothing
  * and an FK no other table in the projection has. Sparsity is not an argument
  * against: `symlinkResolves`, `resourceId` and `vatId` are all "null unless
  * this row is that kind of row", and the alternative — an absent key — is the
@@ -305,12 +313,16 @@ export type ResourceExtentRow = z.infer<typeof ResourceExtentRowSchema>;
  * {@link CONDITION_WITHOUT_REFERENCE} at those sites so the intent is stated
  * rather than inferred from six null literals.
  *
- * ⚠️ **The provenance is ONE witness, not the list.** The table's grain is
- * unchanged — the key does not include these columns, so `ProjectionBuilder`
- * keeps the first row and drops the rest, and the surviving row names the
- * first reference that provoked the condition (first in blob order, then
- * `blob_references.ordinal`). A consumer that needs every reference to a
- * refused path reads `blob_references`, which is where that list lives.
+ * ⚠️ **The provenance still collapses to ONE witness when the key genuinely
+ * repeats** — the fixpoint's own re-emission of the identical reference every
+ * pass (same referring file, same line, same `rawRef`). `ProjectionBuilder`
+ * keeps the first row filed under a key and drops the rest, so a re-emission
+ * is a no-op. Two DIFFERENT referring files whose reference sits at the same
+ * line with the identical spelling are distinguishable — the key carries
+ * `sourcePath` — and record two rows. A consumer that needs every reference to
+ * a refused path, not just every distinguishable one (two identical references
+ * on one line of one file), reads `blob_references`, which is where the full
+ * list lives.
  *
  * `sourcePath` repeats `path` for a condition anchored to the referring file
  * (`CLOSURE_REFERENCE_UNRESOLVED` names the file an author can open, since its

@@ -9,7 +9,7 @@
  * `--only` exited 1) and nothing asserted the contract as a whole.
  */
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { ExitCode, exitCodeForReport, type ExitDeterminingDocument } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
@@ -116,8 +116,18 @@ describe('the exit-code contract, across verbs (system test)', () => {
     expect((await executeCli(ctx.binPath, ['skill', 'review', dir, '--strict'])).status).toBe(ExitCode.FINDINGS);
   });
 
-  it('every verb in the table uses only the three contract values', () => {
-    const codes = new Set(SCENARIOS.map((s) => s.expected));
-    expect([...codes].sort((a, b) => a - b)).toEqual([ExitCode.OK, ExitCode.FINDINGS, ExitCode.ERROR]);
+  it('every expected code in the table is the one the shared derivation gives its outcome', () => {
+    // 🪤 This used to assert that the table's expected codes were the three
+    // contract values — the table's own literals checked against themselves,
+    // which cannot fail. The expectation that CAN fail is that each row's code
+    // is what `exitCodeForReport` derives for that outcome: a row written as
+    // `audit → error: 1` is exactly the hand-mapped divergence this pins against.
+    const documentFor = (outcome: Scenario['outcome']): ExitDeterminingDocument => {
+      if (outcome === 'ok') return { status: 'ok', summary: { errors: 0, warnings: 0, info: 0 } };
+      if (outcome === 'findings') return { status: 'findings', summary: { errors: 1, warnings: 0, info: 0 } };
+      return { status: 'error', summary: { errors: 0, warnings: 0, info: 0 } };
+    };
+    const mismatched = SCENARIOS.filter((s) => s.expected !== exitCodeForReport(documentFor(s.outcome)));
+    expect(mismatched).toEqual([]);
   });
 });

@@ -36,11 +36,11 @@ import { byCodePoint, setupClaudeContextTree } from './claude-context-tree.js';
  * a two-root diamond while proving nothing.
  *
  * `packages/cli/.claude/rules/local.md` imports out of its own directory on
- * purpose: it is a NESTED rules file, so the session loads it on demand, and
- * its import target must inherit that class rather than being charged to the
- * launch-time budget. `@../guide.md` lands in `packages/cli/.claude/`, which is
- * outside `.claude/rules/` and so is not itself a rules file — the target has
- * to earn its class from the importer, not from its own path.
+ * purpose: it is a NESTED rules file, which a session started at or below
+ * `packages/cli` reads at launch (the harness walks `.claude/rules` in every
+ * directory on the chain), and `@../guide.md` lands in `packages/cli/.claude/`,
+ * outside `.claude/rules/` — so the target earns its class from the walk that
+ * reached it, not from its own path.
  */
 const TREE: Record<string, string> = {
   'CLAUDE.md': '# Root\n\n@docs/handbook.md\n',
@@ -63,7 +63,7 @@ const QUERIED_DIR = 'packages/cli/src';
 /** The path-scoped rule, whose admission differs between the two queries above. */
 const SCOPED_RULE = '.claude/rules/scoped.md';
 
-/** The nested rule — on demand, and the reason its import target is too. */
+/** The nested rule — on the chain of every query below `packages/cli`, so loaded at launch there. */
 const NESTED_RULE = 'packages/cli/.claude/rules/local.md';
 
 /** The nested rule's import target, one directory up and NOT itself a rules file. */
@@ -159,18 +159,24 @@ describe('whatLoadsAt over a real populated tree', () => {
     // "may fire" case wearing a file query's clothes), and it is still on demand.
     expect(scoped?.admissions).toEqual([{ kind: 'glob-rule', pattern: 'packages/**/*.ts' }]);
     expect(scoped?.loadClass).toBe('on-demand');
-    // The launch set over a REAL tree, exhaustively: the unscoped root rule and
-    // the ancestor CLAUDE.md's closure, and nothing path-scoped.
+    // The launch set over a REAL tree, exhaustively: the unscoped root rule, the
+    // ancestor CLAUDE.md's closure, and the unscoped rule on the chain at
+    // `packages/cli` with its import — and nothing path-scoped.
     expect(answer.rows.filter((row) => row.loadClass === 'always').map((row) => row.path).sort(byCodePoint))
-      .toEqual(['.claude/rules/always.md', 'CLAUDE.md', HANDBOOK, DEEP].sort(byCodePoint));
+      .toEqual(['.claude/rules/always.md', 'CLAUDE.md', HANDBOOK, DEEP, NESTED_RULE, NESTED_RULE_TARGET].sort(byCodePoint));
   });
 
   it('resolves an import RELATIVE TO THE IMPORTER, not to the corpus root', () => {
-    const handbook = rowAt(answerAt('docs'), HANDBOOK);
+    const answer = answerAt('docs');
 
-    expect(handbook?.admissions).toContainEqual({
-      kind: 'import', rootPath: 'docs/CLAUDE.md', viaPath: 'docs/CLAUDE.md', depth: 1,
-    });
+    // `docs/CLAUDE.md`'s `@handbook.md` names `docs/handbook.md`: read against
+    // the root it would name a missing `handbook.md` and land an unresolved
+    // condition. The launch walk reaches the handbook through the root
+    // `CLAUDE.md` first, so that is the one admission it records.
+    expect(answer.conditions).toEqual([]);
+    expect(rowAt(answer, HANDBOOK)?.admissions).toEqual([
+      { kind: 'import', rootPath: 'CLAUDE.md', viaPath: 'CLAUDE.md', depth: 1 },
+    ]);
   });
 
   it('charges the transitive import once, with its real depth', () => {
@@ -184,12 +190,12 @@ describe('whatLoadsAt over a real populated tree', () => {
     expect(answerAt('docs').rows.map((row) => row.path)).not.toContain(NESTED_RULE);
   });
 
-  it('propagates the import class from the closure ROOT, not from the fact of the import', () => {
+  it('loads a nested rule on the chain, and what it imports, at launch', () => {
     const answer = answerAt(QUERIED_FILE);
 
-    expect(rowAt(answer, NESTED_RULE)?.loadClass).toBe('on-demand');
-    expect(rowAt(answer, NESTED_RULE_TARGET)?.loadClass).toBe('on-demand');
-    expect(rowAt(answer, HANDBOOK)?.loadClass).toBe('always');
+    expect(rowAt(answer, NESTED_RULE)?.loadClass).toBe('always');
+    expect(rowAt(answer, NESTED_RULE_TARGET)?.loadClass).toBe('always');
+    expect(rowAt(answer, SCOPED_RULE)?.loadClass).toBe('on-demand');
   });
 
   it('attributes every member it charges', () => {
@@ -214,7 +220,7 @@ describe('whatLoadsAt over a real populated tree', () => {
     expect(declarations).not.toHaveLength(0);
     for (const declaration of declarations) {
       expect(declaration.referenceDialect).toBe('claude-import');
-      expect(declaration.follow).toEqual(['at-prefixed']);
+      expect(declaration.follow).toEqual([]);
       expect(realizedPaths.has(declaration.closureFrom)).toBe(true);
     }
   });

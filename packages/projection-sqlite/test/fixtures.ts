@@ -84,6 +84,21 @@ export function sampleBlobRows(key: string = FIRST_BLOB): BlobScopedRows {
       message: '',
       line: null,
     }],
+    harnessBlobFacts: [{
+      blob: key,
+      harness: 'claude-code',
+      injectedBytes: 48,
+      injectedTokens: 12,
+      paths: ['src/**', 'docs/*.md'],
+    }],
+    harnessBlobImports: [{
+      blob: key,
+      harness: 'claude-code',
+      ordinal: 0,
+      rawRef: String.raw`@my\ other.md#top`,
+      target: 'my other.md',
+      line: 1,
+    }],
   };
 }
 

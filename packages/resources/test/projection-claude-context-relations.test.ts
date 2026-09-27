@@ -13,12 +13,14 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { estimateTokens } from '../src/link-classify.js';
 import { SIZE_CLIFF_STATES } from '../src/projection/claude-context-accounting.js';
 import { LAUNCH_CHARGES } from '../src/projection/claude-context-launch-charge.js';
 import {
   claudeContextRelations,
   contextChainId,
 } from '../src/projection/claude-context-relations.js';
+import { CLAUDE_CODE } from '../src/projection/harness/claude-code.js';
 import type { Projection } from '../src/projection/projection.js';
 import { ClaudeContextLoadRowSchema, type ClaudeContextLoadRow } from '../src/schemas/projection-claude-context.js';
 
@@ -104,6 +106,32 @@ describe('claudeContextRelations', () => {
       // The representative is a working location too — which is what makes
       // `claude_context_chains` self-joinable without a second relation.
       expect(locations.has(row.representative)).toBe(true);
+    }
+  });
+
+  it('publishes the once-per-launch preamble on the CHAIN, repeated per location like `representative`', async () => {
+    const projection = await claudeContextFixture(TREE);
+    const { claudeContextChains } = claudeContextRelations(projection);
+
+    // The root's own CLAUDE.md is genuinely charged, so its chain's preamble
+    // is non-zero and equals the one estimate every reader of this column
+    // must reproduce by hand — `CLAUDE_CODE.launchPreamble`, estimated.
+    const rootChain = claudeContextChains.filter((row) => row.chainId === contextChainId(ROOT));
+    expect(rootChain.length).toBeGreaterThan(0);
+    for (const row of rootChain) {
+      expect(row.preambleTokens).toBe(estimateTokens(CLAUDE_CODE.launchPreamble));
+    }
+
+    // Repeated per location, not per chain — the same asymmetry `representative`
+    // carries, stated in the schema's own docstring.
+    const byChain = new Map<string, Set<number>>();
+    for (const row of claudeContextChains) {
+      const seen = byChain.get(row.chainId) ?? new Set<number>();
+      seen.add(row.preambleTokens);
+      byChain.set(row.chainId, seen);
+    }
+    for (const [chainId, values] of byChain) {
+      expect(values.size, chainId).toBe(1);
     }
   });
 

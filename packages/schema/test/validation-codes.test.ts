@@ -235,6 +235,18 @@ describe('CODE_REGISTRY — inert Claude rule globs', () => {
     expect(entry.defaultSeverity).toBe('info');
     expect(entry.reference).toBe('#extent_symlink_not_realized');
   });
+
+  // The built-in splits its message on three condition codes, so the registry
+  // text an adopter reads must name all three arms — a dangling rules link is
+  // the arm the two-arm text described as neither "in force" nor "skipped".
+  it('describes all three CLAUDE_RULE_LINK_UNCHECKED arms, with a remedy for the unresolved one', () => {
+    const entry = CODE_REGISTRY.CLAUDE_RULE_LINK_UNCHECKED;
+    expect(entry.defaultSeverity).toBe('warning');
+    expect(entry.description).toMatch(/inside/);
+    expect(entry.description).toMatch(/outside/);
+    expect(entry.description).toContain('loads nothing through a link that resolves to nothing');
+    expect(entry.fix).toContain('point it at a file that exists or delete it');
+  });
 });
 
 describe('IssueCodeSchema', () => {

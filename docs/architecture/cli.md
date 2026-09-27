@@ -214,10 +214,10 @@ export async function myCommand(
     // 1. Validate inputs
     // 2. Process
     // 3. Output results (YAML to stdout)
-    // 4. Exit with appropriate code — a member of `ExitCode`, never a literal
-    //    (`local/no-literal-process-exit`)
+    // 4. Exit with the code the published document DERIVES — never one
+    //    decided beside it (`local/no-literal-process-exit`, `derived`)
 
-    process.exit(ExitCode.OK);
+    process.exit(exitCodeForReport(report));
   } catch (error) {
     handleCommandError(error, logger, startTime, 'MyCommand');
   }
@@ -562,9 +562,25 @@ of materialising these facts as tables: the built-in is the default REPORT, and 
 stays askable by anyone who wants a different answer.
 
 ✅ The second is `claude-rule-frontmatter-invalid` (`CLAUDE_RULE_FRONTMATTER_INVALID`), and it
-exists because of the first one's blind spot: a rules file whose YAML frontmatter does not parse
+exists because of the first one's blind spot: a rules file whose YAML frontmatter VAT cannot read
 produces no `claude_rule_patterns` rows, so the inert check had nothing to read and passed. It reads
-`blobs.frontmatterError` for identities tagged `rules-file` instead — one finding per file.
+`blobs.frontmatterError` for identities tagged `rules-file` instead — one finding per file. Two
+reasons fill that column: YAML that does not parse, and a block that parses to a **sequence or a
+scalar**, which has no `paths:` key to read and used to be indistinguishable from a file with no
+frontmatter at all.
+
+✅ The third is `claude-rule-link-unchecked` (`CLAUDE_RULE_LINK_UNCHECKED`), and it exists because of
+BOTH of their blind spots. VAT realizes no symbolic link's own path, so a `.claude/rules/x.md` that
+is a link — or a linked rules directory — has no realization row, no blob and no pattern row, and
+both checks above pass on it — while Claude Code loads it when the link's target stays inside the
+root, skips it when the target resolves outside, and loads nothing when the link resolves to nothing
+([evidence](../external/claude-code-rules-paths-behaviour.md)). It reads the `realization_conditions`
+rows the extents record under any declined-link code (`EXTENT_SYMLINK_NOT_REALIZED`,
+`EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` or `EXTENT_SYMLINK_TARGET_UNRESOLVED`, all `info`, read together through `DECLINED_SYMLINK_CODES`)
+and reports the ones at or under a rules directory, or at a
+`.claude` directory itself — which carries a rules directory with it while its own path stops short
+of the `rules` segment — which is why `BuiltinCheckInput` carries that table, REQUIRED like every
+other member.
 
 **A built-in's findings carry an ORDINARY registry code.** A built-in is not a custom check: its
 findings carry a `CODE_REGISTRY` code with the registry's own default severity, so
@@ -745,6 +761,13 @@ change's call to make.
   severity; `FINDINGS` (1) the run completed and what it examined failed its gate; `ERROR` (2) the
   command could not do its job (usage, environment, internal). A literal `process.exit(n)` is a
   lint error (`local/no-literal-process-exit`).
+- 🔑 A verb that publishes a document exits with `exitCodeForReport(document)` — the code is
+  DERIVED from the document's `status` and `summary`, never chosen beside it. Choosing it by hand
+  is how one outcome shipped with different codes in different verbs. Under `packages/cli/src/`
+  the rule's `derived` option refuses naming `ExitCode.FINDINGS` at all and any exit that is not
+  `OK`, `ERROR` or a derivation; a child's code is forwarded through `exitCodeOfChild`. The files
+  not yet migrated are the shrink-only `EXIT_CODE_DERIVATION_RATCHET` in `eslint.config.js`, and
+  `test/system/exit-code-matrix.system.test.ts` proves the derivation by running every envelope verb.
 - Always flush stdout before writing to stderr
 - Test format errors must include file:line:column
 

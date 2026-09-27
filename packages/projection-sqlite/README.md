@@ -57,12 +57,12 @@ await store.close();
 
 ## What it stores, and where
 
-The thirteen projection tables split in two, by the `scope` each declares in
+The fifteen projection tables split in two, by the `scope` each declares in
 `PROJECTION_TABLES`:
 
 | scope | tables | keyed by | lifetime |
 |---|---|---|---|
-| `blob` | `blobs`, `blob_references`, `blob_sections`, `blob_conditions` | content key | bounded by the `blob_keys` manifest — a pure function of the bytes, shared by every tree containing them, and retained until it falls out of the newest `DEFAULT_RETAINED_BLOB_KEYS` keys |
+| `blob` | `blobs`, `blob_references`, `blob_sections`, `blob_conditions`, `harness_blob_facts`, `harness_blob_imports` | content key — the last two are additionally partitioned by `harness`: a write clears exactly the `(blob, harness)` pairs it carries, but a read selects by content key alone and returns every harness's rows for it, since these rows are derived only for what one tree's harness reaches; narrowing to one harness happens in memory (`harnessFactsIndex`), not in the SQL | bounded by the `blob_keys` manifest — a pure function of the bytes, shared by every tree containing them, and retained until it falls out of the newest `DEFAULT_RETAINED_BLOB_KEYS` keys |
 | `extent` | the other nine, `claude_rule_patterns` among them | `(storeRootId, storeTreeHash)` | forever *for that tree* — the extent of a tree is a pure function of that tree |
 
 Extent-scoped tables carry two extra leading columns holding that key, and their

@@ -47,7 +47,7 @@ A new smell-style rule — "this description seems short," "this skill uses a bi
 
 ### Worked case: `CLAUDE_RULE_GLOB_INERT` ships at `info`
 
-A path-scoped `.claude/rules/` file whose `paths:` glob matches nothing can never load, so the arithmetic is not in doubt — a glob either matches a realized path or it does not, and there is no threshold to argue about. What is missing is the other half of the evidence bar: an observed population. The only corpus measured so far is one adopter carrying 245 rules across 673 `paths:` globs, and **zero** of those globs are inert. That is a real measurement and it is worth exactly what it says — the pattern has not been observed firing anywhere yet, and a code with an empty observed population is the last one entitled to fail a build.
+A path-scoped `.claude/rules/` file whose `paths:` glob matches nothing can never load, so the arithmetic is not in doubt — a glob either matches a realized path or it does not, and there is no threshold to argue about. What is missing is the other half of the evidence bar: an observed population. The only corpus measured so far is one adopter carrying 245 rules across 673 `paths:` globs, and **zero** of those globs were inert — measured with the picomatch matcher VAT used before it adopted Claude Code's own gitignore engine, and not re-measured since. It is worth exactly what it says — the pattern has not been observed firing anywhere yet, and a code with an empty observed population is the last one entitled to fail a build.
 
 The run-integrity exemption above does not rescue it: VAT enumerated the tree successfully and disliked what it found, which is precisely the class that exemption excludes.
 

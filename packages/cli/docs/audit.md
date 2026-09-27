@@ -235,7 +235,7 @@ The three-way contract every command shares:
 
 - **0** - The audit completed with nothing at error severity. Warnings and informational findings are in the report, not the exit code.
 - **1** - The audit completed and reports `status: error`: at least one error-severity finding, or zero files audited. A directory or file INSIDE the tree that the scan could not read — permission denied, a vanished mount — is `SCAN_PATH_UNREADABLE` (warning): the run is degraded, not failed, every readable sibling is still validated, and the refused path is reported under `summary.pathsUnreadable` rather than counted in `filesScanned` — so a root with nothing readable audited zero files and is refused like an empty tree. A governing `vibe-agent-toolkit.config.yaml` that cannot be loaded, or whose `skills.include` reaches a directory the crawl cannot list, is warned about once on stderr and filed as `SCAN_PATH_UNREADABLE` on the config file or the directory; the skills it governs are validated config-free rather than dropped. Degrading beats destroying, and the report says where it degraded.
-- **2** - The audit could not run at all, so there is no report to read: the path does not exist or is a file no audit lane recognises (the same ending `vat resources validate` and `vat skill review` give that argument), `--user` with no Claude config directory installed, a git URL that could not be cloned, an unknown flag, or an internal failure (a validator defect). An invalid config and a permission problem inside the tree are **not** exit 2 — they are findings, above.
+- **2** - The audit could not run at all, so there is no report to read: the path does not exist, is a directory the OS will not list, or is a file no audit lane recognises (the same ending `vat resources validate` and `vat skill review` give that argument), `--user` with no Claude config directory installed, a git URL that could not be cloned, an unknown flag, or an internal failure (a validator defect). An invalid config and a permission problem inside the tree are **not** exit 2 — they are findings, above.
 
 ## Validation Configuration
 
@@ -321,8 +321,8 @@ Warnings indicate potential issues but don't prevent usage:
 | `SKILL_NAME_INVALID` | error | Name contains invalid characters | Use only letters, numbers, hyphens, underscores |
 | `SKILL_DESCRIPTION_TOO_LONG` | error | Description exceeds 1024 characters (the frontmatter schema limit; `SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT` warns earlier at 250, where the Claude Code `/skills` listing truncates) | Shorten description |
 | `RESERVED_WORD_IN_NAME` | warning | Name contains `anthropic` or `claude`; Claude Code rejects non-certified skills using these words | Rename the skill to avoid these words |
-| `SKILL_NAME_XML_TAGS` | error | Name contains XML-like tags | Remove XML tags from name |
-| `SKILL_DESCRIPTION_XML_TAGS` | error | Description contains XML-like tags | Remove XML tags from description |
+| `SKILL_NAME_XML_TAGS` | error | Name contains markup — a declaration (`<!--`, `<?`, `<![`), a closing or self-closing tag, an opening tag with an attribute, a bare `<word>` that is not part of a compound token, or a prompt-channel name (`<system>`, `<function_results>`) however joined | Remove the tag, or backtick a literal placeholder (backticks do not exempt real markup) |
+| `SKILL_DESCRIPTION_XML_TAGS` | error | Description contains markup, judged the same way as the name | Remove the tag, or backtick a literal placeholder (backticks do not exempt real markup) |
 | `SKILL_DESCRIPTION_EMPTY` | error | Description is empty or whitespace | Provide meaningful description |
 | `SKILL_MISCONFIGURED_LOCATION` | error | Standalone skill in `~/.claude/plugins/` won't be recognized | Move to `~/.claude/skills/` for standalone skills, or add `.claude-plugin/plugin.json` for a proper plugin |
 | `LINK_INTEGRITY_BROKEN` | error | Link to non-existent file | Fix or remove broken link |

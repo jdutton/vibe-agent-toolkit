@@ -89,8 +89,12 @@ Exit Codes:
       envelope: \`examined\`, \`findings\`, \`summary\`, \`data.entryCount\`,
       \`data.skippedCount\`; schema: packages/cli/schemas/ard-emit.json), or
       make both conditions fail with \`--strict\`
-  1 - No \`ard:\` block in the config, or a surface could not be derived. Under
-      \`--strict\`, also an empty manifest or a skipped surface
+  1 - No \`ard:\` block, or a surface that could not be derived — each an
+      error-severity finding about the PROJECT (ARD_NOT_CONFIGURED,
+      ARD_DERIVATION_FAILED), with \`data.outputPath\` null as nothing was
+      written. Under \`--strict\`, also an empty manifest or a skipped surface
+      (ARD_STRICT_REFUSED). The code is derived from the report, never chosen
+      beside it
   2 - System error (no project root, no config file, invalid config, unexpected
       internal failure)
 

@@ -9,7 +9,7 @@
 
 import { lstatSync, realpathSync, statSync } from 'node:fs';
 
-import { isFilesystemAccessError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, isVatError, safePath, TextTooLargeError, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { matchesCollection } from '../collection-matcher.js';
@@ -412,7 +412,9 @@ interface ObservedPath {
  *    consumer could not tell a corpus of directories from one it declined to
  *    read.
  * 2. **The demand policy defers.** No read happens at all; that is the saving.
- * 3. **Otherwise read.** Success keys it; a throw is `unreadable`.
+ * 3. **Otherwise read.** Success keys it; a file too large to decode is
+ *    `oversize` (refused by size, never read); a filesystem refusal is
+ *    `unreadable`; anything else is a bug and is rethrown.
  *
  * A read failure is a fact about the corpus, not an error in the harness — an
  * unreadable file must show up as a row with a null key, not abort the
@@ -455,6 +457,11 @@ async function keyOrState(
     );
     return { contentKey: keyed.key, contentState: 'keyed' };
   } catch (error) {
+    // Too large to become a string: a fact about the corpus with its own name,
+    // refused by size before any read (see `readDecodableBytes`).
+    if (isVatError(error, TextTooLargeError.code)) {
+      return { contentKey: null, contentState: 'oversize' };
+    }
     // `unreadable` means the filesystem refused the bytes, and that is the
     // only thing it may mean: a bug in the keying is not a fact about the corpus.
     if (!isFilesystemAccessError(error)) throw error;

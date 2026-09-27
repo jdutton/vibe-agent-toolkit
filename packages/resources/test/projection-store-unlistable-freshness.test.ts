@@ -21,19 +21,15 @@
 import { chmodSync, existsSync, rmSync } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { ContributorRegistry } from '../src/projection/contributor.js';
 import {
   EXTENT_DIRECTORY_UNLISTABLE,
-  FilesystemExtentContributor,
 } from '../src/projection/contributors/filesystem-extent.js';
-import { DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 
-import { FakeProjectionStore } from './fake-projection-store.js';
+import { FakeProjectionStore, populateExtentThrough } from './fake-projection-store.js';
 import { createCommittedRepo, writeFileIn } from './test-helpers.js';
 
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
@@ -49,22 +45,7 @@ let locked: string;
 
 /** One population of `root` through `store`, reporting whether a contributor ran. */
 async function populateThrough(store: FakeProjectionStore): Promise<{ projection: Projection; contributorRan: boolean }> {
-  const tracker = new GitTracker(root);
-  await tracker.initialize();
-  const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
-  let contributorRan = false;
-  const projection = await populate({
-    root,
-    registry,
-    gitTracker: tracker,
-    onBlobPopulation: DISCARD_BLOB_POPULATION,
-    onContributorTiming: () => {
-      contributorRan = true;
-    },
-    cache: { store, treeUnchanged: () => true, treeHash: TREE_HASH },
-  });
-  return { projection, contributorRan };
+  return populateExtentThrough(root, store, TREE_HASH);
 }
 
 /** The root-relative paths of every unlistable-directory row. */

@@ -1,6 +1,6 @@
 /**
  * The blob-derivation stage: the step that turns the base stratum's
- * `contentKey` columns into the four blob-keyed tables.
+ * `contentKey` columns into the blob-keyed tables.
  *
  * ## Why this exists as its own stage
  *
@@ -377,6 +377,17 @@ export interface BlobPopulationResult {
    */
   readonly realizationsSkippedUnkeyed: number;
   /**
+   * `contentState: 'oversize'` rows — a file too large to decode into a JS
+   * string, refused by size and never read.
+   *
+   * Its own bucket rather than a share of {@link realizationsSkippedUnkeyed}: the
+   * file is readable, and reporting it as "unreadable" would send a reader to
+   * check permissions on a file whose only problem is its size. A refusal all
+   * the same — the file is in the corpus and has no blob — so
+   * `describeBlobRefusals` reports it beside the unreadable count.
+   */
+  readonly realizationsSkippedOversize: number;
+  /**
    * `contentState: 'deferred'` rows — bytes that exist and were deliberately
    * **not** read.
    *
@@ -622,6 +633,7 @@ function emptyCounts(): MutableCounts {
     realizationsSkippedAbsent: 0,
     realizationsSkippedDanglingSymlink: 0,
     realizationsSkippedUnkeyed: 0,
+    realizationsSkippedOversize: 0,
     realizationsContentDeferred: 0,
     headingsSkippedForMissingLine: 0,
     referencesSkippedForMissingLine: 0,
@@ -671,6 +683,10 @@ function countUnkeyedRealization(row: ResourceRealizationRow, counts: MutableCou
     }
     case 'unreadable': {
       counts.realizationsSkippedUnkeyed += 1;
+      break;
+    }
+    case 'oversize': {
+      counts.realizationsSkippedOversize += 1;
       break;
     }
     case 'deferred': {
@@ -1098,6 +1114,10 @@ function emitBlobRows(
   // `byteLength`, never `content.length`: decoding is many-to-one on malformed
   // UTF-8, so the decoded string's length is not the on-disk byte count.
   builder.addBlob(blobRowFor(contentKey, keyed.byteLength, keyed.decoding, parsed));
+
+  // No harness facts here: they are derived LAZILY, for the blobs a harness
+  // reaches, by `harness/harness-pass.ts` — nearly every blob is a source file
+  // no loader ever opens.
   countDecoding(keyed.decoding, counts);
 
   for (const row of blobConditionsFor(contentKey, parsed)) {

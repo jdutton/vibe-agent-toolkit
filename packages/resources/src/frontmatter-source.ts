@@ -51,19 +51,77 @@ export function parseFrontmatterSource(source: string): {
   frontmatter?: Record<string, unknown>;
   frontmatterError?: string;
 } {
-  if (source.trim() === '') {
-    // Empty frontmatter block
-    return {};
-  }
-
-  try {
-    const parsed: unknown = yaml.parse(source);
-    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-      return { frontmatter: parsed as Record<string, unknown> };
+  const decoded = decodeFrontmatter(source);
+  switch (decoded.kind) {
+    case 'mapping': {
+      return { frontmatter: decoded.value };
     }
-    return {};
-  } catch (error) {
-    // Capture YAML parsing error for validation reporting
-    return { frontmatterError: error instanceof Error ? error.message : String(error) };
+    case 'error': {
+      return { frontmatterError: decoded.message };
+    }
+    // Behaviour-preserving: every other value is silently ignored.
+    case 'blank':
+    case 'null':
+    case NON_MAPPING: {
+      return {};
+    }
   }
+}
+
+/**
+ * Whether a frontmatter block is valid YAML that decodes to a sequence or a
+ * scalar — the ONE statement of that rule, read by the projection's
+ * `blob_conditions` and by the OKF judges alike.
+ *
+ * ## Why it is not a key on {@link parseFrontmatterSource}'s result
+ *
+ * That result is spread into every `ParseResult` (cold, cache hit, worker
+ * pool), and its "no undefined-valued key, nothing beyond these two" shape is
+ * pinned; a third key would change what every parse carries to serve two
+ * readers on a rare path. Both come from {@link decodeFrontmatter}, so they
+ * cannot disagree about where "not a mapping" begins.
+ *
+ * A block that declares NOTHING — `~`, `null`, comment-only — is not flagged: it
+ * is "no value" by the document's own word. Blank, a mapping and invalid YAML
+ * are not flagged either; the last is `frontmatterError`'s. Total, like the parse.
+ *
+ * @param source - A frontmatter block's YAML body, or `undefined` for no block
+ * @returns True for a sequence or a scalar
+ */
+export function frontmatterIsNonMapping(source: string | undefined): boolean {
+  return source !== undefined && decodeFrontmatter(source).kind === NON_MAPPING;
+}
+
+/** A sequence or a scalar: valid YAML that is not a mapping and not null. */
+const NON_MAPPING = 'non-mapping';
+
+/** What a frontmatter source decodes to — every case the two readers above tell apart. */
+type FrontmatterDecode =
+  | { readonly kind: 'blank' }
+  | { readonly kind: 'mapping'; readonly value: Record<string, unknown> }
+  | { readonly kind: 'null' }
+  | { readonly kind: typeof NON_MAPPING }
+  | { readonly kind: 'error'; readonly message: string };
+
+/**
+ * Decode a frontmatter source once — pure and total.
+ *
+ * @param source - A frontmatter block's YAML body, delimiters excluded
+ * @returns The decode's kind, with the mapping or the error message
+ */
+function decodeFrontmatter(source: string): FrontmatterDecode {
+  if (source.trim() === '') return { kind: 'blank' };
+  let parsed: unknown;
+  try {
+    parsed = yaml.parse(source);
+  } catch (error) {
+    // Captured for validation reporting, never thrown: the parse cache calls
+    // this on a stored string and must never see it throw.
+    return { kind: 'error', message: error instanceof Error ? error.message : String(error) };
+  }
+  if (parsed === null) return { kind: 'null' };
+  if (typeof parsed === 'object' && !Array.isArray(parsed)) {
+    return { kind: 'mapping', value: parsed as Record<string, unknown> };
+  }
+  return { kind: NON_MAPPING };
 }

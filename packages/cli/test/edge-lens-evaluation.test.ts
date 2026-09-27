@@ -94,6 +94,7 @@ function projectionWith(contexts: Projection['resolutionContexts']): Projection 
     })),
     blobSections: [],
     blobConditions: [],
+    harnessBlobFacts: [], harnessBlobImports: [],
   };
 }
 

@@ -99,7 +99,8 @@ export type ReferencePathResolution =
  * Resolve one reference token to a path, relative to the file that wrote it.
  *
  * @param dialect - How the token is to be read (`href`, `claude-import`)
- * @param rawRef - The reference exactly as authored, `@` and all
+ * @param rawRef - A `blob_references.rawRef` exactly as authored under `href`;
+ *   a `harness_blob_imports.target` under `claude-import`
  * @param fromPath - Root-relative path of the file holding the reference;
  *   resolution is relative to the REFERRING file, never to the root
  * @param root - Absolute corpus root

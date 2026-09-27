@@ -8,7 +8,7 @@ import { PROJECTION_TABLES, type ProjectionTableName } from '../src/projection/t
 const ROOT = safePath.join(normalizedTmpdir(), 'vat-table-registry');
 
 /**
- * The thirteen tables, in {@link Projection}'s declaration order.
+ * The tables, in {@link Projection}'s declaration order.
  *
  * `satisfies readonly (keyof Projection)[]` makes a renamed table a compile
  * error here; the runtime assertions below make an *added* or *removed* one a
@@ -29,6 +29,8 @@ const EXPECTED_TABLES = [
   'blobReferences',
   'blobSections',
   'blobConditions',
+  'harnessBlobFacts',
+  'harnessBlobImports',
 ] as const satisfies readonly (keyof Projection)[];
 
 /**
@@ -39,6 +41,13 @@ const EXPECTED_TABLES = [
  * across hosts is a claim about exactly these tuples, so a registry that
  * silently reordered or dropped a key component would change bytes no other
  * test in this package is positioned to notice.
+ *
+ * `realizationConditions` grew two columns after the registry existed
+ * (`sourceLine`, `sourceRef`): the 4-column key silently collapsed two
+ * DIFFERENT unresolved `@` references in one file to a single stored row, so a
+ * `warning` could hide behind an `info` the walk visited first. Widening the
+ * key — and therefore `exportProjection`'s sort tuple, which this pin also
+ * governs — is the fix, not a drift the pin failed to catch.
  */
 const EXPECTED_PRIMARY_KEYS: Record<ProjectionTableName, readonly string[]> = {
   roots: ['id'],
@@ -46,7 +55,7 @@ const EXPECTED_PRIMARY_KEYS: Record<ProjectionTableName, readonly string[]> = {
   resourceRealizations: ['extentId', 'path'],
   resourceExtents: ['resourceId', 'extentId'],
   resourceTags: ['resourceId', 'tag', 'value', 'source'],
-  realizationConditions: ['extentId', 'path', 'code', 'resourceId'],
+  realizationConditions: ['extentId', 'path', 'code', 'resourceId', 'sourcePath', 'sourceLine', 'sourceRef'],
   claudeRulePatterns: ['resourceId', 'ordinal'],
   resolutionContexts: ['contextId'],
   zoneProvenance: ['contextId', 'contributorId'],
@@ -54,6 +63,8 @@ const EXPECTED_PRIMARY_KEYS: Record<ProjectionTableName, readonly string[]> = {
   blobReferences: ['blob', 'ordinal'],
   blobSections: ['blob', 'ordinal'],
   blobConditions: ['blob', 'code', 'line', 'message'],
+  harnessBlobFacts: ['blob', 'harness'],
+  harnessBlobImports: ['blob', 'harness', 'ordinal'],
 };
 
 /**
@@ -76,13 +87,15 @@ const EXPECTED_SQL_NAMES: Record<ProjectionTableName, string> = {
   blobReferences: 'blob_references',
   blobSections: 'blob_sections',
   blobConditions: 'blob_conditions',
+  harnessBlobFacts: 'harness_blob_facts',
+  harnessBlobImports: 'harness_blob_imports',
 };
 
 /**
  * Full column lists for three tables, in the order their Zod schemas declare
  * them — the order a storage backend's `INSERT (<columns>)` will use.
  *
- * Three rather than thirteen, chosen for what each one can break:
+ * Three rather than fifteen, chosen for what each one can break:
  * `resourceRealizations` and `resolutionContexts` are the two row schemas
  * wrapped in `.superRefine()`, so their shape sits one `ZodEffects` deep and a
  * registry that only looked for `.shape` would report nothing for them.
@@ -159,7 +172,7 @@ function declaredColumns(schema: any): readonly string[] {
 }
 
 describe('PROJECTION_TABLES', () => {
-  it('covers exactly the thirteen tables of Projection, in declaration order', () => {
+  it('covers exactly the tables of Projection, in declaration order', () => {
     expect(Object.keys(PROJECTION_TABLES)).toStrictEqual([...EXPECTED_TABLES]);
   });
 
@@ -184,6 +197,26 @@ describe('PROJECTION_TABLES', () => {
   });
 });
 
+describe('PROJECTION_TABLES partition columns', () => {
+  it('partition exactly the blob-scoped tables that carry a `harness` column, by that column', () => {
+    // `partitionColumn` is optional on the spec, so a lazily derived table that
+    // forgot it would compile and have its rows cleared by any write of the key
+    // — the facts one root's run derived, deleted by a run over another root.
+    // Asserted both ways: a table that declares it without the column is as
+    // wrong as a harness table that does not.
+    const declared = Object.fromEntries(specEntries().flatMap(([name, spec]) => {
+      const column: string | undefined = 'partitionColumn' in spec ? spec.partitionColumn : undefined;
+      return column === undefined ? [] : [[name, column]];
+    }));
+    const expected = Object.fromEntries(specEntries()
+      .filter(([, spec]) => spec.scope === 'blob' && (spec.columns as readonly string[]).includes('harness'))
+      .map(([name]) => [name, 'harness']));
+
+    expect(Object.keys(expected).length).toBeGreaterThan(0);
+    expect(declared).toStrictEqual(expected);
+  });
+});
+
 describe('PROJECTION_TABLES primary keys', () => {
   it('are the keys exportProjection sorted by before the registry existed', () => {
     expect(Object.fromEntries(specEntries().map(([name, spec]) => [name, [...spec.primaryKey]])))
@@ -200,8 +233,8 @@ describe('PROJECTION_TABLES primary keys', () => {
   });
 
   it('are the order exportProjection actually returns rows in', () => {
-    // The behavioural half of the pin above: `realization_conditions` is keyed
-    // on four columns, and these two rows differ only in the third. Inserted
+    // The behavioural half of the pin above: `realization_conditions`'s key puts
+    // `code` third, and these two rows differ only in `code`. Inserted
     // high-then-low, they must come back low-then-high — which they only do if
     // `code` really is the third component of the key the export reads.
     const builder = new ProjectionBuilder({ root: ROOT });

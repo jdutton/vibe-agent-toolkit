@@ -15,11 +15,11 @@
  * target added here and never generated — fails a unit test rather than
  * shipping a stale artifact. See `pin-emitted-schemas.ts`.
  *
- * The **thirteen table** schemas are not listed by hand: they come from
+ * The **table** schemas are not listed by hand: they come from
  * `PROJECTION_TABLES`, the single registry that also supplies `exportProjection`
  * its primary keys. This file used to enumerate fifteen schemas in one
  * undifferentiated list, which is how three non-tables came to sit
- * indistinguishably among thirteen tables — see below.
+ * indistinguishably among the tables — see below.
  */
 
 import { PROJECTION_TABLES } from '../../resources/src/projection/table-registry.js';

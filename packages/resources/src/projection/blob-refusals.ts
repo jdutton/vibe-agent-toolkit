@@ -132,18 +132,36 @@ function describeRun(result: BlobPopulationResult): string | undefined {
     clauses.push(`dropped ${breakdown} for want of a source line`);
   }
 
-  // `realizationsSkippedUnkeyed` is the one realization-level bucket that IS a
-  // refusal: its own docstring calls it "the only bucket here that indicates
-  // something went wrong rather than something is not a blob or was not asked
-  // for".
-  if (result.realizationsSkippedUnkeyed > 0) {
-    clauses.push(`could not key ${result.realizationsSkippedUnkeyed} realization(s)`);
-  }
+  const unkeyed = describeUnkeyed(result);
+  if (unkeyed !== undefined) clauses.push(unkeyed);
 
   const misdecoded = describeMisdecoded(result, considered);
   if (misdecoded !== undefined) clauses.push(misdecoded);
 
   return clauses.length > 0 ? clauses.join('; ') : undefined;
+}
+
+/**
+ * The clause naming realizations that are in the corpus and got no content key,
+ * or nothing when every one that has bytes was keyed or deliberately deferred.
+ *
+ * The two realization-level buckets that ARE refusals: `unreadable` (the
+ * filesystem refused the read — "the only bucket here that indicates something
+ * went wrong", in its own docstring) and `oversize` (too large to decode, never
+ * read). Named apart in the breakdown, because the remedies differ: one is a
+ * permissions problem, the other is a file no JS string can hold.
+ *
+ * @param result - One run of the stage
+ * @returns The clause, or undefined when neither bucket is non-zero
+ */
+function describeUnkeyed(result: BlobPopulationResult): string | undefined {
+  const buckets = [
+    { label: 'unreadable', count: result.realizationsSkippedUnkeyed },
+    { label: 'too large to decode', count: result.realizationsSkippedOversize },
+  ].filter((bucket) => bucket.count > 0);
+  if (buckets.length === 0) return undefined;
+  const total = buckets.reduce((sum, bucket) => sum + bucket.count, 0);
+  return `could not key ${total} realization(s) (${buckets.map(countAndLabel).join(', ')})`;
 }
 
 /**

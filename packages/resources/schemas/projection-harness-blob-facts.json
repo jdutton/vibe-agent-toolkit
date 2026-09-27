@@ -1,0 +1,58 @@
+{
+  "$ref": "#/definitions/projection-harness-blob-facts",
+  "definitions": {
+    "projection-harness-blob-facts": {
+      "type": "object",
+      "properties": {
+        "blob": {
+          "type": "string",
+          "pattern": "^(?:markdown|html|none)\\.[0-9a-f]{64}$",
+          "description": "Foreign key to blobs.contentKey"
+        },
+        "harness": {
+          "type": "string",
+          "enum": [
+            "claude-code"
+          ],
+          "description": "The coding harness whose reading of the blob this row records"
+        },
+        "injectedBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "UTF-8 bytes of the text the harness named by `harness` INJECTS when it reads this blob as a memory file (a CLAUDE.md, a rules file or an @ import): the body after its frontmatter block, with every block-level HTML comment removed, trimmed — the shipped reader's own rule (`q7e`, then `s1n`'s launch-path trim; docs/external/claude-code-memory-loader.md). 0 means the harness injects NOTHING for it and follows none of its imports. Path-independent: whether the harness reads the path at all (its extension, the 4 MiB cliff on `blobs.bytes`) is decided by the reader of the path, not here"
+        },
+        "injectedTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The token estimate (UTF-16 code units / 4, rounded up) of that same injected text — what `vat claude context` charges for this blob"
+        },
+        "paths": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "minItems": 1
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The `paths:` globs the harness named by `harness` scopes this blob by when it reads it as a memory file, or null when it scopes it by none (it then loads unconditionally wherever it is reached). Read the harness's way, whatever the file's extension — NOT from `frontmatter`, which is VAT's parser's answer and is absent for a file routed to no parser: its own frontmatter splitter and YAML parse (a block that fails to parse declares nothing), `paths:` normalised (arrays flattened, strings split on commas at brace depth zero, other values dropped), and null when every survivor of brace expansion and the trailing-`/**` strip is empty or `**` (`kyn`; docs/external/claude-code-rules-paths-behaviour.md). The patterns are VERBATIM, in declaration order; their index is `claude_rule_patterns.ordinal`"
+        }
+      },
+      "required": [
+        "blob",
+        "harness",
+        "injectedBytes",
+        "injectedTokens",
+        "paths"
+      ],
+      "additionalProperties": false,
+      "description": "A row of the blob-keyed `harness_blob_facts` table"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

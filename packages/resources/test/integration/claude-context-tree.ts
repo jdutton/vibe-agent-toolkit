@@ -162,3 +162,10 @@ export function byCodePoint(left: string, right: string): number {
   if (left === right) return 0;
   return left < right ? -1 : 1;
 }
+
+/** VAT's projection, populated from a real temp tree on disk — the production lane. */
+export async function onDiskProjection(files: Readonly<Record<string, string>>): Promise<Projection> {
+  const tree = await buildClaudeContextTree(files);
+  await removeClaudeContextTree(tree.dir);
+  return tree.projection;
+}

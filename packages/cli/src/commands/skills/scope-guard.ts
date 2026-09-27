@@ -17,6 +17,8 @@ import { existsSync, statSync } from 'node:fs';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
+import { handleExpectedFailure } from '../../utils/command-error.js';
+
 /** The name `loadConfig` looks for in the directory these commands are pointed at. */
 export const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
@@ -108,6 +110,9 @@ export function rejectUnscopablePath(
   const reason = unscopableSkillsPath(pathArg);
   if (reason === undefined) return;
 
-  process.stderr.write(unscopablePathMessage(subject, String(pathArg), reason));
-  process.exit(ExitCode.ERROR);
+  // Through the shared failure ending, so the refusal PUBLISHES its document
+  // (`status: error`) on stdout as every other ending of these commands does —
+  // it used to write only stderr, and a wrapper reading stdout got zero bytes.
+  // Neither command offers `--format`, so the document is YAML like its report.
+  handleExpectedFailure(unscopablePathMessage(subject, String(pathArg), reason).trimEnd(), ExitCode.ERROR, Date.now());
 }

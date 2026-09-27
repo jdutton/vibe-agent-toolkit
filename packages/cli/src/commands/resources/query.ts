@@ -4,7 +4,7 @@
  * ## Why a query verb at all, when `scan` already reports counts
  *
  * `vat resources scan` answers the questions its payload was written for, and
- * nothing else. The projection holds thirteen tables — realizations, references,
+ * nothing else. The projection holds a table per fact kind — realizations, references,
  * sections, conditions, provenance, rule patterns — and every question nobody
  * anticipated currently has no answer short of writing a new command. This verb
  * is the general case: one statement, the rows it selects, no new field.

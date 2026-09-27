@@ -119,7 +119,10 @@ describe('docs/validation-codes.md', () => {
     it.each([
       'CLAUDE_RULE_GLOB_INERT',
       'CLAUDE_RULE_FRONTMATTER_INVALID',
+      'CLAUDE_RULE_LINK_UNCHECKED',
       'EXTENT_SYMLINK_NOT_REALIZED',
+      'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT',
+      'EXTENT_SYMLINK_TARGET_UNRESOLVED',
     ] as const)('the %s section quotes the registry verbatim', (code) => {
       const entry = CODE_REGISTRY[code];
       const section = sectionFor(doc, `### \`${code}\``);

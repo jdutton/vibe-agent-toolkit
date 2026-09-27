@@ -19,16 +19,20 @@
  *
  * ## The sum is `vat claude context`'s `alwaysTokens`, exactly
  *
- * `SUM(tokens) WHERE launchCharge = 'charged'` over one chain is the same
- * arithmetic `account()`'s `totalsOf` performs for `alwaysTokens`, and
- * `projection-claude-context-chains-oracle.test.ts` holds the two equal for every
- * working location. ⛔ That equality is the contract. An import is charged at
- * EVERY hop the closure admits, and an import VAT could not attribute to an
- * importer is charged too — its load class comes from its closure root, which is
- * known, so the harness loads it at launch whatever its depth. An earlier version
- * of this module charged only one hop, because a since-deleted token threshold
- * had been calibrated there; that was a property of the threshold, never of what
- * the harness loads.
+ * `SUM(tokens + headerTokens) WHERE launchCharge = 'charged'`, plus the
+ * chain's `preambleTokens` once, is the same arithmetic `account()`'s
+ * `totalsOf` performs for `alwaysTokens` — `tokens` alone is no longer the
+ * whole charge: it also carries the per-file render header and the
+ * once-per-launch preamble, both of which the harness genuinely renders around a launched file
+ * and neither of which `harness_blob_facts.injectedTokens` measures.
+ * `projection-claude-context-chains-oracle.test.ts` holds the two equal for
+ * every working location. ⛔ That equality is the contract. An import is
+ * charged at EVERY hop the closure admits, and an import VAT could not
+ * attribute to an importer is charged too — its load class comes from its
+ * closure root, which is known, so the harness loads it at launch whatever its
+ * depth. An earlier version of this module charged only one hop, because a
+ * since-deleted token threshold had been calibrated there; that was a property
+ * of the threshold, never of what the harness loads.
  */
 
 import type { AccountedRow } from './claude-context-accounting.js';
@@ -85,20 +89,25 @@ export function launchCharge(row: AccountedRow): LaunchCharge {
  * whose kind and pattern `claude_context_loads` stores — so a charged row names a
  * launch-time kind rather than whichever admission happened to be listed first.
  *
- * `ancestry` and `root-rule` are launch-time on their own. An `import` is
- * launch-time exactly when its closure root is, which the query has already
- * decided into the row's `loadClass`; the admission alone cannot say, so every
- * import is a candidate and the row's class settles it.
+ * `ancestry`, `root-rule` and `nested-rule` are launch-time on their own: the
+ * launch walk reads `.claude/rules` in every directory from the root down to
+ * the working directory, and a `nested-rule` admission names exactly such a
+ * directory (`claude-context-walk.ts`). An `import` is launch-time exactly when
+ * the walk reached it, which the query has already decided into the row's
+ * `loadClass`; the admission alone cannot say, so every import is a candidate
+ * and the row's class settles it.
  *
  * ⛔ No other rule kind is, at any depth or in any combination: `glob-rule`,
  * `glob-rule-may-fire` and `glob-rule-covers-dir` load when the agent touches a
- * matching file, and `nested-rule` is in the vendor's on-demand class —
- * `baseLoadClass` in `claude-context-query.ts` argues why. The test enumerates
- * what admits, so a rule kind added to the union later is excluded by default.
+ * matching file. The test enumerates what admits, so a rule kind added to the
+ * union later is excluded by default.
  *
  * @param admission - One admission
  * @returns True when it can charge the row at launch
  */
 export function admissionLoadsAtLaunch(admission: Admission): boolean {
-  return admission.kind === 'ancestry' || admission.kind === 'root-rule' || admission.kind === 'import';
+  return admission.kind === 'ancestry'
+    || admission.kind === 'root-rule'
+    || admission.kind === 'nested-rule'
+    || admission.kind === 'import';
 }

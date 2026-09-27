@@ -35,6 +35,8 @@ const LOCKED = 'build/locked';
 const MIME_CONFLICT = 'COLLECTION_MIME_CONFLICT';
 const UNLISTABLE = 'EXTENT_DIRECTORY_UNLISTABLE';
 const SYMLINK_NOT_REALIZED = 'EXTENT_SYMLINK_NOT_REALIZED';
+/** The other declined-link code — the same decline, target outside the root. */
+const SYMLINK_OUTSIDE_ROOT = 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT';
 
 /** Two collections over `docs/**`, agreeing or not on the file's type. */
 function configTyping(second: string | undefined): ProjectConfig {
@@ -152,10 +154,10 @@ describe('ResourceRegistry surfaces population-time conditions', () => {
       expect(await unlistableIssues(await crawledWith([]))).toEqual([]);
     });
 
-    it('surfaces a declined link unless the crawl excludes its path', async () => {
-      const linkRow = (path: string): RealizationConditionRow => ({
+    it('surfaces a declined link unless the crawl excludes its path — under EITHER code', async () => {
+      const linkRow = (path: string, code = SYMLINK_NOT_REALIZED): RealizationConditionRow => ({
         ...unlistableRow(path, 'info'),
-        code: SYMLINK_NOT_REALIZED,
+        code,
         message: `'${path}' is a symbolic link`,
       });
       const registry = new ResourceRegistry({ baseDir: root });
@@ -168,17 +170,25 @@ describe('ResourceRegistry surfaces population-time conditions', () => {
           linkRow('docs/CLAUDE.md'),
           linkRow('vendor/CLAUDE.md'),
           linkRow('docs/linkdir'),
+          // ⭐ The out-of-root arm, on both sides of the exclude. Whether a link
+          // is this crawl's business is decided by the link's OWN path, so the
+          // second code must be treated identically — a filter written on one
+          // code would keep the excluded one and report `vendor/`.
+          linkRow('docs/shared', SYMLINK_OUTSIDE_ROOT),
+          linkRow('vendor/shared', SYMLINK_OUTSIDE_ROOT),
           unlistableRow('vendor/locked'),
         ]),
       });
       const { issues } = await registry.validate({ skipGitIgnoreCheck: true });
 
-      // Only the EXCLUDED link is dropped. The directory link stays although no
+      // Only the EXCLUDED links are dropped. The directory link stays although no
       // `**/*.md` include matches its own name: it may hold members, as the
       // vendor's `.claude/rules/shared -> ~/shared-rules` does. Every other
       // condition is kept whole.
       expect(issues.filter((issue) => issue.code === SYMLINK_NOT_REALIZED).map((issue) => issue.location))
         .toEqual(['docs/CLAUDE.md', 'docs/linkdir']);
+      expect(issues.filter((issue) => issue.code === SYMLINK_OUTSIDE_ROOT).map((issue) => issue.location))
+        .toEqual(['docs/shared']);
       expect(issues.filter((issue) => issue.code === UNLISTABLE).map((issue) => issue.location))
         .toEqual(['vendor/locked']);
     });

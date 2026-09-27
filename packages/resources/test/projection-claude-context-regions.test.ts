@@ -175,6 +175,18 @@ describe('contextRegions', () => {
       expect(representativeOf(regions, 'packages')).toBe(ROOT);
     });
 
+    it('instructs a directory by its .claude/CLAUDE.md or its .claude/rules — the launch walk reads both there', async () => {
+      const regions = contextRegions(await claudeContextFixture({
+        'CLAUDE.md': 'root\n',
+        [`${APP}/.claude/CLAUDE.md`]: 'second location\n',
+        [`${APP_SRC}/main.md`]: 'x\n',
+        [`${APP_X}/.claude/rules/r.md`]: 'unscoped nested rule\n',
+        [APP_X_README]: 'x\n',
+      }));
+      expect(representativeOf(regions, APP_SRC)).toBe(APP);
+      expect(representativeOf(regions, APP_X)).toBe(APP_X);
+    });
+
     it('falls back to the corpus root when no ancestor carries a CLAUDE.md', async () => {
       const regions = contextRegions(
         await claudeContextFixture({ [APP_CLAUDE_MD]: 'app only\n', 'docs/guide.md': 'x\n' }),

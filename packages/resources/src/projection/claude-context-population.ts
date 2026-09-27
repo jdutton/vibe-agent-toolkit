@@ -14,18 +14,34 @@
  * `contribute` runs, so the set of import roots has to be known before
  * `populate` is called. That is the same constraint `buildInventoryPopulation`
  * satisfies by taking `skillMdPaths` as a parameter; here there is no caller
- * holding the list, so this function POPULATES twice — once cheaply, under
- * `CONTENT_PARSING_SKIP`, purely to find the roots, and once for real.
+ * holding the list, so this lane has to find it for itself first.
+ *
+ * ## 🔑 It asks the STORE for that list before it crawls for it
+ *
+ * `resource_realizations` under a tree-hash key IS the enumeration, and the
+ * three columns the classification reads (`path`, `basenameLower`,
+ * `isDirectory`) do not depend on content demand, on the blob tier, or on which
+ * other contributors ran. So {@link readStoredRealizations} answers the root
+ * list outright whenever the store holds this tree's filesystem extent — under
+ * the same key, the same reuse rule and the same unlistable-directory staleness
+ * gate `populate` itself applies — and nothing is crawled, keyed or populated
+ * to produce it.
+ *
+ * Measured warm on a 12.6k-file adopter (`vat-lab crawl`, `vat claude
+ * context`): the discovery pass was **341.7 ms of a 794.6 ms** crawl total, the
+ * single largest charge on a run whose real population was already a store hit.
+ * On a store miss the discovery pass runs exactly as it did before.
  *
  * The discovery pass registers **only** the filesystem extent and asks for
  * `'deferred'` content, so it reads no bytes: it consumes four realization
  * columns, and `contentKey` is not one of them.
  *
- * ⚠️ **Two populations, ONE enumeration.** The tree is crawled once and both
- * passes are handed the same result — see {@link sharedEnumeration}. The
- * doubling that is structural is the *registration* ordering above, not the
- * walk, and letting the walk double with it charged this lane a second full
- * crawl for a list it already had.
+ * ⚠️ **Two populations, ONE enumeration.** When the discovery pass does run, the
+ * tree is crawled once and both passes are handed the same result — see
+ * {@link sharedEnumeration}. The doubling that is structural is the
+ * *registration* ordering above, not the walk, and letting the walk double with
+ * it charged this lane a second full crawl for a list it already had. When the
+ * store answers, there is one population and no crawl at all.
  *
  * ## ⚠️ Gitignored paths are DECLINED here, like every other lane
  *
@@ -127,7 +143,9 @@ import {
   DISCARD_BLOB_POPULATION,
   populate,
   populationOracles,
+  readStoredRealizations,
   type BlobPopulationReport,
+  type PopulateOptions,
   type PopulationCache,
 } from './merge.js';
 import type { Projection } from './projection.js';
@@ -281,14 +299,43 @@ export async function buildClaudeContextPopulation(options: {
   onBlobPopulation: (report: BlobPopulationReport) => void;
 }): Promise<Projection> {
   const root = safePath.resolve(options.root);
-  // ONE crawl for both passes. Taken before root discovery rather than inside
-  // it, so the single enumeration is visible at the level that owns both passes.
-  const source = await sharedEnumeration(root);
-  const roots = await discoverImportRoots(root, options.gitTracker, source, options.collections);
+
+  // The run's ONE crawl source, and the thunk the extent contributor reads it
+  // through. Nothing asks it a question on a warm run: the store answers the
+  // root list below, and `populate` then answers the population itself, so
+  // neither pass reaches the crawl. "Two populations, ONE enumeration" holds in
+  // both branches — the discovery branch replays its own crawl into this slot
+  // (see {@link sharedEnumeration}), and the stored branch runs one population.
+  let source: CrawlSource | undefined;
+  const sourceOnce = (): CrawlSource => (source ??= crawlSourceFor(root));
 
   const registry = new ContributorRegistry();
-  const filesystem = new FilesystemExtentContributor(() => source);
+  const filesystem = new FilesystemExtentContributor(sourceOnce);
   registry.register(filesystem);
+  // Gitignored paths are declined here exactly as they are in the discovery
+  // pass — see the header for the ruling, and `claude-context-limits.ts` for the
+  // under-report it is published as. Keyed off the INSTANCE's own id rather than
+  // a second copy of the literal: a parameter set filed under an id no
+  // registered contributor answers to is silently ignored.
+  const parameters: Record<string, JsonValue> = { [filesystem.id]: DECLINE_IGNORED };
+
+  // ⛔ The SAME object `populate` is handed below, built before the import
+  // contributors are registered so the two store reads compute one key from one
+  // registry. See {@link readStoredRealizations} on why a later registration
+  // cannot make that key wrong, only make this read miss.
+  const populateOptions = {
+    root,
+    registry,
+    parameters,
+    onBlobPopulation: options.onBlobPopulation,
+    ...populationOracles(options),
+  };
+
+  const discovered = await importRoots(populateOptions, filesystem.id);
+  // The discovery branch's replaying source becomes the run's, so the real pass
+  // reuses that crawl instead of taking a second one.
+  if (discovered.source !== undefined) source = discovered.source;
+
   // AFTER the enumerator, and the order is load-bearing: `byStratum` returns
   // registration order and the driver runs base contributors sequentially, each
   // reading the base the previous ones grew. Registered first, this would
@@ -300,13 +347,7 @@ export async function buildClaudeContextPopulation(options: {
   // rows and a reader looking for one will look for the other.
   registry.register(new ClaudeRulesScopeContributor());
 
-  // Gitignored paths are declined here exactly as they are in the discovery
-  // pass — see the header for the ruling, and `claude-context-limits.ts` for the
-  // under-report it is published as. Keyed off the INSTANCE's own id rather than
-  // a second copy of the literal: a parameter set filed under an id no
-  // registered contributor answers to is silently ignored.
-  const parameters: Record<string, JsonValue> = { [filesystem.id]: DECLINE_IGNORED };
-  for (const rootRelativePath of roots) {
+  for (const rootRelativePath of discovered.roots) {
     registry.register(new ClaudeImportExtentContributor(rootRelativePath));
     // Keyed off the same function the contributor derives its own id from,
     // rather than a second copy of the format: a parameter set filed under an id
@@ -316,11 +357,54 @@ export async function buildClaudeContextPopulation(options: {
       claudeImportExtentDeclaration(rootRelativePath) as unknown as JsonValue;
   }
 
-  return populate({
-    root,
-    registry,
-    parameters,
-    onBlobPopulation: options.onBlobPopulation,
-    ...populationOracles(options),
-  });
+  return populate(populateOptions);
+}
+
+/**
+ * Every `@`-import root under the tree — from the store when it holds this
+ * tree's filesystem extent, and from a discovery crawl when it does not.
+ *
+ * ## Why the store may answer this
+ *
+ * `resource_realizations` under a tree-hash key IS the enumeration, and the
+ * three columns `claudeImportRootsFrom` reads — `path`, `basenameLower`,
+ * `isDirectory` — are the three a `'deferred'` discovery pass would have
+ * produced. They do not depend on content demand, on the blob tier, or on which
+ * other contributors ran. So the stored rows are not an approximation of the
+ * discovery pass's answer; they are the same answer, and
+ * `readStoredRealizations` applies the same key, the same reuse rule and the
+ * same unlistable-directory staleness gate `populate` applies before serving
+ * one.
+ *
+ * ⚠️ Only the filesystem contributor is asked for, deliberately: it is the one
+ * whose rows are the enumeration, and requiring the classifiers' provenance too
+ * would turn a `vat resources scan`'s stored extent — which is enough to answer
+ * this — into a miss.
+ *
+ * @param populateOptions - The options the real population will run under
+ * @param filesystemId - The enumerating contributor's id, from the instance
+ * @returns The roots, and — only when a crawl was taken to find them — the
+ *   replaying source that crawl produced, so the caller can hand the very same
+ *   enumeration to the real pass rather than taking a second one
+ */
+async function importRoots(
+  populateOptions: PopulateOptions,
+  filesystemId: string,
+): Promise<{ roots: readonly string[]; source?: CrawlSource }> {
+  const stored = await readStoredRealizations(populateOptions, [
+    { id: filesystemId, parameterSet: DECLINE_IGNORED },
+  ]);
+  if (stored !== undefined) return { roots: claudeImportRootsFrom(stored) };
+
+  const root = populateOptions.root;
+  const source = await sharedEnumeration(root);
+  return {
+    roots: await discoverImportRoots(
+      root,
+      populateOptions.gitTracker,
+      source,
+      populateOptions.collections,
+    ),
+    source,
+  };
 }

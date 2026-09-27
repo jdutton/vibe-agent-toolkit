@@ -72,7 +72,7 @@ export const BlobRowSchema = z.object({
     .describe('"bom" when a byte-order mark stated the encoding, "assumed" when there was none and UTF-8 was the default. "assumed" is the common case and is NOT by itself a problem — it is the case in which a wrong answer is possible at all, and encodingSource === "assumed" AND encoding !== "utf-8" is unreachable today, since nothing but a BOM ever selects a non-UTF-8 encoding'),
   replacementCharacters: z.number().int().nonnegative()
     .describe('How many U+FFFD REPLACEMENT CHARACTERs the decode produced — a count of characters, not of malformed bytes, and one malformed run can collapse to a single U+FFFD. 0 for a clean decode, INCLUDING a document whose own text legitimately contains U+FFFD (the decode is attempted in fatal mode first, so valid input is never accused). Greater than 0 is proof the bytes are not valid in `encoding` — that much of this blob\'s indexed text is already garbage'),
-  tokenEstimate: z.number().int().nonnegative().describe('Estimated token count for LLM context'),
+  tokenEstimate: z.number().int().nonnegative().describe('Estimated token count for LLM context — over the WHOLE decoded text. What a harness charges for this blob as a memory file is `harness_blob_facts.injectedTokens`'),
   frontmatter: z.record(z.string(), JsonValueSchema).nullable()
     .describe('Parsed frontmatter as JSON, or null when the blob has no frontmatter block'),
   frontmatterError: z.string().nullable()
