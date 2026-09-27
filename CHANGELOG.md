@@ -516,8 +516,9 @@ with a regression test.
   `vat cache clear` removes VAT's on-disk caches; `--no-cache` on the root command, or
   `VAT_CACHE=0` (`false`, `no`, `off`), disables them for one run.
 
-- **Markdown parsing can optionally run on worker threads during projection population.** Off by
-  default; set `VAT_PARSE_POOL=1` to opt in. Output is byte-identical either way.
+- **Markdown parsing runs on worker threads during projection population.** Set `VAT_PARSE_POOL=0`
+  to keep it on one thread — worth doing on a host already running as many jobs as it has cores,
+  because each worker loads its own parser. Output is byte-identical either way.
   `VAT_PARSE_POOL_SIZE`, `VAT_PARSE_POOL_MIN_MISSES` and `VAT_PARSE_LOOK_AHEAD` tune it.
 
 - **A collection can declare the MIME type of the files it matches.**
@@ -778,6 +779,9 @@ with a regression test.
 
 ### Fixed
 
+- **A file too large to decode as text (over ~512 MiB) no longer crashes a whole run.** It is
+  refused by size without being read: `vat resources` reports it as `RESOURCE_UNREADABLE
+  (TEXT_TOO_LARGE)`, and a projection records it as `contentState: 'oversize'`. No action needed.
 - **`vat verify` now reads a plugin-local skill's `skills.config` entry exactly as the plugin build
   does** (declared name, then directory path, then its last segment) when checking its plugin-tree
   copy — including a skill no `skills.include` glob reaches. A skill whose directory is not named
