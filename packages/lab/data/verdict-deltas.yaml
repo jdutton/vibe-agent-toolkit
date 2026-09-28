@@ -10,4 +10,24 @@
 # Schema and rules: packages/lab/src/facets/verdict/deltas.ts.
 # How to run a crucible pass: packages/lab/docs/facets.md ("verdict").
 baseline: 0.2.0-rc.11
-deltas: []
+deltas:
+  - subject: crucible-1
+    verb: resources-check
+    document: reshaped
+    reason: the report envelope now carries the required gate object
+    changelog: .changes/v020-report-contract.md#breaking
+  - subject: crucible-2
+    verb: resources-check
+    document: reshaped
+    reason: the report envelope now carries the required gate object
+    changelog: .changes/v020-report-contract.md#breaking
+  - subject: crucible-3
+    verb: resources-check
+    document: reshaped
+    reason: the report envelope now carries the required gate object
+    changelog: .changes/v020-report-contract.md#breaking
+  - subject: crucible-4
+    verb: resources-check
+    document: reshaped
+    reason: the report envelope now carries the required gate object
+    changelog: .changes/v020-report-contract.md#breaking

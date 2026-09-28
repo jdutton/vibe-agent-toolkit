@@ -14,6 +14,7 @@ import { Command, CommanderError } from 'commander';
 import { COMMAND_LOADERS } from './command-loaders.js';
 import { registerCacheControl } from './commands/cache/cache-control.js';
 import { exitCodeForCommanderEnding } from './utils/command-error.js';
+import { setDebugDiagnostics } from './utils/debug-diagnostics.js';
 import { loadVerboseHelp, writeHelpSync } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
 import { createRootArgvGrammar } from './utils/root-argv.js';
@@ -76,6 +77,9 @@ program
     if (thisCommand.opts()['debug'] === true) {
       actionCommand.setOptionValue('debug', true);
     }
+    // The refusal path has no logger: it asks this, so `--debug` names the
+    // throw site of every refusal, not only of an INTERNAL_ERROR.
+    setDebugDiagnostics(actionCommand.opts()['debug'] === true);
   })
   .showHelpAfterError()
   .configureOutput({

@@ -281,7 +281,7 @@ async function validateScriptsLocation(): Promise<void> {
     'dev-tools',
     'schema',
     'agent-skills',
-    'cli', // Generates the report JSON Schemas from the REPORT_SCHEMAS registry
+    'cli', // Generates the report JSON Schemas from the PUBLISHED_SHAPES registry
     'vat-example-cat-agents', // Uses resource-compiler post-build script
     'vat-development-agents', // Uses resource-compiler post-build script
   ]);
@@ -461,7 +461,7 @@ async function validateSourceFileLocations(): Promise<void> {
         return;
       }
 
-      // Allow cli/scripts (emits the report JSON Schemas from the REPORT_SCHEMAS registry)
+      // Allow cli/scripts (emits the report JSON Schemas from the PUBLISHED_SHAPES registry)
       if (normalizedPath.startsWith('packages/cli/scripts/')) {
         return;
       }

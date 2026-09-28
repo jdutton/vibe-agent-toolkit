@@ -1,0 +1,109 @@
+/**
+ * Which refusal a thrown value is: decided by code, never by message — and a
+ * defect in VAT is never relabelled as the user's mistake.
+ */
+
+import { okfBundleRuns } from '@vibe-agent-toolkit/resources';
+import { ExitCode, type ErrorReport } from '@vibe-agent-toolkit/schema';
+import { VatError } from '@vibe-agent-toolkit/utils';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { parseBudgetSeconds, requireSupervisableFlags } from '../../src/commands/resources/check-supervisor.js';
+import { requireKnownCheck } from '../../src/commands/resources/check.js';
+import { CommandRefusalError, CONFIG_UNREADABLE_CODE, errorMessageOf, refusalCodeOf } from '../../src/utils/command-refusal.js';
+import { endWithRefusal, NOTHING_FINISHED } from '../../src/utils/document-writer.js';
+
+/** An output write the OS refused — `ard emit --output <read-only>`. */
+const DENIED_OUTPUT = 'EACCES: permission denied, open \'/read-only/ard.json\'';
+
+/** What `fn` threw. */
+function thrownBy(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  throw new Error('expected a throw');
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe('refusalCodeOf', () => {
+  it('reads a CommandRefusalError\'s own code and a library error\'s by its code', () => {
+    expect(refusalCodeOf(new CommandRefusalError('USAGE_INVALID', 'no such bundle'))).toBe('USAGE_INVALID');
+    expect(refusalCodeOf(new VatError('CONFIG_LOAD', 'bad yaml'))).toBe('CONFIG_INVALID');
+    expect(refusalCodeOf(new VatError('OKF_UNKNOWN_BUNDLE', 'nope'))).toBe('USAGE_INVALID');
+    expect(refusalCodeOf(new VatError('DIRECTORY_LISTING_REFUSED', 'EACCES'))).toBe('INPUT_UNREADABLE');
+  });
+
+  it('reads the coded config read failure as INPUT_UNREADABLE', () => {
+    expect(refusalCodeOf(new VatError(CONFIG_UNREADABLE_CODE, 'EACCES: permission denied'))).toBe('INPUT_UNREADABLE');
+  });
+
+  it('does NOT read an uncoded errno as the user\'s input — an output write the OS refused is INTERNAL_ERROR', () => {
+    const denied = Object.assign(new Error(DENIED_OUTPUT), { code: 'EACCES' });
+    expect(refusalCodeOf(denied)).toBe('INTERNAL_ERROR');
+    expect(refusalCodeOf(new Error('wrapped', { cause: denied }))).toBe('INTERNAL_ERROR');
+    const absent = Object.assign(new Error('ENOENT: no such file or directory, open \'dist/asset.json\''), { code: 'ENOENT' });
+    expect(refusalCodeOf(absent)).toBe('INTERNAL_ERROR');
+  });
+
+  it('leaves everything unanticipated INTERNAL_ERROR — a TypeError, an uncoded Error, an unmapped code', () => {
+    expect(refusalCodeOf(new TypeError('cannot read properties of undefined'))).toBe('INTERNAL_ERROR');
+    expect(refusalCodeOf(new Error('boom'))).toBe('INTERNAL_ERROR');
+    expect(refusalCodeOf(new VatError('SOMETHING_ELSE', 'x'))).toBe('INTERNAL_ERROR');
+  });
+});
+
+describe('the user mistakes the migrated verbs refuse, by the code they carry', () => {
+  it('an undeclared okf bundle argument is USAGE_INVALID', () => {
+    expect(refusalCodeOf(thrownBy(() => okfBundleRuns(undefined, '/project', { bundle: 'nope' })))).toBe('USAGE_INVALID');
+  });
+
+  it('a bad --budget, --budget beside --cost-log, and an unknown --check are USAGE_INVALID', () => {
+    expect(refusalCodeOf(thrownBy(() => parseBudgetSeconds('abc')))).toBe('USAGE_INVALID');
+    expect(refusalCodeOf(thrownBy(() => parseBudgetSeconds(' ')))).toBe('USAGE_INVALID');
+    expect(refusalCodeOf(thrownBy(() => requireSupervisableFlags({ costLog: 'x', budgetRaw: '60', budgetSecs: 60 })))).toBe('USAGE_INVALID');
+    expect(refusalCodeOf(thrownBy(() => requireKnownCheck(['builtin'], {}, 'nope')))).toBe('USAGE_INVALID');
+  });
+});
+
+describe('a VAT defect is published as one', () => {
+  it('a TypeError surfaces as INTERNAL_ERROR, with its stack on stderr', () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const defect = new TypeError('resolver bug');
+
+    endWithRefusal('okf validate', refusalCodeOf(defect), defect, 'json', { strict: false }, NOTHING_FINISHED);
+
+    const document = JSON.parse(stdout.mock.calls.map((call) => String(call[0])).join('')) as ErrorReport<unknown>;
+    expect(document.error).toEqual({ code: 'INTERNAL_ERROR', message: 'resolver bug' });
+    expect(stderr.mock.calls.map((call) => String(call[0])).join('')).toContain('TypeError: resolver bug\n    at ');
+    expect(exit.mock.calls).toEqual([[ExitCode.ERROR]]);
+  });
+});
+
+describe('an uncoded errno is published as a defect, with its diagnostics', () => {
+  it('an output write the OS refused ends INTERNAL_ERROR with the stack on stderr', () => {
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const denied = Object.assign(new Error(DENIED_OUTPUT), { code: 'EACCES' });
+
+    endWithRefusal('ard emit', refusalCodeOf(denied), denied, 'json', { strict: false }, NOTHING_FINISHED);
+
+    const document = JSON.parse(stdout.mock.calls.map((call) => String(call[0])).join('')) as ErrorReport<unknown>;
+    expect(document.error.code).toBe('INTERNAL_ERROR');
+    expect(stderr.mock.calls.map((call) => String(call[0])).join('')).toContain(`Error: ${DENIED_OUTPUT}\n    at `);
+  });
+});
+
+describe('errorMessageOf', () => {
+  it('reads an Error\'s message and spells out anything else', () => {
+    expect(errorMessageOf(new Error('boom'))).toBe('boom');
+    expect(errorMessageOf('plain')).toBe('plain');
+  });
+});

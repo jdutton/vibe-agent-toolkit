@@ -600,6 +600,7 @@ export {
 } from './config-parser.js';
 
 export {
+  CONFIG_LOAD_CODE,
   formatConfigValidationError,
   parseConfigAllowingUnknownKeys,
 } from './config-issues.js';

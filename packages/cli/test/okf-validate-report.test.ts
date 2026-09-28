@@ -19,7 +19,8 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { createOkfCommand } from '../src/commands/okf/index.js';
-import { OKF_VALIDATE_REPORT_SCHEMA, summarizeOkfBundles, type CheckedOkfBundle } from '../src/commands/okf/validate.js';
+import { OKF_VALIDATE_REPORT_SCHEMA } from '../src/commands/okf/validate-schema.js';
+import { summarizeOkfBundles, type CheckedOkfBundle } from '../src/commands/okf/validate.js';
 
 // Built from the cwd rather than a `/`-rooted literal, so the root has a drive
 // letter on Windows and `issueLocation` relativizes it the same way everywhere.

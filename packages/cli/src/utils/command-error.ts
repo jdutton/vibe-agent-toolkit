@@ -11,7 +11,7 @@
  */
 
 
-import { ExitCode, buildErrorReport, countBySeverity, errorDiagnostics, exitCodeForReport, type ExitCodeValue, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { ExitCode, countBySeverity, errorDiagnostics, type ExitCodeValue, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 
 import type { Logger } from './logger.js';
 import { writeJsonOutput, writeYamlOutput } from './output.js';
@@ -164,59 +164,6 @@ function publishFailure(document: object, format: string | undefined, exitCode: 
     writeYamlOutput(document);
   }
   process.exit(exitCode);
-}
-
-/**
- * {@link handleCommandError} for a command whose document is the shared
- * `Report<T>` envelope: the failure document IS the envelope
- * (`buildErrorReport`), so the emitted `schemas/<command>.json` describes the
- * failed run too. Every command registered as `report` in `report-schemas.ts`
- * ends its unexpected failures here; `handleCommandError`'s
- * `CommandErrorDocument` is the shape the legacy documents keep.
- *
- * @param error - The value that was thrown
- * @param logger - Logger instance for error output
- * @param startTime - Command start time (from Date.now())
- * @param commandName - Name of the command (for the stderr line)
- * @param format - What the operator asked for: `json`, or anything else (and
- *   omitted) for YAML
- */
-export function handleReportCommandError(
-  error: unknown,
-  logger: Logger,
-  startTime: number,
-  commandName: string,
-  format?: string | undefined,
-): never {
-  const { error: message } = reportCommandError(error, logger, startTime, commandName);
-  const report = buildErrorReport(message, Date.now() - startTime);
-  return publishFailure(report, format, exitCodeForReport(report));
-}
-
-/**
- * {@link handleExpectedFailure} for a command whose document is the shared
- * `Report<T>` envelope — same document as {@link handleReportCommandError}.
- *
- * 🔑 No exit-code parameter, deliberately. The document is the envelope's
- * ERROR branch, so its code is {@link exitCodeForReport}'s answer for it: 2.
- * It used to take the code from the caller, and `vat ard emit` passed 1 — a
- * document saying "could not do its job" beside a code saying "the project
- * failed its gate". An outcome that is a finding about the project is
- * published as a finding, not through here.
- *
- * @param message - What went wrong, in the command's own words
- * @param startTime - Command start time (from Date.now())
- * @param format - What the operator asked for: `json`, or anything else (and
- *   omitted) for YAML
- */
-export function handleReportExpectedFailure(
-  message: string,
-  startTime: number,
-  format?: string | undefined,
-): never {
-  process.stderr.write(`${message}\n`);
-  const report = buildErrorReport(message, Date.now() - startTime);
-  return publishFailure(report, format, exitCodeForReport(report));
 }
 
 /** The payload a command publishes when its own validation gate stops it. */

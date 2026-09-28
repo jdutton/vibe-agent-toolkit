@@ -4,7 +4,7 @@ For the project's *stance* on what each category of code exists to enforce — t
 
 See [validation-rule-design.md](./validation-rule-design.md) for the rule-addition policy, default-severity guidance, and graduation path that governs every code in this reference.
 
-This reference lists every validation code VAT emits: the overridable ones (each a `validation.severity` / `validation.allow` key, with a section per code), the two meta-codes, and — at the end — the codes emitted by lanes with their own severity rules, which are documented but are not `validation.severity` keys. Use it to interpret CLI output and to configure overrides.
+This reference lists every validation code VAT emits: the overridable finding codes (each a `validation.severity` / `validation.allow` key, with a section per code), the two meta-codes, the refusal codes (registered, but never a config key), and — at the end — the codes emitted by lanes with their own severity rules, which are documented but are not `validation.severity` keys. Use it to interpret CLI output and to configure overrides.
 
 ## Severity Model
 
@@ -1182,10 +1182,94 @@ Describe the state of the validation config itself.
 - **Why it matters:** Unused allow entries indicate that the underlying issue was fixed, the path pattern no longer matches, or the entry was added in error. Dead entries in the config create false confidence that issues are being tracked when they are not.
 - **Fix:** Remove the entry or fix the pattern. Upgrade severity to `error` to block on unused allow entries.
 
+## Refusal codes
+
+Every code above is a registry entry of kind **finding**: a statement about the thing examined,
+which `validation.severity` can move and `validation.allow` can waive per path. The codes in this
+section are registry entries of kind **refusal**: a statement that the *run* could not do its job.
+
+- A report with `status: error` carries `error: { code, message }`, and `error.code` is always one
+  of these codes — never a finding code. `vat` exits 2 on such a report.
+- A refusal code may also appear as an `error`-severity finding, when the run itself completed but
+  one declared unit of it could not run (`RESOURCE_CHECK_BROKEN` is the generic case). Such a
+  finding fails the gate like any error: exit 1.
+- **Config cannot override a refusal.** None of these is a `validation.severity` or
+  `validation.allow` key, and the config schema refuses one if you write it: a run that did not do
+  its job has no legitimate `ignore`. Downgrade or waive the check that failed, never the news that
+  it could not run.
+
+### `USAGE_INVALID`
+
+- **Default:** `error`
+- **What:** The command line could not be acted on: a missing or conflicting argument, an unknown option value, or a path argument that names nothing.
+- **Fix:** Correct the invocation; the message names the argument, and `--help` on the verb lists what it accepts.
+
+### `CONFIG_INVALID`
+
+- **Default:** `error`
+- **What:** The project configuration could not be used: `vibe-agent-toolkit.config.yaml` is missing where the verb needs one, does not parse, or fails its schema.
+- **Fix:** Fix the config file at the path the message names; the message carries the schema error. Run the verb from inside the project it configures.
+
+### `INPUT_UNREADABLE`
+
+- **Default:** `error`
+- **What:** An input the command must read to answer at all could not be read — absent, refused by permissions, or not the kind of thing the verb expected.
+- **Fix:** Make the named input readable, or point the command at the right one.
+
+### `BACKEND_UNAVAILABLE`
+
+- **Default:** `error`
+- **What:** A local backend the command depends on (an optional package, a vector store, a database file, a binary on `PATH`) is not installed or could not be opened.
+- **Fix:** Install or start the named backend; the message says which one and how.
+
+### `EXTERNAL_API_FAILED`
+
+- **Default:** `error`
+- **What:** A remote API the command calls failed or refused the request — a network error, an authentication failure, or a non-success response.
+- **Fix:** Check credentials and connectivity for the named service, then re-run. The message carries the service's own error.
+
+### `NOT_IMPLEMENTED`
+
+- **Default:** `error`
+- **What:** The command was asked for a mode, target or format VAT does not implement.
+- **Fix:** Choose a supported alternative; the message lists what is supported.
+
+### `RUN_INCOMPLETE`
+
+- **Default:** `error`
+- **What:** The run started and stopped before it finished — a phase failed, a population was interrupted, or a unit of work threw. The report carries whatever did finish: a real `examined`, the findings of the finished work, and partial `data`.
+- **Fix:** Fix the unit the message names as having stopped the run. The findings already in the report are real and stand on their own.
+
+### `INTERNAL_ERROR`
+
+- **Default:** `error`
+- **What:** VAT failed in a way it did not anticipate — a defect in VAT, not in the project.
+- **Fix:** Re-run with `--debug` for the stack and report it as a VAT bug.
+
+### `RESOURCE_CHECK_BROKEN`
+
+- **Default:** `error`
+- **What:** A declared check could not run, or a gate examined nothing (a scan over zero files, a budget over no matched path, a marketplace walk that found fewer than the declared local plugins, a verify over zero bundles) — the run's green would mean nothing. Published as an `error`-severity finding (exit 1) when the run itself completed: the one code every gate uses for "this run checked nothing", decided once in the CLI's `run-integrity.ts` rather than per verb.
+- **Why it matters:** A `vat resources check` violation carries `CUSTOM:<name>`, which an adopter may downgrade or ignore. If "the check is broken" shared that code, `severity: { 'CUSTOM:foo': ignore }` would also silence "foo could not run", and a renamed projection column would end a gate at exit 0.
+- **Fix:** Fix the check or the population the message names. This code cannot be downgraded or waived, by design.
+
+### `ARD_NOT_CONFIGURED`
+
+- **Default:** `error`
+- **What:** `vat ard emit` read the project and it declares no `ard:` block, so no ARD manifest was built. Published as an `error`-severity finding (exit 1): the project is the subject, and editing config fixes it.
+- **Fix:** Add an `ard:` block to `vibe-agent-toolkit.config.yaml` declaring the surfaces to advertise, or do not run `vat ard emit` for this project.
+
+### `ARD_DERIVATION_FAILED`
+
+- **Default:** `error`
+- **What:** A surface declared under `ard:` could not be derived into a conformant ARD entry, so no manifest was written. Published as an `error`-severity finding (exit 1).
+- **Fix:** Fix the declared surface the message names so it derives a conformant entry.
+
 ## Codes outside the overridable framework
 
-Everything above is a `CODE_REGISTRY` entry: a default severity that `validation.severity` can
-move and `validation.allow` can waive per path. The codes below are also emitted by VAT — they reach
+Everything above is a `CODE_REGISTRY` entry: a finding code, with a default severity that
+`validation.severity` can move and `validation.allow` can waive per path, or a refusal code, which
+neither can touch. The codes below are also emitted by VAT — they reach
 the same terminal and the same `--json` output — but **none of them is a `validation.severity`
 key**: each is owned by a lane with its own severity rule, named per table. This section exists so
 that "every code VAT emits" is true of this document; the test
@@ -1212,7 +1296,6 @@ judged at all — no frontmatter, no manifest, unparseable JSON. Declared as `No
 | `SKILL_MISCONFIGURED_LOCATION` | error | A standalone skill sits under `~/.claude/plugins/`, where Claude Code will not recognise it (`vat audit --user`) | Move it to `~/.claude/skills/`, or add `.claude-plugin/plugin.json` to make it a plugin |
 | `LINK_INTEGRITY_BROKEN` | error | A link target in the skill's link graph does not exist, or exists but could not be parsed | Fix or remove the link, or repair the target file |
 | `DUPLICATE_FILES_DEST` | error | Two `files:` entries declare the same `dest` | Give each `files:` entry a unique `dest` |
-| `RESOURCE_CHECK_BROKEN` | error | A declared check could not run, or a gate examined nothing (a scan over zero files, a budget over no matched path, a verify over zero bundles) — the run's green would mean nothing | Fix the check or the population; this code cannot be downgraded, by design |
 | `PLUGIN_MISSING_MANIFEST` | error | No `.claude-plugin/plugin.json` | Create `.claude-plugin/plugin.json` with `name`, `description`, `version` |
 | `PLUGIN_INVALID_JSON` | error | `plugin.json` is not valid JSON | Fix the JSON syntax |
 | `PLUGIN_INVALID_SCHEMA` | error | `plugin.json` fails schema validation (the message names the field) | Correct the named field |

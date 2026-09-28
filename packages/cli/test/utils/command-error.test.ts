@@ -1,15 +1,12 @@
-import { ExitCode, reportSchema, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { ExitCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
 
 import { validateCommand } from '../../src/commands/skills/validate.js';
 import {
   exitCodeForCommanderEnding,
   formatDuration,
   handleCommandError,
-  handleReportCommandError,
-  handleReportExpectedFailure,
   handleValidationGateFailure,
 } from '../../src/utils/command-error.js';
 import type { Logger } from '../../src/utils/logger.js';
@@ -248,39 +245,6 @@ describe('command-error utilities', () => {
       );
       expect(mockProcessExit).toHaveBeenCalledWith(1);
       expect(mockProcessExit).not.toHaveBeenCalledWith(2);
-    });
-  });
-
-  describe('the envelope endings — the failure document IS the published schema', () => {
-    // The strictest data schema an envelope command could declare: an error
-    // document must pass it anyway, because `data` is null on that branch.
-    const SCHEMA = reportSchema(z.object({ root: z.string() }).strict());
-
-    it('handleReportCommandError publishes an error envelope the schema accepts, at ERROR', () => {
-      expect(() => handleReportCommandError(new Error('Boom'), mockLogger, Date.now(), 'Envelope', 'json'))
-        .toThrow(PROCESS_EXIT_ERROR_MESSAGE);
-
-      const parsed = SCHEMA.safeParse(JSON.parse(getYamlOutput(mockStdoutWrite)));
-      expect(parsed.success ? [] : parsed.error.issues).toEqual([]);
-      if (!parsed.success) return;
-      expect(parsed.data.status).toBe('error');
-      expect(parsed.data.error).toBe('Boom');
-      expect(parsed.data.examined).toBe(0);
-      expect(parsed.data.data).toBeNull();
-      expect(mockProcessExit).toHaveBeenCalledWith(ExitCode.ERROR);
-    });
-
-    it('handleReportExpectedFailure publishes the error envelope at the code it DERIVES — ERROR — YAML by default', () => {
-      // 🚨 It took the code from the caller, and `vat ard emit` passed FINDINGS
-      // beside a document whose status said the command could not do its job.
-      expect(() => handleReportExpectedFailure('no config file', Date.now()))
-        .toThrow(PROCESS_EXIT_ERROR_MESSAGE);
-
-      const yamlOutput = getYamlOutput(mockStdoutWrite);
-      expect(yamlOutput).toContain(STATUS_ERROR_LINE);
-      expect(yamlOutput).toContain('error: no config file');
-      expect(yamlOutput).toContain('data: null');
-      expect(mockProcessExit).toHaveBeenCalledWith(ExitCode.ERROR);
     });
   });
 });

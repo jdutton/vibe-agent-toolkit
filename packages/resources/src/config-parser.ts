@@ -4,11 +4,11 @@
  * Discovers and parses project configuration files with directory tree walk-up.
  */
 
-import { findConfigFile } from '@vibe-agent-toolkit/utils';
+import { findConfigFile, VatError } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import { parse as parseYaml } from 'yaml';
 
-import { parseConfigAllowingUnknownKeys } from './config-issues.js';
+import { CONFIG_LOAD_CODE, parseConfigAllowingUnknownKeys } from './config-issues.js';
 import { ProjectConfigSchema, type ProjectConfig } from './schemas/project-config.js';
 
 /**
@@ -26,7 +26,7 @@ import { ProjectConfigSchema, type ProjectConfig } from './schemas/project-confi
  * @param configPath - Absolute path to config file
  * @param onUnknownKeys - Receives a warning when unknown keys were dropped
  * @returns Parsed and validated configuration
- * @throws Error if file cannot be read, YAML is invalid, or validation fails for
+ * @throws Error if file cannot be read; `VatError` `CONFIG_LOAD` if YAML is invalid, or validation fails for
  *   any reason other than an unknown key
  *
  * @example
@@ -51,7 +51,7 @@ export async function parseConfigFile(
   try {
     parsed = parseYaml(content);
   } catch (error) {
-    throw new Error(`Invalid YAML in config file: ${error instanceof Error ? error.message : String(error)}`);
+    throw new VatError(CONFIG_LOAD_CODE, `Invalid YAML in config file: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
 
   // Validate against schema. The message is built by the ONE formatter all THREE

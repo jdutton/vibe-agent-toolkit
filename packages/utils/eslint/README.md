@@ -73,7 +73,7 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 **The auto-fix writes the import to the subpath in that column**, not to the barrel — `--fix` on a raw `path.join()` inserts `import { safePath } from '@vibe-agent-toolkit/utils/path'`. A file that already reaches the helper through the barrel keeps its existing import and only has the call rewritten: adding a second binding of the same name is a `SyntaxError`, not a redundant import.
 
 <!-- gen:eslint-rules -->
-35 rules; 7 auto-fix. `configs.recommended` enables 18 of them (16 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
+36 rules; 7 auto-fix. `configs.recommended` enables 18 of them (16 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
 
 #### Path handling
 
@@ -158,6 +158,7 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 | `no-io-in-unit-tier` | Disallow child_process imports and mkdtemp/spawn/exec calls in unit-tier test files — a test that spawns or writes to disk belongs in the integration or system tier | — | — |  | — |
 | `no-literal-process-exit` | Disallow process.exit(<number>) and process.exitCode = <number> — name the meaning with the ExitCode enum so every command shares one exit contract | — | — |  | — |
 | `no-registry-count-pin` | Disallow pinning the size of an imported registry with a literal in tests — toHaveLength(27) on something pulled from src is a change detector fixed by retyping | — | — |  | — |
+| `no-stdout-outside-writer` | Disallow writing stdout under a command directory except through the one document writer — process.stdout.write, console.log and the stdout helpers publish a shape nothing validates | — | — |  | — |
 | `no-version-literal` | Disallow z.literal(<number>) on a version-named field and <X>_VERSION = <number> constants — a hand-bumped integer deciding data validity is the shape CLAUDE.md bans | — | — |  | — |
 <!-- /gen:eslint-rules -->
 

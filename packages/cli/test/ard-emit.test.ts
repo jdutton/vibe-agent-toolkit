@@ -10,8 +10,8 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
+import { ARD_EMIT_REPORT_SCHEMA } from '../src/commands/ard/emit-schema.js';
 import {
-  ARD_EMIT_REPORT_SCHEMA,
   ArdConfigMissingError,
   ardEmitCommand,
   buildArdEmitReport,
@@ -187,7 +187,7 @@ describe('runArdEmit', () => {
     const root = projectWithSkill(workDir, 'schema-accepts', CONFIG_YAML_WITH_ARD);
     const { result } = await emitAndRead(root);
 
-    expect(ARD_EMIT_REPORT_SCHEMA.safeParse(buildArdEmitReport(result)).success).toBe(true);
+    expect(ARD_EMIT_REPORT_SCHEMA.safeParse(buildArdEmitReport(result, { strict: false })).success).toBe(true);
   });
 
   it('refuses when the project declares no `ard` block at all', async () => {
@@ -404,7 +404,7 @@ describe('ardEmitCommand exit codes agree with the help text', () => {
     expect(exitOneLine).toMatch(/derived/);
   });
 
-  it('publishes exit 2 as a system error, not an internal failure', () => {
+  it('publishes exit 2 as a refusal naming its code, not an internal failure', () => {
     const emit = createArdCommand().commands.find((c) => c.name() === 'emit');
     // `helpInformation()` renders only the generated body — the Exit Codes
     // block lives in an `addHelpText('after')` hook, which only `outputHelp()`
@@ -413,7 +413,9 @@ describe('ardEmitCommand exit codes agree with the help text', () => {
     emit?.configureOutput({ writeOut: (chunk) => { help += chunk; } });
     emit?.outputHelp();
 
-    expect(help).toMatch(/2 - System error/);
+    expect(help).toMatch(/2 - The command could not do its job/);
+    expect(help).toMatch(/USAGE_INVALID/);
+    expect(help).toMatch(/CONFIG_INVALID/);
     expect(help).not.toMatch(/Unexpected internal failure/);
   });
 });
@@ -592,14 +594,20 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
     expect(fullReport['status']).toBe('ok');
   });
 
-  it('keeps the default exit code at 0 over an empty manifest', async () => {
+  it('refuses an empty manifest — nothing examined is exit 1, not a clean pass', async () => {
     const root = projectWith(workDir, 'default-exit-empty', CONFIG_YAML_ARD_NO_SURFACES);
 
     const { exitCalls, stdout } = await captureEmit(root, { format: 'json' });
 
-    // Nothing declared, nothing skipped: the denominator is what says so.
-    expect(reportFrom(stdout)).toMatchObject({ status: 'ok', examined: 0, data: { entryCount: 0, skippedCount: 0 } });
-    expect(exitCalls).toEqual([[0]]);
+    // Nothing declared, nothing skipped: the denominator says so, and the writer
+    // refuses a run that examined nothing, as it does for every report verb.
+    expect(reportFrom(stdout)).toMatchObject({
+      status: 'findings',
+      examined: 0,
+      findings: [expect.objectContaining({ code: 'RESOURCE_CHECK_BROKEN', severity: 'error' })],
+      data: { entryCount: 0, skippedCount: 0 },
+    });
+    expect(exitCalls).toEqual([[1]]);
   });
 
   it('exits 1 under --strict when the manifest advertises nothing, skips or not', async () => {
@@ -679,16 +687,20 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
   it('publishes the zero-entry case and its gate in the exit-code contract', () => {
     const help = emitHelpText();
 
-    // The whole exit-0 BLOCK, not its first line: the contract wraps, and an
-    // assertion scoped to one line would pass or fail on where the text breaks
-    // rather than on what it says.
+    // Whole BLOCKS, not first lines: the contract wraps, and an assertion
+    // scoped to one line would pass or fail on where the text breaks rather
+    // than on what it says.
     const lines = help.split('\n');
     const zeroAt = lines.findIndex((line) => line.includes('0 - '));
     const oneAt = lines.findIndex((line) => line.includes('1 - '));
+    const twoAt = lines.findIndex((line) => line.includes('2 - '));
     const exitZeroBlock = lines.slice(zeroAt, oneAt).join(' ');
+    const exitOneBlock = lines.slice(oneAt, twoAt).join(' ');
 
     expect(exitZeroBlock).toMatch(/skip/i);
-    expect(exitZeroBlock).toMatch(/advertises nothing/i);
+    // A block reaching no surface examined nothing: refused at 1, never a clean 0.
+    expect(exitOneBlock).toMatch(/reaches no surface/i);
+    expect(exitOneBlock).toMatch(/RESOURCE_CHECK_BROKEN/);
     expect(help).toMatch(/--strict/);
     expect(help).toMatch(/--format/);
   });

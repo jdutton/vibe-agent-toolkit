@@ -37,6 +37,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { ProgressEntry } from '../../src/commands/resources/check-progress.js';
 import { unitInFlight } from '../../src/commands/resources/check-progress.js';
+import { CHECK_REPORT_SCHEMA } from '../../src/commands/resources/check-schema.js';
 import {
   type AbnormalDeath,
   parseBudgetSeconds,
@@ -50,7 +51,6 @@ import {
 import {
   buildCheckOutputData,
   buildInterruptedCheckInput,
-  CHECK_REPORT_SCHEMA,
   type CheckPayloadInput,
   NODE_FATAL_ABORT_EXIT_CODE,
 } from '../../src/commands/resources/check.js';
@@ -415,7 +415,8 @@ describe('buildInterruptedCheckInput', () => {
 
     expect(payload.status).toBe('error');
     expect(exitCodeForReport(payload)).toBe(ExitCode.ERROR);
-    expect(payload.error).toContain('before its population completed');
+    expect(payload.error.code).toBe('RUN_INCOMPLETE');
+    expect(payload.error.message).toContain('before its population completed');
     // The envelope's error branch: the reason is in `error`, not in `findings`.
     expect(payload.findings).toStrictEqual([]);
     expect(CHECK_REPORT_SCHEMA.safeParse(payload).success).toBe(true);
@@ -451,8 +452,8 @@ describe('buildInterruptedCheckInput', () => {
     // measured timings, and a bare `/2/` was once satisfied by one of those.
     const { error } = buildCheckOutputData(killed([STARTED]));
 
-    expect(error).toContain('no progress for 2s');
-    expect(error).toContain('before its population completed');
+    expect(error.message).toContain('no progress for 2s');
+    expect(error.message).toContain('before its population completed');
   });
 
   it('says the child had not finished STARTING when the log is empty — also exit 2', () => {
@@ -462,8 +463,8 @@ describe('buildInterruptedCheckInput', () => {
     const payload = buildCheckOutputData(killed([]));
 
     expect(exitCodeForReport(payload)).toBe(ExitCode.ERROR);
-    expect(payload.error).toContain('before the child process had finished starting');
-    expect(payload.error).not.toContain('before its population completed');
+    expect(payload.error.message).toContain('before the child process had finished starting');
+    expect(payload.error.message).not.toContain('before its population completed');
   });
 });
 
@@ -769,13 +770,13 @@ describe('the document a run that DIED publishes', () => {
 
     expect(exitCodeForReport(payload)).toBe(ExitCode.ERROR);
     expect(payload.data.population).toBeNull();
-    expect(payload.error).toContain(ABORTED);
+    expect(payload.error.message).toContain(ABORTED);
   });
 
   it('does not blame the budget in that error either', () => {
     // 🪤 The name promises an ABSENCE and the assertion was a presence, so a
     // message that said both things would have passed. Both halves now.
-    const message = buildCheckOutputData(died(ABORTED, [STARTED])).error;
+    const message = buildCheckOutputData(died(ABORTED, [STARTED])).error.message;
 
     expect(message).toMatch(/died|terminated/i);
     expect(message).not.toMatch(/Raise it with `--budget/);

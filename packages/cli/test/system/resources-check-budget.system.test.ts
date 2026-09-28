@@ -349,7 +349,8 @@ describe('vat resources check --budget', () => {
 
     expect(status).toBe(2);
     expect(doc['status']).toBe('error');
-    expect(doc['error']).toContain(`no progress for ${PRE_POPULATION_BUDGET}s`);
+    // `RUN_INCOMPLETE`: the run started and was stopped before its population finished.
+    expect(doc['error']).toMatchObject({ code: 'RUN_INCOMPLETE', message: expect.stringContaining(`no progress for ${PRE_POPULATION_BUDGET}s`) });
     // The envelope's error branch: the reason is in `error`, not in `findings`.
     expect(doc['findings']).toStrictEqual([]);
     // 🔑 NULL, never a fabricated zero or a guessed origin: there was no
@@ -394,7 +395,7 @@ describe('vat resources check --budget', () => {
 
     // 2, not 1: a mistyped flag is an operator error, not a content violation.
     expect(status).toBe(2);
-    expect(doc['error']).toContain('--budget');
+    expect(doc['error']).toMatchObject({ code: 'USAGE_INVALID', message: expect.stringContaining('--budget') });
   });
 
   it('writes one progress line per unit when given --cost-log', () => {
@@ -446,6 +447,6 @@ describe('vat resources check --budget', () => {
     );
 
     expect(status).toBe(2);
-    expect(doc['error']).toContain(COST_LOG_FLAG);
+    expect(doc['error']).toMatchObject({ code: 'USAGE_INVALID', message: expect.stringContaining(COST_LOG_FLAG) });
   });
 });

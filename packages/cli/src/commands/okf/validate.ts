@@ -17,21 +17,14 @@ import {
   type OkfBundleReport,
   type OkfFinding,
 } from '@vibe-agent-toolkit/resources';
-import {
-  buildReport,
-  exitCodeForReport,
-  reportSchema,
-  toFindings,
-  type Finding,
-  type Report,
-} from '@vibe-agent-toolkit/schema';
+import { buildReport, toFindings, type Finding } from '@vibe-agent-toolkit/schema';
 import { findConfigFile, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
-import { z } from 'zod';
 
-import { handleReportCommandError } from '../../utils/command-error.js';
-import { createLogger } from '../../utils/logger.js';
-import { writeStructuredOutput } from '../../utils/output.js';
+import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { nothingCheckedFinding } from '../../utils/run-integrity.js';
+
+import type { OkfValidateData, OkfValidateReport } from './validate-schema.js';
 
 export interface OkfValidateOptions {
   format?: 'yaml' | 'json';
@@ -39,46 +32,6 @@ export interface OkfValidateOptions {
   debug?: boolean;
 }
 
-/** One checked bundle's `data` row: what was read, never the findings (those are the envelope's). */
-export const OkfBundleSummarySchema = z.object({
-  /** The `okf.bundles.<name>` key. */
-  bundle: z.string(),
-  /** The root as the config file wrote it — never the resolved absolute path. */
-  root: z.string(),
-  /** Every non-reserved `.md` beneath the root, bundle-relative and sorted. */
-  conceptDocuments: z.array(z.string()),
-  /** Every `index.md` / `log.md` beneath the root, bundle-relative and sorted. */
-  reservedDocuments: z.array(z.string()),
-  /** What the root `index.md` declares, when it declares a well-formed one. Reported, never obeyed. */
-  declaredOkfVersion: z.string().optional(),
-}).strict();
-
-export const OkfValidateDataSchema = z.object({
-  bundles: z.array(OkfBundleSummarySchema),
-  /**
-   * Present only when there was nothing to check, and says what to declare or
-   * which root to look at.
-   *
-   * 🪤 The command used to print `status: passed`, `bundles: []`, exit 0 when a
-   * project declared no `okf.bundles` at all — a report indistinguishable from
-   * a bundle read in full and found conformant, so a mistyped key
-   * (`okf.bundle:`, `okf.Bundles:`) read as a clean bill of health. The
-   * envelope's REQUIRED `examined` now says `0` in that case, this sentence
-   * says why, and the run is refused (`RESOURCE_CHECK_BROKEN`, exit 1): a gate
-   * that examined nothing must not read as a pass to a consumer gating on the
-   * status or the exit code. A project that declares no bundles has no reason
-   * to run this verb.
-   */
-  notice: z.string().optional(),
-}).strict();
-
-export type OkfBundleSummary = z.infer<typeof OkfBundleSummarySchema>;
-export type OkfValidateData = z.infer<typeof OkfValidateDataSchema>;
-
-/** The document this command publishes. */
-export const OKF_VALIDATE_REPORT_SCHEMA = reportSchema(OkfValidateDataSchema);
-
-export type OkfValidateReport = Report<OkfValidateData>;
 
 /** One bundle's report beside the absolute root it was read from. */
 export interface CheckedOkfBundle {
@@ -197,6 +150,8 @@ export function summarizeOkfBundles(
     : toFindings(nothingCheckedFinding(examined, [], () => notice ?? NO_BUNDLES_NOTICE));
 
   return buildReport<OkfValidateData>({
+    // `vat okf validate` offers no `--strict`: warnings never fail it.
+    gate: { strict: false },
     examined,
     findings: [...refusal, ...findings],
     data: {
@@ -226,9 +181,12 @@ export async function okfValidateReport(
 ): Promise<OkfValidateReport> {
   const configPath = findConfigFile(process.cwd());
   if (!configPath) {
-    throw new Error('No vibe-agent-toolkit.config.yaml found. Run from a project directory.');
+    throw new CommandRefusalError('CONFIG_INVALID', 'No vibe-agent-toolkit.config.yaml found. Run from a project directory.');
   }
 
+  // A config that does not parse or validate throws `CONFIG_LOAD`, and an
+  // undeclared bundle argument `OKF_UNKNOWN_BUNDLE` — each a coded refusal the
+  // catch reads. Anything else thrown here is VAT's defect and surfaces as one.
   const config = await parseConfigFile(configPath);
   const projectRoot = dirname(configPath);
   const runs = okfBundleRuns(config.okf, projectRoot, {
@@ -249,16 +207,16 @@ export async function okfValidateCommand(
   bundleArg: string | undefined,
   options: OkfValidateOptions,
 ): Promise<void> {
-  const logger = createLogger(options.debug === true ? { debug: true } : {});
   const startTime = Date.now();
+  const format = options.format ?? 'yaml';
 
   try {
     const report = { ...(await okfValidateReport(bundleArg, options)), durationMs: Date.now() - startTime };
-    writeStructuredOutput(report, options.format);
-    // Derived from the report it just PUBLISHED: an adopter who promotes or
-    // lowers a bundle's severity then gates on exactly the number a reader sees.
-    process.exit(exitCodeForReport(report));
+    // The code derives from the report the writer PUBLISHED: an adopter who
+    // promotes or lowers a bundle's severity gates on exactly what a reader sees.
+    endWithReport('okf validate', report, format);
   } catch (error) {
-    handleReportCommandError(error, logger, startTime, 'OKF validate', options.format);
+    // `vat okf validate` offers no `--strict`: warnings never fail it.
+    endWithRefusal('okf validate', refusalCodeOf(error), error, format, { strict: false }, NOTHING_FINISHED);
   }
 }

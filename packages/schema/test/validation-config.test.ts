@@ -279,3 +279,27 @@ describe('customCheckCode', () => {
     expect(isCustomCheckCode(CUSTOM_CHECK_CODE_PREFIX)).toBe(false);
   });
 });
+
+describe('ValidationConfigSchema — refusal codes are not config keys', () => {
+  // 🔑 A refusal says a run could not do its job. It has no legitimate
+  // `ignore` and no path to waive, so it is refused under BOTH maps — and the
+  // severity refusal still names the code as deliberately non-overridable.
+  it.each(['RESOURCE_CHECK_BROKEN', 'INTERNAL_ERROR'])(
+    'refuses a refusal code as a severity key and as an allow key (%s)',
+    (code) => {
+      const message = refusalFor(code);
+      expect(message).toContain(code);
+      expect(message).toContain('refusal');
+      const allow = ValidationConfigSchema.safeParse({ allow: { [code]: [{ reason: 'no' }] } });
+      expect(allow.success).toBe(false);
+    },
+  );
+
+  it('still parses a finding code under both maps', () => {
+    const result = ValidationConfigSchema.safeParse({
+      severity: { LINK_MISSING_TARGET: 'warning' },
+      allow: { LINK_MISSING_TARGET: [{ reason: 'positive control' }] },
+    });
+    expect(result.success).toBe(true);
+  });
+});

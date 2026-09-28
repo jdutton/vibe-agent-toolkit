@@ -164,11 +164,18 @@ export function writeYamlOutput(data: unknown): void {
   // synchronous fd-1 write would jump ahead of anything still buffered there.
   // Completeness is guaranteed instead by makeStdioBlocking() at startup, which
   // makes BOTH channels synchronous and keeps them in order.
-  process.stdout.write(`---\n${yaml.stringify(data, {
-    indent: 2,
-    lineWidth: 120,
-    aliasDuplicateObjects: false,
-  })}`);
+  process.stdout.write(`---\n${renderYamlDocument(data)}`);
+}
+
+/**
+ * The one YAML rendering of a published document — on stdout and in a file
+ * artifact alike, so the same data never serializes two ways.
+ *
+ * @param data - Data to serialize
+ * @returns The YAML text, without a document marker
+ */
+export function renderYamlDocument(data: unknown): string {
+  return yaml.stringify(data, { indent: 2, lineWidth: 120, aliasDuplicateObjects: false });
 }
 
 /**

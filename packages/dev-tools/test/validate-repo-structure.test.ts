@@ -85,7 +85,7 @@ describe('classifySeverityCountsLane — regression guards', () => {
     // literal nor a counts property — the migration that FIXED the lane erased
     // it from the population (three commands went "stale" the day they moved).
     const result = classifySeverityCountsLane(`
-      return buildReport<CheckData>({ examined, findings, data });
+      return buildReport<CheckData>({ examined, findings, data, gate });
     `);
     expect(result).toEqual({ isLane: true, publishesCounts: true });
   });
@@ -95,7 +95,7 @@ describe('classifySeverityCountsLane — regression guards', () => {
     // recogniser keys on, not the call.
     const aliased = `
       import { buildReport as buildEnvelope } from '@vibe-agent-toolkit/schema';
-      const r = buildEnvelope({ examined: 1, findings, data });
+      const r = buildEnvelope({ examined: 1, findings, data, gate: { strict: false } });
     `;
     expect(classifySeverityCountsLane(aliased)).toEqual({ isLane: true, publishesCounts: true });
   });

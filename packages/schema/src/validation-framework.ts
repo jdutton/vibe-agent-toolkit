@@ -20,7 +20,7 @@
 
 import picomatch from 'picomatch';
 
-import { CODE_REGISTRY, type IssueCode, type IssueSeverity } from './validation-codes.js';
+import { CODE_REGISTRY, REFUSAL_CODES, type FindingCode, type IssueCode, type IssueSeverity } from './validation-codes.js';
 import type { AllowEntry, ValidationConfig } from './validation-config.js';
 import type { ValidationIssue } from './validation-issue.js';
 
@@ -35,7 +35,27 @@ export type AllowConfig = Pick<ValidationConfig, 'allow'>;
 // Severity resolution
 // ---------------------------------------------------------------------------
 
+const REFUSALS: ReadonlySet<string> = new Set(REFUSAL_CODES);
+
+/**
+ * Whether config may override this code: anything but a refusal.
+ *
+ * ⚠️ Decided by EXCLUSION, not by `kind === 'finding'`: callers reach here with
+ * non-registry codes too (`resolveIssueSeverity` hands over a `CUSTOM:` check
+ * code whose override it found), and those must keep resolving to the override.
+ * A lookup of the registry entry would throw on them.
+ *
+ * @param code - The code being resolved
+ * @returns False only for a registered refusal code
+ */
+function isOverridable(code: IssueCode): code is FindingCode {
+  return !REFUSALS.has(code);
+}
+
 export function resolveSeverity(code: IssueCode, config: SeverityConfig): IssueSeverity {
+  // A refusal is never a config key (the schema refuses it), so it always
+  // resolves to its registry default.
+  if (!isOverridable(code)) return CODE_REGISTRY[code].defaultSeverity;
   const override = config.severity?.[code];
   if (override === 'error' || override === 'warning' || override === 'info' || override === 'ignore') {
     return override;

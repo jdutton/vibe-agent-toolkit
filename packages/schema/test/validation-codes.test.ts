@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { CODE_REGISTRY, CONSISTENCY_CODES, IssueCodeSchema, type ConsistencyCode, type IssueCode } from '../src/validation-codes.js';
+import {
+  CODE_REGISTRY,
+  CONSISTENCY_CODES,
+  FindingCodeSchema,
+  IssueCodeSchema,
+  REFUSAL_CODES,
+  RefusalCodeSchema,
+  type ConsistencyCode,
+  type IssueCode,
+} from '../src/validation-codes.js';
 
 describe('CODE_REGISTRY', () => {
   it('contains every overridable code with a default severity', () => {
@@ -274,5 +283,52 @@ describe('CONSISTENCY_CODES', () => {
     for (const code of CONSISTENCY_CODES) {
       expect(code in CODE_REGISTRY, `${code} must not be overridable`).toBe(false);
     }
+  });
+});
+
+describe('CODE_REGISTRY — every code has a kind', () => {
+  const EXPECTED_REFUSALS = [
+    'USAGE_INVALID',
+    'CONFIG_INVALID',
+    'INPUT_UNREADABLE',
+    'BACKEND_UNAVAILABLE',
+    'EXTERNAL_API_FAILED',
+    'NOT_IMPLEMENTED',
+    'RUN_INCOMPLETE',
+    'INTERNAL_ERROR',
+    'RESOURCE_CHECK_BROKEN',
+    'ARD_NOT_CONFIGURED',
+    'ARD_DERIVATION_FAILED',
+  ];
+
+  it('gives every registry entry a kind', () => {
+    for (const [code, entry] of Object.entries(CODE_REGISTRY)) {
+      expect(['finding', 'refusal'], `${code} has no kind`).toContain((entry as { kind?: unknown }).kind);
+    }
+  });
+
+  it('registers RESOURCE_CHECK_BROKEN as a refusal', () => {
+    expect(CODE_REGISTRY.RESOURCE_CHECK_BROKEN.kind).toBe('refusal');
+    expect(CODE_REGISTRY.RESOURCE_CHECK_BROKEN.defaultSeverity).toBe('error');
+  });
+
+  it('registers exactly the refusal vocabulary, and derives it from the registry by kind', () => {
+    expect(new Set(REFUSAL_CODES)).toEqual(new Set(EXPECTED_REFUSALS));
+    const byKind = Object.entries(CODE_REGISTRY).filter(([, entry]) => entry.kind === 'refusal').map(([code]) => code);
+    expect(new Set(byKind)).toEqual(new Set(REFUSAL_CODES));
+  });
+
+  it('gives every refusal the error default — a refusal is never quiet', () => {
+    for (const code of REFUSAL_CODES) expect(CODE_REGISTRY[code].defaultSeverity).toBe('error');
+  });
+
+  it('partitions the registry: a code is a refusal or a finding, never both, never neither', () => {
+    for (const code of IssueCodeSchema.options) {
+      const asRefusal = RefusalCodeSchema.safeParse(code).success;
+      const asFinding = FindingCodeSchema.safeParse(code).success;
+      expect(asRefusal !== asFinding, `${code} is in ${asRefusal ? 'both' : 'neither'}`).toBe(true);
+    }
+    expect(RefusalCodeSchema.safeParse('LINK_MISSING_TARGET').success).toBe(false);
+    expect(FindingCodeSchema.safeParse('INTERNAL_ERROR').success).toBe(false);
   });
 });

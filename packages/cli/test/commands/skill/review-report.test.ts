@@ -12,7 +12,8 @@ import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import { CHECKLIST_SECTIONS, type ChecklistSection } from '../../../src/commands/skill/review-checklist.js';
-import { buildReviewReport, SKILL_REVIEW_REPORT_SCHEMA } from '../../../src/commands/skill/review.js';
+import { SKILL_REVIEW_REPORT_SCHEMA } from '../../../src/commands/skill/review-schema.js';
+import { buildReviewReport } from '../../../src/commands/skill/review.js';
 
 function result(allErrors: ValidationIssue[]): PackagingValidationResult {
   return {
@@ -43,9 +44,11 @@ function grouped(entries: Partial<Record<ChecklistSection, ValidationIssue[]>>):
 const NAMING: ValidationIssue = { code: 'SKILL_NAME_MISMATCHES_DIR', severity: 'error', message: 'name', location: 'skills/a/SKILL.md' };
 const BODY: ValidationIssue = { code: 'SKILL_LENGTH_EXCEEDS_RECOMMENDED', severity: 'warning', message: 'long', location: 'skills/a/SKILL.md' };
 
+const LENIENT = { strict: false } as const;
+
 describe('buildReviewReport', () => {
   it('examines exactly one skill and says ok when nothing was found', () => {
-    const report = buildReviewReport(result([]), 'skills/a/SKILL.md', grouped({}));
+    const report = buildReviewReport(result([]), 'skills/a/SKILL.md', grouped({}), LENIENT);
 
     expect(report.status).toBe('ok');
     expect(report.examined).toBe(1);
@@ -59,6 +62,7 @@ describe('buildReviewReport', () => {
       result([NAMING, BODY]),
       'skills/a/SKILL.md',
       grouped({ 'Body structure': [BODY], Naming: [NAMING] }),
+      LENIENT,
     );
 
     expect(report.status).toBe('findings');
@@ -71,9 +75,11 @@ describe('buildReviewReport', () => {
   });
 
   it('validates against the schema the registry emits for it', () => {
-    const report = buildReviewReport(result([NAMING]), 'skills/a/SKILL.md', grouped({ Naming: [NAMING] }));
+    const report = buildReviewReport(result([NAMING]), 'skills/a/SKILL.md', grouped({ Naming: [NAMING] }), { strict: true });
 
     const parsed = SKILL_REVIEW_REPORT_SCHEMA.safeParse(report);
     expect(parsed.success, JSON.stringify(parsed.success ? null : parsed.error.issues)).toBe(true);
+    // The gate the caller passed is the one the document records.
+    expect(report.gate).toEqual({ strict: true });
   });
 });

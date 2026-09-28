@@ -32,10 +32,9 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 
 import type { ProgressEntry } from '../../src/commands/resources/check-progress.js';
+import { CHECK_REPORT_SCHEMA, type CheckReport } from '../../src/commands/resources/check-schema.js';
 import {
   buildCheckOutputData,
-  CHECK_REPORT_SCHEMA,
-  type CheckReport,
   requireKnownCheck,
   runProjectChecks,
   warnUndeclaredOverrides,

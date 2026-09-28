@@ -17,6 +17,7 @@ import { existsSync, statSync } from 'node:fs';
 
 import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 
+import { CommandRefusalError } from './command-refusal.js';
 import type { Logger } from './logger.js';
 
 /**
@@ -27,7 +28,8 @@ import type { Logger } from './logger.js';
 export function requireProjectRoot(startDir: string, commandName: string): string {
   const root = findProjectRoot(startDir);
   if (root === null) {
-    throw new Error(
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
       `${commandName} requires a vibe-agent-toolkit.config.yaml or .git/ ancestor. ` +
         `Run from inside a VAT project or initialize one.`,
     );
@@ -75,15 +77,15 @@ export function projectRootOrNull(startDir: string): string | null {
  *
  * @param pathArg - The argument as typed, relative to cwd or absolute
  * @returns The resolved absolute path
- * @throws When it does not exist or is not a directory
+ * @throws {CommandRefusalError} `USAGE_INVALID` when it does not exist or is not a directory
  */
 export function assertDirectoryArgument(pathArg: string): string {
   const resolved = safePath.resolve(pathArg);
   if (!existsSync(resolved)) {
-    throw new Error(`Path does not exist: ${resolved}`);
+    throw new CommandRefusalError('USAGE_INVALID', `Path does not exist: ${resolved}`);
   }
   if (!statSync(resolved).isDirectory()) {
-    throw new Error(`Path is not a directory: ${resolved}`);
+    throw new CommandRefusalError('USAGE_INVALID', `Path is not a directory: ${resolved}`);
   }
   return resolved;
 }

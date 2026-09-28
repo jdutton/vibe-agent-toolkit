@@ -35,31 +35,28 @@ import {
   bindBuiltinChecks,
   BUILTIN_CHECK_NAMES,
   issuesFromCheckRows,
-  LIMIT_DIRECTIONS,
   type StatedLimit,
   type BoundBuiltinCheck,
   type ResourceCheck,
 } from '@vibe-agent-toolkit/resources';
 import {
+  buildErrorReport,
   buildReport,
   CUSTOM_CHECK_CODE_PREFIX,
-  exitCodeForReport,
   exitCodeOfChild,
   isCustomCheckCode,
-  reportSchema,
   toFindings,
-  type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { z } from 'zod';
 
-import { handleReportCommandError } from '../../utils/command-error.js';
+import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { loadConfigCached } from '../../utils/config-loader.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { resolveIssueSeverity, type SeverityOverrides } from '../../utils/issue-severity.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { writeStdoutSync, writeStructuredOutput } from '../../utils/output.js';
+import { writeStdoutSync } from '../../utils/output.js';
 import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
 import {
   withQueriedProjection,
@@ -77,6 +74,7 @@ import {
   type ProgressEntry,
   type UnitInFlight,
 } from './check-progress.js';
+import type { CheckData, CheckReport } from './check-schema.js';
 import {
   parseBudgetSeconds,
   requireSupervisableFlags,
@@ -180,18 +178,6 @@ export interface CheckPayloadInput {
   populated: PopulatedRun | null;
 }
 
-/** What one rule cost, as the document publishes it. */
-const PublishedCheckCostSchema = z.object({
-  name: z.string(),
-  /** Three significant figures, so a 0.4 ms rule serializes as 0.0004 rather than a zero that reads as "not measured". */
-  durationSecs: z.number().nonnegative(),
-  /** Rows the statement returned. ABSENT, never 0, when the statement did not complete. */
-  rows: z.number().int().nonnegative().optional(),
-  broken: z.literal(true).optional(),
-  /** Present and `true` only for a rule VAT supplied — see {@link CheckCost.builtin}. */
-  builtin: z.literal(true).optional(),
-}).strict();
-
 /**
  * The published copy of {@link relationBoundsFor}'s answer.
  *
@@ -212,76 +198,6 @@ function structuredBounds(lensesEvaluated: readonly string[]): {
   return { boundsStatement: bounds.boundsStatement, limits: bounds.limits.map((limit) => ({ ...limit })) };
 }
 
-/**
- * A signed bound on what the derived rows settle, as `@vibe-agent-toolkit/resources`
- * states it.
- *
- * ⛔ The direction vocabulary is IMPORTED, never respelled: `LIMIT_DIRECTIONS`
- * is the one list, tied to `StatedLimit['direction']` by `satisfies`, so a
- * fifth direction cannot leave this schema quietly rejecting it.
- */
-const StatedLimitSchema = z.object({
-  id: z.string(),
-  direction: z.enum(LIMIT_DIRECTIONS),
-  statement: z.string(),
-}).strict();
-
-/**
- * What the check run reports beyond its findings.
- *
- * The envelope's `examined` is `membersEnumerated` — what the rules ran
- * AGAINST. `checksRun` is the other denominator, the number of RULES, and both
- * are needed: zero findings is the pass condition and either number at zero
- * makes that pass vacuous.
- */
-export const CheckDataSchema = z.object({
-  root: z.string(),
-  /**
-   * Whether the projection was derived this run or read from the store.
-   *
-   * 🔑 `null` — together with `populationSecs`, `lensSecs` and
-   * `lensesEvaluated` — exactly when the run was interrupted before its
-   * population completed. There was no projection, so there is no origin, cost
-   * or lens set to report, and a `RESOURCE_CHECK_BROKEN` finding says why.
-   */
-  population: z.enum(['derived', 'store']).nullable(),
-  /** What the population cost — charged to no check, see `CheckCost`. Null as `population` is. */
-  populationSecs: z.number().nonnegative().nullable(),
-  /** What evaluating the lenses cost, paid before the first statement ran. Null as `population` is. */
-  lensSecs: z.number().nonnegative().nullable(),
-  /**
-   * Which lenses that covers — the derived relations this run's checks could
-   * actually read. 🔑 An empty list says "no check asked for a derived relation"
-   * rather than "a lens stopped running"; without it `lensSecs: 0` is the same
-   * document either way, and a gate whose rules silently read empty relations is
-   * a gate that cannot fail. Null as `population` is — `[]` would claim "no
-   * check asked", about a run that never got far enough to ask.
-   */
-  lensesEvaluated: z.array(z.string()).nullable(),
-  /**
-   * The prose frame {@link CheckDataSchema.limits} is read under. Present
-   * exactly when a lens with stated bounds was evaluated.
-   */
-  boundsStatement: z.string().optional(),
-  /**
-   * What the derived rows this run could read do NOT settle — signed and
-   * directional, the same list `vat claude context` publishes beside its own
-   * answer. Absent when no bounded lens ran: an empty list would claim nothing
-   * bounds the answer, which is stronger than "the answer holds no such row".
-   */
-  limits: z.array(StatedLimitSchema).optional(),
-  /** The number of rules that EXECUTED. Derived from `checks`, never carried beside it. */
-  checksRun: z.number().int().nonnegative(),
-  /** What each rule cost, directly under the denominator it is the breakdown of. */
-  checks: z.array(PublishedCheckCostSchema),
-}).strict();
-
-export type CheckData = z.infer<typeof CheckDataSchema>;
-
-/** The document this command publishes. */
-export const CHECK_REPORT_SCHEMA = reportSchema(CheckDataSchema);
-
-export type CheckReport = Report<CheckData>;
 
 /**
  * The refusal for a run in which NO check executed.
@@ -392,6 +308,8 @@ export function buildCheckOutputData(input: CheckPayloadInput): CheckReport {
   const issues = [...noCheckRanFinding(input.costs, input.issues), ...input.issues];
   const { populated } = input;
   const report = buildReport<CheckData>({
+    // `vat resources check` offers no `--strict`: warnings never fail it.
+    gate: { strict: false },
     // The OTHER denominator, and the one whose absence shipped a green gate over
     // an empty repository. `checksRun` counts rules; this counts what they ran
     // against. 🔑 0 for a run with no population is not a placeholder: nothing
@@ -434,21 +352,25 @@ export function buildCheckOutputData(input: CheckPayloadInput): CheckReport {
  * The error branch of the envelope, for a run that never had a population.
  *
  * `status: error`, nothing in `findings`, zero `summary`, and the reason in
- * `error` — the shape `buildErrorReport` gives every other run that could not
- * do its job — but `data` is KEPT: it names the root and says, with `null`,
- * that there was no projection, which is more than `data: null` could.
+ * `error` under the registered refusal `RUN_INCOMPLETE` — the run started and
+ * stopped before its population completed — and `data` is KEPT: it names the
+ * root and says, with `null`, that there was no projection, which is more than
+ * `data: null` could.
  *
  * @param report - The document as the findings would have built it
  * @returns The same document on the error branch
  */
 function couldNotRun(report: CheckReport): CheckReport {
-  return {
-    ...report,
-    status: 'error',
-    error: report.findings.map((finding) => finding.message).join('\n'),
+  // The one construction of the error branch — the same `buildErrorReport`
+  // every refusal the writer publishes goes through.
+  return buildErrorReport({
+    error: { code: 'RUN_INCOMPLETE', message: report.findings.map((finding) => finding.message).join('\n') },
+    gate: report.gate,
+    examined: report.examined,
     findings: [],
-    summary: { errors: 0, warnings: 0, info: 0 },
-  };
+    data: report.data,
+    durationMs: report.durationMs,
+  });
 }
 
 /**
@@ -777,7 +699,8 @@ export function requireKnownCheck(
   if (only === undefined || builtinNames.includes(only) || Object.hasOwn(checks, only)) return;
 
   const declared = Object.keys(checks);
-  throw new Error(
+  throw new CommandRefusalError(
+    'USAGE_INVALID',
     `No check named "${only}" exists. `
     + `Built in: ${builtinNames.join(', ')}. `
     + (declared.length === 0
@@ -1460,20 +1383,6 @@ export function runProjectChecks(options: {
 }
 
 /**
- * Serialize the document in the format the operator asked for.
- *
- * Extracted because BOTH endings publish one — a completed run and a killed one
- * — and two copies of a two-branch format switch is how one of them ends up
- * ignoring `--format json`.
- *
- * @param payload - The document
- * @param format - `json`, or anything else for YAML
- */
-function emitCheckDocument(payload: CheckReport, format: string | undefined): void {
-  writeStructuredOutput(payload, format);
-}
-
-/**
  * The child's argv — this very command, plus the hidden flag that stops it
  * spawning a child of its own.
  *
@@ -1600,6 +1509,8 @@ export async function checkCommand(
 ): Promise<void> {
   const logger = createLogger({ debug: options.debug ?? false });
   const startTime = Date.now();
+  // The two formats this verb offers; anything else was always YAML.
+  const format = options.format === 'json' ? 'json' : 'yaml';
 
   try {
     if (pathArg !== undefined) assertDirectoryArgument(pathArg);
@@ -1614,91 +1525,105 @@ export async function checkCommand(
     // The presence of `--cost-log` says "you ARE the child". `--budget 0` says
     // the operator declined the bound; both run the work here, and the second
     // can therefore hang forever, which its help text says.
-    if (!runsInThisProcess({ costLog: options.costLog, budgetSecs })) {
-      const ending = await superviseCheckRun({ pathArg, options, budgetSecs });
-      if ('forward' in ending) {
-        // Verbatim. The child already built the document the operator's
-        // `--format` asked for, and re-serializing it here would be a second
-        // place for that shape to live.
-        //
-        // ⚠️ `durationSecs` in it is therefore the CHILD's wall time and does
-        // not include this process's own startup and spawn (~0.15 s measured).
-        // Deliberate: the field is a breakdown that `populationSecs` and the
-        // per-rule costs have to reconcile against, and folding in a supervisor
-        // overhead none of them can account for would leave a remainder a
-        // reader would attribute to whichever rule they were looking at — the
-        // exact defect `CheckCost` documents.
-        writeStdoutSync(ending.forward);
-        // The child derived its code from its own document; a code off the
-        // contract is not a verdict it published and is not forwarded.
-        process.exit(exitCodeOfChild(ending.code));
-      }
-      emitCheckDocument(ending.payload, options.format);
-      // ⛔ Never OK, and never decided here. A run that did not finish carries a
-      // RUN_INTEGRITY finding (a check was in flight: exit 1) or is on the error
-      // branch (nothing was examined: exit 2) — the document says which, and
-      // the code is derived from it, as everywhere else.
-      process.exit(exitCodeForReport(ending.payload));
+    const ending: SupervisedEnding = runsInThisProcess({ costLog: options.costLog, budgetSecs })
+      ? { payload: await runChecksHere(pathArg, options, logger, startTime) }
+      : await superviseCheckRun({ pathArg, options, budgetSecs });
+    if ('forward' in ending) {
+      // Verbatim. The child already built the document the operator's
+      // `--format` asked for, and re-serializing it here would be a second
+      // place for that shape to live.
+      //
+      // ⚠️ `durationSecs` in it is therefore the CHILD's wall time and does
+      // not include this process's own startup and spawn (~0.15 s measured).
+      // Deliberate: the field is a breakdown that `populationSecs` and the
+      // per-rule costs have to reconcile against, and folding in a supervisor
+      // overhead none of them can account for would leave a remainder a
+      // reader would attribute to whichever rule they were looking at — the
+      // exact defect `CheckCost` documents.
+      writeStdoutSync(ending.forward);
+      // The child derived its code from its own document; a code off the
+      // contract is not a verdict it published and is not forwarded.
+      // 🪤 `return` it, though its type is `never`: under a test's returning
+      // exit spy a bare call would fall through to the second ending below.
+      return process.exit(exitCodeOfChild(ending.code));
     }
-
-    // 🔑 FIRST, before anything that touches the tree: the child has booted.
-    // The watchdog's clock started at the spawn, so without this line Node's
-    // startup and the CLI's import were charged to the population — the one
-    // unit the budget is already a total bound for. See `StartedEntrySchema`.
-    const onProgress = options.costLog === undefined
-      ? undefined
-      : createProgressWriter(options.costLog);
-    onProgress?.({ kind: 'started' });
-
-    const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
-    const config = loadConfigCached(projectRoot);
-    const checks = config?.resources?.checks;
-
-    if (checks === undefined || Object.keys(checks).length === 0) {
-      // 🪤 Stderr only, and it decides NOTHING — the document is what the exit
-      // code is computed from and what CI parses. ⚠️ It does not stand beside a
-      // refusal: the built-in set runs here, so this run DID assert something.
-      // What the operator needs to know is that the project is relying entirely
-      // on VAT's defaults, which is what a deleted `checks:` block looks like.
-      logger.warn(
-        `No checks of this project's own are declared, so this run asserted only VAT's`
-        + ` built-in set (${BUILTIN_CHECK_NAMES.join(', ')}).`
-        + ' Add your own under `resources.checks` in vibe-agent-toolkit.config.yaml;'
-        + ' each is a description plus one SQL statement selecting the rows that VIOLATE it.'
-        + ' `vat resources check --help` prints the SQL each built-in is equivalent to,'
-        + ' as a starting point.',
-      );
-    }
-
-    // Before the crawl: a mistyped flag is an operator error and pays nothing.
-    requireKnownCheck(BUILTIN_CHECK_NAMES, checks ?? {}, options.check);
-    // Also before the crawl, and for the same reason: an override that overrides
-    // nothing is knowable from the config alone, and the operator should read it
-    // beside the other config news rather than after a full population.
-    warnUndeclaredOverrides(checks ?? {}, config?.resources?.validation, logger);
-
-    const outcome = await runOutcome({
-      root: projectRoot,
-      checks: checks ?? {},
-      only: options.check,
-      logger,
-      validation: config?.resources?.validation,
-      onProgress,
-    });
-    const { issues, costs, ...populated } = outcome;
-    const payload = buildCheckOutputData({
-      issues,
-      costs,
-      populated,
-      root: projectRoot,
-      durationMs: Date.now() - startTime,
-    });
-    emitCheckDocument(payload, options.format);
-
-    process.exit(exitCodeForReport(payload));
+    // A killed child is never OK and never decided here: its document carries
+    // a RUN_INTEGRITY finding (exit 1) or the error branch (exit 2), and the
+    // writer derives the code from it, as everywhere else.
+    endWithReport('resources check', ending.payload, format);
   } catch (error) {
-    handleReportCommandError(error, logger, startTime, 'Check', options.format);
+    // `vat resources check` offers no `--strict`: warnings never fail it.
+    endWithRefusal('resources check', refusalCodeOf(error), error, format, { strict: false }, NOTHING_FINISHED);
   }
+}
+
+/**
+ * Run the checks in this process and build the document.
+ *
+ * @param pathArg - Where to look for the project, or omitted for the current directory
+ * @param options - Parsed command-line options
+ * @param logger - Where warnings go
+ * @param startTime - When the command started (from Date.now())
+ * @returns The document
+ */
+async function runChecksHere(
+  pathArg: string | undefined,
+  options: CheckOptions,
+  logger: Logger,
+  startTime: number,
+): Promise<CheckReport> {
+  // 🔑 FIRST, before anything that touches the tree: the child has booted.
+  // The watchdog's clock started at the spawn, so without this line Node's
+  // startup and the CLI's import were charged to the population — the one
+  // unit the budget is already a total bound for. See `StartedEntrySchema`.
+  const onProgress = options.costLog === undefined
+    ? undefined
+    : createProgressWriter(options.costLog);
+  onProgress?.({ kind: 'started' });
+
+  const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
+  const config = loadConfigCached(projectRoot);
+  const checks = config?.resources?.checks;
+
+  if (checks === undefined || Object.keys(checks).length === 0) {
+    // 🪤 Stderr only, and it decides NOTHING — the document is what the exit
+    // code is computed from and what CI parses. ⚠️ It does not stand beside a
+    // refusal: the built-in set runs here, so this run DID assert something.
+    // What the operator needs to know is that the project is relying entirely
+    // on VAT's defaults, which is what a deleted `checks:` block looks like.
+    logger.warn(
+      `No checks of this project's own are declared, so this run asserted only VAT's`
+      + ` built-in set (${BUILTIN_CHECK_NAMES.join(', ')}).`
+      + ' Add your own under `resources.checks` in vibe-agent-toolkit.config.yaml;'
+      + ' each is a description plus one SQL statement selecting the rows that VIOLATE it.'
+      + ' `vat resources check --help` prints the SQL each built-in is equivalent to,'
+      + ' as a starting point.',
+    );
+  }
+
+  // Before the crawl: a mistyped flag is an operator error and pays nothing.
+  requireKnownCheck(BUILTIN_CHECK_NAMES, checks ?? {}, options.check);
+  // Also before the crawl, and for the same reason: an override that overrides
+  // nothing is knowable from the config alone, and the operator should read it
+  // beside the other config news rather than after a full population.
+  warnUndeclaredOverrides(checks ?? {}, config?.resources?.validation, logger);
+
+  const outcome = await runOutcome({
+    root: projectRoot,
+    checks: checks ?? {},
+    only: options.check,
+    logger,
+    validation: config?.resources?.validation,
+    onProgress,
+  });
+  const { issues, costs, ...populated } = outcome;
+  return buildCheckOutputData({
+    issues,
+    costs,
+    populated,
+    root: projectRoot,
+    durationMs: Date.now() - startTime,
+  });
 }
 
 /**

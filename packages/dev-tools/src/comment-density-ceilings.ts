@@ -36,7 +36,7 @@ export const COMMENT_DENSITY_CEILINGS: Readonly<Record<string, number>> = {
   'runtime-langchain': 50.8,
   'runtime-openai': 51.6,
   'runtime-vercel-ai-sdk': 57.6,
-  'schema': 43.4,
+  'schema': 42,
   'test-agents': 34.9,
   'transports': 34.9,
   'utils': 62.8,

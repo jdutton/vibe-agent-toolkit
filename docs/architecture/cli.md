@@ -206,33 +206,27 @@ Either indicates project root.
 
 ```typescript
 // commands/mycommand.ts
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { buildReport, toFindings } from '@vibe-agent-toolkit/schema';
 
-export interface MyCommandOptions {
-  debug?: boolean;
-  // ... other options
-}
+import { endWithRefusal, endWithReport, NOTHING_FINISHED, refusalCodeOf } from '../utils/document-writer.js';
 
-export async function myCommand(
-  pathArg: string | undefined,
-  options: MyCommandOptions
-): Promise<void> {
-  const logger = createLogger(options.debug ? { debug: true } : {});
-  const startTime = Date.now();
-
+export async function myCommand(pathArg: string | undefined, options: MyCommandOptions): Promise<void> {
+  const format = options.format ?? 'yaml';
+  const gate = { strict: options.strict === true };
   try {
-    // 1. Validate inputs
+    // 1. Validate inputs — a mistake is `throw new CommandRefusalError('USAGE_INVALID', …)`
     // 2. Process
-    // 3. Output results (YAML to stdout)
-    // 4. Exit with the code the published document DERIVES — never one
-    //    decided beside it (`local/no-literal-process-exit`, `derived`)
-
-    process.exit(exitCodeForReport(report));
+    const report = buildReport({ examined, findings: toFindings(issues), data, gate });
+    // 3. The writer validates, renders and exits on the code the document derives
+    endWithReport('my command', report, format);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'MyCommand');
+    endWithRefusal('my command', refusalCodeOf(error), error, format, gate, NOTHING_FINISHED);
   }
 }
 ```
+
+The verb must be registered in `PUBLISHED_SHAPES` (`src/report-schemas.ts`) — see "The report
+contract" below.
 
 ## Configuration
 
@@ -781,19 +775,39 @@ change's call to make.
 - Always flush stdout before writing to stderr
 - Test format errors must include file:line:column
 
-Use the `handleCommandError` helper for consistent error handling:
+A report verb ends its failures through `endWithRefusal` (next section); the legacy verbs still end
+through `handleCommandError` until their migration task moves them onto the writer.
 
-```typescript
-try {
-  // Command implementation
-} catch (error) {
-  handleCommandError(error, logger, startTime, 'CommandName');
-  // handleCommandError calls process.exit() internally
-}
-```
+## The report contract
 
-This ensures a consistent error format, duration logging, and the exit codes above (`FINDINGS`
-for a gate the tree failed, `ERROR` for a command that could not do its job).
+- **One writer.** Under `packages/cli/src/commands/`, stdout is written by
+  `utils/document-writer.ts` and nothing else — `local/no-stdout-outside-writer` refuses
+  `process.stdout.write`, the stdout `console` methods and the stdout helpers (called or handed on),
+  with a shrink-only `allowFiles` ratchet for the files not yet migrated.
+- **One registry.** `src/report-schemas.ts` `PUBLISHED_SHAPES` lists every published shape — report
+  documents, external payloads, stdout and file artifacts, exported library result types, and the
+  JSON Schemas describing adopter input — and `test/published-shapes.test.ts` asserts each claim
+  both ways against the tree (writer calls, Commander leaves, schema files, barrel exports). A verb's
+  `<VERB>_REPORT_SCHEMA` lives in a sibling `*-schema.ts`, because the registry imports it and the
+  verb imports the writer that imports the registry.
+- **The union envelope.** A report is `Report<T>` from `@vibe-agent-toolkit/schema`: `status`
+  (`ok` | `findings` | `error`), a REQUIRED `examined`, `findings`, `summary`, `gate`, `data`, and on
+  `error` an `error: { code, message }` whose `code` is a registered refusal. The writer validates the
+  document against the entry's schema before a byte leaves, and adds the one `RESOURCE_CHECK_BROKEN`
+  refusal when `examined` is zero, named with the entry's declared unit.
+- **`gate` is in the document.** `gate.strict` records whether warnings fail the run, so the exit
+  code is derived from the published document alone.
+- **The exit table.** `exitCodeForReport(document)`: `2` when `status` is `error`; `1` for an
+  error-severity finding, or a warning under `gate.strict`; `0` otherwise. `endWithReport(verb,
+  report, format)` writes and exits on that; `endWithRefusal(verb, code, error, format, gate,
+  finished)` publishes the error branch with whatever finished (`NOTHING_FINISHED` spelled out) and
+  exits 2. `refusalCodeOf(error)` picks the code: a `CommandRefusalError`'s own (`USAGE_INVALID` for the
+  invocation's mistake), a library error's by its `code`, and `INTERNAL_ERROR` only for what nothing
+  anticipated.
+- **Formats.** `yaml` and `json` render the document; `text` renders one
+  `location:line:column: severity: message [code]` line per finding and a status line with the
+  counts and the denominator — or the entry's own `renderText` when its human rendering is a
+  published contract of its own.
 
 ## Testing Patterns
 

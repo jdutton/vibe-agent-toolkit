@@ -78,10 +78,10 @@
  * ⚠️ **The override reaches VIOLATIONS only.** A check that cannot run — a
  * renamed column, a table that is gone — is not reported under this code space
  * at all: `vat resources check` emits `RESOURCE_CHECK_BROKEN` at `error`. That
- * code is in `NonOverridableCode` in
- * `packages/schema/src/validation-codes.ts` and deliberately **absent from
- * `CODE_REGISTRY`**, so `ValidationConfigSchema` refuses it as a `severity` key
- * outright — unsilenceable by construction rather than by convention. The two
+ * code is registered in `CODE_REGISTRY` as a **refusal**
+ * (`packages/schema/src/validation-codes.ts`), a kind `ValidationConfigSchema`
+ * refuses as a `severity` or `allow` key outright — unsilenceable by
+ * construction rather than by convention. The two
  * used to share `CUSTOM:<name>`, which meant the documented way to stand down an
  * inherited check also silenced the news that it had stopped checking, and a
  * renamed projection column produced exit 0 from a gate. Downgrade the check as

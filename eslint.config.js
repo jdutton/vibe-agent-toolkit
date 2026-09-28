@@ -238,6 +238,62 @@ const EXIT_CODE_DERIVATION_RATCHET = [
   'packages/cli/src/utils/validate-help-files.ts',     // build-time check, FINDINGS with no document
 ];
 
+/**
+ * The command files that still write stdout outside the one document writer
+ * (`packages/cli/src/utils/document-writer.ts`) — the `allowFiles` ratchet of
+ * `no-stdout-outside-writer`. Computed from the rule itself on the tree it was
+ * enabled on, never typed from a plan. Each entry names the task that moves the
+ * file onto the writer. Asserted BOTH ways by the rule: a listed file with no
+ * stdout write left is a `staleAllow` error. It only shrinks, to exactly
+ * `agent/run.ts`, whose stdout is the agent's own stdio conversation.
+ */
+const STDOUT_OUTSIDE_WRITER_RATCHET = [
+  // Command-relative, so each line reads as the file it is; the `.map` below prefixes the directory.
+  'agent/build.ts',                                            // Task 23
+  'agent/import.ts',                                           // Task 23
+  'agent/installed.ts',                                        // Task 23
+  'agent/list.ts',                                             // Task 24
+  'agent/run.ts',                                              // permanent: the agent's stdio conversation, not a document
+  'agent/validate.ts',                                         // Task 13
+  'audit-settings.ts',                                         // Task 11
+  'audit.ts',                                                  // Task 11
+  'build.ts',                                                  // Task 28
+  'cache/clear.ts',                                            // Task 22
+  'claude/context.ts',                                         // Task 27 (writeLegacyDocument)
+  'claude/marketplace/publish.ts',                             // Task 16
+  'claude/marketplace/validate.ts',                            // Task 13 (hands writeYamlOutput to finishCommand)
+  'claude/org/helpers.ts',                                     // Task 17 (writeExternalDocument)
+  'claude/org/stubs.ts',                                       // Task 17
+  'claude/plugin/build.ts',                                    // Task 16 (hands writeYamlOutput to finishCommand)
+  'claude/plugin/helpers.ts',                                  // Task 15
+  'claude/plugin/install.ts',                                  // Task 15
+  'claude/plugin/list.ts',                                     // Task 15
+  'claude/plugin/uninstall.ts',                                // Task 15
+  'doctor.ts',                                                 // Task 22
+  'inventory.ts',                                              // Task 29
+  'mcp/list-collections.ts',                                   // Task 26
+  'mcp/serve.ts',                                              // Task 27 (writeArtifact for --print-config)
+  'phase-utils.ts',                                            // Task 28
+  'rag/clear-command.ts',                                      // Task 26
+  'rag/index-command.ts',                                      // Task 25
+  'rag/query-command.ts',                                      // Task 25
+  'rag/stats-command.ts',                                      // Task 26
+  'resources/check.ts',                                        // Task 31: forwards the supervised child's written document verbatim (writeStdoutSync)
+  'resources/query.ts',                                        // Task 12
+  'resources/scan.ts',                                         // Task 12
+  'resources/validate.ts',                                     // Task 12
+  'skill/test/configure.ts',                                   // Task 20
+  'skill/test/run.ts',                                         // Task 21
+  'skills/build.ts',                                           // Task 19
+  'skills/command-helpers.ts',                                 // Task 19 (writeYamlHeader deleted)
+  'skills/install.ts',                                         // Task 18
+  'skills/list.ts',                                            // Task 18
+  'skills/package.ts',                                         // Task 20
+  'skills/validate.ts',                                        // Task 13
+  'validate.ts',                                               // Task 28
+  'verify.ts',                                                 // Task 28
+].map((file) => `packages/cli/src/commands/${file}`);
+
 const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
   'packages/cli/src/commands/agent/install.ts',                       // access/mkdir/lstat/rm/symlink — install-dir mutation
   'packages/cli/src/commands/agent/installed.ts',                     // ENUM: readdir of the install dir
@@ -465,9 +521,18 @@ const localRulesConfig = {
     ],
     derived: {
       paths: ['packages/cli/src/'],
-      calls: ['exitCodeForReport', 'exitCodeOfChild', 'exitCodeForCommanderEnding'],
+      calls: ['exitCodeForReport', 'exitCodeOfChild', 'exitCodeForCommanderEnding', 'exitCodeForExternal', 'endWithReport', 'endWithRefusal', 'writeExternalDocument'],
       legacy: EXIT_CODE_DERIVATION_RATCHET,
     },
+  }],
+  // ONE stdout writer for the `vat` verbs: under `commands/` a document leaves
+  // through `utils/document-writer.ts` (validated against its registered schema,
+  // exit derived from what was written) and nowhere else — `process.stdout.write`,
+  // the stdout `console` methods and the five stdout helpers (called or handed
+  // on) are errors. `allowFiles` is the shrink-only ratchet above.
+  'local/no-stdout-outside-writer': ['error', {
+    paths: ['packages/cli/src/commands/'],
+    allowFiles: STDOUT_OUTSIDE_WRITER_RATCHET,
   }],
   // The containment trio, from the sweep that watched a delete, a copy and an
   // uninstall walk out of their root. No backlog and no ratchet: every site

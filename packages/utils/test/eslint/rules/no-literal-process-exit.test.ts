@@ -52,7 +52,7 @@ const CASES: RuleCases = {
     { code: 'process.exit(ExitCode.OK);', filename: DERIVED_FILE, options: DERIVED },
     { code: 'process.exit(ExitCode.ERROR);', filename: DERIVED_FILE, options: DERIVED },
     { code: 'process.exit(exitCodeForReport(report));', filename: DERIVED_FILE, options: DERIVED },
-    { code: 'process.exit(schema.exitCodeForReport(report, { strict }));', filename: DERIVED_FILE, options: DERIVED },
+    { code: 'process.exit(schema.exitCodeForReport(report));', filename: DERIVED_FILE, options: DERIVED },
     { code: 'process.exitCode = exitCodeOfChild(result.status);', filename: DERIVED_FILE, options: DERIVED },
     // Outside the derived scope the old floor still applies, and only it.
     { code: 'process.exit(ok ? ExitCode.OK : ExitCode.FINDINGS);', filename: OUTSIDE_FILE, options: DERIVED },

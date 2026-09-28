@@ -8,9 +8,11 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { parseConfigAllowingUnknownKeys, ProjectConfigSchema, type ProjectConfig } from '@vibe-agent-toolkit/resources';
-import { safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { CONFIG_LOAD_CODE, parseConfigAllowingUnknownKeys, ProjectConfigSchema, type ProjectConfig } from '@vibe-agent-toolkit/resources';
+import { isFilesystemAccessError, isVatError, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
+
+import { CONFIG_UNREADABLE_CODE, errorMessageOf } from './command-refusal.js';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
@@ -21,21 +23,25 @@ const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
  */
 const warnedConfigPaths = new Set<string>();
 
+/** The two coded config failures {@link ConfigLoadError} stands for. */
+const CONFIG_FAILURE_CODES: ReadonlySet<string> = new Set([CONFIG_LOAD_CODE, CONFIG_UNREADABLE_CODE]);
+
 /**
- * A `vibe-agent-toolkit.config.yaml` exists but failed to parse or validate.
+ * A `vibe-agent-toolkit.config.yaml` exists but could not be read, parsed or validated.
  *
  * Distinct from "no config found" (which surfaces as `undefined`): a *broken*
  * config is a hard error the user must fix, not something to silently treat as
  * absent. Commands that resolve a skill through a config (`vat skill review`,
  * `vat skill test`) should surface this; a bulk linter (`vat audit`) may catch
- * it and fall back to config-free validation.
+ * it and fall back to config-free validation. It carries its cause's code —
+ * `CONFIG_LOAD` or `CONFIG_UNREADABLE` — so the refusal it becomes is decided by
+ * what failed, not by where it was caught.
  */
 export class ConfigLoadError extends VatError {
   readonly projectRoot: string;
-  constructor(projectRoot: string, cause: unknown) {
-    super('CONFIG_LOAD', cause instanceof Error ? cause.message : String(cause));
+  constructor(projectRoot: string, cause: VatError) {
+    super(cause.code, cause.message, { cause });
     this.projectRoot = projectRoot;
-    if (cause instanceof Error) this.cause = cause;
   }
 }
 
@@ -69,7 +75,7 @@ export function loadConfig(projectRoot: string): ProjectConfig | undefined {
   }
 
   try {
-    const content = readFileSync(configPath, 'utf-8');
+    const content = readConfigText(configPath);
     const parsed = yaml.parse(content);
 
     // Validate with canonical schema from resources package.
@@ -97,16 +103,30 @@ export function loadConfig(projectRoot: string): ProjectConfig | undefined {
       { configPath },
     );
   } catch (error) {
-    if (error instanceof Error) {
-      // `cause` is load-bearing, not decoration: callers decide whether to
-      // degrade or abort by asking `isFilesystemAccessError`, which reads the
-      // errno off the error. Re-wrapping without it produced a plain Error with
-      // no `code`, so an unreadable config read as "a bug in VAT" and aborted the
-      // whole run — the exact failure `vat audit`'s guard exists to prevent,
-      // reintroduced by a message-formatting layer.
-      throw new Error(`Failed to load config: ${error.message}`, { cause: error });
+    // `cause` is load-bearing, not decoration: callers decide whether to
+    // degrade or abort by asking `isFilesystemAccessError`, which reads the
+    // errno off the cause chain. A coded failure (`CONFIG_LOAD`: does not parse
+    // or validate; `CONFIG_UNREADABLE`: the OS refused the read) keeps its code;
+    // anything else — a VAT defect — stays uncoded and surfaces as one.
+    const message = `Failed to load config: ${errorMessageOf(error)}`;
+    if (isVatError(error) && CONFIG_FAILURE_CODES.has(error.code)) {
+      throw new VatError(error.code, message, { cause: error });
     }
+    if (error instanceof yaml.YAMLError) throw new VatError(CONFIG_LOAD_CODE, message, { cause: error });
     throw error;
+  }
+}
+
+/**
+ * Read the adopter's config file, coding a read the OS refused as
+ * `CONFIG_UNREADABLE`: every errno here is about the user's own file.
+ */
+function readConfigText(configPath: string): string {
+  try {
+    return readFileSync(configPath, 'utf-8');
+  } catch (error) {
+    if (!isFilesystemAccessError(error)) throw error;
+    throw new VatError(CONFIG_UNREADABLE_CODE, errorMessageOf(error), { cause: error });
   }
 }
 
@@ -130,11 +150,11 @@ export function getConfigDir(configPath: string): string {
 const loadedConfigCache: Map<string, ProjectConfig | null> = new Map();
 
 /**
- * Companion cache for {@link loadConfigCached}: a broken config's
- * {@link ConfigLoadError}, keyed by `projectRoot`, so a broken config re-throws
- * the same error on every skill in a scan without re-parsing.
+ * Companion cache for {@link loadConfigCached}: what a failed load threw, keyed
+ * by `projectRoot`, so a broken config re-throws the same error on every skill
+ * in a scan without re-parsing.
  */
-const loadErrorCache: Map<string, ConfigLoadError> = new Map();
+const loadErrorCache: Map<string, unknown> = new Map();
 
 /**
  * Reset the cache used by {@link loadConfigCached}.
@@ -175,10 +195,12 @@ export function loadConfigCached(projectRoot: string): ProjectConfig | undefined
     loadedConfigCache.set(projectRoot, config ?? null);
     return config;
   } catch (err) {
-    // loadConfig returns undefined when the file is ABSENT and only throws when
-    // it EXISTS but is broken — so reaching here means a genuinely broken config.
-    const configErr = err instanceof ConfigLoadError ? err : new ConfigLoadError(projectRoot, err);
-    loadErrorCache.set(projectRoot, configErr);
-    throw configErr;
+    // 🔑 Only a CODED config failure becomes a `ConfigLoadError` — the one a
+    // caller like `vat audit` may tolerate. Anything else (a `TypeError`, an
+    // invariant) is cached and rethrown UNCHANGED, so it surfaces as the defect
+    // it is instead of being relabelled a broken config by its throw site.
+    const thrown = isVatError(err) && CONFIG_FAILURE_CODES.has(err.code) ? new ConfigLoadError(projectRoot, err) : err;
+    loadErrorCache.set(projectRoot, thrown);
+    throw thrown;
   }
 }

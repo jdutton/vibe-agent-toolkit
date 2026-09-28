@@ -94,6 +94,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 
+import { CommandRefusalError } from '../../utils/command-refusal.js';
 import { resolveVatBinPath } from '../../utils/vat-bin-path.js';
 
 /**
@@ -217,7 +218,8 @@ export function pollWatchdog(
 export function parseBudgetSeconds(raw: string | undefined): number {
   if (raw === undefined) return DEFAULT_BUDGET_SECONDS;
   if (raw.trim() === '') {
-    throw new Error(
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
       '--budget was given an empty value. That is almost always an unset shell'
       + ' variable (`--budget "$CHECK_BUDGET"`), and it is refused rather than read'
       + ' as `--budget 0` — which would remove the bound entirely and let the run'
@@ -228,14 +230,16 @@ export function parseBudgetSeconds(raw: string | undefined): number {
 
   const seconds = Number(raw);
   if (!Number.isFinite(seconds) || seconds < 0) {
-    throw new Error(
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
       `--budget must be a non-negative number of seconds, not "${raw}".`
       + ` It bounds how long the run may go without completing a unit of work;`
       + ` --budget 0 removes the bound entirely (and can then hang forever).`,
     );
   }
   if (seconds === 0 && raw.trim() !== '0') {
-    throw new Error(
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
       `--budget "${raw}" is a number that means ZERO — and 0 is this flag's escape`
       + ' hatch for "no bound at all", so the run would have gone entirely'
       + ' unsupervised and could hang forever. `1e-400` underflows to zero and `-0`'
@@ -303,7 +307,8 @@ export function requireSupervisableFlags(options: {
   if (options.costLog === undefined) return;
   if (options.budgetRaw === undefined || options.budgetSecs === 0) return;
 
-  throw new Error(
+  throw new CommandRefusalError(
+    'USAGE_INVALID',
     '--budget cannot be combined with --cost-log. --cost-log means "you are the'
     + ' child a supervisor already spawned", so this process does the work rather'
     + ' than bounding it, and the budget would be silently ignored. Drop one:'
