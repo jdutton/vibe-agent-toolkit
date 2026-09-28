@@ -16,8 +16,8 @@
  *   extended from here; a golden over a capture would have to be regenerated
  *   every time an unrelated lane changed, which is exactly the noise this
  *   instrument exists to remove.
- * - **No whole-command half.** See {@link captureCorpus} — spawning the built
- *   binary from a vitest run tests the build, not the instrument.
+ * - **No whole-command half.** The snapshot has none: whole-command output is
+ *   the lab's `verdict` facet (`packages/lab/src/facets/verdict/`).
  * - **No cross-host claim.** The walk-route corpus is asserted for its *route
  *   bookkeeping*, never for its ordering; `readdirSync` order is a property of
  *   the filesystem and is not comparable across hosts.
@@ -65,9 +65,6 @@ const WALK_ROUTE_WARNING = 'filesystem walk route';
 /** Every oracle artifact: one per lane, plus parse facts. */
 const ORACLE_ARTIFACT_COUNT = LANES.length + 1;
 
-/** Ceiling per spawned command. Never reached here — the command half is off. */
-const COMMAND_TIMEOUT_MS = 30_000;
-
 /**
  * Capture the oracle half of a snapshot over one corpus.
  *
@@ -79,17 +76,7 @@ function captureCorpus(corpusRoot: string, corpusLabel: string): Promise<Capture
   return captureSnapshot({
     corpusRoot,
     corpusLabel,
-    // ⛔ Do NOT flip this to true. The whole-command half spawns the built
-    // binary, and under vitest `resolveBinPath()` resolves to
-    // `packages/cli/src/bin.js` — a file that does not exist, because the build
-    // emits `dist/bin.js`. All three commands would record `exitCode: null`
-    // ("did not run") and this file would be asserting on the build's presence
-    // rather than on the instrument. ⚠️ Nothing turns this half on any more:
-    // `vat pipeline snapshot` was its only caller that ever passed `true`, and
-    // that verb is deleted, so the whole-command half has no live caller at all.
-    includeCommands: false,
     includeParseFacts: true,
-    commandTimeoutMs: COMMAND_TIMEOUT_MS,
   });
 }
 
@@ -109,16 +96,13 @@ function asLoaded(dir: string, capture: CaptureResult): LoadedSnapshot {
  * Every artifact path the manifest names, in the order `readSnapshot` reads them.
  *
  * @param capture - The capture whose manifest to read
- * @returns Artifact relative paths: lanes, then parse facts, then commands
+ * @returns Artifact relative paths: lanes, then parse facts
  */
 function namedArtifacts(capture: CaptureResult): string[] {
   const { manifest } = capture;
   const names = manifest.lanes.map((lane) => lane.artifact);
   if (manifest.parseFactArtifact !== null) {
     names.push(manifest.parseFactArtifact);
-  }
-  for (const command of manifest.commands) {
-    names.push(command.stdoutArtifact, command.stderrArtifact);
   }
   return names;
 }
@@ -183,7 +167,6 @@ describe('qa snapshot — git-route corpus', () => {
     // deletion — a catastrophic-looking regression manufactured by bookkeeping.
     expect(first.manifest.lanes.map((lane) => lane.laneId)).toEqual(LANES.map((lane) => lane.id));
     expect(first.manifest.parseFactArtifact).toBe(PARSE_FACT_ARTIFACT);
-    expect(first.manifest.commands).toEqual([]);
 
     const named = namedArtifacts(first);
     expect(named).toHaveLength(ORACLE_ARTIFACT_COUNT);

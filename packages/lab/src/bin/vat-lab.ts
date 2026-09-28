@@ -31,6 +31,11 @@ import {
   renderPopulationComparison,
   renderPopulationReport,
 } from '../facets/population/render.js';
+import { captureVerdict } from '../facets/verdict/capture.js';
+import { compareVerdict, readVerdictDirectory } from '../facets/verdict/compare.js';
+import { loadVerdictDeltas, readChangelogSources } from '../facets/verdict/deltas.js';
+import { renderVerdictComparison, renderVerdictReport } from '../facets/verdict/render.js';
+import { loadVerdictSubjects } from '../facets/verdict/subjects.js';
 import {
   abExitCondition,
   CHANGED_VERDICT,
@@ -41,6 +46,8 @@ import {
   runAb,
   UNMEASURABLE_VERDICT,
 } from '../harness/ab.js';
+import { type ArmEnvironment, armEnvironmentClash, sameArmEnvironment } from '../harness/arm-env.js';
+import { indistinguishableArms } from '../harness/closure.js';
 import {
   DEFAULT_MEASURED_COMMANDS,
   MEASURABLE_COMMAND_NAMES,
@@ -49,7 +56,7 @@ import {
   POPULATION_MEASURED_COMMANDS,
 } from '../harness/commands.js';
 import { resolveInstrument } from '../harness/instrument.js';
-import { instrumentTrustNotes } from '../harness/render.js';
+import { instrumentLabel, instrumentTrustNotes } from '../harness/render.js';
 import { resolveSubject } from '../harness/subject.js';
 import type { CacheMode, InstrumentSource, ResolvedInstrument } from '../harness/types.js';
 import { readReport, writeReport } from '../store.js';
@@ -65,6 +72,9 @@ import { readReport, writeReport } from '../store.js';
  * fold keeps is the property that mattered: neither case exits 0, so a CI job
  * cannot read "nothing could be measured" as "nothing changed".
  */
+
+/** The `--out` flag's spelling, shared by every facet's `run` and `ab`. */
+const OUT_OPTION = '--out <dir>';
 
 /**
  * Parse an instrument specifier into a source.
@@ -207,7 +217,7 @@ export function collectMeasuredCommand(
 }
 
 /**
- * A Commander parser for `--env-a` / `--env-b`, accumulating `KEY=VALUE` pairs.
+ * A Commander parser for `--env`, `--env-a` and `--env-b`, accumulating `KEY=VALUE` pairs.
  *
  * Splits on the FIRST `=` only, so a value may contain one. An empty value is
  * accepted — `KEY=` is a real thing to want, since a seam that tests
@@ -231,6 +241,52 @@ export function collectEnv(
   };
 }
 
+/**
+ * A Commander parser for `--unset`, `--unset-a` and `--unset-b`, accumulating
+ * variable names to remove from the inherited environment.
+ *
+ * A name containing `=` is refused: it is almost certainly a `--env` value
+ * given to the wrong flag, and unsetting a variable literally named `X=1`
+ * would silently do nothing.
+ *
+ * @param flag - Flag spelling, so the error names what the user typed
+ * @returns A parser Commander calls with the raw string and the names so far
+ */
+export function collectUnset(
+  flag: string,
+): (value: string, previous: readonly string[] | undefined) => string[] {
+  return (value, previous) => {
+    if (value === '' || value.includes('=')) {
+      throw new InvalidArgumentError(`${flag} expects a variable NAME; got '${value}'.`);
+    }
+    return [...(previous ?? []), value];
+  };
+}
+
+/**
+ * Assemble one arm's environment from its `--env*` and `--unset*` flags, or
+ * refuse when one key is on both.
+ *
+ * Refused here, before anything runs, rather than left to `buildArmEnv` to
+ * throw at the first spawn — where it would surface as a stack trace mid-run.
+ *
+ * @param set - Collected `KEY=VALUE` pairs, if the flag was given
+ * @param unset - Collected names, if the flag was given
+ * @param flags - The two flag spellings, for the refusal
+ * @returns The arm's environment, or `null` when the run was refused
+ */
+function armEnvironment(
+  set: ArmEnvironment['set'] | undefined,
+  unset: readonly string[] | undefined,
+  flags: string,
+): ArmEnvironment | null {
+  const env: ArmEnvironment = { set: set ?? {}, unset: unset ?? [] };
+  const clash = armEnvironmentClash(env);
+  if (clash === undefined) return env;
+  refuse(`REFUSED: ${flags} both name '${clash}' — an arm cannot set and unset one variable.`);
+  return null;
+}
+
 /** Options Commander collects for a facet's `run`. */
 interface RunOptions {
   readonly instrument: InstrumentSource;
@@ -240,6 +296,10 @@ interface RunOptions {
   readonly id?: string;
   /** Absent unless `--command` was given at least once. */
   readonly command?: readonly MeasuredCommandSpec[];
+  /** Variables set for every child; absent unless `--env` was given. */
+  readonly env?: ArmEnvironment['set'];
+  /** Variables removed from every child; absent unless `--unset` was given. */
+  readonly unset?: readonly string[];
 }
 
 /**
@@ -306,10 +366,22 @@ interface AbOptions {
   readonly command?: readonly MeasuredCommandSpec[];
   readonly control: boolean;
   readonly noiseFloor?: number;
-  /** Extra environment for arm A's children only. */
-  readonly envA?: Readonly<Record<string, string>>;
-  /** Extra environment for arm B's children only. */
-  readonly envB?: Readonly<Record<string, string>>;
+  /** Variables set for arm A's children only. */
+  readonly envA?: ArmEnvironment['set'];
+  /** Variables set for arm B's children only. */
+  readonly envB?: ArmEnvironment['set'];
+  /** Variables removed from arm A's children only. */
+  readonly unsetA?: readonly string[];
+  /** Variables removed from arm B's children only. */
+  readonly unsetB?: readonly string[];
+}
+
+/** Two resolved arms, each with the environment it runs under. */
+interface AbArms {
+  readonly a: ResolvedInstrument;
+  readonly b: ResolvedInstrument;
+  readonly envA: ArmEnvironment;
+  readonly envB: ArmEnvironment;
 }
 
 /**
@@ -386,7 +458,17 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
       'Extra environment for arm B only (repeatable)',
       collectEnv('--env-b'),
     )
-    .option('--out <dir>', 'Directory to write the reports into', '.vat-lab')
+    .option(
+      '--unset-a <KEY>',
+      'Remove an inherited variable from arm A only (repeatable)',
+      collectUnset('--unset-a'),
+    )
+    .option(
+      '--unset-b <KEY>',
+      'Remove an inherited variable from arm B only (repeatable)',
+      collectUnset('--unset-b'),
+    )
+    .option(OUT_OPTION, 'Directory to write the reports into', '.vat-lab')
     .option(
       '--id <name>',
       'Subject id recorded in the reports (default: the <subject> argument exactly as given)',
@@ -409,8 +491,8 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
         cache: options.cache,
         control: options.control,
         noiseFloor: options.noiseFloor ?? null,
-        ...(options.envA === undefined ? {} : { envA: options.envA }),
-        ...(options.envB === undefined ? {} : { envB: options.envB }),
+        envA: arms.envA,
+        envB: arms.envB,
         outDir: abRunDirectory(options.out, startedAt),
         now: () => new Date().toISOString(),
         capture: wiring.capture,
@@ -424,28 +506,6 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
 }
 
 /**
- * Do two arms carry the same extra environment?
- *
- * Absent and empty are the same configuration, so `undefined` reads as `{}` —
- * otherwise `--control` with no env at all would refuse itself.
- *
- * @param a - Arm A's extra environment, if any
- * @param b - Arm B's extra environment, if any
- * @returns True when both arms would run under identical settings
- */
-function sameEnvironment(
-  a: Readonly<Record<string, string>> | undefined,
-  b: Readonly<Record<string, string>> | undefined,
-): boolean {
-  const left = Object.entries(a ?? {}).sort(([one], [other]) => one.localeCompare(other));
-  const right = Object.entries(b ?? {}).sort(([one], [other]) => one.localeCompare(other));
-  return (
-    left.length === right.length &&
-    left.every(([key, value], index) => right[index]?.[0] === key && right[index]?.[1] === value)
-  );
-}
-
-/**
  * Resolve the two arms, or refuse when the flags do not describe an A/B.
  *
  * A control run uses the *same resolved object* for both arms rather than
@@ -455,9 +515,12 @@ function sameEnvironment(
  * @param options - What the caller passed
  * @returns The two arms, or `null` when the run was refused
  */
-async function resolveAbArms(
-  options: AbOptions,
-): Promise<{ a: ResolvedInstrument; b: ResolvedInstrument } | null> {
+export async function resolveAbArms(options: AbOptions): Promise<AbArms | null> {
+  const envA = armEnvironment(options.envA, options.unsetA, '--env-a and --unset-a');
+  if (envA === null) return null;
+  const envB = armEnvironment(options.envB, options.unsetB, '--env-b and --unset-b');
+  if (envB === null) return null;
+
   if (options.control) {
     if (options.instrumentB !== undefined) {
       refuse(
@@ -466,10 +529,11 @@ async function resolveAbArms(
       );
       return null;
     }
-    if (!sameEnvironment(options.envA, options.envB)) {
+    if (!sameArmEnvironment(envA, envB)) {
       refuse(
         'REFUSED: --control measures what this machine returns for a difference that does ' +
-          'not exist, so both arms must be configured identically. --env-a and --env-b ' +
+          'not exist, so both arms must be configured identically. --env-a/--unset-a and ' +
+          '--env-b/--unset-b ' +
           'differ, which is a real difference — it would be published as the noise floor and ' +
           'then used to judge every later run. Make them match, or drop --control and run it ' +
           'as the A/B it is.',
@@ -477,7 +541,7 @@ async function resolveAbArms(
       return null;
     }
     const only = await resolveInstrument(options.instrumentA);
-    return { a: only, b: only };
+    return { a: only, b: only, envA, envB };
   }
 
   if (options.instrumentB === undefined) {
@@ -488,10 +552,17 @@ async function resolveAbArms(
     return null;
   }
 
-  return {
-    a: await resolveInstrument(options.instrumentA),
-    b: await resolveInstrument(options.instrumentB),
-  };
+  const a = await resolveInstrument(options.instrumentA);
+  const b = await resolveInstrument(options.instrumentB);
+  if (indistinguishableArms({ instrument: a.version, env: envA }, { instrument: b.version, env: envB })) {
+    refuse(
+      'REFUSED: the two arms are indistinguishable — same instrument ' +
+        `(${instrumentLabel(a.version)}) and same environment. Pass --control to measure the ` +
+        'noise floor, or change one arm.',
+    );
+    return null;
+  }
+  return { a, b, envA, envB };
 }
 
 /**
@@ -556,13 +627,26 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
       `Measure this command instead of the default set (repeatable). One of: ${MEASURABLE_COMMAND_NAMES.join(', ')}`,
       collectMeasuredCommand,
     )
-    .option('--out <dir>', 'Directory to write the report into', '.vat-lab')
+    .option(
+      '--env <KEY=VALUE>',
+      'Set a variable for every child (repeatable). VAT_BIN, VAT_ROOT_DIR and the other ' +
+        'variables that select which vat runs are never inherited — set them here',
+      collectEnv('--env'),
+    )
+    .option(
+      '--unset <KEY>',
+      'Remove an inherited variable from every child (repeatable)',
+      collectUnset('--unset'),
+    )
+    .option(OUT_OPTION, 'Directory to write the report into', '.vat-lab')
     .option(
       '--id <name>',
       'Subject id recorded in the report (default: the <subject> argument exactly as given)',
     )
     .description(wiring.runSummary)
     .action(async (subjectPath: string, options: RunOptions) => {
+      const env = armEnvironment(options.env, options.unset, '--env and --unset');
+      if (env === null) return;
       const instrument = await resolveInstrument(options.instrument);
       const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
       const report = await wiring.capture({
@@ -573,6 +657,7 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
         commands: options.command ?? wiring.defaultCommands ?? DEFAULT_MEASURED_COMMANDS,
         runs: options.runs,
         cache: options.cache,
+        env,
         capturedAt: new Date().toISOString(),
       });
       const written = await writeReport(options.out, report);
@@ -701,6 +786,109 @@ export function fastestRepeat(row: {
 function refuse(refusal: string): void {
   process.stderr.write(`${refusal}\n`);
   process.exitCode = ExitCode.ERROR;
+}
+
+/** The lab package root, from this module's compiled home (`dist/bin/`). */
+const LAB_ROOT = safePath.resolve(import.meta.dirname, '..', '..');
+
+/**
+ * The committed deltas file — resolved from the lab package, never the cwd, so
+ * `verdict compare` means one file wherever it is run from.
+ */
+const DEFAULT_VERDICT_DELTAS = safePath.join(LAB_ROOT, 'data', 'verdict-deltas.yaml');
+
+/** The repository root, which a deltas entry's changelog reference is relative to. */
+const REPO_ROOT = safePath.resolve(LAB_ROOT, '..', '..');
+
+/** Options Commander collects for `verdict run`. */
+interface VerdictRunOptions {
+  readonly subjects: string;
+  readonly instrument: InstrumentSource;
+  readonly out: string;
+  readonly timeoutMs?: number;
+  readonly env?: ArmEnvironment['set'];
+  readonly unset?: readonly string[];
+}
+
+/** Options Commander collects for `verdict compare`. */
+interface VerdictCompareCliOptions {
+  readonly deltas: string;
+  readonly control: boolean;
+}
+
+/**
+ * Build the `verdict` facet's `run` and `compare`.
+ *
+ * Not built by {@link createFacetCommand}: that factory's shape is one subject,
+ * repeats, a cache mode, one report per run and an `ab` over a per-command
+ * estimate — none of which a verdict has. A verdict runs a SUBJECT SET once per
+ * arm, writes one report per alias, and compares two capture directories
+ * against a committed deltas file.
+ *
+ * @returns The configured command group
+ */
+function createVerdictCommand(): Command {
+  const group = new Command('verdict').description(
+    'Compare what two vat builds DECIDE — exit codes, findings, full documents — across a subject set',
+  );
+
+  group
+    .command('run')
+    .requiredOption('--subjects <file>', 'The local subjects file (alias → path, verbs, SQL files); never committed')
+    .requiredOption(
+      '--instrument <spec>',
+      "Which vat to run: 'tree:<path>', 'dist:<path>' or 'npx:<pkg@version>'",
+      parseInstrument,
+    )
+    .requiredOption(OUT_OPTION, 'Directory to write one report per alias into; outside every subject')
+    .option('--timeout-ms <n>', 'Kill any one verb after this long', wholeNumberAtLeast('--timeout-ms', 1))
+    .option('--env <KEY=VALUE>', 'Set a variable for every child of this arm (repeatable)', collectEnv('--env'))
+    .option('--unset <KEY>', 'Remove an inherited variable from every child of this arm (repeatable)', collectUnset('--unset'))
+    .description('Capture one arm: every verb of every subject, one report per alias')
+    .action(async (options: VerdictRunOptions) => {
+      const env = armEnvironment(options.env, options.unset, '--env and --unset');
+      if (env === null) return;
+      const loaded = loadVerdictSubjects(options.subjects);
+      if (!loaded.ok) return refuse(loaded.refusal);
+      const result = await captureVerdict({
+        instrument: await resolveInstrument(options.instrument),
+        subjects: loaded.subjects.subjects,
+        subjectsDir: loaded.baseDir,
+        env,
+        outDir: safePath.resolve(options.out),
+        capturedAt: new Date().toISOString(),
+        ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      });
+      if (!result.ok) return refuse(result.refusal);
+      for (const envelope of result.envelopes) process.stdout.write(`${renderVerdictReport(envelope)}\n`);
+      process.stdout.write(`Wrote ${result.written.join(', ')}\n`);
+    });
+
+  group
+    .command('compare')
+    .argument('<baselineDir>', "The baseline arm's `verdict run --out` directory")
+    .argument('<candidateDir>', "The candidate arm's `verdict run --out` directory")
+    .option('--deltas <file>', 'The committed expected-deltas file', DEFAULT_VERDICT_DELTAS)
+    .option('--control', 'Both directories are the SAME instrument, on purpose', false)
+    .description('Diff two arms and check the result both ways against the committed deltas')
+    .action(async (baselineDir: string, candidateDir: string, options: VerdictCompareCliOptions) => {
+      const deltas = loadVerdictDeltas(options.deltas);
+      if (!deltas.ok) return refuse(deltas.refusal);
+      const baseline = await readVerdictDirectory(baselineDir);
+      if (!baseline.ok) return refuse(baseline.refusal);
+      const candidate = await readVerdictDirectory(candidateDir);
+      if (!candidate.ok) return refuse(candidate.refusal);
+      const comparison = compareVerdict(baseline.value, candidate.value, {
+        control: options.control,
+        deltas: deltas.deltas,
+        changelog: readChangelogSources(deltas.deltas, REPO_ROOT),
+      });
+      if (!comparison.ok) return refuse(comparison.refusal);
+      process.stdout.write(`${renderVerdictComparison(comparison)}\n`);
+      if (comparison.exitCode !== ExitCode.OK) process.exitCode = comparison.exitCode;
+    });
+
+  return group;
 }
 
 /**
@@ -847,7 +1035,8 @@ export function createProgram(): Command {
         // through `ab` and as CHANGED through `compare`. Use `compare`.
         estimate: (report) => rowEstimates(report.body.commands, 'files', (row) => row.count),
       }),
-    );
+    )
+    .addCommand(createVerdictCommand());
 }
 
 // Run only when this is the invoked script, not merely imported. Without the

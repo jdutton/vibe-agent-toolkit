@@ -81,24 +81,39 @@ function subjectVersionTag(coordinate: Coordinate): string {
 /**
  * The short identifier for axis C.
  *
+ * A build with no commit (`dist:`) is named by its closure digest (see
+ * `InstrumentVersion.closure`): two `dist:` builds of one version are two
+ * instruments, and a name keyed on the version alone would let the second
+ * report silently overwrite the first. Only `npx:` — no commit, no closure,
+ * pinned by its version — is `release`.
+ *
  * A dirty build's identity is NOT its commit — the bytes measured were not the
- * bytes at that commit — and unlike a dirty *subject* there is no fingerprint to
- * fall back on, because what ran is the built output rather than the checkout
- * (see `InstrumentVersion.dirty`). So a dirty instrument is pinned by *when it
- * was observed* instead. That is weaker than an identity and it is meant to be:
- * it cannot say two dirty runs measured the same build, but it does guarantee
- * that a second dirty run never silently overwrites the first, which is the
- * failure this whole naming scheme exists to prevent.
+ * bytes at that commit. A dirty instrument is pinned by *when it was observed*,
+ * which is weaker than an identity and meant to be: it cannot say two dirty runs
+ * measured the same build, but it does guarantee that a second dirty run never
+ * silently overwrites the first, which is the failure this whole naming scheme
+ * exists to prevent.
  *
  * @param envelope - The report being named
  * @returns A short, stable string naming the instrument build
  */
 function instrumentTag(envelope: ReportEnvelope<unknown>): string {
   const instrument = envelope.coordinate.instrument;
-  const build =
-    instrument.commit === null ? 'release' : instrument.commit.slice(0, SHORT_ID_LENGTH);
+  const build = buildTag(instrument.commit, instrument.closure);
   const base = `vat-${slug(instrument.version)}-${build}`;
   return instrument.dirty === true ? `${base}-dirty-${slug(envelope.capturedAt)}` : base;
+}
+
+/**
+ * The part of an instrument's name that says which build it was.
+ *
+ * @param commit - The build's commit, if it came from a checkout
+ * @param closure - The build's closure digest, if its bytes were on disk
+ * @returns A short commit, a short closure, or `release`
+ */
+function buildTag(commit: string | null, closure: string | null): string {
+  if (commit !== null) return commit.slice(0, SHORT_ID_LENGTH);
+  return closure === null ? 'release' : `closure-${closure.slice(0, SHORT_ID_LENGTH)}`;
 }
 
 /**

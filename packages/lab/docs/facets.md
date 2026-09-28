@@ -3,16 +3,15 @@
 A **facet** is one kind of measurement. It decides what goes in a report's `body`; the envelope
 decides everything needed to know whether two bodies may be held next to each other.
 
-## The two shapes
+## The shapes
 
 Facets are not all the same shape, and conflating them produces reports that answer neither question
 well.
 
-**Learning facets** — skill lint, compatibility prediction. The output is findings about code we do
-not own, and each finding needs per-finding provenance plus a **bidirectional verdict**: is this our
-false positive, or their real defect? That bidirectionality is the entire value of scanning upstream.
-A sweep that can only say "237 warnings" teaches nothing; one that can say "of 237, 12 are our rule
-being wrong" improves vat.
+**Verdict facets** — `verdict`. The output is what vat DECIDED: an exit code and a multiset of
+findings per verb, plus the normalized document it printed. The comparator is exact — multiset
+difference for findings, string equality for documents — and every difference must be accounted for
+by a committed, reviewed declaration, in both directions. See [The verdict facet](#the-verdict-facet).
 
 **Measurement facets** — resource integrity, performance, I/O accounting. The output is numbers, and
 numbers need spread. A single sample is not a measurement; a median over repeats with the spread
@@ -70,13 +69,14 @@ way) but a **refusal** on a `population` row, whose schema extends the shared on
 nothing but the subject's own claim, and `null` is the label an old-but-honest build gets, so a
 subject that printed a corrupt lane must not read the same as one that printed none.
 
-⚠️ **On the default `io` spec the lane is honestly `null`.** `resources-scan` — what a bare `io run`
-measures — prints YAML, and the lab reads a lane out of JSON only: it carries no YAML parser, and a
-regex over the `lane:` line would be a second parser that drifts from the first. `null` means *the
-output did not say*, and it is spelled `lane UNREPORTED by the subject's output` on the row. To
-carry the arm on an `io` row, measure the spec that prints JSON: `--command resources-population`.
-That is also why the two arms of an `io` A/B over the default spec read as `arm UNPROVEN on both
-sides` rather than as agreeing.
+Every reader in the lab — `lane.ts`, and the `population` and `verdict` facets — goes through one
+document reader (`harness/document-shape.ts`), which parses JSON first and YAML second (`yaml`'s
+`parseAllDocuments`, single document, a leading `---` tolerated). So a row measured over the
+default `io run` spec (`resources-scan`, which prints YAML) reads its real lane, the same as one
+measured over `--command resources-population` (JSON) — both go through the same parser, and
+neither is privileged. `null` still means *the output did not say* — the build is too old to
+report a lane, or the output is not a document this reader can classify at all — and it is spelled
+`lane UNREPORTED by the subject's output` on the row.
 
 Mixing the two specs in one compare produces NO arm clause at all: the comparator pairs command
 rows by name, a `resources-scan` row never pairs with a `resources-population` row, and the
@@ -86,14 +86,15 @@ lane on one side and not the other — a `resources-population` row measured und
 old to print `lane`, against one measured under a current build — and it is never rendered as an
 arm change.
 
-Both use the same coordinate header. The comparator knows which kind it is holding and diffs
-accordingly — set differences for findings, distribution differences for numbers.
+Every shape uses the same coordinate header. The comparator knows which kind it is holding and
+diffs accordingly — multiset differences for findings, set differences for populations,
+distribution differences for numbers.
 
 ## The contract
 
 A facet owns:
 
-- **A stable `facet` name** — `io`, `perf`, `sweep`, `calibrate`. It goes in the envelope header and
+- **A stable `facet` name** — `perf`, `io`, `parse`, `crawl`, `population`, `verdict`. It goes in the envelope header and
   two reports with different names are refused against each other.
 - **A body schema** — strict, and validated by the facet after it has confirmed the header names it.
   The envelope reader deliberately does not validate bodies; it does not know their shapes.
@@ -140,10 +141,95 @@ One consequence for repeat counts: in `warm` mode the first repeat populates vat
 therefore systematically differs from the rest, so it is a warm-up and is discarded. Verifying
 stability then needs two more, which makes three the smallest honest number of repeats.
 
+## The verdict facet
+
+`vat-lab verdict run|compare` is the crucible: it compares what two vat builds DECIDE over a set of
+real trees, and every wave-A document change is measured with it. Source:
+`src/facets/verdict/`.
+
+```bash
+vat-lab verdict run --subjects <file> --instrument <spec> [--env K=V] [--unset K] --out <dir>
+vat-lab verdict compare <baselineDir> <candidateDir> [--deltas <file>] [--control]
+```
+
+**Subjects** come from a local YAML file that is never committed — `--subjects` is required and has
+no default, because a default path is a place someone eventually commits by accident. Each subject
+is an alias (`crucible-1`, never an adopter's name), a path (relative paths resolve against the
+file's directory), a verb list, an optional `contextPath` (required iff `context-path` is listed),
+`sqlFiles` (required iff `resources-query` is listed) and `buildVerbs`.
+
+**The verb matrix** (`verbs.ts`): `audit`, `skills-validate` (with `--verbose`, which is what makes
+legacy `skills validate` publish its finding list), `resources-validate`, `resources-check`,
+`context-all`, `context-path`, and `resources-query` once per SQL file (row `resources-query:<file>`).
+`buildVerbs: true` adds `build`, `verify` and `marketplace-publish-dry-run`, run in an APFS clone
+(`cp -c -R` per entry, minus `.claude/worktrees`, then the clone's `origin` removed) under the OS
+temp directory — macOS only, and refused for a git worktree subject, whose clone would share the
+real repository's config. Each verb's argv is a function of the arm's `InstrumentVersion`, so a
+future per-arm divergence is one function, not a second matrix.
+
+**Per-arm environment.** Each arm runs under the caller's `--env`/`--unset` plus two lab-owned
+settings: `VAT_PROJECTION_STORE_DIR=<out>/<alias>/store` (a private projection store, so the second
+arm never reads what the first wrote) and `CLAUDE_CONFIG_DIR` unset. An arm naming either is
+refused. Only the caller's part is recorded in the body (`arm`), because the store path differs
+between any two captures and would make every pair of arms distinguishable. **Nothing the lab
+writes lands inside a subject** — VAT itself is one: an `--out` inside any subject path is refused.
+
+**Two layers**, per (alias, verb) row:
+
+1. **Verdict** — exit code plus the finding multiset, read by `extract.ts`. It recognises a
+   `Report<T>` by the envelope identity keys (`ENVELOPE_IDENTITY_KEYS` in
+   `harness/document-shape.ts`: `status`, `examined`, `findings`, `summary`, `data`) with a numeric
+   `examined` and an array `findings` — never by a version string — and reads every legacy shape
+   with one structural rule. This layer stays failable while a document is reshaped.
+2. **Document** — stdout after the ONE normalizer (`normalize.ts`: absolute roots, line endings,
+   and wall-clock fields; no rewrite without a measurement behind it), string-compared, with a diff
+   excerpt of at most 80 lines in the render.
+
+A row is **UNMEASURED** when, in either arm, the verb did not run, exited 2, or printed stdout the
+lab could not parse. Two unmeasured arms trivially agree, so an unmeasured row is a delta in its own
+right and is never rendered as "no change".
+
+**What may be compared.** Exactly one axis may move, and it must be the instrument. A moved subject
+or subject version is refused — re-capture the baseline immediately before the candidate. Two
+captures of one instrument are a control whether or not the caller said so: `movedAxes = []` needs
+`--control`, and indistinguishable arms (same instrument including its closure digest, same arm
+environment) are refused without it.
+
+**The deltas file** — `data/verdict-deltas.yaml`, committed and reviewed, the default for
+`--deltas` (resolved from the lab package, not the cwd). It names one `baseline` (the baseline arm's
+vat version; a compare against any other is refused) and entries keyed by subject alias and verb,
+each declaring any of `exit {from, to}`, `findingsAdded`, `findingsRemoved`, `document: reshaped`
+and `unmeasured: true`, with a `reason` and a `changelog` reference (`.changes/<fragment>.md#<anchor>`
+or `CHANGELOG.md#<anchor>`) that must name a heading that exists. It is checked **both ways**: an
+observed delta no entry declares fails, and a declared delta that did not occur fails — as a
+multiset, item by item. Every entry is validated, none filtered: an entry naming an alias the run
+did not cover, or a verb that alias did not run, is a refusal.
+
+Two consequences of layer 2 for a declaration:
+
+- **A finding or exit change needs `document: reshaped` too.** Any finding or exit move also changes
+  the normalized document, so the document delta is observed alongside it. An entry that declares
+  only the exit or the findings leaves that document delta undeclared, and the compare fails.
+- **Once a row declares `document: reshaped`, any further reshape on that row goes through unseen.**
+  Layer 2 is one string equality per row, so a declared reshape covers every document difference on
+  that (alias, verb), including ones nobody reviewed. Layer 1 is still exact on that row: every
+  exit or finding move must still be declared item by item. Read the diff excerpt the render prints
+  for an accepted row; the declaration does not vouch for it.
+
+A partial run uses a partial
+subjects file and a matching deltas file. `compare` exits `1` on any undeclared or unused delta, `2`
+on any refusal, `0` otherwise.
+
+**The planted-delta proof.** `test/integration/verdict-planted-delta.integration.test.ts` plants a
+delta through two probe instruments with distinct closures: an undeclared exit and finding delta
+fails, a declared delta that did not occur fails, the exact declaration passes, and both-arms-exit-2
+and both-arms-unparseable rows fail as unmeasured. Those cases were seen red before the control and
+refusal cases were written, because a compare that reported nothing would satisfy the latter.
+
 ## Room to split into sub-packages later
 
 Each facet lives in its own directory and depends only on the envelope core — never on another facet.
-That seam is deliberate: if the lab later splits into `lab-perf`, `lab-sweep` and friends, extraction
+That seam is deliberate: if the lab later splits into `lab-perf`, `lab-verdict` and friends, extraction
 is a move rather than a rewrite, and the envelope becomes the shared core they all depend on.
 
 Splitting before there is a reason to is not worth it. Keeping the seam clean so that splitting stays

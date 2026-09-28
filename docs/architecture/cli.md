@@ -131,10 +131,20 @@ Remember: **Other agent repos won't have packages/cli/**. If an agent package ne
 Provides explicit control when needed, automatic detection otherwise.
 
 **Priority order:**
-1. **Explicit override:** `VAT_ROOT_DIR` environment variable
-2. **Dev mode:** Detect if running inside vibe-agent-toolkit repo
-3. **Local install:** Walk up from project root to find `node_modules/@vibe-agent-toolkit/cli`
-4. **Global install:** Use globally installed version
+1. **`VAT_BIN`:** an explicit path to a built `dist/bin.js`, highest precedence. A path that
+   does not exist, or that names the wrapper itself (`dist/bin/vat.js`, which would re-resolve
+   and spawn itself forever), is a hard error (exit 2) — never a silent fall-through to a lower
+   priority.
+2. **`VAT_ROOT_DIR`:** a monorepo checkout root. `<root>/packages/cli/dist/bin.js` must already
+   be built, or this is a hard error (exit 2) — it no longer falls through to dev/local/global
+   resolution the way an unbuilt `VAT_ROOT_DIR` used to.
+3. **Dev mode:** Detect if running inside vibe-agent-toolkit repo
+4. **Local install:** Walk up from project root to find `node_modules/@vibe-agent-toolkit/cli`
+5. **Global install:** Use globally installed version
+
+`VAT_TEST_ROOT` is orthogonal to this list: it only changes the directory priorities 3–4 start
+their detection from — it never names a binary, and it has no effect once `VAT_BIN` or
+`VAT_ROOT_DIR` is set. For every `VAT_*` variable above, an empty string is treated as unset.
 
 ### Implementation
 

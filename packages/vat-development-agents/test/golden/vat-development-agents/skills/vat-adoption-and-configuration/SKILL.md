@@ -101,7 +101,7 @@ Sections and the skills that own their details:
 |---|---|
 | Top-level structure, section orientation (a `version:` key is accepted and ignored — the npm package version is the only version VAT has) | this skill (`vat-adoption-and-configuration`) |
 | `skills:` (include, defaults, per-skill config, packagingOptions) | `vibe-agent-toolkit:vat-skill-authoring` |
-| `resources:` (collections, schemas, validation modes) | `vibe-agent-toolkit:vat-knowledge-resources` |
+| `resources:` (collections, schemas, validation modes, SQL checks (`resources.checks`)) | `vibe-agent-toolkit:vat-knowledge-resources` |
 | `claude:` (marketplaces, plugins, publish, owner) | `vibe-agent-toolkit:vat-skill-distribution` |
 | `rag:` (stores, embedding providers) | `vibe-agent-toolkit:vat-rag` |
 
@@ -175,6 +175,8 @@ phases:
 
 `vat validate` runs the source-only checks — links and SKILL.md frontmatter — that need no build; it's cheap enough to run on every pre-commit or as the first CI-before-build gate. `vat verify` runs the full artifact check (resources → skills → marketplace → consistency) against the built `dist/` tree; it's the authoritative gate before `npm publish`, so it runs after `vat build`. In this repo's own config, `bun run validate` already does this — adopters typically mirror the pattern.
 
+Neither command runs declared `resources.checks` (standing SQL assertions) or VAT's default-on built-in checks — those are a separate command, `vat resources check`, and must be wired into the adopter's own CI or pre-commit phases to actually gate anything. See `vibe-agent-toolkit:vat-knowledge-resources`.
+
 ## VAT writes a cache to disk, and CI should know where
 
 Every resource-scanning verb populates a projection and, by default, keeps it in a SQLite file
@@ -209,7 +211,7 @@ per repository and 50,000 content keys. `vat cache clear` reclaims it.
 - `vibe-agent-toolkit:vat-skill-authoring` — SKILL.md frontmatter, body structure, references, packagingOptions
 - `vibe-agent-toolkit:vat-agent-authoring` — TypeScript agent archetypes and runtime adapters
 - `vibe-agent-toolkit:vat-skill-distribution` — `vat build` / `vat verify` / marketplace / npm publish
-- `vibe-agent-toolkit:vat-knowledge-resources` — `resources:` collections and frontmatter schemas
+- `vibe-agent-toolkit:vat-knowledge-resources` — `resources:` collections, frontmatter schemas, and `vat resources check` (standing SQL assertions)
 - `vibe-agent-toolkit:vat-rag` — `rag:` stores, embedding providers, `vat rag index/query`
 - `vibe-agent-toolkit:vat-audit` — `vat audit` for plugins, marketplaces, and installed skills
 - `vibe-agent-toolkit:vat-skill-review` — pre-publication quality checklist

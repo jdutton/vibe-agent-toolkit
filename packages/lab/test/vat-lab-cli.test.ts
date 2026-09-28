@@ -18,16 +18,18 @@
 import { mkdtemp } from 'node:fs/promises';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { InvalidArgumentError, type Option } from 'commander';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   collectMeasuredCommand,
+  collectUnset,
   createProgram,
   fastestRepeat,
   nonNegativeNumber,
   parseCacheMode,
+  resolveAbArms,
 } from '../src/bin/vat-lab.js';
 import type { PerfBody, PerfCommandStats } from '../src/facets/perf/types.js';
 import { PERF_FACET } from '../src/facets/perf/types.js';
@@ -43,6 +45,7 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   // `compare`'s action sets this as a side effect on the real process object;
   // a value leaked from one test would let the next test's assertion pass
   // whether or not the code under test did anything.
@@ -352,6 +355,100 @@ describe('vat-lab <facet> ab — every facet gets the verb, not just the one tha
         'VAT_PARSE_POOL_SIZE=3',
       ]),
     ).rejects.toThrow();
+  });
+});
+
+/** This checkout's own built CLI — the one `dist:` arm every unit test can rely on. */
+const REPO_CLI_DIST = safePath.join(
+  resolveFromImportMeta(import.meta.url, '../../..'),
+  'packages/cli/dist',
+);
+
+/**
+ * `ab` options as Commander would hand them to the action: both arms named
+ * `dist:` at the same built CLI, nothing else set.
+ *
+ * @param over - What the case varies
+ * @returns The options object
+ */
+function sameDistArms(over: Record<string, unknown> = {}): Parameters<typeof resolveAbArms>[0] {
+  return {
+    instrumentA: { kind: 'dist', path: REPO_CLI_DIST },
+    instrumentB: { kind: 'dist', path: REPO_CLI_DIST },
+    pairs: 1,
+    runs: 1,
+    cache: 'warm',
+    out: tempDir,
+    control: false,
+    ...over,
+  };
+}
+
+describe('vat-lab <facet> ab — indistinguishable arms', () => {
+  it('refuses two indistinguishable arms without --control', async () => {
+    // Two `dist:` arms at one path: same version, same closure digest, same
+    // (empty) environment. Run as an A/B, every effect it printed would be the
+    // machine's noise published as a difference between builds.
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+    const arms = await resolveAbArms(sameDistArms());
+
+    expect(arms).toBeNull();
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+    expect(stderr.mock.calls.map(([chunk]) => String(chunk)).join('')).toContain(
+      'REFUSED: the two arms are indistinguishable',
+    );
+  });
+
+  it('accepts one build in two configurations', async () => {
+    // The positive control: the same instrument on both arms IS an A/B when the
+    // environments differ — the pool-on/pool-off run one build exists to make.
+    const arms = await resolveAbArms(sameDistArms({ envA: { X: '1' } }));
+
+    expect(arms).not.toBeNull();
+    expect(arms?.envA).toStrictEqual({ set: { X: '1' }, unset: [] });
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('accepts one build where only an UNSET differs', async () => {
+    const arms = await resolveAbArms(sameDistArms({ unsetB: ['CLAUDE_CONFIG_DIR'] }));
+
+    expect(arms).not.toBeNull();
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('refuses an arm that sets and unsets one variable, before resolving anything', async () => {
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+
+    const arms = await resolveAbArms(
+      sameDistArms({ envA: { X: '1' }, unsetA: ['X'], instrumentA: { kind: 'dist', path: '/nowhere' } }),
+    );
+
+    expect(arms).toBeNull();
+    expect(process.exitCode).toBe(ExitCode.ERROR);
+  });
+});
+
+describe('collectUnset', () => {
+  it('accumulates names', () => {
+    expect(collectUnset('--unset')('B', collectUnset('--unset')('A', undefined))).toEqual(['A', 'B']);
+  });
+
+  it('refuses a KEY=VALUE, which belongs to --env', () => {
+    expect(() => collectUnset('--unset-a')('X=1', undefined)).toThrow(InvalidArgumentError);
+    expect(() => collectUnset('--unset-a')('', undefined)).toThrow(/--unset-a/);
+  });
+});
+
+describe('vat-lab <facet> run — the arm environment flags', () => {
+  it.for(FACETS)('declares --env and --unset on %s run', (facet) => {
+    expect(optionOf(facet, 'run', '--env')).toBeDefined();
+    expect(optionOf(facet, 'run', '--unset')).toBeDefined();
+  });
+
+  it.for(FACETS)('declares --unset-a and --unset-b on %s ab', (facet) => {
+    expect(optionOf(facet, 'ab', '--unset-a')).toBeDefined();
+    expect(optionOf(facet, 'ab', '--unset-b')).toBeDefined();
   });
 });
 

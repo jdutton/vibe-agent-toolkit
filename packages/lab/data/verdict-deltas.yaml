@@ -1,0 +1,13 @@
+# The verdict facet's expected deltas — committed and reviewed.
+#
+# Every entry is keyed by subject ALIAS (never an adopter name), verb (a row
+# name: a verb, or `resources-query:<file>`), and the changelog heading that
+# explains it. `vat-lab verdict compare` checks this file BOTH ways: an observed
+# delta no entry declares fails, and a declared delta that did not occur fails.
+# `baseline` is the baseline arm's vat version every entry is a move away from;
+# a compare against any other baseline is refused.
+#
+# Schema and rules: packages/lab/src/facets/verdict/deltas.ts.
+# How to run a crucible pass: packages/lab/docs/facets.md ("verdict").
+baseline: 0.2.0-rc.11
+deltas: []

@@ -1,5 +1,5 @@
 /**
- * Unit tests for QA-snapshot output normalization.
+ * Unit tests for the verdict facet's output normalization — the ONE normalizer.
  *
  * The property under test throughout: two runs over an unchanged tree must
  * normalize to identical text, **and nothing beyond the measured instabilities
@@ -14,7 +14,7 @@ import {
   buildPathSubstitutions,
   normalizeCommandOutput,
   type NormalizeContext,
-} from '../../src/qa-snapshot/normalize.js';
+} from '../src/facets/verdict/normalize.js';
 
 /** Shared by every context below; named so the literal appears exactly once. */
 const HOME_DIR = '/Users/dev';
@@ -263,5 +263,48 @@ describe('normalizeCommandOutput — captures survive as parseable documents', (
       `    ${ZEROED_MS_LINE}`,
     ]);
     expect(lines.at(-1)).toBe('  - "resolved from <VATROOT>/packages/cli"');
+  });
+});
+
+/**
+ * The two wall-clock fields a `Report<T>` and `resources query`/`check`
+ * publish. Each case carries its positive control: the neighbouring integer on
+ * the same document is left exactly as it was, so a rule that erased every
+ * number would fail here rather than pass.
+ */
+describe('normalizeCommandOutput — the Report wall-clock fields', () => {
+  it('zeroes durationMs in YAML and JSON', () => {
+    const yaml = normalize(['status: success', 'examined: 42', 'durationMs: 1873', ''].join('\n'));
+    const json = normalize(['{', '  "examined": 42,', '  "durationMs": 1873,', '  "status": "success"', '}', ''].join('\n'));
+
+    expect(yaml).toBe(['status: success', 'examined: 42', 'durationMs: 0', ''].join('\n'));
+    expect(JSON.parse(json)).toEqual({ examined: 42, durationMs: 0, status: 'success' });
+  });
+
+  it('zeroes populationSecs in YAML and JSON', () => {
+    const yaml = normalize(['entryCount: 7', 'populationSecs: 0.412', ''].join('\n'));
+    const json = normalize(['{', '  "populationSecs": 0.412,', '  "entryCount": 7', '}', ''].join('\n'));
+
+    expect(yaml).toBe(['entryCount: 7', 'populationSecs: 0', ''].join('\n'));
+    expect(JSON.parse(json)).toEqual({ populationSecs: 0, entryCount: 7 });
+  });
+
+  // Values verbatim from the wave-1 control run (rc.11 captured twice), plus
+  // an explicit-sign exponent: the lens timer prints scientific notation.
+  it.each(['7.08e-7', '5e-7', '0.0237', '1.2E+3', '0'])('zeroes lensSecs %s in YAML and JSON', (value) => {
+    const yaml = normalize(['rows: 12', `lensSecs: ${value}`, 'examined: 40', ''].join('\n'));
+    const json = normalize(['{', '  "rows": 12,', `  "lensSecs": ${value},`, '  "examined": 40', '}', ''].join('\n'));
+
+    expect(yaml).toBe(['rows: 12', 'lensSecs: 0', 'examined: 40', ''].join('\n'));
+    expect(JSON.parse(json)).toEqual({ rows: 12, lensSecs: 0, examined: 40 });
+  });
+
+  it.each(['7.08e-7', '1.2E+3'])('zeroes a scientific-notation populationSecs %s too', (value) => {
+    expect(normalize(`populationSecs: ${value}\n`)).toBe('populationSecs: 0\n');
+    expect(JSON.parse(normalize(`{\n  "populationSecs": ${value},\n  "rows": 3\n}\n`))).toEqual({ populationSecs: 0, rows: 3 });
+  });
+
+  it('leaves a null lensSecs alone (check built no population)', () => {
+    expect(normalize('lensSecs: null\n')).toBe('lensSecs: null\n');
   });
 });

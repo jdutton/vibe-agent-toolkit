@@ -273,7 +273,6 @@ packages/cli/src/pipeline-oracles/trap-corpus.ts MaterializeOptions dead
 packages/cli/src/pipeline-oracles/trap-corpus.ts TRAP_CORPUS_FILES dead
 packages/cli/src/pipeline-oracles/trap-corpus.ts TRAP_CORPUS_SYMLINKS dead
 packages/cli/src/qa-snapshot/capture.ts CaptureRequest dead
-packages/cli/src/qa-snapshot/normalize.ts PathSubstitution dead
 packages/cli/src/qa-snapshot/store.ts SnapshotPaths dead
 packages/cli/src/report-schemas.ts ReportEntry dead
 packages/cli/src/report-schemas.ts ReportSchemaEntry dead

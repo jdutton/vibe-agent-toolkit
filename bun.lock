@@ -187,6 +187,7 @@
         "@vibe-agent-toolkit/utils": "workspace:*",
         "commander": "^12.1.0",
         "which": "^5.0.0",
+        "yaml": "^2.9.0",
         "zod": "^3.25.0",
       },
       "devDependencies": {

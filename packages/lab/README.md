@@ -29,8 +29,12 @@ vat-lab <facet> compare <baseline> <candidate>
 
 Facets today are **`io`** (filesystem-call counts), **`perf`** (wall time), **`parse`** (where the
 time inside vat's document parse goes, pass by pass), **`crawl`** (where the time spent *finding*
-those documents goes, per contributor, stratum and fixpoint pass) and **`population`** (*which*
-files a command enumerated). `parse` defaults to `--cache cold` because vat's parse cache
+those documents goes, per contributor, stratum and fixpoint pass), **`population`** (*which*
+files a command enumerated) and **`verdict`** (what a build *decides* — exit codes, findings and
+normalized documents — across a subject set, checked both ways against committed deltas).
+`verdict` is shaped differently: `run` takes a required `--subjects <file>` instead of a
+`<subject>`, and `compare` takes two capture directories plus `--deltas` and `--control` — see
+[The verdict facet](docs/facets.md#the-verdict-facet). `parse` defaults to `--cache cold` because vat's parse cache
 short-circuits the parse function on a hit, so a warm run has nothing to attribute; `crawl` and
 `population` default to warm, because nothing caches a crawl — see [Facets](docs/facets.md).
 
@@ -57,14 +61,16 @@ the extent source separates them. The walk sources no extent and so reports none
 
 `io` rows carry the same `lane` / `extentSource` pair, read by the same reader — off the **last**
 repeat, whose dumps the row reports, where `population` reads its **first** — so an A/B of call
-counts no longer has to infer which arm ran from a call-site signature. ⚠️ **On the default `io`
-spec both are `null`**: `resources-scan` prints YAML and the lab reads a lane out of JSON only. The
-row says `lane UNREPORTED by the subject's output`, a compare over two such rows says `arm
-UNPROVEN on both sides`, and a compare where only one side named its arm says `arm UNPROVEN on
-the before side — …; the after side ran 'projection via git'` (or the sides swapped) — never the
-`[A → B]` form, which is reserved for two named arms that differ. Measure
-`--command resources-population` to carry the arm on an `io` row — see [Facets](docs/facets.md)
-for the full table of arm clauses.
+counts no longer has to infer which arm ran from a call-site signature. Every reader in the lab
+parses a subject's stdout through one document reader (JSON first, then YAML — a single document,
+a leading `---` tolerated), so an `io` row measured over the **default** spec (`resources-scan`,
+YAML) carries its real lane exactly as one measured over `--command resources-population` (JSON)
+does. `null` still means *the output did not say* — the build is too old to report a lane, or the
+row's arm truly is unreported — and reads as `lane UNREPORTED by the subject's output`; a compare
+over two such rows says `arm UNPROVEN on both sides`, and a compare where only one side named its
+arm says `arm UNPROVEN on the before side — …; the after side ran 'projection via git'` (or the
+sides swapped) — never the `[A → B]` form, which is reserved for two named arms that differ. See
+[Facets](docs/facets.md) for the full table of arm clauses.
 
 ```bash
 vat-lab population run ../some-project --instrument tree:. --id some-project --out ./walk

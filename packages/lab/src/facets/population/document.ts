@@ -10,16 +10,25 @@
  * measurement; "we could not read one" is not, and the two render identically to
  * anyone scanning for a number.
  *
- * ## Why JSON and not the YAML the command prints by default
+ * ## Reading through `document-shape.ts`, and what changes when `resources
+ * scan` becomes a `Report`
  *
- * `vat resources scan --format json` emits the same document. Taking it as JSON
- * keeps this package free of a YAML parser it would otherwise need only here —
- * and the `--format json` flag exists on the subject precisely so a programmatic
- * consumer does not need one.
+ * `vat resources scan` prints YAML by default and the same document as JSON
+ * under `--format json`; this reader takes either, through `parseDocument`,
+ * rather than requiring `--format json` to avoid carrying a second YAML parser.
+ * `parseDocument` also decides which of the document's two shapes this run
+ * printed: today's per-command document (`legacy`), or the `Report<T>` envelope
+ * every command has published since rc.11 (`report`) — which `resources scan`
+ * itself does not print YET (wave 3). `ScanDocumentSchema` below is applied to
+ * `parseDocument`'s `payload`, which is the right value in both cases without
+ * this module knowing which one it got: the legacy document itself, or a
+ * report's `data`. The one field that is NOT read off the payload either way is
+ * the file count — see {@link readPopulationDocument} for why.
  */
 
 import { z } from 'zod';
 
+import { parseDocument } from '../../harness/document-shape.js';
 import { LaneFieldsSchema, laneOfDocument, type ReportedLane } from '../../harness/lane.js';
 
 import type { PopulationEntry } from './types.js';
@@ -46,10 +55,17 @@ import type { PopulationEntry } from './types.js';
  * `files` is optional because the command omits it without `--verbose`, and that
  * case needs its own sentence rather than a schema error — see
  * {@link readPopulationDocument}.
+ *
+ * `filesScanned` is optional for a different reason: it is validated here (so a
+ * present-but-malformed one is still a refusal, never silently ignored), but it
+ * is NOT the count {@link readPopulationDocument} reports. A `Report`'s `data`
+ * has no reason to repeat the envelope's own `examined` under a second,
+ * per-command name, so a report-shaped payload legitimately omits this key —
+ * only a legacy document is refused for lacking it.
  */
 const ScanDocumentSchema = LaneFieldsSchema.extend({
   root: z.string().min(1),
-  filesScanned: z.number().int().nonnegative(),
+  filesScanned: z.number().int().nonnegative().optional(),
   files: z
     .array(
       z.object({
@@ -85,51 +101,64 @@ export type PopulationDocumentResult =
  * @returns The population, or why it is not readable as one
  */
 export function readPopulationDocument(stdout: string): PopulationDocumentResult {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(stdout) as unknown;
-  } catch (error) {
-    if (!(error instanceof SyntaxError)) throw error;
+  const parsed = parseDocument(stdout);
+  if (parsed.shape === 'unparsed') {
     return {
       ok: false,
       refusal:
-        `the command printed no JSON document (${error.message}), so it reports no population this facet can read — ` +
-        'measure a command that emits one (`resources scan … --format json --verbose`)',
+        `the command printed no document this facet can read (${parsed.reason}), so it reports no population — ` +
+        'measure a command that emits one (`resources scan … --verbose`)',
     };
   }
 
-  const parsed = ScanDocumentSchema.safeParse(raw);
-  if (!parsed.success) {
+  const validated = ScanDocumentSchema.safeParse(parsed.payload);
+  if (!validated.success) {
     return {
       ok: false,
       refusal:
-        'the command printed a JSON document that is not a resource-scan document — ' +
-        parsed.error.issues
+        'the command printed a document that is not a resource-scan document — ' +
+        validated.error.issues
           .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
           .join('; '),
     };
   }
 
-  const document = parsed.data;
+  const document = validated.data;
+  // `examined` for a report, `filesScanned` for legacy — see the schema's
+  // docstring on why `filesScanned` is optional there. `isReportRoot`
+  // (document-shape.ts) already proved `examined` is a number for `report`.
+  const filesScanned = parsed.shape === 'report'
+    ? (parsed.document['examined'] as number)
+    : document.filesScanned;
+
+  if (filesScanned === undefined) {
+    return {
+      ok: false,
+      refusal:
+        'the command printed a resource-scan document with no file count (`filesScanned`) — ' +
+        're-run with a build that reports one',
+    };
+  }
+
   if (document.files === undefined) {
     // The count is right there and it is exactly the wrong thing to take. A row
-    // built from `filesScanned` alone would compare byte-identically against any
+    // built from the count alone would compare byte-identically against any
     // other run of the same size while knowing nothing about which files those
     // were — the failure this whole facet exists to prevent.
     return {
       ok: false,
       refusal:
-        `the command reported ${String(document.filesScanned)} files scanned but listed none, ` +
+        `the command reported ${String(filesScanned)} files scanned but listed none, ` +
         'so there is a count and no population — re-run the command with `--verbose`',
     };
   }
 
-  // Read off the VALIDATED document, never off `raw` or off `stdout` again. The
-  // schema above has already refused every malformed arm, so the shared
-  // reader's lenient "unreadable ⇒ null" path is unreachable from here: what it
-  // does for this facet is the one normalisation both facets share (an omitted
-  // key becomes `null`), and it does it off a value the schema already vouched
-  // for.
+  // Read off the VALIDATED document, never off `parsed.payload` or off `stdout`
+  // again. The schema above has already refused every malformed arm, so the
+  // shared reader's lenient "unreadable ⇒ null" path is unreachable from here:
+  // what it does for this facet is the one normalisation both facets share (an
+  // omitted key becomes `null`), and it does it off a value the schema already
+  // vouched for.
   const arm = laneOfDocument(document);
   return {
     ok: true,

@@ -40,6 +40,7 @@ import {
   ParseBodySchema,
   type ParseCommandStats,
 } from '../src/facets/parse/types.js';
+import type { ArmEnvironment } from '../src/harness/arm-env.js';
 import type { MeasuredCommandSpec } from '../src/harness/commands.js';
 import type { ResolvedSubject } from '../src/harness/types.js';
 
@@ -212,7 +213,7 @@ function subjectAt(path: string): ResolvedSubject {
  */
 async function capture(
   probe: Probe,
-  overrides: Partial<CaptureParseOptions> = {},
+  overrides: Omit<Partial<CaptureParseOptions>, 'env'> & { env?: ArmEnvironment['set'] } = {},
 ): Promise<ReportEnvelope<ParseBody>> {
   return captureParse({
     instrument: probe.instrument,
@@ -223,9 +224,12 @@ async function capture(
     capturedAt: CAPTURED_AT,
     ...overrides,
     env: {
-      NODE_OPTIONS: `--require "${seamPath}"`,
-      [SHOT_ENV]: safePath.join(probe.cwd, 'shot.txt'),
-      ...overrides.env,
+      set: {
+        NODE_OPTIONS: `--require "${seamPath}"`,
+        [SHOT_ENV]: safePath.join(probe.cwd, 'shot.txt'),
+        ...overrides.env,
+      },
+      unset: [],
     },
   });
 }

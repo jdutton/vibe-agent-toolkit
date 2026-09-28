@@ -1,0 +1,29 @@
+status: error
+summary: "2 skills validated, 1 error, 1 warning"
+skillsValidated: 2
+issueCounts:
+  errors: 1
+  warnings: 1
+  info: 0
+runIssueCounts:
+  errors: 0
+  warnings: 0
+  info: 0
+durationSecs: 0.42
+results:
+  - skillName: my-skill
+    path: plugins/my-plugin/skills/my-skill
+    allErrors:
+      - code: SKILL_DESCRIPTION_TOO_LONG
+        severity: error
+        message: "Description exceeds 1024 characters"
+        location: plugins/my-plugin/skills/my-skill/SKILL.md
+      - code: LINK_TO_NAVIGATION_FILE
+        severity: warning
+        message: "Link points at a navigation file"
+        location: plugins/my-plugin/skills/my-skill/SKILL.md
+    ignoredErrors:
+      - code: SKILL_TOO_MANY_FILES
+        location: plugins/my-plugin/skills/my-skill
+        reason: "Migration in progress - will split skill"
+        expires: "2026-06-01"

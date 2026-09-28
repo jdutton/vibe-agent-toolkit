@@ -1,9 +1,14 @@
 /**
- * Normalization of captured whole-command output.
+ * Normalization of captured whole-command output — the ONE normalizer.
+ *
+ * The qa-snapshot copy (`packages/cli/src/qa-snapshot/normalize.ts`) was
+ * absorbed here with the whole-command half it served; the `verdict` facet's
+ * layer 2 (the normalized full document) is its only caller. There is no second
+ * normalizer anywhere in the repository, and there must not be one.
  *
  * ## Why this exists
  *
- * A snapshot comparison is only worth reading if two runs over an *unchanged*
+ * A document comparison is only worth reading if two runs over an *unchanged*
  * tree diff to zero lines. Anything that varies between such runs is noise that
  * appears in every comparison forever, and a reader who has learned to ignore
  * lines is a reader who will ignore the real one.
@@ -15,6 +20,16 @@
  * `root:` header plus the config-less fallback warning on stderr. Every
  * per-file path inside the reports is already corpus-relative, so nothing else
  * needed touching.
+ *
+ * Two more wall-clock fields joined the duration rule when the verdict facet
+ * took the normalizer over, each wall time BY CONSTRUCTION: `durationMs`
+ * (`Report.durationMs`, stamped `Date.now() - startTime`, e.g. okf/validate.ts:256)
+ * and `populationSecs` (resources query.ts:105 / check.ts:471; check's `null`
+ * when it built no population is left alone).
+ *
+ * `lensSecs` (query.ts:109, check.ts:477) joined on a MEASUREMENT: a crucible
+ * control run of rc.11 twice differed only in it, on every query/check row,
+ * incl. scientific notation (7.08e-7 vs 5.41e-7) — which `[\d.eE+-]` covers.
  *
  * ⛔ **Do not add a rewrite without a measurement behind it.** Every extra
  * substitution is a real difference that has been made invisible: the diff goes
@@ -66,8 +81,9 @@ interface DurationRule {
 }
 
 /**
- * Duration is the only field three runs of every verb were observed to
- * disagree on.
+ * Wall time is the only kind of field three runs of every verb were observed
+ * to disagree on — `durationSecs`/`duration` measured, `durationMs` and
+ * `populationSecs` wall clock by construction (see this module's docstring).
  *
  * Every pattern is a **regex literal**, not a `new RegExp` composed from a
  * shared number sub-pattern. Composing read better, but it meant handing the
@@ -94,9 +110,11 @@ interface DurationRule {
  * rather than to validate it.
  */
 const DURATION_RULES: readonly DurationRule[] = Object.freeze([
-  // YAML: `durationSecs: 12.481`
+  // YAML: `durationSecs: 12.481`, `durationMs: 1873`, `populationSecs: 0.412`,
+  // `lensSecs: 7.08e-7`. The alternation is of fixed literals, so it adds no
+  // ambiguity: at most one of them can match at any position.
   {
-    pattern: /^(?<prefix>[ \t]*durationSecs:[ \t]*)-?\d[\d.eE+-]*[ \t]*$/gm,
+    pattern: /^(?<prefix>[ \t]*(?:durationSecs|durationMs|populationSecs|lensSecs):[ \t]*)-?\d[\d.eE+-]*[ \t]*$/gm,
     replacement: '$<prefix>0',
   },
   // YAML: `duration: 412ms`
@@ -104,9 +122,10 @@ const DURATION_RULES: readonly DurationRule[] = Object.freeze([
     pattern: /^(?<prefix>[ \t]*duration:[ \t]*)\d+ms[ \t]*$/gm,
     replacement: '$<prefix>0ms',
   },
-  // JSON: `"durationSecs": 3.902,`
+  // JSON: `"durationSecs": 3.902,`, `"durationMs": 1873,`, `"populationSecs": 0.412,`,
+  // `"lensSecs": 5e-7,`.
   {
-    pattern: /^(?<prefix>[ \t]*"durationSecs":[ \t]*)-?\d[\d.eE+-]*(?<comma>,?)[ \t]*$/gm,
+    pattern: /^(?<prefix>[ \t]*"(?:durationSecs|durationMs|populationSecs|lensSecs)":[ \t]*)-?\d[\d.eE+-]*(?<comma>,?)[ \t]*$/gm,
     replacement: '$<prefix>0$<comma>',
   },
 ]);
