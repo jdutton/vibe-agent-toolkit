@@ -107,15 +107,18 @@ describe('Error scenarios (system test)', () => {
     expect(parsed.status).toBe('error');
   });
 
-  it('should handle empty directory gracefully', () => {
+  it('should refuse a scan of an empty directory as a finding, not crash or pass', () => {
     const emptyDir = safePath.join(tempDir, 'empty');
     fs.mkdirSync(emptyDir);
 
     const { result, parsed } = executeAndParseYaml(binPath, ['resources', 'scan', emptyDir]);
 
-    expect(result.status).toBe(0); // Empty is not an error
-    expect(parsed.status).toBe('success');
-    expect(parsed.filesScanned).toBe(0);
+    // Not a system error (2) and not a clean pass (0): a scan of nothing is the
+    // run-integrity refusal, exit 1.
+    expect(result.status).toBe(1);
+    expect(parsed.status).toBe('findings');
+    expect(parsed.examined).toBe(0);
+    expect((parsed.findings as { code: string }[]).map((finding) => finding.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
   });
 
   it('should handle markdown parse errors gracefully', () => {
@@ -155,8 +158,8 @@ describe('Error scenarios (system test)', () => {
     );
 
     expect(result.status).toBe(1); // Validation error, not system error
-    expect(parsed.status).toBe('error');
-    expect(parsed.errorsFound).toBeGreaterThan(0);
+    expect(parsed.status).toBe('findings');
+    expect((parsed.summary as { errors: number }).errors).toBeGreaterThan(0);
   });
 
   it('should handle debug flag correctly', () => {
@@ -213,14 +216,13 @@ describe('Error scenarios (system test)', () => {
     );
 
     expect(result.status).toBe(1);
-    expect(parsed.errorsFound).toBeGreaterThanOrEqual(3);
+    expect((parsed.summary as { errors: number }).errors).toBeGreaterThanOrEqual(3);
 
-    // Check errors are in structured output (not stderr by default)
-    // Use text format to get stderr output
+    // The same findings, one compiler-style line each, under --format text.
     const textResult = executeCli(binPath, ['resources', 'validate', projectDir, '--format', 'text']);
-    expect(textResult.stderr).toContain('missing1.md');
-    expect(textResult.stderr).toContain('missing2.md');
-    expect(textResult.stderr).toContain('bad-anchor');
+    expect(textResult.stdout).toContain('missing1.md');
+    expect(textResult.stdout).toContain('missing2.md');
+    expect(textResult.stdout).toContain('bad-anchor');
   });
 
   it('should handle circular links without crashing', () => {
@@ -246,6 +248,6 @@ describe('Error scenarios (system test)', () => {
 
     // Should handle circular refs without infinite loop
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    expect(parsed.status).toBe('ok');
   });
 });

@@ -180,7 +180,7 @@ export function collectPostBuildIssues(result: PackageSkillResult): ValidationIs
  * "this asset is not the one" it means. `exactOptionalPropertyTypes` is on, so
  * these are built by spread — assigning `undefined` would emit the key.
  */
-export interface FindingCountSummary {
+interface FindingCountSummary {
   errors?: number;
   warnings?: number;
   info?: number;

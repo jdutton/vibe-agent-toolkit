@@ -117,9 +117,10 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with an unreadable subdirectory', 
     fs.chmodSync(unreadableDir, UNREADABLE);
     const results = await auditSkillDir();
 
-    expect(results.some(r => r.status === 'error')).toBe(false);
+    expect(results.some(r => r.summary.errors > 0)).toBe(false);
     const unreadable = results.find(r => r.issues.some(i => i.code === 'SCAN_PATH_UNREADABLE'));
-    expect(unreadable?.status).toBe('warning');
+    expect(unreadable?.summary.errors).toBe(0);
+    expect(unreadable?.summary.warnings).toBeGreaterThan(0);
   });
 
   it('anchors the finding at the unreadable directory, relative to the scan root', async () => {
@@ -162,7 +163,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with an unreadable subdirectory', 
 
     const codes = results.flatMap(r => r.issues.map(i => i.code));
     expect(codes).toContain('PACKAGED_AGENT_INSTRUCTION_FILE');
-    expect(results.some(r => r.status === 'error')).toBe(false);
+    expect(results.some(r => r.summary.errors > 0)).toBe(false);
     const unreadable = results.flatMap(r => r.issues).filter(i => i.code === 'SCAN_PATH_UNREADABLE');
     expect(unreadable.map(i => i.location)).toEqual([UNREADABLE_SUBDIR]);
     expect(unreadable[0]?.message).toMatch(/EACCES/);
@@ -245,7 +246,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with an unreadable file', () => {
     // destroyed along with every other finding the run had collected.
     expect(codes).toContain('PACKAGED_AGENT_INSTRUCTION_FILE');
     expect(codes).toContain('SCAN_PATH_UNREADABLE');
-    expect(results.some(r => r.status === 'error')).toBe(false);
+    expect(results.some(r => r.summary.errors > 0)).toBe(false);
   });
 
   it('anchors the finding at the unreadable file itself', async () => {
@@ -271,7 +272,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with an unreadable file', () => {
     );
 
     expect(results.flatMap(r => r.issues).map(i => i.code)).toContain('SCAN_PATH_UNREADABLE');
-    expect(results.some(r => r.status === 'error')).toBe(false);
+    expect(results.some(r => r.summary.errors > 0)).toBe(false);
   });
 
   // `issueLocation` is `path.relative`, so it answers '' when the subject IS the
@@ -323,8 +324,8 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
   let alphaSkillMd: string;
 
   interface ReportIssue { code: string; location?: string }
-  interface ReportFile { path: string; type: string; issues: ReportIssue[] }
-  interface Report { status: string; files: ReportFile[] }
+  interface ReportFile { path: string; type: string }
+  interface Report { status: string; findings: ReportIssue[]; data: { files: ReportFile[] } }
 
   /** Each lane's target and where it anchors the refused directory. */
   const lanes: Array<{ lane: string; target: () => string; expectedLocation: string; alphaPath: string }> = [
@@ -338,7 +339,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
   }
 
   function issuesWithCode(report: Report, code: string): ReportIssue[] {
-    return report.files.flatMap((f) => f.issues).filter((i) => i.code === code);
+    return report.findings.filter((i) => i.code === code);
   }
 
   function discoveryWarnings(stderr: string): string[] {
@@ -386,9 +387,9 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
     fs.chmodSync(lockedDir, UNREADABLE);
     const { exit, report } = audit(target());
 
-    // The audit contract: status carries the findings, the exit code says the run completed.
+    // A warning is a finding, not a failure: `findings`, and nothing at error severity to gate on.
     expect(exit).toBe(0);
-    expect(report.status).not.toBe('success');
+    expect(report.status).toBe('findings');
     // In the directory lane TWO lanes meet `skills/locked` — the walk's per-entry
     // guard and the refused discovery — and the report must carry the fact once.
     // In the single-file lane there is no walk, so the refused discovery is the
@@ -407,15 +408,18 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
     expect(warnings[0]).toContain('skills.include');
   });
 
-  /** Audit `target` with the sibling locked and return alpha's row. */
+  /** Audit `target` with the sibling locked and return alpha's row and the findings located in it. */
   const alphaUnderLockedSibling = (target: () => string, alphaPath: string) => {
     fs.chmodSync(lockedDir, UNREADABLE);
     const { report } = audit(target());
-    return report.files.find((f) => f.path === alphaPath);
+    return {
+      row: report.data.files.find((f) => f.path === alphaPath),
+      findings: report.findings.filter((f) => f.location === alphaPath),
+    };
   };
 
   it.each(lanes)('$lane lane: the readable skill is still validated, not dropped with the directory', ({ target, alphaPath }) => {
-    expect(alphaUnderLockedSibling(target, alphaPath)?.type).toBe('agent-skill');
+    expect(alphaUnderLockedSibling(target, alphaPath).row?.type).toBe('agent-skill');
   });
 
   // THE regression as the operator sees it: the config loaded, alpha is readable
@@ -425,7 +429,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
   // a degrade handler so discovery enumerates AROUND the refused directory
   // instead of refusing, and every other caller keeps the refuse-by-name default.
   it.each(lanes)('$lane lane: the readable skill keeps its config-aware finding despite the unreadable sibling', ({ target, alphaPath }) => {
-    expect(alphaUnderLockedSibling(target, alphaPath)?.issues.map((i) => i.code)).toContain(CONFIG_AWARE_CODE);
+    expect(alphaUnderLockedSibling(target, alphaPath).findings.map((i) => i.code)).toContain(CONFIG_AWARE_CODE);
   });
 });
 
@@ -544,24 +548,32 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit of a plugin with a skill directory
 
   it('files the refusal once as SCAN_PATH_UNREADABLE on the plugin — never as PLUGIN_INVALID_JSON — and exits 0', () => {
     const result = runAuditCli(pluginDir);
-    const report = parseYaml(result.stdout) as { status: string; summary: Record<string, number>; files: Array<{ path: string; issues: Array<{ code: string; location?: string }> }> };
-    const issues = report.files.flatMap((f) => f.issues);
+    const report = parseYaml(result.stdout) as {
+      status: string;
+      summary: { errors: number; warnings: number };
+      findings: Array<{ code: string; location?: string }>;
+      data: { counts: Record<string, number>; files: Array<{ path: string }> };
+    };
+    const issues = report.findings;
 
     expect(result.status, result.stderr).toBe(0);
-    expect(report.status).toBe('warning');
+    expect(report.status).toBe('findings');
+    expect(report.summary.errors).toBe(0);
+    expect(report.summary.warnings).toBeGreaterThan(0);
     expect(issues.map((i) => i.code)).not.toContain('PLUGIN_INVALID_JSON');
     expect(issues.filter((i) => i.code === 'SCAN_PATH_UNREADABLE').map((i) => i.location)).toEqual(['skills/lockeddir']);
     // The readable sibling still scanned, and the refusal is not a scanned file.
-    expect(report.files.some((f) => f.path.endsWith('skills/good/SKILL.md'))).toBe(true);
-    expect(report.summary['pathsUnreadable']).toBe(0);
+    expect(report.data.files.some((f) => f.path.endsWith('skills/good/SKILL.md'))).toBe(true);
+    expect(report.data.counts['pathsUnreadable']).toBe(0);
   });
 
   it('a root the OS will not list could not be audited at all: exit 2, the invocation\'s ending', () => {
     const result = runAuditCli(lockedSkillDir);
-    const report = parseYaml(result.stdout) as { status: string; error?: string };
+    const report = parseYaml(result.stdout) as { status: string; error?: { code: string; message: string } };
 
     expect(result.status, result.stderr).toBe(2);
     expect(report.status).toBe('error');
-    expect(report.error).toContain('Path cannot be read');
+    expect(report.error?.code).toBe('INPUT_UNREADABLE');
+    expect(report.error?.message).toContain('Path cannot be read');
   });
 });

@@ -876,7 +876,7 @@ async function validateNothingTrackedUnderNeverCommittedDirs(): Promise<void> {
  * Limits on judging conformance — these fail LOUDLY (a fixed lane stays listed):
  *   - It cannot tell whether the counts block is actually reached at runtime.
  *   - Counts published under a name outside `issueCounts`/`severityCounts`/`counts`
- *     are seen only when they carry the `errors`+`warnings`+`info` SHAPE, or came
+ *     (or a `summary` declared as `SeverityCounts`) are seen only when they carry the `errors`+`warnings`+`info` SHAPE, or came
  *     from the shared counter. Two of three severity names, or three different
  *     names, still reads as nonconforming.
  *   - The property must start a line. That is deliberate — matching the bare word
@@ -975,7 +975,7 @@ const FINDINGS_COLLECTION = /\b(?:issues|allErrors|activeErrors|activeWarnings|e
  * {@link FINDINGS_COLLECTION} — the population must not be defined by a keyword
  * that a legitimate refactor can delete.
  */
-const SHARED_COLLAPSE_CALL = /\b(?:calculateValidationStatus|countBySeverity)\s*\(/;
+const SHARED_COLLAPSE_CALL = /\b(?:calculateValidationStatus|countBySeverity|resultStatus|summarizeIssues|describeIssues)\s*\(/;
 /**
  * The shared report ENVELOPE: `buildReport()` from `@vibe-agent-toolkit/schema`
  * derives `status` and `summary` (the per-severity counts) from the findings in
@@ -983,11 +983,13 @@ const SHARED_COLLAPSE_CALL = /\b(?:calculateValidationStatus|countBySeverity)\s*
  * counts property. Without this arm the migration that FIXED a lane erased it
  * from the population — three commands read as "stale" the day they moved.
  *
- * Two shapes: the call (`buildReport(` or the generic `buildReport<`), or the import from the schema package
+ * Two shapes: the call (`buildReport(`, the generic `buildReport<`, or
+ * `withRunIntegrity(` — the pass every report takes out, which rebuilds the
+ * envelope), or the import from the schema package
  * (the alias is arbitrary, so the import is the structural fact when a lane
  * renames the builder).
  */
-const SHARED_ENVELOPE_CALL = /\bbuildReport[<(]/;
+const SHARED_ENVELOPE_CALL = /\b(?:buildReport|withRunIntegrity)[<(]/;
 /** Every named-import block from the schema package; the alias arm reads these. */
 const SCHEMA_NAMED_IMPORT = /import\s*\{[^}]*\}\s*from\s*'@vibe-agent-toolkit\/schema'/g;
 
@@ -1004,6 +1006,11 @@ function usesSharedEnvelope(source: string): boolean {
  * colon made a genuinely fixed lane read as nonconforming.
  */
 const SEVERITY_COUNTS_PROPERTY = /^[ \t]*(?:issueCounts|severityCounts|counts)\??[ \t]*[:,]/m;
+/**
+ * `summary` DECLARED as `SeverityCounts` — the name the envelope and every library
+ * result use. Typed, not named: `summary: string` is a sentence, not counts.
+ */
+const SUMMARY_COUNTS_DECLARATION = /^[ \t]*summary\??[ \t]*:[ \t]*SeverityCounts\b/m;
 /**
  * The per-severity counts SHAPE — `errors`, `warnings` AND `info` all declared as
  * properties — whatever the block containing them is called.
@@ -1071,6 +1078,9 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   // an info-only issue set.
   'packages/cli/src/commands/audit.ts',
   'packages/cli/src/commands/claude/marketplace/validate.ts',
+  // Its manifest checks became coded findings in the report envelope, whose
+  // `summary` is the distribution; it used to collapse `valid` into a status.
+  'packages/cli/src/commands/agent/validate.ts',
   'packages/cli/src/commands/corpus/runner.ts',
   'packages/agent-skills/src/validators/types.ts',
   'packages/agent-skills/src/validators/skill-validator.ts',
@@ -1078,6 +1088,9 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   'packages/agent-skills/src/validators/marketplace-validator.ts',
   'packages/agent-skills/src/validators/registry-validator.ts',
   'packages/claude-marketplace/src/validators/plugin-validator.ts',
+  // `applyConfigVerdicts`, its one in-place mutator, re-derives `status` and
+  // `summary` in the step that grows `allErrors`, so the count cannot go stale.
+  'packages/agent-skills/src/validators/packaging-validator.ts',
   'packages/cli/src/commands/verify.ts',
   'packages/cli/src/commands/build.ts',
   // Newly ENTERED the lane population by migrating onto the shared collapse: its
@@ -1108,10 +1121,9 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   'packages/cli/src/commands/phase-utils.ts',
   // Was INVISIBLE to this gate, not merely unclassified: it declares `status:
   // AuditStatus` / `status: ReviewStatus`, and the old status recogniser demanded a
-  // string literal on the `status:` line. Conforms on the audit side — `AuditSummary`
-  // now `extends SeverityCounts` and is built as `{...countBySeverity(allIssues),
-  // files_scanned}` by `corpus/runner.ts`, so the distribution is the shared counter's
-  // own output, published under the name `summary` and type-checked against it. `ReviewOutcome` deliberately carries no severity counts: its status is
+  // string literal on the `status:` line. Conforms on the audit side — the row's
+  // `summary` is declared `SeverityCounts` and is the audit report's own `summary`,
+  // with the file count beside it as `files_scanned`. `ReviewOutcome` deliberately carries no severity counts: its status is
   // a lane-EXECUTION outcome (`'ok'` iff every `vat skill review` subprocess ran), and
   // `ReviewSummary` publishes that distribution — reviewed/failed/skills_scanned. The
   // review findings themselves live in the sibling review.md rather than being
@@ -1138,19 +1150,21 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   // `summary` is what separates "emitted everything" from "emitted nothing and
   // said so"; `--strict` reads `data`, not the status word.
   'packages/cli/src/commands/ard/emit.ts',
+  // Entered by publishing the shared envelope. Neither reports a finding of its
+  // own — the only one either can carry is the writer's run-integrity refusal
+  // for an empty denominator — and `summary` is what says so beside `status`.
+  'packages/cli/src/commands/resources/scan.ts',
+  'packages/cli/src/commands/resources/query.ts',
 ]);
 
 /**
  * Lanes that publish a status WITHOUT per-severity counts. Remove an entry in the
  * same change that fixes it — a fixed lane left on this list fails the build.
  *
- * Started at 19. Both survivors are deliberate rather than pending: one collapses
- * a boolean, and one is a two-valued BUILD GATE whose result is mutated in place
- * after construction, so a stored count would go stale rather than help.
+ * Started at 19. The survivor is deliberate rather than pending: it collapses a
+ * boolean.
  */
 const SEVERITY_COUNTS_RATCHET = new Map<string, string>([
-  ['packages/cli/src/commands/agent/validate.ts', 'collapses a boolean `valid` into a status; no counts published'],
-  ['packages/agent-skills/src/validators/packaging-validator.ts', 'two-valued gate status with no counts field; `allErrors` carries info issues that no `activeInfo` bucket exposes, and the result is mutated in place by `applyConfigVerdicts`, so a stored count would go stale'],
 ]);
 
 /**
@@ -1189,12 +1203,12 @@ export function classifySeverityCountsLane(contents: string): LaneClassification
       DECLARED_STATUS_VOCABULARY.test(source) ||
       (VALIDATION_STATUS_VALUE.test(source) && FINDINGS_COLLECTION.test(source)),
     // Calling the shared counter IS publishing the distribution, even when the
-    // lane's own field is named something else (`corpus/runner.ts` spreads it
-    // into an `AuditSummary`).
+    // lane's own field is named something else.
     publishesCounts:
       usesSharedCollapse ||
       SHARED_COUNTS_TYPE.test(source) ||
       SEVERITY_COUNTS_PROPERTY.test(source) ||
+      SUMMARY_COUNTS_DECLARATION.test(source) ||
       SEVERITY_COUNTS_SHAPE_PARTS.every((part) => part.test(source)),
   };
 }
@@ -1240,7 +1254,8 @@ async function validateSeverityCountsRatchet(): Promise<void> {
           path: relPath,
           message:
             'This lane is listed as publishing per-severity counts, but no ' +
-            '`issueCounts`/`severityCounts`/`counts` property was found — a regression.',
+            '`issueCounts`/`severityCounts`/`counts` property, `summary: SeverityCounts` ' +
+            'declaration or shared-counter call was found — a regression.',
           severity: 'error',
         });
       }

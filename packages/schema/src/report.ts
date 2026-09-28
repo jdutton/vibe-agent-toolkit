@@ -54,7 +54,7 @@ import { z } from 'zod';
 
 import { SeveritySchema, type Severity } from './severity.js';
 import { RefusalCodeSchema, type RefusalCode } from './validation-codes.js';
-import { countBySeverity, ValidationIssueSchema, type SeverityCounts, type ValidationIssue } from './validation-issue.js';
+import { countBySeverity, resultStatus, ValidationIssueSchema, type SeverityCounts, type ValidationIssue } from './validation-issue.js';
 
 export const REPORT_STATUSES = ['ok', 'findings', 'error'] as const;
 
@@ -320,14 +320,14 @@ function reportBase(input: Pick<ReportInput<unknown>, 'examined' | 'findings' | 
 /**
  * Assemble a completed run's report. Status and summary are DERIVED from the
  * findings here, in the one place, so no command can publish a status its own
- * list contradicts.
+ * list contradicts — through {@link resultStatus}, as every library result does.
  *
  * @param input - The denominator, the findings, the gate, and the command's data
  * @returns The report, status `ok` or `findings`
  */
 export function buildReport<T>(input: ReportInput<T>): OkReport<T> | FindingsReport<T> {
   const base = reportBase(input);
-  return { status: base.findings.length === 0 ? 'ok' : 'findings', ...base, data: input.data };
+  return { status: resultStatus(base.findings), ...base, data: input.data };
 }
 
 /**

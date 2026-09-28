@@ -21,7 +21,7 @@ Markdown resource scanning, link validation, and frontmatter validation (run bef
 3. Validates anchor links within files (#heading)
 4. Validates cross-file anchor links (file.md#heading)
 5. **Validates frontmatter against JSON Schemas** (per-collection)
-6. Reports broken links and validation errors to stderr
+6. Publishes every finding in the shared report envelope on stdout
 
 **Note:** External URLs are not validated (by design — avoids flaky network checks). Only internal file links and anchors are checked.
 
@@ -36,7 +36,7 @@ See [Collection Validation Guide](../../../docs/guides/collection-validation.md)
 **Exit codes:**
 
 - `0` - All links and frontmatter valid
-- `1` - Broken links or validation errors found (see stderr for details)
+- `1` - An error-severity finding (a broken link, a schema violation), or nothing validated
 - `2` - System error (invalid config, directory not found)
 
 **Creates/modifies:** None (read-only validation)
@@ -59,24 +59,28 @@ Discover markdown resources in directory and report statistics
 
 1. Recursively finds markdown files
 2. Counts links and anchors
-3. Outputs statistics as YAML to stdout
+3. Publishes the shared report envelope as YAML to stdout (`--format json` for JSON)
 
 **When to use:** Understanding markdown structure before processing
 
 **Exit codes:**
 
-- `0` - Scan completed successfully
+- `0` - Scanned at least one file
+- `1` - Scanned nothing (`RESOURCE_CHECK_BROKEN`)
+- `2` - The scan could not run (path names no directory, unreadable, bad config)
 
 **Creates/modifies:** None (read-only scan)
 
 **Output format:** YAML to stdout
 
 ```yaml
-status: success
-filesScanned: 42
-linksFound: 156
-anchorsFound: 89
-duration: 234
+status: ok
+examined: 42
+findings: []
+summary: { errors: 0, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 234
+data: { root: /abs/path/to/project, lane: projection, extentSource: git, collections: {} }
 ```
 
 **Examples:**
@@ -456,7 +460,7 @@ case $? in 0) ;; 1) echo findings ;; *) echo broken; exit 1 ;; esac
 
 **Structured output (YAML)** - Commands like `scan` output YAML to stdout for parsing:
 ```bash
-vat resources scan . | yq '.filesScanned'
+vat resources scan . | yq '.examined'
 ```
 
 **Error output (stderr)** - Validation errors use test format:

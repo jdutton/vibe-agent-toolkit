@@ -16,7 +16,7 @@
  */
 
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
-import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { countBySeverity, resultStatus, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import { formatAuditFindingsLines } from '../../src/commands/audit.js';
@@ -35,21 +35,23 @@ function issue(
   return { severity, code, message: `${code} fired`, ...extra };
 }
 
-function statusFor(counts: { errors: number; warnings: number }): ValidationResult['status'] {
-  if (counts.errors > 0) return 'error';
-  return counts.warnings > 0 ? 'warning' : 'success';
+
+/** `status`, `description`, `issues` and `summary`, derived from the issues as every producer does. */
+function derivedFields(issues: ValidationIssue[]): Pick<ValidationResult, 'status' | 'description' | 'issues' | 'summary'> {
+  const summary = countBySeverity(issues);
+  return {
+    status: resultStatus(issues),
+    description: `${summary.errors} errors, ${summary.warnings} warnings, ${summary.info} info`,
+    issues,
+    summary,
+  };
 }
 
 function skillResult(name: string, issues: ValidationIssue[]): ValidationResult {
-  const counts = countBySeverity(issues);
-  const status = statusFor(counts);
   return {
     path: `${ROOT}/skills/${name}/SKILL.md`,
     type: 'agent-skill',
-    status,
-    summary: `${counts.errors} errors, ${counts.warnings} warnings, ${counts.info} info`,
-    issues,
-    issueCounts: counts,
+    ...derivedFields(issues),
     metadata: { name },
   };
 }
@@ -82,14 +84,10 @@ function rootResult(
   metadata: ValidationResult['metadata'],
   issues: ValidationIssue[],
 ): ValidationResult {
-  const counts = countBySeverity(issues);
   return {
     path: ROOT,
     type: 'claude-plugin',
-    status: statusFor(counts),
-    summary: `${counts.errors} errors, ${counts.warnings} warnings, ${counts.info} info`,
-    issues,
-    issueCounts: counts,
+    ...derivedFields(issues),
     ...(metadata === undefined ? {} : { metadata }),
   };
 }
@@ -244,7 +242,7 @@ describe('vat audit — formatAuditFindingsLines', () => {
       'LINK_DROPPED_BY_DEPTH',
       'NON_PORTABLE_ASSET_REFERENCE',
     ]);
-    expect(results[0]?.issueCounts).toEqual({ errors: 1, warnings: 3, info: 1 });
+    expect(results[0]?.summary).toEqual({ errors: 1, warnings: 3, info: 1 });
   });
 
   it('renders one block per result, so a multi-file report stays attributable', () => {

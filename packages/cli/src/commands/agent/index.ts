@@ -160,19 +160,27 @@ Requirements:
 Description:
   Validates agent manifest schema (using @vibe-agent-toolkit/schema),
   LLM configuration, tool definitions, and resource availability. Outputs
-  YAML validation report to stdout, errors to stderr.
+  the report envelope (YAML) to stdout, findings to stderr.
 
   Argument: agent name OR path to agent directory/manifest file
 
 Validation Checks:
-  - Manifest schema (apiVersion, kind, metadata, spec)
-  - LLM provider and model configuration
-  - Tool configurations (RAG databases)
-  - Resource files (prompts, docs, templates)
-  - Prompt references ($ref paths)
+  - Manifest schema (apiVersion, kind, metadata, spec) — AGENT_MANIFEST_INVALID
+  - Tool configurations (RAG databases) — AGENT_REFERENCE_MISSING,
+    AGENT_RAG_NO_SOURCES
+  - Resource files and prompt $ref paths — AGENT_REFERENCE_MISSING,
+    AGENT_REFERENCE_UNREADABLE
 
-Exit Codes:
-  0 - Valid  |  1 - Validation errors  |  2 - System error
+Output (YAML on stdout):
+  status: ok | findings | error;  examined: 1 (the manifest read)
+  findings[]: each located at the manifest, relative to data.root
+  data: { root, manifest: { name, version, path } }
+
+Exit Codes (derived from the document):
+  0 - ok, or findings with no error-severity finding
+  1 - findings with an error-severity finding
+  2 - error: no manifest to judge — USAGE_INVALID (the path or name names
+      no manifest), INPUT_UNREADABLE (unreadable, or not YAML)
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)

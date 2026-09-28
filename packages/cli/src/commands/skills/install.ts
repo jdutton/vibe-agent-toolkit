@@ -131,7 +131,7 @@ async function preVerifySkill(skillDir: string): Promise<string> {
     skillPath: skillMdPath,
     validation: {},
   });
-  if (result.status === 'error') {
+  if (result.summary.errors > 0) {
     const issueSummary = (result.issues ?? [])
       .filter((i) => i.severity === 'error')
       .map((i) => `  - ${i.message}`)

@@ -304,6 +304,6 @@ export async function analyzeCompatibility(
     observations,
     verdicts,
     unchecked,
-    summary: counts,
+    fileCounts: counts,
   };
 }

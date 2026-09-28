@@ -11,7 +11,6 @@ import { z } from 'zod';
 
 import type { ArmEnvironment } from '../../harness/arm-env.js';
 
-import { type Verdict, VerdictSchema } from './extract.js';
 
 /** The facet name every verdict envelope carries. */
 export const VERDICT_FACET = 'verdict';
@@ -25,9 +24,10 @@ export interface VerdictRow {
   readonly outcome: 'exited' | 'not-run';
   readonly exitCode: number | null;
   readonly spawnError: string | null;
-  /** Layer 1: exit code plus the finding multiset; `null` for a row that did not run. */
-  readonly verdict: Verdict | null;
-  /** Layer 2: stdout after the one normalizer (`normalize.ts`). */
+  /**
+   * Layer 2: stdout after the one normalizer (`normalize.ts`). Layer 1 is derived
+   * from it at compare time (`rowVerdict`), never stored: a stored one freezes the capturing build's extractor.
+   */
   readonly document: string;
 }
 
@@ -63,7 +63,6 @@ export const VerdictBodySchema: z.ZodType<VerdictBody> = z
           outcome: z.enum(['exited', 'not-run']),
           exitCode: z.number().int().nullable(),
           spawnError: z.string().nullable(),
-          verdict: VerdictSchema.nullable(),
           document: z.string(),
         })
         .strict(),

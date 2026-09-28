@@ -3,7 +3,8 @@
  * defect in VAT is never relabelled as the user's mistake.
  */
 
-import { okfBundleRuns } from '@vibe-agent-toolkit/resources';
+import { AGENT_MANIFEST_INVALID_CODE, AGENT_MANIFEST_NOT_FOUND_CODE, AGENT_MANIFEST_UNREADABLE_CODE } from '@vibe-agent-toolkit/agent-config';
+import { LinkAuthConfigError, okfBundleRuns, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
 import { ExitCode, type ErrorReport } from '@vibe-agent-toolkit/schema';
 import { VatError } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -36,6 +37,25 @@ describe('refusalCodeOf', () => {
     expect(refusalCodeOf(new VatError('CONFIG_LOAD', 'bad yaml'))).toBe('CONFIG_INVALID');
     expect(refusalCodeOf(new VatError('OKF_UNKNOWN_BUNDLE', 'nope'))).toBe('USAGE_INVALID');
     expect(refusalCodeOf(new VatError('DIRECTORY_LISTING_REFUSED', 'EACCES'))).toBe('INPUT_UNREADABLE');
+  });
+
+  it('reads a statement the projection store refused as the operator\'s USAGE_INVALID', () => {
+    expect(refusalCodeOf(new VatError(PROJECTION_STATEMENT_REFUSED_CODE, 'no such column: nope'))).toBe('USAGE_INVALID');
+  });
+
+  it('reads a resources.linkAuth provider that does not compile as CONFIG_INVALID', () => {
+    expect(refusalCodeOf(new LinkAuthConfigError('providers[0]', 'rewrite[0].when', new Error('bad regex')))).toBe('CONFIG_INVALID');
+  });
+
+  it('reads an agent path naming no manifest as USAGE_INVALID, and one that cannot be read as INPUT_UNREADABLE', () => {
+    expect(refusalCodeOf(new VatError(AGENT_MANIFEST_NOT_FOUND_CODE, 'No agent manifest found'))).toBe('USAGE_INVALID');
+    expect(refusalCodeOf(new VatError(AGENT_MANIFEST_UNREADABLE_CODE, 'EACCES'))).toBe('INPUT_UNREADABLE');
+  });
+
+  it('reads an agent manifest the schema rejects, thrown by the loader, as CONFIG_INVALID', () => {
+    // `agent run`/`build`/`install` load through `loadAgentManifest`: a user's
+    // invalid manifest is their config's mistake, never a defect in VAT.
+    expect(refusalCodeOf(new VatError(AGENT_MANIFEST_INVALID_CODE, 'Agent manifest validation failed'))).toBe('CONFIG_INVALID');
   });
 
   it('reads the coded config read failure as INPUT_UNREADABLE', () => {

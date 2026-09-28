@@ -1,29 +1,18 @@
 /**
  * Reading a population out of what a vat command printed.
  *
- * Kept apart from the capture, and pure, for one reason: every way this can go
- * wrong is a way a report can quietly claim a population it never observed, and
- * those cases are trivial to state against a literal string and awkward to
- * provoke through a spawn. A command that reported a count but no file list, a
- * command that reports no population at all, a document this build cannot read —
- * each has to become a **refusal**, never an empty set. An empty set is a
- * measurement; "we could not read one" is not, and the two render identically to
- * anyone scanning for a number.
+ * Pure, and apart from the capture: a count with no file list, no population,
+ * or an unreadable document each becomes a **refusal**, never an empty set — an
+ * empty set is a measurement, and the two render identically.
  *
- * ## Reading through `document-shape.ts`, and what changes when `resources
- * scan` becomes a `Report`
+ * ## Two shapes, one reader
  *
- * `vat resources scan` prints YAML by default and the same document as JSON
- * under `--format json`; this reader takes either, through `parseDocument`,
- * rather than requiring `--format json` to avoid carrying a second YAML parser.
- * `parseDocument` also decides which of the document's two shapes this run
- * printed: today's per-command document (`legacy`), or the `Report<T>` envelope
- * every command has published since rc.11 (`report`) — which `resources scan`
- * itself does not print YET (wave 3). `ScanDocumentSchema` below is applied to
- * `parseDocument`'s `payload`, which is the right value in both cases without
- * this module knowing which one it got: the legacy document itself, or a
- * report's `data`. The one field that is NOT read off the payload either way is
- * the file count — see {@link readPopulationDocument} for why.
+ * YAML or JSON, through `parseDocument`, which also says which shape printed:
+ * an older build's per-command document (`legacy`), or the `Report<T>` envelope
+ * `resources scan` publishes from 0.2.0 on (count in `examined`, population in
+ * `data.files`). `ScanDocumentSchema` reads `parseDocument`'s `payload` — the
+ * legacy document or a report's `data` — so both stay readable. The file count
+ * is not read off the payload; see {@link readPopulationDocument}.
  */
 
 import { z } from 'zod';
@@ -41,27 +30,17 @@ import type { PopulationEntry } from './types.js';
  * are this facet's business. Modelling them would make an unrelated addition to
  * the subject's output a refusal here.
  *
- * `lane` and `extentSource` are here by EXTENDING the shared `harness/lane.ts`
- * schema rather than by restating it, and the distinction is load-bearing in
- * both directions. Extending keeps one definition of what the two fields may
- * hold, so this facet and `io` cannot disagree about what a document said its
- * arm was. Having them in THIS schema at all is what makes a malformed arm a
- * refusal here: `io` reads a lane of the wrong type as `null` (a qualifier on
- * counts that are real either way), but a population is nothing but the
- * subject's own claim, and `null` is the label an old-but-honest build gets.
- * A subject that printed a corrupt lane must not be indistinguishable from one
- * that printed none.
+ * `lane` and `extentSource` EXTEND the shared `harness/lane.ts` schema, so this
+ * facet and `io` share one definition of an arm — and a malformed arm is a
+ * refusal here (a population is nothing but the subject's claim), where `io`
+ * reads it as `null`.
  *
- * `files` is optional because the command omits it without `--verbose`, and that
- * case needs its own sentence rather than a schema error — see
- * {@link readPopulationDocument}.
+ * `files` is optional because the command omits it without `--verbose`; that
+ * case gets its own sentence in {@link readPopulationDocument}.
  *
- * `filesScanned` is optional for a different reason: it is validated here (so a
- * present-but-malformed one is still a refusal, never silently ignored), but it
- * is NOT the count {@link readPopulationDocument} reports. A `Report`'s `data`
- * has no reason to repeat the envelope's own `examined` under a second,
- * per-command name, so a report-shaped payload legitimately omits this key —
- * only a legacy document is refused for lacking it.
+ * `filesScanned` is validated (a malformed one is a refusal) but optional: a
+ * report's count is the envelope's `examined`, so only a legacy document is
+ * refused for lacking it.
  */
 const ScanDocumentSchema = LaneFieldsSchema.extend({
   root: z.string().min(1),

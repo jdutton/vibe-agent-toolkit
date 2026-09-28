@@ -2,11 +2,13 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
+import { countBySeverity, resultStatus } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
+import { AUDIT_REPORT_SCHEMA } from '../../../src/commands/audit-schema.js';
 import {
   auditOnePlugin,
   buildAuditOutcome,
@@ -63,7 +65,7 @@ function makeReviewablePluginDir(name: string, skillBody: string): string {
 }
 
 describe('auditOnePlugin — local source', () => {
-  it('returns a PluginRow with status success when the plugin audits cleanly', async () => {
+  it('returns a PluginRow with status ok when the plugin audits cleanly', async () => {
     const pluginDir = makePluginDir(
       'A simple test skill that demonstrates a working SKILL.md frontmatter for the runner unit test.'
     );
@@ -76,9 +78,13 @@ describe('auditOnePlugin — local source', () => {
     expect(row.source).toBe(pluginDir);
     expect(row.name).toBe('foo');
     expect(row.validation_applied).toBe(false);
-    expect(row.audit.status).toBe('success');
+    expect(row.audit.status).toBe('ok');
     expect(row.audit.output_path).toBe('foo-audit.yaml');
     expect(row.review.status).toBe('skipped');
+    // The per-plugin document is the `vat audit` report, parsed by the verb's own schema.
+    const document = AUDIT_REPORT_SCHEMA.parse(yaml.parse(readFileSync(safePath.join(runDir, 'foo-audit.yaml'), 'utf-8')));
+    expect(document.status).toBe('ok');
+    expect(document.examined).toBe(1);
   });
 
   it('records unloadable when the local source path does not exist', async () => {
@@ -130,8 +136,13 @@ describe('auditOnePlugin — URL source', () => {
     const entry: PluginEntry = { source: pathToFileURL(bare).href, name: 'foo', ...META };
     const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false });
 
-    expect(row.audit.status).toBe('success');
+    expect(row.audit.status).toBe('ok');
     expect(row.audit.output_path).toBe('foo-audit.yaml');
+    // A cloned source's root is a random tempdir: the document names the URL instead.
+    const document = AUDIT_REPORT_SCHEMA.parse(yaml.parse(readFileSync(safePath.join(runDir, 'foo-audit.yaml'), 'utf-8')));
+    expect(document.data.root).toBeNull();
+    expect(document.data.provenance?.url).toBe(entry.source);
+    expect(document.data.files.map((file) => file.path)).toStrictEqual(['plugins/foo/SKILL.md']);
   });
 
   it('records unloadable when the clone fails (bad URL)', async () => {
@@ -254,8 +265,8 @@ describe('auditOnePlugin — --with-review', () => {
     // always did; the audit lane used to record `status: success` over
     // `files_scanned: 0` — "an empty tree audits cleanly" — which is the same
     // row a clean plugin produces. It is loadable (not `unloadable`: the path
-    // exists and the audit ran), and it is an ERROR carrying the non-overridable
-    // run-integrity code, because a row that audited nothing is not a verdict.
+    // exists and the audit ran), and it carries the non-overridable run-integrity
+    // finding at error, because a row that audited nothing is not a verdict.
     const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-corpus-empty-'));
     const runDir = makeRunDir();
 
@@ -263,18 +274,16 @@ describe('auditOnePlugin — --with-review', () => {
 
     const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false });
 
-    expect(row.audit.status).toBe('error');
-    expect(row.audit.summary).toEqual({ errors: 1, warnings: 0, info: 0, files_scanned: 0 });
+    expect(row.audit.status).toBe('findings');
+    expect(row.audit.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(row.audit.files_scanned).toBe(0);
     expect(row.audit.findings_emitted).toBe(1);
-    // The finding itself lives in the per-plugin audit document, beside the
-    // (empty) per-file results, so the row's counts are backed by a message.
-    const auditDoc = yaml.parse(readFileSync(safePath.join(runDir, 'empty-audit.yaml'), 'utf-8')) as {
-      results: unknown[];
-      issues: Array<{ code: string; severity: string; message: string }>;
-    };
-    expect(auditDoc.results).toEqual([]);
-    expect(auditDoc.issues.map((i) => [i.code, i.severity])).toEqual([[RUN_INTEGRITY_CODE, 'error']]);
-    expect(auditDoc.issues[0]?.message).toContain('0 file');
+    // The finding itself lives in the per-plugin audit report, beside the
+    // (empty) file rows, so the row's counts are backed by a message.
+    const auditDoc = AUDIT_REPORT_SCHEMA.parse(yaml.parse(readFileSync(safePath.join(runDir, 'empty-audit.yaml'), 'utf-8')));
+    expect(auditDoc.data.files).toEqual([]);
+    expect(auditDoc.findings.map((i) => [i.code, i.severity])).toEqual([[RUN_INTEGRITY_CODE, 'error']]);
+    expect(auditDoc.findings[0]?.message).toContain('0 files');
     expect(row.review.status).toBe('error');
     expect(row.review.error).toMatch(/No SKILL\.md/i);
     expect(row.review.summary).toEqual({ skills_scanned: 0, reviewed: 0, failed: 0 });
@@ -376,13 +385,14 @@ describe('buildReviewOutcome', () => {
 
 /** One per-file audit result carrying the given issues — the unit `files_scanned` counts. */
 function auditResult(issues: Array<{ code: string; severity: 'error' | 'warning' | 'info' }>) {
+  const published = issues.map((i) => ({ ...i, message: `${i.code} fired` }));
   return {
-    path: '/corpus-b/SKILL.md',
+    path: safePath.resolve('/corpus-b/SKILL.md'),
     type: 'agent-skill',
-    status: issues.some((i) => i.severity === 'error') ? 'error' : 'success',
-    summary: 'fixture',
-    issues: issues.map((i) => ({ ...i, message: `${i.code} fired` })),
-    issueCounts: { errors: 0, warnings: 0, info: 0 },
+    status: resultStatus(published),
+    description: 'fixture',
+    issues: published,
+    summary: countBySeverity(published),
   };
 }
 
@@ -392,49 +402,58 @@ function auditResult(issues: Array<{ code: string; severity: 'error' | 'warning'
  * the same function, on the same fixture, answering the same way.
  */
 describe('buildAuditOutcome', () => {
-  it('refuses an audit over zero files as error with ONE run-integrity finding', () => {
-    // 🔑 The reproduced case. Delete the guard and this reds: zero results
-    // summarize to zero findings, and zero findings is `success`.
-    const { audit, document } = buildAuditOutcome([], 12, AUDIT_DOC);
+  const ROOT = safePath.resolve('/corpus-b');
 
-    expect(audit.status).toBe('error');
-    expect(audit.summary).toEqual({ errors: 1, warnings: 0, info: 0, files_scanned: 0 });
+  it('refuses an audit over zero files as findings with ONE run-integrity finding', () => {
+    // 🔑 The reproduced case. Delete the run-integrity pass and this reds: zero
+    // results summarize to zero findings, and zero findings is `ok`.
+    const { audit, document } = buildAuditOutcome([], 12, AUDIT_DOC, ROOT);
+
+    expect(audit.status).toBe('findings');
+    expect(audit.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(audit.files_scanned).toBe(0);
     expect(audit.findings_emitted).toBe(1);
     expect(audit.output_path).toBe(AUDIT_DOC);
-    expect(document.results).toEqual([]);
-    expect(document.issues?.map((i) => i.code)).toEqual([RUN_INTEGRITY_CODE]);
-    expect(document.issues?.[0]?.severity).toBe('error');
+    expect(AUDIT_REPORT_SCHEMA.parse(document).data.files).toEqual([]);
+    expect(document.examined).toBe(0);
+    expect(document.findings.map((f) => f.code)).toEqual([RUN_INTEGRITY_CODE]);
+    expect(document.findings[0]?.severity).toBe('error');
   });
 
   it('says what did not run and what to do, without calling the plugin broken', () => {
-    const { document } = buildAuditOutcome([], 12, AUDIT_DOC);
-    const message = document.issues?.[0]?.message ?? '';
+    const { document } = buildAuditOutcome([], 12, AUDIT_DOC, ROOT);
+    const message = document.findings[0]?.message ?? '';
 
-    expect(message).toContain('0 file');
-    expect(message).toContain('vat audit');
+    expect(message).toContain('0 files');
+    expect(message).toContain('skills.include');
     expect(message).not.toMatch(/invalid plugin|broken skill/i);
   });
 
   it('stays silent over a populated audit, however clean', () => {
     // 🔑 The over-correction guard: a clean plugin must not start reporting
-    // an error, and its document must not grow an `issues` key.
-    const { audit, document } = buildAuditOutcome([auditResult([])], 12, AUDIT_DOC);
+    // an error, and its document must carry no finding.
+    const { audit, document } = buildAuditOutcome([auditResult([])], 12, AUDIT_DOC, ROOT);
 
-    expect(audit.status).toBe('success');
-    expect(audit.summary).toEqual({ errors: 0, warnings: 0, info: 0, files_scanned: 1 });
+    expect(audit.status).toBe('ok');
+    expect(audit.summary).toEqual({ errors: 0, warnings: 0, info: 0 });
+    expect(audit.files_scanned).toBe(1);
     expect(audit.findings_emitted).toBe(0);
-    expect(document).not.toHaveProperty('issues');
+    expect(document.findings).toEqual([]);
   });
 
   it('rolls real findings up unchanged', () => {
-    const { audit } = buildAuditOutcome(
+    const { audit, document } = buildAuditOutcome(
       [auditResult([{ code: 'SKILL_DESCRIPTION_SHORT', severity: 'warning' }])],
       12,
       AUDIT_DOC,
+      ROOT,
     );
 
-    expect(audit.status).toBe('warning');
-    expect(audit.summary).toEqual({ errors: 0, warnings: 1, info: 0, files_scanned: 1 });
+    expect(audit.status).toBe('findings');
+    expect(audit.summary).toEqual({ errors: 0, warnings: 1, info: 0 });
+    expect(audit.files_scanned).toBe(1);
     expect(audit.findings_emitted).toBe(1);
+    // A finding with no `location` inherits its file's row path.
+    expect(document.findings.map((f) => f.location)).toEqual(['SKILL.md']);
   });
 });

@@ -90,6 +90,27 @@ describe('classifySeverityCountsLane — regression guards', () => {
     expect(result).toEqual({ isLane: true, publishesCounts: true });
   });
 
+  it('sees a lane that describes its result through the shared describeIssues', () => {
+    // `describeIssues` derives status, summary and the sentence through
+    // `summarizeIssues`; a validator migrated onto it calls neither by name.
+    const result = classifySeverityCountsLane(`
+      return { path, type, ...describeIssues(issues, 'claude-plugin'), issues };
+    `);
+    expect(result).toEqual({ isLane: true, publishesCounts: true });
+  });
+
+  it('sees a lane that publishes the envelope through the run-integrity pass', () => {
+    // `withRunIntegrity` is the pass every report takes on its way out, and it
+    // rebuilds the envelope — so a lane that hands a report to it (the corpus
+    // runner, writing each plugin's audit report) publishes `summary` without
+    // spelling the builder's name.
+    const result = classifySeverityCountsLane(`
+      const document = withRunIntegrity(located, AUDIT_EXAMINED);
+      return { audit: { status: document.status, findings_emitted: document.findings.length } };
+    `);
+    expect(result).toEqual({ isLane: true, publishesCounts: true });
+  });
+
   it('sees a lane that imports the envelope builder under an alias', () => {
     // The alias is arbitrary, so the IMPORT is the structural fact the
     // recogniser keys on, not the call.
@@ -193,6 +214,34 @@ describe('classifySeverityCountsLane — named status types', () => {
       ${body}
     `;
     expect(classifySeverityCountsLane(lane).publishesCounts).toBe(false);
+  });
+
+  it('sees the library result shape: a literal status with a `summary: SeverityCounts` field, and a `resultStatus` call', () => {
+    // `ValidationResult` moved from `issueCounts` to `summary: SeverityCounts`
+    // beside `status: 'ok' | 'findings'`. A recogniser that only knew the old
+    // property name would read the migrated declaration as a REGRESSION.
+    const declared = `
+      import type { SeverityCounts } from '@vibe-agent-toolkit/schema';
+      export interface LaneResult {
+        status: 'ok' | 'findings';
+        description: string;
+        issues: string[];
+        summary: SeverityCounts;
+      }
+    `;
+    expect(classifySeverityCountsLane(declared)).toEqual({ isLane: true, publishesCounts: true });
+    // Deriving the status through the ONE shared derivation is a lane on its own.
+    const derived = `
+      export function build(issues: Issue[]) { return { status: resultStatus(issues) }; }
+    `;
+    expect(classifySeverityCountsLane(derived).isLane).toBe(true);
+    // A human sentence named `summary` is not a counts block.
+    const sentence = `
+      export interface LaneResult { status: 'ok' | 'findings'; issues: string[];
+        summary: string;
+      }
+    `;
+    expect(classifySeverityCountsLane(sentence)).toEqual({ isLane: true, publishesCounts: false });
   });
 
   it('still sees the counts field VANISH from a lane that merely imports the type', () => {

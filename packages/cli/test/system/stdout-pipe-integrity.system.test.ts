@@ -79,14 +79,14 @@ describe('YAML output survives a pipe (system)', () => {
 
     // A truncated document is cut mid-token, so parsing is the sharpest check.
     const parsed = parseYaml(result.stdout) as {
-      filesScanned: number;
-      files: { path: string }[];
+      examined: number;
+      data: { files: { path: string }[] };
     };
 
     // Every file the command counted must actually appear in the emitted list —
     // truncation drops the tail while leaving the header (and its count) intact,
     // so comparing the two is what catches a partial write.
-    expect(parsed.filesScanned).toBe(FILE_COUNT);
-    expect(parsed.files).toHaveLength(FILE_COUNT);
+    expect(parsed.examined).toBe(FILE_COUNT);
+    expect(parsed.data.files).toHaveLength(FILE_COUNT);
   }, 120_000);
 });

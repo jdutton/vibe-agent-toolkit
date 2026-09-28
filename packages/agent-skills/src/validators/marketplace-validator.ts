@@ -1,11 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
 
-import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { MarketplaceManifestSchema } from '../schemas/marketplace-manifest.js';
 
 import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
+import { describeIssues } from './describe-issues.js';
 import type { ValidationResult } from './types.js';
 import { generateFixSuggestion } from './validation-utils.js';
 
@@ -41,10 +42,8 @@ export async function validateMarketplace(
 		return {
 			path: marketplacePath,
 			type: MARKETPLACE_TYPE,
-			status: 'error',
-			summary: 'Marketplace manifest missing',
+			...describeIssues(issues, MARKETPLACE_TYPE, 'Marketplace manifest missing'),
 			issues,
-			issueCounts: countBySeverity(issues),
 		};
 	}
 
@@ -65,10 +64,8 @@ export async function validateMarketplace(
 		return {
 			path: marketplacePath,
 			type: MARKETPLACE_TYPE,
-			status: 'error',
-			summary: 'Marketplace manifest is invalid JSON',
+			...describeIssues(issues, MARKETPLACE_TYPE, 'Marketplace manifest is invalid JSON'),
 			issues,
-			issueCounts: countBySeverity(issues),
 		};
 	}
 
@@ -87,16 +84,11 @@ export async function validateMarketplace(
 		}
 	}
 
-	const status = calculateValidationStatus(issues);
-
 	const validationResult: ValidationResult = {
 		path: marketplacePath,
 		type: MARKETPLACE_TYPE,
-		status,
-		summary:
-			status === 'success' ? 'Valid marketplace' : `Found ${issues.length} issue(s)`,
+		...describeIssues(issues, MARKETPLACE_TYPE),
 		issues,
-		issueCounts: countBySeverity(issues),
 	};
 
 	if (result.success) {

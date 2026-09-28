@@ -87,7 +87,10 @@ describe('root --version does not shadow subcommand -v/--verbose', () => {
 
     // The defect: this printed the version and exited 0 without validating.
     expect(result.stdout).not.toContain('binary:');
-    expect(result.stdout).toContain('filesScanned:');
+    // `data.files` is published only under --verbose, so its presence is the
+    // proof `-v` reached the subcommand as --verbose rather than being dropped.
+    expect(result.stdout).toContain('examined: 1');
+    expect(result.stdout).toMatch(/^ {2}files:$/m);
     expect(result.status).toBe(0);
   });
 

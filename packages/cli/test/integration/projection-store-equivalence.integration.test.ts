@@ -135,9 +135,9 @@ const COMMANDS: readonly CommandCase[] = [
   {
     name: 'vat resources validate',
     args: ['resources', 'validate', '--format', 'json'],
-    // `durationSecs` is this run's wall clock. It is the ONLY per-run field in
-    // this document, and a cache that made the run faster is the whole point.
-    normalize: ({ durationSecs: _durationSecs, ...rest }: Record<string, unknown>) => rest,
+    // `durationMs` is this run's wall clock. It is the ONLY per-run field in
+    // this report, and a cache that made the run faster is the whole point.
+    normalize: ({ durationMs: _durationMs, ...rest }: Record<string, unknown>) => rest,
     // Measured, and CHANGED from `false` deliberately — see the header for the
     // one-key/three-questions mechanism that used to make its three populations
     // evict each other. All three now ask `filesystem[DECLINE_IGNORED]`, so the

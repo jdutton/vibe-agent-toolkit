@@ -4,23 +4,20 @@
  *
  * ## The defect
  *
- * `withRunIntegrity` publishes the refusal as a row with `file: ''`, and the
- * default (non-verbose) listing projects a row to `{file, errors, codes}` — so
- * the document said `RESOURCE_CHECK_BROKEN: 1` beside an empty file name and
- * nothing else, and stderr said nothing at all. The message — which collection
- * matched nothing, "drop the filter", "`vat resources scan` lists what an
- * enumeration finds" — existed only under `--verbose`. Run through
- * `vat validate` the same row sat under `phases[].report` with stderr reading
- * `▶ Surface: resources` and no more. `run-integrity.ts` invariant 5 says the
- * message tells the operator what to do; a message nobody sees does not.
+ * The refusal once sat in the document as a row with an empty file name, and
+ * stderr said nothing at all; run through `vat validate` it sat under
+ * `phases[].report` with stderr reading `▶ Surface: resources` and no more.
+ * `run-integrity.ts` invariant 5 says the message tells the operator what to
+ * do; a message nobody sees does not.
  *
- * `vat resources check` and `vat claude budget` warn on stderr beside the
- * document refusal; this pins the same for `validate`. The document is still
- * what gates — stderr is the human half of one statement.
+ * The refusal is now the writer's (from the registry's declared denominator),
+ * and the phase warns on stderr with the message of the finding it published.
+ * The document is still what gates — stderr is the human half of one statement.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
+import type { Report } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -43,36 +40,33 @@ describe('resources validate — the refusal message reaches stderr', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  it('warns on stderr with the same message the document refuses with, in the default format', async () => {
+  it('warns on stderr, once, with the message the published refusal carries', async () => {
     let outcome: Awaited<ReturnType<typeof runResourcesValidatePhase>> | undefined;
     const { stderr } = await captureProcessExit(async () => {
       outcome = await runResourcesValidatePhase(root, {});
     });
-    const document = outcome?.document as { status: string; filesScanned: number };
+    const document = outcome?.document as Report<unknown>;
+    const [refusal] = document.findings;
 
-    // The machine half, unchanged: refused, exit 1.
+    // The machine half: refused, exit 1.
     expect(outcome?.exitCode).toBe(1);
-    expect(document.status).toBe('error');
-    expect(document.filesScanned).toBe(0);
-    // The human half: the remedy text, on stderr, without `--verbose`.
-    expect(stderr).toContain('No resource was scanned');
+    expect(document.examined).toBe(0);
+    expect(refusal?.code).toBe('RESOURCE_CHECK_BROKEN');
+    // The human half: the same remedy text, on stderr, once, without `--verbose`.
+    expect(stderr.split(refusal?.message ?? '<no refusal>')).toHaveLength(2);
     expect(stderr).toContain('`vat resources scan`');
   });
 
-  it('names the --collection filter that matched nothing', async () => {
+  it('refuses a --collection the project does not declare, on stderr and in the document', async () => {
+    let outcome: Awaited<ReturnType<typeof runResourcesValidatePhase>> | undefined;
     const { stderr } = await captureProcessExit(async () => {
-      await runResourcesValidatePhase(root, { collection: 'no-such-collection' });
+      outcome = await runResourcesValidatePhase(root, { collection: 'no-such-collection' });
     });
+    const document = outcome?.document as Report<unknown>;
 
-    expect(stderr).toContain('--collection no-such-collection');
-    expect(stderr).toContain('drop the filter');
-  });
-
-  it('does not double up under --format text, which already prints every reported row', async () => {
-    const { stderr } = await captureProcessExit(async () => {
-      await runResourcesValidatePhase(root, { format: 'text' });
-    });
-
-    expect(stderr.split('No resource was scanned')).toHaveLength(2);
+    // The invocation's mistake — not a run over nothing, and never INTERNAL_ERROR.
+    expect(outcome?.exitCode).toBe(2);
+    expect(document.status === 'error' ? document.error.code : document.status).toBe('USAGE_INVALID');
+    expect(stderr).toContain('--collection no-such-collection names no collection');
   });
 });

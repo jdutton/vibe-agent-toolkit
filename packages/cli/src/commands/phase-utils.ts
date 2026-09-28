@@ -340,9 +340,38 @@ function statusFromExitCode(status: number): PhaseStatus {
   return SYSTEM_ERROR;
 }
 
+/**
+ * A phase document in the report envelope (`Report<T>`), recognised by the
+ * envelope's required `gate` and `summary` — never by its `status` word, which
+ * the legacy vocabulary shares (`error` means "found errors" there and "did not
+ * finish" here).
+ */
+function envelopeOf(report: object): { status: unknown; summary: SeverityCounts } | undefined {
+  const candidate = report as { status?: unknown; gate?: unknown; summary?: unknown };
+  if (typeof candidate.gate !== 'object' || candidate.gate === null) return undefined;
+  if (typeof candidate.summary !== 'object' || candidate.summary === null) return undefined;
+  return { status: candidate.status, summary: countsOf(candidate.summary) };
+}
+
+/**
+ * The phase status a Report-shaped document says, in the orchestrator's
+ * interim `PhaseStatus` words: `ok` → `success`; `findings` → `error` when an
+ * error was found, `warning` when a warning was, else `success` (info never
+ * rates a word); `error` (did not finish) → `system-error`.
+ */
+function statusFromEnvelope(envelope: { status: unknown; summary: SeverityCounts }): PhaseStatus | undefined {
+  if (envelope.status === 'ok') return 'success';
+  if (envelope.status === 'error') return SYSTEM_ERROR;
+  if (envelope.status !== 'findings') return undefined;
+  if (envelope.summary.errors > 0) return 'error';
+  return envelope.summary.warnings > 0 ? 'warning' : 'success';
+}
+
 /** The status the phase claimed for itself, when it claimed a recognized one. */
 function statusFromReport(report: unknown): PhaseStatus | undefined {
   if (typeof report !== 'object' || report === null) return undefined;
+  const envelope = envelopeOf(report);
+  if (envelope !== undefined) return statusFromEnvelope(envelope);
   const claimed = (report as { status?: unknown }).status;
   return typeof claimed === 'string' && REPORTABLE_STATUSES.has(claimed)
     ? (claimed as PhaseStatus)
@@ -361,9 +390,11 @@ function statusFromReport(report: unknown): PhaseStatus | undefined {
  *
  * The exit code is then reconciled with the phase's OWN reported `status`,
  * worst-wins. An exit code has three values and cannot express `warning`:
- * `vat skills validate` exits 0 while reporting `status: warning`, so its exit
- * code alone reads as `success` — including on the tree VAT's CI dogfoods on
- * VAT itself.
+ * `vat skills validate` exits 0 over a warnings-only run, so its exit code
+ * alone reads as `success` — including on the tree VAT's CI dogfoods on VAT
+ * itself. A legacy document's `status` word is read as it stands; a
+ * Report-shaped one (`ok | findings | error`) is read with its `summary` —
+ * see {@link statusFromEnvelope}.
  *
  * The table has no row for a signal kill, a missing status code, or a document
  * that fails to parse, and that is the design rather than an omission. A phase
@@ -485,7 +516,8 @@ export function aggregatePhaseStatus(results: readonly PhaseResult[]): PhaseStat
  *
  * A phase that holds its own findings publishes {@link PhaseResult.issueCounts}.
  * A phase that publishes its own document deliberately does not — it owns its
- * findings, and its document rides verbatim in {@link PhaseResult.report}.
+ * findings, and its document rides verbatim in {@link PhaseResult.report}:
+ * `summary` in a Report-shaped document, `issueCounts` in a legacy one.
  *
  * ⚠️ Both places must be read. Reading only `issueCounts` makes an
  * orchestrator's header report `{0, 0, 0}` over phases that just reported 12
@@ -496,7 +528,17 @@ export function aggregatePhaseStatus(results: readonly PhaseResult[]): PhaseStat
  */
 export function phaseIssueCounts(result: PhaseResult): SeverityCounts {
   if (result.issueCounts) return result.issueCounts;
-  const counts = (result.report as { issueCounts?: unknown } | undefined)?.issueCounts;
+  const report = result.report;
+  if (typeof report === 'object' && report !== null) {
+    // A Report-shaped phase counts its findings under `summary`.
+    const envelope = envelopeOf(report);
+    if (envelope !== undefined) return envelope.summary;
+  }
+  return countsOf((report as { issueCounts?: unknown } | undefined)?.issueCounts);
+}
+
+/** Severity counts read defensively: absent, malformed or non-numeric buckets are zero. */
+function countsOf(counts: unknown): SeverityCounts {
   if (typeof counts !== 'object' || counts === null) return { errors: 0, warnings: 0, info: 0 };
   const { errors, warnings, info } = counts as Record<string, unknown>;
   return {

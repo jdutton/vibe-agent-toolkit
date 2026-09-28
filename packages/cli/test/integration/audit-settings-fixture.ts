@@ -25,11 +25,14 @@ export interface CompatibilityBlock {
 export interface ReportFile {
   path: string;
   type: string;
-  issues?: Array<{ code: string }>;
   compatibility?: CompatibilityBlock;
   settings?: SettingsBlock;
 }
-export interface Report { files: ReportFile[] }
+/** The slice of the audit report envelope these suites read. */
+export interface Report {
+  findings: Array<{ code: string; location?: string }>;
+  data: { files: ReportFile[] };
+}
 
 /** Frontmatter declaring `Bash`, the tool every fixture settings file denies. */
 export function bashSkill(name: string): string {
@@ -68,7 +71,7 @@ export function auditWithSettings(
 ): { exit: number | null; stderr: string; plugin: ReportFile | undefined; report: Report } {
   const result = runAuditCli(pluginDir, ['--compat', '--settings', settingsFile, ...extraArgs]);
   const report = parseYaml(result.stdout) as Report;
-  return { exit: result.status, stderr: result.stderr, report, plugin: report.files.find((f) => f.type === 'claude-plugin') };
+  return { exit: result.status, stderr: result.stderr, report, plugin: report.data.files.find((f) => f.type === 'claude-plugin') };
 }
 
 /** The skill files the settings block reports a Bash conflict on. */

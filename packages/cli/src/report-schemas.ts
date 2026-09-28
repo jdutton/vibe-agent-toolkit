@@ -63,10 +63,18 @@ import {
 import { ExitCode, type ExitCodeValue, type Report, type ReportZodSchema } from '@vibe-agent-toolkit/schema';
 import type { ZodTypeAny } from 'zod';
 
+import { AGENT_VALIDATE_EXAMINED, AGENT_VALIDATE_REPORT_SCHEMA } from './commands/agent/validate-schema.js';
 import { ARD_EMIT_REPORT_SCHEMA } from './commands/ard/emit-schema.js';
+import { AUDIT_EXAMINED, AUDIT_REPORT_SCHEMA } from './commands/audit-schema.js';
+import { AUDIT_SETTINGS_EXAMINED, AUDIT_SETTINGS_REPORT_SCHEMA } from './commands/audit-settings-schema.js';
+import { MARKETPLACE_VALIDATE_EXAMINED, MARKETPLACE_VALIDATE_REPORT_SCHEMA } from './commands/claude/marketplace/validate-schema.js';
 import { OKF_VALIDATE_REPORT_SCHEMA } from './commands/okf/validate-schema.js';
 import { CHECK_REPORT_SCHEMA } from './commands/resources/check-schema.js';
+import { RESOURCES_QUERY_EXAMINED, RESOURCES_QUERY_REPORT_SCHEMA } from './commands/resources/query-schema.js';
+import { RESOURCES_SCAN_EXAMINED, RESOURCES_SCAN_REPORT_SCHEMA } from './commands/resources/scan-schema.js';
+import { RESOURCES_VALIDATE_EXAMINED, RESOURCES_VALIDATE_REPORT_SCHEMA } from './commands/resources/validate-schema.js';
 import { SKILL_REVIEW_REPORT_SCHEMA } from './commands/skill/review-schema.js';
+import { SKILLS_VALIDATE_EXAMINED, SKILLS_VALIDATE_REPORT_SCHEMA } from './commands/skills/validate-schema.js';
 import type { ExaminedDeclaration } from './utils/run-integrity.js';
 
 /** How a document is rendered on stdout. */
@@ -207,6 +215,70 @@ const REPORTS = [
     },
     renderText: renderArdEmitText,
   },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['audit'],
+    name: 'audit',
+    schema: AUDIT_REPORT_SCHEMA,
+    examined: AUDIT_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['audit settings'],
+    name: 'audit-settings',
+    schema: AUDIT_SETTINGS_REPORT_SCHEMA,
+    examined: AUDIT_SETTINGS_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['resources validate'],
+    name: 'resources-validate',
+    schema: RESOURCES_VALIDATE_REPORT_SCHEMA,
+    examined: RESOURCES_VALIDATE_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['resources scan'],
+    name: 'resources-scan',
+    schema: RESOURCES_SCAN_REPORT_SCHEMA,
+    examined: RESOURCES_SCAN_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['resources query'],
+    name: 'resources-query',
+    schema: RESOURCES_QUERY_REPORT_SCHEMA,
+    examined: RESOURCES_QUERY_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['skills validate'],
+    name: 'skills-validate',
+    schema: SKILLS_VALIDATE_REPORT_SCHEMA,
+    examined: SKILLS_VALIDATE_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['claude marketplace validate'],
+    name: 'claude-marketplace-validate',
+    schema: MARKETPLACE_VALIDATE_REPORT_SCHEMA,
+    examined: MARKETPLACE_VALIDATE_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['agent validate'],
+    name: 'agent-validate',
+    schema: AGENT_VALIDATE_REPORT_SCHEMA,
+    examined: AGENT_VALIDATE_EXAMINED,
+  },
 ] as const satisfies readonly ReportShape[];
 
 const CLAUDE_ORG_EXTERNAL = {
@@ -238,24 +310,6 @@ const CLAUDE_ORG_EXTERNAL = {
 const EXTERNALS: readonly ExternalShape[] = [CLAUDE_ORG_EXTERNAL];
 
 const LEGACY = [
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: ['audit', 'audit settings'],
-    reason: 'Task 11: the largest document in the CLI (consumed by the corpus runner and the lab) and `SettingsFinding[]` under `path`; both move to the envelope with `location`.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: ['resources validate', 'resources scan', 'resources query'],
-    reason: 'Task 12: the lab measures `resources validate` / `scan` through its population reader, and `query` publishes operator-selected rows; all three move to the envelope together with the reader.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: ['skills validate', 'claude marketplace validate', 'agent validate'],
-    reason: 'Task 13: per-skill COUNT rows, a `vat verify` phase document, and the agent-config result verbatim — each becomes `data` beside flattened findings.',
-  },
   {
     kind: 'legacy',
     channel: 'stdout',
@@ -419,10 +473,10 @@ const ARTIFACTS: readonly PublishedArtifactShape[] = [
     channel: 'file',
     name: 'corpus-audit',
     publishers: [CORPUS_SCAN],
-    schema: null,
-    schemaFile: null,
+    schema: AUDIT_REPORT_SCHEMA,
+    schemaFile: 'packages/cli/schemas/corpus-audit.json',
     writer: DOCUMENT_WRITER,
-    reason: 'corpus scan `<name>-audit.yaml`: the full audit document per plugin.',
+    reason: 'corpus scan `<name>-audit.yaml`: the `vat audit` report for one plugin, the same envelope and schema the verb publishes.',
   },
   ...PROJECTION_RELATIONS,
 ];

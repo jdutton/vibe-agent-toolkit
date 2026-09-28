@@ -22,7 +22,7 @@ describe('verdict verb matrix', () => {
   it.each([
     ['audit', [['audit', '/work/tree']]],
     ['skills-validate', [['skills', 'validate', '/work/tree', '--verbose']]],
-    ['resources-validate', [['resources', 'validate', '/work/tree', '--format', 'json']]],
+    ['resources-validate', [['resources', 'validate', '/work/tree', '--verbose', '--format', 'json']]],
     ['resources-check', [['resources', 'check', '/work/tree', '--format', 'json']]],
     ['context-all', [['claude', 'context', '--all', '--format', 'json']]],
     ['context-path', [['claude', 'context', 'docs/guide.md', '--format', 'json']]],

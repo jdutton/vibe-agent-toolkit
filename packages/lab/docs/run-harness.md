@@ -283,8 +283,9 @@ success, `1` validation findings, `2` system error — so `validate`, `verify` a
 accept `[0, 1]`, because a validator exiting 1 ran the whole corpus and merely had something to
 report at the end of it. Without that, those three were unmeasurable on any real project: every real
 project has findings, so every repeat "failed" and every row was poisoned. `audit` accepts `[0, 1]`
-for the same reason; `resources-scan` keeps the `[0]` default — it is documented as exiting 0
-whatever it finds.
+for the same reason; `resources-scan` keeps the `[0]` default — a scan has no finding of its own,
+so its only exit 1 is the run-integrity refusal for a scan of NOTHING, and a duration over no files
+is not a measurement.
 
 Exit `2` is never accepted. That run did not complete, and its duration is the duration of giving
 up — fast enough that timing it reads as an improvement.

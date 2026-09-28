@@ -39,6 +39,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { MARKETPLACE_VALIDATE_REPORT_SCHEMA, type MarketplaceValidateReport } from '../../../../src/commands/claude/marketplace/validate-schema.js';
 import { runMarketplaceValidatePhase } from '../../../../src/commands/claude/marketplace/validate.js';
 import { errno, realBehind, refusingOnly } from '../../../helpers/refusal-doubles.js';
 
@@ -71,11 +72,8 @@ const COLOCATED_FIXTURE = safePath.resolve(
   '../../../../../agent-skills/test/fixtures/packaging-shapes/colocated-plugin-marketplace',
 );
 
-/** A finding row as `--verbose` publishes it. */
+/** A published finding, the fields these cases read. */
 interface VerboseIssue { code: string; severity: string; message: string }
-
-/** A published plugin row, the fields these cases read. */
-interface PluginRow { name: string; source: string; path: string; status: string }
 
 /** Write a JSON file, creating its directory chain. */
 function writeJson(filePath: string, value: unknown): void {
@@ -109,18 +107,17 @@ function writePlugin(dir: string, name: string): void {
   writeJson(safePath.join(dir, MANIFEST_DIR, PLUGIN_JSON), { name, version: '1.0.0' });
 }
 
-/** The refusal shape shared by every "nothing validated" case: exit 1, error, empty results. */
-function expectRefusedRun(exitCode: number, doc: Record<string, unknown>): void {
+/** The refusal shape shared by every "nothing validated" case: exit 1, findings, no plugin rows. */
+function expectRefusedRun(exitCode: number, doc: MarketplaceValidateReport): void {
   expect(exitCode).toBe(1);
-  expect(doc['status']).toBe('error');
-  expect(doc['pluginsValidated']).toBe(0);
-  expect(doc['plugins']).toEqual([]);
+  expect(doc.status).toBe('findings');
+  expect(doc.data.plugins).toEqual([]);
 }
 
-/** Run the command the way the CLI does, minus the emission. */
-async function validate(root: string, verbose = false) {
+/** Run the command the way the CLI does, minus the emission; the document parsed with its registry schema. */
+async function validate(root: string, verbose = false): Promise<{ exitCode: number; doc: MarketplaceValidateReport }> {
   const outcome = await runMarketplaceValidatePhase(root, { verbose });
-  return { exitCode: outcome.exitCode, doc: outcome.document as Record<string, unknown> };
+  return { exitCode: outcome.exitCode, doc: MARKETPLACE_VALIDATE_REPORT_SCHEMA.parse(outcome.document) as MarketplaceValidateReport };
 }
 
 /**
@@ -130,13 +127,13 @@ async function validate(root: string, verbose = false) {
 async function expectPassedValidating(
   root: string,
   rows: Array<[name: string, path: string]>,
-): Promise<{ doc: Record<string, unknown>; plugins: PluginRow[] }> {
+): Promise<{ doc: MarketplaceValidateReport; plugins: MarketplaceValidateReport['data']['plugins'] }> {
   const { exitCode, doc } = await validate(root);
-  const plugins = doc['plugins'] as PluginRow[];
+  const plugins = doc.data.plugins;
 
   expect(exitCode).toBe(0);
-  expect(doc['status']).toBe('success');
-  expect(doc['pluginsValidated']).toBe(rows.length);
+  expect(doc.summary.errors).toBe(0);
+  expect(doc.examined).toBe(rows.length);
   expect(plugins.map((p) => [p.name, p.path])).toEqual(rows);
   return { doc, plugins };
 }
@@ -162,8 +159,8 @@ describe('marketplace validate — the denominator is the DECLARED local sources
 
     const { doc, plugins } = await expectPassedValidating(root, [['colocated-plugin', '.']]);
 
-    expect(plugins.map((p) => [p.source, p.status])).toEqual([['./', 'success']]);
-    expect(doc['undeclared']).toEqual([]);
+    expect(plugins.map((p) => [p.source, p.manifestRead, p.summary.errors])).toEqual([['./', true, 0]]);
+    expect(doc.data.undeclared).toEqual([]);
   });
 
   it('(b) refuses when the declared source does not resolve, naming it — an undeclared sibling does not count', async () => {
@@ -175,13 +172,13 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     writePlugin(safePath.join(root, 'plugins', 'b'), 'b');
 
     const { exitCode, doc } = await validate(root, true);
-    const issues = doc['issues'] as VerboseIssue[];
+    const issues = doc.findings;
     const refusal = issues.find((i) => i.code === RUN_INTEGRITY_CODE);
 
     expectRefusedRun(exitCode, doc);
     // The undeclared directory is LISTED, not validated: nothing about `b`
     // appears in `issues`, and its presence is not what fails the run.
-    expect(doc['undeclared']).toEqual(['plugins/b']);
+    expect(doc.data.undeclared).toEqual(['plugins/b']);
     expect(issues.filter((i) => i.code !== RUN_INTEGRITY_CODE)).toEqual([]);
     // ONE refusal, at error, naming the source that did not resolve.
     expect(issues.filter((i) => i.code === RUN_INTEGRITY_CODE)).toHaveLength(1);
@@ -203,7 +200,7 @@ describe('marketplace validate — the denominator is the DECLARED local sources
 
     const { doc } = await expectPassedValidating(root, [['a', PLUGIN_A]]);
 
-    expect(doc['undeclared']).toEqual(['plugins/b']);
+    expect(doc.data.undeclared).toEqual(['plugins/b']);
   });
 
   it('refuses a declared source that resolves to a FILE, not a directory', async () => {
@@ -215,12 +212,12 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     writeFileSync(safePath.join(root, 'plugins', 'a'), 'not a directory\n');
 
     const { exitCode, doc } = await validate(root, true);
-    const issues = doc['issues'] as VerboseIssue[];
+    const issues = doc.findings;
 
     expect(exitCode).toBe(1);
-    expect(doc['pluginsValidated']).toBe(0);
+    expect(doc.data.plugins).toHaveLength(0);
     expect(issues.map((i) => i.code)).toEqual([RUN_INTEGRITY_CODE]);
-    expect(doc['undeclared']).toEqual([]);
+    expect(doc.data.undeclared).toEqual([]);
   });
 
   it('refuses the RUN when the OS refuses a declared source, rather than reporting it as unresolved', async () => {
@@ -238,7 +235,8 @@ describe('marketplace validate — the denominator is the DECLARED local sources
       const { exitCode, doc } = await validate(root, true);
 
       expect(exitCode).toBe(2);
-      expect(String(doc['error'])).toContain('EACCES');
+      expect(doc.status).toBe('error');
+      expect(doc.status === 'error' ? doc.error.message : '').toContain('EACCES');
     } finally {
       vi.mocked(statSync).mockRestore();
     }
@@ -252,10 +250,10 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     mkdirSyncReal(safePath.join(root, 'plugins', 'a'), { recursive: true });
 
     const { exitCode, doc } = await validate(root, true);
-    const issues = doc['issues'] as VerboseIssue[];
+    const issues = doc.findings;
 
     expect(exitCode).toBe(1);
-    expect(doc['pluginsValidated']).toBe(1);
+    expect(doc.data.plugins).toHaveLength(1);
     expect(issues.map((i) => i.code)).not.toContain(RUN_INTEGRITY_CODE);
     expect(issues.map((i) => i.code)).toContain('PLUGIN_MISSING_MANIFEST');
   });
@@ -274,9 +272,9 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     const { exitCode, doc } = await validate(root);
 
     expect(exitCode).toBe(0);
-    expect(doc['status']).toBe('success');
-    expect(doc['pluginsValidated']).toBe(0);
-    expect(doc['undeclared']).toEqual([]);
+    expect(doc.summary.errors).toBe(0);
+    expect(doc.data.plugins).toHaveLength(0);
+    expect(doc.data.undeclared).toEqual([]);
   });
 });
 
@@ -285,11 +283,9 @@ describe('marketplace validate — the denominator is the DECLARED local sources
  * the per-plugin rows. The anchor contract says each is relative to `root`
  * and names something INSIDE it, so none may begin with `../`.
  */
-function everyLocationIn(doc: Record<string, unknown>): string[] {
-  const flat = (doc['issues'] as Array<{ location?: string }>).map((i) => i.location);
-  const nested = (doc['plugins'] as Array<{ issues: Array<{ location?: string }> }>)
-    .flatMap((p) => p.issues.map((i) => i.location));
-  return [...flat, ...nested].filter((l): l is string => typeof l === 'string');
+function everyLocationIn(doc: MarketplaceValidateReport): string[] {
+  return [...doc.findings.map((i) => i.location), ...doc.data.plugins.map((p) => p.path)]
+    .filter((l): l is string => typeof l === 'string');
 }
 
 /**
@@ -317,7 +313,7 @@ function everyLocationIn(doc: Record<string, unknown>): string[] {
  */
 async function expectRefusedWithoutLeaving(root: string, source: string): Promise<void> {
   const { exitCode, doc } = await validate(root, true);
-  const issues = doc['issues'] as VerboseIssue[];
+  const issues = doc.findings;
 
   expectRefusedRun(exitCode, doc);
   // Refused BY NAME: the reader sees which entry, and its spelling.
@@ -346,7 +342,7 @@ async function boundaryFindings(tmp: string, name: string, severityYaml: string)
   writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), `skills:\n  include: ['none/SKILL.md']\n  defaults:\n    validation:\n${severityYaml}`);
 
   const { exitCode, doc } = await validate(root, true);
-  return { exitCode, found: (doc['issues'] as VerboseIssue[]).filter((i) => i.code === 'LINK_OUTSIDE_SKILL_DIR') };
+  return { exitCode, found: doc.findings.filter((i) => i.code === 'LINK_OUTSIDE_SKILL_DIR') };
 }
 
 describe('marketplace validate — a plugin skill\'s severity is resolved where the skill is validated', () => {
@@ -419,7 +415,7 @@ describe('marketplace validate — a declared source never leaves the marketplac
 
       await expectRefusedWithoutLeaving(root, SYMLINK_SOURCE);
       const { doc } = await validate(root, true);
-      const issues = doc['issues'] as VerboseIssue[];
+      const issues = doc.findings;
       expect(issues.map((i) => i.code)).toEqual([RUN_INTEGRITY_CODE]);
       expect(issues[0]?.message).toContain('`s` (./plugins/s)');
     });
@@ -447,12 +443,12 @@ describe('marketplace validate — a declared source never leaves the marketplac
     writePlugin(safePath.join(root, 'plugins', 'x'), 'x');
 
     const { doc } = await validate(root);
-    const validatedPaths = (doc['plugins'] as PluginRow[]).map((p) => p.path);
-    const undeclared = doc['undeclared'] as string[];
+    const validatedPaths = doc.data.plugins.map((p) => p.path);
+    const undeclared = doc.data.undeclared;
 
     // XOR: the directory appears on exactly one side of the ledger.
     expect(validatedPaths.includes(PLUGIN_X)).not.toBe(undeclared.includes(PLUGIN_X));
-    expect(doc['pluginsValidated']).toBe(1);
+    expect(doc.data.plugins).toHaveLength(1);
     expect(undeclared).toEqual([]);
   });
 
@@ -466,17 +462,15 @@ describe('marketplace validate — a declared source never leaves the marketplac
     writePlugin(safePath.join(root, 'plugins', 'a'), 'a');
 
     const { doc } = await expectPassedValidating(root, [['a', PLUGIN_A], ['a-again', PLUGIN_A]]);
-    const rows = doc['issues'] as Array<{ location?: string; codes: Record<string, number> }>;
-    const manifestRow = rows.find((r) => r.location === 'plugins/a/.claude-plugin/plugin.json');
+    const codes = doc.findings.map((finding) => finding.code);
 
-    expect(rows).toHaveLength(1);
-    expect(manifestRow?.codes['PLUGIN_MISSING_AUTHOR']).toBe(1);
-    // Every code on the shared file is counted ONCE — the doubled run showed
+    // Every finding sits on the one shared manifest.
+    expect(new Set(doc.findings.map((finding) => finding.location))).toEqual(new Set(['plugins/a/.claude-plugin/plugin.json']));
+    // Every code on the shared file is published ONCE — the doubled run showed
     // each at 2 — and the run's total is exactly that set, nothing doubled.
-    const codeCounts = Object.values(manifestRow?.codes ?? {});
-    expect(codeCounts.length).toBeGreaterThan(0);
-    expect(codeCounts.every((n) => n === 1)).toBe(true);
-    expect((doc['issueCounts'] as { info: number }).info).toBe(codeCounts.length);
+    expect(codes).toContain('PLUGIN_MISSING_AUTHOR');
+    expect(new Set(codes).size).toBe(codes.length);
+    expect(doc.summary.info).toBe(codes.length);
   });
 });
 
@@ -532,13 +526,13 @@ describe.skipIf(SYMLINK_CAP === null)('marketplace validate — containment hold
    */
   async function expectRefusedBelowSource(root: string, refusedPath: string): Promise<void> {
     const { exitCode, doc } = await validate(root, true);
-    const issues = doc['issues'] as VerboseIssue[];
+    const issues = doc.findings;
     const integrity = issues.filter((i) => i.code === RUN_INTEGRITY_CODE);
 
     expect(exitCode).toBe(1);
-    expect(doc['status']).toBe('error');
-    expect(doc['pluginsValidated']).toBe(1);
-    expect(doc['refused']).toEqual([refusedPath]);
+    expect(doc.status).toBe('findings');
+    expect(doc.data.plugins).toHaveLength(1);
+    expect(doc.data.refused).toEqual([refusedPath]);
     expect(integrity).toHaveLength(1);
     expect(integrity[0]?.message).toContain(`\`${refusedPath}\``);
     // Never read: the outside skill's broken link is not a finding here, and
@@ -581,14 +575,20 @@ describe.skipIf(SYMLINK_CAP === null)('marketplace validate — containment hold
     createSymlink(cap, outsidePluginJson, safePath.join(manifestDir, PLUGIN_JSON), 'file');
 
     const { exitCode, doc } = await validate(root, true);
-    const issues = doc['issues'] as VerboseIssue[];
+    const issues = doc.findings;
 
     expect(exitCode).toBe(1);
-    expect(doc['refused']).toEqual(['plugins/a/.claude-plugin/plugin.json']);
+    expect(doc.data.refused).toEqual(['plugins/a/.claude-plugin/plugin.json']);
     expect(issues.filter((i) => i.code === RUN_INTEGRITY_CODE)).toHaveLength(1);
     // Not parsed: none of the manifest-content findings a read would produce.
     expect(issues.map((i) => i.code)).not.toContain('PLUGIN_MISSING_AUTHOR');
     expect(issues.map((i) => i.code)).not.toContain('PLUGIN_MISSING_MANIFEST');
+    // The unread plugin's own row is `error`, not a clean row over an empty
+    // issue list — the library `status` of an unread result is `ok`, so only
+    // `manifestRead: false` can say it.
+    expect(doc.data.plugins.map((p) => [p.path, p.manifestRead, p.summary])).toEqual([
+      ['plugins/a', false, { errors: 0, warnings: 0, info: 0 }],
+    ]);
   });
 
   it('follows a `skills/` link that points INSIDE the root — containment is by real path, not by spelling', async () => {
@@ -602,9 +602,9 @@ describe.skipIf(SYMLINK_CAP === null)('marketplace validate — containment hold
     createSymlink(cap, realSkills, safePath.join(plugin, 'skills'), 'dir');
 
     const { doc } = await validate(root, true);
-    const issues = doc['issues'] as Array<VerboseIssue & { location?: string }>;
+    const issues = doc.findings;
 
-    expect(doc['refused']).toEqual([]);
+    expect(doc.data.refused).toEqual([]);
     expect(issues.map((i) => i.code)).not.toContain(RUN_INTEGRITY_CODE);
     expect(issues.some((i) => i.code === 'LINK_INTEGRITY_BROKEN' && i.location === SKILL_LEAK)).toBe(true);
   });

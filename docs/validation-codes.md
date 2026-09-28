@@ -623,6 +623,7 @@ Only meaningful when a skill is actually being bundled. Most fire from `vat skil
 - **Default:** `warning`
 - **What:** A path under the audited tree could not be read (`EACCES`, a vanished mount, a permissions quirk), so it was not scanned. **Both halves count**: a *directory* the scan could not enter, and a *file* it could not open. One finding per unreadable path, naming it and the operating system's own message. Every readable sibling is still scanned and every finding already collected is still reported.
 - **Second producer: the packaged-size walk** behind [`PACKAGED_SIZE_EXCEEDS_API_LIMIT`](#packaged_size_exceeds_api_limit). Any entry whose bytes it cannot establish — `readdir` threw, `stat` threw, the entry is a **symbolic link** of any kind (the uploader refuses one rather than following it), or it is otherwise not a regular file (a device, a socket) — gets one finding here instead of being summed as **zero**, and the message says the measured packaged size is a **lower bound**. That direction of error is the dangerous one: a `stat` failure on the 35.7 MB `.wasm` took a bundle's total from ~36 MB to ~2 MB, the build reported no warnings, and the upload ate a `413` eleven seconds later. Nothing else stats those bytes, so a silent zero there is a silent zero everywhere.
+- **Third producer: `vat audit settings --show-paths`**, for a settings path whose existence or readability the probe could not determine (a permission error on a parent directory) — that path was not checked, which is not the same answer as "absent".
 - **Why it matters:** One unreadable path used to abort the **entire** `vat audit` run — `status: error`, exit code 2, and **zero findings**, including the ones already collected from readable siblings. A single root-owned or quarantined entry under `~/.claude/plugins` killed the flagship `vat audit --user` invocation outright. `vat audit` is a bulk linter over trees it does not own, so an entry it cannot read is an ordinary condition rather than an exceptional one, and the scan must degrade rather than destroy the work it has already done.
 - **Files matter as much as directories.** Under `~/.claude/plugins` — populated by `sudo` installs and macOS quarantine — a root-owned `SKILL.md` is at least as likely as a root-owned directory, and it produced exactly the same total failure. Guarding only the directory walk would have left the flagship scenario broken while appearing fixed.
 - **Why not silence:** a scan that reports `success` while having skipped part of the tree is the same failure shape as a detector that silently disables itself — the report would be *reassuring* precisely where it is least informed. The same stance as [`TREE_PROVENANCE_INDETERMINATE`](#tree_provenance_indeterminate): a missing answer is reported as a missing answer.
@@ -734,7 +735,7 @@ Reported like every other packaging finding — a located, coded issue on the bu
 
 - **Default:** `error`
 - **What:** A file the crawl enumerated could not be read, so it was skipped. Most often a committed symlink whose target is missing; also permissions, or a file deleted between enumeration and parse.
-- **Why it matters:** The file is absent from every count in the report — `filesScanned`, link totals, bundle contents — while the crawl found it. Before this code existed, an unreadable file terminated `vat resources scan`/`validate` and `vat audit` with a raw `ENOENT` stack trace; the alternative of skipping it quietly would have traded a loud crash for a silent population change, which is worse. The finding names the file so the gap between "enumerated" and "validated" is accounted for rather than inferred.
+- **Why it matters:** The file is absent from every count in the report — `examined`, link totals, bundle contents — while the crawl found it. Before this code existed, an unreadable file terminated `vat resources scan`/`validate` and `vat audit` with a raw `ENOENT` stack trace; the alternative of skipping it quietly would have traded a loud crash for a silent population change, which is worse. The finding names the file so the gap between "enumerated" and "validated" is accounted for rather than inferred.
 - **Scope:** Only recognized filesystem errno codes (`ENOENT`, `EACCES`, `ELOOP`, `EISDIR`, …) are reported this way. A parse or indexing defect still throws, so a bug in VAT cannot disguise itself as a per-file warning.
 - **Fix:** Repoint or delete the dangling symlink, restore the missing target, or fix the permissions. Set `severity.RESOURCE_UNREADABLE` to `warning` if a corpus is expected to contain unresolvable entries.
 
@@ -1161,6 +1162,77 @@ A rules file with a `paths:` list is **path-scoped**: Claude Code does not load 
 - **A link at `.claude` itself is reported too.** `sub/.claude -> ../.claude` carries a whole rules directory with it, and the link's own path never contains the `rules` segment — so a predicate that looked for `.claude` followed by `rules` read the commonest shape of this defect as "not a rules link" and said nothing.
 - **Blind spots:** it reports what the enumerators declined, so it sees a link only where the crawl's `include`/`exclude` would admit the link's path. VAT never follows the link either way: the `paths:` globs and frontmatter of the linked file stay unread, and this code says so rather than guessing at them. **A link at a higher ancestor is not reported at all** — `sub -> ../shared`, where the target holds `sub/.claude/rules/*.md`, hides a whole rules tree and draws nothing here. That is a narrowing, not an oversight: the condition row is at `sub`, VAT follows no link, and no column says what the target holds, so the only predicate that would catch it is "every declined link is a possible hidden rule set" — which reports `CLAUDE.md -> AGENTS.md` and every vendored tree in the corpus. The code claims the narrow thing, and closing the wider class needs a column describing what a declined link's target contains.
 - **Fix:** For a target inside the project root the rule is in force and unchecked: replace the link with the file itself, or with an `@` import of the shared file from a rules file that is not a link, if you want VAT to check its globs and frontmatter. For a target outside it the rule is in force nowhere, because Claude Code skips the link too — copy or vendor those rules into the repository, since sharing one rule set across repositories by symlink does not work. For a link that resolves to nothing no rule is loaded through it: point it at a file that exists or delete it. Keep the link and set `resources.validation.severity.CLAUDE_RULE_LINK_UNCHECKED` to `ignore` to accept the blind spot.
+
+## Claude Settings Codes
+
+Published by `vat audit settings` — about a Claude settings file (`--file`), the settings paths Claude Code reads (`--show-paths`), or the settings the layers merge into (the default mode). Each finding's `location` is the settings file, relative to the report's `data.root` (the directory the command ran in); `field` is the dotted key path inside it when there is one.
+
+### `SETTINGS_FILE_INVALID`
+
+- **Default:** `error`
+- **What:** The file given to `--file` was read, and its content does not parse as JSON, or a field violates the settings schema for its type (managed, user or project). One finding per schema violation, with the dotted key path in `field`. A file that is absent or that the OS refuses is not this finding: nothing was read, so the run is refused instead (`USAGE_INVALID` / `INPUT_UNREADABLE`, exit 2).
+- **Why it matters:** Claude Code ignores a settings file it cannot parse, and a field of the wrong shape is not applied — the policy the file was written to carry is silently not in effect.
+- **Fix:** Fix the field the finding names (its `field` is the dotted key path), or the JSON syntax, then re-run `vat audit settings --file`.
+
+### `SETTINGS_TYPE_AMBIGUOUS`
+
+- **Default:** `info`
+- **What:** The file could be a user or a project settings file. The two share one schema, so nothing in the file tells them apart; it was validated as a user file.
+- **Why it matters:** The verdict does not depend on the answer — the schema is the same — but the reported `detectedType` does, and `typeConfidence: ambiguous` says so rather than presenting a guess as a detection.
+- **Fix:** Pass `--type user` or `--type project` to state which it is.
+
+### `SETTINGS_PATH_DEPRECATED`
+
+- **Default:** `error`
+- **What:** A managed settings file exists at a path Claude Code no longer reads (the legacy Windows managed-settings location).
+- **Why it matters:** The organisation's managed policy in that file is not in effect, while the file's presence suggests it is.
+- **Fix:** Move the managed settings file to the current managed-settings path (`vat audit settings --show-paths` lists it) and remove the legacy file.
+
+### `SETTINGS_RULE_SHADOWED`
+
+- **Default:** `warning`
+- **What:** A permission rule can never take effect: a `deny` rule shadows an `ask` or `allow` rule for the same tool, an `ask` rule shadows an `allow` rule, or a duplicate in the same list already decides it.
+- **Why it matters:** The shadowed rule reads as policy and is not — a reader of that settings file is told something Claude Code will never do.
+- **Fix:** Remove the shadowed rule, or narrow the rule that shadows it.
+
+### `SETTINGS_MARKETPLACE_TOKEN_MISSING`
+
+- **Default:** `warning`
+- **What:** A marketplace registered in the effective settings is sourced from GitHub and `GITHUB_TOKEN` is not set in the environment the audit ran in.
+- **Why it matters:** A private repository cannot be fetched without the token, so the marketplace's plugins would not install or update.
+- **Fix:** Set `GITHUB_TOKEN` in the environment Claude Code runs in, or register the marketplace from a public source.
+
+## Agent Manifest Codes
+
+Emitted by `vat agent validate` about an agent manifest (`agent.yaml`) the run read. A manifest that cannot be read at all — no manifest at the path (`USAGE_INVALID`), or one the OS refuses or that is not YAML (`INPUT_UNREADABLE`) — is a refusal, not one of these.
+
+### `AGENT_MANIFEST_INVALID`
+
+- **Default:** `error`
+- **What:** The manifest was read and parsed, but violates the agent manifest schema. One finding per violation; `field` is the dotted key path.
+- **Why it matters:** Every command that loads the agent (`vat agent run`, `build`, `install`) refuses a manifest the schema rejects.
+- **Fix:** Correct the named field in `agent.yaml`, then re-run `vat agent validate`.
+
+### `AGENT_REFERENCE_MISSING`
+
+- **Default:** `error`
+- **What:** A file or directory the manifest references does not exist: a `spec.prompts` `$ref`, a `spec.resources` path, or the RAG database (`.rag-db`) a `spec.rag` block needs.
+- **Why it matters:** The agent fails at run time on the first use of the missing file.
+- **Fix:** Create the file, correct its path in `agent.yaml`, or run `vat rag index` to create the RAG database.
+
+### `AGENT_REFERENCE_UNREADABLE`
+
+- **Default:** `error`
+- **What:** A referenced file or directory exists, but the operating system refused access, so the run could not check it.
+- **Why it matters:** "Not found" would send you to create a file that is already there; this names the real cause.
+- **Fix:** Make the path readable — check its permissions and ownership — then re-run.
+
+### `AGENT_RAG_NO_SOURCES`
+
+- **Default:** `warning`
+- **What:** `spec.rag` is declared but no entry names any `sources`.
+- **Why it matters:** Nothing can be indexed, so retrieval answers from an empty store.
+- **Fix:** Add `sources` to the RAG entry, or remove the RAG configuration.
 
 ## Meta Codes
 

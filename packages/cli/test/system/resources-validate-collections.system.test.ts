@@ -1,6 +1,9 @@
 // Test data legitimately repeats file paths and config patterns
 
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, it } from 'vitest';
+
+import { RESOURCES_VALIDATE_REPORT_SCHEMA } from '../../src/commands/resources/validate-schema.js';
 
 import { describe, expect, fs, getBinPath, safePath } from './test-common.js';
 import {
@@ -8,6 +11,7 @@ import {
   createMarkdownWithFrontmatter,
   createSchemaFile,
   createTestTempDir,
+  executeCli,
   executeValidateAndParse,
   setupTestProject,
 } from './test-helpers/index.js';
@@ -166,7 +170,7 @@ resources:
 
     // Should succeed because permissive mode allows extra fields
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    expect(RESOURCES_VALIDATE_REPORT_SCHEMA.parse(parsed).status).toBe('ok');
   });
 
   it('should handle resources in multiple collections with compatible schemas', () => {
@@ -215,7 +219,7 @@ resources:
 
     // Should succeed because it satisfies both schemas (both permissive)
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    expect(RESOURCES_VALIDATE_REPORT_SCHEMA.parse(parsed).status).toBe('ok');
   });
 
   it('should fail when resource violates one of multiple collections', () => {
@@ -305,7 +309,7 @@ resources:
 
     // Should succeed - not-in-collection.md doesn't need schema validation
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    expect(RESOURCES_VALIDATE_REPORT_SCHEMA.parse(parsed).status).toBe('ok');
   });
 
   it('should warn on missing schema file and report as failure', () => {
@@ -393,7 +397,7 @@ resources:
 
     // Should succeed - both files validate according to their mode
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    expect(RESOURCES_VALIDATE_REPORT_SCHEMA.parse(parsed).status).toBe('ok');
   });
 
   it('should fail when strict mode doc has extra fields', () => {
@@ -488,7 +492,7 @@ resources:
 
     // Should succeed - both docs validate in their respective collections
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    expect(RESOURCES_VALIDATE_REPORT_SCHEMA.parse(parsed).status).toBe('ok');
   });
 
   it('should report all validation errors across multiple collections', () => {
@@ -545,6 +549,96 @@ resources:
       'level',
     ]);
 
-    expect(parsed.errorsFound).toBeGreaterThanOrEqual(2);
+    expect((parsed.summary as { errors: number }).errors).toBeGreaterThanOrEqual(2);
+  });
+
+  // 🚨 `--collection` must not drop what the collection's own glob matched and
+  // could not read: that path never became a resource, so it is in no
+  // collection's resource list — and a filter keeping only "issues at this
+  // collection's resources" published `ok`, exit 0, over an unreadable file.
+  it.skipIf(CANNOT_DENY_READS)('keeps an unreadable file the collection matched under --collection — and only that collection\'s', () => {
+    const projectDir = setupCollectionTestProject(
+      tempDir,
+      'collection-unreadable-test',
+      `version: 1
+resources:
+  collections:
+    guides-collection:
+      include:
+        - "guides/*.md"
+    notes-collection:
+      include:
+        - "notes/*.md"
+`,
+      [],
+      ['guides', 'notes'],
+    );
+    createMarkdownWithFrontmatter(safePath.join(projectDir, 'guides'), 'readable.md', { title: 'Readable' }, '# Readable');
+    createMarkdownWithFrontmatter(safePath.join(projectDir, 'notes'), 'readable.md', { title: 'Readable' }, '# Readable');
+    const locked = [safePath.join(projectDir, 'guides', 'locked.md'), safePath.join(projectDir, 'notes', 'locked.md')];
+    for (const file of locked) {
+      fs.writeFileSync(file, '# Locked\n');
+      fs.chmodSync(file, 0o000);
+    }
+    try {
+      const { result, parsed } = executeValidateAndParse(binPath, projectDir, ['--collection', 'guides-collection']);
+      const report = RESOURCES_VALIDATE_REPORT_SCHEMA.parse(parsed);
+
+      // Its own unreadable file fails the run...
+      expect(result.status, JSON.stringify(report.findings)).toBe(1);
+      expect(report.findings).toContainEqual(expect.objectContaining({ location: 'guides/locked.md', severity: 'error' }));
+      // ...and the OTHER collection's does not reach it: `notes/locked.md` is no
+      // resource, but `notes-collection`'s glob, not this one's, matched it.
+      expect(report.findings.map((finding) => finding.location)).not.toContain('notes/locked.md');
+    } finally {
+      for (const file of locked) fs.chmodSync(file, 0o644);
+    }
+  });
+
+  it('counts each collection\'s findings, and --collection scopes the report and its exit code', () => {
+    const projectDir = setupCollectionTestProject(
+      tempDir,
+      'collection-scope-test',
+      `version: 1
+resources:
+  collections:
+    docs-collection:
+      include:
+        - "docs/*.md"
+      validation:
+        frontmatterSchema: "strict-schema.json"
+        mode: strict
+    guides-collection:
+      include:
+        - "guides/*.md"
+`,
+      [{ filename: 'strict-schema.json', schema: STRICT_SCHEMA }],
+      ['docs', 'guides'],
+    );
+    // One invalid doc (missing `category`); the guide is clean.
+    createMarkdownWithFrontmatter(safePath.join(projectDir, 'docs'), 'invalid-doc.md', { title: 'Invalid Doc' }, '# Content');
+    createMarkdownWithFrontmatter(safePath.join(projectDir, 'guides'), 'guide.md', { title: 'Guide' }, '# Guide');
+
+    const whole = executeValidateAndParse(binPath, projectDir);
+    expect(whole.result.status).toBe(1);
+    const collections = RESOURCES_VALIDATE_REPORT_SCHEMA.parse(whole.parsed).data.collections;
+    expect(collections['docs-collection']).toMatchObject({ resourceCount: 1, filesWithErrors: 1, summary: { errors: 1 } });
+    expect(collections['guides-collection']).toMatchObject({ resourceCount: 1, filesWithErrors: 0, summary: { errors: 0 } });
+
+    // 🔑 The exit code derives from the document alone: the error outside the
+    // asked-for collection is not in it, so it does not fail the run.
+    const scoped = executeValidateAndParse(binPath, projectDir, ['--collection', 'guides-collection']);
+    const report = RESOURCES_VALIDATE_REPORT_SCHEMA.parse(scoped.parsed);
+    expect(scoped.result.status).toBe(0);
+    expect(report.status).toBe('ok');
+    expect(report.examined).toBe(1);
+    expect(Object.keys(report.data.collections)).toEqual(['guides-collection']);
+
+    // A filter naming no declared collection is the invocation's mistake:
+    // refused before anything is examined.
+    const typo = executeCli(binPath, ['resources', 'validate', '--collection', 'guides-colection', '--format', 'json'], { cwd: projectDir });
+    const refused = RESOURCES_VALIDATE_REPORT_SCHEMA.parse(JSON.parse(typo.stdout));
+    expect(typo.status).toBe(2);
+    expect(refused.status === 'error' ? refused.error.code : refused.status).toBe('USAGE_INVALID');
   });
 });

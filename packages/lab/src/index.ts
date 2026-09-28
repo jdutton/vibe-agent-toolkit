@@ -269,8 +269,8 @@ export {
   findingIdentity,
   type FindingKey,
   FindingKeySchema,
+  rowVerdict,
   type Verdict,
-  VerdictSchema,
 } from './facets/verdict/extract.js';
 export {
   buildPathSubstitutions,

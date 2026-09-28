@@ -65,11 +65,11 @@ describe('analyzeCompatibility', () => {
     expect(result.evidence.some(e => e.patternId === 'SCRIPT_FILE_NODE')).toBe(true);
   });
 
-  it('includes summary counts', async () => {
+  it('includes the per-kind file counts', async () => {
     const result = await analyzeCompatibility(...atFixture(PYTHON_SCRIPT_PLUGIN));
-    expect(result.summary.totalFiles).toBeGreaterThan(0);
-    expect(result.summary.scriptFiles).toBeGreaterThan(0);
-    expect(result.summary.skillFiles).toBeGreaterThan(0);
+    expect(result.fileCounts.totalFiles).toBeGreaterThan(0);
+    expect(result.fileCounts.scriptFiles).toBeGreaterThan(0);
+    expect(result.fileCounts.skillFiles).toBeGreaterThan(0);
   });
 
   it('throws for directory without plugin.json', async () => {

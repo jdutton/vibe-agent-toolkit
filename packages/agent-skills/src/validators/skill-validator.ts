@@ -3,8 +3,6 @@ import { basename, dirname } from 'node:path';
 
 import { isLocalFileLink, isParserUnavailable, parseFileCached, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
 import {
-  calculateValidationStatus,
-  countBySeverity,
   createRegistryIssue,
   runSingleUnitValidation,
   type ValidationConfig,
@@ -19,6 +17,7 @@ import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 import { detectBundledResourceWithoutLinks } from './bundled-resource-link-detection.js';
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
 import { detectUndeclaredCrossSkillAuth } from './cross-skill-dependency-detection.js';
+import { describeIssues } from './describe-issues.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import { detectNonImperativeBody } from './imperative-body-detection.js';
 import { detectKebabCaseViolation } from './kebab-case-detection.js';
@@ -687,17 +686,11 @@ function buildResult(
   metadata?: ValidationResult['metadata']
 ): ValidationResult {
   const issues = runSingleUnitValidation(rawIssues, validation).emitted;
-  const issueCounts = countBySeverity(issues);
-
-  const summary = `${issueCounts.errors} errors, ${issueCounts.warnings} warnings, ${issueCounts.info} info`;
-
   const result: ValidationResult = {
     path: skillPath,
     type: isVATGenerated ? 'vat-agent' : 'agent-skill',
-    status: calculateValidationStatus(issues),
-    summary,
+    ...describeIssues(issues, 'agent-skill'),
     issues,
-    issueCounts,
   };
 
   if (metadata) {

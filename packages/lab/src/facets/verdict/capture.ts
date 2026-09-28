@@ -35,7 +35,6 @@ import type { ResolvedInstrument } from '../../harness/types.js';
 import { writeReport } from '../../store.js';
 
 import { executeClonePlan, planApfsClone, readCloneSource } from './clone.js';
-import { extractVerdict } from './extract.js';
 import { type NormalizeContext, normalizeCommandOutput } from './normalize.js';
 import type { VerdictSubject } from './subjects.js';
 import { VERDICT_FACET, type VerdictBody, type VerdictRow } from './types.js';
@@ -282,13 +281,7 @@ function runRow(
   const document = normalizeCommandOutput(outcome.stdout, context);
   const base = { name: invocation.name, argv: [...invocation.argv], document };
   if (outcome.kind === 'not-run') {
-    return { ...base, outcome: 'not-run', exitCode: null, spawnError: outcome.spawnError, verdict: null };
+    return { ...base, outcome: 'not-run', exitCode: null, spawnError: outcome.spawnError };
   }
-  return {
-    ...base,
-    outcome: 'exited',
-    exitCode: outcome.exitCode,
-    spawnError: null,
-    verdict: extractVerdict({ kind: 'exited', exitCode: outcome.exitCode, stdout: document, stderr: outcome.stderr }),
-  };
+  return { ...base, outcome: 'exited', exitCode: outcome.exitCode, spawnError: null };
 }

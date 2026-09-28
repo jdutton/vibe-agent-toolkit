@@ -95,9 +95,11 @@ const BARREL_EXPORTS = [
   'isExitCode',
   'reportSchema',
   'resolveSeverity',
+  'resultStatus',
   'runSingleUnitValidation',
   'runValidationFramework',
   'strongerSeverity',
+  'summarizeIssues',
   'toFindings',
   'toJsonSchema',
 ];

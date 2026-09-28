@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import type { InstrumentVersion } from '../src/envelope/coordinate.js';
 import type { ReportEnvelope } from '../src/envelope/envelope.js';
 import { compareVerdict } from '../src/facets/verdict/compare.js';
-import type { VerdictBody } from '../src/facets/verdict/types.js';
+import { type VerdictBody, VerdictBodySchema } from '../src/facets/verdict/types.js';
 
 import { PROBE_VERSION } from './command-probe.js';
 
@@ -41,7 +41,6 @@ function envelope(alias: string, instrument: InstrumentVersion): ReportEnvelope<
           outcome: 'exited',
           exitCode: 0,
           spawnError: null,
-          verdict: { exitCode: 0, shape: 'legacy', findings: [] },
           document: 'status: success\n',
         },
       ],
@@ -84,5 +83,49 @@ describe('compareVerdict — one side is one arm', () => {
     );
 
     expect(result).toMatchObject({ ok: false, refusal: expect.stringContaining('the candidate mixes two arms') });
+  });
+});
+
+/** A resources-validate row whose stdout holds one broken-link finding in `docs/a.md`. */
+const FINDING_DOCUMENT = JSON.stringify({
+  status: 'findings',
+  examined: 1,
+  findings: [{ code: 'LINK_BROKEN_FILE', severity: 'error', message: 'gone', location: 'docs/a.md' }],
+  summary: { errors: 1, warnings: 0, info: 0 },
+  data: {},
+});
+
+/** One alias's envelope with one row, its document as given. */
+function withDocument(instrument: InstrumentVersion, document: string, exitCode: number): ReportEnvelope<VerdictBody> {
+  const base = envelope('crucible-1', instrument);
+  const [row] = base.body.rows;
+  if (row === undefined) throw new Error('fixture has one row');
+  return { ...base, body: { ...base.body, rows: [{ ...row, name: 'resources-validate', exitCode, document }] } };
+}
+
+describe('compareVerdict — the verdict is derived from the stored document', () => {
+  it('reads the finding a document holds, whatever an older capture believed about it', () => {
+    // The baseline's document is clean; the candidate's holds a finding. The
+    // comparison is the CURRENT extractor over each stored document — a
+    // verdict baked in by an older lab build is not an input to it.
+    const result = compareVerdict(
+      [withDocument(ARM_A, 'status: success\n', 0)],
+      [withDocument(ARM_B, FINDING_DOCUMENT, 1)],
+      OPTIONS,
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const kinds = result.undeclared.map((delta) => delta.change.kind);
+    expect(kinds).toContain('finding-added');
+  });
+
+  it('refuses to read a capture that still carries a stored verdict, rather than trust it', () => {
+    // Pre-1.0, no compatibility: a capture from a lab build that stored a
+    // verdict is refused loudly by the strict schema, never half-read.
+    const [row] = envelope('crucible-1', ARM_A).body.rows;
+    const stale = { arm: { set: {}, unset: [] }, rows: [{ ...row, verdict: { exitCode: 0, shape: 'legacy', findings: [] } }] };
+
+    expect(VerdictBodySchema.safeParse(stale).success).toBe(false);
   });
 });

@@ -44,7 +44,6 @@ const CEILINGS: Readonly<Record<string, number>> = {
   '@typescript-eslint/await-thenable': 1,
   '@typescript-eslint/explicit-module-boundary-types': 6,
   '@typescript-eslint/no-explicit-any': 24,
-  '@typescript-eslint/no-non-null-assertion': 1,
   '@typescript-eslint/no-require-imports': 1,
   '@typescript-eslint/prefer-nullish-coalescing': 2,
   'import/order': 1,

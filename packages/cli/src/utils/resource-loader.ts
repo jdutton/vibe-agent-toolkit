@@ -18,6 +18,7 @@ import {
 import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { GitTracker, gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 
+import { CommandRefusalError } from './command-refusal.js';
 import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
@@ -105,6 +106,31 @@ export function scopeIncludeToSubtree(include: readonly string[], relDir: string
     return [...include];
   }
   return include.map((pattern) => `${relDir}/${pattern}`);
+}
+
+/**
+ * Refuse a `--collection` that names no collection the project declares.
+ *
+ * A typo'd filter used to run the verb over zero resources and answer with a
+ * run-integrity finding (or, in `scan`, a zero count under the typo'd name) —
+ * a report about a collection that does not exist. It is the invocation's
+ * mistake, and `resources validate` and `resources scan` refuse it the same way.
+ * A declared collection that matched no file is NOT refused here: that is a run
+ * over nothing, and the writer's run-integrity refusal says so.
+ *
+ * @param config - The loaded project config, when there is one
+ * @param collection - The `--collection` value, when one was passed
+ * @throws {CommandRefusalError} `USAGE_INVALID` naming the declared collections
+ */
+export function assertDeclaredCollection(config: ProjectConfig | undefined, collection: string | undefined): void {
+  if (collection === undefined) return;
+  const declared = Object.keys(config?.resources?.collections ?? {});
+  if (declared.includes(collection)) return;
+  throw new CommandRefusalError(
+    'USAGE_INVALID',
+    `--collection ${collection} names no collection in resources.collections`
+      + ` (declared: ${declared.length === 0 ? 'none' : declared.join(', ')})`,
+  );
 }
 
 /**

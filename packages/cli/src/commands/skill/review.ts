@@ -10,7 +10,7 @@
  * the automated portion is the same code path used by `vat skills validate`.
  */
 
-import { existsSync, statSync } from 'node:fs';
+import { statSync, type Stats } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
@@ -21,10 +21,10 @@ import {
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
 import {
   buildReport,
-  calculateValidationStatus,
   countBySeverity,
   toFindings,
   type Gate,
+  type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import { isFilesystemAccessError, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
@@ -35,7 +35,7 @@ import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { formatIssueAnchor } from '../../utils/issue-anchor.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { projectRootOrNull } from '../../utils/project-root-policy.js';
+import { projectRootOrNull, unstatablePathRefusal } from '../../utils/project-root-policy.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 
@@ -71,11 +71,13 @@ export interface SkillReviewCommandOptions {
 export function resolveSkillPath(pathArg: string): string {
   const absolute = safePath.resolve(pathArg);
 
-  if (!existsSync(absolute)) {
-    throw new CommandRefusalError('USAGE_INVALID', `Path does not exist: ${pathArg}`);
+  let stat: Stats;
+  try {
+    stat = statSync(absolute);
+  } catch (error) {
+    // Absent is the invocation's mistake; an `EACCES` parent is the input's refusal.
+    throw unstatablePathRefusal(absolute, error);
   }
-
-  const stat = statSync(absolute);
 
   if (stat.isFile()) {
     if (!absolute.endsWith('.md')) {
@@ -243,14 +245,17 @@ export function buildReviewReport(
   });
 }
 
-/** Footer: share the checklist link when any skill-level finding fires. */
-function renderFooter(result: PackagingValidationResult, logger: Logger): void {
+/**
+ * Footer: share the checklist link when any skill-level finding fires. Whether
+ * one did is read from the report's own `summary` — an error or a warning —
+ * so the footer and the written document cannot disagree.
+ */
+function renderFooter(result: PackagingValidationResult, summary: SeverityCounts, logger: Logger): void {
   const emittedCodes = new Set<string>();
   for (const issue of result.allErrors) {
     emittedCodes.add(issue.code);
   }
-  const hasSkillFindings = calculateValidationStatus(result.allErrors) !== 'success';
-  renderSkillQualityFooter(logger, hasSkillFindings, emittedCodes);
+  renderSkillQualityFooter(logger, summary.errors + summary.warnings > 0, emittedCodes);
 }
 
 export async function reviewCommand(
@@ -304,7 +309,7 @@ export async function reviewCommand(
 
     const report = { ...buildReviewReport(result, skillPath, grouped, gate), durationMs: Date.now() - startTime };
     if (!options.yaml) renderHumanReport(result, skillPath, grouped, logger);
-    renderFooter(result, logger);
+    renderFooter(result, report.summary, logger);
 
     // The code derives from the written document. Errors fail; warnings fail
     // only under `--strict`, which the report records as its `gate` — this

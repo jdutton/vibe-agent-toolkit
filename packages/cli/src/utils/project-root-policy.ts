@@ -13,9 +13,9 @@
  * root as a parameter — never call `findProjectRoot` themselves.
  */
 
-import { existsSync, statSync } from 'node:fs';
+import { accessSync, constants, statSync, type Stats } from 'node:fs';
 
-import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from './command-refusal.js';
 import type { Logger } from './logger.js';
@@ -77,15 +77,96 @@ export function projectRootOrNull(startDir: string): string | null {
  *
  * @param pathArg - The argument as typed, relative to cwd or absolute
  * @returns The resolved absolute path
- * @throws {CommandRefusalError} `USAGE_INVALID` when it does not exist or is not a directory
+ * @throws {CommandRefusalError} `USAGE_INVALID` when it does not exist or is not a directory;
+ *   `INPUT_UNREADABLE` when the OS refuses the `stat` (e.g. an `EACCES` parent)
  */
 export function assertDirectoryArgument(pathArg: string): string {
   const resolved = safePath.resolve(pathArg);
-  if (!existsSync(resolved)) {
-    throw new CommandRefusalError('USAGE_INVALID', `Path does not exist: ${resolved}`);
-  }
-  if (!statSync(resolved).isDirectory()) {
-    throw new CommandRefusalError('USAGE_INVALID', `Path is not a directory: ${resolved}`);
-  }
+  const refusal = directoryRefusal(resolved);
+  if (refusal !== undefined) throw refusal;
   return resolved;
+}
+
+/**
+ * The refusal for a path argument whose `stat` (or `lstat`) threw — the ONE
+ * absent-vs-unreadable predicate every path verb classifies with.
+ *
+ * Only an ABSENCE is the invocation's mistake (`USAGE_INVALID`). Any other
+ * error — an `EACCES` parent the process may not traverse, an `ELOOP` — means
+ * whether the path exists is unknown: the INPUT's refusal (`INPUT_UNREADABLE`),
+ * never "does not exist" and never a scan that starts anyway. Never classify
+ * with `existsSync`: it answers `false` for both.
+ *
+ * @param resolved - The resolved path that was stat'ed
+ * @param error - What the `stat` threw
+ * @returns The refusal to throw or return
+ */
+export function unstatablePathRefusal(resolved: string, error: unknown): CommandRefusalError {
+  if (isPathAbsentError(error)) return new CommandRefusalError('USAGE_INVALID', `Path does not exist: ${resolved}`, { cause: error });
+  const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
+  return new CommandRefusalError('INPUT_UNREADABLE', `Path cannot be read (${code}): ${resolved}`, { cause: error });
+}
+
+/**
+ * Why `resolved` is not a usable directory, or `undefined` when it is one.
+ * A `stat` that throws is classified by {@link unstatablePathRefusal}.
+ */
+function directoryRefusal(resolved: string): CommandRefusalError | undefined {
+  let stats: Stats;
+  try {
+    stats = statSync(resolved);
+  } catch (error) {
+    return unstatablePathRefusal(resolved, error);
+  }
+  if (!stats.isDirectory()) return new CommandRefusalError('USAGE_INVALID', `Path is not a directory: ${resolved}`);
+  return undefined;
+}
+
+/**
+ * Why a DIRECTORY argument cannot be read, or `undefined` when it can be.
+ *
+ * A probe, not a listing: the verb's own walk owns enumeration; this only asks
+ * whether it can start. A directory the OS will not let the process list or
+ * enter is an input that exists and cannot be read — `INPUT_UNREADABLE`, never
+ * "not found" and never a finding about a tree nothing was read from.
+ *
+ * @param dir - The resolved argument, known to be a directory
+ * @returns The `INPUT_UNREADABLE` refusal, or `undefined`
+ */
+export function unlistableDirectoryRefusal(dir: string): CommandRefusalError | undefined {
+  try {
+    accessSync(dir, constants.R_OK | constants.X_OK);
+    return undefined;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
+    return new CommandRefusalError('INPUT_UNREADABLE', `Path cannot be read (${code}): ${dir}`, { cause: error });
+  }
+}
+
+/**
+ * {@link assertDirectoryArgument}, plus the one more way a directory argument
+ * can leave nothing to examine: the OS will not let the process read it.
+ *
+ * @param pathArg - The argument as typed, relative to cwd or absolute
+ * @returns The resolved absolute path
+ * @throws {CommandRefusalError} `USAGE_INVALID` when it does not exist or is not a
+ *   directory; `INPUT_UNREADABLE` when it cannot be listed
+ */
+export function assertReadableDirectoryArgument(pathArg: string): string {
+  const resolved = safePath.resolve(pathArg);
+  const refusal = readableDirectoryRefusal(resolved);
+  if (refusal !== undefined) throw refusal;
+  return resolved;
+}
+
+/**
+ * Why `resolved` cannot be read as a directory — absent or not a directory
+ * (`USAGE_INVALID`), or refused by the OS (`INPUT_UNREADABLE`) — or
+ * `undefined`. The one judgement behind {@link assertReadableDirectoryArgument}
+ * and the skills scope guard.
+ *
+ * @param resolved - The resolved argument
+ */
+export function readableDirectoryRefusal(resolved: string): CommandRefusalError | undefined {
+  return directoryRefusal(resolved) ?? unlistableDirectoryRefusal(resolved);
 }

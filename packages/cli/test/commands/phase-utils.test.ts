@@ -80,6 +80,32 @@ describe('phaseResultFromOutcome', () => {
   });
 });
 
+describe('phaseResultFromOutcome — a Report-shaped phase document', () => {
+  /** A migrated phase's published envelope, with the given status and counts. */
+  const report = (status: 'ok' | 'findings' | 'error', summary: { errors: number; warnings: number; info: number }) =>
+    ({ status, examined: 1, findings: [], summary, gate: { strict: false }, data: null });
+
+  it('reads a Report-shaped phase document: findings with only warnings is warning', () => {
+    // An exit code has three values and cannot say `warning`; the envelope's
+    // `findings` covers info-only and warnings-only alike, so the summary decides.
+    expect(phaseResultFromOutcome('skills', { document: report('findings', { errors: 0, warnings: 2, info: 0 }), exitCode: 0 }).status)
+      .toBe('warning');
+    expect(phaseResultFromOutcome('skills', { document: report('findings', { errors: 0, warnings: 0, info: 3 }), exitCode: 0 }).status)
+      .toBe('success');
+    expect(phaseResultFromOutcome('skills', { document: report('findings', { errors: 1, warnings: 0, info: 0 }), exitCode: 1 }).status)
+      .toBe('error');
+    expect(phaseResultFromOutcome('skills', { document: report('ok', { errors: 0, warnings: 0, info: 0 }), exitCode: 0 }).status)
+      .toBe('success');
+    expect(phaseResultFromOutcome('skills', { document: { ...report('error', { errors: 0, warnings: 0, info: 0 }), error: { code: 'USAGE_INVALID', message: 'x' } }, exitCode: 2 }).status)
+      .toBe('system-error');
+  });
+
+  it('counts a Report-shaped phase document from its summary', () => {
+    const result = phaseResultFromOutcome('skills', { document: report('findings', { errors: 1, warnings: 4, info: 2 }), exitCode: 1 });
+    expect(aggregatePhaseIssueCounts([result])).toEqual({ errors: 1, warnings: 4, info: 2 });
+  });
+});
+
 describe('aggregatePhaseStatus', () => {
   it('is success for no phases and for all-success phases', () => {
     expect(aggregatePhaseStatus([])).toBe('success');

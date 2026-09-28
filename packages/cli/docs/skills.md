@@ -52,49 +52,56 @@ See `docs/validation-codes.md` for the full code reference with per-code descrip
 **What it does:**
 1. Reads `vibe-agent-toolkit.config.yaml` from `[path]` (default: current directory) and discovers every file its `skills.include` / `skills.exclude` globs match
 2. Validates each with the packaging validator: frontmatter, links and link depth, size/complexity, `files:` config, compat observations — under the merged `skills.defaults` + `skills.config.<name>` validation config (`severity` + `allow`)
-3. Publishes a YAML document to stdout and a findings report to stderr
-4. Exits 0, 1 or 2 — see below
+3. Publishes the report envelope (YAML) on stdout and a findings report on stderr
+4. Exits on the code the published document derives — 0, 1 or 2, see below
 
 **Arguments:**
-- `[path]` — a directory that holds `vibe-agent-toolkit.config.yaml`. It scopes *which config is read*, not which files are scanned; the globs in that config do the scanning. A path that does not exist, is not a directory, or holds no config is refused (exit 2) rather than silently rescoping the run to nothing. There is no `--user` mode and no "scan this directory" mode.
+- `[path]` — a directory that holds `vibe-agent-toolkit.config.yaml`. It scopes *which config is read*, not which files are scanned; the globs in that config do the scanning. A path that does not exist, is not a directory, or holds no config is refused as `USAGE_INVALID`, and one the OS will not list as `INPUT_UNREADABLE` (exit 2) — never silently rescoped to nothing. There is no `--user` mode and no "scan this directory" mode.
 
 **Options:**
-- `--skill <name>` — validate one discovered skill only (narrows what is reported on, not what counts as declared test input)
-- `-v, --verbose` — publish every validated skill, findings or not, with full detail (`allErrors`, `ignoredErrors`, `observations`, `evidence`, metadata) and one block per finding on stderr
+- `--skill <name>` — validate one discovered skill only (narrows what is reported on, not what counts as declared test input). A name no discovered skill has is refused as `USAGE_INVALID`
+- `-v, --verbose` — stderr only: every finding in full, plus each skill's allow-suppressed records and the reference paths its bundle excludes. The published document is the same with or without it
 - `-d, --debug` — debug logging
 
 **Exit codes:**
 
-| Exit | When |
-|---|---|
-| `0` | No active `error` finding (warnings and info do not fail; allowed errors do not fail) |
-| `1` | An active `error` finding on any skill, **or** the run validated no skill: `skills.include` matched nothing (typo, renamed directory, an `exclude` that swallows every match). Refused as one non-overridable `RESOURCE_CHECK_BROKEN` naming the globs — a green over zero skills is not a verdict |
-| `2` | Could not run: `[path]` refused, config invalid, `projectRoot` not found |
+The code is derived from the published document — the one rule every report verb shares.
 
-A config with no `skills:` block at all is "nothing to validate": no document, exit 0 — declaring no skills is a choice, and both orchestrators skip the phase on that config.
+| Exit | `status` | When |
+|---|---|---|
+| `0` | `ok` / `findings` | No `error`-severity finding (warnings and info do not fail; allowed findings are not published) |
+| `1` | `findings` | An `error`-severity finding on any skill, **or** the run validated no skill: `skills.include` matched nothing (typo, renamed directory, an `exclude` that swallows every match) or the config has no `skills:` block. The writer adds one non-overridable `RESOURCE_CHECK_BROKEN` — a green over zero skills is not a verdict — and stderr names the globs that matched nothing |
+| `2` | `error` | Could not run; `error.code` says why: `USAGE_INVALID` (`[path]` refused, unknown `--skill`, no `projectRoot`), `INPUT_UNREADABLE` (a directory the OS will not list), `CONFIG_INVALID` (config does not parse) |
 
-**What a matched file must be.** Every file the globs match is validated as a skill and counted in `skillsValidated`. A matched file with no YAML frontmatter block — or one whose block does not parse — is refused with `SKILL_MISSING_FRONTMATTER` at `error` (non-overridable), located at the file's project-relative path. So a glob that drifts onto a `README.md`, or a `SKILL.md` that lost its fence, fails the run instead of passing under its H1 as a name. A frontmatter block without a `name` is legal (agentskills.io makes `name` optional) and is not refused on that ground.
+Both orchestrators (`vat validate`, `vat verify`) skip the skills phase for a config with no `skills:` block, so only a direct run reports it.
+
+**What a matched file must be.** Every file the globs match is validated as a skill and counted in `examined`. A matched file with no YAML frontmatter block — or one whose block does not parse — is refused with `SKILL_MISSING_FRONTMATTER` at `error` (non-overridable), located at the file's project-relative path. So a glob that drifts onto a `README.md`, or a `SKILL.md` that lost its fence, fails the run instead of passing under its H1 as a name. A frontmatter block without a `name` is legal (agentskills.io makes `name` optional) and is not refused on that ground.
 
 **Output:**
 
-Default `results[]` lists only skills WITH findings — per-skill counts and a per-code tally, dominant code first; a clean skill is omitted and a zero bucket is an absent field. `skillsValidated` is the true denominator regardless. `issueCounts` always equals the sum of the per-skill rows plus `runIssueCounts` (run-level findings: `ALLOW_UNUSED` entries and the zero-skill refusal).
+The report envelope: every finding flat on `findings[]`, each `location` relative to `data.root` (the directory the config was read from); one `data.skills[]` row per skill validated, clean ones included, so `examined` and the rows always agree. `summary` counts findings by severity on the envelope and on each row, and the envelope's `summary` is exactly the rows plus the run-level findings (`ALLOW_UNUSED` entries no skill matched, and the zero-skill refusal). `allowed` counts the findings `validation.allow` suppressed for the skill; they are never published as findings.
 
 ```yaml
-status: error            # success | warning | error — worst actionable severity in the run
-issueCounts: { errors: 1, warnings: 0, info: 0 }
-runIssueCounts: { errors: 0, warnings: 0, info: 0 }
-skillsValidated: 2
-results:
-  - skillName: Beta
-    status: error
-    errors: 1
-    codes:
-      SKILL_MISSING_FRONTMATTER: 1
-runIssues: []
-durationSecs: 0.31
+status: findings         # ok | findings | error — findings = at least one finding published
+examined: 2              # skills validated
+findings:
+  - code: SKILL_MISSING_FRONTMATTER
+    severity: error
+    message: …
+    location: skills/beta/SKILL.md
+summary: { errors: 1, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 310
+data:
+  root: /abs/path/to/packages/my-pkg
+  skills:
+    - { name: alpha, status: ok, summary: { errors: 0, warnings: 0, info: 0 }, allowed: 0 }
+    - { name: beta, status: findings, summary: { errors: 1, warnings: 0, info: 0 }, allowed: 0 }
 ```
 
-stderr prints the same thing as one line per skill, with every `error` finding rendered in full beneath its row (location, message, fix) at every verbosity.
+`jq '.findings[] | select(.severity == "error")'` (after converting the YAML) lists what failed the run; `data.skills[]` is the per-skill tally. The schema is `packages/cli/schemas/skills-validate.json`.
+
+stderr prints one line per skill with findings, with every `error` finding rendered in full beneath its row (location, message, fix) at every verbosity.
 
 **Example:**
 ```bash

@@ -9,6 +9,8 @@ import { NODE_EXECUTABLE, gitExecutable } from '@vibe-agent-toolkit/utils/testin
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
+import { SKILLS_VALIDATE_REPORT_SCHEMA, type SkillsValidateReport } from '../../src/commands/skills/validate-schema.js';
+
 import {
   createSuiteContext,
   executeCli,
@@ -19,39 +21,9 @@ import {
 } from './test-common.js';
 import { executeSkillsCommandAndExpectYaml } from './test-helpers/index.js';
 
-// Type for packaging validation result
-interface SeverityCountsOutput {
-  errors: number;
-  warnings: number;
-  info: number;
-}
-
-interface PackagingValidationOutput {
-  status: string;
-  /** The distribution the two/three-valued status cannot express. */
-  issueCounts: SeverityCountsOutput;
-  skillsValidated: number;
-  results: Array<{
-    skillName: string;
-    status: string;
-    issueCounts: SeverityCountsOutput;
-    allErrors: Array<unknown>;
-    ignoredErrors: Array<unknown>;
-    metadata: {
-      skillLines: number;
-      totalLines: number;
-      fileCount: number;
-      directFileCount: number;
-      maxLinkDepth: number;
-      excludedReferenceCount: number;
-      excludedReferences?: Array<{
-        path: string;
-        reason: string;
-        matchedPattern?: string;
-      }>;
-    };
-  }>;
-  durationSecs: number;
+/** The published document, parsed with the verb's own registry schema. */
+function publishedDocument(stdout: string): SkillsValidateReport {
+  return SKILLS_VALIDATE_REPORT_SCHEMA.parse(yaml.parse(stdout)) as SkillsValidateReport;
 }
 
 describe('skills validate command (system test)', () => {
@@ -66,126 +38,31 @@ describe('skills validate command (system test)', () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('Validate skills for packaging');
-    expect(result.stdout).toContain('Exit Codes:');
+    expect(result.stdout).toContain('Exit Codes');
   });
 
-  it('should validate skills and report packaging validation results', () => {
-    const { result, parsed } = executeSkillsCommandAndExpectYaml(binPath, 'validate', fixtureDir);
+  it('publishes the report envelope its registry schema describes, one row per skill validated', () => {
+    const { result } = executeSkillsCommandAndExpectYaml(binPath, 'validate', fixtureDir);
+    const document = publishedDocument(result.stdout);
 
     expect(result.status).toBe(0);
-
-    const typedParsed = parsed as unknown as PackagingValidationOutput;
-
-    expect(parsed).toHaveProperty('status');
-    // The status is a collapse; the counts are what make it readable. Required
-    // here so a future change cannot quietly drop them and leave the status alone.
-    expect(parsed).toHaveProperty('issueCounts');
-    expect(typedParsed.issueCounts).toMatchObject({
-      errors: expect.any(Number),
-      warnings: expect.any(Number),
-      info: expect.any(Number),
-    });
-    expect(parsed).toHaveProperty('skillsValidated');
-    expect(parsed).toHaveProperty('results');
-    expect(parsed).toHaveProperty('durationSecs');
-    expect(Array.isArray(typedParsed.results)).toBe(true);
-
-    // Should find skills in fixture
-    expect(typedParsed.skillsValidated).toBeGreaterThan(0);
-
-    // Verify result structure
-    if (typedParsed.results.length > 0) {
-      const firstResult = typedParsed.results[0];
-      expect(firstResult).toHaveProperty('skillName');
-      expect(firstResult).toHaveProperty('status');
-      expect(firstResult).toHaveProperty('issueCounts');
-      expect(firstResult).toHaveProperty('allErrors');
-      expect(firstResult).toHaveProperty('metadata');
-      expect(firstResult.metadata).toHaveProperty('skillLines');
-      expect(firstResult.metadata).toHaveProperty('totalLines');
-    }
+    expect(document.status).not.toBe('error');
+    expect(document.examined).toBeGreaterThan(0);
+    // Every validated skill has a row, clean or not: the denominator and the
+    // listing can no longer disagree.
+    expect(document.data.skills).toHaveLength(document.examined);
+    // The envelope's summary is exactly the findings it publishes.
+    expect(document.summary.errors + document.summary.warnings + document.summary.info).toBe(document.findings.length);
+    expect(document.data.root).toBe(fixtureDir);
   });
 
-  it('should output YAML format', () => {
-    const { result, parsed } = executeSkillsCommandAndExpectYaml(binPath, 'validate', fixtureDir);
+  it('publishes the same document with and without --verbose — it only changes stderr', () => {
+    const plain = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'validate', fixtureDir], { encoding: 'utf-8' });
+    const verbose = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'validate', fixtureDir, '--verbose'], { encoding: 'utf-8' });
+    const withoutDuration = ({ durationMs: _durationMs, ...rest }: SkillsValidateReport): Omit<SkillsValidateReport, 'durationMs'> => rest;
 
-    // Should be parseable as YAML
-    expect(result.status).toBeDefined();
-    expect(parsed.status).toBeDefined();
-    // The full status vocabulary, not just the two this lane happens to emit
-    // today. A two-value assertion here would go red the moment `skills
-    // validate` learns to say `warning` — i.e. it would fire on the FIX, and a
-    // future reader would "repair" it by narrowing the status back.
-    expect(['success', 'warning', 'error']).toContain(parsed.status);
-  });
-
-  it('should exit with proper status code', () => {
-    // Note: Fixture may have validation errors, that's fine for testing structure
-    const { parsed } = executeSkillsCommandAndExpectYaml(binPath, 'validate', fixtureDir);
-
-    expect(parsed.status).toBeDefined();
-    // The full status vocabulary, not just the two this lane happens to emit
-    // today. A two-value assertion here would go red the moment `skills
-    // validate` learns to say `warning` — i.e. it would fire on the FIX, and a
-    // future reader would "repair" it by narrowing the status back.
-    expect(['success', 'warning', 'error']).toContain(parsed.status);
-  });
-
-  it('should report validation errors with proper structure', () => {
-    const { parsed } = executeSkillsCommandAndExpectYaml(binPath, 'validate', fixtureDir);
-
-    const typedParsed = parsed as unknown as PackagingValidationOutput;
-
-    if (typedParsed.results.length > 0) {
-      const skillResult = typedParsed.results[0];
-
-      // Verify packaging validation structure
-      expect(skillResult).toHaveProperty('skillName');
-      expect(skillResult).toHaveProperty('allErrors');
-      expect(skillResult).toHaveProperty('ignoredErrors');
-      // `allErrors` is the sole issue container — the emitted set is written to
-      // the document once, not again under an `active*` partition.
-      expect(skillResult).not.toHaveProperty('activeErrors');
-      expect(skillResult).not.toHaveProperty('activeWarnings');
-      expect(skillResult).toHaveProperty('metadata');
-
-      // Verify metadata structure (including new fields)
-      expect(skillResult.metadata).toHaveProperty('skillLines');
-      expect(skillResult.metadata).toHaveProperty('totalLines');
-      expect(skillResult.metadata).toHaveProperty('fileCount');
-      expect(skillResult.metadata).toHaveProperty('directFileCount');
-      expect(skillResult.metadata).toHaveProperty('maxLinkDepth');
-      expect(skillResult.metadata).toHaveProperty('excludedReferenceCount');
-    }
-  });
-
-  it('should NOT include excludedReferences in default (non-verbose) output', () => {
-    const { parsed } = executeSkillsCommandAndExpectYaml(binPath, 'validate', fixtureDir);
-
-    const typedParsed = parsed as unknown as PackagingValidationOutput;
-
-    // In non-verbose mode, excludedReferences should be stripped from metadata
-    for (const result of typedParsed.results) {
-      expect(result.metadata).not.toHaveProperty('excludedReferences');
-      // But excludedReferenceCount should still be present
-      expect(result.metadata).toHaveProperty('excludedReferenceCount');
-    }
-  });
-
-  it('should include excludedReferences in verbose output', () => {
-    const result = spawnSync(NODE_EXECUTABLE, [binPath, 'skills', 'validate', fixtureDir, '--verbose'], {
-      encoding: 'utf-8',
-    });
-
-    expect(result.status).toBe(0);
-
-    const parsed = yaml.parse(result.stdout) as PackagingValidationOutput;
-
-    // In verbose mode, excludedReferences should be present in metadata
-    for (const skillResult of parsed.results) {
-      expect(skillResult.metadata).toHaveProperty('excludedReferences');
-      expect(Array.isArray(skillResult.metadata.excludedReferences)).toBe(true);
-    }
+    expect(verbose.status).toBe(plain.status);
+    expect(withoutDuration(publishedDocument(verbose.stdout))).toEqual(withoutDuration(publishedDocument(plain.stdout)));
   });
 });
 
@@ -353,61 +230,54 @@ describe('skills validate — framework exit codes (system test)', () => {
     const tempDir = frameworkCtx.createTempDir();
     const projectDir = setupProjectWithGitignoreLink(tempDir, VALIDATE_SKILL_NAME);
 
-    const { result, parsed } = await executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate'], { cwd: projectDir });
+    const { result } = await executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate'], { cwd: projectDir });
+    const document = publishedDocument(result.stdout);
 
     expect(result.status).toBe(1);
-    // Output should contain the error code somewhere (stdout YAML or stderr)
-    expect(result.stderr + result.stdout).toContain('LINK_TO_GITIGNORED_FILE');
-    // YAML should reflect error status
-    expect(parsed.status).toBe('error');
+    // An error-severity finding is `findings` at exit 1 — `error` is reserved
+    // for a run that did not finish.
+    expect(document.status).toBe('findings');
+    expect(document.findings.filter((f) => f.severity === 'error').map((f) => f.code)).toContain('LINK_TO_GITIGNORED_FILE');
   });
 
   it('exits 0 when LINK_TO_GITIGNORED_FILE error is suppressed via allow', async () => {
     const tempDir = frameworkCtx.createTempDir();
     const projectDir = setupProjectWithGitignoreLinkAllowed(tempDir, VALIDATE_SKILL_NAME);
 
-    const { result, parsed } = await executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate'], { cwd: projectDir });
+    const { result } = await executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate'], { cwd: projectDir });
+    const document = publishedDocument(result.stdout);
 
     // The gitignored-link ERROR is suppressed, which is what "exits 0" tests.
     // The fixture's frontmatter still carries a `version` field, so the run is
-    // not silent — and the status now says so instead of rounding down to
-    // `success`. The invariant under test is zero errors, not a quiet status.
+    // not silent. The invariant under test is zero errors, not a quiet status —
+    // and the suppression is counted on the skill's row, never published.
     expect(result.status).toBe(0);
-    expect(parsed.issueCounts).toMatchObject({ errors: 0 });
+    expect(document.summary).toMatchObject({ errors: 0 });
+    expect(document.data.skills[0]?.allowed).toBeGreaterThan(0);
+    expect(document.findings.map((f) => f.code)).not.toContain('LINK_TO_GITIGNORED_FILE');
   });
 
   it('exits 0 but reports `warning` when LINK_TO_NAVIGATION_FILE fires (default severity=warning, non-blocking)', async () => {
     const tempDir = frameworkCtx.createTempDir();
     const projectDir = setupProjectWithNavigationLink(tempDir, VALIDATE_SKILL_NAME);
 
-    // `--verbose`: the assertions at the bottom drill into `results[0].allErrors`
-    // for an individual finding's code AND its severity — a pairing the default
-    // per-skill row cannot state (it publishes severity counts and a `codes`
-    // tally side by side, so a row with both an error and a warning could not say
-    // which code was which). Every run-level assertion above it (`status`,
-    // `issueCounts`, exit code, banner suppression) is identical in both modes.
-    const { result, parsed } = await executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate', '--verbose'], { cwd: projectDir });
+    const { result } = await executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate'], { cwd: projectDir });
+    const document = publishedDocument(result.stdout);
 
     // Warnings are non-blocking — should exit 0
     expect(result.status).toBe(0);
     // ...but non-blocking is not the same as absent. This lane used to publish
-    // `success` here AND print "✅ All validations passed" over the warnings,
-    // because its status collapse had no `warning` value to reach for.
-    expect(parsed.status).toBe('warning');
-    expect(parsed.issueCounts).toMatchObject({ errors: 0 });
-    expect((parsed.issueCounts as { warnings: number }).warnings).toBeGreaterThan(0);
+    // `success` here AND print "✅ All validations passed" over the warnings.
+    expect(document.status).toBe('findings');
+    expect(document.summary).toMatchObject({ errors: 0 });
+    expect(document.summary.warnings).toBeGreaterThan(0);
     expect(result.stderr).not.toContain('All validations passed');
 
-    // The code should appear in the emitted set in the YAML output. Asserted
-    // unconditionally: the old `if (activeWarnings.length > 0)` guard made the
-    // whole check vanish exactly when the renderer stopped reporting warnings.
-    const results = parsed.results as Array<Record<string, unknown>>;
-    const firstResult = results[0] ?? {};
-    const allErrors = firstResult['allErrors'] as Array<Record<string, unknown>>;
-    const navWarnings = allErrors.filter((w) => w['severity'] === 'warning');
-    expect(navWarnings.map((w) => w['code'])).toContain('LINK_TO_NAVIGATION_FILE');
-    // Per-skill counts ride beside the per-skill two-valued gate status.
-    expect(firstResult['issueCounts']).toMatchObject({ errors: 0 });
+    // Each finding states its own code AND severity, flat on the envelope.
+    expect(document.findings.filter((f) => f.severity === 'warning').map((f) => f.code)).toContain('LINK_TO_NAVIGATION_FILE');
+    // Per-skill counts (`summary`) ride beside the literal per-skill status.
+    expect(document.data.skills[0]?.status).toBe('findings');
+    expect(document.data.skills[0]?.summary).toMatchObject({ errors: 0 });
   });
 
   it('help text uses validation framework language and not stale override language', async () => {
@@ -420,8 +290,8 @@ describe('skills validate — framework exit codes (system test)', () => {
     expect(result.stdout).toContain('allow');
     expect(result.stdout).toContain('docs/validation-codes.md');
     // Exit codes section updated
-    expect(result.stdout).toContain('Exit Codes:');
-    expect(result.stdout).toContain('severity=error, not allowed');
+    expect(result.stdout).toContain('Exit Codes');
+    expect(result.stdout).toContain('error-severity finding');
     // Stale language should be gone
     expect(result.stdout).not.toContain('validation overrides with expiration checking');
     expect(result.stdout).not.toContain('ignoreValidationErrors');

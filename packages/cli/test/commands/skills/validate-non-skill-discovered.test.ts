@@ -31,8 +31,9 @@ import { dirname } from 'node:path';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { type buildValidateSummary, runSkillsValidatePhase } from '../../../src/commands/skills/validate.js';
 import { resetSkillDiscoveryCache } from '../../../src/skill-resolution/packaging-config.js';
+
+import { publishedSkillsValidate } from './skills-validate-document.js';
 
 const MISSING_FRONTMATTER = 'SKILL_MISSING_FRONTMATTER';
 
@@ -76,15 +77,6 @@ function writeProject(configBody: string, betaBody: string): string {
   return root;
 }
 
-/** The phase's document, typed by what the builder publishes. */
-type Summary = ReturnType<typeof buildValidateSummary>;
-
-/** Verbose rows carry the whole result; this is the slice these rows read. */
-interface VerboseRow {
-  skillName: string;
-  status: string;
-  allErrors: Array<{ code: string; location?: string; severity: string }>;
-}
 
 const includeOnly = (glob: string): string => `version: 1\nskills:\n  include:\n    - "${glob}"\n`;
 
@@ -96,19 +88,17 @@ describe('vat skills validate refuses a discovered file that is not a skill', ()
   it('a glob that matches a plain markdown file is not success — the file fails, by path, exit 1', async () => {
     const root = writeProject(includeOnly(README_PATH), ALPHA_SKILL);
 
-    const outcome = await runSkillsValidatePhase(root, { verbose: true });
+    const { exitCode, document } = await publishedSkillsValidate(root);
 
-    expect(outcome.exitCode).toBe(1);
-    expect(outcome.failed).toBeUndefined();
-    const document = outcome.document as Summary;
-    expect(document.status).toBe('error');
+    expect(exitCode).toBe(1);
+    expect(document.status).toBe('findings');
     // The glob matched one file, so one was checked — the refusal is on the
     // file, not a zero-denominator run-integrity refusal.
-    expect(document.skillsValidated).toBe(1);
-    expect(document.runIssues).toEqual([]);
-    const [row] = document.results as VerboseRow[];
-    expect(row?.status).toBe('error');
-    const refusal = row?.allErrors.find((issue) => issue.code === MISSING_FRONTMATTER);
+    expect(document.examined).toBe(1);
+    const [row] = document.data.skills;
+    expect(row?.status).toBe('findings');
+    expect(row?.summary.errors).toBe(1);
+    const refusal = document.findings.find((issue) => issue.code === MISSING_FRONTMATTER);
     expect(refusal?.severity).toBe('error');
     // Names the file the glob matched, relative to the project root.
     expect(refusal?.location).toBe(README_PATH);
@@ -117,30 +107,24 @@ describe('vat skills validate refuses a discovered file that is not a skill', ()
   it('a SKILL.md that lost its frontmatter fails the same way, beside a real skill that passes', async () => {
     const root = writeProject(includeOnly(SKILLS_GLOB), '# Beta\n\nBody with no frontmatter.\n');
 
-    const outcome = await runSkillsValidatePhase(root, { verbose: true });
+    const { exitCode, document } = await publishedSkillsValidate(root);
 
-    expect(outcome.exitCode).toBe(1);
-    const document = outcome.document as Summary;
-    expect(document.status).toBe('error');
-    expect(document.skillsValidated).toBe(2);
-    const rows = document.results as VerboseRow[];
-    const byLocation = new Map(
-      rows.map((row) => [row.allErrors.find((i) => i.code === MISSING_FRONTMATTER)?.location, row.status]),
-    );
-    // Exactly one row refused, and it is beta's file; alpha has no such finding.
-    expect(byLocation.get(BETA_PATH)).toBe('error');
-    expect(rows.filter((row) => row.status === 'error')).toHaveLength(1);
-    expect(rows.find((row) => row.skillName === 'alpha')?.status).toBe('success');
+    expect(exitCode).toBe(1);
+    expect(document.status).toBe('findings');
+    expect(document.examined).toBe(2);
+    // Exactly one finding refused a file, and it is beta's; alpha's row is clean.
+    expect(document.findings.filter((i) => i.code === MISSING_FRONTMATTER).map((i) => i.location)).toEqual([BETA_PATH]);
+    expect(document.data.skills.filter((row) => row.summary.errors > 0)).toHaveLength(1);
+    expect(document.data.skills.find((row) => row.name === 'alpha')?.summary.errors).toBe(0);
   });
 
   it('two real skills stay green — the refusal is off the populated, well-formed path', async () => {
     const root = writeProject(includeOnly(SKILLS_GLOB), ALPHA_SKILL.replaceAll('alpha', 'beta'));
 
-    const outcome = await runSkillsValidatePhase(root, {});
+    const { exitCode, document } = await publishedSkillsValidate(root);
 
-    expect(outcome.exitCode).toBe(0);
-    const document = outcome.document as Summary;
-    expect(document.status).toBe('success');
-    expect(document.skillsValidated).toBe(2);
+    expect(exitCode).toBe(0);
+    expect(document.summary.errors).toBe(0);
+    expect(document.examined).toBe(2);
   });
 });

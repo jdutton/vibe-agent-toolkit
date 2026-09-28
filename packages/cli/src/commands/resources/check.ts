@@ -35,7 +35,6 @@ import {
   bindBuiltinChecks,
   BUILTIN_CHECK_NAMES,
   issuesFromCheckRows,
-  type StatedLimit,
   type BoundBuiltinCheck,
   type ResourceCheck,
 } from '@vibe-agent-toolkit/resources';
@@ -177,27 +176,6 @@ export interface CheckPayloadInput {
    */
   populated: PopulatedRun | null;
 }
-
-/**
- * The published copy of {@link relationBoundsFor}'s answer.
- *
- * The registry lists are `readonly` and this document is handed to a serializer,
- * so the arrays are copied rather than referenced — the same rule
- * `lensesEvaluated` follows one field above: a published document owns no
- * reference into the run's own state.
- *
- * @param lensesEvaluated - The lenses this run evaluated
- * @returns The bounds keys to spread, or nothing
- */
-function structuredBounds(lensesEvaluated: readonly string[]): {
-  boundsStatement?: string;
-  limits?: { id: string; direction: StatedLimit['direction']; statement: string }[];
-} {
-  const bounds = relationBoundsFor(lensesEvaluated);
-  if (bounds.boundsStatement === undefined || bounds.limits === undefined) return {};
-  return { boundsStatement: bounds.boundsStatement, limits: bounds.limits.map((limit) => ({ ...limit })) };
-}
-
 
 /**
  * The refusal for a run in which NO check executed.
@@ -406,7 +384,7 @@ function populationData(populated: PopulatedRun | null): Pick<
     // one that most owes them — `utils/relation-limits.ts` carries why.
     // Copied out of the readonly registry lists: the published document owns
     // no reference into module state a later render could mutate.
-    ...structuredBounds(populated.lensesEvaluated),
+    ...relationBoundsFor(populated.lensesEvaluated),
   };
 }
 

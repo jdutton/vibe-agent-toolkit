@@ -2,6 +2,7 @@ import { existsSync, readdirSync } from 'node:fs';
 
 import {
   safePath,
+  VatError,
 } from '@vibe-agent-toolkit/utils';
 import {
   nonInteractiveGitOverrides,
@@ -61,6 +62,13 @@ function runGit(
 }
 
 /**
+ * The code a subpath the clone does not hold — absent, or escaping the repo —
+ * is thrown with. The source WAS read; the subpath is the caller's argument, so
+ * a caller maps it to a usage mistake by code, never by the message.
+ */
+export const GIT_SUBPATH_INVALID_CODE = 'GIT_SUBPATH_INVALID';
+
+/**
  * Shallow-clone `parsed` into the caller-provided `targetTempdir`, validate any
  * subpath, and return the resolved ref/commit/targetDir.
  *
@@ -81,7 +89,8 @@ export function cloneGitSource(parsed: ParsedGitUrl, targetTempdir: string): Git
     const inside =
       resolvedTarget === resolvedTemp || resolvedTarget.startsWith(`${resolvedTemp}/`);
     if (!inside) {
-      throw new Error(
+      throw new VatError(
+        GIT_SUBPATH_INVALID_CODE,
         `Subpath escapes the cloned repository: ${subpath}. ` +
           `Subpaths must be relative paths inside the repo (no \`..\` traversal).`,
       );
@@ -90,7 +99,8 @@ export function cloneGitSource(parsed: ParsedGitUrl, targetTempdir: string): Git
 
   if (!existsSync(targetDir)) {
     const topLevel = readdirSync(targetTempdir).join(', ');
-    throw new Error(
+    throw new VatError(
+      GIT_SUBPATH_INVALID_CODE,
       `Subpath not found in cloned repo: ${subpath ?? '(none)'}. Repo root contains: ${topLevel}.`,
     );
   }

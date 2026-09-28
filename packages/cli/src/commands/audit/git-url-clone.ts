@@ -16,6 +16,8 @@ import { cloneGitSource } from '@vibe-agent-toolkit/agent-skills';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { type ParsedGitUrl } from '@vibe-agent-toolkit/utils/git';
 
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
+
 import type { Provenance } from './provenance.js';
 
 export interface CloneAndAuditContext {
@@ -30,6 +32,23 @@ export interface CloneOptions {
    * stderr. Wired to the existing `--debug` flag in `auditCommand`.
    */
   keepTempForDebug: boolean;
+}
+
+/**
+ * Clone the source, or refuse. A subpath the clone does not hold, or one that
+ * escapes it, arrives coded (`GIT_SUBPATH_INVALID`) and keeps its own refusal —
+ * `USAGE_INVALID`, the argument's mistake. Anything else the clone step throws
+ * (a clone that fails, a ref it does not have) means the source the operator
+ * named could not be read: `INPUT_UNREADABLE`. Only the clone step is coded; a
+ * failure inside the audit that follows is the audit's own.
+ */
+function cloneSource(parsed: ParsedGitUrl, tempdir: string): ReturnType<typeof cloneGitSource> {
+  try {
+    return cloneGitSource(parsed, tempdir);
+  } catch (error) {
+    if (refusalCodeOf(error) !== 'INTERNAL_ERROR') throw error;
+    throw new CommandRefusalError('INPUT_UNREADABLE', errorMessageOf(error), { cause: error });
+  }
 }
 
 /**
@@ -54,7 +73,7 @@ export async function withClonedRepo<T>(
   process.on('SIGINT', sigintListener);
 
   // The audit pipeline calls `process.exit()` on completion
-  // (`handleAuditResults` in audit.ts), which would skip any `finally`
+  // (`runAuditAtPath` in audit.ts), which would skip any `finally`
   // block here. Register an `'exit'` listener so cleanup runs even when
   // the process is ending — this is Node's documented escape hatch for
   // "always run this sync cleanup". We still keep the `finally` below so
@@ -75,7 +94,7 @@ export async function withClonedRepo<T>(
   process.on('exit', exitListener);
 
   try {
-    const { ref, commit, targetDir } = cloneGitSource(parsed, tempdir);
+    const { ref, commit, targetDir } = cloneSource(parsed, tempdir);
     const { subpath } = parsed;
     const provenance: Provenance = {
       url: parsed.cloneUrl,

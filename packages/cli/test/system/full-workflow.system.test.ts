@@ -4,6 +4,9 @@ import { type AddressInfo } from 'node:net';
 import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { it, beforeAll, afterAll } from 'vitest';
 
+import { RESOURCES_SCAN_REPORT_SCHEMA } from '../../src/commands/resources/scan-schema.js';
+import { RESOURCES_VALIDATE_REPORT_SCHEMA } from '../../src/commands/resources/validate-schema.js';
+
 import { describe, executeCliAndParseYaml, expect, fs, getBinPath, safePath, spawnSync } from './test-common.js';
 import {
   createTestTempDir,
@@ -54,24 +57,15 @@ ${validationConfig}`;
 }
 
 /**
- * Flatten the nested `errors` array of a `resources validate` YAML payload and
- * return the first EXTERNAL_URL_DEAD finding (or undefined). Shared by the
- * default-warning and promoted-error severity cases so the flatten/find logic
- * lives in exactly one place.
- *
- * Reads the VERBOSE document: the default publishes per-file COUNTS plus a
- * `codes` tally, and both callers assert on an individual finding's `severity`
- * — the very thing under test here is which severity a given CODE resolved to,
- * a pairing only the verbose form states. Hence the `--verbose` on both
- * invocations below.
+ * The first EXTERNAL_URL_DEAD finding of a `resources validate` report (or
+ * undefined), read through the published schema. Shared by the default-warning
+ * and promoted-error severity cases so the find logic lives in exactly one
+ * place — the thing under test is which severity a given CODE resolved to.
  */
 function findExternalUrlDeadFinding(
   parsed: Record<string, unknown>
 ): { code: string; severity: string } | undefined {
-  const files = parsed['issues'] as
-    | Array<{ issues: Array<{ code: string; severity: string }> }>
-    | undefined;
-  return (files ?? []).flatMap(f => f.issues).find(e => e.code === 'EXTERNAL_URL_DEAD');
+  return RESOURCES_VALIDATE_REPORT_SCHEMA.parse(parsed).findings.find(e => e.code === 'EXTERNAL_URL_DEAD');
 }
 
 const binPath = getBinPath(import.meta.url);
@@ -121,23 +115,24 @@ resources:
     const { result, parsed } = executeScanAndParse(binPath, projectDir);
 
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
-    expect(parsed.filesScanned).toBe(3); // README, guide, broken
-    expect(parsed.linksFound).toBeGreaterThan(0);
+    const report = RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed);
+    expect(report.status).toBe('ok');
+    expect(report.examined).toBe(3); // README, guide, broken
   });
 
   it('should validate and detect broken links', () => {
     const { result, parsed } = executeValidateAndParse(binPath, projectDir);
 
     expect(result.status).toBe(1); // Validation failed
-    expect(parsed.status).toBe('error');
-    expect(parsed.errorsFound).toBe(2); // missing.md + #nonexistent
+    const report = RESOURCES_VALIDATE_REPORT_SCHEMA.parse(parsed);
+    expect(report.status).toBe('findings');
+    expect(report.summary.errors).toBe(2); // missing.md + #nonexistent
 
-    // Check test-format errors on stderr (use text format)
+    // The same findings as compiler-style lines under --format text.
     const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
-    expect(textResult.stderr).toContain('broken.md');
-    expect(textResult.stderr).toContain('missing.md');
-    expect(textResult.stderr).toContain('#nonexistent');
+    expect(textResult.stdout).toContain('broken.md');
+    expect(textResult.stdout).toContain('missing.md');
+    expect(textResult.stdout).toContain('#nonexistent');
   });
 
   it('should validate successfully after fixing links', () => {
@@ -150,7 +145,7 @@ resources:
     const { result, parsed } = executeValidateAndParse(binPath, projectDir);
 
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    expect(RESOURCES_VALIDATE_REPORT_SCHEMA.parse(parsed).status).toBe('ok');
   });
 
   it('should show version with context in dev mode', () => {
@@ -213,10 +208,10 @@ resources:
 
     const { result, parsed } = executeValidateAndParse(binPath, projectDir);
 
-    // Without the flag, external URLs are never fetched → clean success.
+    // Without the flag, external URLs are never fetched → nothing found.
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
-    expect(parsed.errorsFound).toBeUndefined();
+    expect(parsed.status).toBe('ok');
+    expect(parsed.findings).toEqual([]);
   });
 });
 
@@ -246,7 +241,7 @@ describe('Dead external URL severity → exit code (system test)', () => {
 
     const { result, parsed } = await executeCliAndParseYaml(
       binPath,
-      ['resources', 'validate', '--check-external-urls', '--no-cache', '--verbose'],
+      ['resources', 'validate', '--check-external-urls', '--no-cache'],
       { cwd: projectDir }
     );
 
@@ -272,13 +267,13 @@ describe('Dead external URL severity → exit code (system test)', () => {
 
     const { result, parsed } = await executeCliAndParseYaml(
       binPath,
-      ['resources', 'validate', '--check-external-urls', '--no-cache', '--verbose'],
+      ['resources', 'validate', '--check-external-urls', '--no-cache'],
       { cwd: projectDir }
     );
 
     // Promoted to error → fatal exit.
     expect(result.status).toBe(1);
-    expect(parsed.status).toBe('error');
+    expect(parsed.status).toBe('findings');
 
     const dead = findExternalUrlDeadFinding(parsed);
     expect(dead).toBeDefined();

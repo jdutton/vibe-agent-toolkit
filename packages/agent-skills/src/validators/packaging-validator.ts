@@ -31,9 +31,11 @@ import {
   CODE_REGISTRY,
   runSingleUnitValidation,
   runValidationFramework,
+  summarizeIssues,
   type AllowUsageLedger,
   type AllowRecord,
   type IssueCode,
+  type SeverityCounts,
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
@@ -132,15 +134,23 @@ export interface PackagingValidationResult {
   skillName: string;
 
   /**
-   * Gate verdict: `error` iff there is an active error. TWO-valued on purpose —
-   * this is the build/validate gate, and a warning does not fail a build.
+   * `findings` when {@link PackagingValidationResult.allErrors} holds anything,
+   * `ok` when it is empty — `resultStatus(allErrors)` from
+   * `@vibe-agent-toolkit/schema`, the one derivation every library result and
+   * `buildReport` share.
    *
-   * It therefore says NOTHING about warnings or info. Read {@link
-   * PackagingValidationResult.allErrors} for the distribution — via
-   * `countBySeverity(result.allErrors)` from `@vibe-agent-toolkit/schema`,
-   * which is the same collapse every other lane uses.
+   * It is NOT the build gate. "Does this fail a build?" is `summary.errors > 0`
+   * — a warning does not fail a build, and an info-only result is `findings`.
    */
-  status: 'success' | 'error';
+  status: 'ok' | 'findings';
+
+  /**
+   * Per-severity counts of {@link PackagingValidationResult.allErrors}
+   * (`countBySeverity`). Anything that appends to `allErrors` after
+   * construction (the CLI's `applyConfigVerdicts`) re-derives `status` and
+   * `summary` in the same step, so the counts never go stale.
+   */
+  summary: SeverityCounts;
 
   /**
    * THE container: every emitted issue after severity resolution, stored once.
@@ -154,8 +164,8 @@ export interface PackagingValidationResult {
    * that serializes a result spreads the whole object, each issue record —
    * including its paragraph-length `fix` and `reference` prose — was written to
    * the output document twice. Derive the partition instead:
-   * {@link activeErrorsOf} / {@link activeWarningsOf}, or `countBySeverity` /
-   * `calculateValidationStatus` from `@vibe-agent-toolkit/schema`.
+   * {@link activeErrorsOf} / {@link activeWarningsOf}, or read
+   * {@link PackagingValidationResult.summary} for the counts.
    */
   allErrors: ValidationIssue[];
 
@@ -196,7 +206,7 @@ type WithAllErrors = Pick<PackagingValidationResult, 'allErrors'>;
  * The active errors: emitted, resolved-severity `error`.
  *
  * Derived on read, never stored on the result — see the `allErrors` doc comment
- * for why. Equivalent to `result.status === 'error'` when all you need is the
+ * for why. Equivalent to `result.summary.errors > 0` when all you need is the
  * gate bit; use this only when you need the issues themselves.
  */
 export function activeErrorsOf(result: WithAllErrors): ValidationIssue[] {
@@ -1029,7 +1039,7 @@ export async function validateSkillForPackaging(
 
   return {
     skillName,
-    status: framework.hasErrors ? 'error' : 'success',
+    ...summarizeIssues(framework.emitted),
     allErrors: framework.emitted,
     ignoredErrors: framework.allowed,
     observations,

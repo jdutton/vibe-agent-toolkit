@@ -1,8 +1,6 @@
 import { ExitCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { validateCommand } from '../../src/commands/skills/validate.js';
 import {
   exitCodeForCommanderEnding,
   formatDuration,
@@ -15,13 +13,6 @@ const PROCESS_EXIT_ERROR_MESSAGE = 'process.exit called';
 
 /** The line every failure envelope on stdout must open with. */
 const STATUS_ERROR_LINE = 'status: error';
-
-/**
- * A directory with no `vibe-agent-toolkit.config.yaml` and no `.git/` ancestor,
- * so every `required`-policy command throws at its very first step. Enough to
- * exercise the catch arm without staging a project.
- */
-const ROOTLESS_DIR = normalizedTmpdir();
 
 /** The subject name reused across the gate-failure cases. */
 const GATE_SUBJECT = 'my-skill';
@@ -193,24 +184,6 @@ describe('command-error utilities', () => {
 
       const yamlOutput = getYamlOutput(mockStdoutWrite);
       expect(yamlOutput).toMatch(/duration: \d+\.\d+s/);
-    });
-  });
-
-  describe('the `skills` command family routes through this implementation', () => {
-    it('emits the error envelope on stdout when `skills validate` fails', async () => {
-      // The defect: `commands/skills/command-helpers.ts` shipped a SECOND
-      // `handleCommandError` that logged to stderr and exited 2 having written
-      // NOTHING to stdout — a `vat skills validate` failure produced 0 bytes of
-      // the machine-readable document its own help text promises, while every
-      // other command family (`resources/`, `rag/`, and `skills build` /
-      // `skills package`) emitted the envelope. Two implementations, one
-      // contract, two behaviours.
-      await expect(validateCommand(ROOTLESS_DIR, {})).rejects.toThrow(PROCESS_EXIT_ERROR_MESSAGE);
-
-      const yamlOutput = getYamlOutput(mockStdoutWrite);
-      expect(yamlOutput).toContain(STATUS_ERROR_LINE);
-      expect(yamlOutput).toContain('vat skills validate requires');
-      expect(mockProcessExit).toHaveBeenCalledWith(2);
     });
   });
 

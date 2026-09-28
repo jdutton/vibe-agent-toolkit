@@ -15,7 +15,7 @@
  * elsewhere in the package or to lower nothing and add code.
  */
 export const COMMENT_DENSITY_CEILINGS: Readonly<Record<string, number>> = {
-  'agent-config': 25,
+  'agent-config': 23.5,
   'agent-runtime': 43.8,
   'agent-skills': 50.7,
   'claude-marketplace': 42.6,

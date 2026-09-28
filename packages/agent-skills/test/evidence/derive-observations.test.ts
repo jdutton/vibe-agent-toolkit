@@ -37,6 +37,14 @@ function expectSingleExternalCli(commands: string[], expectedBinary: string): vo
   expect(externalCli[0]?.payload).toEqual({ binary: expectedBinary });
 }
 
+describe('deriveObservationsFromEvidence — the sentence field', () => {
+  it('carries its sentence as description, never summary (summary always means SeverityCounts)', () => {
+    const [observation] = deriveForPlugin([mcpEvidence('python3')]);
+    expect(observation?.description).toBe('Plugin invokes external CLI: python3.');
+    expect(observation).not.toHaveProperty('summary');
+  });
+});
+
 describe('deriveObservationsFromEvidence — MCP interpreter rollup', () => {
   it('emits CAPABILITY_EXTERNAL_CLI(python3) for command: python3', () => {
     const result = deriveForPlugin([mcpEvidence('python3')]);

@@ -48,7 +48,7 @@ import {
   reconcileDeltas,
   type VerdictDeltas,
 } from './deltas.js';
-import { findingIdentity } from './extract.js';
+import { findingIdentity, rowVerdict } from './extract.js';
 import { multisetDifference } from './multiset.js';
 import { VERDICT_FACET, type VerdictBody, VerdictBodySchema, type VerdictRow } from './types.js';
 import type { Validated } from './yaml-file.js';
@@ -378,8 +378,8 @@ function rowDeltas(alias: string, before: VerdictRow, after: VerdictRow): Observ
     return [...deltas, { ...at, change: { kind: 'unmeasured' }, detail: unmeasured }];
   }
   const { onlyLeft: removed, onlyRight: added } = multisetDifference(
-    before.verdict?.findings ?? [],
-    after.verdict?.findings ?? [],
+    rowVerdict(before)?.findings ?? [],
+    rowVerdict(after)?.findings ?? [],
     (finding) => JSON.stringify(findingIdentity(finding)),
   );
   deltas.push(
@@ -400,7 +400,7 @@ function rowDeltas(alias: string, before: VerdictRow, after: VerdictRow): Observ
 function unmeasuredReasons(side: string, row: VerdictRow): string[] {
   if (row.outcome === 'not-run') return [`${side} did not run: ${row.spawnError ?? 'no exit code'}`];
   if (row.exitCode === VAT_SYSTEM_ERROR_EXIT) return [`${side} exited 2 (the command could not do its job)`];
-  if (row.verdict?.shape === 'unparsed') return [`${side} printed stdout the lab could not parse`];
+  if (rowVerdict(row)?.shape === 'unparsed') return [`${side} printed stdout the lab could not parse`];
   return [];
 }
 

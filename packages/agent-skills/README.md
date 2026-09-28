@@ -36,7 +36,7 @@ const result = await validateSkill({
   skillPath: './my-skill/SKILL.md',
 });
 
-if (result.status === 'error') {
+if (result.summary.errors > 0) {
   console.error('Validation failed:');
   for (const issue of result.issues) {
     console.error(`  [${issue.code}] ${issue.message}`);
@@ -93,9 +93,10 @@ interface ValidateOptions {
 interface ValidationResult {
   path: string;                       // Path to skill file
   type: 'agent-skill' | 'vat-agent'; // Detected type
-  status: 'success' | 'warning' | 'error';
-  summary: string;                    // Human-readable summary
+  status: 'ok' | 'findings';          // Literal: `findings` iff any issue is published (info counts)
+  description: string;                // Human-readable one-liner
   issues: ValidationIssue[];          // All validation issues
+  summary: SeverityCounts;            // { errors, warnings, info } — gate on summary.errors > 0
   metadata?: {                        // Extracted metadata
     name?: string;
     description?: string;
@@ -120,7 +121,7 @@ const result = await validateSkill({
 });
 
 console.log(`Status: ${result.status}`);
-console.log(`Summary: ${result.summary}`);
+console.log(`Summary: ${result.description}`);
 
 // Check for specific error types
 const nameErrors = result.issues.filter(
@@ -370,7 +371,7 @@ const validation = await validateSkill({
   skillPath: './my-skill/SKILL.md',
 });
 
-if (validation.status === 'error') {
+if (validation.summary.errors > 0) {
   console.error('Validation failed, cannot import');
   process.exit(1);
 }
@@ -412,7 +413,7 @@ async function validateAllSkills(dir: string) {
 }
 
 const results = await validateAllSkills('./skills');
-const failed = results.filter(r => r.result.status === 'error');
+const failed = results.filter(r => r.result.summary.errors > 0);
 
 console.log(`Validated ${results.length} skills`);
 console.log(`Failed: ${failed.length}`);
@@ -476,7 +477,7 @@ async function validateInCI() {
       skillPath: `./skills/${skill}`,
     });
 
-    if (result.status === 'error') {
+    if (result.summary.errors > 0) {
       console.error(`❌ ${skill}:`);
       for (const issue of result.issues) {
         if (issue.severity === 'error') {
@@ -538,8 +539,8 @@ Validation errors are returned in the `ValidationResult` object, not thrown:
 ```typescript
 const result = await validateSkill({ skillPath: './skill/SKILL.md' });
 
-// result.status will be 'error', not thrown
-if (result.status === 'error') {
+// errors are counted in result.summary, not thrown
+if (result.summary.errors > 0) {
   // Handle validation failures
 }
 ```

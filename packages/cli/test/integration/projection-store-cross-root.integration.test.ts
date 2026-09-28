@@ -78,8 +78,8 @@ async function ask(
     },
   });
   expect(result.status, result.stderr).toBe(0);
-  const document = JSON.parse(result.stdout) as { rows: unknown[]; population: unknown };
-  return { rows: document.rows, population: document.population };
+  const document = JSON.parse(result.stdout) as { data: { rows: unknown[]; population: unknown } };
+  return { rows: document.data.rows, population: document.data.population };
 }
 
 describe('a projection store shared by two repositories', () => {

@@ -63,7 +63,7 @@ async function validateBody(
 
 /** The one error of `code`, asserted present, at `error`, anchored to SKILL.md. */
 function expectRefusal(result: PackagingValidationResult, code: string): ValidationIssue | undefined {
-  expect(result.status).toBe('error');
+  expect(result.summary.errors).toBeGreaterThan(0);
   const found = activeErrorsOf(result).filter((issue) => issue.code === code);
   expect(found).toHaveLength(1);
   const [issue] = found;
@@ -74,7 +74,7 @@ function expectRefusal(result: PackagingValidationResult, code: string): Validat
 
 /** A green result that emits neither frontmatter code. */
 function expectGreenWithoutFrontmatterCodes(result: Awaited<ReturnType<typeof validateBody>>): void {
-  expect(result.status).toBe('success');
+  expect(result.summary.errors).toBe(0);
   const codes = activeErrorsOf(result).map((i) => i.code);
   expect(codes).not.toContain(MISSING_FRONTMATTER);
   expect(codes).not.toContain(MISSING_NAME);

@@ -221,9 +221,6 @@ const DOCTOR_COMMAND_FILE = 'packages/cli/src/commands/doctor.ts';
  * a `staleLegacy` error, so the list cannot hold a dead entry. Never add one.
  */
 const EXIT_CODE_DERIVATION_RATCHET = [
-  'packages/cli/src/commands/agent/validate.ts',       // FINDINGS on the agent-config result, passed through verbatim
-  'packages/cli/src/commands/audit-settings.ts',       // FINDINGS from `SettingsFinding[]` counts
-  'packages/cli/src/commands/audit.ts',                // `refused || errors` → FINDINGS over the legacy severity-word `status`
   'packages/cli/src/commands/build.ts',                // exitCodeForPhases, and FINDINGS on a skills gate
   'packages/cli/src/commands/cache/clear.ts',          // `partial` → ERROR, decided beside the document
   'packages/cli/src/commands/claude/org/helpers.ts',   // FINDINGS for a partial Admin API write
@@ -254,14 +251,10 @@ const STDOUT_OUTSIDE_WRITER_RATCHET = [
   'agent/installed.ts',                                        // Task 23
   'agent/list.ts',                                             // Task 24
   'agent/run.ts',                                              // permanent: the agent's stdio conversation, not a document
-  'agent/validate.ts',                                         // Task 13
-  'audit-settings.ts',                                         // Task 11
-  'audit.ts',                                                  // Task 11
   'build.ts',                                                  // Task 28
   'cache/clear.ts',                                            // Task 22
   'claude/context.ts',                                         // Task 27 (writeLegacyDocument)
   'claude/marketplace/publish.ts',                             // Task 16
-  'claude/marketplace/validate.ts',                            // Task 13 (hands writeYamlOutput to finishCommand)
   'claude/org/helpers.ts',                                     // Task 17 (writeExternalDocument)
   'claude/org/stubs.ts',                                       // Task 17
   'claude/plugin/build.ts',                                    // Task 16 (hands writeYamlOutput to finishCommand)
@@ -279,9 +272,6 @@ const STDOUT_OUTSIDE_WRITER_RATCHET = [
   'rag/query-command.ts',                                      // Task 25
   'rag/stats-command.ts',                                      // Task 26
   'resources/check.ts',                                        // Task 31: forwards the supervised child's written document verbatim (writeStdoutSync)
-  'resources/query.ts',                                        // Task 12
-  'resources/scan.ts',                                         // Task 12
-  'resources/validate.ts',                                     // Task 12
   'skill/test/configure.ts',                                   // Task 20
   'skill/test/run.ts',                                         // Task 21
   'skills/build.ts',                                           // Task 19
@@ -289,7 +279,6 @@ const STDOUT_OUTSIDE_WRITER_RATCHET = [
   'skills/install.ts',                                         // Task 18
   'skills/list.ts',                                            // Task 18
   'skills/package.ts',                                         // Task 20
-  'skills/validate.ts',                                        // Task 13
   'validate.ts',                                               // Task 28
   'verify.ts',                                                 // Task 28
 ].map((file) => `packages/cli/src/commands/${file}`);
@@ -354,7 +343,6 @@ export const NO_UNSAFE_BACKLOG = [
   'packages/cli/src/bin.ts', // 1
   'packages/cli/src/commands/corpus/seed.ts', // 1
   DOCTOR_COMMAND_FILE, // 9
-  'packages/cli/src/commands/resources/validate.ts', // 1
   'packages/cli/src/utils/config-loader.ts', // 1
   'packages/cli/src/version.ts', // 3
   'packages/dev-tools/src/bump-version.ts', // 15

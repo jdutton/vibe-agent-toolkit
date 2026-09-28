@@ -646,7 +646,8 @@ export {
 export { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
 // The refusal `buildLinkAuthEngineConfig` throws for a provider that cannot
 // compile — named, so a caller can tell a config error from an engine bug.
-export { LinkAuthConfigError } from './link-auth/compile-check.js';
+export { LINK_AUTH_CONFIG_CODE, LinkAuthConfigError } from './link-auth/compile-check.js';
+export { matchesCollection } from './collection-matcher.js';
 
 // linkAuth pure engine — public API only.
 // Internal helpers (rewrite, build-headers, etc.) stay module-private.
@@ -864,7 +865,7 @@ export {
 // A project's own SQL assertions over its projection: what a returned row MEANS.
 // The statement itself is the CLI's business — only it knows a storage backend
 // exists — so the rule engine here never opens a database.
-export { issuesFromCheckRows } from './projection/sql-checks.js';
+export { issuesFromCheckRows, PROJECTION_STATEMENT_REFUSED_CODE } from './projection/sql-checks.js';
 
 // VAT's OWN default assertions over the same projection — TypeScript predicates,
 // never SQL, because a default-on rule written as a statement would make the

@@ -18,7 +18,9 @@
  * published-shape registry to do it.
  */
 
-import { CONFIG_LOAD_CODE } from '@vibe-agent-toolkit/resources';
+import { AGENT_MANIFEST_INVALID_CODE, AGENT_MANIFEST_NOT_FOUND_CODE, AGENT_MANIFEST_UNREADABLE_CODE } from '@vibe-agent-toolkit/agent-config';
+import { GIT_SUBPATH_INVALID_CODE } from '@vibe-agent-toolkit/agent-skills';
+import { CONFIG_LOAD_CODE, LINK_AUTH_CONFIG_CODE, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 import { isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
@@ -52,6 +54,18 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   OKF_UNKNOWN_BUNDLE: 'USAGE_INVALID',
   // A directory the OS would not list, under a `refuse` policy.
   DIRECTORY_LISTING_REFUSED: 'INPUT_UNREADABLE',
+  // A git URL's `#ref:subpath` naming a path the clone does not hold, or one escaping it.
+  [GIT_SUBPATH_INVALID_CODE]: 'USAGE_INVALID',
+  // A `resources.linkAuth` provider that does not compile (`LinkAuthConfigError`): the config's mistake.
+  [LINK_AUTH_CONFIG_CODE]: 'CONFIG_INVALID',
+  // An agent path or name that names no manifest — the argument is the mistake.
+  [AGENT_MANIFEST_NOT_FOUND_CODE]: 'USAGE_INVALID',
+  // An agent manifest the OS refuses, or whose content is not YAML.
+  [AGENT_MANIFEST_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
+  // An agent manifest `loadAgentManifest` read and the schema rejects: the adopter's config.
+  [AGENT_MANIFEST_INVALID_CODE]: 'CONFIG_INVALID',
+  // A SQL statement the projection store refused — the statement the operator passed is wrong.
+  [PROJECTION_STATEMENT_REFUSED_CODE]: 'USAGE_INVALID',
 };
 
 /**

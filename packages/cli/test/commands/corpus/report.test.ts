@@ -35,9 +35,10 @@ function cleanRow(name: string, source = '.', filesScanned = 1): PluginRow {
     name,
     validation_applied: false,
     audit: {
-      status: 'success',
+      status: 'ok',
       duration_ms: 10,
-      summary: { errors: 0, warnings: 0, info: 0, files_scanned: filesScanned },
+      summary: { errors: 0, warnings: 0, info: 0 },
+      files_scanned: filesScanned,
       findings_emitted: 0,
       output_path: `${name}-audit.yaml`,
     },
@@ -54,7 +55,16 @@ describe('writeRunReport', () => {
         source: 'b/c',
         name: 'b',
         validation_applied: true,
-        audit: { status: 'warning', duration_ms: 20, summary: { errors: 0, warnings: 1, info: 0, files_scanned: 2 }, findings_emitted: 1, output_path: 'b-audit.yaml' },
+        audit: { status: 'findings', duration_ms: 20, summary: { errors: 0, warnings: 1, info: 0 },
+      files_scanned: 2, findings_emitted: 1, output_path: 'b-audit.yaml' },
+        review: { status: 'skipped', duration_ms: 0 },
+      },
+      {
+        source: 'd',
+        name: 'd',
+        validation_applied: false,
+        audit: { status: 'findings', duration_ms: 20, summary: { errors: 2, warnings: 0, info: 0 },
+      files_scanned: 1, findings_emitted: 2, output_path: 'd-audit.yaml' },
         review: { status: 'skipped', duration_ms: 0 },
       },
       {
@@ -77,10 +87,10 @@ describe('writeRunReport', () => {
     // project has, and a reader's own strict schema is what decides readability.
     expect(written).not.toHaveProperty('schema_version');
     expect(written.totals).toEqual({
-      plugins: 3,
-      audit_clean: 1,
-      audit_warning: 1,
-      audit_error: 0,
+      plugins: 4,
+      audit_ok: 1,
+      audit_findings: 2,
+      audit_with_errors: 1,
       unloadable: 1,
     });
   });

@@ -8,7 +8,7 @@
  */
 
 import type { PackagingValidationResult } from '@vibe-agent-toolkit/agent-skills';
-import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { countBySeverity, resultStatus, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
 import { CHECKLIST_SECTIONS, type ChecklistSection } from '../../../src/commands/skill/review-checklist.js';
@@ -18,7 +18,8 @@ import { buildReviewReport } from '../../../src/commands/skill/review.js';
 function result(allErrors: ValidationIssue[]): PackagingValidationResult {
   return {
     skillName: 'my-skill',
-    status: allErrors.some((issue) => issue.severity === 'error') ? 'error' : 'success',
+    status: resultStatus(allErrors),
+    summary: countBySeverity(allErrors),
     allErrors,
     ignoredErrors: [],
     observations: [],

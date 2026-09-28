@@ -17,7 +17,7 @@ import {
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import { parseFileCached, type ParseResult } from '@vibe-agent-toolkit/resources';
-import { ExitCode, type SeverityCounts } from '@vibe-agent-toolkit/schema';
+import { calculateValidationStatus, ExitCode, type SeverityCounts } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
@@ -161,7 +161,7 @@ async function validateSkillOrExit(
     logger.info(line);
   }
 
-  if (validationResult.status === 'error') {
+  if (validationResult.summary.errors > 0) {
     // The findings above went to stderr only; without this the command exited 1
     // having written zero bytes of the documented stdout summary.
     handleValidationGateFailure(skillPath, validationResult.issues);
@@ -184,7 +184,9 @@ export function buildPackageHeader(validation: ValidationResult): {
   status: 'success' | 'warning' | 'error';
   issueCounts: SeverityCounts;
 } {
-  return { status: validation.status, issueCounts: validation.issueCounts };
+  // This document still speaks the worst-actionable-severity word; the library
+  // `status` is the literal `ok`/`findings`, so the word is derived here.
+  return { status: calculateValidationStatus(validation.issues), issueCounts: validation.summary };
 }
 
 /**
@@ -198,14 +200,15 @@ export function buildPackageHeader(validation: ValidationResult): {
  * non-blocking status, which is exactly the case that got swallowed.
  */
 /** One glyph per status value — total, so a new status cannot fall through to a nicer one. */
-const SKILL_VALIDATION_GLYPHS: Record<ValidationResult['status'], string> = {
+const SKILL_VALIDATION_GLYPHS: Record<ReturnType<typeof calculateValidationStatus>, string> = {
   error: '❌',
   warning: '⚠️ ',
   success: 'ℹ️ ',
 };
 
 export function formatSkillValidationLines(validationResult: ValidationResult): string[] {
-  const { issues, status } = validationResult;
+  const { issues } = validationResult;
+  const status = calculateValidationStatus(issues);
   if (issues.length === 0) {
     return ['✅ Validation passed — no findings'];
   }
@@ -215,7 +218,7 @@ export function formatSkillValidationLines(validationResult: ValidationResult): 
     ? `\n${glyph} Skill validation failed — ${formatIssueSetHeading(issues)}`
     : `\n${glyph} Validation passed with findings — ${formatIssueSetHeading(issues)}`;
 
-  const lines = [headline, `   Summary: ${validationResult.summary}\n`];
+  const lines = [headline, `   Summary: ${validationResult.description}\n`];
   for (const issue of issues) {
     lines.push(...formatIssueLines(issue, '  '));
   }

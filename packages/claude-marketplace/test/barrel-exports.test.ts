@@ -96,7 +96,6 @@ const BARREL_EXPORTS = [
   'resolveEffectiveTargets',
   'resolveSettingsPaths',
   'skillVersionsPath',
-  'summarizeSettingsFindings',
   'uninstallPlugin',
   'validatePlugin',
   'validateSettingsFile',

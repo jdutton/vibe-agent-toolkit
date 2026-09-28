@@ -122,6 +122,7 @@ export {
   runCompatDetectors,
   type DetectorOutput,
 } from './validators/compat-detectors.js';
+export { describeIssues } from './validators/describe-issues.js';
 export { validateMarketplace } from './validators/marketplace-validator.js';
 export { validateSkill } from './validators/skill-validator.js';
 export { validate, type UnifiedValidateOptions } from './validators/unified-validator.js';
@@ -171,7 +172,7 @@ export {
 } from './import.js';
 
 // Skill source primitives
-export { cloneGitSource, type GitCloneResult } from './skill-source/git-clone.js';
+export { cloneGitSource, GIT_SUBPATH_INVALID_CODE, type GitCloneResult } from './skill-source/git-clone.js';
 
 // Unified skill-source resolution (spec §11c)
 export { resolveSkillSource, type ResolveSkillSourceOptions } from './skill-source/resolve-skill-source.js';

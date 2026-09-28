@@ -868,7 +868,7 @@ export async function packageSkill(
     ...checkPackagedSizeLimit(outputPath),
     // A receipt for every file a glob matched and the never-package list refused.
     // Reported as an issue, not written to stderr: a file vanishing from a bundle
-    // has to be visible in `issueCounts`, or CI reads a clean report for a build
+    // has to be visible in the counts (`summary`), or CI reads a clean report for a build
     // that quietly shipped less than the config declared.
     // Anchored at the PROJECT root, not `outputPath` like its neighbours here: a
     // dropped file is a source file that never reached the output, so the only
@@ -1092,7 +1092,7 @@ function assemblePackageResult(input: AssembleResultInput): PackageSkillResult {
     },
     artifacts: input.artifacts,
     postBuildValidation: input.postBuildValidation,
-    hasErrors: input.framework.hasErrors || input.postBuildValidation.status === 'error',
+    hasErrors: input.framework.hasErrors || input.postBuildValidation.summary.errors > 0,
   };
 
   if (input.framework.emitted.length > 0) {

@@ -115,7 +115,7 @@ describe('validateSkillForPackaging - Size validation', () => {
 
 		const result = await validateSkillForPackaging(skillPath);
 
-		expect(result.status).toBe('success');
+		expect(result.summary.errors).toBe(0);
 		expect(activeErrorsOf(result)).toHaveLength(0);
 	});
 
@@ -130,7 +130,7 @@ describe('validateSkillForPackaging - Size validation', () => {
 		const result = await validateSkillForPackaging(skillPath);
 
 		// Size checks are warnings not errors — status is success
-		expect(result.status).toBe('success');
+		expect(result.summary.errors).toBe(0);
 		expect(activeErrorsOf(result)).toHaveLength(0);
 		// SKILL_LENGTH + NO_PROGRESSIVE_DISCLOSURE are warnings
 		expect(activeWarningsOf(result)).toHaveLength(2);
@@ -173,7 +173,7 @@ describe('validateSkillForPackaging - Total size validation', () => {
 			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION }
 		)) as PackagingValidationResult;
 
-		expect(result.status).toBe('success'); // warnings don't make status error
+		expect(result.summary.errors).toBe(0); // warnings don't fail the gate
 		expect(result.metadata.totalLines).toBeGreaterThan(2000);
 		const totalSizeWarn = activeWarningsOf(result).find((e) => e.code === 'SKILL_TOTAL_SIZE_LARGE');
 		expect(totalSizeWarn).toBeDefined();
@@ -221,7 +221,7 @@ describe('validateSkillForPackaging - File count validation', () => {
 
 		const result = await validateSkillForPackaging(skillPath);
 
-		expect(result.status).toBe('success'); // warnings don't make status error
+		expect(result.summary.errors).toBe(0); // warnings don't fail the gate
 		expect(result.metadata.fileCount).toBe(8); // 7 refs + SKILL.md
 		const fileCountWarn = activeWarningsOf(result).find((e) => e.code === 'SKILL_TOO_MANY_FILES');
 		expect(fileCountWarn).toBeDefined();
@@ -254,7 +254,7 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 		const metadata = { linkFollowDepth: 'full' as const };
 		const result = await validateSkillForPackaging(skillPath, metadata as never);
 
-		expect(result.status).toBe('success'); // warnings don't make status error
+		expect(result.summary.errors).toBe(0); // warnings don't fail the gate
 		expect(result.metadata.maxLinkDepth).toBeGreaterThan(2);
 		const depthWarn = activeWarningsOf(result).find((e) => e.code === 'REFERENCE_TOO_DEEP');
 		expect(depthWarn).toBeDefined();
@@ -266,7 +266,7 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 		// Default behavior: linkFollowDepth = 2, so level3.md is excluded
 		const result = await validateSkillForPackaging(skillPath);
 
-		expect(result.status).toBe('success');
+		expect(result.summary.errors).toBe(0);
 		expect(result.metadata.maxLinkDepth).toBeLessThanOrEqual(2);
 		expect(result.metadata.fileCount).toBe(3); // SKILL.md + level1.md + level2.md
 		expect(result.metadata.excludedReferenceCount).toBe(1); // level3.md excluded
@@ -301,7 +301,7 @@ describe('validateSkillForPackaging - Navigation file detection', () => {
 		const result = await validateSkillForPackaging(skillPath);
 
 		// Navigation file links are warnings, not errors
-		expect(result.status).toBe('success');
+		expect(result.summary.errors).toBe(0);
 		const navWarn = activeWarningsOf(result).find((e) => e.code === 'LINK_TO_NAVIGATION_FILE');
 		expect(navWarn).toBeDefined();
 		// The issue is anchored at the file CONTAINING the link; the target the
@@ -409,7 +409,7 @@ describe('validateSkillForPackaging - Description validation', () => {
 		const result = await validateSkillForPackaging(skillPath);
 
 		// Description warning — status is still success
-		expect(result.status).toBe('success');
+		expect(result.summary.errors).toBe(0);
 		const descWarn = activeWarningsOf(result).find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
 		expect(descWarn).toBeDefined();
 		expect(descWarn?.message).toContain('characters');
@@ -888,7 +888,7 @@ describe('validateSkillForPackaging - Progressive disclosure validation', () => 
 			SKILL_HEADER + LINE_CONTENT.repeat(550)
 		)) as PackagingValidationResult;
 
-		expect(result.status).toBe('success'); // warnings don't make status error
+		expect(result.summary.errors).toBe(0); // warnings don't fail the gate
 		const pdWarn = activeWarningsOf(result).find((e) => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
 		expect(pdWarn).toBeDefined();
 	});
@@ -912,7 +912,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 			'NO_PROGRESSIVE_DISCLOSURE',
 		]);
 
-		expect(result.status).toBe('success');
+		expect(result.summary.errors).toBe(0);
 		expect(activeWarningsOf(result).filter(
 			e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED' || e.code === 'NO_PROGRESSIVE_DISCLOSURE'
 		)).toHaveLength(0);
@@ -922,7 +922,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		// Only ignore SKILL_LENGTH — NO_PROGRESSIVE_DISCLOSURE should remain
 		const result = await testIgnoreWarnings(['SKILL_LENGTH_EXCEEDS_RECOMMENDED']);
 
-		expect(result.status).toBe('success');
+		expect(result.summary.errors).toBe(0);
 		expect(activeWarningsOf(result).find(e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED')).toBeUndefined();
 		const pdWarn = activeWarningsOf(result).find(e => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
 		expect(pdWarn).toBeDefined();
@@ -934,7 +934,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 			NO_PROGRESSIVE_DISCLOSURE: [{ paths: ['**'], reason: REASON_REFACTOR_Q2 }],
 		});
 
-		expect(result.status).toBe('success');
+		expect(result.summary.errors).toBe(0);
 		// Both codes are allowed (suppressed), not in warnings
 		expect(activeWarningsOf(result).filter(
 			e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED' || e.code === 'NO_PROGRESSIVE_DISCLOSURE'
@@ -978,7 +978,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 			},
 		});
 
-		expect(result.status).toBe('success');
+		expect(result.summary.errors).toBe(0);
 		expect(activeWarningsOf(result).filter(
 			e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED' || e.code === 'NO_PROGRESSIVE_DISCLOSURE'
 		)).toHaveLength(0);
@@ -1014,10 +1014,10 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 	// `../shared.md`, inside the project (the config marks its root). Default
 	// bundles it silently; a strict skill raises the severity.
 	it.each([
-		['the default (ignore): bundled, no finding', {}, [], 'success'],
-		['warning: bundled and reported', { LINK_OUTSIDE_SKILL_DIR: 'warning' }, ['warning'], 'success'],
-		['error: the skill must be self-contained', { LINK_OUTSIDE_SKILL_DIR: 'error' }, ['error'], 'error'],
-	] as const)('LINK_OUTSIDE_SKILL_DIR under %s', async (_label, severity, expectedSeverities, expectedStatus) => {
+		['the default (ignore): bundled, no finding', {}, [], 0],
+		['warning: bundled and reported', { LINK_OUTSIDE_SKILL_DIR: 'warning' }, ['warning'], 0],
+		['error: the skill must be self-contained', { LINK_OUTSIDE_SKILL_DIR: 'error' }, ['error'], 1],
+	] as const)('LINK_OUTSIDE_SKILL_DIR under %s', async (_label, severity, expectedSeverities, expectedErrors) => {
 		const tempDir = getTempDir();
 		const skillDir = safePath.join(tempDir, 'skill');
 		fs.mkdirSync(skillDir, { recursive: true });
@@ -1033,7 +1033,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		const boundary = result.allErrors.filter(e => e.code === 'LINK_OUTSIDE_SKILL_DIR');
 		expect(boundary.map(e => e.severity)).toEqual(expectedSeverities);
 		expect(boundary.map(e => [e.location, e.link])).toEqual(expectedSeverities.map(() => ['skill/SKILL.md', '../shared.md']));
-		expect(result.status).toBe(expectedStatus);
+		expect(result.summary.errors).toBe(expectedErrors);
 		expect(result.allErrors.map(e => e.code)).not.toContain('LINK_OUTSIDE_PROJECT');
 		// Bundled whatever the severity: the verdict gates the build, not the walk.
 		expect(result.metadata.fileCount).toBe(2);
@@ -1160,7 +1160,7 @@ async function expectFilesConfigError(
 	code: string,
 ): Promise<ValidationIssue | undefined> {
 	const result = await validateSkillForPackaging(skillPath, { files });
-	expect(result.status).toBe('error');
+	expect(result.summary.errors).toBeGreaterThan(0);
 	const issue = activeErrorsOf(result).find(e => e.code === code);
 	expect(issue).toBeDefined();
 	return issue;
@@ -1217,7 +1217,7 @@ describe('validateSkillForPackaging - Files config validation', () => {
 			],
 		});
 
-		expect(result.status).toBe('error');
+		expect(result.summary.errors).toBeGreaterThan(0);
 		const dupErrors = activeErrorsOf(result).filter(e => e.code === DUPLICATE_FILES_DEST_CODE);
 		expect(dupErrors).toHaveLength(2);
 	});
@@ -1416,7 +1416,7 @@ describe('validateSkillForPackaging - deferred dest links (files: config)', () =
 		});
 
 		// Should not error — deferred dest is not a missing target
-		expect(result.status).toBe('success');
+		expect(result.summary.errors).toBe(0);
 
 		// No LINK_MISSING_TARGET — it was classified as deferred
 		const missingIssue = result.allErrors.find(i => i.code === 'LINK_MISSING_TARGET');

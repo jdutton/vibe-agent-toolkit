@@ -66,7 +66,6 @@ const AWAITING_WRITER: Readonly<Record<string, string>> = {
   'artifact:claude-desktop-config': 'Task 27 — mcp serve --print-config',
   'artifact:friction-report': 'Task 21 — skill test run writes it through writeArtifactFile',
   'artifact:corpus-summary': 'Task 27 — corpus scan summary.yaml',
-  'artifact:corpus-audit': 'Task 27 — corpus scan <name>-audit.yaml',
 };
 
 /** Leaves whose stdout is a protocol stream, not a document. Asserted both ways. */

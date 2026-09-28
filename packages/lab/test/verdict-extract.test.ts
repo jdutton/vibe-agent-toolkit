@@ -24,6 +24,11 @@ function fixture(name: string): string {
   return readFileSync(safePath.join(FIXTURES, name), 'utf-8');
 }
 
+/** An `exited` outcome whose stdout is one inline legacy document. */
+function legacyStdout(document: Record<string, unknown>): Extract<RunOutcome, { kind: 'exited' }> {
+  return { kind: 'exited', exitCode: 1, stdout: JSON.stringify(document), stderr: '' };
+}
+
 /** An `exited` outcome wrapping one fixture's stdout. */
 function exited(name: string, exitCode = 1): Extract<RunOutcome, { kind: 'exited' }> {
   return { kind: 'exited', exitCode, stdout: fixture(name), stderr: '' };
@@ -89,7 +94,12 @@ describe('extractVerdict', () => {
   });
 
   it('keeps duplicate findings as a multiset', () => {
-    const verdict = extractVerdict(exited('legacy-resources-validate.json'));
+    const verdict = extractVerdict(legacyStdout({
+      issues: [
+        { code: 'LINK_INTEGRITY_BROKEN', severity: 'error', message: 'Broken link to ./missing.md' },
+        { code: 'LINK_INTEGRITY_BROKEN', severity: 'error', message: 'Broken link to ./missing.md' },
+      ],
+    }));
     const duplicates = verdict.findings.filter(
       (f) => f.code === 'LINK_INTEGRITY_BROKEN' && f.severity === 'error' && f.location === null,
     );
@@ -101,5 +111,47 @@ describe('extractVerdict', () => {
     expect(verdict.shape).toBe('unparsed');
     expect(verdict.findings).toEqual([]);
     expect(verdict.exitCode).toBe(2);
+  });
+});
+
+/**
+ * Where a legacy finding with no `location` of its own is anchored: ONE
+ * structural rule across every legacy shape. The finding's own `location`,
+ * then its own `path`, then its own `file`; otherwise the nearest enclosing
+ * object carrying a `path` or a `file` — `path` winning when one object carries
+ * both — else `null`.
+ *
+ * `file` is here because rc.11's `vat resources validate --verbose` keys each
+ * row's file as `file` (`issues[].file` over `issues[].issues[]`). Read as
+ * `path`-only, every one of its findings compared as `location: null` against
+ * a report build's `location: docs/a.md` — a delta the instrument invented.
+ */
+describe('legacy finding location', () => {
+  it('takes the enclosing row\'s `file` when only `file` is present — rc.11 resources validate --verbose', () => {
+    const verdict = extractVerdict(exited('legacy-resources-validate.json'));
+    expect(verdict.findings.map((f) => f.location)).toEqual(['docs/a.md', 'docs/b.md']);
+  });
+
+  it('takes the enclosing `path` over `file` when one object carries both', () => {
+    const verdict = extractVerdict(legacyStdout({
+      files: [{ path: 'plugins/p/SKILL.md', file: 'SKILL.md', issues: [{ code: 'X', severity: 'error' }] }],
+    }));
+    expect(verdict.findings.map((f) => f.location)).toEqual(['plugins/p/SKILL.md']);
+  });
+
+  it('is null when neither the finding nor any enclosing object names a `path` or a `file`', () => {
+    const verdict = extractVerdict(legacyStdout({ rows: [{ issues: [{ code: 'X', severity: 'warning' }] }] }));
+    expect(verdict.findings.map((f) => f.location)).toEqual([null]);
+  });
+
+  it('takes a finding\'s OWN `path` over an enclosing `file` that means something else — rc.11 claude context', () => {
+    // An rc.11 `claude context` answer carries `file` (the file the QUESTION was
+    // about) above `conditions[]`, each of which names its own `path`. The
+    // condition's own path is where it is; the answer's `file` is not.
+    const verdict = extractVerdict(legacyStdout({
+      kind: 'answer',
+      answers: [{ file: 'CLAUDE.md', conditions: [{ code: 'RULE_GLOB_INERT', severity: 'warning', path: '.claude/rules/x.md' }] }],
+    }));
+    expect(verdict.findings.map((f) => f.location)).toEqual(['.claude/rules/x.md']);
   });
 });

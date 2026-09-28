@@ -395,7 +395,7 @@ export function assertValidationError<T extends z.ZodTypeAny>(
  * Assert that validation result is successful (no errors)
  */
 export function assertValidationSuccess(result: ValidationResult): void {
-	expect(result.status).toBe('success');
+	expect(result.summary).toMatchObject({ errors: 0, warnings: 0 });
 	expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
 }
 
@@ -406,7 +406,8 @@ export function assertSingleError(
 	result: ValidationResult,
 	code: string,
 ): void {
-	expect(result.status).toBe('error');
+	expect(result.status).toBe('findings');
+	expect(result.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
 	expect(result.issues).toHaveLength(1);
 	expect(result.issues[0]?.code).toBe(code);
 	expect(result.issues[0]?.severity).toBe('error');

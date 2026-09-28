@@ -111,6 +111,6 @@ describe('vat corpus scan — integration', () => {
 
     const totals = summary.totals as Record<string, number>;
     expect(totals.unloadable).toBe(1);
-    expect(totals.audit_clean + totals.audit_warning + totals.audit_error).toBe(1);
+    expect(totals.audit_ok + totals.audit_findings).toBe(1);
   });
 });

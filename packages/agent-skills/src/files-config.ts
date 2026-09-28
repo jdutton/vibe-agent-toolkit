@@ -241,7 +241,7 @@ export interface AppliedFilesConfig {
    *
    * Returned rather than written to a `warn` sink because a file vanishing from
    * a bundle is a build FINDING, not a log line: it has to reach the structured
-   * report (`issueCounts`), or a CI consumer reads `warnings: 0` for a build
+   * report's counts (`summary`), or a CI consumer reads `warnings: 0` for a build
    * that silently shipped less than the config asked for.
    */
   dropped: DroppedGlobMatch[];

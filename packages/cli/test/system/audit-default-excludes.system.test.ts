@@ -94,9 +94,9 @@ describe('Audit default artifact excludes (system test)', () => {
 
     expect(result.status).toBe(0);
     // Only the source skill should be scanned — 1 file, not 4.
-    expect(parsed['summary']).toMatchObject({ filesScanned: 1 });
+    expect(parsed['examined']).toBe(1);
 
-    const files = parsed['files'] as Array<{ path: string }>;
+    const files = (parsed['data'] as { files: Array<{ path: string }> }).files;
     const paths = files.map(f => f.path);
     expect(paths).toEqual([
       expect.stringContaining('skills/hello/SKILL.md'),
@@ -117,9 +117,9 @@ describe('Audit default artifact excludes (system test)', () => {
     expect(result.status).toBe(0);
     // The source skill and its gitignored dist/ mirror — 2, not 4: the two
     // copies under never-crawl directories stay out whatever the flag says.
-    expect(parsed['summary']).toMatchObject({ filesScanned: 2 });
+    expect(parsed['examined']).toBe(2);
 
-    const files = parsed['files'] as Array<{ path: string }>;
+    const files = (parsed['data'] as { files: Array<{ path: string }> }).files;
     const paths = files.map(f => f.path);
     expect(paths.some(p => DIST_SEGMENT.test(p))).toBe(true);
     expect(paths.some(p => p.includes('node_modules'))).toBe(false);
@@ -151,6 +151,6 @@ description: A vendored skill copy that should be excluded when the user adds it
 
     expect(result.status).toBe(0);
     // Still only the real source skill — defaults AND user exclude applied.
-    expect(parsed['summary']).toMatchObject({ filesScanned: 1 });
+    expect(parsed['examined']).toBe(1);
   });
 });

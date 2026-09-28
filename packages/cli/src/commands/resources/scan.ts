@@ -3,15 +3,16 @@
  */
 
 import type { CrawlSourceKind } from '@vibe-agent-toolkit/resources';
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { buildReport } from '@vibe-agent-toolkit/schema';
 
-import { handleCommandError } from '../../utils/command-error.js';
-import { formatDurationSecs } from '../../utils/duration.js';
+import { refusalCodeOf } from '../../utils/command-refusal.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
-import { writeStructuredOutput } from '../../utils/output.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { relativizePathEntries } from '../../utils/relativize-paths.js';
-import { loadResourcesWithConfig, type ResourceCrawlLane } from '../../utils/resource-loader.js';
+import { assertDeclaredCollection, loadResourcesWithConfig, type ResourceCrawlLane } from '../../utils/resource-loader.js';
+
+import type { ResourcesScanData, ResourcesScanReport } from './scan-schema.js';
 
 interface ScanOptions {
   debug?: boolean;
@@ -63,7 +64,8 @@ export interface ScanPayloadInput {
    */
   extentSource: CrawlSourceKind | null;
   durationMs: number;
-  collections: Record<string, { resourceCount: number }> | undefined;
+  /** Resources per collection; `{}` when the project configures none. */
+  collections: Record<string, { resourceCount: number }>;
   verbose: boolean;
 }
 
@@ -79,26 +81,22 @@ function countHeadings(headings: readonly HeadingWithChildren[]): number {
 }
 
 /**
- * Build the scan payload.
+ * Build the scan report.
  *
  * Pure: no file system, no clock, no `process.exit`. The registry keeps
  * absolute `filePath`s because that is the identity it keys on; re-basing onto
  * the stated root happens exactly once, here, at the document boundary — the
  * same contract `vat audit` follows. A payload of `$HOME`-absolute paths names
  * the machine it ran on and cannot be diffed across two checkouts.
+ *
+ * `examined` is the number of files scanned — the denominator the lab's
+ * population facet reads, beside `data.files`. A scan has no findings of its
+ * own; a scan of nothing gets the writer's run-integrity refusal.
  */
-export function buildScanOutputData(input: ScanPayloadInput): Record<string, unknown> {
+export function buildScanReport(input: ScanPayloadInput): ResourcesScanReport {
   const { resources, root, lane, extentSource, durationMs, collections, verbose } = input;
 
-  const files = resources.map((resource) => ({
-    path: resource.filePath,
-    links: resource.links.length,
-    anchors: countHeadings(resource.headings),
-    checksum: resource.checksum,
-  }));
-
-  return {
-    status: 'success',
+  const data: ResourcesScanData = {
     // Stated once, and the only absolute path in the document.
     root,
     lane,
@@ -106,13 +104,38 @@ export function buildScanOutputData(input: ScanPayloadInput): Record<string, unk
     // indistinguishable from a build too old to report it, which is the same
     // absence-vs-old-build ambiguity the two lane markers exist to avoid.
     extentSource,
-    filesScanned: resources.length,
-    linksFound: resources.reduce((sum, r) => sum + r.links.length, 0),
-    anchorsFound: files.reduce((sum, f) => sum + f.anchors, 0),
-    durationSecs: formatDurationSecs(durationMs),
-    ...(collections ? { collections } : {}),
-    ...(verbose ? { files: relativizePathEntries(files, root) } : {}),
+    collections,
   };
+  if (verbose) {
+    data.files = relativizePathEntries(
+      resources.map((resource) => ({
+        path: resource.filePath,
+        links: resource.links.length,
+        anchors: countHeadings(resource.headings),
+        checksum: resource.checksum,
+      })),
+      root,
+    );
+  }
+
+  // `vat resources scan` offers no `--strict`, and reports no finding of its own.
+  return buildReport({ examined: resources.length, findings: [], data, gate: { strict: false }, durationMs });
+}
+
+/**
+ * Resources per collection, narrowed to the `--collection` one when filtering —
+ * the same rule `resources validate` follows: the registry's stats list only
+ * collections with members, so a declared collection that matched nothing is
+ * absent rather than listed at 0.
+ */
+function collectionCounts(
+  collectionStats: { collections: Record<string, { resourceCount: number }> } | undefined,
+  collection: string | undefined,
+): Record<string, { resourceCount: number }> {
+  const counts = Object.entries(collectionStats?.collections ?? {})
+    .filter(([id]) => collection === undefined || id === collection)
+    .map(([id, stat]) => [id, { resourceCount: stat.resourceCount }] as const);
+  return Object.fromEntries(counts);
 }
 
 export async function scanCommand(
@@ -121,54 +144,34 @@ export async function scanCommand(
 ): Promise<void> {
   const logger = createLogger({ debug: options.debug ?? false });
   const startTime = Date.now();
+  // The two formats this verb offers (Commander refuses any other).
+  const format = options.format === 'json' ? 'json' : 'yaml';
 
   try {
     // Resolve projectRoot at the CLI boundary (spec §5/§7 — loud-cwd policy).
     const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
 
     // Load resources with config support
-    const { registry, lane, extentSource } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
+    const { registry, config, lane, extentSource } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
+    assertDeclaredCollection(config, options.collection);
 
     // Get all resources (filtered by collection if specified)
-    let allResources = registry.getAllResources();
-    if (options.collection) {
-      const { collection } = options;
-      allResources = allResources.filter(r => {
-        return collection ? r.collections?.includes(collection) ?? false : false;
-      });
-    }
+    const { collection } = options;
+    const resources = collection === undefined
+      ? registry.getAllResources()
+      : registry.getAllResources().filter((r) => r.collections?.includes(collection) ?? false);
 
-    // Build collection stats (filtered or all)
-    let collectionsOutput: Record<string, { resourceCount: number }> | undefined;
-    if (options.collection) {
-      // When filtering by collection, only show that collection
-      collectionsOutput = { [options.collection]: { resourceCount: allResources.length } };
-    } else {
-      // Show all collections
-      const collectionStats = registry.getCollectionStats();
-      collectionsOutput = collectionStats
-        ? Object.fromEntries(
-            Object.entries(collectionStats.collections).map(([id, stat]) => [
-              id,
-              { resourceCount: stat.resourceCount },
-            ])
-          )
-        : undefined;
-    }
-
-    const payload = buildScanOutputData({
-      resources: allResources,
+    const report = buildScanReport({
+      resources,
       root: projectRoot,
       lane,
       extentSource,
       durationMs: Date.now() - startTime,
-      collections: collectionsOutput,
+      collections: collectionCounts(registry.getCollectionStats(), collection),
       verbose: options.verbose ?? false,
     });
-    writeStructuredOutput(payload, options.format);
-
-    process.exit(ExitCode.OK);
+    endWithReport('resources scan', report, format);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'Scan', options.format);
+    endWithRefusal('resources scan', refusalCodeOf(error), error, format, { strict: false }, NOTHING_FINISHED);
   }
 }

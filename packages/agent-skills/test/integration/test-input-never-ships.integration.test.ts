@@ -265,7 +265,7 @@ describe('declared test input never ships (integration)', () => {
     });
     expect(codesOf(activeErrorsOf(validated))).toContain(BROKEN_LINK_CODE);
     expect(codesOf(validated.allErrors)).not.toContain('LINK_DEFERRED_ARTIFACT');
-    expect(validated.status).toBe('error');
+    expect(validated.summary.errors).toBeGreaterThan(0);
   });
 
   it('still packages a files: entry that points OUTSIDE test input', async () => {

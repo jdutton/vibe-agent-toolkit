@@ -2,6 +2,7 @@
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
+import { RESOURCES_SCAN_REPORT_SCHEMA } from '../../src/commands/resources/scan-schema.js';
 import {
   getBinPath,
   createTestTempDir,
@@ -37,9 +38,9 @@ describe('vat resources scan (integration)', () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('---');
-    expect(parsed).toBeDefined();
-    expect(parsed.status).toBe('success');
-    expect(parsed.filesScanned).toBeGreaterThan(0);
+    const report = RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed);
+    expect(report.status).toBe('ok');
+    expect(report.examined).toBe(2);
   });
 
   it('emits the same document as JSON, parseable without a YAML parser', async () => {
@@ -58,13 +59,13 @@ describe('vat resources scan (integration)', () => {
     // `JSON.parse` of the whole stream, not a substring match: the point of the
     // flag is that a consumer needs no parser of ours, and a document with a
     // stray `---` opener or a trailing second document fails exactly here.
-    const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
-    expect(parsed.status).toBe('success');
+    const report = RESOURCES_SCAN_REPORT_SCHEMA.parse(JSON.parse(result.stdout));
+    expect(report.status).toBe('ok');
     // The projection lane is the default; this fixture has no `.git`, so it is
     // the filesystem enumerator that runs under it.
-    expect(parsed.lane).toBe('projection');
-    expect(parsed.extentSource).toBe('filesystem');
-    expect(Array.isArray(parsed.files)).toBe(true);
+    expect(report.data.lane).toBe('projection');
+    expect(report.data.extentSource).toBe('filesystem');
+    expect(report.data.files).toHaveLength(1);
   });
 
   it('refuses an output format it does not have', async () => {
@@ -76,10 +77,15 @@ describe('vat resources scan (integration)', () => {
     expect(result.stderr).toContain('--format');
   });
 
-  it('should exit 0 even if no files found', async () => {
-    const result = await executeCli(binPath, ['resources', 'scan', tempDir]);
+  it('refuses a scan of nothing: exit 1 and one RESOURCE_CHECK_BROKEN, never a clean empty population', async () => {
+    const { result, parsed } = await executeCliAndParseYaml(binPath, ['resources', 'scan', tempDir]);
 
-    expect(result.status).toBe(0);
+    // A scan of zero files reads exactly like a scan of a tree whose files the
+    // enumeration lost; the writer refuses it from the declared denominator.
+    expect(result.status).toBe(1);
+    const report = RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed);
+    expect(report.examined).toBe(0);
+    expect(report.findings.map((finding) => finding.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
   });
 
   it('should use current directory if no path provided', async () => {
@@ -103,7 +109,7 @@ describe('vat resources scan (integration)', () => {
     ]);
 
     expect(result.status).toBe(0);
-    expect(parsed.filesScanned).toBe(3);
+    expect(RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed).examined).toBe(3);
   });
 
   // Previously skipped as "--verbose conflicts with the parent command's
@@ -121,8 +127,7 @@ describe('vat resources scan (integration)', () => {
     ]);
 
     expect(result.status).toBe(0);
-    expect(parsed.files).toBeDefined();
-    const files = parsed.files as Array<{ path: string; links: number; anchors: number; checksum: string }>;
+    const files = RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed).data.files ?? [];
     expect(files.length).toBeGreaterThan(0);
     expect(files[0]).toHaveProperty('checksum');
     expect(files[0]?.checksum).toMatch(/^[a-f0-9]{64}$/); // SHA-256 format
@@ -145,8 +150,8 @@ describe('vat resources scan (integration)', () => {
       '--verbose',
     ]);
 
-    expect(parsed.root).toBeDefined();
-    const files = parsed.files as Array<{ path: string }>;
-    expect(files.map(f => f.path)).toEqual(['nested/test.md']);
+    const report = RESOURCES_SCAN_REPORT_SCHEMA.parse(parsed);
+    expect(report.data.root).toBeDefined();
+    expect(report.data.files?.map(f => f.path)).toEqual(['nested/test.md']);
   });
 });

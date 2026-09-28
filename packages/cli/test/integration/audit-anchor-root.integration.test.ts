@@ -66,10 +66,8 @@ function buildScanRoot(root: string): void {
         '',
         'See [the missing reference](./missing-reference.md) for details.',
         '',
-        // A link that RESOLVES is what populates `linkedFiles[]`. Without one,
-        // every path-walking assertion below is vacuous on that branch of the
-        // document — which is exactly how 532 absolute `linkedFiles[].path`
-        // values survived a gate that already forbade absolute paths.
+        // A link that RESOLVES, so the validator walks a linked file and its
+        // findings are anchored through that lane too.
         'See [the resolvable guide](./references/guide.md) for the rest.',
         '',
         // A fenced shell block invoking an external CLI makes the compat
@@ -81,8 +79,7 @@ function buildScanRoot(root: string): void {
         '',
       ].join('\n'),
     );
-    // The target of the resolvable link above. Its presence is what gives the
-    // audit document a populated `linkedFiles[]` to walk.
+    // The target of the resolvable link above.
     writeFileAt(
       safePath.join(pluginDir, 'skills', 'example', 'references', 'guide.md'),
       '# Guide\n\nReference content reachable by link traversal.\n',
@@ -135,27 +132,18 @@ describe('vat audit — one run, one anchor base', () => {
   });
 
   it('emits exactly one absolute path — the top-level root — and re-bases every other path onto it', async () => {
-    const { document } = await buildAuditReport(scanRoot, {}, Date.now(), silentLogger);
+    const { report } = await buildAuditReport(scanRoot, {}, Date.now(), silentLogger);
+    const root = report.data.root ?? '';
 
-    expect(document.root).toBe(toForwardSlash(scanRoot));
-    expect(isAbsoluteAnyPlatform(document.root)).toBe(true);
+    expect(root).toBe(toForwardSlash(scanRoot));
+    expect(isAbsoluteAnyPlatform(root)).toBe(true);
 
-    const anchors = anchorsBelowRoot(document);
+    const anchors = anchorsBelowRoot(report);
     expect(anchors.length).toBeGreaterThan(0);
-    expect(anchorContractViolations(anchors, document.root)).toEqual([]);
-  });
-
-  // This gate already walked every path in the document and forbade absolutes,
-  // yet 532 absolute `linkedFiles[].path` values passed it — because the fixture
-  // had no resolvable link, so that branch of the document was always empty.
-  // Assert the distinguishing power itself, or the coverage silently rots away
-  // again the next time the fixture is simplified.
-  it('actually has linked files to walk, so the absolute-path contract is not vacuous', async () => {
-    const { document } = await buildAuditReport(scanRoot, {}, Date.now(), silentLogger);
-
-    const linkedAnchors = anchorsBelowRoot(document).filter((a) => a.trail.includes('linkedFiles'));
-    expect(linkedAnchors.length).toBeGreaterThan(0);
-    expect(anchorContractViolations(linkedAnchors, document.root)).toEqual([]);
+    // Both halves of the document carry anchors: the file rows and the findings.
+    expect(anchors.some((a) => a.trail.startsWith('findings'))).toBe(true);
+    expect(anchors.some((a) => a.trail.startsWith('data.files'))).toBe(true);
+    expect(anchorContractViolations(anchors, root)).toEqual([]);
   });
 
   it('spells the resource that IS the scan root as `.`, never as a blank path', async () => {
@@ -163,35 +151,35 @@ describe('vat audit — one run, one anchor base', () => {
     // relativizes to the empty string. An empty path is a value every consumer
     // has to special-case; `.` is joinable and needs no special case.
     const pluginDir = safePath.join(scanRoot, PROJECTS[0], 'plugins', 'plugin-a');
-    const { document } = await buildAuditReport(pluginDir, {}, Date.now(), silentLogger);
+    const { report } = await buildAuditReport(pluginDir, {}, Date.now(), silentLogger);
 
-    const anchors = anchorsBelowRoot(document);
+    const anchors = anchorsBelowRoot(report);
     expect(anchors.map((a) => a.value)).toContain('.');
-    expect(anchorContractViolations(anchors, document.root)).toEqual([]);
+    expect(anchorContractViolations(anchors, report.data.root ?? '')).toEqual([]);
   });
 
   it('anchors evidence `location.file` at the same root as every string location', async () => {
     // Evidence is omitted from terse output, so the anchor contract can only be
     // observed with --verbose; --compat additionally attaches the plugin-level
     // scanner evidence. Both lanes must answer "relative to what?" identically.
-    const { document } = await buildAuditReport(
+    const { report } = await buildAuditReport(
       scanRoot,
       { verbose: true, compat: true },
       Date.now(),
       silentLogger,
     );
 
-    const anchors = anchorsBelowRoot(document);
+    const anchors = anchorsBelowRoot(report);
     const evidenceAnchors = anchors.filter((a) => a.key === 'file');
     expect(evidenceAnchors.length).toBeGreaterThan(0);
-    expect(anchorContractViolations(anchors, document.root)).toEqual([]);
+    expect(anchorContractViolations(anchors, report.data.root ?? '')).toEqual([]);
   });
 
   it('gives the two same-named plugins distinct locations for their distinct manifests', async () => {
-    const { document } = await buildAuditReport(scanRoot, {}, Date.now(), silentLogger);
+    const { report } = await buildAuditReport(scanRoot, {}, Date.now(), silentLogger);
 
     // A collision collapses these two strings into one.
-    expect(pluginManifestLocations(anchorsBelowRoot(document))).toEqual(
+    expect(pluginManifestLocations(anchorsBelowRoot(report))).toEqual(
       PROJECTS.map((p) => `${p}/plugins/plugin-a/.claude-plugin/plugin.json`),
     );
   });

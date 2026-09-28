@@ -13,6 +13,8 @@ import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { expect } from 'vitest';
 import * as yaml from 'yaml';
 
+import { RESOURCES_VALIDATE_REPORT_SCHEMA } from '../../../src/commands/resources/validate-schema.js';
+
 import { setupTestProject } from './project-setup.js';
 
 /**
@@ -147,30 +149,27 @@ export function executeValidateAndParse(
 /**
  * Assert validation failure and check that the expected error string(s) appear
  * in the command's output (combined stdout + stderr). Runs the CLI once — the
- * YAML output carries the error details (file paths, field names, AJV messages)
- * that earlier versions of this helper re-checked via a second `--format text`
- * invocation.
+ * report carries the error details (file paths, field names, AJV messages) in
+ * each finding's `location` and `message`.
  *
- * Runs with `--verbose`: the default document publishes per-file COUNTS plus a
- * `codes` tally, and this helper's whole contract is that a finding's MESSAGE
- * text (AJV wording, offending field name) appears in the output — which only
- * the verbose form carries. `status`, `errorsFound` and the exit code asserted
- * below are run-level totals and are identical in both modes.
+ * The report is parsed with `RESOURCES_VALIDATE_REPORT_SCHEMA`, so a document
+ * the published schema would refuse fails here too.
  *
  * @param expectedInOutput  Single string or array of strings that must all
  *                          appear somewhere in the combined stdout/stderr.
- * @returns { result, parsed } for additional assertions (e.g. errorsFound).
+ * @returns { result, parsed } for additional assertions (e.g. `summary.errors`).
  */
 export function assertValidationFailureWithError(
   binPath: string,
   projectDir: string,
   expectedInOutput: string | string[]
 ): { result: CliResult; parsed: Record<string, unknown> } {
-  const { result, parsed } = executeValidateAndParse(binPath, projectDir, ['--verbose']);
+  const { result, parsed } = executeValidateAndParse(binPath, projectDir);
 
   expect(result.status).toBe(1);
-  expect(parsed.status).toBe('error');
-  expect(parsed.errorsFound).toBeGreaterThan(0);
+  const report = RESOURCES_VALIDATE_REPORT_SCHEMA.parse(parsed);
+  expect(report.status).toBe('findings');
+  expect(report.summary.errors).toBeGreaterThan(0);
 
   const combined = result.stdout + result.stderr;
   const expectedList = Array.isArray(expectedInOutput) ? expectedInOutput : [expectedInOutput];

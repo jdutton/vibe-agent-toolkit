@@ -117,10 +117,6 @@ packages/cli/src/commands/audit/distributed-tree.ts SkillTreeProvenance dead
 packages/cli/src/commands/audit/git-url-clone.ts CloneAndAuditContext dead
 packages/cli/src/commands/audit/git-url-clone.ts CloneOptions dead
 packages/cli/src/commands/audit/hierarchical-output.ts CacheStatus dead
-packages/cli/src/commands/audit/hierarchical-output.ts HierarchicalOutput dead
-packages/cli/src/commands/audit/hierarchical-output.ts MarketplaceGroup dead
-packages/cli/src/commands/audit/hierarchical-output.ts PluginGroup dead
-packages/cli/src/commands/audit/hierarchical-output.ts SkillEntry dead
 packages/cli/src/commands/audit/scan-population.ts AuditScanOptions dead
 packages/cli/src/commands/audit/scan-population.ts AuditScanPopulation dead
 packages/cli/src/commands/audit/scan-population.ts ScanLogger dead
@@ -138,9 +134,7 @@ packages/cli/src/commands/claude/marketplace/git-publish.ts PublishGitOptions de
 packages/cli/src/commands/claude/marketplace/license-utils.ts resolveLicense test-only
 packages/cli/src/commands/claude/marketplace/publish-tree.ts ComposeResult test-only
 packages/cli/src/commands/claude/marketplace/publish.ts MarketplacePublishOptions dead
-packages/cli/src/commands/claude/marketplace/validate.ts LocationIssueSummary dead
 packages/cli/src/commands/claude/marketplace/validate.ts MarketplaceFindings dead
-packages/cli/src/commands/claude/marketplace/validate.ts MarketplaceValidateReport dead
 packages/cli/src/commands/claude/org/helpers.ts autopaginateCustom dead
 packages/cli/src/commands/claude/org/helpers.ts OrgCommandEnding dead
 packages/cli/src/commands/claude/org/helpers.ts QueryParams dead
@@ -175,7 +169,6 @@ packages/cli/src/commands/consistency-check.ts matchesSimpleGlob dead
 packages/cli/src/commands/corpus/report.ts computeTotals dead
 packages/cli/src/commands/corpus/report.ts runDirectoryName dead
 packages/cli/src/commands/corpus/report.ts RunTotals dead
-packages/cli/src/commands/corpus/runner.ts AuditDocument dead
 packages/cli/src/commands/corpus/runner.ts RunnerOptions dead
 packages/cli/src/commands/corpus/seed.ts Seed dead
 packages/cli/src/commands/corpus/seed.ts ValidationAllowEntry dead
@@ -220,11 +213,9 @@ packages/cli/src/commands/skills/command-helpers.ts CommandContext dead
 packages/cli/src/commands/skills/install.ts InstallCommandOptions dead
 packages/cli/src/commands/skills/install.ts InstallError dead
 packages/cli/src/commands/skills/package.ts SkillsPackageCommandOptions dead
-packages/cli/src/commands/skills/scope-guard.ts unscopablePathMessage dead
 packages/cli/src/commands/skills/source-resolvers.ts ResolvedNpmSource dead
 packages/cli/src/commands/skills/validate.ts SkillsValidateRegistryOptions dead
 packages/cli/src/commands/skills/validate.ts ValidatableSkill dead
-packages/cli/src/commands/skills/validate.ts withRunIntegrity test-only
 packages/cli/src/commands/validate.ts ValidateCommandOptions dead
 packages/cli/src/commands/verify.ts VerifyCommandOptions dead
 packages/cli/src/pipeline-oracles/enumeration-snapshot.ts CaptureOptions dead

@@ -840,6 +840,77 @@ export const CODE_REGISTRY = {
     'registry_shape_drift',
   ),
 
+  // `vat audit settings` — Claude settings files and the settings they merge
+  // into. Registered so the verb publishes findings with codes like every other
+  // report, not a private vocabulary carried in its messages.
+  SETTINGS_FILE_INVALID: entry(
+    'finding',
+    'error',
+    'A Claude settings file is not valid: its content does not parse as JSON, or a field violates the settings schema for its type.',
+    'Fix the field the finding names (its `field` is the dotted key path), or the JSON syntax, then re-run vat audit settings --file.',
+    'settings_file_invalid',
+  ),
+  SETTINGS_TYPE_AMBIGUOUS: entry(
+    'finding',
+    'info',
+    'A settings file could be a user or a project settings file — they share one schema — so it was validated as a user file.',
+    'Pass --type user or --type project to state which it is.',
+    'settings_type_ambiguous',
+  ),
+  SETTINGS_PATH_DEPRECATED: entry(
+    'finding',
+    'error',
+    'A managed settings file is present at a path Claude Code no longer reads, so the policy it carries is not in effect.',
+    'Move the managed settings file to the current managed-settings path (vat audit settings --show-paths lists it) and remove the legacy file.',
+    'settings_path_deprecated',
+  ),
+  SETTINGS_RULE_SHADOWED: entry(
+    'finding',
+    'warning',
+    'A permission rule can never take effect: a rule in a higher-priority list (deny over ask over allow) or a duplicate in its own list already decides it.',
+    'Remove the shadowed rule, or narrow the rule that shadows it.',
+    'settings_rule_shadowed',
+  ),
+  SETTINGS_MARKETPLACE_TOKEN_MISSING: entry(
+    'finding',
+    'warning',
+    'A registered marketplace is sourced from GitHub and GITHUB_TOKEN is not set, so a private repository cannot be fetched.',
+    'Set GITHUB_TOKEN in the environment Claude Code runs in, or register the marketplace from a public source.',
+    'settings_marketplace_token_missing',
+  ),
+
+  // `vat agent validate` — an agent manifest (agent.yaml) and the files it
+  // references. A manifest that cannot be read at all is a refusal, not one of
+  // these: these are statements about a manifest the run did read.
+  AGENT_MANIFEST_INVALID: entry(
+    'finding',
+    'error',
+    'An agent manifest was read but does not satisfy the agent manifest schema.',
+    'Fix the field the finding names (its `field` is the dotted key path) so agent.yaml matches the manifest schema, then re-run vat agent validate.',
+    'agent_manifest_invalid',
+  ),
+  AGENT_REFERENCE_MISSING: entry(
+    'finding',
+    'error',
+    'A file or directory the agent manifest references — a prompt, a resource, the RAG database — does not exist.',
+    'Create the referenced file, correct its path in agent.yaml, or (for the RAG database) run vat rag index.',
+    'agent_reference_missing',
+  ),
+  AGENT_REFERENCE_UNREADABLE: entry(
+    'finding',
+    'error',
+    'A file or directory the agent manifest references exists, but the operating system refused access to it, so it could not be checked.',
+    'Make the referenced path readable — check its permissions and ownership — then re-run vat agent validate.',
+    'agent_reference_unreadable',
+  ),
+  AGENT_RAG_NO_SOURCES: entry(
+    'finding',
+    'warning',
+    'The agent manifest declares a RAG configuration that names no sources, so nothing can be indexed for it.',
+    'Add sources to the spec.rag entry, or remove the RAG configuration if the agent does not use one.',
+    'agent_rag_no_sources',
+  ),
+
   // Resources path — link / frontmatter / external-URL codes
   // Promotions of existing resources-package validator behavior (formerly free-form
   // lowercase `type` strings). Severities are locked by the design spec and reflect

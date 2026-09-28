@@ -32,6 +32,7 @@ import {
   calculateValidationStatus,
   countBySeverity,
   createAllowUsageLedger,
+  ExitCode,
   type AllowUsageLedger,
   type SeverityCounts,
   type ValidationIssue,
@@ -40,7 +41,7 @@ import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
 
-import { reportCommandError } from '../../utils/command-error.js';
+import { handleExpectedFailure, reportCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import {
   collectPostBuildIssues,
@@ -66,7 +67,7 @@ import {
   writeYamlHeader,
   type DiscoveredSkill,
 } from './command-helpers.js';
-import { rejectUnscopablePath, type SkillsScopeSubject } from './scope-guard.js';
+import { unscopablePathMessage, unscopableSkillsPath, type SkillsScopeSubject } from './scope-guard.js';
 import { discoverSkillsFromConfig } from './skill-discovery.js';
 
 export interface SkillsBuildCommandOptions {
@@ -90,6 +91,19 @@ const SCOPE_SUBJECT: SkillsScopeSubject = {
   silentSuccess: 'nothing to build',
 };
 
+/**
+ * Refuse a `[path]` the build cannot read a config from, exit 2.
+ *
+ * `vat skills build` still publishes a legacy document (Task 19 moves it onto
+ * the report writer), so it ends on the legacy failure document here, from the
+ * same judgement `vat skills validate` throws as a coded refusal.
+ */
+function rejectUnscopableBuildPath(pathArg: string | undefined): void {
+  const refusal = unscopableSkillsPath(pathArg);
+  if (refusal === undefined) return;
+  handleExpectedFailure(unscopablePathMessage(SCOPE_SUBJECT, String(pathArg), refusal.reason).trimEnd(), ExitCode.ERROR, Date.now());
+}
+
 export function createBuildCommand(): Command {
   const command = new Command('build');
 
@@ -101,7 +115,7 @@ export function createBuildCommand(): Command {
     .option('-v, --verbose', 'Show every individual finding, not just the errors')
     .option('--debug', 'Enable debug logging')
     .action(async (pathArg: string | undefined, options: SkillsBuildCommandOptions) => {
-      rejectUnscopablePath(SCOPE_SUBJECT, pathArg);
+      rejectUnscopableBuildPath(pathArg);
       await buildCommand(pathArg, options);
     })
     .addHelpText(
@@ -464,7 +478,7 @@ async function validateSkillBeforeBuild(
     locationRoot,
   );
 
-  if (validationResult.status !== 'error') {
+  if (validationResult.summary.errors === 0) {
     if (validationResult.ignoredErrors.length > 0) {
       logger.debug(`   ${validationResult.ignoredErrors.length} issue(s) allowed by config`);
     }

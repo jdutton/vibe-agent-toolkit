@@ -33,7 +33,7 @@ function scanDocument(overrides: Record<string, unknown> = {}): string {
   });
 }
 
-/** A future `Report<T>` envelope, `data` shaped like today's scan document. */
+/** A minimal `Report<T>` envelope — only the fields this reader needs, so each case varies one. */
 function reportScanDocument(dataOverrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     status: 'ok',
@@ -52,7 +52,48 @@ function reportScanDocument(dataOverrides: Record<string, unknown> = {}): string
   });
 }
 
+/**
+ * `vat resources scan --verbose --format json` as the Report envelope prints it
+ * (wave 3): the count is `examined`, the population is `data.files`, the arm is
+ * `data.lane` / `data.extentSource`. Byte-for-byte the shape
+ * `RESOURCES_SCAN_REPORT_SCHEMA` accepts.
+ */
+const REPORT_SHAPED_SCAN = JSON.stringify({
+  status: 'ok',
+  examined: 2,
+  findings: [],
+  summary: { errors: 0, warnings: 0, info: 0 },
+  gate: { strict: false },
+  durationMs: 41,
+  data: {
+    root: '/fixture/project',
+    lane: 'projection',
+    extentSource: 'git',
+    collections: {},
+    files: [
+      { path: 'docs/b.md', links: 1, anchors: 1, checksum: 'bbb' },
+      { path: 'docs/a.md', links: 2, anchors: 3, checksum: 'aaa' },
+    ],
+  },
+});
+
 describe('readPopulationDocument', () => {
+  it('reads a Report-shaped scan: examined and data.files', () => {
+    const result = readPopulationDocument(REPORT_SHAPED_SCAN);
+
+    expect(result.ok, result.ok ? '' : result.refusal).toBe(true);
+    if (!result.ok) return;
+    expect(result.document).toEqual({
+      root: '/fixture/project',
+      lane: 'projection',
+      extentSource: 'git',
+      files: [
+        { path: 'docs/a.md', checksum: 'aaa' },
+        { path: 'docs/b.md', checksum: 'bbb' },
+      ],
+    });
+  });
+
   it('reads a report-shaped document, taking the file count from the envelope\'s examined', () => {
     // `data` carries no `filesScanned` of its own — the envelope's `examined`
     // IS the denominator, and this facet must not require a per-command

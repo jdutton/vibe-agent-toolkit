@@ -10,6 +10,7 @@
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
+import { CommandRefusalError } from '../../utils/command-refusal.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 
 /**
@@ -28,7 +29,8 @@ export interface DiscoveredSkill {
  * @param skills - All discovered skills
  * @param skillName - Optional skill name to filter by
  * @returns Filtered skills array
- * @throws Error if skillName specified but not found
+ * @throws {CommandRefusalError} `USAGE_INVALID` when `skillName` names no discovered skill —
+ *   the invocation's mistake, never a defect in VAT
  */
 export function filterSkillsByName<T extends DiscoveredSkill>(
   skills: T[],
@@ -42,8 +44,9 @@ export function filterSkillsByName<T extends DiscoveredSkill>(
 
   if (filtered.length === 0) {
     const available = skills.map(s => s.name).join(', ');
-    throw new Error(
-      `Skill "${skillName}" not found. Available skills: ${available}`
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
+      `Skill "${skillName}" not found. Available skills: ${available}`,
     );
   }
 

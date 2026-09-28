@@ -20,6 +20,7 @@ import { dirname } from 'node:path';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { RESOURCES_VALIDATE_REPORT_SCHEMA } from '../../src/commands/resources/validate-schema.js';
 import {
   cleanupTestTempDir,
   createTestTempDir,
@@ -34,23 +35,14 @@ const SKILL_NAME = 'my-skill';
 const SOURCE_FILE = 'build-output/generated-ref.md';
 const DEST_FILE = 'cli-reference.md';
 
-/**
- * Flattened `{code, severity}` view of the parsed YAML output's grouped-by-file issues.
- *
- * Reads the VERBOSE document: the default publishes per-file counts plus a `codes`
- * tally, and these tests assert on individual findings, so every invocation below
- * passes `--verbose`.
- */
+/** `{code, severity}` of each finding, read off the report with its published schema. */
 interface FlatIssue {
   code: string;
   severity: string;
 }
 
 function flattenIssues(parsed: Record<string, unknown>): FlatIssue[] {
-  const files = (parsed['issues'] ?? []) as Array<{
-    issues: Array<{ code: string; severity: string }>;
-  }>;
-  return files.flatMap((f) => f.issues.map((e) => ({ code: e.code, severity: e.severity })));
+  return RESOURCES_VALIDATE_REPORT_SCHEMA.parse(parsed).findings.map((f) => ({ code: f.code, severity: f.severity }));
 }
 
 interface FixtureOptions {
@@ -115,9 +107,10 @@ describe('vat resources validate + deferred files: artifacts (integration)', () 
       'resources', 'validate', tempDir, '--verbose',
     ]);
 
+    // `findings` (the info note) at exit 0: nothing at error severity.
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
-    expect(parsed.errorsFound).toBe(0);
+    expect(parsed.status).toBe('findings');
+    expect((parsed.summary as { errors: number }).errors).toBe(0);
 
     const issues = flattenIssues(parsed);
     const deferred = issues.filter((i) => i.code === 'LINK_DEFERRED_ARTIFACT');

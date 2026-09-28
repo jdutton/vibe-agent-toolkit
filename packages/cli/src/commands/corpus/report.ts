@@ -14,24 +14,20 @@ import type { SeverityCounts } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
-export type AuditStatus = 'success' | 'warning' | 'error' | 'unloadable';
+/** A row's audit: the `vat audit` report's own status, or `unloadable` when the audit could not run. */
+export type AuditStatus = 'ok' | 'findings' | 'unloadable';
 export type ReviewStatus = 'ok' | 'error' | 'skipped';
 
 /**
- * Extends `SeverityCounts` rather than re-declaring `errors`/`warnings`/`info`:
- * `runner.ts` builds this by spreading `countBySeverity()`, so the two are
- * already the same shape by construction. Deriving makes the compiler enforce
- * that, instead of leaving it as a fact someone has to re-verify by hand every
- * time a severity bucket is added.
+ * One plugin's audit row. `summary` is the audit report's own — FINDINGS by
+ * severity, the one meaning `summary` has — and `files_scanned` is the report's
+ * `examined`, FILES: two denominators, so two keys, never one block mixing them.
  */
-export interface AuditSummary extends SeverityCounts {
-  files_scanned: number;
-}
-
 export interface AuditOutcome {
   status: AuditStatus;
   duration_ms: number;
-  summary?: AuditSummary;        // present when status != unloadable
+  summary?: SeverityCounts;      // present when status != unloadable
+  files_scanned?: number;        // present when status != unloadable
   findings_emitted?: number;     // present when status != unloadable
   output_path?: string;          // relative to run dir; absent on unloadable
   error?: string;                // present only on unloadable
@@ -39,7 +35,7 @@ export interface AuditOutcome {
 
 /**
  * Outcome distribution for one plugin's review lane — the review-side mirror
- * of `AuditSummary`. `skills_scanned` counts SKILLS (the denominator, like
+ * of the audit row's counts. `skills_scanned` counts SKILLS (the denominator, like
  * `files_scanned`); `reviewed` and `failed` bucket those skills by whether
  * `vat skill review` ran to completion, and always sum to `skills_scanned`.
  */
@@ -76,9 +72,12 @@ export interface RunReport {
 
 export interface RunTotals {
   plugins: number;
-  audit_clean: number;
-  audit_warning: number;
-  audit_error: number;
+  /** Rows whose audit found nothing. */
+  audit_ok: number;
+  /** Rows whose audit found something — at any severity. */
+  audit_findings: number;
+  /** The subset of `audit_findings` with at least one error-severity finding. */
+  audit_with_errors: number;
   unloadable: number;
   reviewed?: number;             // rows whose review lane ran; present iff flags.with_review
   review_error?: number;         // subset of `reviewed` that failed; present iff flags.with_review
@@ -90,24 +89,21 @@ export interface RunTotals {
 export function computeTotals(report: RunReport): RunTotals {
   const totals: RunTotals = {
     plugins: report.plugins.length,
-    audit_clean: 0,
-    audit_warning: 0,
-    audit_error: 0,
+    audit_ok: 0,
+    audit_findings: 0,
+    audit_with_errors: 0,
     unloadable: 0,
   };
 
   for (const row of report.plugins) {
     switch (row.audit.status) {
-      case 'success': {
-        totals.audit_clean += 1;
+      case 'ok': {
+        totals.audit_ok += 1;
         break;
       }
-      case 'warning': {
-        totals.audit_warning += 1;
-        break;
-      }
-      case 'error': {
-        totals.audit_error += 1;
+      case 'findings': {
+        totals.audit_findings += 1;
+        if ((row.audit.summary?.errors ?? 0) > 0) totals.audit_with_errors += 1;
         break;
       }
       case 'unloadable': {

@@ -8,16 +8,20 @@
  * commands print different words while doing it (`nothing to validate` vs
  * `nothing to build`), which is the only thing that varies between them.
  *
- * One implementation, parameterised by those words. Fixing this for one command
- * and copying it into the other is how the pair drifts.
+ * One judgement, parameterised by those words. Fixing this for one command
+ * and copying it into the other is how the pair drifts. How each command ENDS
+ * on it is its own: `skills validate` throws the coded refusal into its report
+ * lane ({@link assertScopableSkillsPath}); `skills build`, still a legacy
+ * document, publishes its failure document from the same reason.
  */
 
-import { existsSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-import { handleExpectedFailure } from '../../utils/command-error.js';
+import { CommandRefusalError } from '../../utils/command-refusal.js';
+import { readableDirectoryRefusal } from '../../utils/project-root-policy.js';
 
 /** The name `loadConfig` looks for in the directory these commands are pointed at. */
 export const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
@@ -39,31 +43,42 @@ export interface SkillsScopeSubject {
   silentSuccess: string;
 }
 
+/** Why a typed path cannot scope the run, and which refusal that is. */
+interface ScopeRefusal {
+  /** `USAGE_INVALID` for a path naming no usable directory; `INPUT_UNREADABLE` for one the OS refuses. */
+  refusal: RefusalCode;
+  /** The reason, quoted into {@link unscopablePathMessage}. */
+  reason: string;
+}
+
 /**
  * Why the path the operator typed cannot scope this run — or `undefined` when it
  * can.
  *
  * Only an EXPLICIT argument is judged. With no argument the command means "the
- * current directory", and a cwd that happens to hold no config is the documented
- * nothing-to-do case, not a mis-scoped run.
+ * current directory".
+ *
+ * A directory the OS will not let the process read is the INPUT's refusal
+ * (`INPUT_UNREADABLE`), never "holds no config": the config may well be there.
  *
  * `VAT_TEST_CONFIG` is honoured for the same reason `loadConfig` honours it: when
  * it is set, the config does not come from the named directory at all, so
  * demanding one there would reject a scope that is in fact resolvable.
  *
- * Pure — returns the message instead of writing it, so both answers are
- * assertable without capturing a stream.
+ * Pure of output — returns the refusal instead of writing it, so every answer
+ * is assertable without capturing a stream.
  */
-export function unscopableSkillsPath(pathArg: string | undefined): string | undefined {
+export function unscopableSkillsPath(pathArg: string | undefined): ScopeRefusal | undefined {
   if (pathArg === undefined) return undefined;
 
   const resolved = safePath.resolve(pathArg);
-  if (!existsSync(resolved)) return 'no such directory';
-  if (!statSync(resolved).isDirectory()) return 'not a directory';
+  // The one directory judgement every path-taking verb shares.
+  const refusal = readableDirectoryRefusal(resolved);
+  if (refusal !== undefined) return { refusal: refusal.refusal, reason: refusal.message };
 
   if (process.env['VAT_TEST_CONFIG'] !== undefined) return undefined;
   if (!existsSync(safePath.join(resolved, CONFIG_FILENAME))) {
-    return `no ${CONFIG_FILENAME} there`;
+    return { refusal: 'USAGE_INVALID', reason: `no ${CONFIG_FILENAME} there` };
   }
   return undefined;
 }
@@ -71,8 +86,8 @@ export function unscopableSkillsPath(pathArg: string | undefined): string | unde
 /**
  * The refusal text, as a string.
  *
- * Separate from the writing and the exiting so a test can assert what the
- * operator is told without capturing a stream or trapping `process.exit`.
+ * Separate from the ending so a test can assert what the operator is told
+ * without capturing a stream or trapping `process.exit`.
  */
 export function unscopablePathMessage(
   subject: SkillsScopeSubject,
@@ -96,23 +111,16 @@ export function unscopablePathMessage(
 }
 
 /**
- * Refuse to run when the operator scoped the command at something it cannot
- * read a config from.
+ * Refuse, by code, a run the operator scoped at something it cannot read a
+ * config from — thrown into the caller's report lane, which publishes it as
+ * the envelope's error branch (exit 2). Exit 1 on these commands means
+ * "errors found", and reporting a usage mistake as 1 tells a CI gate the
+ * project's skills are broken when nothing was inspected.
  *
- * Exit 2, matching `rejectPositionalArguments`: exit 1 on these commands is
- * documented as "errors found", and reporting a usage error as 1 tells a CI gate
- * the project's skills are broken when nothing was inspected.
+ * @throws {CommandRefusalError} `USAGE_INVALID` or `INPUT_UNREADABLE` — see {@link unscopableSkillsPath}
  */
-export function rejectUnscopablePath(
-  subject: SkillsScopeSubject,
-  pathArg: string | undefined,
-): void {
-  const reason = unscopableSkillsPath(pathArg);
-  if (reason === undefined) return;
-
-  // Through the shared failure ending, so the refusal PUBLISHES its document
-  // (`status: error`) on stdout as every other ending of these commands does —
-  // it used to write only stderr, and a wrapper reading stdout got zero bytes.
-  // Neither command offers `--format`, so the document is YAML like its report.
-  handleExpectedFailure(unscopablePathMessage(subject, String(pathArg), reason).trimEnd(), ExitCode.ERROR, Date.now());
+export function assertScopableSkillsPath(subject: SkillsScopeSubject, pathArg: string | undefined): void {
+  const refusal = unscopableSkillsPath(pathArg);
+  if (refusal === undefined) return;
+  throw new CommandRefusalError(refusal.refusal, unscopablePathMessage(subject, String(pathArg), refusal.reason).trimEnd());
 }

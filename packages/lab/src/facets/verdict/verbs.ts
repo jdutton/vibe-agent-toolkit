@@ -100,10 +100,12 @@ function once<TName extends string>(
 const SUBJECT_VERBS: { readonly [K in VerdictVerbName]: VerdictVerbSpec<K> } = {
   audit: once('audit', (s) => ['audit', s.path]),
   'skills-validate': once('skills-validate', (s) => ['skills', 'validate', s.path, '--verbose']),
+  // `--verbose`: an older build's default document has count rows, no findings.
   'resources-validate': once('resources-validate', (s) => [
     'resources',
     'validate',
     s.path,
+    '--verbose',
     '--format',
     'json',
   ]),

@@ -77,17 +77,13 @@ describe('CLI-boundary projectRoot policy (integration, spec §13.4)', () => {
         'resources',
         'validate',
         tempDir,
-        // The default document publishes per-file COUNTS; this test asserts on an
-        // individual finding's `message`, which only the verbose form carries.
-        '--verbose',
       ]);
 
       expect(result.status).toBe(1);
       expect(result.stderr).toMatch(LOUD_CWD_PATTERN);
       // The error surfaces as LINK_BROKEN_FILE with the documented message.
-      const files = parsed['issues'] as Array<{ issues: Array<{ code: string; severity: string; message: string }> }> | undefined;
-      expect(files).toBeDefined();
-      const flat = (files ?? []).flatMap(f => f.issues);
+      const flat = parsed['findings'] as Array<{ code: string; severity: string; message: string }>;
+      expect(flat.length).toBeGreaterThan(0);
       const hasAbsoluteEscape = flat.some(
         e => e.code === 'LINK_BROKEN_FILE' && /escapes the project root/.test(e.message),
       );

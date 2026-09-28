@@ -1,0 +1,638 @@
+{
+  "$ref": "#/definitions/corpus-audit",
+  "definitions": {
+    "corpus-audit": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "ok"
+            },
+            "examined": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "summary": {
+              "type": "object",
+              "properties": {
+                "errors": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "warnings": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "info": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "errors",
+                "warnings",
+                "info"
+              ],
+              "additionalProperties": false
+            },
+            "gate": {
+              "type": "object",
+              "properties": {
+                "strict": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "strict"
+              ],
+              "additionalProperties": false
+            },
+            "durationMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "location": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "field": {
+                    "type": "string"
+                  },
+                  "link": {
+                    "type": "string"
+                  },
+                  "fix": {
+                    "type": "string"
+                  },
+                  "reference": {
+                    "type": "string"
+                  },
+                  "suggestion": {
+                    "type": "string"
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "error",
+                      "warning",
+                      "info"
+                    ]
+                  },
+                  "column": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "severity"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 0
+            },
+            "data": {
+              "type": "object",
+              "properties": {
+                "root": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "provenance": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "url": {
+                          "type": "string"
+                        },
+                        "ref": {
+                          "type": "string"
+                        },
+                        "commit": {
+                          "type": "string"
+                        },
+                        "subpath": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "url",
+                        "ref",
+                        "commit"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "counts": {
+                  "type": "object",
+                  "properties": {
+                    "filesPassed": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "filesWithWarnings": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "filesWithErrors": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "pathsUnreadable": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "filesPassed",
+                    "filesWithWarnings",
+                    "filesWithErrors",
+                    "pathsUnreadable"
+                  ],
+                  "additionalProperties": false
+                },
+                "files": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "agent-skill",
+                          "vat-agent",
+                          "claude-plugin",
+                          "marketplace",
+                          "registry",
+                          "unknown"
+                        ]
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "ok",
+                          "findings"
+                        ]
+                      },
+                      "summary": {
+                        "$ref": "#/definitions/corpus-audit/anyOf/0/properties/summary"
+                      },
+                      "compatibility": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "analyzed": {
+                                "type": "boolean",
+                                "const": false
+                              },
+                              "reason": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "analyzed",
+                              "reason"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "object",
+                            "properties": {
+                              "plugin": {
+                                "type": "string"
+                              },
+                              "version": {
+                                "type": "string"
+                              },
+                              "declaredTargets": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "evidence": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "additionalProperties": {}
+                                }
+                              },
+                              "observations": {
+                                "type": "array",
+                                "items": {
+                                  "$ref": "#/definitions/corpus-audit/anyOf/0/properties/data/properties/files/items/properties/compatibility/anyOf/1/properties/evidence/items"
+                                }
+                              },
+                              "verdicts": {
+                                "type": "array",
+                                "items": {
+                                  "$ref": "#/definitions/corpus-audit/anyOf/0/properties/data/properties/files/items/properties/compatibility/anyOf/1/properties/evidence/items"
+                                }
+                              },
+                              "unchecked": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "path": {
+                                      "type": "string"
+                                    },
+                                    "reason": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "path",
+                                    "reason"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "fileCounts": {
+                                "type": "object",
+                                "properties": {
+                                  "totalFiles": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "skillFiles": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "scriptFiles": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "hookFiles": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  },
+                                  "mcpConfigs": {
+                                    "type": "integer",
+                                    "minimum": 0
+                                  }
+                                },
+                                "required": [
+                                  "totalFiles",
+                                  "skillFiles",
+                                  "scriptFiles",
+                                  "hookFiles",
+                                  "mcpConfigs"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "plugin",
+                              "observations",
+                              "verdicts",
+                              "unchecked",
+                              "fileCounts"
+                            ],
+                            "additionalProperties": false
+                          }
+                        ]
+                      },
+                      "settings": {
+                        "type": "object",
+                        "properties": {
+                          "compatible": {
+                            "type": "boolean"
+                          },
+                          "conflicts": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string"
+                                },
+                                "detail": {
+                                  "type": "string"
+                                },
+                                "blockedBy": {
+                                  "type": "string"
+                                },
+                                "value": {
+                                  "type": "string"
+                                },
+                                "settingsFile": {
+                                  "type": "string"
+                                },
+                                "settingsLevel": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "type",
+                                "detail",
+                                "blockedBy",
+                                "value",
+                                "settingsFile",
+                                "settingsLevel"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "unchecked": {
+                            "type": "array",
+                            "items": {
+                              "$ref": "#/definitions/corpus-audit/anyOf/0/properties/data/properties/files/items/properties/compatibility/anyOf/1/properties/unchecked/items"
+                            }
+                          }
+                        },
+                        "required": [
+                          "compatible",
+                          "conflicts"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "type",
+                      "status",
+                      "summary"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "hierarchical": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "marketplaces": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "plugins": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "name": {
+                                      "type": "string"
+                                    },
+                                    "skills": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "path": {
+                                            "type": "string"
+                                          },
+                                          "status": {
+                                            "type": "string",
+                                            "enum": [
+                                              "ok",
+                                              "findings"
+                                            ]
+                                          },
+                                          "summary": {
+                                            "$ref": "#/definitions/corpus-audit/anyOf/0/properties/summary"
+                                          },
+                                          "cacheStatus": {
+                                            "type": "string",
+                                            "enum": [
+                                              "stale",
+                                              "orphaned",
+                                              "fresh"
+                                            ]
+                                          }
+                                        },
+                                        "required": [
+                                          "name",
+                                          "path",
+                                          "status",
+                                          "summary"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "name",
+                                    "skills"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "required": [
+                              "name",
+                              "plugins"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "cachedPlugins": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/definitions/corpus-audit/anyOf/0/properties/data/properties/hierarchical/anyOf/0/properties/marketplaces/items/properties/plugins/items"
+                          }
+                        },
+                        "standalonePlugins": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/definitions/corpus-audit/anyOf/0/properties/data/properties/hierarchical/anyOf/0/properties/marketplaces/items/properties/plugins/items"
+                          }
+                        },
+                        "standaloneSkills": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/definitions/corpus-audit/anyOf/0/properties/data/properties/hierarchical/anyOf/0/properties/marketplaces/items/properties/plugins/items/properties/skills/items"
+                          }
+                        }
+                      },
+                      "required": [
+                        "marketplaces",
+                        "cachedPlugins",
+                        "standalonePlugins",
+                        "standaloneSkills"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "root",
+                "provenance",
+                "counts",
+                "files",
+                "hierarchical"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "status",
+            "examined",
+            "summary",
+            "gate",
+            "findings",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "findings"
+            },
+            "examined": {
+              "$ref": "#/definitions/corpus-audit/anyOf/0/properties/examined"
+            },
+            "summary": {
+              "$ref": "#/definitions/corpus-audit/anyOf/0/properties/summary"
+            },
+            "gate": {
+              "$ref": "#/definitions/corpus-audit/anyOf/0/properties/gate"
+            },
+            "durationMs": {
+              "$ref": "#/definitions/corpus-audit/anyOf/0/properties/durationMs"
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/corpus-audit/anyOf/0/properties/findings/items"
+              },
+              "minItems": 1
+            },
+            "data": {
+              "$ref": "#/definitions/corpus-audit/anyOf/0/properties/data"
+            }
+          },
+          "required": [
+            "status",
+            "examined",
+            "summary",
+            "gate",
+            "findings",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "error"
+            },
+            "examined": {
+              "$ref": "#/definitions/corpus-audit/anyOf/0/properties/examined"
+            },
+            "summary": {
+              "$ref": "#/definitions/corpus-audit/anyOf/0/properties/summary"
+            },
+            "gate": {
+              "$ref": "#/definitions/corpus-audit/anyOf/0/properties/gate"
+            },
+            "durationMs": {
+              "$ref": "#/definitions/corpus-audit/anyOf/0/properties/durationMs"
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/corpus-audit/anyOf/0/properties/findings/items"
+              }
+            },
+            "error": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "USAGE_INVALID",
+                    "CONFIG_INVALID",
+                    "INPUT_UNREADABLE",
+                    "BACKEND_UNAVAILABLE",
+                    "EXTERNAL_API_FAILED",
+                    "NOT_IMPLEMENTED",
+                    "RUN_INCOMPLETE",
+                    "INTERNAL_ERROR",
+                    "RESOURCE_CHECK_BROKEN",
+                    "ARD_NOT_CONFIGURED",
+                    "ARD_DERIVATION_FAILED"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            "data": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/corpus-audit/anyOf/0/properties/data"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "examined",
+            "summary",
+            "gate",
+            "findings",
+            "error",
+            "data"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

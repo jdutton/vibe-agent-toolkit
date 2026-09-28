@@ -266,21 +266,26 @@ resources:
 
 ### YAML by Default
 
-All commands output YAML on stdout (readable by humans and agents):
+Commands output YAML on stdout (readable by humans and agents); `--format json` renders the same
+document. A report verb's document is the envelope described under
+[The report contract](#the-report-contract):
 
 ```yaml
 ---
-status: success
-filesScanned: 12
-durationSecs: 0.234
----
+status: ok
+examined: 12
+findings: []
+summary: { errors: 0, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 234
+data: { ... }
 ```
-
-Future: `--format json` flag for JSON output
 
 ### Dual Output for Errors
 
-Commands that find errors produce both formats:
+Legacy commands that find errors produce both formats below. A report verb renders the same
+compiler-style lines under `--format text`, on stdout, from its published findings
+(`location:line:column: severity: message [code]`) — see [The report contract](#the-report-contract).
 
 #### Test Format (stderr)
 
@@ -304,25 +309,19 @@ which lines they have to act on.
 
 ```yaml
 ---
-# status is the worst ACTIONABLE severity: success | warning | error.
-# Info-only findings report `success` — read issueCounts for what was seen.
-status: error
-errorsFound: 2
-issueCounts: { errors: 2, warnings: 0, info: 0 }
-issues:
-  - file: docs/README.md
-    issues:
-      - line: 15
-        column: 25
-        code: LINK_BROKEN_FILE
-        severity: error
-        message: Link target not found: ./missing.md
-  - file: docs/guide.md
-    line: 42
-    column: 10
-    type: broken-anchor
-    message: Broken anchor: #non-existent-section
----
+# status: ok (nothing found) | findings (anything found, at any severity) |
+# error (the run could not finish). summary counts findings by severity.
+status: findings
+examined: 12
+findings:
+  - code: LINK_BROKEN_FILE
+    severity: error
+    message: "File not found: docs/missing.md"
+    location: docs/README.md
+    line: 15
+summary: { errors: 1, warnings: 0, info: 0 }
+gate: { strict: false }
+data: { root: /abs/path/to/project, collections: {} }
 ```
 
 **Purpose:**
@@ -427,27 +426,32 @@ Each command group exports its verbose help function.
 
 **Behavior:**
 - Scans directory for markdown files (vat-aware discovery)
-- Shows what files would be validated
-- Displays stats: file count, link count, etc.
-- Helps decide inclusions/exclusions before validation
-- Always exits 0 (informational only)
+- Shows what files would be validated, and helps decide inclusions/exclusions before validation
+- Publishes the report envelope: `examined` is the number of files scanned; a scan has no finding
+  of its own, so a scan of NOTHING is the writer's `RESOURCE_CHECK_BROKEN` at exit 1 — it is not a
+  population. Exits 0 when it scanned at least one file, 2 when it could not run
 - Defaults to project root if no path provided
+- The lab's population facet reads it: the count from `examined`, the population from `data.files`
 
-**Example output:**
+**Example output (`--verbose`):**
 ```yaml
 ---
-status: success
-root: /abs/path/to/project
-filesScanned: 12
-linksFound: 47
-anchorsFound: 23
-files:
-  - path: docs/README.md
-    links: 5
-    anchors: 3
-    checksum: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-durationSecs: 0.234
----
+status: ok
+examined: 12
+findings: []
+summary: { errors: 0, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 234
+data:
+  root: /abs/path/to/project
+  lane: projection
+  extentSource: git
+  collections: {}
+  files:
+    - path: docs/README.md
+      links: 5
+      anchors: 3
+      checksum: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 ```
 
 ### `vat resources validate [path]`
@@ -456,48 +460,46 @@ durationSecs: 0.234
 
 **Behavior:**
 - Validates discovered resources (link integrity, anchors, structure)
-- Exits 0 if valid, non-zero if errors found
+- Publishes every finding flat, `location` relative to `data.root`; `examined` is the number of
+  resources validated
+- Exits on the code the document derives: 0 with no error-severity finding, 1 with one (or when
+  nothing was validated), 2 when the run could not finish
+- `--collection` scopes the whole report — findings, `examined`, exit code — to that collection
 - Defaults to project root if no path provided
-- Dual output: test format (stderr) + YAML (stdout)
-- CI/CD gate
-
-**Success output:**
-```yaml
----
-status: success
-filesScanned: 12
-linksChecked: 47
-anchorsChecked: 23
-duration: 456ms
----
-```
+- CI/CD gate; also a phase of `vat validate` and `vat verify`, which fold the same published
+  document (`publishedReport`) under `phases[].report`
 
 **Error output:**
-
-*stderr:*
-```
-docs/README.md:15:25: error: Link target not found: ./missing.md
-```
-
-*stdout:*
 ```yaml
 ---
-status: error
-filesScanned: 12
-errorsFound: 1
-filesWithErrors: 1
-issueCounts: { errors: 1, warnings: 0, info: 0 }
-issueSummary: { LINK_BROKEN_FILE: 1 }
-issues:
-  - file: docs/README.md
-    issues:
-      - line: 15
-        column: 25
-        code: LINK_BROKEN_FILE
-        severity: error
-        message: Link target not found: ./missing.md
----
+status: findings
+examined: 12
+findings:
+  - code: LINK_BROKEN_FILE
+    severity: error
+    message: "File not found: docs/missing.md"
+    location: docs/README.md
+    link: ./missing.md
+    line: 15
+summary: { errors: 1, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 456
+data:
+  root: /abs/path/to/project
+  collections: {}
 ```
+
+### `vat resources query <sql> [path]`
+
+**Purpose:** Ask the resource projection one read-only SQL question
+
+**Behavior:**
+- `examined` is the POPULATION the statement ran over, never the rows it selected: zero rows over a
+  populated tree is `ok` (an empty answer is an answer); a population of nothing is refused
+- `data.columns` names the result columns even when no row was selected; `data.rows` holds the rows
+  exactly as SQLite holds them; `data.population` / `populationSecs` are the cache tell
+- A statement the store refuses (not a query, a second statement, an unbound `?`, a name the schema
+  lacks) is `USAGE_INVALID` by its code, `PROJECTION_STATEMENT_REFUSED`, never by its message
 
 ### `vat resources check [path]`
 
@@ -804,6 +806,10 @@ through `handleCommandError` until their migration task moves them onto the writ
   exits 2. `refusalCodeOf(error)` picks the code: a `CommandRefusalError`'s own (`USAGE_INVALID` for the
   invocation's mistake), a library error's by its `code`, and `INTERNAL_ERROR` only for what nothing
   anticipated.
+- **A phase folds the published document.** A verb that is also a phase of `vat validate` /
+  `vat verify` hands back `publishedReport(verb, report)` — the same run-integrity pass and schema
+  validation the writer applies — or, on a refusal, `refusalReport(code, error, gate, finished)`, so
+  the orchestrator folds exactly what the verb would have written.
 - **Formats.** `yaml` and `json` render the document; `text` renders one
   `location:line:column: severity: message [code]` line per finding and a status line with the
   counts and the denominator — or the entry's own `renderText` when its human rendering is a

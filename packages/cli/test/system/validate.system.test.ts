@@ -82,8 +82,12 @@ describe('vat validate command (system test)', () => {
     const result = await suite.runValidate(tempDir);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(SUCCESS_MARKER);
-    expect(result.stdout).toContain('skills');
+    const parsed = YAML.parse(result.stdout) as { status: string; phases: Array<{ name: string }> };
+    expect(parsed.phases.map((p) => p.name)).toEqual(['skills']);
+    // Not `success`: the fixture's `version:` frontmatter key is a
+    // SKILL_FRONTMATTER_EXTRA_FIELDS warning. A `status: success` substring
+    // used to match the per-skill ROW, not the run.
+    expect(parsed.status).toBe('warning');
   });
 
   it('discovers configured surfaces when run from a subdirectory', async () => {

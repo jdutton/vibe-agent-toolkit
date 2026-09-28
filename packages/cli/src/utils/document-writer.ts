@@ -72,6 +72,27 @@ function writeStructured(document: unknown, format: DocumentFormat): void {
 }
 
 /**
+ * The document a report verb publishes, without writing it: the run-integrity
+ * refusal its registered denominator declares, then its published schema.
+ *
+ * For the one lane that hands the document on instead of writing it — a phase
+ * `vat validate` / `vat verify` folds under `phases[].report` — so the folded
+ * document is the same one the verb would have written, refusal included.
+ * {@link writeDocument} goes through it too.
+ *
+ * @param verb - The registered verb
+ * @param report - The document as the verb built it
+ * @returns The document as published
+ * @throws When the verb is unregistered or its schema rejects the document (a defect)
+ */
+export function publishedReport<T>(verb: ReportVerb, report: Report<T>): Report<T> {
+  const entry = reportShapeFor(verb);
+  const published = withRunIntegrity(report, entry.examined);
+  entry.schema.parse(published);
+  return published;
+}
+
+/**
  * Publish a report verb's document.
  *
  * @param verb - The registered verb, as typed after `vat`
@@ -82,8 +103,7 @@ function writeStructured(document: unknown, format: DocumentFormat): void {
  */
 export function writeDocument<T>(verb: ReportVerb, report: Report<T>, format: DocumentFormat): Report<T> {
   const entry = reportShapeFor(verb);
-  const written = withRunIntegrity(report, entry.examined);
-  entry.schema.parse(written);
+  const written = publishedReport(verb, report);
   if (format === 'text') {
     const text = entry.renderText === undefined
       ? renderReportText(written, entry.examined.unit)
@@ -141,13 +161,28 @@ export function endWithRefusal(
   gate: Gate,
   finished: FinishedWork,
 ): never {
+  process.exit(exitCodeForReport(writeDocument(verb, refusalReport(code, error, gate, finished), format)));
+}
+
+/**
+ * The envelope's error branch for a refusal, with its human half already on
+ * stderr — what {@link endWithRefusal} writes, for the lane that hands the
+ * document on instead (a phase folded under `phases[].report`).
+ *
+ * @param code - Which refusal (see {@link endWithRefusal})
+ * @param error - The thrown value, or the message
+ * @param gate - The gate the run was judged by
+ * @param finished - The work that finished, or {@link NOTHING_FINISHED}
+ * @returns The error report, not yet published
+ */
+export function refusalReport(code: RefusalCode, error: unknown, gate: Gate, finished: FinishedWork): Report<unknown> {
   const raw = errorMessageOf(error);
   const message = raw === '' ? CODE_REGISTRY[code].description : raw;
   process.stderr.write(`${message}\n`);
   // The stack always for a VAT defect; for a user's refusal only under `--debug`,
   // which exists to name the throw site.
   if (code === 'INTERNAL_ERROR' || debugDiagnosticsEnabled()) process.stderr.write(`${errorDiagnostics(error)}\n`);
-  const report = buildErrorReport({
+  return buildErrorReport({
     error: { code, message },
     gate,
     examined: finished.examined,
@@ -155,7 +190,6 @@ export function endWithRefusal(
     data: finished.data,
     durationMs: undefined,
   });
-  process.exit(exitCodeForReport(writeDocument(verb, report, format)));
 }
 
 /**

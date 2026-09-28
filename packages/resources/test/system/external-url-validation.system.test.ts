@@ -35,7 +35,7 @@ describe('External URL validation CLI flags (system test)', () => {
 
   const BASE_CMD = ['resources', 'validate'];
   const VALIDATE_CMD = [...BASE_CMD, '--check-external-urls'];
-  const SUCCESS_OUTPUT = 'status: success';
+  const SUCCESS_OUTPUT = 'status: ok';
   const NO_CACHE_CMD = [...BASE_CMD, '--no-cache'];
 
   beforeAll(() => {

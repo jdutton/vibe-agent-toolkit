@@ -166,7 +166,6 @@ export {
   readEffectiveSettings,
   readSettingsLayers,
   resolveSettingsPaths,
-  summarizeSettingsFindings,
   validateSettingsFile,
 } from './settings/index.js';
 

@@ -25,8 +25,8 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import type { ExtentKey } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { PROJECTION_STATEMENT_REFUSED_CODE, type ExtentKey } from '@vibe-agent-toolkit/resources';
+import { isVatError, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -54,6 +54,43 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await store.close();
+});
+
+describe('a refused statement carries a code, not only a message', () => {
+  // The caller learns WHICH failure this is — the caller's statement, not the
+  // store — from `code`, never from the words. One case per refusal site.
+  it.each([
+    ['a write', 'DELETE FROM "blobs"'],
+    ['a second statement', 'SELECT 1; SELECT 2'],
+    ['an unbound placeholder', 'SELECT ? AS x'],
+    ['a name the schema lacks', 'SELECT "no_such_column" FROM "blobs"'],
+  ])('%s', (_label, sql) => {
+    let caught: unknown;
+    try {
+      store.query(sql);
+    } catch (error) {
+      caught = error;
+    }
+    expect(isVatError(caught, PROJECTION_STATEMENT_REFUSED_CODE), String(caught)).toBe(true);
+  });
+});
+
+describe('columns', () => {
+  it('names a statement\'s result columns in order, even when it would select no row', () => {
+    // A zero-row answer is still an answer with a SHAPE: rows alone cannot say
+    // which columns it had, so a document built from them would publish none.
+    expect(store.columns('SELECT "contentKey" AS key, "encoding" FROM "blobs" WHERE 0')).toEqual(['key', 'encoding']);
+  });
+
+  it('binds the same parameters as query and runs nothing', () => {
+    expect(store.columns('SELECT COUNT(*) AS n FROM "blobs" WHERE "encoding" = ?', 'utf-16le')).toEqual(['n']);
+    expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
+  });
+
+  it('refuses what query refuses', () => {
+    expect(() => store.columns('DELETE FROM "blobs"')).toThrow(/read/i);
+    expect(() => store.columns('SELECT "no_such_column" FROM "blobs"')).toThrow(/no such column/);
+  });
 });
 
 describe('query', () => {

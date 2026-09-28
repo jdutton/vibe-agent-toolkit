@@ -118,6 +118,12 @@ describe('review-checklist.sectionForCode', () => {
  * skill rather than the skill itself.
  */
 const FALLS_TO_CATCH_ALL: ReadonlySet<string> = new Set([
+  // About an agent manifest (agent.yaml), which `vat agent validate` reads and
+  // a skill review never does.
+  'AGENT_MANIFEST_INVALID',
+  'AGENT_RAG_NO_SOURCES',
+  'AGENT_REFERENCE_MISSING',
+  'AGENT_REFERENCE_UNREADABLE',
   'ALLOW_EXPIRED',
   'ALLOW_UNUSED',
   // Emitted over a project's `.claude/rules` tree, which a skill review does not walk —
@@ -178,6 +184,13 @@ const FALLS_TO_CATCH_ALL: ReadonlySet<string> = new Set([
   'REGISTRY_SHAPE_DRIFT',
   'RESOURCE_UNREADABLE',
   'SCAN_PATH_UNREADABLE',
+  // About Claude settings files, which `vat audit settings` reads and a skill
+  // review never does.
+  'SETTINGS_FILE_INVALID',
+  'SETTINGS_MARKETPLACE_TOKEN_MISSING',
+  'SETTINGS_PATH_DEPRECATED',
+  'SETTINGS_RULE_SHADOWED',
+  'SETTINGS_TYPE_AMBIGUOUS',
   'SKILL_BODY_NOT_IMPERATIVE',
   'SKILL_CLAUDE_PLUGIN_NAME_MISMATCH',
   'SKILL_NAME_NOT_KEBAB_CASE',

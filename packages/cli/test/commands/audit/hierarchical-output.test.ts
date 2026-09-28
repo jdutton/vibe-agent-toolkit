@@ -1,10 +1,10 @@
 import * as os from 'node:os';
 
-import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
-import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { describeIssues, type ValidationResult } from '@vibe-agent-toolkit/agent-skills';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it } from 'vitest';
 
-import { buildHierarchicalOutput } from '../../../src/commands/audit/hierarchical-output.js';
+import { addMisconfigurationIssues, buildHierarchicalOutput } from '../../../src/commands/audit/hierarchical-output.js';
 
 // Constants for test data
 const RESOURCE_TYPE_SKILL = 'agent-skill';
@@ -20,45 +20,41 @@ const TEST_INFO_MESSAGE = 'Test info';
 const SHARED_SKILL_NAME = 'shared-name';
 
 /**
- * Build a one-issue result.
+ * Build a one-issue result whose `status`/`summary` are DERIVED from that issue,
+ * as every real producer does.
  *
- * `severity` is a SEPARATE parameter from `status` on purpose. This factory used
- * to take `status: 'error' | 'warning'` and derive the issue severity from it,
- * which made an info-only result — status `success`, one `info` issue —
- * structurally inexpressible. That is exactly the case `hierarchical-output`
- * drops on the floor, so a fixture that cannot build it cannot catch it.
+ * Takes the issue's SEVERITY, not a status: the skill tree's status word is
+ * derived from the issues, and an info-only result — which the terse filter
+ * once dropped — is expressible only when severity is the input.
  */
 function createTestResult(
   path: string,
-  status: ValidationResult['status'],
+  severity: 'error' | 'warning' | 'info',
   issueCode: string,
   issueMessage: string,
-  severity: 'error' | 'warning' | 'info' = status === 'error' ? SEVERITY_ERROR : SEVERITY_WARNING,
 ): ValidationResult {
+  // `code` is a registry-typed union; these fixtures use synthetic codes.
   const issues = [{ code: issueCode, message: issueMessage, severity }] as unknown as ValidationIssue[];
-  return {
-    path,
-    status,
-    resourceType: RESOURCE_TYPE_SKILL,
-    issues,
-    issueCounts: countBySeverity(issues),
-  } as unknown as ValidationResult;
+  return resultOf(path, issues);
 }
 
 /** A result with NO findings at all — the only thing a terse report may drop. */
 function createCleanResult(path: string): ValidationResult {
+  return resultOf(path, []);
+}
+
+function resultOf(path: string, issues: ValidationIssue[]): ValidationResult {
   return {
     path,
-    status: 'success',
-    resourceType: RESOURCE_TYPE_SKILL,
-    issues: [],
-    issueCounts: countBySeverity([]),
-  } as unknown as ValidationResult;
+    type: RESOURCE_TYPE_SKILL,
+    ...describeIssues(issues, RESOURCE_TYPE_SKILL),
+    issues,
+  };
 }
 
 /** A one-error result — the shape most of the cache/grouping cases need. */
 function createErrorResult(path: string): ValidationResult {
-  return createTestResult(path, 'error', TEST_ERROR_CODE, TEST_ERROR_MESSAGE);
+  return createTestResult(path, SEVERITY_ERROR, TEST_ERROR_CODE, TEST_ERROR_MESSAGE);
 }
 
 const homeDir = os.homedir();
@@ -82,19 +78,19 @@ describe('buildHierarchicalOutput', () => {
     const results: ValidationResult[] = [
       createTestResult(
         `${homeDir}/.claude/plugins/marketplaces/marketplace1/plugin1/skills/skill1/SKILL.md`,
-        'error',
+        SEVERITY_ERROR,
         TEST_ERROR_CODE,
         TEST_ERROR_MESSAGE
       ),
       createTestResult(
         `${homeDir}/.claude/plugins/marketplaces/marketplace1/plugin1/skills/skill2/SKILL.md`,
-        'warning',
+        SEVERITY_WARNING,
         TEST_WARNING_CODE,
         'Test warning 2'
       ),
       createTestResult(
         `${homeDir}/.claude/plugins/marketplaces/marketplace1/plugin2/skills/skill3/SKILL.md`,
-        'warning',
+        SEVERITY_WARNING,
         TEST_WARNING_CODE,
         TEST_WARNING_MESSAGE
       ),
@@ -110,22 +106,24 @@ describe('buildHierarchicalOutput', () => {
     expect(plugin1?.name).toBe('plugin1');
     expect(plugin1?.skills).toHaveLength(2);
     expect(plugin1?.skills[0]?.name).toBe('skill1');
-    expect(plugin1?.skills[0]?.status).toBe('error');
+    // The literal envelope vocabulary: the distribution is in `summary`.
+    expect(plugin1?.skills[0]?.status).toBe('findings');
+    expect(plugin1?.skills[0]?.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
     expect(plugin1?.skills[1]?.name).toBe('skill2');
-    expect(plugin1?.skills[1]?.status).toBe('warning');
+    expect(plugin1?.skills[1]?.summary).toEqual({ errors: 0, warnings: 1, info: 0 });
 
     const plugin2 = output.marketplaces[0]?.plugins[1];
     expect(plugin2?.name).toBe('plugin2');
     expect(plugin2?.skills).toHaveLength(1);
     expect(plugin2?.skills[0]?.name).toBe('skill3');
-    expect(plugin2?.skills[0]?.status).toBe('warning');
+    expect(plugin2?.skills[0]?.summary).toEqual({ errors: 0, warnings: 1, info: 0 });
   });
 
   it('should handle standalone plugins (no marketplace)', () => {
     const results: ValidationResult[] = [
       createTestResult(
         `${homeDir}/.claude/plugins/standalone-plugin/skills/skill1/SKILL.md`,
-        'error',
+        SEVERITY_ERROR,
         TEST_ERROR_CODE,
         TEST_ERROR_MESSAGE
       ),
@@ -143,28 +141,30 @@ describe('buildHierarchicalOutput', () => {
     const results: ValidationResult[] = [
       createTestResult(
         `${homeDir}/.claude/plugins/standalone-skill/SKILL.md`,
-        'warning',
+        SEVERITY_WARNING,
         TEST_WARNING_CODE,
         'Test warning',
       ),
     ];
 
-    const output = buildHierarchicalOutput(results, false, runRoot);
+    // The misconfiguration finding joins the RESULTS first (the `--user` lane
+    // does this), so the envelope counts it — then the hierarchy shows it.
+    const withMisconfig = addMisconfigurationIssues(results, runRoot);
+    const output = buildHierarchicalOutput(withMisconfig, false, runRoot);
 
     expect(output.standaloneSkills).toHaveLength(1);
     expect(output.standaloneSkills[0]?.name).toBe('standalone-skill');
-    // Status is upgraded to 'error' due to misconfiguration detection
-    expect(output.standaloneSkills[0]?.status).toBe('error');
-    // Should have original warning + misconfiguration error
-    expect(output.standaloneSkills[0]?.issues).toHaveLength(2);
-    expect(output.standaloneSkills[0]?.issues[1]?.code).toBe('SKILL_MISCONFIGURED_LOCATION');
+    // Original warning + misconfiguration error
+    expect(output.standaloneSkills[0]?.summary).toEqual({ errors: 1, warnings: 1, info: 0 });
+    expect(withMisconfig[0]?.issues.map((i) => i.code)).toEqual([TEST_WARNING_CODE, 'SKILL_MISCONFIGURED_LOCATION']);
+    expect(withMisconfig[0]?.summary).toEqual({ errors: 1, warnings: 1, info: 0 });
   });
 
   it('reports every path relative to the run root, not as an absolute or ~-abbreviated path', () => {
     const results: ValidationResult[] = [
       createTestResult(
         `${homeDir}/.claude/plugins/marketplaces/marketplace1/plugin1/skills/skill1/SKILL.md`,
-        'error',
+        SEVERITY_ERROR,
         TEST_ERROR_CODE,
         TEST_ERROR_MESSAGE
       ),
@@ -176,19 +176,31 @@ describe('buildHierarchicalOutput', () => {
     expect(skill?.path).toBe('plugins/marketplaces/marketplace1/plugin1/skills/skill1/SKILL.md');
   });
 
+  it('files the misconfigured-location finding on a SKILL only — a plugin directory under plugins/ is where it belongs', () => {
+    const plugin: ValidationResult = { ...resultOf(`${homeDir}/.claude/plugins/some-plugin`, []), type: 'claude-plugin' };
+
+    expect(addMisconfigurationIssues([plugin], runRoot)).toEqual([plugin]);
+  });
+
+  it('does not flag a skill-claude-plugin — a root SKILL.md beside its own plugin manifest', () => {
+    const pluginDir = `${homeDir}/.claude/plugins/skill-plugin`;
+    const skill = createTestResult(`${pluginDir}/SKILL.md`, SEVERITY_WARNING, TEST_WARNING_CODE, TEST_WARNING_MESSAGE);
+    const plugin: ValidationResult = { ...resultOf(pluginDir, []), type: 'claude-plugin' };
+
+    expect(addMisconfigurationIssues([skill, plugin], runRoot)).toEqual([skill, plugin]);
+  });
+
   it('anchors the misconfigured-location finding at the run root too', () => {
     const results: ValidationResult[] = [
       createTestResult(
         `${homeDir}/.claude/plugins/standalone-skill/SKILL.md`,
-        'warning',
+        SEVERITY_WARNING,
         TEST_WARNING_CODE,
         TEST_WARNING_MESSAGE
       ),
     ];
 
-    const output = buildHierarchicalOutput(results, false, runRoot);
-
-    const misconfig = output.standaloneSkills[0]?.issues.find(
+    const misconfig = addMisconfigurationIssues(results, runRoot)[0]?.issues.find(
       (i) => i.code === 'SKILL_MISCONFIGURED_LOCATION',
     );
     expect(misconfig?.location).toBe('plugins/standalone-skill/SKILL.md');
@@ -204,10 +216,9 @@ describe('buildHierarchicalOutput', () => {
     const results: ValidationResult[] = [
       createTestResult(
         marketplaceSkillPath('marketplace1', 'plugin1', 'skill1'),
-        'success',
+        SEVERITY_INFO,
         TEST_INFO_CODE,
         TEST_INFO_MESSAGE,
-        SEVERITY_INFO,
       ),
     ];
 
@@ -215,9 +226,8 @@ describe('buildHierarchicalOutput', () => {
 
     const skill = output.marketplaces[0]?.plugins[0]?.skills[0];
     expect(skill?.name).toBe('skill1');
-    expect(skill?.status).toBe('success');
-    expect(skill?.issues).toHaveLength(1);
-    expect(skill?.issues[0]?.severity).toBe(SEVERITY_INFO);
+    expect(skill?.status).toBe('findings');
+    expect(skill?.summary).toEqual({ errors: 0, warnings: 0, info: 1 });
   });
 
   it('still drops a result with zero findings in terse mode', () => {

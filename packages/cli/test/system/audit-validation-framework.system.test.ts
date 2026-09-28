@@ -260,9 +260,10 @@ describe('vat audit — validation framework behavior (system test)', () => {
     // --help must exit 0
     expect(result.status).toBe(0);
     // The three codes, each with its meaning
-    expect(result.stdout).toContain('0 - The audit completed with nothing at error severity');
-    expect(result.stdout).toContain("1 - The audit completed and reports 'status: error'");
-    expect(result.stdout).toContain('2 - The audit could not run at all');
+    expect(result.stdout).toContain('0 - The audit finished and no finding is at error severity');
+    expect(result.stdout).toContain('1 - The audit finished with at least one error-severity finding');
+    // `status: error` means only "did not finish", and names its refusal.
+    expect(result.stdout).toContain("2 - The audit did not finish ('status: error', the reason in error.code)");
     // Still names the sibling gate that honours validation.allow
     expect(result.stdout).toContain('skills validate');
     // Must reference validation-codes.md

@@ -7,6 +7,7 @@ import {
 	validateInstalledPluginsRegistry,
 	validateKnownMarketplacesRegistry,
 } from '../../src/validators/registry-validator.js';
+import type { ValidationResult } from '../../src/validators/types.js';
 import {
 	assertSingleError,
 	assertValidationSuccess,
@@ -32,10 +33,28 @@ async function createAndValidateRegistry(
  */
 function assertSchemaError(result: unknown): void {
 	const validationResult = result as { status: string; issues: Array<{ code: string }> };
-	expect(validationResult.status).toBe('error');
+	expect(validationResult.summary.errors).toBeGreaterThan(0);
 	expect(
 		validationResult.issues.some((i) => i.code === 'REGISTRY_INVALID_SCHEMA'),
 	).toBe(true);
+}
+
+
+/** A registry that validated clean: the one `registry` clean sentence, no metadata. */
+function expectValidRegistry(result: ValidationResult): void {
+	assertValidationSuccess(result);
+	expect(result.type).toBe('registry');
+	expect(result.description).toBe('Valid registry');
+	expect(result.metadata).toBeUndefined();
+}
+
+/** A registry path that does not exist: the halted sentence prefixes the counts. */
+function expectMissingRegistry(result: ValidationResult): void {
+	assertSingleError(result, 'REGISTRY_MISSING_FILE');
+	expect(result.description).toBe('Registry file not found: 1 errors, 0 warnings, 0 info');
+	// `location` is project-relative (anchor contract) — the temp dir has no
+	// enclosing config or git root, so the file's own directory is the root.
+	expect(result.issues[0]?.location).toBe('nonexistent.json');
 }
 
 describe('validateInstalledPluginsRegistry', () => {
@@ -64,10 +83,7 @@ describe('validateInstalledPluginsRegistry', () => {
 
 		const result = await validateInstalledPluginsRegistry(registryPath);
 
-		assertValidationSuccess(result);
-		expect(result.type).toBe('registry');
-		expect(result.summary).toBe('Valid installed plugins registry');
-		expect(result.metadata).toBeUndefined();
+		expectValidRegistry(result);
 	});
 
 	it('should fail when registry file does not exist', async () => {
@@ -75,11 +91,7 @@ describe('validateInstalledPluginsRegistry', () => {
 
 		const result = await validateInstalledPluginsRegistry(nonExistentPath);
 
-		assertSingleError(result, 'REGISTRY_MISSING_FILE');
-		expect(result.summary).toBe('Registry file not found');
-		// `location` is project-relative (anchor contract) — the temp dir has no
-		// enclosing config or git root, so the file's own directory is the root.
-		expect(result.issues[0]?.location).toBe('nonexistent.json');
+		expectMissingRegistry(result);
 		expect(result.issues[0]?.fix).toContain('Create the registry file');
 	});
 
@@ -90,7 +102,7 @@ describe('validateInstalledPluginsRegistry', () => {
 		const result = await validateInstalledPluginsRegistry(registryPath);
 
 		assertSingleError(result, 'REGISTRY_INVALID_JSON');
-		expect(result.summary).toBe('Registry file is invalid JSON');
+		expect(result.description).toBe('Registry file is invalid JSON: 1 errors, 0 warnings, 0 info');
 		expect(result.issues[0]?.location).toBe('invalid.json');
 		expect(result.issues[0]?.message).toContain('Failed to parse');
 	});
@@ -266,10 +278,7 @@ describe('validateKnownMarketplacesRegistry', () => {
 
 		const result = await validateKnownMarketplacesRegistry(registryPath);
 
-		assertValidationSuccess(result);
-		expect(result.type).toBe('registry');
-		expect(result.summary).toBe('Valid known marketplaces registry');
-		expect(result.metadata).toBeUndefined();
+		expectValidRegistry(result);
 	});
 
 	it('should fail when registry file does not exist', async () => {
@@ -277,11 +286,7 @@ describe('validateKnownMarketplacesRegistry', () => {
 
 		const result = await validateKnownMarketplacesRegistry(nonExistentPath);
 
-		assertSingleError(result, 'REGISTRY_MISSING_FILE');
-		expect(result.summary).toBe('Registry file not found');
-		// `location` is project-relative (anchor contract) — the temp dir has no
-		// enclosing config or git root, so the file's own directory is the root.
-		expect(result.issues[0]?.location).toBe('nonexistent.json');
+		expectMissingRegistry(result);
 	});
 
 	it('should fail when registry file has invalid JSON', async () => {
@@ -291,7 +296,7 @@ describe('validateKnownMarketplacesRegistry', () => {
 		const result = await validateKnownMarketplacesRegistry(registryPath);
 
 		assertSingleError(result, 'REGISTRY_INVALID_JSON');
-		expect(result.summary).toBe('Registry file is invalid JSON');
+		expect(result.description).toBe('Registry file is invalid JSON: 1 errors, 0 warnings, 0 info');
 	});
 
 	it('should fail when marketplace entry is missing required fields', async () => {

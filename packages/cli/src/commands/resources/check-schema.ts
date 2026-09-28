@@ -31,7 +31,7 @@ const PublishedCheckCostSchema = z.object({
  * is the one list, tied to `StatedLimit['direction']` by `satisfies`, so a
  * fifth direction cannot leave this schema quietly rejecting it.
  */
-const StatedLimitSchema = z.object({
+export const StatedLimitSchema = z.object({
   id: z.string(),
   direction: z.enum(LIMIT_DIRECTIONS),
   statement: z.string(),

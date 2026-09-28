@@ -16,6 +16,8 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { AUDIT_REPORT_SCHEMA } from '../../src/commands/audit-schema.js';
+
 import {
   cleanupTestTempDir,
   createTestTempDir,
@@ -49,34 +51,23 @@ describe('Audit User Plugins Fixture (system test)', () => {
         fixtureDir,
       ]);
 
-      // Exit 1: the exit code follows `status`, and this tree has an error-severity finding.
+      // Exit 1: this tree has an error-severity finding.
       expect(status).toBe(1);
 
-      // Parse YAML output
-      const output = parseYamlOutput(stdout);
-
-      // Verify flat output structure (not hierarchical)
-      expect(output).toHaveProperty('status');
-      expect(output).toHaveProperty('summary');
-      expect(output).toHaveProperty('issueCounts');
-      expect(output).toHaveProperty('duration');
-      expect(output).toHaveProperty('files');
-
-      const summary = output.summary as {
-        filesScanned: number;
-        filesPassed: number;
-        filesWithWarnings: number;
-        filesWithErrors: number;
-      };
+      // The report envelope, parsed by the verb's registered schema.
+      const report = AUDIT_REPORT_SCHEMA.parse(parseYamlOutput(stdout));
+      expect(report.status).toBe('findings');
+      // A directory audit, not `--user`: no hierarchy.
+      expect(report.data.hierarchical).toBeNull();
 
       // Should have scanned files
-      expect(summary.filesScanned).toBeGreaterThan(0);
+      expect(report.examined).toBeGreaterThan(0);
 
       // Should have some errors (fixture contains skills with validation issues)
-      expect(summary.filesWithErrors).toBeGreaterThan(0);
+      expect(report.data.counts.filesWithErrors).toBeGreaterThan(0);
 
       // Should have some successes too
-      expect(summary.filesPassed).toBeGreaterThan(0);
+      expect(report.data.counts.filesPassed).toBeGreaterThan(0);
     });
 
     it('should validate singleton marketplace (anthropic-agent-skills)', () => {
@@ -89,16 +80,11 @@ describe('Audit User Plugins Fixture (system test)', () => {
       // Marketplace validation now works — should succeed
       expect(status).toBe(0);
 
-      const output = parseYamlOutput(stdout);
-      expect(output.status).toBe('success');
-
-      const summary = output.summary as {
-        filesScanned: number;
-        filesPassed: number;
-      };
-
-      expect(summary.filesScanned).toBeGreaterThan(0);
-      expect(summary.filesPassed).toBeGreaterThan(0);
+      const report = AUDIT_REPORT_SCHEMA.parse(parseYamlOutput(stdout));
+      // Nothing at error severity; any info or warning finding is still `findings`.
+      expect(report.summary.errors).toBe(0);
+      expect(report.examined).toBeGreaterThan(0);
+      expect(report.data.counts.filesPassed).toBeGreaterThan(0);
     });
 
     it('should validate standard marketplace (claude-plugins-official)', () => {
@@ -108,19 +94,14 @@ describe('Audit User Plugins Fixture (system test)', () => {
         safePath.join(fixtureDir, 'marketplaces/claude-plugins-official'),
       ]);
 
-      // Exit 1: the exit code follows `status`, and this tree has an error-severity finding.
+      // Exit 1: this tree has an error-severity finding.
       expect(status).toBe(1);
 
-      const output = parseYamlOutput(stdout);
+      const report = AUDIT_REPORT_SCHEMA.parse(parseYamlOutput(stdout));
 
       // Should have scanned at least the marketplace manifest
-      const summary = output.summary as {
-        filesScanned: number;
-        filesPassed: number;
-      };
-
-      expect(summary.filesScanned).toBeGreaterThan(0);
-      expect(summary.filesPassed).toBeGreaterThan(0);
+      expect(report.examined).toBeGreaterThan(0);
+      expect(report.data.counts.filesPassed).toBeGreaterThan(0);
     });
 
     it('should validate cached plugins', () => {
@@ -130,14 +111,8 @@ describe('Audit User Plugins Fixture (system test)', () => {
         safePath.join(fixtureDir, 'cache'),
       ]);
 
-      const output = parseYamlOutput(stdout);
-
-      const summary = output.summary as {
-        filesScanned: number;
-      };
-
       // Should have scanned skills from cache
-      expect(summary.filesScanned).toBeGreaterThan(0);
+      expect(AUDIT_REPORT_SCHEMA.parse(parseYamlOutput(stdout)).examined).toBeGreaterThan(0);
     });
   });
 
@@ -149,22 +124,16 @@ describe('Audit User Plugins Fixture (system test)', () => {
         fixtureDir,
       ]);
 
-      const output = parseYamlOutput(stdout);
-
-      const summary = output.summary as {
-        filesScanned: number;
-        filesPassed: number;
-        filesWithWarnings: number;
-        filesWithErrors: number;
-      };
+      const report = AUDIT_REPORT_SCHEMA.parse(parseYamlOutput(stdout));
+      const { filesPassed, filesWithWarnings, filesWithErrors, pathsUnreadable } = report.data.counts;
 
       // Should report files scanned
-      expect(summary.filesScanned).toBeGreaterThan(0);
+      expect(report.examined).toBeGreaterThan(0);
 
-      // Sanity check: success + warnings + errors should equal filesScanned
-      expect(summary.filesScanned).toBe(
-        summary.filesPassed + summary.filesWithWarnings + summary.filesWithErrors
-      );
+      // Sanity check: passed + warnings + errors equals the files read, and
+      // every row is a file read or a refused path.
+      expect(report.examined).toBe(filesPassed + filesWithWarnings + filesWithErrors);
+      expect(report.data.files).toHaveLength(report.examined + pathsUnreadable);
     });
   });
 });

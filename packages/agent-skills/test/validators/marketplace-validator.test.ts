@@ -67,7 +67,7 @@ describe('validateMarketplace', () => {
 
     const result = await validateMarketplace(marketplacePath);
 
-    expect(result.status).toBe('error');
+    expect(result.summary.errors).toBeGreaterThan(0);
     expect(result.issues.length).toBeGreaterThan(0);
     expect(
       result.issues.every((issue) => issue.code === 'MARKETPLACE_INVALID_SCHEMA'),

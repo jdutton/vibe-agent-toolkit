@@ -96,6 +96,16 @@ import type { ResourceCheck } from '../schemas/project-config.js';
 import { findingLocation } from './finding-location.js';
 
 /**
+ * The code every statement a projection query store REFUSES to run carries:
+ * not a query, a second statement, placeholders that do not pair with their
+ * values, or SQLite's own refusal (a name the schema lacks, an unevaluated
+ * derived relation). The backend (`@vibe-agent-toolkit/projection-sqlite`)
+ * throws it; a caller tells "the statement is wrong" — the author's to fix —
+ * from "the store failed" by this code, never by the message.
+ */
+export const PROJECTION_STATEMENT_REFUSED_CODE = 'PROJECTION_STATEMENT_REFUSED';
+
+/**
  * Turn one check's selected rows into findings.
  *
  * @param name - The check's key in `resources.checks`

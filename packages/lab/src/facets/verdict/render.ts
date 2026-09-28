@@ -12,6 +12,7 @@ import { coordinateLines, instrumentLabel } from '../../harness/render.js';
 
 import type { VerdictComparison } from './compare.js';
 import type { DeclaredDelta, DeltaChange, ObservedDelta } from './deltas.js';
+import { rowVerdict } from './extract.js';
 import type { VerdictBody, VerdictRow } from './types.js';
 
 /**
@@ -32,7 +33,7 @@ export function renderVerdictReport(envelope: ReportEnvelope<VerdictBody>): stri
  */
 function rowLine(row: VerdictRow): string {
   if (row.outcome === 'not-run') return `  ${row.name}: NOT RUN — ${row.spawnError ?? ''}`;
-  const verdict = row.verdict;
+  const verdict = rowVerdict(row);
   const findings = verdict === null ? '' : `, ${String(verdict.findings.length)} finding(s), ${verdict.shape}`;
   return `  ${row.name}: exit ${String(row.exitCode)}${findings}`;
 }

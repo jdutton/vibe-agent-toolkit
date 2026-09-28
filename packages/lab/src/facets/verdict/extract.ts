@@ -28,6 +28,8 @@ import { z } from 'zod';
 import { parseDocument, type ParsedDocument } from '../../harness/document-shape.js';
 import type { RunOutcome } from '../../harness/outcome.js';
 
+import type { VerdictRow } from './types.js';
+
 /** The severities a published finding can carry — never `ignore`; see this module's docstring. */
 const FINDING_SEVERITIES = ['error', 'warning', 'info'] as const;
 
@@ -78,15 +80,6 @@ export function findingIdentity(finding: FindingKey): readonly [string, FindingS
   return [finding.code, finding.severity, finding.location, finding.scope];
 }
 
-/** Runtime schema for {@link Verdict}, for reading a stored envelope back. */
-export const VerdictSchema: z.ZodType<Verdict> = z
-  .object({
-    exitCode: z.number().int(),
-    shape: z.enum(['report', 'legacy', 'unparsed']),
-    findings: z.array(FindingKeySchema),
-  })
-  .strict();
-
 /**
  * Extract the verdict a finished run reported.
  *
@@ -98,6 +91,17 @@ export const VerdictSchema: z.ZodType<Verdict> = z
 export function extractVerdict(outcome: Extract<RunOutcome, { kind: 'exited' }>): Verdict {
   const parsed = parseDocument(outcome.stdout);
   return { exitCode: outcome.exitCode, shape: parsed.shape, findings: findingsOf(parsed) };
+}
+
+/**
+ * A captured row's verdict, derived from its stored document by THIS build's extractor.
+ *
+ * @param row - One captured invocation
+ * @returns Its verdict, or `null` when it produced no exit code
+ */
+export function rowVerdict(row: VerdictRow): Verdict | null {
+  if (row.outcome === 'not-run' || row.exitCode === null) return null;
+  return extractVerdict({ kind: 'exited', exitCode: row.exitCode, stdout: row.document, stderr: '' });
 }
 
 /**
@@ -156,14 +160,12 @@ function legacyFindings(document: Record<string, unknown>): FindingKey[] {
 /**
  * Visit one node, recording it as a finding when it qualifies, then recurse.
  *
- * `ancestorPath` is the nearest enclosing object's own `path` field, inherited
- * downward and overridden only when a node carries its own `path` — the rule
- * `verdict-extract.test.ts` fixtures on `vat audit`'s `files[].issues[]`, whose
- * elements carry no `location` of their own and must fall back to the `path` of
- * the `files[]` row that holds them.
+ * `ancestorPath` is the nearest enclosing object's {@link namedLocation},
+ * inherited downward: `vat audit`'s `files[].issues[]` (rows keyed `path`) and
+ * rc.11 `resources validate --verbose`'s `issues[].issues[]` (keyed `file`).
  *
  * @param node - Any value reachable from the document root
- * @param ancestorPath - The nearest ancestor's `path`, or `null` above the root
+ * @param ancestorPath - The nearest ancestor's named location, or `null` above the root
  * @param out - Accumulator, appended to in visiting order
  */
 function walk(node: unknown, ancestorPath: string | null, out: FindingKey[]): void {
@@ -173,9 +175,15 @@ function walk(node: unknown, ancestorPath: string | null, out: FindingKey[]): vo
   }
   if (!isPlainObject(node)) return;
 
-  const path = typeof node['path'] === 'string' ? node['path'] : ancestorPath;
   if (isLegacyFinding(node)) out.push(legacyFindingKey(node, ancestorPath));
-  for (const value of Object.values(node)) walk(value, path, out);
+  const inherited = namedLocation(node) ?? ancestorPath;
+  for (const value of Object.values(node)) walk(value, inherited, out);
+}
+
+/** The location an object names: its `path`, else its `file`, else `null`. */
+function namedLocation(node: Record<string, unknown>): string | null {
+  if (typeof node['path'] === 'string') return node['path'];
+  return typeof node['file'] === 'string' ? node['file'] : null;
 }
 
 /**
@@ -207,8 +215,8 @@ function isLegacyFinding(node: Record<string, unknown>): boolean {
 
 /**
  * @param node - A node that passed {@link isLegacyFinding}
- * @param ancestorPath - The nearest ancestor's `path`, used when `node` names
- *   neither its own `location` nor `file`
+ * @param ancestorPath - The nearest ancestor's named location, used when
+ *   `node` names none of its own
  * @returns Its key; legacy documents carry no `scope`, so that field is always `null`
  */
 function legacyFindingKey(node: Record<string, unknown>, ancestorPath: string | null): FindingKey {
@@ -221,14 +229,16 @@ function legacyFindingKey(node: Record<string, unknown>, ancestorPath: string | 
 }
 
 /**
+ * A finding's OWN location first, then the enclosing object's: an rc.11 `claude
+ * context` answer's `file` is the QUESTION's file; each condition names its own `path`.
+ *
  * @param node - A node that passed {@link isLegacyFinding}
- * @param ancestorPath - The nearest ancestor's `path`
- * @returns The node's own `location`, else its own `file`, else `ancestorPath`
+ * @param ancestorPath - The nearest ancestor's named location
+ * @returns The node's own `location`, else its own `path`/`file`, else `ancestorPath`
  */
 function legacyLocation(node: Record<string, unknown>, ancestorPath: string | null): string | null {
   if (typeof node['location'] === 'string') return node['location'];
-  if (typeof node['file'] === 'string') return node['file'];
-  return ancestorPath;
+  return namedLocation(node) ?? ancestorPath;
 }
 
 /**

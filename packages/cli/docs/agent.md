@@ -31,8 +31,38 @@ vat agent validate packages/vat-development-agents/agents/agent-generator
 - Resource file existence (prompts, docs, templates)
 - Prompt references ($ref paths)
 
-**Output**: YAML to stdout with validation results
-**Exit codes**: 0 = valid, 1 = validation errors, 2 = system error
+**Output**: the report envelope (YAML) on stdout; the findings, human-readable, on stderr.
+One manifest per run, so `examined` is 1. Every finding is located at the manifest,
+relative to `data.root` (the working directory):
+
+- `AGENT_MANIFEST_INVALID` (error) — one per schema violation; `field` is the dotted key path
+- `AGENT_REFERENCE_MISSING` (error) — a prompt `$ref`, a resource path or the RAG database does not exist
+- `AGENT_REFERENCE_UNREADABLE` (error) — a referenced path exists but the OS refused access
+- `AGENT_RAG_NO_SOURCES` (warning) — `spec.rag` names no sources
+
+```yaml
+status: findings          # ok | findings | error
+examined: 1
+findings:
+  - code: AGENT_REFERENCE_MISSING
+    severity: error
+    message: "System prompt not found: ./prompts/system.md"
+    location: my-agent/agent.yaml
+summary: { errors: 1, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 12
+data:
+  root: /abs/path/to/project
+  manifest: { name: my-agent, version: 0.1.0, path: my-agent/agent.yaml }   # name/version null when the manifest does not validate
+```
+
+**Exit codes** (derived from the document):
+
+| Exit | `status` | When |
+|---|---|---|
+| `0` | `ok` / `findings` | No error-severity finding (a warning never fails the run) |
+| `1` | `findings` | An error-severity finding — a schema violation or an unreachable reference |
+| `2` | `error` | No manifest to judge; `error.code` says why: `USAGE_INVALID` (the path or name names no manifest, or no `projectRoot`), `INPUT_UNREADABLE` (the OS refuses the manifest, or it is not YAML) |
 
 ---
 
