@@ -29,15 +29,30 @@ export interface BuildExecutorPromptOptions {
  * executor's environment provides) and is OMITTED for the skill-absent arm;
  * `workspaceDir` is the project the executor is actually meant to operate on.
  *
+ * ⚠️ THE TWO CLAUSES MUST NOT COMPETE FOR "WHERE YOUR FILES ARE". `subjectPath`
+ * used to read "The relevant files are located at ...", which is the sentence an
+ * executor looking for the data it was asked about will act on first. An eval's
+ * declared input `files` are staged ONLY under `workspaceDir`, and
+ * `eval-suite-isolation` strips `evals/` and `fixtures/` out of the staged
+ * subject on purpose, so that clause named the one directory guaranteed NOT to
+ * hold them. Measured on a 21-eval suite: executors listed the subject dir,
+ * reported that the path held tooling and not a data file, and asked the user for
+ * a path rather than performing the task -- which grades as a skill failure and
+ * is not one. The subject clause now describes TOOLING; the workspace clause owns
+ * the files.
+ *
  * Pure function: same inputs always produce the same prompt.
  */
 export function buildExecutorPrompt(opts: BuildExecutorPromptOptions): string {
   const context: string[] = [];
   if (opts.subjectPath !== undefined) {
-    context.push(`The relevant files are located at ${opts.subjectPath}.`);
+    context.push(`Supporting tools and reference material are installed at ${opts.subjectPath}.`);
   }
   if (opts.workspaceDir !== undefined) {
-    context.push(`Your working directory is ${opts.workspaceDir} — the project to operate on.`);
+    context.push(
+      `Your working directory is ${opts.workspaceDir} — the project to operate on.` +
+        ` Any files you have been given are there.`,
+    );
   }
   return context.length === 0 ? opts.task : [opts.task, '', ...context].join('\n');
 }
