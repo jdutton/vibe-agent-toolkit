@@ -1,22 +1,23 @@
 /**
  * System tests for rag index command
  *
- * ⚠️ The `status: 'success'` assertions below were VACUOUS until the command
- * started deriving that field: it was a hardcoded literal beside an
- * unconditional `process.exit(0)`, so every case here passed no matter what
- * `indexResources` reported. They are real assertions now.
+ * ⚠️ The clean-status assertions below were VACUOUS until the command started
+ * deriving its status: it was a hardcoded literal beside an unconditional
+ * `process.exit(0)`, so every case here passed no matter what
+ * `indexResources` reported. Every document is now parsed with the verb's
+ * published schema, and the status is the report's.
  *
  * The other half of that contract — a run that did not index everything it was
- * asked to reporting `status: 'partial'` and exiting 1 — is covered by the
+ * asked to reporting `status: findings` and exiting 1 — is covered by the
  * unreadable-file case below. A file the crawl enumerates and cannot READ never
  * reaches `indexResources` (the crawl reads and parses every file itself), so it
  * was a resource that is *missing* rather than one that *failed*: in none of
- * the provider's counters, not in its `errors`, and the report said `success`
- * over a corpus with a document absent from it. The registry keeps that log
- * (`getUnreadableResources()`); the command now folds it into `errors`. The
- * provider's own per-resource failures (the chunker rejecting an over-long
- * line, an embedding error) are a moving target and stay pinned as pure logic
- * in `test/commands/rag/index-outcome.test.ts`.
+ * the provider's counters, not in its `errors`, and the report called a corpus
+ * with a document absent from it clean. The registry keeps that log
+ * (`getUnreadableResources()`); the command makes each one a
+ * `RAG_DOCUMENT_INDEX_FAILED` finding. The provider's own per-resource failures
+ * (the chunker rejecting an over-long line, an embedding error) are a moving
+ * target and stay pinned as pure logic in `test/commands/rag/index-outcome.test.ts`.
  *
  * `chmod 000` is the fixture, so that case is POSIX-only and refuses to run as
  * root, where `chmod 000` denies nothing.
@@ -24,6 +25,9 @@
 
 import { getTestOutputDir , CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, it } from 'vitest';
+import yaml from 'yaml';
+
+import { RAG_INDEX_REPORT_SCHEMA } from '../../src/commands/rag/index-schema.js';
 
 import {
   createTestTempDir,
@@ -63,14 +67,16 @@ describe('RAG index command (system test)', () => {
       { cwd: projectDir }
     );
 
+    const report = RAG_INDEX_REPORT_SCHEMA.parse(parsed);
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
-    // The exit code and the status have to agree, and `success` has to mean the
-    // whole corpus landed: an `errors` list alongside exit 0 is the defect.
-    expect(parsed.errors).toBeUndefined();
-    expect(parsed.resourcesIndexed).toBeGreaterThan(0);
-    expect(parsed.chunksCreated).toBeGreaterThan(0);
-    expect(parsed.duration).toBeDefined();
+    // The exit code and the status have to agree, and `ok` has to mean the
+    // whole corpus landed: a finding alongside exit 0 is the defect.
+    expect(report.status).toBe('ok');
+    expect(report.findings).toStrictEqual([]);
+    expect(report.examined).toBeGreaterThanOrEqual(report.data?.resourcesIndexed ?? Number.NaN);
+    expect(report.data?.resourcesIndexed).toBeGreaterThan(0);
+    expect(report.data?.chunksCreated).toBeGreaterThan(0);
+    expect(report.durationMs).toBeGreaterThanOrEqual(0);
 
     // Verify database was created
     expect(fs.existsSync(dbPath)).toBe(true);
@@ -98,8 +104,9 @@ describe('RAG index command (system test)', () => {
     );
 
     expect(result1.status).toBe(0);
-    expect(parsed1.status).toBe('success');
-    expect(parsed1.resourcesIndexed).toBeGreaterThan(0);
+    expect(parsed1.status).toBe('ok');
+    const first = RAG_INDEX_REPORT_SCHEMA.parse(parsed1).data;
+    expect(first?.resourcesIndexed).toBeGreaterThan(0);
 
     // Second index - nothing changed on disk, so the provider must recognise every
     // resource by its content hash and skip it rather than re-embedding it.
@@ -110,15 +117,17 @@ describe('RAG index command (system test)', () => {
     );
 
     expect(result2.status).toBe(0);
-    expect(parsed2.status).toBe('success');
-    expect(parsed2.resourcesSkipped).toBe(parsed1.resourcesIndexed);
-    expect(parsed2.resourcesIndexed).toBe(0);
-    expect(parsed2.resourcesUpdated).toBe(0);
-    expect(parsed2.chunksCreated).toBe(0);
+    expect(parsed2.status).toBe('ok');
+    expect(RAG_INDEX_REPORT_SCHEMA.parse(parsed2).data).toMatchObject({
+      resourcesSkipped: first?.resourcesIndexed,
+      resourcesIndexed: 0,
+      resourcesUpdated: 0,
+      chunksCreated: 0,
+    });
   });
 
   it.skipIf(CANNOT_DENY_READS)(
-    'reports partial and exits 1 when a declared resource cannot be read, naming it',
+    'reports a RAG_DOCUMENT_INDEX_FAILED finding and exits 1 when a declared resource cannot be read, naming it',
     async () => {
       const unreadableProjectDir = setupTestProject(tempDir, {
         name: 'unreadable-test-project',
@@ -139,13 +148,13 @@ describe('RAG index command (system test)', () => {
 
       // The readable neighbour is indexed and the report is complete: this is a
       // REPORTED outcome (exit 1), not a command that could not run (exit 2).
+      const report = RAG_INDEX_REPORT_SCHEMA.parse(parsed);
       expect(result.status).toBe(1);
-      expect(parsed.status).toBe('partial');
-      expect(parsed.resourcesIndexed).toBe(1);
-      const errors = parsed.errors as { resourceId: string; error: string }[];
-      expect(errors).toHaveLength(1);
-      expect(errors[0]?.resourceId).toBe('docs/locked.md');
-      expect(errors[0]?.error).toContain('EACCES');
+      expect(report.status).toBe('findings');
+      expect(report.data?.resourcesIndexed).toBe(1);
+      expect(report.findings).toHaveLength(1);
+      expect(report.findings[0]).toMatchObject({ code: 'RAG_DOCUMENT_INDEX_FAILED', severity: 'error', location: 'docs/locked.md' });
+      expect(report.findings[0]?.message).toContain('EACCES');
     }
   );
 
@@ -154,14 +163,14 @@ describe('RAG index command (system test)', () => {
     const nonProjectDir = safePath.join(tempDir, 'non-project');
     fs.mkdirSync(nonProjectDir);
 
-    const { result, parsed } = await executeCliAndParseYaml(
+    const { result } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'index'],
       { cwd: nonProjectDir }
     );
 
     expect(result.status).toBe(2); // System error
-    expect(parsed.status).toBe('error');
+    expect(RAG_INDEX_REPORT_SCHEMA.parse(yaml.parse(result.stdout))).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
     expect(result.stderr).toContain('No database path');
   });
 });

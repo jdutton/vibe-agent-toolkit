@@ -11,6 +11,8 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, afterEach, beforeAll } from 'vitest';
 
+import { SKILLS_BUILD_REPORT_SCHEMA } from '../../src/commands/skills/build-schema.js';
+
 import {
   createSkillMarkdown,
   createSkillsConfigYaml,
@@ -67,37 +69,36 @@ function setupSkillsBuildTestSuite() {
     createConfigWithSkills(tempDir, ['resources/skills/**/SKILL.md']);
   };
 
+  /** Run the build; `report` is the stdout document parsed by the verb's own published schema. */
   const runBuildCommand = async (cwd: string, args: string[] = []) => {
-    return executeCliAndParseYaml(binPath, ['skills', 'build', ...args], { cwd });
+    const { result, parsed } = await executeCliAndParseYaml(binPath, ['skills', 'build', ...args], { cwd });
+    return { result, report: SKILLS_BUILD_REPORT_SCHEMA.parse(parsed) };
+  };
+
+  type BuildReport = Awaited<ReturnType<typeof runBuildCommand>>['report'];
+
+  /** The report's `data`, which every completed run carries. */
+  const dataOf = (report: BuildReport) => {
+    expect(report.data, JSON.stringify(report)).not.toBeNull();
+    return report.data as NonNullable<BuildReport['data']>;
   };
 
   const assertSuccessfulBuild = (
     result: Awaited<ReturnType<typeof runBuildCommand>>['result'],
-    parsed: Awaited<ReturnType<typeof runBuildCommand>>['parsed']
+    report: BuildReport,
   ) => {
-    expect(result.status).toBe(0);
-    // "Successful" means the build gate passed: exit 0 and ZERO errors. The
-    // published status is the shared issues→status collapse, so it legitimately
-    // reads `warning` for a build that shipped non-blocking findings (this
-    // fixture's frontmatter carries a `version` field → one warning). Pinning it
-    // to 'success' asserted that the status could not tell the truth — which is
-    // the defect, not the contract. The invariant is the error count.
-    expect(['success', 'warning']).toContain(parsed['status']);
-    if (parsed['validated'] === false) {
-      // A dry run publishes no distribution because it validated nothing, and
-      // says so explicitly rather than letting the absence read as "clean".
-      expect(parsed['issueCounts']).toBeUndefined();
-    } else {
-      expect(parsed['issueCounts']).toMatchObject({ errors: 0 });
-    }
-    expect(parsed).toHaveProperty('skills');
-
-    const skills = parsed['skills'] as Array<Record<string, unknown>>;
-    expect(skills).toHaveLength(1);
-    expect(skills[0]).toHaveProperty('name', TEST_SKILL_NAME);
-
+    expect(result.status, result.stderr).toBe(0);
+    // "Successful" means the build gate passed: exit 0 and ZERO errors. This
+    // fixture's frontmatter carries a `version` field, so a real build may ship a
+    // non-blocking finding and publish `findings`; the invariant is the error count.
+    expect(report.summary.errors).toBe(0);
+    const skills = dataOf(report).skills;
+    expect(skills.map((row) => row.name)).toEqual([TEST_SKILL_NAME]);
     return skills;
   };
+
+  /** The codes of a report's findings, in order. */
+  const codesOf = (report: BuildReport): string[] => report.findings.map((finding) => finding.code);
 
   return {
     binPath,
@@ -108,6 +109,8 @@ function setupSkillsBuildTestSuite() {
     setupSingleSkillTest,
     runBuildCommand,
     assertSuccessfulBuild,
+    dataOf,
+    codesOf,
   };
 }
 
@@ -141,46 +144,53 @@ describe('skills build command (system test)', () => {
     );
   });
 
-  it('should exit 0 when config yaml has no skills section', async () => {
+  it('a config with no skills section built nothing, so it is not a verdict: exit 1', async () => {
     const tempDir = suite.createTempDir();
     writeTestFile(safePath.join(tempDir, VAT_CONFIG_FILENAME), CONFIG_VERSION_HEADER);
 
-    const { result } = await suite.runBuildCommand(tempDir);
+    const { result, report } = await suite.runBuildCommand(tempDir);
 
-    expect(result.status).toBe(0);
+    expect(result.status).toBe(1);
+    expect(report.examined).toBe(0);
+    expect(suite.codesOf(report)).toEqual(['RESOURCE_CHECK_BROKEN']);
   });
 
-  it('should fail when no SKILL.md files match include patterns', async () => {
+  it('include patterns that match no SKILL.md examine nothing: exit 1, and dist/ is untouched', async () => {
     const tempDir = suite.createTempDir();
     suite.createConfigWithSkills(tempDir, ['resources/skills/**/SKILL.md']);
     // Intentionally NOT creating any skill source files
 
-    const { result } = await suite.runBuildCommand(tempDir);
+    const { result, report } = await suite.runBuildCommand(tempDir);
 
-    expect(result.status).not.toBe(0);
+    expect(result.status).toBe(1);
+    expect(suite.codesOf(report)).toEqual(['RESOURCE_CHECK_BROKEN']);
+    expect(existsSync(safePath.join(tempDir, 'dist'))).toBe(false);
   });
 
   it('should perform dry-run without creating files', async () => {
     const tempDir = suite.createTempDir();
     suite.setupSingleSkillTest(tempDir);
 
-    const { result, parsed } = await suite.runBuildCommand(tempDir, ['--dry-run']);
+    const { result, report } = await suite.runBuildCommand(tempDir, ['--dry-run']);
 
-    const skills = suite.assertSuccessfulBuild(result, parsed);
-    expect(parsed).toHaveProperty('dryRun', true);
-    expect(parsed).toHaveProperty('skillsFound', 1);
-    expect(skills[0]).toHaveProperty('source');
+    const skills = suite.assertSuccessfulBuild(result, report);
+    expect(report.status).toBe('ok');
+    expect(report.examined).toBe(1);
+    expect(suite.dataOf(report)).toMatchObject({ dryRun: true, validated: false, outputCommitted: false });
+    // Relative to the directory whose config the build read — never `$HOME`.
+    expect(skills[0]).toMatchObject({ source: 'resources/skills/SKILL.md', output: `dist/skills/${TEST_SKILL_NAME}` });
+    expect(existsSync(safePath.join(tempDir, 'dist'))).toBe(false);
   });
 
   it('should build a valid skill', async () => {
     const tempDir = suite.createTempDir();
     suite.setupSingleSkillTest(tempDir);
 
-    const { result, parsed } = await suite.runBuildCommand(tempDir);
+    const { result, report } = await suite.runBuildCommand(tempDir);
 
-    const skills = suite.assertSuccessfulBuild(result, parsed);
-    expect(parsed).toHaveProperty('skillsBuilt', 1);
-    expect(skills[0]).toHaveProperty('filesPackaged', 1);
+    const skills = suite.assertSuccessfulBuild(result, report);
+    expect(suite.dataOf(report)).toMatchObject({ dryRun: false, validated: true, skillsBuilt: 1, outputCommitted: true });
+    expect(skills[0]).toMatchObject({ output: `dist/skills/${TEST_SKILL_NAME}` });
 
     // Verify output directory was created
     const outputPath = safePath.join(tempDir, 'dist', 'skills', TEST_SKILL_NAME);
@@ -194,14 +204,12 @@ describe('skills build command (system test)', () => {
     suite.createSkillSource(tempDir, 'resources/skills/skill-b.md', SKILL_B_NAME);
     suite.createConfigWithSkills(tempDir, ['resources/skills/*.md']);
 
-    const { result, parsed } = await suite.runBuildCommand(tempDir, ['--skill', SKILL_B_NAME]);
+    const { result, report } = await suite.runBuildCommand(tempDir, ['--skill', SKILL_B_NAME]);
 
     expect(result.status).toBe(0);
-    expect(parsed).toHaveProperty('skillsBuilt', 1);
-
-    const skills = parsed['skills'] as Array<Record<string, unknown>>;
-    expect(skills).toHaveLength(1);
-    expect(skills[0]).toHaveProperty('name', SKILL_B_NAME);
+    expect(report.examined).toBe(1);
+    expect(suite.dataOf(report).skillsBuilt).toBe(1);
+    expect(suite.dataOf(report).skills.map((row) => row.name)).toEqual([SKILL_B_NAME]);
 
     // Verify only skill-b was built
     const outputPathB = safePath.join(tempDir, 'dist', 'skills', SKILL_B_NAME);
@@ -218,9 +226,10 @@ describe('skills build command (system test)', () => {
     const tempDir = suite.createTempDir();
     suite.setupSingleSkillTest(tempDir);
 
-    const { result } = await suite.runBuildCommand(tempDir, ['--skill', 'nonexistent']);
+    const { result, report } = await suite.runBuildCommand(tempDir, ['--skill', 'nonexistent']);
 
-    expect(result.status).not.toBe(0);
+    expect(result.status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
   });
 
   describe('publish: false = an in-place skill: validated at source, never bundled', () => {
@@ -238,15 +247,14 @@ describe('skills build command (system test)', () => {
       const tempDir = suite.createTempDir();
       setupOnePooledOneInPlace(tempDir);
 
-      const { result, parsed } = await suite.runBuildCommand(tempDir);
+      const { result, report } = await suite.runBuildCommand(tempDir);
 
       expect(result.status).toBe(0);
-      expect(parsed).toHaveProperty('skillsBuilt', 1);
       // The drop is VISIBLE in the machine output: a build that ships fewer
-      // skills than it discovered says so by count, not by omission.
-      expect(parsed).toHaveProperty('skillsInPlace', 1);
-      expect(parsed['skillsInPlaceNames']).toEqual([SKILL_B_NAME]);
-      expect((parsed['skills'] as Array<Record<string, unknown>>).map((s) => s['name'])).toEqual([SKILL_A_NAME]);
+      // skills than it discovered examines both and names the one it set aside.
+      expect(report.examined).toBe(2);
+      expect(suite.dataOf(report)).toMatchObject({ skillsBuilt: 1, skillsInPlace: [SKILL_B_NAME] });
+      expect(suite.dataOf(report).skills.map((row) => row.name)).toEqual([SKILL_A_NAME]);
       expect(existsSync(safePath.join(tempDir, 'dist', 'skills', SKILL_A_NAME, 'SKILL.md'))).toBe(true);
       expect(existsSync(safePath.join(tempDir, 'dist', 'skills', SKILL_B_NAME))).toBe(false);
 
@@ -263,25 +271,26 @@ describe('skills build command (system test)', () => {
       const tempDir = suite.createTempDir();
       setupOnePooledOneInPlace(tempDir);
 
-      const { result, parsed } = await suite.runBuildCommand(tempDir, ['--dry-run']);
+      const { result, report } = await suite.runBuildCommand(tempDir, ['--dry-run']);
 
       expect(result.status).toBe(0);
-      expect(parsed).toHaveProperty('skillsFound', 1);
-      expect(parsed).toHaveProperty('skillsInPlace', 1);
-      expect((parsed['skills'] as Array<Record<string, unknown>>).map((s) => s['name'])).toEqual([SKILL_A_NAME]);
+      expect(suite.dataOf(report)).toMatchObject({ validated: false, skillsInPlace: [SKILL_B_NAME] });
+      expect(suite.dataOf(report).skills.map((row) => row.name)).toEqual([SKILL_A_NAME]);
       expect(result.stderr).toContain(SKILL_B_NAME);
       expect(existsSync(safePath.join(tempDir, 'dist'))).toBe(false);
     });
 
-    it('--skill naming an in-place skill is a contradiction: exit 1, naming the config key', async () => {
+    it('building an in-place skill by name is a findings report, exit 1, naming the config key', async () => {
       const tempDir = suite.createTempDir();
       setupOnePooledOneInPlace(tempDir);
 
-      const { result, parsed } = await suite.runBuildCommand(tempDir, ['--skill', SKILL_B_NAME]);
+      const { result, report } = await suite.runBuildCommand(tempDir, ['--skill', SKILL_B_NAME]);
 
       expect(result.status).toBe(1);
-      expect(parsed).toHaveProperty('status', 'error');
-      expect(String(parsed['error'])).toContain(`skills.config.${SKILL_B_NAME}.publish`);
+      expect(report.status).toBe('findings');
+      expect(suite.codesOf(report)).toEqual(['SKILL_BUILD_TARGET_NOT_BUILDABLE']);
+      expect(report.findings[0]).toMatchObject({ severity: 'error', location: 'resources/skills/skill-b.md' });
+      expect(report.findings[0]?.message).toContain(`skills.config.${SKILL_B_NAME}.publish`);
       expect(result.stderr).toContain(`skills.config.${SKILL_B_NAME}.publish`);
       expect(existsSync(safePath.join(tempDir, 'dist', 'skills'))).toBe(false);
     });
@@ -295,12 +304,11 @@ describe('skills build command (system test)', () => {
         [CONFIG_VERSION_LINE, 'skills:', '  include:', '    - "resources/skills/*.md"', '  defaults:', '    publish: false', ''].join('\n'),
       );
 
-      const { result, parsed } = await suite.runBuildCommand(tempDir);
+      const { result, report } = await suite.runBuildCommand(tempDir);
 
       expect(result.status).toBe(0);
-      expect(parsed).toHaveProperty('skillsBuilt', 0);
-      expect(parsed).toHaveProperty('skillsInPlace', 2);
-      expect(parsed['skills']).toEqual([]);
+      expect(report.examined).toBe(2);
+      expect(suite.dataOf(report)).toMatchObject({ skillsBuilt: 0, skillsInPlace: [SKILL_A_NAME, SKILL_B_NAME], skills: [] });
       // Pinned: `runSkillBuild` over zero specs promotes an EMPTY staging tree, so
       // dist/skills is absent or empty — never a stale bundle from an earlier run.
       const distSkills = safePath.join(tempDir, 'dist', 'skills');
@@ -566,10 +574,17 @@ describe('skills build — framework exit codes (system test)', () => {
     const tempDir = suite.createTempDir();
     const projectDir = setupProjectWithMissingLinkTarget(tempDir, MISSING_TARGET_SKILL);
 
-    const { result: cmdResult } = await suite.runBuildCommand(projectDir);
+    const { result: cmdResult, report } = await suite.runBuildCommand(projectDir);
 
     expect(cmdResult.status).toBe(1);
-    expect(cmdResult.stderr + cmdResult.stdout).toContain('LINK_MISSING_TARGET');
+    // Named in the document, not only on stderr: the finding that failed the build
+    // is on the envelope with its location, and the output was not committed.
+    expect(report.status).toBe('findings');
+    expect(suite.codesOf(report)).toContain('LINK_MISSING_TARGET');
+    expect(suite.dataOf(report)).toMatchObject({ skillsFailedValidation: 1, outputCommitted: false });
+    expect(suite.dataOf(report).skills).toEqual([
+      { name: MISSING_TARGET_SKILL, source: 'skills/SKILL.md', output: `dist/skills/${MISSING_TARGET_SKILL}`, status: 'findings' },
+    ]);
     // The severity is rendered as itself, so a reader can tell WHICH finding
     // failed the build rather than inferring it from the exit code.
     expect(cmdResult.stderr + cmdResult.stdout).toContain('[ERROR] [LINK_MISSING_TARGET]');

@@ -1,7 +1,9 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
-import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
+
+import { PLUGIN_BUILD_REPORT_SCHEMA } from '../../src/commands/claude/plugin/build-schema.js';
 
 import { buildSkillsThenPlugin, createTempDirTracker, getBinPath, writeTestFile } from './test-common.js';
 
@@ -90,15 +92,25 @@ Uses the bundled [engine](lib/engine.mjs).
   writeTestFile(safePath.join(tempDir, 'dist', 'gen', 'engine.mjs'), 'export const engine = 3;');
 }
 
-/** The `plugins[]` rows of the first marketplace in a build document. */
+/** The `plugins[]` rows of the first marketplace in a build document, read through the published schema. */
 function pluginRowsOf(pb: Awaited<ReturnType<typeof buildSkillsThenPlugin>>): Array<Record<string, unknown>> {
-  const mps = pb.parsed['marketplaces'] as Array<Record<string, unknown>>;
-  return mps[0]?.['plugins'] as Array<Record<string, unknown>>;
+  const report = PLUGIN_BUILD_REPORT_SCHEMA.parse(pb.parsed);
+  if (report.status === 'error') throw new Error(`plugin build refused: ${report.error.message}`);
+  return report.data.marketplaces[0]?.plugins ?? [];
 }
 
 /** Build the fixture at `tempDir` (skills, then plugin) and return the first marketplace's plugin rows. */
 async function buildAndReadPluginRows(tempDir: string): Promise<Array<Record<string, unknown>>> {
   return pluginRowsOf(await buildSkillsThenPlugin(binPath, tempDir));
+}
+
+/** Every file under `dir`, relative to it, forward-slashed and sorted. */
+function filesUnder(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    // A link is an entry the build placed too; listed as one, not followed.
+    .filter((entry) => entry.isSymbolicLink() || entry.isFile())
+    .map((entry) => toForwardSlash(safePath.relative(dir, safePath.join(entry.parentPath, entry.name))))
+    .sort((a, b) => a.localeCompare(b));
 }
 
 describe('vat claude plugin build (full plugin support)', () => {
@@ -146,18 +158,24 @@ describe('vat claude plugin build (full plugin support)', () => {
     expect(pluginJson.author).toEqual({ name: 'Test Org', email: 'ops@test.example' });
 
     const plugins = pluginRowsOf(pb);
-    expect(plugins[0]).toMatchObject({
-      commandsCopied: 1,
-      hooksCopied: 1,
-      agentsCopied: 1,
-      mcpCopied: 1,
-    });
+    expect(plugins[0]).toStrictEqual({ name: 'full-plugin', outputPath: expect.any(String), skills: [] });
   });
 
-  // The published document is what a CI consumer reads. A link copied by content
-  // used to publish as `treeFilesCopied: N` and nothing else — the same row a
-  // tree with no symlinks publishes — so the tell has to be on the row itself.
-  it.skipIf(!symlinkCapability())('publishes the in-tree file symlinks copied by content on the plugin row', async () => {
+  it('plugin build output paths are root-relative', async () => {
+    const tempDir = createTempDir();
+    buildFixture(tempDir);
+
+    const pb = await buildSkillsThenPlugin(binPath, tempDir);
+
+    // Relative to the directory holding vibe-agent-toolkit.config.yaml: an
+    // absolute path here published the developer's $HOME in every CI log.
+    expect(pluginRowsOf(pb)[0]?.['outputPath']).toBe('dist/.claude/plugins/marketplaces/mp1/plugins/full-plugin');
+    expect(pb.result.stdout).not.toContain(toForwardSlash(tempDir));
+  });
+
+  // A link copied by content ships the target's bytes under the link's name;
+  // the build says so on stderr, one line per link.
+  it.skipIf(!symlinkCapability())('ships an in-tree file symlink by content and names it on stderr', async () => {
     const cap = symlinkCapability();
     if (!cap) throw new Error('gated by skipIf');
     const tempDir = createTempDir();
@@ -165,8 +183,10 @@ describe('vat claude plugin build (full plugin support)', () => {
     const hooks = safePath.join(tempDir, 'plugins', 'full-plugin', 'hooks');
     createSymlink(cap, 'hooks.json', safePath.join(hooks, 'alias.json'));
 
-    const plugins = await buildAndReadPluginRows(tempDir);
-    expect(plugins[0]).toMatchObject({ hooksCopied: 2, symlinksCopied: ['hooks/alias.json'] });
+    const pb = await buildSkillsThenPlugin(binPath, tempDir);
+    const shipped = safePath.join(tempDir, 'dist', '.claude', 'plugins', 'marketplaces', 'mp1', 'plugins', 'full-plugin', 'hooks', 'alias.json');
+    expect(readFileSync(shipped, 'utf-8')).toBe('{"events":{}}');
+    expect(pb.result.stderr).toContain('hooks/alias.json (symlink, copied by content)');
   });
 
   it('resolves a skill claimed by both the pool selector and the plugin-local skills/ tree to the single pool-packaged copy (collision referee)', async () => {
@@ -187,12 +207,10 @@ describe('vat claude plugin build (full plugin support)', () => {
     expect(readFileSync(engineOut, 'utf-8')).toBe('export const engine = 3;');
 
     const plugins = pluginRowsOf(pb);
-    // local-b now arrives via the pool selector, not the tree-copy.
+    // local-b now arrives via the pool selector, not the tree-copy — its
+    // files: config was already applied by `vat skills build` and is baked
+    // into the pool copy that Phase 3 copies in.
     expect(plugins[0]?.['skills']).toEqual(['local-b']);
-    // The tree-copy's files: re-application is excluded for a colliding skill
-    // — its files: config was already applied by `vat skills build` and is
-    // baked into the pool copy that Phase 3 copies in.
-    expect(plugins[0]?.['localSkillsPackaged']).toBe(0);
 
     // A collision warning naming the skill was printed to stderr (build progress).
     expect(pb.result.stderr).toContain('local-b');
@@ -229,15 +247,17 @@ claude:
     );
 
     const plugins = await buildAndReadPluginRows(tempDir);
-    // The sole plugin-source file (skills/foo__bar/SKILL.md) was excluded
-    // from tree-copy — proving the fs-safe form matched and the collision
-    // was detected, not just coincidentally overlapping.
-    expect(plugins[0]?.['treeFilesCopied']).toBe(0);
     expect(plugins[0]?.['skills']).toEqual(['foo__bar']);
 
+    // Only the pool copy and the generated manifest: the sole plugin-source
+    // file (skills/foo__bar/SKILL.md) was excluded from tree-copy — proving
+    // the fs-safe form matched and the collision was detected.
     const outDir = safePath.join(
       tempDir, 'dist', '.claude', 'plugins', 'marketplaces', 'mp2', 'plugins', 'colon-plugin',
     );
-    expect(existsSync(safePath.join(outDir, 'skills', 'foo__bar', 'SKILL.md'))).toBe(true);
+    const poolDist = safePath.join(tempDir, 'dist', 'skills', 'foo__bar');
+    expect(filesUnder(outDir)).toStrictEqual(
+      ['.claude-plugin/plugin.json', ...filesUnder(poolDist).map((file) => `skills/foo__bar/${file}`)].sort((a, b) => a.localeCompare(b)),
+    );
   });
 });

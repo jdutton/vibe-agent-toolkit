@@ -4,11 +4,14 @@
  * System tests for `vat claude plugin uninstall` command.
  */
 
-import { existsSync } from 'node:fs';
+import { chmodSync, existsSync } from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
+
+import { PLUGIN_UNINSTALL_REPORT_SCHEMA } from '../../src/commands/claude/plugin/uninstall-schema.js';
 
 import {
   createTempDirTracker,
@@ -60,6 +63,23 @@ function setupInstalledPlugin(
   }));
 }
 
+/** A fresh fake HOME holding an empty `.claude/`. */
+function createUninstallTestHome(createTempDir: () => string): string {
+  const fakeHome = safePath.join(createTempDir(), 'home');
+  mkdirSyncReal(safePath.join(fakeHome, '.claude'), { recursive: true });
+  return fakeHome;
+}
+
+/** Run `vat claude plugin uninstall <args>` under `fakeHome` and parse the report it publishes. */
+async function runUninstall(
+  binPath: string,
+  fakeHome: string,
+  args: string[],
+): Promise<{ status: number | null; report: ReturnType<typeof PLUGIN_UNINSTALL_REPORT_SCHEMA.parse> }> {
+  const { result, parsed } = await executeCliAndParseYaml(binPath, ['claude', 'plugin', 'uninstall', ...args], { env: fakeHomeEnv(fakeHome) });
+  return { status: result.status, report: PLUGIN_UNINSTALL_REPORT_SCHEMA.parse(parsed) };
+}
+
 describe('claude plugin uninstall command (system test)', () => {
   const binPath = getBinPath(import.meta.url);
   const { createTempDir, cleanupTempDirs } = createTempDirTracker(TEMP_DIR_PREFIX);
@@ -69,66 +89,89 @@ describe('claude plugin uninstall command (system test)', () => {
   });
 
   it('uninstalls a plugin and removes all artifacts', async () => {
-    const tempDir = createTempDir();
-    const fakeHome = safePath.join(tempDir, 'home');
-    mkdirSyncReal(fakeHome, { recursive: true });
+    const fakeHome = createUninstallTestHome(createTempDir);
     setupInstalledPlugin(fakeHome, 'my-skill', 'my-market');
 
-    const { result, parsed } = await executeCliAndParseYaml(binPath, [
-      'claude', 'plugin', 'uninstall', 'my-skill@my-market',
-    ], { env: fakeHomeEnv(fakeHome) });
+    const { status, report } = await runUninstall(binPath, fakeHome, ['my-skill@my-market']);
 
-    expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
-    expect(parsed.pluginsRemoved).toBe(1);
+    expect(status).toBe(0);
+    expect(report.status).toBe('ok');
+    expect(report.examined).toBe(1);
+    expect(report.data).toStrictEqual({ dryRun: false, plugins: [{ key: 'my-skill@my-market', removed: true }] });
     expect(
       existsSync(safePath.join(fakeHome, '.claude', 'plugins', 'marketplaces', 'my-market', 'plugins', 'my-skill'))
     ).toBe(false);
   });
 
   it('is idempotent when plugin is not installed', async () => {
-    const tempDir = createTempDir();
-    const fakeHome = safePath.join(tempDir, 'home');
-    mkdirSyncReal(safePath.join(fakeHome, '.claude'), { recursive: true });
+    const fakeHome = createUninstallTestHome(createTempDir);
 
-    const { result, parsed } = await executeCliAndParseYaml(binPath, [
-      'claude', 'plugin', 'uninstall', 'missing@market',
-    ], { env: fakeHomeEnv(fakeHome) });
+    const { status, report } = await runUninstall(binPath, fakeHome, ['missing@market']);
 
-    expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
-    expect(parsed.pluginsRemoved).toBe(0);
+    expect(status).toBe(0);
+    expect(report.status).toBe('ok');
+    expect(report.data?.plugins).toStrictEqual([{ key: 'missing@market', removed: false }]);
   });
 
   it('dry-run shows what would be removed without removing files', async () => {
-    const tempDir = createTempDir();
-    const fakeHome = safePath.join(tempDir, 'home');
-    mkdirSyncReal(fakeHome, { recursive: true });
+    const fakeHome = createUninstallTestHome(createTempDir);
     setupInstalledPlugin(fakeHome, 'dry-skill', 'dry-market');
 
-    const { result, parsed } = await executeCliAndParseYaml(binPath, [
-      'claude', 'plugin', 'uninstall', 'dry-skill@dry-market', '--dry-run',
-    ], { env: fakeHomeEnv(fakeHome) });
+    const { status, report } = await runUninstall(binPath, fakeHome, ['dry-skill@dry-market', '--dry-run']);
 
-    expect(result.status).toBe(0);
-    expect(parsed.dryRun).toBe(true);
-    expect(parsed.pluginsRemoved).toBe(1);
+    expect(status).toBe(0);
+    expect(report.data).toStrictEqual({ dryRun: true, plugins: [{ key: 'dry-skill@dry-market', removed: true }] });
     // Files must still exist — dry-run must not remove anything
     expect(
       existsSync(safePath.join(fakeHome, '.claude', 'plugins', 'marketplaces', 'dry-market', 'plugins', 'dry-skill'))
     ).toBe(true);
   });
 
-  it('fails with non-zero exit code when no plugin key given and --all not specified', async () => {
-    const tempDir = createTempDir();
-    const fakeHome = safePath.join(tempDir, 'home');
-    mkdirSyncReal(fakeHome, { recursive: true });
+  it('uninstall of a half-removed plugin reports a PLUGIN_UNINSTALL_INCOMPLETE finding', async () => {
+    const fakeHome = createUninstallTestHome(createTempDir);
+    // The plugin directory is on disk, but no registry names it.
+    mkdirSyncReal(safePath.join(fakeHome, '.claude', 'plugins', 'marketplaces', 'half-market', 'plugins', 'half-skill'), { recursive: true });
 
-    const { result } = await executeCliAndParseYaml(binPath, [
-      'claude', 'plugin', 'uninstall',
-    ], { env: fakeHomeEnv(fakeHome) });
+    const { status, report } = await runUninstall(binPath, fakeHome, ['half-skill@half-market']);
 
-    // Plugin key is required; command exits with error (code 2 = system/unexpected error)
-    expect(result.status).not.toBe(0);
+    // A warning: the cleanup ran, and the operator is told the install was not VAT's.
+    expect(status).toBe(0);
+    expect(report.status).toBe('findings');
+    expect(report.findings).toMatchObject([{ code: 'PLUGIN_UNINSTALL_INCOMPLETE', severity: 'warning', location: 'half-skill@half-market' }]);
+    expect(report.data?.plugins).toStrictEqual([{ key: 'half-skill@half-market', removed: true }]);
+  });
+
+  // Read-only modes are what this test needs; the same hosts that cannot deny a read cannot deny a write.
+  it.skipIf(CANNOT_DENY_READS)('refuses a registry it could not rewrite as RUN_INCOMPLETE, never INTERNAL_ERROR', async () => {
+    const fakeHome = createUninstallTestHome(createTempDir);
+    setupInstalledPlugin(fakeHome, 'ro-skill', 'ro-market');
+    const settingsPath = safePath.join(fakeHome, '.claude', 'settings.json');
+    chmodSync(settingsPath, 0o444);
+    try {
+      const { status, report } = await runUninstall(binPath, fakeHome, ['ro-skill@ro-market']);
+
+      expect(status).toBe(2);
+      expect(report).toMatchObject({ status: 'error', error: { code: 'RUN_INCOMPLETE' } });
+    } finally {
+      chmodSync(settingsPath, 0o644);
+    }
+  });
+
+  it('refuses with USAGE_INVALID when no plugin key given and --all not specified', async () => {
+    const fakeHome = createUninstallTestHome(createTempDir);
+
+    const { status, report } = await runUninstall(binPath, fakeHome, []);
+
+    expect(status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
+  });
+
+  it.each(['no-marketplace', 'p@'])('refuses the key %s as USAGE_INVALID', async (key) => {
+    const fakeHome = createUninstallTestHome(createTempDir);
+
+    const { status, report } = await runUninstall(binPath, fakeHome, [key]);
+
+    expect(status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
   });
 });

@@ -700,6 +700,22 @@ export function directoryRefusalFor(
 }
 
 /**
+ * The refusal a failed `stat` or `readdir` of a scan ROOT stands for, or
+ * `undefined` when the root is simply absent (`ENOENT`/`ENOTDIR`).
+ *
+ * For a caller that must decide whether a root exists before it scans it: an
+ * `existsSync` answers `false` for an untraversable parent too, and the root
+ * then reads as scanned and empty.
+ *
+ * @param error - What the `stat` or `readdir` of `directory` threw
+ * @param directory - The root that was asked about
+ */
+export function rootListingRefusal(error: unknown, directory: string): DirectoryRefusal | undefined {
+  const listing = listingFailure(error);
+  return listing.outcome === 'unreadable' ? directoryRefusalFor(listing, directory) : undefined;
+}
+
+/**
  * The cause for a listing that produced no index.
  *
  * @param listing - A `readdir` outcome that is not `listed`

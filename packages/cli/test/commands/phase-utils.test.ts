@@ -1,432 +1,237 @@
 /**
- * Unit tests for phase orchestration outcomes (`vat build`/`verify`/`validate`).
+ * Unit tests for phase orchestration (`vat build` / `verify` / `validate`).
  *
- * The defect these pin: `runPhase` used to answer `result.status === 0 ?
- * 'passed' : 'failed'`, which collapsed distinguishable outcomes into one
- * reassuring value. A phase that reported its own system error was recorded as
- * an ordinary validation failure — making the exit code 2 that every
- * orchestrator's help text documents unreachable, and a CI script unable to tell
- * "the config is broken" from "a link is broken".
- *
- * Phases used to be child processes and these tests used to spawn a stub "bin"
- * per case. They no longer are, so a phase is now just a function returning
- * `{ document, exitCode }` — which is both what the orchestrator reads and what
- * a test can state directly, with no process, no serialization and no stub.
+ * A phase is a function returning `{ report }` — the `Report<T>` its own
+ * command would publish, before the writer's run-integrity pass — and the
+ * orchestrator folds every phase into ONE report. These pin the fold: findings
+ * flat and unchanged, `examined` summed, a phase that did not finish making the
+ * run `error` / `RUN_INCOMPLETE` with the finished phases still in the data, and
+ * integrity applied once to the sum rather than per phase.
  */
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { buildReport, exitCodeForReport, ExitCode, FindingSchema, reportSchema, type Finding, type Report } from '@vibe-agent-toolkit/schema';
 import { describe, expect, it, vi } from 'vitest';
-import * as YAML from 'yaml';
+import { z } from 'zod';
 
+import { ORCHESTRATOR_EXAMINED, ORCHESTRATOR_REPORT_SCHEMA } from '../../src/commands/orchestrator-schema.js';
 import {
-  aggregatePhaseIssueCounts,
-  aggregatePhaseStatus,
   applyPhaseSelection,
-  exitCodeForPhases,
-  phaseResultFromOutcome,
+  orchestrate,
+  ORCHESTRATOR_GATE,
+  orchestratorReport,
   runPhase,
-  type PhaseOutcome,
+  type Phase,
   type PhaseResult,
 } from '../../src/commands/phase-utils.js';
+import { CommandRefusalError } from '../../src/utils/command-refusal.js';
+import { NOTHING_FINISHED, publishedReport, refusalReport } from '../../src/utils/document-writer.js';
 import { createLogger } from '../../src/utils/logger.js';
+import { withRunIntegrity } from '../../src/utils/run-integrity.js';
 
-/** The outcome value for "the phase could not tell us what it found". */
-const SYSTEM_ERROR = 'system-error';
+const WARNING: Finding = { code: 'LINK_MISSING_TARGET', severity: 'warning', message: 'gone', location: 'docs/a.md' };
+const ERROR: Finding = { code: 'LINK_MISSING_TARGET', severity: 'error', message: 'gone', location: 'skills/x/SKILL.md', line: 3 };
 
-/** A phase result with just the fields the aggregate/exit-code helpers read. */
-function phase(name: string, status: PhaseResult['status']): PhaseResult {
-  return { name, status };
+/** A phase schema that accepts any `data` — for the tests where the data is not the question. */
+const ANY_DATA = reportSchema(z.unknown(), FindingSchema);
+
+/** A phase schema whose `data` must be `{ name: string }`, strictly — the question for the schema tests. */
+const NAMED_DATA = reportSchema(z.object({ name: z.string() }).strict(), FindingSchema);
+
+/** Run `body` with stderr silenced (a refusal prints its diagnostics there). */
+async function quietly<T>(body: () => Promise<T>): Promise<T> {
+  const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  try {
+    return await body();
+  } finally {
+    stderr.mockRestore();
+  }
 }
 
-/** A phase whose run resolves to the given outcome. */
-const phaseReturning = (name: string, outcome: PhaseOutcome) => ({
-  name,
-  run: () => Promise.resolve(outcome),
-});
+/** A completed phase over `examined` things with `findings`. */
+function done(name: string, examined: number, findings: Finding[] = [], data: unknown = { name }): PhaseResult {
+  return { name, report: buildReport({ examined, findings, data, gate: ORCHESTRATOR_GATE }) };
+}
 
-describe('phaseResultFromOutcome', () => {
-  it('maps exit 0 to success', () => {
-    expect(phaseResultFromOutcome('resources', { document: undefined, exitCode: 0 })).toEqual({
-      name: 'resources',
-      status: 'success',
-      exitCode: 0,
+/** A phase that did not finish, refused with `code`. */
+function refused(name: string): PhaseResult {
+  const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  try {
+    return { name, report: refusalReport('CONFIG_INVALID', new Error(`${name} config is broken`), ORCHESTRATOR_GATE, NOTHING_FINISHED) };
+  } finally {
+    stderr.mockRestore();
+  }
+}
+
+/** What the writer publishes for these phases, validated against the registered schema. */
+function published(results: PhaseResult[]): Report<unknown> {
+  return publishedReport('verify', orchestratorReport(results, ORCHESTRATOR_GATE, 5));
+}
+
+describe('orchestratorReport', () => {
+  it('publishes every phase\'s findings flat, with their location unchanged, and sums examined', () => {
+    const report = published([done('resources', 4, [WARNING]), done('skills', 2, [ERROR])]);
+
+    expect(report.status).toBe('findings');
+    expect(report.examined).toBe(6);
+    expect(report.findings).toEqual([WARNING, ERROR]);
+    expect(report.summary).toEqual({ errors: 1, warnings: 1, info: 0 });
+    expect(exitCodeForReport(report)).toBe(ExitCode.FINDINGS);
+  });
+
+  it('carries each phase\'s status, count, summary and its own data under data.phases', () => {
+    const report = published([done('resources', 4, [WARNING], { resources: 4 }), done('skills', 2)]);
+
+    expect(report.data).toEqual({
+      phases: [
+        { name: 'resources', status: 'findings', examined: 4, summary: { errors: 0, warnings: 1, info: 0 }, data: { resources: 4 } },
+        { name: 'skills', status: 'ok', examined: 2, summary: { errors: 0, warnings: 0, info: 0 }, data: { name: 'skills' } },
+      ],
     });
   });
 
-  it('maps exit 1 to a validation error', () => {
-    const result = phaseResultFromOutcome('resources', { document: undefined, exitCode: 1 });
-
-    expect(result.status).toBe('error');
-    expect(result.exitCode).toBe(1);
+  it('a warning never fails the run', () => {
+    expect(exitCodeForReport(published([done('skills', 1, [WARNING])]))).toBe(ExitCode.OK);
   });
 
-  it('maps exit 2 to system-error, not to a validation error', () => {
-    const result = phaseResultFromOutcome('resources', { document: undefined, exitCode: 2 });
+  it('a phase system error publishes status error with the finished phases in data, exit 2', () => {
+    const report = published([done('resources', 3, [WARNING]), refused('skills')]);
 
-    expect(result.status).toBe(SYSTEM_ERROR);
-    expect(result.exitCode).toBe(2);
-    expect(result.error).toContain('system-error code 2');
+    expect(report.status).toBe('error');
+    if (report.status !== 'error') throw new Error('unreachable');
+    expect(report.error.code).toBe('RUN_INCOMPLETE');
+    expect(report.error.message).toContain("'skills' (CONFIG_INVALID)");
+    // The finished phase's work stands: its findings, its count, its entry.
+    expect(report.findings).toEqual([WARNING]);
+    expect(report.examined).toBe(3);
+    expect((report.data as { phases: { name: string; status: string; error?: unknown }[] }).phases).toEqual([
+      expect.objectContaining({ name: 'resources', status: 'findings' }),
+      expect.objectContaining({ name: 'skills', status: 'error', error: { code: 'CONFIG_INVALID', message: 'skills config is broken' } }),
+    ]);
+    expect(exitCodeForReport(report)).toBe(ExitCode.ERROR);
   });
 
-  // A code outside the ExitCode contract is a defect in the phase, not a
-  // status to round: the old table folded it into `system-error` silently.
-  it('refuses a code outside the contract, and runPhase files that as a system-error naming the defect', async () => {
-    expect(() =>
-      phaseResultFromOutcome('skills', { document: undefined, exitCode: 7 as never }),
-    ).toThrow(/exit code 7 is not in the ExitCode contract/);
-    const result = await runPhase(phaseReturning('skills', { document: undefined, exitCode: 7 as never }));
-    expect(result.status).toBe(SYSTEM_ERROR);
-    expect(result.error).toContain('exit code 7 is not in the ExitCode contract');
-  });
-});
+  it('applies run integrity ONCE, to the sum: a phase that examined nothing does not fail a run that examined something', () => {
+    // A project with a resources: block and a skills: block that matched no
+    // SKILL.md, or a marketplace of plugin-local skills and no skills: pool.
+    const report = published([done('resources', 5), done('skills', 0)]);
 
-describe('phaseResultFromOutcome — a Report-shaped phase document', () => {
-  /** A migrated phase's published envelope, with the given status and counts. */
-  const report = (status: 'ok' | 'findings' | 'error', summary: { errors: number; warnings: number; info: number }) =>
-    ({ status, examined: 1, findings: [], summary, gate: { strict: false }, data: null });
-
-  it('reads a Report-shaped phase document: findings with only warnings is warning', () => {
-    // An exit code has three values and cannot say `warning`; the envelope's
-    // `findings` covers info-only and warnings-only alike, so the summary decides.
-    expect(phaseResultFromOutcome('skills', { document: report('findings', { errors: 0, warnings: 2, info: 0 }), exitCode: 0 }).status)
-      .toBe('warning');
-    expect(phaseResultFromOutcome('skills', { document: report('findings', { errors: 0, warnings: 0, info: 3 }), exitCode: 0 }).status)
-      .toBe('success');
-    expect(phaseResultFromOutcome('skills', { document: report('findings', { errors: 1, warnings: 0, info: 0 }), exitCode: 1 }).status)
-      .toBe('error');
-    expect(phaseResultFromOutcome('skills', { document: report('ok', { errors: 0, warnings: 0, info: 0 }), exitCode: 0 }).status)
-      .toBe('success');
-    expect(phaseResultFromOutcome('skills', { document: { ...report('error', { errors: 0, warnings: 0, info: 0 }), error: { code: 'USAGE_INVALID', message: 'x' } }, exitCode: 2 }).status)
-      .toBe('system-error');
+    expect(report.status).toBe('ok');
+    expect(exitCodeForReport(report)).toBe(ExitCode.OK);
   });
 
-  it('counts a Report-shaped phase document from its summary', () => {
-    const result = phaseResultFromOutcome('skills', { document: report('findings', { errors: 1, warnings: 4, info: 2 }), exitCode: 1 });
-    expect(aggregatePhaseIssueCounts([result])).toEqual({ errors: 1, warnings: 4, info: 2 });
-  });
-});
-
-describe('aggregatePhaseStatus', () => {
-  it('is success for no phases and for all-success phases', () => {
-    expect(aggregatePhaseStatus([])).toBe('success');
-    expect(aggregatePhaseStatus([phase('a', 'success'), phase('b', 'success')])).toBe('success');
+  it('refuses a run whose every phase examined nothing — and a run of no phase at all', () => {
+    for (const results of [[done('skills', 0)], []]) {
+      const report = published(results);
+      expect(report.findings.map((finding) => finding.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
+      expect(report.findings[0]?.message).toContain(ORCHESTRATOR_EXAMINED.whenZero);
+      expect(exitCodeForReport(report)).toBe(ExitCode.FINDINGS);
+    }
   });
 
-  it('reports warning when a phase warned but none failed', () => {
-    expect(aggregatePhaseStatus([phase('a', 'success'), phase('b', 'warning')])).toBe('warning');
-  });
-
-  it('ranks system-error above error — could-not-determine is not a verdict', () => {
-    expect(aggregatePhaseStatus([phase('a', 'error'), phase('b', SYSTEM_ERROR)])).toBe(SYSTEM_ERROR);
-    expect(aggregatePhaseStatus([phase('a', SYSTEM_ERROR), phase('b', 'error')])).toBe(SYSTEM_ERROR);
-  });
-});
-
-describe('aggregatePhaseIssueCounts', () => {
-  /** A subprocess phase: its findings live in the child's document, not on the row. */
-  const child = (name: string, counts: unknown): PhaseResult => ({
-    name,
-    status: 'warning',
-    exitCode: 0,
-    report: { issueCounts: counts },
-  });
-
-  it('reads a SUBPROCESS phase’s counts out of the child report', () => {
-    // The defect, measured on a real adopter: `vat build --only claude` published
-    // a top-level `issueCounts: {0, 0, 0}` over a nested phase reporting 12
-    // warnings, because the parent read only `PhaseResult.issueCounts` — which a
-    // subprocess phase deliberately never sets.
-    expect(aggregatePhaseIssueCounts([child('claude', { errors: 0, warnings: 12, info: 3 })]))
-      .toEqual({ errors: 0, warnings: 12, info: 3 });
-  });
-
-  it('sums across phases and across both storage shapes', () => {
-    const inProcess: PhaseResult = {
-      name: 'consistency',
-      status: 'error',
-      issueCounts: { errors: 2, warnings: 0, info: 0 },
-    };
-    expect(aggregatePhaseIssueCounts([child('skills', { errors: 1, warnings: 5, info: 0 }), inProcess]))
-      .toEqual({ errors: 3, warnings: 5, info: 0 });
-  });
-
-  it('prefers the row’s own counts when a phase carries both', () => {
-    const both: PhaseResult = {
-      name: 'skills',
-      status: 'warning',
-      issueCounts: { errors: 0, warnings: 1, info: 0 },
-      report: { issueCounts: { errors: 99, warnings: 99, info: 99 } },
-    };
-    expect(aggregatePhaseIssueCounts([both])).toEqual({ errors: 0, warnings: 1, info: 0 });
-  });
-
-  it('treats absent, malformed and non-numeric counts as zero rather than throwing', () => {
-    // A phase that published no distribution must contribute nothing — the same
-    // answer as before this aggregation existed. Throwing here would turn a
-    // report-shape surprise into a failed build.
-    expect(aggregatePhaseIssueCounts([])).toEqual({ errors: 0, warnings: 0, info: 0 });
-    expect(
-      aggregatePhaseIssueCounts([
-        { name: 'a', status: 'success' },
-        child('b', undefined),
-        child('c', 'not-an-object'),
-        child('d', { errors: '4', warnings: null, info: 2 }),
-      ]),
-    ).toEqual({ errors: 0, warnings: 0, info: 2 });
-  });
-});
-
-describe('exitCodeForPhases', () => {
-  it('exits 0 for success and for warnings (a warning does not fail a run)', () => {
-    expect(exitCodeForPhases([phase('a', 'success')])).toBe(0);
-    expect(exitCodeForPhases([phase('a', 'warning')])).toBe(0);
-  });
-
-  it('exits 1 for a validation error', () => {
-    expect(exitCodeForPhases([phase('a', 'success'), phase('b', 'error')])).toBe(1);
-  });
-
-  it('exits 2 when any phase could not run, even alongside a validation error', () => {
-    expect(exitCodeForPhases([phase('a', 'error'), phase('b', SYSTEM_ERROR)])).toBe(2);
+  it('is what the registered schema describes', () => {
+    const report = withRunIntegrity(orchestratorReport([done('a', 1, [ERROR]), refused('b')], ORCHESTRATOR_GATE), ORCHESTRATOR_EXAMINED);
+    expect(() => ORCHESTRATOR_REPORT_SCHEMA.parse(report)).not.toThrow();
   });
 });
 
 describe('runPhase', () => {
-  it('turns a phase that reports exit 2 into process exit 2', async () => {
-    const result = await runPhase(
-      phaseReturning('resources', { document: undefined, exitCode: 2 }),
-    );
-
-    expect(result.status).toBe(SYSTEM_ERROR);
-    expect(result.exitCode).toBe(2);
-    // The whole point: the documented exit code 2 is reachable from an
-    // orchestrator. Before the fix this was 1, indistinguishable from a
-    // broken link.
-    expect(exitCodeForPhases([result])).toBe(2);
-  });
-
-  it('turns a phase that reports exit 1 into process exit 1', async () => {
-    const result = await runPhase(
-      phaseReturning('resources', { document: undefined, exitCode: 1 }),
-    );
-
-    expect(result.status).toBe('error');
-    expect(exitCodeForPhases([result])).toBe(1);
-  });
-
-  it('observes a clean exit 0 as success', async () => {
-    const result = await runPhase(phaseReturning('skills', { document: undefined, exitCode: 0 }));
-
-    expect(result.status).toBe('success');
-    expect(exitCodeForPhases([result])).toBe(0);
+  it('hands back the phase\'s report under its name', async () => {
+    const report = done('skills', 2).report;
+    expect(await runPhase({ name: 'skills', schema: NAMED_DATA, run: () => Promise.resolve({ report }) })).toEqual({ name: 'skills', report });
   });
 
   /**
-   * The backstop, and the reason this whole conversion needed one.
-   *
-   * A phase reports its own failures through `reportCommandError` and returns
-   * them. A throw that escapes THAT is a bug — and in a child process it was a
-   * survivable one, because the blast radius was the child. In this process an
-   * uncaught throw would abort the orchestrator's loop, silently skipping every
-   * later phase and every aggregation, and the run would end having done half
-   * the work with nothing in the document to say so.
+   * The orchestrator's schema holds a phase's `data` as `unknown`, so nothing
+   * downstream of the fold could catch a phase publishing data its own verb's
+   * schema does not describe. `runPhase` holds each report to the schema the
+   * phase declares, and a report that fails it is VAT's defect.
    */
-  it('contains a phase that throws past its own error handling, rather than aborting the run', async () => {
-    const exploding = {
-      name: 'skills',
-      run: () => Promise.reject(new Error('registry blew up')),
-    };
+  it('refuses a phase whose report its own schema rejects — INTERNAL_ERROR, never folded as finished', async () => {
+    const report = buildReport({ examined: 1, findings: [], data: { name: 'skills', extra: true }, gate: ORCHESTRATOR_GATE });
+    const result = await quietly(() => runPhase({ name: 'skills', schema: NAMED_DATA, run: () => Promise.resolve({ report }) }));
 
-    const result = await runPhase(exploding);
-
-    expect(result.status).toBe(SYSTEM_ERROR);
-    expect(result.error).toContain('registry blew up');
-    expect(exitCodeForPhases([result])).toBe(2);
+    expect(result.report).toMatchObject({ status: 'error', error: { code: 'INTERNAL_ERROR' }, examined: 0 });
+    expect(orchestratorReport([result], ORCHESTRATOR_GATE)).toMatchObject({ status: 'error', error: { code: 'RUN_INCOMPLETE' } });
   });
 
-  it('keeps running later phases after one throws', async () => {
-    const phases = [
-      { name: 'a', run: () => Promise.reject(new Error('boom')) },
-      phaseReturning('b', { document: { status: 'success' }, exitCode: 0 }),
-    ];
+  /**
+   * The backstop. A phase returns its own refusal as a report; a throw that
+   * escaped that would abort the orchestrator's loop and silently skip every
+   * later phase, so it becomes the phase's refusal instead — INTERNAL_ERROR
+   * when it carries no code, since an uncoded escape is VAT's defect.
+   */
+  it('turns a throw past the phase\'s own handling into that phase\'s refusal', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const result = await runPhase({ name: 'skills', schema: ANY_DATA, run: () => Promise.reject(new Error('registry blew up')) });
 
-    const results: PhaseResult[] = [];
-    for (const p of phases) results.push(await runPhase(p));
-
-    expect(results.map((r) => r.name)).toEqual(['a', 'b']);
-    expect(results[1]?.status).toBe('success');
-    expect(aggregatePhaseStatus(results)).toBe(SYSTEM_ERROR);
-  });
-});
-
-/**
- * A phase's report is DATA the orchestrator owns, not a stream it forwards.
- *
- * Two defects live here, and one change fixed both:
- *
- *  1. `vat verify` was structurally blind to warnings. `vat skills validate`
- *     exits 0 while reporting `status: warning`, and the phase status was
- *     derived from the exit code — so the orchestrator answered `success` on
- *     the very tree where the phase said `warning`. VAT's own CI dogfoods
- *     `vat verify`, so this blinded the project to its own warnings.
- *
- *  2. `vat validate`'s stdout was malformed YAML. With `stdio: 'inherit'` each
- *     child wrote its own document straight onto the parent's stdout with no
- *     `---` separator, so two phases produced one map with `status:` and
- *     `durationSecs:` twice over and `YAML.parse()` threw "Map keys must be
- *     unique". `vat validate | jq` had never worked.
- *
- * Folding each phase's document into its own result keeps the orchestrator's
- * stdout a single document AND gives the phase status a source of truth richer
- * than an exit code. The document now arrives as a VALUE rather than as parsed
- * stdout, which is why the truncation and unparseable-output cases below are
- * gone: there is no serialization step left in which to lose one.
- */
-describe('runPhase (report folding)', () => {
-  it('derives warning from the phase\'s reported status, not from its exit code', async () => {
-    // Exactly what `vat skills validate` does: warnings are non-blocking, so it
-    // reports exit 0 — the exit code cannot express "warning" and never could.
-    const document = { status: 'warning', issueCounts: { errors: 0, warnings: 3, info: 0 } };
-
-    const result = await runPhase(phaseReturning('skills', { document, exitCode: 0 }));
-
-    expect(result.status).toBe('warning');
-    expect(result.report).toEqual(document);
-    // A warning still does not fail the run — it is published, not fatal.
-    expect(exitCodeForPhases([result])).toBe(0);
-  });
-
-  it('takes the worse of the exit code and the reported status, in both directions', async () => {
-    // A phase that says `success` but reports exit 1 has contradicted itself;
-    // the orchestrator must not believe the reassuring half.
-    const optimistic = await runPhase(
-      phaseReturning('skills', { document: { status: 'success' }, exitCode: 1 }),
-    );
-    expect(optimistic.status).toBe('error');
-
-    // And the other way round: a phase reporting `system-error` while exiting 1
-    // could not determine the answer, which must not be filed as "we determined
-    // it is bad" — the exit code alone cannot make that distinction.
-    const pessimistic = await runPhase(
-      phaseReturning('skills', { document: { status: 'system-error' }, exitCode: 1 }),
-    );
-    expect(pessimistic.status).toBe(SYSTEM_ERROR);
-  });
-
-  it('composes into ONE parseable document that keeps each phase report separate', async () => {
-    // The concatenation defect in miniature: both phases emit a `status` and a
-    // `durationSecs`. Streamed onto one stdout with no separator they collapse
-    // into a single map with duplicate keys and YAML.parse() throws. Folded into
-    // `phases[].report` they coexist, and both values remain readable.
-    const phases = [
-      await runPhase(
-        phaseReturning('resources', {
-          document: { status: 'success', durationSecs: 1.5 },
-          exitCode: 0,
-        }),
-      ),
-      await runPhase(
-        phaseReturning('skills', {
-          document: { status: 'warning', durationSecs: 2.5 },
-          exitCode: 0,
-        }),
-      ),
-    ];
-
-    const stdout = `---\n${YAML.stringify({
-      status: aggregatePhaseStatus(phases),
-      phases,
-      duration: '10ms',
-    })}`;
-
-    const parsed = YAML.parse(stdout) as {
-      status: string;
-      phases: Array<{ name: string; report?: { status: string; durationSecs: number } }>;
-    };
-
-    expect(parsed.status).toBe('warning');
-    expect(parsed.phases[0]?.report).toEqual({ status: 'success', durationSecs: 1.5 });
-    expect(parsed.phases[1]?.report).toEqual({ status: 'warning', durationSecs: 2.5 });
-  });
-
-  it('falls back to the exit code when the phase publishes no document at all', async () => {
-    // `vat skills validate` returns no document when there is no skills: block.
-    // Silence is not a crash — do not invent a system error.
-    const result = await runPhase(phaseReturning('skills', { document: undefined, exitCode: 0 }));
-
-    expect(result.status).toBe('success');
-    expect(result.report).toBeUndefined();
+      expect(result.report.status).toBe('error');
+      expect(result.report).toMatchObject({ error: { code: 'INTERNAL_ERROR', message: 'registry blew up' }, examined: 0 });
+      expect(exitCodeForReport(orchestratorReport([result], ORCHESTRATOR_GATE))).toBe(ExitCode.ERROR);
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });
-
-/**
- * An unroutable `--only` used to be an uncaught `throw` from OUTSIDE the
- * command's try block. The user got a raw Node stack trace, **zero bytes of
- * stdout**, and an exit 1 that looked exactly like "validation errors" — so the
- * one output a scripted caller parses was never written at all.
- */
-/** Run `applyPhaseSelection`, capturing stdout and intercepting the exit. */
-function captureSelectionOutput(selection: Parameters<typeof applyPhaseSelection>[0]): {
-  stdout: string;
-  exitCode: number | undefined;
-} {
-  const chunks: string[] = [];
-  let exitCode: number | undefined;
-  const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
-    chunks.push(String(chunk));
-    return true;
-  });
-  const exitSpy = vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
-    exitCode = code;
-    throw new Error('process.exit');
-  }) as never);
-
-  try {
-    applyPhaseSelection(selection, createLogger({}), Date.now());
-  } catch (error) {
-    if ((error as Error).message !== 'process.exit') throw error;
-  } finally {
-    stdoutSpy.mockRestore();
-    exitSpy.mockRestore();
-  }
-
-  return { stdout: chunks.join(''), exitCode };
-}
 
 describe('applyPhaseSelection', () => {
-  // ERROR, not FINDINGS: a selection that cannot run is the command failing to
-  // do its job, not a finding about the tree. This used to exit 1 while the
-  // contract every `--help` prints reserves 1 for validation findings.
-  it('writes the normal structured document — not a stack trace — for an unroutable --only', () => {
-    const { stdout, exitCode } = captureSelectionOutput({ kind: 'fail', message: "Phase 'claude' is not configured" });
+  const logger = createLogger({});
+  const phases: Phase[] = [{ name: 'skills', schema: ANY_DATA, run: () => Promise.resolve({ report: done('skills', 1).report }) }];
 
-    expect(exitCode).toBe(ExitCode.ERROR);
-    expect(YAML.parse(stdout)).toMatchObject({
-      status: 'error',
-      phases: [],
-      error: "Phase 'claude' is not configured",
-    });
+  it('returns the phases untouched when there is work to do', () => {
+    expect(applyPhaseSelection({ kind: 'run', phases }, logger)).toBe(phases);
   });
 
-  it('writes a warned no-op document at exit 0 when nothing is configured', () => {
-    const { stdout, exitCode } = captureSelectionOutput({ kind: 'noop', warning: 'check your config', note: 'nothing configured' });
-
-    expect(exitCode).toBe(0);
-    expect(YAML.parse(stdout)).toMatchObject({ status: 'success', note: 'nothing configured' });
+  it('throws the selection\'s refusal, carrying its code, for the orchestrator to publish', () => {
+    expect(() => applyPhaseSelection({ kind: 'fail', code: 'USAGE_INVALID', message: "Phase 'claude' is not configured" }, logger))
+      .toThrow(expect.objectContaining({ refusal: 'USAGE_INVALID', message: "Phase 'claude' is not configured" }));
   });
 
-  it('returns the phases untouched and writes nothing when there is work to do', () => {
-    const phases = [phaseReturning('skills', { document: undefined, exitCode: 0 })];
+  it('runs no phase for a warned no-op — the writer refuses the zero-examined run', () => {
+    const warn = vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    expect(applyPhaseSelection({ kind: 'noop', warning: 'check your config' }, logger)).toEqual([]);
+    expect(warn).toHaveBeenCalledWith('check your config');
+  });
+});
 
-    const chunks: string[] = [];
-    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
-      chunks.push(String(chunk));
-      return true;
+describe('orchestrate', () => {
+  it('folds a clean run into the one report, over every phase the body recorded', async () => {
+    const report = await orchestrate((results) => {
+      results.push(done('resources', 3, [WARNING]), done('skills', 2));
+      return Promise.resolve();
     });
-    const returned = applyPhaseSelection({ kind: 'run', phases }, createLogger({}), Date.now());
-    stdoutSpy.mockRestore();
 
-    expect(returned).toBe(phases);
-    expect(chunks).toEqual([]);
+    expect(report).toMatchObject({ status: 'findings', examined: 5, findings: [WARNING] });
+  });
+
+  /**
+   * The run itself refused AFTER phases finished — discovery that could not see
+   * the tree, a package.json the OS would not read. The refusal carries its own
+   * code, and the finished phases' work stands in the envelope.
+   */
+  it('publishes a throw after phases finished as that code, with the finished phases in data', async () => {
+    const report = await quietly(() => orchestrate((results) => {
+      results.push(done('resources', 3, [WARNING]));
+      throw new CommandRefusalError('INPUT_UNREADABLE', 'dist/ could not be read');
+    }));
+
+    expect(report.status).toBe('error');
+    if (report.status !== 'error') throw new Error('unreachable');
+    expect(report.error).toEqual({ code: 'INPUT_UNREADABLE', message: 'dist/ could not be read' });
+    expect(report.examined).toBe(3);
+    expect(report.findings).toEqual([WARNING]);
+    expect(report.data).toEqual({
+      phases: [{ name: 'resources', status: 'findings', examined: 3, summary: { errors: 0, warnings: 1, info: 0 }, data: { name: 'resources' } }],
+    });
+    expect(() => ORCHESTRATOR_REPORT_SCHEMA.parse(publishedReport('verify', report))).not.toThrow();
+    expect(exitCodeForReport(report)).toBe(ExitCode.ERROR);
+  });
+
+  it('publishes a throw before any phase finished with nothing finished: data null, examined 0', async () => {
+    const report = await quietly(() => orchestrate(() => {
+      throw new CommandRefusalError('USAGE_INVALID', 'a path argument');
+    }));
+
+    expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' }, examined: 0, findings: [], data: null });
   });
 });

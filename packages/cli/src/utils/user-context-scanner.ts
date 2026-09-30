@@ -4,11 +4,27 @@
  * Scan user-level Claude directories for plugins, skills, and marketplaces.
  */
 
-import { existsSync } from 'node:fs';
+import { statSync } from 'node:fs';
 
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { scan, type ScanResult } from '@vibe-agent-toolkit/discovery';
-import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
+import { rootListingRefusal, type DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
+
+/**
+ * Whether a scan root is there to scan. Absent is `false` (scanned and empty);
+ * a `stat` the OS refuses — an untraversable `~/.claude` — is recorded in
+ * `unreadable` and also `false`, so the root is never reported as read.
+ */
+function rootToScan(dir: string, unreadable: DirectoryRefusal[]): boolean {
+  try {
+    statSync(dir);
+    return true;
+  } catch (error) {
+    const refusal = rootListingRefusal(error, dir);
+    if (refusal !== undefined) unreadable.push(refusal);
+    return false;
+  }
+}
 
 
 /**
@@ -19,7 +35,8 @@ import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
  * - ~/.claude/skills for SKILL.md files
  * - ~/.claude/marketplaces (reserved for future use)
  *
- * Returns empty arrays if directories don't exist (not an error).
+ * Returns empty arrays if directories don't exist (not an error). A root the
+ * OS will not let the process `stat` is not absent: it is in `unreadable`.
  *
  * @returns Object containing separate arrays for plugins, skills, marketplaces
  *
@@ -47,7 +64,7 @@ export async function scanUserContext(): Promise<{
 
   // Scan plugins directory (SKILL.md and .claude-plugin directories)
   let plugins: ScanResult[] = [];
-  if (existsSync(pluginsDir)) {
+  if (rootToScan(pluginsDir, unreadable)) {
     const pluginsScan = await scan({
       path: pluginsDir,
       recursive: true,
@@ -59,7 +76,7 @@ export async function scanUserContext(): Promise<{
 
   // Scan skills directory (SKILL.md files)
   let skills: ScanResult[] = [];
-  if (existsSync(skillsDir)) {
+  if (rootToScan(skillsDir, unreadable)) {
     const skillsScan = await scan({
       path: skillsDir,
       recursive: true,

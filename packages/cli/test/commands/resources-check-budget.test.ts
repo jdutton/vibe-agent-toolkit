@@ -42,6 +42,7 @@ import {
   type AbnormalDeath,
   parseBudgetSeconds,
   pollWatchdog,
+  readCompletedDocument,
   requireSupervisableFlags,
   resolveChildEnding,
   resolveSilentCompletion,
@@ -644,6 +645,37 @@ describe('resolveSilentCompletion — the WINDOWS half of the signal-death defec
     } as const;
 
     expect(resolveSilentCompletion(signalled, '')).toStrictEqual(signalled);
+  });
+});
+
+describe('readCompletedDocument — a completion whose document does not survive the trip', () => {
+  // 🚨 One situation, one ending. A child that exits having written a document
+  // cut off mid-write (or anything that is not this verb's document) is the
+  // silent completion's sibling, not a VAT defect: it publishes the interrupted
+  // document from the progress log, exit 1 — never INTERNAL_ERROR, exit 2.
+  it('reads a truncated document as an abnormal death carrying the code', () => {
+    const read = readCompletedDocument(A_DOCUMENT, 1, 'yaml');
+
+    expect(read).toMatchObject({ death: { kind: 'unparseable-output', code: 1 } });
+  });
+
+  it('publishes the interrupted document for it — findings, exit 1, not a refusal', () => {
+    const read = readCompletedDocument(`{"status": "ok", "exam`, 0, 'json');
+    if (!('death' in read)) throw new Error('a truncated document was accepted');
+    const report = buildCheckOutputData(diedOf(read.death));
+
+    expect(report.status).toBe('findings');
+    expect(report.findings.map((finding) => finding.code)).toContain('RESOURCE_CHECK_BROKEN');
+    expect(report.findings[0]?.message).toContain('exited 0');
+    expect(exitCodeForReport(report)).toBe(ExitCode.FINDINGS);
+  });
+
+  it('accepts a whole document, and its exit code is derived from it', () => {
+    // ⛔ The negative control: without it "always a death" passes the two above.
+    const whole = buildCheckOutputData(diedOf({ kind: 'no-status' }));
+    const read = readCompletedDocument(JSON.stringify(whole), 0, 'json');
+
+    expect(read).toMatchObject({ document: { report: { status: whole.status } } });
   });
 });
 

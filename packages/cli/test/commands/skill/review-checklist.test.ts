@@ -180,6 +180,8 @@ const FALLS_TO_CATCH_ALL: ReadonlySet<string> = new Set([
   'PLUGIN_MISSING_LICENSE',
   'PLUGIN_NAME_NOT_KEBAB_CASE',
   'PLUGIN_TOPLEVEL_BIN_DIR',
+  // About a local Claude install `vat claude plugin uninstall` removes, never a skill's content.
+  'PLUGIN_UNINSTALL_INCOMPLETE',
   'REFERENCE_TARGET_MISSING',
   'REGISTRY_SHAPE_DRIFT',
   'RESOURCE_UNREADABLE',

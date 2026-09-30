@@ -355,7 +355,7 @@ resources (→ utils)
 **Purpose:** Comprehensive validation of Claude plugins, marketplaces, registries, and skills
 
 **Architecture:**
-- **Inventory substrate**: All structural enumeration goes through the inventory layer (see [Skill Packaging — Inventory Layer](./skill-packaging.md#inventory-layer)). Vendor-neutral interfaces live in `packages/agent-skills/src/inventory/`; concrete Claude extractors live in `packages/claude-marketplace/src/inventory/`. Detectors are pure consumers of inventory data — they never walk the filesystem directly. `vat inventory <path>` exposes the same model as YAML/JSON.
+- **Inventory substrate**: All structural enumeration goes through the inventory layer (see [Skill Packaging — Inventory Layer](./skill-packaging.md#inventory-layer)). Vendor-neutral interfaces live in `packages/agent-skills/src/inventory/`; concrete Claude extractors live in `packages/claude-marketplace/src/inventory/`. Detectors are pure consumers of inventory data — they never walk the filesystem directly. `vat inventory <path>` publishes the same model as its report's `data.inventory`.
 - **Auto-detection**: Detects resource type based on file structure
   - Plugin directories: `.claude-plugin/plugin.json` ([official spec](https://code.claude.com/docs/en/plugins-reference))
   - Marketplace directories: `.claude-plugin/marketplace.json`

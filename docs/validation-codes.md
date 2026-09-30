@@ -117,7 +117,7 @@ once in each code's section below (linked from the `Code` cell).
 | [`PACKAGED_UNREFERENCED_FILE`](#packaged_unreferenced_file) | error | File in the packaged output is not referenced from any packaged markdown. | Add a markdown link or code-block mention in SKILL.md or a linked resource. A file consumed programmatically belongs in skills.config.<name>.files as a source/dest pair — a declared dest is exempt, so do NOT restate it in validation.allow. |
 | [`PACKAGED_AGENT_INSTRUCTION_FILE`](#packaged_agent_instruction_file) | warning | A repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) is present in the scanned tree — a built skill bundle, an installed plugin, or a plugin source directory. | In a distributed tree (a built bundle or an installed plugin) remove the file, or move it outside the directory that is packaged. In a repo source tree, confirm first whether it ships: the build excludes agent-instruction files from the plugin tree-copy and from files: globs, so only an explicit files: entry naming it puts it in the output. If it must ship, set severity.PACKAGED_AGENT_INSTRUCTION_FILE to ignore so the exception is recorded in config. If an explicit files: entry already names this dest, vat build and vat verify honour it and stay silent; vat audit reports it anyway because a path-addressed scan cannot see the config that declared it. |
 | [`TREE_PROVENANCE_INDETERMINATE`](#tree_provenance_indeterminate) | warning | Could not determine whether a scanned skill tree is repository source or a distributed artifact, because `git` could not be consulted; agent-instruction files present in the tree were left unclassified rather than silently accepted. | Make `git` runnable for this tree — install it, put it on PATH, or repair the repository whose `.git` directory could not be read — then re-run the audit. Set severity.TREE_PROVENANCE_INDETERMINATE to ignore if this environment deliberately has no git and the unclassified files are known to be repository source. |
-| [`SCAN_PATH_UNREADABLE`](#scan_path_unreadable) | warning | A path under the audited tree could not be read — a directory the scan could not enter, or a file it could not open — so it was not scanned; findings from every readable sibling are still reported. | Make the path readable — check its permissions and ownership — then re-run the audit, or pass --exclude to drop it from the scan deliberately. Set severity.SCAN_PATH_UNREADABLE to ignore if the path is expected to be unreadable and the scan runs inside a project whose config VAT can find. |
+| [`SCAN_PATH_UNREADABLE`](#scan_path_unreadable) | warning | A path the command had to read could not be read — a directory it could not enter, or a file it could not open — so it was not scanned; findings from every readable sibling are still reported. | Make the path readable — check its permissions and ownership — then re-run. To drop it deliberately instead: vat audit takes --exclude, and a verb that reads a project config VAT can find honours severity.SCAN_PATH_UNREADABLE: ignore; other verbs have no lever, and their result stays a floor. |
 | [`FILES_GLOB_DROPPED_NEVER_PACKAGED`](#files_glob_dropped_never_packaged) | warning | A `files:` glob matched a file that is never packaged into a skill bundle (an agent-instruction file such as CLAUDE.md, or a navigation file such as README.md); it was dropped and did not ship. | No action needed if the drop is intended — a glob is a net, not a declaration. To ship that specific file deliberately, add an explicit `files:` entry naming it (`source: <path>`); to stop matching it at all, narrow the glob. |
 | [`FILES_GLOB_SKIPPED_NON_REGULAR_FILE`](#files_glob_skipped_non_regular_file) | warning | A `files:` glob matched something that is not a regular file (a symlink to a directory, a dangling symlink, a FIFO, a socket or a device node); it cannot be packaged and was skipped, so it did not ship. | Point the glob at regular files, or narrow it so it stops matching this path. To ship the contents a directory symlink targets, name the real directory in a glob of its own (`source: <real-dir>/**/*`) — a link cannot be packaged as one file. Set severity.FILES_GLOB_SKIPPED_NON_REGULAR_FILE to ignore if the skip is expected. |
 | [`FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED`](#files_glob_matched_only_never_packaged) | warning | A `files:` glob matched only files that are never packaged into a skill bundle (agent-instruction files such as CLAUDE.md, navigation files such as README.md), so the entry ships nothing and `vat skills build` fails on it. | Name the file you intend to ship in an explicit (non-glob) `files:` entry (`source: <path>`), or point the glob at a directory that holds files which can be packaged. Widening the glob does not help — the never-package filter matches on basename at any width. Set severity.FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED to ignore if the entry is deliberately inert. |
@@ -621,7 +621,7 @@ Only meaningful when a skill is actually being bundled. Most fire from `vat skil
 ### `SCAN_PATH_UNREADABLE`
 
 - **Default:** `warning`
-- **What:** A path under the audited tree could not be read (`EACCES`, a vanished mount, a permissions quirk), so it was not scanned. **Both halves count**: a *directory* the scan could not enter, and a *file* it could not open. One finding per unreadable path, naming it and the operating system's own message. Every readable sibling is still scanned and every finding already collected is still reported.
+- **What:** A path the command had to read could not be read (`EACCES`, a vanished mount, a permissions quirk), so it was not scanned. **Both halves count**: a *directory* the scan could not enter, and a *file* it could not open. One finding per unreadable path, naming it and the operating system's own message. Every readable sibling is still scanned and every finding already collected is still reported.
 - **Second producer: the packaged-size walk** behind [`PACKAGED_SIZE_EXCEEDS_API_LIMIT`](#packaged_size_exceeds_api_limit). Any entry whose bytes it cannot establish — `readdir` threw, `stat` threw, the entry is a **symbolic link** of any kind (the uploader refuses one rather than following it), or it is otherwise not a regular file (a device, a socket) — gets one finding here instead of being summed as **zero**, and the message says the measured packaged size is a **lower bound**. That direction of error is the dangerous one: a `stat` failure on the 35.7 MB `.wasm` took a bundle's total from ~36 MB to ~2 MB, the build reported no warnings, and the upload ate a `413` eleven seconds later. Nothing else stats those bytes, so a silent zero there is a silent zero everywhere.
 - **Third producer: `vat audit settings --show-paths`**, for a settings path whose existence or readability the probe could not determine (a permission error on a parent directory) — that path was not checked, which is not the same answer as "absent".
 - **Why it matters:** One unreadable path used to abort the **entire** `vat audit` run — `status: error`, exit code 2, and **zero findings**, including the ones already collected from readable siblings. A single root-owned or quarantined entry under `~/.claude/plugins` killed the flagship `vat audit --user` invocation outright. `vat audit` is a bulk linter over trees it does not own, so an entry it cannot read is an ordinary condition rather than an exceptional one, and the scan must degrade rather than destroy the work it has already done.
@@ -631,7 +631,7 @@ Only meaningful when a skill is actually being bundled. Most fire from `vat skil
 - **Scoped to the path that caused it.** The finding replaces only what that path would have contributed; the walk continues through its siblings and its parent's remaining entries. A skill beside the unreadable path is validated exactly as if it were not there.
 - **Where it points:** the **unreadable path**, relative to the scan root. The OS message (which names the errno and the syscall — useful for telling a permissions problem from a vanished mount) is carried in the finding's detail rather than being the run's only output.
 - **Why this is a `warning`, not an `error`:** the findings that *did* come back are trustworthy, and an unreadable path is usually a fact about the environment rather than a defect in the audited tree — failing CI over someone's file permissions would make the flagship invocation unusable. It is louder than `info` because your scan genuinely did not cover everything you asked it to.
-- **Fix:** Make the path readable — check its permissions and ownership — then re-run the audit, or pass `--exclude` to drop it from the scan deliberately. Set `severity.SCAN_PATH_UNREADABLE` to `ignore` if the path is expected to be unreadable **and the scan runs inside a project whose config VAT can find** — that qualifier is load-bearing: severity overrides are read from a `vibe-agent-toolkit.config.yaml` at or above the scan path, and there is normally none above `~/.claude/plugins`, so for `vat audit --user` the working lever is `--exclude`, not the override.
+- **Fix:** Make the path readable — check its permissions and ownership — then re-run. To drop it deliberately instead, the lever depends on the verb: `vat audit` takes `--exclude`; a verb that reads a project config honours `severity.SCAN_PATH_UNREADABLE: ignore`, **but only inside a project whose config VAT can find** — that qualifier is load-bearing: severity overrides are read from a `vibe-agent-toolkit.config.yaml` at or above the scan path, and there is normally none above `~/.claude/plugins`, so for `vat audit --user` the working lever is `--exclude`, not the override. The listings `vat skills list`, `vat agent list` and `vat agent installed` take no `--exclude` and load no config: there the finding is only the receipt that the list is a floor.
 
 ### `FILES_GLOB_DROPPED_NEVER_PACKAGED`
 
@@ -1036,6 +1036,13 @@ These files are external data: VAT reads them, Claude Code writes them. Per VAT'
 - **Why it matters:** Liberal parsing alone would trade false errors for total blindness: Claude Code could add three new fields and a new install scope and VAT would report a clean run forever. This code is the visible half of the trade — VAT accepts the shape it does not understand *and says so*. It is the signal that VAT's registry model has fallen behind, and the input for updating it.
 - **Fix:** No action needed — the unknown value was preserved, not rejected. Report the field so VAT's model can catch up, or set `severity.REGISTRY_SHAPE_DRIFT` to `ignore`.
 
+### `PLUGIN_UNINSTALL_INCOMPLETE`
+
+- **Default:** `warning`
+- **What:** `vat claude plugin uninstall` found the plugin's directory under the Claude marketplaces tree with no entry in `installed_plugins.json` — a half-removed install, or one VAT never made. The directory, cache and settings entry were removed; `data.plugins[]` still reports `removed: true`. The finding's `location` is the plugin key.
+- **Why it matters:** VAT reverses only the artifacts its own install writes. An install it did not record may have written others it cannot see, so "removed" is VAT's side of the uninstall, not a guarantee the plugin is gone.
+- **Fix:** Check Claude Code for leftovers of the plugin (`/plugin`) and remove them there. Set `severity.PLUGIN_UNINSTALL_INCOMPLETE` to `ignore` if half-removed installs are expected.
+
 ## Compat Codes
 
 *Stance: see [Compatibility](./skill-quality-and-compatibility.md#compatibility).*
@@ -1384,6 +1391,99 @@ judged at all — no frontmatter, no manifest, unparseable JSON. Declared as `No
 | `UNKNOWN_FORMAT` | error | `vat audit` could not classify the path as a plugin, marketplace, registry file or skill | Point it at a valid plugin directory, marketplace directory, registry file or `SKILL.md` |
 | `SKILL_TOO_LONG` | warning | The skill's markdown exceeds 5000 lines | Split it into smaller skills or reference files |
 
+### `vat skills build` findings (never overridable)
+
+Emitted by `vat skills build` (and `SKILL_PACKAGING_FAILED` also by `vat skills package`), always at
+`error`, and declared as `NonOverridableCode` in
+`packages/schema/src/validation-codes.ts` — so `validation.severity` and `validation.allow` refuse
+either code as a key: nothing reads an override for them, and an accepted key would parse and do
+nothing. One skill's failure never stops the run — every other skill still builds or fails on its
+own findings — but either finding keeps `dist/skills` from being replaced. `location` is the
+skill's `SKILL.md`.
+
+| Code | Severity | What | Fix |
+|---|---|---|---|
+| `SKILL_BUILD_TARGET_NOT_BUILDABLE` | error | `--skill <name>` named a skill whose merged config says `publish: false`: an in-place skill (validated at source by `vat validate`, never bundled) or a plugin-local one (shipped with its plugin by the claude phase). `data.skillsInPlace` / `data.skillsPluginOnly` name it. Building nothing and exiting 0 would tell a release step the skill it asked for was built | Drop `--skill`, set `publish: true` to distribute it through `dist/skills`, or — for a plugin-local skill — run `vat build --only claude` |
+| `SKILL_PACKAGING_FAILED` | error | Packaging stopped before it produced a bundle — an absent or unreadable `files:` source, a `SKILL.md` bundled as a resource, a name that is not a single path segment; the message is the packager's own. Only the packager's CODED refusals (`SKILL_PACKAGING_INPUT_INVALID`, `SKILL_NAME_NOT_A_SEGMENT`) are this finding under `vat skills package`; any other throw there is `INTERNAL_ERROR`. Counted in `data.skillsFailed` (`vat skills build`) | Fix what the message names in the skill or its `skills.config` entry, then rebuild |
+
+### `vat skills package` findings (never overridable)
+
+Emitted only by `vat skills package`, always at `error`, and declared as `NonOverridableCode` in
+`packages/schema/src/validation-codes.ts` — the verb reads no project config, so a
+`validation.severity` or `validation.allow` key for it would parse and do nothing, and both refuse
+it. `location` is the skill's `SKILL.md`. Not `PACKAGED_SIZE_EXCEEDS_API_LIMIT`: that is the 30 MiB
+Skills API ceiling on the uncompressed bundle, a warning; this is claude.ai's 8 MB ZIP upload limit.
+
+| Code | Severity | What | Fix |
+|---|---|---|---|
+| `SKILL_PACKAGE_TOO_LARGE` | error | `--target claude-web` produced a ZIP of 8 MB or more, over claude.ai's upload limit (a 4 MB one warns on stderr). The directory and the ZIP are on disk; `data.outputPath` names the directory | Link fewer or smaller resources from the skill, or package with `--target claude-code`, which has no upload ceiling |
+
+### `vat verify` findings (never overridable)
+
+Emitted only by `vat verify`'s `files-config-dests` phase, always at `error`, and declared as
+`NonOverridableCode` in `packages/schema/src/validation-codes.ts` — the phase reads no
+`validation.severity`, so a `validation.severity` or `validation.allow` key for it would parse and
+do nothing, and both refuse it. One finding per missing dest; `location` is the path where the dest
+should be, relative to the project root.
+
+| Code | Severity | What | Fix |
+|---|---|---|---|
+| `FILES_CONFIG_DEST_MISSING` | error | A `files:` entry (under `skills.defaults` or `skills.config.<name>`) declares a `dest` that the built skill output — `dist/skills/<name>/`, or the plugin tree for a plugin-local skill — does not hold | Run `vat build` so the `files:` entry is applied, or correct the entry's `dest` in `vibe-agent-toolkit.config.yaml` |
+
+### `vat skill test run` findings (never overridable)
+
+Emitted only by `vat skill test run`, and declared as `NonOverridableCode` in
+`packages/schema/src/validation-codes.ts` — the verb reads no `validation.severity`, so a
+`validation.severity` or `validation.allow` key for it would parse and do nothing, and both refuse
+it. One finding per failed eval: `location` is the eval suite (`evals.json`) relative to the
+project root — omitted when the suite lies outside the project, as a `--evals` corpus or the
+held copy of a fetched skill's suite does — and `field` is the eval's `id` inside it.
+Severity is `error` (exit 1), or `warning` (exit 0) under `--allow-eval-failure`.
+
+| Code | Severity | What | Fix |
+|---|---|---|---|
+| `SKILL_TEST_EVAL_FAILED` | error | The eval ran and did not pass: an output expectation the grader marked failed, or a tool verdict (`mustRun`, `mustNotRun`, `mustSucceed`, `sequence`) that did not hold. Which one is in `grading.json` / `tool-eval.json` under `data.artifacts.outputDir`'s `results/` | Read the eval's entry in `grading.json` and `tool-eval.json`, then fix the skill — or the expectation, if it asks for the wrong thing |
+
+### `vat doctor` findings (never overridable)
+
+Emitted only by `vat doctor`, one per check whose outcome is not a pass, and declared as
+`NonOverridableCode` in `packages/schema/src/validation-codes.ts` — doctor diagnoses a config that
+may not exist and reads no `validation.severity`, so a `validation.severity` or `validation.allow`
+key for either would parse and do nothing, and both refuse it. No `location`: a check is about the
+environment, not a file. The message is `<check name>: <what it found>`; `fix` is the check's
+suggestion when it has one. The row itself is in `data.checks`.
+
+| Code | Severity | What | Fix |
+|---|---|---|---|
+| `DOCTOR_CHECK_FAILED` | error | A check ran and the thing is wrong (`outcome: fail`): an unsupported Node.js, no git, no repository, no or an invalid config, a stale source-tree build, a command module that does not load | Follow the finding's `fix` (the check's suggestion), then re-run `vat doctor` |
+| `DOCTOR_CHECK_WARNED` | warning | A check could not reach an answer (`outcome: undetermined`) — the npm registry did not answer, a file could not be read. Nothing was verified, which is not the same as healthy, but it does not fail the run | Restore what the message names (network, permissions) and re-run; the check reports `pass` or `fail` once it can answer |
+
+### `vat rag index` findings (never overridable)
+
+Emitted only by `vat rag index`, one per document the index does not hold, and declared as
+`NonOverridableCode` in `packages/schema/src/validation-codes.ts` — the verb reads no
+`validation.severity`, so a `validation.severity` or `validation.allow` key for it would parse and
+do nothing, and both refuse it. `location` is the document's path relative to the crawl root; the
+message carries the reason. The counters in `data` still report everything that did land.
+
+| Code | Severity | What | Fix |
+|---|---|---|---|
+| `RAG_DOCUMENT_INDEX_FAILED` | error | A document the crawl enumerated is not in the index: the crawl could not read it (the OS refused it), or the provider could not chunk or embed it. Its content is not searchable | Fix what the message names — the file's permissions, or the content the chunker or embedder rejected — then re-run `vat rag index`; unchanged documents are skipped |
+
+### `vat corpus scan` findings (never overridable)
+
+Emitted only by `vat corpus scan`, one per seed entry the scan could not finish, and declared as
+`NonOverridableCode` in `packages/schema/src/validation-codes.ts` — the verb reads no project
+config, so a `validation.severity` or `validation.allow` key for it would parse and do nothing, and
+both refuse it. No `location`: the entry is named by `field` (`plugins[<index>]` in the seed) and in
+the message. The row itself is in `data.entries`. A `warning`, so the scan still exits 0: every
+other entry's outcome is trustworthy, and the one that could not be done is named rather than
+dropped.
+
+| Code | Severity | What | Fix |
+|---|---|---|---|
+| `CORPUS_ENTRY_INCOMPLETE` | warning | A seed entry whose audit could not run (`audit: unloadable` — a source path that is not there, a clone that failed, a source that refused the validation overlay), or whose review, asked for with `--with-review`, did not finish (`review: error`) | Fix what the message names — the entry's `source`, network access for a clone, or the failing skill review in `<name>-review.md` — and re-run the scan |
+
 ### Structural reports (info, always emitted)
 
 Declared as `InfoCode` beside the list above. Display-only inventory rows; never fail a run.
@@ -1440,7 +1540,7 @@ codes say conformance was *not assessed* rather than that a document is non-conf
 | `OKF_LINK_CASE_MISMATCH` | — | The target exists under a different case; opens on the publisher's machine, 404s on a case-sensitive filesystem | Re-spell the link to the on-disk path, or rename the file |
 | `OKF_LINK_NORMALIZATION_MISMATCH` | — | The target resolves only after Unicode normalization; same visible name, different bytes | Normalize both link and filename to NFC |
 | `OKF_DOCUMENT_ESCAPES_BUNDLE` | §2 | A `.md` entry is a symlink out of the bundle and is excluded from the conformance population | Copy the file into the root, or remove the link |
-| `OKF_BUNDLE_ROOT_UNREADABLE` | — | `okf.bundles.<name>.root` is not a readable directory, so the bundle was not checked at all | Point the root at the directory holding the concept documents |
+| `OKF_BUNDLE_ROOT_UNREADABLE` | — | `okf.bundles.<name>.root` is not a readable directory, so the bundle was not checked at all (a `validateOkfBundle` finding; `vat okf validate` ends on it as an `INPUT_UNREADABLE` refusal, exit 2) | Point the root at the directory holding the concept documents |
 | `OKF_SUBDIRECTORY_UNREADABLE` | — | A directory beneath the root could not be listed, so nothing beneath it was checked (also: a cross-link whose target directory refused a listing was not judged) | Fix its permissions, or move it outside the bundle root |
 | `OKF_DOCUMENT_UNREADABLE` | — | A document inside the bundle could not be read, so its conformance was not assessed | Fix its permissions, or remove it from the bundle root |
 

@@ -206,82 +206,16 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
  * tell an enumeration (`ENUM` — a `readdir`, the shape the rule exists for)
  * from a probe or a copy, and retire the enumerations first.
  */
-/** Named once: three ratchets list this file. */
+/** Named once: two ratchets list this file. */
 const DOCTOR_COMMAND_FILE = 'packages/cli/src/commands/doctor.ts';
 
 /**
- * The `vat` command files that still decide an exit code by hand — the legacy
- * half of `no-literal-process-exit`'s `derived` floor.
- *
- * Each names the hand decision it still makes. An entry leaves when that file
- * exits through a derivation (`exitCodeForReport(document)`, `exitCodeOfChild`),
- * which for most of them means its document migrating to the `Report<T>`
- * envelope (`packages/cli/src/report-schemas.ts` lists those as `legacy`).
- * Asserted BOTH ways by the rule: a listed file with nothing left to migrate is
- * a `staleLegacy` error, so the list cannot hold a dead entry. Never add one.
+ * The one command file that writes stdout outside the document writer
+ * (`packages/cli/src/utils/document-writer.ts`): `vat agent run`, whose stdout
+ * is the agent's reply, not a document. Asserted BOTH ways by the rule: were it
+ * to stop writing stdout, the entry is a `staleAllow` error. Never add one.
  */
-const EXIT_CODE_DERIVATION_RATCHET = [
-  'packages/cli/src/commands/build.ts',                // exitCodeForPhases, and FINDINGS on a skills gate
-  'packages/cli/src/commands/cache/clear.ts',          // `partial` → ERROR, decided beside the document
-  'packages/cli/src/commands/claude/org/helpers.ts',   // FINDINGS for a partial Admin API write
-  DOCTOR_COMMAND_FILE,                                 // FINDINGS from failed checks, no document status
-  'packages/cli/src/commands/phase-utils.ts',          // the phase orchestrators' own status→code table
-  'packages/cli/src/commands/rag/index-command.ts',    // `partial` → FINDINGS
-  'packages/cli/src/commands/skill/test/run.ts',       // forwards the harness's OK|FINDINGS
-  'packages/cli/src/commands/skills/package.ts',       // FINDINGS on the packaging gate
-  'packages/cli/src/commands/validate.ts',             // exitCodeForPhases
-  'packages/cli/src/commands/verify.ts',               // exitCodeForPhases
-  'packages/cli/src/utils/command-error.ts',           // the legacy failure documents' caller-chosen codes
-  'packages/cli/src/utils/validate-help-files.ts',     // build-time check, FINDINGS with no document
-];
-
-/**
- * The command files that still write stdout outside the one document writer
- * (`packages/cli/src/utils/document-writer.ts`) — the `allowFiles` ratchet of
- * `no-stdout-outside-writer`. Computed from the rule itself on the tree it was
- * enabled on, never typed from a plan. Each entry names the task that moves the
- * file onto the writer. Asserted BOTH ways by the rule: a listed file with no
- * stdout write left is a `staleAllow` error. It only shrinks, to exactly
- * `agent/run.ts`, whose stdout is the agent's own stdio conversation.
- */
-const STDOUT_OUTSIDE_WRITER_RATCHET = [
-  // Command-relative, so each line reads as the file it is; the `.map` below prefixes the directory.
-  'agent/build.ts',                                            // Task 23
-  'agent/import.ts',                                           // Task 23
-  'agent/installed.ts',                                        // Task 23
-  'agent/list.ts',                                             // Task 24
-  'agent/run.ts',                                              // permanent: the agent's stdio conversation, not a document
-  'build.ts',                                                  // Task 28
-  'cache/clear.ts',                                            // Task 22
-  'claude/context.ts',                                         // Task 27 (writeLegacyDocument)
-  'claude/marketplace/publish.ts',                             // Task 16
-  'claude/org/helpers.ts',                                     // Task 17 (writeExternalDocument)
-  'claude/org/stubs.ts',                                       // Task 17
-  'claude/plugin/build.ts',                                    // Task 16 (hands writeYamlOutput to finishCommand)
-  'claude/plugin/helpers.ts',                                  // Task 15
-  'claude/plugin/install.ts',                                  // Task 15
-  'claude/plugin/list.ts',                                     // Task 15
-  'claude/plugin/uninstall.ts',                                // Task 15
-  'doctor.ts',                                                 // Task 22
-  'inventory.ts',                                              // Task 29
-  'mcp/list-collections.ts',                                   // Task 26
-  'mcp/serve.ts',                                              // Task 27 (writeArtifact for --print-config)
-  'phase-utils.ts',                                            // Task 28
-  'rag/clear-command.ts',                                      // Task 26
-  'rag/index-command.ts',                                      // Task 25
-  'rag/query-command.ts',                                      // Task 25
-  'rag/stats-command.ts',                                      // Task 26
-  'resources/check.ts',                                        // Task 31: forwards the supervised child's written document verbatim (writeStdoutSync)
-  'skill/test/configure.ts',                                   // Task 20
-  'skill/test/run.ts',                                         // Task 21
-  'skills/build.ts',                                           // Task 19
-  'skills/command-helpers.ts',                                 // Task 19 (writeYamlHeader deleted)
-  'skills/install.ts',                                         // Task 18
-  'skills/list.ts',                                            // Task 18
-  'skills/package.ts',                                         // Task 20
-  'validate.ts',                                               // Task 28
-  'verify.ts',                                                 // Task 28
-].map((file) => `packages/cli/src/commands/${file}`);
+const STDOUT_OUTSIDE_WRITER_ALLOW = ['packages/cli/src/commands/agent/run.ts'];
 
 const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
   'packages/cli/src/commands/agent/install.ts',                       // access/mkdir/lstat/rm/symlink — install-dir mutation
@@ -292,9 +226,7 @@ const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
   'packages/cli/src/commands/audit/git-url-clone.ts',                 // mkdtemp/rm — clone scratch dir
   'packages/cli/src/commands/build.ts',                               // ENUM: readdir for phase output; existsSync probes
   'packages/cli/src/commands/cache/clear.ts',                         // ENUM: readdir of the cache dir; rm
-  'packages/cli/src/commands/claude/marketplace/changelog-utils.ts',  // readFileSync
   'packages/cli/src/commands/claude/marketplace/git-publish.ts',      // ENUM: readdirSync of the publish tree; mkdtemp/cp/rm
-  'packages/cli/src/commands/claude/marketplace/license-utils.ts',    // readFileSync
   'packages/cli/src/commands/claude/marketplace/publish-tree.ts',     // writeFile/cp/readFileSync — publish tree assembly
   'packages/cli/src/commands/claude/marketplace/publish.ts',          // mkdtempSync
   'packages/cli/src/commands/claude/marketplace/validate.ts',         // ENUM: readdirSync over plugins/ and skills/ (lane table: raw-readdir)
@@ -308,26 +240,23 @@ const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
   'packages/cli/src/commands/claude/plugin/tree-copy.ts',             // ENUM: readdir; realpath/lstat/copyFile — tree copy
   'packages/cli/src/commands/claude/plugin/uninstall.ts',             // readFileSync
   'packages/cli/src/commands/consistency-check.ts',                   // existsSync probes
-  'packages/cli/src/commands/corpus/report.ts',                       // mkdirSync/writeFileSync — report output
-  'packages/cli/src/commands/corpus/runner.ts',                       // writeFileSync/existsSync
+  'packages/cli/src/commands/corpus/report.ts',                       // mkdirSync — the run directory
+  'packages/cli/src/commands/corpus/runner.ts',                       // writeFileSync — review.md and the validation overlay
   'packages/cli/src/commands/corpus/scan.ts',                         // mkdirSync/readFileSync
-  'packages/cli/src/commands/corpus/seed.ts',                         // existsSync/readFileSync
   DOCTOR_COMMAND_FILE,                                                // readFileSync/existsSync probes
-  'packages/cli/src/commands/inventory.ts',                           // existsSync probes
   'packages/cli/src/commands/resources/check-progress.ts',            // appendFileSync — cost log
   'packages/cli/src/commands/resources/check-supervisor.ts',          // stat/readFileSync/mkdtemp/rm — child supervision (audit-A §1.2)
   'packages/cli/src/commands/resources/validate.ts',                  // readFile
   'packages/cli/src/commands/skill/review.ts',                        // existsSync/stat probes
   'packages/cli/src/commands/skill/test/configure.ts',                // readFileSync/writeFileSync — config edit
-  'packages/cli/src/commands/skill/test/run.ts',                      // existsSync probes
+  'packages/cli/src/commands/skill/test/run.ts',                      // existsSync probe of VAT's own harness dir (the stderr Harness: line)
   'packages/cli/src/commands/skills/build.ts',                        // mkdir/rename/rm/mkdtemp — staging
-  'packages/cli/src/commands/skills/install.ts',                      // ENUM: readdirSync ×2; rm/cp/mkdtemp/lstat
-  'packages/cli/src/commands/skills/list.ts',                         // ENUM: readdirSync of ~/.claude/skills under --user (lane table: raw-readdir)
+  'packages/cli/src/commands/skills/install.ts',                      // rm/cp/mkdtemp/stat — install-dir mutation, source probes
   'packages/cli/src/commands/skills/package.ts',                      // existsSync/stat probes
   'packages/cli/src/commands/skills/scope-guard.ts',                  // existsSync/stat probes
   'packages/cli/src/commands/skills/shared.ts',                       // existsSync probes, readFile
   'packages/cli/src/commands/skills/skill-discovery.ts',              // existsSync probe
-  'packages/cli/src/commands/skills/source-resolvers.ts',             // mkdtemp/existsSync/rm — source staging
+  'packages/cli/src/commands/skills/source-resolvers.ts',             // ENUM: readdirSync of an install/list source dir; mkdtemp/stat/rm — source staging
   'packages/cli/src/commands/verify.ts',                              // stat/existsSync probes
 ] };
 
@@ -341,7 +270,6 @@ const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
 export const NO_UNSAFE_BACKLOG = [
   'packages/agent-skills/src/skill-test/pipeline.ts', // 1
   'packages/cli/src/bin.ts', // 1
-  'packages/cli/src/commands/corpus/seed.ts', // 1
   DOCTOR_COMMAND_FILE, // 9
   'packages/cli/src/utils/config-loader.ts', // 1
   'packages/cli/src/version.ts', // 3
@@ -498,9 +426,8 @@ const localRulesConfig = {
   // beside it — one outcome shipped with different codes in different verbs
   // because each call site mapped it by hand. `ExitCode.FINDINGS` may not be
   // named under `packages/cli/src/`, and an exit takes OK, ERROR or a
-  // derivation. `legacy` is a RATCHET asserted both ways by the rule itself: a
-  // listed file that stops deciding by hand is an error until it leaves the
-  // list. Each entry is a verb whose document is not yet the envelope.
+  // derivation. No file is exempt: the migration ratchet reached zero and the
+  // option went with it.
   'local/no-literal-process-exit': ['error', {
     allow: [
       'packages/gateway-mcp/examples/example-helpers.ts',
@@ -510,17 +437,16 @@ const localRulesConfig = {
     derived: {
       paths: ['packages/cli/src/'],
       calls: ['exitCodeForReport', 'exitCodeOfChild', 'exitCodeForCommanderEnding', 'exitCodeForExternal', 'endWithReport', 'endWithRefusal', 'writeExternalDocument'],
-      legacy: EXIT_CODE_DERIVATION_RATCHET,
     },
   }],
   // ONE stdout writer for the `vat` verbs: under `commands/` a document leaves
   // through `utils/document-writer.ts` (validated against its registered schema,
   // exit derived from what was written) and nowhere else — `process.stdout.write`,
-  // the stdout `console` methods and the five stdout helpers (called or handed
-  // on) are errors. `allowFiles` is the shrink-only ratchet above.
+  // the stdout `console` methods and the stdout helpers (called or handed
+  // on) are errors. `allowFiles` names the one protocol leaf above.
   'local/no-stdout-outside-writer': ['error', {
     paths: ['packages/cli/src/commands/'],
-    allowFiles: STDOUT_OUTSIDE_WRITER_RATCHET,
+    allowFiles: STDOUT_OUTSIDE_WRITER_ALLOW,
   }],
   // The containment trio, from the sweep that watched a delete, a copy and an
   // uninstall walk out of their root. No backlog and no ratchet: every site

@@ -36,6 +36,7 @@ import {
   type ContentTransformOptions,
   type ResourceMetadata,
 } from '@vibe-agent-toolkit/resources';
+import { RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape } from 'zod';
 
 import { resolveChunkingConfig } from './chunking-config.js';
@@ -377,7 +378,10 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     await this.reconnectAndOpenTable();
 
     if (!this.table) {
-      throw new Error(
+      // Coded: the caller's index holds nothing to search — its input, not a
+      // defect. `vat rag query` maps the code to its INPUT_UNREADABLE refusal.
+      throw new VatError(
+        RAG_INDEX_EMPTY_CODE,
         `No data indexed yet: no '${TABLE_NAME}' table at ${this.config.dbPath}. ` +
           'If indexResources() was called, check its returned `errors` for resources that failed to chunk or embed, ' +
           'and `resourcesEmpty` for resources that had no prose to index (frontmatter-only or blank).',

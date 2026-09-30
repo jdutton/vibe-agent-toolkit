@@ -125,13 +125,13 @@ discovery rule that this command participates in.
 
 ### vat skills build
 
-**Purpose:** Build skills from package.json metadata during package build
+**Purpose:** Build every skill `vibe-agent-toolkit.config.yaml` declares into `dist/skills/<name>/`
 
 **What it does:**
-1. Reads `vat.skills` array from package.json
-2. Validates each skill source exists
-3. Runs `packageSkill()` for each skill
-4. Outputs to configured path directories
+1. Discovers SKILL.md files through the `skills.include` / `skills.exclude` globs
+2. Sets aside `publish: false` skills (in-place, or plugin-local — shipped with their plugin)
+3. Validates each remaining skill's source, then packages the ones that pass
+4. Promotes the staged bundles into `dist/skills/` only if the whole run is clean
 
 **Typical Usage:**
 ```json
@@ -142,65 +142,56 @@ discovery rule that this command participates in.
 }
 ```
 
-**Package.json Structure:**
-```json
-{
-  "vat": {
-    "version": "1.0",
-    "type": "agent-bundle",
-    "skills": [
-      {
-        "name": "my-skill",
-        "source": "./resources/skills/SKILL.md",
-        "path": "./dist/skills/my-skill"
-      }
-    ]
-  }
-}
-```
-
 **Options:**
 - `--skill <name>` - Build specific skill only
 - `--dry-run` - Preview build without creating files
+- `-v, --verbose` - Show every finding on stderr (the stdout report carries all of them either way)
 - `--debug` - Enable debug logging
 
 **Exit Codes:**
-- `0` - Build successful (or dry-run preview)
-- `1` - A skill failed its validation gate, or a shipped link check found an error
-- `2` - The build could not run (missing package.json, invalid config, an unknown flag, an internal failure)
+- `0` - Built; findings, if any, are warnings or info (or a dry-run preview)
+- `1` - An error-severity finding: a skill failed validation, could not be packaged
+  (`SKILL_PACKAGING_FAILED`), or emitted post-build errors; `--skill` named a `publish: false`
+  skill (`SKILL_BUILD_TARGET_NOT_BUILDABLE`); or nothing was examined — no `skills:` block, or
+  globs matching no SKILL.md (`RESOURCE_CHECK_BROKEN`)
+- `2` - The build could not run (`error.code`): `USAGE_INVALID` (a bad `[path]`, an unknown
+  `--skill`), `INPUT_UNREADABLE` (including a previous `dist/skills` the OS will not stat),
+  `CONFIG_INVALID`, or `RUN_INCOMPLETE` (the staging area under `dist/` could not be opened, or
+  promoting `dist/skills` failed — `data.promotionError` names what is on disk and how to recover it)
 
-**Output Format:**
+**Output Format** (the report contract — schema `packages/cli/schemas/skills-build.json`):
 ```yaml
-status: success
-skillsBuilt: 2
-outputCommitted: true      # false ⇒ dist/skills was NOT replaced
-skills:                    # bundles that exist on disk; empty when outputCommitted is false
-  - name: skill1
-    outputPath: /path/to/dist/skills/skill1
-    filesPackaged: 5
-    issueCounts: { errors: 0, warnings: 1, info: 0 }
-    issues:                # every finding, at every verbosity
-      - code: LINK_DROPPED_BY_DEPTH
-        severity: warning
-        message: ...
-        location: dist/skills/skill1/docs/deep.md
-        fix: ...
-  - name: skill2
-    outputPath: /path/to/dist/skills/skill2
-    filesPackaged: 3
-    issueCounts: { errors: 0, warnings: 0, info: 0 }
-    issues: []
-skillsStaged: []           # the same rows, WITHOUT outputPath, when the promotion was aborted
-duration: 1234ms
+status: findings           # ok | findings | error
+gate: { strict: false }
+summary: { errors: 0, warnings: 1, info: 0 }
+examined: 3                # skills discovered after --skill, publish: false ones included
+findings:                  # every finding, at every verbosity
+  - code: LINK_DROPPED_BY_DEPTH
+    severity: warning
+    message: ...
+    location: dist/skills/skill1/docs/deep.md
+    fix: ...
+data:
+  dryRun: false
+  validated: true          # false on a dry run: nothing was validated
+  skillsBuilt: 2
+  skillsFailed: 0          # packaging threw
+  skillsFailedValidation: 0
+  skillsInPlace: [skill3]  # publish: false, never bundled here
+  skillsPluginOnly: []     # publish: false, shipped with their plugin
+  outputCommitted: true    # false ⇒ dist/skills was NOT replaced
+  skills:
+    - { name: skill1, source: skills/skill1/SKILL.md, output: dist/skills/skill1, status: findings }
+    - { name: skill2, source: skills/skill2/SKILL.md, output: dist/skills/skill2, status: ok }
+durationMs: 1234
 ```
 
-`--verbose` changes the stderr report only — the YAML above is identical at either
-verbosity. See `vat skills build --help` for the full field list and the identity
-`issueCounts` reconciles against.
+Every path is relative to the directory holding `vibe-agent-toolkit.config.yaml`. A row's
+`output` is where its bundle lands; it exists on disk only when `outputCommitted` is true.
 
 **Examples:**
 ```bash
-# Build all skills from package.json
+# Build all skills from config
 vat skills build
 
 # Build specific skill
@@ -235,7 +226,7 @@ for terminology.
 4. Creates distributable artifacts (directory, ZIP, npm, marketplace)
 
 **Arguments:**
-- `<skill-path>` - Path to SKILL.md file (required)
+- `<skill-path>` - Path to the SKILL.md file, or the skill directory holding it (required)
 
 **Required Options:**
 - `-o, --output <path>` - Output directory for packaged skill (required)
@@ -247,10 +238,15 @@ for terminology.
 - `--dry-run` - Preview packaging without creating files
 - `--debug` - Enable debug logging
 
-**Exit Codes:**
-- `0` - Packaging successful (or dry-run preview)
-- `1` - The skill failed its validation gate, or its ZIP exceeds the upload size limit
-- `2` - Packaging could not run (skill path not found, an unknown flag, an internal failure)
+**Exit Codes:** derived from the published report — `0` when no finding is an error (warnings
+and info never block: the verb has no `--strict`), `1` when one is, `2` when the run was refused.
+
+- `1` — the skill failed its validation gate (nothing is packaged), packaging refused the skill's
+  content (`SKILL_PACKAGING_FAILED`, no bundle), or `--target claude-web` produced a ZIP over
+  claude.ai's 8 MB upload limit (`SKILL_PACKAGE_TOO_LARGE`; the directory and the ZIP are on disk)
+- `2` — `error.code` says why: `USAGE_INVALID` (a `<skill-path>` naming nothing, an invalid
+  `--target`, no project root), `INPUT_UNREADABLE` (a `<skill-path>` the OS will not stat or read),
+  `INTERNAL_ERROR` (an unexpected failure, stack on stderr)
 
 **What Gets Packaged:**
 - Root SKILL.md file
@@ -258,17 +254,36 @@ for terminology.
 - Links are rewritten to maintain correctness
 - Directory structure is preserved
 
-**Output Format:**
+**Output Format:** the report envelope on stdout (schema `packages/cli/schemas/skills-package.json`);
+progress and the rendered findings go to stderr. `examined` is the one skill; `findings[]` carries
+every validation finding, located as the validator locates it. `data.outputPath` is relative to the
+working directory, and `null` when no package was produced; on `--dry-run` it is where the
+package would go. Each finding carries the validator's `fix` and `reference` (an anchor into
+`docs/validation-codes.md`). A real run over a skill whose frontmatter carries `version`:
+
 ```yaml
-status: success
-skill: my-skill
-version: 1.0.0
-outputPath: /path/to/output/my-skill
-filesPackaged: 8
-artifacts:
-  directory: /path/to/output/my-skill
-  zip: /path/to/output/my-skill.zip
-duration: 456ms
+status: findings
+examined: 1
+findings:
+  - severity: warning
+    code: SKILL_FRONTMATTER_EXTRA_FIELDS
+    message: Frontmatter contains non-standard field "version"; use `metadata.*` for custom data.
+    field: frontmatter
+    fix: Move custom data under `metadata.<key>`, or remove the field. Per-project config belongs in
+      vibe-agent-toolkit.config.yaml, not SKILL.md frontmatter.
+    reference: "#skill_frontmatter_extra_fields"
+    location: skills/my-skill/SKILL.md
+summary:
+  errors: 0
+  warnings: 1
+  info: 0
+gate:
+  strict: false
+data:
+  skill: my-skill
+  version: 1.0.0
+  outputPath: dist/my-skill
+  dryRun: false
 ```
 
 **Examples:**
@@ -370,32 +385,32 @@ list --user` and `vat audit --user` read `~/.claude` only. A skill installed to
 any other target lands correctly but is invisible to them.
 
 **Exit Codes:**
-- `0` - Install successful (or dry-run complete)
-- `2` - Install could not proceed: the source was not found or failed validation, the skill is already present and `--force` was not passed, a bad target/scope, an unexpected exception. None of these is a finding about a skill, so none is exit `1`; the message says which.
+- `0` - Installed, or `--dry-run` complete
+- `1` - A skill failed its pre-install validation: its error findings are published and nothing in the batch is installed
+- `2` - Could not install. `error.code` says why: `USAGE_INVALID` for a bad `--target`/`--scope`/`--name`, a source holding no `SKILL.md`, two skills claiming one name, or a skill already installed without `--force`; `INPUT_UNREADABLE` for a source the OS (or the ZIP/tarball reader) will not read, or an install path whose existence the OS will not let VAT check; `EXTERNAL_API_FAILED` when the npm registry will not hand over an `npm:` package; `RUN_INCOMPLETE` for a copy that failed partway — `data.skills` then lists the skills already installed
 
-**YAML Output Format:**
+**Output** — the `Report` envelope (schema: `schemas/skills-install.json`); `examined` counts the skills in the install plan and `durationMs` is on the envelope:
 ```yaml
----
-status: success          # or dry-run on --dry-run
-source: /abs/path/to/source
-target: claude
-scope: user
-skillsInstalled: 2
-skills:
-  - name: my-skill
-    installPath: /Users/you/.claude/skills/my-skill
-  - name: other-skill
-    installPath: /Users/you/.claude/skills/other-skill
-duration: 234ms
+status: ok               # ok | findings | error
+gate: { strict: false }
+summary: { errors: 0, warnings: 0, info: 0 }
+examined: 2
+findings: []             # each skill's validation findings
+data:
+  source: /abs/path/to/source   # npm:<pkg> as typed
+  target: claude
+  scope: user
+  dryRun: false          # true on --dry-run
+  skills:                # installed; planned on --dry-run; [] when validation stopped the batch
+    - name: my-skill
+      installPath: /Users/you/.claude/skills/my-skill
+    - name: other-skill
+      installPath: /Users/you/.claude/skills/other-skill
+      # alreadyInstalled: true   — --dry-run only: a real run would need --force
 ```
 
-On error, stdout receives:
-```yaml
----
-status: error
-error: <first line of error message>
-duration: 234ms
-```
+A run that could not install publishes the same envelope with `status: error` and
+`error: { code, message }`; the message also goes to stderr.
 
 **All-or-nothing semantics:** Skills are pre-verified before any filesystem writes. If any skill fails validation, or if a conflict is detected (without `--force`), the entire install is aborted and no files are written.
 
@@ -473,7 +488,7 @@ only when the `SKILL.md` declares none.
 - Strict filename validation
 
 **Arguments:**
-- `[path]` - Path to list skills from (default: current directory)
+- `[path]` - Directory to list skills from (default: current directory), or an `npm:` / `.tgz` source to preview without installing
 
 **Options:**
 - `--user` - List user-installed skills in ~/.claude
@@ -481,39 +496,47 @@ only when the `SKILL.md` declares none.
 - `--debug` - Enable debug logging
 
 **Exit Codes:**
-- `0` - List operation successful (warnings don't fail)
-- `2` - System error (directory not found, config invalid)
+- `0` - Listed — including a listing with a directory the scan could not read, which is a warning finding
+- `2` - Could not list: a `[path]` that names no readable directory (`USAGE_INVALID`, or `INPUT_UNREADABLE` when the OS refuses it), a config that does not load, or an `npm:`/`.tgz` source that is not a skill package
 
 **Validation Status:**
-- ✅ `valid` - Filename is "SKILL.md" (uppercase)
-- ⚠️ `warning` - Non-standard filename detected (skill.md, Skill.md, etc.)
+- ✅ `valid: true` - Filename is "SKILL.md" (uppercase)
+- ⚠️ `valid: false` with `warning` - Non-standard filename detected (skill.md, Skill.md, etc.)
 
-**Output Format:**
+**Output** — the `Report` envelope (schema: `schemas/skills-list.json`). `examined` counts the
+search roots scanned: the project directory or extracted package is one; `--user` scans two,
+`~/.claude/plugins` and `~/.claude/skills`, and an absent one is scanned and empty:
 ```yaml
-status: success
-root: /abs/path/to/project
-context: project | user
-skillsFound: 3
-skills:
-  - name: skill1
-    path: resources/skills/SKILL.md
-    validation: valid
-  - name: skill2
-    path: skills/skill2.md
-    validation: warning
-    warning: Non-standard filename (should be SKILL.md)
+status: ok                     # ok | findings | error
+gate: { strict: false }
+summary: { errors: 0, warnings: 0, info: 0 }
+examined: 1
+findings: []
+data:
+  root: /abs/path/to/project   # the one absolute path; every skills[].path is relative to it
+  context: project             # project | user | npm
+  skills:
+    - name: skill1
+      path: resources/skills/SKILL.md
+      valid: true
+    - name: skill2
+      path: skills/skill2.md
+      valid: false
+      warning: Non-standard filename (should be SKILL.md)
 ```
 
 When the scan could not list a directory (a root-owned or quarantined directory under
-`~/.claude/plugins`, say), `status` is `warning` and the document names each such directory,
-root-relative, with the errno — `skillsFound` is then a floor, not the answer:
+`~/.claude/plugins`, say), each one is a `SCAN_PATH_UNREADABLE` warning finding, root-relative,
+naming the errno — `status: findings` at exit 0, and the listing is a floor, not the answer:
 
 ```yaml
-status: warning
-...
-unreadable:
-  - path: plugins/locked
-    code: EACCES
+status: findings
+summary: { errors: 0, warnings: 1, info: 0 }
+findings:
+  - code: SCAN_PATH_UNREADABLE
+    severity: warning
+    location: plugins/locked
+    message: "<the code's description> (plugins/locked: listing was refused with EACCES; any skill beneath it is missing from this list)"
 ```
 
 **Examples:**
@@ -707,31 +730,20 @@ vat skills install my-skill.zip --target claude --scope user --force
 vat skills install my-skill.zip --target claude --scope user --name my-skill-v2
 ```
 
-### "No skills found in package.json"
-**Problem:** Running `vat skills build` without `vat.skills` field
+### `vat skills build` exits 1 with `RESOURCE_CHECK_BROKEN`
+**Problem:** The run examined no skill — the config has no `skills:` block, or its `include`
+globs match no SKILL.md.
 
-**Solution:** Add `vat.skills` to package.json:
-```json
-{
-  "vat": {
-    "skills": [...]
-  }
-}
-```
+**Solution:** Declare `skills.include` globs in `vibe-agent-toolkit.config.yaml` that match the
+SKILL.md files this project ships.
 
-### "Skill source not found"
-**Problem:** `source` path in package.json is incorrect
+### `vat skills build` exits 1 with `SKILL_PACKAGING_FAILED`
+**Problem:** A skill's packaging stopped before it produced a bundle — most often a
+`skills.config.<name>.files` entry whose `source` does not exist (a build artifact not built yet)
+or cannot be read.
 
-**Solution:** Verify path is relative to package.json:
-```json
-{
-  "vat": {
-    "skills": [{
-      "source": "./resources/skills/SKILL.md"  // Must exist
-    }]
-  }
-}
-```
+**Solution:** Read the finding's `message` — it names the entry and the path, relative to the
+project. Build the artifact first, or correct the `source` path in `vibe-agent-toolkit.config.yaml`.
 
 ### "Reserved word in name"
 **Problem:** Skill name uses reserved word like "help" or "exit"

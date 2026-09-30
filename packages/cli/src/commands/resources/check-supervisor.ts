@@ -94,7 +94,8 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 
-import { CommandRefusalError } from '../../utils/command-refusal.js';
+import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
+import { readForwardedDocument, type ForwardedDocument } from '../../utils/document-writer.js';
 import { resolveVatBinPath } from '../../utils/vat-bin-path.js';
 
 /**
@@ -367,7 +368,14 @@ export type AbnormalDeath =
    * died: 128 + n is the conventional encoding of a fatal signal, and
    * `deathRemedy` reads the signal back out of it.
    */
-  | { readonly kind: 'no-output'; readonly code: number };
+  | { readonly kind: 'no-output'; readonly code: number }
+  /**
+   * The child exited with a code and wrote something that is not this verb's
+   * document — cut off mid-write, most often. The sibling of `no-output`: the
+   * same situation (no usable report), so the same ending (the interrupted
+   * document from the progress log), never an internal error.
+   */
+  | { readonly kind: 'unparseable-output'; readonly code: number; readonly detail: string };
 
 /** What a child's ending MEANT, once the watchdog's belief is reconciled with it. */
 export type RunResolution =
@@ -461,8 +469,8 @@ export function resolveChildEnding(ending: {
  * one, about the artifact, and the two disagree in exactly one place: a child
  * that exited with a code and wrote no document.
  *
- * Every in-process path through `checkCommand` ends at `emitCheckDocument` or at
- * `handleCommandError`, and both write to stdout — a clean pass, a violation, a
+ * Every in-process path through `checkCommand` ends at `endWithReport` or at
+ * `endWithRefusal`, and both write to stdout — a clean pass, a violation, a
  * bricked config, a mistyped `--check`. There is no exit this command can take
  * that legitimately publishes nothing. So an empty stdout is not a quiet run, it
  * is a run that was cut off before it could say anything, and forwarding its
@@ -476,11 +484,10 @@ export function resolveChildEnding(ending: {
  * ordering argument that has already been got wrong twice. It runs AFTER, on the
  * one branch it can change, and it changes no other.
  *
- * ⚠️ **Blank, not unparseable.** The parent forwards the child's document
- * verbatim precisely so it stays `--format`-agnostic, so it cannot ask whether
- * the bytes parse without learning the format. A truncated document — an abort
- * that landed mid-write — therefore still forwards, and that is the honest
- * limit of this test rather than an oversight.
+ * ⚠️ **Blank, not unparseable.** This asks only whether anything was written.
+ * Whether the bytes parse is asked next, by {@link readCompletedDocument}, which
+ * knows the format: a truncated document — an abort that landed mid-write — is
+ * the sibling `unparseable-output` death, and ends the same way.
  *
  * @param resolution - How the process ended
  * @param stdout - Everything the child wrote to stdout
@@ -496,7 +503,7 @@ export function resolveSilentCompletion(
 
 /** How a supervised run ended. */
 export type SupervisedRun =
-  | { readonly outcome: 'completed'; readonly code: number; readonly stdout: string }
+  | { readonly outcome: 'completed'; readonly document: ForwardedDocument }
   | { readonly outcome: 'killed'; readonly log: string; readonly elapsedMs: number }
   | {
     readonly outcome: 'abnormal';
@@ -558,12 +565,14 @@ export type SupervisedRun =
  * @param options.args - The child's argv after the node binary, `--cost-log` included
  * @param options.logPath - The progress log both sides agreed on
  * @param options.budgetMs - How long silence is allowed to last
+ * @param options.format - The format the child was asked for, to read its document in
  * @returns How the child ended, and what it left behind
  */
 export async function superviseCheck(options: {
   args: readonly string[];
   logPath: string;
   budgetMs: number;
+  format: 'yaml' | 'json';
 }): Promise<SupervisedRun> {
   const startedAt = Date.now();
   const binary = resolveVatBinPath();
@@ -632,13 +641,19 @@ export async function superviseCheck(options: {
   // {@link resolveSilentCompletion} for the platform this is about.
   const ending = resolveSilentCompletion(resolution, stdout);
 
+  const wreckage = (): { log: string; elapsedMs: number } =>
+    ({ log: readLog(options.logPath), elapsedMs: Date.now() - startedAt });
   if (ending.kind === 'completed') {
-    return { outcome: 'completed', code: ending.code, stdout };
+    // Read while the progress log still exists: a document that is not one is
+    // a death, and the log is what its interrupted document is built from.
+    const read = readCompletedDocument(stdout, ending.code, options.format);
+    return 'document' in read
+      ? { outcome: 'completed', document: read.document }
+      : { outcome: 'abnormal', death: read.death, ...wreckage() };
   }
-  const wreckage = { log: readLog(options.logPath), elapsedMs: Date.now() - startedAt };
   return ending.kind === 'killed'
-    ? { outcome: 'killed', ...wreckage }
-    : { outcome: 'abnormal', death: ending.death, ...wreckage };
+    ? { outcome: 'killed', ...wreckage() }
+    : { outcome: 'abnormal', death: ending.death, ...wreckage() };
 }
 
 /**
@@ -709,5 +724,26 @@ export async function withProgressLog<T>(work: (logPath: string) => Promise<T>):
     return await work(safePath.join(dir, 'progress.jsonl'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Read what a COMPLETED child wrote as `resources check`'s document, or name
+ * the death when it is not one.
+ *
+ * @param stdout - Everything the child wrote (known not to be blank)
+ * @param code - The child's exit code
+ * @param format - The format the child was asked for
+ * @returns The forwardable document, or the `unparseable-output` death
+ */
+export function readCompletedDocument(
+  stdout: string,
+  code: number,
+  format: 'yaml' | 'json',
+): { readonly document: ForwardedDocument } | { readonly death: AbnormalDeath } {
+  try {
+    return { document: readForwardedDocument('resources check', stdout, format) };
+  } catch (error) {
+    return { death: { kind: 'unparseable-output', code, detail: errorMessageOf(error) } };
   }
 }

@@ -770,7 +770,7 @@ const PARSER_UNAVAILABLE_CODE = 'VAT_PARSER_UNAVAILABLE';
  * predicate returns `true` for this error.
  *
  * What that costs, stated honestly: VAT never inspects `loaderError`. The CLI's
- * `handleCommandError` prints `error.message`, and `--debug` prints the
+ * refusal prints `error.message`, and `--debug` prints the
  * WRAPPER's `.stack` — neither reaches an own non-standard property, and no
  * `util.inspect` of this error happens on any shipped path. What actually
  * survives to the operator is what {@link describeLoaderError} folds INTO the

@@ -17,12 +17,11 @@ import {
   type OkfBundleReport,
   type OkfFinding,
 } from '@vibe-agent-toolkit/resources';
-import { buildReport, toFindings, type Finding } from '@vibe-agent-toolkit/schema';
+import { buildReport, type Finding } from '@vibe-agent-toolkit/schema';
 import { findConfigFile, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
-import { nothingCheckedFinding } from '../../utils/run-integrity.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
 
 import type { OkfValidateData, OkfValidateReport } from './validate-schema.js';
 
@@ -140,20 +139,15 @@ export function summarizeOkfBundles(
     (sum, report) => sum + report.conceptDocuments.length + report.reservedDocuments.length,
     0,
   );
+  // A run that examined nothing is refused by the writer, from the registry's
+  // declared denominator; `notice` says which case it was.
   const notice = noticeFor(bundles);
-  // A run that examined nothing is refused through the shared run-integrity
-  // mechanism. It stands down when the run already carries a finding: the only
-  // way to examine zero AND find something is an unreadable root, whose own
-  // `error` finding already fails the run and says the truer thing.
-  const refusal = findings.length > 0
-    ? []
-    : toFindings(nothingCheckedFinding(examined, [], () => notice ?? NO_BUNDLES_NOTICE));
 
   return buildReport<OkfValidateData>({
     // `vat okf validate` offers no `--strict`: warnings never fail it.
     gate: { strict: false },
     examined,
-    findings: [...refusal, ...findings],
+    findings,
     data: {
       bundles: bundles.map((report) => ({
         bundle: report.bundle,
@@ -165,6 +159,32 @@ export function summarizeOkfBundles(
       ...(notice === undefined ? {} : { notice }),
     },
   });
+}
+
+/** The resources lane's code for a bundle root the OS would not list. */
+const ROOT_UNREADABLE = 'OKF_BUNDLE_ROOT_UNREADABLE';
+
+/**
+ * The refusal a run with an unreadable bundle root ends on: `INPUT_UNREADABLE`,
+ * as a directory the OS will not list is in every verb, publishing what every
+ * other bundle finished. The resources lane reports the root as that bundle's
+ * finding so one bad root cannot discard the rest; this is where it becomes
+ * the run's refusal, and the finished work is what the rest keeps.
+ *
+ * @param report - The assembled report
+ * @returns The refusal, or nothing when every root was read
+ */
+export function unreadableRootRefusal(report: OkfValidateReport): { message: string; finished: FinishedWork } | undefined {
+  const unreadable = report.findings.filter((finding) => finding.code === ROOT_UNREADABLE);
+  if (unreadable.length === 0) return undefined;
+  return {
+    message: unreadable.map((finding) => finding.message).join('\n'),
+    finished: {
+      examined: report.examined,
+      findings: report.findings.filter((finding) => finding.code !== ROOT_UNREADABLE),
+      data: report.data,
+    },
+  };
 }
 
 /**
@@ -209,14 +229,22 @@ export async function okfValidateCommand(
 ): Promise<void> {
   const startTime = Date.now();
   const format = options.format ?? 'yaml';
+  // What finished before a refusal — read by the catch, so an unreadable root
+  // still publishes every other bundle's findings.
+  let finished = NOTHING_FINISHED;
 
   try {
     const report = { ...(await okfValidateReport(bundleArg, options)), durationMs: Date.now() - startTime };
+    const refusal = unreadableRootRefusal(report);
+    if (refusal !== undefined) {
+      finished = refusal.finished;
+      throw new CommandRefusalError('INPUT_UNREADABLE', refusal.message);
+    }
     // The code derives from the report the writer PUBLISHED: an adopter who
     // promotes or lowers a bundle's severity gates on exactly what a reader sees.
     endWithReport('okf validate', report, format);
   } catch (error) {
     // `vat okf validate` offers no `--strict`: warnings never fail it.
-    endWithRefusal('okf validate', refusalCodeOf(error), error, format, { strict: false }, NOTHING_FINISHED);
+    endWithRefusal('okf validate', refusalCodeOf(error), error, format, { strict: false }, finished);
   }
 }

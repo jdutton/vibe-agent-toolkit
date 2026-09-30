@@ -975,7 +975,7 @@ const FINDINGS_COLLECTION = /\b(?:issues|allErrors|activeErrors|activeWarnings|e
  * {@link FINDINGS_COLLECTION} — the population must not be defined by a keyword
  * that a legitimate refactor can delete.
  */
-const SHARED_COLLAPSE_CALL = /\b(?:calculateValidationStatus|countBySeverity|resultStatus|summarizeIssues|describeIssues)\s*\(/;
+const SHARED_COLLAPSE_CALL = /\b(?:countBySeverity|resultStatus|summarizeIssues|describeIssues)\s*\(/;
 /**
  * The shared report ENVELOPE: `buildReport()` from `@vibe-agent-toolkit/schema`
  * derives `status` and `summary` (the per-severity counts) from the findings in
@@ -1073,8 +1073,8 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   // sets per check — so the distribution is exactly what a reader cannot
   // reconstruct from a status here.
   'packages/cli/src/commands/resources/check.ts',
-  // Migrated onto the shared `calculateValidationStatus` + `countBySeverity`
-  // pair, which ended five separate collapses and three different answers for
+  // Migrated onto the shared issues→status/counts derivation (now
+  // `summarizeIssues`), which ended five separate collapses and three different answers for
   // an info-only issue set.
   'packages/cli/src/commands/audit.ts',
   'packages/cli/src/commands/claude/marketplace/validate.ts',
@@ -1103,6 +1103,13 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   'packages/cli/src/commands/skills/validate.ts',
   'packages/cli/src/commands/skills/build.ts',
   'packages/cli/src/commands/claude/plugin/build.ts',
+  // Returns `status` and `summary` (the counts) together from `summarizeIssues`.
+  'packages/agent-skills/src/validators/describe-issues.ts',
+  // Report-envelope verbs: `summary` is derived from their findings by `buildReport`.
+  'packages/cli/src/commands/claude/marketplace/publish.ts',
+  'packages/cli/src/commands/claude/plugin/install.ts',
+  'packages/cli/src/commands/claude/plugin/list.ts',
+  'packages/cli/src/commands/claude/plugin/uninstall.ts',
   // Publishes `ValidationResult.issueCounts` and never calls the shared counter,
   // so it conforms only because the block is built from a real object
   // (`{ issueCounts: counts }` → `yaml.stringify`) rather than hand-spelled
@@ -1155,6 +1162,27 @@ const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   // for an empty denominator — and `summary` is what says so beside `status`.
   'packages/cli/src/commands/resources/scan.ts',
   'packages/cli/src/commands/resources/query.ts',
+  // Wave 4 report-contract migration: each verb publishes the shared `Report<T>`
+  // envelope through `endWithReport`/`endWithRefusal`, whose `summary` is the
+  // per-severity distribution derived from the verb's findings by `buildReport`.
+  'packages/cli/src/commands/agent/build.ts',
+  'packages/cli/src/commands/agent/import.ts',
+  'packages/cli/src/commands/agent/install.ts',
+  'packages/cli/src/commands/agent/installed.ts',
+  'packages/cli/src/commands/agent/list.ts',
+  'packages/cli/src/commands/agent/uninstall.ts',
+  'packages/cli/src/commands/cache/clear.ts',
+  'packages/cli/src/commands/corpus/scan.ts',
+  'packages/cli/src/commands/doctor.ts',
+  'packages/cli/src/commands/inventory.ts',
+  'packages/cli/src/commands/mcp/list-collections.ts',
+  'packages/cli/src/commands/rag/clear-command.ts',
+  'packages/cli/src/commands/rag/query-command.ts',
+  'packages/cli/src/commands/rag/stats-command.ts',
+  'packages/cli/src/commands/skill/test/configure.ts',
+  'packages/cli/src/commands/skill/test/run.ts',
+  'packages/cli/src/commands/skills/install.ts',
+  'packages/cli/src/commands/skills/list.ts',
 ]);
 
 /**
@@ -1194,7 +1222,7 @@ export function classifySeverityCountsLane(contents: string): LaneClassification
   // Calling the shared collapse is sufficient on its own: it is what makes a
   // file a findings-reporting lane. Requiring a literal status value AND a
   // findings-shaped keyword hid `audit.ts` the moment its status became
-  // `calculateValidationStatus(issues)` instead of `status: 'error'` — the
+  // a call to the shared collapse instead of `status: 'error'` — the
   // migration that fixed the lane is what erased it from the checklist.
   const usesSharedCollapse = SHARED_COLLAPSE_CALL.test(source) || usesSharedEnvelope(source);
   return {

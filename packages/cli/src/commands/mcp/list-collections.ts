@@ -2,17 +2,24 @@
  * MCP list-collections command - lists available agent collections
  */
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { refusalCodeOf } from '../../utils/command-refusal.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
-import { writeYamlOutput } from '../../utils/output.js';
 
 import { listKnownPackages } from './collections.js';
+import type { McpListCollectionsReport } from './list-collections-schema.js';
 
 export interface ListCollectionsOptions {
   debug?: boolean;
 }
+
+/** `vat mcp list-collections` has no `--strict` and reports no finding: the gate is fixed. */
+const GATE: Gate = { strict: false };
+
+/** The one known-package registry read: the built-in list. */
+const REGISTRIES_READ = 1;
 
 /**
  * List available MCP agent collections
@@ -23,20 +30,17 @@ export async function listCollectionsCommand(
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
+  let report: McpListCollectionsReport;
   try {
-    const packages = listKnownPackages();
+    const packages = listKnownPackages().map((p) => ({ name: p.name, description: p.description }));
 
-    const output = {
-      status: 'success',
-      packages: packages.map((p) => ({
-        name: p.name,
-        description: p.description,
-      })),
-      count: packages.length,
-      duration: `${Date.now() - startTime}ms`,
-    };
-
-    writeYamlOutput(output);
+    report = buildReport({
+      examined: REGISTRIES_READ,
+      findings: [],
+      data: { packages },
+      gate: GATE,
+      durationMs: Date.now() - startTime,
+    });
 
     logger.info(`\nAvailable MCP agent packages:\n`);
     for (const pkg of packages) {
@@ -51,9 +55,8 @@ export async function listCollectionsCommand(
     logger.info(`Examples:`);
     logger.info(`  vat mcp serve @vibe-agent-toolkit/vat-example-cat-agents`);
     logger.info(`  vat mcp serve ./packages/vat-example-cat-agents  # Local development\n`);
-
-    process.exit(ExitCode.OK);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'MCPListCollections');
+    return endWithRefusal('mcp list-collections', refusalCodeOf(error), error, 'yaml', GATE, NOTHING_FINISHED);
   }
+  endWithReport('mcp list-collections', report, 'yaml');
 }

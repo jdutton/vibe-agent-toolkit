@@ -3,24 +3,30 @@
  * in vibe-agent-toolkit.config.yaml without disturbing comments or key ordering.
  *
  * Orchestration only. Domain logic lives in upsertTestConfig (agent-skills).
- * Mirrors review.ts error-handling conventions (handleCommandError / projectRootOrNull).
+ * Publishes the report contract (`SKILL_TEST_CONFIGURE_REPORT_SCHEMA`); under
+ * `--print` stdout is the `skill-test-config` artifact — the config text alone.
  */
 
 import { writeFileSync } from 'node:fs';
 
 import { upsertTestConfig } from '@vibe-agent-toolkit/agent-skills';
 import { parseConfigAllowingUnknownKeys, ProjectConfigSchema } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
 
-import { handleCommandError } from '../../../utils/command-error.js';
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED, writeArtifact } from '../../../utils/document-writer.js';
 import { createLogger } from '../../../utils/logger.js';
+import { requireInputPath, requireProjectRoot, unstatablePathRefusal } from '../../../utils/project-root-policy.js';
 
 import { assertValidAuth, type AuthValue } from './auth-flags.js';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
+/** No `--strict`: the edit has no warnings to gate on. */
+const CONFIGURE_GATE: Gate = { strict: false };
 
 export interface SkillTestConfigureOptions {
   auth?: string;
@@ -46,7 +52,7 @@ export interface SkillTestConfigureOptions {
 function parsePositiveInt(value: string, flag: string): number {
   const n = Number.parseInt(value, 10);
   if (!Number.isInteger(n) || n <= 0) {
-    throw new Error(`${flag} must be a positive integer. Got: ${value}`);
+    throw new CommandRefusalError('USAGE_INVALID', `${flag} must be a positive integer. Got: ${value}`);
   }
   return n;
 }
@@ -54,7 +60,7 @@ function parsePositiveInt(value: string, flag: string): number {
 function parsePositiveFloat(value: string, flag: string): number {
   const n = Number.parseFloat(value);
   if (!Number.isFinite(n) || n <= 0) {
-    throw new Error(`${flag} must be a positive number. Got: ${value}`);
+    throw new CommandRefusalError('USAGE_INVALID', `${flag} must be a positive number. Got: ${value}`);
   }
   return n;
 }
@@ -135,8 +141,9 @@ export function buildKnobs(
  * @param knobs - The knobs the operator typed; only these are changed
  * @param onWarn - Receives the unknown-key warning, if any
  * @returns The updated YAML, comments and key ordering preserved
- * @throws Error when the UPDATED config would fail validation for any reason
- *   other than an unknown key
+ * @throws {CommandRefusalError} `CONFIG_INVALID` when the project has no config
+ *   file, or the UPDATED config would fail validation for any reason other than
+ *   an unknown key; `INPUT_UNREADABLE` when the OS refuses the read
  */
 export async function updateSkillTestConfig(
   configPath: string,
@@ -144,7 +151,17 @@ export async function updateSkillTestConfig(
   knobs: Parameters<typeof upsertTestConfig>[2],
   onWarn: (message: string) => void,
 ): Promise<string> {
-  const { text: yamlText } = await readTextContent(configPath);
+  // A `.git/` ancestor is a project root with no config file in it.
+  requireInputPath(configPath, {
+    code: 'CONFIG_INVALID',
+    message: `No ${CONFIG_FILENAME} at the project root: ${configPath}. Create one (version: 1 and a skills: block) first.`,
+  });
+  let yamlText: string;
+  try {
+    ({ text: yamlText } = await readTextContent(configPath));
+  } catch (error) {
+    throw unstatablePathRefusal(configPath, error);
+  }
   const updatedYaml = upsertTestConfig(yamlText, skillName, knobs);
 
   // Validate the FULL updated config before it can be written.
@@ -156,10 +173,19 @@ export async function updateSkillTestConfig(
     // cannot know: what is being judged is the config AFTER this command's
     // edit, so a reader has to be told the file on disk may still be fine.
     const detail = validationError instanceof Error ? validationError.message : String(validationError);
-    throw new Error(`Updated config would fail schema validation.\n${detail}`);
+    throw new CommandRefusalError('CONFIG_INVALID', `Updated config would fail schema validation.\n${detail}`);
   }
 
   return updatedYaml;
+}
+
+/** Write the updated config over the file — a failed write stopped the run, it is not VAT's defect. */
+function writeConfig(configPath: string, updatedYaml: string): void {
+  try {
+    writeFileSync(configPath, updatedYaml, 'utf-8');
+  } catch (error) {
+    throw new CommandRefusalError('RUN_INCOMPLETE', `Could not write ${configPath}: ${errorMessageOf(error)}`, { cause: error });
+  }
 }
 
 async function configureCommand(
@@ -167,17 +193,9 @@ async function configureCommand(
   options: SkillTestConfigureOptions,
 ): Promise<void> {
   const logger = createLogger(options.debug ? { debug: true } : {});
-  const startTime = Date.now();
 
   try {
-    const projectRoot = findProjectRoot(process.cwd());
-    if (projectRoot === null) {
-      throw new Error(
-        'skill test configure requires a vibe-agent-toolkit.config.yaml or .git/ ancestor. ' +
-          'Run from inside a VAT project or initialize one.',
-      );
-    }
-
+    const projectRoot = requireProjectRoot(process.cwd(), 'vat skill test configure');
     const configPath = safePath.join(projectRoot, CONFIG_FILENAME);
     const updatedYaml = await updateSkillTestConfig(
       configPath,
@@ -187,13 +205,22 @@ async function configureCommand(
     );
 
     if (options.print) {
-      process.stdout.write(updatedYaml);
-    } else {
-      writeFileSync(configPath, updatedYaml, 'utf-8');
-      logger.info(`Updated ${configPath}`);
+      // The artifact alone: redirectable over the file, so no report rides along.
+      // Returning (exit 0) rather than `process.exit`, which could cut a piped write short.
+      writeArtifact('skill-test-config', updatedYaml, 'raw');
+      return;
     }
+
+    writeConfig(configPath, updatedYaml);
+    logger.info(`Updated ${configPath}`);
+    endWithReport('skill test configure', buildReport({
+      examined: 1,
+      findings: [],
+      data: { configPath: toForwardSlash(safePath.relative(process.cwd(), configPath)), skill: skillName },
+      gate: CONFIGURE_GATE,
+    }), 'yaml');
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'SkillTestConfigure');
+    endWithRefusal('skill test configure', refusalCodeOf(error), error, 'yaml', CONFIGURE_GATE, NOTHING_FINISHED);
   }
 }
 
@@ -237,9 +264,19 @@ Description:
   test block for the named skill. Comments and key ordering are preserved.
   Only the knobs you pass are changed; other knob values remain intact.
 
+Output:
+  YAML report on stdout (schema: packages/cli/schemas/skill-test-configure.json):
+  status ok|error, examined (1 config file), data: configPath (relative to the
+  working directory), skill. With --print, stdout is the updated config text
+  and nothing else, so it can be redirected over the file. Warnings (an
+  unknown config key) go to stderr.
+
 Exit Codes:
-  0 - Config updated successfully (or printed with --print)
-  2 - Error (invalid option value, config validation failure, file not found)
+  0 - Config updated (or printed with --print)
+  2 - Refused; error.code says why: USAGE_INVALID (an invalid option value, or
+      no project root), CONFIG_INVALID (no config file, or the updated config
+      fails its schema), INPUT_UNREADABLE (the config cannot be read),
+      RUN_INCOMPLETE (the config could not be written)
 
 Example:
   $ vat skill test configure my-skill --auth subscription --max-turns 20

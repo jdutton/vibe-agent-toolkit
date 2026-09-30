@@ -24,6 +24,7 @@ import {
 } from '@vibe-agent-toolkit/utils/git';
 
 import { type InventoryPopulation } from './inventory-population.js';
+import { recordedFailure } from './recorded-failure.js';
 import { ClaudeSkillInventory } from './types.js';
 
 type ParseErrors = ClaudeSkillInventory['parseErrors'];
@@ -203,7 +204,7 @@ async function parseFrontmatterFields(
 			parseErrors.push({ path: absolute, message: parsed.error });
 		}
 	} catch (e) {
-		parseErrors.push({ path: absolute, message: (e as Error).message });
+		parseErrors.push(recordedFailure(absolute, (e as Error).message, e));
 	}
 	return { name, description };
 }

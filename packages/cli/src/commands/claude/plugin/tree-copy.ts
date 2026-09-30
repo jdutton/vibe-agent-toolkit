@@ -164,13 +164,16 @@ function describeRefusal(entry: RefusedSymlink): string {
  * build host's absolute paths, and names the remedy — the `exclude:` knob — in
  * the same terms the listing refusal does.
  */
+/** The code {@link PluginSymlinkRefusedError} carries — the CLI maps it to `INPUT_UNREADABLE`. */
+export const PLUGIN_SYMLINK_REFUSED_CODE = 'PLUGIN_SYMLINK_REFUSED';
+
 export class PluginSymlinkRefusedError extends VatError {
   readonly refused: readonly RefusedSymlink[];
 
   constructor(refused: readonly RefusedSymlink[]) {
     const lines = refused.map((entry) => `  - '${entry.path}' ${describeRefusal(entry)}`);
     super(
-      'PLUGIN_SYMLINK_REFUSED',
+      PLUGIN_SYMLINK_REFUSED_CODE,
       `Refusing to copy the plugin source: ${refused.length} symbolic link(s) cannot be shipped in a bundle,`
         + ` so nothing was copied.\n${lines.join('\n')}\n`
         + 'Replace each link with the file it points at, or name it in the plugin\'s `exclude:` list to leave'

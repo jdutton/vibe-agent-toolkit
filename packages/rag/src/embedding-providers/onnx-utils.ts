@@ -717,6 +717,11 @@ async function downloadFile(url: string, destination: string): Promise<void> {
   }
 }
 
+/** Download progress goes to STDERR: stdout is the calling command's document. */
+function progress(line: string): void {
+  process.stderr.write(`[vat-onnx] ${line}\n`);
+}
+
 /**
  * Ensure that the ONNX weights and vocab.txt files are available locally.
  *
@@ -746,18 +751,18 @@ export async function ensureModelFiles(
   const modelExists = await fileExists(modelPath);
   if (!modelExists) {
     const modelUrl = `${baseUrl}/onnx/${onnxFileName}`;
-    console.log(`[vat-onnx] Downloading model: ${modelUrl}`);
-    console.log(`[vat-onnx] Destination: ${modelPath}`);
+    progress(`Downloading model: ${modelUrl}`);
+    progress(`Destination: ${modelPath}`);
     await downloadFile(modelUrl, modelPath);
-    console.log('[vat-onnx] Model download complete.');
+    progress('Model download complete.');
   }
 
   const vocabExists = await fileExists(vocabPath);
   if (!vocabExists) {
     const vocabUrl = `${baseUrl}/vocab.txt`;
-    console.log(`[vat-onnx] Downloading vocab: ${vocabUrl}`);
+    progress(`Downloading vocab: ${vocabUrl}`);
     await downloadFile(vocabUrl, vocabPath);
-    console.log('[vat-onnx] Vocab download complete.');
+    progress('Vocab download complete.');
   }
 
   return { modelPath, vocabPath };

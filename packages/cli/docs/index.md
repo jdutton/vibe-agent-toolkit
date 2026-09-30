@@ -108,9 +108,13 @@ Diagnose vat setup and environment health
 
 **Exit codes:**
 
-- `0` - No check failed (a check that could not be determined is reported as ❓, not fatal)
-- `1` - One or more checks failed
+- `0` - No check failed (a check that could not be determined is a `DOCTOR_CHECK_WARNED` warning, not fatal)
+- `1` - One or more checks failed (`DOCTOR_CHECK_FAILED`)
 - `2` - Doctor itself could not run (an internal failure; no verdict was produced)
+
+**Output:** the report envelope on stdout (`--format yaml|json|text`, default yaml);
+`data.checks` lists every check. The human block goes to stderr, or is the stdout
+rendering under `--format text`.
 
 **Creates/modifies:** None (read-only diagnostics)
 
@@ -122,6 +126,40 @@ vat doctor --verbose                      # Show all checks (including passing)
 ```
 
 **More details:** `vat doctor --help` or see `packages/cli/docs/doctor.md`
+
+---
+
+### `inventory`
+
+Extract the structural inventory of a Claude plugin, marketplace, skill or install root
+
+**What it does:** enumerates what the subject contains — declared and discovered components,
+resolved references, unexpected manifests, and every manifest that did not parse. It runs no
+detectors; `vat audit` judges what it finds.
+
+**Exit codes:**
+
+- `0` - The subject was inventoried (`ok`), or a path inside it the OS would not read was skipped
+  (`findings`: one `SCAN_PATH_UNREADABLE` warning each — the inventory is then a floor)
+- `2` - Nothing could be inventoried: no path, a path that does not exist or is neither a directory
+  nor a SKILL.md, an unknown `--format` (`USAGE_INVALID`); a path the OS will not read
+  (`INPUT_UNREADABLE`); `--system` (`NOT_IMPLEMENTED`); the projection store's backend not
+  installed (`BACKEND_UNAVAILABLE`)
+
+**Output:** the report envelope on stdout (`--format yaml|json`, default yaml). `data.inventory` is
+the inventory (`kind`, `vendor`, `path`, per-kind lists, `parseErrors[]`); with `--shallow` it
+carries `projection: shallow` and every list it did not walk is `null`, never `[]`. `examined`
+counts the subject and each marketplace, plugin and skill inventory nested under it.
+
+**Creates/modifies:** None (read-only)
+
+**Examples:**
+
+```bash
+vat inventory my-plugin/                  # Inventory a plugin
+vat inventory my-plugin/ --shallow --format json
+vat inventory --user                      # The user-level Claude install
+```
 
 ---
 
@@ -203,9 +241,10 @@ Run a packaged skill's eval suite in a headless, context-isolated Claude session
 **Exit codes:**
 
 - `0` - Run completed, all expectations passed
-- `1` - Run completed and at least one eval failed
-- `2` - The harness could not run; a `Reason: internal | preflight | bootstrap` line on stderr says why
-- `4` - Eval failure (run completed, expectations did not all pass)
+- `1` - Run completed and at least one eval failed (a `SKILL_TEST_EVAL_FAILED` finding per failed eval)
+- `2` - The harness could not run; `error.code` in the published report says which refusal, and a `Reason: internal | preflight | bootstrap` line on stderr restates it
+
+**Output:** YAML report on stdout (schema `packages/cli/schemas/skill-test-run.json`); see [skill-test.md](./skill-test.md#the-report)
 
 **Creates/modifies:** A harness directory (removed unless `--keep`)
 
@@ -222,6 +261,111 @@ vat skill test configure my-skill --auth subscription
 
 **More details:** `packages/cli/docs/skill-test.md` — full knob table for the
 per-skill `skills.config.<skill>.test` block and the global `test:` node
+
+---
+
+### `claude plugin build`
+
+Assemble each Claude plugin bundle declared under `claude.marketplaces` into
+`dist/.claude/plugins/marketplaces/<marketplace>/`
+
+**What it does:**
+
+1. Packages each plugin-local skill (`plugins/<name>/skills/**`) with the same
+   packager as pool skills, and copies in the pool skills its `skills:` selector names
+2. Tree-copies the rest of `plugins/<name>/` (commands, hooks, agents, `.mcp.json`),
+   applies `files:` mappings, and merges `.claude-plugin/plugin.json`
+3. Writes `.claude-plugin/marketplace.json`; a plugin with `externalSource` is
+   listed there verbatim, never built
+
+**`plugin.json` author:** merged per subfield. The config owns `name` and
+`email` (from the marketplace `owner`; an omitted `owner.email` publishes no
+email even when plugin.json has one); every other subfield of an object
+`author` in the plugin's own plugin.json (`url`, ...) passes through. A
+plugin.json `name`/`email` that disagrees is overridden with a stderr warning,
+not an error. A non-object `author` (npm's `"Name <email>"` string form, say)
+has no subfields to merge: it is replaced by the config's object, with a
+warning. marketplace.json's entry for the plugin carries the same merged object.
+
+**Output:** a report on stdout — `status`, `summary`, `examined`
+(marketplaces built), `findings` (each with `location`), and `data`
+(`marketplacesBuilt`, `pluginsBuilt`, `pluginsReferenced`, `skillsPackaged`,
+`marketplaces[]` of `{ name, status, reason?, plugins[] { name, outputPath,
+skills }, externalPlugins[] }`). Paths are relative to the directory holding
+`vibe-agent-toolkit.config.yaml`.
+
+**Exit codes:**
+
+- `0` - Built; any findings are warnings or info
+- `1` - A plugin-local skill failed the post-build gate (the build stops there:
+  that plugin is not assembled, nothing after it is built, and its marketplace's
+  `reason` names it), or no marketplace is configured
+- `2` - The build could not run: an undeclared `--marketplace` (`USAGE_INVALID`),
+  a missing config or an invalid plugin declaration (`CONFIG_INVALID`), or an input
+  nothing built or that is not what it should be (`INPUT_UNREADABLE`)
+
+**Examples:**
+
+```bash
+vat skills build && vat claude plugin build
+```
+
+---
+
+### `claude marketplace publish`
+
+Push a built marketplace to a git branch, with its CHANGELOG, README and LICENSE
+
+**Output:** a report on stdout; `examined` counts the marketplaces with a
+`publish:` block, and `data.published[]` is `{ marketplace, version, branch,
+files, dryRun }` (`version` is `null` for a multi-plugin marketplace). A refusal
+after one marketplace was published still lists it.
+
+**Exit codes:**
+
+- `0` - Published (or `--dry-run` completed)
+- `1` - No marketplace declares `publish:`
+- `2` - Publish could not run: `USAGE_INVALID`, `CONFIG_INVALID`,
+  `INPUT_UNREADABLE` (no build output, no release notes), `EXTERNAL_API_FAILED`
+  (push rejected), `RUN_INCOMPLETE` (a git step failed)
+
+**Examples:**
+
+```bash
+vat build && vat claude marketplace publish --no-push
+```
+
+---
+
+### `claude org`
+
+Anthropic organization administration (Admin API) and workspace skills (Skills API)
+
+**Output:** the one `external` entry in the published-shape registry. A
+successful run publishes the API's payload as the API returns it (`has_more`,
+`data[]`, snake_case) — VAT adds no status word and no duration. A batch or
+delete whose writes did not all land still publishes its payload (what landed,
+what did not, and why). A run that threw publishes
+`{ error: { code, message } }` instead: `USAGE_INVALID` (missing
+`ANTHROPIC_ADMIN_API_KEY` / `ANTHROPIC_API_KEY`, a bad argument, no such
+source), `INPUT_UNREADABLE` (a source the OS will not read),
+`EXTERNAL_API_FAILED` (the API refused, answered unusably, or never answered),
+or `INTERNAL_ERROR` (a VAT defect, stack on stderr).
+
+**Exit codes** — no envelope to derive one from, so the entry's adapter maps
+what the write did:
+
+| Outcome | Exit |
+|---|---|
+| `ok` — every write landed, or the read succeeded | `0` |
+| `partial` — some writes landed (`skills install --from-npm`, `skills delete --all`) | `2` |
+| `failed` — none landed, the API named another outcome, or the run was refused | `2` |
+
+**Not implemented:** `users update|remove`, `invites create|delete`,
+`workspaces create|archive`, `workspaces members add|update|remove` and
+`api-keys update` are report verbs (`claude-org-not-implemented`): each
+publishes the envelope's error branch — `status: error`,
+`error.code: NOT_IMPLEMENTED`, `examined: 0`, `data: null` — at exit `2`.
 
 ---
 

@@ -17,8 +17,12 @@ import {
 export interface SafeExecOptions {
   /** Character encoding for output (default: undefined = Buffer) */
   encoding?: BufferEncoding;
-  /** Standard I/O configuration */
-  stdio?: 'pipe' | 'ignore' | 'inherit' | Array<'pipe' | 'ignore' | 'inherit'>;
+  /**
+   * Standard I/O configuration. An entry may be a file descriptor — `2` sends
+   * that child stream to this process's stderr with no buffering, and so no
+   * `maxBuffer` to overrun.
+   */
+  stdio?: 'pipe' | 'ignore' | 'inherit' | Array<'pipe' | 'ignore' | 'inherit' | number>;
   /**
    * The child's complete environment. It **replaces** `process.env` rather than
    * merging with it, so a partial object is a partial environment — build one

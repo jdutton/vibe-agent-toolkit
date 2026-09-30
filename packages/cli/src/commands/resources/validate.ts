@@ -22,11 +22,9 @@ import {
 import {
   buildReport,
   countBySeverity,
-  exitCodeForReport,
   resultStatus,
   toFindings,
   type Finding,
-  type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import { resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
@@ -39,7 +37,7 @@ import { endWithReport, NOTHING_FINISHED, publishedReport, refusalReport } from 
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { assertDeclaredCollection, loadResourcesWithConfig } from '../../utils/resource-loader.js';
-import { RUN_INTEGRITY_CODE } from '../../utils/run-integrity.js';
+import { warnRunIntegrity } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import type { PhaseOutcome } from '../phase-utils.js';
 import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
@@ -428,29 +426,13 @@ function inCollectionScope(
 }
 
 /**
- * The human half of the writer's run-integrity refusal: the same message, on
- * stderr.
- *
- * 🚨 **The message never reached the operator.** The refusal sat in the
- * document; through `vat validate` it was nested under `phases[].report` with
- * stderr reading `▶ Surface: resources`. `vat resources check` warns on stderr
- * beside its document refusal; this is the same statement for the same reason.
- * It decides nothing — the document is what gates.
- */
-function warnRunIntegrity(report: Report<unknown>, logger: Logger): void {
-  for (const finding of report.findings) {
-    if (finding.code === RUN_INTEGRITY_CODE) logger.warn(`Warning: ${finding.message}`);
-  }
-}
-
-/**
- * Validate resources and hand back the published document and its exit code,
- * printing the document nowhere.
+ * Validate resources and hand back the report, printing it nowhere.
  *
  * The phase entry point for `vat validate` and `vat verify`, and the command's
- * own. The document is the one the writer publishes — the run-integrity refusal
- * included — so the phase lane folds exactly what the command writes. A refusal
- * is the envelope's error branch, its message already on stderr.
+ * own. The report is the one BEFORE the writer's run-integrity pass: inside an
+ * orchestrator, zero examined is judged on the whole run, not on this phase. A
+ * refusal is the envelope's error branch, its message already on stderr, and a
+ * site-specific run-integrity finding is warned here, where both lanes see it.
  */
 export async function runResourcesValidatePhase(
   pathArg: string | undefined,
@@ -459,22 +441,24 @@ export async function runResourcesValidatePhase(
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
-  let document: Report<unknown>;
   try {
-    document = publishedReport(VERB, await runValidation(pathArg, options, logger, startTime));
-    warnRunIntegrity(document, logger);
+    const report = await runValidation(pathArg, options, logger, startTime);
+    warnRunIntegrity(report);
+    return { report };
   } catch (error) {
-    document = publishedReport(VERB, refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED));
+    return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED) };
   }
-  return { document, exitCode: exitCodeForReport(document) };
 }
 
 export async function validateCommand(
   pathArg: string | undefined,
   options: ValidateOptions
 ): Promise<void> {
-  const outcome = await runResourcesValidatePhase(pathArg, options);
-  endWithReport('resources validate', outcome.document as ResourcesValidateReport, options.format ?? 'yaml');
+  const { report } = await runResourcesValidatePhase(pathArg, options);
+  const published = publishedReport(VERB, report);
+  // The writer's own zero-examined refusal, warned in the lane that publishes it.
+  if (published !== report) warnRunIntegrity(published);
+  endWithReport('resources validate', published, options.format ?? 'yaml');
 }
 
 /**

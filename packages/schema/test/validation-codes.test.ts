@@ -332,3 +332,16 @@ describe('CODE_REGISTRY — every code has a kind', () => {
     expect(FindingCodeSchema.safeParse('INTERNAL_ERROR').success).toBe(false);
   });
 });
+
+describe('SCAN_PATH_UNREADABLE remedy', () => {
+  // Emitted by audit, skills list, agent list and agent installed — and only
+  // audit takes --exclude, while the listings load no config. The registry text
+  // must not hand every other verb a flag or an override it does not have.
+  it('names --exclude and the severity override only as the levers of the verbs that have them', () => {
+    const { fix, description } = CODE_REGISTRY.SCAN_PATH_UNREADABLE;
+    expect(fix).not.toMatch(/re-run the audit/);
+    expect(fix).toMatch(/vat audit takes --exclude/);
+    expect(fix).toMatch(/other verbs have no lever/);
+    expect(description).not.toMatch(/audited tree/);
+  });
+});

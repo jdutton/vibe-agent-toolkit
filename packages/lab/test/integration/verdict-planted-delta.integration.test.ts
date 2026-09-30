@@ -55,7 +55,7 @@ afterAll(cleanupVerdictFixtures);
 function reportOf(findings: readonly FindingKey[]): string {
   return JSON.stringify(
     {
-      status: findings.length > 0 ? 'error' : 'success',
+      status: findings.length > 0 ? 'findings' : 'ok',
       examined: 3,
       findings: findings.map(({ code, severity, location }) => ({ code, severity, location, message: 'm' })),
       summary: { error: findings.length, warning: 0, info: 0 },

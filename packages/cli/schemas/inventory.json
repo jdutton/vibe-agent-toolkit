@@ -1,0 +1,985 @@
+{
+  "$ref": "#/definitions/inventory",
+  "definitions": {
+    "inventory": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "ok"
+            },
+            "examined": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "summary": {
+              "type": "object",
+              "properties": {
+                "errors": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "warnings": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "info": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "errors",
+                "warnings",
+                "info"
+              ],
+              "additionalProperties": false
+            },
+            "gate": {
+              "type": "object",
+              "properties": {
+                "strict": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "strict"
+              ],
+              "additionalProperties": false
+            },
+            "durationMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "location": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "field": {
+                    "type": "string"
+                  },
+                  "link": {
+                    "type": "string"
+                  },
+                  "fix": {
+                    "type": "string"
+                  },
+                  "reference": {
+                    "type": "string"
+                  },
+                  "suggestion": {
+                    "type": "string"
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "error",
+                      "warning",
+                      "info"
+                    ]
+                  },
+                  "column": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "severity"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 0
+            },
+            "data": {
+              "type": "object",
+              "properties": {
+                "inventory": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "plugin"
+                            },
+                            "vendor": {
+                              "type": "string"
+                            },
+                            "path": {
+                              "type": "string"
+                            },
+                            "parseErrors": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "path": {
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "type": "string"
+                                  },
+                                  "line": {
+                                    "type": "integer"
+                                  },
+                                  "unreadable": {
+                                    "type": "boolean",
+                                    "const": true
+                                  }
+                                },
+                                "required": [
+                                  "path",
+                                  "message"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "manifest": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "version": {
+                                  "type": "string"
+                                },
+                                "description": {
+                                  "type": "string"
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            "shape": {
+                              "type": "string",
+                              "enum": [
+                                "claude-plugin",
+                                "skill-claude-plugin"
+                              ]
+                            },
+                            "declared": {
+                              "type": "object",
+                              "properties": {
+                                "skills": {
+                                  "anyOf": [
+                                    {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "manifestPath": {
+                                            "type": "string"
+                                          },
+                                          "resolvedPath": {
+                                            "type": "string"
+                                          },
+                                          "exists": {
+                                            "type": "boolean"
+                                          },
+                                          "inline": {
+                                            "type": "object",
+                                            "additionalProperties": {}
+                                          }
+                                        },
+                                        "required": [
+                                          "manifestPath",
+                                          "resolvedPath",
+                                          "exists"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "commands": {
+                                  "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/declared/properties/skills"
+                                },
+                                "agents": {
+                                  "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/declared/properties/skills"
+                                },
+                                "hooks": {
+                                  "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/declared/properties/skills"
+                                },
+                                "mcpServers": {
+                                  "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/declared/properties/skills"
+                                },
+                                "outputStyles": {
+                                  "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/declared/properties/skills"
+                                },
+                                "lspServers": {
+                                  "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/declared/properties/skills"
+                                }
+                              },
+                              "required": [
+                                "skills",
+                                "commands",
+                                "agents",
+                                "hooks",
+                                "mcpServers",
+                                "outputStyles",
+                                "lspServers"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "discovered": {
+                              "type": "object",
+                              "properties": {
+                                "skills": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "const": "skill"
+                                      },
+                                      "vendor": {
+                                        "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/vendor"
+                                      },
+                                      "path": {
+                                        "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/path"
+                                      },
+                                      "parseErrors": {
+                                        "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/parseErrors"
+                                      },
+                                      "manifest": {
+                                        "type": "object",
+                                        "properties": {
+                                          "name": {
+                                            "type": "string"
+                                          },
+                                          "description": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": [
+                                          "name"
+                                        ],
+                                        "additionalProperties": false
+                                      },
+                                      "files": {
+                                        "type": "object",
+                                        "properties": {
+                                          "skillMd": {
+                                            "type": "string"
+                                          },
+                                          "linked": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          },
+                                          "packaged": {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string"
+                                            }
+                                          }
+                                        },
+                                        "required": [
+                                          "skillMd",
+                                          "linked",
+                                          "packaged"
+                                        ],
+                                        "additionalProperties": false
+                                      }
+                                    },
+                                    "required": [
+                                      "kind",
+                                      "vendor",
+                                      "path",
+                                      "parseErrors",
+                                      "manifest",
+                                      "files"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "commands": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "manifestPath": {
+                                        "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/declared/properties/skills/anyOf/0/items/properties/manifestPath"
+                                      },
+                                      "resolvedPath": {
+                                        "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/declared/properties/skills/anyOf/0/items/properties/resolvedPath"
+                                      },
+                                      "exists": {
+                                        "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/declared/properties/skills/anyOf/0/items/properties/exists"
+                                      }
+                                    },
+                                    "required": [
+                                      "manifestPath",
+                                      "resolvedPath",
+                                      "exists"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                },
+                                "agents": {
+                                  "type": "array",
+                                  "items": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/discovered/properties/commands/items"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "skills",
+                                "commands",
+                                "agents"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "references": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "from": {
+                                    "type": "string"
+                                  },
+                                  "to": {
+                                    "type": "string"
+                                  },
+                                  "exists": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "from",
+                                  "to",
+                                  "exists"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "unexpected": {
+                              "type": "object",
+                              "properties": {
+                                "skillManifests": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "pluginManifests": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "skillManifests",
+                                "pluginManifests"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "vendor",
+                            "path",
+                            "parseErrors",
+                            "manifest",
+                            "shape",
+                            "declared",
+                            "discovered",
+                            "references",
+                            "unexpected"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "marketplace"
+                            },
+                            "vendor": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/vendor"
+                            },
+                            "path": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/path"
+                            },
+                            "parseErrors": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/parseErrors"
+                            },
+                            "manifest": {
+                              "type": "object",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "description": {
+                                  "type": "string"
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            "declared": {
+                              "type": "object",
+                              "properties": {
+                                "plugins": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "manifestPath": {
+                                        "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/declared/properties/skills/anyOf/0/items/properties/manifestPath"
+                                      },
+                                      "resolvedPath": {
+                                        "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/declared/properties/skills/anyOf/0/items/properties/resolvedPath"
+                                      },
+                                      "exists": {
+                                        "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/declared/properties/skills/anyOf/0/items/properties/exists"
+                                      },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": [
+                                          "path",
+                                          "git",
+                                          "npm",
+                                          "unknown"
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "manifestPath",
+                                      "resolvedPath",
+                                      "exists",
+                                      "source"
+                                    ],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": [
+                                "plugins"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "discovered": {
+                              "type": "object",
+                              "properties": {
+                                "plugins": {
+                                  "type": "array",
+                                  "items": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0"
+                                  }
+                                }
+                              },
+                              "required": [
+                                "plugins"
+                              ],
+                              "additionalProperties": false
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "vendor",
+                            "path",
+                            "parseErrors",
+                            "manifest",
+                            "declared",
+                            "discovered"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "install"
+                            },
+                            "vendor": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/vendor"
+                            },
+                            "path": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/path"
+                            },
+                            "parseErrors": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/parseErrors"
+                            },
+                            "installRoot": {
+                              "type": "string"
+                            },
+                            "marketplaces": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/1"
+                              }
+                            },
+                            "plugins": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0"
+                              }
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "vendor",
+                            "path",
+                            "parseErrors",
+                            "installRoot",
+                            "marketplaces",
+                            "plugins"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/discovered/properties/skills/items"
+                        }
+                      ]
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/kind"
+                            },
+                            "vendor": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/vendor"
+                            },
+                            "path": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/path"
+                            },
+                            "parseErrors": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/parseErrors"
+                            },
+                            "manifest": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/manifest"
+                            },
+                            "shape": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/shape"
+                            },
+                            "declared": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/declared"
+                            },
+                            "discovered": {
+                              "type": "object",
+                              "properties": {
+                                "skills": {
+                                  "type": "null"
+                                },
+                                "commands": {
+                                  "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/discovered/properties/commands"
+                                },
+                                "agents": {
+                                  "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/discovered/properties/agents"
+                                }
+                              },
+                              "required": [
+                                "skills",
+                                "commands",
+                                "agents"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "references": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/references"
+                            },
+                            "unexpected": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/unexpected"
+                            },
+                            "projection": {
+                              "type": "string",
+                              "const": "shallow"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "vendor",
+                            "path",
+                            "parseErrors",
+                            "manifest",
+                            "shape",
+                            "declared",
+                            "discovered",
+                            "references",
+                            "unexpected",
+                            "projection"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/1/properties/kind"
+                            },
+                            "vendor": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/vendor"
+                            },
+                            "path": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/path"
+                            },
+                            "parseErrors": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/parseErrors"
+                            },
+                            "manifest": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/1/properties/manifest"
+                            },
+                            "declared": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/1/properties/declared"
+                            },
+                            "discovered": {
+                              "type": "object",
+                              "properties": {
+                                "plugins": {
+                                  "type": "null"
+                                }
+                              },
+                              "required": [
+                                "plugins"
+                              ],
+                              "additionalProperties": false
+                            },
+                            "projection": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/1/anyOf/0/properties/projection"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "vendor",
+                            "path",
+                            "parseErrors",
+                            "manifest",
+                            "declared",
+                            "discovered",
+                            "projection"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/2/properties/kind"
+                            },
+                            "vendor": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/vendor"
+                            },
+                            "path": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/path"
+                            },
+                            "parseErrors": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/parseErrors"
+                            },
+                            "installRoot": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/2/properties/installRoot"
+                            },
+                            "marketplaces": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/1/properties/kind"
+                                  },
+                                  "vendor": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/vendor"
+                                  },
+                                  "path": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/path"
+                                  },
+                                  "parseErrors": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/parseErrors"
+                                  },
+                                  "manifest": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/1/properties/manifest"
+                                  },
+                                  "declared": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/1/properties/declared"
+                                  },
+                                  "discovered": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/1/anyOf/1/properties/discovered"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "vendor",
+                                  "path",
+                                  "parseErrors",
+                                  "manifest",
+                                  "declared",
+                                  "discovered"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "plugins": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/kind"
+                                  },
+                                  "vendor": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/vendor"
+                                  },
+                                  "path": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/path"
+                                  },
+                                  "parseErrors": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/parseErrors"
+                                  },
+                                  "manifest": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/manifest"
+                                  },
+                                  "shape": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/shape"
+                                  },
+                                  "declared": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/declared"
+                                  },
+                                  "discovered": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/1/anyOf/0/properties/discovered"
+                                  },
+                                  "references": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/references"
+                                  },
+                                  "unexpected": {
+                                    "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/unexpected"
+                                  }
+                                },
+                                "required": [
+                                  "kind",
+                                  "vendor",
+                                  "path",
+                                  "parseErrors",
+                                  "manifest",
+                                  "shape",
+                                  "declared",
+                                  "discovered",
+                                  "references",
+                                  "unexpected"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
+                            "projection": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/1/anyOf/0/properties/projection"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "vendor",
+                            "path",
+                            "parseErrors",
+                            "installRoot",
+                            "marketplaces",
+                            "plugins",
+                            "projection"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/discovered/properties/skills/items/properties/kind"
+                            },
+                            "vendor": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/vendor"
+                            },
+                            "path": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/path"
+                            },
+                            "parseErrors": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/parseErrors"
+                            },
+                            "manifest": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/discovered/properties/skills/items/properties/manifest"
+                            },
+                            "files": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/0/anyOf/0/properties/discovered/properties/skills/items/properties/files"
+                            },
+                            "projection": {
+                              "$ref": "#/definitions/inventory/anyOf/0/properties/data/properties/inventory/anyOf/1/anyOf/0/properties/projection"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "vendor",
+                            "path",
+                            "parseErrors",
+                            "manifest",
+                            "files",
+                            "projection"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "inventory"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "status",
+            "examined",
+            "summary",
+            "gate",
+            "findings",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "findings"
+            },
+            "examined": {
+              "$ref": "#/definitions/inventory/anyOf/0/properties/examined"
+            },
+            "summary": {
+              "$ref": "#/definitions/inventory/anyOf/0/properties/summary"
+            },
+            "gate": {
+              "$ref": "#/definitions/inventory/anyOf/0/properties/gate"
+            },
+            "durationMs": {
+              "$ref": "#/definitions/inventory/anyOf/0/properties/durationMs"
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/inventory/anyOf/0/properties/findings/items"
+              },
+              "minItems": 1
+            },
+            "data": {
+              "$ref": "#/definitions/inventory/anyOf/0/properties/data"
+            }
+          },
+          "required": [
+            "status",
+            "examined",
+            "summary",
+            "gate",
+            "findings",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "error"
+            },
+            "examined": {
+              "$ref": "#/definitions/inventory/anyOf/0/properties/examined"
+            },
+            "summary": {
+              "$ref": "#/definitions/inventory/anyOf/0/properties/summary"
+            },
+            "gate": {
+              "$ref": "#/definitions/inventory/anyOf/0/properties/gate"
+            },
+            "durationMs": {
+              "$ref": "#/definitions/inventory/anyOf/0/properties/durationMs"
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/inventory/anyOf/0/properties/findings/items"
+              }
+            },
+            "error": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "USAGE_INVALID",
+                    "CONFIG_INVALID",
+                    "INPUT_UNREADABLE",
+                    "BACKEND_UNAVAILABLE",
+                    "EXTERNAL_API_FAILED",
+                    "NOT_IMPLEMENTED",
+                    "RUN_INCOMPLETE",
+                    "INTERNAL_ERROR",
+                    "RESOURCE_CHECK_BROKEN",
+                    "ARD_NOT_CONFIGURED",
+                    "ARD_DERIVATION_FAILED"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            "data": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/inventory/anyOf/0/properties/data"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "examined",
+            "summary",
+            "gate",
+            "findings",
+            "error",
+            "data"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

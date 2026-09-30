@@ -19,6 +19,7 @@
 import type { PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import {
   countBySeverity,
+  type Finding,
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
@@ -84,10 +85,14 @@ export function formatIssueSetHeading(
 /**
  * Render one issue as its own lines, each prefixed with `indent`.
  *
+ * Takes a library `ValidationIssue` or a published `Finding` — the renderer
+ * reads only the fields the two share, so a lane holding a report's findings
+ * renders them as they are rather than casting them back to issues.
+ *
  * Returns an array rather than writing, so a caller can pick its own stream and
  * a unit test can assert over every line without capturing output.
  */
-export function formatIssueLines(issue: ValidationIssue, indent = ''): string[] {
+export function formatIssueLines(issue: ValidationIssue | Finding, indent = ''): string[] {
   const lines = [
     `${indent}[${severityLabel(issue.severity)}] [${String(issue.code)}] ${String(issue.message)}`,
   ];

@@ -84,41 +84,10 @@ export function runIntegrityFinding(message: string): ValidationIssue {
 }
 
 /**
- * The refusal for a run whose denominator is zero — nothing was checked.
- *
- * 🪤 **It asks the DENOMINATOR, never the config.** A builder cannot see why
- * nothing ran and deliberately does not ask. An absent config block, a filter
- * that matched nothing, a glob with a typo, a directory that was never built —
- * all arrive as the same document, and all of them are a gate that asserted
- * nothing. The message is where a site names the likely causes and the remedy.
- *
- * 🪤 **One report per situation.** A run that already carries a run-integrity
- * finding (an interrupted run, say) has the more specific of the two claims on
- * the document, so this stands down rather than handing the operator two reports
- * about one situation. Nothing weaker is needed: every such finding is `error`,
- * so the status is already refused.
- *
- * @param denominator - How many things the run actually checked
- * @param issues - What the run already found, so an existing run-integrity
- *   report is not duplicated
- * @param message - The site's own account of what did not run and what to do;
- *   evaluated lazily so a populated run pays nothing for it
- * @returns The one finding, or nothing when at least one thing was checked
- */
-export function nothingCheckedFinding(
-  denominator: number,
-  issues: readonly ValidationIssue[],
-  message: () => string,
-): readonly ValidationIssue[] {
-  if (denominator > 0) return [];
-  if (issues.some((issue) => issue.code === RUN_INTEGRITY_CODE)) return [];
-  return [runIntegrityFinding(message())];
-}
-
-/**
  * What a report's `examined` counts, and what an operator should check when
  * it is zero — the two facts only the verb knows, so {@link withRunIntegrity}
- * can name them without asking why the denominator is zero (🪤 above).
+ * can name them without asking WHY the denominator is zero — an absent config
+ * block, a filter that matched nothing and a typo'd glob all arrive as zero.
  */
 export interface ExaminedDeclaration {
   /** What `examined` counts, plural noun: 'files', 'skills', 'rows of the population', 'search roots'. */
@@ -161,4 +130,20 @@ export function withRunIntegrity<T>(report: Report<T>, examined: ExaminedDeclara
     gate: report.gate,
     durationMs: report.durationMs,
   });
+}
+
+/**
+ * The human half of a run-integrity refusal: each `RESOURCE_CHECK_BROKEN`
+ * finding's message, on stderr. It decides nothing — the document is what
+ * gates — but a refusal only in the document never reached the operator
+ * reading the terminal.
+ *
+ * A command lane calls it with the writer's published report when the writer
+ * ADDED the refusal (`publishedReport(verb, report) !== report`); a phase warns
+ * its own site-specific refusal where every lane sees it.
+ */
+export function warnRunIntegrity(report: Report<unknown>): void {
+  for (const finding of report.findings) {
+    if (finding.code === RUN_INTEGRITY_CODE) process.stderr.write(`Warning: ${finding.message}\n`);
+  }
 }

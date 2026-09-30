@@ -8,10 +8,10 @@
  * Follows Postel's Law: reads with fallbacks (liberal), writes with structured data.
  */
 
-import { cpSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { isPathAbsentError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, isUnderRoot, isVatError, mkdirSyncReal, normalizePath, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
@@ -56,6 +56,31 @@ export interface InstallPluginOptions {
   paths: ClaudeUserPaths;
 }
 
+/** A Claude Code registry, settings file or skills dir that is present and unreadable, or not JSON. */
+export const CLAUDE_USER_STATE_UNREADABLE_CODE = 'CLAUDE_USER_STATE_UNREADABLE';
+
+/** A copy, write or removal in Claude user state failed partway (install or uninstall). */
+export const CLAUDE_USER_STATE_WRITE_FAILED_CODE = 'CLAUDE_USER_STATE_WRITE_FAILED';
+
+/**
+ * Run a mutation of Claude user state; a failure that is not already coded is
+ * rethrown as {@link CLAUDE_USER_STATE_WRITE_FAILED_CODE}, naming `what`.
+ */
+export async function codedUserStateWrite<T>(what: string, mutate: () => T | Promise<T>): Promise<T> {
+  try {
+    return await mutate();
+  } catch (error) {
+    if (isVatError(error)) throw error;
+    throw new VatError(CLAUDE_USER_STATE_WRITE_FAILED_CODE, `Could not ${what}: ${String(error)}`, { cause: error });
+  }
+}
+
+/** Whether `source` IS `dest` on disk, or lies inside it — copying there would copy a tree onto itself. */
+function resolvesInto(source: string, dest: string): boolean {
+  const real = (p: string): string => toForwardSlash(normalizePath(safePath.resolve(p)));
+  return real(source) === real(dest) || isUnderRoot(dest, source) === 'inside';
+}
+
 /**
  * Parse a registry file that Claude Code owns, or `undefined` when it is not there.
  *
@@ -64,8 +89,7 @@ export interface InstallPluginOptions {
  * OS, or not JSON after a half-written save — must not read as empty: the next
  * write would then replace the user's registry (or their whole `settings.json`)
  * with a document holding nothing but the plugin being installed. That refusal
- * is translated so the message names the file, and `installPlugin`'s own catch
- * turns it into the warning the operator sees.
+ * is thrown coded {@link CLAUDE_USER_STATE_UNREADABLE_CODE}, naming the file.
  */
 function readRegistryFile(filePath: string): unknown {
   let raw: string;
@@ -73,12 +97,12 @@ function readRegistryFile(filePath: string): unknown {
     raw = readFileSync(filePath, 'utf-8');
   } catch (error) {
     if (isPathAbsentError(error)) return undefined;
-    throw new Error(`Could not read ${filePath}: ${String(error)}`, { cause: error });
+    throw new VatError(CLAUDE_USER_STATE_UNREADABLE_CODE, `Could not read ${filePath}: ${String(error)}`, { cause: error });
   }
   try {
     return JSON.parse(raw) as unknown;
   } catch (error) {
-    throw new Error(`${filePath} is not valid JSON: ${String(error)}`, { cause: error });
+    throw new VatError(CLAUDE_USER_STATE_UNREADABLE_CODE, `${filePath} is not valid JSON: ${String(error)}`, { cause: error });
   }
 }
 
@@ -120,7 +144,7 @@ export function writeInstalledPlugins(paths: ClaudeUserPaths, data: InstalledPlu
 /**
  * Install a plugin into the Claude user plugin registry.
  *
- * Performs 5 steps atomically (best-effort — failures warn but never throw):
+ * Performs 5 steps in order; a failure throws, coded (see the two codes above).
  * 1. Copy plugin files to marketplacesDir
  * 2. Update known_marketplaces.json
  * 3. Copy plugin files to pluginsCacheDir
@@ -130,16 +154,18 @@ export function writeInstalledPlugins(paths: ClaudeUserPaths, data: InstalledPlu
 export async function installPlugin(opts: InstallPluginOptions): Promise<void> {
   const { marketplaceName, pluginName, pluginDir, version, source, paths } = opts;
 
-  try {
+  const pluginKey = `${pluginName}@${marketplaceName}`;
+  await codedUserStateWrite(`register plugin ${pluginKey}`, () => {
     const now = new Date().toISOString();
-    const pluginKey = `${pluginName}@${marketplaceName}`;
+    // The directory itself, not a link to it: a copied link would collide with the directory it lands on.
+    const realPluginDir = normalizePath(safePath.resolve(pluginDir));
 
     // Step 1: Copy plugin to marketplacesDir/<marketplaceName>/plugins/<pluginName>/
     // Skip if pluginDir is already at the destination (e.g. copyPluginTree already did the copy)
     const marketplacePluginDest = safePath.join(paths.marketplacesDir, marketplaceName, 'plugins', pluginName);
-    if (safePath.resolve(pluginDir) !== safePath.resolve(marketplacePluginDest)) {
+    if (!resolvesInto(pluginDir, marketplacePluginDest)) {
       mkdirSyncReal(marketplacePluginDest, { recursive: true });
-      cpSync(pluginDir, marketplacePluginDest, { recursive: true });
+      cpSync(realPluginDir, marketplacePluginDest, { recursive: true });
     }
 
     // Step 2: Update known_marketplaces.json
@@ -152,11 +178,13 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<void> {
     writeKnownMarketplaces(paths, knownMarketplaces);
 
     // Step 3: Copy plugin to pluginsCacheDir/<marketplaceName>/<pluginName>/<version>/
-    // Skip if source and destination are the same
+    // Skip when the source IS the destination on disk (or inside it) — then the rm below would delete it
     const cacheDest = safePath.join(paths.pluginsCacheDir, marketplaceName, pluginName, version);
-    if (safePath.resolve(pluginDir) !== safePath.resolve(cacheDest)) {
+    if (!resolvesInto(pluginDir, cacheDest)) {
+      // Replaced, never copied into: a re-install's links would copy onto their own targets.
+      rmSync(cacheDest, { recursive: true, force: true });
       mkdirSyncReal(cacheDest, { recursive: true });
-      cpSync(pluginDir, cacheDest, { recursive: true });
+      cpSync(realPluginDir, cacheDest, { recursive: true });
     }
 
     // Step 4: Update installed_plugins.json
@@ -174,9 +202,7 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<void> {
 
     // Step 5: Enable plugin in user settings.json
     updateUserSettings(paths, pluginKey);
-  } catch (error) {
-    console.warn(`[vat] Warning: Could not register plugin ${opts.pluginName}@${opts.marketplaceName}: ${String(error)}`);
-  }
+  });
 }
 
 /**

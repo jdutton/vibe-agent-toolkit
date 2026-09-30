@@ -1,8 +1,7 @@
 /**
  * `withRunIntegrity` is the single point that decides "examined nothing" for
  * every report: it adds the one `RESOURCE_CHECK_BROKEN` refusal-as-finding
- * behind the same precedence `nothingCheckedFinding` already enforces at each
- * site — an existing refusal-kind finding wins, an error report is untouched,
+ * behind one precedence — an existing refusal-kind finding wins, an error report is untouched,
  * and a report that examined at least one thing is untouched.
  */
 

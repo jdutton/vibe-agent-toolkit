@@ -13,8 +13,9 @@
  * root as a parameter — never call `findProjectRoot` themselves.
  */
 
-import { accessSync, constants, statSync, type Stats } from 'node:fs';
+import { accessSync, constants, lstatSync, readFileSync, statSync, type Stats } from 'node:fs';
 
+import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 import { findProjectRoot, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from './command-refusal.js';
@@ -105,6 +106,83 @@ export function unstatablePathRefusal(resolved: string, error: unknown): Command
   if (isPathAbsentError(error)) return new CommandRefusalError('USAGE_INVALID', `Path does not exist: ${resolved}`, { cause: error });
   const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
   return new CommandRefusalError('INPUT_UNREADABLE', `Path cannot be read (${code}): ${resolved}`, { cause: error });
+}
+
+/**
+ * Whether something is at `path`, asked the way the caller will USE it — so the
+ * mode is required, never defaulted:
+ *
+ * - `'entry'` (`lstat`): is there a directory entry at all, a dangling link
+ *   included? Right before writing there — `existsSync` calls a dangling link
+ *   absent, and the copy then trips over it.
+ * - `'follow'` (`stat`): does it resolve to something that can be read? Right
+ *   before reading or staging from it — a dangling link is absent, so the caller
+ *   refuses it by its own "not there" message instead of failing later.
+ *
+ * A `stat`/`lstat` the OS refuses is the input's refusal
+ * ({@link unstatablePathRefusal}), never "absent".
+ *
+ * @throws {CommandRefusalError} `INPUT_UNREADABLE` when the OS refuses the probe
+ */
+export function pathPresent(path: string, mode: 'entry' | 'follow'): boolean {
+  try {
+    if (mode === 'entry') lstatSync(path);
+    else statSync(path);
+    return true;
+  } catch (error) {
+    if (isPathAbsentError(error)) return false;
+    throw unstatablePathRefusal(path, error);
+  }
+}
+
+/** What an absent input means at its call site: which refusal, and the sentence naming the remedy. */
+interface AbsentInput {
+  readonly code: RefusalCode;
+  readonly message: string;
+}
+
+/**
+ * The refusal for an input the CONFIG or an earlier step names — not a
+ * command-line argument — whose `stat` or read threw.
+ *
+ * The same absent-vs-unreadable split as {@link unstatablePathRefusal}, but an
+ * absence is the caller's to name: a `files[].source` nothing built, a
+ * `publish.changelog` naming no file. Anything else is `INPUT_UNREADABLE`.
+ */
+function inputRefusal(resolved: string, error: unknown, absent: AbsentInput): CommandRefusalError {
+  if (isPathAbsentError(error)) return new CommandRefusalError(absent.code, absent.message, { cause: error });
+  return unstatablePathRefusal(resolved, error);
+}
+
+/** A config key naming a file that is not there: the config's mistake. */
+export function configNamedFileAbsent(key: string, named: string): AbsentInput {
+  return { code: 'CONFIG_INVALID', message: `${key} names ${named}, which does not exist.` };
+}
+
+/**
+ * Refuse unless `resolved` can be stat'ed.
+ *
+ * @throws {CommandRefusalError} `absent` when nothing is there; `INPUT_UNREADABLE` when the OS refuses the `stat`
+ */
+export function requireInputPath(resolved: string, absent: AbsentInput): void {
+  try {
+    statSync(resolved);
+  } catch (error) {
+    throw inputRefusal(resolved, error, absent);
+  }
+}
+
+/**
+ * Read a UTF-8 input file, refusing like {@link requireInputPath}.
+ *
+ * @throws {CommandRefusalError} `absent` when nothing is there; `INPUT_UNREADABLE` when it cannot be read
+ */
+export function readInputFile(resolved: string, absent: AbsentInput): string {
+  try {
+    return readFileSync(resolved, 'utf-8');
+  } catch (error) {
+    throw inputRefusal(resolved, error, absent);
+  }
 }
 
 /**

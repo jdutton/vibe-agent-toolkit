@@ -7,9 +7,10 @@
  * (`okf.bundle:`, `okf.Bundles:`) therefore read as a clean bill of health,
  * which is the *green-without-running* shape this repo keeps finding.
  *
- * A run that examined nothing is refused: one non-overridable
+ * A run that examined nothing is refused by the writer: one non-overridable
  * `RESOURCE_CHECK_BROKEN` at `error` (the run-integrity mechanism every other
  * gate uses), so `status: findings` and exit 1, with the notice saying why.
+ * Each case therefore reads the PUBLISHED report.
  * `examined: 0` beside `status: ok` read as a pass to every consumer that
  * gates on the status or the exit code rather than on the denominator.
  */
@@ -20,7 +21,8 @@ import { describe, expect, it } from 'vitest';
 
 import { createOkfCommand } from '../src/commands/okf/index.js';
 import { OKF_VALIDATE_REPORT_SCHEMA } from '../src/commands/okf/validate-schema.js';
-import { summarizeOkfBundles, type CheckedOkfBundle } from '../src/commands/okf/validate.js';
+import { summarizeOkfBundles, unreadableRootRefusal, type CheckedOkfBundle } from '../src/commands/okf/validate.js';
+import { publishedReport, refusalReport } from '../src/utils/document-writer.js';
 
 // Built from the cwd rather than a `/`-rooted literal, so the root has a drive
 // letter on Windows and `issueLocation` relativizes it the same way everywhere.
@@ -51,6 +53,16 @@ function report(bundle: string, findings: OkfFinding[] = []): CheckedOkfBundle {
   };
 }
 
+/** The finding the resources lane reports for a bundle root the OS would not list. */
+function rootUnreadable(bundle: string): OkfFinding {
+  return {
+    code: 'OKF_BUNDLE_ROOT_UNREADABLE',
+    severity: 'error',
+    message: `okf.bundles.${bundle}.root is not a readable directory (EACCES)`,
+    document: '.',
+  };
+}
+
 /** A bundle whose root was read successfully and held not one markdown file. */
 function emptyReport(bundle: string): CheckedOkfBundle {
   return {
@@ -67,7 +79,7 @@ function emptyReport(bundle: string): CheckedOkfBundle {
 }
 
 function summarize(checked: readonly CheckedOkfBundle[]) {
-  return summarizeOkfBundles(checked, PROJECT_ROOT);
+  return publishedReport('okf validate', summarizeOkfBundles(checked, PROJECT_ROOT));
 }
 
 /** The `validate` subcommand, with Commander's process.exit disabled. */
@@ -202,7 +214,6 @@ describe('summarizeOkfBundles', () => {
       expect(summary.data.notice).toContain("'empty'");
       expect(summary.status).toBe('findings');
       expect(summary.findings.map((f) => f.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
-      expect(summary.findings[0]?.message).toContain("'empty'");
       expect(exitCodeForReport(summary)).toBe(1);
     });
 
@@ -214,15 +225,26 @@ describe('summarizeOkfBundles', () => {
       expect(exitCodeForReport(summary)).toBe(0);
     });
 
-    it('adds no second report when the root was unreadable — that finding already fails the run', () => {
-      const unreadable = emptyReport('gone');
-      const summary = summarize([{
-        ...unreadable,
-        report: { ...unreadable.report, findings: [finding('error', '.')], hasErrors: true },
-      }]);
+    it('refuses an unreadable root as INPUT_UNREADABLE, publishing every other bundle\'s work', () => {
+      // A directory the OS will not list ends on 2 in every verb. The writer's
+      // "declare a bundle" remedy would be wrong here: the bundle IS declared.
+      const gone = emptyReport('gone');
+      const unreadable = { ...gone, report: { ...gone.report, findings: [rootUnreadable('gone')], hasErrors: true } };
+      const summary = summarizeOkfBundles([unreadable, report('knowledge', [finding('error')])], PROJECT_ROOT);
+      const refusal = unreadableRootRefusal(summary);
 
-      expect(summary.findings.map((f) => f.code)).toEqual(['OKF_FRONTMATTER_MISSING']);
-      expect(exitCodeForReport(summary)).toBe(1);
+      expect(refusal?.message).toContain('okf.bundles.gone.root');
+      expect(refusal?.finished.examined).toBe(1);
+      expect(refusal?.finished.findings.map((f) => f.code)).toEqual(['OKF_FRONTMATTER_MISSING']);
+      // The error branch that carries it is one the published schema accepts, and ends on 2.
+      if (refusal === undefined) throw new Error('no refusal');
+      const published = refusalReport('INPUT_UNREADABLE', refusal.message, { strict: false }, refusal.finished);
+      expect(OKF_VALIDATE_REPORT_SCHEMA.safeParse(published).success).toBe(true);
+      expect(exitCodeForReport(published)).toBe(2);
+    });
+
+    it('does not refuse a run whose every root was read', () => {
+      expect(unreadableRootRefusal(summarizeOkfBundles([report('knowledge', [finding('error')])], PROJECT_ROOT))).toBeUndefined();
     });
 
     it('names every empty bundle, not just the first', () => {

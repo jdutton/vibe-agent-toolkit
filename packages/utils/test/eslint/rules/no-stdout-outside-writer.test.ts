@@ -20,7 +20,7 @@ const CASES: RuleCases = {
     // Outside `paths` — the writer itself is where stdout is written.
     { code: "process.stdout.write('x');", filename: WRITER_FILE, options: OPTIONS },
     { code: 'console.log(1);', filename: WRITER_FILE, options: OPTIONS },
-    { code: 'writeYamlOutput(d);', filename: WRITER_FILE, options: OPTIONS },
+    { code: 'writeStdoutSync(t);', filename: WRITER_FILE, options: OPTIONS },
     // stderr is the human channel and is not this rule's business.
     { code: 'console.error(1);', filename: COMMAND_FILE, options: OPTIONS },
     { code: 'console.warn(1);', filename: COMMAND_FILE, options: OPTIONS },
@@ -40,13 +40,11 @@ const CASES: RuleCases = {
     { code: 'console.info(1);', filename: COMMAND_FILE, options: OPTIONS, errors: [{ messageId: 'stdoutOutsideWriter' }] },
     { code: 'console.table(rows);', filename: COMMAND_FILE, options: OPTIONS, errors: [{ messageId: 'stdoutOutsideWriter' }] },
     { code: 'writeStdoutSync(t);', filename: COMMAND_FILE, options: OPTIONS, errors: [{ messageId: 'stdoutOutsideWriter' }] },
-    { code: 'writeYamlOutput(d);', filename: COMMAND_FILE, options: OPTIONS, errors: [{ messageId: 'stdoutOutsideWriter' }] },
-    { code: 'output.writeJsonOutput(d);', filename: COMMAND_FILE, options: OPTIONS, errors: [{ messageId: 'stdoutOutsideWriter' }] },
-    { code: 'writeStructuredOutput(d, format);', filename: COMMAND_FILE, options: OPTIONS, errors: [{ messageId: 'stdoutOutsideWriter' }] },
+    { code: 'output.writeStdoutSync(t);', filename: COMMAND_FILE, options: OPTIONS, errors: [{ messageId: 'stdoutOutsideWriter' }] },
     { code: 'writeAllSync(w, b);', filename: COMMAND_FILE, options: OPTIONS, errors: [{ messageId: 'stdoutOutsideWriter' }] },
     // Imported to be handed on rather than called: the file still writes stdout through it.
     {
-      code: "import { writeYamlOutput } from '../utils/output.js';\nfinishCommand(result, writeYamlOutput);",
+      code: "import { writeStdoutSync } from '../utils/output.js';\nrender(result, writeStdoutSync);",
       filename: COMMAND_FILE,
       options: OPTIONS,
       errors: [{ messageId: 'stdoutOutsideWriter' }],

@@ -1,8 +1,8 @@
-import { existsSync } from 'node:fs';
-
 import {
-	serializeInventory,
-	serializeInventoryShallow,
+	countInventories,
+	materializeIssue,
+	serializedInventory,
+	unreadableParseErrors,
 	type AnyInventory,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
@@ -17,24 +17,34 @@ import {
 	type SharedPopulationSource,
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { type PopulationCache } from '@vibe-agent-toolkit/resources';
-import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { buildReport, toFindings, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { findProjectRoot, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
-import { handleCommandError } from '../utils/command-error.js';
+import { CommandRefusalError, refusalCodeOf } from '../utils/command-refusal.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../utils/document-writer.js';
 import { createLogger, type Logger } from '../utils/logger.js';
 import { populationWiring } from '../utils/population-wiring.js';
+import { pathPresent, readableDirectoryRefusal, readInputFile } from '../utils/project-root-policy.js';
 import { withPopulationCache } from '../utils/projection-store.js';
 
 import { gitTrackerForProjectRoot } from './audit/distributed-tree.js';
+import type { InventoryReport } from './inventory-schema.js';
 
 export interface InventoryCommandOptions {
 	user?: boolean;
 	system?: boolean;
-	format?: 'yaml' | 'json';
+	format?: string;
 	shallow?: boolean;
 	debug?: boolean;
 }
+
+/** `vat inventory` has no `--strict`; its one finding is a warning: the gate is fixed. */
+const GATE: Gate = { strict: false };
+
+/** The document formats `--format` accepts. */
+const FORMATS = ['yaml', 'json'] as const;
+type InventoryFormat = (typeof FORMATS)[number];
 
 /**
  * Create and configure the `vat inventory` command.
@@ -45,7 +55,7 @@ export function createInventoryCommand(): Command {
 		.description('Extract structural inventory of a plugin, marketplace, skill, or install root')
 		.argument('[path]', 'Path to inventory (directory or SKILL.md)')
 		.option('--user', 'Inventory the user-level Claude install (~/.claude/plugins)')
-		.option('--system', 'Inventory the system-level Claude install')
+		.option('--system', 'Inventory the system-level Claude install (not implemented)')
 		.option('--format <yaml|json>', 'Output format', 'yaml')
 		.option('--shallow', 'Omit nested inventories (paths only)')
 		.option('--debug', 'Verbose logging to stderr')
@@ -53,21 +63,30 @@ export function createInventoryCommand(): Command {
 		.addHelpText('after', `
 Description:
   Extract and emit the structural inventory of a Claude plugin, marketplace,
-  skill, or install root. Outputs YAML to stdout by default. Runs no validation
-  detectors — pure structural enumeration.
+  skill, or install root. Runs no validation detectors — pure structural
+  enumeration; \`vat audit\` judges what it finds.
 
-Output:
-  - kind: marketplace | plugin | skill | install
-  - vendor: claude-code
-  - declared / discovered / references / unexpected (per kind)
-  - parseErrors: any manifest parse failures
+Output (the report envelope on stdout, YAML by default):
+  status: ok | findings;  examined: components inventoried (the subject and
+    every marketplace, plugin and skill inventory nested under it)
+  findings[]: SCAN_PATH_UNREADABLE (warning) per path the OS would not read —
+    it was not inventoried, so the inventory is a floor
+  data.inventory: kind (marketplace | plugin | skill | install), vendor, path,
+    declared / discovered / references / unexpected (per kind), and
+    parseErrors[] — a manifest that does not parse is data, not a finding.
+    --shallow: projection: shallow, and each unwalked list is null
 
-Exit Codes:
-  0 - Inventory extracted (parse errors surface in output, not as exit code)
-  2 - System error (path not found, --system not supported, etc.)
+Exit Codes (derived from the document):
+  0 - ok, or findings (an unreadable path is a warning)
+  2 - error: USAGE_INVALID (no path and no --user; a path that does not exist
+      or is neither a directory nor a SKILL.md; an unknown --format),
+      INPUT_UNREADABLE (a path the OS will not read), NOT_IMPLEMENTED
+      (--system), BACKEND_UNAVAILABLE (the projection store's optional
+      backend is not installed), INTERNAL_ERROR (a defect in VAT)
 
 Example:
   $ vat inventory my-plugin/                # Inventory a single plugin
+  $ vat inventory my-plugin/ --shallow --format json
 `);
 	return command;
 }
@@ -81,17 +100,49 @@ export async function inventoryCommand(
 ): Promise<void> {
 	const logger = createLogger(options.debug === true ? { debug: true } : {});
 	const startTime = Date.now();
+	const format: InventoryFormat = options.format === 'json' ? 'json' : 'yaml';
+	let report: InventoryReport;
 	try {
+		if (options.format !== undefined && !(FORMATS as readonly string[]).includes(options.format)) {
+			throw new CommandRefusalError('USAGE_INVALID', `Unknown --format "${options.format}" (expected yaml or json).`);
+		}
 		const inv = await routeInventory(pathArg, options, logger);
-		const format = options.format ?? 'yaml';
-		const out = options.shallow === true
-			? serializeInventoryShallow(inv, format)
-			: serializeInventory(inv, format);
-		process.stdout.write(out);
-		process.exit(ExitCode.OK);
+		report = buildReport({
+			examined: countInventories(inv),
+			findings: toFindings(unreadablePathFindings(inv)),
+			data: { inventory: serializedInventory(inv, options.shallow === true ? 'shallow' : 'full') },
+			gate: GATE,
+			durationMs: Date.now() - startTime,
+		});
 	} catch (error) {
-		handleCommandError(error, logger, startTime, 'Inventory', options.format);
+		endWithRefusal('inventory', refusalCodeOf(error), error, format, GATE, NOTHING_FINISHED);
 	}
+	endWithReport('inventory', report, format);
+}
+
+/**
+ * One `SCAN_PATH_UNREADABLE` warning per path the OS refused, located relative
+ * to the subject's directory (the install root under `--user`).
+ */
+function unreadablePathFindings(inv: AnyInventory): ValidationIssue[] {
+	const base = inv.kind === 'skill' ? safePath.resolve(inv.path, '..') : inv.path;
+	return unreadableParseErrors(inv).map((row) => {
+		const relative = toForwardSlash(safePath.relative(base, row.path));
+		// Outside the subject (a followed link, a cross-drive path): filed on the subject itself.
+		const outside = relativeEscapesRoot(relative);
+		const location = outside ? '.' : relative || '.';
+		const what = outside ? 'a path it links to outside the subject' : location;
+		return materializeIssue('SCAN_PATH_UNREADABLE', {
+			location,
+			// The OS's own message names the absolute path; it stays in data.inventory.parseErrors[].
+			detail: `${what}: the OS refused the read; nothing beneath it is in the inventory`,
+		});
+	});
+}
+
+/** The refusal for a SKILL.md argument that names nothing. */
+function absentSkillMd(absolute: string): { code: 'USAGE_INVALID'; message: string } {
+	return { code: 'USAGE_INVALID', message: `Path does not exist: ${absolute}` };
 }
 
 /**
@@ -122,13 +173,15 @@ export async function routeInventory(
 		});
 	}
 	if (options.system === true) {
-		throw new Error('--system inventory is not implemented in this version');
+		throw new CommandRefusalError('NOT_IMPLEMENTED', '--system inventory is not implemented in this version.');
 	}
 	if (!pathArg) {
-		throw new Error('Path argument is required (or use --user / --system).');
+		throw new CommandRefusalError('USAGE_INVALID', 'Path argument is required (or use --user).');
 	}
 	const absolute = safePath.resolve(pathArg);
 	if (absolute.endsWith('SKILL.md') || absolute.endsWith('skill.md')) {
+		// Read, not only stat'ed: a SKILL.md the OS will not open is the subject unread.
+		readInputFile(absolute, absentSkillMd(absolute));
 		// No shared registry: there is nothing to share it WITH. The extractor derives the
 		// same root from the same skill path and crawls it exactly once, so handing it a
 		// registry here would only duplicate that derivation — and get it wrong the moment
@@ -141,9 +194,14 @@ export async function routeInventory(
 		// none would have to say `NO_GIT_TRACKER` out loud.
 		return extractClaudeSkillInventory(absolute, { gitTrackerSource: gitTrackerForProjectRoot });
 	}
+	// Anything else must be a directory the process can read: an absent path, a
+	// file, or one the OS refuses is refused here rather than inventoried as a
+	// plugin whose only content is the parse error saying it is not there.
+	const refusal = readableDirectoryRefusal(absolute);
+	if (refusal !== undefined) throw refusal;
 	const claudePluginDir = safePath.join(absolute, '.claude-plugin');
-	const hasMarketplace = existsSync(safePath.join(claudePluginDir, 'marketplace.json'));
-	const hasPlugin = existsSync(safePath.join(claudePluginDir, 'plugin.json'));
+	const hasMarketplace = pathPresent(safePath.join(claudePluginDir, 'marketplace.json'), 'follow');
+	const hasPlugin = pathPresent(safePath.join(claudePluginDir, 'plugin.json'), 'follow');
 	// A directory with marketplace.json but no plugin.json is a marketplace root.
 	// When both are present, the plugin extractor takes precedence (plugin is installed,
 	// marketplace.json is a cached metadata artifact alongside it).
@@ -224,7 +282,7 @@ export async function routeInventory(
  *   whether the answer is cached are independent choices, and conflating them
  *   would make the cache unmeasurable against the lane it is supposed to speed up
  * @param logger - Where the blob stage's refusals are reported. stderr, never
- *   stdout: this command's stdout is the YAML document a caller parses, and a
+ *   stdout: this command's stdout is the report a caller parses, and a
  *   diagnostic in the middle of it would break every consumer
  * @returns A population source, or `undefined` to use the walk
  */

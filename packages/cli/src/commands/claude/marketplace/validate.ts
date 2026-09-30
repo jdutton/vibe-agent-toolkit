@@ -23,7 +23,6 @@ import {
 import { validatePlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import {
   buildReport,
-  exitCodeForReport,
   summarizeIssues,
   toFindings,
   type Report,
@@ -41,13 +40,10 @@ import { resolveIssueSeverity } from '../../../utils/issue-severity.js';
 import { createLogger, type Logger } from '../../../utils/logger.js';
 import { assertReadableDirectoryArgument } from '../../../utils/project-root-policy.js';
 import { relativizePath } from '../../../utils/relativize-paths.js';
-import { RUN_INTEGRITY_CODE, runIntegrityFinding } from '../../../utils/run-integrity.js';
+import { RUN_INTEGRITY_CODE, runIntegrityFinding, warnRunIntegrity } from '../../../utils/run-integrity.js';
 import type { PhaseOutcome } from '../../phase-utils.js';
 
 import type { MarketplaceValidateData, MarketplaceValidateReport } from './validate-schema.js';
-
-/** The verb, as registered. */
-const VERB = 'claude marketplace validate';
 
 /** `vat claude marketplace validate` offers no `--strict`: warnings never fail it. */
 const GATE = { strict: false } as const;
@@ -767,14 +763,13 @@ function logFindings(report: Report<unknown>, verbose: boolean, logger: Logger):
 }
 
 /**
- * Validate a marketplace and hand back its published document and exit code,
- * printing nothing on stdout.
+ * Validate a marketplace and hand back its report, printing nothing on stdout.
  *
  * The phase entry point for `vat verify`, which runs this once per configured
- * marketplace, and the command's own. The document is the one the writer
- * publishes — the run-integrity pass included — so the phase lane folds exactly
- * what the command writes. A refusal is the envelope's error branch, its
- * message already on stderr.
+ * marketplace, and the command's own. The report is the one BEFORE the
+ * writer's run-integrity pass: inside an orchestrator, zero examined is judged
+ * on the whole run, not on this phase. A refusal is the envelope's error
+ * branch, its message already on stderr.
  */
 export async function runMarketplaceValidatePhase(
   targetPath: string | undefined,
@@ -783,7 +778,6 @@ export async function runMarketplaceValidatePhase(
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
-  let document: Report<unknown>;
   try {
     const marketplacePath = safePath.resolve(targetPath ?? '.');
     logger.info(`Validating marketplace: ${marketplacePath}`);
@@ -791,7 +785,7 @@ export async function runMarketplaceValidatePhase(
     const { marketplaceResult, pluginResults, undeclared, refused, issues } =
       await collectMarketplaceFindings(marketplacePath, logger);
 
-    document = publishedReport(VERB, buildMarketplaceValidateReport({
+    const report = buildMarketplaceValidateReport({
       root: marketplacePath,
       marketplace: marketplaceResult.metadata,
       pluginResults,
@@ -799,17 +793,17 @@ export async function runMarketplaceValidatePhase(
       refused,
       issues,
       durationMs: Date.now() - startTime,
-    }));
-    logFindings(document, options.verbose === true, logger);
+    });
+    logFindings(report, options.verbose === true, logger);
+    return { report };
   } catch (error) {
-    document = refused(error);
+    return { report: refusedReport(error) };
   }
-  return { document, exitCode: exitCodeForReport(document) };
 }
 
-/** The published error branch for a run that could not do its job — classified by code, never by message. */
-function refused(error: unknown): Report<unknown> {
-  return publishedReport(VERB, refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED));
+/** The error branch for a run that could not do its job — classified by code, never by message. */
+function refusedReport(error: unknown): Report<unknown> {
+  return refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED);
 }
 
 /**
@@ -826,17 +820,19 @@ async function marketplaceValidateCommand(
   targetPath: string | undefined,
   options: MarketplaceValidateOptions,
 ): Promise<void> {
-  // The phase's document, or the argument's refusal — both already published.
-  let document: unknown;
+  let report: Report<unknown>;
   try {
     const marketplacePath = assertReadableDirectoryArgument(targetPath ?? '.');
-    ({ document } = await runMarketplaceValidatePhase(marketplacePath, options));
+    ({ report } = await runMarketplaceValidatePhase(marketplacePath, options));
   } catch (error) {
-    // Only the argument check throws here: the phase publishes its own refusals.
-    document = refused(error);
+    // Only the argument check throws here: the phase returns its own refusals.
+    report = refusedReport(error);
   }
+  const published = publishedReport('claude marketplace validate', report);
+  // The writer's own zero-examined refusal, warned in the lane that publishes it.
+  if (published !== report) warnRunIntegrity(published);
   // This command offers no `--format`: its document is YAML.
-  endWithReport('claude marketplace validate', document as MarketplaceValidateReport, 'yaml');
+  endWithReport('claude marketplace validate', published, 'yaml');
 }
 
 export function createMarketplaceValidateCommand(): Command {

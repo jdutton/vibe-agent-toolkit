@@ -17,7 +17,6 @@ const BARREL_EXPORTS = [
   'version',
   'writeStdoutSync',
   'writeTestFormatError',
-  'writeYamlOutput',
 ];
 
 describe('@vibe-agent-toolkit/cli — the `.` barrel export surface', () => {

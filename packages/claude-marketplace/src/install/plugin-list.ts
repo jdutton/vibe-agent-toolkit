@@ -9,11 +9,11 @@
 
 import { existsSync, lstatSync, readdirSync } from 'node:fs';
 
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
-import { readInstalledPlugins, readKnownMarketplaces } from './plugin-registry.js';
+import { CLAUDE_USER_STATE_UNREADABLE_CODE, readInstalledPlugins, readKnownMarketplaces } from './plugin-registry.js';
 
 export interface ListedPlugin {
   name: string;
@@ -102,7 +102,9 @@ function collectLegacySkills(paths: ClaudeUserPaths): ListedLegacySkill[] {
     // read is the concurrent-deletion race: the entries collected so far are the
     // answer. A listing the OS REFUSES is not — reporting it as "no legacy skills"
     // is the quiet answer that is wrong, so the refusal reaches `vat plugins list`.
-    if (!isPathAbsentError(error)) throw error;
+    if (!isPathAbsentError(error)) {
+      throw new VatError(CLAUDE_USER_STATE_UNREADABLE_CODE, `Could not list ${paths.skillsDir}: ${String(error)}`, { cause: error });
+    }
   }
 
   return legacySkills;

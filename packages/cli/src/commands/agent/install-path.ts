@@ -22,11 +22,14 @@
 
 import { isSingleFsSegment, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
+/** The code an {@link AgentNameEscapesScopeError} carries — the invocation's mistake (`USAGE_INVALID`). */
+export const AGENT_NAME_ESCAPES_SCOPE_CODE = 'AGENT_NAME_ESCAPES_SCOPE';
+
 /** Thrown when the positional cannot name an entry directly under the scope root. */
 export class AgentNameEscapesScopeError extends VatError {
   constructor(agentName: string, targetLocation: string) {
     super(
-      'AGENT_NAME_ESCAPES_SCOPE',
+      AGENT_NAME_ESCAPES_SCOPE_CODE,
       `Refusing to touch "${agentName}": an agent name must be a single path segment ` +
         `directly under ${targetLocation} (no separators, not "." or "..").`,
     );

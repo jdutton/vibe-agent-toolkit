@@ -12,18 +12,20 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { scan } from '@vibe-agent-toolkit/discovery';
-import { safePath, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, safePath, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 import { isGitUrl, parseGitUrl } from '@vibe-agent-toolkit/utils/git';
 import * as yaml from 'yaml';
 
+import { errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
 import { writeArtifactFile } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
+import { pathPresent } from '../../utils/project-root-policy.js';
 import { withRunIntegrity } from '../../utils/run-integrity.js';
 import { resolveVatBinPath } from '../../utils/vat-bin-path.js';
 import { withClonedRepo } from '../audit/git-url-clone.js';
@@ -38,7 +40,7 @@ import {
   type CompletedAuditReport,
 } from '../audit.js';
 
-import type { AuditOutcome, PluginRow, ReviewOutcome, ReviewSummary } from './report.js';
+import { writeRunOutput, type AuditOutcome, type PluginRow, type ReviewOutcome, type ReviewSummary } from './report.js';
 import type { PluginEntry } from './seed.js';
 
 export interface RunnerOptions {
@@ -125,10 +127,27 @@ export async function auditOnePlugin(
 }
 
 async function runLocalEntry(entry: PluginEntry, opts: RunnerOptions): Promise<PluginRow> {
-  if (!existsSync(entry.source)) {
-    return unloadableRow(entry, `Source path not found: ${entry.source}`, 0);
-  }
+  const unusable = localSourceUnusable(entry.source);
+  if (unusable !== undefined) return unloadableRow(entry, unusable, 0);
   return auditAndRecord(entry, entry.source, opts);
+}
+
+/**
+ * Why a local source cannot be audited, or `undefined` when it can be.
+ *
+ * Absent and unreadable are told apart (`pathPresent`, never `existsSync`,
+ * which calls an `EACCES` parent "not found"), and both are one entry's
+ * outcome — an unloadable row — never the whole scan's: per-plugin failures
+ * never abort the loop. `pathPresent` throws only its coded refusal.
+ */
+function localSourceUnusable(source: string): string | undefined {
+  try {
+    return pathPresent(source, 'follow') ? undefined : `Source path not found: ${source}`;
+  } catch (error) {
+    // Only the probe's coded refusal is the entry's; anything uncoded is a defect and stays loud.
+    if (refusalCodeOf(error) === 'INTERNAL_ERROR') throw error;
+    return errorMessageOf(error);
+  }
 }
 
 async function runUrlEntry(entry: PluginEntry, opts: RunnerOptions): Promise<PluginRow> {
@@ -139,7 +158,10 @@ async function runUrlEntry(entry: PluginEntry, opts: RunnerOptions): Promise<Plu
       async ({ targetDir, tempdir, provenance }) => auditAndRecord(entry, targetDir, opts, { provenance, tempRoot: tempdir })
     );
   } catch (err) {
-    return unloadableRow(entry, err instanceof Error ? err.message : String(err), 0);
+    // A write under --out the OS refused is the RUN's refusal — the same in both lanes —
+    // never this entry's unloadable row. Matched by code, not by class.
+    if (refusalCodeOf(err) === 'RUN_INCOMPLETE') throw err;
+    return unloadableRow(entry, errorMessageOf(err), 0);
   }
 }
 
@@ -152,23 +174,34 @@ async function auditAndRecord(
   const logger = createLogger(opts.debug ? { debug: true } : {});
   const start = Date.now();
 
-  const validationApplied = applyValidationOverlay(entry, scanPath);
+  const overlay = applyValidationOverlay(entry, scanPath);
+  // The overlay goes into the SOURCE, not --out: a source that refuses it is this
+  // entry's unloadable row in both lanes, and the scan carries on.
+  if (overlay.refused !== undefined) return unloadableRow(entry, overlay.refused, Date.now() - start);
+  const validationApplied = overlay.applied;
 
+  const outputPath = `${entry.name}-audit.yaml`;
+  let outcome: ReturnType<typeof buildAuditOutcome> | undefined;
   let audit: AuditOutcome;
   try {
     // The corpus run root is the scanned plugin itself — one root per row.
     const root = deriveScanRoot(scanPath);
     const results = await getValidationResults(scanPath, true, {}, logger, root);
-    const outputPath = `${entry.name}-audit.yaml`;
-    const outcome = buildAuditOutcome(results, Date.now() - start, outputPath, root, cloned);
-    writeArtifactFile('corpus-audit', safePath.join(opts.runDir, outputPath), outcome.document);
+    outcome = buildAuditOutcome(results, Date.now() - start, outputPath, root, cloned);
     audit = outcome.audit;
   } catch (err) {
     audit = {
       status: 'unloadable',
       duration_ms: Date.now() - start,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessageOf(err),
     };
+  }
+  // Outside the catch: a document the audit produced and the OS would not let
+  // the scan write is the RUN's refusal, not an unloadable plugin.
+  if (outcome !== undefined) {
+    const auditPath = safePath.join(opts.runDir, outputPath);
+    const { document } = outcome;
+    writeRunOutput(auditPath, () => writeArtifactFile('corpus-audit', auditPath, document));
   }
 
   // Skip review when audit was unloadable — nothing meaningful to review.
@@ -356,21 +389,26 @@ async function runSkillReview(
 
   const aggregated = renderAggregatedReview(entry, sections, summarizeReview(sections));
 
-  writeFileSync(reviewPath, aggregated, 'utf-8');
+  writeRunOutput(reviewPath, () => writeFileSync(reviewPath, aggregated, 'utf-8'));
 
   return buildReviewOutcome(sections, `${entry.name}-review.md`, Date.now() - start);
 }
 
+/** Whether the overlay was written, or why the source refused it. */
+type OverlayOutcome = { applied: boolean; refused?: undefined } | { applied: false; refused: string };
+
 /**
  * Write a synthetic `vibe-agent-toolkit.config.yaml` at the audit target,
  * placing the entry's `validation:` block under `skills.defaults.validation`.
- * Returns true iff the overlay was written.
+ *
+ * A write the OS refuses (classified by errno) is the SOURCE's — the entry's
+ * outcome, not the run's; anything else propagates as a defect.
  *
  * Phase 1: clobbers any pre-existing config in the cloned tree. Merging
  * with author-shipped configs is a follow-up.
  */
-function applyValidationOverlay(entry: PluginEntry, scanPath: string): boolean {
-  if (!entry.validation) return false;
+function applyValidationOverlay(entry: PluginEntry, scanPath: string): OverlayOutcome {
+  if (!entry.validation) return { applied: false };
 
   const overlayPath = safePath.join(scanPath, 'vibe-agent-toolkit.config.yaml');
   const overlay = {
@@ -380,8 +418,13 @@ function applyValidationOverlay(entry: PluginEntry, scanPath: string): boolean {
       },
     },
   };
-  writeFileSync(overlayPath, yaml.stringify(overlay, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
-  return true;
+  try {
+    writeFileSync(overlayPath, yaml.stringify(overlay, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
+  } catch (error) {
+    if (!isFilesystemAccessError(error)) throw error;
+    return { applied: false, refused: `Could not write the validation overlay ${overlayPath}: ${errorMessageOf(error)}` };
+  }
+  return { applied: true };
 }
 
 function unloadableRow(entry: PluginEntry, error: string, durationMs: number): PluginRow {

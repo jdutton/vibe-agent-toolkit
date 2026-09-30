@@ -9,11 +9,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { dirname } from 'node:path';
 
 
-import { mkdirSyncReal, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { createSymlink, isVatError, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  CLAUDE_USER_STATE_UNREADABLE_CODE,
   installPlugin,
+  CLAUDE_USER_STATE_WRITE_FAILED_CODE,
   readInstalledPlugins,
   readKnownMarketplaces,
   readUserSettings,
@@ -57,6 +59,16 @@ function setupTempDir(prefix: string): { getDir: () => string } {
   return { getDir: () => tempDir };
 }
 
+/** What `fn` threw, or `undefined` when it returned. */
+function thrownBy(fn: () => unknown): unknown {
+  try {
+    fn();
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
 describe('readKnownMarketplaces', () => {
   const { getDir } = setupTempDir(REGISTRY_TEST_PREFIX);
 
@@ -69,6 +81,13 @@ describe('readKnownMarketplaces', () => {
     const paths = buildTestPaths(getDir());
     plantFile(paths.knownMarketplacesPath, NOT_JSON);
     expect(() => readKnownMarketplaces(paths)).toThrow(paths.knownMarketplacesPath);
+  });
+
+  it('codes a registry it cannot read as CLAUDE_USER_STATE_UNREADABLE', () => {
+    const paths = buildTestPaths(getDir());
+    // A directory where the file should be: present, and not readable as a file.
+    mkdirSyncReal(paths.knownMarketplacesPath, { recursive: true });
+    expect(thrownBy(() => readKnownMarketplaces(paths))).toSatisfy((error: unknown) => isVatError(error, CLAUDE_USER_STATE_UNREADABLE_CODE));
   });
 
   it('round-trips with writeKnownMarketplaces', () => {
@@ -104,6 +123,7 @@ describe('readInstalledPlugins', () => {
     const paths = buildTestPaths(getDir());
     plantFile(paths.installedPluginsPath, NOT_JSON);
     expect(() => readInstalledPlugins(paths)).toThrow(paths.installedPluginsPath);
+    expect(thrownBy(() => readInstalledPlugins(paths))).toSatisfy((error: unknown) => isVatError(error, CLAUDE_USER_STATE_UNREADABLE_CODE));
   });
 
   it('round-trips with writeInstalledPlugins', () => {
@@ -156,6 +176,31 @@ describe('readUserSettings', () => {
   });
 });
 
+/** A built plugin directory under `dir`, ready to register. */
+function builtPlugin(dir: string): string {
+  const pluginDir = safePath.join(dir, 'dist', 'plugins', PLUGIN_NAME);
+  mkdirSyncReal(pluginDir, { recursive: true });
+  writeFileSync(safePath.join(pluginDir, PLUGIN_JSON), JSON.stringify({ name: PLUGIN_NAME }));
+  return pluginDir;
+}
+
+/** Register a plugin built under `dir` into `paths`, returning what it threw (or undefined). */
+async function registrationError(dir: string, paths: ReturnType<typeof buildTestPaths>): Promise<unknown> {
+  try {
+    await installPlugin({
+      marketplaceName: MARKETPLACE_NAME,
+      pluginName: PLUGIN_NAME,
+      pluginDir: builtPlugin(dir),
+      version: VERSION,
+      source: { source: 'npm', package: NPM_PACKAGE, version: VERSION },
+      paths,
+    });
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
 describe('installPlugin', () => {
   const { getDir } = setupTempDir('vat-install-test-');
 
@@ -163,13 +208,72 @@ describe('installPlugin', () => {
     vi.restoreAllMocks();
   });
 
-  it('leaves an unparseable settings.json untouched and says why on stderr', async () => {
+  it('refuses an unparseable settings.json, coded, and leaves it untouched', async () => {
     const paths = buildTestPaths(getDir());
-    const pluginDir = safePath.join(getDir(), 'dist', 'plugins', PLUGIN_NAME);
-    mkdirSyncReal(pluginDir, { recursive: true });
-    writeFileSync(safePath.join(pluginDir, PLUGIN_JSON), JSON.stringify({ name: PLUGIN_NAME }));
     plantFile(paths.userSettingsPath, NOT_JSON);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const error = await registrationError(getDir(), paths);
+
+    // The failure reaches the caller — a registration that did not happen is never "installed".
+    expect(isVatError(error, CLAUDE_USER_STATE_UNREADABLE_CODE), String(error)).toBe(true);
+    expect(String(error)).toContain(paths.userSettingsPath);
+    // The user's file is what it was — not replaced by `{ enabledPlugins: {…} }`.
+    expect(readFileSync(paths.userSettingsPath, 'utf-8')).toBe(NOT_JSON);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('codes a registration it could not write as CLAUDE_USER_STATE_WRITE_FAILED', async () => {
+    const paths = buildTestPaths(getDir());
+    // A FILE where the cache directory must go: the copy into it cannot happen.
+    plantFile(paths.pluginsCacheDir, 'not a directory');
+
+    const error = await registrationError(getDir(), paths);
+
+    expect(isVatError(error, CLAUDE_USER_STATE_WRITE_FAILED_CODE), String(error)).toBe(true);
+    expect(String(error)).toContain(`${PLUGIN_NAME}@${MARKETPLACE_NAME}`);
+  });
+
+  it('re-registers a plugin whose skills are links (a --dev re-install) — the cache is replaced, not copied into', async ({ skip }) => {
+    const cap = symlinkCapability();
+    if (cap === null) {
+      skip('this process cannot create symlinks');
+      return;
+    }
+    const paths = buildTestPaths(getDir());
+    const build = safePath.join(getDir(), 'dist', 'skills', 'linked');
+    plantFile(safePath.join(build, 'SKILL.md'), '# linked\n');
+    // Registered in place, as `--dev` does: the plugin dir IS the marketplace destination.
+    const pluginDir = safePath.join(paths.marketplacesDir, MARKETPLACE_NAME, 'plugins', PLUGIN_NAME);
+    plantFile(safePath.join(pluginDir, PLUGIN_JSON), JSON.stringify({ name: PLUGIN_NAME }));
+    mkdirSyncReal(safePath.join(pluginDir, 'skills'), { recursive: true });
+    createSymlink(cap, build, safePath.join(pluginDir, 'skills', 'linked'), 'dir');
+    const register = (): Promise<void> => installPlugin({
+      marketplaceName: MARKETPLACE_NAME,
+      pluginName: PLUGIN_NAME,
+      pluginDir,
+      version: VERSION,
+      source: { source: 'npm', package: NPM_PACKAGE, version: VERSION },
+      paths,
+    });
+
+    await register();
+    await expect(register()).resolves.toBeUndefined();
+    expect(existsSync(safePath.join(paths.pluginsCacheDir, MARKETPLACE_NAME, PLUGIN_NAME, VERSION, 'skills', 'linked', 'SKILL.md'))).toBe(true);
+  });
+
+  it('never deletes a pluginDir that resolves to the cache destination through a link', async ({ skip }) => {
+    const cap = symlinkCapability();
+    if (cap === null) {
+      skip('this process cannot create symlinks');
+      return;
+    }
+    const paths = buildTestPaths(getDir());
+    const cacheDest = safePath.join(paths.pluginsCacheDir, MARKETPLACE_NAME, PLUGIN_NAME, VERSION);
+    plantFile(safePath.join(cacheDest, PLUGIN_JSON), JSON.stringify({ name: PLUGIN_NAME }));
+    // Textually a different path; on disk, the cache destination itself.
+    const pluginDir = safePath.join(getDir(), 'linked-plugin');
+    createSymlink(cap, cacheDest, pluginDir, 'dir');
 
     await installPlugin({
       marketplaceName: MARKETPLACE_NAME,
@@ -180,10 +284,7 @@ describe('installPlugin', () => {
       paths,
     });
 
-    // The user's file is what it was — not replaced by `{ enabledPlugins: {…} }`.
-    expect(readFileSync(paths.userSettingsPath, 'utf-8')).toBe(NOT_JSON);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]?.[0])).toContain(paths.userSettingsPath);
+    expect(existsSync(safePath.join(cacheDest, PLUGIN_JSON))).toBe(true);
   });
 
   it('full flow: creates dirs, writes registry files, updates settings.json', async () => {

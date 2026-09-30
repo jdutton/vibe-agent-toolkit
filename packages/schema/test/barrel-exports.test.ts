@@ -78,7 +78,6 @@ const BARREL_EXPORTS = [
   'applyAllowFilter',
   'buildErrorReport',
   'buildReport',
-  'calculateValidationStatus',
   'compareSeverity',
   'countBySeverity',
   'createAllowUsageLedger',

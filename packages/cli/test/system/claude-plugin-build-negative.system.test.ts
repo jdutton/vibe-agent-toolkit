@@ -1,8 +1,12 @@
 import { existsSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import type { RefusalCode } from '@vibe-agent-toolkit/schema';
+import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, describe, expect, it } from 'vitest';
+import yaml from 'yaml';
+
+import { PLUGIN_BUILD_REPORT_SCHEMA, type PluginBuildReport } from '../../src/commands/claude/plugin/build-schema.js';
 
 import {
   createSkillMarkdown,
@@ -57,6 +61,27 @@ async function runSkillsThenPluginBuild(tempDir: string): ReturnType<typeof exec
   return executeCli(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
 }
 
+/** The build's stdout, read through the published schema. */
+function reportOf(stdout: string): PluginBuildReport {
+  return PLUGIN_BUILD_REPORT_SCHEMA.parse(yaml.parse(stdout));
+}
+
+/** The build refused with `code`, exit 2 — a user's mistake, never INTERNAL_ERROR. */
+function expectRefusal(result: Awaited<ReturnType<typeof executeCli>>, code: RefusalCode): void {
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
+  const report = reportOf(result.stdout);
+  expect(report.status === 'error' ? report.error.code : report.status).toBe(code);
+}
+
+/** `git init` + commit, so the tree-copy sees the fixture's files. */
+function commitAll(tempDir: string): void {
+  runGitOrThrow(['init', '-q'], { cwd: tempDir });
+  runGitOrThrow(['config', 'user.email', 't@t'], { cwd: tempDir });
+  runGitOrThrow(['config', 'user.name', 't'], { cwd: tempDir });
+  runGitOrThrow(['add', '-A'], { cwd: tempDir });
+  runGitOrThrow(['commit', '-q', '-m', 'init'], { cwd: tempDir });
+}
+
 /**
  * Seed a plugin-local skill for plugin `p1` and write the minimal config that
  * declares it. Shared setup for negative-path tests whose bodies diverge only
@@ -80,7 +105,7 @@ describe('vat claude plugin build (negative paths)', () => {
     writeTestFile(safePath.join(tempDir, 'plugins', 'p1', 'hooks', 'hooks.json'), '{not json');
 
     const result = await runSkillsThenPluginBuild(tempDir);
-    expect(result.status).not.toBe(0);
+    expectRefusal(result, 'INPUT_UNREADABLE');
     expect(result.stderr).toContain('hooks.json');
   });
 
@@ -91,7 +116,7 @@ describe('vat claude plugin build (negative paths)', () => {
     writeTestFile(safePath.join(tempDir, 'plugins', 'p1', '.mcp.json'), 'bogus');
 
     const result = await runSkillsThenPluginBuild(tempDir);
-    expect(result.status).not.toBe(0);
+    expectRefusal(result, 'INPUT_UNREADABLE');
     expect(result.stderr).toContain('.mcp.json');
   });
 
@@ -117,7 +142,7 @@ claude:
 `,
     );
     const result = await runSkillsThenPluginBuild(tempDir);
-    expect(result.status).not.toBe(0);
+    expectRefusal(result, 'INPUT_UNREADABLE');
     expect(result.stderr).toContain('dist/missing.mjs');
   });
 
@@ -146,7 +171,7 @@ claude:
 `,
     );
     const result = await runSkillsThenPluginBuild(tempDir);
-    expect(result.status).not.toBe(0);
+    expectRefusal(result, 'CONFIG_INVALID');
     expect(result.stderr).toMatch(/declared more than once|globally unique/i);
   });
 
@@ -154,8 +179,70 @@ claude:
     const tempDir = createTempDir();
     writeConfigAndPkg(tempDir, configMin('        - name: empty\n          skills: []\n'));
     const result = await runSkillsThenPluginBuild(tempDir);
-    expect(result.status).not.toBe(0);
+    expectRefusal(result, 'CONFIG_INVALID');
     expect(result.stderr).toMatch(/has no content/i);
+  });
+
+  it('refuses a --marketplace the config does not declare as USAGE_INVALID', async () => {
+    const tempDir = createTempDir();
+    seedPluginP1WithMinimalConfig(tempDir);
+    const result = await executeCli(binPath, ['claude', 'plugin', 'build', '--marketplace', 'nope'], { cwd: tempDir });
+    expectRefusal(result, 'USAGE_INVALID');
+    expect(result.stderr).toContain('declared: mp1');
+  });
+
+  it('refuses outside a project as CONFIG_INVALID', async () => {
+    const tempDir = createTempDir();
+    const result = await executeCli(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
+    expectRefusal(result, 'CONFIG_INVALID');
+  });
+
+  it('plugin build publishes a gate failure as findings, exit 1', async () => {
+    const tempDir = createTempDir();
+    writeConfigAndPkg(tempDir, `version: 1
+skills:
+  include: ["plugins/*/skills/**/SKILL.md"]
+  defaults:
+    validation:
+      severity:
+        LINK_OUTSIDE_SKILL_DIR: error
+claude:
+  marketplaces:
+    mp1:
+      owner:
+        name: Test
+      plugins:
+        - name: p1
+          skills: []
+`);
+    const skills = safePath.join(tempDir, 'plugins', 'p1', 'skills');
+    mkdirSyncReal(safePath.join(skills, 'strict'), { recursive: true });
+    writeTestFile(safePath.join(skills, 'shared.md'), '# Shared notes\n');
+    writeTestFile(
+      safePath.join(skills, 'strict', 'SKILL.md'),
+      '---\nname: strict\ndescription: Plugin-local skill whose SKILL.md links a file outside its own directory.\n---\n\n# strict\n\nSee [shared notes](../shared.md).\n',
+    );
+    writeTestFile(safePath.join(tempDir, '.gitignore'), 'dist/\n');
+    commitAll(tempDir);
+
+    const result = await executeCli(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
+
+    // The gate's error-severity finding is a finding, not a crash: exit 1, never 2.
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+    const report = reportOf(result.stdout);
+    expect(report.status).toBe('findings');
+    // Located relative to the directory holding the config, never absolute.
+    expect(report.findings).toContainEqual(expect.objectContaining({
+      code: 'LINK_OUTSIDE_SKILL_DIR',
+      severity: 'error',
+      location: 'plugins/p1/skills/strict/SKILL.md',
+    }));
+    expect(result.stdout).not.toContain(toForwardSlash(tempDir));
+    expect(report.data.marketplaces[0]).toMatchObject({
+      name: 'mp1',
+      status: 'findings',
+      reason: expect.stringMatching(/post-build validation errors: strict$/),
+    });
   });
 
   it('does not copy gitignored node_modules from plugins/<p>/', async () => {

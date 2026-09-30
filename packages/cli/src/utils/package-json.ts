@@ -17,13 +17,15 @@ import { readFileSync } from 'node:fs';
 
 import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
 
+import { CommandRefusalError } from './command-refusal.js';
+import { unstatablePathRefusal } from './project-root-policy.js';
+
 /**
  * The parsed manifest, or `undefined` when there is none at `pkgPath`.
  *
- * @throws {Error} naming the file when it exists but is not a JSON object;
- *   the parse error is the `cause`.
- * @throws whatever the filesystem threw for anything that is not an absence
- *   (a refusal stays a refusal).
+ * @throws {CommandRefusalError} `INPUT_UNREADABLE` naming the file when it
+ *   exists but is not a JSON object (the parse error is the `cause`), or when
+ *   the OS refused the read (a refusal stays a refusal, never an absence).
  */
 export function readPackageJsonOrAbsent(pkgPath: string): Record<string, unknown> | undefined {
   let raw: string;
@@ -31,7 +33,7 @@ export function readPackageJsonOrAbsent(pkgPath: string): Record<string, unknown
     raw = readFileSync(pkgPath, 'utf-8');
   } catch (error) {
     if (isPathAbsentError(error)) return undefined;
-    throw error;
+    throw unstatablePathRefusal(pkgPath, error);
   }
 
   let parsed: unknown;
@@ -39,10 +41,10 @@ export function readPackageJsonOrAbsent(pkgPath: string): Record<string, unknown
     parsed = JSON.parse(raw);
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
-    throw new Error(`${pkgPath} is not valid JSON: ${error.message}`, { cause: error });
+    throw new CommandRefusalError('INPUT_UNREADABLE', `${pkgPath} is not valid JSON: ${error.message}`, { cause: error });
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`${pkgPath} is not a JSON object, so it is not a package manifest`);
+    throw new CommandRefusalError('INPUT_UNREADABLE', `${pkgPath} is not a JSON object, so it is not a package manifest`);
   }
   return parsed as Record<string, unknown>;
 }

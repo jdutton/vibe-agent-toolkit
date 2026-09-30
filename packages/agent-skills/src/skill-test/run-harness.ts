@@ -18,7 +18,7 @@ import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
-import { ExitCode, type ExitCodeValue } from '@vibe-agent-toolkit/schema';
+import { ExitCode, type RefusalCode } from '@vibe-agent-toolkit/schema';
 import {
   direntKind,
   isPathAbsentError,
@@ -86,6 +86,7 @@ import {
   BootstrapNeededError,
   DuplicateStagedSkillError,
   InternalHarnessError,
+  SKILL_TEST_REFUSAL_BY_ERROR_CODE,
   type SkillTestFailureReason,
 } from './failure-reason.js';
 import { mergeFragmentsToFriction, mergeFragmentsToGrading, mergeFragmentsToToolEval } from './fragment-merge.js';
@@ -104,11 +105,12 @@ import {
 import { acquireHarnessLock, installSignalCleanup } from './lock.js';
 import { RateLimitSignal, runPipeline } from './pipeline.js';
 import { detectPluginLayout } from './plugin-layout.js';
-import { runPreflight, type PreflightInput } from './preflight.js';
+import { preflightRefusal, runPreflight, type PreflightInput } from './preflight.js';
 import { descriptorToSource, stageHarness, type SkippedOptionalItem, type StageItem } from './staging.js';
 import {
   buildSkippedSummary,
   formatSkippedTiersSummary,
+  fragmentPassed,
   groupEvalsByTier,
   shouldGateAfterTier,
   type SkippedEvalsSummary,
@@ -316,27 +318,13 @@ export interface RunHarnessOptions {
    * `name` instead convicted clean control arms of reading their own scratch files.
    */
   declaredExecutables?: Array<{ name: string; howInvoked: string; kind: string; path: string }>;
-
-  /**
-   * Opt-OUT of eval gating (for interactive use). By DEFAULT (false/absent) a
-   * failing verdict returns exit FINDINGS — fail-closed, so CI catches a
-   * regression without an extra flag. When true, a failing verdict is downgraded
-   * to Ok (0) and the pass/fail count lives only in the summary/grading.json.
-   * Harness-broke codes (1/2/3) are unaffected either way.
-   */
-  tolerateEvalFailure?: boolean;
 }
 
-export interface RunHarnessResult {
+/** Fields every harness result carries, whether or not the run happened. */
+interface RunHarnessResultBase {
   harnessPath: string;
-  exitCode: ExitCodeValue;
-  /**
-   * Present exactly when `exitCode` is `ERROR`: why the harness could not run.
-   * The CLI prints it as `Reason: …` on stderr. Absent on a completed run,
-   * whatever its verdict.
-   */
-  reason?: SkillTestFailureReason;
-  summary: string;
+  /** The run's human verdict line (or why it stopped) — prose, for stderr and the report. */
+  description: string;
   /**
    * Where the executor's per-eval working directories were materialized. Lives
    * OUTSIDE `harnessPath` on purpose (see {@link resolveWorkspacesRoot}), so it
@@ -359,6 +347,50 @@ export interface RunHarnessResult {
    */
   resultsPath?: string;
 }
+
+/** One eval the run graded, and its COMPOSITE verdict (output expectations and tool verdict). */
+interface SkillTestEvalOutcome {
+  id: string;
+  passed: boolean;
+}
+
+/**
+ * The harness could not run. `exitCode` is `ERROR`, and the two answers to "why"
+ * are both required — so no return site can say "failed" without saying which
+ * refusal: `refusal` is the published `error.code`, `reason` the stderr `Reason:`.
+ */
+interface RefusedHarnessRun extends RunHarnessResultBase {
+  exitCode: typeof ExitCode.ERROR;
+  reason: SkillTestFailureReason;
+  refusal: RefusalCode;
+}
+
+/** The harness ran: every eval it graded, with the verdict it reached. */
+interface CompletedHarnessRun extends RunHarnessResultBase {
+  /**
+   * `FINDINGS` when any eval failed (or a fail-fast gate skipped some), `OK`
+   * otherwise — the same fact as `evals`, never softened: tolerating a failed eval
+   * is a caller's decision about how to publish it.
+   */
+  exitCode: typeof ExitCode.OK | typeof ExitCode.FINDINGS;
+  /** The eval suite the run read (absolute) — authored, `--evals`, or the vat-only held copy. */
+  evalsPath: string;
+  /**
+   * The evals this run examined: those it graded, or — on a dry run, which grades
+   * nothing — those it staged and would have run.
+   */
+  examined: number;
+  /**
+   * Each graded eval's composite verdict, WITH arm only, in the order they were
+   * graded. Empty on a dry run. Evals a fail-fast gate skipped are absent — they
+   * were not run, and the failure that fired the gate is already here.
+   */
+  evals: SkillTestEvalOutcome[];
+  /** The `friction.json` this run wrote, or `null` when it wrote none (a dry run). */
+  frictionReportPath: string | null;
+}
+
+export type RunHarnessResult = RefusedHarnessRun | CompletedHarnessRun;
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -401,19 +433,12 @@ function resolveTimeoutMs(opts: RunHarnessOptions): number {
 }
 
 /**
- * Map an eval verdict to a process exit code. Default behavior (fail-closed): a
- * failing verdict is `FINDINGS` — the harness ran to completion and what it
- * examined did not pass, exactly as `vat skills validate` reports an
- * error-severity finding — while a harness that could not run is `ERROR`, so a
- * CI consumer can `case $? in 0);; 1) tolerate;; *) hard fail;; esac`.
- * When `tolerateEvalFailure` is set (interactive opt-out), a failing verdict is
- * downgraded to `OK` and the count lives only in the summary/grading.json.
+ * A completed run's verdict: `FINDINGS` when anything failed, `OK` otherwise —
+ * never softened here; whether a failed eval fails the CALLER is the caller's
+ * call (`vat skill test run --allow-eval-failure` publishes it as a warning).
  */
-export function verdictExitCode(
-  allPassed: boolean,
-  tolerateEvalFailure: boolean,
-): typeof ExitCode.OK | typeof ExitCode.FINDINGS {
-  return !allPassed && !tolerateEvalFailure ? ExitCode.FINDINGS : ExitCode.OK;
+function completedExitCode(allPassed: boolean): typeof ExitCode.OK | typeof ExitCode.FINDINGS {
+  return allPassed ? ExitCode.OK : ExitCode.FINDINGS;
 }
 
 function resolveStallMs(opts: RunHarnessOptions): number | undefined {
@@ -983,7 +1008,8 @@ function attemptStageWorkspaces(
         harnessPath: harnessRoot,
         exitCode: ExitCode.ERROR,
         reason: 'preflight',
-        summary: `Eval input error:\n  ${e.message}`,
+        refusal: SKILL_TEST_REFUSAL_BY_ERROR_CODE.EVAL_INPUT,
+        description: `Eval input error:\n  ${e.message}`,
       };
     }
     throw e;
@@ -2510,7 +2536,7 @@ interface WriteRunArtifactsInput {
 }
 
 const IN_PLACE_SUBJECT_FRICTION: FrictionItem = {
-  severity: 'low',
+  severity: 'info',
   category: 'path-assumption',
   message:
     'In-place skill (publish: false) — staged from source; links that leave the skill directory are not ' +
@@ -3088,12 +3114,14 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     const preflightResult = runPreflight(preflightInput);
 
     if (!preflightResult.passed) {
-      const summary = renderPreflightSummary(preflightResult.checks);
+      const failedChecks = renderPreflightSummary(preflightResult.checks);
       return {
         harnessPath: harnessRoot,
         exitCode: ExitCode.ERROR,
         reason: 'preflight',
-        summary: `Preflight failed:\n${summary}`,
+        // `passed` is false, so some check failed and named its refusal.
+        refusal: preflightRefusal(preflightResult) ?? 'INTERNAL_ERROR',
+        description: `Preflight failed:\n${failedChecks}`,
       };
     }
 
@@ -3121,7 +3149,8 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
         harnessPath: harnessRoot,
         exitCode: ExitCode.ERROR,
         reason: 'preflight',
-        summary:
+        refusal: SKILL_TEST_REFUSAL_BY_ERROR_CODE.SKILL_TEST_SECURITY_ACK_MISSING,
+        description:
           'Security acknowledgment required. Pass --i-understand-this-runs-skill-code to proceed.',
       };
     }
@@ -3189,7 +3218,11 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       return {
         harnessPath: harnessRoot,
         exitCode: ExitCode.OK,
-        summary: buildDryRunSummary({
+        examined: declaredEvalCount,
+        evals: [],
+        frictionReportPath: null,
+        evalsPath,
+        description: buildDryRunSummary({
           wouldBuild: opts.wouldBuild === true,
           ...(opts.dryRunStagedExistingDist === undefined
             ? {}
@@ -3339,7 +3372,10 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // that SKIPPED higher tiers is never a pass: skipped ≠ passed forces allPassed
     // false → exit FINDINGS (never downgraded to 0 by the composite path).
     const allPassed = resolveCompositeAllPassed(verdict.allPassed, toolEval, skipped);
-    const summary = buildRunSummaryWithSkips(verdict, toolEval, allPassed, skipped, costAccumulator);
+    const description = buildRunSummaryWithSkips(verdict, toolEval, allPassed, skipped, costAccumulator);
+    // The same per-fragment composite the fail-fast gate reads, so an eval this
+    // lists as passed can never be one the gate stopped the run for.
+    const evals = partitionFragmentsByArm(fragments).withArm.map((f) => ({ id: f.evalId, passed: fragmentPassed(f) }));
 
     return {
       harnessPath: harnessRoot,
@@ -3349,8 +3385,12 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       // existed. Same predicate as cleanup's, by construction.
       ...(retainWorkspaces ? { workspacesPath: workspacesRoot } : {}),
       resultsPath: resultsDir,
-      exitCode: verdictExitCode(allPassed, opts.tolerateEvalFailure === true),
-      summary,
+      exitCode: completedExitCode(allPassed),
+      examined: evals.length,
+      evals,
+      frictionReportPath: artifacts.frictionOut,
+      evalsPath,
+      description,
     };
   } finally {
     // Surface any packaging-fidelity friction VAT merged into friction.json to

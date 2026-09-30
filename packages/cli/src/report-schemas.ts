@@ -20,7 +20,7 @@
  *   check when it is zero), and ends on the code the written document derives.
  *   `scripts/generate-json-schemas.ts` emits `schemas/<name>.json` from it.
  * - `external` / `stdout` — a payload whose shape someone else owns (the
- *   Anthropic Admin API), passed through; `exitCode` adapts its outcome to the
+ *   Anthropic Admin API), passed through; `exitCodes` maps each outcome to the
  *   exit contract, since there is no envelope to derive one from.
  * - `artifact` — a VAT-owned shape that is not a run report: a stdout
  *   artifact (a config to paste), a file a verb writes, or a type a package
@@ -30,10 +30,8 @@
  * - `input` / `schema-file` — a committed JSON Schema describing what an
  *   ADOPTER writes (config, manifests, frontmatter). Registered so the
  *   both-ways file check can tell "describes an input" from "unregistered".
- * - `legacy` / `stdout` — INTERIM, shrink-only: every Commander leaf not yet
- *   migrated, each naming the task that migrates it. A leaf that migrates
- *   leaves this list in the same change; a legacy verb that now writes through
- *   a `report` entry is a red test. Only `claude context` survives wave A.
+ * - `legacy` / `stdout` — exactly `claude context`, the one verb not on the
+ *   envelope through wave A (wave C replaces it). Its type admits no other verb.
  *
  * ## Why the report schemas live in sibling `*-schema.ts` modules
  *
@@ -46,9 +44,8 @@
  * ## The one lint exception
  *
  * `local/no-stdout-outside-writer` makes the writer the only stdout under
- * `commands/`. Its `allowFiles` is the same interim ratchet as `legacy`, and
- * reaches exactly `commands/agent/run.ts` — whose stdout is the agent's own
- * stdio conversation, not a document.
+ * `commands/`. Its `allowFiles` is exactly `commands/agent/run.ts` — whose
+ * stdout is the agent's reply, not a document.
  */
 
 import { FrictionReportSchema } from '@vibe-agent-toolkit/agent-skills';
@@ -63,17 +60,45 @@ import {
 import { ExitCode, type ExitCodeValue, type Report, type ReportZodSchema } from '@vibe-agent-toolkit/schema';
 import type { ZodTypeAny } from 'zod';
 
+import { AGENT_BUILD_EXAMINED, AGENT_BUILD_REPORT_SCHEMA } from './commands/agent/build-schema.js';
+import { AGENT_IMPORT_EXAMINED, AGENT_IMPORT_REPORT_SCHEMA } from './commands/agent/import-schema.js';
+import { AGENT_INSTALL_EXAMINED, AGENT_INSTALL_REPORT_SCHEMA } from './commands/agent/install-schema.js';
+import { AGENT_INSTALLED_EXAMINED, AGENT_INSTALLED_REPORT_SCHEMA } from './commands/agent/installed-schema.js';
+import { AGENT_LIST_EXAMINED, AGENT_LIST_REPORT_SCHEMA } from './commands/agent/list-schema.js';
+import { AGENT_UNINSTALL_EXAMINED, AGENT_UNINSTALL_REPORT_SCHEMA } from './commands/agent/uninstall-schema.js';
 import { AGENT_VALIDATE_EXAMINED, AGENT_VALIDATE_REPORT_SCHEMA } from './commands/agent/validate-schema.js';
 import { ARD_EMIT_REPORT_SCHEMA } from './commands/ard/emit-schema.js';
 import { AUDIT_EXAMINED, AUDIT_REPORT_SCHEMA } from './commands/audit-schema.js';
 import { AUDIT_SETTINGS_EXAMINED, AUDIT_SETTINGS_REPORT_SCHEMA } from './commands/audit-settings-schema.js';
+import { CACHE_CLEAR_EXAMINED, CACHE_CLEAR_REPORT_SCHEMA } from './commands/cache/clear-schema.js';
+import { MARKETPLACE_PUBLISH_EXAMINED, MARKETPLACE_PUBLISH_REPORT_SCHEMA } from './commands/claude/marketplace/publish-schema.js';
 import { MARKETPLACE_VALIDATE_EXAMINED, MARKETPLACE_VALIDATE_REPORT_SCHEMA } from './commands/claude/marketplace/validate-schema.js';
+import { ORG_NOT_IMPLEMENTED_EXAMINED, ORG_NOT_IMPLEMENTED_REPORT_SCHEMA } from './commands/claude/org/stubs-schema.js';
+import { PLUGIN_BUILD_EXAMINED, PLUGIN_BUILD_REPORT_SCHEMA } from './commands/claude/plugin/build-schema.js';
+import { PLUGIN_INSTALL_EXAMINED, PLUGIN_INSTALL_REPORT_SCHEMA } from './commands/claude/plugin/install-schema.js';
+import { PLUGIN_LIST_EXAMINED, PLUGIN_LIST_REPORT_SCHEMA } from './commands/claude/plugin/list-schema.js';
+import { PLUGIN_UNINSTALL_EXAMINED, PLUGIN_UNINSTALL_REPORT_SCHEMA } from './commands/claude/plugin/uninstall-schema.js';
+import { CORPUS_SCAN_EXAMINED, CORPUS_SCAN_REPORT_SCHEMA } from './commands/corpus/scan-schema.js';
+import { renderDoctorText } from './commands/doctor-render.js';
+import { DOCTOR_EXAMINED, DOCTOR_REPORT_SCHEMA } from './commands/doctor-schema.js';
+import { INVENTORY_EXAMINED, INVENTORY_REPORT_SCHEMA } from './commands/inventory-schema.js';
+import { MCP_LIST_COLLECTIONS_EXAMINED, MCP_LIST_COLLECTIONS_REPORT_SCHEMA } from './commands/mcp/list-collections-schema.js';
 import { OKF_VALIDATE_REPORT_SCHEMA } from './commands/okf/validate-schema.js';
+import { ORCHESTRATOR_EXAMINED, ORCHESTRATOR_REPORT_SCHEMA } from './commands/orchestrator-schema.js';
+import { RAG_CLEAR_REPORT_SCHEMA, RAG_DATABASE_EXAMINED, RAG_STATS_REPORT_SCHEMA } from './commands/rag/admin-schema.js';
+import { RAG_INDEX_EXAMINED, RAG_INDEX_REPORT_SCHEMA } from './commands/rag/index-schema.js';
+import { RAG_QUERY_EXAMINED, RAG_QUERY_REPORT_SCHEMA } from './commands/rag/query-schema.js';
 import { CHECK_REPORT_SCHEMA } from './commands/resources/check-schema.js';
 import { RESOURCES_QUERY_EXAMINED, RESOURCES_QUERY_REPORT_SCHEMA } from './commands/resources/query-schema.js';
 import { RESOURCES_SCAN_EXAMINED, RESOURCES_SCAN_REPORT_SCHEMA } from './commands/resources/scan-schema.js';
 import { RESOURCES_VALIDATE_EXAMINED, RESOURCES_VALIDATE_REPORT_SCHEMA } from './commands/resources/validate-schema.js';
 import { SKILL_REVIEW_REPORT_SCHEMA } from './commands/skill/review-schema.js';
+import { SKILL_TEST_CONFIGURE_EXAMINED, SKILL_TEST_CONFIGURE_REPORT_SCHEMA } from './commands/skill/test/configure-schema.js';
+import { SKILL_TEST_RUN_EXAMINED, SKILL_TEST_RUN_REPORT_SCHEMA } from './commands/skill/test/run-schema.js';
+import { SKILLS_BUILD_EXAMINED, SKILLS_BUILD_REPORT_SCHEMA } from './commands/skills/build-schema.js';
+import { SKILLS_INSTALL_EXAMINED, SKILLS_INSTALL_REPORT_SCHEMA } from './commands/skills/install-schema.js';
+import { SKILLS_LIST_EXAMINED, SKILLS_LIST_REPORT_SCHEMA } from './commands/skills/list-schema.js';
+import { SKILLS_PACKAGE_EXAMINED, SKILLS_PACKAGE_REPORT_SCHEMA } from './commands/skills/package-schema.js';
 import { SKILLS_VALIDATE_EXAMINED, SKILLS_VALIDATE_REPORT_SCHEMA } from './commands/skills/validate-schema.js';
 import type { ExaminedDeclaration } from './utils/run-integrity.js';
 
@@ -104,7 +129,8 @@ interface ExternalShape {
   readonly channel: 'stdout';
   readonly verbs: readonly string[];
   readonly reason: string;
-  readonly exitCode: (outcome: ExternalOutcome) => ExitCodeValue;
+  /** The adapter: the code each outcome of the external write ends on. */
+  readonly exitCodes: Readonly<Record<ExternalOutcome['kind'], ExitCodeValue>>;
 }
 
 /** A VAT-owned shape on stdout or in a file that is not a run report. */
@@ -117,8 +143,13 @@ interface PublishedArtifactShape {
   readonly schema: ZodTypeAny | null;
   /** Repo-relative path of the committed JSON Schema rendered from `schema`, or `null` when none is. */
   readonly schemaFile: string | null;
-  /** Who puts the bytes out: the document writer (`writeArtifact` / `writeArtifactFile`), or the projection store. */
-  readonly writer: 'document-writer' | 'projection-store';
+  /**
+   * Who puts the bytes out: the document writer (`writeArtifact` /
+   * `writeArtifactFile`), the projection store, or the skill-test harness
+   * (`runSkillTestHarness`, the sole writer of a run's `results/`, which a
+   * library cannot hand to the CLI's writer).
+   */
+  readonly writer: 'document-writer' | 'projection-store' | 'skill-test-harness';
   readonly reason: string;
 }
 
@@ -140,11 +171,11 @@ interface InputShape {
   readonly reason: string;
 }
 
-/** INTERIM: a leaf not yet migrated, naming the task that migrates it. */
+/** The one verb not yet on the envelope; wave C replaces it. */
 interface LegacyShape {
   readonly kind: 'legacy';
   readonly channel: 'stdout';
-  readonly verbs: readonly string[];
+  readonly verbs: readonly ['claude context'];
   readonly reason: string;
 }
 
@@ -157,8 +188,7 @@ const DOCUMENT_WRITER = 'document-writer';
 const CORPUS_SCAN = 'corpus scan';
 
 /** The Admin API adapter: only a write that fully landed is `OK`; a partial or failed one is `ERROR`. */
-const adminApiExitCode = (outcome: ExternalOutcome): ExitCodeValue =>
-  outcome.kind === 'ok' ? ExitCode.OK : ExitCode.ERROR;
+const ADMIN_API_EXIT_CODES = { ok: ExitCode.OK, partial: ExitCode.ERROR, failed: ExitCode.ERROR } as const;
 
 /** `ard emit --format text`: the one summary line it has always printed; its findings go to stderr. */
 function renderArdEmitText(report: Report<unknown>): string {
@@ -226,6 +256,14 @@ const REPORTS = [
   {
     kind: 'report',
     channel: 'stdout',
+    verbs: ['inventory'],
+    name: 'inventory',
+    schema: INVENTORY_REPORT_SCHEMA,
+    examined: INVENTORY_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
     verbs: ['audit settings'],
     name: 'audit-settings',
     schema: AUDIT_SETTINGS_REPORT_SCHEMA,
@@ -266,6 +304,120 @@ const REPORTS = [
   {
     kind: 'report',
     channel: 'stdout',
+    verbs: ['skills build'],
+    name: 'skills-build',
+    schema: SKILLS_BUILD_REPORT_SCHEMA,
+    examined: SKILLS_BUILD_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['skills package'],
+    name: 'skills-package',
+    schema: SKILLS_PACKAGE_REPORT_SCHEMA,
+    examined: SKILLS_PACKAGE_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['skills list'],
+    name: 'skills-list',
+    schema: SKILLS_LIST_REPORT_SCHEMA,
+    examined: SKILLS_LIST_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['skills install'],
+    name: 'skills-install',
+    schema: SKILLS_INSTALL_REPORT_SCHEMA,
+    examined: SKILLS_INSTALL_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['skill test run'],
+    name: 'skill-test-run',
+    schema: SKILL_TEST_RUN_REPORT_SCHEMA,
+    examined: SKILL_TEST_RUN_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['skill test configure'],
+    name: 'skill-test-configure',
+    schema: SKILL_TEST_CONFIGURE_REPORT_SCHEMA,
+    examined: SKILL_TEST_CONFIGURE_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['doctor'],
+    name: 'doctor',
+    schema: DOCTOR_REPORT_SCHEMA,
+    examined: DOCTOR_EXAMINED,
+    // The human check block, every check listed; under yaml/json it goes to stderr instead.
+    renderText: renderDoctorText,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['cache clear'],
+    name: 'cache-clear',
+    schema: CACHE_CLEAR_REPORT_SCHEMA,
+    examined: CACHE_CLEAR_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['rag index'],
+    name: 'rag-index',
+    schema: RAG_INDEX_REPORT_SCHEMA,
+    examined: RAG_INDEX_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['rag query'],
+    name: 'rag-query',
+    schema: RAG_QUERY_REPORT_SCHEMA,
+    examined: RAG_QUERY_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['rag stats'],
+    name: 'rag-stats',
+    schema: RAG_STATS_REPORT_SCHEMA,
+    examined: RAG_DATABASE_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['rag clear'],
+    name: 'rag-clear',
+    schema: RAG_CLEAR_REPORT_SCHEMA,
+    examined: RAG_DATABASE_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['mcp list-collections'],
+    name: 'mcp-list-collections',
+    schema: MCP_LIST_COLLECTIONS_REPORT_SCHEMA,
+    examined: MCP_LIST_COLLECTIONS_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: [CORPUS_SCAN],
+    name: 'corpus-scan',
+    schema: CORPUS_SCAN_REPORT_SCHEMA,
+    examined: CORPUS_SCAN_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
     verbs: ['claude marketplace validate'],
     name: 'claude-marketplace-validate',
     schema: MARKETPLACE_VALIDATE_REPORT_SCHEMA,
@@ -278,6 +430,123 @@ const REPORTS = [
     name: 'agent-validate',
     schema: AGENT_VALIDATE_REPORT_SCHEMA,
     examined: AGENT_VALIDATE_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['agent build'],
+    name: 'agent-build',
+    schema: AGENT_BUILD_REPORT_SCHEMA,
+    examined: AGENT_BUILD_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['agent import'],
+    name: 'agent-import',
+    schema: AGENT_IMPORT_REPORT_SCHEMA,
+    examined: AGENT_IMPORT_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['agent installed'],
+    name: 'agent-installed',
+    schema: AGENT_INSTALLED_REPORT_SCHEMA,
+    examined: AGENT_INSTALLED_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['agent list'],
+    name: 'agent-list',
+    schema: AGENT_LIST_REPORT_SCHEMA,
+    examined: AGENT_LIST_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['agent install'],
+    name: 'agent-install',
+    schema: AGENT_INSTALL_REPORT_SCHEMA,
+    examined: AGENT_INSTALL_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['agent uninstall'],
+    name: 'agent-uninstall',
+    schema: AGENT_UNINSTALL_REPORT_SCHEMA,
+    examined: AGENT_UNINSTALL_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['claude plugin list'],
+    name: 'claude-plugin-list',
+    schema: PLUGIN_LIST_REPORT_SCHEMA,
+    examined: PLUGIN_LIST_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['claude plugin install'],
+    name: 'claude-plugin-install',
+    schema: PLUGIN_INSTALL_REPORT_SCHEMA,
+    examined: PLUGIN_INSTALL_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['claude plugin uninstall'],
+    name: 'claude-plugin-uninstall',
+    schema: PLUGIN_UNINSTALL_REPORT_SCHEMA,
+    examined: PLUGIN_UNINSTALL_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['claude plugin build'],
+    name: 'claude-plugin-build',
+    schema: PLUGIN_BUILD_REPORT_SCHEMA,
+    examined: PLUGIN_BUILD_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    verbs: ['claude marketplace publish'],
+    name: 'claude-marketplace-publish',
+    schema: MARKETPLACE_PUBLISH_REPORT_SCHEMA,
+    examined: MARKETPLACE_PUBLISH_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    // The not-implemented stubs: each only ever publishes the error branch (NOT_IMPLEMENTED).
+    verbs: [
+      'claude org api-keys update',
+      'claude org invites create',
+      'claude org invites delete',
+      'claude org users update',
+      'claude org users remove',
+      'claude org workspaces create',
+      'claude org workspaces archive',
+      'claude org workspaces members add',
+      'claude org workspaces members update',
+      'claude org workspaces members remove',
+    ],
+    name: 'claude-org-not-implemented',
+    schema: ORG_NOT_IMPLEMENTED_REPORT_SCHEMA,
+    examined: ORG_NOT_IMPLEMENTED_EXAMINED,
+  },
+  {
+    kind: 'report',
+    channel: 'stdout',
+    // ONE shape for the three: each folds its phases' reports the same way.
+    verbs: ['build', 'validate', 'verify'],
+    name: 'orchestrator',
+    schema: ORCHESTRATOR_REPORT_SCHEMA,
+    examined: ORCHESTRATOR_EXAMINED,
   },
 ] as const satisfies readonly ReportShape[];
 
@@ -303,8 +572,8 @@ const CLAUDE_ORG_EXTERNAL = {
     'claude org skills versions add',
     'claude org skills versions delete',
   ],
-  reason: 'Anthropic Admin API objects passed through as the API returns them (`has_more`, `data[]`, snake_case). Renaming them would make VAT a second schema for a document Anthropic owns.',
-  exitCode: adminApiExitCode,
+  reason: 'Anthropic Admin API objects passed through as the API returns them (`has_more`, `data[]`, snake_case). Renaming them would make VAT a second schema for a document Anthropic owns. A run that threw publishes `{ error: { code, message } }` instead (endWithExternalRefusal).',
+  exitCodes: ADMIN_API_EXIT_CODES,
 } as const satisfies ExternalShape;
 
 const EXTERNALS: readonly ExternalShape[] = [CLAUDE_ORG_EXTERNAL];
@@ -313,103 +582,8 @@ const LEGACY = [
   {
     kind: 'legacy',
     channel: 'stdout',
-    verbs: ['claude plugin list', 'claude plugin install', 'claude plugin uninstall'],
-    reason: 'Task 15: hand-written YAML headers and a `not-available` status word; they become reports with `USAGE_INVALID` refusals.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: ['claude plugin build', 'claude marketplace publish'],
-    reason: 'Task 16: the plugin build document carries `issueCounts` and absolute output paths; publish a results list. Both become reports.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: [
-      'claude org users update',
-      'claude org users remove',
-      'claude org invites create',
-      'claude org invites delete',
-      'claude org workspaces create',
-      'claude org workspaces archive',
-      'claude org workspaces members add',
-      'claude org workspaces members update',
-      'claude org workspaces members remove',
-      'claude org api-keys update',
-    ],
-    reason: 'Task 17: the not-implemented stubs write a hand-rolled `status: not-yet-implemented` document; they refuse with `NOT_IMPLEMENTED` through the writer.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: ['skills list', 'skills install'],
-    reason: 'Task 18: a `warning` status word for an unreadable directory and a `dry-run` status; both become findings and `data`.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: ['skills build'],
-    reason: 'Task 19: `issueCounts` / `runIssueCounts` and a hand-written dry-run document; the in-place refusal becomes a finding.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: ['skills package', 'skill test configure'],
-    reason: 'Task 20: the packaging gate failure is a validation-gate document; `configure --print` becomes a raw stdout artifact.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: ['skill test run'],
-    reason: 'Task 21: a `Summary:` stdout line and forwarded harness exit codes; failed evals become findings.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: ['doctor', 'cache clear'],
-    reason: 'Task 22: a human check block on stdout and a `partial` status decided beside the document.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: ['agent build', 'agent import', 'agent installed'],
-    reason: 'Task 23: ad-hoc result documents; import failures refuse with `INPUT_UNREADABLE`.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: ['agent list', 'agent install', 'agent uninstall'],
-    reason: 'Task 24: a listing with a `count` field, and two verbs that publish no document at all yet.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: ['rag index', 'rag query'],
-    reason: 'Task 25: a `partial` outcome and per-document errors; they become findings, and an unavailable backend a refusal.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: ['rag stats', 'rag clear', 'mcp list-collections'],
-    reason: 'Task 26: status-word documents with a `message` and a `count`; each becomes `data`.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: [CORPUS_SCAN, 'claude context'],
-    reason: 'Task 27: corpus scan writes its file artifacts by hand; `claude context` stays the one legacy document through wave A and moves onto writeLegacyDocument.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: ['build', 'validate', 'verify'],
-    reason: 'Task 28: the phase orchestrators nest each phase\'s own document, so they migrate after every phase does.',
-  },
-  {
-    kind: 'legacy',
-    channel: 'stdout',
-    verbs: ['inventory'],
-    reason: 'Task 29: the structural inventory `serializeInventory` builds, published verbatim; it becomes `data.inventory`.',
+    verbs: ['claude context'],
+    reason: 'The one legacy document through wave A, published through writeLegacyDocument; wave C replaces the verb.',
   },
 ] as const satisfies readonly LegacyShape[];
 
@@ -450,13 +624,23 @@ const ARTIFACTS: readonly PublishedArtifactShape[] = [
   },
   {
     kind: 'artifact',
+    channel: 'stdout',
+    name: 'skill-test-config',
+    publishers: ['skill test configure'],
+    schema: null,
+    schemaFile: null,
+    writer: DOCUMENT_WRITER,
+    reason: '`skill test configure --print`: the updated vibe-agent-toolkit.config.yaml text, verbatim, for redirecting over the file; its shape is the project config.',
+  },
+  {
+    kind: 'artifact',
     channel: 'file',
     name: 'friction-report',
     publishers: ['skill test run'],
     schema: FrictionReportSchema,
     schemaFile: 'packages/agent-skills/schemas/friction-report.json',
-    writer: DOCUMENT_WRITER,
-    reason: 'The graded friction report a skill test run writes beside its output.',
+    writer: 'skill-test-harness',
+    reason: 'The graded friction report a skill test run writes into its results/ directory (`data.artifacts.frictionReport`), validated against its schema before the run reports.',
   },
   {
     kind: 'artifact',
@@ -551,6 +735,9 @@ export const PUBLISHED_SHAPES: readonly PublishedShape[] = [
 /** A verb whose document is the union envelope. */
 export type ReportVerb = (typeof REPORTS)[number]['verbs'][number];
 
+/** A verb of an `external` entry: its payload is passed through, its code decided by the entry's adapter. */
+export type ExternalVerb = (typeof CLAUDE_ORG_EXTERNAL)['verbs'][number];
+
 /** A verb still on the interim legacy path. */
 export type LegacyVerb = (typeof LEGACY)[number]['verbs'][number];
 
@@ -584,5 +771,5 @@ export function artifactShapeFor(name: string, channel: 'stdout' | 'file'): Publ
 export function exitCodeForExternal(verb: string, outcome: ExternalOutcome): ExitCodeValue {
   const entry = EXTERNALS.find((shape) => shape.verbs.includes(verb));
   if (entry === undefined) throw new Error(`No external entry in PUBLISHED_SHAPES for verb '${verb}'`);
-  return entry.exitCode(outcome);
+  return entry.exitCodes[outcome.kind];
 }

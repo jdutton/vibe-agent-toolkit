@@ -1,5 +1,6 @@
-import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import type * as fs from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 
 import type {
   PackageSkillResult,
@@ -12,24 +13,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   beginStagedBuild,
-  buildYamlSummary,
   reanchorStagedResult,
   runSkillBuild,
   settleStaging,
+  skillsBuildWork,
   type BuildSkillSpec,
   type SkillBuildRun,
   type SkillBuildRunInput,
 } from '../../../src/commands/skills/build.js';
+import { refusalCodeOf } from '../../../src/utils/command-refusal.js';
 import { collectPostBuildIssues } from '../../../src/utils/issue-rendering.js';
 import type { Logger } from '../../../src/utils/logger.js';
-import { errno } from '../../helpers/refusal-doubles.js';
+import { errno, realBehind, refusingOnly } from '../../helpers/refusal-doubles.js';
 import { createTempDirTracker } from '../../system/test-common.js';
 import { recordingLogger, silentLogger as SILENT_LOGGER } from '../../test-doubles.js';
 
 // `rm` is a named import in the build, so the one refused-cleanup case injects
 // at the module seam. Every other call removes for real.
 vi.mock('node:fs/promises', async (importOriginal) =>
-  (await import('../../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['rm']));
+  (await import('../../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['rm', 'rename']));
+// `statSync` answers "is there a previous output to park?" — a refusal there is injected too.
+// Inline, not through `spiedModule`: that helper's module graph imports `node:fs`
+// itself, so importing it from THIS factory waits on the factory — a deadlock.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof fs>();
+  return { ...actual, statSync: vi.fn(actual.statSync) };
+});
 
 /**
  * A body whose relative link resolves to nothing: `LINK_MISSING_TARGET`, an
@@ -180,9 +189,9 @@ describe('runSkillBuild - one run reports EVERY pre-build validation failure', (
     expect(run.validationFailures.map((f) => f.name)).toEqual(['bad-one', 'bad-two']);
   });
 
-  it('publishes each failure\'s own severity counts rather than a flat one-error stand-in', async () => {
+  it('carries each failure\'s own findings rather than a flat one-error stand-in', async () => {
     const run = await build(createTempDir(), [['bad-one', BROKEN_BODY], ['good', CLEAN_BODY]]);
-    expect(run.validationFailures[0]?.issueCounts.errors).toBeGreaterThanOrEqual(1);
+    expect(run.validationFailures[0]?.issues.filter((i) => i.severity === 'error').map((i) => i.code)).toContain('LINK_MISSING_TARGET');
   });
 
   it('still packages the skills that passed', async () => {
@@ -359,35 +368,37 @@ describe('runSkillBuild - a collapsed findings block says how to see it', () => 
   });
 });
 
-describe('runSkillBuild - no published output path that does not exist', () => {
+/** The report's `data` for a run over the named skills, sources under `cwd`. */
+function dataOf(cwd: string, run: SkillBuildRun, names: readonly string[]): ReturnType<typeof skillsBuildWork>['data'] {
+  const skills = names.map((name) => ({ name, sourcePath: safePath.join(cwd, 'skills', name, 'SKILL.md') }));
+  return skillsBuildWork({ cwd, skills, setAside: { inPlace: [], pluginOnly: [] }, dryRun: false, run, setAsideIssues: [] }).data;
+}
+
+describe('runSkillBuild - a published output path exists exactly when the run committed', () => {
   const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-staging-paths-');
 
   afterEach(() => cleanupTempDirs());
 
-  it('publishes no `skills[]` row at all when the output was not promoted', async () => {
+  it('says outputCommitted: false, and no row\'s output exists, when the output was not promoted', async () => {
     // The defect, measured on a 90-skill adopter: a failed run published 86
-    // `skills[]` rows carrying `dist/skills/<name>` paths, 85 of which did not
-    // exist — the bundles were staged and the promotion was then aborted.
+    // `dist/skills/<name>` paths, 85 of which did not exist, beside a boolean
+    // nobody was told to read. The paths are the swap's target, never a claim.
     const cwd = createTempDir();
     const run = await build(cwd, [['good', CLEAN_BODY], ['bad', BROKEN_BODY]]);
-    const summary = buildYamlSummary(run, 1);
+    const data = dataOf(cwd, run, ['good', 'bad']);
 
-    expect(summary.outputCommitted).toBe(false);
-    expect(summary.skills).toEqual([]);
-    // The findings are not lost — they move to a list whose name does not
-    // promise disk presence, and which carries no path at all.
-    expect(summary.skillsStaged.map((s) => s.name)).toEqual(['good']);
-    expect(JSON.stringify(summary.skillsStaged)).not.toContain('outputPath');
+    expect(data.outputCommitted).toBe(false);
+    expect(data.skills.map((row) => row.status)).toEqual(['ok', 'findings']);
+    expect(data.skills.map((row) => existsSync(safePath.join(cwd, row.output)))).toEqual([false, false]);
   });
 
   it('publishes a path that exists for every row of a promoted run', async () => {
     const cwd = createTempDir();
     const run = await build(cwd, [['good', CLEAN_BODY]]);
-    const summary = buildYamlSummary(run, 1);
+    const data = dataOf(cwd, run, ['good']);
 
-    expect(summary.outputCommitted).toBe(true);
-    expect(summary.skillsStaged).toEqual([]);
-    expect(summary.skills.map((s) => existsSync(s.outputPath))).toEqual([true]);
+    expect(data.outputCommitted).toBe(true);
+    expect(data.skills.map((row) => existsSync(safePath.join(cwd, row.output)))).toEqual([true]);
   });
 });
 
@@ -576,5 +587,42 @@ describe('reanchorStagedResult - BOTH post-build channels are re-anchored', () =
     );
 
     expect(result.postBuildIssues?.[0]?.location).toBe('resources/skills/demo/extra/CLAUDE.md');
+  });
+});
+
+describe('beginStagedBuild - a filesystem refusal is coded at its cause, never INTERNAL_ERROR', () => {
+  const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-staging-refusal-');
+
+  afterEach(() => {
+    vi.mocked(statSync).mockImplementation(realBehind(statSync));
+    return cleanupTempDirs();
+  });
+
+  it('refuses a previous output the OS will not stat as INPUT_UNREADABLE, before anything moves', async () => {
+    // `existsSync` read EACCES as "no previous output", so the run went on to
+    // promote over a tree it could not see.
+    const cwd = createTempDir();
+    await seedPreviousOutput(cwd, ['kept']);
+    const target = safePath.join(cwd, 'dist', 'skills');
+    vi.mocked(statSync).mockImplementation(refusingOnly(target, errno('EACCES'), realBehind(statSync)));
+
+    const refused = await beginStagedBuild(cwd, undefined).catch((error: unknown) => error);
+
+    expect(refusalCodeOf(refused)).toBe('INPUT_UNREADABLE');
+    expect(String((refused as Error).message)).toContain(target);
+    vi.mocked(statSync).mockImplementation(realBehind(statSync));
+    await expect(readBundle(cwd, 'kept')).resolves.toBe(PREVIOUS_BUNDLE);
+  });
+
+  it('refuses a previous output that cannot be parked as RUN_INCOMPLETE, naming the path', async () => {
+    const cwd = createTempDir();
+    await seedPreviousOutput(cwd, ['kept']);
+    vi.mocked(rename).mockRejectedValueOnce(errno('EACCES', 'EACCES: permission denied'));
+
+    const refused = await beginStagedBuild(cwd, undefined).catch((error: unknown) => error);
+
+    expect(refusalCodeOf(refused)).toBe('RUN_INCOMPLETE');
+    expect(String((refused as Error).message)).toContain(safePath.join(cwd, 'dist', 'skills'));
+    await expect(readBundle(cwd, 'kept')).resolves.toBe(PREVIOUS_BUNDLE);
   });
 });

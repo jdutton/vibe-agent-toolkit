@@ -51,12 +51,12 @@ vat rag clear
 - `--db <path>` - Database path (default: `.rag-db` in project root)
 - `--debug` - Enable debug logging
 
-**Exit Codes:**
-- `0` - Indexing completed successfully
-- `1` - Indexed with errors: the run finished, `status: partial`, and `errors` names each resource whose content is NOT in the index — one the provider failed to chunk or embed, or one the crawl enumerated but could not read (a permission-denied file is reported here, never silently dropped)
-- `2` - System error (config invalid, database error, a `rag_documents` table whose columns an earlier build typed differently — the message names the columns and `vat rag clear` is the remedy, etc.)
+**Exit Codes:** derived from the published report (`status: ok | findings | error`)
+- `0` - `ok`: every submitted file is indexed, or skipped as unchanged
+- `1` - `findings`: the run finished and at least one file is NOT in the index — each is a `RAG_DOCUMENT_INDEX_FAILED` error finding located at its path, whether the provider failed to chunk or embed it or the crawl enumerated it and could not read it (a permission-denied file is reported here, never silently dropped). A run that found no file at all is a `RESOURCE_CHECK_BROKEN` finding: it examined nothing
+- `2` - `error`: the run could not do its job; `error.code` says why — `USAGE_INVALID` (a path argument that names nothing, or no `--db` and no project root), `INPUT_UNREADABLE` (a path the OS will not list), `CONFIG_INVALID`, `BACKEND_UNAVAILABLE` (the optional RAG backend is not installed; the message names the package), or `INTERNAL_ERROR` (a database error such as a `rag_documents` table whose columns an earlier build typed differently — the message names the columns and `vat rag clear` is the remedy)
 
-**Output:** YAML on stdout with indexing statistics
+**Output:** the report envelope as YAML on stdout (schema `packages/cli/schemas/rag-index.json`). `examined` counts the files submitted, read or not; `data` holds the counters.
 
 **Example:**
 ```bash
@@ -66,15 +66,19 @@ vat rag index docs/
 
 # Output:
 # ---
-# status: success
-# resourcesIndexed: 12
-# resourcesSkipped: 0
-# resourcesEmpty: 0      # frontmatter-only or blank files: counted, not stored
-# resourcesUpdated: 0
-# chunksCreated: 48
-# chunksDeleted: 0
-# duration: 2.4s
-# ---
+# status: ok
+# examined: 12
+# findings: []
+# summary: { errors: 0, warnings: 0, info: 0 }
+# gate: { strict: false }
+# durationMs: 2400
+# data:
+#   resourcesIndexed: 12
+#   resourcesSkipped: 0
+#   resourcesEmpty: 0      # frontmatter-only or blank files: counted, not stored
+#   resourcesUpdated: 0
+#   chunksCreated: 48
+#   chunksDeleted: 0
 ```
 
 **Incremental Updates:**
@@ -115,10 +119,10 @@ vat rag index docs/
 - `--debug` - Enable debug logging
 
 **Exit Codes:**
-- `0` - Query completed successfully
-- `2` - System error (no database, embedding error, etc.)
+- `0` - `ok`: the index was searched — a query matching nothing is `ok` with `chunks: []`
+- `2` - `error`: `INPUT_UNREADABLE` when nothing is indexed yet — no chunk table, or a table of zero chunks, one outcome either way (run `vat rag index`), `USAGE_INVALID` with no `--db` and no project root, `BACKEND_UNAVAILABLE`, or `INTERNAL_ERROR` (an embedding or database failure)
 
-**Output:** YAML on stdout with query results
+**Output:** the report envelope as YAML on stdout (schema `packages/cli/schemas/rag-query.json`). `examined` counts the chunks in the index searched; `data` holds `root` (the directory every `filePath` is relative to), `query`, `stats` and `chunks`.
 
 **Example:**
 ```bash
@@ -126,15 +130,19 @@ vat rag query "error handling patterns" --limit 5
 
 # Output:
 # ---
-# status: success
-# query: error handling patterns
-# stats:
-#   totalMatches: 5
-#   searchDurationMs: 62
-#   embedding:
-#     model: Xenova/all-MiniLM-L6-v2
-# duration: 65ms
-# chunks:
+# status: ok
+# examined: 48
+# findings: []
+# ...
+# data:
+#   root: /path/to/project
+#   query: error handling patterns
+#   stats:
+#     totalMatches: 5
+#     searchDurationMs: 62
+#     embedding:
+#       model: Xenova/all-MiniLM-L6-v2
+#   chunks:
 #   - chunkId: doc1-chunk2
 #     resourceId: doc1-hash
 #     filePath: docs/guide.md
@@ -166,7 +174,7 @@ Each chunk includes comprehensive metadata:
 - `resourceId` - ID of source document (content-based hash)
 
 **Location:**
-- `filePath` - Path to source markdown file
+- `filePath` - Path to source markdown file, relative to `data.root`
 - `headingPath` - Full heading hierarchy (e.g., "Guide > Setup > Installation")
 - `headingLevel` - Markdown heading level (1-6)
 - `startLine` / `endLine` - Line numbers in source file
@@ -180,7 +188,7 @@ Each chunk includes comprehensive metadata:
 - `contentHash` - Hash of chunk content (for change detection)
 - `tokenCount` - Approximate token count for this chunk
 - `embeddingModel` - Model used to generate embedding
-- `embeddedAt` - Timestamp when embedding was created
+- `embeddedAt` - ISO 8601 timestamp when the embedding was created
 
 **Context:**
 - `previousChunkId` - ID of previous chunk in same document (if exists)
@@ -204,10 +212,10 @@ Each chunk includes comprehensive metadata:
 - `--debug` - Enable debug logging
 
 **Exit Codes:**
-- `0` - Stats retrieved successfully
-- `2` - System error (no database exists)
+- `0` - `ok`: the database was read — an empty or absent database reports zeros
+- `2` - `error`: `USAGE_INVALID` with no `--db` and no project root, `BACKEND_UNAVAILABLE`, or `INTERNAL_ERROR`
 
-**Output:** YAML on stdout with database statistics
+**Output:** the report envelope as YAML on stdout (schema `packages/cli/schemas/rag-stats.json`); `examined` is 1, the database opened.
 
 **Example:**
 ```bash
@@ -215,14 +223,16 @@ vat rag stats
 
 # Output:
 # ---
-# status: success
-# totalChunks: 48
-# totalResources: 12
-# dbSizeBytes: 0
-# embeddingModel: Xenova/all-MiniLM-L6-v2
-# lastIndexed: 2025-12-29T10:30:45.123Z
-# duration: 15ms
-# ---
+# status: ok
+# examined: 1
+# findings: []
+# ...
+# data:
+#   totalChunks: 48
+#   totalResources: 12
+#   dbSizeBytes: 0
+#   embeddingModel: Xenova/all-MiniLM-L6-v2
+#   lastIndexed: 2025-12-29T10:30:45.123Z
 ```
 
 **Field Descriptions:**
@@ -253,10 +263,10 @@ vat rag stats
 - `--debug` - Enable debug logging
 
 **Exit Codes:**
-- `0` - Database cleared successfully
-- `2` - System error
+- `0` - `ok`: the database was cleared
+- `2` - `error`: `USAGE_INVALID` with no `--db` and no project root, `BACKEND_UNAVAILABLE`, or `INTERNAL_ERROR`
 
-**Output:** YAML on stdout with confirmation
+**Output:** the report envelope as YAML on stdout (schema `packages/cli/schemas/rag-clear.json`); `examined` is 1, the database opened, and `data` is `{ cleared: true }`.
 
 **Example:**
 ```bash
@@ -264,10 +274,12 @@ vat rag clear
 
 # Output:
 # ---
-# status: success
-# message: Database cleared
-# duration: 12ms
-# ---
+# status: ok
+# examined: 1
+# findings: []
+# ...
+# data:
+#   cleared: true
 ```
 
 **Warning:** This operation is **permanent and cannot be undone**. The entire

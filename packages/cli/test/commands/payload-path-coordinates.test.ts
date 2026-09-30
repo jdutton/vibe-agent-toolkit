@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { buildAgentListOutput } from '../../src/commands/agent/list.js';
+import { buildAgentListData } from '../../src/commands/agent/list.js';
 import type { MarketplaceValidateReport } from '../../src/commands/claude/marketplace/validate-schema.js';
 import {
   buildMarketplaceValidateReport,
@@ -38,7 +38,8 @@ import {
 import { buildQueryOutputData } from '../../src/commands/rag/query-command.js';
 import { RESOURCES_SCAN_REPORT_SCHEMA } from '../../src/commands/resources/scan-schema.js';
 import { buildScanReport } from '../../src/commands/resources/scan.js';
-import { formatSkillsYaml } from '../../src/commands/skills/list.js';
+import { SKILLS_LIST_REPORT_SCHEMA } from '../../src/commands/skills/list-schema.js';
+import { buildSkillsListReport } from '../../src/commands/skills/list.js';
 import {
   anchorContractViolations,
   anchorsBelowRoot,
@@ -135,37 +136,40 @@ describe('resources scan payload', () => {
 
 describe('skills list payload', () => {
   const skills = [{ name: 'alpha', path: SKILL, valid: true }];
+  const listing = (unreadable: Parameters<typeof buildSkillsListReport>[0]['unreadable']) =>
+    buildSkillsListReport({ skills, context: 'project', root: ROOT, unreadable, examined: 1 }, 7);
 
   it('publishes each skill path relative to the stated root', () => {
-    const yamlText = formatSkillsYaml(skills, 'project', ROOT, []);
+    const report = SKILLS_LIST_REPORT_SCHEMA.parse(listing([]));
 
-    expect(yamlText).toContain(`root: ${ROOT}\n`);
-    expect(yamlText).toContain(`    path: ${SKILL_REL}\n`);
-    expect(yamlText).not.toContain(`path: ${SKILL}`);
-    expect(yamlText).toContain('status: success\n');
-    expect(yamlText).not.toContain('unreadable:');
+    expect(report.status).toBe('ok');
+    expect(report.data?.root).toBe(ROOT);
+    expect(report.data?.skills).toStrictEqual([{ name: 'alpha', path: SKILL_REL, valid: true }]);
+    expect(report.findings).toStrictEqual([]);
   });
 
   it('leaves the entries it was handed unmutated', () => {
-    formatSkillsYaml(skills, 'project', ROOT, []);
+    listing([]);
 
     expect(skills[0]?.path).toBe(SKILL);
   });
 
   // A directory the scan could not list is a skill count the reader cannot
   // trust; the machine-readable document — the one a CI wrapper diffs — must
-  // say so, in the same root-relative coordinates as every other path in it.
-  it('publishes the directories it could not list, root-relative, and degrades the status', () => {
+  // say so, as a finding in the same root-relative coordinates as every path.
+  it('publishes each directory it could not list as a root-relative SCAN_PATH_UNREADABLE warning', () => {
     const locked = safePath.join(ROOT, 'skills', 'locked');
-    const yamlText = formatSkillsYaml(skills, 'project', ROOT, [
+    const report = SKILLS_LIST_REPORT_SCHEMA.parse(listing([
       { kind: 'directory_unreadable', code: 'EACCES', directory: locked, transient: false },
-    ]);
+    ]));
 
-    expect(yamlText).toContain('status: warning\n');
-    expect(yamlText).toContain('unreadable:\n  - path: skills/locked\n    code: EACCES\n');
-    expect(yamlText).not.toContain(locked);
+    expect(report.status).toBe('findings');
+    expect(report.findings.map((finding) => [finding.code, finding.severity, finding.location])).toStrictEqual([
+      ['SCAN_PATH_UNREADABLE', 'warning', 'skills/locked'],
+    ]);
+    expect(JSON.stringify(report)).not.toContain(locked);
     // The skills that WERE listed are still published.
-    expect(yamlText).toContain(`    path: ${SKILL_REL}\n`);
+    expect(report.data?.skills.map((skill) => skill.path)).toStrictEqual([SKILL_REL]);
   });
 });
 
@@ -175,12 +179,9 @@ describe('agent list payload', () => {
   ];
 
   it('publishes each agent path relative to the stated root', () => {
-    const data = buildAgentListOutput(agents, ROOT, 19);
+    const data = buildAgentListData(agents, ROOT);
 
-    expect(data.root).toBe(ROOT);
-    expect(data.agents).toEqual([{ name: 'alpha', version: '0.1.0', path: AGENT_REL }]);
-    expect(data.count).toBe(1);
-    expect(data.duration).toBe('19ms');
+    expect(data).toStrictEqual({ root: ROOT, agents: [{ name: 'alpha', version: '0.1.0', path: AGENT_REL }] });
     expectNoAbsolutePaths(data.agents);
   });
 });
@@ -206,15 +207,14 @@ describe('rag query payload', () => {
       queryText: 'hello',
       chunks: [chunk],
       stats: { totalMatches: 1, searchDurationMs: 3 },
-      durationMs: 12,
       root: ROOT,
     });
 
     expect(data.root).toBe(ROOT);
-    const chunks = data.chunks as Array<{ filePath: string; resourceId: string }>;
-    expect(chunks[0]?.filePath).toBe(README_REL);
-    expect(chunks[0]?.resourceId).toBe(README_REL);
-    expect(data.duration).toBe('12ms');
+    expect(data.chunks[0]?.filePath).toBe(README_REL);
+    expect(data.chunks[0]?.resourceId).toBe(README_REL);
+    // A Date has no JSON form: the published document carries ISO 8601.
+    expect(data.chunks[0]?.embeddedAt).toBe(new Date(0).toISOString());
     expectNoAbsolutePaths(data.chunks);
   });
 });

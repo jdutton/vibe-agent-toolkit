@@ -1,7 +1,7 @@
 /**
  * System test: YAML output must survive a PIPE, not just a terminal.
  *
- * Every YAML-emitting command writes via `writeYamlOutput` and then calls
+ * Every YAML-emitting command writes through the document writer and then calls
  * `process.exit(0)` immediately. `process.stdout.write` is ASYNCHRONOUS when
  * stdout is a pipe, and `process.exit` does not wait for the pending write to
  * drain — so everything past the first pipe buffer (64 KB on Linux/macOS) was

@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { countBySeverity, resultStatus } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as yaml from 'yaml';
 
 import { AUDIT_REPORT_SCHEMA } from '../../../src/commands/audit-schema.js';
@@ -17,6 +17,16 @@ import {
   unlistedDirectorySections,
 } from '../../../src/commands/corpus/runner.js';
 import type { PluginEntry } from '../../../src/commands/corpus/seed.js';
+import { CommandRefusalError } from '../../../src/utils/command-refusal.js';
+import type * as ProjectRootPolicy from '../../../src/utils/project-root-policy.js';
+
+/** The local-source probe, replaced only where a test makes it throw; every other call runs the real one. */
+const { pathPresent } = vi.hoisted(() => ({ pathPresent: vi.fn() }));
+vi.mock('../../../src/utils/project-root-policy.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof ProjectRootPolicy>();
+  pathPresent.mockImplementation(actual.pathPresent);
+  return { ...actual, pathPresent };
+});
 
 const META = {
   bucket: 'official',
@@ -127,6 +137,30 @@ function makeBareRepoWithSkill(): string {
   git(['push', 'origin', 'main'], work);
   return bare;
 }
+
+describe('auditOnePlugin — a local source the probe cannot answer for', () => {
+  const entry = (): PluginEntry => ({ source: '/probe/target', name: 'probed', ...META });
+  const runDir = (): string => mkdtempSync(safePath.join(normalizedTmpdir(), RUN_DIR_PREFIX));
+
+  it('records the probe\'s coded refusal as the entry\'s unloadable row', async () => {
+    pathPresent.mockImplementationOnce(() => {
+      throw new CommandRefusalError('INPUT_UNREADABLE', 'Path cannot be read (EACCES): /probe/target');
+    });
+
+    const row = await auditOnePlugin(entry(), { runDir: runDir(), withReview: false, debug: false });
+
+    expect(row.audit).toMatchObject({ status: 'unloadable', error: 'Path cannot be read (EACCES): /probe/target' });
+  });
+
+  it('lets an uncoded throw through — a defect in the probe is not a row message', async () => {
+    const defect = new TypeError('probe defect');
+    pathPresent.mockImplementationOnce(() => {
+      throw defect;
+    });
+
+    await expect(auditOnePlugin(entry(), { runDir: runDir(), withReview: false, debug: false })).rejects.toBe(defect);
+  });
+});
 
 describe('auditOnePlugin — URL source', () => {
   it('clones a file:// URL, audits, and cleans up', async () => {

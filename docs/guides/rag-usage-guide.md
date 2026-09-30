@@ -32,12 +32,18 @@ This guide provides practical examples for using the VAT RAG system in real-worl
 # Index all markdown files in docs/
 vat rag index docs/
 
-# Output:
-# status: success
-# resourcesIndexed: 42
-# chunksCreated: 156
-# duration: 2134ms
+# Output (the report envelope; counters under data):
+# status: ok               # findings (exit 1) names each file NOT indexed
+# examined: 42
+# durationMs: 2134
+# data:
+#   resourcesIndexed: 42
+#   chunksCreated: 156
 ```
+
+A file that did not make it into the index — unreadable, or rejected by the chunker or embedder —
+is a `RAG_DOCUMENT_INDEX_FAILED` finding at its path, and the run exits 1. An uninstalled RAG backend
+is the `BACKEND_UNAVAILABLE` refusal (exit 2) naming the package to install.
 
 ### 2. Search Your Documentation
 
@@ -45,12 +51,13 @@ vat rag index docs/
 # Ask a question in natural language
 vat rag query "How do I configure agent tools?"
 
-# Output shows relevant chunks:
-# status: success
-# chunks:
-#   - content: "Agent tools are configured in the spec.tools section..."
-#     filePath: docs/agent-configuration.md
-#     headingPath: Configuration > Tools
+# Output shows relevant chunks under data:
+# status: ok
+# data:
+#   chunks:
+#     - content: "Agent tools are configured in the spec.tools section..."
+#       filePath: docs/agent-configuration.md   # relative to data.root
+#       headingPath: Configuration > Tools
 ```
 
 ### 3. View Database Statistics
@@ -58,11 +65,11 @@ vat rag query "How do I configure agent tools?"
 ```bash
 vat rag stats
 
-# Output:
-# totalChunks: 156
-# totalResources: 42
-# embeddingModel: Xenova/all-MiniLM-L6-v2
-# dbSizeBytes: 2458624
+# Output (under data):
+#   totalChunks: 156
+#   totalResources: 42
+#   embeddingModel: Xenova/all-MiniLM-L6-v2
+#   dbSizeBytes: 2458624
 ```
 
 ---
@@ -424,12 +431,12 @@ vat rag index docs/
 # Re-index (skips unchanged files automatically)
 vat rag index docs/
 
-# Output:
-# resourcesIndexed: 1    # Only api.md
-# resourcesSkipped: 41   # All others unchanged
-# resourcesEmpty: 0      # Frontmatter-only or blank files: counted, not stored
-# chunksDeleted: 5       # Old chunks from api.md
-# chunksCreated: 6       # New chunks from api.md
+# Output (under data):
+#   resourcesIndexed: 1    # Only api.md
+#   resourcesSkipped: 41   # All others unchanged
+#   resourcesEmpty: 0      # Frontmatter-only or blank files: counted, not stored
+#   chunksDeleted: 5       # Old chunks from api.md
+#   chunksCreated: 6       # New chunks from api.md
 ```
 
 ### Pattern 3: Multi-Store Querying

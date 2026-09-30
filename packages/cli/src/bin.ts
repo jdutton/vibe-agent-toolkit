@@ -13,7 +13,7 @@ import { Command, CommanderError } from 'commander';
 
 import { COMMAND_LOADERS } from './command-loaders.js';
 import { registerCacheControl } from './commands/cache/cache-control.js';
-import { exitCodeForCommanderEnding } from './utils/command-error.js';
+import { exitCodeForCommanderEnding } from './utils/commander-ending.js';
 import { setDebugDiagnostics } from './utils/debug-diagnostics.js';
 import { loadVerboseHelp, writeHelpSync } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';

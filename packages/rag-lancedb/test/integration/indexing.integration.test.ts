@@ -197,6 +197,8 @@ More content in section 2.`
     provider = await LanceDBRAGProvider.create({ dbPath });
 
     await expect(provider.query({ text: 'test' })).rejects.toThrow('No data indexed yet');
+    // Coded at the cause, so `vat rag query` refuses it as the input's (INPUT_UNREADABLE), not as a VAT defect.
+    await expect(provider.query({ text: 'test' })).rejects.toMatchObject({ code: 'RAG_INDEX_EMPTY' });
   });
 
   it('should enforce readonly mode', async () => {

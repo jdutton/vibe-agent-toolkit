@@ -140,34 +140,6 @@ export function writeAllSync(
 }
 
 /**
- * Write a single YAML document to stdout, opened with `---`.
- *
- * There is deliberately NO trailing marker. `---` OPENS a document in YAML; the
- * end-of-document marker is `...`. Emitting `---` at the end therefore opened a
- * second, empty document, so every command's stdout was a two-document stream and
- * a plain `YAML.parse()` threw `Source contains multiple documents` — on output
- * this CLI documents as "YAML summary → stdout (for programmatic parsing)".
- *
- * The repo's own test helper had already been written around it: `executeCli…`
- * calls `parseAllDocuments(...)` and takes `docs[0]`, with a comment saying "to
- * handle document markers". That workaround is what kept the defect invisible —
- * every consumer that did the obvious thing instead got an exception.
- *
- * Dropping the trailer also makes this agree with the seven hand-rolled emit
- * sites elsewhere in the CLI, none of which ever wrote one.
- *
- * @param data - Data to serialize as YAML
- */
-export function writeYamlOutput(data: unknown): void {
-  // Deliberately the ordinary stream write, NOT writeStdoutSync: this summary
-  // follows human-readable progress output written via console.log, and a
-  // synchronous fd-1 write would jump ahead of anything still buffered there.
-  // Completeness is guaranteed instead by makeStdioBlocking() at startup, which
-  // makes BOTH channels synchronous and keeps them in order.
-  process.stdout.write(`---\n${renderYamlDocument(data)}`);
-}
-
-/**
  * The one YAML rendering of a published document — on stdout and in a file
  * artifact alike, so the same data never serializes two ways.
  *
@@ -176,42 +148,6 @@ export function writeYamlOutput(data: unknown): void {
  */
 export function renderYamlDocument(data: unknown): string {
   return yaml.stringify(data, { indent: 2, lineWidth: 120, aliasDuplicateObjects: false });
-}
-
-/**
- * Write a single JSON document to stdout.
- *
- * The sibling of {@link writeYamlOutput}, for the same payloads, and it exists
- * because a consumer that has to parse YAML needs a YAML parser: JSON is the
- * format every language reads without one. `vat resources validate` already
- * offers `--format json` for exactly this reason; a scan document that could
- * only be had as YAML made the population it reports the harder of the two to
- * consume programmatically, which is backwards.
- *
- * Written the same way as its YAML sibling, and the comment there applies
- * verbatim: the ordinary stream write keeps this summary behind any
- * human-readable progress already buffered on the same channel.
- *
- * @param data - Data to serialize as JSON
- */
-export function writeJsonOutput(data: unknown): void {
-  process.stdout.write(`${JSON.stringify(data, null, 2)}\n`);
-}
-
-/**
- * Write one structured document in the format a `--format` option selected:
- * `json` → {@link writeJsonOutput}; anything else (including an absent option)
- * → {@link writeYamlOutput}, the CLI's default document format.
- *
- * @param data - The document
- * @param format - The selected format (`json`, or anything else for YAML)
- */
-export function writeStructuredOutput(data: unknown, format: string | undefined): void {
-  if (format === 'json') {
-    writeJsonOutput(data);
-  } else {
-    writeYamlOutput(data);
-  }
 }
 
 /**

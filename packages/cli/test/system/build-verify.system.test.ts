@@ -1,16 +1,17 @@
 /**
  * System tests for vat build and vat verify commands (with --cwd flag)
  *
- * vat build runs: skills build → produces dist/skills/<name>/SKILL.md
- * Claude plugin artifacts (dist/.claude/...) are built separately by the
- * package author's own build tooling; vat build no longer includes a claude phase.
+ * vat build runs: skills build → dist/skills/<name>/SKILL.md, then (when
+ * claude.marketplaces is configured) the claude plugin build → dist/.claude/.
+ * Both orchestrators publish ONE report, parsed here with its registered schema.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+
+import { orchestratorReportOf, phaseDataMismatches } from '../helpers/published-phase.js';
 
 import {
   createSkillMarkdown,
@@ -22,6 +23,7 @@ import {
 } from './test-common.js';
 
 const TEMP_DIR_PREFIX = 'vat-build-verify-test-';
+
 const TEST_SKILL_NAME = 'test-skill';
 const MARKETPLACE_NAME = 'test-tools';
 const PLUGIN_NAME = 'test-plugin';
@@ -139,6 +141,9 @@ describe('vat build command (system test)', () => {
     const result = await suite.runBuild(tempDir);
 
     expect(result.status).toBe(0);
+    // Every phase ran, and each one's data is what its own verb's schema describes.
+    expect(orchestratorReportOf(result.stdout).data?.phases.map((phase) => phase.name)).toEqual(['skills', 'claude', 'shipped-links']);
+    expect(phaseDataMismatches(orchestratorReportOf(result.stdout), 'build')).toEqual([]);
     // Pool skills live at dist/skills/<name>/
     expect(
       existsSync(
@@ -178,10 +183,11 @@ describe('vat build command (system test)', () => {
 
     expect(result.status).toBe(0);
     expect(existsSync(safePath.join(tempDir, DIST_SKILLS_DIR, TEST_SKILL_NAME, 'SKILL.md'))).toBe(true);
-    // A status with no distribution beside it cannot say whether `success`
+    // A status with no distribution beside it cannot say whether a pass
     // means "clean" or "we did not look".
-    expect(result.stdout).toContain('issueCounts:');
-    expect(result.stdout).toContain('errors: 0');
+    const report = orchestratorReportOf(result.stdout);
+    expect(report.summary.errors).toBe(0);
+    expect(report.data?.phases.map((phase) => phase.name)).toEqual(['skills']);
   });
 
   it('should sanitize colon-namespaced skill names to fs-safe directory names', async () => {
@@ -229,7 +235,7 @@ describe('vat build command (system test)', () => {
     }
   });
 
-  it('should fail build with exit 2 when skill source missing', async () => {
+  it('should fail build with exit 1 when the include patterns match no skill', async () => {
     const tempDir = suite.createTempDir();
     // Config references skills but no SKILL.md files exist
     writeTestFile(
@@ -240,12 +246,12 @@ describe('vat build command (system test)', () => {
 
     const result = await suite.runBuild(tempDir);
 
-    // `vat skills build` treats "the include patterns match nothing" as a
-    // config-level system error (exit 2), and `vat build` must report it as
-    // one — `not.toBe(0)` could not tell that from a build failure.
-    expect(result.status).toBe(2);
-    expect(result.stdout).toContain('status: system-error');
-    expect(result.stdout).toContain('exitCode: 2');
+    // A run that examined nothing is not a verdict: the writer's
+    // RESOURCE_CHECK_BROKEN finding fails it (exit 1) — never a green build of nothing.
+    expect(result.status).toBe(1);
+    const report = orchestratorReportOf(result.stdout);
+    expect(report.status).toBe('findings');
+    expect(report.findings.map((finding) => finding.code)).toContain('RESOURCE_CHECK_BROKEN');
   });
 });
 
@@ -275,7 +281,12 @@ async function setupBuiltFixture(suite: ReturnType<typeof setupBuildVerifyTestSu
   return tempDir;
 }
 
-const VERIFY_SUCCESS_MARKER = 'status: success';
+/** A verify run that finished with no error finding (warnings never fail it). */
+function expectPassed(stdout: string): void {
+  const report = orchestratorReportOf(stdout);
+  expect(report.status).not.toBe('error');
+  expect(report.summary.errors).toBe(0);
+}
 
 describe('vat verify command (system test)', () => {
   const suite = setupBuildVerifyTestSuite();
@@ -298,11 +309,52 @@ describe('vat verify command (system test)', () => {
 
     it('should verify all phases pass when artifacts are valid', () => {
       expect(verifyResult.status).toBe(0);
-      expect(verifyResult.stdout).toContain(VERIFY_SUCCESS_MARKER);
+      expectPassed(verifyResult.stdout);
     });
 
     it('should include marketplace phase when claude.marketplaces config exists', () => {
       expect(verifyResult.stdout).toContain(`marketplace:${MARKETPLACE_NAME}`);
+    });
+
+    it('publishes every phase, each one\'s data as its own schema describes', () => {
+      expect(orchestratorReportOf(verifyResult.stdout).data?.phases.map((phase) => [phase.name, phase.status])).toEqual([
+        ['skills', expect.not.stringMatching(/^error$/)],
+        [`marketplace:${MARKETPLACE_NAME}`, expect.not.stringMatching(/^error$/)],
+        ['files-config-dests', 'ok'],
+        ['packaged-content', expect.not.stringMatching(/^error$/)],
+        ['consistency', expect.not.stringMatching(/^error$/)],
+      ]);
+      expect(phaseDataMismatches(orchestratorReportOf(verifyResult.stdout), 'verify')).toEqual([]);
+    });
+  });
+
+  it('publishes a files: dest missing from the built output as FILES_CONFIG_DEST_MISSING, exit 1', async () => {
+    // A pool skill whose `files:` entry `vat build` applied; the dest is then
+    // deleted from dist/ — the state a partial or hand-edited build leaves.
+    const tempDir = suite.createTempDir();
+    writeTestFile(
+      safePath.join(tempDir, VAT_CONFIG_FILENAME),
+      `${createSkillsConfigYaml([SKILL_INCLUDE_GLOB])}  config:\n    ${TEST_SKILL_NAME}:\n      files:\n        - source: assets/tool.mjs\n          dest: scripts/tool.mjs\n`,
+    );
+    suite.createSkillSource(tempDir, SKILL_SOURCE_PATH, TEST_SKILL_NAME);
+    mkdirSyncReal(safePath.join(tempDir, 'assets'), { recursive: true });
+    writeTestFile(safePath.join(tempDir, 'assets', 'tool.mjs'), 'export {};\n');
+    expect((await suite.runBuild(tempDir)).status).toBe(0);
+    const dest = safePath.join(tempDir, DIST_SKILLS_DIR, TEST_SKILL_NAME, 'scripts', 'tool.mjs');
+    expect(existsSync(dest)).toBe(true);
+    rmSync(dest);
+
+    const result = await suite.runVerify(tempDir);
+
+    expect(result.status).toBe(1);
+    const report = orchestratorReportOf(result.stdout);
+    expect(report.findings.filter((finding) => finding.code === 'FILES_CONFIG_DEST_MISSING')).toEqual([
+      expect.objectContaining({ severity: 'error', location: `dist/skills/${TEST_SKILL_NAME}/scripts/tool.mjs` }),
+    ]);
+    expect(report.data?.phases.find((phase) => phase.name === 'files-config-dests')).toMatchObject({
+      status: 'findings',
+      examined: 1,
+      summary: { errors: 1, warnings: 0, info: 0 },
     });
   });
 
@@ -322,9 +374,9 @@ describe('vat verify command (system test)', () => {
     const result = await suite.runVerify(tempDir);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(VERIFY_SUCCESS_MARKER);
+    expectPassed(result.stdout);
     // Marketplace phase should NOT appear
-    expect(result.stdout).not.toContain('marketplace:');
+    expect(orchestratorReportOf(result.stdout).data?.phases.map((phase) => phase.name)).not.toContain(`marketplace:${MARKETPLACE_NAME}`);
   });
 
   it('propagates a phase that could not run as exit 2, not as a validation failure', async () => {
@@ -345,8 +397,9 @@ describe('vat verify command (system test)', () => {
     const result = await suite.runVerify(tempDir);
 
     expect(result.status).toBe(2);
-    expect(result.stdout).toContain('status: system-error');
-    expect(result.stdout).toContain('exitCode: 2');
+    const report = orchestratorReportOf(result.stdout);
+    expect(report.error?.code).toBe('RUN_INCOMPLETE');
+    expect(report.data?.phases.map((phase) => phase.error?.code)).toEqual(['CONFIG_INVALID', 'CONFIG_INVALID']);
   });
 
 });

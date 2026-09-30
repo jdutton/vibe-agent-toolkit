@@ -349,13 +349,13 @@ export const CODE_REGISTRY = {
   SCAN_PATH_UNREADABLE: entry(
     'finding',
     'warning',
-    'A path under the audited tree could not be read — a directory the scan could not enter, or a file it could not open — so it was not scanned; findings from every readable sibling are still reported.',
+    'A path the command had to read could not be read — a directory it could not enter, or a file it could not open — so it was not scanned; findings from every readable sibling are still reported.',
     // `--exclude` leads, and the severity override is qualified, because the
     // override is NOT reachable in the case that produces this finding most
     // often: `applySeverityFilter` early-returns unless a VAT config is found
     // above the scan path, and there is normally none above `~/.claude/plugins`.
     // Advertising a remedy an adopter cannot apply is worse than not offering it.
-    'Make the path readable — check its permissions and ownership — then re-run the audit, or pass --exclude to drop it from the scan deliberately. Set severity.SCAN_PATH_UNREADABLE to ignore if the path is expected to be unreadable and the scan runs inside a project whose config VAT can find.',
+    'Make the path readable — check its permissions and ownership — then re-run. To drop it deliberately instead: vat audit takes --exclude, and a verb that reads a project config VAT can find honours severity.SCAN_PATH_UNREADABLE: ignore; other verbs have no lever, and their result stays a floor.',
     'scan_path_unreadable',
   ),
   FILES_GLOB_DROPPED_NEVER_PACKAGED: entry(
@@ -838,6 +838,16 @@ export const CODE_REGISTRY = {
     "An installed-plugins registry written by Claude Code carries a field or scope value VAT's model does not recognize; the registry shape is newer than the model reading it. The value was preserved, not rejected.",
     "No action needed — VAT reads registries it does not own liberally, so the unknown value passed through untouched. Report the field so VAT's model can catch up, or set severity.REGISTRY_SHAPE_DRIFT to ignore.",
     'registry_shape_drift',
+  ),
+  // `vat claude plugin uninstall` — a warning, not an error: the cleanup ran and
+  // removed what was there; what the operator learns is that the install was not
+  // VAT's, so artifacts VAT never recorded may remain.
+  PLUGIN_UNINSTALL_INCOMPLETE: entry(
+    'finding',
+    'warning',
+    'An uninstalled plugin had a directory under the Claude marketplaces tree but no entry in the plugin registry, so it was not installed by VAT; the directory was removed, and anything its installer wrote elsewhere may remain.',
+    'Check Claude Code for leftovers of the plugin the message names (run /plugin), and remove them there. Set severity.PLUGIN_UNINSTALL_INCOMPLETE to ignore if half-removed installs are expected.',
+    'plugin_uninstall_incomplete',
   ),
 
   // `vat audit settings` — Claude settings files and the settings they merge
@@ -1350,4 +1360,34 @@ export type NonOverridableCode =
   | 'REGISTRY_INVALID_JSON'
   | 'REGISTRY_INVALID_SCHEMA'
   | 'UNKNOWN_FORMAT'
-  | 'SKILL_TOO_LONG';
+  | 'SKILL_TOO_LONG'
+  // `vat skills build`: a `--skill` naming a `publish: false` skill, and a skill
+  // whose packaging threw. Always `error` — nothing reads an override for them,
+  // so a registry entry would let `validation.severity` accept an inert key.
+  | 'SKILL_BUILD_TARGET_NOT_BUILDABLE'
+  | 'SKILL_PACKAGING_FAILED'
+  // `vat skills package`: a claude-web ZIP over the 8 MB claude.ai upload
+  // ceiling (not PACKAGED_SIZE_EXCEEDS_API_LIMIT, the 30 MiB Skills API
+  // warning). The verb reads no project config, so an override would be inert.
+  | 'SKILL_PACKAGE_TOO_LARGE'
+  // `vat verify`'s files-config-dests phase: a declared `files:` dest the built
+  // output lacks. Always `error` — the phase reads no `validation.severity`, so a
+  // registry entry would let the config accept a key nothing applies.
+  | 'FILES_CONFIG_DEST_MISSING'
+  // `vat skill test run`: an eval that ran and did not pass, at `error` — or
+  // `warning` under `--allow-eval-failure`, a flag, not config. The verb reads no
+  // `validation.severity`, so a registry entry would let config accept an inert key.
+  | 'SKILL_TEST_EVAL_FAILED'
+  // `vat doctor`: a check that failed (`error`) or could not reach an answer
+  // (`warning`). Doctor reads no project config for severity — it diagnoses a
+  // config that may not exist — so a registry entry would be an inert key.
+  | 'DOCTOR_CHECK_FAILED'
+  | 'DOCTOR_CHECK_WARNED'
+  // `vat rag index`: a document the index does not hold — the crawl could not
+  // read it, or the provider could not chunk or embed it. Always `error`; the
+  // verb reads no `validation.severity`, so a registry entry would be an inert key.
+  | 'RAG_DOCUMENT_INDEX_FAILED'
+  // `vat corpus scan`: a seed entry whose audit could not run, or whose requested
+  // review did not finish. Always `warning` — the scan finished and the entry is
+  // named; the verb reads no project config, so a registry entry would be inert.
+  | 'CORPUS_ENTRY_INCOMPLETE';

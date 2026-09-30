@@ -6,10 +6,13 @@
  * directory ready to be committed to the publish branch.
  */
 
-import { cpSync, existsSync, readFileSync } from 'node:fs';
+import { cpSync, readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+
+import { CommandRefusalError } from '../../../utils/command-refusal.js';
+import { configNamedFileAbsent, readInputFile, requireInputPath } from '../../../utils/project-root-policy.js';
 
 import {
   parseUnreleasedSection,
@@ -114,7 +117,8 @@ async function extractChangelogDelta(
     const reason = derivedVersion
       ? `has neither a non-empty [Unreleased] section nor a [${derivedVersion}] section`
       : `has no non-empty [Unreleased] section`;
-    throw new Error(
+    throw new CommandRefusalError(
+      'INPUT_UNREADABLE',
       `Changelog "${changelog.sourcePath}" ${reason}. Document the release before publishing.`,
     );
   }
@@ -131,11 +135,10 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
 
   // 1. Verify build output exists
   const buildDir = safePath.join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', marketplaceName);
-  if (!existsSync(buildDir)) {
-    throw new Error(
-      `Marketplace build output not found at ${buildDir}. Run "vat build" first.`,
-    );
-  }
+  requireInputPath(buildDir, {
+    code: 'INPUT_UNREADABLE',
+    message: `Marketplace build output not found at dist/.claude/plugins/marketplaces/${marketplaceName}. Run "vat build" first.`,
+  });
 
   // 2. Copy marketplace artifacts to output
   // Use cpSync instead of async cp() — Node 22 cp() drops files in nested directories
@@ -169,7 +172,7 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
   // 4. Process readme
   if (options.readme) {
     const readmePath = safePath.resolve(configDir, options.readme.sourcePath);
-    const readmeContent = readFileSync(readmePath, 'utf-8');
+    const readmeContent = readInputFile(readmePath, configNamedFileAbsent('publish.readme', options.readme.sourcePath));
     await writeFile(safePath.join(outputDir, 'README.md'), readmeContent);
     files.push('README.md');
   }

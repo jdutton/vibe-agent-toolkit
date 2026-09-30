@@ -82,20 +82,22 @@ Description:
   a successful clear.
 
   The tree is shared by every VAT on the machine, so another run writing into
-  it can make the delete stop part-way. That is reported as status: partial,
-  naming what went and what stayed, rather than failing with no account of it.
+  it can make the delete stop part-way. That is the report's error branch
+  (error.code RUN_INCOMPLETE, error.message saying why), still naming what went
+  and what stayed, rather than failing with no account of it.
 
 Output:
+  A YAML report on stdout (status ok, or error); its data holds:
   - cacheDir: absolute path that was targeted
   - existed: whether the directory was there at all
   - removed: top-level entries that are now gone
-  - remaining / reason: what survived a partial clear, and why (partial only)
+  - remaining: top-level entries still there (empty unless the clear stopped short)
   - entriesRemoved / bytesRemoved: file count and total size actually removed
 
 Exit Codes:
   0 - Cache cleared (or already absent)
-  1 - Cleared only in part, because something else is using the tree
-  2 - Could not read or target the cache at all (permissions, unexpected layout)
+  2 - Cleared only in part (RUN_INCOMPLETE), or the cache could not be read at
+      all (INPUT_UNREADABLE) — the document's error says which
 
 Example:
   $ vat cache clear                    # Reclaim the temp-directory cache tree

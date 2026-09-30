@@ -59,7 +59,7 @@ Configuration:
     .description('Index markdown resources into vector database')
     .option(DB_PATH_OPTION, DB_PATH_DESC)
     .option('--debug', DEBUG_OPTION_DESC)
-    .action(lazyAction(RAG_BACKEND, async () => (await import('./index-command.js')).indexCommand))
+    .action(lazyAction('rag index', RAG_BACKEND, async () => (await import('./index-command.js')).indexCommand))
     .addHelpText(
       'after',
       `
@@ -73,21 +73,24 @@ Description:
   When path specified: recursively finds all *.md files (ignores config)
   When no path: uses vibe-agent-toolkit.config.yaml include/exclude patterns
 
-Output Structure (YAML):
-  status: success (every resource indexed) / partial (some failed) / error
-  resourcesIndexed: new/updated files
-  resourcesSkipped: unchanged files (content hash match)
-  resourcesEmpty: files that chunked to nothing (frontmatter-only or blank);
-          recorded, not searchable, not an error
-  resourcesUpdated: files with new content
-  chunksCreated: total chunks added
-  chunksDeleted: chunks removed from updated files
-  duration: total indexing time
-  errors: resources that failed, present only when non-empty. Their content
-          is NOT in the index and NOT searchable.
+Output:
+  A YAML report on stdout (status ok, findings or error); examined counts
+  the resources submitted. Its data holds:
+  - resourcesIndexed: new/updated files
+  - resourcesSkipped: unchanged files (content hash match)
+  - resourcesEmpty: files that chunked to nothing (frontmatter-only or blank);
+    recorded, not searchable, not an error
+  - resourcesUpdated: files with new content
+  - chunksCreated / chunksDeleted: chunks added, and removed from updated files
+  Each file NOT in the index (unreadable, or failed to chunk or embed) is a
+  RAG_DOCUMENT_INDEX_FAILED finding at its path; its content is not searchable.
 
 Exit Codes:
-  0 - Success  |  1 - Indexed with errors (see 'errors')  |  2 - System error
+  0 - Every submitted file indexed (or skipped as unchanged)
+  1 - Findings: at least one file is not in the index
+  2 - Could not run (error.code says why: USAGE_INVALID for a missing path or
+      --db, INPUT_UNREADABLE, CONFIG_INVALID, BACKEND_UNAVAILABLE when the RAG
+      backend is not installed)
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)
@@ -108,7 +111,7 @@ Example:
     .option(DB_PATH_OPTION, DB_PATH_DESC)
     .option('--limit <n>', 'Maximum results to return (default: 10)', Number.parseInt)
     .option('--debug', DEBUG_OPTION_DESC)
-    .action(lazyAction(RAG_BACKEND, async () => (await import('./query-command.js')).queryCommand))
+    .action(lazyAction('rag query', RAG_BACKEND, async () => (await import('./query-command.js')).queryCommand))
     .addHelpText(
       'after',
       `
@@ -117,15 +120,13 @@ Description:
   to a vector embedding and finds the most relevant document chunks based
   on meaning (not just keywords). Returns full chunk content with metadata.
 
-Output Structure (YAML):
-  status: success/error
-  query: original search text
-  stats:
-    totalMatches: number of results
-    searchDurationMs: query time
-    embedding.model: model used for embeddings
-  duration: total command time
-  chunks: array of matching document chunks with full content
+Output:
+  A YAML report on stdout (status ok, or error); examined counts the chunks
+  in the index searched, so a query matching nothing is ok. Its data holds:
+  - root: the directory every filePath is relative to
+  - query: original search text
+  - stats: totalMatches, searchDurationMs, embedding.model
+  - chunks: matching document chunks with full content
 
 Each chunk includes:
   - chunkId, resourceId, filePath (identifiers)
@@ -135,7 +136,9 @@ Each chunk includes:
   - content (full text, not truncated)
 
 Exit Codes:
-  0 - Success  |  2 - System error (no database)
+  0 - Searched
+  2 - Could not run (error.code: INPUT_UNREADABLE when nothing is indexed yet,
+      USAGE_INVALID with no --db and no project, BACKEND_UNAVAILABLE)
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)
@@ -154,7 +157,7 @@ Example:
     .description('Show RAG database statistics')
     .option(DB_PATH_OPTION, DB_PATH_DESC)
     .option('--debug', DEBUG_OPTION_DESC)
-    .action(lazyAction(RAG_BACKEND, async () => (await import('./stats-command.js')).statsCommand))
+    .action(lazyAction('rag stats', RAG_BACKEND, async () => (await import('./stats-command.js')).statsCommand))
     .addHelpText(
       'after',
       `
@@ -163,17 +166,19 @@ Description:
   embedding model information, and database metadata. Use this to verify
   indexing completed successfully and monitor database size.
 
-Output Structure (YAML):
-  status: success/error
-  totalChunks: number of document chunks indexed
-  totalResources: number of unique documents indexed
-  dbSizeBytes: database size on disk (if available)
-  embeddingModel: model used for vector embeddings
-  lastIndexed: timestamp of most recent indexing
-  duration: command execution time
+Output:
+  A YAML report on stdout (status ok, or error); examined is 1, the database
+  opened. Its data holds:
+  - totalChunks: number of document chunks indexed
+  - totalResources: number of unique documents indexed
+  - dbSizeBytes: database size on disk
+  - embeddingModel: model used for vector embeddings
+  - lastIndexed: ISO 8601 timestamp of the most recent indexing
 
 Exit Codes:
-  0 - Success  |  2 - System error (no database)
+  0 - Reported (an empty database reports zeros)
+  2 - Could not run (error.code: USAGE_INVALID with no --db and no project,
+      BACKEND_UNAVAILABLE)
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)
@@ -192,7 +197,7 @@ Example:
     .description('Delete entire RAG database directory')
     .option(DB_PATH_OPTION, DB_PATH_DESC)
     .option('--debug', DEBUG_OPTION_DESC)
-    .action(lazyAction(RAG_BACKEND, async () => (await import('./clear-command.js')).clearCommand))
+    .action(lazyAction('rag clear', RAG_BACKEND, async () => (await import('./clear-command.js')).clearCommand))
     .addHelpText(
       'after',
       `
@@ -205,13 +210,14 @@ Warning:
   This operation cannot be undone. The database directory will be
   permanently deleted. Re-run 'vat rag index' to rebuild from source.
 
-Output Structure (YAML):
-  status: success/error
-  message: confirmation message
-  duration: command execution time
+Output:
+  A YAML report on stdout (status ok, or error); examined is 1, the database
+  opened. Its data is { cleared: true }.
 
 Exit Codes:
-  0 - Success  |  2 - System error
+  0 - Cleared
+  2 - Could not run (error.code: USAGE_INVALID with no --db and no project,
+      BACKEND_UNAVAILABLE)
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)

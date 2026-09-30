@@ -1,10 +1,9 @@
 /**
  * Helper functions for skill commands.
  *
- * Error handling deliberately does NOT live here: every command family shares
- * the one implementation in `utils/command-error.ts`. This module used to carry
- * a second `handleCommandError` with the same name and signature that wrote
- * nothing to stdout before exiting 2.
+ * Error handling deliberately does NOT live here: every command family ends
+ * through the one writer (`utils/document-writer.ts`). This module used to carry
+ * a second failure helper that wrote nothing to stdout before exiting 2.
  */
 
 
@@ -51,18 +50,6 @@ export function filterSkillsByName<T extends DiscoveredSkill>(
   }
 
   return filtered;
-}
-
-/**
- * Write YAML header to stdout
- *
- * @param fields - Key-value pairs to write as YAML
- */
-export function writeYamlHeader(fields: Record<string, string | number | boolean>): void {
-  process.stdout.write('---\n');
-  for (const [key, value] of Object.entries(fields)) {
-    process.stdout.write(`${key}: ${value}\n`);
-  }
 }
 
 /**

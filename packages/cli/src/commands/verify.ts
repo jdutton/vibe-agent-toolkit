@@ -9,9 +9,11 @@
  *   5. packaged-content  (in-process; built bundles carry nothing that must not ship)
  *   6. consistency check  (in-process; skill distribution integrity — package.json, plugin assignment)
  *
- * 1–3 delegate to a whole `vat` command and nest that command's own report under
- * `report`; they are chosen by {@link selectVerifyPhases}. 4–6 exist only here and
- * are chosen by `selectInProcessVerifyPhases`. Every phase runs in this process.
+ * 1–3 delegate to a whole `vat` command, whose report is held to that command's
+ * registered schema and folded into `data.phases`; they are chosen by
+ * {@link selectVerifyPhases}. 4–6 exist only here, hold their reports to their own
+ * schemas, and are chosen by `selectInProcessVerifyPhases`. Every phase runs in
+ * this process.
  * Both sets are config-gated, and both are announced on startup.
  */
 
@@ -26,47 +28,54 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import {
-  calculateValidationStatus,
-  countBySeverity,
-  type SeverityCounts,
+  buildReport,
+  toFindings,
+  type Finding,
+  type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import { isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
-import { handleCommandError } from '../utils/command-error.js';
 import { loadConfig } from '../utils/config-loader.js';
+import { endWithReport } from '../utils/document-writer.js';
 import { formatIssueLines } from '../utils/issue-rendering.js';
 import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import type { createLogger } from '../utils/logger.js';
-import { writeYamlOutput } from '../utils/output.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
-import { nothingCheckedFinding, runIntegrityFinding } from '../utils/run-integrity.js';
+import { runIntegrityFinding } from '../utils/run-integrity.js';
 import { isSkillPublished, mergeSkillPackagingConfig, pluginLocalSkillConfigEntry, publishScope } from '../utils/skill-packaging-config.js';
 
+import { MARKETPLACE_VALIDATE_REPORT_SCHEMA } from './claude/marketplace/validate-schema.js';
 import { runMarketplaceValidatePhase } from './claude/marketplace/validate.js';
 import {
   runConsistencyChecks,
   type ConsistencyIssue,
 } from './consistency-check.js';
+import { PACKAGED_CONTENT_REPORT_SCHEMA, type PackagedContentData } from './orchestrator-schema.js';
 import {
   addRetiredOnlyOption,
-  aggregatePhaseStatus,
   applyPhaseSelection,
   createPhaseContext,
+  DATALESS_PHASE_REPORT_SCHEMA,
   decidePhaseSelection,
-  exitCodeForPhases,
+  orchestrate,
+  ORCHESTRATOR_FORMAT,
+  ORCHESTRATOR_GATE,
   rejectRetiredOnly,
   runPhase,
   type Phase,
+  type PhaseReportSchema,
   type PhaseResult,
   type PhaseSelection,
   type PhaseVocabulary,
 } from './phase-utils.js';
 import { rejectPositionalArguments } from './positional-args.js';
+import { RESOURCES_VALIDATE_REPORT_SCHEMA } from './resources/validate-schema.js';
 import { runResourcesValidatePhase } from './resources/validate.js';
 import type { DiscoveredSkill } from './skills/command-helpers.js';
 import { discoverSkillsFromConfig, readPluginLocalSkillNames, type PluginLocalSkillNames } from './skills/skill-discovery.js';
+import { SKILLS_VALIDATE_REPORT_SCHEMA } from './skills/validate-schema.js';
 import { runSkillsValidatePhase } from './skills/validate.js';
 
 export interface VerifyCommandOptions {
@@ -115,8 +124,8 @@ Description:
     marketplace  → strict marketplace validation (when 'claude.marketplaces:' configured)
 
   Phases (verify's own, run after the above, when 'skills:' is configured):
-    files-config-dests → every 'files:' dest exists in the built output. Appears
-                         in the document only when a dest is missing.
+    files-config-dests → every 'files:' dest exists in the built output; one
+                         FILES_CONFIG_DEST_MISSING error per missing dest.
     packaged-content   → built skill bundles carry no repo-internal agent-instruction
                          file (CLAUDE.md, AGENTS.md, GEMINI.md). A dest an explicit
                          'files:' entry names is honoured, not reported.
@@ -131,32 +140,22 @@ Description:
   inspect its inputs is listed even when it finds nothing to report.
 
 Output:
-  ONE YAML document → stdout
-    per phase: status (success | warning | error | system-error). A delegated
-    phase's own report is captured and nested under 'report', so the whole run
-    is a single parseable document (a phase's stdout is never streamed
-    through). A phase's status comes from its own REPORTED status, not from its
-    exit code — an exit code cannot express 'warning'. Verify's own phases also
-    publish issueCounts {errors, warnings, info}; 'consistency' and
-    'packaged-content' carry their findings into the document too, while
-    'files-config-dests' publishes counts only and lists the missing dests on
-    stderr. 'packaged-content' also publishes bundlesInspected — the built
-    bundles it crawled — beside bundlesExpected (the bundles 'vat build'
-    produces for the skills this run discovered) and bundlesMissing (expected
-    bundles absent from dist/, by path). Zero inspected, or any missing, is
-    refused as RESOURCE_CHECK_BROKEN at error (exit 1) rather than reported as
-    a pass: a run that found none of the build (dist/ not built, or a
-    skills.include glob that matched nothing) or only part of it (a bundle
-    deleted, a skill added since the last build) is not a verdict on what ships.
-    A skill whose merged config says publish: false is IN-PLACE — never
-    bundled by 'vat build', so no pool bundle is expected for it (a stale one
-    in dist/skills is still inspected); bundlesInPlace counts them, and a run
-    whose every discovered skill is in place passes with nothing to inspect. A
-    plugin-local skill (a git-tracked skill dir under a plugin's skills/) is
-    never in place: it is expected in its plugin tree whatever publish says,
-    and never counted in bundlesInPlace. Declare
-    skills.defaults.publish: false for a project that builds with --only claude
-    and uses its other skills from the repo.
+  ONE report envelope (YAML) → stdout: status (ok | findings | error),
+  examined (the sum over every phase), summary {errors, warnings, info},
+  findings (every phase's, flat), and data.phases — one entry per phase with
+  its own status, examined, summary, error (when it did not finish) and the
+  phase's own data. Schema: packages/cli/schemas/orchestrator.json.
+    'packaged-content': examined is the built bundles it crawled; its data is
+    bundlesExpected (the bundles 'vat build' produces for the skills this run
+    discovered), bundlesInPlace, and bundlesMissing (expected bundles absent
+    from dist/, by path). Zero inspected, or any missing, is refused as
+    RESOURCE_CHECK_BROKEN at error (exit 1): a run that found none of the build
+    (dist/ not built, or a skills.include glob that matched nothing) or only
+    part of it is not a verdict on what ships. A skill whose merged config says
+    publish: false is IN-PLACE — never bundled by 'vat build', so no pool bundle
+    is expected for it; a run whose every discovered skill is in place passes
+    with nothing to inspect. A plugin-local skill (a git-tracked skill dir under
+    a plugin's skills/) is never in place: it is expected in its plugin tree.
   Progress and validation errors → stderr (streamed live)
 
   By default each delegated phase reports a per-asset summary plus the assets
@@ -164,11 +163,12 @@ Output:
   then also lists the assets it inspected and found nothing to report.
 
 Exit Codes:
-  0 - All phases passed (a warning does not fail the run — read status/issueCounts)
-  1 - Validation errors found
-  2 - System error (this command's own, or propagated from a phase that could
-      not run: it exited 2, or reported 'system-error' for itself), or a usage
-      error such as passing a path
+  0 - Every phase finished and no finding is an error (warnings never fail)
+  1 - An error finding, or nothing was examined at all (RESOURCE_CHECK_BROKEN)
+  2 - The run could not do its job: a phase did not finish (RUN_INCOMPLETE,
+      the finished phases still in data.phases), a path argument or the
+      retired '--only' (USAGE_INVALID), no project root, a population it
+      could not see
 
 Arguments:
   None. Scope comes from vibe-agent-toolkit.config.yaml, never from the command
@@ -189,8 +189,8 @@ Example:
   return command;
 }
 
-/** Result of checking files config dests for a single (skill, outputDir) pair */
-export interface FilesDestCheckResult {
+/** The `files:` dests one built bundle lacks: a single (skill, outputDir) pair. */
+interface MissingDests {
   skillName: string;
   /** The actual output directory that was checked (pool dir or plugin-tree dir). */
   outputDir: string;
@@ -276,7 +276,7 @@ function isDirectory(dir: string): boolean {
  * that is not a directory is named in `missing` — that absence is the finding,
  * not a skip (see {@link isDirectory} for why "exists" is not enough).
  *
- * An EMPTY `files:` block is registered, not skipped: {@link checkFilesConfigDests}
+ * An EMPTY `files:` block is registered, not skipped: {@link runFilesConfigDestsPhase}
  * has nothing to verify for such a skill and filters it out itself, but
  * {@link checkPackagedAgentInstructionFiles} must still crawl that bundle — a skill
  * with no `files:` block is exactly the one whose agent-instruction file arrived by
@@ -416,28 +416,21 @@ function collectBuiltSkillOutputs(
 }
 
 /**
- * Check that all dest paths from the merged files config exist in the built output.
+ * The `files:` dests of every built bundle that declares some: how many bundles
+ * were checked, and which dests are absent.
  *
- * A dest is "missing" ONLY when absent from a candidate dir that exists. If a skill
- * has no existing candidate dir, it is not reported (build didn't run for that mode).
- *
- * @param discovered - The skills this run discovered from `skills.include`. See
- *   {@link collectBuiltSkillOutputs} for why it is required rather than optional.
- * @param pluginLocal - The run's plugin-local index — required for the same reason.
- * @param pluginLocalNames - The declared name of every location in `pluginLocal` — required for the same reason.
- * @returns One result per (skill, outputDir) pair where dests are absent.
+ * A dest is "missing" ONLY when absent from a candidate dir that exists. A skill
+ * with no existing candidate dir is not reported (the build did not run for that
+ * mode) — the packaged-content phase names the unbuilt bundles.
  */
-export function checkFilesConfigDests(
-  cwd: string,
-  discovered: readonly DiscoveredSkill[],
-  pluginLocal: PluginLocalSkillIndex,
-  pluginLocalNames: PluginLocalSkillNames,
-): FilesDestCheckResult[] {
-  const results: FilesDestCheckResult[] = [];
-  for (const check of collectBuiltSkillOutputs(cwd, discovered, pluginLocal, pluginLocalNames).built) {
+function checkFilesConfigDestsOf(built: readonly CheckEntry[]): { checked: number; missing: MissingDests[] } {
+  const results: MissingDests[] = [];
+  let checked = 0;
+  for (const check of built) {
     const { skillName, outputDir } = check;
     const mergedFiles = filesOf(check);
     if (mergedFiles.length === 0) continue;
+    checked += 1;
     const missing: string[] = [];
     for (const entry of mergedFiles) {
       const destPath = safePath.resolve(outputDir, entry.dest);
@@ -449,7 +442,7 @@ export function checkFilesConfigDests(
       results.push({ skillName, outputDir, missing });
     }
   }
-  return results;
+  return { checked, missing: results };
 }
 
 /**
@@ -566,7 +559,7 @@ const FILES_CONFIG_DESTS = 'files-config-dests';
  * Log files-config-dests errors to stderr.
  */
 function reportFilesDestErrors(
-  results: FilesDestCheckResult[],
+  results: readonly MissingDests[],
   logger: ReturnType<typeof createLogger>
 ): void {
   logger.error(`\n▶ Phase: ${FILES_CONFIG_DESTS}`);
@@ -579,24 +572,20 @@ function reportFilesDestErrors(
 }
 
 /**
- * Log packaged-content findings to stderr.
- *
- * A companion to the document entry, never a substitute for it: this phase's
- * findings are published into the YAML too (see {@link FindingsPhaseResult}).
+ * Log packaged-content findings to stderr — a companion to the report, never a
+ * substitute for it.
  *
  * Rendered through the SHARED {@link formatIssueLines}, which `vat skills build`
- * and `vat skills validate` already use. The hand-rolled renderer this replaces
- * printed severity, code, location and fix — and dropped `message`, the only part
- * of a finding that says what is wrong. A second renderer for the same shape is
+ * and `vat skills validate` already use: a second renderer for the same shape is
  * how one command's findings end up spelled differently from every other's.
  */
 function reportPackagedContentIssues(
-  issues: readonly ValidationIssue[],
+  findings: readonly Finding[],
   logger: ReturnType<typeof createLogger>
 ): void {
   logger.error(`\n▶ Phase: ${PACKAGED_CONTENT}`);
-  for (const issue of issues) {
-    for (const line of formatIssueLines(issue, '  ')) logger.error(line);
+  for (const finding of findings) {
+    for (const line of formatIssueLines(finding, '  ')) logger.error(line);
   }
 }
 
@@ -642,7 +631,6 @@ const VERIFY_VOCABULARY: PhaseVocabulary = {
   noop: {
     warning:
       'No resources:, skills: or claude.marketplaces: block found in vibe-agent-toolkit.config.yaml — nothing to verify. If this is unexpected, check your config.',
-    note: 'No configured phases (no resources, skills or claude.marketplaces block in vibe-agent-toolkit.config.yaml).',
   },
 };
 
@@ -680,6 +668,7 @@ export function selectVerifyPhases(
   if (unreadable || config?.resources) {
     phases.push({
       name: 'resources',
+      schema: RESOURCES_VALIDATE_REPORT_SCHEMA,
       run: () => runResourcesValidatePhase(undefined, { verbose: detail }),
     });
   }
@@ -687,6 +676,7 @@ export function selectVerifyPhases(
   if (unreadable || config?.skills) {
     phases.push({
       name: 'skills',
+      schema: SKILLS_VALIDATE_REPORT_SCHEMA,
       run: () => runSkillsValidatePhase(undefined, { verbose: detail }),
     });
   }
@@ -698,6 +688,7 @@ export function selectVerifyPhases(
     const marketplacePath = `dist/.claude/plugins/marketplaces/${name}`;
     phases.push({
       name: `marketplace:${name}`,
+      schema: MARKETPLACE_VALIDATE_REPORT_SCHEMA,
       run: () => runMarketplaceValidatePhase(marketplacePath, { verbose: detail }),
     });
   }
@@ -731,7 +722,7 @@ type InProcessPhaseName = typeof FILES_CONFIG_DESTS | typeof PACKAGED_CONTENT | 
  * announced 'resources → files-config-dests → consistency' and emitted a
  * document holding `resources` and nothing else, so an operator read a claim
  * that distribution consistency had been checked. Both in-process phases read
- * the same input, the `skills:` block — without it {@link checkFilesConfigDests}
+ * the same input, the `skills:` block — without it {@link runFilesConfigDestsPhase}
  * has no `files:` entry to resolve (both `defaults.files` and
  * `config.<skill>.files` live under `skills:`, so every merge is empty) and
  * {@link runConsistencyPhase} returns before its first lookup. Neither can
@@ -761,70 +752,9 @@ export function formatVerifyAnnouncement(
   return `🔍 vat verify (phases: ${all.join(' → ')})`;
 }
 
-/** An in-process phase's finding as it appears in the archived YAML. */
-interface PublishedIssue {
-  // `packaged-content` publishes real ValidationIssues, whose severity
-  // vocabulary also carries 'ignore'; the consistency phase's carry `Severity`.
-  severity: ValidationIssue['severity'];
-  code: string;
-  message: string;
-  fix: string;
-  /** Project-relative path of the file to open. Absent when the finding has none. */
-  location?: string;
-  /** 1-based line within {@link PublishedIssue.location}. */
-  line?: number;
-  /** Doc link the code's registry entry carries. */
-  reference?: string;
-}
-
-/**
- * Project ONE finding into the archived YAML.
- *
- * The whole anchor rides along. This shape used to be `{severity, code, message,
- * fix}` and the projection destructured exactly those four, so every
- * `packaged-content` finding reached the document with no `location` — the same
- * defect this PR fixed one command over in `vat skills build`, where a published
- * count carried "no `code`, no location and no fix string at ANY verbosity". It
- * looked survivable only because `materializeIssue` happens to interpolate the
- * detail into `message` for this one code; that is a coincidence, not a contract,
- * and stderr is not the document a CI consumer parses.
- */
-export function toPublishedIssue(issue: ValidationIssue): PublishedIssue {
-  return {
-    severity: issue.severity,
-    code: issue.code,
-    message: issue.message,
-    fix: issue.fix ?? '',
-    // Conditional rather than `location: issue.location`: `exactOptionalPropertyTypes`
-    // distinguishes an absent key from an explicit `undefined`, and a YAML document
-    // carrying `location: null` claims something the finding never said.
-    ...(issue.location === undefined ? {} : { location: issue.location }),
-    ...(issue.line === undefined ? {} : { line: issue.line }),
-    ...(issue.reference === undefined ? {} : { reference: issue.reference }),
-  };
-}
-
-/**
- * A phase result that carries its own findings into the archived YAML.
- *
- * Extends {@link PhaseResult} rather than widening it: only verify's own phases
- * hold findings — a delegated phase's findings belong to (and are printed by)
- * the command it delegates to, inside the report nested under `report`.
- */
-interface FindingsPhaseResult extends PhaseResult {
-  issueCounts: SeverityCounts;
-  issues: PublishedIssue[];
-}
-
-/**
- * The `packaged-content` phase's result: its findings, the count they are
- * over, and the count they should have been over — see {@link PackagedContentCrawl}.
- */
-export interface PackagedContentPhaseResult extends FindingsPhaseResult {
-  bundlesInspected: number;
-  bundlesExpected: number;
-  bundlesInPlace: number;
-  bundlesMissing: string[];
+/** The `packaged-content` phase: its name and its report. */
+export interface PackagedContentPhaseResult extends PhaseResult {
+  report: Report<PackagedContentData>;
 }
 
 /**
@@ -851,99 +781,54 @@ function missingBundlesFinding(crawl: PackagedContentCrawl): readonly Validation
   )];
 }
 
+/** The refusal for a crawl that found no bundle at all where one was expected. */
+function noBundleFinding(): ValidationIssue {
+  return runIntegrityFinding(
+    'The packaged-content phase inspected 0 built skill bundles, so this phase is not a'
+    + ' verdict: nothing was crawled for files that must not ship, and the document reads'
+    + ' the same as a run over clean bundles. Either `vat build` has not run (or wrote'
+    + ' somewhere other than dist/), or `skills.include` in vibe-agent-toolkit.config.yaml'
+    + ' matched no SKILL.md — usually a typo in the glob. Run `vat build` first; `vat skills'
+    + ' validate` lists what the globs discover.',
+  );
+}
+
 /**
- * Build the `packaged-content` phase result from what the crawl found.
+ * Build the `packaged-content` phase from what the crawl found.
  *
  * 🚨 **Zero bundles is an ERROR, not a clean phase — and so is a MISSING one.**
- * The phase is pushed unconditionally whenever `skills:` exists and it feeds the
- * real exit code; `discoverSkillsFromConfig` returning `[]` on a typo'd glob —
- * or `dist/` not having been built at all, or built somewhere else — gave the
- * crawl nothing to walk, and nothing walked was zero findings was `success`,
- * with no count in the document to say the phase had looked at nothing. `vat
- * verify` exists to check the BUILT tree; a run that found none of it is not a
- * verdict on it. Nor is a run that found half of it: with `bundlesInspected` as
- * the only denominator, two discovered skills and one deleted bundle published
- * `success` beside `bundlesInspected: 1`. The crawl now also carries what it
- * should have found, and the document publishes both counts.
+ * `vat verify` exists to check the BUILT tree; a run that found none of it is
+ * not a verdict on it, and neither is a run that found half of it. This phase
+ * refuses both itself, with the specific cause, rather than leaving it to the
+ * writer's zero-examined pass — which judges the whole run's sum, and the skills
+ * phase beside this one always examined something. One `RESOURCE_CHECK_BROKEN`
+ * at `error`, never two: the missing-bundle refusal names paths, so it wins.
  *
  * One zero IS a verdict: nothing expected because every discovered skill is in
  * place (`bundlesInPlace > 0`). Zero discovered skills stays refused.
  *
- * Derived here, in the one function that produces this phase's document, and
- * not in the command body, so no path through the orchestrator can publish
- * `status: success` beside `bundlesInspected: 0` or beside a non-empty
- * `bundlesMissing`. Through the shared mechanism in `run-integrity.ts`: one
- * non-overridable `RESOURCE_CHECK_BROKEN` at `error`, which
- * {@link exitCodeForPhases} then turns into exit 1. ONE, not two, when both
- * apply: the missing-bundle refusal is derived first because it names paths,
- * and {@link nothingCheckedFinding} stands down behind an existing
- * run-integrity finding.
- *
  * Pure, and exported so the refusal is pinned without a project on disk.
  */
 export function buildPackagedContentPhase(crawl: PackagedContentCrawl): PackagedContentPhaseResult {
-  const { bundlesInspected, bundlesExpected, bundlesInPlace, bundlesMissing, issues: found } = crawl;
+  const { issues: found, bundlesInspected, ...data } = crawl;
   const missing = missingBundlesFinding(crawl);
-  const accountedFor = bundlesExpected === 0 ? bundlesInspected + bundlesInPlace : bundlesInspected;
-  const issues = [
-    ...missing,
-    ...nothingCheckedFinding(accountedFor, [...missing, ...found], () =>
-      'The packaged-content phase inspected 0 built skill bundles, so this phase is not a'
-      + ' verdict: nothing was crawled for files that must not ship, and the document reads'
-      + ' the same as a run over clean bundles. Either `vat build` has not run (or wrote'
-      + ' somewhere other than dist/), or `skills.include` in vibe-agent-toolkit.config.yaml'
-      + ' matched no SKILL.md — usually a typo in the glob. Run `vat build` first; `vat skills'
-      + ' validate` lists what the globs discover.'),
-    ...found,
-  ];
+  const accountedFor = data.bundlesExpected === 0 ? bundlesInspected + data.bundlesInPlace : bundlesInspected;
+  const nothing = accountedFor === 0 && missing.length === 0 ? [noBundleFinding()] : [];
   return {
     name: PACKAGED_CONTENT,
-    status: calculateValidationStatus(issues),
-    // The denominator, beside the counts it qualifies — and what it should have been.
-    bundlesInspected,
-    bundlesExpected,
-    bundlesInPlace,
-    bundlesMissing,
-    issueCounts: countBySeverity(issues),
-    issues: issues.map(toPublishedIssue),
+    report: buildReport({
+      examined: bundlesInspected,
+      findings: toFindings([...missing, ...nothing, ...found]),
+      data,
+      gate: ORCHESTRATOR_GATE,
+    }),
   };
 }
 
 /**
- * `ConsistencyIssue` speaks the same severity vocabulary as `ValidationIssue`
- * but carries a free-form `code`, so it is counted through this projection —
- * there must be exactly ONE issues→status/counts collapse in the codebase, and
- * it lives in `@vibe-agent-toolkit/schema`.
- */
-function asValidationIssues(issues: readonly PublishedIssue[]): ValidationIssue[] {
-  return issues.map((issue) => ({
-    code: issue.code as ValidationIssue['code'],
-    severity: issue.severity,
-    message: issue.message,
-    fix: issue.fix,
-    ...(issue.location === undefined ? {} : { location: issue.location }),
-    ...(issue.line === undefined ? {} : { line: issue.line }),
-  }));
-}
-
-/**
- * Run the `packaged-content` phase: crawl, derive the phase document, and
- * report THAT document's issues on stderr.
- *
- * 🚨 **The stderr report used to be gated on the crawl, one line before the
- * refusal was derived.** `if (crawl.issues.length > 0) report(crawl.issues)`
- * ran ahead of {@link buildPackagedContentPhase}, which is where the
- * zero-bundle refusal is added — so on an unbuilt project the crawl found
- * nothing, nothing was logged, the skills phase's `✅ All validations passed`
- * stayed the last line on stderr, and the process exited 1 on a refusal that
- * existed only in the YAML. Reporting from the phase result makes what stderr
- * says and what the exit code is computed from one list, which is
- * `run-integrity.ts` invariant 6.
- *
- * The round trip through `asValidationIssues` is deliberate rather than
- * reporting the crawl's list plus a second derivation of the refusal: the
- * document is the artifact of record, and stderr should render exactly what it
- * carries, not a parallel computation that can drift from it.
+ * Run the `packaged-content` phase: crawl, derive the phase, and report THAT
+ * phase's findings on stderr — so what stderr says and what the exit code is
+ * computed from are one list (`run-integrity.ts` invariant 6).
  */
 export function runPackagedContentPhase(
   projectRoot: string,
@@ -961,20 +846,57 @@ export function reportPackagedContentPhase(
   phase: PackagedContentPhaseResult,
   logger: ReturnType<typeof createLogger>,
 ): void {
-  if (phase.issues.length > 0) {
-    reportPackagedContentIssues(asValidationIssues(phase.issues), logger);
-  } else if (phase.bundlesExpected === 0 && phase.bundlesInspected === 0) {
-    logger.info(`\n▶ Phase: ${PACKAGED_CONTENT} — nothing to inspect: all ${phase.bundlesInPlace} discovered skill(s) are in place (publish: false)`);
+  const { findings, data, examined } = phase.report;
+  if (findings.length > 0) {
+    reportPackagedContentIssues(findings, logger);
+  } else if (data !== null && data.bundlesExpected === 0 && examined === 0) {
+    logger.info(`\n▶ Phase: ${PACKAGED_CONTENT} — nothing to inspect: all ${data.bundlesInPlace} discovered skill(s) are in place (publish: false)`);
   }
 }
 
+/** One finding per `files:` dest absent from the built output, located at the path it should be. */
+function filesDestFindings(projectRoot: string, missing: readonly MissingDests[]): Finding[] {
+  return missing.flatMap(({ skillName, outputDir, missing: dests }) => dests.map((dest): Finding => ({
+    code: 'FILES_CONFIG_DEST_MISSING',
+    severity: 'error',
+    message: `Skill '${skillName}' declares the files: dest '${dest}', and the built output does not hold it.`,
+    location: toForwardSlash(safePath.relative(projectRoot, safePath.resolve(outputDir, dest))),
+    fix: 'Run `vat build` so the files: entry is applied, or correct the entry\'s dest in vibe-agent-toolkit.config.yaml.',
+  })));
+}
+
 /**
- * Run the in-process consistency check phase and record its outcome.
+ * The `files-config-dests` phase: every built bundle declaring `files:` dests,
+ * checked. `examined` is the bundles checked — those that exist and declare at
+ * least one dest — and each missing dest is one `FILES_CONFIG_DEST_MISSING`
+ * error at the path it should be, relative to `projectRoot`. Always `error`: the
+ * code is a `NonOverridableCode`, so no `validation.severity` is read for it.
  *
- * The findings are published INTO the phase result, not merely logged: they used
- * to go to stderr only, so the archived YAML — the artifact of record — said
- * nothing happened. And a warning-only run reported `passed`, which is the
- * reassuring answer to a question it could not represent.
+ * @param discovered - The skills this run discovered from `skills.include`. See
+ *   {@link collectBuiltSkillOutputs} for why it is required rather than optional.
+ * @param pluginLocal - The run's plugin-local index — required for the same reason.
+ * @param pluginLocalNames - The declared name of every location in `pluginLocal` — required for the same reason.
+ */
+export function runFilesConfigDestsPhase(
+  projectRoot: string,
+  discovered: readonly DiscoveredSkill[],
+  pluginLocal: PluginLocalSkillIndex,
+  pluginLocalNames: PluginLocalSkillNames,
+  logger: ReturnType<typeof createLogger>,
+): PhaseResult {
+  const built = collectBuiltSkillOutputs(projectRoot, discovered, pluginLocal, pluginLocalNames).built;
+  const { checked, missing } = checkFilesConfigDestsOf(built);
+  if (missing.length > 0) reportFilesDestErrors(missing, logger);
+  return {
+    name: FILES_CONFIG_DESTS,
+    report: buildReport({ examined: checked, findings: filesDestFindings(projectRoot, missing), data: null, gate: ORCHESTRATOR_GATE }),
+  };
+}
+
+/**
+ * The in-process consistency check phase, its findings published into the
+ * report, not merely logged: they used to go to stderr only, so the archived
+ * YAML — the artifact of record — said nothing happened.
  *
  * Discovery is handed in rather than performed here: it crawls the whole project,
  * and the packaged-content and files-config-dests phases need the same list. One
@@ -982,100 +904,63 @@ export function reportPackagedContentPhase(
  */
 function runConsistencyPhase(
   logger: ReturnType<typeof createLogger>,
-  phaseResults: PhaseResult[],
-  config: ProjectConfig | undefined,
+  config: ProjectConfig,
   projectRoot: string,
   discoveredSkills: readonly DiscoveredSkill[],
   pluginLocal: PluginLocalSkillIndex,
-): void {
-  if (!config?.skills) {
-    // Nothing to cross-reference, so nothing to report: a run without a
-    // `skills:` block is a genuine no-op, and {@link selectInProcessVerifyPhases}
-    // has already decided not to name this phase. There used to be a second arm
-    // here that pushed an ERROR result instead — because `--only consistency`
-    // had asked for THIS phase specifically, and answering an explicit request
-    // with an empty phase list and `success` is the same silent pass
-    // `vat validate --only <unconfigured surface>` refuses to give. With
-    // `--only` retired from `vat verify` there is no way to ask for this phase
-    // specifically, so that arm went with it. This guard remains reachable only
-    // defensively (and narrows `config.skills` for the call below).
-    return;
-  }
-
-  const consistencyResult = runConsistencyChecks([...discoveredSkills], config, projectRoot, pluginLocal);
-  const issues = consistencyResult.issues;
-
-  if (issues.length > 0) {
-    reportConsistencyIssues(issues, logger);
-  }
-
-  const asValidation = asValidationIssues(issues);
-  const result: FindingsPhaseResult = {
+): PhaseResult {
+  const { issues } = runConsistencyChecks([...discoveredSkills], config, projectRoot, pluginLocal);
+  if (issues.length > 0) reportConsistencyIssues(issues, logger);
+  return {
     name: 'consistency',
-    status: calculateValidationStatus(asValidation),
-    issueCounts: countBySeverity(asValidation),
-    issues: asValidation.map(toPublishedIssue),
+    report: buildReport({ examined: discoveredSkills.length, findings: issues, data: null, gate: ORCHESTRATOR_GATE }),
   };
-  phaseResults.push(result);
+}
+
+/**
+ * Run one in-process phase as a {@link Phase}, so a throw inside it — a
+ * `package.json` the OS will not read, coded `INPUT_UNREADABLE` — becomes THAT
+ * phase's refusal with its own code, and the phases that finished still publish.
+ */
+async function inProcess(name: string, schema: PhaseReportSchema, run: () => PhaseResult): Promise<PhaseResult> {
+  return runPhase({ name, schema, run: () => Promise.resolve({ report: run().report }) });
 }
 
 /**
  * The in-process half of `vat verify`: `files-config-dests`, `packaged-content` and
- * `consistency`, each where `inProcess` names it.
+ * `consistency`, each where `inProcess` names it, each recorded as it finishes.
  */
 async function runInProcessPhases(run: {
-  inProcess: readonly InProcessPhaseName[];
+  phases: readonly InProcessPhaseName[];
   config: ProjectConfig;
   skills: NonNullable<ProjectConfig['skills']>;
   projectRoot: string;
   logger: ReturnType<typeof createLogger>;
-  phaseResults: PhaseResult[];
+  results: PhaseResult[];
 }): Promise<void> {
-  const { inProcess, config, projectRoot, logger, phaseResults } = run;
-  // ONE discovery for the whole in-process half of the run. Every phase below
-  // asks the same question — "which skills does this project have" — and each
-  // answer used to be a different one: `consistency` crawled, while
-  // `files-config-dests` and `packaged-content` read `skills.config` keys and
-  // were therefore blind to every skill discovered by a glob.
-  // `'refuse'`: a verify over a population it could not see is the
-  // green-without-checking shape this command exists to refuse. The throw
-  // lands in the command's catch → `handleCommandError`, exit 2, with the
-  // crawl's own root-relative sentence.
+  const { phases, config, projectRoot, logger, results } = run;
+  // ONE discovery for the whole in-process half of the run: every phase below
+  // asks "which skills does this project have", and each used to answer it
+  // differently. `'refuse'`: a verify over a population it could not see is the
+  // green-without-checking shape this command exists to refuse — the throw is
+  // the run's refusal, published with the phases that already finished.
   const discoveredSkills = await discoverSkillsFromConfig(run.skills, projectRoot, 'refuse');
-  // ONE plugin-local index likewise: listing it crawls every plugin, and every phase
-  // below asks it (in-place vs plugin-only, plugin-tree bundles, plugin assignment).
+  // ONE plugin-local index likewise, and the declared name of each plugin-local
+  // skill, which keys its config exactly as the plugin build keyed it.
   const pluginLocal = indexPluginLocalSkills(config, projectRoot);
-  // …and the declared name of each plugin-local skill, which keys its config exactly as
-  // the plugin build keyed it.
   const pluginLocalNames = await readPluginLocalSkillNames(pluginLocal);
 
-  // Post-build files config check: verify all dest paths exist in built output
-  if (inProcess.includes(FILES_CONFIG_DESTS)) {
-    const filesDestResults = checkFilesConfigDests(projectRoot, discoveredSkills, pluginLocal, pluginLocalNames);
-    if (filesDestResults.length > 0) {
-      reportFilesDestErrors(filesDestResults, logger);
-      phaseResults.push({
-        name: FILES_CONFIG_DESTS,
-        status: 'error',
-        issueCounts: { errors: filesDestResults.length, warnings: 0, info: 0 },
-      });
-    }
+  if (phases.includes(FILES_CONFIG_DESTS)) {
+    results.push(await inProcess(FILES_CONFIG_DESTS, DATALESS_PHASE_REPORT_SCHEMA, () =>
+      runFilesConfigDestsPhase(projectRoot, discoveredSkills, pluginLocal, pluginLocalNames, logger)));
   }
-
-  // Packaged-content check: crawl each built skill bundle for repo-internal
-  // agent-instruction files. Publishes its findings INTO the document rather
-  // than only logging them — a file that must not ship has to be visible in
-  // `issueCounts`, or a CI consumer reads a clean report for a bundle carrying
-  // one. Warnings do not fail the run; the exit code still comes from errors.
-  // The zero-bundle refusal is derived inside the builder and logged from the
-  // built phase, so stderr, the document and the exit code carry one list.
-  if (inProcess.includes(PACKAGED_CONTENT)) {
-    phaseResults.push(runPackagedContentPhase(projectRoot, discoveredSkills, pluginLocal, pluginLocalNames, logger));
+  if (phases.includes(PACKAGED_CONTENT)) {
+    results.push(await inProcess(PACKAGED_CONTENT, PACKAGED_CONTENT_REPORT_SCHEMA, () =>
+      runPackagedContentPhase(projectRoot, discoveredSkills, pluginLocal, pluginLocalNames, logger)));
   }
-
-  // Consistency check: cross-reference discovered skills vs package.json and plugin assignments
-  if (inProcess.includes('consistency')) {
-    runConsistencyPhase(logger, phaseResults, config, projectRoot, discoveredSkills, pluginLocal);
+  if (phases.includes('consistency')) {
+    results.push(await inProcess('consistency', DATALESS_PHASE_REPORT_SCHEMA, () =>
+      runConsistencyPhase(logger, config, projectRoot, discoveredSkills, pluginLocal)));
   }
 }
 
@@ -1083,68 +968,42 @@ async function verifyTopLevelCommand(
   options: VerifyCommandOptions,
   command: Command,
 ): Promise<void> {
-  // First, and before requireProjectRoot: `vat verify dist/skills/demo` used to
-  // be accepted, have its path discarded, run wide over the whole project and
-  // report success. Nothing below can un-tell that lie, so the run ends here.
-  rejectPositionalArguments(
-    command.args,
-    COMMAND_NAME,
-    'verifies every phase vibe-agent-toolkit.config.yaml declares, against the built dist/ tree',
-  );
+  const { logger } = createPhaseContext(options.debug);
 
-  // Before requireProjectRoot: a retired flag is a usage error, and answering it
-  // with "no vibe-agent-toolkit.config.yaml found" would diagnose the wrong
-  // problem for anyone running the old invocation outside a project.
-  rejectRetiredOnly(options.only, COMMAND_NAME, VERIFY_FULL_RUN_SECONDS);
+  const report = await orchestrate(async (results) => {
+    // First, and before requireProjectRoot: `vat verify dist/skills/demo` used to
+    // be accepted, have its path discarded, run wide over the whole project and
+    // report success.
+    rejectPositionalArguments(
+      command.args,
+      COMMAND_NAME,
+      'verifies every phase vibe-agent-toolkit.config.yaml declares, against the built dist/ tree',
+    );
+    // Before requireProjectRoot: a retired flag is a usage error, and answering it
+    // with "no vibe-agent-toolkit.config.yaml found" would diagnose the wrong problem.
+    rejectRetiredOnly(options.only, COMMAND_NAME, VERIFY_FULL_RUN_SECONDS);
 
-  const { logger, startTime } = createPhaseContext(options.debug);
-
-  try {
-    // Inside the try, deliberately: phase selection used to throw from out here
-    // (on an unroutable `--only`), so the user got a raw Node stack trace and
-    // zero bytes of the structured document a scripted caller parses — and so
-    // did "no project here", at Node's default exit 1, which the contract reads
-    // as FINDINGS.
     // Spec §7: `vat verify` requires a projectRoot.
     const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
     const { config, error: configError } = loadConfigTolerant(projectRoot);
-    const phases = applyPhaseSelection(
-      selectVerifyPhases(config, configError, options.verbose),
-      logger,
-      startTime,
-    );
+    const phases = applyPhaseSelection(selectVerifyPhases(config, configError, options.verbose), logger);
 
     // Announced from the same list the in-process gates below read, so the
     // printed phases and the executed phases cannot disagree.
-    const inProcess = selectInProcessVerifyPhases(config);
+    const inProcessPhases = selectInProcessVerifyPhases(config);
     logger.info(formatVerifyAnnouncement(phases.map((p) => p.name), config));
 
-    const phaseResults: PhaseResult[] = [];
     for (const phase of phases) {
       logger.info(`\n▶ Phase: ${phase.name}`);
       // Awaited in the loop, deliberately: phases are announced in a fixed order
       // and their stderr streams live, so overlapping them would interleave two
       // running reports into one unreadable channel.
-      phaseResults.push(await runPhase(phase));
+      results.push(await runPhase(phase));
     }
 
-    if (inProcess.length > 0 && config?.skills) {
-      await runInProcessPhases({ inProcess, config, skills: config.skills, projectRoot, logger, phaseResults });
+    if (inProcessPhases.length > 0 && config?.skills) {
+      await runInProcessPhases({ phases: inProcessPhases, config, skills: config.skills, projectRoot, logger, results });
     }
-
-    const duration = Date.now() - startTime;
-
-    // Worst-wins across phases, with `system-error` outranking `error`: a phase
-    // that could not run exits 2, so a CI script can tell a broken config from
-    // a broken artifact.
-    writeYamlOutput({
-      status: aggregatePhaseStatus(phaseResults),
-      phases: phaseResults,
-      duration: `${duration}ms`,
-    });
-
-    process.exit(exitCodeForPhases(phaseResults));
-  } catch (error) {
-    handleCommandError(error, logger, startTime, 'Verify');
-  }
+  });
+  endWithReport('verify', report, ORCHESTRATOR_FORMAT);
 }

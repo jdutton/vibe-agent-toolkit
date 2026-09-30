@@ -31,11 +31,9 @@ import {
   buildReport,
   countBySeverity,
   createAllowUsageLedger,
-  exitCodeForReport,
   summarizeIssues,
   toFindings,
   type Finding,
-  type Report,
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
@@ -45,7 +43,7 @@ import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
 import type { DocumentFormat } from '../../report-schemas.js';
 import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { loadConfig } from '../../utils/config-loader.js';
-import { endWithReport, NOTHING_FINISHED, publishedReport, refusalReport } from '../../utils/document-writer.js';
+import { endWithReport, NOTHING_FINISHED, refusalReport } from '../../utils/document-writer.js';
 import {
   formatIssueLines,
   formatRunIssueLines,
@@ -60,7 +58,6 @@ import {
   RESOURCES_CRAWL_PROJECTION,
   withResourcePopulationSource,
 } from '../../utils/resource-loader.js';
-import { RUN_INTEGRITY_CODE, runIntegrityFinding } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
@@ -90,9 +87,6 @@ export interface SkillsValidateCommandOptions {
 export interface ValidatableSkill extends DiscoveredSkill {
   packagingConfig: SkillPackagingConfig;
 }
-
-/** The verb, as registered. */
-const VERB = 'skills validate';
 
 /** `vat skills validate` offers no `--strict`: warnings never fail it. */
 const GATE = { strict: false } as const;
@@ -361,20 +355,6 @@ export function formatValidationReportLines(
     lines.push(...runLines, '');
   }
   return lines;
-}
-
-/**
- * The run-level findings a published document carries: the run's own
- * (`ALLOW_UNUSED`) and the writer's run-integrity refusal. Read off the
- * PUBLISHED report, so stderr names exactly what the document does.
- */
-function runLevelFindings(runIssues: readonly ValidationIssue[], published: Report<unknown>): ValidationIssue[] {
-  return [
-    ...runIssues,
-    ...published.findings
-      .filter((finding) => finding.code === RUN_INTEGRITY_CODE)
-      .map((finding) => runIntegrityFinding(finding.message)),
-  ];
 }
 
 /**
@@ -702,21 +682,21 @@ async function validateConfiguredSkills(
 }
 
 /**
- * Validate every configured skill and hand back the published document and
- * its exit code, printing the document nowhere.
+ * Validate every configured skill and hand back the report, printing it
+ * nowhere.
  *
  * The phase entry point for `vat validate` and `vat verify`, and the command's
- * own: the document is the one the writer publishes — the run-integrity refusal
- * included — so the phase lane folds exactly what the command writes.
+ * own. The report is the one BEFORE the writer's run-integrity pass: inside an
+ * orchestrator, zero examined is judged on the whole run, not on this phase.
  *
  * A run that validated no skill — globs that discover nothing, or a config
  * with no `skills:` block — is not a clean run. It used to take an early
  * return that printed one info line and published NO document at exit 0, and
  * `vat validate` folded that into success: the gate the docs name as THE gate,
- * green forever on a config that checked nothing. Now it publishes a report
- * over zero skills, which the writer refuses with `RESOURCE_CHECK_BROKEN`
- * (exit 1); stderr names the globs that matched nothing. Both orchestrators
- * still skip this phase for a config with no `skills:` block.
+ * green forever on a config that checked nothing. Now it reports zero skills,
+ * which the writer refuses with `RESOURCE_CHECK_BROKEN` (exit 1) when this is
+ * the whole run; stderr names the globs that matched nothing. Both
+ * orchestrators skip this phase for a config with no `skills:` block.
  *
  * Every refusal is classified by code: a `[path]` naming nothing, an unknown
  * `--skill`, no project root → `USAGE_INVALID`; an unlistable directory →
@@ -728,7 +708,6 @@ export async function runSkillsValidatePhase(
 ): Promise<PhaseOutcome> {
   const { logger, cwd, startTime } = setupCommandContext(pathArg, options.debug);
 
-  let document: Report<unknown>;
   try {
     assertScopableSkillsPath(SCOPE_SUBJECT, pathArg);
     // Spec §7: `vat skills validate` requires a projectRoot. Config is read
@@ -741,18 +720,18 @@ export async function runSkillsValidatePhase(
       ? { results: [], runIssues: [] }
       : await validateConfiguredSkills(config.skills, cwd, config, options, logger);
 
-    document = publishedReport(VERB, buildSkillsValidateReport({
+    const report = buildSkillsValidateReport({
       root: cwd,
       results,
       runIssues,
       durationMs: Date.now() - startTime,
-    }));
-    reportValidationToStderr(results, runLevelFindings(runIssues, document), logger, options.verbose === true);
-    if (document.examined === 0) logger.error(nothingDiscoveredLine(config?.skills));
+    });
+    reportValidationToStderr(results, runIssues, logger, options.verbose === true);
+    if (report.examined === 0) logger.error(nothingDiscoveredLine(config?.skills));
+    return { report };
   } catch (error) {
-    document = publishedReport(VERB, refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED));
+    return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED) };
   }
-  return { document, exitCode: exitCodeForReport(document) };
 }
 
 /**
@@ -762,6 +741,5 @@ export async function validateCommand(
   pathArg: string | undefined,
   options: SkillsValidateCommandOptions
 ): Promise<void> {
-  const outcome = await runSkillsValidatePhase(pathArg, options);
-  endWithReport('skills validate', outcome.document as SkillsValidateReport, FORMAT);
+  endWithReport('skills validate', (await runSkillsValidatePhase(pathArg, options)).report, FORMAT);
 }

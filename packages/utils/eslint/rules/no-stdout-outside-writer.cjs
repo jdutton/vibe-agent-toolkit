@@ -14,21 +14,20 @@
  * - `console.log|info|debug|dir|table(…)` — the console methods that write
  *   stdout (`console.error` / `console.warn` are stderr, the human channel,
  *   and are not this rule's business);
- * - a call to a stdout-writing helper BY NAME — `writeYamlOutput`,
- *   `writeJsonOutput`, `writeStructuredOutput`, `writeStdoutSync`,
+ * - a call to a stdout-writing helper BY NAME — `writeStdoutSync`,
  *   `writeAllSync`, bare or as a member — and one HANDED ON as an argument
- *   (`finishCommand(result, writeYamlOutput)`), which writes stdout just the
+ *   (`render(result, writeStdoutSync)`), which writes stdout just the
  *   same. A rule that saw only the primitives was blind to every command that
  *   writes through a helper.
  *
- * Option `allowFiles: string[]` — repo-relative files not yet migrated. A
- * RATCHET asserted both ways: a listed file with no violation left is itself
- * an error (`staleAllow`), so the list can only shrink and never holds a dead
- * entry.
+ * Option `allowFiles: string[]` — repo-relative files whose stdout is not a
+ * document (a protocol leaf). Asserted both ways: a listed file with no
+ * violation left is itself an error (`staleAllow`), so the list never holds a
+ * dead entry.
  *
  * @example
  * // BAD — a shape nothing validates, beside a code decided here
- * writeYamlOutput(result);
+ * writeStdoutSync(yaml.stringify(result));
  * process.stdout.write(`${JSON.stringify(result)}\n`);
  *
  * // GOOD — validated against the registry, exit derived from what was written
@@ -44,9 +43,6 @@ const STDOUT_CONSOLE_METHODS = new Set(['log', 'info', 'debug', 'dir', 'table'])
 
 /** Helpers that write stdout, recognised by name wherever they are imported from. */
 const STDOUT_HELPERS = new Set([
-  'writeYamlOutput',
-  'writeJsonOutput',
-  'writeStructuredOutput',
   'writeStdoutSync',
   'writeAllSync',
 ]);

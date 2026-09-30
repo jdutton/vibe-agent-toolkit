@@ -204,6 +204,17 @@ describe('ValidationConfigSchema — the CUSTOM: override namespace', () => {
     expect(result.success).toBe(false);
   });
 
+  // `vat skills build` / `vat skills package` / `vat verify` / `vat skill test run` / `vat doctor` / `vat rag index` / `vat corpus scan` decide these codes' severity themselves; an override would parse and do nothing.
+  it.each(['SKILL_BUILD_TARGET_NOT_BUILDABLE', 'SKILL_PACKAGING_FAILED', 'SKILL_PACKAGE_TOO_LARGE', 'FILES_CONFIG_DEST_MISSING', 'SKILL_TEST_EVAL_FAILED', 'DOCTOR_CHECK_FAILED', 'DOCTOR_CHECK_WARNED', 'RAG_DOCUMENT_INDEX_FAILED', 'CORPUS_ENTRY_INCOMPLETE'])(
+    'rejects the non-overridable packaging code %s as a severity or allow key',
+    (code) => {
+      // Control: the same shapes parse for an overridable code, so a refusal below is about the key.
+      expect(ValidationConfigSchema.safeParse({ allow: { LINK_DROPPED_BY_DEPTH: [{ paths: ['**'], reason: 'x' }] } }).success).toBe(true);
+      expect(ValidationConfigSchema.safeParse({ severity: { [code]: 'ignore' } }).success).toBe(false);
+      expect(ValidationConfigSchema.safeParse({ allow: { [code]: [{ paths: ['**'], reason: 'x' }] } }).success).toBe(false);
+    },
+  );
+
   /**
    * The refusal MESSAGE, which used to send half its readers to the wrong place.
    *

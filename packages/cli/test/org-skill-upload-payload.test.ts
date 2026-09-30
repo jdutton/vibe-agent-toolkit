@@ -57,6 +57,7 @@ import {
   VERSION_NAME_MISMATCH_REFUSAL,
   withRemedy,
 } from '../src/commands/claude/org/skills.js';
+import { exitCodeForExternal, type ExternalOutcome } from '../src/report-schemas.js';
 
 import { recordingLogger } from './helpers/upload-logger.js';
 import { skillMdBytes, writeZipFixture } from './helpers/zip-fixtures.js';
@@ -1353,19 +1354,19 @@ describe('readDeleteResponse', () => {
  * the skill was still there. Two independent reviewers found it.
  */
 describe('reportDelete', () => {
-  it('exits 0 with status success when the API confirms the delete', () => {
+  it('exits 0 on an ok outcome when the API confirms the delete', () => {
     const result = ending(reportDelete({ id: 'skill_abc', type: 'skill_deleted' }, 'skill_abc', SKILL_DELETED_TYPES));
 
     expect(result.exitCode).toBe(0);
-    expect(result.document['status']).toBe('success');
+    expect(result.outcome).toStrictEqual({ kind: 'ok' });
     expect(result.document['deleted']).toBe(true);
   });
 
-  it('exits 1 with status error when the API names a different outcome', () => {
+  it('exits 2 on a failed outcome when the API names a different outcome', () => {
     const result = ending(reportDelete({ id: 'skill_abc', type: 'skill_archived' }, 'skill_abc', SKILL_DELETED_TYPES));
 
-    expect(result.exitCode).toBe(1);
-    expect(result.document['status']).toBe('error');
+    expect(result.exitCode).toBe(2);
+    expect(result.outcome.kind).toBe('failed');
     // The document is still published: the verdict is what the operator needs.
     expect(result.document['id']).toBe('skill_abc');
     expect(result.document['deleted']).toBe(false);
@@ -1409,15 +1410,15 @@ describe('reportVersionDelete', () => {
     expect(result.document['deleted']).toBe(true);
   });
 
-  it('exits 1, still naming the version, when the API names a different outcome', () => {
+  it('exits 2, still naming the version, when the API names a different outcome', () => {
     const result = ending(reportVersionDelete(
       { type: 'skill_version_archived' },
       'skill_abc',
       '1775007400733130',
     ));
 
-    expect(result.exitCode).toBe(1);
-    expect(result.document['status']).toBe('error');
+    expect(result.exitCode).toBe(2);
+    expect(result.outcome.kind).toBe('failed');
     expect(result.document['version']).toBe('1775007400733130');
     expect(result.document['deleted']).toBe(false);
   });
@@ -1438,7 +1439,8 @@ describe('mergeDeleteReport', () => {
 
     const result = ending(mergeDeleteReport(failed, ['v1']));
 
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(2);
+    expect(result.outcome.kind).toBe('failed');
     expect(result.document['deletedVersions']).toEqual(['v1']);
     expect(result.document).not.toHaveProperty('orgCommandFailed');
     expect(result.document).not.toHaveProperty('document');
@@ -1452,17 +1454,23 @@ function uploaded(id: string): SkillUploadResult {
   return { id, displayTitle: id, version: '1', createdAt: CREATED_AT };
 }
 
-/** The document and exit code `executeOrgCommand` would actually publish. */
-function ending(outcome: object): { document: Record<string, unknown>; exitCode: number } {
-  return buildOrgCommandEnding(outcome, 5);
+/**
+ * The payload `executeOrgCommand` would actually publish, the outcome, and the
+ * code the external entry's adapter maps it to. The payload is the action's own
+ * document: an external verb adds no `status` word to it.
+ */
+function ending(result: object): { document: Record<string, unknown>; outcome: ExternalOutcome; exitCode: number } {
+  const { document, outcome } = buildOrgCommandEnding(result);
+  expect(document).not.toHaveProperty('status');
+  return { document: document as Record<string, unknown>, outcome, exitCode: exitCodeForExternal('claude org skills install', outcome) };
 }
 
 describe('summarizeNpmInstall', () => {
-  it('exits 0 with status success when every skill uploaded', () => {
+  it('exits 0 on an ok outcome when every skill uploaded', () => {
     const result = ending(summarizeNpmInstall('pkg@1.0.0', [uploaded('a')], []));
 
     expect(result.exitCode).toBe(0);
-    expect(result.document['status']).toBe('success');
+    expect(result.outcome).toStrictEqual({ kind: 'ok' });
     expect(result.document['skillsUploaded']).toBe(1);
   });
 
@@ -1474,8 +1482,8 @@ describe('summarizeNpmInstall', () => {
     ];
     const result = ending(summarizeNpmInstall('pkg@1.0.0', [], errors));
 
-    expect(result.exitCode).toBe(1);
-    expect(result.document['status']).toBe('error');
+    expect(result.exitCode).toBe(2);
+    expect(result.outcome.kind).toBe('failed');
     expect(result.document['skillsUploaded']).toBe(0);
     expect(result.document['skillsFailed']).toBe(3);
     expect(result.document['errors']).toEqual(errors);
@@ -1488,8 +1496,8 @@ describe('summarizeNpmInstall', () => {
       [{ skill: 'b', error: '413 payload too large' }],
     ));
 
-    expect(result.exitCode).toBe(1);
-    expect(result.document['status']).toBe('error');
+    expect(result.exitCode).toBe(2);
+    expect(result.outcome).toStrictEqual({ kind: 'partial', failed: 1 });
     // What DID land still has to be readable — the workspace is now mixed.
     expect(result.document['skillsUploaded']).toBe(1);
     expect(result.document['skills']).toHaveLength(1);

@@ -42,7 +42,6 @@ import {
   buildErrorReport,
   buildReport,
   CUSTOM_CHECK_CODE_PREFIX,
-  exitCodeOfChild,
   isCustomCheckCode,
   toFindings,
   type ValidationIssue,
@@ -51,11 +50,16 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { loadConfigCached } from '../../utils/config-loader.js';
-import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
+import {
+  endWithForwardedDocument,
+  endWithRefusal,
+  endWithReport,
+  NOTHING_FINISHED,
+  type ForwardedDocument,
+} from '../../utils/document-writer.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { resolveIssueSeverity, type SeverityOverrides } from '../../utils/issue-severity.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { writeStdoutSync } from '../../utils/output.js';
 import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
 import {
   withQueriedProjection,
@@ -64,7 +68,7 @@ import {
   type ProjectionProvenance,
 } from '../../utils/projection-query.js';
 import { relationBoundsFor } from '../../utils/relation-limits.js';
-import { nothingCheckedFinding, runIntegrityFinding } from '../../utils/run-integrity.js';
+import { RUN_INTEGRITY_CODE, runIntegrityFinding } from '../../utils/run-integrity.js';
 
 import {
   createProgressWriter,
@@ -204,10 +208,10 @@ export interface CheckPayloadInput {
  * having to remember it. It also lands after `resolveIssueSeverity`, which is
  * belt and braces: the code is already unreachable from a `severity` key.
  *
- * The mechanism — ask the DENOMINATOR never the config, one report per
- * situation, stand down behind an existing run-integrity finding — is the shared
- * {@link nothingCheckedFinding}; this wrapper owns only the message. The
- * stand-down matters here for an interrupted run, which recovers zero costs when
+ * The writer refuses a run that examined no RESOURCE; this is the other
+ * denominator, CHECKS, which only this verb knows — so it asks that count,
+ * never the config, and stands down behind an existing run-integrity finding
+ * (one report per situation). The stand-down matters here for an interrupted run, which recovers zero costs when
  * the kill landed before the first statement finished and already carries
  * {@link interruptedRunFinding}, the more specific of the two claims. A `--check`
  * filter that matched nothing is refused earlier by {@link requireKnownCheck},
@@ -228,14 +232,15 @@ function noCheckRanFinding(
   costs: readonly CheckCost[],
   issues: readonly ValidationIssue[],
 ): readonly ValidationIssue[] {
-  return nothingCheckedFinding(costs.length, issues, () =>
+  if (costs.length > 0 || issues.some((issue) => issue.code === RUN_INTEGRITY_CODE)) return [];
+  return [runIntegrityFinding(
     'No check ran at all, so this document is not a verdict: a gate that checked nothing'
     + ' produces the same report as a gate that was removed, and this run cannot tell'
     + ' you which happened.'
     + ' This is not an absent `resources.checks` block — VAT\'s own built-in checks run'
     + ' whether or not a project declares any, so reaching zero means not even those'
     + ' executed. Re-run with --debug and report it; if the run was filtered, check that'
-    + ' --check named a rule this build still ships.');
+    + ' --check named a rule this build still ships.')];
 }
 
 /**
@@ -859,6 +864,10 @@ function deathPhrase(death: AbnormalDeath): string {
   if (death.kind === 'no-output') {
     return `the child process exited ${death.code} and published no report at all`;
   }
+  if (death.kind === 'unparseable-output') {
+    return `the child process exited ${death.code} and published a report that is not this`
+      + ` command's document, most likely cut off mid-write (${death.detail})`;
+  }
   return 'the child process ended with neither an exit code nor a signal';
 }
 
@@ -1011,7 +1020,7 @@ function noOutputRemedy(code: number): string {
       + ' — surfaces as an exit code what macOS and Linux report as SIGABRT itself, and it is the'
       + ' same event.' + signalRemedy('SIGABRT');
   }
-  return ` Exit ${code} is not Node's abort code, and the child published none of the document`
+  return ` Exit ${code} is not Node's abort code, and the child published no usable copy of the document`
     + ' every path through this command ends by writing — so this is either a termination from'
     + ' outside that left an exit code instead of a signal, or a defect in vat. The child\'s stderr'
     + ' was inherited, so whatever it managed to say is above this report; if there is nothing'
@@ -1040,7 +1049,9 @@ function deathRemedy(death: AbnormalDeath): string {
   if (death.kind === 'kill-failed') return killFailedRemedy(death.detail, death.pid);
   if (death.kind === 'spawn-failed') return spawnFailedRemedy(death.detail) + WATCHDOG_UNINVOLVED;
   if (death.kind === 'signal') return signalRemedy(death.signal) + WATCHDOG_UNINVOLVED;
-  if (death.kind === 'no-output') return noOutputRemedy(death.code) + WATCHDOG_UNINVOLVED;
+  if (death.kind === 'no-output' || death.kind === 'unparseable-output') {
+    return noOutputRemedy(death.code) + WATCHDOG_UNINVOLVED;
+  }
   return ' The cause is outside anything this command can observe; the child left no exit code'
     + ' to report.' + WATCHDOG_UNINVOLVED;
 }
@@ -1392,7 +1403,7 @@ function childArgs(
 
 /** What a supervised run decided to publish. */
 type SupervisedEnding =
-  | { readonly forward: string; readonly code: number }
+  | { readonly forward: ForwardedDocument }
   | { readonly payload: CheckReport };
 
 /**
@@ -1427,8 +1438,9 @@ async function superviseCheckRun(options: {
       args: childArgs(options.pathArg, options.options, logPath),
       logPath,
       budgetMs: options.budgetSecs * 1000,
+      format: options.options.format === 'json' ? 'json' : 'yaml',
     });
-    if (run.outcome === 'completed') return { forward: run.stdout, code: run.code };
+    if (run.outcome === 'completed') return { forward: run.document };
 
     return {
       payload: buildCheckOutputData(buildInterruptedCheckInput({
@@ -1507,9 +1519,9 @@ export async function checkCommand(
       ? { payload: await runChecksHere(pathArg, options, logger, startTime) }
       : await superviseCheckRun({ pathArg, options, budgetSecs });
     if ('forward' in ending) {
-      // Verbatim. The child already built the document the operator's
-      // `--format` asked for, and re-serializing it here would be a second
-      // place for that shape to live.
+      // Verbatim — the supervisor already checked it is this verb's document —
+      // and on the code that document derives. The child already built what the operator's `--format` asked for, and
+      // re-serializing it here would be a second place for that shape to live.
       //
       // ⚠️ `durationSecs` in it is therefore the CHILD's wall time and does
       // not include this process's own startup and spawn (~0.15 s measured).
@@ -1518,12 +1530,10 @@ export async function checkCommand(
       // overhead none of them can account for would leave a remainder a
       // reader would attribute to whichever rule they were looking at — the
       // exact defect `CheckCost` documents.
-      writeStdoutSync(ending.forward);
-      // The child derived its code from its own document; a code off the
-      // contract is not a verdict it published and is not forwarded.
+      //
       // 🪤 `return` it, though its type is `never`: under a test's returning
       // exit spy a bare call would fall through to the second ending below.
-      return process.exit(exitCodeOfChild(ending.code));
+      return endWithForwardedDocument(ending.forward);
     }
     // A killed child is never OK and never decided here: its document carries
     // a RUN_INTEGRITY finding (exit 1) or the error branch (exit 2), and the

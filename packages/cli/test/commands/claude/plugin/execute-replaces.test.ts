@@ -9,7 +9,6 @@
 import { lstatSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 
-
 import type { ClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
@@ -29,7 +28,9 @@ import {
 // Module mocks
 // ---------------------------------------------------------------------------
 
-vi.mock('@vibe-agent-toolkit/claude-marketplace', () => ({
+vi.mock('@vibe-agent-toolkit/claude-marketplace', async (importOriginal) => ({
+  // The error codes stay real: the refusal classifier imports them.
+  ...(await importOriginal<Record<string, unknown>>()),
   getClaudeUserPaths: vi.fn(),
   installPlugin: vi.fn(),
   uninstallPlugin: vi.fn(),
@@ -229,7 +230,8 @@ describe('executeReplaces — flatSkills', () => {
 
     await expect(
       executeReplaces({ flatSkills: ['locked-skill'] }, [], makePaths(), false, makeLogger()),
-    ).rejects.toMatchObject({ code: 'EACCES' });
+    // Coded as the input's refusal — an uncoded errno would publish INTERNAL_ERROR.
+    ).rejects.toMatchObject({ refusal: 'INPUT_UNREADABLE' });
     expect(rm).not.toHaveBeenCalled();
   });
 

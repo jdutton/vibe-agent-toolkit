@@ -27,6 +27,7 @@ import {
   type RefusalCode,
   type Report,
 } from '@vibe-agent-toolkit/schema';
+import { parse as parseYaml } from 'yaml';
 
 import {
   artifactShapeFor,
@@ -34,13 +35,14 @@ import {
   reportShapeFor,
   type DocumentFormat,
   type ExternalOutcome,
+  type ExternalVerb,
   type LegacyVerb,
   type ReportVerb,
 } from '../report-schemas.js';
 
-import { errorMessageOf } from './command-refusal.js';
+import { errorMessageOf, refusalCodeOf } from './command-refusal.js';
 import { debugDiagnosticsEnabled } from './debug-diagnostics.js';
-import { renderYamlDocument, writeJsonOutput, writeYamlOutput } from './output.js';
+import { renderYamlDocument, writeStdoutSync } from './output.js';
 import { withRunIntegrity } from './run-integrity.js';
 
 /** One finding as a compiler-style line: `location:line:column: severity: message [code]`. */
@@ -62,23 +64,30 @@ function renderReportText(report: Report<unknown>, unit: string): string {
   return `${lines.join('\n')}\n`;
 }
 
-/** Write `document` in a structured format — `text` has no structure, so it is YAML. */
+/**
+ * Write `document` in a structured format — `text` has no structure, so it is YAML.
+ *
+ * YAML opens with `---` and has NO trailing marker: `---` opens a document, so a
+ * trailer made every stdout a two-document stream a plain `YAML.parse()` refused.
+ *
+ * The ordinary stream write, not {@link writeStdoutSync}: a document follows
+ * progress written through `console.log`, and a synchronous fd-1 write would
+ * jump ahead of anything still buffered there. `makeStdioBlocking()` at startup
+ * makes both channels synchronous, so nothing is lost at `process.exit`.
+ */
 function writeStructured(document: unknown, format: DocumentFormat): void {
-  if (format === 'json') {
-    writeJsonOutput(document);
-  } else {
-    writeYamlOutput(document);
-  }
+  process.stdout.write(format === 'json' ? `${JSON.stringify(document, null, 2)}\n` : `---\n${renderYamlDocument(document)}`);
 }
 
 /**
  * The document a report verb publishes, without writing it: the run-integrity
  * refusal its registered denominator declares, then its published schema.
  *
- * For the one lane that hands the document on instead of writing it — a phase
- * `vat validate` / `vat verify` folds under `phases[].report` — so the folded
- * document is the same one the verb would have written, refusal included.
- * {@link writeDocument} goes through it too.
+ * For a lane that needs the published document before writing it — a command
+ * that warns on stderr with the refusal the writer adds. {@link writeDocument}
+ * goes through it too. (A phase of `vat build` / `validate` / `verify` hands
+ * back its report BEFORE this pass: the orchestrator judges zero examined on
+ * the whole run.)
  *
  * @param verb - The registered verb
  * @param report - The document as the verb built it
@@ -165,9 +174,25 @@ export function endWithRefusal(
 }
 
 /**
+ * A refusal's human half: its message on stderr — the code's own description
+ * when the thrown value carries none — plus the stack for a VAT defect, or for
+ * any refusal under `--debug`, which exists to name the throw site.
+ *
+ * @returns The message the published document carries
+ */
+function announceRefusal(code: RefusalCode, error: unknown): string {
+  const raw = errorMessageOf(error);
+  const message = raw === '' ? CODE_REGISTRY[code].description : raw;
+  process.stderr.write(`${message}\n`);
+  if (code === 'INTERNAL_ERROR' || debugDiagnosticsEnabled()) process.stderr.write(`${errorDiagnostics(error)}\n`);
+  return message;
+}
+
+/**
  * The envelope's error branch for a refusal, with its human half already on
  * stderr — what {@link endWithRefusal} writes, for the lane that hands the
- * document on instead (a phase folded under `phases[].report`).
+ * report on instead (a phase an orchestrator folds, or an orchestrator's own
+ * refusal).
  *
  * @param code - Which refusal (see {@link endWithRefusal})
  * @param error - The thrown value, or the message
@@ -176,12 +201,7 @@ export function endWithRefusal(
  * @returns The error report, not yet published
  */
 export function refusalReport(code: RefusalCode, error: unknown, gate: Gate, finished: FinishedWork): Report<unknown> {
-  const raw = errorMessageOf(error);
-  const message = raw === '' ? CODE_REGISTRY[code].description : raw;
-  process.stderr.write(`${message}\n`);
-  // The stack always for a VAT defect; for a user's refusal only under `--debug`,
-  // which exists to name the throw site.
-  if (code === 'INTERNAL_ERROR' || debugDiagnosticsEnabled()) process.stderr.write(`${errorDiagnostics(error)}\n`);
+  const message = announceRefusal(code, error);
   return buildErrorReport({
     error: { code, message },
     gate,
@@ -190,6 +210,41 @@ export function refusalReport(code: RefusalCode, error: unknown, gate: Gate, fin
     data: finished.data,
     durationMs: undefined,
   });
+}
+
+/** A document another `vat` process wrote, checked to be its verb's, with the report it parses to. */
+export interface ForwardedDocument {
+  readonly text: string;
+  readonly report: Report<unknown>;
+}
+
+/**
+ * Read a report verb's document another `vat` process already wrote — a
+ * supervised child — checking it IS that verb's document: parsed in the format
+ * it was asked for and validated against the published schema.
+ *
+ * @param verb - The registered verb whose document `text` claims to be
+ * @param text - The document as the child wrote it
+ * @param format - The format the child was asked for
+ * @returns The text with the report it parses to, for {@link endWithForwardedDocument}
+ * @throws When `text` does not parse, or its schema rejects it — a truncated
+ *   write among them, which the caller decides how to report
+ */
+export function readForwardedDocument(verb: ReportVerb, text: string, format: Exclude<DocumentFormat, 'text'>): ForwardedDocument {
+  const parsed: unknown = format === 'json' ? JSON.parse(text) : parseYaml(text);
+  reportShapeFor(verb).schema.parse(parsed);
+  return { text, report: parsed as Report<unknown> };
+}
+
+/**
+ * Publish a forwarded document byte for byte and end on the code the document
+ * derives — never on the code the process that wrote it happened to exit with.
+ *
+ * @param document - What {@link readForwardedDocument} accepted
+ */
+export function endWithForwardedDocument(document: ForwardedDocument): never {
+  writeStdoutSync(document.text);
+  process.exit(exitCodeForReport(document.report));
 }
 
 /**
@@ -201,9 +256,27 @@ export function refusalReport(code: RefusalCode, error: unknown, gate: Gate, fin
  * @param format - How to render it (`text` renders YAML)
  * @param outcome - What the external write did
  */
-export function writeExternalDocument(verb: string, payload: unknown, format: DocumentFormat, outcome: ExternalOutcome): never {
+export function writeExternalDocument(verb: ExternalVerb, payload: unknown, format: DocumentFormat, outcome: ExternalOutcome): never {
   writeStructured(payload, format);
   process.exit(exitCodeForExternal(verb, outcome));
+}
+
+/**
+ * End an external verb whose run threw: publish `{ error: { code, message } }`
+ * — the one failure payload every external verb shares, since the payload it
+ * would have passed through never arrived — and end on the code its adapter
+ * maps `failed` to. The code is the thrown value's own ({@link refusalCodeOf}):
+ * a missing key or a bad argument is `USAGE_INVALID`, a refused or unanswered
+ * API call `EXTERNAL_API_FAILED`, anything uncoded `INTERNAL_ERROR`.
+ *
+ * @param verb - A verb of an `external` entry
+ * @param error - What the run threw
+ * @param format - How to render the payload
+ */
+export function endWithExternalRefusal(verb: ExternalVerb, error: unknown, format: DocumentFormat): never {
+  const code = refusalCodeOf(error);
+  const message = announceRefusal(code, error);
+  writeExternalDocument(verb, { error: { code, message } }, format, { kind: 'failed', cause: message });
 }
 
 /**
@@ -212,10 +285,18 @@ export function writeExternalDocument(verb: string, payload: unknown, format: Do
  *
  * @param _verb - A verb of a `legacy` entry
  * @param document - The legacy document
- * @param format - How to render it (`text` renders YAML)
+ * @param format - How to render it
+ * @param text - The verb's own `--format text` rendering, written as-is; with
+ *   none (a refusal has no human rendering of its own) `text` renders YAML.
+ *   Required, so a caller says which it means
  */
-export function writeLegacyDocument(_verb: LegacyVerb, document: unknown, format: DocumentFormat): void {
+export function writeLegacyDocument(_verb: LegacyVerb, document: unknown, format: DocumentFormat, text: string | undefined): void {
   // The verb's TYPE is the guarantee — only a legacy verb compiles here.
+  if (format === 'text' && text !== undefined) {
+    // Synchronously, as `claude context` always wrote it: its text can run long and the verb exits straight after.
+    writeStdoutSync(text);
+    return;
+  }
   writeStructured(document, format);
 }
 

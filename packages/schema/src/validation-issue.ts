@@ -257,31 +257,3 @@ export function summarizeIssues(
 ): { status: 'ok' | 'findings'; summary: SeverityCounts } {
   return { status: resultStatus(issues), summary: countBySeverity(issues) };
 }
-
-/**
- * The single answer to "issues → status": the worst ACTIONABLE severity.
- *
- * There were five implementations of this and three different answers for an
- * info-only set — `warning` here, `success` in `vat audit`, and in
- * `corpus/runner` a `statusFromCounts(errors, warnings)` whose signature could
- * not see info at all. Two lanes could therefore report different statuses for
- * the same artifact.
- *
- * Info-only resolves to `success` because an informational observation is not
- * something the consumer must act on. That is only defensible when the counts
- * ride alongside — pair every use of this with {@link countBySeverity}, or the
- * status becomes the silence it used to be.
- *
- * Interim: its last callers are the legacy phase-orchestrator documents of
- * `build.ts`, `verify.ts`, `skills/build.ts` and `skills/package.ts`; a report
- * verb derives its status from its `Report` instead. Delete it with the last of them.
- */
-export function calculateValidationStatus(
-  issues: readonly Pick<ValidationIssue, 'severity'>[],
-): 'success' | 'warning' | 'error' {
-  const { errors, warnings } = countBySeverity(issues);
-  if (errors > 0) {
-    return 'error';
-  }
-  return warnings > 0 ? 'warning' : 'success';
-}

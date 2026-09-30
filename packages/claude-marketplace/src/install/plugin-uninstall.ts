@@ -8,12 +8,13 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
 import type { InstalledPlugins } from './plugin-registry.js';
 import {
+  codedUserStateWrite,
   readInstalledPlugins,
   readKnownMarketplaces,
   readUserSettings,
@@ -42,9 +43,15 @@ export interface UninstallPluginResult {
   };
 }
 
-function parsePluginKey(pluginKey: string): { pluginName: string; marketplace: string } {
+/** The code {@link parsePluginKey} throws for a key that is not `<name>@<marketplace>`. */
+export const PLUGIN_KEY_INVALID_CODE = 'PLUGIN_KEY_INVALID';
+
+/** Split a plugin key at its LAST `@`; throws {@link PLUGIN_KEY_INVALID_CODE} when either half is empty. */
+export function parsePluginKey(pluginKey: string): { pluginName: string; marketplace: string } {
   const atIdx = pluginKey.lastIndexOf('@');
-  if (atIdx <= 0) throw new Error(`Invalid pluginKey: "${pluginKey}" — expected "<name>@<marketplace>"`);
+  if (atIdx <= 0 || atIdx === pluginKey.length - 1) {
+    throw new VatError(PLUGIN_KEY_INVALID_CODE, `Invalid plugin key "${pluginKey}" — expected "<plugin>@<marketplace>".`);
+  }
   return { pluginName: pluginKey.slice(0, atIdx), marketplace: pluginKey.slice(atIdx + 1) };
 }
 
@@ -127,16 +134,19 @@ export async function uninstallPlugin(opts: UninstallPluginOptions): Promise<Uni
   const installedPlugins = readInstalledPlugins(paths);
   const inRegistry = Object.hasOwn(installedPlugins.plugins, pluginKey);
 
+  const what = `uninstall plugin ${pluginKey}`;
   if (!mpPluginExists && !inRegistry) {
-    await removeFromSettings(paths, pluginKey, dryRun);
+    await codedUserStateWrite(what, () => removeFromSettings(paths, pluginKey, dryRun));
     return { removed: false, artifacts: emptyArtifacts };
   }
 
   const isOrphan = mpPluginExists && !inRegistry;
 
-  const { pluginDir, cacheDir } = await removePluginDirs(paths, pluginName, marketplace, mpPluginDir, mpPluginExists, dryRun);
-  const { installedPlugins: installedPluginsRemoved, knownMarketplaces } = await removeRegistryEntries(paths, pluginKey, marketplace, inRegistry, dryRun, installedPlugins);
-  const settings = await removeFromSettings(paths, pluginKey, dryRun);
+  const { pluginDir, cacheDir, installedPluginsRemoved, knownMarketplaces, settings } = await codedUserStateWrite(what, async () => {
+    const dirs = await removePluginDirs(paths, pluginName, marketplace, mpPluginDir, mpPluginExists, dryRun);
+    const entries = await removeRegistryEntries(paths, pluginKey, marketplace, inRegistry, dryRun, installedPlugins);
+    return { ...dirs, installedPluginsRemoved: entries.installedPlugins, knownMarketplaces: entries.knownMarketplaces, settings: await removeFromSettings(paths, pluginKey, dryRun) };
+  });
 
   const artifacts = { pluginDir, cacheDir, installedPlugins: installedPluginsRemoved, knownMarketplaces, settings };
 

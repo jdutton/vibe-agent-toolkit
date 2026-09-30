@@ -92,6 +92,7 @@ const BARREL_EXPORTS = [
   'ExtentDeclarationSchema',
   'ExtentRefusalRuleSchema',
   'ExtentsConfigSchema',
+  'ExternalPluginSourceSchema',
   'FilesystemCrawlSource',
   'FilesystemExtentContributor',
   'FrontmatterParseError',

@@ -78,6 +78,9 @@ export type {
   MarketplaceSource,
 } from './install/plugin-registry.js';
 export {
+  CLAUDE_USER_STATE_UNREADABLE_CODE,
+  CLAUDE_USER_STATE_WRITE_FAILED_CODE,
+  codedUserStateWrite,
   installPlugin,
   readInstalledPlugins,
   readKnownMarketplaces,
@@ -90,7 +93,7 @@ export type {
   UninstallPluginOptions,
   UninstallPluginResult,
 } from './install/plugin-uninstall.js';
-export { findPluginsByPackage, uninstallPlugin } from './install/plugin-uninstall.js';
+export { findPluginsByPackage, parsePluginKey, PLUGIN_KEY_INVALID_CODE, uninstallPlugin } from './install/plugin-uninstall.js';
 
 // Plugin list
 export type {
@@ -107,16 +110,19 @@ export {
   // Unexported, a caller outside the package could not name it and had to match
   // on message TEXT to tell a 429 from a 400 — which is exactly the brittleness
   // the typed error was added to remove.
+  API_REQUEST_CODE,
   ApiRequestError,
   // Its counterpart for a failure that never earned a status. It carries the
   // bytes that actually left the socket, which is the only fact a caller may
   // build a claim about the request on — the CLI previously inferred one from
   // `!(error instanceof ApiRequestError)` and told an operator with no API key
   // that a connection had closed mid-upload.
+  API_TRANSPORT_CODE,
   ApiTransportError,
   buildMultipartFormData,
   createOrgApiClientFromEnv,
   OrgApiClient,
+  ORG_API_KEY_MISSING_CODE,
   // The one spelling of a skill's versions path, so the CLI's `versions list`
   // and `delete --all` address the same resource the client's POST and DELETE
   // do, with the same id encoding.

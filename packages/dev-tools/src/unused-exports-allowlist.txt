@@ -18,7 +18,6 @@ packages/agent-runtime/src/shared-validation.ts createValidatedExecute dead
 packages/agent-skills/src/evidence/index.ts detectInterpreter dead
 packages/agent-skills/src/evidence/index.ts extractMcpCommandFromMatchText dead
 packages/agent-skills/src/fs-attribution.ts WRITE_REMEDY dead
-packages/agent-skills/src/inventory/serialize.ts ShallowInventory dead
 packages/agent-skills/src/schemas/installed-plugins-registry.ts InstalledPluginsRegistry dead
 packages/agent-skills/src/schemas/installed-plugins-registry.ts InstalledPluginsRegistryJsonSchema dead
 packages/agent-skills/src/schemas/installed-plugins-registry.ts KNOWN_INSTALLATION_SCOPES dead
@@ -122,7 +121,6 @@ packages/cli/src/commands/audit/scan-population.ts AuditScanPopulation dead
 packages/cli/src/commands/audit/scan-population.ts ScanLogger dead
 packages/cli/src/commands/build.ts BuildCommandOptions dead
 packages/cli/src/commands/cache/cache-control.ts CacheControlOptions dead
-packages/cli/src/commands/cache/clear.ts CacheClearReport dead
 packages/cli/src/commands/claude/claude-config.ts LoadedClaudeConfig dead
 packages/cli/src/commands/claude/context.ts ClaudeContextOptions dead
 packages/cli/src/commands/claude/context.ts ContextCostMapEnvelope dead
@@ -153,8 +151,6 @@ packages/cli/src/commands/claude/org/skills.ts ZipUnreadable dead
 packages/cli/src/commands/claude/plugin/build.ts ExternalPluginBuildResult dead
 packages/cli/src/commands/claude/plugin/build.ts MarketplaceBuildResult dead
 packages/cli/src/commands/claude/plugin/build.ts PluginBuildCommandOptions dead
-packages/cli/src/commands/claude/plugin/helpers.ts PackageJson dead
-packages/cli/src/commands/claude/plugin/helpers.ts PackageJsonVat dead
 packages/cli/src/commands/claude/plugin/install.ts PluginInstallCommandOptions dead
 packages/cli/src/commands/claude/plugin/marketplace-json.ts BuildMarketplaceJsonArgs dead
 packages/cli/src/commands/claude/plugin/plugin-files.ts ApplyPluginFilesArgs dead
@@ -174,12 +170,10 @@ packages/cli/src/commands/corpus/seed.ts Seed dead
 packages/cli/src/commands/corpus/seed.ts ValidationAllowEntry dead
 packages/cli/src/commands/corpus/seed.ts ValidationBlock dead
 packages/cli/src/commands/doctor.ts DoctorOptions dead
-packages/cli/src/commands/doctor.ts DoctorOutcomeCounts dead
 packages/cli/src/commands/doctor.ts DoctorResult test-only
 packages/cli/src/commands/doctor.ts ProjectContext dead
 packages/cli/src/commands/doctor.ts runDoctor dead
 packages/cli/src/commands/doctor.ts VersionChecker dead
-packages/cli/src/commands/inventory.ts inventoryCommand dead
 packages/cli/src/commands/inventory.ts InventoryCommandOptions dead
 packages/cli/src/commands/mcp/collections.ts AgentCollection dead
 packages/cli/src/commands/mcp/collections.ts AgentRegistration dead
@@ -188,8 +182,6 @@ packages/cli/src/commands/mcp/list-collections.ts ListCollectionsOptions dead
 packages/cli/src/commands/mcp/serve.ts ServeCommandOptions dead
 packages/cli/src/commands/okf/validate.ts okfValidateReport dead
 packages/cli/src/commands/phase-utils.ts PhaseContext dead
-packages/cli/src/commands/phase-utils.ts phaseIssueCounts dead
-packages/cli/src/commands/rag/index-command.ts IndexOutcome dead
 packages/cli/src/commands/rag/query-command.ts QueryPayloadInput dead
 packages/cli/src/commands/resources/check-supervisor.ts RunResolution dead
 packages/cli/src/commands/resources/check-supervisor.ts SupervisedRun dead
@@ -210,8 +202,6 @@ packages/cli/src/commands/skills/build.ts SkillsBuildCommandOptions dead
 packages/cli/src/commands/skills/build.ts StagingRecovery dead
 packages/cli/src/commands/skills/build.ts StagingResidue dead
 packages/cli/src/commands/skills/command-helpers.ts CommandContext dead
-packages/cli/src/commands/skills/install.ts InstallCommandOptions dead
-packages/cli/src/commands/skills/install.ts InstallError dead
 packages/cli/src/commands/skills/package.ts SkillsPackageCommandOptions dead
 packages/cli/src/commands/skills/source-resolvers.ts ResolvedNpmSource dead
 packages/cli/src/commands/skills/validate.ts SkillsValidateRegistryOptions dead
@@ -264,9 +254,6 @@ packages/cli/src/skill-resolution/index.ts SkillReference dead
 packages/cli/src/skill-resolution/index.ts stripValidationAllowForDisplay dead
 packages/cli/src/utils/agent-runner.ts RunAgentOptions dead
 packages/cli/src/utils/agent-runner.ts RunAgentResult dead
-packages/cli/src/utils/command-error.ts buildValidationGateFailure dead
-packages/cli/src/utils/command-error.ts CommandErrorDocument dead
-packages/cli/src/utils/command-error.ts ValidationGateFailure dead
 packages/cli/src/utils/config-loader.ts getConfigDir dead
 packages/cli/src/utils/edge-lens-evaluation.ts EVALUATED_LENS_RELATIONS dead
 packages/cli/src/utils/edge-lens-evaluation.ts EvaluatedLenses dead

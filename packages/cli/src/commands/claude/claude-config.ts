@@ -7,6 +7,8 @@ import { dirname } from 'node:path';
 import { parseConfigFile, type ClaudeConfig } from '@vibe-agent-toolkit/resources';
 import { findConfigFile } from '@vibe-agent-toolkit/utils';
 
+import { CommandRefusalError } from '../../utils/command-refusal.js';
+
 export interface LoadedClaudeConfig {
   configPath: string;
   configDir: string;
@@ -15,8 +17,9 @@ export interface LoadedClaudeConfig {
 
 /**
  * Find, parse, and return the claude: section of the project config.
- * Throws if the config file cannot be found or parsed.
- * Returns null for claudeConfig when the claude: section is absent.
+ * Refuses `CONFIG_INVALID` when no config file is found; a config that does
+ * not parse throws the parser's coded error.
+ * Returns undefined for claudeConfig when the claude: section is absent.
  */
 export async function loadClaudeProjectConfig(): Promise<{
   configPath: string;
@@ -26,7 +29,7 @@ export async function loadClaudeProjectConfig(): Promise<{
   // findConfigFile from utils is synchronous; await of a non-promise is a no-op.
   const configPath = findConfigFile(process.cwd());
   if (!configPath) {
-    throw new Error('No vibe-agent-toolkit.config.yaml found. Run from a project directory.');
+    throw new CommandRefusalError('CONFIG_INVALID', 'No vibe-agent-toolkit.config.yaml found. Run from a project directory.');
   }
 
   // No `onUnknownKeys` argument: `parseConfigFile` already DEFAULTS to writing
@@ -39,4 +42,21 @@ export async function loadClaudeProjectConfig(): Promise<{
   const configDir = dirname(configPath);
 
   return { configPath, configDir, claudeConfig: config.claude };
+}
+
+/**
+ * Refuse a `--marketplace <name>` the config does not declare — the
+ * invocation's mistake, like an undeclared `--collection`. A declared
+ * marketplace the verb then has nothing to do with is not this refusal.
+ *
+ * @param requested - The `--marketplace` value, when one was passed
+ * @param declared - The names under `claude.marketplaces`
+ * @throws {CommandRefusalError} `USAGE_INVALID` naming the declared marketplaces
+ */
+export function assertMarketplaceDeclared(requested: string | undefined, declared: readonly string[]): void {
+  if (requested === undefined || declared.includes(requested)) return;
+  throw new CommandRefusalError(
+    'USAGE_INVALID',
+    `Marketplace "${requested}" is not declared in claude.marketplaces (declared: ${declared.length === 0 ? 'none' : declared.join(', ')}).`,
+  );
 }

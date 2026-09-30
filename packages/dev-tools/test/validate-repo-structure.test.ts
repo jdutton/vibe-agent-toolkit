@@ -74,7 +74,7 @@ export interface AuditOutcome {
 describe('classifySeverityCountsLane — regression guards', () => {
   it('sees a lane that calls the shared collapse, whatever it names its findings', () => {
     const result = classifySeverityCountsLane(`
-      const status = calculateValidationStatus(rows);
+      const status = resultStatus(rows);
     `);
     expect(result).toEqual({ isLane: true, publishesCounts: true });
   });

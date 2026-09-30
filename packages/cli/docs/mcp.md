@@ -24,13 +24,31 @@ vat mcp list-collections [options]
 **Options:**
 - `--debug` - Enable debug logging
 
-**Output:**
-Lists all known packages that export MCP agent collections.
+**Output:** the report envelope as YAML on stdout (schema
+`packages/cli/schemas/mcp-list-collections.json`): `status: ok`, `examined: 1` (the built-in
+package list read), and `data.packages`, each package's `name` and `description`. A human listing
+with usage examples goes to stderr.
+
+**Exit Codes:**
+- `0` - Listed
+- `2` - `error` (`INTERNAL_ERROR`: a VAT defect — the command takes no argument to mistake)
 
 **Example:**
 ```bash
 $ vat mcp list-collections
 
+# stdout:
+# ---
+# status: ok
+# examined: 1
+# findings: []
+# ...
+# data:
+#   packages:
+#     - name: "@vibe-agent-toolkit/vat-example-cat-agents"
+#       description: Example cat breeding agents (haiku validator, photo analyzer)
+
+# stderr:
 Available MCP agent packages:
 
   @vibe-agent-toolkit/vat-example-cat-agents
@@ -64,6 +82,13 @@ vat mcp serve <package> [options]
 - Runs until terminated (Ctrl+C)
 - Writes MCP protocol messages to stdout
 - Writes logs to stderr (does not interfere with protocol)
+- A failure (a package that does not resolve, a gateway that will not start)
+  writes its message to stderr — the stack too under `--debug` — and exits 2,
+  with nothing on stdout: stdout belongs to the protocol, so there is no
+  report document
+- `--print-config` writes the Claude Desktop config as JSON on stdout and
+  nothing else, so it can be redirected straight into a file; the
+  instructions around it go to stderr. Exits 0
 
 **Example - Production:**
 ```bash
@@ -77,23 +102,23 @@ vat mcp serve ./packages/vat-example-cat-agents
 
 **Example - Show Configuration:**
 ```bash
-$ vat mcp serve @vibe-agent-toolkit/vat-example-cat-agents --print-config
-
-Claude Desktop configuration for '@vibe-agent-toolkit/vat-example-cat-agents':
-
-Add this to ~/.claude/config.json:
-
+$ vat mcp serve @vibe-agent-toolkit/vat-example-cat-agents --print-config 2>/dev/null
 {
   "mcpServers": {
-    "vat-example-cat-agents": {
+    "vat-vat-example-cat-agents": {
       "command": "vat",
-      "args": ["mcp", "serve", "@vibe-agent-toolkit/vat-example-cat-agents"]
+      "args": [
+        "mcp",
+        "serve",
+        "@vibe-agent-toolkit/vat-example-cat-agents"
+      ]
     }
   }
 }
-
-Then restart Claude Desktop to load the MCP server.
 ```
+
+Without the `2>/dev/null`, the terminal also shows the stderr instructions
+(which file to add it to, and to restart Claude Desktop).
 
 ## Claude Desktop Integration
 

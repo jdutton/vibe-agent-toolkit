@@ -5,7 +5,7 @@
  * - every writer call in `commands/` names a registered verb or artifact, and
  *   every registered one has its writer call;
  * - every Commander leaf with an action is covered by exactly one entry;
- * - the interim `legacy` list names only live, unmigrated leaves;
+ * - the one `legacy` entry is `claude context`, a live, unmigrated leaf;
  * - every committed JSON Schema under `packages/*` is registered, and every
  *   registered one exists (and, for an artifact, is what its Zod renders);
  * - every exported `*Result` / `*Report` / `*Document` type of a published
@@ -49,24 +49,10 @@ const published = artifactEntries.filter((entry): entry is PublishedArtifact => 
 const stdoutArtifacts = published.filter((entry) => entry.channel === 'stdout');
 const fileArtifacts = published.filter((entry) => entry.channel === 'file');
 const exportEntries = artifactEntries.filter((entry): entry is ExportEntry => entry.channel === 'export');
-/** A stdout or file artifact's registry key; an export has none. */
-const artifactKey = (entry: Kind<'artifact'>): string[] => (entry.channel === 'export' ? [] : [`artifact:${entry.name}`]);
 const inputEntries = ofKind('input');
 
 const reportVerbs = new Set(reportEntries.flatMap((entry) => entry.verbs));
 const legacyVerbs = new Set(legacyEntries.flatMap((entry) => entry.verbs));
-
-/**
- * Registered publishers whose writer call lands in a later task, keyed
- * `<kind>:<verb or name>` to the task that wires it. Asserted both ways below:
- * an entry here that now HAS its call is a red test, so it can only shrink.
- */
-const AWAITING_WRITER: Readonly<Record<string, string>> = {
-  'external:claude org info': 'Task 17 — claude/org/helpers.ts ends through writeExternalDocument',
-  'artifact:claude-desktop-config': 'Task 27 — mcp serve --print-config',
-  'artifact:friction-report': 'Task 21 — skill test run writes it through writeArtifactFile',
-  'artifact:corpus-summary': 'Task 27 — corpus scan summary.yaml',
-};
 
 /** Leaves whose stdout is a protocol stream, not a document. Asserted both ways. */
 const PROTOCOL_LEAVES = ['agent run', 'mcp serve'];
@@ -78,12 +64,20 @@ function commandSources(): string[] {
     .map((file) => readFileSync(safePath.join(COMMANDS_DIR, file), 'utf-8'));
 }
 
-const WRITER_CALL = /\b(endWithReport|writeDocument|endWithRefusal|writeExternalDocument|writeArtifact|writeArtifactFile|writeLegacyDocument)\(\s*'([^']+)'/g;
+/**
+ * A writer call with a literal first argument. `executeOrgCommand` counts as
+ * `writeExternalDocument`: it is the org lane's one route to it, and each
+ * external verb names itself there — the writer call inside it takes a variable.
+ */
+const WRITER_CALL = /\b(endWithReport|writeDocument|endWithRefusal|readForwardedDocument|writeExternalDocument|executeOrgCommand|writeArtifact|writeArtifactFile|writeLegacyDocument)\(\s*'([^']+)'/g;
 
 /** Every literal-first-argument writer call in `commands/`, as `[function, name]`. */
 function writerCalls(): Array<readonly [string, string]> {
   return commandSources().flatMap((source) =>
-    [...source.matchAll(WRITER_CALL)].map((match) => [match[1] ?? '', match[2] ?? ''] as const),
+    [...source.matchAll(WRITER_CALL)].map((match) => {
+      const fn = match[1] === 'executeOrgCommand' ? 'writeExternalDocument' : match[1] ?? '';
+      return [fn, match[2] ?? ''] as const;
+    }),
   );
 }
 
@@ -103,6 +97,13 @@ function registeredNamesFor(fn: string): ReadonlySet<string> {
   }
 }
 
+/** Whether a report entry's `ok` branch publishes `data: null` — a verb that has no data to publish. */
+function hasNoData(entry: (typeof reportEntries)[number]): boolean {
+  const union = (entry.schema as z.ZodEffects<z.ZodTypeAny>).innerType() as z.ZodDiscriminatedUnion<'status', z.AnyZodObject[]>;
+  const ok = union.options.find((option) => option.shape.status.value === 'ok');
+  return ok?.shape.data instanceof z.ZodNull;
+}
+
 describe('writer calls ↔ registry', () => {
   const calls = writerCalls();
 
@@ -112,38 +113,36 @@ describe('writer calls ↔ registry', () => {
     const unregistered = calls.filter(([fn, name]) => !registeredNamesFor(fn).has(name));
     expect(unregistered).toEqual([]);
 
+    // A verb that publishes data must have an endWithReport/writeDocument call. Only
+    // a verb with NO data (`data: z.null()` — a not-implemented stub) may be
+    // covered by its refusal alone: it only ever refuses.
     const reportWriters = new Set(
       calls.filter(([fn]) => fn === 'endWithReport' || fn === 'writeDocument').map(([, name]) => name),
     );
-    expect([...reportVerbs].filter((verb) => !reportWriters.has(verb))).toEqual([]);
+    const refusers = new Set(calls.filter(([fn]) => fn === 'endWithRefusal').map(([, name]) => name));
+    const refusalOnly = new Set(reportEntries.filter(hasNoData).flatMap((entry) => entry.verbs));
+    expect([...refusalOnly].length).toBeGreaterThan(0);
+    expect(
+      [...reportVerbs].filter((verb) => !reportWriters.has(verb) && !(refusalOnly.has(verb) && refusers.has(verb))),
+    ).toEqual([]);
 
     const called = new Set(calls.map(([fn, name]) => `${fn}:${name}`));
     const publishers = [
-      ...externalEntries.map((entry) => ({ key: `external:${entry.verbs[0] ?? ''}`, has: entry.verbs.some((verb) => called.has(`writeExternalDocument:${verb}`)) })),
+      // Per VERB: an entry is covered only when every one of its verbs has its call.
+      ...externalEntries.flatMap((entry) => entry.verbs.map((verb) => ({ key: `external:${verb}`, has: called.has(`writeExternalDocument:${verb}`) }))),
       ...stdoutArtifacts.map((entry) => ({ key: `artifact:${entry.name}`, has: called.has(`writeArtifact:${entry.name}`) })),
     ];
-    const silent = publishers.filter((p) => !p.has && !Object.hasOwn(AWAITING_WRITER, p.key)).map((p) => p.key);
-    const arrived = publishers.filter((p) => p.has && Object.hasOwn(AWAITING_WRITER, p.key)).map((p) => p.key);
-    expect({ silent, arrived }).toEqual({ silent: [], arrived: [] });
+    expect(publishers.filter((p) => !p.has).map((p) => p.key)).toEqual([]);
   });
 
   it('every file artifact has a writeArtifactFile call and vice versa', () => {
     const called = new Set(calls.filter(([fn]) => fn === 'writeArtifactFile').map(([, name]) => name));
     const written = fileArtifacts.filter((entry) => entry.writer === 'document-writer');
-    const silent = written.filter((entry) => !called.has(entry.name) && !Object.hasOwn(AWAITING_WRITER, `artifact:${entry.name}`));
-    const arrived = written.filter((entry) => called.has(entry.name) && Object.hasOwn(AWAITING_WRITER, `artifact:${entry.name}`));
-    expect({ silent: silent.map((e) => e.name), arrived: arrived.map((e) => e.name) }).toEqual({ silent: [], arrived: [] });
-    // A projection relation reaches disk through the projection store, never through the writer.
-    const misrouted = fileArtifacts.filter((entry) => entry.writer === 'projection-store' && called.has(entry.name));
+    expect(written.filter((entry) => !called.has(entry.name)).map((entry) => entry.name)).toEqual([]);
+    // A projection relation reaches disk through the projection store, and a skill-test
+    // artifact through the harness that owns results/ — never through the CLI's writer.
+    const misrouted = fileArtifacts.filter((entry) => entry.writer !== 'document-writer' && called.has(entry.name));
     expect(misrouted.map((entry) => entry.name)).toEqual([]);
-  });
-
-  it('every AWAITING_WRITER key names a registered entry', () => {
-    const keys = new Set([
-      ...externalEntries.map((entry) => `external:${entry.verbs[0] ?? ''}`),
-      ...artifactEntries.flatMap(artifactKey),
-    ]);
-    expect(Object.keys(AWAITING_WRITER).filter((key) => !keys.has(key))).toEqual([]);
   });
 });
 
@@ -168,14 +167,23 @@ async function liveLeaves(): Promise<string[]> {
   return leaves;
 }
 
-/** How many entries cover `leaf` as a stdout document. */
+/**
+ * How many entries cover `leaf` as a stdout document.
+ *
+ * A stdout artifact counts only for a leaf with no document entry: a leaf may
+ * publish its report on one lane and an artifact on another (`skill test
+ * configure` writes its report, or under `--print` the config text alone), and
+ * the report is what covers it. The price: such a leaf could carry a second
+ * artifact unseen by this count.
+ */
 function coverageOf(leaf: string): number {
-  return [
+  const documents = [
     ...reportEntries.map((entry) => entry.verbs),
     ...externalEntries.map((entry) => entry.verbs),
     ...legacyEntries.map((entry) => entry.verbs),
-    ...stdoutArtifacts.map((entry) => entry.publishers),
   ].filter((verbs) => verbs.includes(leaf)).length;
+  if (documents > 0) return documents;
+  return stdoutArtifacts.filter((entry) => entry.publishers.includes(leaf)).length;
 }
 
 describe('Commander leaves ↔ registry', () => {
@@ -200,6 +208,10 @@ describe('Commander leaves ↔ registry', () => {
     expect([...legacyVerbs].filter((verb) => reportVerbs.has(verb))).toEqual([]);
     const written = new Set(writerCalls().filter(([fn]) => fn === 'endWithReport' || fn === 'writeDocument').map(([, name]) => name));
     expect([...legacyVerbs].filter((verb) => written.has(verb))).toEqual([]);
+  });
+
+  it('the only legacy entry is claude context', () => {
+    expect(legacyEntries.map((entry) => entry.verbs)).toEqual([['claude context']]);
   });
 
   it('every legacy verb is still a live Commander leaf', async () => {

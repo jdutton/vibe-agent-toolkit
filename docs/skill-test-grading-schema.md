@@ -148,11 +148,12 @@ an `evals` array.
 
 By **default** (fail-closed) a completed run with a failing verdict exits **1**
 (`FINDINGS`), distinct from a harness that could not run (exit **2**, with a
-`Reason: internal | preflight | bootstrap` line on stderr) so CI can gate on eval
-outcomes without conflating them with harness breakage — a consumer can `case $?
-in 0);; 1) tolerate;; *) hard fail;; esac`. Pass `--allow-eval-failure`
-(interactive opt-out) to downgrade a failing verdict to exit **0**; the pass/fail
-count then lives only in the summary string and `grading.json`.
+report's `error.code` and a `Reason: internal | preflight | bootstrap` line on stderr)
+so CI can gate on eval outcomes without conflating them with harness breakage — a
+consumer can `case $? in 0);; 1) tolerate;; *) hard fail;; esac`. Each failed eval is a
+`SKILL_TEST_EVAL_FAILED` finding in the published report. Pass `--allow-eval-failure`
+(interactive opt-out) to publish those findings at `warning`, so the run exits **0**
+while the report still names every eval that failed.
 
 The end-to-end producer→consumer path is exercised by the opt-in e2e test in
 `packages/cli/test/system/skill-test.system.test.ts`

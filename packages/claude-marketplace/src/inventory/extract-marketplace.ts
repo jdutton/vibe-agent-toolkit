@@ -7,6 +7,7 @@ import { hasParentTraversalSegment, isPathAbsentError, isVatError, normalizePath
 
 import { extractClaudePluginInventory } from './extract-plugin.js';
 import type { GitTrackerSource } from './extract-skill.js';
+import { recordedFailure } from './recorded-failure.js';
 import { ClaudeMarketplaceInventory } from './types.js';
 
 type ParseErrors = ClaudeMarketplaceInventory['parseErrors'];
@@ -68,7 +69,7 @@ export async function extractClaudeMarketplaceInventory(
 	try {
 		raw = JSON.parse(await readFile(manifestFilePath, 'utf-8'));
 	} catch (e) {
-		parseErrors.push({ path: manifestFilePath, message: (e as Error).message });
+		parseErrors.push(recordedFailure(manifestFilePath, (e as Error).message, e));
 		return new ClaudeMarketplaceInventory({
 			path: absolute,
 			manifest: {},

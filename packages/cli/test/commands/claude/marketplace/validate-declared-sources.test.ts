@@ -39,8 +39,9 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { MARKETPLACE_VALIDATE_REPORT_SCHEMA, type MarketplaceValidateReport } from '../../../../src/commands/claude/marketplace/validate-schema.js';
+import type { MarketplaceValidateReport } from '../../../../src/commands/claude/marketplace/validate-schema.js';
 import { runMarketplaceValidatePhase } from '../../../../src/commands/claude/marketplace/validate.js';
+import { publishedPhase } from '../../../helpers/published-phase.js';
 import { errno, realBehind, refusingOnly } from '../../../helpers/refusal-doubles.js';
 
 // `statSync` is a named import in the command, so the one refused-source case
@@ -116,8 +117,8 @@ function expectRefusedRun(exitCode: number, doc: MarketplaceValidateReport): voi
 
 /** Run the command the way the CLI does, minus the emission; the document parsed with its registry schema. */
 async function validate(root: string, verbose = false): Promise<{ exitCode: number; doc: MarketplaceValidateReport }> {
-  const outcome = await runMarketplaceValidatePhase(root, { verbose });
-  return { exitCode: outcome.exitCode, doc: MARKETPLACE_VALIDATE_REPORT_SCHEMA.parse(outcome.document) as MarketplaceValidateReport };
+  const { exitCode, document } = publishedPhase<MarketplaceValidateReport>('claude marketplace validate', await runMarketplaceValidatePhase(root, { verbose }));
+  return { exitCode, doc: document };
 }
 
 /**

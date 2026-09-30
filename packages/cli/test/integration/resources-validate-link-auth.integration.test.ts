@@ -240,9 +240,11 @@ describe('vat resources validate refuses a linkAuth provider that cannot compile
       env: { [TOKEN_ENV]: TOKEN },
     });
 
-    const phases = parsed['phases'] as { name: string; exitCode: number; report: Record<string, unknown> }[];
+    // The run did not finish; the resources phase carries the refusal by name.
+    const { phases } = parsed['data'] as { phases: { name: string; status: string; error?: unknown }[] };
     const resources = phases.find((phase) => phase.name === 'resources');
-    expectRefusedByName(result.status, resources?.report['error']);
-    expect(resources?.exitCode).toBe(2);
+    expect(parsed['error']).toMatchObject({ code: 'RUN_INCOMPLETE' });
+    expect(resources?.status).toBe('error');
+    expectRefusedByName(result.status, resources?.error);
   });
 });

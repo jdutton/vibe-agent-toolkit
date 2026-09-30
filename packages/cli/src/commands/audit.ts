@@ -2485,7 +2485,7 @@ function logRunIntegrity(
   if (refusals.length === 0) return false;
   logger.error(`Audit is not a verdict: it audited ${written.examined} files`);
   for (const refusal of refusals) {
-    for (const line of formatIssueLines(refusal as ValidationIssue, '  ')) logger.error(line);
+    for (const line of formatIssueLines(refusal, '  ')) logger.error(line);
   }
   return true;
 }

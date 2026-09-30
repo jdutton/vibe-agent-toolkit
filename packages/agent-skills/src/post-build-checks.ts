@@ -423,7 +423,7 @@ export async function checkMissingReferencedPaths(
  *   to `.dest`. A link resolving to one of THESE is broken by deliberate policy,
  *   and gets a remediation that says so instead of the generic "report a VAT bug".
  *   Defaults to none for callers that never ran a files config (e.g.
- *   `validateShippedPluginSkillLinks`, which inspects an already-built plugin
+ *   `checkShippedPluginSkillLinks`, which inspects an already-built plugin
  *   tree): they cannot know a drop happened, so they correctly claim no cause.
  */
 export async function checkBrokenPackagedLinks(

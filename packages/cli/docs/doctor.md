@@ -21,25 +21,36 @@ providing actionable suggestions for any problems found.
 7. CLI build status (when running from VAT source tree)
 
 **Options:**
-- `--verbose` - Show all checks (including passing and skipped ones)
+- `--verbose` - Show all checks (including passing and skipped ones) in the human block
+- `--format <yaml|json|text>` - How the report is rendered on stdout (default `yaml`)
 
 **Check outcomes:**
 
-| Icon | Outcome | Meaning |
-|------|---------|---------|
-| ✅ | `pass` | The check ran and the thing is fine |
-| ❌ | `fail` | The check ran and the thing is wrong — the only outcome that affects the exit code |
-| ❓ | `undetermined` | The check could not reach an answer (registry unreachable, file unreadable). **Nothing was verified** — this is not a pass |
-| ⏭️ | `skipped` | The check does not apply here (e.g. a VAT-source-tree-only check outside the source tree) |
+| Icon | Outcome | Finding | Meaning |
+|------|---------|---------|---------|
+| ✅ | `pass` | none | The check ran and the thing is fine |
+| ❌ | `fail` | `DOCTOR_CHECK_FAILED` (error) | The check ran and the thing is wrong — the only outcome that affects the exit code |
+| ❓ | `undetermined` | `DOCTOR_CHECK_WARNED` (warning) | The check could not reach an answer (registry unreachable, file unreadable). **Nothing was verified** — this is not a pass |
+| ⏭️ | `skipped` | none | The check does not apply here (e.g. a VAT-source-tree-only check outside the source tree) |
 
 **Exit Codes:**
-- `0` - No check failed (an undetermined check is reported in the output, not fatal)
+- `0` - No check failed (an undetermined check is a warning finding, not fatal)
 - `1` - One or more checks failed
-- `2` - Doctor itself could not run (an internal failure, an unknown flag); no verdict was produced
+- `2` - Doctor itself could not run (an internal failure); the report's `error` says why and no verdict was produced
 
-**Output:** Human-friendly formatted text with emojis. The summary always prints the
-full outcome distribution and, when the concise view hides checks, how many it hid —
-so the counts can never contradict the list above them.
+**Output:** The report envelope on stdout — `status`, `summary`, `examined` (the checks
+run), one finding per failed or undetermined check, and `data`:
+
+- `currentDir` — the working directory doctor ran from
+- `projectRoot` / `configPath` — found from `currentDir`, or `null`
+- `checks[]` — every check that ran, in order: `name`, `outcome`, `message`, and
+  `suggestion` when the check has one
+
+The human block below goes to **stderr** under `--format yaml|json`. Under
+`--format text` it is the stdout rendering instead, printed once and listing every
+check. Its summary always prints the full outcome distribution and, when the
+concise view hides checks, how many it hid — so the counts can never contradict
+the list above them.
 
 ## Usage Examples
 
@@ -234,7 +245,8 @@ vat doctor --verbose
 
 ### CI/CD Integration
 
-Use exit codes for automated checks:
+Use exit codes for automated checks, or read the report (`vat doctor --format json`
+and `jq '.data.checks[] | select(.outcome != "pass")'`):
 
 ```bash
 if vat doctor; then
@@ -314,5 +326,5 @@ for terminology.
 - Run `vat doctor` before reporting issues to verify environment
 - Use `--verbose` flag when debugging to see all check details
 - Doctor checks can be run from any subdirectory in your project
-- Exit code 0 means no check *failed*; read the counts line to see whether any
-  check was undetermined (useful for scripts)
+- Exit code 0 means no check *failed*; read the report's `summary.warnings` (or the
+  counts line) to see whether any check was undetermined

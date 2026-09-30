@@ -11,12 +11,21 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { PLUGIN_INSTALL_REPORT_SCHEMA, type PluginInstallData } from '../../src/commands/claude/plugin/install-schema.js';
+
 import {
   executeCommandAndParse,
   setupInstallTestSuite,
 } from './test-helpers/index.js';
 
 const suite = setupInstallTestSuite('vat-skills-install-test-', import.meta.url);
+
+/** The `data` of a completed install report, validated against the published schema. */
+function dataOf(parsed: Record<string, unknown>): PluginInstallData {
+  const report = PLUGIN_INSTALL_REPORT_SCHEMA.parse(parsed);
+  if (report.data === null) throw new Error(`install published no data: ${JSON.stringify(parsed)}`);
+  return report.data;
+}
 
 /**
  * Helper: Create a simple skill directory with SKILL.md
@@ -31,7 +40,7 @@ async function createSimpleSkill(tempDir: string, skillName: string): Promise<st
 /**
  * Helper: Execute install command and verify success. Returns the raw
  * result + parsed YAML so callers can make additional assertions (e.g.
- * `parsed.dryRun`) without re-running the command.
+ * `dataOf(parsed).dryRun`) without re-running the command.
  */
 function executeInstallAndExpectSuccess(
   binPath: string,
@@ -43,14 +52,27 @@ function executeInstallAndExpectSuccess(
   const { result, parsed } = executeCommandAndParse(binPath, args, projectDir);
 
   expect(result.status).toBe(0);
-  expect(parsed.status).toBe('success');
-  expect(parsed.sourceType).toBe(expectedSourceType);
+  expect(parsed.status).toBe('ok');
+  expect(dataOf(parsed).sourceType).toBe(expectedSourceType);
 
-  const skills = parsed.skills as Array<Record<string, unknown>>;
+  const skills = dataOf(parsed).skills;
   expect(skills).toHaveLength(1);
   expect(skills[0]).toHaveProperty('name', expectedSkillName);
 
   return { result, parsed };
+}
+
+/** A `--dry-run` install of `source` detects `sourceType` and publishes an ok report saying it wrote nothing. */
+function expectDryRunDetects(source: string, sourceType: string): void {
+  const { result, parsed } = executeCommandAndParse(
+    suite.binPath,
+    ['claude', 'plugin', 'install', source, '-s', suite.skillsDir, '--dry-run'],
+    suite.projectDir
+  );
+
+  expect(result.status).toBe(0);
+  expect(parsed.status).toBe('ok');
+  expect(dataOf(parsed)).toMatchObject({ sourceType, dryRun: true });
 }
 
 describe('claude plugin install command (system test)', () => {
@@ -62,43 +84,27 @@ describe('claude plugin install command (system test)', () => {
       const zipPath = safePath.join(suite.tempDir, 'test-skill.zip');
       await writeFile(zipPath, 'fake zip content');
 
-      const { result, parsed } = executeCommandAndParse(
-        suite.binPath,
-        ['claude', 'plugin', 'install', zipPath, '-s', suite.skillsDir, '--dry-run'],
-        suite.projectDir
-      );
-
-      expect(result.status).toBe(0);
-      expect(parsed.status).toBe('success');
-      expect(parsed.sourceType).toBe('zip');
-      expect(parsed.dryRun).toBe(true);
+      expectDryRunDetects(zipPath, 'zip');
     });
 
     it('should detect local directory source', async () => {
       const dirPath = safePath.join(suite.tempDir, 'test-skill-dir');
       await mkdir(dirPath, { recursive: true });
 
-      const { result, parsed } = executeCommandAndParse(
-        suite.binPath,
-        ['claude', 'plugin', 'install', dirPath, '-s', suite.skillsDir, '--dry-run'],
-        suite.projectDir
-      );
-
-      expect(result.status).toBe(0);
-      expect(parsed.status).toBe('success');
-      expect(parsed.sourceType).toBe('local');
-      expect(parsed.dryRun).toBe(true);
+      expectDryRunDetects(dirPath, 'local');
     });
 
-    it('should throw error for invalid source', () => {
+    it('should refuse a source path that names nothing', () => {
       const { result } = executeCommandAndParse(
         suite.binPath,
         ['claude', 'plugin', 'install', '/nonexistent/path', '-s', suite.skillsDir],
         suite.projectDir
       );
 
+      // A source path that names nothing is the invocation's mistake.
       expect(result.status).toBe(2);
-      expect(result.stderr).toContain('Cannot detect source type');
+      expect(result.stderr).toContain('Path does not exist');
+      expect(result.stderr).toContain('Expected: npm:package-name');
     });
   });
 
@@ -152,10 +158,10 @@ describe('claude plugin install command (system test)', () => {
       );
 
       expect(result.status).toBe(0);
-      expect(parsed.status).toBe('success');
-      expect(parsed.sourceType).toBe('local');
+      expect(parsed.status).toBe('ok');
+      expect(dataOf(parsed).sourceType).toBe('local');
 
-      const skills = parsed.skills as Array<Record<string, unknown>>;
+      const skills = dataOf(parsed).skills;
       expect(skills).toHaveLength(1);
       expect(skills[0]).toHaveProperty('name', skillName);
 
@@ -179,7 +185,7 @@ describe('claude plugin install command (system test)', () => {
       );
 
       expect(result.status).toBe(0);
-      const skills = parsed.skills as Array<Record<string, unknown>>;
+      const skills = dataOf(parsed).skills;
       expect(skills[0]).toHaveProperty('name', customName);
 
       // Verify installed with custom name
@@ -237,7 +243,7 @@ describe('claude plugin install command (system test)', () => {
       );
 
       expect(result.status).toBe(0);
-      expect(parsed.status).toBe('success');
+      expect(parsed.status).toBe('ok');
     });
 
     it('should fail without --force if skill exists', async () => {
@@ -276,7 +282,7 @@ describe('claude plugin install command (system test)', () => {
         'my-skill',
         'local'
       );
-      expect(parsed.dryRun).toBe(true);
+      expect(dataOf(parsed).dryRun).toBe(true);
 
       // Verify nothing was actually installed
       expect(existsSync(safePath.join(suite.skillsDir, 'my-skill'))).toBe(false);

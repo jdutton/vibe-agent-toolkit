@@ -8,11 +8,13 @@
  * compute aggregates.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 
 import type { SeverityCounts } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'yaml';
+import { isFilesystemAccessError, safePath } from '@vibe-agent-toolkit/utils';
+
+import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
+import { writeArtifactFile } from '../../utils/document-writer.js';
 
 /** A row's audit: the `vat audit` report's own status, or `unloadable` when the audit could not run. */
 export type AuditStatus = 'ok' | 'findings' | 'unloadable';
@@ -130,15 +132,41 @@ export function runDirectoryName(report: RunReport): string {
 }
 
 /**
+ * Run one write of the scan's output, refusing an OS refusal as the run's.
+ *
+ * Classified by errno at the cause: the filesystem refusing a path under
+ * `--out` (a full disk and a failing device included) means the scan could not
+ * finish its output — `RUN_INCOMPLETE`, in every lane — while anything else (a
+ * schema the writer rejects, a bug) is not the environment's and propagates as
+ * VAT's defect. Only `--out` writes go through here: the validation overlay
+ * writes into the SOURCE, and a refusal there is the entry's unloadable row.
+ *
+ * @param what - The file or directory being written, for the message
+ * @param write - The write
+ * @throws {CommandRefusalError} `RUN_INCOMPLETE` when the OS refused the write
+ */
+export function writeRunOutput(what: string, write: () => void): void {
+  try {
+    write();
+  } catch (error) {
+    if (!isFilesystemAccessError(error)) throw error;
+    throw new CommandRefusalError('RUN_INCOMPLETE', `Could not write ${what}: ${errorMessageOf(error)}`, { cause: error });
+  }
+}
+
+/**
  * Write `summary.yaml` (and create the run directory) under `outDir`.
  * Returns the absolute path of the created run directory. Per-plugin
  * sibling files (audit outputs, review outputs) are written by the
- * runner — this function only writes the summary index.
+ * runner — this function only writes the summary index, through the
+ * writer's `corpus-summary` artifact.
+ *
+ * @throws {CommandRefusalError} `RUN_INCOMPLETE` when the OS refuses the directory or the file
  */
 export async function writeRunReport(report: RunReport, outDir: string): Promise<string> {
   const runDir = safePath.join(outDir, runDirectoryName(report));
   // eslint-disable-next-line local/no-fs-mkdirSync -- the corpus output dir is caller-supplied; mkdir-recursive is the right call here
-  mkdirSync(runDir, { recursive: true });
+  writeRunOutput(runDir, () => mkdirSync(runDir, { recursive: true }));
 
   const totals = computeTotals(report);
   const dump = {
@@ -152,7 +180,7 @@ export async function writeRunReport(report: RunReport, outDir: string): Promise
   };
 
   const summaryPath = safePath.join(runDir, 'summary.yaml');
-  writeFileSync(summaryPath, yaml.stringify(dump, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
+  writeRunOutput(summaryPath, () => writeArtifactFile('corpus-summary', summaryPath, dump));
 
   return runDir;
 }

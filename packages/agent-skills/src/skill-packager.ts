@@ -76,6 +76,7 @@ import {
 } from './files-config.js';
 import { READ_REMEDY, withFsAttribution } from './fs-attribution.js';
 import { LINK_GRAPH_MEMBER_GLOBS } from './link-graph-members.js';
+import { packagingInputError, SKILL_NAME_NOT_A_SEGMENT_CODE } from './packaging-errors.js';
 import { checkBrokenPackagedLinks, checkMissingReferencedPaths, checkUnreferencedFiles } from './post-build-checks.js';
 import {
   checkPackagedTestInput,
@@ -1505,12 +1506,12 @@ function applyFilesEntriesToPathMap(
     } catch (error) {
       if ((error as { code?: string }).code !== 'ENOENT') {
         const reason = error instanceof Error ? error.message : String(error);
-        throw new Error(
+        throw packagingInputError(
           `files entry for skill '${skillName}': source '${fileEntry.source}' could not be read: ${reason}. ` +
           `Check the file's permissions and ownership, and that every directory above it is traversable.`,
         );
       }
-      throw new Error(
+      throw packagingInputError(
         `files entry for skill '${skillName}': source '${fileEntry.source}' does not exist.${buildArtifactHint(fileEntry.source)}`,
       );
     }
@@ -2317,7 +2318,7 @@ async function validateNoNestedSkillMd(outputPath: string, skillName: string): P
     .filter(relativePath => relativePath !== 'SKILL.md'); // Exclude the root SKILL.md
 
   if (nestedSkillMds.length > 0) {
-    throw new Error(
+    throw packagingInputError(
       `SKILL.md found inside skill "${skillName}" at: ${nestedSkillMds.join(', ')}\n` +
       `A SKILL.md was bundled as a resource — this creates a duplicate skill definition\n` +
       `in the build output, which breaks marketplace sync and confuses skill consumers.\n\n` +
@@ -2708,7 +2709,7 @@ function getDefaultSkillOutputPath(skillPath: string, skillName: string): string
   // through the public `packageSkill` export, issues empty, `hasErrors` false.
   if (!isSingleFsSegment(skillName)) {
     throw new VatError(
-      'SKILL_NAME_NOT_A_SEGMENT',
+      SKILL_NAME_NOT_A_SEGMENT_CODE,
       `Cannot derive an output directory from skill name "${skillName}": a name must be a single ` +
         `path segment (no separators, not "." or ".."). Declare \`name:\` in the SKILL.md frontmatter ` +
         `or pass an explicit outputPath.`,

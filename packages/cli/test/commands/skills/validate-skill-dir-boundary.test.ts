@@ -9,9 +9,10 @@ import { writeFileSync } from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { SKILLS_VALIDATE_REPORT_SCHEMA } from '../../../src/commands/skills/validate-schema.js';
+import type { SkillsValidateReport } from '../../../src/commands/skills/validate-schema.js';
 import { runSkillsValidatePhase } from '../../../src/commands/skills/validate.js';
 import { resetSkillDiscoveryCache } from '../../../src/skill-resolution/packaging-config.js';
+import { publishedPhase } from '../../helpers/published-phase.js';
 import { createTempDirTracker } from '../../system/test-common.js';
 
 const CODE = 'LINK_OUTSIDE_SKILL_DIR';
@@ -39,9 +40,8 @@ function projectWithSharedDocLink(lines: string[]): string {
 
 /** Run the phase and return its exit code and the boundary findings' severities. */
 async function validateBoundary(lines: string[]): Promise<{ exitCode: number; severities: string[] }> {
-  const outcome = await runSkillsValidatePhase(projectWithSharedDocLink(lines), {});
-  const { findings } = SKILLS_VALIDATE_REPORT_SCHEMA.parse(outcome.document);
-  return { exitCode: outcome.exitCode, severities: findings.filter((i) => i.code === CODE).map((i) => i.severity) };
+  const { exitCode, document: { findings } } = publishedPhase<SkillsValidateReport>('skills validate', await runSkillsValidatePhase(projectWithSharedDocLink(lines), {}));
+  return { exitCode, severities: findings.filter((i) => i.code === CODE).map((i) => i.severity) };
 }
 
 const STRICT = ['      validation:', '        severity:', `          ${CODE}: error`];

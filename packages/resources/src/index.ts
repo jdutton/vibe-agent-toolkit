@@ -606,6 +606,7 @@ export {
 } from './config-issues.js';
 
 export {
+  ExternalPluginSourceSchema,
   ProjectConfigSchema,
   SkillExecutableEntrySchema,
   SkillFileEntrySchema,

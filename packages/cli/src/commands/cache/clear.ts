@@ -29,44 +29,44 @@ import { type Dirent, promises as fs } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import { parseCacheDirectory } from '@vibe-agent-toolkit/resources';
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { buildReport, type Gate, type RefusalCode } from '@vibe-agent-toolkit/schema';
 import { direntKind, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
-import { writeYamlOutput } from '../../utils/output.js';
+import { unstatablePathRefusal } from '../../utils/project-root-policy.js';
+
+import type { CacheClearData } from './clear-schema.js';
 
 /** The one name the shared cache root is allowed to have. See {@link vatCacheRoot}. */
 const VAT_CACHE_DIR_NAME = '.vat-cache';
+
+/** `vat cache clear` has no `--strict` and publishes no finding: the gate is fixed. */
+const CACHE_CLEAR_GATE: Gate = { strict: false };
+
+/** One location is considered on every run: the shared cache root. */
+const CACHE_LOCATIONS_CONSIDERED = 1;
 
 export interface CacheClearOptions {
   debug?: boolean;
 }
 
 /**
- * What a clear did, as published on stdout.
+ * What a clear did.
  *
- * `partial` is not a failure mode bolted on — it is the *common* outcome when
- * something else on the machine is writing to the shared tree, and it has to be
- * reportable. A recursive delete that gives up part-way has already removed most
- * of the cache; surfacing that as a bare thrown error told the operator only
- * that the command failed, while leaving them to guess how much of their cache
- * still existed. An honest count of what went and what stayed is the whole
- * point of a report.
+ * A delete that stops short is not a failure mode bolted on — it is the
+ * *common* outcome when something else on the machine is writing to the shared
+ * tree, and it has to be reportable. A recursive delete that gives up part-way
+ * has already removed most of the cache; surfacing that as a bare thrown error
+ * told the operator only that the command failed, while leaving them to guess
+ * how much of their cache still existed. So an incomplete clear carries the
+ * same `data` as a complete one — what went, what stayed, the counts actually
+ * removed — plus why it stopped.
  */
-export interface CacheClearReport {
-  status: 'success' | 'partial';
-  cacheDir: string;
-  existed: boolean;
-  /** Top-level entries that are gone, sorted. Empty when nothing was there. */
-  removed: string[];
-  /** Top-level entries that survived a partial clear, sorted. Absent on success. */
-  remaining?: string[];
-  /** Why the delete stopped short. Absent on success. */
-  reason?: string;
-  entriesRemoved: number;
-  bytesRemoved: number;
-}
+type CacheClearOutcome =
+  | { readonly complete: true; readonly data: CacheClearData }
+  | { readonly complete: false; readonly data: CacheClearData | null; readonly reason: string };
 
 interface TreeUsage {
   entries: number;
@@ -151,13 +151,15 @@ export function vatCacheRoot(): string {
  * cleanup would leave an operator with a cache they can neither use nor remove.
  *
  * @param cacheDir - Directory to remove, in full
- * @returns What was removed
+ * @returns What was removed, and whether the delete finished
+ * @throws {CommandRefusalError} `INPUT_UNREADABLE` when the OS refuses to list or
+ *   stat an entry during the measurement — before anything is deleted
  */
-export async function clearCacheDirectory(cacheDir: string): Promise<CacheClearReport> {
+export async function clearCacheDirectory(cacheDir: string): Promise<CacheClearOutcome> {
   const entries = await readdirOrNull(cacheDir);
 
   if (entries === null) {
-    return { status: 'success', cacheDir, existed: false, removed: [], entriesRemoved: 0, bytesRemoved: 0 };
+    return { complete: true, data: { cacheDir, existed: false, removed: [], remaining: [], entriesRemoved: 0, bytesRemoved: 0 } };
   }
 
   const usage = await measureEntries(cacheDir, entries);
@@ -166,16 +168,19 @@ export async function clearCacheDirectory(cacheDir: string): Promise<CacheClearR
   try {
     await fs.rm(cacheDir, { recursive: true, force: true, ...RM_RETRY });
   } catch (error) {
-    return partialReport(cacheDir, names, usage, error);
+    return partialOutcome(cacheDir, names, usage, error);
   }
 
   return {
-    status: 'success',
-    cacheDir,
-    existed: true,
-    removed: sorted(names),
-    entriesRemoved: usage.entries,
-    bytesRemoved: usage.bytes,
+    complete: true,
+    data: {
+      cacheDir,
+      existed: true,
+      removed: sorted(names),
+      remaining: [],
+      entriesRemoved: usage.entries,
+      bytesRemoved: usage.bytes,
+    },
   };
 }
 
@@ -194,28 +199,42 @@ export async function clearCacheDirectory(cacheDir: string): Promise<CacheClearR
  * @param cacheDir - The tree that was being removed
  * @param names - Top-level entry names as they were before the delete
  * @param before - Usage measured before the delete
+ * When the OS refuses that re-read too, what went is unknowable: the outcome
+ * is still incomplete — the delete stopped part-way, and its own error is the
+ * cause — with no `data` and a reason naming both errors. Letting the re-read's
+ * refusal escape would publish "could not read the cache" for a clear that ran.
+ *
  * @param error - Whatever `fs.rm` threw
- * @returns A report naming what went, what stayed, and why
+ * @returns An incomplete outcome naming what went, what stayed, and why
  */
-async function partialReport(
+async function partialOutcome(
   cacheDir: string,
   names: string[],
   before: TreeUsage,
   error: unknown,
-): Promise<CacheClearReport> {
-  const survivors = (await readdirOrNull(cacheDir)) ?? [];
+): Promise<CacheClearOutcome> {
+  const reason = `Cleared only part of ${cacheDir}: ${errorMessageOf(error)}`;
+  let survivors: Dirent[];
+  let after: TreeUsage;
+  try {
+    survivors = (await readdirOrNull(cacheDir)) ?? [];
+    after = await measureEntries(cacheDir, survivors);
+  } catch (rereadError) {
+    return { complete: false, data: null, reason: `${reason}; what survived cannot be read back: ${errorMessageOf(rereadError)}` };
+  }
   const remaining = new Set(survivors.map((entry) => entry.name));
-  const after = await measureEntries(cacheDir, survivors);
 
   return {
-    status: 'partial',
-    cacheDir,
-    existed: true,
-    removed: sorted(names.filter((name) => !remaining.has(name))),
-    remaining: sorted([...remaining]),
-    reason: error instanceof Error ? error.message : String(error),
-    entriesRemoved: Math.max(0, before.entries - after.entries),
-    bytesRemoved: Math.max(0, before.bytes - after.bytes),
+    complete: false,
+    reason,
+    data: {
+      cacheDir,
+      existed: true,
+      removed: sorted(names.filter((name) => !remaining.has(name))),
+      remaining: sorted([...remaining]),
+      entriesRemoved: Math.max(0, before.entries - after.entries),
+      bytesRemoved: Math.max(0, before.bytes - after.bytes),
+    },
   };
 }
 
@@ -227,40 +246,51 @@ function sorted(names: readonly string[]): string[] {
 /**
  * Command entry point: clear the real cache root and publish the report.
  *
+ * A complete clear is `ok` — nothing there to remove included. A clear that
+ * stopped part-way is the envelope's error branch, `RUN_INCOMPLETE`, carrying
+ * what it removed and what survived: the operator most needs that account
+ * precisely when the command did not finish.
+ *
  * @param options - Command options (only `--debug`, inherited from the root)
  */
 export async function cacheClearCommand(options: CacheClearOptions = {}): Promise<void> {
-  const startTime = Date.now();
   const logger = createLogger(options.debug ? { debug: true } : {});
 
+  let outcome: CacheClearOutcome;
   try {
-    const report = await clearCacheDirectory(vatCacheRoot());
-    logger.debug(`Cleared ${String(report.entriesRemoved)} cache entries from ${report.cacheDir}`);
-    writeYamlOutput(report);
-    // A partial clear publishes its report and *then* fails. Exiting through
-    // `handleCommandError` instead would suppress the report entirely, which is
-    // the defect this branch exists to fix: the operator most needs to know how
-    // much of the cache survived precisely when the command did not finish.
-    // A partial clear is a run that did not finish, not a finding about the tree.
-    process.exit(report.status === 'partial' ? ExitCode.ERROR : ExitCode.OK);
+    outcome = await clearCacheDirectory(vatCacheRoot());
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'CacheClear');
+    refuse(refusalCodeOf(error), error, NOTHING_FINISHED);
   }
+
+  if (!outcome.complete) {
+    // No `data` means what went is unknowable — nothing can be claimed as finished.
+    const finished = outcome.data === null ? NOTHING_FINISHED : { examined: CACHE_LOCATIONS_CONSIDERED, findings: [], data: outcome.data };
+    refuse('RUN_INCOMPLETE', outcome.reason, finished);
+  }
+  logger.debug(`Cleared ${String(outcome.data.entriesRemoved)} cache entries from ${outcome.data.cacheDir}`);
+  endWithReport('cache clear', buildReport({ examined: CACHE_LOCATIONS_CONSIDERED, findings: [], data: outcome.data, gate: CACHE_CLEAR_GATE }), 'yaml');
+}
+
+/** End on the envelope's error branch, carrying whatever finished. */
+function refuse(code: RefusalCode, error: unknown, finished: FinishedWork): never {
+  endWithRefusal('cache clear', code, error, 'yaml', CACHE_CLEAR_GATE, finished);
 }
 
 /**
  * `readdir` that reports a missing directory as `null` rather than throwing.
  *
- * Only ENOENT is absorbed. EACCES on a directory that exists is a genuine
+ * Only an absence is absorbed. EACCES on a directory that exists is a genuine
  * failure — reporting it as "nothing to clear" would tell the operator their
- * cache is gone when it is still on disk.
+ * cache is gone when it is still on disk — so it is the input's refusal,
+ * classified by the shared absent-vs-unreadable predicate.
  */
 async function readdirOrNull(dir: string): Promise<Dirent[] | null> {
   try {
     return await fs.readdir(dir, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
+    if (isPathAbsentError(error)) return null;
+    throw unstatablePathRefusal(dir, error);
   }
 }
 
@@ -309,6 +339,6 @@ async function sizeOf(target: string): Promise<number> {
     return stats.size;
   } catch (error) {
     if (isPathAbsentError(error)) return 0;
-    throw error;
+    throw unstatablePathRefusal(target, error);
   }
 }

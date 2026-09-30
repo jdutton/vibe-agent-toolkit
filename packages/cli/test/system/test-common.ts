@@ -73,6 +73,18 @@ export function createTestTempDir(prefix: string): string {
 }
 
 /**
+ * Write a tree of files under `dir`: each key a `/`-separated path relative to
+ * it, each value the file's UTF-8 content. Parent directories are created.
+ */
+export function writeFileTree(dir: string, files: Readonly<Record<string, string>>): void {
+  for (const [relative, content] of Object.entries(files)) {
+    const target = safePath.join(dir, relative);
+    mkdirSyncReal(pathDirname(target), { recursive: true });
+    fs.writeFileSync(target, content, 'utf-8');
+  }
+}
+
+/**
  * Clean up a temporary directory.
  *
  * `force: true` already tolerates a directory that is gone, and the retries

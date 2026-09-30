@@ -30,6 +30,7 @@ import { glob } from 'glob';
 import picomatch from 'picomatch';
 
 import { withFsAttribution } from './fs-attribution.js';
+import { packagingInputError } from './packaging-errors.js';
 import { materializeIssue } from './validators/rule-engine/index.js';
 import { isNeverPackagedBasename } from './validators/validation-rules.js';
 
@@ -329,7 +330,7 @@ function globMatchesToIssues(
  *
  * Load-bearing for every THROWN message in this module, not only for issue
  * locations: `applyFilesConfig`'s throws reach `vat skills build`'s stdout
- * verbatim as `failedSkills[].message`, so an absolute path there publishes the
+ * verbatim as a `SKILL_PACKAGING_FAILED` finding's `message`, so an absolute path there publishes the
  * developer's home directory into whatever issue or CI log the report is pasted
  * into. Build-report messages are project-relative, never absolute.
  */
@@ -437,7 +438,7 @@ export function mergeFilesConfig(
     for (const entry of perSkill) {
       const normalized = normalizeRelPath(entry.dest);
       if (destSet.has(normalized)) {
-        throw new Error(
+        throw packagingInputError(
           `Duplicate dest in per-skill files config: '${entry.dest}'. ` +
           `Each dest must be unique within a skill's files configuration.`
         );
@@ -637,12 +638,12 @@ async function copyNonGlobEntry(
     sourceStat = statSync(absoluteSource);
   } catch (error) {
     if ((error as { code?: string }).code !== 'ENOENT') throw error;
-    throw new Error(
+    throw packagingInputError(
       `files: source '${entry.source}' does not exist (resolved to ${anchoredPath(absoluteSource, projectRoot)}).${buildArtifactHint(entry.source)}`,
     );
   }
   if (sourceStat.isDirectory()) {
-    throw new Error(
+    throw packagingInputError(
       `files: source '${entry.source}' is a directory; use a glob like '${entry.source}/**/*' to copy its contents.`,
     );
   }
@@ -715,7 +716,7 @@ async function expandGlobEntry(
 ): Promise<GlobExpansion> {
   const remainder = globMagicRemainder(entry.source);
   if (hasParentTraversalSegment(remainder)) {
-    throw new Error(
+    throw packagingInputError(
       `files: source '${entry.source}' (glob) has a '..' segment in its glob portion ('${remainder}'); ` +
       `parent-directory traversal is not allowed after the static base.`,
     );
@@ -788,11 +789,11 @@ async function copyGlobEntry(
   } = await expandGlobEntry(entry, projectRoot);
 
   // Project-relative in both throws below: these messages are published verbatim
-  // as `failedSkills[].message` (see {@link anchoredPath}).
+  // as a `SKILL_PACKAGING_FAILED` finding's `message` (see {@link anchoredPath}).
   const reportedBase = anchoredPath(absoluteBase, projectRoot);
 
   if (allMatches.length === 0) {
-    throw new Error(
+    throw packagingInputError(
       `files: source '${entry.source}' (glob) matched no files under ${reportedBase} — has your build run?`,
     );
   }
@@ -802,7 +803,7 @@ async function copyGlobEntry(
   // a file, "all of them are never packaged" names the wrong cause and its
   // remediation ("declare an explicit source: entry") would not work if followed.
   if (matches.length === 0 && droppedRel.length === 0) {
-    throw new Error(
+    throw packagingInputError(
       `files: source '${entry.source}' (glob) matched ${allMatches.length} path(s) under ${reportedBase}, ` +
       `but none of them is a regular file (a symlink to a directory, a FIFO, a socket or a device node ` +
       `cannot be packaged): ${nonRegularRel.join(', ')}. ` +
@@ -823,7 +824,7 @@ async function copyGlobEntry(
       ? ''
       : ` A further ${nonRegularRel.length.toString()} match(es) are not regular files and could not ` +
         `be packaged either: ${nonRegularRel.join(', ')}.`;
-    throw new Error(
+    throw packagingInputError(
       `files: source '${entry.source}' (glob) matched ${allMatches.length} file(s) under ${reportedBase}, ` +
       `but all of them are never packaged into a skill bundle: ${droppedRel.join(', ')}. ` +
       // NOT "widen the glob": the filter is on basename and applies at any width, so a
@@ -1210,7 +1211,7 @@ function assertFileShapedDest(entry: SkillFileEntry): void {
   let base = normalized;
   while (base.endsWith('/')) base = base.slice(0, -1);
   const suggested = `${base}/${entry.source.slice(entry.source.lastIndexOf('/') + 1)}`;
-  throw new Error(
+  throw packagingInputError(
     `files: dest '${entry.dest}' names a directory, but a non-glob entry copies ONE file to ONE path. ` +
     `Name the output file itself (e.g. dest: '${normalizeRelPath(suggested)}'), ` +
     `or use a glob source to copy a whole subtree.`,

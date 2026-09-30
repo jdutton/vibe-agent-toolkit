@@ -14,6 +14,8 @@ import { setDebugDiagnostics } from '../../src/utils/debug-diagnostics.js';
 import {
   endWithRefusal,
   endWithReport,
+  endWithForwardedDocument,
+  readForwardedDocument,
   NOTHING_FINISHED,
   writeArtifact,
   writeArtifactFile,
@@ -22,6 +24,13 @@ import {
   writeLegacyDocument,
   type FinishedWork,
 } from '../../src/utils/document-writer.js';
+import type * as OutputModule from '../../src/utils/output.js';
+
+// `writeStdoutSync` writes fd 1 directly, past the stdout spy; route it through the spy.
+vi.mock('../../src/utils/output.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof OutputModule>()),
+  writeStdoutSync: (content: string) => process.stdout.write(content),
+}));
 
 const VERB = 'okf validate';
 const DATA = {
@@ -180,9 +189,30 @@ describe('the other writer entry points', () => {
   });
 
   it('writeLegacyDocument serializes the legacy document as asked', () => {
-    writeLegacyDocument('claude context', { kind: 'answer' }, 'yaml');
+    writeLegacyDocument('claude context', { kind: 'answer' }, 'yaml', undefined);
 
+    // ONE document: opened with `---`, no trailing marker (which would open a second).
+    expect(written().startsWith('---\n')).toBe(true);
+    expect(yaml.parseAllDocuments(written())).toHaveLength(1);
     expect(yaml.parse(written())).toEqual({ kind: 'answer' });
+  });
+
+  it('a forwarded document is written byte for byte and ends on the code IT derives', () => {
+    const asJson = `${JSON.stringify(reportWith(1, [FINDING]), null, 2)}\n`;
+    endWithForwardedDocument(readForwardedDocument(VERB, asJson, 'json'));
+    expect(written()).toBe(asJson);
+    expect(exit.mock.calls).toEqual([[ExitCode.FINDINGS]]);
+    stdout.mockClear();
+
+    const asYaml = `---\n${yaml.stringify(reportWith(1, []))}`;
+    expect(readForwardedDocument(VERB, asYaml, 'yaml').report.status).toBe('ok');
+  });
+
+  it('readForwardedDocument refuses a truncated or foreign document', () => {
+    const full = JSON.stringify(reportWith(1, []));
+    expect(() => readForwardedDocument(VERB, full.slice(0, full.length / 2), 'json')).toThrow();
+    expect(() => readForwardedDocument(VERB, '---\nkind: answer\n', 'yaml')).toThrow();
+    expect(written()).toBe('');
   });
 
   it('writeArtifact writes a raw artifact verbatim and refuses an unregistered name', () => {

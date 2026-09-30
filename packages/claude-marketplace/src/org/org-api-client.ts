@@ -143,6 +143,13 @@ const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
  */
 const ORIGIN_OUTCOME_UNKNOWN_STATUSES = new Set([502, 504]);
 
+/** The code a call carries when its endpoint's key is not set: nothing was sent. */
+export const ORG_API_KEY_MISSING_CODE = 'ORG_API_KEY_MISSING';
+/** {@link ApiRequestError}'s code. */
+export const API_REQUEST_CODE = 'API_REQUEST';
+/** {@link ApiTransportError}'s code. */
+export const API_TRANSPORT_CODE = 'API_TRANSPORT';
+
 /**
  * A failed HTTP exchange, carrying the status so a caller can branch on it.
  *
@@ -158,7 +165,7 @@ export class ApiRequestError extends VatError {
     readonly retryAfterHeader: string | undefined,
     options?: { cause?: unknown },
   ) {
-    super('API_REQUEST', message, options);
+    super(API_REQUEST_CODE, message, options);
   }
 }
 
@@ -196,7 +203,7 @@ export class ApiTransportError extends VatError {
     readonly bytesSent: number,
     options?: { cause?: unknown; deadlineExceeded?: boolean },
   ) {
-    super('API_TRANSPORT', message, options);
+    super(API_TRANSPORT_CODE, message, options);
     this.deadlineExceeded = options?.deadlineExceeded ?? false;
   }
 }
@@ -653,7 +660,8 @@ export class OrgApiClient {
 
   buildAdminHeaders(): Record<string, string> {
     if (!this.adminApiKey) {
-      throw new Error(
+      throw new VatError(
+        ORG_API_KEY_MISSING_CODE,
         'ANTHROPIC_ADMIN_API_KEY is required for org administration commands.\n' +
           'Set it in your environment: export ANTHROPIC_ADMIN_API_KEY=sk-ant-admin-...',
       );
@@ -667,7 +675,8 @@ export class OrgApiClient {
 
   buildSkillsHeaders(): Record<string, string> {
     if (!this.apiKey) {
-      throw new Error(
+      throw new VatError(
+        ORG_API_KEY_MISSING_CODE,
         'ANTHROPIC_API_KEY is required for workspace skills commands.\n' +
           'Set it in your environment: export ANTHROPIC_API_KEY=sk-ant-api03-...',
       );

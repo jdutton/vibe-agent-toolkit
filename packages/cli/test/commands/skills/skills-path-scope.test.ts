@@ -170,24 +170,24 @@ interface FailureDocument {
   error?: string | { code: string; message: string };
 }
 
+/** The report envelope's error branch: a coded refusal — both commands publish it. */
+const refusalMessage = (document: FailureDocument): string | undefined =>
+  typeof document.error === 'object' && document.error.code === 'USAGE_INVALID' ? document.error.message : undefined;
+
 const SCOPED_COMMANDS = [
   {
     spelling: 'vat skills validate',
     create: createValidateCommand,
     silentBanner: 'declares no `skills:` block',
     quotedPhrase: 'nothing to validate',
-    // The report envelope's error branch: a coded refusal.
-    errorMessage: (document: FailureDocument): string | undefined =>
-      typeof document.error === 'object' && document.error.code === 'USAGE_INVALID' ? document.error.message : undefined,
+    errorMessage: refusalMessage,
   },
   {
     spelling: 'vat skills build',
     create: createBuildCommand,
     silentBanner: 'No skills configuration found',
     quotedPhrase: 'nothing to build',
-    // Still the legacy failure document until `skills build` migrates.
-    errorMessage: (document: FailureDocument): string | undefined =>
-      typeof document.error === 'string' ? document.error : undefined,
+    errorMessage: refusalMessage,
   },
 ] as const;
 

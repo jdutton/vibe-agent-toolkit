@@ -709,8 +709,8 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
 /**
  * A `--format json` run is a promise about a CHANNEL, not about the happy path.
  *
- * `handleCommandError` states the rule this suite enforces — "format is not
- * decoration ... a caller that has a --format option MUST pass it" — because a
+ * The rule this suite enforces — a caller that has a `--format` option MUST
+ * publish its failure in that format — exists because a
  * CI wrapper reading stdout gets a parse error on top of whatever went wrong,
  * and has to guess at the second failure to find the first. `ard emit` honoured
  * it on the success path alone, and dropped it on every EXPECTED failure it
@@ -722,8 +722,8 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
  * prompted it, which would pin the instance.
  *
  * ⚠️ The third case was written as a CONTROL — an arm expected to pass already,
- * because it exits 2 and exit 2 was believed to route through
- * `handleCommandError`, which honours the format. It failed with the other two.
+ * because it exits 2 and exit 2 was believed to route through the
+ * last-resort failure handler, which honoured the format. It failed with the other two.
  * Both `ArdConfigMissingError` codes leave through one inline `return`, so the
  * "unexpected failure" handler was never on this path at all and the defect was
  * a third wider than the reasoning that found it. The arm stays, now as a case
@@ -749,8 +749,8 @@ describe('ardEmitCommand — every exit path honours --format json', () => {
       status: 'findings',
     },
     {
-      // The control: this path already routes through `handleCommandError`,
-      // which takes the format and honours it.
+      // Once the control: this path was believed to reach the format-honouring
+      // failure handler. It now ends through the writer's refusal.
       path: 'no config file is found at all',
       root: (): string => {
         const root = projectWith(workDir, 'json-no-config', CONFIG_YAML_WITHOUT_ARD);

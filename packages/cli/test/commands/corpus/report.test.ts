@@ -4,7 +4,8 @@ import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
-import { writeRunReport, type RunReport, type PluginRow } from '../../../src/commands/corpus/report.js';
+import { writeRunOutput, writeRunReport, type RunReport, type PluginRow } from '../../../src/commands/corpus/report.js';
+import { refusalCodeOf } from '../../../src/utils/command-refusal.js';
 
 const FROZEN_TIMESTAMP = '2026-05-01T18:34:56Z';
 const SUMMARY_FILE = 'summary.yaml';
@@ -146,5 +147,39 @@ describe('writeRunReport', () => {
     const segments = runDir.split('/');
     const last = segments.at(-1) ?? '';
     expect(last).toMatch(/^\d{4}-\d{2}-\d{2}-[a-f0-9]{8}$/);
+  });
+});
+
+/** What `write` threw once `writeRunOutput` had classified it. */
+function thrownBy(write: () => void): unknown {
+  try {
+    writeRunOutput('out/summary.yaml', write);
+  } catch (error) {
+    return error;
+  }
+  throw new Error('writeRunOutput did not throw');
+}
+
+/** An OS error as Node shapes it: the `code` is the contract. */
+const errno = (code: string): Error => Object.assign(new Error(`${code}: refused`), { code });
+
+describe('writeRunOutput', () => {
+
+  // A full disk and a failing device under --out are the run not finishing, never VAT's defect.
+  it.each(['ENOSPC', 'EIO', 'EACCES', 'EROFS', 'EDQUOT'])('refuses %s as RUN_INCOMPLETE, naming what it was writing', (code) => {
+    const error = thrownBy(() => {
+      throw errno(code);
+    });
+
+    expect(refusalCodeOf(error)).toBe('RUN_INCOMPLETE');
+    expect((error as Error).message).toContain('Could not write out/summary.yaml');
+  });
+
+  it('lets a non-errno throw through untouched — a defect is not the environment\'s', () => {
+    const defect = new TypeError('undefined is not a function');
+
+    expect(thrownBy(() => {
+      throw defect;
+    })).toBe(defect);
   });
 });

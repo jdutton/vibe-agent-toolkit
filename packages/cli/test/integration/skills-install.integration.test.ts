@@ -1,11 +1,40 @@
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 
+import { ExitCode, type RefusalCode } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import yaml from 'yaml';
 
-import { installCommand } from '../../src/commands/skills/install.js';
-import { captureStdout } from '../helpers/stdout-capture.js';
+import { SKILLS_INSTALL_REPORT_SCHEMA, type SkillsInstallReport } from '../../src/commands/skills/install-schema.js';
+import { installCommand, type InstallCommandOptions } from '../../src/commands/skills/install.js';
+import { captureCommand } from '../helpers/stdout-capture.js';
+
+/** Run the install lane: the report it published (validated against its registry schema) and the code it ended on. */
+async function runInstall(
+  source: string,
+  options: InstallCommandOptions,
+): Promise<{ report: SkillsInstallReport; exited: number | undefined; stdout: string; stderr: string }> {
+  const captured = await captureCommand(() => installCommand(source, options));
+  return { ...captured, report: SKILLS_INSTALL_REPORT_SCHEMA.parse(yaml.parse(captured.stdout)) };
+}
+
+/** A completed install at exit 0. */
+async function install(source: string, options: InstallCommandOptions): Promise<SkillsInstallReport> {
+  const { report, exited, stderr } = await runInstall(source, options);
+  expect(exited, stderr).toBe(ExitCode.OK);
+  expect(report.status).toBe('ok');
+  return report;
+}
+
+/** A refusal: exit 2, the refusal code, and a message matching `message`. */
+async function expectRefusal(source: string, options: InstallCommandOptions, code: RefusalCode, message: RegExp): Promise<void> {
+  const { report, exited } = await runInstall(source, options);
+  expect(exited).toBe(ExitCode.ERROR);
+  expect(report.error?.code).toBe(code);
+  expect(report.error?.message).toMatch(message);
+}
 
 /**
  * Create a skill directory whose leaf name and frontmatter `name` differ.
@@ -61,7 +90,7 @@ async function setupInstalledSkill(
   const skillSrc = createSkillDir(tempDir, 'dup-skill', 'First.');
   const projectDir = safePath.join(tempDir, 'project');
   mkdirSyncReal(projectDir, { recursive: true });
-  await installCommand(skillSrc, { target: 'claude', scope: 'project', cwd: projectDir });
+  await install(skillSrc, { target: 'claude', scope: 'project', cwd: projectDir });
   return { skillSrc, projectDir };
 }
 
@@ -81,7 +110,7 @@ describe('vat skills install — local directory source', () => {
     const projectDir = safePath.join(tempDir, 'project');
     mkdirSyncReal(projectDir, { recursive: true });
 
-    await installCommand(skillSrc, {
+    await install(skillSrc, {
       target: 'claude',
       scope: 'project',
       cwd: projectDir,
@@ -93,7 +122,7 @@ describe('vat skills install — local directory source', () => {
     expect(content).toContain('name: hello-skill');
   });
 
-  it('fails pre-verification when SKILL.md is missing required frontmatter', async () => {
+  it('publishes a skill that fails pre-verification as its error findings, exit 1, nothing installed', async () => {
     const skillSrc = safePath.join(tempDir, 'broken-skill');
     mkdirSyncReal(skillSrc, { recursive: true });
     writeFileSync(safePath.join(skillSrc, 'SKILL.md'), '# broken\n\nNo frontmatter.\n', 'utf-8');
@@ -101,9 +130,12 @@ describe('vat skills install — local directory source', () => {
     const projectDir = safePath.join(tempDir, 'project');
     mkdirSyncReal(projectDir, { recursive: true });
 
-    await expect(
-      installCommand(skillSrc, { target: 'claude', scope: 'project', cwd: projectDir }),
-    ).rejects.toThrow(/validation failed/i);
+    const { report, exited } = await runInstall(skillSrc, { target: 'claude', scope: 'project', cwd: projectDir });
+
+    expect(exited).toBe(ExitCode.FINDINGS);
+    expect(report.status).toBe('findings');
+    expect(report.summary.errors).toBeGreaterThan(0);
+    expect(report.data?.skills).toStrictEqual([]);
 
     expect(existsSync(safePath.join(projectDir, '.claude/skills/broken-skill'))).toBe(false);
   });
@@ -111,9 +143,7 @@ describe('vat skills install — local directory source', () => {
   it('refuses to overwrite an existing skill without --force', async () => {
     const { skillSrc, projectDir } = await setupInstalledSkill(tempDir);
 
-    await expect(
-      installCommand(skillSrc, { target: 'claude', scope: 'project', cwd: projectDir }),
-    ).rejects.toThrow(/already installed/i);
+    await expectRefusal(skillSrc, { target: 'claude', scope: 'project', cwd: projectDir }, 'USAGE_INVALID', /already installed/i);
   });
 
   it('overwrites with --force', async () => {
@@ -125,7 +155,7 @@ describe('vat skills install — local directory source', () => {
       'utf-8',
     );
 
-    await installCommand(skillSrc, {
+    await install(skillSrc, {
       target: 'claude',
       scope: 'project',
       cwd: projectDir,
@@ -144,7 +174,7 @@ describe('vat skills install — local directory source', () => {
     const projectDir = safePath.join(tempDir, 'project');
     mkdirSyncReal(projectDir, { recursive: true });
 
-    await installCommand(skillSrc, {
+    await install(skillSrc, {
       target: 'claude',
       scope: 'project',
       cwd: projectDir,
@@ -152,6 +182,19 @@ describe('vat skills install — local directory source', () => {
     });
 
     expect(existsSync(safePath.join(projectDir, '.claude/skills/preview-skill'))).toBe(false);
+  });
+
+  it('install --dry-run publishes dryRun: true', async () => {
+    const { skillSrc, projectDir } = await setupInstalledSkill(tempDir);
+
+    const report = await install(skillSrc, { target: 'claude', scope: 'project', cwd: projectDir, dryRun: true });
+
+    expect(report.examined).toBe(1);
+    expect(report.data).toMatchObject({ dryRun: true, target: 'claude', scope: 'project' });
+    // The plan says the skill is already there — a real run would need --force.
+    expect(report.data?.skills).toStrictEqual([
+      { name: 'dup-skill', installPath: expect.stringMatching(/\.claude\/skills\/dup-skill$/), alreadyInstalled: true },
+    ]);
   });
 
   it('installs from a local ZIP file', async () => {
@@ -166,7 +209,7 @@ describe('vat skills install — local directory source', () => {
     const projectDir = safePath.join(tempDir, 'project');
     mkdirSyncReal(projectDir, { recursive: true });
 
-    await installCommand(zipPath, {
+    await install(zipPath, {
       target: 'claude',
       scope: 'project',
       cwd: projectDir,
@@ -196,7 +239,7 @@ describe('vat skills install — local directory source', () => {
     const projectDir = safePath.join(tempDir, 'project');
     mkdirSyncReal(projectDir, { recursive: true });
 
-    await installCommand(tarballPath, {
+    await install(tarballPath, {
       target: 'claude',
       scope: 'project',
       cwd: projectDir,
@@ -210,20 +253,11 @@ describe('vat skills install — local directory source', () => {
     const projectDir = safePath.join(tempDir, 'project');
     mkdirSyncReal(projectDir, { recursive: true });
 
-    const captured: string[] = [];
-    const restore = captureStdout(captured);
-
-    try {
-      await installCommand(skillSrc, {
-        target: 'claude',
-        scope: 'project',
-        cwd: projectDir,
-      });
-    } finally {
-      restore();
-    }
-
-    const output = captured.join('');
+    const { stdout: output } = await runInstall(skillSrc, {
+      target: 'claude',
+      scope: 'project',
+      cwd: projectDir,
+    });
     const backslashMatches = output.match(/\\/g);
     expect(backslashMatches).toBeNull();
     expect(output).toContain('slash-skill');
@@ -232,7 +266,7 @@ describe('vat skills install — local directory source', () => {
   it('discovers multiple skills from a dist/skills/ directory', async () => {
     const { distSkills, projectDir } = createMultiSkillProject(tempDir, 'multi-src');
 
-    await installCommand(distSkills, {
+    await install(distSkills, {
       target: 'claude',
       scope: 'project',
       cwd: projectDir,
@@ -254,13 +288,9 @@ describe('vat skills install — local directory source', () => {
     const projectDir = safePath.join(tempDir, 'project');
     mkdirSyncReal(projectDir, { recursive: true });
 
-    await expect(
-      installCommand(distSkills, {
-        target: 'claude',
-        scope: 'project',
-        cwd: projectDir,
-      }),
-    ).rejects.toThrow();
+    const { report, exited } = await runInstall(distSkills, { target: 'claude', scope: 'project', cwd: projectDir });
+    expect(exited).toBe(ExitCode.FINDINGS);
+    expect(report.examined).toBe(2);
 
     // Neither skill should be installed
     expect(existsSync(safePath.join(projectDir, '.claude/skills/good-skill'))).toBe(false);
@@ -270,14 +300,12 @@ describe('vat skills install — local directory source', () => {
   it('rejects --name when multiple skills are discovered', async () => {
     const { distSkills, projectDir } = createMultiSkillProject(tempDir, 'multi-name-src');
 
-    await expect(
-      installCommand(distSkills, {
-        target: 'claude',
-        scope: 'project',
-        cwd: projectDir,
-        name: 'renamed',
-      }),
-    ).rejects.toThrow(/--name.*single-skill/);
+    await expectRefusal(
+      distSkills,
+      { target: 'claude', scope: 'project', cwd: projectDir, name: 'renamed' },
+      'USAGE_INVALID',
+      /--name.*single-skill/,
+    );
   });
 
   it('rejects --name with path traversal characters', async () => {
@@ -285,14 +313,12 @@ describe('vat skills install — local directory source', () => {
     const projectDir = safePath.join(tempDir, 'project');
     mkdirSyncReal(projectDir, { recursive: true });
 
-    await expect(
-      installCommand(skillSrc, {
-        target: 'claude',
-        scope: 'project',
-        cwd: projectDir,
-        name: '../../etc',
-      }),
-    ).rejects.toThrow(/Invalid skill name "\.\.\/\.\.\/etc" \(--name\)/);
+    await expectRefusal(
+      skillSrc,
+      { target: 'claude', scope: 'project', cwd: projectDir, name: '../../etc' },
+      'USAGE_INVALID',
+      /Invalid skill name "\.\.\/\.\.\/etc" \(--name\)/,
+    );
   });
 
   it('rejects --name containing forward slash', async () => {
@@ -300,14 +326,81 @@ describe('vat skills install — local directory source', () => {
     const projectDir = safePath.join(tempDir, 'project');
     mkdirSyncReal(projectDir, { recursive: true });
 
-    await expect(
-      installCommand(skillSrc, {
-        target: 'claude',
-        scope: 'project',
-        cwd: projectDir,
-        name: 'foo/bar',
-      }),
-    ).rejects.toThrow(/Invalid skill name "foo\/bar" \(--name\)/);
+    await expectRefusal(
+      skillSrc,
+      { target: 'claude', scope: 'project', cwd: projectDir, name: 'foo/bar' },
+      'USAGE_INVALID',
+      /Invalid skill name "foo\/bar" \(--name\)/,
+    );
+  });
+});
+
+/**
+ * The refusals coded where they are raised, each observed in the published
+ * document: an archive the reader refuses is the input's (`INPUT_UNREADABLE`),
+ * an archive that is not a skill package is the invocation's (`USAGE_INVALID`),
+ * and a copy that fails partway is `RUN_INCOMPLETE` with the finished work.
+ */
+describe('vat skills install — refusals coded at their cause', () => {
+  let tempDir: string;
+  let projectDir: string;
+  const at = (): InstallCommandOptions => ({ target: 'claude', scope: 'project', cwd: projectDir });
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-skills-install-refusal-'));
+    projectDir = safePath.join(tempDir, 'project');
+    mkdirSyncReal(projectDir, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('refuses a ZIP the reader cannot read as INPUT_UNREADABLE', async () => {
+    const zipPath = safePath.join(tempDir, 'corrupt.zip');
+    writeFileSync(zipPath, 'not a zip archive', 'utf-8');
+
+    await expectRefusal(zipPath, at(), 'INPUT_UNREADABLE', /ZIP cannot be read/);
+  });
+
+  it('refuses a tarball the reader cannot read as INPUT_UNREADABLE', async () => {
+    const tarballPath = safePath.join(tempDir, 'corrupt.tgz');
+    writeFileSync(tarballPath, 'not a gzip stream', 'utf-8');
+
+    await expectRefusal(tarballPath, at(), 'INPUT_UNREADABLE', /Tarball cannot be read/);
+  });
+
+  it('refuses a tarball with no package/ directory as USAGE_INVALID', async () => {
+    const staging = safePath.join(tempDir, 'staging');
+    createSkillDir(staging, 'loose-skill', 'Not packed by npm.');
+    const tarballPath = safePath.join(tempDir, 'loose.tgz');
+    const tarModule = await import('tar');
+    await tarModule.create({ file: tarballPath, cwd: staging, gzip: true }, ['loose-skill']);
+
+    await expectRefusal(tarballPath, at(), 'USAGE_INVALID', /does not contain a package\/ directory/);
+  });
+
+  // A file the copy cannot read stops the batch after the first skill landed:
+  // the refusal publishes that skill, and the validation warnings it had.
+  it.skipIf(CANNOT_DENY_READS)('a copy that fails partway is RUN_INCOMPLETE, publishing the installed skill and its findings', async () => {
+    const source = safePath.join(tempDir, 'batch');
+    // "This skill…" opens the description with meta-filler: a warning, not an error.
+    createSkillDir(source, 'a-first', 'This skill says hello to the user.');
+    const second = createSkillDir(source, 'b-second', 'Says goodbye to the user.');
+    const unreadable = safePath.join(second, 'data.txt');
+    writeFileSync(unreadable, 'secret', 'utf-8');
+    chmodSync(unreadable, 0o000);
+    try {
+      const { report, exited } = await runInstall(source, at());
+
+      expect(exited).toBe(ExitCode.ERROR);
+      expect(report.error?.code).toBe('RUN_INCOMPLETE');
+      expect(report.examined).toBe(2);
+      expect(report.data?.skills.map((skill) => skill.name)).toStrictEqual(['a-first']);
+      expect(report.findings.map((finding) => finding.code)).toContain('SKILL_DESCRIPTION_FILLER_OPENER');
+    } finally {
+      chmodSync(unreadable, 0o644);
+    }
   });
 });
 
@@ -334,7 +427,7 @@ describe('vat skills install — installed name comes from the skill, not the pa
     const projectDir = safePath.join(tempDir, 'project');
     mkdirSyncReal(projectDir, { recursive: true });
 
-    await installCommand(skillSrc, { target: 'claude', scope: 'project', cwd: projectDir });
+    await install(skillSrc, { target: 'claude', scope: 'project', cwd: projectDir });
 
     expect(existsSync(safePath.join(projectDir, '.claude/skills/pdf-processor/SKILL.md'))).toBe(
       true,
@@ -356,7 +449,7 @@ describe('vat skills install — installed name comes from the skill, not the pa
     const projectDir = safePath.join(tempDir, 'project');
     mkdirSyncReal(projectDir, { recursive: true });
 
-    await installCommand(zipPath, { target: 'claude', scope: 'project', cwd: projectDir });
+    await install(zipPath, { target: 'claude', scope: 'project', cwd: projectDir });
 
     const installedDirs = readdirSync(safePath.join(projectDir, '.claude/skills'));
     expect(installedDirs).toEqual(['root-zip-skill']);
@@ -371,9 +464,7 @@ describe('vat skills install — installed name comes from the skill, not the pa
     const projectDir = safePath.join(tempDir, 'project');
     mkdirSyncReal(projectDir, { recursive: true });
 
-    await expect(
-      installCommand(distSkills, { target: 'claude', scope: 'project', cwd: projectDir }),
-    ).rejects.toThrow(/shared-name/);
+    await expectRefusal(distSkills, { target: 'claude', scope: 'project', cwd: projectDir }, 'USAGE_INVALID', /shared-name/);
 
     expect(existsSync(safePath.join(projectDir, '.claude/skills/shared-name'))).toBe(false);
   });

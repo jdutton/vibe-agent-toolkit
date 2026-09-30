@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { toForwardSlash } from '@vibe-agent-toolkit/utils/path';
 import { vi, expect } from 'vitest';
 
-import type { DoctorCheckResult, DoctorOutcome } from '../../src/commands/doctor.js';
+import type { DoctorCheckResult, DoctorOutcome } from '../../src/commands/doctor-schema.js';
 
 // ============================================================================
 // Type Definitions
@@ -65,7 +65,7 @@ export interface DoctorConfigMockConfig {
 /**
  * Doctor result with checks array
  *
- * `DoctorCheckResult` / `DoctorOutcome` are imported from the command itself —
+ * `DoctorCheckResult` / `DoctorOutcome` are imported from the published schema —
  * a second copy here would let the two drift, which is how an outcome the
  * command can emit ends up with no assertion helper that can see it.
  */

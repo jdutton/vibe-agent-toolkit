@@ -466,8 +466,8 @@ data:
   nothing was validated), 2 when the run could not finish
 - `--collection` scopes the whole report — findings, `examined`, exit code — to that collection
 - Defaults to project root if no path provided
-- CI/CD gate; also a phase of `vat validate` and `vat verify`, which fold the same published
-  document (`publishedReport`) under `phases[].report`
+- CI/CD gate; also a phase of `vat validate` and `vat verify`, which fold its report into their
+  own (see "The orchestrators" below)
 
 **Error output:**
 ```yaml
@@ -771,21 +771,26 @@ change's call to make.
   DERIVED from the document's `status` and `summary`, never chosen beside it. Choosing it by hand
   is how one outcome shipped with different codes in different verbs. Under `packages/cli/src/`
   the rule's `derived` option refuses naming `ExitCode.FINDINGS` at all and any exit that is not
-  `OK`, `ERROR` or a derivation; a child's code is forwarded through `exitCodeOfChild`. The files
-  not yet migrated are the shrink-only `EXIT_CODE_DERIVATION_RATCHET` in `eslint.config.js`, and
-  `test/system/exit-code-matrix.system.test.ts` proves the derivation by running every envelope verb.
+  `OK`, `ERROR` or a derivation; a child's code is forwarded through `exitCodeOfChild`. No file is
+  exempt, and `test/system/exit-code-matrix.system.test.ts` proves the derivation by running every
+  envelope verb and asserting every external adapter outcome.
 - Always flush stdout before writing to stderr
 - Test format errors must include file:line:column
 
-A report verb ends its failures through `endWithRefusal` (next section); the legacy verbs still end
-through `handleCommandError` until their migration task moves them onto the writer.
+Every verb ends its failures through the writer (`endWithRefusal`, next section); a protocol leaf
+(`agent run`, `mcp serve`), whose stdout is not a document, writes its failure to stderr and ends on
+`ERROR`. Build-time scripts that are not `vat` verbs (`validate-help-files.ts`) throw, and the build
+runner exits on the uncaught throw.
 
 ## The report contract
 
 - **One writer.** Under `packages/cli/src/commands/`, stdout is written by
   `utils/document-writer.ts` and nothing else — `local/no-stdout-outside-writer` refuses
   `process.stdout.write`, the stdout `console` methods and the stdout helpers (called or handed on),
-  with a shrink-only `allowFiles` ratchet for the files not yet migrated.
+  with one `allowFiles` entry, `commands/agent/run.ts` (the agent's reply is its stdout). A
+  supervised child's document is read with `readForwardedDocument` (parsed and validated; one that
+  is not the verb's document is the child's death, not a forward) and ends through
+  `endWithForwardedDocument`, on the code that document derives.
 - **One registry.** `src/report-schemas.ts` `PUBLISHED_SHAPES` lists every published shape — report
   documents, external payloads, stdout and file artifacts, exported library result types, and the
   JSON Schemas describing adopter input — and `test/published-shapes.test.ts` asserts each claim
@@ -806,10 +811,24 @@ through `handleCommandError` until their migration task moves them onto the writ
   exits 2. `refusalCodeOf(error)` picks the code: a `CommandRefusalError`'s own (`USAGE_INVALID` for the
   invocation's mistake), a library error's by its `code`, and `INTERNAL_ERROR` only for what nothing
   anticipated.
-- **A phase folds the published document.** A verb that is also a phase of `vat validate` /
-  `vat verify` hands back `publishedReport(verb, report)` — the same run-integrity pass and schema
-  validation the writer applies — or, on a refusal, `refusalReport(code, error, gate, finished)`, so
-  the orchestrator folds exactly what the verb would have written.
+- **The orchestrators.** `vat build`, `vat validate` and `vat verify` publish ONE report
+  (`orchestrator` in the registry, `schemas/orchestrator.json`). Each phase function
+  (`run…Phase`) returns `{ report }` — its own command's report BEFORE the writer's run-integrity
+  pass, or `refusalReport(code, error, gate, finished)` on a refusal — and the command lane is
+  `endWithReport(verb, (await run()).report, format)`. `orchestratorReport` (`commands/phase-utils.ts`)
+  folds the phases: findings flat with `location` unchanged, `examined` the sum, and
+  `data.phases[]` one `{ name, status, examined, summary, error?, data }` per phase. The
+  orchestrator's schema holds a phase's `data` as `unknown`; what keeps it honest is that every
+  `Phase` names the schema its report is held to (`schema`, required) and `runPhase` parses the
+  report with it before the fold — a delegated phase names its verb's registered
+  `<VERB>_REPORT_SCHEMA`, an in-process one `DATALESS_PHASE_REPORT_SCHEMA` or
+  `PACKAGED_CONTENT_REPORT_SCHEMA`, and a report its schema rejects is that phase's
+  `INTERNAL_ERROR`. Run integrity
+  is applied ONCE, to the sum, so a project lacking one phase's config does not fail on the phase
+  that had nothing to examine. A phase that did not finish makes the run `error` /
+  `RUN_INCOMPLETE` with the finished phases still in `data.phases`; a refusal of the run itself (a
+  path argument, the retired `--only`, no project root) is the error branch with every phase that
+  already finished. There is no second status vocabulary.
 - **Formats.** `yaml` and `json` render the document; `text` renders one
   `location:line:column: severity: message [code]` line per finding and a status line with the
   counts and the denominator — or the entry's own `renderText` when its human rendering is a

@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 
 import type { MarketplaceInventory, PluginInventory } from '@vibe-agent-toolkit/agent-skills';
@@ -10,6 +9,7 @@ import { buildClaudeUserPaths, getClaudeUserPaths } from '../paths/claude-paths.
 import { extractClaudeMarketplaceInventory } from './extract-marketplace.js';
 import { extractClaudePluginInventory } from './extract-plugin.js';
 import type { GitTrackerSource } from './extract-skill.js';
+import { presentOrRecord, recordedFailure } from './recorded-failure.js';
 import { ClaudeInstallInventory } from './types.js';
 
 type ParseErrors = ClaudeInstallInventory['parseErrors'];
@@ -85,7 +85,7 @@ async function collectMarketplaces(
 	parseErrors: ParseErrors,
 	gitTrackerSource: GitTrackerSource,
 ): Promise<void> {
-	if (!existsSync(marketplacesDir)) return;
+	if (!(await presentOrRecord(marketplacesDir, parseErrors))) return;
 	try {
 		const entries = await readdir(marketplacesDir, { withFileTypes: true });
 		for (const entry of entries) {
@@ -95,7 +95,7 @@ async function collectMarketplaces(
 			marketplaces.push(await extractClaudeMarketplaceInventory(mpPath, { gitTrackerSource }));
 		}
 	} catch (e) {
-		parseErrors.push({ path: marketplacesDir, message: (e as Error).message });
+		parseErrors.push(recordedFailure(marketplacesDir, (e as Error).message, e));
 	}
 }
 
@@ -111,7 +111,7 @@ async function subdirectoriesOrRecord(dir: string, parseErrors: ParseErrors): Pr
 			.filter(e => direntKindFollowingSync(dir, e) === 'directory')
 			.map(e => safePath.join(dir, e.name));
 	} catch (e) {
-		parseErrors.push({ path: dir, message: (e as Error).message });
+		parseErrors.push(recordedFailure(dir, (e as Error).message, e));
 		return [];
 	}
 }
@@ -122,7 +122,7 @@ async function collectCachedPlugins(
 	parseErrors: ParseErrors,
 	gitTrackerSource: GitTrackerSource,
 ): Promise<void> {
-	if (!existsSync(cacheDir)) return;
+	if (!(await presentOrRecord(cacheDir, parseErrors))) return;
 
 	for (const mpDir of await subdirectoriesOrRecord(cacheDir, parseErrors)) {
 		await collectPluginsInMarketplaceCache(mpDir, plugins, parseErrors, gitTrackerSource);
@@ -163,7 +163,7 @@ async function collectPluginsInMarketplaceCache(
 				// guard makes this a no-op and the win is smaller than the numbers above imply.
 				plugins.push(await extractClaudePluginInventory(versionDir, { gitTrackerSource }));
 			} catch (e) {
-				parseErrors.push({ path: versionDir, message: (e as Error).message });
+				parseErrors.push(recordedFailure(versionDir, (e as Error).message, e));
 			}
 		}
 	}

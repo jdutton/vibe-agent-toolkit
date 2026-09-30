@@ -66,7 +66,7 @@ const RATCHETS: readonly Ratchet[] = [
     rule: 'local/no-stdout-outside-writer',
     option: 'allowFiles',
     probeFile: 'packages/cli/src/commands/okf/validate.ts',
-    constant: 'STDOUT_OUTSIDE_WRITER_RATCHET',
+    constant: 'STDOUT_OUTSIDE_WRITER_ALLOW',
   },
 ];
 

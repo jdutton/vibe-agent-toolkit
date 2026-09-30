@@ -52,7 +52,7 @@ import type { PopulationCache, ProjectionStore } from '@vibe-agent-toolkit/resou
 import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
 import { freshGitTreeSnapshot, gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
-import { isModuleMissing, reportMissingBackend, type OptionalBackend } from './optional-backend.js';
+import { isModuleMissing, missingBackendError, type OptionalBackend } from './optional-backend.js';
 import { installSqliteWarningFilter } from './sqlite-experimental-warning.js';
 
 /**
@@ -277,7 +277,7 @@ export async function openPopulationCache(options: {
 }
 
 /**
- * Load the selected backend, or report it as uninstalled and exit.
+ * Load the selected backend, or throw its `BACKEND_UNAVAILABLE` refusal when it is uninstalled.
  *
  * 🪤 Only `ERR_MODULE_NOT_FOUND` means "not installed". A Node older than
  * 22.13.0 has no `node:sqlite` at all and fails with a *different* code, which
@@ -334,7 +334,7 @@ export async function openCompileProbe(): Promise<ProjectionSqlite.ProjectionCom
 }
 
 /**
- * Load the selected backend module, or report it as uninstalled and exit.
+ * Load the selected backend module, or throw its `BACKEND_UNAVAILABLE` refusal when it is uninstalled.
  *
  * @returns The backend's module namespace
  */
@@ -355,7 +355,8 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
     const floor = nodeSqliteFloorFailure(error);
     if (floor !== undefined) throw floor;
     if (!isModuleMissing(error)) throw error;
-    reportMissingBackend(PROJECTION_STORE_BACKEND);
+    // Thrown into the verb's own catch, which publishes BACKEND_UNAVAILABLE in its shape.
+    throw missingBackendError(PROJECTION_STORE_BACKEND);
   } finally {
     restoreWarnings();
   }

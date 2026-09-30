@@ -1,7 +1,9 @@
 /**
- * Integration tests for checkFilesConfigDests — tree-copy distribution awareness.
+ * Integration tests for `vat verify`'s `files-config-dests` phase — tree-copy
+ * distribution awareness — driven through `runFilesConfigDestsPhase`, the
+ * function the command itself runs, and read off the report it publishes.
  *
- * Regression coverage for rc.11 Bug 1: `checkFilesConfigDests` was hard-coded to
+ * Regression coverage for rc.11 Bug 1: the dest check was hard-coded to
  * check only `dist/skills/<name>/` (pool dir). Tree-copied skills land in the plugin
  * tree instead (`dist/.claude/plugins/marketplaces/<mp>/plugins/<plugin>/skills/<name>/`).
  * The old code reported false "missing dest" errors for tree-copy skills even when the
@@ -15,8 +17,8 @@
 import { writeFileSync } from 'node:fs';
 
 import { indexPluginLocalSkills, type PluginLocalSkillIndex } from '@vibe-agent-toolkit/agent-skills';
-import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import type { Finding, ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -25,12 +27,12 @@ import {
   type PluginLocalSkillNames,
 } from '../../src/commands/skills/skill-discovery.js';
 import {
-  checkFilesConfigDests,
   checkPackagedAgentInstructionFiles,
-  type FilesDestCheckResult,
+  runFilesConfigDestsPhase,
 } from '../../src/commands/verify.js';
 import { loadConfig } from '../../src/utils/config-loader.js';
 import { createTempDirTracker } from '../system/test-common.js';
+import { silentLogger } from '../test-doubles.js';
 
 // ---------------------------------------------------------------------------
 // The two phases under test take the run's DISCOVERED skills, so the tests wire
@@ -51,8 +53,19 @@ async function pluginLocalIn(cwd: string): Promise<[PluginLocalSkillIndex, Plugi
   return [index, await readPluginLocalSkillNames(index)];
 }
 
-const filesDestsIn = async (cwd: string): Promise<FilesDestCheckResult[]> =>
-  checkFilesConfigDests(cwd, await discoveredIn(cwd), ...(await pluginLocalIn(cwd)));
+/** The `files-config-dests` phase's report over `cwd`: how many bundles it checked, and its findings. */
+async function filesDestsIn(cwd: string): Promise<{ examined: number; findings: Finding[] }> {
+  const { report } = runFilesConfigDestsPhase(cwd, await discoveredIn(cwd), ...(await pluginLocalIn(cwd)), silentLogger);
+  return { examined: report.examined, findings: report.findings };
+}
+
+/** Where a finding for `dest` missing from the bundle at `outputDir` is located: project-relative. */
+const destLocation = (cwd: string, outputDir: string, dest = DEST_FILE): string =>
+  toForwardSlash(safePath.relative(cwd, safePath.join(outputDir, dest)));
+
+/** The locations of the phase's findings over `cwd` — one per missing dest. */
+const missingIn = async (cwd: string): Promise<string[]> =>
+  (await filesDestsIn(cwd)).findings.map((finding) => String(finding.location));
 
 const packagedCrawlIn = async (cwd: string): Promise<ReturnType<typeof checkPackagedAgentInstructionFiles>> =>
   checkPackagedAgentInstructionFiles(cwd, await discoveredIn(cwd), ...(await pluginLocalIn(cwd)));
@@ -103,7 +116,7 @@ interface FixtureOptions {
 }
 
 interface FixtureResult {
-  /** Root of the temp dir (used as `cwd` for checkFilesConfigDests). */
+  /** Root of the temp dir (the project root the phase runs over). */
   tempDir: string;
   /** Absolute path to the plugin-tree skill output dir (may or may not exist). */
   pluginOutputSkillDir: string;
@@ -230,7 +243,7 @@ ${claudeSection}`;
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('checkFilesConfigDests (tree-copy distribution awareness)', () => {
+describe('the files-config-dests phase (tree-copy distribution awareness)', () => {
   afterEach(() => {
     cleanupTempDirs();
   });
@@ -255,14 +268,13 @@ describe('checkFilesConfigDests (tree-copy distribution awareness)', () => {
         createDestInPool: false,
       });
 
-      const results = await filesDestsIn(tempDir);
-
-      expect(results).toHaveLength(0);
+      // One bundle checked — the plugin-tree copy — and nothing missing.
+      expect(await filesDestsIn(tempDir)).toEqual({ examined: 1, findings: [] });
     });
 
     it('(b) still flags genuinely absent dest in an existing plugin-tree dir', async () => {
       // True-positive: the plugin-tree dir exists but the dest file is NOT there.
-      const { tempDir } = setupFilesDestsFixture({
+      const { tempDir, pluginOutputSkillDir } = setupFilesDestsFixture({
         includeTreeCopyPlugin: true,
         createPluginSourceSkillDir: true,
         createPoolDir: false,
@@ -271,10 +283,18 @@ describe('checkFilesConfigDests (tree-copy distribution awareness)', () => {
         createDestInPool: false,
       });
 
-      const results = await filesDestsIn(tempDir);
-
-      expect(results).toHaveLength(1);
-      expect(results[0]?.missing).toContain(DEST_FILE);
+      // The whole finding: the code, at error (never overridable), located at
+      // the path the dest should be, relative to the project root.
+      expect(await filesDestsIn(tempDir)).toEqual({
+        examined: 1,
+        findings: [{
+          code: 'FILES_CONFIG_DEST_MISSING',
+          severity: 'error',
+          message: `Skill '${SKILL_NAME}' declares the files: dest '${DEST_FILE}', and the built output does not hold it.`,
+          location: destLocation(tempDir, pluginOutputSkillDir),
+          fix: 'Run `vat build` so the files: entry is applied, or correct the entry\'s dest in vibe-agent-toolkit.config.yaml.',
+        }],
+      });
     });
 
     it('does not report when neither pool dir nor plugin-tree dir exists (no candidate dirs)', async () => {
@@ -288,9 +308,9 @@ describe('checkFilesConfigDests (tree-copy distribution awareness)', () => {
         createDestInPool: false,
       });
 
-      const results = await filesDestsIn(tempDir);
-
-      expect(results).toHaveLength(0);
+      // Nothing built, so nothing checked: `examined` says so (the
+      // packaged-content phase names the unbuilt bundle).
+      expect(await filesDestsIn(tempDir)).toEqual({ examined: 0, findings: [] });
     });
   });
 
@@ -327,22 +347,20 @@ claude:
     );
     mkdirSyncReal(outputDir, { recursive: true });
 
-    const results = await filesDestsIn(tempDir);
-
-    expect(results.map((r) => [r.outputDir, r.missing])).toEqual([[outputDir, [DEST_FILE]]]);
+    expect(await missingIn(tempDir)).toEqual([destLocation(tempDir, outputDir)]);
   });
 
   describe('a plugin-tree copy\'s config is looked up exactly as the plugin build looks it up', () => {
     it('by declared name even when no include glob reaches the skill — the build still names it', async () => {
       const { tempDir, outputDir } = planted({ name: 'shipped', dir: 'shipped-dir', include: 'elsewhere/**/SKILL.md', configKey: 'shipped' });
 
-      expect((await filesDestsIn(tempDir)).map((r) => [r.outputDir, r.missing])).toEqual([[outputDir, [DEST_FILE]]]);
+      expect(await missingIn(tempDir)).toEqual([destLocation(tempDir, outputDir)]);
     });
 
     it('by directory when no key carries its declared name — the build applies that entry, so verify checks it', async () => {
       const { tempDir, outputDir } = planted({ name: 'foo', dir: 'bar', include: 'plugins/*/skills/**/SKILL.md', configKey: 'bar' });
 
-      expect((await filesDestsIn(tempDir)).map((r) => [r.outputDir, r.missing])).toEqual([[outputDir, [DEST_FILE]]]);
+      expect(await missingIn(tempDir)).toEqual([destLocation(tempDir, outputDir)]);
     });
   });
 
@@ -361,10 +379,10 @@ claude:
         createDestInPool: false,          // dest absent from existing pool dir
       });
 
-      const results = await filesDestsIn(tempDir);
+      const { examined, findings } = await filesDestsIn(tempDir);
 
-      expect(results).toHaveLength(1);
-      expect(results[0]?.missing).toContain(DEST_FILE);
+      expect(examined).toBe(1);
+      expect(findings.map((finding) => [finding.code, finding.severity])).toEqual([['FILES_CONFIG_DEST_MISSING', 'error']]);
     });
 
     it('does not report when pool dir exists and dest is present', async () => {
@@ -377,9 +395,7 @@ claude:
         createDestInPool: true,           // dest present
       });
 
-      const results = await filesDestsIn(tempDir);
-
-      expect(results).toHaveLength(0);
+      expect(await filesDestsIn(tempDir)).toEqual({ examined: 1, findings: [] });
     });
   });
 
@@ -387,8 +403,8 @@ claude:
   // Error reporting quality: outputDir names the actual directory
   // -------------------------------------------------------------------------
 
-  describe('error message quality', () => {
-    it('result.outputDir is the plugin-tree dir, not a hard-coded dist/skills/... path', async () => {
+  describe('where a finding points', () => {
+    it('at the plugin-tree dir, not a hard-coded dist/skills/... path', async () => {
       // Asserts that the error report names the real directory where the dest was expected.
       const { tempDir, pluginOutputSkillDir } = setupFilesDestsFixture({
         includeTreeCopyPlugin: true,
@@ -399,13 +415,10 @@ claude:
         createDestInPool: false,
       });
 
-      const results = await filesDestsIn(tempDir);
-
-      expect(results).toHaveLength(1);
-      expect(results[0]?.outputDir).toBe(pluginOutputSkillDir);
+      expect(await missingIn(tempDir)).toEqual([destLocation(tempDir, pluginOutputSkillDir)]);
     });
 
-    it('result.outputDir is the pool dir for a pool-model skill', async () => {
+    it('at the pool dir for a pool-model skill', async () => {
       const { tempDir, poolOutputSkillDir } = setupFilesDestsFixture({
         includeTreeCopyPlugin: false,
         createPluginSourceSkillDir: false,
@@ -415,10 +428,7 @@ claude:
         createDestInPool: false,          // dest absent → reported
       });
 
-      const results = await filesDestsIn(tempDir);
-
-      expect(results).toHaveLength(1);
-      expect(results[0]?.outputDir).toBe(poolOutputSkillDir);
+      expect(await missingIn(tempDir)).toEqual([destLocation(tempDir, poolOutputSkillDir)]);
     });
   });
 });
@@ -634,11 +644,26 @@ describe('in-process phases see skills the include globs discovered', () => {
     writeBundle(tempDir, CONFIGURED, []);
     writeBundle(tempDir, PLAIN, []);
 
-    const results = await filesDestsIn(tempDir);
+    const { examined } = await filesDestsIn(tempDir);
 
-    expect(results.map((r) => r.skillName).toSorted((a, b) => a.localeCompare(b)))
-      .toEqual([CONFIGURED, PLAIN]);
-    expect(results[0]?.missing).toEqual(['scripts/tool.mjs']);
+    expect(examined).toBe(2);
+    expect((await missingIn(tempDir)).toSorted((a, b) => a.localeCompare(b))).toEqual([
+      `dist/skills/${CONFIGURED}/scripts/tool.mjs`,
+      `dist/skills/${PLAIN}/scripts/tool.mjs`,
+    ]);
+  });
+
+  it('counts as examined only the built bundles that declare a files: dest', async () => {
+    // Both bundles are built; only `configured` declares a dest. The bundle with
+    // nothing to check is not "checked and clean" — counting it would inflate
+    // the denominator the orchestrator sums.
+    const tempDir = setupTwoSkillFixture(
+      `  config:\n    ${CONFIGURED}:\n      files:\n        - source: src/a.js\n          dest: a.js\n`,
+    );
+    writeBundle(tempDir, CONFIGURED, ['a.js']);
+    writeBundle(tempDir, PLAIN, []);
+
+    expect(await filesDestsIn(tempDir)).toEqual({ examined: 1, findings: [] });
   });
 
   it('still enumerates a skills.config key that discovery does not reach', async () => {
@@ -649,8 +674,6 @@ describe('in-process phases see skills the include globs discovered', () => {
     );
     writeBundle(tempDir, 'ghost', []);
 
-    const results = await filesDestsIn(tempDir);
-
-    expect(results.map((r) => r.skillName)).toEqual(['ghost']);
+    expect(await missingIn(tempDir)).toEqual(['dist/skills/ghost/a.js']);
   });
 });

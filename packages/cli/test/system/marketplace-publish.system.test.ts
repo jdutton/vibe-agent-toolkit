@@ -1,9 +1,13 @@
 import { spawnSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 
+import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
+import yaml from 'yaml';
+
+import { MARKETPLACE_PUBLISH_REPORT_SCHEMA, type MarketplacePublishReport } from '../../src/commands/claude/marketplace/publish-schema.js';
 
 import {
   createTempDirTracker,
@@ -122,14 +126,20 @@ async function setupAndDryRunPublish(
   return { tempDir, result };
 }
 
+/** The publish document, read through the published schema. */
+function reportOf(stdout: string): MarketplacePublishReport {
+  return MARKETPLACE_PUBLISH_REPORT_SCHEMA.parse(yaml.parse(stdout));
+}
+
 /**
  * Run dry-run publish against a project configured to fail, and assert the
- * failure shape. Pass `withBuildOutput: true` for tests that need build
- * artifacts to exist but still expect a later-stage failure.
+ * refusal: exit 2 and the refusal code, never INTERNAL_ERROR for the user's
+ * mistake. Pass `withBuildOutput: true` for tests that need build artifacts to
+ * exist but still expect a later-stage failure.
  */
 async function expectDryRunPublishFailure(
   createTempDir: () => string,
-  opts: { changelog: string; stderrContains: string; withBuildOutput?: boolean; expectedStatus?: number },
+  opts: { changelog: string; stderrContains: string; withBuildOutput?: boolean; code: RefusalCode },
 ): Promise<void> {
   const tempDir = createTempDir();
   writeProjectFiles(tempDir, opts.changelog);
@@ -138,7 +148,9 @@ async function expectDryRunPublishFailure(
   }
   initGitRepo(tempDir);
   const result = await executeCli(binPath, [...PUBLISH_ARGS, '--dry-run'], { cwd: tempDir });
-  expect(result.status).toBe(opts.expectedStatus ?? 2);
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
+  const report = reportOf(result.stdout);
+  expect(report.status === 'error' ? report.error.code : report.status).toBe(opts.code);
   expect(result.stderr).toContain(opts.stderrContains);
 }
 
@@ -153,7 +165,16 @@ describe('vat claude marketplace publish (system)', () => {
     const { result } = await setupAndDryRunPublish(createTempDir, '# Changelog\n\n## [Unreleased]\n\n- Added marketplace publish\n');
 
     expect(result.status, `Expected exit 0 but got ${String(result.status)}. stderr: ${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain('success');
+    const report = reportOf(result.stdout);
+    expect(report.status).toBe('ok');
+    expect(report.examined).toBe(1);
+    expect(report.status === 'error' ? undefined : report.data.published).toStrictEqual([{
+      marketplace: 'test-mp',
+      version: '0.4.2',
+      branch: 'test-branch',
+      files: ['.claude-plugin/marketplace.json', 'plugins/', 'CHANGELOG.md', 'README.md', 'LICENSE'],
+      dryRun: true,
+    }]);
 
     // Issue #110 regression guard: when the marketplace has exactly one plugin,
     // the label version is the plugin's version (0.4.2), NOT the project root
@@ -169,10 +190,12 @@ describe('vat claude marketplace publish (system)', () => {
     await expectDryRunPublishFailure(createTempDir, {
       changelog: '# Changelog\n\n## [Unreleased]\n\n- Changes\n',
       stderrContains: 'build output not found',
+      code: 'INPUT_UNREADABLE',
     });
   });
 
-  it('should fail when no publish config exists', async () => {
+  // Nothing declares `publish:`, so nothing was examined: a finding, exit 1 — not a green run.
+  it('should report RESOURCE_CHECK_BROKEN when no publish config exists', async () => {
     const tempDir = createTempDir();
 
     // Config without publish section
@@ -194,7 +217,24 @@ claude:
 
     const result = await executeCli(binPath, [...PUBLISH_ARGS, '--dry-run'], { cwd: tempDir });
 
-    expect(result.status).not.toBe(0);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+    const report = reportOf(result.stdout);
+    expect(report.status).toBe('findings');
+    expect(report.examined).toBe(0);
+    expect(report.findings.map((finding) => finding.code)).toStrictEqual(['RESOURCE_CHECK_BROKEN']);
+  });
+
+  it('refuses a --marketplace the config does not declare as USAGE_INVALID', async () => {
+    const tempDir = createTempDir();
+    writeProjectFiles(tempDir, '# Changelog\n\n## [Unreleased]\n\n- Changes\n');
+    initGitRepo(tempDir);
+
+    const result = await executeCli(binPath, [...PUBLISH_ARGS, '--dry-run', '--marketplace', 'nope'], { cwd: tempDir });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
+    const report = reportOf(result.stdout);
+    expect(report.status === 'error' ? report.error.code : report.status).toBe('USAGE_INVALID');
+    expect(result.stderr).toContain('declared: test-mp');
   });
 
   it('should preserve non-markdown files (e.g., .mjs scripts) through publish pipeline', async () => {
@@ -224,6 +264,7 @@ claude:
       changelog: '# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2025-01-01\n\n- Old change\n',
       stderrContains: 'empty [Unreleased]',
       withBuildOutput: true,
+      code: 'INPUT_UNREADABLE',
     });
   });
 });

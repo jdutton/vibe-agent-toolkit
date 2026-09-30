@@ -18,6 +18,8 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
+import { ORCHESTRATOR_REPORT_SCHEMA } from '../../src/commands/orchestrator-schema.js';
+
 import {
   createSkillMarkdown,
   createTempDirTracker,
@@ -28,30 +30,34 @@ import {
 
 const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 /** The per-severity counts block the verify YAML must carry beside its status. */
-const ISSUE_COUNTS_KEY = 'issueCounts:';
+const SUMMARY_KEY = 'summary:';
 
-/** One phase entry of a `vat verify` document. */
+/** One phase entry of a `vat verify` document's `data.phases`. */
 interface VerifyPhaseEntry {
-  name?: string;
-  status?: string;
+  name: string;
+  status: string;
+  summary: { errors: number; warnings: number; info: number };
 }
 
 /**
- * The status `vat verify` recorded for its in-process `consistency` phase.
+ * What `vat verify` recorded for its in-process `consistency` phase, read from
+ * the entry's own summary: `errors` when it found any, `warnings` when it found
+ * warnings and no error, `clean` otherwise.
  *
  * Throws when the phase is absent: a run that never reached `consistency` must
  * fail these tests loudly rather than compare `undefined` to `undefined`.
  */
-function consistencyStatus(stdout: string): string | undefined {
-  const doc = yaml.parseAllDocuments(stdout).find((d) => d.contents !== null);
-  const phases = (doc?.toJS() as { phases?: VerifyPhaseEntry[] } | undefined)?.phases ?? [];
+function consistencyStatus(stdout: string): 'errors' | 'warnings' | 'clean' {
+  const report = ORCHESTRATOR_REPORT_SCHEMA.parse(yaml.parse(stdout)) as { data: { phases: VerifyPhaseEntry[] } | null };
+  const phases = report.data?.phases ?? [];
   const phase = phases.find((p) => p.name === 'consistency');
   if (phase === undefined) {
     throw new Error(
       `No 'consistency' phase in the verify document. Phases: ${phases.map((p) => p.name).join(', ') || '(none)'}`,
     );
   }
-  return phase.status;
+  if (phase.summary.errors > 0) return 'errors';
+  return phase.summary.warnings > 0 ? 'warnings' : 'clean';
 }
 
 function setupConsistencyTestSuite() {
@@ -114,7 +120,7 @@ describe('vat verify consistency checks (system test)', () => {
     const tempDir = suite.setupTwoSkillsWithMarketplace(['skill-a', 'skill-b'], 'skills: "*"');
 
     const result = await suite.runVerify(tempDir);
-    expect(consistencyStatus(result.stdout)).toBe('success');
+    expect(consistencyStatus(result.stdout)).toBe('clean');
   });
 
   it('should error when published skill is missing from package.json vat.skills', async () => {
@@ -125,7 +131,7 @@ describe('vat verify consistency checks (system test)', () => {
     suite.writeSkillsOnlyConfig(tempDir);
 
     const result = await suite.runVerify(tempDir);
-    expect(consistencyStatus(result.stdout)).toBe('error');
+    expect(consistencyStatus(result.stdout)).toBe('errors');
     // The one place the process exit code is still asserted: this fixture
     // declares `skills:` and nothing else, so the aggregate can only be the
     // consistency verdict. It pins that a consistency error actually FAILS the
@@ -136,8 +142,8 @@ describe('vat verify consistency checks (system test)', () => {
     expect(result.stderr).toContain('publish: false');
     // ...and the archived YAML carries the finding and its distribution, not
     // just a phase status that stderr alone could explain.
-    expect(result.stdout).toContain('status: error');
-    expect(result.stdout).toContain(ISSUE_COUNTS_KEY);
+    expect(result.stdout).toContain('status: findings');
+    expect(result.stdout).toContain(SUMMARY_KEY);
     expect(result.stdout).toMatch(/errors: [1-9]/);
     expect(result.stdout).toContain('PUBLISHED_SKILL_NOT_IN_PACKAGE_JSON');
   });
@@ -149,7 +155,7 @@ describe('vat verify consistency checks (system test)', () => {
     suite.writeSkillsOnlyConfig(tempDir);
 
     const result = await suite.runVerify(tempDir);
-    expect(consistencyStatus(result.stdout)).toBe('error');
+    expect(consistencyStatus(result.stdout)).toBe('errors');
     expect(result.stderr).toContain('ghost-skill');
     expect(result.stderr).toContain('PACKAGE_JSON_LISTS_UNKNOWN_SKILL');
   });
@@ -161,7 +167,7 @@ describe('vat verify consistency checks (system test)', () => {
     );
 
     const result = await suite.runVerify(tempDir);
-    expect(consistencyStatus(result.stdout)).toBe('error');
+    expect(consistencyStatus(result.stdout)).toBe('errors');
     expect(result.stderr).toContain('skill-b');
     expect(result.stderr).toContain('PUBLISHED_SKILL_NOT_IN_PLUGIN');
   });
@@ -174,7 +180,7 @@ describe('vat verify consistency checks (system test)', () => {
     suite.writeMarketplaceConfig(tempDir, 'skills:\n            - "skill-a"', '  config:\n    dev-skill:\n      publish: false\n');
 
     const result = await suite.runVerify(tempDir);
-    expect(consistencyStatus(result.stdout)).toBe('success');
+    expect(consistencyStatus(result.stdout)).toBe('clean');
     expect(result.stderr).toContain('SKILL_UNPUBLISHED');
     expect(result.stderr).toContain('dev-skill');
   });
@@ -186,24 +192,24 @@ describe('vat verify consistency checks (system test)', () => {
     suite.writeSkillsOnlyConfig(tempDir, '  config:\n    skill-a:\n      publish: false\n');
 
     const result = await suite.runVerify(tempDir);
-    expect(consistencyStatus(result.stdout)).toBe('warning');
+    expect(consistencyStatus(result.stdout)).toBe('warnings');
     expect(result.stderr).toContain('UNPUBLISHED_SKILL_IN_PACKAGE_JSON');
     // The archived YAML is the artifact of record. It used to say
     // `status: passed` with nothing beside it, so a warning that stderr had
     // already scrolled past left no trace at all.
-    expect(result.stdout).toContain('status: warning');
-    expect(result.stdout).toContain(ISSUE_COUNTS_KEY);
+    expect(result.stdout).toContain('status: findings');
+    expect(result.stdout).toContain(SUMMARY_KEY);
     expect(result.stdout).toMatch(/warnings: [1-9]/);
     expect(result.stdout).toContain('UNPUBLISHED_SKILL_IN_PACKAGE_JSON');
   });
 
-  it('publishes zero counts for a clean consistency phase, so `success` is quantified', async () => {
+  it('publishes zero counts for a clean consistency phase, so a pass is quantified', async () => {
     const tempDir = suite.setupTwoSkillsWithMarketplace(['skill-a', 'skill-b'], 'skills: "*"');
 
     const result = await suite.runVerify(tempDir);
 
-    expect(consistencyStatus(result.stdout)).toBe('success');
-    expect(result.stdout).toContain(ISSUE_COUNTS_KEY);
+    expect(consistencyStatus(result.stdout)).toBe('clean');
+    expect(result.stdout).toContain(SUMMARY_KEY);
     expect(result.stdout).toContain('errors: 0');
   });
 
@@ -214,7 +220,7 @@ describe('vat verify consistency checks (system test)', () => {
     suite.writeSkillsOnlyConfig(tempDir, '  config:\n    typo-skill:\n      publish: false\n');
 
     const result = await suite.runVerify(tempDir);
-    expect(consistencyStatus(result.stdout)).toBe('error');
+    expect(consistencyStatus(result.stdout)).toBe('errors');
     expect(result.stderr).toContain('typo-skill');
     expect(result.stderr).toContain('CONFIG_REFERENCES_UNKNOWN_SKILL');
   });
@@ -226,7 +232,7 @@ describe('vat verify consistency checks (system test)', () => {
     suite.writeMarketplaceConfig(tempDir, 'skills:\n            - "skill-a"\n            - "nonexistent-skill"');
 
     const result = await suite.runVerify(tempDir);
-    expect(consistencyStatus(result.stdout)).toBe('error');
+    expect(consistencyStatus(result.stdout)).toBe('errors');
     expect(result.stderr).toContain('nonexistent-skill');
     expect(result.stderr).toContain('PLUGIN_REFERENCES_UNKNOWN_SKILL');
   });
@@ -237,7 +243,7 @@ describe('vat verify consistency checks (system test)', () => {
     suite.writeSkillsOnlyConfig(tempDir);
 
     const result = await suite.runVerify(tempDir);
-    expect(consistencyStatus(result.stdout)).toBe('success');
+    expect(consistencyStatus(result.stdout)).toBe('clean');
   });
 
   it('does not run consistency at all when the project has no skills block', async () => {
@@ -265,6 +271,6 @@ describe('vat verify consistency checks (system test)', () => {
     suite.writeSkillsOnlyConfig(tempDir);
 
     const result = await suite.runVerify(tempDir);
-    expect(consistencyStatus(result.stdout)).toBe('success');
+    expect(consistencyStatus(result.stdout)).toBe('clean');
   });
 });

@@ -9,10 +9,9 @@
  * `nothing to build`), which is the only thing that varies between them.
  *
  * One judgement, parameterised by those words. Fixing this for one command
- * and copying it into the other is how the pair drifts. How each command ENDS
- * on it is its own: `skills validate` throws the coded refusal into its report
- * lane ({@link assertScopableSkillsPath}); `skills build`, still a legacy
- * document, publishes its failure document from the same reason.
+ * and copying it into the other is how the pair drifts. Both end on it the same
+ * way: each throws the coded refusal into its report lane
+ * ({@link assertScopableSkillsPath}).
  */
 
 import { existsSync } from 'node:fs';
@@ -89,7 +88,7 @@ export function unscopableSkillsPath(pathArg: string | undefined): ScopeRefusal 
  * Separate from the ending so a test can assert what the operator is told
  * without capturing a stream or trapping `process.exit`.
  */
-export function unscopablePathMessage(
+function unscopablePathMessage(
   subject: SkillsScopeSubject,
   pathArg: string,
   reason: string,

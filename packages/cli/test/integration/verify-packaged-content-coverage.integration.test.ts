@@ -2,11 +2,11 @@
  * `vat verify`'s `packaged-content` phase over a PARTIALLY built `dist/`.
  *
  * The reproduced case: two skills discovered, `vat build`, `rm -rf
- * dist/skills/beta`. The phase used to publish `status: success,
- * bundlesInspected: 1` and exit 0 — a verdict over half the build. It must now
+ * dist/skills/beta`. The phase used to publish a pass beside
+ * `bundlesInspected: 1` and exit 0 — a verdict over half the build. It must now
  * publish `bundlesExpected: 2` beside `bundlesInspected: 1`, name `beta` as
  * missing, and refuse (exit 1). The control arm, both bundles present, must
- * stay `success` with the two counts equal.
+ * stay `ok` with the two counts equal.
  *
  * The second half pins the in-place (`publish: false`) contract: such a skill's
  * pool bundle is never expected, while a plugin-local skill's always is.
@@ -18,10 +18,10 @@
 import { rmSync, writeFileSync } from 'node:fs';
 
 import { indexPluginLocalSkills, type PluginLocalSkillIndex } from '@vibe-agent-toolkit/agent-skills';
+import { exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { exitCodeForPhases } from '../../src/commands/phase-utils.js';
 import {
   discoverSkillsFromConfig,
   readPluginLocalSkillNames,
@@ -106,10 +106,10 @@ async function expectBetaMissing(root: string): Promise<{ phase: PackagedContent
   expect(crawl.bundlesMissing).toEqual([BETA_BUNDLE]);
 
   const outcome = await phaseIn(root);
-  expect(outcome.phase.status).toBe('error');
-  expect(outcome.phase.issues.map((i) => i.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
-  expect(outcome.phase.issues[0]?.message).toContain(BETA_BUNDLE);
-  expect(exitCodeForPhases([outcome.phase])).toBe(1);
+  expect(outcome.phase.report.status).toBe('findings');
+  expect(outcome.phase.report.findings.map((i) => i.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
+  expect(outcome.phase.report.findings[0]?.message).toContain(BETA_BUNDLE);
+  expect(exitCodeForReport(outcome.phase.report)).toBe(1);
   return outcome;
 }
 
@@ -125,10 +125,10 @@ describe('packaged-content over a partially built dist/', () => {
     expect(crawl).toEqual({ bundlesInspected: 2, bundlesExpected: 2, bundlesInPlace: 0, bundlesMissing: [], issues: [] });
 
     const { phase } = await phaseIn(root);
-    expect(phase.status).toBe('success');
-    expect(phase.bundlesExpected).toBe(2);
-    expect(phase.bundlesInspected).toBe(2);
-    expect(exitCodeForPhases([phase])).toBe(0);
+    expect(phase.report.status).toBe('ok');
+    expect(phase.report.data?.bundlesExpected).toBe(2);
+    expect(phase.report.examined).toBe(2);
+    expect(exitCodeForReport(phase.report)).toBe(0);
   });
 
   it('one bundle deleted ⇒ error naming `beta`, exit 1', async () => {
@@ -136,8 +136,8 @@ describe('packaged-content over a partially built dist/', () => {
     rmSync(safePath.join(root, 'dist', 'skills', 'beta'), { recursive: true, force: true });
 
     const { phase, stderr } = await expectBetaMissing(root);
-    expect(phase.bundlesMissing).toEqual([BETA_BUNDLE]);
-    expect(phase.issues[0]?.message).not.toContain('alpha');
+    expect(phase.report.data?.bundlesMissing).toEqual([BETA_BUNDLE]);
+    expect(phase.report.findings[0]?.message).not.toContain('alpha');
     // stderr and the document carry one list (run-integrity invariant 6).
     expect(stderr).toContain('RESOURCE_CHECK_BROKEN');
     expect(stderr).toContain(BETA_BUNDLE);
@@ -155,7 +155,7 @@ describe('packaged-content over a partially built dist/', () => {
 
     const { phase } = await expectBetaMissing(root);
     // Named in the run's coordinates, never the build host's.
-    expect(phase.issues[0]?.message).not.toContain(root);
+    expect(phase.report.findings[0]?.message).not.toContain(root);
   });
 
   it('a stale skills.config key is not an expected bundle (the consistency phase owns that)', async () => {
@@ -260,7 +260,7 @@ async function inPlaceCrawlIn(root: string): Promise<PackagedContentCrawl> {
 /** The refusal shape: one run-integrity finding, exit 1. */
 async function expectRefused(root: string): Promise<void> {
   const { phase } = await phaseIn(root);
-  expect([phase.status, ...phase.issues.map((i) => i.code), exitCodeForPhases([phase])]).toEqual(['error', 'RESOURCE_CHECK_BROKEN', 1]);
+  expect([phase.report.status, ...phase.report.findings.map((i) => i.code), exitCodeForReport(phase.report)]).toEqual(['findings', 'RESOURCE_CHECK_BROKEN', 1]);
 }
 
 describe('packaged-content with in-place (publish: false) skills', () => {
@@ -288,10 +288,10 @@ describe('packaged-content with in-place (publish: false) skills', () => {
     expect(crawl).toEqual({ bundlesInspected: 1, bundlesExpected: 1, bundlesInPlace: 1, bundlesMissing: [], issues: [] });
 
     const { phase } = await phaseIn(root);
-    expect(phase.status).toBe('success');
-    expect(phase.bundlesExpected).toBe(1);
-    expect(phase.bundlesInspected).toBe(1);
-    expect(exitCodeForPhases([phase])).toBe(0);
+    expect(phase.report.status).toBe('ok');
+    expect(phase.report.data?.bundlesExpected).toBe(1);
+    expect(phase.report.examined).toBe(1);
+    expect(exitCodeForReport(phase.report)).toBe(0);
   });
 
   it('per-skill publish: false on the pool-only skill narrows expected by ONE — the discovered plugin-local skill still expects its pool bundle', async () => {
@@ -326,17 +326,17 @@ describe('packaged-content with in-place (publish: false) skills', () => {
     const crawl = await inPlaceCrawlIn(root);
     // Distributed output is looked at (it is in dist/); nothing in this run builds it.
     expect(crawl).toEqual({ bundlesInspected: 2, bundlesExpected: 1, bundlesInPlace: 1, bundlesMissing: [], issues: [] });
-    expect(exitCodeForPhases([(await phaseIn(root)).phase])).toBe(0);
+    expect(exitCodeForReport((await phaseIn(root)).phase.report)).toBe(0);
   });
 
   it('every discovered skill in place and no plugin ⇒ 0 expected, 0 inspected, 2 in place: a visible no-op, exit 0', async () => {
     const root = poolOnlyProject('skills/*/SKILL.md');
 
     const { phase, stderr } = await phaseIn(root);
-    expect([phase.status, phase.issues.map((i) => i.code), exitCodeForPhases([phase])]).toEqual(['success', [], 0]);
+    expect([phase.report.status, phase.report.findings.map((i) => i.code), exitCodeForReport(phase.report)]).toEqual(['ok', [], 0]);
     expect(stderr).toContain('all 2 discovered skill(s) are in place');
     expect(await crawlIn(root)).toEqual({ bundlesInspected: 0, bundlesExpected: 0, bundlesInPlace: 2, bundlesMissing: [], issues: [] });
-    expect(phase).toMatchObject({ bundlesInspected: 0, bundlesExpected: 0, bundlesInPlace: 2 });
+    expect(phase.report.data).toEqual({ bundlesExpected: 0, bundlesInPlace: 2, bundlesMissing: [] });
   });
 
   it('publish: false over a glob that discovers NOTHING is still the zero-bundle refusal — in-place counts discovered skills, never config', async () => {
@@ -378,7 +378,7 @@ describe('packaged-content — what the plugin build ships decides in-place, not
     const crawl = await crawlPluginProject([shipped], { untracked: [shipped.dir] });
 
     expect(crawl).toMatchObject({ bundlesInspected: 0, bundlesExpected: 0, bundlesInPlace: 1 });
-    expect(exitCodeForPhases([buildPackagedContentPhase(crawl)])).toBe(0);
+    expect(exitCodeForReport(buildPackagedContentPhase(crawl).report)).toBe(0);
   });
 
   it('a repo-only skill sharing its declared name with a tracked plugin-local one is still in place', async () => {

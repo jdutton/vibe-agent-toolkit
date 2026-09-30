@@ -8,13 +8,15 @@
  * - npm postinstall hook
  */
 
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, statSync, type Stats } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import * as tar from 'tar';
+
+import { CommandRefusalError } from '../../../utils/command-refusal.js';
+import { unstatablePathRefusal } from '../../../utils/project-root-policy.js';
 
 
 export type SkillSource = 'npm' | 'local' | 'zip' | 'tgz' | 'npm-postinstall' | 'dev';
@@ -40,6 +42,9 @@ export interface PackageJson {
   vat?: PackageJsonVat;
 }
 
+/** What an install source looks like, for a refusal of one that is not. */
+const SOURCE_FORMS_HINT = 'Expected: npm:package-name, /path/to/dir, /path/to/file.zip, or /path/to/file.tgz';
+
 /**
  * Detect source type from user input
  */
@@ -64,28 +69,45 @@ export function detectSource(input: string): SkillSource {
     return 'tgz';
   }
 
-  // Check filesystem
+  // Check filesystem: a path naming nothing is the invocation's mistake, one the OS refuses the input's.
   const absolutePath = safePath.resolve(input);
-
-  if (existsSync(absolutePath)) {
-    const stat = statSync(absolutePath);
-
-    if (stat.isDirectory()) {
-      return 'local';
-    }
-
-    if (stat.isFile()) {
-      if (absolutePath.endsWith('.tgz') || absolutePath.endsWith('.tar.gz')) {
-        return 'tgz';
-      }
-      return 'zip';
-    }
+  let stat: Stats;
+  try {
+    stat = statSync(absolutePath);
+  } catch (error) {
+    const refusal = unstatablePathRefusal(absolutePath, error);
+    // A bare word that names nothing is most often a source typed wrong: say what a source looks like.
+    throw new CommandRefusalError(refusal.refusal, `${refusal.message}\n${SOURCE_FORMS_HINT}`, { cause: error });
   }
 
-  throw new Error(
-    `Cannot detect source type for: ${input}\n` +
-      `Expected: npm:package-name, /path/to/dir, /path/to/file.zip, or --npm-postinstall`
-  );
+  if (stat.isDirectory()) {
+    return 'local';
+  }
+
+  if (stat.isFile()) {
+    return 'zip';
+  }
+
+  throw new CommandRefusalError('USAGE_INVALID', `Cannot detect source type for: ${input}\n${SOURCE_FORMS_HINT}`);
+}
+
+/**
+ * Read `dir/package.json`: absent is the invocation's mistake, unreadable or
+ * not JSON the input's.
+ */
+export async function readPackageJson(dir: string): Promise<PackageJson> {
+  const packageJsonPath = safePath.join(dir, 'package.json');
+  let content: string;
+  try {
+    content = await readFile(packageJsonPath, 'utf-8');
+  } catch (error) {
+    throw unstatablePathRefusal(packageJsonPath, error);
+  }
+  try {
+    return JSON.parse(content) as PackageJson;
+  } catch (error) {
+    throw new CommandRefusalError('INPUT_UNREADABLE', `${packageJsonPath} is not valid JSON: ${String(error)}`, { cause: error });
+  }
 }
 
 /**
@@ -94,17 +116,11 @@ export function detectSource(input: string): SkillSource {
 export async function readPackageJsonVatMetadata(
   dir: string
 ): Promise<{ packageJson: PackageJson; skills: string[] }> {
-  const packageJsonPath = safePath.join(dir, 'package.json');
-
-  if (!existsSync(packageJsonPath)) {
-    throw new Error(`package.json not found in: ${dir}`);
-  }
-
-  const content = await readFile(packageJsonPath, 'utf-8');
-  const packageJson = JSON.parse(content) as PackageJson;
+  const packageJson = await readPackageJson(dir);
 
   if (!packageJson.vat?.skills || packageJson.vat.skills.length === 0) {
-    throw new Error(
+    throw new CommandRefusalError(
+      'INPUT_UNREADABLE',
       `No skills found in package.json vat.skills field.\n` +
         `Package: ${packageJson.name}\n` +
         `Expected vat.skills array with at least one skill.`
@@ -129,14 +145,20 @@ export function downloadNpmPackage(packageName: string, tempDir: string): string
     ? packageName.slice(4)
     : packageName;
 
-  // Use npm pack to download package (creates .tgz in current dir)
-  const packOutput = safeExecSync('npm', ['pack', actualPackageName], {
-    cwd: tempDir,
-    encoding: 'utf-8',
-  });
+  // Use npm pack to download package (creates .tgz in current dir). A failure
+  // here is the registry's or the network's answer, not VAT's defect.
+  let packOutput: string | Buffer;
+  try {
+    packOutput = safeExecSync('npm', ['pack', actualPackageName], {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
+  } catch (error) {
+    throw new CommandRefusalError('EXTERNAL_API_FAILED', `npm pack failed for package ${actualPackageName}: ${String(error)}`, { cause: error });
+  }
 
   if (!packOutput) {
-    throw new Error(`npm pack failed for package: ${actualPackageName}`);
+    throw new CommandRefusalError('EXTERNAL_API_FAILED', `npm pack failed for package: ${actualPackageName}`);
   }
 
   // npm pack outputs the filename (e.g., "package-1.0.0.tgz")
@@ -144,7 +166,7 @@ export function downloadNpmPackage(packageName: string, tempDir: string): string
   const tarballPath = safePath.join(tempDir, tarballName);
 
   if (!existsSync(tarballPath)) {
-    throw new Error(`npm pack succeeded but tarball not found: ${tarballPath}`);
+    throw new CommandRefusalError('EXTERNAL_API_FAILED', `npm pack succeeded but tarball not found: ${tarballPath}`);
   }
 
   // Extract tarball using tar npm package (cross-platform)
@@ -158,7 +180,7 @@ export function downloadNpmPackage(packageName: string, tempDir: string): string
   const packageDir = safePath.join(tempDir, 'package');
 
   if (!existsSync(packageDir)) {
-    throw new Error(`npm tarball extracted but package/ directory not found`);
+    throw new CommandRefusalError('EXTERNAL_API_FAILED', 'npm tarball extracted but package/ directory not found');
   }
 
   return packageDir;
@@ -213,16 +235,4 @@ export function isGlobalNpmInstall(): boolean {
   const isInstallCommand = getEnvCI('npm_command') === 'install';
 
   return isGlobal && isPostinstall && isInstallCommand;
-}
-
-/**
- * Write the common YAML header for skill command output
- * Eliminates duplication between install and uninstall output functions
- */
-export function writeYamlHeader(dryRun?: boolean): void {
-  process.stdout.write('---\n');
-  process.stdout.write(`status: success\n`);
-  if (dryRun) {
-    process.stdout.write(`dryRun: true\n`);
-  }
 }

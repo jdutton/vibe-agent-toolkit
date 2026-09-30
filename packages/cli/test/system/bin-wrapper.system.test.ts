@@ -107,9 +107,10 @@ describe('root --version does not shadow subcommand -v/--verbose', () => {
     const result = await executeBunVat(import.meta.url, ['doctor', '-v']);
 
     expect(result.stderr).not.toContain("unknown option '-v'");
-    // Doctor's banner. Its exit code is environment-dependent (a failed check is
-    // a legitimate 1), so the parse is what this asserts, not the diagnosis.
-    expect(result.stdout).toContain('vat doctor');
+    // Doctor's banner, on stderr beside the stdout report. Its exit code is
+    // environment-dependent (a failed check is a legitimate 1), so the parse is
+    // what this asserts, not the diagnosis.
+    expect(result.stderr).toContain('🩺 vat doctor');
   });
 
   // `audit` is the OTHER verb the root cleanup missed, and the one an adopter is
