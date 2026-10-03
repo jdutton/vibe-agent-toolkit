@@ -401,8 +401,8 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
  * establishes it — but "every default run of those two commands" was a claim
  * nothing had counted.
  *
- * ✅ **VAT's declared floor is now `>=22.13.0`, so this no longer fires on a
- * SUPPORTED Node.** It used to: the manifests said `>=22.0.0` while these two
+ * ✅ **VAT's declared floor is now `>=22.16.0` (raised past 22.13.0 for
+ * `StatementSync.columns()`), so this no longer fires on a SUPPORTED Node.** It used to: the manifests said `>=22.0.0` while these two
  * commands could not run below 22.13.0, which meant thirteen Node patch
  * releases were advertised as supported and hard-failed here. The floor was
  * raised to stop advertising what VAT cannot do. The branch stays load-bearing
@@ -434,7 +434,7 @@ export function nodeSqliteFloorFailure(error: unknown): Error | undefined {
     // the next time the floor moves.
     + ` \`node:sqlite\` loads unflagged from Node 22.13.0 (added in 22.5.0 behind`
     + ` \`--experimental-sqlite\`) — you are on ${process.version}.`
-    + ' Upgrade Node to 22.13.0 or newer. Installing a package will not help:'
+    + ' Upgrade Node to the floor `vat doctor` reports. Installing a package will not help:'
     + ' the module is built into Node, not published to npm.',
   );
 }

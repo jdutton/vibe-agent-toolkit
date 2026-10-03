@@ -44,6 +44,14 @@
 #
 # What that leaves is a single advisory, below. If you are adding a second one,
 # the bar is rule 1: show that a real fix was tried first.
+#
+# Reconciled 2026-10-03 (27 CI advisories + 3 published since): every one with a
+# patched version was fixed — undici / fast-uri / ip-address / hono / basic-ftp
+# re-pinned in `overrides` (basic-ftp crosses to 6.x: get-uri@8.0.1, the latest,
+# still declares `^5.3.1`, no 5.x fix exists, and 6.0's one break is a
+# safer default for separate transfer hosts that get-uri never asks for), and
+# brace-expansion / markdown-it refreshed in the lockfile inside their ranges.
+# ONE entry was added, braces, because no fixed version exists at all.
 # ---------------------------------------------------------------------------
 
 # --- esbuild (dev-server file read) ------------------------------------------
@@ -58,3 +66,15 @@
 id = "GHSA-g7r4-m6w7-qqqr"
 reason = "esbuild advisory affects the `esbuild serve` dev server, which VAT never runs. Build-time-only, not shipped in any published package. Fix (0.28.1) is outside vite's declared range; re-check whether vite has widened it."
 
+# --- braces (stack exhaustion on deeply nested patterns) ---------------------
+# NO FIXED VERSION EXISTS: the advisory's range is `last_affected: 3.0.3`, and
+# 3.0.3 is the newest braces published. Rule 1 cannot apply. The copies here come
+# from chokidar@3 (resource-compiler's watch mode, `^3.6.0`) and micromatch via
+# fast-glob (jscpd, knip, globby — dev tooling). braces expands glob patterns the
+# project author writes in its own config or on the command line, not input from
+# a remote party, so the exhausted stack is the author's own process.
+# BLOCKER TO RE-CHECK (rule 4): a braces release that fixes it (then delete this
+# entry), or chokidar 4 in resource-compiler, which drops braces from that path.
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+reason = "No fixed braces version exists (last_affected 3.0.3, the newest release). Reached via chokidar@3 (resource-compiler watch mode) and micromatch/fast-glob dev tooling; patterns come from the project's own config/CLI, not a remote party. Delete when braces ships a fix or resource-compiler moves to chokidar 4."

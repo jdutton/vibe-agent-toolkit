@@ -194,6 +194,9 @@
   are added. An empty population now exits 1 with `RESOURCE_CHECK_BROKEN` (was 0); zero rows over
   a populated tree is `ok`. A refused statement is `USAGE_INVALID` (exit 2); an engine fault such
   as a corrupt or busy store is `INTERNAL_ERROR`.
+- **The Node floor is now `>=22.16.0` (was `>=22.13.0`) in every package's `engines.node`.**
+  `vat resources query` failed on 22.13–22.15 (`statement.columns is not a function`). Upgrade
+  Node to 22.16.0 or newer; `vat doctor` reports the range.
 - **`vat validate` and `vat verify` phase output follows the report contract for the `resources`
   and `skills` phases.** A phase's `report` is the exact document the verb writes, refusals
   included. A warnings-only phase is now rated `warning` (the `resources` phase had read

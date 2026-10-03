@@ -1851,7 +1851,7 @@ async function validate(): Promise<void> {
 // Run validation.
 //
 // ⛔ NOT `import.meta.main`. That property does not exist before Node 24.2 /
-// 22.18, and this repo's declared floor is 22.13.0 — so this guard was FALSE on
+// 22.18, and this repo's declared floor is 22.16.0 — so this guard was FALSE on
 // the exact Node `node-floor.yml` installs, and running this file there printed
 // nothing and exited 0. A contributor on the supported floor got a green
 // pre-commit structure gate that had checked nothing. See `isEntrypoint`.

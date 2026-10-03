@@ -406,7 +406,7 @@ describe('every placeholder must be bound', () => {
     (sql, form) => {
       // `StatementSync` never binds positional values into a `:a` slot, and on
       // the declared floor it does not bind them into `?NNN` either — measured,
-      // Node 22.13.0 and 22.14.0 throw `column index out of range` for
+      // Node 22.13.0, 22.14.0 and 22.16.0 throw `column index out of range` for
       // `SELECT ?1 AS x` with one value, while 22.22.3 and 24.x bind it. The
       // engine's message is about a column, for a statement with no column
       // problem; a form that works on one supported runtime and fails on

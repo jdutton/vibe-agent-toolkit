@@ -39,7 +39,7 @@
   "author": "Jeff Dutton",
   "license": "MIT",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.16.0"
   },
   "repository": {
     "type": "git",

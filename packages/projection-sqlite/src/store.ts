@@ -343,7 +343,7 @@ const DIGIT = /\d/;
  * reported rather than counted, because positional values cannot reach it on
  * every Node this package supports: a `:x`, `@x` or `$x` name never binds
  * positionally, and `?NNN` does not either on the declared floor — measured,
- * Node 22.13.0 and 22.14.0 throw `column index out of range` for
+ * Node 22.13.0, 22.14.0 and 22.16.0 throw `column index out of range` for
  * `SELECT ?1 AS x` with one value, while 22.22.3 and 24.x bind it. A form that
  * works on one supported runtime and throws an unrelated error on another is
  * refused on all of them, with a message that names the form.
@@ -1766,6 +1766,9 @@ class SqliteProjectionStore implements SqlQueryableStore {
   columns(sql: string, ...parameters: readonly SqliteValue[]): readonly string[] {
     this.#assertOpen();
     // Through the same gates as `query`, and then prepared but never stepped.
+    // `StatementSync.columns()` is why the engines floor is 22.16.0, not 22.13.0:
+    // Node added it in 22.16.0 (see the package header for the rejected
+    // alternative).
     return runGated(this.#database, sql, parameters, (statement) => statement.columns().map((column) => column.name));
   }
 

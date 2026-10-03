@@ -11,7 +11,7 @@
  * real statement refusal that must stay coded.
  */
 
-import { mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdtempSync, openSync, readdirSync, rmSync, statSync, writeSync } from 'node:fs';
 
 import { PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
 import { isVatError, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -43,9 +43,22 @@ describe('a store fault propagates uncoded (integration)', () => {
     store = openSqliteProjectionStore({ directory });
     // The database, its WAL and its shared-memory index all overwritten while
     // the connection is open: the next read transaction finds no database.
+    //
+    // 🪤 IN PLACE (`r+`), never truncate-then-write. SQLite memory-maps the
+    // `-shm` index, and Windows refuses to truncate a file with a mapped view
+    // (`ERROR_USER_MAPPED_FILE`, which libuv reports as `UNKNOWN`), so
+    // `writeFileSync` died on `projection.db-shm` before the store was asked
+    // anything. Writing over the bytes is permitted there and leaves the same
+    // file contents as the truncating write did on POSIX.
     for (const file of readdirSync(directory)) {
       const path = safePath.join(directory, file);
-      writeFileSync(path, Buffer.alloc(Math.max(statSync(path).size, 4096), 0x5a));
+      const garbage = Buffer.alloc(Math.max(statSync(path).size, 4096), 0x5a);
+      const descriptor = openSync(path, 'r+');
+      try {
+        writeSync(descriptor, garbage, 0, garbage.length, 0);
+      } finally {
+        closeSync(descriptor);
+      }
     }
     const openStore = store;
 

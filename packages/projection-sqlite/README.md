@@ -16,9 +16,11 @@ binary, no WASM module, no extension to seed and nothing to download — which i
 why the VAT CLI now selects it **by default**, with `VAT_PROJECTION_STORE=off`
 (or `VAT_CACHE=0` for every VAT cache) as the way back to re-deriving each run.
 
-**Requires Node >= 22.13.0** — `node:sqlite` was added in 22.5.0 behind
+**Requires Node >= 22.16.0** — `node:sqlite` was added in 22.5.0 behind
 `--experimental-sqlite`, and 22.13.0 is the first 22.x where it loads without that
-flag. That is now
+flag; 22.16.0 is the first 22.x with `StatementSync.columns()`, which
+`SqliteProjectionStore.columns()` needs to name a query's result columns even
+when it selects no row (absent on 22.15.1, present on 22.16.0 — measured). That is now
 the whole toolkit's floor, and this package is the reason: the CLI depends on it
 outright and `vat resources query|check` build their ephemeral store from it on
 every run, so Node 22.0–22.12 could not run those commands while the manifests

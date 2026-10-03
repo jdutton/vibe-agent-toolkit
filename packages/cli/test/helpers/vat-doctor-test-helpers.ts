@@ -21,7 +21,7 @@ import type { DoctorCheckResult, DoctorOutcome } from '../../src/commands/doctor
  * Environment mock configuration
  */
 export interface DoctorEnvironmentConfig {
-  /** Node.js version string (default: 'v22.13.0', the declared floor) */
+  /** Node.js version string (default: 'v22.16.0', the declared floor) */
   nodeVersion?: string | null;
   /** Git version string (default: 'git version 2.43.0') */
   gitVersion?: string | null;
@@ -111,7 +111,7 @@ export async function mockDoctorEnvironment(
   config?: DoctorEnvironmentConfig,
 ): Promise<() => void> {
   const opts = {
-    nodeVersion: 'v22.13.0',
+    nodeVersion: 'v22.16.0',
     gitVersion: 'git version 2.43.0',
     vatVersion: '0.1.0',
     ...config,
@@ -205,7 +205,7 @@ export async function mockDoctorFileSystem(
     configExists: true,
     configContent: 'version: "1.0"\nagents: {}\n',
     isVatSourceTree: false,
-    nodeEngines: '>=22.13.0' as string | null,
+    nodeEngines: '>=22.16.0' as string | null,
     ...config,
   };
 

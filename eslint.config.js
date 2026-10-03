@@ -388,7 +388,7 @@ const localRulesConfig = {
   // ⛔ The mechanism behind `isEntrypoint()`. Enabled here rather than inherited
   // from `configs.recommended` because it is excluded there: `import.meta.main`
   // is only wrong below Node 24.2 / 22.18, which is a fact about the CONSUMER's
-  // floor. It is a fact about OURS — this repo declares `>=22.13.0`, where the
+  // floor. It is a fact about OURS — this repo declares `>=22.16.0`, where the
   // property is `undefined` — so every such guard here is dead code that exits 0.
   //
   // This is the half of the fix that is not a comment. Three prose

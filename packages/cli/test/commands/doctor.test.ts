@@ -101,11 +101,11 @@ describe('doctor command - unit tests', () => {
     });
 
     it('passes on the declared floor itself', async () => {
-      await mockDoctorEnvironment({ nodeVersion: 'v22.13.0' });
+      await mockDoctorEnvironment({ nodeVersion: 'v22.16.0' });
 
       const result = checkNodeVersion();
 
-      assertCheckPassed(result, CHECK_NODE_VERSION, 'v22.13.0');
+      assertCheckPassed(result, CHECK_NODE_VERSION, 'v22.16.0');
       assertCheckPassed(result, CHECK_NODE_VERSION, 'meets requirement');
     });
 
@@ -118,8 +118,9 @@ describe('doctor command - unit tests', () => {
     });
 
     /*
-     * ⭐ The first two rows are the point. The boundary is a MINOR — `node:sqlite`
-     * is absent from 22.12.0 and present in 22.13.0 — so the old `major >= 20`
+     * ⭐ The first three rows are the point. The boundary is a MINOR —
+     * `StatementSync.columns()` is absent from 22.15.1 and present in 22.16.0,
+     * and `node:sqlite` itself is absent from 22.12.0 — so the old `major >= 20`
      * test could not see the difference between the only two versions that
      * matter, and reported BOTH `v22.0.0` and `v20.0.0` as healthy environments
      * in which `vat resources query|check` cannot run at all. A doctor that
@@ -127,7 +128,8 @@ describe('doctor command - unit tests', () => {
      * doctor: it ends the user's investigation at exactly the wrong moment.
      */
     it.each([
-      ['v22.12.0', 'one patch below the floor, where node:sqlite is still absent'],
+      ['v22.15.1', 'the last release below the floor, where StatementSync.columns() is absent'],
+      ['v22.12.0', 'below the floor, where node:sqlite is still absent'],
       ['v22.0.0', 'the version the old major-only check called healthy'],
       ['v20.0.0', 'two majors below the floor'],
     ])('fails on %s — %s', async (nodeVersion) => {

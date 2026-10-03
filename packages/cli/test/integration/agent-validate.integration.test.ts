@@ -6,13 +6,24 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
 import { AGENT_VALIDATE_REPORT_SCHEMA } from '../../src/commands/agent/validate-schema.js';
-import { runCliCommand } from '../test-helpers.js';
+import { executeCli } from '../system/test-helpers/cli-runner.js';
+import { binPath } from '../test-helpers.js';
 
 describe('agent validate command (integration)', () => {
   let tempDir: string;
 
+  /**
+   * Run from INSIDE the fixture, which is its own project root. Every location
+   * in the document is relative to the working directory, and the OS temp dir
+   * can sit on another drive than the checkout — on the Windows runner it is
+   * `C:` against a `D:` workspace — where no relative path exists at all.
+   */
+  const runAgentValidate = (agentDir: string): ReturnType<typeof executeCli> =>
+    executeCli(binPath, ['agent', 'validate', agentDir], { cwd: tempDir });
+
   beforeAll(() => {
     tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-agent-validate-'));
+    fs.mkdirSync(safePath.join(tempDir, '.git'));
   });
 
   afterAll(() => {
@@ -35,7 +46,7 @@ spec:
 `
     );
 
-    const result = runCliCommand('agent', 'validate', agentDir);
+    const result = runAgentValidate(agentDir);
     const document = AGENT_VALIDATE_REPORT_SCHEMA.parse(yaml.parse(result.stdout));
 
     expect(result.status).toBe(0);
@@ -62,13 +73,14 @@ spec:
 `
     );
 
-    const result = runCliCommand('agent', 'validate', agentDir);
+    const result = runAgentValidate(agentDir);
     const document = AGENT_VALIDATE_REPORT_SCHEMA.parse(yaml.parse(result.stdout));
 
     expect(result.status).toBe(1);
     expect(document.status).toBe('findings');
     expect(document.examined).toBe(1);
     expect(new Set(document.findings.map((finding) => finding.code))).toEqual(new Set(['AGENT_MANIFEST_INVALID']));
+    expect(new Set(document.findings.map((finding) => finding.location))).toEqual(new Set(['invalid-agent/agent.yaml']));
     expect(document.data.manifest.name).toBeNull();
     expect(result.stderr).toContain('Agent validation failed');
   });
@@ -78,7 +90,7 @@ spec:
     fs.mkdirSync(agentDir, { recursive: true });
     fs.writeFileSync(safePath.join(agentDir, 'agent.yaml'), 'invalid: yaml: [[[{');
 
-    const result = runCliCommand('agent', 'validate', agentDir);
+    const result = runAgentValidate(agentDir);
     const document = AGENT_VALIDATE_REPORT_SCHEMA.parse(yaml.parse(result.stdout));
 
     expect(result.status).toBe(2);

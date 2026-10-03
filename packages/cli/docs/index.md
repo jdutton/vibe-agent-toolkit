@@ -98,7 +98,7 @@ Diagnose vat setup and environment health
 
 **What it does:**
 
-- Checks Node.js version (>=22.13.0 required)
+- Checks Node.js version (>=22.16.0 required)
 - Checks Git installation and repository
 - Validates configuration file exists and is valid
 - Checks vat version and available updates
