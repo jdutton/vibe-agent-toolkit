@@ -134,7 +134,6 @@
                         "type": "string",
                         "enum": [
                           "ok",
-                          "findings",
                           "skipped",
                           "error"
                         ]
@@ -228,9 +227,6 @@
             },
             "gate": {
               "$ref": "#/definitions/corpus-scan/anyOf/0/properties/gate"
-            },
-            "durationMs": {
-              "$ref": "#/definitions/corpus-scan/anyOf/0/properties/durationMs"
             },
             "findings": {
               "type": "array",

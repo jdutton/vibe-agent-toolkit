@@ -32,12 +32,40 @@
 - **User mistakes across `okf validate`, `skill review`, `resources check` and `ard emit` publish
   `USAGE_INVALID` / `CONFIG_INVALID` / `INPUT_UNREADABLE` instead of `INTERNAL_ERROR`.** A genuine
   VAT defect still publishes `INTERNAL_ERROR`, with its stack on stderr.
-- **Refusal documents no longer carry `durationMs`.**
+- **Refusal documents (`status: error`) no longer carry `durationMs`** — every one, including the
+  orchestrators' `RUN_INCOMPLETE` and `resources check`'s population-never-completed refusal.
 - **`vat skill review` without `--yaml` now prints nothing on stdout when it refuses** (its
   human-readable report has always gone to stderr).
 - **`@vibe-agent-toolkit/resources` `parseConfigFile` and `parseConfigAllowingUnknownKeys` now
-  throw a coded `VatError` (`CONFIG_LOAD`)** instead of a plain `Error`; the barrel now exports
-  `CONFIG_LOAD_CODE`. Messages are unchanged.
+  throw a coded `VatError`** instead of a plain `Error`: `CONFIG_LOAD` for a config that does not
+  parse or validate, and (`parseConfigFile`, `loadConfig`) `CONFIG_UNREADABLE` for one the OS will
+  not read (was a raw errno). The barrel exports `CONFIG_LOAD_CODE` and `CONFIG_UNREADABLE_CODE`
+  (moved from the CLI). Parse and validation messages are unchanged.
+- **A project config the OS will not read is `INPUT_UNREADABLE`, exit 2, on every verb** (one
+  shared read, `readConfigText`): `vat okf validate`, `vat claude plugin build` and
+  `vat claude marketplace publish` published `INTERNAL_ERROR` with a stack. The CLI's own config
+  loader now decodes a UTF-16LE or BOM-prefixed config, as `parseConfigFile` always did.
+- **`vat ard emit` with an `--output` the OS will not write is `RUN_INCOMPLETE`, exit 2** (was
+  `INTERNAL_ERROR` with a stack).
+- **A path with no relative spelling (on Windows, another drive than its root) no longer kills the
+  document.** `vat agent validate` with a manifest on another drive than the working directory
+  refuses `USAGE_INVALID` (it died on its own document, printing nothing); a `vat okf validate`
+  finding in a bundle on another drive than the project, and a `vat skills build` packaging
+  finding for a skill on another drive than the working directory, omit `location` (the OKF one
+  names the document in its message).
+- **Help `Exit Codes:` blocks now state what the code does.** `vat claude context` no longer
+  promises exit 1 for an unknown option or unsupported `--format` (Commander rejects those at 2,
+  with no document); `vat agent run` documents 0 or 2 (it never exits 1); `vat corpus scan` no
+  longer advertises exit 130 (VAT installs no SIGINT handler there).
+- **`@vibe-agent-toolkit/schema` library breaks** (library-only):
+  - `reportSchema(dataSchema)` takes a second, required argument: `reportSchema(dataSchema,
+    findingSchema)`.
+  - `buildErrorReport(error: string, durationMs)` becomes `buildErrorReport({ error, gate,
+    examined, findings, data })` (no `durationMs`), with `error` a `{ code, message }` and the
+    result a generic `ErrorReport<T>`.
+  - `buildReport` requires `gate`, and returns `OkReport<T> | FindingsReport<T>`.
+  - `CodeRegistryEntry` gains a required `kind: 'finding' | 'refusal'`.
+  - `REPORT_ENVELOPE_KEYS` gains `gate`.
 - **`packages/cli` removed `handleReportCommandError`, `handleReportExpectedFailure`, and the old
   `report-schemas.ts` types `ReportEntry`, `UnmigratedEntry`, `ReportSchemaEntry`,
   `REPORT_SCHEMAS`**, replaced by `PUBLISHED_SHAPES` and `endWithReport`/`endWithRefusal`
@@ -393,8 +421,9 @@
   `data.phases` (was `system-error` beside the phases). Refusals of the run itself carry codes and
   publish the envelope (they printed stderr only, or an uncoded `{status: error}`): a positional
   path argument, the retired `--only`, and `vat build --only` naming an unknown or unconfigured
-  phase -> `USAGE_INVALID` (help text said exit 1 for the last; it was, and is, 2); an unreadable
-  config -> `CONFIG_INVALID`; discovery that cannot list the tree -> `INPUT_UNREADABLE`; a throw in
+  phase -> `USAGE_INVALID` (help text said exit 1 for the last; it was, and is, 2); a config
+  that does not parse or validate -> `CONFIG_INVALID`, one the OS will not read ->
+  `INPUT_UNREADABLE`; discovery that cannot list the tree -> `INPUT_UNREADABLE`; a throw in
   a verify in-process phase (e.g. a `package.json` the OS will not read) is that phase's refusal
   with its own code (was always an uncoded exit 2).
 - **Phase functions return `{ report }`.** `runResourcesValidatePhase`, `runSkillsValidatePhase`,
@@ -552,9 +581,10 @@
 - **`vat corpus scan` publishes the report contract on stdout** (schema
   `packages/cli/schemas/corpus-scan.json`; before, stdout was empty). `examined` counts the seed
   entries; `data` is `{ outDir, entries[] }`, each entry `{ name, audit: ok|findings|unloadable,
-  review: ok|skipped|error, outputPath }` (`outputPath` is the audit file relative to `outDir`,
-  `null` when unloadable). An entry whose audit could not run, or whose `--with-review` review did
-  not finish, is a `CORPUS_ENTRY_INCOMPLETE` warning (status `findings`, still exit 0). Refusals
+  review: ok|skipped|error, outputPath }`. The schema's `review` enum is exactly those three;
+  `outputPath` is the audit file relative to `outDir`, `null` when unloadable. An entry whose
+  audit could not run, or whose `--with-review` review did not finish, is a
+  `CORPUS_ENTRY_INCOMPLETE` warning (status `findings`, still exit 0). Refusals
   are coded and exit 2 as before: a seed file that is not there -> `USAGE_INVALID`; malformed YAML,
   a schema violation or a duplicate `source`/`name` -> `CONFIG_INVALID` (both were an uncoded
   error); an unreadable seed -> `INPUT_UNREADABLE`; a write under `--out` the OS refuses (a full
@@ -633,13 +663,19 @@
   `SETTINGS_RULE_SHADOWED`, `SETTINGS_MARKETPLACE_TOKEN_MISSING`, `AGENT_MANIFEST_INVALID`,
   `AGENT_REFERENCE_MISSING`, `AGENT_REFERENCE_UNREADABLE`, `AGENT_RAG_NO_SOURCES`,
   `SKILL_TEST_EVAL_FAILED`, `DOCTOR_CHECK_FAILED`, `DOCTOR_CHECK_WARNED`,
-  `CORPUS_ENTRY_INCOMPLETE` (non-overridable).
+  `CORPUS_ENTRY_INCOMPLETE` (non-overridable), `SKILL_PACKAGING_FAILED`,
+  `SKILL_BUILD_TARGET_NOT_BUILDABLE`, `SKILL_PACKAGE_TOO_LARGE`, `FILES_CONFIG_DEST_MISSING`,
+  `RAG_DOCUMENT_INDEX_FAILED`, `PLUGIN_UNINSTALL_INCOMPLETE`.
 - **New library exports** (library-only). `@vibe-agent-toolkit/schema`: `resultStatus`,
-  `summarizeIssues`. `@vibe-agent-toolkit/agent-skills`: `describeIssues`,
+  `summarizeIssues`, `CodeKind`, `RefusalCode`, `FindingCode`, `REFUSAL_CODES`,
+  `RefusalCodeSchema`, `FindingCodeSchema`, `GateSchema`, `Gate`, `ReportError`, `OkReport`,
+  `FindingsReport`, `ErrorReportInput`. `@vibe-agent-toolkit/claude-marketplace`:
+  `codedUserStateWrite`. `@vibe-agent-toolkit/agent-skills`: `describeIssues`,
   `GIT_SUBPATH_INVALID_CODE`, `SKILL_PACKAGING_INPUT_INVALID_CODE`, `isSkillPackagingInputError`,
   `SKILL_TEST_REFUSAL_BY_ERROR_CODE`.
   `@vibe-agent-toolkit/utils/yaml`: `YAML_EDIT_INPUT_REFUSED_CODE`. `@vibe-agent-toolkit/resources`: `PROJECTION_STATEMENT_REFUSED_CODE`,
-  `LINK_AUTH_CONFIG_CODE`, `matchesCollection`, `ExternalPluginSourceSchema`. `@vibe-agent-toolkit/agent-config`:
+  `LINK_AUTH_CONFIG_CODE`, `matchesCollection`, `ExternalPluginSourceSchema`, `CONFIG_UNREADABLE_CODE`,
+  `readConfigText`, `readConfigTextSync`. `@vibe-agent-toolkit/agent-config`:
   `AGENT_MANIFEST_NOT_FOUND_CODE`, `AGENT_MANIFEST_UNREADABLE_CODE`, `AGENT_MANIFEST_INVALID_CODE`,
   `ValidateAgentOptions`. `@vibe-agent-toolkit/projection-sqlite`:
   `SqlQueryableStore.columns(sql, ...params)`.

@@ -28,7 +28,7 @@ import {
   ORG_API_KEY_MISSING_CODE,
   PLUGIN_KEY_INVALID_CODE,
 } from '@vibe-agent-toolkit/claude-marketplace';
-import { CONFIG_LOAD_CODE, LINK_AUTH_CONFIG_CODE, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
+import { CONFIG_LOAD_CODE, CONFIG_UNREADABLE_CODE, LINK_AUTH_CONFIG_CODE, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 import { isVatError, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
 import { YAML_EDIT_INPUT_REFUSED_CODE } from '@vibe-agent-toolkit/utils/yaml';
@@ -37,14 +37,6 @@ import { AGENT_NAME_ESCAPES_SCOPE_CODE } from '../commands/agent/install-path.js
 import { PLUGIN_SYMLINK_REFUSED_CODE } from '../commands/claude/plugin/tree-copy.js';
 
 const COMMAND_REFUSAL = 'COMMAND_REFUSAL';
-
-/**
- * The code a config that exists and could not be READ carries — the OS refused
- * it (permissions, a directory where the file should be). `config-loader.ts`'s
- * read of the adopter's own config is the one site that knows the errno is
- * about the user's input, so it throws this; the refusal is `INPUT_UNREADABLE`.
- */
-export const CONFIG_UNREADABLE_CODE = 'CONFIG_UNREADABLE';
 
 /** A refusal a command raises on purpose, carrying WHICH refusal. */
 export class CommandRefusalError extends VatError {
@@ -60,7 +52,7 @@ export class CommandRefusalError extends VatError {
 const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   // A config file that exists and does not parse or validate (resources' parser and the CLI loader).
   [CONFIG_LOAD_CODE]: 'CONFIG_INVALID',
-  // A config file that exists and the OS would not let VAT read.
+  // A config file that exists and the OS would not let VAT read (resources' shared `readConfigText`).
   [CONFIG_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
   // A bundle argument the project does not declare under `okf.bundles`.
   OKF_UNKNOWN_BUNDLE: 'USAGE_INVALID',

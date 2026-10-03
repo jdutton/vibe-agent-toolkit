@@ -131,6 +131,9 @@ function resolveLicenseOptions(
   return { type: 'spdx', value: licenseValue, ownerName };
 }
 
+/** Test seam: a config `license` value as the composer's options. */
+export const __internal = { resolveLicenseOptions };
+
 /**
  * Build ComposeOptions for a single marketplace entry.
  */

@@ -338,7 +338,7 @@ export function buildCheckOutputData(input: CheckPayloadInput): CheckReport {
  * `error` under the registered refusal `RUN_INCOMPLETE` — the run started and
  * stopped before its population completed — and `data` is KEPT: it names the
  * root and says, with `null`, that there was no projection, which is more than
- * `data: null` could.
+ * `data: null` could. No `durationMs`: no refusal document carries one.
  *
  * @param report - The document as the findings would have built it
  * @returns The same document on the error branch
@@ -352,7 +352,6 @@ function couldNotRun(report: CheckReport): CheckReport {
     examined: report.examined,
     findings: [],
     data: report.data,
-    durationMs: report.durationMs,
   });
 }
 

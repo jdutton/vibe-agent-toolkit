@@ -276,6 +276,9 @@ function stopsTheBuild(result: PhaseResult): boolean {
   return exitCodeForReport(result.report) !== ExitCode.OK;
 }
 
+/** Test seam: which phase report stops the build. */
+export const __internal = { stopsTheBuild };
+
 async function buildTopLevelCommand(
   options: BuildCommandOptions,
   command: Command,

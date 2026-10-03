@@ -29,7 +29,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync } from 'node:fs';
+import { chmodSync, existsSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 import {
@@ -1019,6 +1019,24 @@ function expectUnreadableRefusal(verb: string, args: (path: string) => string[],
   }
 }
 
+/**
+ * Run `args` in a directory holding only a `vibe-agent-toolkit.config.yaml` made
+ * by `makeConfig`, and expect `INPUT_UNREADABLE` at exit 2. The mode is restored either way.
+ */
+function expectConfigRefusal(name: string, args: readonly string[], makeConfig: (configPath: string) => void): void {
+  const cwd = safePath.join(tempDir, name);
+  mkdirSyncReal(cwd, { recursive: true });
+  const configPath = safePath.join(cwd, 'vibe-agent-toolkit.config.yaml');
+  makeConfig(configPath);
+  try {
+    const result = executeCli(binPath, [...args], { cwd });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(ExitCode.ERROR);
+    expectErrorDocument(result.stdout, 'INPUT_UNREADABLE');
+  } finally {
+    if (existsSync(configPath)) chmodSync(configPath, READABLE);
+  }
+}
+
 /** A project declaring `guides`, holding one file, and `empty`, which no file matches. */
 const COLLECTION_CONFIG = 'version: 1\nresources:\n  collections:\n    guides:\n      include:\n        - "docs/*.md"\n'
   + '    empty:\n      include:\n        - "nothing/*.md"\n';
@@ -1164,5 +1182,28 @@ describe('exit codes are derived from the published document (system test)', () 
         expectUnreadableRefusal(verb, args, safePath.join(parent, 'child'), parent);
       },
     );
+  });
+
+  // The verbs that read the project config through resources' `parseConfigFile`
+  // (the CLI's own loader has always coded this): a config the OS will not read
+  // is the user's input — INPUT_UNREADABLE, never INTERNAL_ERROR with a stack.
+  describe('a project config the OS will not read is INPUT_UNREADABLE', () => {
+    const CONFIG_READERS: ReadonlyArray<{ readonly verb: string; readonly args: readonly string[] }> = [
+      { verb: 'okf validate', args: ['okf', 'validate', '--format', 'json'] },
+      { verb: 'claude plugin build', args: ['claude', 'plugin', 'build'] },
+      { verb: 'claude marketplace publish', args: ['claude', 'marketplace', 'publish', '--dry-run'] },
+    ];
+
+    // A directory where the file should be: EISDIR on every platform.
+    it.each(CONFIG_READERS)('$verb with a directory at the config path ends on ERROR', ({ verb, args }) => {
+      expectConfigRefusal(`config-dir-${verb.replaceAll(' ', '-')}`, args, (configPath) => mkdirSyncReal(configPath));
+    });
+
+    it.skipIf(CANNOT_DENY_READS).each(CONFIG_READERS)('$verb with a mode-000 config ends on ERROR', ({ verb, args }) => {
+      expectConfigRefusal(`config-000-${verb.replaceAll(' ', '-')}`, args, (configPath) => {
+        writeFileSync(configPath, 'version: 1\n');
+        chmodSync(configPath, UNREADABLE);
+      });
+    });
   });
 });

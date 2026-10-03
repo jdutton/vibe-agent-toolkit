@@ -261,9 +261,6 @@
             "gate": {
               "$ref": "#/definitions/claude-plugin-list/anyOf/0/properties/gate"
             },
-            "durationMs": {
-              "$ref": "#/definitions/claude-plugin-list/anyOf/0/properties/durationMs"
-            },
             "findings": {
               "type": "array",
               "items": {

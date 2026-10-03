@@ -221,9 +221,6 @@
             "gate": {
               "$ref": "#/definitions/claude-marketplace-publish/anyOf/0/properties/gate"
             },
-            "durationMs": {
-              "$ref": "#/definitions/claude-marketplace-publish/anyOf/0/properties/durationMs"
-            },
             "findings": {
               "type": "array",
               "items": {

@@ -3,11 +3,12 @@
  * to invent the parts the ARD specification does not define.
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import { exitCodeForReport, type ExitDeterminingDocument } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { ARD_EMIT_REPORT_SCHEMA } from '../src/commands/ard/emit-schema.js';
@@ -20,6 +21,7 @@ import {
 } from '../src/commands/ard/emit.js';
 import { createArdCommand } from '../src/commands/ard/index.js';
 import { collectArdSurfaces } from '../src/commands/ard/surfaces.js';
+import { refusalCodeOf } from '../src/utils/command-refusal.js';
 
 import {
   CONFIG_YAML_ARD_DOT_NAMESPACE,
@@ -331,6 +333,19 @@ describe('runArdEmit — which of the three absences it is', () => {
     ).rejects.toThrow(/does not exist/i);
   });
 
+  it.skipIf(CANNOT_DENY_READS)('refuses a root the OS will not stat as INPUT_UNREADABLE, never as absent', async () => {
+    const parent = safePath.join(workDir, 'untraversable-root');
+    mkdirSyncReal(safePath.join(parent, 'project'), { recursive: true });
+    chmodSync(parent, 0o000);
+    try {
+      const failure = await runArdEmit({ projectRoot: safePath.join(parent, 'project'), output: safePath.join(workDir, 'y.json') })
+        .then(() => undefined, (error: unknown) => error);
+      expect(refusalCodeOf(failure)).toBe('INPUT_UNREADABLE');
+    } finally {
+      chmodSync(parent, 0o755);
+    }
+  });
+
   it('says the config FILE is missing when the root exists but carries none', async () => {
     const root = projectWith(workDir, 'no-file', CONFIG_YAML_WITHOUT_ARD);
     removeConfigFile(root);
@@ -346,6 +361,21 @@ describe('runArdEmit — which of the three absences it is', () => {
     await expect(
       runArdEmit({ projectRoot: root, output: safePath.join(root, 'ard.json') })
     ).rejects.toThrow(/`ard:`/);
+  });
+});
+
+describe('ardEmitCommand — an --output the OS will not write', () => {
+  it('publishes RUN_INCOMPLETE at exit 2, never INTERNAL_ERROR', async () => {
+    const root = projectWithSkill(workDir, 'unwritable-output', CONFIG_YAML_WITH_ARD);
+    // A FILE where the output's parent directory must be: the mkdir fails on every platform.
+    writeFileSync(safePath.join(root, 'out'), 'not a directory\n');
+
+    const { stdout, exitCalls } = await captureEmit(root, { format: 'json' });
+
+    expect(exitCalls).toEqual([[2]]);
+    const document = JSON.parse(stdout) as { status: string; error?: { code: string } };
+    expect(document.status).toBe('error');
+    expect(document.error?.code).toBe('RUN_INCOMPLETE');
   });
 });
 

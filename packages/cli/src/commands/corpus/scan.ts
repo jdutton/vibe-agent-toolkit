@@ -121,6 +121,9 @@ function finishedScan(rows: readonly PluginRow[], run: RunLocation): FinishedWor
   };
 }
 
+/** Test seam: the pure fold a refusal part-way publishes. */
+export const __internal = { finishedScan };
+
 /**
  * Audit every seed entry and write the run's files, recording each finished
  * row in `progress` as it lands.

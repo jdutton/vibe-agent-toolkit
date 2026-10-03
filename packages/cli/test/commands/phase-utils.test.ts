@@ -108,6 +108,8 @@ describe('orchestratorReport', () => {
       expect.objectContaining({ name: 'skills', status: 'error', error: { code: 'CONFIG_INVALID', message: 'skills config is broken' } }),
     ]);
     expect(exitCodeForReport(report)).toBe(ExitCode.ERROR);
+    // A refusal document carries no `durationMs`, though the run was timed.
+    expect(report).not.toHaveProperty('durationMs');
   });
 
   it('applies run integrity ONCE, to the sum: a phase that examined nothing does not fail a run that examined something', () => {

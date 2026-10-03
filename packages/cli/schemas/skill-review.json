@@ -283,9 +283,6 @@
             "gate": {
               "$ref": "#/definitions/skill-review/anyOf/0/properties/gate"
             },
-            "durationMs": {
-              "$ref": "#/definitions/skill-review/anyOf/0/properties/durationMs"
-            },
             "findings": {
               "type": "array",
               "items": {

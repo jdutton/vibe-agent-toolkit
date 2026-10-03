@@ -195,9 +195,6 @@
             "gate": {
               "$ref": "#/definitions/agent-uninstall/anyOf/0/properties/gate"
             },
-            "durationMs": {
-              "$ref": "#/definitions/agent-uninstall/anyOf/0/properties/durationMs"
-            },
             "findings": {
               "type": "array",
               "items": {

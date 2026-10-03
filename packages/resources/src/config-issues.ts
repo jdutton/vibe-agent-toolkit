@@ -261,6 +261,14 @@ function withoutUnrecognizedKeys(raw: unknown, issues: readonly z.ZodIssue[]): u
 export const CONFIG_LOAD_CODE = 'CONFIG_LOAD';
 
 /**
+ * The code a config that exists and the OS would not let VAT READ carries
+ * (permissions, a directory where the file should be) — the user's input, not
+ * a VAT defect. Thrown by {@link readConfigText} and its sync twin, the one
+ * config read every reader shares.
+ */
+export const CONFIG_UNREADABLE_CODE = 'CONFIG_UNREADABLE';
+
+/**
  * Parse a config, treating an UNKNOWN KEY as a warning and anything else as a
  * refusal.
  *

@@ -138,6 +138,9 @@ function collectionCounts(
   return Object.fromEntries(counts);
 }
 
+/** Test seam: the per-collection counts `--collection` narrows. */
+export const __internal = { collectionCounts };
+
 export async function scanCommand(
   pathArg: string | undefined,
   options: ScanOptions

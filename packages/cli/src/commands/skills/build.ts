@@ -56,6 +56,7 @@ import {
 } from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot, unstatablePathRefusal } from '../../utils/project-root-policy.js';
+import { relativeLocationOrUndefined } from '../../utils/relativize-paths.js';
 import { withResourcePopulationSource } from '../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, publishScope } from '../../utils/skill-packaging-config.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
@@ -479,12 +480,12 @@ interface SkillsBuildWorkInput {
  * here reads an override for them, and a key that parses and does nothing is
  * the inert-config shape the registry exists to prevent.
  */
-function notBuildableIssue(message: string, location: string): ValidationIssue {
+function notBuildableIssue(message: string, location: string | undefined): ValidationIssue {
   return {
     severity: 'error',
     code: 'SKILL_BUILD_TARGET_NOT_BUILDABLE',
     message,
-    location,
+    ...(location === undefined ? {} : { location }),
     fix: 'Drop --skill, set publish: true on the skill to distribute it through dist/skills, or — for a plugin-local skill — run vat build --only claude to package its plugin.',
   };
 }
@@ -508,6 +509,11 @@ function reportPath(cwd: string, path: string): string {
   return toForwardSlash(safePath.relative(cwd, path));
 }
 
+/** A finding's `location` for `path`, or none when it has no `cwd`-relative spelling (another drive). */
+function reportLocation(cwd: string, path: string): string | undefined {
+  return relativeLocationOrUndefined(reportPath(cwd, path));
+}
+
 /**
  * Every issue ONE skill contributed, keyed by skill name: its pre-build
  * rejection, its packaging throw (as a `SKILL_PACKAGING_FAILED`
@@ -521,7 +527,7 @@ function issuesBySkill(input: SkillsBuildWorkInput): Map<string, ValidationIssue
   for (const { name, issues } of run.validationFailures) bySkill.set(name, [...issues]);
   for (const { name, message } of run.failures) {
     const source = sources.get(name);
-    bySkill.set(name, [packagingFailedIssue(message, source === undefined ? undefined : reportPath(cwd, source))]);
+    bySkill.set(name, [packagingFailedIssue(message, source === undefined ? undefined : reportLocation(cwd, source))]);
   }
   for (const { name, result } of run.results) bySkill.set(name, collectPostBuildIssues(result));
   return bySkill;
@@ -1513,7 +1519,7 @@ async function prepareBuild(
   const target = [...inPlace, ...pluginOnly][0];
   if (refusal !== undefined && target !== undefined) {
     logger.error(refusal.message);
-    const issue = notBuildableIssue(refusal.message, reportPath(cwd, target.skill.sourcePath));
+    const issue = notBuildableIssue(refusal.message, reportLocation(cwd, target.skill.sourcePath));
     return { kind: 'done', report: earlyReport({ ...planned, setAsideIssues: [issue] }, startTime) };
   }
 

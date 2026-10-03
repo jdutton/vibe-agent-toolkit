@@ -221,7 +221,6 @@ const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
   'packages/cli/src/commands/agent/install.ts',                       // access/mkdir/lstat/rm/symlink — install-dir mutation
   'packages/cli/src/commands/agent/installed.ts',                     // ENUM: readdir of the install dir
   'packages/cli/src/commands/agent/uninstall.ts',                     // access/lstat/rm — install-dir mutation
-  'packages/cli/src/commands/ard/emit.ts',                            // existsSync probe
   'packages/cli/src/commands/audit.ts',                               // existsSync/stat probes only — the walker is gone (audit/scan-population.ts)
   'packages/cli/src/commands/audit/git-url-clone.ts',                 // mkdtemp/rm — clone scratch dir
   'packages/cli/src/commands/build.ts',                               // ENUM: readdir for phase output; existsSync probes

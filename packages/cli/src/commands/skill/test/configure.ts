@@ -10,17 +10,16 @@
 import { writeFileSync } from 'node:fs';
 
 import { upsertTestConfig } from '@vibe-agent-toolkit/agent-skills';
-import { parseConfigAllowingUnknownKeys, ProjectConfigSchema } from '@vibe-agent-toolkit/resources';
+import { parseConfigAllowingUnknownKeys, ProjectConfigSchema, readConfigText } from '@vibe-agent-toolkit/resources';
 import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
 
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED, writeArtifact } from '../../../utils/document-writer.js';
 import { createLogger } from '../../../utils/logger.js';
-import { requireInputPath, requireProjectRoot, unstatablePathRefusal } from '../../../utils/project-root-policy.js';
+import { requireInputPath, requireProjectRoot } from '../../../utils/project-root-policy.js';
 
 import { assertValidAuth, type AuthValue } from './auth-flags.js';
 
@@ -130,7 +129,7 @@ export function buildKnobs(
  * - The message was `validation.error.message`, which in Zod 3 is a **JSON dump
  *   of the issue array**: no file named, no key named in words, no remedy.
  *
- * 🔑 **The read goes through `readTextContent`**, never `readFileSync(path,
+ * 🔑 **The read goes through the shared `readConfigText`**, never `readFileSync(path,
  * 'utf-8')`. This is a read-modify-WRITE path, so a UTF-16LE or BOM-prefixed
  * config (what PowerShell 5.1 writes by default) was decoded as mojibake and then
  * serialized back over the original — destroying a config whose only fault was
@@ -143,7 +142,7 @@ export function buildKnobs(
  * @returns The updated YAML, comments and key ordering preserved
  * @throws {CommandRefusalError} `CONFIG_INVALID` when the project has no config
  *   file, or the UPDATED config would fail validation for any reason other than
- *   an unknown key; `INPUT_UNREADABLE` when the OS refuses the read
+ *   an unknown key; `VatError` `CONFIG_UNREADABLE` (→ `INPUT_UNREADABLE`) when the OS refuses the read
  */
 export async function updateSkillTestConfig(
   configPath: string,
@@ -156,12 +155,7 @@ export async function updateSkillTestConfig(
     code: 'CONFIG_INVALID',
     message: `No ${CONFIG_FILENAME} at the project root: ${configPath}. Create one (version: 1 and a skills: block) first.`,
   });
-  let yamlText: string;
-  try {
-    ({ text: yamlText } = await readTextContent(configPath));
-  } catch (error) {
-    throw unstatablePathRefusal(configPath, error);
-  }
+  const yamlText = await readConfigText(configPath);
   const updatedYaml = upsertTestConfig(yamlText, skillName, knobs);
 
   // Validate the FULL updated config before it can be written.

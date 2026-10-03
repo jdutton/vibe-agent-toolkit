@@ -11,7 +11,13 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { relativizePath, relativizePathEntries } from '../../src/utils/relativize-paths.js';
+import { refusalCodeOf } from '../../src/utils/command-refusal.js';
+import {
+  relativeLocationOrRefuse,
+  relativeLocationOrUndefined,
+  relativizePath,
+  relativizePathEntries,
+} from '../../src/utils/relativize-paths.js';
 
 /**
  * Synthetic absolute paths, resolved rather than written as literals — on
@@ -95,5 +101,47 @@ describe('relativizePathEntries', () => {
     const entries = [{ path: SKILL }, { path: SKILL, linkedFiles: undefined }];
 
     expect(() => relativizePathEntries(entries, ROOT, ['linkedFiles'])).not.toThrow();
+  });
+});
+
+/**
+ * A target on another Windows drive than its root has no relative spelling:
+ * `path.relative` returns the absolute one, which a published `location`
+ * refuses. Driven with the strings `path.relative` returns, so the cross-drive
+ * case is pinned on every platform, not only on a Windows runner.
+ */
+const CROSS_DRIVE_CASES = [
+  ['C:/Users/runner/Temp/agent.yaml', 'what path.relative returns for a target on another Windows drive'],
+  ['/elsewhere/agent.yaml', 'a POSIX-absolute location'],
+] as const;
+
+describe('relativeLocationOrUndefined', () => {
+  it('passes a relative location through unchanged, a climb included', () => {
+    expect(relativeLocationOrUndefined('agents/a/agent.yaml')).toBe('agents/a/agent.yaml');
+    expect(relativeLocationOrUndefined('../sibling/agent.yaml')).toBe('../sibling/agent.yaml');
+    expect(relativeLocationOrUndefined('')).toBe('');
+  });
+
+  it.each(CROSS_DRIVE_CASES)('answers undefined for %s — %s', (location) => {
+    expect(relativeLocationOrUndefined(location)).toBeUndefined();
+  });
+});
+
+describe('relativeLocationOrRefuse', () => {
+  it('passes a relative location through unchanged', () => {
+    expect(relativeLocationOrRefuse('agents/a/agent.yaml', '/work/repo', 'vat agent validate')).toBe('agents/a/agent.yaml');
+  });
+
+  it.each(CROSS_DRIVE_CASES)('refuses %s as USAGE_INVALID — %s', (location) => {
+    let refusal: unknown;
+    try {
+      relativeLocationOrRefuse(location, 'D:/a/repo', 'vat agent validate');
+    } catch (error) {
+      refusal = error;
+    }
+
+    expect(refusalCodeOf(refusal)).toBe('USAGE_INVALID');
+    expect((refusal as Error).message).toContain(location);
+    expect((refusal as Error).message).toContain('vat agent validate');
   });
 });

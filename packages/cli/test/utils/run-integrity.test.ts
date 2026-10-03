@@ -67,7 +67,6 @@ describe('withRunIntegrity', () => {
       examined: 0,
       findings: [],
       data: null,
-      durationMs: undefined,
     });
 
     const published = withRunIntegrity(report, EXAMINED);

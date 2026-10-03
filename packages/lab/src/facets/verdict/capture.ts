@@ -244,7 +244,9 @@ function inClone(
     if (host !== undefined) {
       return { ok: false, refusal: `REFUSED: the build-verb clone '${clonePath}' would lie inside subject '${host}'.` };
     }
-    const plan = planApfsClone(readCloneSource(path, subject.alias), clonePath, process.platform);
+    const listed = readCloneSource(path, subject.alias);
+    if (!listed.ok) return listed;
+    const plan = planApfsClone(listed.source, clonePath, process.platform);
     if (!plan.ok) return plan;
     const failed = executeClonePlan(plan);
     if (failed !== null) return { ok: false, refusal: failed };

@@ -152,7 +152,7 @@ Description:
   User input: The input text/query for the agent
 
 Exit Codes:
-  0 - Success  |  1 - Execution error  |  2 - System error
+  0 - Success  |  2 - Any failure (the agent did not load, or the run failed)
 
 Examples:
   $ vat agent run agent-generator "Create a code review agent"

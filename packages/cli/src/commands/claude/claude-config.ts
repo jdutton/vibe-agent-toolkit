@@ -17,8 +17,8 @@ export interface LoadedClaudeConfig {
 
 /**
  * Find, parse, and return the claude: section of the project config.
- * Refuses `CONFIG_INVALID` when no config file is found; a config that does
- * not parse throws the parser's coded error.
+ * Refuses `CONFIG_INVALID` when no config file is found; a config that cannot
+ * be read or does not parse throws the parser's coded error.
  * Returns undefined for claudeConfig when the claude: section is absent.
  */
 export async function loadClaudeProjectConfig(): Promise<{

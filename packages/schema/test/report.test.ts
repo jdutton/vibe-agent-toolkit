@@ -23,6 +23,7 @@ import {
   SeveritySchema,
   strongerSeverity,
   toFindings,
+  withDurationMs,
   type Finding,
   type ValidationIssue,
 } from '../src/index.js';
@@ -141,7 +142,6 @@ describe('buildErrorReport', () => {
       examined: 2,
       findings: [finding('warning'), finding('error')],
       data: { root: '.' },
-      durationMs: 7,
     });
     expect(report).toEqual({
       status: 'error',
@@ -149,24 +149,40 @@ describe('buildErrorReport', () => {
       findings: [finding('warning'), finding('error')],
       summary: { errors: 1, warnings: 1, info: 0 },
       gate: { strict: false },
-      durationMs: 7,
       error: { code: 'INPUT_UNREADABLE', message: 'could not read docs/c.md' },
       data: { root: '.' },
     });
   });
 
-  it('spells "nothing finished" at the call site and omits an unmeasured duration', () => {
+  it('spells "nothing finished" at the call site and never carries a duration', () => {
     const report = buildErrorReport({
       error: { code: 'INTERNAL_ERROR', message: 'boom' },
       gate: LENIENT,
       examined: 0,
       findings: [],
       data: null,
-      durationMs: undefined,
-    });
+      // An untyped caller handing one in: a refusal document still carries none.
+      durationMs: 7,
+    } as Parameters<typeof buildErrorReport>[0]);
     expect(report.data).toBeNull();
     expect(report.summary).toEqual({ errors: 0, warnings: 0, info: 0 });
     expect('durationMs' in report).toBe(false);
+  });
+});
+
+describe('withDurationMs', () => {
+  it('times a completed report and leaves a refusal untimed', () => {
+    const done = buildReport({ examined: 1, findings: [], data: { root: '.' }, gate: LENIENT });
+    expect(withDurationMs(done, 5)).toMatchObject({ status: 'ok', durationMs: 5 });
+
+    const refused = buildErrorReport({
+      error: { code: 'INTERNAL_ERROR', message: 'boom' },
+      gate: LENIENT,
+      examined: 0,
+      findings: [],
+      data: null,
+    });
+    expect(withDurationMs(refused, 5)).toBe(refused);
   });
 });
 
@@ -179,7 +195,6 @@ describe('reportSchema', () => {
       examined: 2,
       findings: [finding('warning')],
       data: { root: '.' },
-      durationMs: 3,
     }),
     ...overrides,
   });
@@ -235,6 +250,10 @@ describe('reportSchema', () => {
     // …and one that finished nothing, with data null.
     expect(schema.safeParse(errorReport({ examined: 0, findings: [], summary: { errors: 0, warnings: 0, info: 0 }, data: null })).success)
       .toBe(true);
+  });
+
+  it('rejects an error report carrying durationMs: a refusal is never timed', () => {
+    expect(schema.safeParse(errorReport({ durationMs: 3 })).success).toBe(false);
   });
 
   it('rejects an error report without error.code', () => {

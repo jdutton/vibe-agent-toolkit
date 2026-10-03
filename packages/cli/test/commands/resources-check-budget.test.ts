@@ -420,6 +420,8 @@ describe('buildInterruptedCheckInput', () => {
     expect(payload.error.message).toContain('before its population completed');
     // The envelope's error branch: the reason is in `error`, not in `findings`.
     expect(payload.findings).toStrictEqual([]);
+    // No refusal document carries `durationMs`.
+    expect(payload).not.toHaveProperty('durationMs');
     expect(CHECK_REPORT_SCHEMA.safeParse(payload).success).toBe(true);
   });
 

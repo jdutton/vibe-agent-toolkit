@@ -131,27 +131,36 @@ interface ReportBase {
   summary: SeverityCounts;
   /** The gate the exit code is derived from. */
   gate: Gate;
+}
+
+/** What a COMPLETED run adds: its duration. A refusal carries none. */
+interface CompletedReportBase extends ReportBase {
   /** Wall-clock milliseconds the run took, when the command measures it. */
   durationMs?: number;
 }
 
 /** A completed run that found nothing. */
-export interface OkReport<T> extends ReportBase {
+export interface OkReport<T> extends CompletedReportBase {
   status: 'ok';
   data: T;
 }
 
 /** A completed run that found at least one thing. */
-export interface FindingsReport<T> extends ReportBase {
+export interface FindingsReport<T> extends CompletedReportBase {
   status: 'findings';
   data: T;
 }
 
-/** A run that did not finish, with whatever did: `data` is the command's own type, or `null` when nothing was produced. */
+/**
+ * A run that did not finish, with whatever did: `data` is the command's own
+ * type, or `null` when nothing was produced. No `durationMs` — `never`, so
+ * reading it off any {@link Report} still type-checks and answers `undefined`.
+ */
 export interface ErrorReport<T> extends ReportBase {
   status: 'error';
   error: ReportError;
   data: T | null;
+  durationMs?: never;
 }
 
 /** The envelope, discriminated on `status`. */
@@ -207,11 +216,12 @@ export function reportSchema<T extends z.ZodTypeAny, F extends FindingZodSchema>
     examined: z.number().int().nonnegative(),
     summary: SeverityCountsSchema,
     gate: GateSchema,
-    durationMs: z.number().nonnegative().optional(),
   };
+  // Only a completed run is timed: the error branch refuses `durationMs`.
+  const durationMs = z.number().nonnegative().optional();
   return z.discriminatedUnion('status', [
-    z.object({ status: z.literal('ok'), ...base, findings: z.array(findingSchema).max(0), data: dataSchema }).strict(),
-    z.object({ status: z.literal('findings'), ...base, findings: z.array(findingSchema).min(1), data: dataSchema }).strict(),
+    z.object({ status: z.literal('ok'), ...base, durationMs, findings: z.array(findingSchema).max(0), data: dataSchema }).strict(),
+    z.object({ status: z.literal('findings'), ...base, durationMs, findings: z.array(findingSchema).min(1), data: dataSchema }).strict(),
     z.object({
       status: z.literal('error'),
       ...base,
@@ -231,17 +241,19 @@ type ReportZodBase<F extends FindingZodSchema> = {
   examined: z.ZodNumber;
   summary: typeof SeverityCountsSchema;
   gate: typeof GateSchema;
-  durationMs: z.ZodOptional<z.ZodNumber>;
   findings: z.ZodArray<F>;
 };
+
+/** The duration only a completed branch carries. */
+type ReportZodDuration = { durationMs: z.ZodOptional<z.ZodNumber> };
 
 /** The union {@link reportSchema} returns, spelled out so the shape is nameable. */
 export type ReportZodSchema<T extends z.ZodTypeAny, F extends FindingZodSchema> = z.ZodEffects<
   z.ZodDiscriminatedUnion<
     'status',
     [
-      z.ZodObject<ReportZodBase<F> & { status: z.ZodLiteral<'ok'>; data: T }, 'strict'>,
-      z.ZodObject<ReportZodBase<F> & { status: z.ZodLiteral<'findings'>; data: T }, 'strict'>,
+      z.ZodObject<ReportZodBase<F> & ReportZodDuration & { status: z.ZodLiteral<'ok'>; data: T }, 'strict'>,
+      z.ZodObject<ReportZodBase<F> & ReportZodDuration & { status: z.ZodLiteral<'findings'>; data: T }, 'strict'>,
       z.ZodObject<
         ReportZodBase<F> & { status: z.ZodLiteral<'error'>; error: typeof ReportErrorSchema; data: z.ZodNullable<T> },
         'strict'
@@ -288,7 +300,7 @@ export interface ReportInput<T> {
  * What {@link buildErrorReport} needs. Every field REQUIRED: an error report
  * must say what finished. "Nothing finished" is spelled out at the call site
  * (`examined: 0, findings: [], data: null`) — never a default that silently
- * drops finished work.
+ * drops finished work. No `durationMs`: a refusal document carries none.
  */
 export interface ErrorReportInput<T> {
   error: ReportError;
@@ -296,25 +308,18 @@ export interface ErrorReportInput<T> {
   examined: number;
   findings: readonly Finding[];
   data: T | null;
-  durationMs: number | undefined;
 }
 
 /**
  * The fields every branch shares, with `summary` DERIVED from the findings —
  * the one place it is computed, for completed and unfinished runs alike.
  *
- * @param input - The denominator, the findings, the gate and the duration
+ * @param input - The denominator, the findings and the gate
  * @returns The shared fields, in published key order
  */
-function reportBase(input: Pick<ReportInput<unknown>, 'examined' | 'findings' | 'gate' | 'durationMs'>): ReportBase {
+function reportBase(input: Pick<ReportInput<unknown>, 'examined' | 'findings' | 'gate'>): ReportBase {
   const findings = [...input.findings];
-  return {
-    examined: input.examined,
-    findings,
-    summary: countBySeverity(findings),
-    gate: input.gate,
-    ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
-  };
+  return { examined: input.examined, findings, summary: countBySeverity(findings), gate: input.gate };
 }
 
 /**
@@ -327,7 +332,12 @@ function reportBase(input: Pick<ReportInput<unknown>, 'examined' | 'findings' | 
  */
 export function buildReport<T>(input: ReportInput<T>): OkReport<T> | FindingsReport<T> {
   const base = reportBase(input);
-  return { status: resultStatus(base.findings), ...base, data: input.data };
+  return {
+    status: resultStatus(base.findings),
+    ...base,
+    ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
+    data: input.data,
+  };
 }
 
 /**
@@ -340,4 +350,18 @@ export function buildReport<T>(input: ReportInput<T>): OkReport<T> | FindingsRep
  */
 export function buildErrorReport<T>(input: ErrorReportInput<T>): ErrorReport<T> {
   return { status: 'error', ...reportBase(input), error: input.error, data: input.data };
+}
+
+/**
+ * Stamp a report with the run's duration — on a COMPLETED run only. An error
+ * report is returned unchanged: a refusal document carries no `durationMs`,
+ * and its schema refuses one, so a `{ ...report, durationMs }` spread over the
+ * union would publish a document the writer must reject.
+ *
+ * @param report - Any branch of the envelope
+ * @param durationMs - Wall-clock milliseconds the run took
+ * @returns The report, timed when it completed
+ */
+export function withDurationMs<T>(report: Report<T>, durationMs: number): Report<T> {
+  return report.status === 'error' ? report : { ...report, durationMs };
 }

@@ -205,9 +205,6 @@
             "gate": {
               "$ref": "#/definitions/ard-emit/anyOf/0/properties/gate"
             },
-            "durationMs": {
-              "$ref": "#/definitions/ard-emit/anyOf/0/properties/durationMs"
-            },
             "findings": {
               "type": "array",
               "items": {

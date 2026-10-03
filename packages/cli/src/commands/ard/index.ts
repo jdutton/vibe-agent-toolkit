@@ -97,7 +97,9 @@ Exit Codes:
       derived from the published report, never chosen beside it
   2 - The command could not do its job; \`error.code\` says which: USAGE_INVALID
       (no such project root), CONFIG_INVALID (no config file, or one that does
-      not parse), INTERNAL_ERROR (a VAT defect)
+      not parse), INPUT_UNREADABLE (a config the OS will not read),
+      RUN_INCOMPLETE (the OS refused the --output write), INTERNAL_ERROR (a
+      VAT defect)
 
 Example:
   $ vat ard emit --format json --strict

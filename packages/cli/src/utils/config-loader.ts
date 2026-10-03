@@ -5,14 +5,21 @@
  * - VAT_TEST_CONFIG: Override config file path for testing (absolute path)
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { CONFIG_LOAD_CODE, parseConfigAllowingUnknownKeys, ProjectConfigSchema, type ProjectConfig } from '@vibe-agent-toolkit/resources';
-import { isFilesystemAccessError, isVatError, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import {
+  CONFIG_LOAD_CODE,
+  CONFIG_UNREADABLE_CODE,
+  parseConfigAllowingUnknownKeys,
+  ProjectConfigSchema,
+  readConfigTextSync,
+  type ProjectConfig,
+} from '@vibe-agent-toolkit/resources';
+import { isVatError, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
-import { CONFIG_UNREADABLE_CODE, errorMessageOf } from './command-refusal.js';
+import { errorMessageOf } from './command-refusal.js';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
@@ -75,7 +82,7 @@ export function loadConfig(projectRoot: string): ProjectConfig | undefined {
   }
 
   try {
-    const content = readConfigText(configPath);
+    const content = readConfigTextSync(configPath);
     const parsed = yaml.parse(content);
 
     // Validate with canonical schema from resources package.
@@ -114,19 +121,6 @@ export function loadConfig(projectRoot: string): ProjectConfig | undefined {
     }
     if (error instanceof yaml.YAMLError) throw new VatError(CONFIG_LOAD_CODE, message, { cause: error });
     throw error;
-  }
-}
-
-/**
- * Read the adopter's config file, coding a read the OS refused as
- * `CONFIG_UNREADABLE`: every errno here is about the user's own file.
- */
-function readConfigText(configPath: string): string {
-  try {
-    return readFileSync(configPath, 'utf-8');
-  } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
-    throw new VatError(CONFIG_UNREADABLE_CODE, errorMessageOf(error), { cause: error });
   }
 }
 

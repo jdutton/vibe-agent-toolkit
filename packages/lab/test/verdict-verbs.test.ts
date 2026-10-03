@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { type CloneSource, planApfsClone } from '../src/facets/verdict/clone.js';
+import { type CloneDir, type CloneSource, planApfsClone } from '../src/facets/verdict/clone.js';
 import { buildVerbInvocations, verdictVerb, type VerbSubject } from '../src/facets/verdict/verbs.js';
 
 import { PROBE_VERSION } from './command-probe.js';
@@ -47,11 +47,12 @@ describe('verdict verb matrix', () => {
 });
 
 describe('planApfsClone', () => {
+  /** A directory with no skipped entry beneath it: cloned whole. */
+  const leaf = (...entries: string[]): CloneDir => ({ entries, descend: {} });
   const source: CloneSource = {
     path: '/work/tree',
     alias: 'crucible-1',
-    entries: ['.claude', '.git', 'docs'],
-    claudeEntries: ['rules', 'worktrees'],
+    root: { entries: ['.claude', '.git', 'docs'], descend: { '.claude': leaf('rules', 'worktrees') } },
     git: 'directory',
   };
 
@@ -60,13 +61,44 @@ describe('planApfsClone', () => {
       ok: true,
       steps: [
         { kind: 'mkdir', path: '/tmp/clone' },
-        { kind: 'spawn', command: 'cp', args: ['-c', '-R', '/work/tree/.git', '/tmp/clone/.git'] },
-        { kind: 'spawn', command: 'cp', args: ['-c', '-R', '/work/tree/docs', '/tmp/clone/docs'] },
         { kind: 'mkdir', path: '/tmp/clone/.claude' },
         { kind: 'spawn', command: 'cp', args: ['-c', '-R', '/work/tree/.claude/rules', '/tmp/clone/.claude/rules'] },
+        { kind: 'spawn', command: 'cp', args: ['-c', '-R', '/work/tree/.git', '/tmp/clone/.git'] },
+        { kind: 'spawn', command: 'cp', args: ['-c', '-R', '/work/tree/docs', '/tmp/clone/docs'] },
         { kind: 'remove-origin', repository: '/tmp/clone' },
       ],
     });
+  });
+
+  // Ruling 62: a `.turbo` cache cloned for 4+ minutes. Regenerable caches are
+  // not the subject, at the root or nested in a workspace package.
+  // node_modules is CLONED: the subject's build resolves bare specifiers through it.
+  it('skips .turbo at any depth but clones node_modules whole, descending only where a skip lies', () => {
+    const monorepo: CloneSource = {
+      ...source,
+      git: 'none',
+      root: {
+        entries: ['.turbo', 'node_modules', 'packages', 'README.md'],
+        descend: {
+          packages: {
+            entries: ['a', 'b'],
+            descend: { a: leaf('src', 'node_modules', '.turbo', 'package.json') },
+          },
+        },
+      },
+    };
+
+    const plan = planApfsClone(monorepo, '/tmp/clone', 'darwin');
+    const cloned = plan.ok ? plan.steps.flatMap((step) => (step.kind === 'spawn' ? [step.args[2]] : [])) : [];
+
+    expect(cloned).toEqual([
+      '/work/tree/node_modules',
+      '/work/tree/packages/a/src',
+      '/work/tree/packages/a/node_modules',
+      '/work/tree/packages/a/package.json',
+      '/work/tree/packages/b',
+      '/work/tree/README.md',
+    ]);
   });
 
   it('refuses off macOS, naming buildVerbs', () => {
@@ -84,7 +116,7 @@ describe('planApfsClone', () => {
   });
 
   it('does not touch remotes of a tree with no git', () => {
-    const plan = planApfsClone({ ...source, git: 'none', entries: ['docs'], claudeEntries: null }, '/tmp/clone', 'darwin');
+    const plan = planApfsClone({ ...source, git: 'none', root: leaf('docs') }, '/tmp/clone', 'darwin');
 
     expect(plan.ok && plan.steps.map((step) => step.kind)).toEqual(['mkdir', 'spawn']);
   });

@@ -6,7 +6,7 @@
 import { AGENT_MANIFEST_INVALID_CODE, AGENT_MANIFEST_NOT_FOUND_CODE, AGENT_MANIFEST_UNREADABLE_CODE } from '@vibe-agent-toolkit/agent-config';
 import { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE } from '@vibe-agent-toolkit/agent-skills';
 import { ApiRequestError, ApiTransportError, OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
-import { LinkAuthConfigError, okfBundleRuns, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
+import { CONFIG_UNREADABLE_CODE, LinkAuthConfigError, okfBundleRuns, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
 import { ExitCode, type ErrorReport } from '@vibe-agent-toolkit/schema';
 import { CopyLinkEscapesSourceError, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
 import { updateYamlIn } from '@vibe-agent-toolkit/utils/yaml';
@@ -16,7 +16,7 @@ import { AgentNameEscapesScopeError } from '../../src/commands/agent/install-pat
 import { PluginSymlinkRefusedError } from '../../src/commands/claude/plugin/tree-copy.js';
 import { parseBudgetSeconds, requireSupervisableFlags } from '../../src/commands/resources/check-supervisor.js';
 import { requireKnownCheck } from '../../src/commands/resources/check.js';
-import { CommandRefusalError, CONFIG_UNREADABLE_CODE, errorMessageOf, refusalCodeOf } from '../../src/utils/command-refusal.js';
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../src/utils/command-refusal.js';
 import { endWithRefusal, NOTHING_FINISHED } from '../../src/utils/document-writer.js';
 
 /** An output write the OS refused — `ard emit --output <read-only>`. */

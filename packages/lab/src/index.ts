@@ -279,6 +279,7 @@ export {
   type PathSubstitution,
 } from './facets/verdict/normalize.js';
 export {
+  type CloneDir,
   type CloneSource,
   type ClonePlan,
   type CloneStep,

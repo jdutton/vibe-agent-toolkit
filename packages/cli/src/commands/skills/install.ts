@@ -23,7 +23,7 @@ import { cpSync, rmSync, statSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 
 import { validateSkill } from '@vibe-agent-toolkit/agent-skills';
-import { buildReport, toFindings, type Finding, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { buildReport, toFindings, withDurationMs, type Finding, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   direntKindFollowingSync,
   isSingleFsSegment,
@@ -442,7 +442,7 @@ export async function installCommand(
   } else {
     logger.info(`\nInstalled ${count} skill(s) to ${options.target} (${options.scope} scope)`);
   }
-  endWithReport('skills install', { ...report, durationMs: Date.now() - startTime }, 'yaml');
+  endWithReport('skills install', withDurationMs(report, Date.now() - startTime), 'yaml');
 }
 
 export function createInstallCommand(): Command {

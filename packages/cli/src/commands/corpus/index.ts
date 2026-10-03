@@ -65,7 +65,6 @@ Exit Codes:
       there, CONFIG_INVALID for a seed that does not parse or validate,
       INPUT_UNREADABLE for one the OS will not read, RUN_INCOMPLETE when a
       write under --out failed — the entries that finished are in data)
-  130 - Interrupted by SIGINT (partial results written)
 
 Requirements:
   projectRoot: optional (tolerates absence)

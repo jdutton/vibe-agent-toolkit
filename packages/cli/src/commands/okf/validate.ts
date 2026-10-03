@@ -17,11 +17,12 @@ import {
   type OkfBundleReport,
   type OkfFinding,
 } from '@vibe-agent-toolkit/resources';
-import { buildReport, type Finding } from '@vibe-agent-toolkit/schema';
+import { buildReport, withDurationMs, type Finding } from '@vibe-agent-toolkit/schema';
 import { findConfigFile, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
+import { relativeLocationOrUndefined } from '../../utils/relativize-paths.js';
 
 import type { OkfValidateData, OkfValidateReport } from './validate-schema.js';
 
@@ -105,11 +106,16 @@ const NO_BUNDLES_NOTICE =
  * @returns The published finding
  */
 function toFinding(finding: OkfFinding, root: string, projectRoot: string): Finding {
+  const document = safePath.join(root, finding.document);
+  // A bundle root on another drive than the project (an absolute or package
+  // root) has no project-relative spelling: the finding names the document in
+  // its message and carries no `location`, rather than killing the document.
+  const location = relativeLocationOrUndefined(issueLocation(document, projectRoot));
   return {
     code: finding.code,
     severity: finding.severity,
-    message: finding.message,
-    location: issueLocation(safePath.join(root, finding.document), projectRoot),
+    message: location === undefined ? `${finding.message} (${document})` : finding.message,
+    ...(location === undefined ? {} : { location }),
     ...(finding.link === undefined ? {} : { link: finding.link }),
     ...(finding.line === undefined ? {} : { line: finding.line }),
   };
@@ -204,8 +210,9 @@ export async function okfValidateReport(
     throw new CommandRefusalError('CONFIG_INVALID', 'No vibe-agent-toolkit.config.yaml found. Run from a project directory.');
   }
 
-  // A config that does not parse or validate throws `CONFIG_LOAD`, and an
-  // undeclared bundle argument `OKF_UNKNOWN_BUNDLE` — each a coded refusal the
+  // A config the OS will not read throws `CONFIG_UNREADABLE`, one that does not
+  // parse or validate `CONFIG_LOAD`, and an undeclared bundle argument
+  // `OKF_UNKNOWN_BUNDLE` — each a coded refusal the
   // catch reads. Anything else thrown here is VAT's defect and surfaces as one.
   const config = await parseConfigFile(configPath);
   const projectRoot = dirname(configPath);
@@ -234,7 +241,7 @@ export async function okfValidateCommand(
   let finished = NOTHING_FINISHED;
 
   try {
-    const report = { ...(await okfValidateReport(bundleArg, options)), durationMs: Date.now() - startTime };
+    const report = withDurationMs(await okfValidateReport(bundleArg, options), Date.now() - startTime);
     const refusal = unreadableRootRefusal(report);
     if (refusal !== undefined) {
       finished = refusal.finished;

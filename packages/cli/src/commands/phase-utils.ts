@@ -327,7 +327,8 @@ function finishedPhases(results: readonly PhaseResult[]): { examined: number; fi
  *
  * @param results - Every phase that ran, in execution order
  * @param gate - The gate the run is judged by
- * @param durationMs - Wall-clock milliseconds the run took
+ * @param durationMs - Wall-clock milliseconds the run took; carried by a completed
+ *   run only, as no refusal document carries `durationMs`
  * @returns The report, before the writer's run-integrity pass
  */
 export function orchestratorReport(
@@ -346,7 +347,6 @@ export function orchestratorReport(
     },
     gate,
     ...finished,
-    durationMs,
   });
 }
 

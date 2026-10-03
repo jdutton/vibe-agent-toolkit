@@ -203,9 +203,6 @@
             "gate": {
               "$ref": "#/definitions/agent-build/anyOf/0/properties/gate"
             },
-            "durationMs": {
-              "$ref": "#/definitions/agent-build/anyOf/0/properties/durationMs"
-            },
             "findings": {
               "type": "array",
               "items": {

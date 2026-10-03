@@ -384,8 +384,9 @@ Output:
 
 Exit Codes:
   0 - An answer was produced (there is no threshold and no gate)
-  1 - Invalid usage (unknown option, or an unsupported --format value)
-  2 - Refused: error.code USAGE_INVALID (a path outside the corpus root),
+  2 - Invalid usage rejected before the verb runs (an unknown option, or an
+      unsupported --format value: Commander's message on stderr, no document),
+      or refused: error.code USAGE_INVALID (a path outside the corpus root),
       BACKEND_UNAVAILABLE (the projection store's optional backend is not
       installed), INPUT_UNREADABLE (a tree the OS will not read), or
       INTERNAL_ERROR (a VAT bug, e.g. a memory file reached with no derived
@@ -995,6 +996,9 @@ function renderUnknownText(document: ContextUnknownDocument): string {
     '',
   ].join('\n');
 }
+
+/** Test seam: the non-answer's document and its text rendering. */
+export const __internal = { renderUnknownText, unknownDocumentFor };
 
 /**
  * Render the answer for a person.

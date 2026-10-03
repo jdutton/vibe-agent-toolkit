@@ -26,7 +26,7 @@ const CorpusScanDataSchema = z.object({
   entries: z.array(z.object({
     name: z.string(),
     audit: z.enum(['ok', 'findings', 'unloadable']),
-    review: z.enum(['ok', 'findings', 'skipped', 'error']),
+    review: z.enum(['ok', 'skipped', 'error']),
     // The entry's `<name>-audit.yaml`, relative to `outDir` (`<run dir>/<name>-audit.yaml`); `null` when unloadable.
     outputPath: z.string().nullable(),
   }).strict()),

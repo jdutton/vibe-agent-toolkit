@@ -10,13 +10,14 @@
 
 import { validateAgent, type ValidationResult } from '@vibe-agent-toolkit/agent-config';
 import { buildReport, toFindings } from '@vibe-agent-toolkit/schema';
-import { isAbsoluteAnyPlatform, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
-import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
+import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
+import { relativeLocationOrRefuse } from '../../utils/relativize-paths.js';
 
 import type { AgentValidateReport } from './validate-schema.js';
 
@@ -26,31 +27,6 @@ export interface ValidateCommandOptions {
 
 /** `vat agent validate` offers no `--strict`: warnings never fail it. */
 const GATE = { strict: false } as const;
-
-/**
- * A location the document can publish, or a refusal when it is not relative.
- *
- * Every location in the document is relative to the working directory, and on
- * Windows a manifest on another drive than the working directory has no
- * relative path: `path.relative` hands back the absolute one, which the
- * published schema refuses — so the run used to die on its own document with
- * an uncaught schema error and print nothing. That is the invocation's
- * mistake, and it is said as one.
- *
- * @param location - `issueLocation(manifestPath, root)`
- * @param root - The working directory
- * @returns The location, unchanged, when it is relative
- * @throws CommandRefusalError `USAGE_INVALID` when it is absolute
- */
-export function relativeLocationOrRefuse(location: string, root: string): string {
-  if (isAbsoluteAnyPlatform(location)) {
-    throw new CommandRefusalError(
-      'USAGE_INVALID',
-      `vat agent validate reports locations relative to the working directory, and ${location} has no path relative to ${root} (it is on another drive). Run from the manifest's drive.`,
-    );
-  }
-  return location;
-}
 
 /**
  * Build the report. Pure: no file system, no clock, no `process.exit`.
@@ -69,7 +45,7 @@ function buildAgentValidateReport(result: ValidationResult, root: string, durati
       manifest: {
         name: result.manifest.name,
         version: result.manifest.version,
-        path: relativeLocationOrRefuse(issueLocation(result.manifest.path, root), root),
+        path: relativeLocationOrRefuse(issueLocation(result.manifest.path, root), root, 'vat agent validate'),
       },
     },
     gate: GATE,

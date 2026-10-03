@@ -349,6 +349,9 @@ function frontmatterVersion(parseResult: ParseResult): string | null {
   return typeof version === 'string' || typeof version === 'number' ? String(version) : null;
 }
 
+/** Test seam: the report's pure field derivations. */
+export const __internal = { extractSkillName, frontmatterVersion, reportPath };
+
 /**
  * Perform dry-run preview of packaging operation. Runs after the validation
  * gate passed, so the SKILL.md exists and parses.

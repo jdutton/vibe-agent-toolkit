@@ -7,8 +7,6 @@
  * this rule avoids.
  */
 
-import { existsSync } from 'node:fs';
-
 import {
   ArdDerivationError,
   buildArdEntries,
@@ -26,12 +24,13 @@ import {
   type OkReport,
   type RefusalCode,
 } from '@vibe-agent-toolkit/schema';
-import { safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
-import { refusalCodeOf } from '../../utils/command-refusal.js';
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import { endWithRefusal, NOTHING_FINISHED, writeDocument } from '../../utils/document-writer.js';
 import { readPackageJsonOrAbsent } from '../../utils/package-json.js';
+import { pathPresent } from '../../utils/project-root-policy.js';
 import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
 
 import type { ArdEmitData } from './emit-schema.js';
@@ -142,10 +141,13 @@ function readProjectVersion(projectRoot: string): string | undefined {
  * @throws {ArdDerivationError} when a surface cannot be turned into a
  *   conformant entry — a missing `ard.baseUrl`, an unusable URN segment, or a
  *   trust identity that does not align with the publisher.
+ * @throws {CommandRefusalError} `RUN_INCOMPLETE` when the OS refuses the manifest write.
  */
 export async function runArdEmit(options: ArdEmitOptions): Promise<ArdEmitResult> {
   const projectRoot = options.projectRoot ?? process.cwd();
-  if (!existsSync(projectRoot)) {
+  // Absent is the invocation naming nothing; a stat the OS refuses is the
+  // input's refusal (INPUT_UNREADABLE), never read as absent.
+  if (!pathPresent(projectRoot, 'follow')) {
     throw new ArdConfigMissingError(projectRoot, 'no-project-root');
   }
   const config = loadConfig(projectRoot);
@@ -177,7 +179,14 @@ export async function runArdEmit(options: ArdEmitOptions): Promise<ArdEmitResult
   });
   const manifest = buildArdManifest(buildArdEntries(surfaces, ard));
   const outputPath = safePath.resolve(projectRoot, options.output ?? DEFAULT_ARD_OUTPUT);
-  await writeArdManifest(manifest, outputPath);
+  try {
+    await writeArdManifest(manifest, outputPath);
+  } catch (error) {
+    // The OS refusing `--output` (read-only, full disk, a file where a directory
+    // must be) stopped the run: the user's environment, not a VAT defect.
+    if (!isFilesystemAccessError(error)) throw error;
+    throw new CommandRefusalError('RUN_INCOMPLETE', `Could not write ${outputPath}: ${errorMessageOf(error)}`, { cause: error });
+  }
   return {
     outputPath,
     entryCount: manifest.entries.length,

@@ -208,7 +208,6 @@ export function refusalReport(code: RefusalCode, error: unknown, gate: Gate, fin
     examined: finished.examined,
     findings: finished.findings,
     data: finished.data,
-    durationMs: undefined,
   });
 }
 

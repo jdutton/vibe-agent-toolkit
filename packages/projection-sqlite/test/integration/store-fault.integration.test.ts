@@ -12,6 +12,7 @@
  */
 
 import { closeSync, mkdtempSync, openSync, readdirSync, rmSync, statSync, writeSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 
 import { PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
 import { isVatError, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -29,6 +30,9 @@ function thrownBy(run: () => unknown): unknown {
   return undefined;
 }
 
+/** The store's database file — `DATABASE_FILENAME` in `src/store.ts`, which is not exported. */
+const DATABASE_FILE = 'projection.db';
+
 describe('a store fault propagates uncoded (integration)', () => {
   let directory: string | undefined;
   let store: SqlQueryableStore | undefined;
@@ -41,16 +45,20 @@ describe('a store fault propagates uncoded (integration)', () => {
   it('does NOT code "file is not a database" as a refused statement', () => {
     directory = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-store-fault-'));
     store = openSqliteProjectionStore({ directory });
-    // The database, its WAL and its shared-memory index all overwritten while
-    // the connection is open: the next read transaction finds no database.
+    // A second connection commits, so the store's next read transaction sees
+    // the WAL index move and must re-read pages rather than serve its cache.
+    const other = new DatabaseSync(safePath.join(directory, DATABASE_FILE));
+    other.exec('PRAGMA user_version = 7');
+    other.close();
+    // Then the database and its WAL are overwritten while the store holds them
+    // open: the re-read finds no database.
     //
-    // 🪤 IN PLACE (`r+`), never truncate-then-write. SQLite memory-maps the
-    // `-shm` index, and Windows refuses to truncate a file with a mapped view
-    // (`ERROR_USER_MAPPED_FILE`, which libuv reports as `UNKNOWN`), so
-    // `writeFileSync` died on `projection.db-shm` before the store was asked
-    // anything. Writing over the bytes is permitted there and leaves the same
-    // file contents as the truncating write did on POSIX.
-    for (const file of readdirSync(directory)) {
+    // 🪤 IN PLACE (`r+`), and NEVER the `-shm` index. SQLite memory-maps and
+    // byte-range-locks `-shm`; Windows refuses to truncate a mapped file
+    // (`UNKNOWN`) and to write a locked range (`EBUSY`). The database and WAL
+    // carry no lock in the bytes written here, so the fault is the same fault on
+    // both OSes — and the commit above is what makes the stale cache visible.
+    for (const file of readdirSync(directory).filter((name) => !name.endsWith('-shm'))) {
       const path = safePath.join(directory, file);
       const garbage = Buffer.alloc(Math.max(statSync(path).size, 4096), 0x5a);
       const descriptor = openSync(path, 'r+');

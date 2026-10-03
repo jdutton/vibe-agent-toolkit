@@ -23,6 +23,7 @@ import {
   buildReport,
   countBySeverity,
   toFindings,
+  withDurationMs,
   type Gate,
   type SeverityCounts,
   type ValidationIssue,
@@ -307,7 +308,7 @@ export async function reviewCommand(
 
     const grouped = groupIssuesBySection(result.allErrors);
 
-    const report = { ...buildReviewReport(result, skillPath, grouped, gate), durationMs: Date.now() - startTime };
+    const report = withDurationMs(buildReviewReport(result, skillPath, grouped, gate), Date.now() - startTime);
     if (!options.yaml) renderHumanReport(result, skillPath, grouped, logger);
     renderFooter(result, report.summary, logger);
 

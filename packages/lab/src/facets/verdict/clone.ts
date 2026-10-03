@@ -4,10 +4,10 @@
  * `vat build`, `vat verify` and `vat claude marketplace publish --dry-run`
  * write into the tree they run in, and a measured tree must never receive
  * anything. So they run in a copy-on-write clone of the subject under a temp
- * directory outside every subject: `cp -c -R` per top-level entry, minus
- * `.claude/worktrees` (a checkout's sibling worktrees are not the subject, and
- * cloning them is the whole cost), then `git remote remove origin`, so nothing
- * a dry run does can reach a real remote.
+ * directory outside every subject: `cp -c -R` per entry, minus sibling
+ * worktrees and regenerable caches (`.turbo` took 4+ minutes) at any depth —
+ * then `git remote remove origin`, so nothing a dry run does can reach a real
+ * remote.
  *
  * ## Refusals
  *
@@ -27,15 +27,49 @@
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readdirSync } from 'node:fs';
 
-import { isPathAbsentError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, isPathAbsentError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
 
 import { runGit } from '../../harness/git-state.js';
 
-/** The directory under `.claude` that is never cloned. */
-const WORKTREES_DIR = 'worktrees';
+/**
+ * Never skipped though the crawler skips them: `.git` (the clone needs it) and
+ * `node_modules` — the subject's build resolves npm bare specifiers (a config's
+ * `frontmatterSchema`) through it, and `cp -c -R` keeps a relative workspace
+ * link pointing into the clone. Without it both arms refuse alike and the
+ * delta reads a false zero.
+ */
+const CLONED_ANYWAY: ReadonlySet<string> = new Set(['.git', 'node_modules']);
+
+/**
+ * The tree-relative suffixes never cloned: each {@link NEVER_CRAWL_GLOBS}
+ * entry's directory, minus {@link CLONED_ANYWAY}. Derived, so a cache the
+ * crawler learns to skip the clone skips too.
+ */
+const SKIPPED_SUFFIXES: readonly string[] = NEVER_CRAWL_GLOBS
+  .map((glob) => glob.replace(/^\*\*\//u, '').replace(/\/\*\*$/u, ''))
+  .filter((suffix) => !CLONED_ANYWAY.has(suffix));
+
+/**
+ * @param relative - A tree-relative, forward-slashed path
+ * @returns Whether the clone skips it
+ */
+function isSkippedFromClone(relative: string): boolean {
+  return SKIPPED_SUFFIXES.some((suffix) => relative === suffix || relative.endsWith(`/${suffix}`));
+}
 
 /** Whether a tree carries git, and how. */
 export type GitKind = 'directory' | 'file' | 'none';
+
+/**
+ * One directory of the source tree, as far as the plan must see it: its entry
+ * names, and — by name — the subdirectories holding a skipped entry somewhere
+ * beneath, which are descended rather than cloned whole.
+ */
+export interface CloneDir {
+  readonly entries: readonly string[];
+  readonly descend: Readonly<Record<string, CloneDir>>;
+}
 
 /** What the plan needs to know about the source tree. */
 export interface CloneSource {
@@ -43,10 +77,7 @@ export interface CloneSource {
   readonly path: string;
   /** The subject's alias, for the refusal. */
   readonly alias: string;
-  /** Top-level entry names. */
-  readonly entries: readonly string[];
-  /** Entry names under `.claude`, or `null` when there is no `.claude` directory. */
-  readonly claudeEntries: readonly string[] | null;
+  readonly root: CloneDir;
   readonly git: GitKind;
 }
 
@@ -88,41 +119,70 @@ export function planApfsClone(source: CloneSource, destination: string, platform
         'repository. Point the subject at a full checkout, or set buildVerbs: false.',
     };
   }
-  const clone = (from: string, to: string): CloneStep => ({ kind: 'spawn', command: 'cp', args: ['-c', '-R', from, to] });
-  const steps: CloneStep[] = [{ kind: 'mkdir', path: destination }];
-  for (const entry of source.entries) {
-    if (entry === '.claude' && source.claudeEntries !== null) continue;
-    steps.push(clone(safePath.join(source.path, entry), safePath.join(destination, entry)));
-  }
-  if (source.claudeEntries !== null) {
-    steps.push({ kind: 'mkdir', path: safePath.join(destination, '.claude') });
-    for (const entry of source.claudeEntries) {
-      if (entry === WORKTREES_DIR) continue;
-      steps.push(clone(safePath.join(source.path, '.claude', entry), safePath.join(destination, '.claude', entry)));
-    }
-  }
+  const steps: CloneStep[] = [];
+  planDir(source.root, source.path, destination, '', steps);
   if (source.git === 'directory') {
     steps.push({ kind: 'remove-origin', repository: destination });
   }
   return { ok: true, steps };
 }
 
+/** Append the steps cloning `dir` (at `relative` in the tree) from `from` into `to`. */
+function planDir(dir: CloneDir, from: string, to: string, relative: string, steps: CloneStep[]): void {
+  steps.push({ kind: 'mkdir', path: to });
+  for (const entry of dir.entries) {
+    const entryRelative = relative === '' ? entry : `${relative}/${entry}`;
+    if (isSkippedFromClone(entryRelative)) continue;
+    const child = dir.descend[entry];
+    if (child === undefined) {
+      steps.push({ kind: 'spawn', command: 'cp', args: ['-c', '-R', safePath.join(from, entry), safePath.join(to, entry)] });
+    } else {
+      planDir(child, safePath.join(from, entry), safePath.join(to, entry), entryRelative, steps);
+    }
+  }
+}
+
 /**
- * List what {@link planApfsClone} needs to know about a subject.
+ * List what {@link planApfsClone} needs to know about a subject: a walk of its
+ * directories (never following a link, never into a skipped entry or one of
+ * {@link CLONED_ANYWAY}, which are cloned whole).
  *
  * @param path - Absolute subject root
  * @param alias - The subject's alias
- * @returns The listing
+ * @returns The listing, or a refusal naming a directory the OS would not list
  */
-export function readCloneSource(path: string, alias: string): CloneSource {
-  const entries = readdirSync(path);
-  return {
-    path,
-    alias,
-    entries,
-    claudeEntries: kindOf(safePath.join(path, '.claude')) === 'directory' ? readdirSync(safePath.join(path, '.claude')) : null,
-    git: kindOf(safePath.join(path, '.git')),
-  };
+export function readCloneSource(
+  path: string,
+  alias: string,
+): { readonly ok: true; readonly source: CloneSource } | { readonly ok: false; readonly refusal: string } {
+  try {
+    return { ok: true, source: { path, alias, root: readCloneDir(path, '').dir, git: kindOf(safePath.join(path, '.git')) } };
+  } catch (error) {
+    if (!isFilesystemAccessError(error)) throw error;
+    const detail = error instanceof Error ? error.message : String(error);
+    return { ok: false, refusal: `REFUSED: cannot plan the build-verb clone of subject '${alias}': ${detail}` };
+  }
+}
+
+/** `dir`, and whether a skipped entry lies anywhere beneath it. */
+function readCloneDir(path: string, relative: string): { dir: CloneDir; holdsSkipped: boolean } {
+  const descend: Record<string, CloneDir> = {};
+  const dirents = readdirSync(path, { withFileTypes: true });
+  let holdsSkipped = false;
+  for (const dirent of dirents) {
+    const entryRelative = relative === '' ? dirent.name : `${relative}/${dirent.name}`;
+    if (isSkippedFromClone(entryRelative)) {
+      holdsSkipped = true;
+    } else if (!dirent.isSymbolicLink() && dirent.isDirectory() && !CLONED_ANYWAY.has(dirent.name)) {
+      // A link is never walked: `cp -R` clones it as a link.
+      const child = readCloneDir(safePath.join(path, dirent.name), entryRelative);
+      if (child.holdsSkipped) {
+        descend[dirent.name] = child.dir;
+        holdsSkipped = true;
+      }
+    }
+  }
+  return { dir: { entries: dirents.map((dirent) => dirent.name), descend }, holdsSkipped };
 }
 
 /**

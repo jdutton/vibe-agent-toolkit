@@ -1,10 +1,12 @@
 // Test file - all file operations are in temp directories, duplicated strings acceptable
-import { mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { loadConfig, parseConfigFile } from '../src/config-parser.js';
+import { CONFIG_UNREADABLE_CODE } from '../src/config-issues.js';
+import { loadConfig, parseConfigFile, readConfigTextSync } from '../src/config-parser.js';
 import { ClaudeMarketplaceSchema, ProjectConfigSchema } from '../src/schemas/project-config.js';
 
 import { setupTempDirTestSuite } from './test-helpers.js';
@@ -147,6 +149,32 @@ resources:
     await writeFile(configPath, content);
 
     await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid configuration in');
+  });
+});
+
+describe('a config the OS will not read', () => {
+  const suite = setupTempDirTestSuite('config-unreadable-');
+  beforeEach(suite.beforeEach);
+  afterEach(suite.afterEach);
+
+  // A directory where the file should be: EISDIR on every platform.
+  it('codes a directory at the config path CONFIG_UNREADABLE, async and sync', async () => {
+    const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
+    await mkdir(configPath);
+
+    await expect(parseConfigFile(configPath)).rejects.toMatchObject({ code: CONFIG_UNREADABLE_CODE });
+    expect(() => readConfigTextSync(configPath)).toThrow(expect.objectContaining({ code: CONFIG_UNREADABLE_CODE }));
+  });
+
+  it.skipIf(CANNOT_DENY_READS)('codes a mode-000 config CONFIG_UNREADABLE', async () => {
+    const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
+    await writeFile(configPath, 'version: 1\n');
+    await chmod(configPath, 0o000);
+    try {
+      await expect(parseConfigFile(configPath)).rejects.toMatchObject({ code: CONFIG_UNREADABLE_CODE });
+    } finally {
+      await chmod(configPath, 0o600);
+    }
   });
 });
 

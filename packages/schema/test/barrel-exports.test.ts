@@ -101,6 +101,7 @@ const BARREL_EXPORTS = [
   'summarizeIssues',
   'toFindings',
   'toJsonSchema',
+  'withDurationMs',
 ];
 
 describe('@vibe-agent-toolkit/schema — the `.` barrel export surface', () => {
