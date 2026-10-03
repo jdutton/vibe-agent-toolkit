@@ -23,6 +23,8 @@
  * are not filtered by name, they simply never look like a finding.
  */
 
+import { createHash } from 'node:crypto';
+
 import { z } from 'zod';
 
 import { parseDocument, type ParsedDocument } from '../../harness/document-shape.js';
@@ -31,7 +33,7 @@ import type { RunOutcome } from '../../harness/outcome.js';
 import type { VerdictRow } from './types.js';
 
 /** The severities a published finding can carry — never `ignore`; see this module's docstring. */
-const FINDING_SEVERITIES = ['error', 'warning', 'info'] as const;
+export const FINDING_SEVERITIES = ['error', 'warning', 'info'] as const;
 
 type FindingSeverity = (typeof FINDING_SEVERITIES)[number];
 
@@ -102,6 +104,260 @@ export function extractVerdict(outcome: Extract<RunOutcome, { kind: 'exited' }>)
 export function rowVerdict(row: VerdictRow): Verdict | null {
   if (row.outcome === 'not-run' || row.exitCode === null) return null;
   return extractVerdict({ kind: 'exited', exitCode: row.exitCode, stdout: row.document, stderr: '' });
+}
+
+/**
+ * The digest a deltas file may declare a finding's location by, instead of the
+ * location: a location is a path inside the subject, and can spell what a
+ * committed file must never hold. The digest pins the same identity.
+ *
+ * @param location - A finding's location, as the extractor read it
+ * @returns Its SHA-256, lowercase hex
+ */
+export function locationDigest(location: string): string {
+  return createHash('sha256').update(location, 'utf8').digest('hex');
+}
+
+/** How a refusal that carries a sentence and no code is named — never a string a real code could be. */
+export const UNCODED_REFUSAL = '(uncoded)';
+
+/**
+ * The refusal codes a run PUBLISHED, in document order: the run's own
+ * (`error.code` at the root), then each named owner's as `<name>:<code>` — a
+ * phase that did not finish carries its own `error` beside its `name`.
+ *
+ * Read on a row that measured nothing, where the exit code and this are the
+ * only data: a build that turns a user's mistake into `INTERNAL_ERROR` (or the
+ * reverse) changes neither the exit code nor "unmeasured". The message is NOT
+ * read — it names temp directories that differ run to run. An older build's
+ * refusal is a sentence (`error: "Phase 'claude' exited…"`), not a code: it IS
+ * a refusal, so it is named, as {@link UNCODED_REFUSAL}.
+ *
+ * An empty list therefore means the run published NO refusal the lab can read
+ * — nothing on stdout, unparseable stdout, or a document that refuses nothing —
+ * which is a different thing from refusing, whatever the exit code.
+ *
+ * @param row - One captured invocation
+ * @returns Its refusal codes; empty when it published no refusal or was unreadable
+ */
+export function refusalCodes(row: VerdictRow): string[] {
+  if (row.outcome === 'not-run' || row.exitCode === null) return [];
+  const parsed = parseDocument(row.document);
+  return parsed.shape === 'unparsed' ? [] : collectRefusalCodes(parsed.document);
+}
+
+/**
+ * @param node - Any value reachable from a document root
+ * @param out - Accumulator, appended to in visiting order
+ * @returns `out`
+ */
+function collectRefusalCodes(node: unknown, out: string[] = []): string[] {
+  if (Array.isArray(node)) {
+    for (const item of node) collectRefusalCodes(item, out);
+    return out;
+  }
+  if (!isPlainObject(node)) return out;
+  const code = refusalCodeOf(node['error']);
+  if (code !== null) out.push(typeof node['name'] === 'string' ? `${node['name']}:${code}` : code);
+  for (const value of Object.values(node)) collectRefusalCodes(value, out);
+  return out;
+}
+
+/**
+ * @param error - An object's `error` value
+ * @returns Its code; {@link UNCODED_REFUSAL} for a non-empty sentence; `null` when it is no refusal
+ */
+function refusalCodeOf(error: unknown): string | null {
+  if (isPlainObject(error) && typeof error['code'] === 'string') return error['code'];
+  return typeof error === 'string' && error.trim() !== '' ? UNCODED_REFUSAL : null;
+}
+
+/** A count per severity. */
+export type SeverityCounts = Readonly<Record<FindingSeverity, number>>;
+
+/**
+ * A phase of a composite document: an element, carrying a string `name`, of an
+ * array under a key `phases` — at the root of an older build's document, under
+ * `data` in a report.
+ *
+ * @param node - Any value reachable from a document root
+ * @param out - Accumulator
+ * @returns Every phase, in document order
+ */
+function collectPhases(node: unknown, out: Array<Record<string, unknown>> = []): Array<Record<string, unknown>> {
+  if (Array.isArray(node)) {
+    for (const item of node) collectPhases(item, out);
+    return out;
+  }
+  if (!isPlainObject(node)) return out;
+  for (const [key, value] of Object.entries(node)) {
+    if (key === 'phases' && Array.isArray(value)) {
+      out.push(...value.filter(isPlainObject).filter((phase) => typeof phase['name'] === 'string'));
+    }
+    collectPhases(value, out);
+  }
+  return out;
+}
+
+/**
+ * @param value - A candidate `{ errors, warnings, info }` object
+ * @returns Its counts by severity, or `null` when it is not one
+ */
+function asSeverityCounts(value: unknown): SeverityCounts | null {
+  if (!isPlainObject(value)) return null;
+  const counts: Record<FindingSeverity, number> = { error: 0, warning: 0, info: 0 };
+  for (const [field, severity] of TALLY_SEVERITY_FIELDS) {
+    const count = value[field];
+    if (!isCount(count)) return null;
+    counts[severity] = count;
+  }
+  return counts;
+}
+
+/**
+ * The severity counts each PHASE of a composite document published: a report
+ * phase's `summary`, an older build's `issueCounts` (on the phase, or on its
+ * `report`). Both generations publish them, so they are a margin a compare can
+ * hold two differently-shaped documents to.
+ *
+ * @param row - One captured invocation
+ * @returns Phase name → counts; no entry for a phase that published none
+ */
+export function phaseSeverityCounts(row: VerdictRow): Map<string, SeverityCounts> {
+  const counts = new Map<string, SeverityCounts>();
+  if (row.outcome === 'not-run' || row.exitCode === null) return counts;
+  const parsed = parseDocument(row.document);
+  if (parsed.shape === 'unparsed') return counts;
+  for (const phase of collectPhases(parsed.document)) {
+    const report = phase['report'];
+    const published =
+      asSeverityCounts(phase['summary']) ??
+      asSeverityCounts(phase['issueCounts']) ??
+      (isPlainObject(report) ? asSeverityCounts(report['issueCounts']) : null);
+    if (published !== null) counts.set(phase['name'] as string, published);
+  }
+  return counts;
+}
+
+/** A tally key: a finding code, as every vat build spells one. */
+const TALLY_CODE = /^[A-Z][A-Z0-9_]*$/u;
+
+/** The severity counts a tally's owner carries, and the severity each one counts. */
+const TALLY_SEVERITY_FIELDS = [
+  ['errors', 'error'],
+  ['warnings', 'warning'],
+  ['info', 'info'],
+] as const satisfies ReadonlyArray<readonly [string, FindingSeverity]>;
+
+/** The findings a document published only as counts — never as findings. */
+export interface PublishedTallies {
+  /** Per code, how many. Never holds a zero. */
+  readonly byCode: ReadonlyMap<string, number>;
+  /** The same findings, per severity. */
+  readonly bySeverity: SeverityCounts;
+  /** How many in all — the sum of either margin. */
+  readonly total: number;
+  /** The phases that hold a tally, by name — see {@link phaseSeverityCounts}. */
+  readonly phases: readonly string[];
+}
+
+/**
+ * The findings a run published ONLY AS COUNTS, per code and per severity.
+ *
+ * An older build's composite document (rc.11 `vat verify`) itemizes some
+ * findings and publishes the rest only as per-owner tallies — under each skill
+ * or file, `{ info: 10, warnings: 2, codes: { LINK_DROPPED_BY_DEPTH: 12 } }`.
+ * The finding layer cannot see a tally, so a build that itemizes the same
+ * findings reads as thousands of added ones. These counts are what lets a
+ * compare tell "the same findings, now itemized" from "new findings".
+ *
+ * One structural rule, like {@link isLegacyFinding}'s: an object is a tally
+ * owner when its `codes` maps finding codes to non-negative integers AND its
+ * own `errors` / `warnings` / `info` counts (absent reads as zero) sum to the
+ * same total. An owner whose two counts disagree is not read at all — half a
+ * tally would let a compare vouch for a severity nobody published.
+ *
+ * A tally's code and severity counts are two separate margins — not a count
+ * per (code, severity) pair. Its owner does name a skill or a file (`skillName`,
+ * `file`, `location`), which this reader does not use: a report's flat
+ * `findings[]` names no owner to match it against.
+ *
+ * @param row - One captured invocation
+ * @returns Its tallies (all zero when it tallied nothing), or `null` when it
+ *   produced no readable document
+ */
+export function publishedTallies(row: VerdictRow): PublishedTallies | null {
+  if (row.outcome === 'not-run' || row.exitCode === null) return null;
+  const parsed = parseDocument(row.document);
+  if (parsed.shape === 'unparsed') return null;
+  const byCode = new Map<string, number>();
+  const bySeverity: Record<FindingSeverity, number> = { error: 0, warning: 0, info: 0 };
+  let total = 0;
+  for (const tally of collectTallies(parsed.document)) {
+    for (const [code, count] of tally.codes) byCode.set(code, (byCode.get(code) ?? 0) + count);
+    for (const severity of FINDING_SEVERITIES) bySeverity[severity] += tally.severities[severity];
+    total += tally.total;
+  }
+  const phases = collectPhases(parsed.document)
+    .filter((phase) => collectTallies(phase).length > 0)
+    .map((phase) => phase['name'] as string);
+  return { byCode, bySeverity, total, phases };
+}
+
+/** One owner's tally, already checked: `codes` and `severities` both sum to `total`. */
+interface Tally {
+  /** Non-zero entries only: a zero count publishes nothing. */
+  readonly codes: ReadonlyArray<readonly [string, number]>;
+  readonly severities: Readonly<Record<FindingSeverity, number>>;
+  readonly total: number;
+}
+
+/**
+ * @param node - Any value reachable from a document root
+ * @param out - Accumulator: every tally found
+ * @returns `out`
+ */
+function collectTallies(node: unknown, out: Tally[] = []): Tally[] {
+  if (Array.isArray(node)) {
+    for (const item of node) collectTallies(item, out);
+    return out;
+  }
+  if (!isPlainObject(node)) return out;
+  const tally = asTally(node);
+  if (tally !== null) out.push(tally);
+  for (const value of Object.values(node)) collectTallies(value, out);
+  return out;
+}
+
+/**
+ * @param owner - A candidate tally owner
+ * @returns Its tally when it is one (see {@link publishedTallies}) and counts anything, else `null`
+ */
+function asTally(owner: Record<string, unknown>): Tally | null {
+  const codes = owner['codes'];
+  if (!isPlainObject(codes)) return null;
+  const counted: Array<readonly [string, number]> = [];
+  for (const [code, count] of Object.entries(codes)) {
+    if (!TALLY_CODE.test(code) || !isCount(count)) return null;
+    if (count > 0) counted.push([code, count]);
+  }
+  const severities: Record<FindingSeverity, number> = { error: 0, warning: 0, info: 0 };
+  for (const [field, severity] of TALLY_SEVERITY_FIELDS) {
+    const count = owner[field] ?? 0;
+    if (!isCount(count)) return null;
+    severities[severity] = count;
+  }
+  const total = counted.reduce((sum, [, count]) => sum + count, 0);
+  if (total === 0 || total !== severities.error + severities.warning + severities.info) return null;
+  return { codes: counted, severities, total };
+}
+
+/**
+ * @param value - A candidate count
+ * @returns True iff it is a non-negative integer
+ */
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
 /**

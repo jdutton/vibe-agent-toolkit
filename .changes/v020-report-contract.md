@@ -4,6 +4,7 @@
   requires `gate`.** `error` carries `{ code, message }` (`code` is a registered refusal code);
   `data` is never `null` on `ok`/`findings` and may be partial on `error`. `exitCodeForReport`
   reads `gate` from the document — it no longer takes a `{ strict }` option.
+  <!-- verdict-delta:report-union-and-gate -->
 - **Refusal codes are registered and rejected as `validation.severity`/`validation.allow` keys.**
   New refusal codes: `USAGE_INVALID`, `CONFIG_INVALID`, `INPUT_UNREADABLE`, `BACKEND_UNAVAILABLE`,
   `EXTERNAL_API_FAILED`, `NOT_IMPLEMENTED`, `RUN_INCOMPLETE`, `INTERNAL_ERROR`,
@@ -47,6 +48,17 @@
   loader now decodes a UTF-16LE or BOM-prefixed config, as `parseConfigFile` always did.
 - **`vat ard emit` with an `--output` the OS will not write is `RUN_INCOMPLETE`, exit 2** (was
   `INTERNAL_ERROR` with a stack).
+- **`vat claude plugin build` (and `vat build`'s `claude` phase): the packager refusing a
+  plugin-local skill's content is `RUN_INCOMPLETE`, exit 2, with a `SKILL_PACKAGING_FAILED` error
+  finding at the skill's `SKILL.md`** — a skill `files:` source that does not exist, a bundled
+  nested `SKILL.md`, a name that is not one path segment. It was an uncoded exit 2 whose reason
+  was on stderr only. Same refusal `vat agent build` and `vat skill test run` publish for the
+  same cause; the build still stops at that skill.
+  <!-- verdict-delta:plugin-build-packaging-refusal -->
+- **`vat claude marketplace publish` over build output that holds no
+  `.claude-plugin/marketplace.json`, or one that is not a JSON manifest, is `INPUT_UNREADABLE`, exit 2**
+  (was an uncoded exit 2 carrying a raw `ENOENT` under a temp directory). Run `vat build` first.
+  <!-- verdict-delta:publish-unbuilt-marketplace -->
 - **A path with no relative spelling (on Windows, another drive than its root) no longer kills the
   document.** `vat agent validate` with a manifest on another drive than the working directory
   refuses `USAGE_INVALID` (it died on its own document, printing nothing); a `vat okf validate`
@@ -85,6 +97,7 @@
   stderr). The run-level `RESOURCE_CHECK_BROKEN` issue is one entry in `findings[]` (exit 1).
   Under `--compat`, `compatibility.summary` -> `compatibility.fileCounts`, and
   `observations[].summary` / `verdicts[].summary` (sentences) -> `description`.
+  <!-- verdict-delta:audit-report-contract -->
 - **`vat audit` refusals and exit codes.** Every refusal is an envelope with a code: a missing path,
   an unrecognised file, `--user` with no Claude directories, an unparseable URL, or a bad subpath
   in a `url#ref:subpath` -> `USAGE_INVALID`; a root the OS will not list, a path under a parent the
@@ -122,6 +135,7 @@
   `USAGE_INVALID`, and one the OS will not list -> `INPUT_UNREADABLE`. Scope refusals read
   `Path does not exist: <abs>` / `Path is not a directory: <abs>`. On stderr an info-only skill
   is rated with the success glyph, as `vat validate` rates an info-only phase.
+  <!-- verdict-delta:skills-validate-report-contract -->
 - **`vat claude marketplace validate` publishes the report contract.** `status` ->
   `ok|findings|error`; `issueCounts` -> `summary`; `duration` -> `durationMs`; the `summary`
   sentence is removed; `pluginsValidated` -> `data.plugins.length`. `root`, `marketplace`
@@ -208,6 +222,7 @@
   extension -> `USAGE_INVALID`, and one the OS will not read or that does not parse ->
   `INPUT_UNREADABLE`; a linkAuth provider that does not compile -> `CONFIG_INVALID` (was
   `INTERNAL_ERROR`).
+  <!-- verdict-delta:resources-validate-report-contract -->
 - **`vat resources scan` publishes the report contract.** `status: success` -> `ok`;
   `filesScanned` -> `examined`; `durationSecs` -> `durationMs`; `root`, `lane`, `extentSource`,
   `collections` and `files` move under `data`; `linksFound` and `anchorsFound` are removed.
@@ -222,6 +237,7 @@
   are added. An empty population now exits 1 with `RESOURCE_CHECK_BROKEN` (was 0); zero rows over
   a populated tree is `ok`. A refused statement is `USAGE_INVALID` (exit 2); an engine fault such
   as a corrupt or busy store is `INTERNAL_ERROR`.
+  <!-- verdict-delta:resources-query-report-contract -->
 - **The Node floor is now `>=22.16.0` (was `>=22.13.0`) in every package's `engines.node`.**
   `vat resources query` failed on 22.13–22.15 (`statement.columns is not a function`). Upgrade
   Node to 22.16.0 or newer; `vat doctor` reports the range.
@@ -411,6 +427,7 @@
   `validation.severity` / `validation.allow` refuse it as a key; was a per-skill error COUNT with
   no finding). Every phase's report is now validated against its own verb's schema before it is
   folded — a phase whose report does not match is that phase's `INTERNAL_ERROR`.
+  <!-- verdict-delta:orchestrators-report-contract -->
 - **Orchestrator exit codes.** Run integrity is judged ONCE, on the sum over every phase: a phase
   that examined nothing no longer fails a run whose other phases examined something (a `vat build`
   of a marketplace with no `skills:` pool exits 0; a per-phase `RESOURCE_CHECK_BROKEN` for zero

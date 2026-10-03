@@ -14,12 +14,17 @@ function doc(subject: Record<string, unknown>): unknown {
   return { subjects: [{ alias: 'crucible-1', path: '../trees/one', verbs: ['audit'], ...subject }] };
 }
 
+/** A reason long enough to say something. */
+const REASON = 'the subject needs a build artifact it has not produced';
+
 describe('parseVerdictSubjects', () => {
   it('accepts a minimal subject and applies the defaults (positive control)', () => {
     expect(parseVerdictSubjects(doc({}))).toEqual({
       ok: true,
       subjects: {
-        subjects: [{ alias: 'crucible-1', path: '../trees/one', verbs: ['audit'], sqlFiles: [], buildVerbs: false }],
+        subjects: [
+          { alias: 'crucible-1', path: '../trees/one', verbs: ['audit'], sqlFiles: [], buildVerbs: false, unmeasurableBuildVerbs: {} },
+        ],
       },
     });
   });
@@ -49,6 +54,32 @@ describe('parseVerdictSubjects', () => {
     expect(parseVerdictSubjects(doc({ verbs: ['resources-query'] }))).toMatchObject({
       ok: false,
       refusal: expect.stringContaining('sqlFiles'),
+    });
+  });
+
+  it('accepts a reasoned unmeasurable build verb alongside buildVerbs (positive control)', () => {
+    const result = parseVerdictSubjects(doc({ buildVerbs: true, unmeasurableBuildVerbs: { build: REASON } }));
+
+    expect(result).toMatchObject({ ok: true, subjects: { subjects: [{ unmeasurableBuildVerbs: { build: REASON } }] } });
+  });
+
+  it('refuses an unmeasurable build verb without buildVerbs, as silently unused', () => {
+    expect(parseVerdictSubjects(doc({ unmeasurableBuildVerbs: { build: REASON } }))).toMatchObject({
+      ok: false,
+      refusal: expect.stringContaining('unmeasurableBuildVerbs is set but buildVerbs is false'),
+    });
+  });
+
+  it('refuses naming every build verb, an unknown one, or one with no real reason', () => {
+    const all = { build: REASON, verify: REASON, 'marketplace-publish-dry-run': REASON };
+    expect(parseVerdictSubjects(doc({ buildVerbs: true, unmeasurableBuildVerbs: all }))).toMatchObject({
+      ok: false,
+      refusal: expect.stringContaining('set buildVerbs: false instead'),
+    });
+    expect(parseVerdictSubjects(doc({ buildVerbs: true, unmeasurableBuildVerbs: { audit: REASON } }))).toMatchObject({ ok: false });
+    expect(parseVerdictSubjects(doc({ buildVerbs: true, unmeasurableBuildVerbs: { build: 'no' } }))).toMatchObject({
+      ok: false,
+      refusal: expect.stringContaining('says why'),
     });
   });
 

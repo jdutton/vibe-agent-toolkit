@@ -28,9 +28,26 @@
  *
  * An entry is expanded into one {@link DeclaredDelta} per thing it declares —
  * the exit move, each added finding, each removed finding, a reshaped document,
- * an unmeasured row — and matched as a MULTISET against the observed ones, so
- * "declared two added findings, one occurred" is one unused declaration, not a
- * pass.
+ * an unmeasured row, findings newly itemized — and matched as a MULTISET against
+ * the observed ones, so "declared two added findings, one occurred" is one
+ * unused declaration, not a pass.
+ *
+ * ## A finding whose location cannot be committed
+ *
+ * A finding is declared by its full identity, location included. A location is
+ * a path inside the subject, and a subject's paths can spell what this file
+ * must never hold — who the subject is. So a declared finding names its
+ * location EITHER as `location` or as `locationDigest`, the SHA-256 of it
+ * (`locationDigest()` in `extract.ts`; a compare prints it beside every
+ * observed finding). Both pin the same identity: a finding of the same code and
+ * severity anywhere else is undeclared, and the declaration is unused.
+ *
+ * ## A changelog reference names one bullet
+ *
+ * `changelog: <file>#<id>` resolves to the ONE bullet of that file carrying the
+ * marker `<!-- verdict-delta:<id> -->` ({@link bulletAnchors}). An id no bullet
+ * carries, or two do, is a refusal. A heading is not a target: a section holds
+ * hundreds of bullets, and a reference to it would vouch for none of them.
  */
 
 import { readFileSync } from 'node:fs';
@@ -38,18 +55,49 @@ import { readFileSync } from 'node:fs';
 import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
-import { type FindingKey, findingIdentity, FindingKeySchema } from './extract.js';
+import { FINDING_SEVERITIES, type FindingKey, findingIdentity, FindingKeySchema, locationDigest } from './extract.js';
 import { multisetDifference } from './multiset.js';
 import { readYamlDocument, type Validated, validateDocument } from './yaml-file.js';
 
 /** What a deltas document is, in a refusal. */
 const DELTAS_FILE = 'a verdict deltas file';
 
+/** A finding named by the digest of its location — see this module's docstring. */
+export interface FindingDigestKey {
+  readonly code: string;
+  readonly severity: FindingKey['severity'];
+  /** `locationDigest(location)`: 64 lowercase hex characters. */
+  readonly locationDigest: string;
+  readonly scope: string | null;
+}
+
+/** A finding as a delta names it: by its location (always, when observed), or by that location's digest. */
+export type DeclaredFinding = FindingKey | FindingDigestKey;
+
+/** Runtime schema for {@link DeclaredFinding}. Each form is strict, so a finding naming both is refused. */
+const DeclaredFindingSchema: z.ZodType<DeclaredFinding> = z.union([
+  FindingKeySchema,
+  z
+    .object({
+      code: z.string(),
+      severity: z.enum(FINDING_SEVERITIES),
+      locationDigest: z.string().regex(/^[0-9a-f]{64}$/, 'a locationDigest is the SHA-256 of the location, 64 lowercase hex characters'),
+      scope: z.string().nullable(),
+    })
+    .strict(),
+]);
+
 /** One kind of difference between two arms' verdicts on one (alias, verb) row. */
 export type DeltaChange =
   | { readonly kind: 'exit'; readonly from: number; readonly to: number }
-  | { readonly kind: 'finding-added'; readonly finding: FindingKey }
-  | { readonly kind: 'finding-removed'; readonly finding: FindingKey }
+  | { readonly kind: 'finding-added'; readonly finding: DeclaredFinding }
+  | { readonly kind: 'finding-removed'; readonly finding: DeclaredFinding }
+  /**
+   * The refusal codes a row's document published differ between the arms
+   * (`refusalCodes` in `extract.ts`), in document order. Read only on a row that
+   * measured nothing, where it and the exit code are the only data.
+   */
+  | { readonly kind: 'refusal'; readonly from: readonly string[]; readonly to: readonly string[] }
   /** Layer 2: the normalized documents differ. */
   | { readonly kind: 'document' }
   /**
@@ -57,7 +105,17 @@ export type DeltaChange =
    * 2, or printed stdout the lab could not parse. Two unmeasured arms trivially
    * "agree", so this is a delta in its own right: never read as "no change".
    */
-  | { readonly kind: 'unmeasured' };
+  | { readonly kind: 'unmeasured' }
+  /**
+   * The baseline published some findings only as tallies (`publishedTallies`
+   * in `extract.ts`) and the candidate itemizes exactly those: per code and per
+   * severity it adds as many as were tallied, removes none, and tallies nothing
+   * itself (`itemizedTallies` in `compare.ts`). Observed INSTEAD of one
+   * `finding-added` per covered finding. It covers only codes the baseline
+   * tallied — every other added or removed finding on the row is still observed
+   * one by one — and when a count disagrees it is not observed at all.
+   */
+  | { readonly kind: 'findings-itemized' };
 
 /** A difference a compare saw. */
 export interface ObservedDelta {
@@ -90,14 +148,17 @@ export const VerdictDeltasSchema = z
           changelog: z
             .string()
             .regex(
-              /^\.changes\/[a-z0-9-]+\.md#.+$|^CHANGELOG\.md#.+$/,
-              "a changelog reference is '.changes/<fragment>.md#<anchor>' or 'CHANGELOG.md#<anchor>'",
+              // The id after `#` is spelled as BULLET_MARKER spells it.
+              /^(?:\.changes\/[a-z0-9-]+\.md|CHANGELOG\.md)#[a-z0-9][a-z0-9-]*$/,
+              "a changelog reference is '.changes/<fragment>.md#<id>' or 'CHANGELOG.md#<id>', the id of one bullet's verdict-delta marker",
             ),
           exit: z.object({ from: z.number().int(), to: z.number().int() }).strict().optional(),
-          findingsAdded: z.array(FindingKeySchema).default([]),
-          findingsRemoved: z.array(FindingKeySchema).default([]),
+          refusal: z.object({ from: z.array(z.string().min(1)), to: z.array(z.string().min(1)) }).strict().optional(),
+          findingsAdded: z.array(DeclaredFindingSchema).default([]),
+          findingsRemoved: z.array(DeclaredFindingSchema).default([]),
           document: z.literal('reshaped').optional(),
           unmeasured: z.literal(true).optional(),
+          findings: z.literal('itemized').optional(),
           reason: z.string().min(10),
         })
         .strict(),
@@ -213,10 +274,12 @@ function entryRefusals(
         'define. A partial run uses a partial subjects file AND a deltas file that matches it.',
     );
   } else if (run.verbsByAlias.get(entry.subject)?.has(entry.verb) !== true) {
-    refusals.push(`REFUSED: ${at} names verb '${entry.verb}', which subject '${entry.subject}' did not run.`);
+    refusals.push(
+      `REFUSED: ${at} names verb '${entry.verb}', which subject '${entry.subject}' did not run.`,
+    );
   }
   if (expandEntry(entry).length === 0) {
-    refusals.push(`REFUSED: ${at} declares nothing — no exit, findings, document or unmeasured.`);
+    refusals.push(`REFUSED: ${at} declares nothing — no exit, refusal, findings, document, unmeasured or itemized findings.`);
   }
   if (all.findIndex((other) => other.subject === entry.subject && other.verb === entry.verb) !== index) {
     refusals.push(`REFUSED: ${at} repeats an earlier entry's (subject, verb); declare each row once.`);
@@ -233,10 +296,12 @@ function entryRefusals(
 function expandEntry(entry: DeltaEntry): DeclaredDelta[] {
   const changes: DeltaChange[] = [
     ...(entry.exit === undefined ? [] : [{ kind: 'exit' as const, from: entry.exit.from, to: entry.exit.to }]),
+    ...(entry.refusal === undefined ? [] : [{ kind: 'refusal' as const, from: entry.refusal.from, to: entry.refusal.to }]),
     ...entry.findingsAdded.map((finding) => ({ kind: 'finding-added' as const, finding })),
     ...entry.findingsRemoved.map((finding) => ({ kind: 'finding-removed' as const, finding })),
     ...(entry.document === undefined ? [] : [{ kind: 'document' as const }]),
     ...(entry.unmeasured === undefined ? [] : [{ kind: 'unmeasured' as const }]),
+    ...(entry.findings === undefined ? [] : [{ kind: 'findings-itemized' as const }]),
   ];
   return changes.map((change) => ({
     subject: entry.subject,
@@ -259,6 +324,20 @@ function deltaKey(delta: { readonly subject: string; readonly verb: string; read
 }
 
 /**
+ * The identity a finding is matched on whichever way it was named: its
+ * location is compared BY DIGEST, so a declaration that holds only the digest
+ * and an observation that holds the path key identically.
+ *
+ * @param finding - A finding, by location or by location digest
+ * @returns Its identity fields, in order — `null` where there is no location
+ */
+function declaredFindingIdentity(finding: DeclaredFinding): readonly [string, string, string | null, string | null] {
+  if ('locationDigest' in finding) return [finding.code, finding.severity, finding.locationDigest, finding.scope];
+  const [code, severity, location, scope] = findingIdentity(finding);
+  return [code, severity, location === null ? null : locationDigest(location), scope];
+}
+
+/**
  * @param change - One change
  * @returns Its fields as a fixed-order array
  */
@@ -269,17 +348,21 @@ function changeKey(change: DeltaChange): readonly unknown[] {
     }
     case 'finding-added':
     case 'finding-removed': {
-      return [change.kind, ...findingIdentity(change.finding)];
+      return [change.kind, ...declaredFindingIdentity(change.finding)];
+    }
+    case 'refusal': {
+      return [change.kind, change.from, change.to];
     }
     case 'document':
-    case 'unmeasured': {
+    case 'unmeasured':
+    case 'findings-itemized': {
       return [change.kind];
     }
   }
 }
 
 /**
- * Refuse every entry whose `changelog` reference names no heading that exists.
+ * Refuse every entry whose `changelog` reference does not name exactly one bullet.
  *
  * Pure: the caller reads the referenced files and hands their text in, keyed by
  * the path as the entry wrote it (`.changes/x.md`, `CHANGELOG.md`). A file the
@@ -287,20 +370,28 @@ function changeKey(change: DeltaChange): readonly unknown[] {
  *
  * @param declared - The deltas file
  * @param sources - Referenced file path → its markdown text
- * @returns One refusal per unresolvable reference
+ * @returns One refusal per unresolvable or ambiguous reference
  */
 export function changelogRefusals(declared: VerdictDeltas, sources: ReadonlyMap<string, string>): string[] {
   const refusals: string[] = [];
+  const anchors = new Map<string, ReadonlyMap<string, number>>();
   for (const [index, entry] of declared.deltas.entries()) {
     const hash = entry.changelog.indexOf('#');
     const file = entry.changelog.slice(0, hash);
-    const anchor = entry.changelog.slice(hash + 1);
+    const id = entry.changelog.slice(hash + 1);
     const text = sources.get(file);
     const at = `deltas[${String(index)}] (${entry.subject} / ${entry.verb})`;
     if (text === undefined) {
       refusals.push(`REFUSED: ${at} cites '${file}', which does not exist.`);
-    } else if (!headingAnchors(text).has(anchor)) {
-      refusals.push(`REFUSED: ${at} cites '${entry.changelog}', but '${file}' has no heading with anchor '${anchor}'.`);
+      continue;
+    }
+    const inFile = anchors.get(file) ?? bulletAnchors(text);
+    anchors.set(file, inFile);
+    const bullets = inFile.get(id) ?? 0;
+    if (bullets === 0) {
+      refusals.push(`REFUSED: ${at} cites '${entry.changelog}', but '${file}' has no bullet carrying '<!-- verdict-delta:${id} -->'.`);
+    } else if (bullets > 1) {
+      refusals.push(`REFUSED: ${at} cites '${entry.changelog}', but ${String(bullets)} bullets carry that id in '${file}'; a reference names ONE.`);
     }
   }
   return refusals;
@@ -329,37 +420,40 @@ export function readChangelogSources(declared: VerdictDeltas, repoRoot: string):
   return sources;
 }
 
-/**
- * The anchors a markdown file's headings produce, GitHub-style: lowercased,
- * punctuation dropped, spaces to hyphens, a repeated heading suffixed `-1`, `-2`.
- *
- * @param markdown - The file's text
- * @returns Every heading anchor it defines
- */
-export function headingAnchors(markdown: string): ReadonlySet<string> {
-  const anchors = new Set<string>();
-  const seen = new Map<string, number>();
-  for (const line of markdown.split('\n')) {
-    const text = headingText(line);
-    if (text === null) continue;
-    const slug = text
-      .toLowerCase()
-      .replaceAll(/[^\p{L}\p{N} _-]/gu, '')
-      .replaceAll(' ', '-');
-    const count = seen.get(slug) ?? 0;
-    seen.set(slug, count + 1);
-    anchors.add(count === 0 ? slug : `${slug}-${String(count)}`);
-  }
-  return anchors;
-}
+/** A bullet's marker: `<!-- verdict-delta:<id> -->`, the id as a `changelog` reference spells it after `#`. */
+const BULLET_MARKER = /<!-- verdict-delta:([a-z0-9][a-z0-9-]*) -->/g;
 
 /**
- * @param line - One markdown line
- * @returns The ATX heading's text, or `null` when the line is not one
+ * The ids a changelog file's BULLETS carry, and how many bullets carry each.
+ *
+ * A bullet is a line starting `- ` plus the indented lines that continue it —
+ * the shape `.changes/README.md` defines and `validate-structure` enforces. A
+ * marker anywhere else (under a heading, in prose) belongs to no bullet and is
+ * not counted. An id is counted once per bullet however often that bullet
+ * repeats it, so the count is "how many bullets", which must be exactly one.
+ *
+ * @param markdown - The file's text
+ * @returns Id → the number of bullets carrying it
  */
-function headingText(line: string): string | null {
-  let level = 0;
-  while (line[level] === '#') level += 1;
-  if (level === 0 || level > 6 || line[level] !== ' ') return null;
-  return line.slice(level + 1).trim();
+export function bulletAnchors(markdown: string): Map<string, number> {
+  const counts = new Map<string, number>();
+  let bullet: Set<string> | null = null;
+  const close = (): void => {
+    for (const id of bullet ?? []) counts.set(id, (counts.get(id) ?? 0) + 1);
+    bullet = null;
+  };
+  for (const line of markdown.split('\n')) {
+    if (line.startsWith('- ')) {
+      close();
+      bullet = new Set();
+    } else if (!(line.startsWith(' ') || line.startsWith('\t')) && line.trim() !== '') {
+      close();
+    }
+    for (const match of line.matchAll(BULLET_MARKER)) {
+      const [, id] = match;
+      if (id !== undefined) bullet?.add(id);
+    }
+  }
+  close();
+  return counts;
 }

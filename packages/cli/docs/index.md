@@ -301,8 +301,10 @@ skills }, externalPlugins[] }`). Paths are relative to the directory holding
   that plugin is not assembled, nothing after it is built, and its marketplace's
   `reason` names it), or no marketplace is configured
 - `2` - The build could not run: an undeclared `--marketplace` (`USAGE_INVALID`),
-  a missing config or an invalid plugin declaration (`CONFIG_INVALID`), or an input
-  nothing built or that is not what it should be (`INPUT_UNREADABLE`)
+  a missing config or an invalid plugin declaration (`CONFIG_INVALID`), an input
+  nothing built or that is not what it should be (`INPUT_UNREADABLE`), or the packager
+  refusing a plugin-local skill's content, such as a skill `files:` source that does
+  not exist (`RUN_INCOMPLETE`, with a `SKILL_PACKAGING_FAILED` finding at the skill)
 
 **Examples:**
 
@@ -326,7 +328,8 @@ after one marketplace was published still lists it.
 - `0` - Published (or `--dry-run` completed)
 - `1` - No marketplace declares `publish:`
 - `2` - Publish could not run: `USAGE_INVALID`, `CONFIG_INVALID`,
-  `INPUT_UNREADABLE` (no build output, no release notes), `EXTERNAL_API_FAILED`
+  `INPUT_UNREADABLE` (no build output, or build output with no readable
+  `marketplace.json` — run `vat build`; no release notes), `EXTERNAL_API_FAILED`
   (push rejected), `RUN_INCOMPLETE` (a git step failed)
 
 **Examples:**

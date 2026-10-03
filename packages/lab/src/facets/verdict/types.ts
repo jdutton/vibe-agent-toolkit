@@ -31,6 +31,16 @@ export interface VerdictRow {
   readonly document: string;
 }
 
+/**
+ * A verb the subjects file says this subject cannot complete, and why
+ * (`unmeasurableBuildVerbs`). It still ran — its row is in `rows` — and a
+ * compare checks the claim: the row refused at exit 2 in both arms.
+ */
+export interface VerdictExclusion {
+  readonly name: string;
+  readonly reason: string;
+}
+
 /** One subject's capture under one arm. */
 export interface VerdictBody {
   /**
@@ -44,6 +54,12 @@ export interface VerdictBody {
    */
   readonly arm: ArmEnvironment;
   readonly rows: readonly VerdictRow[];
+  /**
+   * Verbs the subjects file says cannot be measured for this subject. Each names
+   * exactly one row of `rows`: the verb ran, and what it did is the evidence the
+   * compare judges the exclusion by.
+   */
+  readonly excluded: readonly VerdictExclusion[];
 }
 
 /** Runtime schema for {@link VerdictBody}, for reading a stored envelope back. */
@@ -67,5 +83,22 @@ export const VerdictBodySchema: z.ZodType<VerdictBody> = z
         })
         .strict(),
     ),
+    excluded: z.array(z.object({ name: z.string().min(1), reason: z.string().min(1) }).strict()),
   })
-  .strict();
+  .strict()
+  .superRefine((body, ctx) => {
+    // An exclusion with no row would be a verb nobody ran and nobody can check —
+    // exactly the hidden row an exclusion must never become.
+    for (const [index, exclusion] of body.excluded.entries()) {
+      const rows = body.rows.filter((row) => row.name === exclusion.name).length;
+      const repeated = body.excluded.findIndex((other) => other.name === exclusion.name) !== index;
+      if (rows === 1 && !repeated) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['excluded', index, 'name'],
+        message: repeated
+          ? `verb '${exclusion.name}' is excluded twice`
+          : `excluded verb '${exclusion.name}' names ${String(rows)} row(s); an excluded verb still runs, and has exactly one`,
+      });
+    }
+  });

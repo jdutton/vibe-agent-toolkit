@@ -104,8 +104,9 @@ Exit Codes:
   2 - Publish could not run (error.code): USAGE_INVALID (an undeclared
       --marketplace), CONFIG_INVALID (no config, a license value VAT cannot
       render, a configured changelog/readme/license file that does not exist,
-      an unknown git remote), INPUT_UNREADABLE (no build output — run vat
-      build; a changelog with no release notes for this version),
+      an unknown git remote), INPUT_UNREADABLE (no build output, or build
+      output with no readable marketplace.json — run vat build; a changelog
+      with no release notes for this version),
       EXTERNAL_API_FAILED (the push was rejected), RUN_INCOMPLETE (a git step
       failed)
 

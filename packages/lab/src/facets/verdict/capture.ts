@@ -38,7 +38,7 @@ import { executeClonePlan, planApfsClone, readCloneSource } from './clone.js';
 import { type NormalizeContext, normalizeCommandOutput } from './normalize.js';
 import type { VerdictSubject } from './subjects.js';
 import { VERDICT_FACET, type VerdictBody, type VerdictRow } from './types.js';
-import { buildVerbInvocations, type VerbInvocation, type VerbQuery, type VerbSubject, verdictVerb } from './verbs.js';
+import { planBuildVerbs, type VerbInvocation, type VerbQuery, type VerbSubject, verdictVerb } from './verbs.js';
 import type { Validated } from './yaml-file.js';
 
 /** The variable a private projection store is selected by. */
@@ -184,9 +184,12 @@ async function captureSubject(
     subject.verbs.flatMap((verb) => verdictVerb(verb).args(verbSubject, request.instrument.version)),
     resolved.path,
   );
+  // An exclusion is a claim, and the verb it names still runs (last — see
+  // `planBuildVerbs`): the compare checks the claim against both arms.
+  const { excluded } = planBuildVerbs(subject, verbSubject, request.instrument.version);
   if (subject.buildVerbs) {
     const built = inClone(request, subject, resolved.path, (clonePath) =>
-      run(buildVerbInvocations({ ...verbSubject, path: clonePath }, request.instrument.version), clonePath),
+      run(planBuildVerbs(subject, { ...verbSubject, path: clonePath }, request.instrument.version).invocations, clonePath),
     );
     if (!built.ok) return built;
     rows.push(...built.rows);
@@ -198,7 +201,7 @@ async function captureSubject(
       facet: VERDICT_FACET,
       coordinate: { subject: resolved.ref, subjectVersion: resolved.version, instrument: request.instrument.version },
       capturedAt: request.capturedAt,
-      body: { arm: request.env, rows },
+      body: { arm: request.env, rows, excluded: [...excluded] },
     },
   };
 }

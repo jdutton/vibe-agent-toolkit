@@ -156,7 +156,39 @@ vat-lab verdict compare <baselineDir> <candidateDir> [--deltas <file>] [--contro
 no default, because a default path is a place someone eventually commits by accident. Each subject
 is an alias (`crucible-1`, never an adopter's name), a path (relative paths resolve against the
 file's directory), a verb list, an optional `contextPath` (required iff `context-path` is listed),
-`sqlFiles` (required iff `resources-query` is listed) and `buildVerbs`.
+`sqlFiles` (required iff `resources-query` is listed), `buildVerbs`, and `unmeasurableBuildVerbs` —
+a map from build verb to the reason this subject cannot complete it (for example a skill whose
+`files:` entry names an artifact only the subject's own build produces).
+
+**An exclusion is a narrow claim the lab checks, never a verb it skips.** The claim is: on this
+subject, in every arm, this verb REFUSES — it exits 2 and publishes a refusal the lab can read (a
+refusal code, or an older build's refusal sentence). Exit 2 alone is not that: a command line the
+binary rejects also exits 2, and prints nothing. A verb named in `unmeasurableBuildVerbs` still runs in every
+arm — after the build verbs the subject can complete, because a build that stops half-way leaves a
+half-written `dist/` whose extent differs between two builds, and `verify` must not measure that
+leftover (`planBuildVerbs` in `verbs.ts` decides the order and the exclusions together). Its row is
+captured and compared like any other row, and the exclusion accounts for exactly ONE thing: the
+UNMEASURED delta of a row that **refused at exit 2 in both arms**, which a control would otherwise
+have to declare against an empty deltas file. Then the row is listed under **EXCLUDED** with each arm's exit
+code and the refusal codes its document published, and counted in the verdict line. Never a pass.
+
+Everything else about an excluded row is observed exactly as on a row nobody excluded, and fails the
+compare unless the committed deltas file declares it:
+
+- an arm that crashed, hung, exited anything but 2, or exited 2 with empty or unparseable output (or
+  a document that refuses nothing) — the row's `UNMEASURED` delta appears, with a line saying the
+  exclusion did not hold, beside its `exit` and `refusal` deltas where those moved. This holds when
+  BOTH arms do it, so in a control too;
+- both arms exiting 2 with different **refusal codes** — a `refusal` delta (below);
+- one arm completing the verb — `exit` and `UNMEASURED` deltas, which is how a tree that fixes the
+  verb is declared (`exit: {from: 2, to: 0}`, `unmeasured: true`, and the `refusal` that went away) while the control still passes.
+
+An exclusion BOTH arms disprove by measuring the verb is a **STALE EXCLUSION**: it fails the compare
+(exit 1), no deltas entry can declare it, and the remedy is to remove it from the subjects file.
+
+Naming every build verb is refused (set `buildVerbs: false`), as is naming one without `buildVerbs`
+or with a reason under 20 characters; two captures that exclude different verbs are refused as
+coming from two files, and a stored capture whose exclusion names no row is refused as malformed.
 
 **The verb matrix** (`verbs.ts`): `audit`, `skills-validate` (with `--verbose`, which is what makes
 legacy `skills validate` publish its finding list), `resources-validate`, `resources-check`,
@@ -187,7 +219,41 @@ writes lands inside a subject** — VAT itself is one: an `--out` inside any sub
 
 A row is **UNMEASURED** when, in either arm, the verb did not run, exited 2, or printed stdout the
 lab could not parse. Two unmeasured arms trivially agree, so an unmeasured row is a delta in its own
-right and is never rendered as "no change".
+right and is never rendered as "no change". Its findings and document are not evidence, but two
+things still are, and both are compared: its **exit code**, and the **refusal codes** its document
+published — `error.code` at the root, then each named phase's as `<phase>:<code>`, in document order
+(`refusalCodes` in `extract.ts`). A build that turns a user's mistake into `INTERNAL_ERROR`, or the
+reverse, moves neither the exit code nor "unmeasured"; it shows as a `refusal` delta. Messages are
+not compared — they name temp directories that differ run to run. An older build's refusal is a
+sentence with no code: it is still a refusal, read as `(uncoded)`. An EMPTY list means the run
+published no refusal at all — empty or unparseable stdout, or a document that refuses nothing.
+
+**Findings the baseline only tallied.** A legacy composite document (rc.11 `vat verify`) itemizes
+some findings and publishes the rest only as per-owner tallies (`{info: 10, warnings: 2, codes:
+{LINK_DROPPED_BY_DEPTH: 12}}` under each skill or file), which layer 1 cannot see — so a build that
+itemizes the same findings reads as thousands of added ones. A row shows ONE `findings-itemized`
+delta, instead of one `finding-added` per covered finding, only when all of these hold:
+
+- the baseline tallied something and the candidate tallies nothing;
+- no finding with a tallied code was removed;
+- per **code**, the candidate adds exactly as many findings as the baseline tallied;
+- per **severity**, likewise;
+- every **phase** that tallied publishes the same severity counts in both arms (an older build's
+  `phases[].issueCounts`, a report's `data.phases[].summary`). A phase that tallied and publishes
+  no counts in either arm is not a match.
+
+One tallied finding gained, lost, re-coded, re-graded or moved to another phase breaks an equality,
+and every added finding is then observed one by one. The rule covers only codes the baseline
+tallied: a finding with any other code — and every finding the baseline itemized itself — is still
+compared by identity and observed one by one. A tally owner whose severity counts do not sum to its
+code counts is not read at all.
+
+Two things a match does NOT establish, because the baseline did not publish them in a form a report's
+flat `findings[]` can be checked against: the count per (code, severity) **pair** — it published the
+two margins — and which skill or file each covered finding belongs to. A tally's owner does name one
+(`skillName`, `file`, `location`), but the report merges every phase into one list that names no
+owner, so an owner-by-owner match is not defined. A count-preserving swap inside one phase is
+therefore invisible to this rule.
 
 **What may be compared.** Exactly one axis may move, and it must be the instrument. A moved subject
 or subject version is refused — re-capture the baseline immediately before the candidate. Two
@@ -198,9 +264,22 @@ environment) are refused without it.
 **The deltas file** — `data/verdict-deltas.yaml`, committed and reviewed, the default for
 `--deltas` (resolved from the lab package, not the cwd). It names one `baseline` (the baseline arm's
 vat version; a compare against any other is refused) and entries keyed by subject alias and verb,
-each declaring any of `exit {from, to}`, `findingsAdded`, `findingsRemoved`, `document: reshaped`
-and `unmeasured: true`, with a `reason` and a `changelog` reference (`.changes/<fragment>.md#<anchor>`
-or `CHANGELOG.md#<anchor>`) that must name a heading that exists. It is checked **both ways**: an
+each declaring any of `exit {from, to}`, `refusal {from, to}` (the refusal codes of an unmeasured
+row, each a list in document order), `findingsAdded`, `findingsRemoved`, `document: reshaped`,
+`unmeasured: true` and `findings: itemized`, with a `reason` and a `changelog` reference.
+
+A declared finding names its full identity — `code`, `severity`, `scope`, and its location EITHER as
+`location` or as `locationDigest`, the SHA-256 of the location. A location is a path inside the
+subject and can spell who the subject is, which this file must never hold; the digest pins the same
+identity without the path (a compare prints `[locationDigest …]` beside every observed finding, to
+copy from). Either way a finding of the same code and severity at any other location is undeclared,
+and the declaration unused.
+
+A `changelog` reference is `.changes/<fragment>.md#<id>` or `CHANGELOG.md#<id>` and must name exactly
+ONE bullet: the bullet carrying the marker `<!-- verdict-delta:<id> -->` (on the bullet's line or an
+indented continuation of it). An id no bullet carries, or two do, is a refusal; a heading is never a
+target — a section holds hundreds of bullets and vouches for none of them. The marker travels with
+the bullet when `bump-version` folds the fragment into `CHANGELOG.md`. It is checked **both ways**: an
 observed delta no entry declares fails, and a declared delta that did not occur fails — as a
 multiset, item by item. Every entry is validated, none filtered: an entry naming an alias the run
 did not cover, or a verb that alias did not run, is a refusal.

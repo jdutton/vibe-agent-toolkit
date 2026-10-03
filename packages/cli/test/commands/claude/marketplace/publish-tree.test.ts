@@ -122,6 +122,40 @@ describe('publish-tree', () => {
     expect((error as Error).message).toBe('Marketplace build output not found at dist/.claude/plugins/marketplaces/nonexistent. Run "vat build" first.');
   });
 
+  // A build that stopped half-way leaves the directory and no manifest. That is
+  // the project's state, never a defect in VAT: it must not surface as a raw ENOENT.
+  it('refuses build output holding no marketplace.json as INPUT_UNREADABLE, naming it project-relative', async () => {
+    const sourceDir = makeTempDir(tempDirs);
+    mkdirSyncReal(safePath.join(sourceDir, 'dist', '.claude', 'plugins', 'marketplaces', 'half-built', 'plugins'), { recursive: true });
+    const error = await composePublishTree({ marketplaceName: 'half-built', configDir: sourceDir, outputDir: makeTempDir(tempDirs) })
+      .then(() => undefined, (thrown: unknown) => thrown);
+    expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
+    expect((error as Error).message).toBe(
+      'Marketplace build output at dist/.claude/plugins/marketplaces/half-built holds no .claude-plugin/marketplace.json — the build did not finish. Run "vat build" first.',
+    );
+  });
+
+  // A damaged manifest is the project's state — whether it is not JSON at all, or
+  // valid JSON that is not a manifest — never a SyntaxError or TypeError out of VAT.
+  it.each([
+    ['not JSON', '{ "name": ', 'is not valid JSON'],
+    ['null', 'null', 'is not a marketplace manifest'],
+    ['an array', '[]', 'is not a marketplace manifest'],
+    ['a non-array plugins', '{"plugins":"all"}', 'is not a marketplace manifest'],
+    ['a plugins entry that is not an object', '{"plugins":[null]}', 'is not a marketplace manifest'],
+  ])('refuses a built marketplace.json that is %s as INPUT_UNREADABLE', async (_what, body, why) => {
+    const sourceDir = makeTempDir(tempDirs);
+    const mpName = seedMarketplaceBuild(sourceDir);
+    writeFileSync(
+      safePath.join(sourceDir, 'dist', '.claude', 'plugins', 'marketplaces', mpName, '.claude-plugin', 'marketplace.json'),
+      body,
+    );
+    const error = await composePublishTree({ marketplaceName: mpName, configDir: sourceDir, outputDir: makeTempDir(tempDirs) })
+      .then(() => undefined, (thrown: unknown) => thrown);
+    expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
+    expect((error as Error).message).toContain(`dist/.claude/plugins/marketplaces/${mpName}/.claude-plugin/marketplace.json ${why}`);
+  });
+
   // A `publish.<key>` naming a file that is not there is the config's mistake.
   it.each<[string, Partial<ComposeOptions>]>([
     ['publish.changelog', { changelog: { sourcePath: 'NOPE.md' } }],

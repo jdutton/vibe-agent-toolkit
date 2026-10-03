@@ -24,7 +24,19 @@
  * A row is UNMEASURED when, in either arm, the verb did not run, exited 2, or
  * printed stdout the lab could not parse. Two unmeasured arms trivially agree,
  * so an unmeasured row is an observed delta of its own (see `deltas.ts`) and is
- * never reported as "no change".
+ * never reported as "no change". Its findings and document are not evidence;
+ * its exit code and the refusal codes its document published still are, and
+ * both are compared.
+ *
+ * ## Excluded verbs
+ *
+ * A subjects file may say a subject cannot complete a build verb. The verb runs
+ * anyway, its row is compared like any other, and the exclusion accounts for
+ * exactly one thing: the UNMEASURED delta of a row that, IN BOTH ARMS, exited 2
+ * AND published a refusal the lab could read. A crash, a hang, a differing exit
+ * code, a differing refusal code, or an exit 2 with empty or unparseable output
+ * in either arm is observed as on any row, and must be declared in the
+ * committed deltas file or it fails the compare — a control included.
  */
 
 import { readdir } from 'node:fs/promises';
@@ -48,7 +60,16 @@ import {
   reconcileDeltas,
   type VerdictDeltas,
 } from './deltas.js';
-import { findingIdentity, rowVerdict } from './extract.js';
+import {
+  FINDING_SEVERITIES,
+  type FindingKey,
+  findingIdentity,
+  phaseSeverityCounts,
+  publishedTallies,
+  refusalCodes,
+  rowVerdict,
+  type SeverityCounts,
+} from './extract.js';
 import { multisetDifference } from './multiset.js';
 import { VERDICT_FACET, type VerdictBody, VerdictBodySchema, type VerdictRow } from './types.js';
 import type { Validated } from './yaml-file.js';
@@ -77,6 +98,19 @@ export interface VerdictRowComparison {
   readonly observed: readonly ObservedDelta[];
 }
 
+/**
+ * A verb the subjects file says one subject cannot complete, as both arms found
+ * it. The verb ran in both; `detail` is what each arm did with it.
+ */
+export interface VerdictExcludedRow {
+  readonly subject: string;
+  readonly verb: string;
+  /** The subjects file's reason the verb cannot be measured. */
+  readonly reason: string;
+  /** Per arm: its exit code and the refusal codes its document published. */
+  readonly detail: readonly string[];
+}
+
 /** A completed comparison. */
 export interface VerdictComparison {
   readonly ok: true;
@@ -84,6 +118,18 @@ export interface VerdictComparison {
   readonly candidate: InstrumentVersion;
   readonly control: boolean;
   readonly rows: readonly VerdictRowComparison[];
+  /**
+   * Excluded verbs that REFUSED AT EXIT 2 IN BOTH ARMS, as the subjects file said they
+   * would. That is all an exclusion accounts for: the row's UNMEASURED delta.
+   * The row is still in `rows`, and its exit code and refusal codes are still
+   * compared and reconciled like any other row's. Never a pass.
+   */
+  readonly excluded: readonly VerdictExcludedRow[];
+  /**
+   * Excluded verbs BOTH arms measured: the exclusion excludes nothing. Fails the
+   * compare, and no deltas entry can declare it — remove it from the subjects file.
+   */
+  readonly staleExclusions: readonly VerdictExcludedRow[];
   /** Observed and declared — accepted. */
   readonly accepted: readonly ObservedDelta[];
   readonly undeclared: readonly ObservedDelta[];
@@ -116,12 +162,17 @@ export function compareVerdict(
   const pairs = pairByAlias(baseline, candidate);
   if (!pairs.ok) return pairs;
   const rows: VerdictRowComparison[] = [];
+  const excluded: VerdictExcludedRow[] = [];
+  const staleExclusions: VerdictExcludedRow[] = [];
   for (const [alias, [before, after]] of pairs.value) {
-    const refusal = axisRefusal(before, after, options.control);
+    const refusal = axisRefusal(before, after, options.control) ?? exclusionRefusal(alias, before.body, after.body);
     if (refusal !== null) return { ok: false, refusal };
-    const compared = compareRows(alias, before.body.rows, after.body.rows);
+    const reasons = new Map(before.body.excluded.map((exclusion) => [exclusion.name, exclusion.reason]));
+    const compared = compareRows(alias, before.body, after.body, reasons);
     if (!compared.ok) return compared;
-    rows.push(...compared.value);
+    rows.push(...compared.value.rows);
+    excluded.push(...compared.value.held);
+    staleExclusions.push(...compared.value.stale);
   }
 
   const [first] = pairs.value.values();
@@ -141,12 +192,64 @@ export function compareVerdict(
     candidate: first[1].coordinate.instrument,
     control: options.control,
     rows,
+    excluded,
+    staleExclusions,
     accepted: observed.filter((delta) => !undeclared.has(delta)),
     undeclared: reconciled.undeclared,
     unused: reconciled.unused,
     refusals,
-    exitCode: exitCodeOf(refusals, reconciled.undeclared, reconciled.unused),
+    exitCode: exitCodeOf(refusals, [...reconciled.undeclared, ...reconciled.unused, ...staleExclusions]),
   };
+}
+
+/**
+ * What an exclusion says of a row: vat REFUSED — it exited 2, its own "the
+ * command could not do its job", and published a refusal the lab could read
+ * (`refusalCodes`: a code, or an older build's sentence). Exit 2 alone is not
+ * this: a command line the binary rejects exits 2 and prints nothing, and that
+ * is a different failure. Nor is a crash, a hang, or any other exit code.
+ *
+ * @param row - One arm's row
+ * @returns True iff the row is what an exclusion expects
+ */
+function refusedAtTwo(row: VerdictRow): boolean {
+  return row.outcome === 'exited' && row.exitCode === VAT_SYSTEM_ERROR_EXIT && refusalCodes(row).length > 0;
+}
+
+/**
+ * Judge one exclusion against what both arms did — see `subjects.ts`.
+ *
+ * - **held**: both arms refused at exit 2 ({@link refusedAtTwo}). The exclusion
+ *   accounts for the row's UNMEASURED delta and nothing else ({@link rowDeltas}).
+ * - **stale**: both arms measured the verb. The exclusion excludes nothing.
+ * - **neither**: the arms disagree, or are unmeasured some other way. Nothing is
+ *   accounted for; the row's deltas are observed exactly as on any other row.
+ *
+ * @param subject - The subject
+ * @param exclusion - The excluded verb and the subjects file's reason
+ * @param before - The baseline's row for it
+ * @param after - The candidate's
+ * @returns Which list the exclusion belongs on, with the row to list
+ */
+function judgeExclusion(
+  subject: string,
+  exclusion: { readonly verb: string; readonly reason: string },
+  before: VerdictRow,
+  after: VerdictRow,
+): { readonly kind: 'held' | 'stale'; readonly row: VerdictExcludedRow } | null {
+  const sides = [
+    ['baseline', before],
+    ['candidate', after],
+  ] as const;
+  const listed = (detail: string[]): VerdictExcludedRow => ({ subject, ...exclusion, detail });
+  if (refusedAtTwo(before) && refusedAtTwo(after)) {
+    const detail = sides.map(([side, row]) => `${side}: exit ${String(row.exitCode)}, refusal ${refusalCodes(row).join(', ')}`);
+    return { kind: 'held', row: listed(detail) };
+  }
+  if (sides.every(([side, row]) => unmeasuredReasons(side, row).length === 0)) {
+    return { kind: 'stale', row: listed(sides.map(([side, row]) => `${side} MEASURED it: exit ${String(row.exitCode)}`)) };
+  }
+  return null;
 }
 
 /**
@@ -172,13 +275,12 @@ function mixedArmRefusal(envelopes: readonly ReportEnvelope<VerdictBody>[], side
 
 /**
  * @param refusals - Deltas-file refusals
- * @param undeclared - Observed, undeclared
- * @param unused - Declared, not observed
+ * @param failures - Everything that fails a compare: undeclared deltas, unused declarations, stale exclusions
  * @returns The compare's exit code
  */
-function exitCodeOf(refusals: readonly string[], undeclared: readonly unknown[], unused: readonly unknown[]): number {
+function exitCodeOf(refusals: readonly string[], failures: readonly unknown[]): number {
   if (refusals.length > 0) return ExitCode.ERROR;
-  return undeclared.length > 0 || unused.length > 0 ? ExitCode.FINDINGS : ExitCode.OK;
+  return failures.length > 0 ? ExitCode.FINDINGS : ExitCode.OK;
 }
 
 /**
@@ -321,18 +423,63 @@ function armOf(envelope: ReportEnvelope<VerdictBody>): Parameters<typeof indisti
 }
 
 /**
- * Pair one subject's rows by name and diff each pair.
+ * Both arms must exclude the same verbs for the same reasons: an exclusion is
+ * the subjects file's, and two captures that disagree on it came from two files.
  *
  * @param alias - The subject
- * @param before - Baseline rows
- * @param after - Candidate rows
- * @returns One comparison per row, or a refusal on a one-sided row
+ * @param before - The baseline body
+ * @param after - The candidate body
+ * @returns A refusal, or `null`
  */
-function compareRows(alias: string, before: readonly VerdictRow[], after: readonly VerdictRow[]): Validated<VerdictRowComparison[]> {
-  const afterByName = new Map(after.map((row) => [row.name, row]));
+function exclusionRefusal(alias: string, before: VerdictBody, after: VerdictBody): string | null {
+  const key = (body: VerdictBody): string =>
+    body.excluded
+      .map((exclusion) => JSON.stringify([exclusion.name, exclusion.reason]))
+      .sort(compareByCodeUnit)
+      .join('\n');
+  if (key(before) === key(after)) return null;
+  return (
+    `REFUSED: subject '${alias}' excludes different verbs in the two captures ` +
+    `(baseline: ${namesOf(before)}; candidate: ${namesOf(after)}). Capture both arms from one subjects file.`
+  );
+}
+
+/**
+ * @param body - One arm's body
+ * @returns Its excluded verb names, or `none`
+ */
+function namesOf(body: VerdictBody): string {
+  return body.excluded.length === 0 ? 'none' : body.excluded.map((exclusion) => exclusion.name).join(', ');
+}
+
+/** One subject's compared rows, and what became of each of its exclusions. */
+interface SubjectComparison {
+  readonly rows: VerdictRowComparison[];
+  readonly held: VerdictExcludedRow[];
+  readonly stale: VerdictExcludedRow[];
+}
+
+/**
+ * Pair one subject's rows by name and diff each pair. An excluded verb's row is
+ * a row like any other; its exclusion is judged beside it ({@link judgeExclusion}).
+ *
+ * @param alias - The subject
+ * @param before - The baseline body
+ * @param after - The candidate body
+ * @param reasons - Excluded verb → the subjects file's reason (the same in both bodies)
+ * @returns The compared rows and judged exclusions, or a refusal on a one-sided
+ *   row or an exclusion that names no row
+ */
+function compareRows(
+  alias: string,
+  before: VerdictBody,
+  after: VerdictBody,
+  reasons: ReadonlyMap<string, string>,
+): Validated<SubjectComparison> {
+  const afterByName = new Map(after.rows.map((row) => [row.name, row]));
   const oneSided = [
-    ...before.filter((row) => !afterByName.has(row.name)),
-    ...after.filter((row) => !before.some((other) => other.name === row.name)),
+    ...before.rows.filter((row) => !afterByName.has(row.name)),
+    ...after.rows.filter((row) => !before.rows.some((other) => other.name === row.name)),
   ];
   if (oneSided.length > 0) {
     return {
@@ -342,30 +489,46 @@ function compareRows(alias: string, before: readonly VerdictRow[], after: readon
         `(${oneSided.map((row) => row.name).join(', ')}). Capture both arms from one subjects file.`,
     };
   }
-  return {
-    ok: true,
-    value: before.map((row) => {
-      const other = afterByName.get(row.name) ?? row;
-      return {
-        subject: alias,
-        verb: row.name,
-        baselineExit: row.exitCode,
-        candidateExit: other.exitCode,
-        observed: rowDeltas(alias, row, other),
-      };
-    }),
-  };
+  const unrun = [...reasons.keys()].find((verb) => !afterByName.has(verb));
+  if (unrun !== undefined) {
+    return {
+      ok: false,
+      refusal:
+        `REFUSED: subject '${alias}' excludes '${unrun}', and a capture holds no row for it. An excluded ` +
+        'verb still runs in every arm; re-capture both arms with this lab build.',
+    };
+  }
+  const comparison: SubjectComparison = { rows: [], held: [], stale: [] };
+  for (const row of before.rows) {
+    const other = afterByName.get(row.name) ?? row;
+    const reason = reasons.get(row.name);
+    comparison.rows.push({
+      subject: alias,
+      verb: row.name,
+      baselineExit: row.exitCode,
+      candidateExit: other.exitCode,
+      observed: rowDeltas(alias, row, other, reason !== undefined),
+    });
+    const judged = reason === undefined ? null : judgeExclusion(alias, { verb: row.name, reason }, row, other);
+    if (judged !== null) comparison[judged.kind].push(judged.row);
+  }
+  return { ok: true, value: comparison };
 }
 
 /**
  * The deltas one row shows, both layers.
  *
+ * An unmeasured row has no findings and no document worth comparing, but two
+ * things about it are still data and are compared on every row, excluded or
+ * not: its exit code, and the refusal codes its document published.
+ *
  * @param alias - The subject
  * @param before - The baseline row
  * @param after - The candidate row
+ * @param excluded - Whether the subjects file excludes this verb for the subject
  * @returns Every observed delta on the row
  */
-function rowDeltas(alias: string, before: VerdictRow, after: VerdictRow): ObservedDelta[] {
+function rowDeltas(alias: string, before: VerdictRow, after: VerdictRow, excluded: boolean): ObservedDelta[] {
   const at = { subject: alias, verb: before.name };
   const deltas: ObservedDelta[] = [];
   if (before.exitCode !== null && after.exitCode !== null && before.exitCode !== after.exitCode) {
@@ -373,23 +536,131 @@ function rowDeltas(alias: string, before: VerdictRow, after: VerdictRow): Observ
   }
   const unmeasured = [...unmeasuredReasons('baseline', before), ...unmeasuredReasons('candidate', after)];
   if (unmeasured.length > 0) {
-    // Findings and documents of an unmeasured row are not evidence of anything;
-    // the exit move above still is, because the exit code is data.
-    return [...deltas, { ...at, change: { kind: 'unmeasured' }, detail: unmeasured }];
+    const from = refusalCodes(before);
+    const to = refusalCodes(after);
+    if (JSON.stringify(from) !== JSON.stringify(to)) deltas.push({ ...at, change: { kind: 'refusal', from, to }, detail: [] });
+    // The ONE thing an exclusion accounts for: a row that refused at exit 2 in both arms.
+    if (excluded && refusedAtTwo(before) && refusedAtTwo(after)) return deltas;
+    const broken = excluded
+      ? ['the subjects file excludes this verb as refusing at exit 2 in every arm — that is not what happened']
+      : [];
+    return [...deltas, { ...at, change: { kind: 'unmeasured' }, detail: [...unmeasured, ...broken] }];
   }
   const { onlyLeft: removed, onlyRight: added } = multisetDifference(
     rowVerdict(before)?.findings ?? [],
     rowVerdict(after)?.findings ?? [],
     (finding) => JSON.stringify(findingIdentity(finding)),
   );
+  const itemized = itemizedTallies(before, after, added, removed);
+  if (itemized !== null) deltas.push({ ...at, change: { kind: 'findings-itemized' }, detail: itemized.detail });
   deltas.push(
-    ...added.map((finding): ObservedDelta => ({ ...at, change: { kind: 'finding-added', finding }, detail: [] })),
+    ...(itemized?.rest ?? added).map((finding): ObservedDelta => ({ ...at, change: { kind: 'finding-added', finding }, detail: [] })),
     ...removed.map((finding): ObservedDelta => ({ ...at, change: { kind: 'finding-removed', finding }, detail: [] })),
   );
   if (before.document !== after.document) {
     deltas.push({ ...at, change: { kind: 'document' }, detail: diffExcerpt(before.document, after.document) });
   }
   return deltas;
+}
+
+/**
+ * Whether some of a row's added findings are exactly the baseline's tallies
+ * being itemized (see `findings-itemized` in `deltas.ts`).
+ *
+ * It is, only when ALL of these hold — and then exactly the added findings
+ * whose code the baseline tallied are covered, and nothing else is:
+ *
+ * - the baseline tallied something and the candidate tallies nothing;
+ * - no finding with a tallied code was REMOVED (the baseline's own itemized
+ *   findings are compared by identity, as on any row);
+ * - per code, the candidate adds exactly as many findings as the baseline tallied;
+ * - per severity, likewise — a severity that moved in aggregate breaks this one;
+ * - every PHASE that tallied publishes the same severity counts in both arms —
+ *   a finding that moved to another phase keeps its code and severity, and
+ *   only this margin sees it.
+ *
+ * One tallied finding gained, lost, re-coded, re-graded or moved between phases
+ * breaks an equality, and then every added finding is observed one by one. A
+ * finding whose code the baseline never tallied is ALWAYS observed one by one,
+ * covered or not — a new code is not an itemization.
+ *
+ * What a match does NOT establish, because the baseline did not publish it in a
+ * form the candidate's flat `findings[]` can be checked against: the count per
+ * (code, severity) pair — the baseline published the two margins — and which
+ * skill or file each finding belongs to. A tally's owner names one (`file`,
+ * `location`, `skillName`), but the candidate merges every phase into one list
+ * with no owner, so an owner-by-owner match is not defined.
+ *
+ * @param before - The baseline row
+ * @param after - The candidate row
+ * @param added - Findings only the candidate has
+ * @param removed - Findings only the baseline has
+ * @returns The evidence lines and the added findings NOT covered, or `null` when nothing is
+ */
+function itemizedTallies(
+  before: VerdictRow,
+  after: VerdictRow,
+  added: readonly FindingKey[],
+  removed: readonly FindingKey[],
+): { readonly detail: string[]; readonly rest: FindingKey[] } | null {
+  const tallied = publishedTallies(before);
+  if (tallied === null || tallied.total === 0 || publishedTallies(after)?.total !== 0) return null;
+  if (removed.some((finding) => tallied.byCode.has(finding.code))) return null;
+  const covered = added.filter((finding) => tallied.byCode.has(finding.code));
+  const sameCodes = sameCounts(countBy(covered, (finding) => finding.code), tallied.byCode);
+  const severities = new Map(Object.entries(tallied.bySeverity).filter(([, count]) => count > 0));
+  if (!sameCodes || !sameCounts(countBy(covered, (finding) => finding.severity), severities)) return null;
+  if (!samePhaseCounts(tallied.phases, phaseSeverityCounts(before), phaseSeverityCounts(after))) return null;
+  const { error, warning, info } = tallied.bySeverity;
+  return {
+    detail: [
+      `baseline published ${String(tallied.total)} finding(s) only as tallies — ${String(tallied.byCode.size)} code(s); ` +
+        `${String(error)} error(s), ${String(warning)} warning(s), ${String(info)} info — and the candidate itemizes ` +
+        'exactly those: the same count for every code and every severity, none removed, and the same severity ' +
+        `counts in each of the ${String(tallied.phases.length)} phase(s) that tallied`,
+    ],
+    rest: added.filter((finding) => !tallied.byCode.has(finding.code)),
+  };
+}
+
+/**
+ * @param phases - The phases the baseline tallied in, by name
+ * @param before - Phase → severity counts, as the baseline published them
+ * @param after - The same, for the candidate
+ * @returns Whether each of those phases publishes counts in BOTH arms, and the same ones
+ */
+function samePhaseCounts(
+  phases: readonly string[],
+  before: ReadonlyMap<string, SeverityCounts>,
+  after: ReadonlyMap<string, SeverityCounts>,
+): boolean {
+  return phases.every((phase) => {
+    const baseline = before.get(phase);
+    const candidate = after.get(phase);
+    // A phase that tallied and publishes no counts cannot be checked — not a match.
+    if (baseline === undefined || candidate === undefined) return false;
+    return FINDING_SEVERITIES.every((severity) => baseline[severity] === candidate[severity]);
+  });
+}
+
+/**
+ * @param items - Anything
+ * @param keyOf - What to count by
+ * @returns Key → how many items carry it
+ */
+function countBy<T>(items: readonly T[], keyOf: (item: T) => string): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(keyOf(item), (counts.get(keyOf(item)) ?? 0) + 1);
+  return counts;
+}
+
+/**
+ * @param a - Counts by key
+ * @param b - Counts by key
+ * @returns Whether both name the same keys with the same counts
+ */
+function sameCounts(a: ReadonlyMap<string, number>, b: ReadonlyMap<string, number>): boolean {
+  return a.size === b.size && [...a].every(([code, count]) => b.get(code) === count);
 }
 
 /**

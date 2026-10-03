@@ -2,17 +2,18 @@
  * Plain-text rendering of verdict captures and comparisons.
  *
  * The comparison's order is the reader's order of need: refusals (nothing
- * below them can be trusted), then what FAILS the compare — undeclared and
- * unused deltas — then what was accepted, with unmeasured rows named as
- * UNMEASURED and never folded into "no change".
+ * below them can be trusted), then what FAILS the compare — stale exclusions,
+ * undeclared and unused deltas — then what measured nothing (excluded rows,
+ * declared-unmeasured rows — named, never folded into "no change"), then what
+ * was accepted.
  */
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { coordinateLines, instrumentLabel } from '../../harness/render.js';
 
-import type { VerdictComparison } from './compare.js';
-import type { DeclaredDelta, DeltaChange, ObservedDelta } from './deltas.js';
-import { rowVerdict } from './extract.js';
+import type { VerdictComparison, VerdictExcludedRow } from './compare.js';
+import type { DeclaredDelta, DeclaredFinding, DeltaChange, ObservedDelta } from './deltas.js';
+import { locationDigest, rowVerdict } from './extract.js';
 import type { VerdictBody, VerdictRow } from './types.js';
 
 /**
@@ -24,6 +25,9 @@ export function renderVerdictReport(envelope: ReportEnvelope<VerdictBody>): stri
     `verdict — ${envelope.coordinate.subject.id}`,
     ...coordinateLines(envelope.coordinate),
     ...envelope.body.rows.map(rowLine),
+    ...envelope.body.excluded.map(
+      (exclusion) => `  ${exclusion.name}: EXCLUDED (it still ran — see its row) — ${exclusion.reason}`,
+    ),
   ].join('\n');
 }
 
@@ -51,8 +55,16 @@ export function renderVerdictComparison(comparison: VerdictComparison): string {
     `Candidate: ${instrumentLabel(comparison.candidate)}`,
     `Rows compared: ${String(comparison.rows.length)}`,
     ...section('REFUSED — the deltas file cannot be judged against this run', comparison.refusals),
+    ...section(
+      'STALE EXCLUSION — the subjects file says the verb cannot be completed, and both arms measured it; remove the exclusion',
+      comparison.staleExclusions.flatMap(excludedLines),
+    ),
     ...section('UNDECLARED — observed, and no entry declares it', comparison.undeclared.flatMap(observedLines)),
     ...section('UNUSED — declared, and it did not occur', comparison.unused.map(declaredLine)),
+    ...section(
+      'EXCLUDED by the subjects file — refused at exit 2 in both arms, so measured nothing; never read these as a pass',
+      comparison.excluded.flatMap(excludedLines),
+    ),
     ...section('UNMEASURED (declared) — never read these as "no change"', unmeasured.flatMap(observedLines)),
     ...section('Accepted — observed and declared', accepted.flatMap(observedLines)),
     verdictLine(comparison),
@@ -77,6 +89,14 @@ function observedLines(delta: ObservedDelta): string[] {
 }
 
 /**
+ * @param row - An excluded verb, as both arms found it
+ * @returns Its line with the subjects file's reason, then what each arm did
+ */
+function excludedLines(row: VerdictExcludedRow): string[] {
+  return [`${row.subject} / ${row.verb}: ${row.reason}`, ...row.detail.map((line) => `    ${line}`)];
+}
+
+/**
  * @param delta - A declared delta
  * @returns Its line, with the changelog entry that claimed it
  */
@@ -95,9 +115,12 @@ function changeText(change: DeltaChange): string {
     }
     case 'finding-added':
     case 'finding-removed': {
-      const { code, severity, location } = change.finding;
+      const { code, severity } = change.finding;
       const sign = change.kind === 'finding-added' ? '+' : '-';
-      return `${sign} ${severity} ${code} @ ${location ?? '<run>'}`;
+      return `${sign} ${severity} ${code} @ ${locationText(change.finding)}`;
+    }
+    case 'refusal': {
+      return `refusal ${refusalText(change.from)} → ${refusalText(change.to)}`;
     }
     case 'document': {
       return 'document reshaped';
@@ -105,7 +128,30 @@ function changeText(change: DeltaChange): string {
     case 'unmeasured': {
       return 'UNMEASURED';
     }
+    case 'findings-itemized': {
+      return 'findings itemized (exactly the findings the baseline only tallied)';
+    }
   }
+}
+
+/**
+ * Where a finding is, as a reader can act on it: an OBSERVED finding's path
+ * with the digest a deltas file may declare it by, or a DECLARED digest alone.
+ *
+ * @param finding - A finding, by location or by location digest
+ * @returns Its location text
+ */
+function locationText(finding: DeclaredFinding): string {
+  if ('locationDigest' in finding) return `sha256:${finding.locationDigest}`;
+  return finding.location === null ? '<run>' : `${finding.location} [locationDigest ${locationDigest(finding.location)}]`;
+}
+
+/**
+ * @param codes - One arm's refusal codes
+ * @returns Them, or that none was published
+ */
+function refusalText(codes: readonly string[]): string {
+  return codes.length === 0 ? '(no refusal published)' : codes.join(', ');
 }
 
 /**
@@ -113,10 +159,13 @@ function changeText(change: DeltaChange): string {
  * @returns The closing verdict line
  */
 function verdictLine(comparison: VerdictComparison): string {
+  const stale = comparison.staleExclusions.length;
   const tally =
     `${String(comparison.undeclared.length)} undeclared, ${String(comparison.unused.length)} unused, ` +
-    `${String(comparison.accepted.length)} accepted`;
+    `${String(comparison.accepted.length)} accepted` +
+    (comparison.excluded.length === 0 ? '' : `; ${String(comparison.excluded.length)} excluded`) +
+    (stale === 0 ? '' : `; ${String(stale)} stale exclusion(s)`);
   if (comparison.refusals.length > 0) return `\nREFUSED (${tally})`;
-  const failed = comparison.undeclared.length > 0 || comparison.unused.length > 0;
+  const failed = comparison.undeclared.length > 0 || comparison.unused.length > 0 || stale > 0;
   return `\n${failed ? 'FAILED' : 'PASSED'} (${tally})`;
 }

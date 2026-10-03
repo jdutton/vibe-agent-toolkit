@@ -10,14 +10,14 @@
 import { cpSync, existsSync } from 'node:fs';
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 
-import { conventionalSuiteProbe, createProjectRegistry, getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
+import { conventionalSuiteProbe, createProjectRegistry, getPluginOutputDir, getPluginSourceDir, isSkillPackagingInputError, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Finding, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowing, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, issueLocation, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { readPluginLocalSkillName } from '../../../commands/skills/skill-discovery.js';
-import { CommandRefusalError, refusalCodeOf } from '../../../utils/command-refusal.js';
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { loadConfig } from '../../../utils/config-loader.js';
 import { endWithReport, NOTHING_FINISHED, refusalReport, type FinishedWork } from '../../../utils/document-writer.js';
 import {
@@ -33,6 +33,7 @@ import { requireInputPath } from '../../../utils/project-root-policy.js';
 import { withResourcePopulationSource } from '../../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, pluginLocalSkillConfigEntry } from '../../../utils/skill-packaging-config.js';
 import type { PhaseOutcome } from '../../phase-utils.js';
+import { packagingFailedIssue } from '../../skills/build.js';
 import { discoverSkillsFromConfig } from '../../skills/skill-discovery.js';
 import { assertMarketplaceDeclared, loadClaudeProjectConfig } from '../claude-config.js';
 
@@ -194,7 +195,9 @@ Exit Codes:
       --marketplace), CONFIG_INVALID (no config; an empty or colliding plugin
       declaration; an invalid files[].dest), INPUT_UNREADABLE (a plugin file
       that is not JSON, a pool skill or files[].source nothing built, a
-      symlink no bundle can ship)
+      symlink no bundle can ship), RUN_INCOMPLETE (the packager refused a
+      plugin-local skill's content, e.g. a skill files: source that does not
+      exist — the SKILL_PACKAGING_FAILED finding names the skill)
 
 Example:
   $ vat skills build && vat claude plugin build    # Build skills then wrap for Claude
@@ -421,6 +424,39 @@ function pluginBuildData(configDir: string, built: readonly MarketplaceBuildResu
   };
 }
 
+/**
+ * The packager refused one plugin-local skill's own CONTENT — a `files:` source
+ * that is not there, a bundled nested `SKILL.md`, a name that is no path segment.
+ *
+ * That is the project's to fix, so it is coded where it is caught: the run
+ * stopped (`RUN_INCOMPLETE`) on a `SKILL_PACKAGING_FAILED` finding at the skill —
+ * the refusal `vat skill test run` and `vat agent build` publish for the same
+ * cause. An uncoded packager throw is not wrapped: it stays a defect.
+ */
+class SkillPackagingStop extends CommandRefusalError {
+  /** The refused skill's `SKILL.md`, absolute. */
+  readonly skillPath: string;
+
+  constructor(cause: unknown, skillPath: string) {
+    super('RUN_INCOMPLETE', errorMessageOf(cause), { cause });
+    this.skillPath = skillPath;
+  }
+}
+
+/**
+ * `finished`, plus the `SKILL_PACKAGING_FAILED` finding a {@link SkillPackagingStop} stands for.
+ *
+ * @param finished - What the run finished before it stopped
+ * @param error - What stopped it
+ * @param configDir - The project root the finding's `location` is relative to, when known
+ */
+function withPackagingStop(finished: FinishedWork, error: unknown, configDir: string | undefined): FinishedWork {
+  if (!(error instanceof SkillPackagingStop)) return finished;
+  const relative = configDir === undefined ? undefined : issueLocation(error.skillPath, configDir);
+  const location = relative === undefined || relativeEscapesRoot(relative) ? undefined : relative;
+  return { ...finished, findings: [...finished.findings, ...toFindings([packagingFailedIssue(error.message, location)])] };
+}
+
 /** What the marketplaces built so far are, as the report or a refusal's finished work. */
 function builtWork(configDir: string, built: readonly MarketplaceBuildResult[]): FinishedWork & { data: PluginBuildData; findings: Finding[] } {
   return {
@@ -458,7 +494,7 @@ export async function runClaudePluginBuildPhase(options: PluginBuildCommandOptio
     return { report: buildReport({ ...work, gate: GATE, durationMs: Date.now() - startTime }) };
   } catch (error) {
     const finished = configDir === undefined || built.length === 0 ? NOTHING_FINISHED : builtWork(configDir, built);
-    return { report: refusalReport(refusalCodeOf(error), error, GATE, finished) };
+    return { report: refusalReport(refusalCodeOf(error), error, GATE, withPackagingStop(finished, error, configDir)) };
   }
 }
 
@@ -865,10 +901,13 @@ export async function packagePluginLocalSkills(input: {
   const packaged: Array<{ skillDirPath: string; result: PackageSkillResult }> = [];
   // KNOWN GAP — NO PER-SKILL CONTAINMENT. `packageSkill` reports most problems by
   // RETURNING a result whose `hasErrors` is set, but it THROWS on structural packaging
-  // failures (filename collisions, unreadable sources). This loop awaits it bare, so one
-  // throw escapes the whole plugin build and discards every skill packaged before it —
-  // while the partial `skills/<dir>/` trees already written stay on disk, described by
-  // nothing.
+  // failures (filename collisions, unreadable sources). One throw escapes the whole
+  // plugin build and discards every skill packaged before it — while the partial
+  // `skills/<dir>/` trees already written stay on disk, described by nothing.
+  //
+  // What IS done: the packager's refusal of a skill's own content is CODED where it is
+  // caught below (`SkillPackagingStop`), so the stopped run names the skill and is not
+  // published as a defect in VAT. It still stops the run; containment is the gap.
   //
   // This is the SAME defect, in the same shape, that `packageSkills` had until commit
   // ba140fae ("fix(skills): one unbuildable skill no longer discards the whole build").
@@ -934,6 +973,8 @@ export async function packagePluginLocalSkills(input: {
         input.suiteProbe,
       ),
       registry: input.registry,
+    }).catch((error: unknown) => {
+      throw isSkillPackagingInputError(error) ? new SkillPackagingStop(error, skillPath) : error;
     });
     input.logger.info(
       `         ${skillName} -> skills/${skillDirPath} (${formatPackagedFileCount(result)})`,

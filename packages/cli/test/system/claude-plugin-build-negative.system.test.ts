@@ -146,6 +146,55 @@ claude:
     expect(result.stderr).toContain('dist/missing.mjs');
   });
 
+  // The packager refusing a plugin-local skill's own content is the project's to
+  // fix — the same `SKILL_PACKAGING_FAILED` finding on a stopped run that
+  // `vat skill test run` and `vat agent build` publish for it, never a defect in VAT.
+  it.each([
+    ['claude plugin build', ['claude', 'plugin', 'build']],
+    ['build', ['build']],
+  ])('vat %s: a plugin-local skill whose files: source is missing stops the run, coded at the skill', async (_verb, args) => {
+    const tempDir = createTempDir();
+    seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
+    writeTestFile(
+      safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
+      `version: 1
+skills:
+  include: ["plugins/*/skills/**/SKILL.md"]
+  defaults:
+    publish: false
+  config:
+    skill-a:
+      files:
+        - source: generated/missing.bin
+          dest: scripts/missing.bin
+claude:
+  marketplaces:
+    mp1:
+      owner:
+        name: Test
+      plugins:
+        - name: p1
+          skills: []
+`,
+    );
+
+    const result = await executeCli(binPath, args, { cwd: tempDir });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
+    const document = yaml.parse(result.stdout) as {
+      error: { code: string };
+      findings: Array<{ code: string; severity: string; location?: string }>;
+      data?: { phases?: Array<{ name: string; error?: { code: string } }> };
+    };
+    expect(document.error.code).toBe('RUN_INCOMPLETE');
+    expect(result.stdout).not.toContain('INTERNAL_ERROR');
+    expect(document.findings.map(({ code, severity, location }) => ({ code, severity, location }))).toEqual([
+      { code: 'SKILL_PACKAGING_FAILED', severity: 'error', location: 'plugins/p1/skills/skill-a/SKILL.md' },
+    ]);
+    const phases = document.data?.phases;
+    if (phases !== undefined) expect(phases.find((phase) => phase.name === 'claude')?.error?.code).toBe('RUN_INCOMPLETE');
+  });
+
   it('errors when the same plugin name is declared in two marketplaces', async () => {
     const tempDir = createTempDir();
     seedPluginLocalSkill(tempDir, 'dup', 'skill-a');

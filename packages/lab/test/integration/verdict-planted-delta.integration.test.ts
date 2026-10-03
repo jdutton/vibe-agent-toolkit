@@ -40,7 +40,7 @@ const ALIAS = FIXTURE_ALIAS;
 const VERB = 'audit';
 const CHANGELOG_FILE = '.changes/verdict-fixture.md';
 const CHANGELOG_REF = `${CHANGELOG_FILE}#planted-delta`;
-const CHANGELOG = new Map([[CHANGELOG_FILE, '# Fixture\n\n## Planted delta\n']]);
+const CHANGELOG = new Map([[CHANGELOG_FILE, '### Changed\n\n- A planted delta. <!-- verdict-delta:planted-delta -->\n']]);
 const REASON = 'the planted fixture delta under test';
 
 const KEPT: FindingKey = { code: 'LINK_BROKEN', severity: 'error', location: 'docs/a.md', scope: null };
@@ -108,7 +108,7 @@ function arm(spec: ArmSpec): Arm {
 async function capture(subjectPath: string, fixture: Arm): Promise<Awaited<ReturnType<typeof captureVerdict>>> {
   return captureVerdict({
     instrument: fixture.instrument,
-    subjects: [{ alias: ALIAS, path: subjectPath, verbs: [VERB], sqlFiles: [], buildVerbs: false }],
+    subjects: [{ alias: ALIAS, path: subjectPath, verbs: [VERB], sqlFiles: [], buildVerbs: false, unmeasurableBuildVerbs: {} }],
     subjectsDir: subjectPath,
     env: fixture.env,
     outDir: tempDir('lab-verdict-out-'),

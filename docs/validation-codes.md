@@ -1393,7 +1393,9 @@ judged at all — no frontmatter, no manifest, unparseable JSON. Declared as `No
 
 ### `vat skills build` findings (never overridable)
 
-Emitted by `vat skills build` (and `SKILL_PACKAGING_FAILED` also by `vat skills package`), always at
+Emitted by `vat skills build` (and `SKILL_PACKAGING_FAILED` also by `vat skills package`, and — on
+a run the refusal stopped, `RUN_INCOMPLETE` — by `vat claude plugin build`, `vat agent build` and
+`vat skill test run`), always at
 `error`, and declared as `NonOverridableCode` in
 `packages/schema/src/validation-codes.ts` — so `validation.severity` and `validation.allow` refuse
 either code as a key: nothing reads an override for them, and an accepted key would parse and do

@@ -21,7 +21,7 @@
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
-import { VERDICT_VERB_NAMES } from './verbs.js';
+import { VERDICT_BUILD_VERB_NAMES, VERDICT_VERB_NAMES } from './verbs.js';
 import { readYamlDocument, type Validated, validateDocument } from './yaml-file.js';
 
 /** What a subjects document is, in a refusal. */
@@ -38,8 +38,44 @@ const VerdictSubjectSchema = z
     sqlFiles: z.array(z.string().min(1)).default([]),
     /** Run `build` / `verify` / `claude marketplace publish --dry-run` in an APFS clone. */
     buildVerbs: z.boolean().default(false),
+    /**
+     * Build verbs this subject cannot complete, each with the reason — a claim
+     * the lab checks rather than trusts, and a narrow one: the verb REFUSES in
+     * every arm — exits 2 and publishes a refusal the lab can read. The verb still runs in every arm (after the build verbs the
+     * subject can complete; see `planBuildVerbs`), its row is compared like any
+     * other, and the exclusion accounts for exactly one thing — the UNMEASURED
+     * delta of a row that refused at exit 2 in both arms, which a control would
+     * otherwise have to declare. Anything else about the row (an exit code
+     * that differs, a crash, a hang, a different refusal code, an exit 2 that
+     * published no refusal) is observed and
+     * must be declared in the committed deltas file. An exclusion both arms
+     * disprove by measuring the verb fails the compare.
+     */
+    unmeasurableBuildVerbs: z
+      .record(
+        z.enum(VERDICT_BUILD_VERB_NAMES),
+        z.string().min(20, 'a reason says why the subject cannot complete the verb'),
+      )
+      .default({}),
   })
   .strict()
+  .superRefine((subject, ctx) => {
+    const named = Object.keys(subject.unmeasurableBuildVerbs);
+    if (named.length === 0) return;
+    if (!subject.buildVerbs) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['unmeasurableBuildVerbs'],
+        message: 'unmeasurableBuildVerbs is set but buildVerbs is false — it would be silently unused',
+      });
+    } else if (named.length === VERDICT_BUILD_VERB_NAMES.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['unmeasurableBuildVerbs'],
+        message: 'every build verb is named unmeasurable — set buildVerbs: false instead of cloning the subject to measure nothing',
+      });
+    }
+  })
   .superRefine((subject, ctx) => {
     const wantsPath = subject.verbs.includes('context-path');
     if (wantsPath === (subject.contextPath !== undefined)) return;

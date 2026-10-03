@@ -246,13 +246,16 @@ export {
   type VerdictCompareOptions,
   type VerdictComparison,
   type VerdictComparisonResult,
+  type VerdictExcludedRow,
   type VerdictRowComparison,
 } from './facets/verdict/compare.js';
 export {
+  bulletAnchors,
   changelogRefusals,
   type DeclaredDelta,
+  type DeclaredFinding,
   type DeltaChange,
-  headingAnchors,
+  type FindingDigestKey,
   loadVerdictDeltas,
   type ObservedDelta,
   parseVerdictDeltas,
@@ -266,10 +269,17 @@ export {
 } from './facets/verdict/deltas.js';
 export {
   extractVerdict,
+  FINDING_SEVERITIES,
   findingIdentity,
   type FindingKey,
   FindingKeySchema,
+  locationDigest,
+  phaseSeverityCounts,
+  type PublishedTallies,
+  publishedTallies,
+  refusalCodes,
   rowVerdict,
+  type SeverityCounts,
   type Verdict,
 } from './facets/verdict/extract.js';
 export {
@@ -303,10 +313,12 @@ export {
   VERDICT_FACET,
   type VerdictBody,
   VerdictBodySchema,
+  type VerdictExclusion,
   type VerdictRow,
 } from './facets/verdict/types.js';
 export {
-  buildVerbInvocations,
+  type BuildVerbPlan,
+  planBuildVerbs,
   VERDICT_BUILD_VERB_NAMES,
   VERDICT_VERB_NAMES,
   type VerbInvocation,

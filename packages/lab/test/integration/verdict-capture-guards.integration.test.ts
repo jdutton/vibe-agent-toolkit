@@ -17,6 +17,8 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { captureVerdict, type VerdictCaptureResult } from '../../src/facets/verdict/capture.js';
+import type { VerdictSubject } from '../../src/facets/verdict/subjects.js';
+import { VerdictBodySchema } from '../../src/facets/verdict/types.js';
 import type { ArmEnvironment } from '../../src/harness/arm-env.js';
 import { PROBE_ECHO_ENV, PROBE_NO_LOG_ENV, setupProbe } from '../command-probe.js';
 
@@ -37,12 +39,18 @@ afterAll(cleanupVerdictFixtures);
  * @param env - The caller's arm environment, over the probe's own switches
  * @param subjectPath - The subject root
  * @param outDir - Where the capture writes
+ * @param build - The subject's build-verb settings; none unless given
  * @returns The capture
  */
-function capture(env: ArmEnvironment, subjectPath: string, outDir: string): Promise<VerdictCaptureResult> {
+function capture(
+  env: ArmEnvironment,
+  subjectPath: string,
+  outDir: string,
+  build: Pick<VerdictSubject, 'buildVerbs' | 'unmeasurableBuildVerbs'> = { buildVerbs: false, unmeasurableBuildVerbs: {} },
+): Promise<VerdictCaptureResult> {
   return captureVerdict({
     instrument: setupProbe('lab-verdict-guard-').instrument,
-    subjects: [{ alias: FIXTURE_ALIAS, path: subjectPath, verbs: ['audit'], sqlFiles: [], buildVerbs: false }],
+    subjects: [{ alias: FIXTURE_ALIAS, path: subjectPath, verbs: ['audit'], sqlFiles: [], ...build }],
     subjectsDir: subjectPath,
     env: {
       set: { [PROBE_NO_LOG_ENV]: '1', [PROBE_ECHO_ENV]: [STORE_ENV, CLAUDE_ENV, CALLER_ENV].join(','), ...env.set },
@@ -112,5 +120,26 @@ describe('verdict capture — refusals', () => {
     const result = await capture({ set: {}, unset: [] }, fixtureSubject(), outDir);
 
     expect(result).toMatchObject({ ok: false, refusal: expect.stringContaining('Capture into a fresh --out') });
+  });
+});
+
+describe('verdict capture — a build verb the subject cannot complete', () => {
+  const reason = 'the subject needs a build artifact it has not produced';
+
+  // The build verbs run in an APFS clone (`cp -c`), so this path exists on macOS only.
+  it.runIf(process.platform === 'darwin')('still runs it — last — and records the exclusion beside its row', async () => {
+    const result = await capture({ set: {}, unset: [] }, fixtureSubject(), tempDir('lab-verdict-out-'), {
+      buildVerbs: true,
+      unmeasurableBuildVerbs: { build: reason },
+    });
+    if (!result.ok) throw new Error(`unexpected refusal: ${result.refusal}`);
+    const body = result.envelopes[0]?.body;
+
+    // Never dropped: a verb that is not run cannot be caught becoming measurable.
+    // Last: a build that stops half-way must not be what `verify` measures.
+    expect(body?.rows.map((row) => row.name)).toEqual(['audit', 'verify', 'marketplace-publish-dry-run', 'build']);
+    expect(body?.rows.every((row) => row.outcome === 'exited')).toBe(true);
+    expect(body?.excluded).toEqual([{ name: 'build', reason }]);
+    expect(VerdictBodySchema.safeParse(body).success).toBe(true);
   });
 });

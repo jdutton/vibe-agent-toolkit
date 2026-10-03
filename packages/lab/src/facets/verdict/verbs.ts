@@ -145,16 +145,41 @@ export function verdictVerb(name: VerdictVerbName): VerdictVerbSpec {
   return SUBJECT_VERBS[name] as VerdictVerbSpec;
 }
 
+/** What a subject's clone-only verbs come to: what to run, in order, and what is excluded. */
+export interface BuildVerbPlan {
+  /** Empty when the subject sets no `buildVerbs`: no clone is made. */
+  readonly invocations: readonly VerbInvocation[];
+  /** The verbs the subjects file says the subject cannot complete — each still in `invocations`. */
+  readonly excluded: ReadonlyArray<{ readonly name: string; readonly reason: string }>;
+}
+
 /**
- * The invocations of the clone-only verbs, run in the clone rather than the subject.
+ * Plan a subject's clone-only verbs — pure, so the order and the exclusions are
+ * one decision, testable on every platform (the clone they run in is not).
  *
+ * A verb the subjects file says the subject cannot complete is NOT dropped: it
+ * still runs, so a compare can hold the claim to account, but LAST — after every
+ * verb the subject can complete — because a build that stops half-way leaves a
+ * half-written `dist/`, and how far it got differs between two builds. Run
+ * first, that leftover is what `verify` would measure.
+ *
+ * @param settings - The subject's `buildVerbs` and `unmeasurableBuildVerbs`, as the subjects file parsed them
  * @param subject - The CLONE, as the verbs will see it
  * @param instrument - The arm the argv is for
- * @returns One invocation per clone-only verb, in run order
+ * @returns The invocations — the measurable ones in run order, then the rest — and the exclusions
  */
-export function buildVerbInvocations(
+export function planBuildVerbs(
+  settings: { readonly buildVerbs: boolean; readonly unmeasurableBuildVerbs: Readonly<Record<string, string>> },
   subject: VerbSubject,
   instrument: InstrumentVersion,
-): readonly VerbInvocation[] {
-  return BUILD_VERBS.flatMap((spec) => spec.args(subject, instrument));
+): BuildVerbPlan {
+  if (!settings.buildVerbs) return { invocations: [], excluded: [] };
+  const all = BUILD_VERBS.flatMap((spec) => spec.args(subject, instrument));
+  const unmeasurable = (invocation: VerbInvocation): boolean => Object.hasOwn(settings.unmeasurableBuildVerbs, invocation.name);
+  return {
+    invocations: [...all.filter((invocation) => !unmeasurable(invocation)), ...all.filter(unmeasurable)],
+    excluded: all
+      .filter(unmeasurable)
+      .map((invocation) => ({ name: invocation.name, reason: settings.unmeasurableBuildVerbs[invocation.name] ?? '' })),
+  };
 }

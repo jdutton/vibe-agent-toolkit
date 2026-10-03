@@ -15,7 +15,15 @@ import { readFileSync } from 'node:fs';
 import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { extractVerdict } from '../src/facets/verdict/extract.js';
+import {
+  extractVerdict,
+  locationDigest,
+  phaseSeverityCounts,
+  publishedTallies,
+  refusalCodes,
+  UNCODED_REFUSAL,
+} from '../src/facets/verdict/extract.js';
+import type { VerdictRow } from '../src/facets/verdict/types.js';
 import type { RunOutcome } from '../src/harness/outcome.js';
 
 const FIXTURES = resolveFromImportMeta(import.meta.url, 'fixtures/verdict');
@@ -153,5 +161,125 @@ describe('legacy finding location', () => {
       answers: [{ file: 'CLAUDE.md', conditions: [{ code: 'RULE_GLOB_INERT', severity: 'warning', path: '.claude/rules/x.md' }] }],
     }));
     expect(verdict.findings.map((f) => f.location)).toEqual(['.claude/rules/x.md']);
+  });
+});
+
+/**
+ * @param document - A legacy document
+ * @returns A row that exited 1 printing it
+ */
+function row(document: Record<string, unknown>): VerdictRow {
+  return { name: 'verify', argv: ['verify'], outcome: 'exited', exitCode: 1, spawnError: null, document: JSON.stringify(document) };
+}
+
+describe('publishedTallies', () => {
+  it('sums every owner\'s tally per code and per severity, and never counts an itemized finding', () => {
+    const tallies = publishedTallies(row({
+      results: [
+        { skillName: 'one', info: 2, codes: { LINK_DROPPED_BY_DEPTH: 2, SKILL_TOO_LONG: 0 } },
+        { skillName: 'two', info: 1, warnings: 1, codes: { LINK_DROPPED_BY_DEPTH: 1, SKILL_TOO_LONG: 1 } },
+      ],
+      runIssues: [{ code: 'ALLOW_UNUSED', severity: 'warning' }],
+    }));
+
+    expect(tallies).toEqual({
+      byCode: new Map([['LINK_DROPPED_BY_DEPTH', 3], ['SKILL_TOO_LONG', 1]]),
+      bySeverity: { error: 0, warning: 1, info: 3 },
+      total: 4,
+      phases: [],
+    });
+  });
+
+  it('never reads a `codes` object that is not a tally — a lowercase key, a non-integer, a negative count', () => {
+    for (const codes of [{ lowercase: 1 }, { CODE: 1.5 }, { CODE: -1 }, { CODE: '1' }, {}]) {
+      expect(publishedTallies(row({ info: 1, codes }))?.total).toBe(0);
+    }
+  });
+
+  // Half a tally would let a compare vouch for a severity nobody published.
+  it('never reads an owner whose severity counts do not sum to its code counts', () => {
+    expect(publishedTallies(row({ info: 2, codes: { CODE: 2 } }))?.total).toBe(2); // positive control
+    for (const owner of [{ codes: { CODE: 2 } }, { info: 1, codes: { CODE: 2 } }, { info: 'two', codes: { CODE: 2 } }]) {
+      expect(publishedTallies(row(owner))?.total).toBe(0);
+    }
+  });
+
+  it('has no tallies for a row that produced no exit code or an unreadable document', () => {
+    expect(publishedTallies({ ...row({}), outcome: 'not-run', exitCode: null })).toBeNull();
+    expect(publishedTallies({ ...row({}), document: 'not: [yaml' })).toBeNull();
+  });
+});
+
+describe('publishedTallies — the phases that tallied', () => {
+  it('names each phase holding a tally, and no phase that only itemizes', () => {
+    const tallies = publishedTallies(row({
+      phases: [
+        { name: 'skills', report: { results: [{ skillName: 'one', info: 1, codes: { CODE: 1 } }] } },
+        { name: 'consistency', issues: [{ code: 'OTHER', severity: 'info' }] },
+      ],
+    }));
+
+    expect(tallies?.phases).toEqual(['skills']);
+  });
+});
+
+describe('phaseSeverityCounts', () => {
+  it('reads a legacy phase from issueCounts or report.issueCounts, and a report phase from summary', () => {
+    const counts = { errors: 1, warnings: 2, info: 3 };
+    const expected = { error: 1, warning: 2, info: 3 };
+
+    expect(phaseSeverityCounts(row({ phases: [{ name: 'a', issueCounts: counts }, { name: 'b', report: { issueCounts: counts } }] }))).toEqual(
+      new Map([['a', expected], ['b', expected]]),
+    );
+    expect(phaseSeverityCounts(row({ status: 'findings', examined: 1, findings: [], summary: counts, data: { phases: [{ name: 'a', summary: counts }] } }))).toEqual(
+      new Map([['a', expected]]),
+    );
+  });
+
+  it('has no entry for a phase that publishes no counts, and none at all for a document without phases', () => {
+    expect(phaseSeverityCounts(row({ phases: [{ name: 'a' }] }))).toEqual(new Map());
+    expect(phaseSeverityCounts(row({ results: [] }))).toEqual(new Map());
+  });
+});
+
+describe('refusalCodes', () => {
+  it('reads the run\'s refusal code, then each named phase\'s as name:code, in document order', () => {
+    const document = {
+      status: 'error',
+      examined: 1,
+      findings: [],
+      summary: { errors: 0, warnings: 0, info: 0 },
+      error: { code: 'RUN_INCOMPLETE', message: 'm' },
+      data: { phases: [{ name: 'skills', status: 'ok' }, { name: 'claude', status: 'error', error: { code: 'INTERNAL_ERROR', message: 'm' } }] },
+    };
+
+    expect(refusalCodes({ ...row(document), exitCode: 2 })).toEqual(['RUN_INCOMPLETE', 'claude:INTERNAL_ERROR']);
+  });
+
+  // An older build's refusal is a sentence. It IS a refusal — unlike empty
+  // stdout — so it is named, with no code to name it by.
+  it('reads a refusal that is a sentence as (uncoded), at the root and on a named phase', () => {
+    const legacy = { status: 'system-error', error: 'Phase claude exited with code 2', phases: [{ name: 'claude', error: 'exited 2' }] };
+
+    expect(refusalCodes(row(legacy))).toEqual([UNCODED_REFUSAL, `claude:${UNCODED_REFUSAL}`]);
+    // The committed deltas file spells this value, so it is pinned here: no real
+    // refusal code — uppercase letters and underscores — can ever equal it.
+    expect(UNCODED_REFUSAL).toBe('(uncoded)');
+  });
+
+  it('publishes none for a document that refuses nothing, a row that did not run, or unreadable or empty stdout', () => {
+    expect(refusalCodes(row({ status: 'success', error: '' }))).toEqual([]);
+    expect(refusalCodes({ ...row({}), document: '' })).toEqual([]);
+    expect(refusalCodes({ ...row({}), outcome: 'not-run', exitCode: null })).toEqual([]);
+    expect(refusalCodes({ ...row({}), document: 'not: [yaml' })).toEqual([]);
+  });
+});
+
+describe('locationDigest', () => {
+  it('is the SHA-256 of the location, as lowercase hex', () => {
+    expect(locationDigest('docs/a.md')).toMatch(/^[0-9a-f]{64}$/u);
+    expect(locationDigest('docs/a.md')).toBe(locationDigest('docs/a.md'));
+    expect(locationDigest('docs/a.md')).not.toBe(locationDigest('docs/b.md'));
+    expect(locationDigest('')).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
   });
 });

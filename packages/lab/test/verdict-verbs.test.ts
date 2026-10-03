@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { type CloneDir, type CloneSource, planApfsClone } from '../src/facets/verdict/clone.js';
-import { buildVerbInvocations, verdictVerb, type VerbSubject } from '../src/facets/verdict/verbs.js';
+import { planBuildVerbs, verdictVerb, type VerbSubject } from '../src/facets/verdict/verbs.js';
 
 import { PROBE_VERSION } from './command-probe.js';
 
@@ -37,11 +37,35 @@ describe('verdict verb matrix', () => {
     ]);
   });
 
-  it('spells the build verbs, build first', () => {
-    expect(buildVerbInvocations(SUBJECT, PROBE_VERSION)).toEqual([
-      { name: 'build', argv: ['build'] },
-      { name: 'verify', argv: ['verify'] },
-      { name: 'marketplace-publish-dry-run', argv: ['claude', 'marketplace', 'publish', '--dry-run'] },
+  const REASON = 'the subject needs a build artifact it has not produced';
+  const plan = (buildVerbs: boolean, unmeasurable: Readonly<Record<string, string>>): ReturnType<typeof planBuildVerbs> =>
+    planBuildVerbs({ buildVerbs, unmeasurableBuildVerbs: unmeasurable }, SUBJECT, PROBE_VERSION);
+
+  it('spells the build verbs, build first, and excludes nothing by default', () => {
+    expect(plan(true, {})).toEqual({
+      invocations: [
+        { name: 'build', argv: ['build'] },
+        { name: 'verify', argv: ['verify'] },
+        { name: 'marketplace-publish-dry-run', argv: ['claude', 'marketplace', 'publish', '--dry-run'] },
+      ],
+      excluded: [],
+    });
+  });
+
+  it('plans nothing for a subject without buildVerbs', () => {
+    expect(plan(false, {})).toEqual({ invocations: [], excluded: [] });
+  });
+
+  // A build that cannot finish leaves a half-written dist behind, and how far
+  // it got differs between two builds — so it must not run before `verify`.
+  // Never dropped: a verb that is not run cannot be caught changing.
+  it('still runs a verb the subject cannot complete, after every verb it can, and records the exclusion', () => {
+    const planned = plan(true, { build: REASON, 'marketplace-publish-dry-run': REASON });
+
+    expect(planned.invocations.map((invocation) => invocation.name)).toEqual(['verify', 'build', 'marketplace-publish-dry-run']);
+    expect(planned.excluded).toEqual([
+      { name: 'build', reason: REASON },
+      { name: 'marketplace-publish-dry-run', reason: REASON },
     ]);
   });
 });
