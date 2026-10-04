@@ -78,7 +78,7 @@ function writeProject(configBody: string, betaBody: string): string {
 }
 
 
-const includeOnly = (glob: string): string => `version: 1\nskills:\n  include:\n    - "${glob}"\n`;
+const includeOnly = (glob: string): string => `skills:\n  include:\n    - "${glob}"\n`;
 
 describe('vat skills validate refuses a discovered file that is not a skill', () => {
   beforeEach(() => {

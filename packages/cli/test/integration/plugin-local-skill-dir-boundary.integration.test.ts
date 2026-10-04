@@ -37,8 +37,7 @@ function writeFixture(tempDir: string, skillsBlock: string): void {
   writeTestFile(safePath.join(tempDir, '.gitignore'), 'dist/\n');
   writeTestFile(
     safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1
-skills:
+    `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
 ${skillsBlock}
 claude:

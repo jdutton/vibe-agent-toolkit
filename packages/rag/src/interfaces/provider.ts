@@ -26,56 +26,15 @@ export interface RAGQuery<TMetadata extends Record<string, unknown> = DefaultRAG
   /**
    * Filters
    *
-   * 🔑 `resourceId` and `metadata` are the only two keys a shipped provider
-   * reads: `buildWhereClause` in `@vibe-agent-toolkit/rag-lancedb` branches on
-   * exactly those and destructures nothing else. Anything else declared here is
-   * REFUSED at query time, not dropped.
+   * 🔑 `resourceId` and `metadata` are the only two keys; `RAGQuerySchema` is strict and
+   * refuses any other.
    */
   filters?: {
     /** Filter by resource ID(s) */
     resourceId?: string | string[];
-    /**
-     * Filter by date range
-     *
-     * ⛔ NOT IMPLEMENTED by any shipped provider, at any position, and a shipped
-     * provider THROWS on it. `buildWhereClause` in
-     * `@vibe-agent-toolkit/rag-lancedb` never destructures this field, and no
-     * other provider implements `RAGQueryProvider`.
-     *
-     * It throws rather than being ignored because ignoring it WIDENS the result
-     * set rather than narrowing it: an unread filter contributes no SQL
-     * condition, `query()` applies a WHERE clause only when one was produced, so
-     * a query filtered solely by `dateRange` used to degrade into an unfiltered
-     * full-recall vector search over the whole index — with no error and no
-     * warning, and results drawn from exactly the documents it was meant to
-     * exclude.
-     *
-     * Until a provider implements it, model the date as a field on your metadata
-     * schema and filter via `metadata`, or filter the returned chunks yourself.
-     */
-    dateRange?: { start: Date; end: Date };
 
     /** Metadata filters (type-safe based on TMetadata) */
     metadata?: Partial<TMetadata>;
-  };
-
-  /**
-   * Hybrid search configuration (vector + keyword)
-   *
-   * ⛔ NOT IMPLEMENTED by any shipped provider, and `enabled: true` THROWS.
-   * Nothing outside this declaration, `RAGQuerySchema` and their tests references
-   * it; `LanceDBRAGProvider.query()` always performs a pure vector search.
-   *
-   * It throws rather than being ignored for a sharper version of the reason
-   * above: the results of an ignored `enabled: true` are indistinguishable from
-   * omitting the field entirely, so nothing at all would tell a caller that the
-   * keyword pass never ran. Pass `enabled: false`, or omit the field, to run the
-   * vector search deliberately.
-   */
-  hybridSearch?: {
-    enabled: boolean;
-    /** Keyword weight (0-1, balance between semantic and keyword) */
-    keywordWeight?: number;
   };
 }
 

@@ -99,7 +99,7 @@ Sections and the skills that own their details:
 
 | Section | Owning skill |
 |---|---|
-| Top-level structure, section orientation (a `version:` key is accepted and ignored — the npm package version is the only version VAT has) | this skill (`vat-adoption-and-configuration`) |
+| Top-level structure, section orientation (there is no `version:` key — the npm package version is the only version VAT has) | this skill (`vat-adoption-and-configuration`) |
 | `skills:` (include, defaults, per-skill config, packagingOptions) | `vibe-agent-toolkit:vat-skill-authoring` |
 | `resources:` (collections, schemas, validation modes, SQL checks (`resources.checks`)) | `vibe-agent-toolkit:vat-knowledge-resources` |
 | `claude:` (marketplaces, plugins, publish, owner) | `vibe-agent-toolkit:vat-skill-distribution` |
@@ -192,7 +192,7 @@ per repository and 50,000 content keys. `vat cache clear` reclaims it.
 
 1. `npm install -g vibe-agent-toolkit` (or add to local deps)
 2. `vat --help` — confirm the CLI resolves
-3. Create `vibe-agent-toolkit.config.yaml` with the sections you need (no `version:` key — one is accepted and ignored)
+3. Create `vibe-agent-toolkit.config.yaml` with the sections you need (no `version:` key — it is an unrecognized root key)
 4. Add `resources/skills/SKILL.md` or a kebab-case SKILL.md file and stage it in git (the skill discovery crawler uses `git ls-files` by default — untracked new files are skipped)
 5. `vat skills validate` — report any issues before building
 6. `vat build` — produces `dist/` artifacts

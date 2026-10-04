@@ -260,3 +260,46 @@ vat skill test configure my-skill --auth subscription --require-auth subscriptio
 
 - [skills.md](./skills.md) - `vat skills` (plural): packaging, validation, install
 - [index.md](./index.md) - full CLI command index
+
+## Example reports
+
+Each block below is a real document from the built CLI, trimmed where noted; `packages/cli/test/integration/tagged-report-examples.integration.test.ts` validates every `vat-report=<verb>` block against that verb's registered schema.
+
+### `skill test configure`
+
+The test block written to the config. Produced by `vat skill test configure test-skill-2 --auth inherit`.
+
+```yaml vat-report=skill test configure
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  configPath: vibe-agent-toolkit.config.yaml
+  skill: test-skill-2
+```
+
+### `skill test run`
+
+Refused without the security acknowledgment: an `error` document, exit `2`. Produced by `vat skill test run test-skill-1`.
+
+```yaml vat-report=skill test run
+status: error
+examined: 0
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+error:
+  code: USAGE_INVALID
+  message: Security acknowledgment required. Pass --i-understand-this-runs-skill-code to proceed.
+data: null
+```

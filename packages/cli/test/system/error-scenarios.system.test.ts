@@ -42,7 +42,7 @@ describe('Error scenarios (system test)', () => {
     const result = testConfigError(
       tempDir,
       'malformed-yaml',
-      'version: 1\nresources:\n  - invalid: yaml: syntax:\n',
+      'resources:\n  - invalid: yaml: syntax:\n',
       binPath
     );
 
@@ -165,7 +165,7 @@ describe('Error scenarios (system test)', () => {
   it('should handle debug flag correctly', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'debug-test',
-      config: 'version: 1\n',
+      config: '{}\n',
       withDocs: true,
     });
 

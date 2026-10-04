@@ -19,7 +19,6 @@ const ADR_SCHEMA = JSON.stringify({
 });
 
 const ADR_CONFIG: ProjectConfig = {
-  version: 1,
   resources: {
     collections: {
       adrs: {
@@ -68,7 +67,6 @@ describe('ResourceRegistry.validate runs the validation framework', () => {
     await fs.writeFile(docPath, '---\ntitle: Hi\n---\n\n# Heading\n', 'utf-8');
 
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           docs: {

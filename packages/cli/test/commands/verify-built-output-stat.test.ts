@@ -38,7 +38,7 @@ function projectWithOneCandidate(): string {
   const root = safePath.resolve(createTempDir());
   writeFileSync(
     safePath.join(root, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1\nskills:\n  include:\n    - "nothing/**/SKILL.md"\n  config:\n    ${SKILL}:\n      files: []\n`,
+    `skills:\n  include:\n    - "nothing/**/SKILL.md"\n  config:\n    ${SKILL}:\n      files: []\n`,
     'utf-8',
   );
   return root;

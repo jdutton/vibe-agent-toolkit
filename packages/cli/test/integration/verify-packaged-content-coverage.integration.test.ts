@@ -55,7 +55,7 @@ function setupTwoBuiltSkills(): string {
   const root = createTempDir();
   writeFileSync(
     safePath.join(root, 'vibe-agent-toolkit.config.yaml'),
-    'version: 1\nskills:\n  include:\n    - "skills/*/SKILL.md"\n',
+    'skills:\n  include:\n    - "skills/*/SKILL.md"\n',
     'utf-8',
   );
   for (const name of SKILLS) {
@@ -80,7 +80,7 @@ async function discoveredIn(root: string): Promise<Awaited<ReturnType<typeof dis
 
 /** The plugin-local index `vat verify` builds for `root`, and the declared names it reads for it. */
 async function pluginLocalIn(root: string): Promise<[PluginLocalSkillIndex, PluginLocalSkillNames]> {
-  const index = indexPluginLocalSkills(loadConfig(root) ?? { version: 1 }, root);
+  const index = indexPluginLocalSkills(loadConfig(root) ?? {}, root);
   return [index, await readPluginLocalSkillNames(index)];
 }
 
@@ -165,7 +165,7 @@ describe('packaged-content over a partially built dist/', () => {
     const root = setupTwoBuiltSkills();
     writeFileSync(
       safePath.join(root, 'vibe-agent-toolkit.config.yaml'),
-      'version: 1\nskills:\n  include:\n    - "skills/*/SKILL.md"\n  config:\n    ghost: {}\n',
+      'skills:\n  include:\n    - "skills/*/SKILL.md"\n  config:\n    ghost: {}\n',
       'utf-8',
     );
 
@@ -223,8 +223,7 @@ function setupProject(opts: {
   }[opts.publish];
   writeFileSync(
     safePath.join(root, 'vibe-agent-toolkit.config.yaml'),
-    'version: 1\n'
-      + 'skills:\n'
+    'skills:\n'
       + '  include:\n'
       + '    - "skills/*/SKILL.md"\n'
       + `    - "plugins/${PLUGIN}/skills/*/SKILL.md"\n`
@@ -353,7 +352,7 @@ function poolOnlyProject(includeGlob: string): string {
   rmSync(safePath.join(root, 'dist'), { recursive: true, force: true });
   writeFileSync(
     safePath.join(root, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1\nskills:\n  include:\n    - "${includeGlob}"\n  defaults:\n    publish: false\n`,
+    `skills:\n  include:\n    - "${includeGlob}"\n  defaults:\n    publish: false\n`,
     'utf-8',
   );
   return root;

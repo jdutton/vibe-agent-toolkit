@@ -786,3 +786,183 @@ name: my-help  # Instead of "help"
 - [Skill Test Command](./skill-test.md) - `vat skill test` eval harness and its config knobs
 - [Audit Command](./audit.md) - Comprehensive validation
 - [Resources Command](./resources.md) - Markdown resource validation
+
+## Example reports
+
+Each block below is a real document from the built CLI, trimmed where noted; `packages/cli/test/integration/tagged-report-examples.integration.test.ts` validates every `vat-report=<verb>` block against that verb's registered schema.
+
+### `skills validate`
+
+A two-skill project, both valid. Produced by `vat skills validate`.
+
+```yaml vat-report=skills validate
+status: ok
+examined: 2
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 144
+data:
+  root: /work/project
+  skills:
+    - name: test-skill-1
+      status: ok
+      summary:
+        errors: 0
+        warnings: 0
+        info: 0
+      allowed: 0
+    - name: test-skill-2
+      status: ok
+      summary:
+        errors: 0
+        warnings: 0
+        info: 0
+      allowed: 0
+```
+
+### `skills list`
+
+The same project listed. Produced by `vat skills list`.
+
+```yaml vat-report=skills list
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 24
+data:
+  root: /work/project
+  context: project
+  skills:
+    - path: packages/test-skill-2/resources/skills/SKILL.md
+      name: test-skill-2
+      valid: true
+    - path: resources/skills/SKILL.md
+      name: test-skill-1
+      valid: true
+```
+
+### `skills build`
+
+Both skills built into `dist/skills/`. Produced by `vat skills build`.
+
+```yaml vat-report=skills build
+status: ok
+examined: 2
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 223
+data:
+  dryRun: false
+  validated: true
+  skillsBuilt: 2
+  skillsFailed: 0
+  skillsFailedValidation: 0
+  skillsInPlace: []
+  skillsPluginOnly: []
+  outputCommitted: true
+  skills:
+    - name: test-skill-1
+      source: resources/skills/SKILL.md
+      output: dist/skills/test-skill-1
+      status: ok
+    - name: test-skill-2
+      source: packages/test-skill-2/resources/skills/SKILL.md
+      output: dist/skills/test-skill-2
+      status: ok
+```
+
+### `skills package`
+
+One skill packaged. Produced by `vat skills package resources/skills/SKILL.md -o dist/pkg`.
+
+```yaml vat-report=skills package
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  skill: test-skill-1
+  version: null
+  outputPath: dist/pkg
+  dryRun: false
+```
+
+### `skills install`
+
+A built skill installed to the user scope (home directory shortened). Produced by `vat skills install dist/skills/test-skill-1 --target claude --scope user`.
+
+```yaml vat-report=skills install
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  source: /work/project/dist/skills/test-skill-1
+  target: claude
+  scope: user
+  dryRun: false
+  skills:
+    - name: test-skill-1
+      installPath: ~/.claude/skills/test-skill-1
+durationMs: 1598
+```
+
+### `skill review`
+
+The review checklist, cut to its first section. Produced by `vat skill review resources/skills/SKILL.md --yaml`.
+
+```yaml vat-report=skill review
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  skill: test-skill-1
+  source: /work/project/resources/skills/SKILL.md
+  metadata:
+    skillLines: 13
+    totalLines: 13
+    fileCount: 1
+    directFileCount: 0
+    maxLinkDepth: 0
+    excludedReferenceCount: 0
+    excludedReferences: []
+  sections:
+    - section: Naming
+      codes: []
+      manual:
+        - "[A] Does the name use gerund form (e.g. processing-pdfs) or an acceptable alternative (noun/verb phrase)?"
+        - "[A] Does the name avoid vague terms like helper, utils, tools?"
+durationMs: 62
+```

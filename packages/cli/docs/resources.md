@@ -313,3 +313,105 @@ finding on stdout, for an extractor that reads compiler-style lines.
 
 - GitHub: https://github.com/jdutton/vibe-agent-toolkit
 - Issues: https://github.com/jdutton/vibe-agent-toolkit/issues
+
+## Example reports
+
+Each block below is a real document from the built CLI, trimmed where noted; `packages/cli/test/integration/tagged-report-examples.integration.test.ts` validates every `vat-report=<verb>` block against that verb's registered schema.
+
+### `resources scan`
+
+A scan of a project that declares no collections. Produced by `vat resources scan .`.
+
+```yaml vat-report=resources scan
+status: ok
+examined: 2
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 184
+data:
+  root: /work/project
+  lane: projection
+  extentSource: git
+  collections: {}
+```
+
+### `resources validate`
+
+The same project validated. Produced by `vat resources validate`.
+
+```yaml vat-report=resources validate
+status: ok
+examined: 2
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 82
+data:
+  root: /work/project
+  collections: {}
+```
+
+### `resources query`
+
+One read-only SQL statement; the answer is under `data.rows`. Produced by `vat resources query "SELECT count(*) AS n FROM resources"`.
+
+```yaml vat-report=resources query
+status: ok
+examined: 16
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 225
+data:
+  root: /work/project
+  columns:
+    - n
+  rows:
+    - n: 16
+  population: derived
+  populationSecs: 0.221
+  lensSecs: 3.75e-7
+  lensesEvaluated: []
+```
+
+### `resources check`
+
+The built-in checks, cut to the first. Produced by `vat resources check`.
+
+```yaml vat-report=resources check
+status: ok
+examined: 16
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 86
+data:
+  root: /work/project
+  population: store
+  populationSecs: 0.0819
+  lensSecs: 3.75e-7
+  lensesEvaluated: []
+  checksRun: 3
+  checks:
+    - name: claude-rule-glob-inert
+      durationSecs: 0.0000399
+      rows: 0
+      builtin: true
+```

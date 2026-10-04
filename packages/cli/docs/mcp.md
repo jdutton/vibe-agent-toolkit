@@ -356,3 +356,28 @@ for terminology.
 - [MCP Gateway README](../../gateway-mcp/README.md)
 - [Example Cat Agents](../../vat-example-cat-agents/README.md)
 - [VAT Architecture](../../../docs/architecture/README.md)
+
+## Example reports
+
+Each block below is a real document from the built CLI, trimmed where noted; `packages/cli/test/integration/tagged-report-examples.integration.test.ts` validates every `vat-report=<verb>` block against that verb's registered schema.
+
+### `mcp list-collections`
+
+The MCP agent packages available. Produced by `vat mcp list-collections`.
+
+```yaml vat-report=mcp list-collections
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 0
+data:
+  packages:
+    - name: "@vibe-agent-toolkit/vat-example-cat-agents"
+      description: Example cat breeding agents (haiku validator, photo analyzer)
+```

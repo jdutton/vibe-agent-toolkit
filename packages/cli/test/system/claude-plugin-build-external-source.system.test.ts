@@ -32,8 +32,7 @@ function buildFixture(tempDir: string): void {
   );
   writeTestFile(
     safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1
-skills:
+    `skills:
   include: ["skills/**/SKILL.md"]
 claude:
   marketplaces:
@@ -116,8 +115,7 @@ describe('vat claude plugin build (externalSource)', () => {
     );
     writeTestFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-      `version: 1
-claude:
+      `claude:
   marketplaces:
     mp1:
       owner:

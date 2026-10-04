@@ -84,7 +84,7 @@ function severityOverride(code: string, level: string): string {
 function writeChecksIn(root: string, checks: string, moreResources = ''): void {
   fs.writeFileSync(
     safePath.join(root, CONFIG_FILE),
-    `version: 1\nresources:\n  checks:\n${checks}${moreResources}`,
+    `resources:\n  checks:\n${checks}${moreResources}`,
     'utf-8',
   );
 }
@@ -411,7 +411,7 @@ describe('vat resources check', () => {
     // `noCheckRanFinding` — and the unit suite drives it at `costs: []`.
     fs.writeFileSync(
       safePath.join(projectDir, CONFIG_FILE),
-      'version: 1\nresources:\n  include:\n    - "**/*.md"\n',
+      'resources:\n  include:\n    - "**/*.md"\n',
       'utf-8',
     );
 
@@ -437,7 +437,7 @@ describe('vat resources check', () => {
     // when a project declares none.
     fs.writeFileSync(
       safePath.join(projectDir, CONFIG_FILE),
-      'version: 1\nresources:\n  include:\n    - "**/*.md"\n',
+      'resources:\n  include:\n    - "**/*.md"\n',
       'utf-8',
     );
 

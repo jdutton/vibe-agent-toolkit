@@ -124,7 +124,6 @@ Description:
   claude phase that packages it.
 
 Config Structure (vibe-agent-toolkit.config.yaml):
-  version: 1
   skills:
     include: ["resources/skills/**/SKILL.md"]
     exclude: ["resources/skills/draft/**"]

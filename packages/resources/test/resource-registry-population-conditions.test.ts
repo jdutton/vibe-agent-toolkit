@@ -41,7 +41,6 @@ const SYMLINK_OUTSIDE_ROOT = 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT';
 /** Two collections over `docs/**`, agreeing or not on the file's type. */
 function configTyping(second: string | undefined): ProjectConfig {
   return {
-    version: 1,
     resources: {
       collections: {
         prose: { include: ['docs/**'], mimeType: 'text/markdown' },

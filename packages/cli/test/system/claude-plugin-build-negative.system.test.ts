@@ -20,8 +20,7 @@ const binPath = getBinPath(import.meta.url);
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-plugin-neg-');
 
 function configMin(pluginYaml: string): string {
-  return `version: 1
-skills:
+  return `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
 claude:
   marketplaces:
@@ -125,8 +124,7 @@ describe('vat claude plugin build (negative paths)', () => {
     seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
     writeTestFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-      `version: 1
-skills:
+      `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
 claude:
   marketplaces:
@@ -157,8 +155,7 @@ claude:
     seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
     writeTestFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-      `version: 1
-skills:
+      `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
   defaults:
     publish: false
@@ -200,8 +197,7 @@ claude:
     seedPluginLocalSkill(tempDir, 'dup', 'skill-a');
     writeTestFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-      `version: 1
-skills:
+      `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
 claude:
   marketplaces:
@@ -248,8 +244,7 @@ claude:
 
   it('plugin build publishes a gate failure as findings, exit 1', async () => {
     const tempDir = createTempDir();
-    writeConfigAndPkg(tempDir, `version: 1
-skills:
+    writeConfigAndPkg(tempDir, `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
   defaults:
     validation:

@@ -402,17 +402,20 @@ const answer = await llm.complete({
 
 ## Advanced Patterns
 
-### Pattern 1: Hybrid Search (Vector + Keyword)
+### Pattern 1: Filtered Search
 
-**Coming Soon**: Combine semantic search with exact keyword matching
+**Use Case**: Narrow a query to one resource or to metadata values
+
+`RAGQuery` declares exactly `text`, `limit`, `filters.resourceId` and `filters.metadata`;
+search is always pure vector search. Any other key (`hybridSearch`, `filters.tags`,
+`filters.type`, `filters.headingPath`, `filters.dateRange`) is a schema error, not ignored.
 
 ```typescript
-// Future API
 const results = await ragProvider.query({
   text: "authentication",
   filters: {
-    keywords: ["OAuth", "JWT"],    // Must contain these keywords
-    filePath: "docs/security/**",   // Only search security docs
+    resourceId: "security-guide",
+    metadata: { tags: ["oauth"] },
   },
 });
 ```

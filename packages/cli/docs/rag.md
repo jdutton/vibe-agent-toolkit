@@ -483,3 +483,115 @@ for terminology.
 - **Issues:** https://github.com/jdutton/vibe-agent-toolkit/issues
 - **Embedding Model:** https://huggingface.co/Xenova/all-MiniLM-L6-v2
 - **LanceDB:** https://lancedb.com
+
+## Example reports
+
+Each block below is a real document from the built CLI, trimmed where noted; `packages/cli/test/integration/tagged-report-examples.integration.test.ts` validates every `vat-report=<verb>` block against that verb's registered schema.
+
+### `rag index`
+
+Two markdown files indexed. Produced by `vat rag index knowledge --db .rag-db`.
+
+```yaml vat-report=rag index
+status: ok
+examined: 2
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 14560
+data:
+  resourcesIndexed: 2
+  resourcesSkipped: 0
+  resourcesEmpty: 0
+  resourcesUpdated: 0
+  chunksCreated: 2
+  chunksDeleted: 0
+```
+
+### `rag stats`
+
+The index just built. Produced by `vat rag stats --db .rag-db`.
+
+```yaml vat-report=rag stats
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 246
+data:
+  totalChunks: 2
+  totalResources: 2
+  dbSizeBytes: 16318
+  embeddingModel: Xenova/all-MiniLM-L6-v2
+  lastIndexed: 2026-10-04T00:30:54.226Z
+```
+
+### `rag query`
+
+One match; each hit is under `data.chunks`. Produced by `vat rag query "when do I file an expense report" --db .rag-db --limit 1`.
+
+```yaml vat-report=rag query
+status: ok
+examined: 2
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 996
+data:
+  root: /work/project
+  query: when do I file an expense report
+  stats:
+    totalMatches: 1
+    searchDurationMs: 920
+    embedding:
+      model: Xenova/all-MiniLM-L6-v2
+  chunks:
+    - chunkId: knowledge-playbooks-expenses-md-chunk-0
+      resourceId: knowledge-playbooks-expenses-md
+      filePath: knowledge/playbooks/expenses.md
+      headingPath: Expense reports
+      headingLevel: 1
+      startLine: 5
+      endLine: 8
+      type: playbook
+      contentHash: 2d7cb5f57ef71b95a61bb71d5c8a550a1cf1841936205a605c465422663b8d27
+      tokenCount: 10
+      embeddingModel: Xenova/all-MiniLM-L6-v2
+      embeddedAt: 2026-10-04T00:22:49.099Z
+      content: |-
+        # Expense reports
+
+        File within 30 days.
+```
+
+### `rag clear`
+
+The index removed. Produced by `vat rag clear --db .rag-db`.
+
+```yaml vat-report=rag clear
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 57
+data:
+  cleared: true
+```

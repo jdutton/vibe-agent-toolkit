@@ -39,7 +39,6 @@ const REAL_SKILL = 'real-skill';
 /** Build a two-plugin ProjectConfig for computeTreeCopiedSkillLocations tests. */
 function makeTwoPluginConfig(): ProjectConfig {
   return {
-    version: 1,
     claude: {
       marketplaces: {
         [MARKET]: {
@@ -272,12 +271,12 @@ describe('computeTreeCopiedSkillLocations', () => {
   const { getTempDir } = setupTempDir('vat-plugin-layout-compute-');
 
   it('returns [] when config has no claude section', () => {
-    const config: ProjectConfig = { version: 1 };
+    const config: ProjectConfig = {};
     expect(computeTreeCopiedSkillLocations(config, getTempDir())).toEqual([]);
   });
 
   it('returns [] when config has no marketplaces', () => {
-    const config: ProjectConfig = { version: 1, claude: {} };
+    const config: ProjectConfig = { claude: {} };
     expect(computeTreeCopiedSkillLocations(config, getTempDir())).toEqual([]);
   });
 
@@ -332,7 +331,6 @@ describe('computeTreeCopiedSkillLocations', () => {
   it('stray files under skills/ are excluded from locations', () => {
     const tempDir = getTempDir();
     const config: ProjectConfig = {
-      version: 1,
       claude: {
         marketplaces: {
           test: {

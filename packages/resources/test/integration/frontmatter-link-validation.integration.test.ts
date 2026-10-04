@@ -103,7 +103,6 @@ const baseSchema = {
 };
 
 const baseConfig: ProjectConfig = {
-  version: 1,
   resources: {
     collections: {
       prds: {
@@ -240,7 +239,6 @@ describe('Frontmatter URI-reference link validation (integration)', () => {
 
   it('honors checkFrontmatterLinks: false', async () => {
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           prds: {

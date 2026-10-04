@@ -24,8 +24,7 @@ const PUBLISH_ARGS = ['claude', 'marketplace', 'publish'] as const;
  * Write the standard config YAML used by most publish tests.
  */
 function writePublishConfig(tempDir: string): void {
-  writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), `version: 1
-skills:
+  writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), `skills:
   include:
     - "skills/**/SKILL.md"
 claude:
@@ -199,8 +198,7 @@ describe('vat claude marketplace publish (system)', () => {
     const tempDir = createTempDir();
 
     // Config without publish section
-    writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), `version: 1
-skills:
+    writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), `skills:
   include:
     - "skills/**/SKILL.md"
 claude:

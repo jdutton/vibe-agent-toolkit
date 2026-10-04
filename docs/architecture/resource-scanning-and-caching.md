@@ -68,7 +68,7 @@ noting skills must be discoverable before being committed.
 
 **Demonstrated, not merely reasoned about** (2026-08-16, against the pre-rule code): on a two-file
 repository with one committed and one uncommitted markdown file, each carrying a broken link, `vat
-resources validate` reported `filesScanned: 1` and one finding. The uncommitted file's broken link
+resources validate` reported `examined: 1` and one finding. The uncommitted file's broken link
 was not missed *quietly* — it was invisible, and the command exited green about the half it could
 see. That measurement is the evidence behind §2.1, and it is what the registry's
 `includeUntracked: true` now fixes on the default lane; §3.4's opt-in projection lane reaches the
@@ -335,8 +335,8 @@ resolving §4's proposed within-snapshot resolution is what would collapse all t
 
 | subject | walker | projection | note |
 |---|---|---|---|
-| git repo, 1 committed + 1 untracked broken link | `filesScanned: 1` | `filesScanned: 2` | the untracked file's real broken link, found. ⚠️ **The walker column is pre-§2.1**; both arms are 2 today |
-| git repo, 2 committed symlinks | `filesScanned: 3` | `filesScanned: 1` | the symlink paths are not members |
+| git repo, 1 committed + 1 untracked broken link | `examined: 1` | `examined: 2` | the untracked file's real broken link, found. ⚠️ **The walker column is pre-§2.1**; both arms are 2 today |
+| git repo, 2 committed symlinks | `examined: 3` | `examined: 1` | the symlink paths are not members |
 | non-git anchored corpus, 198 files / 90 HTML / 3,950 links | 112 files, 0.085 s | 112 files, 0.926 s | output **byte-identical** but for `durationSecs` |
 | ...its `resource-registry:enumerate` row | 2.7 ms | 851.9 ms | **316×** |
 | adopter git working tree, 1,378 resource files across 8 collections | 1.02 s | 4.99 s | **4.9×**, output byte-identical but for `durationSecs` |
@@ -346,8 +346,8 @@ resolving §4's proposed within-snapshot resolution is what would collapse all t
 anything** — including that it, too, is a pre-§2.1 walker arm. That tree carried zero untracked files and zero committed symlinks at measurement time,
 so the two lanes had no population to disagree over — "byte-identical" there is agreement on
 *today's tree state*, not a property of the lanes. Re-measured with one untracked `roadmap.md`
-carrying a broken link added to it, the same tree gives `filesScanned` 1,378 → **1,379**,
-`errorsFound` 0 → **1**, and `status: success` → **`error`**. **So on that adopter the flip costs
+carrying a broken link added to it, the same tree gives `examined` 1,378 → **1,379**,
+`summary.errors` 0 → **1**, and `status: ok` → **`findings`**. **So on that adopter the flip costs
 ~4× wall clock and changes no finding until somebody has uncommitted work — at which point it turns
 a green run red, which is the entire point of the lane.** Sizing the flip from the clean-tree run
 alone would be sizing a fixture that cannot distinguish.

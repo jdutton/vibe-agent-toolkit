@@ -20,7 +20,7 @@ projection and judgement at once. Two consequences:
   from "a check now fires more often."
 - **Blind to population.** The safety story for any pipeline restructure is
   "each lane's population is unchanged" — and population is not directly
-  observable in command output. `filesScanned` catches gross changes; a file
+  observable in command output. `examined` catches gross changes; a file
   whose *classification* moves while its findings stay identical is invisible.
 
 ## What is here

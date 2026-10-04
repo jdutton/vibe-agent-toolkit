@@ -153,7 +153,7 @@ export async function updateSkillTestConfig(
   // A `.git/` ancestor is a project root with no config file in it.
   requireInputPath(configPath, {
     code: 'CONFIG_INVALID',
-    message: `No ${CONFIG_FILENAME} at the project root: ${configPath}. Create one (version: 1 and a skills: block) first.`,
+    message: `No ${CONFIG_FILENAME} at the project root: ${configPath}. Create one (a skills: block) first.`,
   });
   const yamlText = await readConfigText(configPath);
   const updatedYaml = upsertTestConfig(yamlText, skillName, knobs);

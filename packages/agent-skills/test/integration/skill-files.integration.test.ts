@@ -66,7 +66,7 @@ function setupSkillFilesTestDir(): { getTempDir: () => string } {
     // findProjectRoot to config-first, no longer consults npm workspaces).
     await writeFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-      'version: 1\n',
+      '{}\n',
     );
   });
 
@@ -333,7 +333,7 @@ function setupLinkedGlobRepo(): LinkedGlobRepo {
     }
 
     await writeFile(safePath.join(repoRoot, '.gitignore'), 'out/\nnode_modules/\n');
-    await writeFile(safePath.join(repoRoot, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+    await writeFile(safePath.join(repoRoot, 'vibe-agent-toolkit.config.yaml'), '{}\n');
     await writeFile(
       safePath.join(repoRoot, 'package.json'),
       JSON.stringify({ name: 'linked-glob-fixture', private: true }),

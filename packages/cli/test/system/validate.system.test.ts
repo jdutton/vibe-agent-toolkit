@@ -35,8 +35,7 @@ function phaseNames(stdout: string): string[] {
 const CLEAN_MARKDOWN = '# Title\n\nNo links here.\n';
 
 /** A minimal resources config block (presence is what enables the surface). */
-const RESOURCES_CONFIG = `version: 1
-resources:
+const RESOURCES_CONFIG = `resources:
   exclude:
     - "node_modules/**"
 `;
@@ -114,7 +113,7 @@ describe('vat validate command (system test)', () => {
     // (exit 1), and the stderr warning names the likely config typo
     // (e.g. `recources:`).
     const tempDir = suite.createTempDir();
-    suite.writeConfig(tempDir, 'version: 1\n');
+    suite.writeConfig(tempDir, '{}\n');
 
     const result = await suite.runValidate(tempDir);
 

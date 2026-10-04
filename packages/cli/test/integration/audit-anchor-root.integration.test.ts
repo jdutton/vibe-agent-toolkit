@@ -46,7 +46,7 @@ function writeFileAt(filePath: string, content: string): void {
 function buildScanRoot(root: string): void {
   for (const project of PROJECTS) {
     const projectDir = safePath.join(root, project);
-    writeFileAt(safePath.join(projectDir, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+    writeFileAt(safePath.join(projectDir, 'vibe-agent-toolkit.config.yaml'), '{}\n');
     const pluginDir = safePath.join(projectDir, 'plugins', 'plugin-a');
     // No `version` field → PLUGIN_MISSING_VERSION anchors at plugin.json.
     writeFileAt(

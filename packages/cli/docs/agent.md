@@ -285,3 +285,164 @@ for terminology.
 - [@vibe-agent-toolkit/schema](../../schema/README.md) - Schema reference
 - [agent-generator](../../vat-development-agents/agents/agent-generator/README.md) - Example agent
 - [RAG Commands](./rag.md) - Indexing documentation for RAG tools
+
+## Example reports
+
+Each block below is a real document from the built CLI, trimmed where noted; `packages/cli/test/integration/tagged-report-examples.integration.test.ts` validates every `vat-report=<verb>` block against that verb's registered schema.
+
+### `agent list`
+
+Agents discovered under the project. Produced by `vat agent list`.
+
+```yaml vat-report=agent list
+status: ok
+examined: 3
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 19
+data:
+  root: /work/agents
+  agents:
+    - name: widget-reviewer
+      version: 0.1.0
+      path: widget-reviewer
+```
+
+### `agent validate`
+
+One manifest validated. Produced by `vat agent validate widget-reviewer`.
+
+```yaml vat-report=agent validate
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 49
+data:
+  root: /work/agents
+  manifest:
+    name: widget-reviewer
+    version: 0.1.0
+    path: widget-reviewer/agent.yaml
+```
+
+### `agent build`
+
+The agent built as an Agent Skill. Produced by `vat agent build widget-reviewer`.
+
+```yaml vat-report=agent build
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 2168
+data:
+  agent: widget-reviewer
+  target: skill
+  output: /work/agents/dist/vat-bundles/skill/widget-reviewer
+  files:
+    - /work/agents/dist/vat-bundles/skill/widget-reviewer/SKILL.md
+    - /work/agents/dist/vat-bundles/skill/widget-reviewer/agent-manifest-guide.md
+```
+
+### `agent import`
+
+A skill imported to `agent.yaml`. Produced by `vat agent import resources/skills/SKILL.md`.
+
+```yaml vat-report=agent import
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 9
+data:
+  agentPath: /work/project/resources/skills/agent.yaml
+```
+
+### `agent install`
+
+Installed to the user scope. Produced by `vat agent install widget-reviewer`.
+
+```yaml vat-report=agent install
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 44
+data:
+  agent: widget-reviewer
+  installPath: ~/.claude/skills/widget-reviewer
+  symlink: false
+```
+
+### `agent installed`
+
+What is installed. Produced by `vat agent installed`.
+
+```yaml vat-report=agent installed
+status: ok
+examined: 2
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 2
+data:
+  scanned:
+    - user
+    - project
+  skills:
+    - name: widget-reviewer
+      scope: user
+      type: directory
+      path: ~/.claude/skills/widget-reviewer
+```
+
+### `agent uninstall`
+
+The install removed. Produced by `vat agent uninstall widget-reviewer`.
+
+```yaml vat-report=agent uninstall
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 2
+data:
+  agent: widget-reviewer
+  installPath: ~/.claude/skills/widget-reviewer
+  wasSymlink: false
+```

@@ -28,7 +28,7 @@ export const COMMENT_DENSITY_CEILINGS: Readonly<Record<string, number>> = {
   'gateway-mcp': 27.7,
   'lab': 54,
   'projection-sqlite': 63.6,
-  'rag': 50.5,
+  'rag': 48.9,
   'rag-lancedb': 48.8,
   'resource-compiler': 38.6,
   'resources': 62.8,

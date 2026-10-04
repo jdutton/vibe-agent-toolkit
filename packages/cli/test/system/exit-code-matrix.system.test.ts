@@ -79,19 +79,19 @@ const CLEAN_SKILL = '---\nname: clean\ndescription: Reviews widgets for quality.
 /** A SKILL.md with an error-severity finding: a description past the 1024-character limit. */
 const BROKEN_SKILL = `---\nname: broken\ndescription: Reviews widgets. ${'Use when a reviewer wants a walkthrough. '.repeat(30)}\n---\n\n# broken\n\nBody.\n`;
 
-const OKF_CONFIG = 'version: 1\nokf:\n  bundles:\n    knowledge:\n      root: ./bundles/knowledge\n';
+const OKF_CONFIG = 'okf:\n  bundles:\n    knowledge:\n      root: ./bundles/knowledge\n';
 /**
  * One declared skill, so the manifest advertises something: an `ard:` block
  * over no surface examines nothing, and the writer refuses that run.
  */
-const ARD_CONFIG = 'version: 1\nskills:\n  include: ["skills/**/SKILL.md"]\n  config:\n    clean: {}\n'
+const ARD_CONFIG = 'skills:\n  include: ["skills/**/SKILL.md"]\n  config:\n    clean: {}\n'
   + 'ard:\n  publisher: example.com\n  baseUrl: https://example.com/catalog\n';
 const CHECK_CONFIG = (sql: string): string =>
-  `version: 1\nresources:\n  checks:\n    probe:\n      description: probe\n      sql: "${sql}"\n`;
+  `resources:\n  checks:\n    probe:\n      description: probe\n      sql: "${sql}"\n`;
 /** A tree whose markdown git ignores wholesale: the population enumerates nothing. */
 const NOTHING_TRACKED = { '.gitignore': '*\n', 'docs/a.md': '# A\n' } as const;
 /** A project whose `skills:` block discovers every `skills/<name>/SKILL.md`. */
-const SKILLS_CONFIG = 'version: 1\nskills:\n  include: ["skills/*/SKILL.md"]\n';
+const SKILLS_CONFIG = 'skills:\n  include: ["skills/*/SKILL.md"]\n';
 /** A one-eval suite for `clean`, so `skill test run --dry-run` has something to stage. */
 const CLEAN_EVALS = JSON.stringify({ skill_name: 'clean', evals: [{ id: 'one', prompt: 'Review this widget.', expectations: ['It reviews the widget.'] }] });
 /**
@@ -154,7 +154,7 @@ const lockedByScenarios: string[] = [];
 
 /** A project holding one clean skill beside a directory the OS will not list. */
 function projectWithLockedDir(name: string): string {
-  const dir = project(name, 'version: 1\n', { 'skills/clean/SKILL.md': CLEAN_SKILL });
+  const dir = project(name, '{}\n', { 'skills/clean/SKILL.md': CLEAN_SKILL });
   const locked = safePath.join(dir, 'skills', 'locked');
   mkdirSyncReal(locked, { recursive: true });
   chmodSync(locked, UNREADABLE);
@@ -170,13 +170,13 @@ const DEV_INSTALL_SKIP = process.platform === 'win32' ? '--dev is refused on Win
 
 /** A marketplace of one local plugin holding a command; `pluginExtra` is YAML appended to the plugin entry. */
 const PLUGIN_BUILD_CONFIG = (pluginExtra = ''): string =>
-  'version: 1\nclaude:\n  marketplaces:\n    matrix-mp:\n      owner:\n        name: Matrix\n'
+  'claude:\n  marketplaces:\n    matrix-mp:\n      owner:\n        name: Matrix\n'
   + `      plugins:\n        - name: p\n          skills: []\n${pluginExtra}`;
 const PLUGIN_BUILD_FILES: Readonly<Record<string, string>> = { 'plugins/p/commands/hello.md': '# hello\n' };
 
 /** A marketplace with a `publish:` block, or without one; the remote is never contacted under `--dry-run`. */
 const PUBLISH_CONFIG = (publish: boolean): string =>
-  'version: 1\nclaude:\n  marketplaces:\n    matrix-mp:\n      owner:\n        name: Matrix\n'
+  'claude:\n  marketplaces:\n    matrix-mp:\n      owner:\n        name: Matrix\n'
   + (publish ? '      publish:\n        changelog: CHANGELOG.md\n        remote: https://example.invalid/matrix.git\n' : '')
   + '      plugins:\n        - name: p\n          skills: []\n';
 /** What `vat build` leaves for `publish`, and a changelog with release notes. */
@@ -191,7 +191,7 @@ const PUBLISH_FILES: Readonly<Record<string, string>> = {
 };
 
 /** A `resources:` block holding one collection over `docs/`. */
-const RESOURCES_CONFIG = 'version: 1\nresources:\n  collections:\n    guides:\n      include:\n        - "docs/*.md"\n';
+const RESOURCES_CONFIG = 'resources:\n  collections:\n    guides:\n      include:\n        - "docs/*.md"\n';
 /**
  * A `resources:` block whose one `linkAuth` provider does not compile, beside
  * the skills block: the resources phase refuses (CONFIG_INVALID) and the
@@ -395,35 +395,35 @@ const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
     { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['inventory', '--format', 'json'], cwd: tempDir }) },
   ],
   audit: [
-    { status: 'ok', run: () => ({ args: ['audit', '.'], cwd: project('audit-ok', 'version: 1\n', { 'skills/clean/SKILL.md': CLEAN_SKILL }) }) },
+    { status: 'ok', run: () => ({ args: ['audit', '.'], cwd: project('audit-ok', '{}\n', { 'skills/clean/SKILL.md': CLEAN_SKILL }) }) },
     // An error-severity finding is `findings` at exit 1 — `error` is reserved for a run that did not finish.
-    { status: 'findings', run: () => ({ args: ['audit', '.'], cwd: project('audit-findings', 'version: 1\n', { 'skills/broken/SKILL.md': BROKEN_SKILL }) }) },
-    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['audit', 'never-created'], cwd: project('audit-error', 'version: 1\n') }) },
+    { status: 'findings', run: () => ({ args: ['audit', '.'], cwd: project('audit-findings', '{}\n', { 'skills/broken/SKILL.md': BROKEN_SKILL }) }) },
+    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['audit', 'never-created'], cwd: project('audit-error', '{}\n') }) },
   ],
   'audit settings': [
     {
       status: 'ok',
-      run: () => ({ args: ['audit', 'settings', '--file', 'settings.json', '--type', 'project'], cwd: project('settings-ok', 'version: 1\n', { 'settings.json': '{}\n' }) }),
+      run: () => ({ args: ['audit', 'settings', '--file', 'settings.json', '--type', 'project'], cwd: project('settings-ok', '{}\n', { 'settings.json': '{}\n' }) }),
     },
     {
       status: 'findings',
       run: () => ({
         args: ['audit', 'settings', '--file', 'settings.json', '--type', 'project'],
-        cwd: project('settings-findings', 'version: 1\n', { 'settings.json': '{"permissions": 5}\n' }),
+        cwd: project('settings-findings', '{}\n', { 'settings.json': '{"permissions": 5}\n' }),
       }),
     },
     // A `--type` the command does not know is the invocation's mistake.
     {
       status: 'error',
       code: 'USAGE_INVALID',
-      run: () => ({ args: ['audit', 'settings', '--file', 'settings.json', '--type', 'bogus'], cwd: project('settings-error', 'version: 1\n', { 'settings.json': '{}\n' }) }),
+      run: () => ({ args: ['audit', 'settings', '--file', 'settings.json', '--type', 'bogus'], cwd: project('settings-error', '{}\n', { 'settings.json': '{}\n' }) }),
     },
   ],
   'skill review': [
-    { status: 'ok', run: () => ({ args: ['skill', 'review', 'SKILL.md', '--yaml'], cwd: project('review-ok', 'version: 1\n', { 'SKILL.md': CLEAN_SKILL }) }) },
-    { status: 'findings', run: () => ({ args: ['skill', 'review', 'SKILL.md', '--yaml'], cwd: project('review-findings', 'version: 1\n', { 'SKILL.md': BROKEN_SKILL }) }) },
+    { status: 'ok', run: () => ({ args: ['skill', 'review', 'SKILL.md', '--yaml'], cwd: project('review-ok', '{}\n', { 'SKILL.md': CLEAN_SKILL }) }) },
+    { status: 'findings', run: () => ({ args: ['skill', 'review', 'SKILL.md', '--yaml'], cwd: project('review-findings', '{}\n', { 'SKILL.md': BROKEN_SKILL }) }) },
     // A path argument that names nothing is the invocation's mistake — never INTERNAL_ERROR.
-    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['skill', 'review', 'never-created', '--yaml'], cwd: project('review-error', 'version: 1\n') }) },
+    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['skill', 'review', 'never-created', '--yaml'], cwd: project('review-error', '{}\n') }) },
   ],
   'okf validate': [
     {
@@ -444,10 +444,10 @@ const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
     { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['okf', 'validate', 'no-such-bundle', '--format', 'json'], cwd: project('okf-error', OKF_CONFIG) }) },
   ],
   'resources validate': [
-    { status: 'ok', run: () => ({ args: ['resources', 'validate', '--format', 'json'], cwd: project('validate-ok', 'version: 1\n', { 'docs/a.md': '# A\n' }) }) },
+    { status: 'ok', run: () => ({ args: ['resources', 'validate', '--format', 'json'], cwd: project('validate-ok', '{}\n', { 'docs/a.md': '# A\n' }) }) },
     {
       status: 'findings',
-      run: () => ({ args: ['resources', 'validate', '--format', 'json'], cwd: project('validate-findings', 'version: 1\n', { 'docs/a.md': '# A\n\n[gone](./missing.md)\n' }) }),
+      run: () => ({ args: ['resources', 'validate', '--format', 'json'], cwd: project('validate-findings', '{}\n', { 'docs/a.md': '# A\n\n[gone](./missing.md)\n' }) }),
     },
     // `--frontmatter-schema` naming no file is the invocation's mistake.
     {
@@ -455,15 +455,15 @@ const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
       code: 'USAGE_INVALID',
       run: () => ({
         args: ['resources', 'validate', '--frontmatter-schema', 'never-created.json', '--format', 'json'],
-        cwd: project('validate-error', 'version: 1\n', { 'docs/a.md': '# A\n' }),
+        cwd: project('validate-error', '{}\n', { 'docs/a.md': '# A\n' }),
       }),
     },
   ],
   'resources scan': [
-    { status: 'ok', run: () => ({ args: ['resources', 'scan', '--format', 'json'], cwd: project('scan-ok', 'version: 1\n', { 'docs/a.md': '# A\n' }) }) },
+    { status: 'ok', run: () => ({ args: ['resources', 'scan', '--format', 'json'], cwd: project('scan-ok', '{}\n', { 'docs/a.md': '# A\n' }) }) },
     // Nothing scanned: the writer's run-integrity refusal is the finding.
-    { status: 'findings', run: () => ({ args: ['resources', 'scan', 'docs', '--format', 'json'], cwd: project('scan-findings', 'version: 1\n', { 'docs/notes.txt': 'not markdown\n' }) }) },
-    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['resources', 'scan', 'never-created', '--format', 'json'], cwd: project('scan-error', 'version: 1\n') }) },
+    { status: 'findings', run: () => ({ args: ['resources', 'scan', 'docs', '--format', 'json'], cwd: project('scan-findings', '{}\n', { 'docs/notes.txt': 'not markdown\n' }) }) },
+    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['resources', 'scan', 'never-created', '--format', 'json'], cwd: project('scan-error', '{}\n') }) },
   ],
   'resources query': [
     // Zero rows over a populated tree is an answer, not a finding.
@@ -471,13 +471,13 @@ const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
       status: 'ok',
       run: () => ({
         args: ['resources', 'query', "SELECT path FROM resource_realizations WHERE ext = '.txt'", '--format', 'json'],
-        cwd: project('query-ok', 'version: 1\n', { 'docs/a.md': '# A\n' }),
+        cwd: project('query-ok', '{}\n', { 'docs/a.md': '# A\n' }),
       }),
     },
     // A population of nothing answers nothing: the writer's run-integrity refusal.
     {
       status: 'findings',
-      run: () => ({ args: ['resources', 'query', 'SELECT 1 AS one', '--format', 'json'], cwd: project('query-findings', 'version: 1\n', NOTHING_TRACKED) }),
+      run: () => ({ args: ['resources', 'query', 'SELECT 1 AS one', '--format', 'json'], cwd: project('query-findings', '{}\n', NOTHING_TRACKED) }),
     },
     // A statement naming a column the projection lacks is the invocation's mistake.
     {
@@ -485,7 +485,7 @@ const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
       code: 'USAGE_INVALID',
       run: () => ({
         args: ['resources', 'query', 'SELECT no_such_column FROM resource_realizations', '--format', 'json'],
-        cwd: project('query-error', 'version: 1\n', { 'docs/a.md': '# A\n' }),
+        cwd: project('query-error', '{}\n', { 'docs/a.md': '# A\n' }),
       }),
     },
   ],
@@ -544,42 +544,42 @@ const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
     { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['skill', 'test', 'run', 'clean', '--auth', 'bogus'], cwd: project('skill-test-run-error', SKILLS_CONFIG) }) },
   ],
   'claude marketplace validate': [
-    { status: 'ok', run: () => ({ args: ['claude', 'marketplace', 'validate', '.'], cwd: project('marketplace-ok', 'version: 1\n', MARKETPLACE_FILES) }) },
+    { status: 'ok', run: () => ({ args: ['claude', 'marketplace', 'validate', '.'], cwd: project('marketplace-ok', '{}\n', MARKETPLACE_FILES) }) },
     // No LICENSE: an error-severity finding about the marketplace, exit 1.
     {
       status: 'findings',
       run: () => ({
         args: ['claude', 'marketplace', 'validate', '.'],
-        cwd: project('marketplace-findings', 'version: 1\n', Object.fromEntries(Object.entries(MARKETPLACE_FILES).filter(([file]) => file !== 'LICENSE'))),
+        cwd: project('marketplace-findings', '{}\n', Object.fromEntries(Object.entries(MARKETPLACE_FILES).filter(([file]) => file !== 'LICENSE'))),
       }),
     },
-    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['claude', 'marketplace', 'validate', 'never-created'], cwd: project('marketplace-error', 'version: 1\n') }) },
+    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['claude', 'marketplace', 'validate', 'never-created'], cwd: project('marketplace-error', '{}\n') }) },
   ],
   'agent validate': [
-    { status: 'ok', run: () => ({ args: ['agent', 'validate', './agent'], cwd: project('agent-ok', 'version: 1\n', { 'agent/agent.yaml': AGENT_MANIFEST }) }) },
+    { status: 'ok', run: () => ({ args: ['agent', 'validate', './agent'], cwd: project('agent-ok', '{}\n', { 'agent/agent.yaml': AGENT_MANIFEST }) }) },
     // A manifest the schema rejects is a finding about the manifest, exit 1.
     {
       status: 'findings',
-      run: () => ({ args: ['agent', 'validate', './agent'], cwd: project('agent-findings', 'version: 1\n', { 'agent/agent.yaml': 'metadata:\n  name: x\nspec:\n  llm: 5\n' }) }),
+      run: () => ({ args: ['agent', 'validate', './agent'], cwd: project('agent-findings', '{}\n', { 'agent/agent.yaml': 'metadata:\n  name: x\nspec:\n  llm: 5\n' }) }),
     },
-    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['agent', 'validate', './never-created'], cwd: project('agent-error', 'version: 1\n') }) },
+    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['agent', 'validate', './never-created'], cwd: project('agent-error', '{}\n') }) },
   ],
   'agent build': [
-    { status: 'ok', run: () => ({ args: ['agent', 'build', './agent'], cwd: project('agent-build-ok', 'version: 1\n', BUILDABLE_AGENT_FILES) }) },
+    { status: 'ok', run: () => ({ args: ['agent', 'build', './agent'], cwd: project('agent-build-ok', '{}\n', BUILDABLE_AGENT_FILES) }) },
     // A `--target` VAT does not build is the invocation's mistake, refused before anything is read.
     {
       status: 'error',
       code: 'USAGE_INVALID',
-      run: () => ({ args: ['agent', 'build', './agent', '--target', 'nope'], cwd: project('agent-build-error', 'version: 1\n', BUILDABLE_AGENT_FILES) }),
+      run: () => ({ args: ['agent', 'build', './agent', '--target', 'nope'], cwd: project('agent-build-error', '{}\n', BUILDABLE_AGENT_FILES) }),
     },
   ],
   'agent import': [
-    { status: 'ok', run: () => ({ args: ['agent', 'import', './skill/SKILL.md'], cwd: project('agent-import-ok', 'version: 1\n', { 'skill/SKILL.md': CLEAN_SKILL }) }) },
+    { status: 'ok', run: () => ({ args: ['agent', 'import', './skill/SKILL.md'], cwd: project('agent-import-ok', '{}\n', { 'skill/SKILL.md': CLEAN_SKILL }) }) },
     // A SKILL.md whose frontmatter no schema accepts cannot be read as a skill: the input's refusal.
     {
       status: 'error',
       code: 'INPUT_UNREADABLE',
-      run: () => ({ args: ['agent', 'import', './skill/SKILL.md'], cwd: project('agent-import-error', 'version: 1\n', { 'skill/SKILL.md': UNIMPORTABLE_SKILL }) }),
+      run: () => ({ args: ['agent', 'import', './skill/SKILL.md'], cwd: project('agent-import-error', '{}\n', { 'skill/SKILL.md': UNIMPORTABLE_SKILL }) }),
     },
   ],
   'agent installed': [
@@ -600,13 +600,13 @@ const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
     { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['agent', 'installed', '--runtime', 'bogus'], cwd: tempDir }) },
   ],
   'agent list': [
-    { status: 'ok', run: () => ({ args: ['agent', 'list'], cwd: project('agent-list-ok', 'version: 1\n', { 'agents/matrix-agent/agent.yaml': AGENT_MANIFEST }) }) },
+    { status: 'ok', run: () => ({ args: ['agent', 'list'], cwd: project('agent-list-ok', '{}\n', { 'agents/matrix-agent/agent.yaml': AGENT_MANIFEST }) }) },
     // A search path the OS will not list: the listing is a floor, said as a warning finding (exit 0).
     {
       status: 'findings',
       skipReason: CANNOT_DENY_READS ? 'this platform cannot deny a directory listing' : undefined,
       run: () => {
-        const cwd = project('agent-list-findings', 'version: 1\n', { 'agents/matrix-agent/agent.yaml': AGENT_MANIFEST });
+        const cwd = project('agent-list-findings', '{}\n', { 'agents/matrix-agent/agent.yaml': AGENT_MANIFEST });
         const agents = safePath.join(cwd, 'agents');
         chmodSync(agents, UNREADABLE);
         lockedByScenarios.push(agents);
@@ -616,8 +616,8 @@ const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
   ],
   'agent install': [
     // Into this scenario's fake HOME: `~/.claude/skills/matrix-agent`.
-    { status: 'ok', run: () => ({ args: ['agent', 'install', 'matrix-agent'], cwd: project('agent-install-ok', 'version: 1\n', INSTALLABLE_AGENT_FILES) }) },
-    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['agent', 'install', 'matrix-agent', '--scope', 'galaxy'], cwd: project('agent-install-error', 'version: 1\n', INSTALLABLE_AGENT_FILES) }) },
+    { status: 'ok', run: () => ({ args: ['agent', 'install', 'matrix-agent'], cwd: project('agent-install-ok', '{}\n', INSTALLABLE_AGENT_FILES) }) },
+    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['agent', 'install', 'matrix-agent', '--scope', 'galaxy'], cwd: project('agent-install-error', '{}\n', INSTALLABLE_AGENT_FILES) }) },
   ],
   'agent uninstall': [
     {
@@ -631,31 +631,31 @@ const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
     { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['agent', 'uninstall', 'matrix-agent'], cwd: tempDir }) },
   ],
   'skills list': [
-    { status: 'ok', run: () => ({ args: ['skills', 'list', '.'], cwd: project('skills-list-ok', 'version: 1\n', { 'skills/clean/SKILL.md': CLEAN_SKILL }) }) },
+    { status: 'ok', run: () => ({ args: ['skills', 'list', '.'], cwd: project('skills-list-ok', '{}\n', { 'skills/clean/SKILL.md': CLEAN_SKILL }) }) },
     // A directory the scan could not list: the listing is a floor, said as a warning finding (exit 0).
     {
       status: 'findings',
       skipReason: CANNOT_DENY_READS ? 'this platform cannot deny a directory listing' : undefined,
       run: () => ({ args: ['skills', 'list', '.'], cwd: projectWithLockedDir('skills-list-findings') }),
     },
-    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['skills', 'list', 'never-created'], cwd: project('skills-list-error', 'version: 1\n') }) },
+    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['skills', 'list', 'never-created'], cwd: project('skills-list-error', '{}\n') }) },
   ],
   'skills install': [
     {
       status: 'ok',
-      run: () => ({ args: ['skills', 'install', './skill', ...SKILLS_INSTALL_FLAGS], cwd: project('skills-install-ok', 'version: 1\n', { 'skill/SKILL.md': CLEAN_SKILL }) }),
+      run: () => ({ args: ['skills', 'install', './skill', ...SKILLS_INSTALL_FLAGS], cwd: project('skills-install-ok', '{}\n', { 'skill/SKILL.md': CLEAN_SKILL }) }),
     },
     // The skill fails its pre-install validation: its own error finding, nothing installed.
     {
       status: 'findings',
-      run: () => ({ args: ['skills', 'install', './skill', ...SKILLS_INSTALL_FLAGS], cwd: project('skills-install-findings', 'version: 1\n', { 'skill/SKILL.md': BROKEN_SKILL }) }),
+      run: () => ({ args: ['skills', 'install', './skill', ...SKILLS_INSTALL_FLAGS], cwd: project('skills-install-findings', '{}\n', { 'skill/SKILL.md': BROKEN_SKILL }) }),
     },
     {
       status: 'error',
       code: 'USAGE_INVALID',
       run: () => ({
         args: ['skills', 'install', './skill', '--target', 'nope', '--scope', 'project'],
-        cwd: project('skills-install-error', 'version: 1\n', { 'skill/SKILL.md': CLEAN_SKILL }),
+        cwd: project('skills-install-error', '{}\n', { 'skill/SKILL.md': CLEAN_SKILL }),
       }),
     },
   ],
@@ -665,12 +665,12 @@ const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
     { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['claude', 'plugin', 'list', '--target', 'claude.ai'], cwd: tempDir }) },
   ],
   'claude plugin install': [
-    { status: 'ok', run: () => ({ args: ['claude', 'plugin', 'install', './skill'], cwd: project('install-ok', 'version: 1\n', { 'skill/SKILL.md': CLEAN_SKILL }) }) },
+    { status: 'ok', run: () => ({ args: ['claude', 'plugin', 'install', './skill'], cwd: project('install-ok', '{}\n', { 'skill/SKILL.md': CLEAN_SKILL }) }) },
     // The plugin tree declares a skill whose build is missing: installed without it, and said so.
     {
       status: 'findings',
       skipReason: DEV_INSTALL_SKIP,
-      run: () => ({ args: ['claude', 'plugin', 'install', '--dev'], cwd: project('install-findings', 'version: 1\n', UNBUILT_PLUGIN_FILES) }),
+      run: () => ({ args: ['claude', 'plugin', 'install', '--dev'], cwd: project('install-findings', '{}\n', UNBUILT_PLUGIN_FILES) }),
     },
     { status: 'error', code: 'NOT_IMPLEMENTED', run: () => ({ args: ['claude', 'plugin', 'install', 'npm:@matrix/none', '--target', 'claude.ai'], cwd: tempDir }) },
   ],
@@ -763,7 +763,7 @@ const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
     {
       status: 'ok',
       skipReason: NPM_REACHABLE ? undefined : 'the npm registry does not answer, so the version check is undetermined',
-      run: () => ({ args: ['doctor'], cwd: project('doctor-ok', 'version: 1\n') }),
+      run: () => ({ args: ['doctor'], cwd: project('doctor-ok', '{}\n') }),
     },
     // Outside any git repository and any config: two checks fail.
     { status: 'findings', run: () => ({ args: ['doctor'], cwd: tempDir }) },
@@ -792,7 +792,7 @@ const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
   ],
   'rag index': [
     // A frontmatter-only document indexes as empty — clean, and no embedding model is loaded.
-    { status: 'ok', run: () => ({ args: ['rag', 'index', '.', '--db', ragDb('index-ok')], cwd: project('rag-index-ok', 'version: 1\n', { 'docs/a.md': '---\ntitle: A\n---\n' }) }) },
+    { status: 'ok', run: () => ({ args: ['rag', 'index', '.', '--db', ragDb('index-ok')], cwd: project('rag-index-ok', '{}\n', { 'docs/a.md': '---\ntitle: A\n---\n' }) }) },
     // A document the crawl cannot read is not in the index: a RAG_DOCUMENT_INDEX_FAILED finding (exit 1).
     {
       status: 'findings',
@@ -803,7 +803,7 @@ const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
         // the OS will not read, and the whole run refuses as INTERNAL_ERROR instead of reporting that
         // one file. Move this row back into a git project once that is fixed.
         const cwd = noProject('rag-index-findings');
-        writeFileTree(cwd, { 'vibe-agent-toolkit.config.yaml': 'version: 1\n', 'docs/locked.md': '# Locked\n\nProse nobody can read.\n' });
+        writeFileTree(cwd, { 'vibe-agent-toolkit.config.yaml': '{}\n', 'docs/locked.md': '# Locked\n\nProse nobody can read.\n' });
         const locked = safePath.join(cwd, 'docs', 'locked.md');
         chmodSync(locked, UNREADABLE);
         lockedByScenarios.push(locked);
@@ -818,7 +818,7 @@ const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
       skipReason: noOnnxModelReason(),
       run: (home) => {
         linkOnnxModelCache(home);
-        const cwd = project('rag-query-ok', 'version: 1\n', { 'docs/a.md': '# Widgets\n\nReviewing widgets in depth.\n' });
+        const cwd = project('rag-query-ok', '{}\n', { 'docs/a.md': '# Widgets\n\nReviewing widgets in depth.\n' });
         executeCli(binPath, ['rag', 'index', '.', '--db', ragDb('query-ok')], { cwd, env: { ...process.env, ...scenarioEnv(home) } });
         return { args: ['rag', 'query', 'widgets', '--db', ragDb('query-ok')], cwd };
       },
@@ -847,7 +847,7 @@ const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
     { status: 'ok', run: () => ({ args: ['ard', 'emit', '--format', 'json'], cwd: project('ard-ok', ARD_CONFIG, { 'skills/clean/SKILL.md': CLEAN_SKILL }) }) },
     // A project with no `ard:` block: a finding about the PROJECT. It used to be
     // the envelope's error branch at exit 1 — the document and the code disagreed.
-    { status: 'findings', run: () => ({ args: ['ard', 'emit', '--format', 'json'], cwd: project('ard-findings', 'version: 1\n') }) },
+    { status: 'findings', run: () => ({ args: ['ard', 'emit', '--format', 'json'], cwd: project('ard-findings', '{}\n') }) },
     { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['ard', 'emit', '--format', 'json', '--project-root', safePath.join(tempDir, 'never-created')], cwd: tempDir }) },
   ],
 };
@@ -1038,7 +1038,7 @@ function expectConfigRefusal(name: string, args: readonly string[], makeConfig: 
 }
 
 /** A project declaring `guides`, holding one file, and `empty`, which no file matches. */
-const COLLECTION_CONFIG = 'version: 1\nresources:\n  collections:\n    guides:\n      include:\n        - "docs/*.md"\n'
+const COLLECTION_CONFIG = 'resources:\n  collections:\n    guides:\n      include:\n        - "docs/*.md"\n'
   + '    empty:\n      include:\n        - "nothing/*.md"\n';
 
 /** The verbs taking `--collection`: one flag, one meaning — an undeclared name is the invocation's mistake. */
@@ -1201,7 +1201,7 @@ describe('exit codes are derived from the published document (system test)', () 
 
     it.skipIf(CANNOT_DENY_READS).each(CONFIG_READERS)('$verb with a mode-000 config ends on ERROR', ({ verb, args }) => {
       expectConfigRefusal(`config-000-${verb.replaceAll(' ', '-')}`, args, (configPath) => {
-        writeFileSync(configPath, 'version: 1\n');
+        writeFileSync(configPath, '{}\n');
         chmodSync(configPath, UNREADABLE);
       });
     });

@@ -66,7 +66,6 @@ function writeLinkAuthOnlyProject(tempDir: string, origin: string): void {
   writeTestFile(
     safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
     [
-      'version: 1',
       'resources:',
       '  include:',
       '    - "docs/**/*.md"',
@@ -167,7 +166,6 @@ describe('vat resources validate refuses a linkAuth provider that cannot compile
     writeTestFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
       [
-        'version: 1',
         'resources:',
         '  include:',
         '    - "docs/**/*.md"',

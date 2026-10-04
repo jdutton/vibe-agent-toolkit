@@ -328,3 +328,37 @@ for terminology.
 - Doctor checks can be run from any subdirectory in your project
 - Exit code 0 means no check *failed*; read the report's `summary.warnings` (or the
   counts line) to see whether any check was undetermined
+
+## Example reports
+
+Each block below is a real document from the built CLI, trimmed where noted; `packages/cli/test/integration/tagged-report-examples.integration.test.ts` validates every `vat-report=<verb>` block against that verb's registered schema.
+
+### `doctor`
+
+Cut to the three checks that do not name a tool version. Produced by `vat doctor`.
+
+```yaml vat-report=doctor
+status: ok
+examined: 8
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  currentDir: /work/project
+  projectRoot: /work/project
+  configPath: /work/project/vibe-agent-toolkit.config.yaml
+  checks:
+    - name: Git repository
+      outcome: pass
+      message: Current directory is a git repository
+    - name: Configuration file
+      outcome: pass
+      message: "Found: /work/project/vibe-agent-toolkit.config.yaml"
+    - name: Configuration valid
+      outcome: pass
+      message: Configuration is valid (no collections defined)
+```

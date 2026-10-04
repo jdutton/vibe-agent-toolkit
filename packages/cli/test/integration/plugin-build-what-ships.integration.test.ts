@@ -73,8 +73,7 @@ function writeSkillWithEvals(skillsDir: string, dirPath: string, name: string): 
 }
 
 function configYaml(poolSelector: string): string {
-  return `version: 1
-skills:
+  return `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
   config:
     ${PACKAGED_SKILL}:
@@ -285,8 +284,7 @@ function guidedConfig(
   extraPluginKeys: readonly string[] = [],
 ): string {
   const extra = extraPluginKeys.map((line) => `\n          ${line}`).join('');
-  return `version: 1
-skills:
+  return `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
 claude:
   marketplaces:

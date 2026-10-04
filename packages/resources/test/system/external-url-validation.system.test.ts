@@ -61,7 +61,6 @@ This file has no external links.
 
     // Minimal valid config
     const configContent = `
-version: 1
 resources:
   include:
     - "docs/**/*.md"

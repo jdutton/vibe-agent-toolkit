@@ -43,8 +43,7 @@ function setupDeadUrlProject(
   name: string,
   validationConfig: string
 ): string {
-  const config = `version: 1
-resources:
+  const config = `resources:
   include:
     - "docs/**/*.md"
 ${validationConfig}`;
@@ -77,8 +76,7 @@ describe('Full CLI workflow (system test)', () => {
   beforeAll(() => {
     tempDir = createTestTempDir('vat-system-test-');
 
-    const configContent = `version: 1
-resources:
+    const configContent = `resources:
   include:
     - "docs/**/*.md"
   exclude:

@@ -154,8 +154,8 @@ Context detection in `packages/cli/src/bin/vat.ts` spawns the actual CLI with `V
 
 ```bash
 # Dev mode
-vat --version → 0.1.0-dev (/Users/jeff/Workspaces/vibe-agent-toolkit)
-                 binary: /Users/jeff/Workspaces/vibe-agent-toolkit/packages/cli/dist/bin.js
+vat --version → 0.1.0-dev (/work/vibe-agent-toolkit)
+                 binary: /work/vibe-agent-toolkit/packages/cli/dist/bin.js
 
 # Local install
 vat --version → 0.1.0 (local: /path/to/project)
@@ -531,7 +531,7 @@ severity under one non-overridable code, `RESOURCE_CHECK_BROKEN`:
 
 The empty-corpus case is the one that shipped: a broad `.gitignore`, a shallow or sparse CI
 checkout, or a root that resolved somewhere else ran every declared check over nothing and reported
-`status: success` on exit 0 with empty stderr. Population declines ignored members rather than
+`status: ok` on exit 0 with empty stderr. Population declines ignored members rather than
 flagging them, so the tables held no trace of it either.
 
 The fourth case changed meaning once a DEFAULT SET existed. `checksRun` counts the built-in set plus
@@ -833,6 +833,11 @@ runner exits on the uncaught throw.
   `location:line:column: severity: message [code]` line per finding and a status line with the
   counts and the denominator — or the entry's own `renderText` when its human rendering is a
   published contract of its own.
+- **Documented examples are held to the schema.** A fenced block tagged `yaml vat-report=<verb>`
+  (or `json`; `<verb>` as typed after `vat`) in any tracked `.md` outside `CHANGELOG.md` and
+  `.changes/` must validate against that verb's registered schema, and every `report` entry needs
+  at least one (`tagged-report-examples.integration.test.ts`). Produce an example by running the
+  built CLI and trimming it; never write one by hand.
 
 ## Testing Patterns
 
@@ -856,7 +861,7 @@ describe('MyCommand (system test)', () => {
     const { result, parsed } = executeCommandAndParse(binPath, projectDir);
 
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    expect(parsed.status).toBe('ok');
   });
 
   it('should handle errors correctly', () => {

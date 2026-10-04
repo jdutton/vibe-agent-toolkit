@@ -5,34 +5,11 @@
   `data` is never `null` on `ok`/`findings` and may be partial on `error`. `exitCodeForReport`
   reads `gate` from the document — it no longer takes a `{ strict }` option.
   <!-- verdict-delta:report-union-and-gate -->
-- **Refusal codes are registered and rejected as `validation.severity`/`validation.allow` keys.**
-  New refusal codes: `USAGE_INVALID`, `CONFIG_INVALID`, `INPUT_UNREADABLE`, `BACKEND_UNAVAILABLE`,
-  `EXTERNAL_API_FAILED`, `NOT_IMPLEMENTED`, `RUN_INCOMPLETE`, `INTERNAL_ERROR`,
-  `RESOURCE_CHECK_BROKEN`, `ARD_NOT_CONFIGURED`, `ARD_DERIVATION_FAILED`. A config that names one
-  as a severity override or an allow entry is now rejected.
-
-  Exit code per code: `exitCodeForReport` returns 2 for any `status: error` document, so the
-  eight refusals that end a run publish 2. The last three are refusal-as-finding: the run
-  completed, they publish at `error` severity inside a `findings` document, and exit 1.
-
-  | Code | Meaning | Exit code |
-  | --- | --- | --- |
-  | `USAGE_INVALID` | The command line could not be acted on (missing or conflicting argument, unknown option value, path naming nothing). | 2 |
-  | `CONFIG_INVALID` | The project config is missing where needed, does not parse, or fails its schema. | 2 |
-  | `INPUT_UNREADABLE` | An input the command must read could not be read. | 2 |
-  | `BACKEND_UNAVAILABLE` | A local backend (optional package, vector store, database file, binary) is not installed or could not be opened. | 2 |
-  | `EXTERNAL_API_FAILED` | A remote API call failed or was refused. | 2 |
-  | `NOT_IMPLEMENTED` | The requested mode, target or format is not implemented. | 2 |
-  | `RUN_INCOMPLETE` | The run started and stopped before finishing; the report carries what finished. | 2 |
-  | `INTERNAL_ERROR` | A defect in VAT itself, not in the project. | 2 |
-  | `RESOURCE_CHECK_BROKEN` | A declared check could not run, or a gate examined nothing. Published as an error-severity finding, not a `status: error` document. | 1 |
-  | `ARD_NOT_CONFIGURED` | The project declares no `ard:` block, so no manifest was built. Published as an error-severity finding. | 1 |
-  | `ARD_DERIVATION_FAILED` | A declared `ard:` surface could not be derived into a conformant entry. Published as an error-severity finding. | 1 |
 - **`vat ard emit` over an `ard:` block that reaches no surface now exits 1, not 0.** The
   zero-examined case is decided once, by the writer, from each verb's declared denominator.
 - **User mistakes across `okf validate`, `skill review`, `resources check` and `ard emit` publish
-  `USAGE_INVALID` / `CONFIG_INVALID` / `INPUT_UNREADABLE` instead of `INTERNAL_ERROR`.** A genuine
-  VAT defect still publishes `INTERNAL_ERROR`, with its stack on stderr.
+  `USAGE_INVALID` / `CONFIG_INVALID` / `INPUT_UNREADABLE` instead of an uncoded failure document.** A genuine
+  VAT defect publishes the new `INTERNAL_ERROR` refusal, with its stack on stderr.
 - **Refusal documents (`status: error`) no longer carry `durationMs`** — every one, including the
   orchestrators' `RUN_INCOMPLETE` and `resources check`'s population-never-completed refusal.
 - **`vat skill review` without `--yaml` now prints nothing on stdout when it refuses** (its
@@ -44,10 +21,10 @@
   (moved from the CLI). Parse and validation messages are unchanged.
 - **A project config the OS will not read is `INPUT_UNREADABLE`, exit 2, on every verb** (one
   shared read, `readConfigText`): `vat okf validate`, `vat claude plugin build` and
-  `vat claude marketplace publish` published `INTERNAL_ERROR` with a stack. The CLI's own config
+  `vat claude marketplace publish` published an uncoded failure with a stack. The CLI's own config
   loader now decodes a UTF-16LE or BOM-prefixed config, as `parseConfigFile` always did.
 - **`vat ard emit` with an `--output` the OS will not write is `RUN_INCOMPLETE`, exit 2** (was
-  `INTERNAL_ERROR` with a stack).
+  an uncoded failure with a stack).
 - **`vat claude plugin build` (and `vat build`'s `claude` phase): the packager refusing a
   plugin-local skill's content is `RUN_INCOMPLETE`, exit 2, with a `SKILL_PACKAGING_FAILED` error
   finding at the skill's `SKILL.md`** — a skill `files:` source that does not exist, a bundled
@@ -59,16 +36,6 @@
   `.claude-plugin/marketplace.json`, or one that is not a JSON manifest, is `INPUT_UNREADABLE`, exit 2**
   (was an uncoded exit 2 carrying a raw `ENOENT` under a temp directory). Run `vat build` first.
   <!-- verdict-delta:publish-unbuilt-marketplace -->
-- **A path with no relative spelling (on Windows, another drive than its root) no longer kills the
-  document.** `vat agent validate` with a manifest on another drive than the working directory
-  refuses `USAGE_INVALID` (it died on its own document, printing nothing); a `vat okf validate`
-  finding in a bundle on another drive than the project, and a `vat skills build` packaging
-  finding for a skill on another drive than the working directory, omit `location` (the OKF one
-  names the document in its message).
-- **Help `Exit Codes:` blocks now state what the code does.** `vat claude context` no longer
-  promises exit 1 for an unknown option or unsupported `--format` (Commander rejects those at 2,
-  with no document); `vat agent run` documents 0 or 2 (it never exits 1); `vat corpus scan` no
-  longer advertises exit 130 (VAT installs no SIGINT handler there).
 - **`@vibe-agent-toolkit/schema` library breaks** (library-only):
   - `reportSchema(dataSchema)` takes a second, required argument: `reportSchema(dataSchema,
     findingSchema)`.
@@ -78,10 +45,9 @@
   - `buildReport` requires `gate`, and returns `OkReport<T> | FindingsReport<T>`.
   - `CodeRegistryEntry` gains a required `kind: 'finding' | 'refusal'`.
   - `REPORT_ENVELOPE_KEYS` gains `gate`.
-- **`packages/cli` removed `handleReportCommandError`, `handleReportExpectedFailure`, and the old
-  `report-schemas.ts` types `ReportEntry`, `UnmigratedEntry`, `ReportSchemaEntry`,
-  `REPORT_SCHEMAS`**, replaced by `PUBLISHED_SHAPES` and `endWithReport`/`endWithRefusal`
-  (library-only; no CLI-facing change).
+  - `ValidationConfig.severity` is keyed by `FindingCode | CustomCheckCode` (was `IssueCode |
+    CustomCheckCode`) and `.allow` by `FindingCode` alone (was `IssueCode`; it never accepted `CUSTOM:`
+    keys). Neither takes a refusal-kind code, and `ValidationConfigSchema` rejects one.
 - **`vat audit` publishes the report contract.** `status: success|warning|error` becomes
   `ok|findings|error` (an error-severity finding is `findings`, exit 1 as before; `error` means only
   "did not finish", exit 2, with `error: { code, message }`). `issueCounts` -> `summary`;
@@ -164,9 +130,9 @@
   names no file -> `CONFIG_INVALID` (all three were uncoded, so they now stop reading as VAT
   defects). A system prompt, `scripts/`, `LICENSE.txt` or `package.json` the OS will not read or
   stat -> `INPUT_UNREADABLE` (a refused `scripts/`/`LICENSE.txt` was skipped silently, a refused
-  `package.json` walked past, an unreadable prompt was `INTERNAL_ERROR`). A packager refusal of the
+  `package.json` walked past, an unreadable prompt was an uncoded failure). A packager refusal of the
   bundle's content -> `RUN_INCOMPLETE` with one `SKILL_PACKAGING_FAILED` finding at the agent (was
-  `INTERNAL_ERROR`).
+  an uncoded failure).
 - **`vat agent import` publishes the report contract** (schema `packages/cli/schemas/agent-import.json`).
   `status: success` -> `ok` with `data: { agentPath }`; `duration` -> `durationMs`; `examined: 1`.
   `status: error` + `error: <string>` -> `error: { code, message }`, exit 2 as before: no SKILL.md at
@@ -192,11 +158,11 @@
   Every failure publishes `error: { code, message }`, exit 2 as before (install "already installed"
   and uninstall "not installed" were exit 2 with nothing on stdout): an unknown `--scope`/`--runtime`,
   a name that is not one path segment, already installed without `--force`, not installed, or no
-  `package.json` around the agent -> `USAGE_INVALID`; `--dev` on Windows -> `NOT_IMPLEMENTED`; an
-  unbuilt bundle or a path the OS will not read -> `INPUT_UNREADABLE`; a failed write under the
+  `package.json` around the agent -> `USAGE_INVALID`; `--dev` on Windows -> `NOT_IMPLEMENTED`; a manifest that does not
+  validate -> `CONFIG_INVALID`; an unbuilt bundle or a path the OS will not read -> `INPUT_UNREADABLE`; a failed write under the
   scope directory -> `RUN_INCOMPLETE`. `uninstall` now removes a dangling `--dev` link (was "not
   installed", exit 2). Agent discovery (every verb that takes an agent name) refuses an unreadable
-  search path or manifest as `INPUT_UNREADABLE` (was an uncoded errno, `INTERNAL_ERROR`).
+  search path or manifest as `INPUT_UNREADABLE` (was an uncoded errno).
 - **`@vibe-agent-toolkit/agent-skills` `ImportError` carries `refusal: RefusalCode`** (library-only),
   and `importSkillToAgent` no longer throws on a SKILL.md it cannot read: it returns
   `INPUT_UNREADABLE`. `buildAgentSkill` throws coded `VatError`s: `AGENT_MANIFEST_INVALID` (from
@@ -213,7 +179,8 @@
   fix?, reference? }`. `collections` -> `data.collections` (always present; `errorCount` -> a
   `summary`; `filesWithErrors` kept per collection); `--verbose` adds `data.files[]` `{ path,
   status, summary }` for every resource. `issueSummary`, top-level `filesWithErrors`,
-  `linksChecked`, `validationMode` and `frontmatterSchema` are removed (derive `issueSummary` from
+  `linksChecked`, `validationMode` and `frontmatterSchema` are removed (each collection keeps its own
+  `validationMode`) (derive `issueSummary` from
   `findings[].code`). `--format text` now prints `location:line: severity: message [code]` and a
   status line on stdout (before: `file:line:col:` on stderr). Exit codes: `--collection X` is
   scoped, so an error only outside X no longer fails it (1 -> 0), while an unreadable file matched
@@ -221,7 +188,7 @@
   `USAGE_INVALID` (was 0 or 1); `--frontmatter-schema` with a missing file or unsupported
   extension -> `USAGE_INVALID`, and one the OS will not read or that does not parse ->
   `INPUT_UNREADABLE`; a linkAuth provider that does not compile -> `CONFIG_INVALID` (was
-  `INTERNAL_ERROR`).
+  an uncoded failure).
   <!-- verdict-delta:resources-validate-report-contract -->
 - **`vat resources scan` publishes the report contract.** `status: success` -> `ok`;
   `filesScanned` -> `examined`; `durationSecs` -> `durationMs`; `root`, `lane`, `extentSource`,
@@ -288,7 +255,11 @@
 - **`vat claude plugin list`, `install` and `uninstall` publish the report contract.**
   `status: success` -> `ok`; every other field moves under `data`; `duration` -> `durationMs`.
   A refusal exits 2 with `error: { code, message }`: `list --target <not code>` and
-  `install --target <unknown>` -> `USAGE_INVALID`, `install --target claude.ai` -> `NOT_IMPLEMENTED`.
+  `install --target <unknown>` -> `USAGE_INVALID`, `install --target claude.ai` -> `NOT_IMPLEMENTED`; an unreadable registry (`list`, `install`) or
+  source -> `INPUT_UNREADABLE`; a failing `npm pack` -> `EXTERNAL_API_FAILED`; a failed `--build` or
+  a copy or registry write that fails partway -> `RUN_INCOMPLETE`. `uninstall --all` over an unreadable
+  `package.json` or registry -> `INPUT_UNREADABLE`; a removal that fails partway -> `RUN_INCOMPLETE`
+  (the plugins already removed stay listed).
 - **`vat claude plugin list`: `sources.pluginRegistry` / `sources.legacySkillsDir` are now the paths
   read, not counts** (count `data.plugins` / `data.legacySkills`); `legacySkills` is always present.
 - **`vat claude plugin install`: `skillsInstalled` is removed** (count `data.skills`); `data.dryRun`,
@@ -366,7 +337,7 @@
   directory or none holding a config, an unknown `--skill`, no project root), `INPUT_UNREADABLE`
   (a `[path]`, or a previous `dist/skills`, the OS will not stat — was read as absent),
   `CONFIG_INVALID`, `RUN_INCOMPLETE` (the staging area under `dist/` could not be created, or the
-  previous output could not be set aside — was an uncoded `INTERNAL_ERROR`).
+  previous output could not be set aside — was an uncoded failure).
 - **`vat skills package` publishes the report contract** (schema
   `packages/cli/schemas/skills-package.json`). `status: success|warning|error` -> `ok|findings|error`;
   `issueCounts` -> the envelope `summary`, and every validation finding (stderr-only before) is in
@@ -405,8 +376,6 @@
   `VatError` coded `SKILL_PACKAGING_INPUT_INVALID_CODE` (was a plain `Error`; messages unchanged);
   `isSkillPackagingInputError(error)` also recognises `SKILL_NAME_NOT_A_SEGMENT`. The `files:`
   integrity post-conditions stay uncoded (a defect).
-- **`packages/cli` removed `handleValidationGateFailure`, `buildValidationGateFailure` and
-  `ValidationGateFailure`** (internal; their last caller was `vat skills package`).
 - **`vat build`, `vat validate` and `vat verify` publish the report contract** — one shape for the
   three (registry entry `orchestrator`, schema `packages/cli/schemas/orchestrator.json`).
   `status: success|warning|error|system-error` -> `ok|findings|error`; the header `issueCounts` ->
@@ -443,18 +412,9 @@
   `INPUT_UNREADABLE`; discovery that cannot list the tree -> `INPUT_UNREADABLE`; a throw in
   a verify in-process phase (e.g. a `package.json` the OS will not read) is that phase's refusal
   with its own code (was always an uncoded exit 2).
-- **Phase functions return `{ report }`.** `runResourcesValidatePhase`, `runSkillsValidatePhase`,
-  `runSkillsBuildPhase`, `runClaudePluginBuildPhase` and `runMarketplaceValidatePhase` return the
-  report BEFORE the writer's run-integrity pass (was `{ document, exitCode, failed? }` of the
-  published document). `vat skills build` and `vat claude plugin build` publish the same
-  zero-examined refusal as before on their own command lines.
 - **`calculateValidationStatus` is removed** from `@vibe-agent-toolkit/schema` — the second status
   vocabulary (`success | warning | error`) is gone; derive a status with `resultStatus` /
-  `summarizeIssues` (`ok | findings`) and read `countBySeverity` for the distribution. Also
-  removed from `packages/cli/src/commands/phase-utils.ts`: `PhaseStatus`, `SYSTEM_ERROR`,
-  `worseOf`, `aggregatePhaseStatus`, `phaseIssueCounts`, `aggregatePhaseIssueCounts`,
-  `exitCodeForPhases`, `phaseResultFromOutcome`, `finishCommand`; `validateShippedPluginSkillLinks`
-  -> `checkShippedPluginSkillLinks` (returns a report); verify's `toPublishedIssue` is removed.
+  `summarizeIssues` (`ok | findings`) and read `countBySeverity` for the distribution.
 - **`vat claude org` publishes the Admin API payload verbatim, and a failed write exits 2.**
   The `status: success|error` and `duration` fields VAT wrapped around the payload are removed
   (the exit code is the verdict). A partial or failed write (`skills install --from-npm` with a
@@ -471,11 +431,6 @@
   `claude-org-not-implemented.json`): `status: not-yet-implemented`, `command`, `guidance` ->
   `status: error`, `error: { code: NOT_IMPLEMENTED, message }`, `examined: 0`, `data: null`,
   `gate: { strict: false }`; exit stays 2.
-- **`packages/cli` org helpers** (library-internal): `writeNotYetImplementedStub` is removed
-  (`NOT_IMPLEMENTED_MESSAGE` in `claude/org/stubs.ts`); `executeOrgCommand` takes the registered
-  verb (`'claude org info'`, was `'OrgInfo'`); `orgCommandFailure(document, outcome)` requires the
-  outcome (`partial` / `failed`); `buildOrgCommandEnding(result)` drops its `durationMs` argument
-  and returns `{ document, outcome }` (was `{ document, exitCode }`).
 - **`@vibe-agent-toolkit/claude-marketplace` `OrgApiClient` missing-key throws are coded**
   (library-only): `buildAdminHeaders` / `buildSkillsHeaders` throw a `VatError` with code
   `ORG_API_KEY_MISSING` (exported as `ORG_API_KEY_MISSING_CODE`), was a plain `Error`;
@@ -546,10 +501,7 @@
   `outcome` is `pass|fail|undetermined|skipped`. `examined` is the checks run; each `fail` is a
   `DOCTOR_CHECK_FAILED` finding (error, exit 1 as before) and each `undetermined` a
   `DOCTOR_CHECK_WARNED` finding (warning, exit 0 as before). A doctor that could not run publishes
-  `status: error` (`INTERNAL_ERROR`, exit 2) instead of a stderr line. `DoctorResult` drops
-  `totalChecks` and `outcomeCounts`; `countByOutcome`, `selectDisplayChecks` and
-  `formatDoctorSummary` move to `commands/doctor-render.ts`, and `DoctorOutcome` /
-  `DoctorCheckResult` to `commands/doctor-schema.ts` (cli-internal).
+  `status: error` (`INTERNAL_ERROR`, exit 2) instead of a stderr line.
 - **`vat cache clear` publishes the report contract** (schema
   `packages/cli/schemas/cache-clear.json`). `status: success` -> `ok`; `status: partial` -> the error
   branch, `error.code: RUN_INCOMPLETE` (exit 2, unchanged; the help said 1), with `reason` moved to
@@ -558,8 +510,7 @@
   a complete clear). `examined` is 1, the one cache root considered; an absent root is `ok` with
   `existed: false`. A cache entry the OS will not list or stat is `INPUT_UNREADABLE` (was an uncoded
   errno), before anything is deleted; a delete that stopped part-way and whose survivors cannot be read
-  back stays `RUN_INCOMPLETE`, with `data: null` and both errors in the message. `clearCacheDirectory` (cli-internal) returns `{ complete,
-  data, reason? }` instead of `CacheClearReport`.
+  back stays `RUN_INCOMPLETE`, with `data: null` and both errors in the message.
 - **`vat rag index` publishes the report contract** (schema `packages/cli/schemas/rag-index.json`).
   `status: success` -> `ok`; `status: partial` -> `findings` (exit 1 as before); `duration` ->
   `durationMs`; the six counters move under `data`; `errors[]` (`{ resourceId, error }`) is removed —
@@ -592,9 +543,7 @@
   (`error.code: BACKEND_UNAVAILABLE`, exit 2 as before; was `{ status: error, error, fix }`), the
   message naming the package and the install command. A missing projection store reached from a
   report verb (`resources query`, `resources check`, …) publishes that verb's `BACKEND_UNAVAILABLE`
-  refusal instead of the same legacy document. `reportMissingBackend` (cli-internal) is replaced by
-  `missingBackendError`, which returns the refusal for the caller to throw; `lazyAction` takes the
-  report verb first.
+  refusal instead of the same legacy document.
 - **`vat corpus scan` publishes the report contract on stdout** (schema
   `packages/cli/schemas/corpus-scan.json`; before, stdout was empty). `examined` counts the seed
   entries; `data` is `{ outDir, entries[] }`, each entry `{ name, audit: ok|findings|unloadable,
@@ -617,12 +566,10 @@
   `gate`. A path outside the corpus root -> `USAGE_INVALID`; an uninstalled projection backend ->
   `BACKEND_UNAVAILABLE`; a reached memory file with no derived harness facts -> `INTERNAL_ERROR`
   with its stack on stderr (the stderr label `claude context (HARNESS_FACTS_ABSENT) failed` is
-  gone). The answer document is unchanged — it stays the one legacy shape until wave C.
+  gone). The answer document is unchanged — it stays the one legacy shape for now.
 - **`vat mcp serve` failures no longer print a document on stdout** (stdout is the MCP protocol):
   the message goes to stderr (the stack under `--debug`) and the exit stays 2. `--print-config`
   writes only the JSON config on stdout, through the writer.
-- **`packages/cli` `writeLegacyDocument` takes the verb's text rendering** (cli-internal): a
-  required fourth argument, `text: string | undefined`, written as-is under `--format text`.
 - **`vat inventory` publishes the report contract** (schema `packages/cli/schemas/inventory.json`).
   The inventory document that was the whole of stdout moves to `data.inventory` unchanged (`kind`,
   `vendor`, `declared`/`discovered`/`references`/`unexpected`, `parseErrors[]`); under `--shallow`
@@ -670,6 +617,30 @@
 
 ### Added
 
+- **Refusal codes: every `status: error` document and every refusal-as-finding carries one of eleven
+  registered codes.** Eight are new (`USAGE_INVALID`, `CONFIG_INVALID`, `INPUT_UNREADABLE`,
+  `BACKEND_UNAVAILABLE`, `EXTERNAL_API_FAILED`, `NOT_IMPLEMENTED`, `RUN_INCOMPLETE`, `INTERNAL_ERROR`);
+  `RESOURCE_CHECK_BROKEN`, `ARD_NOT_CONFIGURED` and `ARD_DERIVATION_FAILED` existed and are now
+  registered as refusals. A refusal is never a `validation.severity` / `validation.allow` key (a config
+  naming one was and is rejected; the message now says it is a refusal).
+
+  `exitCodeForReport` returns 2 for any `status: error` document, so the eight refusals that end a run
+  publish 2. The last three are refusal-as-finding: the run completed, they publish at `error` severity
+  inside a `findings` document, and exit 1.
+
+  | Code | Meaning | Exit code |
+  | --- | --- | --- |
+  | `USAGE_INVALID` | The command line could not be acted on (missing or conflicting argument, unknown option value, path naming nothing). | 2 |
+  | `CONFIG_INVALID` | The project config is missing where needed, does not parse, or fails its schema. | 2 |
+  | `INPUT_UNREADABLE` | An input the command must read could not be read. | 2 |
+  | `BACKEND_UNAVAILABLE` | A local backend (optional package, vector store, database file, binary) is not installed or could not be opened. | 2 |
+  | `EXTERNAL_API_FAILED` | A remote API call failed or was refused. | 2 |
+  | `NOT_IMPLEMENTED` | The requested mode, target or format is not implemented. | 2 |
+  | `RUN_INCOMPLETE` | The run started and stopped before finishing; the report carries what finished. | 2 |
+  | `INTERNAL_ERROR` | A defect in VAT itself, not in the project. | 2 |
+  | `RESOURCE_CHECK_BROKEN` | A declared check could not run, or a gate examined nothing. Published as an error-severity finding, not a `status: error` document. | 1 |
+  | `ARD_NOT_CONFIGURED` | The project declares no `ard:` block, so no manifest was built. Published as an error-severity finding. | 1 |
+  | `ARD_DERIVATION_FAILED` | A declared `ard:` surface could not be derived into a conformant entry. Published as an error-severity finding. | 1 |
 - **`no-stdout-outside-writer` ESLint rule** makes `packages/cli/src/utils/document-writer.ts`
   the one place under `commands/` that writes stdout for a document.
 - **`PUBLISHED_SHAPES` registry** (`packages/cli/src/report-schemas.ts`) lists every shape VAT
@@ -679,10 +650,11 @@
   `SETTINGS_FILE_INVALID`, `SETTINGS_TYPE_AMBIGUOUS`, `SETTINGS_PATH_DEPRECATED`,
   `SETTINGS_RULE_SHADOWED`, `SETTINGS_MARKETPLACE_TOKEN_MISSING`, `AGENT_MANIFEST_INVALID`,
   `AGENT_REFERENCE_MISSING`, `AGENT_REFERENCE_UNREADABLE`, `AGENT_RAG_NO_SOURCES`,
-  `SKILL_TEST_EVAL_FAILED`, `DOCTOR_CHECK_FAILED`, `DOCTOR_CHECK_WARNED`,
-  `CORPUS_ENTRY_INCOMPLETE` (non-overridable), `SKILL_PACKAGING_FAILED`,
-  `SKILL_BUILD_TARGET_NOT_BUILDABLE`, `SKILL_PACKAGE_TOO_LARGE`, `FILES_CONFIG_DEST_MISSING`,
-  `RAG_DOCUMENT_INDEX_FAILED`, `PLUGIN_UNINSTALL_INCOMPLETE`.
+  `PLUGIN_UNINSTALL_INCOMPLETE` (these ten take a `validation.severity` override). Non-overridable
+  (always their own severity; refused as a `validation.severity` / `allow` key):
+  `SKILL_TEST_EVAL_FAILED`, `DOCTOR_CHECK_FAILED`, `DOCTOR_CHECK_WARNED`, `CORPUS_ENTRY_INCOMPLETE`,
+  `SKILL_PACKAGING_FAILED`, `SKILL_BUILD_TARGET_NOT_BUILDABLE`, `SKILL_PACKAGE_TOO_LARGE`,
+  `FILES_CONFIG_DEST_MISSING`, `RAG_DOCUMENT_INDEX_FAILED`.
 - **New library exports** (library-only). `@vibe-agent-toolkit/schema`: `resultStatus`,
   `summarizeIssues`, `CodeKind`, `RefusalCode`, `FindingCode`, `REFUSAL_CODES`,
   `RefusalCodeSchema`, `FindingCodeSchema`, `GateSchema`, `Gate`, `ReportError`, `OkReport`,
@@ -696,3 +668,19 @@
   `AGENT_MANIFEST_NOT_FOUND_CODE`, `AGENT_MANIFEST_UNREADABLE_CODE`, `AGENT_MANIFEST_INVALID_CODE`,
   `ValidateAgentOptions`. `@vibe-agent-toolkit/projection-sqlite`:
   `SqlQueryableStore.columns(sql, ...params)`.
+
+### Fixed
+
+- **A path with no relative spelling (on Windows, another drive than its root) no longer kills the
+  document.** `vat agent validate` with a manifest on another drive than the working directory
+  refuses `USAGE_INVALID` (it died on its own document, printing nothing); a `vat okf validate`
+  finding in a bundle on another drive than the project, and a `vat skills build` packaging
+  finding for a skill on another drive than the working directory, omit `location` (the OKF one
+  names the document in its message).
+
+### Changed
+
+- **Help `Exit Codes:` blocks now state what the code does.** `vat claude context` no longer
+  promises exit 1 for an unknown option or unsupported `--format` (Commander rejects those at 2,
+  with no document); `vat agent run` documents 0 or 2 (it never exits 1); `vat corpus scan` no
+  longer advertises exit 130 (VAT installs no SIGINT handler there).

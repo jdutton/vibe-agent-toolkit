@@ -87,13 +87,13 @@ describe('vat skills validate refuses a run that discovered no skill', () => {
   });
 
   it('a skills.include glob matching nothing is a run-integrity refusal, exit 1', async () => {
-    const { exitCode, document } = await publishedSkillsValidate(writeProject(`version: 1\nskills:\n  include:\n    - "${TYPO_GLOB}"\n`));
+    const { exitCode, document } = await publishedSkillsValidate(writeProject(`skills:\n  include:\n    - "${TYPO_GLOB}"\n`));
     expectRefusedOverNothing(exitCode, document);
   });
 
   it('an exclude that swallows every match is the same refusal', async () => {
     const { exitCode, document } = await publishedSkillsValidate(
-      writeProject(`version: 1\nskills:\n  include:\n    - "${MATCHING_GLOB}"\n  exclude:\n    - "**"\n`),
+      writeProject(`skills:\n  include:\n    - "${MATCHING_GLOB}"\n  exclude:\n    - "**"\n`),
     );
     expectRefusedOverNothing(exitCode, document);
   });
@@ -102,12 +102,12 @@ describe('vat skills validate refuses a run that discovered no skill', () => {
     // It used to publish NO document at exit 0. Both orchestrators still skip
     // this phase without `skills:`; invoked directly, a run over nothing is
     // the same claim as a glob over nothing.
-    const { exitCode, document } = await publishedSkillsValidate(writeProject('version: 1\n'));
+    const { exitCode, document } = await publishedSkillsValidate(writeProject('{}\n'));
     expectRefusedOverNothing(exitCode, document);
   });
 
   it('a glob that matches the skill still validates it — the refusal is off the populated path', async () => {
-    const { document } = await publishedSkillsValidate(writeProject(`version: 1\nskills:\n  include:\n    - "${MATCHING_GLOB}"\n`));
+    const { document } = await publishedSkillsValidate(writeProject(`skills:\n  include:\n    - "${MATCHING_GLOB}"\n`));
 
     expect(document.examined).toBe(1);
     expect(document.data.skills.map((skill) => skill.name)).toEqual(['alpha']);

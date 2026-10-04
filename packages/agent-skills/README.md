@@ -145,10 +145,9 @@ The validator checks for:
 - `SKILL_MISSING_DESCRIPTION` - Required "description" field missing
 - `SKILL_NAME_INVALID` - Name doesn't match pattern: `^[a-z0-9]+(-[a-z0-9]+)*$`
 - `RESERVED_WORD_IN_NAME` (warning) - Name contains "claude" or "anthropic"
-- `SKILL_NAME_XML_TAGS` - Name contains an XML/HTML tag
 - `SKILL_DESCRIPTION_TOO_LONG` - Description exceeds 1024 characters
 - `SKILL_DESCRIPTION_EMPTY` - Description is empty or whitespace-only
-- `SKILL_DESCRIPTION_XML_TAGS` - Description contains an XML/HTML tag. Three lanes:
+- `SKILL_DESCRIPTION_XML_TAGS` - Description contains an XML/HTML tag (VAT's reading of the vendor's "cannot contain XML tags"). Three lanes:
   **markup** — a closing `</x>`, a self-closing `<x/>`, an opening tag with an attribute
   assignment `<x a="b">`, or a declaration (`<!--`, `<![CDATA[`, `<!DOCTYPE`, `<?xml`) — fires
   wherever it appears, **backticks included**; a **bare placeholder** `<word>`, which is

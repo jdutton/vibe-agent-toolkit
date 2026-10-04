@@ -90,8 +90,7 @@ describe('Resources validate with collections (system test)', () => {
   it('should apply collection-specific validation in strict mode', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'strict-collection-test',
-      config: `version: 1
-resources:
+      config: `resources:
   exclude:
     - "node_modules/**"
   collections:
@@ -134,8 +133,7 @@ resources:
   it('should allow extra fields in permissive mode', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'permissive-collection-test',
-      config: `version: 1
-resources:
+      config: `resources:
   collections:
     permissive-guides:
       include:
@@ -176,8 +174,7 @@ resources:
   it('should handle resources in multiple collections with compatible schemas', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'multi-collection-test',
-      config: `version: 1
-resources:
+      config: `resources:
   collections:
     docs-collection:
       include:
@@ -225,8 +222,7 @@ resources:
   it('should fail when resource violates one of multiple collections', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'multi-collection-fail-test',
-      config: `version: 1
-resources:
+      config: `resources:
   collections:
     docs-collection:
       include:
@@ -270,8 +266,7 @@ resources:
   it('should handle resources in no collections (default validation only)', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'no-collection-test',
-      config: `version: 1
-resources:
+      config: `resources:
   collections:
     docs-collection:
       include:
@@ -315,8 +310,7 @@ resources:
   it('should warn on missing schema file and report as failure', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'missing-schema-test',
-      config: `version: 1
-resources:
+      config: `resources:
   collections:
     docs-collection:
       include:
@@ -347,8 +341,7 @@ resources:
     const projectDir = setupCollectionTestProject(
       tempDir,
       'mixed-modes-test',
-      `version: 1
-resources:
+      `resources:
   collections:
     strict-docs:
       include:
@@ -403,8 +396,7 @@ resources:
   it('should fail when strict mode doc has extra fields', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'strict-mode-fail-test',
-      config: `version: 1
-resources:
+      config: `resources:
   collections:
     strict-docs:
       include:
@@ -444,8 +436,7 @@ resources:
   it('should validate resources with nested directory patterns', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'nested-patterns-test',
-      config: `version: 1
-resources:
+      config: `resources:
   collections:
     api-docs:
       include:
@@ -499,8 +490,7 @@ resources:
     const projectDir = setupCollectionTestProject(
       tempDir,
       'multiple-errors-test',
-      `version: 1
-resources:
+      `resources:
   collections:
     docs-collection:
       include:
@@ -560,8 +550,7 @@ resources:
     const projectDir = setupCollectionTestProject(
       tempDir,
       'collection-unreadable-test',
-      `version: 1
-resources:
+      `resources:
   collections:
     guides-collection:
       include:
@@ -599,8 +588,7 @@ resources:
     const projectDir = setupCollectionTestProject(
       tempDir,
       'collection-scope-test',
-      `version: 1
-resources:
+      `resources:
   collections:
     docs-collection:
       include:

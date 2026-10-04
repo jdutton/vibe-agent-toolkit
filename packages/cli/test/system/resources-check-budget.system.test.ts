@@ -157,7 +157,7 @@ function writeChecks(...entries: readonly (readonly [string, string])[]): void {
     .join('');
   fs.writeFileSync(
     safePath.join(projectDir, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1\nresources:\n  checks:\n${checks}`,
+    `resources:\n  checks:\n${checks}`,
     'utf-8',
   );
 }

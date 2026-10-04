@@ -39,7 +39,7 @@ function seedProject(scanRoot: string, project: string): void {
   fs.mkdirSync(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
   fs.mkdirSync(skillDir, { recursive: true });
 
-  writeTestFile(safePath.join(projectDir, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+  writeTestFile(safePath.join(projectDir, 'vibe-agent-toolkit.config.yaml'), '{}\n');
   // No `version` field, so the manifest itself carries findings.
   writeTestFile(
     safePath.join(pluginDir, '.claude-plugin', 'plugin.json'),

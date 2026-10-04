@@ -1044,12 +1044,6 @@ export type ArdConfig = z.infer<typeof ArdConfigSchema>;
  * Complete project configuration schema.
  */
 export const ProjectConfigSchema = z.object({
-  // Accepted and ignored; the npm package version is the only version this
-  // project has. The strict schema decides whether a config can be read — no
-  // integer in the file gets a vote. The key stays declared so a config still
-  // carrying the historical `version: 1` is not refused as an unknown key.
-  version: z.unknown().optional()
-    .describe('Accepted and ignored. The npm package version is the only version VAT has; a `version:` key of any value is not read.'),
   skills: SkillsConfigSchema.optional()
     .describe('Skills discovery and packaging configuration'),
   resources: ResourcesConfigSchema.optional()

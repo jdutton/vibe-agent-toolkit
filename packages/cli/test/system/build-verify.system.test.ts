@@ -55,8 +55,7 @@ function createVatConfig(
 ): void {
   const globs = skillIncludeGlobs ?? [pluginSkillIncludeGlob(pluginName)];
 
-  const content = `version: 1
-skills:
+  const content = `skills:
   include:
 ${globs.map(g => `    - "${g}"`).join('\n')}
 claude:
@@ -391,7 +390,7 @@ describe('vat verify command (system test)', () => {
     const tempDir = suite.createTempDir();
     writeTestFile(
       safePath.join(tempDir, VAT_CONFIG_FILENAME),
-      'version: 1\nresources:\n  include: [unclosed\n',
+      'resources:\n  include: [unclosed\n',
     );
 
     const result = await suite.runVerify(tempDir);

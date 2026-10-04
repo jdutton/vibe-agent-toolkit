@@ -26,8 +26,7 @@ import {
 const TEMP_DIR_PREFIX = 'vat-build-test-';
 const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 const PACKAGE_JSON_FILENAME = 'package.json';
-const CONFIG_VERSION_HEADER = 'version: 1\n';
-const CONFIG_VERSION_LINE = 'version: 1';
+const EMPTY_CONFIG = '{}\n';
 const CONFIG_VALIDATION_INDENT = '      validation:';
 const TEST_SKILL_NAME = 'test-skill';
 const SKILL_A_NAME = 'skill-a';
@@ -146,7 +145,7 @@ describe('skills build command (system test)', () => {
 
   it('a config with no skills section built nothing, so it is not a verdict: exit 1', async () => {
     const tempDir = suite.createTempDir();
-    writeTestFile(safePath.join(tempDir, VAT_CONFIG_FILENAME), CONFIG_VERSION_HEADER);
+    writeTestFile(safePath.join(tempDir, VAT_CONFIG_FILENAME), EMPTY_CONFIG);
 
     const { result, report } = await suite.runBuildCommand(tempDir);
 
@@ -239,7 +238,7 @@ describe('skills build command (system test)', () => {
       suite.createSkillSource(tempDir, 'resources/skills/skill-b.md', SKILL_B_NAME);
       writeTestFile(
         safePath.join(tempDir, VAT_CONFIG_FILENAME),
-        [CONFIG_VERSION_LINE, 'skills:', '  include:', '    - "resources/skills/*.md"', '  config:', `    ${SKILL_B_NAME}:`, '      publish: false', ''].join('\n'),
+        ['skills:', '  include:', '    - "resources/skills/*.md"', '  config:', `    ${SKILL_B_NAME}:`, '      publish: false', ''].join('\n'),
       );
     };
 
@@ -301,7 +300,7 @@ describe('skills build command (system test)', () => {
       suite.createSkillSource(tempDir, 'resources/skills/skill-b.md', SKILL_B_NAME);
       writeTestFile(
         safePath.join(tempDir, VAT_CONFIG_FILENAME),
-        [CONFIG_VERSION_LINE, 'skills:', '  include:', '    - "resources/skills/*.md"', '  defaults:', '    publish: false', ''].join('\n'),
+        ['skills:', '  include:', '    - "resources/skills/*.md"', '  defaults:', '    publish: false', ''].join('\n'),
       );
 
       const { result, report } = await suite.runBuildCommand(tempDir);
@@ -342,7 +341,6 @@ describe('skills build command (system test)', () => {
     // the allow entry it used to carry is dead — and a dead allow entry would now
     // itself emit ALLOW_UNUSED.
     const configContent = [
-      CONFIG_VERSION_LINE,
       'skills:',
       '  include:',
       '    - "resources/skills/**/SKILL.md"',
@@ -402,7 +400,6 @@ function setupProjectWithMissingLinkTarget(
   // Config: no files: entry for that path, so the link is a genuine dangling link
   // rather than a deferred build artifact (which would be info LINK_DEFERRED_ARTIFACT).
   const configContent = [
-    CONFIG_VERSION_LINE,
     'skills:',
     '  include:',
     '    - "skills/SKILL.md"',
@@ -460,7 +457,6 @@ function setupProjectWithDepthDrop(
 
   // linkFollowDepth=1 so level2/b.md is dropped; override severity to error
   const configContent = [
-    CONFIG_VERSION_LINE,
     'skills:',
     '  include:',
     '    - "skills/level0/SKILL.md"',
@@ -496,7 +492,6 @@ function setupProjectWithDepthDropAndAllow(
 
   // linkFollowDepth=1, severity=error, but allow suppresses it
   const configContent = [
-    CONFIG_VERSION_LINE,
     'skills:',
     '  include:',
     '    - "skills/level0/SKILL.md"',
@@ -532,7 +527,7 @@ function setupProjectLinkingSharedDoc(tempDir: string, skillName: string, skillC
   writeTestFile(safePath.join(projectDir, 'skills', 'shared.md'), '# Shared\n\nShared guidance.\n');
   writeTestFile(
     safePath.join(projectDir, VAT_CONFIG_FILENAME),
-    [CONFIG_VERSION_LINE, 'skills:', '  include:', `    - "skills/${skillName}/SKILL.md"`, '  config:', `    ${skillName}:`, ...skillConfigLines, ''].join('\n'),
+    ['skills:', '  include:', `    - "skills/${skillName}/SKILL.md"`, '  config:', `    ${skillName}:`, ...skillConfigLines, ''].join('\n'),
   );
   return projectDir;
 }

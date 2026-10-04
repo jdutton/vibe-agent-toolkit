@@ -76,12 +76,12 @@ function setupConsistencyTestSuite() {
 
   /** Config with skills.include only (no claude section) */
   const writeSkillsOnlyConfig = (tempDir: string, extra = '') => {
-    writeConfig(tempDir, `version: 1\nskills:\n  include:\n    - "skills/**/SKILL.md"\n${extra}`);
+    writeConfig(tempDir, `skills:\n  include:\n    - "skills/**/SKILL.md"\n${extra}`);
   };
 
   /** Config with skills + marketplace with specified plugin skills selector */
   const writeMarketplaceConfig = (tempDir: string, pluginSkills: string, extra = '') => {
-    writeConfig(tempDir, `version: 1\nskills:\n  include:\n    - "skills/**/SKILL.md"\n${extra}claude:\n  marketplaces:\n    test-mp:\n      owner:\n        name: Test Org\n      plugins:\n        - name: test-plugin\n          ${pluginSkills}\n`);
+    writeConfig(tempDir, `skills:\n  include:\n    - "skills/**/SKILL.md"\n${extra}claude:\n  marketplaces:\n    test-mp:\n      owner:\n        name: Test Org\n      plugins:\n        - name: test-plugin\n          ${pluginSkills}\n`);
   };
 
   const writePackageJson = (tempDir: string, vatSkills?: string[]) => {
@@ -255,7 +255,7 @@ describe('vat verify consistency checks (system test)', () => {
     // is a genuine no-op — and the contract that remains is that it must not
     // CLAIM to have checked distribution consistency.
     const tempDir = suite.createTempDir();
-    suite.writeConfig(tempDir, 'version: 1\nresources:\n  exclude:\n    - "node_modules/**"\n');
+    suite.writeConfig(tempDir, 'resources:\n  exclude:\n    - "node_modules/**"\n');
 
     const result = await suite.runVerify(tempDir);
 

@@ -55,7 +55,7 @@ describe('YAML output survives a pipe (system)', () => {
     fs.mkdirSync(docsDir, { recursive: true });
     writeTestFile(
       join(projectDir, 'vibe-agent-toolkit.config.yaml'),
-      'version: 1\n',
+      '{}\n',
     );
     for (let i = 0; i < FILE_COUNT; i++) {
       writeTestFile(

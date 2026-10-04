@@ -44,7 +44,7 @@ const locked: string[] = [];
 function project(name: string, files: Readonly<Record<string, string>>): string {
   const dir = safePath.join(tempDir, name);
   // A package.json, so a build has somewhere to put its default output.
-  writeFileTree(dir, { 'vibe-agent-toolkit.config.yaml': 'version: 1\n', 'package.json': '{"name":"agents"}', ...files });
+  writeFileTree(dir, { 'vibe-agent-toolkit.config.yaml': '{}\n', 'package.json': '{"name":"agents"}', ...files });
   spawnSync(gitExecutable(), ['init', '--quiet'], { cwd: dir });
   return dir;
 }

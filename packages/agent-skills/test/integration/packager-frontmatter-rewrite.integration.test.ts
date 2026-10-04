@@ -37,7 +37,6 @@ describe('packager rewrites frontmatter URI-refs with body parity (Gap 3)', () =
     writeFileSync(
       safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'),
       [
-        'version: 1',
         'resources:',
         '  collections:',
         '    specs:',
@@ -116,7 +115,6 @@ function writeProjectWithSchema(schemaFileContent: string | undefined): string {
   writeFileSync(
     safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'),
     [
-      'version: 1',
       'resources:',
       '  collections:',
       '    specs:',

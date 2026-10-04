@@ -169,7 +169,6 @@ function skillFilesConfigLines(
  */
 function writeDeclaredProjectConfig(projectRoot: string, perSkillLines: string[]): void {
   const lines = [
-    'version: 1',
     'skills:',
     '  include:',
     '    - "skills/**/SKILL.md"',

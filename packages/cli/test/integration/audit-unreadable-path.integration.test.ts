@@ -350,7 +350,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit under a config whose skills.includ
     projectDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-locked-include-'));
     fs.writeFileSync(
       safePath.join(projectDir, 'vibe-agent-toolkit.config.yaml'),
-      'version: 1\nskills:\n  include:\n    - "skills/*/SKILL.md"\n',
+      'skills:\n  include:\n    - "skills/*/SKILL.md"\n',
     );
     // `description: Short.` is the control: config-aware validation flags it as
     // DESCRIPTION_TOO_VAGUE and the config-free validator does not, so its

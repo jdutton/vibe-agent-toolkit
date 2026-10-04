@@ -94,7 +94,7 @@ function severityBlock(indent: string, severity: OverrideSeverity): string {
  * because the `per-skill` scope has nowhere else to write its override.
  */
 function configYaml(scope: OverrideScope, severity: OverrideSeverity = 'ignore'): string {
-  const base = `version: 1\nskills:\n  include:\n    - "skills/**/SKILL.md"\n`;
+  const base = `skills:\n  include:\n    - "skills/**/SKILL.md"\n`;
   const defaults = scope === 'defaults' ? `  defaults:\n${severityBlock('    ', severity)}` : '';
   const perSkillBody =
     scope === 'per-skill' ? severityBlock('      ', severity) : '      publish: true\n';
@@ -239,7 +239,7 @@ async function marketplaceOutcome(
 async function verifyFindings(root: string): Promise<string[]> {
   const config = loadConfig(root);
   const discovered = config?.skills ? await discoverSkillsFromConfig(config.skills, root, 'refuse') : [];
-  const pluginLocal = indexPluginLocalSkills(config ?? { version: 1 }, root);
+  const pluginLocal = indexPluginLocalSkills(config ?? {}, root);
   return checkPackagedAgentInstructionFiles(root, discovered, pluginLocal, await readPluginLocalSkillNames(pluginLocal)).issues.map((i) => String(i.location));
 }
 

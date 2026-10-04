@@ -75,7 +75,7 @@ function setupProjectWithOutsideLink(tempDir: string): string {
   // Config: no validation overrides (its presence anchors projectRoot to projectDir)
   writeTestFile(
     safePath.join(projectDir, VAT_CONFIG_FILENAME),
-    'version: 1\nskills:\n  include:\n    - "skills/SKILL.md"\n',
+    'skills:\n  include:\n    - "skills/SKILL.md"\n',
   );
 
   return projectDir;
@@ -100,7 +100,7 @@ function setupProjectWithBrokenLink(tempDir: string): string {
   // Config: no validation overrides
   writeTestFile(
     safePath.join(projectDir, VAT_CONFIG_FILENAME),
-    'version: 1\nskills:\n  include:\n    - "skills/SKILL.md"\n',
+    'skills:\n  include:\n    - "skills/SKILL.md"\n',
   );
 
   return projectDir;
@@ -123,7 +123,6 @@ function setupProjectWithBrokenLinkAllowed(tempDir: string): string {
 
   // Config: allow suppresses LINK_MISSING_TARGET — audit must ignore this
   const configContent = [
-    'version: 1',
     'skills:',
     '  include:',
     `    - "${SKILL_MD_RELATIVE}"`,
@@ -164,7 +163,6 @@ function setupProjectWithIgnoredSeverity(tempDir: string): string {
 
   // Config: severity.LINK_OUTSIDE_PROJECT set to ignore — audit must hide it
   const configContent = [
-    'version: 1',
     'skills:',
     '  include:',
     `    - "${SKILL_MD_RELATIVE}"`,

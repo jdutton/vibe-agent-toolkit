@@ -49,7 +49,7 @@ describe('CLI-boundary projectRoot policy (integration, spec §13.4)', () => {
   describe('vat resources validate (loud-cwd policy)', () => {
     it('uses the config dir as projectRoot when vibe-agent-toolkit.config.yaml is present (no warning)', async () => {
       await expectNoLoudCwdWarning(tempDir, () => {
-        writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+        writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), '{}\n');
       });
     });
 

@@ -27,7 +27,6 @@ describe('review-checklist.sectionForCode', () => {
     // Naming
     ['SKILL_NAME_INVALID', SEC_NAMING],
     ['RESERVED_WORD_IN_NAME', SEC_NAMING],
-    ['SKILL_NAME_XML_TAGS', SEC_NAMING],
     ['SKILL_NAME_MISMATCHES_DIR', SEC_NAMING],
     // Description
     ['SKILL_MISSING_DESCRIPTION', SEC_DESCRIPTION],

@@ -59,8 +59,7 @@ interface FixtureOptions {
 function writeFixture(tempDir: string, options: FixtureOptions): void {
   writeTestFile(
     safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1
-skills:
+    `skills:
   include:
     - "skills/*/SKILL.md"
   config:

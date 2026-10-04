@@ -297,7 +297,7 @@ Errors prevent the resource from being used correctly:
 - **Schema validation failures**: Manifest/frontmatter doesn't match expected format
 - **Broken links**: Links to non-existent files (Skills only)
 - **Reserved words in names**: `anthropic` or `claude` in a skill name (`RESERVED_WORD_IN_NAME`, a warning — Claude Code rejects non-certified skills using them)
-- **XML tags in frontmatter**: XML-like tags in name/description (Skills only)
+- **XML tags in frontmatter**: XML-like tags in the description (Skills only)
 
 ### Warnings (Should Fix)
 
@@ -342,8 +342,7 @@ Warnings indicate potential issues but don't prevent usage:
 | `SKILL_NAME_INVALID` | error | Name contains invalid characters | Use only letters, numbers, hyphens, underscores |
 | `SKILL_DESCRIPTION_TOO_LONG` | error | Description exceeds 1024 characters (the frontmatter schema limit; `SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT` warns earlier at 250, where the Claude Code `/skills` listing truncates) | Shorten description |
 | `RESERVED_WORD_IN_NAME` | warning | Name contains `anthropic` or `claude`; Claude Code rejects non-certified skills using these words | Rename the skill to avoid these words |
-| `SKILL_NAME_XML_TAGS` | error | Name contains markup — a declaration (`<!--`, `<?`, `<![`), a closing or self-closing tag, an opening tag with an attribute, a bare `<word>` that is not part of a compound token, or a prompt-channel name (`<system>`, `<function_results>`) however joined | Remove the tag, or backtick a literal placeholder (backticks do not exempt real markup) |
-| `SKILL_DESCRIPTION_XML_TAGS` | error | Description contains markup, judged the same way as the name | Remove the tag, or backtick a literal placeholder (backticks do not exempt real markup) |
+| `SKILL_DESCRIPTION_XML_TAGS` | error | Description contains markup — VAT's reading of the vendor's "cannot contain XML tags" | Remove the tag, or backtick a literal placeholder (backticks do not exempt real markup) |
 | `SKILL_DESCRIPTION_EMPTY` | error | Description is empty or whitespace | Provide meaningful description |
 | `SKILL_MISCONFIGURED_LOCATION` | error | Standalone skill in `~/.claude/plugins/` won't be recognized | Move to `~/.claude/skills/` for standalone skills, or add `.claude-plugin/plugin.json` for a proper plugin |
 | `LINK_INTEGRITY_BROKEN` | error | Link to non-existent file | Fix or remove broken link |
@@ -794,3 +793,129 @@ for VAT's audit stance.
 - [Agent Command](./agent.md) - Agent build and import commands
 - [Resources Command](./resources.md) - Markdown resource validation
 - [Doctor Command](./doctor.md) - Environment diagnostics
+
+## Example reports
+
+Each block below is a real document from the built CLI, trimmed where noted; `packages/cli/test/integration/tagged-report-examples.integration.test.ts` validates every `vat-report=<verb>` block against that verb's registered schema.
+
+### `audit`
+
+A built marketplace with one finding, cut to the first file entry: `status: findings`, exit `1` only on an error. Produced by `vat audit dist/.claude/plugins/marketplaces/mp1`.
+
+```yaml vat-report=audit
+status: findings
+examined: 4
+findings:
+  - severity: info
+    code: PLUGIN_MISSING_LICENSE
+    message: plugin.json is missing the recommended `license` field.
+    location: plugins/sample/.claude-plugin/plugin.json
+    fix: Add a "license" SPDX identifier (e.g. "MIT") to plugin.json so redistribution terms are explicit.
+    reference: "#plugin_missing_license"
+summary:
+  errors: 0
+  warnings: 0
+  info: 1
+gate:
+  strict: false
+durationMs: 16689
+data:
+  root: /work/project/dist/.claude/plugins/marketplaces/mp1
+  provenance: null
+  counts:
+    filesPassed: 4
+    filesWithWarnings: 0
+    filesWithErrors: 0
+    pathsUnreadable: 0
+  files:
+    - path: .
+      type: marketplace
+      status: ok
+      summary:
+        errors: 0
+        warnings: 0
+        info: 0
+    - path: plugins/sample
+      type: claude-plugin
+      status: findings
+      summary:
+        errors: 0
+        warnings: 0
+        info: 1
+  hierarchical: null
+```
+
+### `inventory`
+
+The inventory of a project directory. Produced by `vat inventory .`.
+
+```yaml vat-report=inventory
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 75
+data:
+  inventory:
+    kind: plugin
+    vendor: claude-code
+    path: /work/project
+    shape: claude-plugin
+    manifest: {}
+    declared:
+      skills: null
+      commands: null
+      agents: null
+      hooks: null
+      mcpServers: null
+      outputStyles: null
+      lspServers: null
+    discovered:
+      skills: []
+      commands: []
+      agents: []
+    references: []
+    unexpected:
+      skillManifests:
+        - /work/project/dist/skills/test-skill-1/SKILL.md
+      pluginManifests: []
+    parseErrors: []
+```
+
+### `audit settings`
+
+The effective settings of a project with one allow and one deny rule. Produced by `vat audit settings`.
+
+```yaml vat-report=audit settings
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  mode: effective
+  root: /work/project
+  layers:
+    - level: project
+      file: .claude/settings.json
+  effectiveSettings:
+    permissions:
+      deny:
+        - rule: Read(./.env)
+          source: .claude/settings.json
+          level: project
+      allow:
+        - rule: Read(./docs/**)
+          source: .claude/settings.json
+          level: project
+  conflicts: []
+```

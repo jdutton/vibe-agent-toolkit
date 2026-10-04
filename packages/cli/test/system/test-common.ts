@@ -444,7 +444,7 @@ export function createSkillsConfigYaml(
   includeGlobs: string[],
   excludeGlobs?: string[]
 ): string {
-  let content = `version: 1\nskills:\n  include:\n`;
+  let content = `skills:\n  include:\n`;
   for (const glob of includeGlobs) {
     content += `    - "${glob}"\n`;
   }

@@ -64,7 +64,6 @@ const FILL_DIVERGENCE_MESSAGE =
 
 function configWithSchema(schemaRef: string): ProjectConfig {
   return {
-    version: 1,
     resources: {
       collections: {
         docs: {

@@ -112,7 +112,7 @@ async function writeSkill(
  * re-anchored path from an unanchored one.
  */
 const seedProjectRoot = (cwd: string): Promise<void> =>
-  writeFile(safePath.join(cwd, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+  writeFile(safePath.join(cwd, 'vibe-agent-toolkit.config.yaml'), '{}\n');
 
 /** Build the named skills (name → body) in one run, optionally in `--skill` mode. */
 async function build(

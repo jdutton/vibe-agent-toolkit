@@ -16,7 +16,7 @@ import { createTempDirTracker, executeCli, getBinPath, writeTestFile } from './t
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 /** `skills:` is only valid alongside an `include:`. The comment is what `--print` must carry through. */
-const CONFIG = '# kept by the edit\nversion: 1\nskills:\n  include:\n    - "skills/*/SKILL.md"\n';
+const CONFIG = '# kept by the edit\nskills:\n  include:\n    - "skills/*/SKILL.md"\n';
 
 const binPath = getBinPath(import.meta.url);
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-skill-test-configure-');
@@ -80,7 +80,7 @@ describe('vat skill test configure (system)', () => {
   // The surgical editor refuses the file's own shape — the adopter's config to
   // fix, never INTERNAL_ERROR with a stack and "report it as a VAT bug".
   it.each([
-    ['is not valid YAML', 'version: 1\nskills: [unterminated\n'],
+    ['is not valid YAML', 'skills: [unterminated\n'],
     ['holds a collection where the knob goes', `${CONFIG}  config:\n    my-skill:\n      test:\n        maxTurns:\n          nested: 1\n`],
   ])('refuses a config that %s as CONFIG_INVALID, exit 2', async (_label, config) => {
     const project = projectWith(config);

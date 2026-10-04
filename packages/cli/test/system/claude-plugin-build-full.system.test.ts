@@ -16,8 +16,7 @@ function buildFixture(tempDir: string, pluginSkills: string[] = []): void {
     JSON.stringify({ name: 't', version: '1.0.0' }),
   );
 
-  const config = `version: 1
-skills:
+  const config = `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
   config:
     local-b:
@@ -222,8 +221,7 @@ describe('vat claude plugin build (full plugin support)', () => {
     writeTestFile(safePath.join(tempDir, 'package.json'), JSON.stringify({ name: 't', version: '1.0.0' }));
     writeTestFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-      `version: 1
-skills:
+      `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
 claude:
   marketplaces:

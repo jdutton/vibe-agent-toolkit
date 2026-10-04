@@ -587,10 +587,6 @@ with a regression test.
 
 ### Changed
 
-- **The `version:` key in `vibe-agent-toolkit.config.yaml` is accepted and ignored** — any value,
-  or none. The npm package version is the only version VAT has; an existing config carrying
-  `version: 1` loads unchanged, and a new config need not carry the key.
-
 - **`vat audit --include-artifacts` help text says what the flag lifts and what no flag lifts.**
 
 - **(contributor convention) Source comments no longer cite issue/PR numbers, dates or people**: the rule a comment states

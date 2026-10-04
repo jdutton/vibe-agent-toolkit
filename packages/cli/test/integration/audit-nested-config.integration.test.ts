@@ -64,8 +64,7 @@ function writeExternalDoc(docPath: string): void {
 function writeRootConfig(rootDir: string): void {
   fs.writeFileSync(
     safePath.join(rootDir, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1
-
+    `
 resources:
   exclude:
     - "node_modules/**"
@@ -108,8 +107,7 @@ const BOUNDARY_CODES = new Set(['LINK_OUTSIDE_PROJECT', 'LINK_OUTSIDE_SKILL_DIR'
 function writePkgAConfig(pkgDir: string): void {
   fs.writeFileSync(
     safePath.join(pkgDir, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1
-
+    `
 skills:
   include:
     - "resources/skills/SKILL.md"

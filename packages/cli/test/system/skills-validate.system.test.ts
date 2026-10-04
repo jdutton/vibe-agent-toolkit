@@ -71,7 +71,6 @@ describe('skills validate command (system test)', () => {
 // ---------------------------------------------------------------------------
 const TEMP_DIR_PREFIX = 'vat-validate-test-';
 const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
-const CONFIG_VERSION_LINE = 'version: 1';
 const VALIDATE_SKILL_NAME = 'validate-test-skill';
 const SKILL_INCLUDE_GLOB = '    - "skills/SKILL.md"';
 const GITIGNORED_FILE_GLOB = 'skills/secret.md';
@@ -128,7 +127,6 @@ function setupProjectWithGitignoreLink(tempDir: string, skillName: string): stri
 
   // Config: no validation override → LINK_TO_GITIGNORED_FILE fires at default error severity
   const configContent = [
-    CONFIG_VERSION_LINE,
     'skills:',
     '  include:',
     SKILL_INCLUDE_GLOB,
@@ -161,7 +159,6 @@ function setupProjectWithGitignoreLinkAllowed(tempDir: string, skillName: string
 
   // Config: allow suppresses the gitignored-link error
   const configContent = [
-    CONFIG_VERSION_LINE,
     'skills:',
     '  include:',
     SKILL_INCLUDE_GLOB,
@@ -205,7 +202,6 @@ function setupProjectWithNavigationLink(tempDir: string, skillName: string): str
 
   // Config: no overrides → LINK_TO_NAVIGATION_FILE fires at default warning severity
   const configContent = [
-    CONFIG_VERSION_LINE,
     'skills:',
     '  include:',
     SKILL_INCLUDE_GLOB,

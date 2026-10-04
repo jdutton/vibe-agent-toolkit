@@ -351,7 +351,7 @@ describe('marketplace validate — every producer anchored at the stated root', 
     projectRoot = safePath.resolve(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-mp-anchor-')));
     // What makes the project root discoverable — and therefore what makes the
     // wrong anchor a DIFFERENT string from the right one.
-    writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+    writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), '{}\n');
 
     marketplaceRoot = safePath.join(projectRoot, 'mp');
     // DECLARED, because only declared sources are validated: an undeclared

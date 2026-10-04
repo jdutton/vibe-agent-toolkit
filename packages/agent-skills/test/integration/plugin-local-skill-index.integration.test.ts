@@ -20,7 +20,6 @@ const FRESH = 'fresh-skill';
 const IGNORED = 'ignored-skill';
 
 const config: ProjectConfig = {
-  version: 1,
   claude: { marketplaces: { prod: { owner: { name: 'Test Owner' }, plugins: [{ name: PLUGIN, skills: [] }] } } },
 };
 

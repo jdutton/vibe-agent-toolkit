@@ -116,7 +116,6 @@ function createAdopterProject(dirName: string, evalsSubpath: string): string {
   const projectRoot = safePath.join(tempDir, dirName);
   mkdirSyncReal(projectRoot, { recursive: true });
   writeAt(projectRoot, 'vibe-agent-toolkit.config.yaml', [
-    'version: 1',
     'skills:',
     '  include: ["skills/**/SKILL.md"]',
     '  config:',
@@ -906,7 +905,6 @@ describe('what installFromLocal actually reads out of a REAL archive', () => {
     const projectRoot = safePath.join(tempDir, 'waived-project');
     mkdirSyncReal(projectRoot, { recursive: true });
     writeAt(projectRoot, 'vibe-agent-toolkit.config.yaml', [
-      'version: 1',
       'skills:',
       '  include: ["skills/**/SKILL.md"]',
       '  config:',

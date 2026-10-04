@@ -34,7 +34,7 @@ describe('resources validate — the refusal message reaches stderr', () => {
     // An include that enumerates nothing: the project has no docs/ at all.
     writeFileSync(
       safePath.join(root, 'vibe-agent-toolkit.config.yaml'),
-      'version: 1\nresources:\n  include:\n    - "docs/**/*.md"\n',
+      'resources:\n  include:\n    - "docs/**/*.md"\n',
     );
   });
 

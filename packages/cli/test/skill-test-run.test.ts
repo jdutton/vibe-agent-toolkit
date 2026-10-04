@@ -647,7 +647,7 @@ const FLAG_GRADER_MODEL = 'flag-grader';
 function stubGlobalTestConfig(testNode: Record<string, unknown>): void {
   const dir = createTestTempDir('vat-global-test-config-');
   const configPath = safePath.join(dir, CONFIG_FILENAME);
-  writeFileSync(configPath, yaml.stringify({ version: 1, test: testNode }));
+  writeFileSync(configPath, yaml.stringify({ test: testNode }));
   process.env['VAT_TEST_CONFIG'] = configPath;
 }
 
@@ -1862,7 +1862,6 @@ function setupNameBasenameMismatchFixture(buildHook: string): { root: string; sk
     `---\nname: ${MISMATCH_SKILL_NAME}\ndescription: Synthetic skill whose declared name differs from its directory basename.\n---\n\n# ${MISMATCH_SKILL_NAME}\n\nBody.\n`,
   );
   const config = {
-    version: 1,
     skills: {
       include: ['skills/*/SKILL.md'],
       config: { [MISMATCH_SKILL_NAME]: { test: { build: buildHook } } },
@@ -1905,7 +1904,7 @@ describe('runSkillTestRun (a broken COMPANION config exits 2, not 1)', () => {
     resetSkillDiscoveryCache();
     const nested = nestedOf(fx);
     // Break ONLY the nested config (unparseable YAML: an unterminated flow sequence).
-    writeFileSync(safePath.join(nested.root, CONFIG_FILENAME), 'version: 1\nskills: [unclosed\n');
+    writeFileSync(safePath.join(nested.root, CONFIG_FILENAME), 'skills: [unclosed\n');
     vi.spyOn(process, 'cwd').mockReturnValue(fx.root);
     const harnessSpy = vi.spyOn(harness, 'runSkillTestHarness');
     vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);

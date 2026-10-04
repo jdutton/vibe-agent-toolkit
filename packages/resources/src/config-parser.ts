@@ -76,7 +76,6 @@ export function readConfigTextSync(configPath: string): string {
  * @example
  * ```typescript
  * const config = await parseConfigFile('/project/vibe-agent-toolkit.config.yaml', console.warn);
- * console.log(`Version: ${config.version}`);
  * console.log(`Collections: ${Object.keys(config.resources?.collections ?? {}).join(', ')}`);
  * ```
  */

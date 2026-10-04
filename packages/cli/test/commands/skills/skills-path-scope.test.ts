@@ -43,7 +43,7 @@ const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-skills-path
 /** A directory holding a real config — the scope the commands CAN honour. */
 function scopableDir(): string {
   const dir = createTempDir();
-  writeFileSync(safePath.join(dir, CONFIG_FILENAME), 'version: 1\n', 'utf-8');
+  writeFileSync(safePath.join(dir, CONFIG_FILENAME), '{}\n', 'utf-8');
   return dir;
 }
 
@@ -97,7 +97,7 @@ describe('unscopableSkillsPath', () => {
   it('rejects a path that exists but is a file', () => {
     const dir = createTempDir();
     const file = safePath.join(dir, CONFIG_FILENAME);
-    writeFileSync(file, 'version: 1\n', 'utf-8');
+    writeFileSync(file, '{}\n', 'utf-8');
     expect(unscopableSkillsPath(file)).toEqual({ refusal: 'USAGE_INVALID', reason: `Path is not a directory: ${file}` });
   });
 

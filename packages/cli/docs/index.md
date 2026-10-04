@@ -638,3 +638,372 @@ vat rag search "markdown validation"
 
 - **Documentation:** https://github.com/jdutton/vibe-agent-toolkit
 - **Issues:** https://github.com/jdutton/vibe-agent-toolkit/issues
+
+## Example reports
+
+Each block below is a real document from the built CLI, trimmed where noted; `packages/cli/test/integration/tagged-report-examples.integration.test.ts` validates every `vat-report=<verb>` block against that verb's registered schema.
+
+### `ard emit`
+
+A project declaring an ARD publisher but no skill entries. Produced by `vat ard emit --format json`.
+
+```json vat-report=ard emit
+{
+  "status": "findings",
+  "examined": 2,
+  "findings": [
+    {
+      "code": "ARD_SURFACE_SKIPPED",
+      "severity": "warning",
+      "message": "skipped skill \"(discovered skills)\": skills.config is empty, so no skill was advertised. ARD entries are derived per named skill; add `skills.config.<name>` for each skill you want announced. Discovery globs alone (`skills.include`) do not name them."
+    },
+    {
+      "code": "ARD_SURFACE_SKIPPED",
+      "severity": "warning",
+      "message": "skipped okf-bundle \"playbooks\": the ARD specification names no media type for surface kind \"okf-bundle\", so VAT derives none. Set `ard.entries.\"okf-bundle:playbooks\".type` to advertise it."
+    }
+  ],
+  "summary": {
+    "errors": 0,
+    "warnings": 2,
+    "info": 0
+  },
+  "gate": {
+    "strict": false
+  },
+  "data": {
+    "outputPath": "/work/project/.well-known/ard.json",
+    "entryCount": 0,
+    "skippedCount": 2,
+    "shadowedCount": 0
+  },
+  "durationMs": 2414
+}
+```
+
+### `okf validate`
+
+A bundle with one document missing its frontmatter. Produced by `vat okf validate`.
+
+```yaml vat-report=okf validate
+status: findings
+examined: 2
+findings:
+  - code: OKF_FRONTMATTER_MISSING
+    severity: error
+    message: No YAML frontmatter block. OKF §11.1 requires one on every non-reserved .md file; only index.md and log.md are exempt (§3.1).
+    location: knowledge/playbooks/notes.md
+summary:
+  errors: 1
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  bundles:
+    - bundle: playbooks
+      root: knowledge/playbooks
+      conceptDocuments:
+        - expenses.md
+        - notes.md
+      reservedDocuments: []
+durationMs: 77
+```
+
+### `cache clear`
+
+The cache directory emptied. Produced by `vat cache clear`.
+
+```yaml vat-report=cache clear
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  cacheDir: /tmp/.vat-cache
+  existed: true
+  removed:
+    - x.y.z
+  remaining: []
+  entriesRemoved: 3
+  bytesRemoved: 262998
+```
+
+### `corpus scan`
+
+A one-plugin seed. Produced by `vat corpus scan seed.yaml --out corpus`.
+
+```yaml vat-report=corpus scan
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 273
+data:
+  outDir: /work/corpus
+  entries:
+    - name: sample
+      audit: ok
+      review: skipped
+      outputPath: 2026-10-04-e61d62b6/sample-audit.yaml
+```
+
+### `validate`
+
+`validate`, `build` and `verify` share one shape: each phase folds into `data.phases`. Produced by `vat validate`.
+
+```yaml vat-report=validate
+status: ok
+examined: 2
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 18127
+data:
+  phases:
+    - name: skills
+      status: ok
+      examined: 2
+      summary:
+        errors: 0
+        warnings: 0
+        info: 0
+      data:
+        root: /work/project
+        skills:
+          - name: test-skill-1
+            status: ok
+            summary:
+              errors: 0
+              warnings: 0
+              info: 0
+            allowed: 0
+          - name: test-skill-2
+            status: ok
+            summary:
+              errors: 0
+              warnings: 0
+              info: 0
+            allowed: 0
+```
+
+### `claude plugin build`
+
+One marketplace with one plugin built. Produced by `vat claude plugin build`.
+
+```yaml vat-report=claude plugin build
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 12847
+data:
+  marketplacesBuilt: 1
+  pluginsBuilt: 1
+  pluginsReferenced: 0
+  skillsPackaged: 2
+  marketplaces:
+    - name: mp1
+      status: ok
+      plugins:
+        - name: sample
+          outputPath: dist/.claude/plugins/marketplaces/mp1/plugins/sample
+          skills:
+            - test-skill-1
+            - test-skill-2
+      externalPlugins: []
+```
+
+### `claude plugin install`
+
+A skill directory installed. Produced by `vat claude plugin install dist/skills/test-skill-1 --skills-dir ~/.claude/skills`.
+
+```yaml vat-report=claude plugin install
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 8
+data:
+  source: local:/work/project/dist/skills/test-skill-1
+  sourceType: local
+  dryRun: false
+  symlink: false
+  skills:
+    - name: test-skill-1
+      installPath: ~/.claude/skills/test-skill-1
+      sourcePath: null
+```
+
+### `claude plugin list`
+
+Nothing in the plugin registry; one flat skill. Produced by `vat claude plugin list`.
+
+```yaml vat-report=claude plugin list
+status: ok
+examined: 2
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 1
+data:
+  target: code
+  sources:
+    pluginRegistry: ~/.claude/plugins/installed_plugins.json
+    legacySkillsDir: ~/.claude/skills
+  plugins: []
+  legacySkills:
+    - name: test-skill-1
+      path: ~/.claude/skills/test-skill-1
+      type: directory
+```
+
+### `claude plugin uninstall`
+
+A key that was not installed: `removed: false`. Produced by `vat claude plugin uninstall sample@mp1`.
+
+```yaml vat-report=claude plugin uninstall
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 1
+data:
+  dryRun: false
+  plugins:
+    - key: sample@mp1
+      removed: false
+```
+
+### `claude marketplace validate`
+
+A built marketplace missing its LICENSE: `findings`, exit `1`. Produced by `vat claude marketplace validate dist/.claude/plugins/marketplaces/mp1`.
+
+```yaml vat-report=claude marketplace validate
+status: findings
+examined: 1
+findings:
+  - severity: error
+    code: MARKETPLACE_MISSING_LICENSE
+    message: Marketplace is missing a LICENSE — required for distribution
+    location: LICENSE
+    fix: Add a LICENSE to the marketplace root directory
+  - severity: warning
+    code: MARKETPLACE_MISSING_README
+    message: Marketplace is missing a README.md — recommended for documentation
+    location: README.md
+    fix: Add a README.md to the marketplace root directory
+  - severity: warning
+    code: MARKETPLACE_MISSING_CHANGELOG
+    message: Marketplace is missing a CHANGELOG.md — recommended for tracking changes
+    location: CHANGELOG.md
+    fix: Add a CHANGELOG.md to the marketplace root directory
+  - severity: info
+    code: PLUGIN_MISSING_LICENSE
+    message: plugin.json is missing the recommended `license` field.
+    location: plugins/sample/.claude-plugin/plugin.json
+    fix: Add a "license" SPDX identifier (e.g. "MIT") to plugin.json so redistribution terms are explicit.
+    reference: "#plugin_missing_license"
+summary:
+  errors: 1
+  warnings: 2
+  info: 1
+gate:
+  strict: false
+durationMs: 45
+data:
+  root: /work/project/dist/.claude/plugins/marketplaces/mp1
+  marketplace:
+    name: mp1
+    pluginEntries: 1
+    localPluginSources:
+      - name: sample
+        source: ./plugins/sample
+  plugins:
+    - name: sample
+      source: ./plugins/sample
+      path: plugins/sample
+      manifestRead: true
+      status: findings
+      summary:
+        errors: 0
+        warnings: 0
+        info: 1
+  undeclared: []
+  refused: []
+```
+
+### `claude marketplace publish`
+
+No marketplace declares a `publish:` block, so nothing was examined. Produced by `vat claude marketplace publish --dry-run`.
+
+```yaml vat-report=claude marketplace publish
+status: findings
+examined: 0
+findings:
+  - code: RESOURCE_CHECK_BROKEN
+    severity: error
+    message: "Nothing was examined: 0 marketplaces. No marketplace declares a publish: block — add claude.marketplaces.<name>.publish to vibe-agent-toolkit.config.yaml."
+summary:
+  errors: 1
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 151
+data:
+  published: []
+```
+
+### `claude org users remove`
+
+The not-implemented stubs publish only this `error` branch. Produced by `vat claude org users remove u1`.
+
+```yaml vat-report=claude org users remove
+status: error
+examined: 0
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+error:
+  code: NOT_IMPLEMENTED
+  message: This command is not implemented. Read operations (list/get) are implemented; mutating operations are not. Use the Anthropic Console or call the Admin API directly.
+data: null
+```

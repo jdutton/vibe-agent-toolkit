@@ -1021,7 +1021,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		const tempDir = getTempDir();
 		const skillDir = safePath.join(tempDir, 'skill');
 		fs.mkdirSync(skillDir, { recursive: true });
-		fs.writeFileSync(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+		fs.writeFileSync(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), '{}\n');
 		fs.writeFileSync(safePath.join(tempDir, 'shared.md'), '# Shared\n');
 		const { skillPath } = createTransitiveSkillStructure(skillDir, {}, createSkillContent(
 			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },

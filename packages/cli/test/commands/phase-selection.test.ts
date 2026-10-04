@@ -140,18 +140,16 @@ function retiredOnlyRefusal(only: string | undefined): { refusal: string; messag
 
 const SKILL_GLOB = '**/SKILL.md';
 
-const CONFIG_RESOURCES_ONLY = { version: 1, resources: {} } as unknown as ProjectConfig;
-const CONFIG_SKILLS_ONLY = { version: 1, skills: { include: [SKILL_GLOB] } } as unknown as ProjectConfig;
+const CONFIG_RESOURCES_ONLY = { resources: {} } as unknown as ProjectConfig;
+const CONFIG_SKILLS_ONLY = { skills: { include: [SKILL_GLOB] } } as unknown as ProjectConfig;
 const CONFIG_BOTH = {
-  version: 1,
   resources: {},
   skills: { include: [SKILL_GLOB] },
 } as unknown as ProjectConfig;
-const CONFIG_EMPTY = { version: 1 } as unknown as ProjectConfig;
+const CONFIG_EMPTY = {} as unknown as ProjectConfig;
 /** What a config that exists but does not parse hands back to the orchestrator. */
 const BROKEN_CONFIG_ERROR = 'Failed to load config: bad yaml';
 const CONFIG_MARKETPLACE = {
-  version: 1,
   skills: { include: [SKILL_GLOB] },
   claude: { marketplaces: { 'test-tools': {} } },
 } as unknown as ProjectConfig;
@@ -351,7 +349,7 @@ describe('runFilesConfigDestsPhase', () => {
     try {
       writeFileSync(
         safePath.join(dir, 'vibe-agent-toolkit.config.yaml'),
-        'version: 1\nresources:\n  include: ["docs/**/*.md"]\n',
+        'resources:\n  include: ["docs/**/*.md"]\n',
       );
 
       // `[]` is what the command itself passes here: with no `skills:` block

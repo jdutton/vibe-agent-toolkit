@@ -557,7 +557,6 @@ describe('createArdCommand', () => {
 describe('ardEmitCommand — a zero-entry run is machine-readable and documented', () => {
   /** A config naming one skill that is on disk and one that is not. */
   const CONFIG_YAML_ARD_ONE_GHOST = [
-    'version: 1',
     'skills:',
     '  include: ["skills/**/SKILL.md"]',
     '  config:',
@@ -578,7 +577,6 @@ describe('ardEmitCommand — a zero-entry run is machine-readable and documented
    * skip branch and proves nothing about the empty one.
    */
   const CONFIG_YAML_ARD_NO_SURFACES = [
-    'version: 1',
     'ard:',
     `  publisher: ${FIXTURE_PUBLISHER}`,
     '  baseUrl: https://example.com/catalog',

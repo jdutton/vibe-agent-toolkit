@@ -27,8 +27,7 @@ describe('Config loading integration (system test)', () => {
   it('should scan all markdown files when no path argument provided', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'default-scan-test',
-      config: `version: 1
-resources:
+      config: `resources:
   exclude:
     - "other/**"
 `,
@@ -52,8 +51,7 @@ resources:
   it('should respect exclude patterns from config', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'exclude-test',
-      config: `version: 1
-resources:
+      config: `resources:
   exclude:
     - "test/**"
     - "**/*.test.md"
@@ -93,8 +91,7 @@ resources:
   it('should find config in parent directory', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'parent-config',
-      config: `version: 1
-resources:
+      config: `resources:
   include:
     - "**/*.md"
   exclude:
@@ -136,8 +133,7 @@ resources:
   it('should respect config exclude patterns when no path argument provided', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'config-exclude-test',
-      config: `version: 1
-resources:
+      config: `resources:
   exclude:
     - "excluded/**"
 `,
@@ -167,8 +163,7 @@ resources:
   it('should handle validation config options', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'validation-config',
-      config: `version: 1
-resources:
+      config: `resources:
   validation:
     severity:
       EXTERNAL_URL_DEAD: ignore
@@ -192,7 +187,7 @@ resources:
   it('should handle config with only version field', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'minimal-config',
-      config: 'version: 1\n',
+      config: '{}\n',
       withDocs: true,
     });
 
@@ -208,8 +203,7 @@ resources:
   it('should handle complex nested patterns', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'nested-patterns',
-      config: `version: 1
-resources:
+      config: `resources:
   exclude:
     - "**/node_modules/**"
     - "**/test/fixtures/**"

@@ -29,7 +29,6 @@ export const FIXTURE_MARKETPLACE = 'vat-marketplace';
 
 /** A project declaring two skills, one of them unpublished. */
 export const SKILLS_PROJECT: ProjectConfig = {
-  version: 1,
   skills: {
     include: ['skills/**/SKILL.md'],
     config: {
@@ -89,7 +88,6 @@ export const QUALIFIED_MARKETPLACE_KEY = `marketplace:${FIXTURE_MARKETPLACE}`;
 
 /** The lines every ARD fixture shares: one discovered, published skill, then `ard.publisher`. */
 const CONFIG_YAML_ARD_PREFIX = [
-  'version: 1',
   'skills:',
   '  include: ["skills/**/SKILL.md"]',
   '  config:',
@@ -160,7 +158,6 @@ export const CONFIG_YAML_ARD_DOT_NAMESPACE = ardConfigYaml('  namespace: ".."', 
 
 /** Config YAML for a project that never opted into ARD at all. */
 export const CONFIG_YAML_WITHOUT_ARD = [
-  'version: 1',
   'skills:',
   '  include: ["skills/**/SKILL.md"]',
   '',

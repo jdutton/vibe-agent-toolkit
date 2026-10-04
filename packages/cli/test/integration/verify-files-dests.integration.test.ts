@@ -49,7 +49,7 @@ async function discoveredIn(cwd: string): Promise<Awaited<ReturnType<typeof disc
 
 /** The plugin-local index `vat verify` builds for `cwd`, and the declared names it reads for it. */
 async function pluginLocalIn(cwd: string): Promise<[PluginLocalSkillIndex, PluginLocalSkillNames]> {
-  const index = indexPluginLocalSkills(loadConfig(cwd) ?? { version: 1 }, cwd);
+  const index = indexPluginLocalSkills(loadConfig(cwd) ?? {}, cwd);
   return [index, await readPluginLocalSkillNames(index)];
 }
 
@@ -135,8 +135,7 @@ function planted(opts: { name: string; dir: string; include: string; configKey: 
   const tempDir = createTempDir();
   writeFileSync(
     safePath.join(tempDir, CONFIG_FILE),
-    `version: 1
-skills:
+    `skills:
   include: ["${opts.include}"]
   config:
     ${opts.configKey}:
@@ -188,8 +187,7 @@ function setupFilesDestsFixture(opts: FixtureOptions): FixtureResult {
 `
     : '';
 
-  const configContent = `version: 1
-skills:
+  const configContent = `skills:
   include:
     - "resources/skills/**/SKILL.md"
   config:
@@ -320,8 +318,7 @@ describe('the files-config-dests phase (tree-copy distribution awareness)', () =
     const tempDir = createTempDir();
     writeFileSync(
       safePath.join(tempDir, CONFIG_FILE),
-      `version: 1
-skills:
+      `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
   config:
     shipped:
@@ -500,8 +497,7 @@ describe('checkPackagedAgentInstructionFiles (built skill bundles)', () => {
     // Re-point the fixture's single explicit entry at an agent-instruction dest.
     writeFileSync(
       safePath.join(tempDir, CONFIG_FILE),
-      `version: 1
-skills:
+      `skills:
   include:
     - "resources/skills/**/SKILL.md"
   config:
@@ -610,7 +606,7 @@ function setupTwoSkillFixture(configBlock: string): string {
   const tempDir = createTempDir();
   writeFileSync(
     safePath.join(tempDir, CONFIG_FILE),
-    `version: 1\nskills:\n  include:\n    - "resources/skills/**/SKILL.md"\n${configBlock}`,
+    `skills:\n  include:\n    - "resources/skills/**/SKILL.md"\n${configBlock}`,
     'utf-8',
   );
   writeDiscoverableSkill(tempDir, CONFIGURED);
