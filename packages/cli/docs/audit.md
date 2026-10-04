@@ -713,10 +713,13 @@ path (`--show-paths`). It publishes the same report envelope as `vat audit`
 - `data.mode` says which mode ran: `effective` (default: `layers`,
   `effectiveSettings`, `conflicts`), `file` (`file`, `detectedType`,
   `typeConfidence`, `fields`) or `paths` (`paths`).
-- `findings` carry the registered `SETTINGS_*` codes (see
-  [`docs/validation-codes.md`](../../../docs/validation-codes.md#claude-settings-codes))
-  and `SCAN_PATH_UNREADABLE` for a settings path the probe could not check. Each
-  finding's `location` is the settings file; `field` is the dotted key path inside it.
+- `findings` carry the `SETTINGS_*` codes (see
+  [`docs/validation-codes.md`](../../../docs/validation-codes.md#claude-settings-codes)) —
+  non-overridable: no `validation.severity` or `validation.allow` key applies to them,
+  and both refuse one — and `SCAN_PATH_UNREADABLE` for a settings path the probe could
+  not check. Each finding's `location` is the settings file; `field` is the dotted key
+  path inside it when there is one, and is absent for a finding about the document as a
+  whole (JSON that does not parse, a violation at its root).
 - `data.root` is the directory the command ran in — the one absolute path in the
   document, as `vat audit`'s `data.root` is. Every other path (a finding's
   `location`, `layers[].file`, a rule's `source` / `ruleSource` /

@@ -121,7 +121,9 @@ Exit Codes (derived from the document):
       prompt, or its $ref names no file), INPUT_UNREADABLE (an agent
       search path looked up by name, the manifest, its system prompt,
       scripts/, LICENSE.txt or package.json cannot be read), RUN_INCOMPLETE (the packager refused the bundle's content — a
-      SKILL_PACKAGING_FAILED finding at the agent)
+      SKILL_PACKAGING_FAILED finding at the agent — or the OS would not let
+      the build write its output: a full disk, a read-only or unwritable
+      --output, a file in its way; no finding)
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)

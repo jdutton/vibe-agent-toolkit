@@ -48,11 +48,27 @@ describe('withFsAttribution', () => {
   });
 
   // Two `files:` dests where one lands under the other's FILE: the bundle layout the
-  // skill's config asked for cannot exist. That is the skill's, on whichever side it surfaces.
-  it.each(['EEXIST', 'ENOTDIR', 'EISDIR'])('codes a %s on the OUTPUT as the skill\'s content: the config laid out a bundle that cannot exist', async (code) => {
-    const thrown = await thrownBy('output', () => Promise.reject(errnoError(code)));
+  // skill's config asked for cannot exist. That is the skill's — but only INSIDE the
+  // bundle, where the config decides the layout.
+  it.each(['EEXIST', 'ENOTDIR', 'EISDIR'])('codes a %s inside the BUNDLE as the skill\'s content: the config laid out a bundle that cannot exist', async (code) => {
+    const thrown = await thrownBy('bundle', () => Promise.reject(errnoError(code)));
 
     expect(isSkillPackagingInputError(thrown), String(thrown)).toBe(true);
+  });
+
+  // The output ROOT is the path the operator chose (`--output`, `dist/`): a file in its
+  // way says nothing about the skill, so it is the run not finishing, never a finding.
+  it.each(['EEXIST', 'ENOTDIR', 'EISDIR'])('codes a %s on the OUTPUT root as an unfinished run, never as the skill\'s content', async (code) => {
+    const thrown = await thrownBy('output', () => Promise.reject(errnoError(code)));
+
+    expect(isVatError(thrown, SKILL_PACKAGING_OUTPUT_FAILED_CODE), String(thrown)).toBe(true);
+    expect(isSkillPackagingInputError(thrown)).toBe(false);
+  });
+
+  it.each(['EACCES', 'ENOSPC'])('codes a %s inside the BUNDLE as an unfinished run: no layout is impossible', async (code) => {
+    const thrown = await thrownBy('bundle', () => Promise.reject(errnoError(code)));
+
+    expect(isVatError(thrown, SKILL_PACKAGING_OUTPUT_FAILED_CODE), String(thrown)).toBe(true);
   });
 
   it('keeps the subject, the action, the errno text and the side\'s remedy in the message', async () => {
@@ -68,7 +84,7 @@ describe('withFsAttribution', () => {
     );
   });
 
-  it.each(['source', 'output'] as const)('rethrows a non-filesystem throw on the %s side untouched: a defect is never worded as the adopter\'s', async (side) => {
+  it.each(['source', 'output', 'bundle'] as const)('rethrows a non-filesystem throw on the %s side untouched: a defect is never worded as the adopter\'s', async (side) => {
     const defect = new TypeError("Cannot read properties of undefined (reading 'length')");
 
     const thrown = await thrownBy(side, () => Promise.reject(defect));

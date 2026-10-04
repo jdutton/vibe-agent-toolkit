@@ -120,7 +120,7 @@ vat rag index docs/
 
 **Exit Codes:**
 - `0` - `ok`: the index was searched — a query matching nothing is `ok` with `chunks: []`
-- `2` - `error`: `INPUT_UNREADABLE` when nothing is indexed yet — no project database, no chunk table, or a table of zero chunks, one outcome every way (run `vat rag index`) — or when the database directory cannot be read; `USAGE_INVALID` with no `--db` and no project root, or a `--db` that names no database (the path is not created); `BACKEND_UNAVAILABLE`; or `INTERNAL_ERROR` (an embedding or database failure)
+- `2` - `error`: `INPUT_UNREADABLE` when nothing is indexed yet — no project database, no chunk table, or a table of zero chunks, one outcome every way (run `vat rag index`) — or when the database directory cannot be read; `USAGE_INVALID` with no `--db` and no project root, or a `--db` that is not a RAG database — nothing there, a file, or a directory holding anything but the tables `vat rag index` writes (nothing is read, created or removed); `BACKEND_UNAVAILABLE`; or `INTERNAL_ERROR` (an embedding failure). A database whose files are damaged is `INPUT_UNREADABLE`; `vat rag clear` removes it
 
 **Output:** the report envelope as YAML on stdout (schema `packages/cli/schemas/rag-query.json`). `examined` counts the chunks in the index searched; `data` holds `root` (the directory every `filePath` is relative to), `query`, `stats` and `chunks`.
 
@@ -213,7 +213,7 @@ Each chunk includes comprehensive metadata:
 
 **Exit Codes:**
 - `0` - `ok`: the database was read — an existing database that holds nothing reports zeros
-- `2` - `error`: `USAGE_INVALID` with no `--db` and no project root, or a `--db` that names no database or names a file; `INPUT_UNREADABLE` when the project has no database yet (run `vat rag index`) or the database directory cannot be read; `BACKEND_UNAVAILABLE`; or `INTERNAL_ERROR`
+- `2` - `error`: `USAGE_INVALID` with no `--db` and no project root, or a `--db` that is not a RAG database — nothing there, a file, or a directory holding anything but the tables `vat rag index` writes (nothing is read, created or removed); `INPUT_UNREADABLE` when the project has no database yet (run `vat rag index`), its `.rag-db` is a file, or the database cannot be read (a directory the OS will not list, or damaged table files — `vat rag clear` removes it); `BACKEND_UNAVAILABLE`; or `INTERNAL_ERROR`
 
 `vat rag stats` only reads: it never creates the database it is asked about.
 
@@ -249,8 +249,8 @@ vat rag stats
 **Purpose:** Delete entire RAG database directory
 
 **What it does:**
-1. Closes database connection
-2. Deletes entire database directory (`.rag-db/` by default)
+1. Checks the path is a RAG database (refuses anything else)
+2. Deletes entire database directory (`.rag-db/` by default), without opening it
 3. Removes all indexed data and embeddings
 4. Cannot be undone - use with caution
 
@@ -266,9 +266,11 @@ vat rag stats
 
 **Exit Codes:**
 - `0` - `ok`: the database was cleared
-- `2` - `error`: `USAGE_INVALID` with no `--db` and no project root, or a `--db` that names no database; `INPUT_UNREADABLE` when the project has no database to clear or the database directory cannot be read; `BACKEND_UNAVAILABLE`; or `INTERNAL_ERROR`
+- `2` - `error`: `USAGE_INVALID` with no `--db` and no project root, or a `--db` that is not a RAG database — nothing there, a file, or a directory holding anything but the tables `vat rag index` writes (nothing is read, created or removed); `INPUT_UNREADABLE` when the project has no database to clear, its `.rag-db` is a file, or the database directory cannot be listed; `BACKEND_UNAVAILABLE`; or `INTERNAL_ERROR`
 
-**Output:** the report envelope as YAML on stdout (schema `packages/cli/schemas/rag-clear.json`); `examined` is 1, the database opened, and `data` is `{ cleared: true }`.
+`vat rag clear` removes a database without opening it, so a database whose files are damaged can still be cleared. It removes only a directory holding nothing but the tables `vat rag index` writes (or nothing at all); any other directory is refused and left as it is.
+
+**Output:** the report envelope as YAML on stdout (schema `packages/cli/schemas/rag-clear.json`); `examined` is 1, the database removed, and `data` is `{ cleared: true }`.
 
 **Example:**
 ```bash

@@ -22,7 +22,8 @@
  * connections are long-lived.
  */
 
-import { rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -249,6 +250,18 @@ More content in section 2.`
 
     // Query should fail on empty DB
     await expect(provider.query({ text: 'test' })).rejects.toThrow('No data indexed yet');
+  });
+
+  // `clear()` removes recursively: a dbPath that holds anything a database does not
+  // (a project, a home directory) must be refused with everything left in place.
+  it('refuses to clear a directory holding anything but its tables, and removes nothing', async () => {
+    provider = await LanceDBRAGProvider.create({ dbPath });
+    await provider.indexResources([await createTestResource(testFilePath)]);
+    await writeFile(safePath.join(dbPath, 'keep.txt'), 'precious');
+
+    await expect(provider.clear()).rejects.toThrow(/not a RAG database \(it holds keep\.txt\)/);
+    expect(await readFile(safePath.join(dbPath, 'keep.txt'), 'utf8')).toBe('precious');
+    expect(existsSync(safePath.join(dbPath, 'rag_chunks.lance'))).toBe(true);
   });
 
 

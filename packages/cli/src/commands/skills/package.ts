@@ -45,6 +45,7 @@ export interface SkillsPackageCommandOptions {
   dryRun?: boolean;
   debug?: boolean;
   target?: string;
+  force?: boolean;
 }
 
 /**
@@ -94,6 +95,7 @@ export function createPackageCommand(): Command {
     .option('--no-rewrite-links', 'Skip rewriting relative links in copied files')
     .option('-b, --base-path <path>', 'Base path for resolving relative links (default: dirname of SKILL.md)')
     .option('--dry-run', 'Preview packaging without creating files')
+    .option('--force', 'Replace whatever is already at --output (and the archive beside it); without it, an --output that holds anything is refused')
     .option('--debug', 'Enable debug logging')
     .option(
       '--target <target>',
@@ -114,6 +116,12 @@ Description:
 
   REQUIRED: --output flag must specify where to create the package
 
+  VAT never deletes what it did not produce. An --output that already holds
+  anything — a non-empty directory, a file, or (with the zip / marketplace
+  formats) the <output>.zip or <name>.marketplace.json beside it — is refused
+  (USAGE_INVALID) and left exactly as it was, unless --force says it is a
+  previous package to replace. An empty directory is used as-is.
+
 Output:
   YAML report on stdout (schema: packages/cli/schemas/skills-package.json):
   status ok|findings|error, examined (1 skill), findings[] (every validation
@@ -127,9 +135,13 @@ Exit Codes:
   1 - An error-severity finding: the skill failed validation (nothing is
       packaged), packaging refused the skill's content (SKILL_PACKAGING_FAILED),
       or its claude-web ZIP exceeds 8 MB (SKILL_PACKAGE_TOO_LARGE)
-  2 - The run could not start; error.code says why: USAGE_INVALID (a
-      <skill-path> naming nothing, an invalid --target, no project root),
-      INPUT_UNREADABLE (a <skill-path> the OS will not stat or read), or
+  2 - The run could not start or finish; error.code says why: USAGE_INVALID
+      (a <skill-path> naming nothing, an invalid --target, no project root,
+      an --output already holding something and no --force), INPUT_UNREADABLE
+      (a <skill-path> the OS will not stat or read, or a file in the git
+      repository it will not read), RUN_INCOMPLETE (an output the OS will not
+      let the build write: a full disk, a read-only or unwritable output
+      directory, a file in the way, a ZIP that could not be written), or
       INTERNAL_ERROR (an unexpected failure)
 
 Requirements:
@@ -140,8 +152,9 @@ Requirements:
 
 Examples:
   $ vat skills package SKILL.md -o dist/my-skill
+  $ vat skills package SKILL.md -o dist/my-skill --force   # replace the previous package
   $ vat skills package SKILL.md -o /tmp/skill --dry-run
-  $ vat skills package SKILL.md -o dist -f zip,npm
+  $ vat skills package SKILL.md -o dist/my-skill -f zip,npm
 `
     );
 
@@ -443,6 +456,7 @@ async function packageAndReport(
     rewriteLinks: resolveRewriteLinks(options),
     outputPath: options.output,
     target,
+    ...(options.force === true && { replaceExistingOutput: true }),
   };
   // Only set when explicitly supplied — packageSkill() owns the fallback for
   // this field, so an unconditional resolveBasePath() here would change it.

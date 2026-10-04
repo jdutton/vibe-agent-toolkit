@@ -36,8 +36,10 @@ export { gitFindRoot, gitLsFiles, gitLsOthers, isGitIgnored } from './git-utils.
 export type { RefuseListingContext, UnreadablePolicy } from './listing-refusal.js';
 export {
   freshGitTreeSnapshot,
+  GIT_SNAPSHOT_UNREADABLE_CODE,
   gitTreeSnapshot,
   peekGitTreeSnapshot,
+  unreadableSnapshotRefusal,
   withGitSnapshotCache,
   type GitSnapshotEntry,
   type GitTreeSnapshot,

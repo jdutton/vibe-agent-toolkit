@@ -74,6 +74,7 @@ export function skillTestFailureReason(err: unknown): SkillTestFailureReason {
  *   declare (or `--no-build` with no dist), an unsafe `--workdir`, a held harness
  *   lock, the missing security ack. A `SkillBuildError` carrying a `cause` is
  *   classified by that cause, not by this row (see {@link SkillBuildError}).
+ * - `RUN_INCOMPLETE` — a harness root the OS would not let the run create.
  *
  * An absent runtime (`claude` not on PATH, or too old for a flag the spawn
  * needs) is `BACKEND_UNAVAILABLE`, and is decided by the preflight check that
@@ -86,6 +87,7 @@ export const SKILL_TEST_REFUSAL_BY_ERROR_CODE = {
   AUTH_PREFLIGHT: 'USAGE_INVALID',
   BUILD_HOOK: 'USAGE_INVALID',
   HARNESS_LOCATION: 'USAGE_INVALID',
+  HARNESS_OUTPUT_UNWRITABLE: 'RUN_INCOMPLETE',
   HARNESS_LOCK_BUSY: 'USAGE_INVALID',
   PROMPT_INVARIANT: 'USAGE_INVALID',
   SKILL_TEST_BUILD_FAILED: 'USAGE_INVALID',

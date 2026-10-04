@@ -13,7 +13,7 @@ import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { conventionalSuiteProbe, createProjectRegistry, getPluginOutputDir, getPluginSourceDir, isSkillPackagingInputError, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Finding, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowing, issueLocation, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, isFilesystemAccessError, issueLocation, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { readPluginLocalSkillName } from '../../../commands/skills/skill-discovery.js';
@@ -197,7 +197,9 @@ Exit Codes:
       that is not JSON, a pool skill or files[].source nothing built, a
       symlink no bundle can ship), RUN_INCOMPLETE (the packager refused a
       plugin-local skill's content, e.g. a skill files: source that does not
-      exist — the SKILL_PACKAGING_FAILED finding names the skill)
+      exist — the SKILL_PACKAGING_FAILED finding names the skill — or the OS
+      would not let the build write its output: a full disk, a read-only
+      dist/; no finding)
 
 Example:
   $ vat skills build && vat claude plugin build    # Build skills then wrap for Claude
@@ -444,6 +446,21 @@ class SkillPackagingStop extends CommandRefusalError {
 }
 
 /**
+ * One write into the marketplace tree this build owns (`dist/.claude/plugins/…`).
+ * A refusal — an unwritable or read-only `dist/`, a full disk, a file in the way —
+ * is the run stopping (`RUN_INCOMPLETE`), naming what it was doing: never an
+ * uncoded throw read as a defect in VAT, and never a finding against a plugin.
+ */
+async function writingMarketplace<T>(what: string, write: () => Promise<T>): Promise<T> {
+  try {
+    return await write();
+  } catch (error) {
+    if (!isFilesystemAccessError(error)) throw error;
+    throw new CommandRefusalError('RUN_INCOMPLETE', `Could not ${what}: ${errorMessageOf(error)}`, { cause: error });
+  }
+}
+
+/**
  * `finished`, plus the `SKILL_PACKAGING_FAILED` finding a {@link SkillPackagingStop} stands for.
  *
  * @param finished - What the run finished before it stopped
@@ -571,7 +588,7 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
     name,
   );
   if (existsSync(marketplaceBaseDir)) {
-    await rm(marketplaceBaseDir, { recursive: true, force: true });
+    await writingMarketplace(`remove the previous ${marketplaceBaseDir}`, () => rm(marketplaceBaseDir, { recursive: true, force: true }));
   }
 
   // Marketplace-level skills filter restricts pool available to plugins that use "*"
@@ -620,7 +637,7 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
   // Generate .claude-plugin/marketplace.json
   const marketplaceDir = marketplaceBaseDir;
   const claudePluginDir = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
-  await mkdir(claudePluginDir, { recursive: true });
+  await writingMarketplace(`create ${claudePluginDir}`, () => mkdir(claudePluginDir, { recursive: true }));
 
   // Each BUILT entry's author is the plugin's own MERGED author (see
   // marketplace-json.ts), so marketplace.json and that plugin's plugin.json
@@ -646,7 +663,8 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
     ],
   });
 
-  await writeFile(safePath.join(claudePluginDir, 'marketplace.json'), JSON.stringify(marketplaceJson, null, 2));
+  const marketplaceJsonPath = safePath.join(claudePluginDir, 'marketplace.json');
+  await writingMarketplace(`write ${marketplaceJsonPath}`, () => writeFile(marketplaceJsonPath, JSON.stringify(marketplaceJson, null, 2)));
   logger.info(`   .claude-plugin/marketplace.json`);
 
   await copyDistributionFiles(marketplaceDir, configDir, config, logger);
@@ -728,7 +746,7 @@ async function writeMergedPluginJson(
   logger: ReturnType<typeof createLogger>,
 ): Promise<Record<string, unknown>> {
   const pluginJsonDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
-  await mkdir(pluginJsonDir, { recursive: true });
+  await writingMarketplace(`create ${pluginJsonDir}`, () => mkdir(pluginJsonDir, { recursive: true }));
 
   const { merged, author, warnings } = mergePluginJson({
     vat: {
@@ -740,7 +758,8 @@ async function writeMergedPluginJson(
     authorJson,
   });
   for (const w of warnings) logger.info(`warning: ${w}`);
-  await writeFile(safePath.join(pluginJsonDir, 'plugin.json'), JSON.stringify(merged, null, 2));
+  const pluginJsonPath = safePath.join(pluginJsonDir, 'plugin.json');
+  await writingMarketplace(`write ${pluginJsonPath}`, () => writeFile(pluginJsonPath, JSON.stringify(merged, null, 2)));
   logger.info(`         .claude-plugin/plugin.json`);
   return author;
 }
@@ -1205,7 +1224,7 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildOutcome>
   if (pluginSourceExists) {
     await parsePluginJsonFiles(pluginSourceDir);
   }
-  await mkdir(pluginDir, { recursive: true });
+  await writingMarketplace(`create ${pluginDir}`, () => mkdir(pluginDir, { recursive: true }));
 
   // Phase 1.4: discover the plugin's own skills ONCE (recursive; git-visible only),
   // resolving each declared name. Every phase below reads this list.

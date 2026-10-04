@@ -1,4 +1,5 @@
 import { readdir } from 'node:fs/promises';
+import { basename } from 'node:path';
 
 import type { MarketplaceInventory, PluginInventory } from '@vibe-agent-toolkit/agent-skills';
 import { direntKindFollowing, direntKindFollowingSync, safePath } from '@vibe-agent-toolkit/utils';
@@ -140,7 +141,9 @@ async function collectPluginsInMarketplaceCache(
 	const pluginNameDirs = await subdirectoriesOrRecord(mpDir, parseErrors);
 
 	for (const nameDir of pluginNameDirs) {
-		const versionDirs = await subdirectoriesOrRecord(nameDir, parseErrors);
+		// A dot-named directory is never a version: it is `installPlugin`'s staged copy or
+		// parked previous tree, left by a crash or by a removal the OS refused.
+		const versionDirs = (await subdirectoriesOrRecord(nameDir, parseErrors)).filter(dir => !basename(dir).startsWith('.'));
 		for (const versionDir of versionDirs) {
 			try {
 				// N+1 WHOLE-CORPUS CRAWL — known, not fixed here. No `SharedRegistrySource` is

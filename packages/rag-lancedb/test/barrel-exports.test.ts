@@ -18,7 +18,9 @@ const BARREL_EXPORTS = [
   'buildMetadataWhereClause',
   'buildWhereClause',
   'chunkToLanceRow',
+  'foreignDatabaseEntries',
   'lanceRowToChunk',
+  'removeRagDatabase',
   'resolveChunkingConfig',
 ];
 

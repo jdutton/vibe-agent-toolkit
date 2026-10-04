@@ -94,7 +94,8 @@ manifest is unreadable or not YAML, or the OS refuses its system prompt,
 `scripts/`, `LICENSE.txt` or `package.json` — only an absence is "not there"),
 `RUN_INCOMPLETE` (the packager refused the bundle's content, e.g. a stale nested
 `SKILL.md` in the output: one `SKILL_PACKAGING_FAILED` error finding at the agent,
-relative to the project root).
+relative to the project root; or an output the OS will not let the build write — a
+full disk, a read-only or unwritable `--output`, a file in its way — with no finding).
 
 ### `vat agent import <skillPath>`
 

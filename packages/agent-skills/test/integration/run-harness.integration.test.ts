@@ -219,7 +219,8 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
     // Simulate a reused/interrupted harness: pre-seed a stale friction.json under
     // results/ (as a prior run — or a crash before cleanup — would leave behind).
     const resultsDir = safePath.join(tempDir, 'harness', 'results');
-    mkdirSyncReal(resultsDir, { recursive: true });
+    // 0700, as the prior run left the harness root: VAT never re-modes an --out it did not create.
+    mkdirSyncReal(resultsDir, { recursive: true, mode: 0o700 });
     const frictionPath = safePath.join(resultsDir, 'friction.json');
     writeFileSync(
       frictionPath,

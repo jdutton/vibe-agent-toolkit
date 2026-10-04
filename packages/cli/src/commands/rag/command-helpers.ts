@@ -40,15 +40,43 @@ export function resolveDbPath(
 }
 
 /**
- * Execute a RAG operation on an EXISTING database, with standard setup/teardown.
+ * Run `action` on an EXISTING RAG database's path, after checking that it is one.
  *
  * Per CLI-boundary rule (spec §5/§7), `projectRoot` is resolved here using
  * the `tolerate null` policy — null is fine, the existing rag config-loading
  * surface produces its own error if config is required.
  *
- * A failure anywhere — the database path, opening the store, the operation —
- * ends the run as `verb`'s refusal, classified by the thrown value's code
- * (`refusalCodeOf`), never by where it was thrown.
+ * A failure anywhere — the database path, the action — ends the run as
+ * `verb`'s refusal, classified by the thrown value's code (`refusalCodeOf`),
+ * never by where it was thrown.
+ *
+ * @param verb - The report verb running the action, for the refusal document
+ * @param options - Command options (db path, debug flag)
+ * @param action - What to do with the recognised database path
+ * @returns Result of the action
+ */
+export async function onRagDatabase<T>(
+  verb: ReportVerb,
+  options: { db?: string; debug?: boolean },
+  action: (dbPath: string, logger: Logger) => T | Promise<T>,
+): Promise<T> {
+  const logger = createLogger({ debug: options.debug ?? false });
+
+  try {
+    // Resolve projectRoot at the CLI boundary (`tolerate null` policy).
+    const projectRoot = projectRootOrNull(process.cwd());
+    const dbPath = resolveDbPath(options.db, projectRoot ?? undefined);
+    logger.debug(`Database path: ${dbPath}`);
+    requireExistingDatabase(dbPath, options.db !== undefined && options.db !== '');
+    return await action(dbPath, logger);
+  } catch (error) {
+    return endWithRefusal(verb, refusalCodeOf(error), error, 'yaml', RAG_GATE, NOTHING_FINISHED);
+  }
+}
+
+/**
+ * Execute a RAG operation on an EXISTING database, opened, with standard
+ * setup/teardown ({@link onRagDatabase}).
  *
  * @param verb - The report verb running the operation, for the refusal document
  * @param options - Command options (db path, debug flag, readonly mode)
@@ -60,29 +88,15 @@ export async function executeRagOperation<T>(
   options: { db?: string; debug?: boolean; readonly?: boolean },
   operation: (provider: RAGQueryProvider, logger: Logger, dbPath: string) => Promise<T>,
 ): Promise<T> {
-  const logger = createLogger({ debug: options.debug ?? false });
-
-  try {
-    // Resolve projectRoot at the CLI boundary (`tolerate null` policy).
-    const projectRoot = projectRootOrNull(process.cwd());
-    const dbPath = resolveDbPath(options.db, projectRoot ?? undefined);
-    logger.debug(`Database path: ${dbPath}`);
-    requireExistingDatabase(dbPath, options.db !== undefined && options.db !== '');
-
+  return onRagDatabase(verb, options, async (dbPath, logger) => {
     // Create RAG provider (readonly mode by default, can be overridden)
     const ragProvider = await LanceDBRAGProvider.create({
       dbPath,
       readonly: options.readonly ?? true,
     });
 
-    // Execute operation
     const result = await operation(ragProvider, logger, dbPath);
-
-    // Close provider
     await ragProvider.close();
-
     return result;
-  } catch (error) {
-    return endWithRefusal(verb, refusalCodeOf(error), error, 'yaml', RAG_GATE, NOTHING_FINISHED);
-  }
+  });
 }

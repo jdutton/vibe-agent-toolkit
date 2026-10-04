@@ -563,10 +563,10 @@ declaring one.
 
 ### Problem: Database corruption
 
-**Symptoms**: `Error: Invalid LanceDB file`
+**Symptoms**: `vat rag stats` or `vat rag query` refuses with `INPUT_UNREADABLE`, saying the `rag_chunks` table cannot be read (its files are damaged)
 
 **Solutions**:
-1. Clear and rebuild: `vat rag clear && vat rag index`
+1. Clear and rebuild: `vat rag clear && vat rag index` — `clear` removes the database without opening it, so it works on a damaged one
 2. Check disk space (>100MB free)
 3. Verify no concurrent writes
 4. Update LanceDB: `bun update @lancedb/lancedb`

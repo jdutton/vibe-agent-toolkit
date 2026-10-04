@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
 
@@ -8,7 +8,7 @@ import { buildHostileTree, HOSTILE_NAMES , CANNOT_DENY_READS } from '@vibe-agent
 import { describe, expect, it } from 'vitest';
 
 import { getResourceSubdirForFile } from '../src/content-type-routing.js';
-import { SKILL_PACKAGING_OUTPUT_FAILED_CODE } from '../src/packaging-errors.js';
+import { SKILL_PACKAGING_OUTPUT_FAILED_CODE, SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE } from '../src/packaging-errors.js';
 import {
   extractH1Title,
   findCommonAncestor,
@@ -605,8 +605,8 @@ describe('packageSkill - output directory structure', () => {
     await mkdir(safePath.join(outDir, 'old-dir'), { recursive: true });
     await writeFile(safePath.join(outDir, 'old-dir', 'leftover.md'), '# Also gone');
 
-    // Rebuild — should clean stale files
-    await packageSkill(sp, { outputPath: outDir });
+    // Rebuild into a location the caller owns — should clean stale files
+    await packageSkill(sp, { outputPath: outDir, replaceExistingOutput: true });
 
     const rootEntries = await readdir(outDir);
     expect(rootEntries).not.toContain('stale.md');
@@ -615,6 +615,109 @@ describe('packageSkill - output directory structure', () => {
     expect(rootEntries).toContain('SKILL.md');
     expect(rootEntries).toContain('resources');
   });
+});
+
+// ============================================================================
+// Output path ownership: VAT never removes what it did not produce
+// ============================================================================
+
+const PRECIOUS = 'precious.txt';
+
+/** A skill in `tmp`, packaged into a sibling of its own directory. */
+async function skillBeside(tmp: string): Promise<string> {
+  return writeSkillMd(tmp, UNIT_SKILL_NAME, '# Owned Output');
+}
+
+describe('packageSkill - an explicit output path it does not own', () => {
+  it('refuses an existing non-empty directory, and everything in it survives', async () => {
+    const tmp = getTempDir();
+    const outDir = safePath.join(tmp, 'keep');
+    await mkdir(outDir, { recursive: true });
+    await writeFile(safePath.join(outDir, PRECIOUS), 'keep me');
+    const sp = await skillBeside(tmp);
+
+    await expect(packageSkill(sp, { outputPath: outDir })).rejects.toMatchObject({
+      code: SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE,
+      message: expect.stringContaining('keep') as unknown,
+    });
+    expect(readFileSync(safePath.join(outDir, PRECIOUS), 'utf-8')).toBe('keep me');
+    expect(existsSync(safePath.join(outDir, 'SKILL.md'))).toBe(false);
+  });
+
+  it('refuses an existing FILE at the output path, and the file survives', async () => {
+    const tmp = getTempDir();
+    const outFile = safePath.join(tmp, 'notes.txt');
+    await writeFile(outFile, 'precious');
+    const sp = await skillBeside(tmp);
+
+    await expect(packageSkill(sp, { outputPath: outFile })).rejects.toMatchObject({ code: SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE });
+    expect(readFileSync(outFile, 'utf-8')).toBe('precious');
+  });
+
+  it('packages into an existing EMPTY directory', async () => {
+    const tmp = getTempDir();
+    const outDir = safePath.join(tmp, 'empty');
+    await mkdir(outDir, { recursive: true });
+    const sp = await skillBeside(tmp);
+
+    const result = await packageSkill(sp, { outputPath: outDir });
+
+    expect(existsSync(safePath.join(result.outputPath, 'SKILL.md'))).toBe(true);
+  });
+
+  it('refuses an existing ZIP beside the output when a ZIP is asked for, and it survives', async () => {
+    const tmp = getTempDir();
+    const outDir = safePath.join(tmp, 'zipped');
+    await writeFile(`${outDir}.zip`, 'not ours');
+    const sp = await skillBeside(tmp);
+
+    await expect(packageSkill(sp, { outputPath: outDir, formats: [DIRECTORY_FORMAT, 'zip'] }))
+      .rejects.toMatchObject({ code: SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE });
+    expect(readFileSync(`${outDir}.zip`, 'utf-8')).toBe('not ours');
+    expect(existsSync(outDir)).toBe(false);
+  });
+});
+
+describe('packageSkill - an output the OS will not let it write', () => {
+  it('codes a file in the way of the output root as an unfinished run, never as the skill\'s content', async () => {
+    const tmp = getTempDir();
+    await writeFile(safePath.join(tmp, 'blocker'), 'x');
+    const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, '# Blocked');
+
+    await expect(packageSkill(sp, { outputPath: safePath.join(tmp, 'blocker', 'out') }))
+      .rejects.toMatchObject({ code: SKILL_PACKAGING_OUTPUT_FAILED_CODE });
+  });
+
+  it('codes a ZIP that cannot be written as an unfinished run, never as a success', async () => {
+    const tmp = getTempDir();
+    const outDir = safePath.join(tmp, 'z');
+    // A directory where the archive must go: the write fails with EISDIR.
+    await mkdir(`${outDir}.zip`, { recursive: true });
+    const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, '# Zip Blocked');
+
+    await expect(packageSkill(sp, { outputPath: outDir, formats: [DIRECTORY_FORMAT, 'zip'], replaceExistingOutput: true }))
+      .rejects.toMatchObject({ code: SKILL_PACKAGING_OUTPUT_FAILED_CODE, message: expect.stringContaining('z.zip') as unknown });
+  });
+
+  it.skipIf(CANNOT_DENY_READS)(
+    'codes a previous output it cannot remove as an unfinished run',
+    async () => {
+      const tmp = getTempDir();
+      const parent = safePath.join(tmp, 'ro');
+      const outDir = safePath.join(parent, 'out');
+      await mkdir(safePath.join(outDir, 'sub'), { recursive: true });
+      await writeFile(safePath.join(outDir, 'sub', 'old.md'), '# old');
+      chmodSync(outDir, 0o555);
+      const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, '# Stale Locked');
+
+      try {
+        await expect(packageSkill(sp, { outputPath: outDir, replaceExistingOutput: true }))
+          .rejects.toMatchObject({ code: SKILL_PACKAGING_OUTPUT_FAILED_CODE });
+      } finally {
+        chmodSync(outDir, 0o755);
+      }
+    },
+  );
 });
 
 // ============================================================================
@@ -896,7 +999,7 @@ describe('packageSkill - source-in-output check', () => {
     expect(existsSync(markerPath)).toBe(true);
   });
 
-  it('should delete output dir when SKILL.md is outside it', async () => {
+  it('should replace an owned output dir when SKILL.md is outside it', async () => {
     const tmp = getTempDir();
     const outDir = safePath.join(tmp, 'out');
     await mkdir(outDir, { recursive: true });
@@ -906,7 +1009,7 @@ describe('packageSkill - source-in-output check', () => {
 
     // SKILL.md is outside the output dir
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, '# Normal Skill');
-    await packageSkill(sp, { outputPath: outDir });
+    await packageSkill(sp, { outputPath: outDir, replaceExistingOutput: true });
 
     // Stale file should be gone
     expect(existsSync(safePath.join(outDir, 'stale.md'))).toBe(false);

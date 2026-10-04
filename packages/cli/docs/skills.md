@@ -155,9 +155,12 @@ discovery rule that this command participates in.
   skill (`SKILL_BUILD_TARGET_NOT_BUILDABLE`); or nothing was examined — no `skills:` block, or
   globs matching no SKILL.md (`RESOURCE_CHECK_BROKEN`)
 - `2` - The build could not run (`error.code`): `USAGE_INVALID` (a bad `[path]`, an unknown
-  `--skill`), `INPUT_UNREADABLE` (including a previous `dist/skills` the OS will not stat),
-  `CONFIG_INVALID`, or `RUN_INCOMPLETE` (the staging area under `dist/` could not be opened, or
-  promoting `dist/skills` failed — `data.promotionError` names what is on disk and how to recover it).
+  `--skill`), `INPUT_UNREADABLE` (including a previous `dist/skills` the OS will not stat, or a file
+  in the git repository the OS will not let git read — the message names it), `CONFIG_INVALID`, or
+  `RUN_INCOMPLETE` (an output the OS will not let the build write: the staging area under `dist/`
+  could not be opened, a bundle could not be written, or promoting `dist/skills` failed —
+  `data.promotionError` names what is on disk and how to recover it; a refusal after discovery
+  still reports the skills it `examined`).
   Any other throw from the packager stops the run under its own code (`INPUT_UNREADABLE` for a
   directory the OS will not list); one that carries no code is a defect in VAT
   (`INTERNAL_ERROR`). Either way `dist/skills` is left untouched
@@ -239,6 +242,10 @@ for terminology.
 - `--no-rewrite-links` - Skip rewriting relative links in copied files
 - `-b, --base-path <path>` - Base path for resolving relative links (default: dirname of SKILL.md)
 - `--dry-run` - Preview packaging without creating files
+- `--force` - Replace whatever is already at `--output` (and the `<output>.zip` /
+  `<name>.marketplace.json` beside it). Without it, an `--output` that already holds anything — a
+  non-empty directory, a file, or one of those siblings — is refused (`USAGE_INVALID`) and left
+  exactly as it was: VAT never deletes what it did not produce. An empty directory is used as-is
 - `--debug` - Enable debug logging
 
 **Exit Codes:** derived from the published report — `0` when no finding is an error (warnings
@@ -248,8 +255,11 @@ and info never block: the verb has no `--strict`), `1` when one is, `2` when the
   content (`SKILL_PACKAGING_FAILED`, no bundle), or `--target claude-web` produced a ZIP over
   claude.ai's 8 MB upload limit (`SKILL_PACKAGE_TOO_LARGE`; the directory and the ZIP are on disk)
 - `2` — `error.code` says why: `USAGE_INVALID` (a `<skill-path>` naming nothing, an invalid
-  `--target`, no project root), `INPUT_UNREADABLE` (a `<skill-path>` the OS will not stat or read),
-  `INTERNAL_ERROR` (an unexpected failure, stack on stderr)
+  `--target`, no project root, an `--output` already holding something without `--force`),
+  `INPUT_UNREADABLE` (a `<skill-path>` the OS will not stat or read, or a file in the git repository
+  it will not read), `RUN_INCOMPLETE` (an output the OS will not let the build write — a full disk,
+  a read-only or unwritable output directory, a file in the way, a ZIP that could not be written;
+  never a finding against the skill), `INTERNAL_ERROR` (an unexpected failure, stack on stderr)
 
 **What Gets Packaged:**
 - Root SKILL.md file
@@ -294,17 +304,20 @@ data:
 # Package with default formats (directory + ZIP)
 vat skills package resources/skills/SKILL.md -o dist/my-skill
 
+# Re-package over the previous package (without --force an occupied -o is refused)
+vat skills package resources/skills/SKILL.md -o dist/my-skill --force
+
 # Preview without creating files
 vat skills package SKILL.md -o /tmp/skill --dry-run
 
 # Package as ZIP and npm formats only
-vat skills package SKILL.md -o dist -f zip,npm
+vat skills package SKILL.md -o dist/my-skill -f zip,npm
 
 # Package without rewriting links
-vat skills package SKILL.md -o dist --no-rewrite-links
+vat skills package SKILL.md -o dist/my-skill --no-rewrite-links
 
 # Package with custom base path
-vat skills package SKILL.md -o dist -b /custom/base
+vat skills package SKILL.md -o dist/my-skill -b /custom/base
 ```
 
 **Requirements:**

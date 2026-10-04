@@ -94,7 +94,7 @@ export function project(name: string, config: string, files: Readonly<Record<str
 }
 
 /** A SKILL.md nothing complains about at error or warning severity. */
-const CLEAN_SKILL = '---\nname: clean\ndescription: Reviews widgets for quality. Use when a reviewer wants a '
+export const CLEAN_SKILL = '---\nname: clean\ndescription: Reviews widgets for quality. Use when a reviewer wants a '
   + 'checklist walkthrough of a widget in depth.\n---\n\n# clean\n\nPurpose statement goes here.\n\nDoes one thing well.\n';
 /** A SKILL.md with an error-severity finding: a description past the 1024-character limit. */
 const BROKEN_SKILL = `---\nname: broken\ndescription: Reviews widgets. ${'Use when a reviewer wants a walkthrough. '.repeat(30)}\n---\n\n# broken\n\nBody.\n`;
@@ -111,15 +111,15 @@ const CHECK_CONFIG = (sql: string): string =>
 /** A tree whose markdown git ignores wholesale: the population enumerates nothing. */
 const NOTHING_TRACKED = { '.gitignore': '*\n', 'docs/a.md': '# A\n' } as const;
 /** A project whose `skills:` block discovers every `skills/<name>/SKILL.md`. */
-const SKILLS_CONFIG = 'skills:\n  include: ["skills/*/SKILL.md"]\n';
+export const SKILLS_CONFIG = 'skills:\n  include: ["skills/*/SKILL.md"]\n';
 /** A one-eval suite for `clean`, so `skill test run --dry-run` has something to stage. */
-const CLEAN_EVALS = JSON.stringify({ skill_name: 'clean', evals: [{ id: 'one', prompt: 'Review this widget.', expectations: ['It reviews the widget.'] }] });
+export const CLEAN_EVALS = JSON.stringify({ skill_name: 'clean', evals: [{ id: 'one', prompt: 'Review this widget.', expectations: ['It reviews the widget.'] }] });
 /**
  * Whether a `claude` binary answers on PATH. A dry run spends no tokens, but the
  * harness preflight still probes the binary (version, `--help` flags, `auth status`)
  * before it stages anything, so without one every run refuses BACKEND_UNAVAILABLE.
  */
-function hasClaude(): boolean {
+export function hasClaude(): boolean {
   return probeExitsZero('claude', ['--version']);
 }
 
@@ -158,7 +158,7 @@ const AGENT_MANIFEST = 'metadata:\n  name: matrix-agent\n  version: 0.1.0\n  des
   + 'spec:\n  llm:\n    provider: anthropic\n    model: claude-sonnet-5\n';
 
 /** An agent `vat agent build` can build: a manifest naming a system prompt that is there, inside a package for the default output. */
-const BUILDABLE_AGENT_FILES: Readonly<Record<string, string>> = {
+export const BUILDABLE_AGENT_FILES: Readonly<Record<string, string>> = {
   'package.json': JSON.stringify({ name: 'matrix-agents' }),
   'agent/agent.yaml': `${AGENT_MANIFEST}  prompts:\n    system:\n      $ref: ./prompts/system.md\n`,
   'agent/prompts/system.md': 'You review widgets.\n',
@@ -208,10 +208,10 @@ export const SKILLS_INSTALL_FLAGS = ['--target', 'claude', '--scope', 'project']
 const DEV_INSTALL_SKIP = process.platform === 'win32' ? '--dev is refused on Windows' : undefined;
 
 /** A marketplace of one local plugin holding a command; `pluginExtra` is YAML appended to the plugin entry. */
-const PLUGIN_BUILD_CONFIG = (pluginExtra = ''): string =>
+export const PLUGIN_BUILD_CONFIG = (pluginExtra = ''): string =>
   'claude:\n  marketplaces:\n    matrix-mp:\n      owner:\n        name: Matrix\n'
   + `      plugins:\n        - name: p\n          skills: []\n${pluginExtra}`;
-const PLUGIN_BUILD_FILES: Readonly<Record<string, string>> = { 'plugins/p/commands/hello.md': '# hello\n' };
+export const PLUGIN_BUILD_FILES: Readonly<Record<string, string>> = { 'plugins/p/commands/hello.md': '# hello\n' };
 
 /** A marketplace with a `publish:` block, or without one; the remote is never contacted under `--dry-run`. */
 const PUBLISH_CONFIG = (publish: boolean): string =>
@@ -858,10 +858,10 @@ export const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> =
       status: 'findings',
       skipReason: () => (CANNOT_DENY_READS ? 'this platform or user cannot deny a file its reads' : undefined),
       run: (): ScenarioRun => {
-        // Not a git project, to step around a DEFECT (filed): in a git project, `getGitTreeSnapshot`
-        // (`utils/src/git-snapshot.ts`, `git add --all` into a temp index) fails on a non-ignored file
-        // the OS will not read, and the whole run refuses as INTERNAL_ERROR instead of reporting that
-        // one file. Move this row back into a git project once that is fixed.
+        // Not a git project, deliberately: in a git project the snapshot (`git add --all` into a temp
+        // index) cannot hash a non-ignored file the OS will not read, so the whole run refuses as
+        // INPUT_UNREADABLE naming that file (`unreadableSnapshotRefusal`) — the error branch, not this
+        // per-file finding. Outside git the crawl walks, and reports the one file it could not read.
         const cwd = noProject('rag-index-findings');
         writeFileTree(cwd, { 'vibe-agent-toolkit.config.yaml': '{}\n', 'docs/locked.md': '# Locked\n\nProse nobody can read.\n' });
         const locked = safePath.join(cwd, 'docs', 'locked.md');

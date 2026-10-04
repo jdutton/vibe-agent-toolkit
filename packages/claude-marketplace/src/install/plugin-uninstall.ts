@@ -15,9 +15,11 @@ import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 import type { InstalledPlugins } from './plugin-registry.js';
 import {
   codedUserStateWrite,
+  PLUGIN_KEY_INVALID_CODE,
   readInstalledPlugins,
   readKnownMarketplaces,
   readUserSettings,
+  requirePluginPathSegment,
   writeInstalledPlugins,
   writeKnownMarketplaces,
 } from './plugin-registry.js';
@@ -43,16 +45,22 @@ export interface UninstallPluginResult {
   };
 }
 
-/** The code {@link parsePluginKey} throws for a key that is not `<name>@<marketplace>`. */
-export const PLUGIN_KEY_INVALID_CODE = 'PLUGIN_KEY_INVALID';
-
-/** Split a plugin key at its LAST `@`; throws {@link PLUGIN_KEY_INVALID_CODE} when either half is empty. */
+/**
+ * Split a plugin key at its LAST `@`.
+ *
+ * @throws VatError {@link PLUGIN_KEY_INVALID_CODE} when either half is empty or
+ *   is not a single path segment
+ */
 export function parsePluginKey(pluginKey: string): { pluginName: string; marketplace: string } {
   const atIdx = pluginKey.lastIndexOf('@');
   if (atIdx <= 0 || atIdx === pluginKey.length - 1) {
     throw new VatError(PLUGIN_KEY_INVALID_CODE, `Invalid plugin key "${pluginKey}" — expected "<plugin>@<marketplace>".`);
   }
-  return { pluginName: pluginKey.slice(0, atIdx), marketplace: pluginKey.slice(atIdx + 1) };
+  const pluginName = pluginKey.slice(0, atIdx);
+  const marketplace = pluginKey.slice(atIdx + 1);
+  requirePluginPathSegment(pluginName, 'plugin name', pluginKey);
+  requirePluginPathSegment(marketplace, 'marketplace name', pluginKey);
+  return { pluginName, marketplace };
 }
 
 function marketplaceHasOtherPlugins(plugins: Record<string, unknown>, pluginKey: string, marketplace: string): boolean {

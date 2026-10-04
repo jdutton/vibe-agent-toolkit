@@ -8,10 +8,10 @@
  * Follows Postel's Law: reads with fallbacks (liberal), writes with structured data.
  */
 
-import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, cpSync, type Dirent, lstatSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-import { isPathAbsentError, isUnderRoot, isVatError, mkdirSyncReal, normalizePath, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, isSingleFsSegment, isUnderRoot, isVatError, mkdirSyncReal, normalizePath, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
@@ -66,15 +66,62 @@ export const CLAUDE_USER_STATE_WRITE_FAILED_CODE = 'CLAUDE_USER_STATE_WRITE_FAIL
 export const PLUGIN_SOURCE_UNREADABLE_CODE = 'PLUGIN_SOURCE_UNREADABLE';
 
 /**
- * Refuse a plugin source that cannot be listed, before anything is written for it.
+ * The code for a plugin key — or a plugin name, marketplace name or version
+ * given to `installPlugin` — that cannot name one entry under ~/.claude.
+ */
+export const PLUGIN_KEY_INVALID_CODE = 'PLUGIN_KEY_INVALID';
+
+/**
+ * Refuse a plugin name, marketplace name or version that is not ONE path
+ * segment. Each is joined into a path under ~/.claude that is copied over or
+ * removed recursively, so `..`, a separator or an absolute or drive-letter name
+ * would reach outside it.
  *
- * @throws VatError {@link PLUGIN_SOURCE_UNREADABLE_CODE}
+ * @param value - The name or version, exactly as given
+ * @param what - What it is, for the refusal's wording
+ * @param context - The key or install it came from
+ * @throws VatError {@link PLUGIN_KEY_INVALID_CODE} when it is not one segment
+ */
+export function requirePluginPathSegment(value: string, what: string, context: string): void {
+  if (!isSingleFsSegment(value)) {
+    throw new VatError(
+      PLUGIN_KEY_INVALID_CODE,
+      `Invalid ${what} "${value}" in "${context}": it must be a single path segment (no path separator, not "." or "..", not absolute).`,
+    );
+  }
+}
+
+/** The refusal for a plugin source path the OS will not list or read. */
+function pluginSourceUnreadable(path: string, error: unknown): VatError {
+  return new VatError(PLUGIN_SOURCE_UNREADABLE_CODE, `Could not read the plugin to install at ${path}: ${String(error)}`, { cause: error });
+}
+
+/**
+ * Refuse a plugin source any part of which cannot be read, before anything is
+ * written for it. The whole tree, not its top level: a file the copy cannot
+ * read deeper down otherwise fails inside ~/.claude and reads as Claude's
+ * state, naming the destination. Each file is opened, not `access`ed — on
+ * Windows `access` does not consult ACLs. Links are copied as links, so they
+ * are not followed here.
+ *
+ * @throws VatError {@link PLUGIN_SOURCE_UNREADABLE_CODE} naming the path that failed
  */
 function requirePluginSource(pluginDir: string): void {
+  let entries: Dirent[];
   try {
-    readdirSync(pluginDir);
+    entries = readdirSync(pluginDir, { recursive: true, withFileTypes: true });
   } catch (error) {
-    throw new VatError(PLUGIN_SOURCE_UNREADABLE_CODE, `Could not read the plugin to install at ${pluginDir}: ${String(error)}`, { cause: error });
+    throw pluginSourceUnreadable((error as NodeJS.ErrnoException).path ?? pluginDir, error);
+  }
+  for (const entry of entries) {
+    // A link is copied as a link, never read through: what it points at is not the copy's to read.
+    if (entry.isSymbolicLink() || !entry.isFile()) continue;
+    const file = safePath.join(entry.parentPath, entry.name);
+    try {
+      closeSync(openSync(file, 'r'));
+    } catch (error) {
+      throw pluginSourceUnreadable(file, error);
+    }
   }
 }
 
@@ -97,6 +144,17 @@ function resolvesInto(source: string, dest: string): boolean {
   return real(source) === real(dest) || isUnderRoot(dest, source) === 'inside';
 }
 
+/** Whether anything — a dangling link included — sits at `path`. */
+function entryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (isPathAbsentError(error)) return false;
+    throw error;
+  }
+}
+
 /**
  * Make `dest` a copy of `source`, replacing whatever tree is there.
  *
@@ -105,25 +163,39 @@ function resolvesInto(source: string, dest: string): boolean {
  * copy that fails must leave the previous tree in place. The copy goes to a
  * sibling directory and is swapped in only once it is whole; a failure removes
  * the sibling and, if the swap itself failed, puts the previous tree back.
+ *
+ * The sibling is DOT-named: `vat inventory` reads every other directory beside
+ * the versions as one, so a sibling a crash leaves behind must not look like a
+ * version. It takes the source's mode — `mkdtemp` makes it 0700.
+ *
+ * @returns Warnings: the previous tree, when it could not be removed once replaced
  */
-function replaceDirectory(source: string, dest: string): void {
+function replaceDirectory(source: string, dest: string): string[] {
   const parent = dirname(dest);
   mkdirSyncReal(parent, { recursive: true });
-  const staged = mkdtempSync(safePath.join(parent, `${basename(dest)}.tmp-`));
+  const staged = mkdtempSync(safePath.join(parent, `.${basename(dest)}.vat-staged-`));
   try {
+    chmodSync(staged, statSync(source).mode & 0o7777);
     cpSync(source, staged, { recursive: true });
-    swapIn(staged, dest);
+    return swapIn(staged, dest);
   } finally {
-    // Gone already once swapped in; otherwise the half-copied sibling must not stay to read as a version.
+    // Gone already once swapped in; otherwise the half-copied sibling must not stay.
     rmSync(staged, { recursive: true, force: true });
   }
 }
 
-/** Move the whole tree `staged` to `dest`; the tree `dest` held is removed only after `staged` is in its place. */
-function swapIn(staged: string, dest: string): void {
-  if (!existsSync(dest)) {
+/**
+ * Move the whole tree `staged` to `dest`; the tree `dest` held is removed only
+ * after `staged` is in its place. That removal is best-effort: the new tree is
+ * live by then, so a removal the OS refuses must not fail the install.
+ *
+ * @returns Warnings: the previous tree, when it could not be removed
+ */
+function swapIn(staged: string, dest: string): string[] {
+  // `lstat`, not `existsSync`: a dangling link at `dest` is moved aside like a tree.
+  if (!entryExists(dest)) {
     renameSync(staged, dest);
-    return;
+    return [];
   }
   const previous = `${staged}.previous`;
   renameSync(dest, previous);
@@ -133,7 +205,12 @@ function swapIn(staged: string, dest: string): void {
     renameSync(previous, dest);
     throw error;
   }
-  rmSync(previous, { recursive: true, force: true });
+  try {
+    rmSync(previous, { recursive: true, force: true });
+    return [];
+  } catch (error) {
+    return [`The previous ${basename(dest)} tree could not be removed and is left at ${previous}: ${String(error)}`];
+  }
 }
 
 /**
@@ -199,21 +276,28 @@ export function writeInstalledPlugins(paths: ClaudeUserPaths, data: InstalledPlu
 /**
  * Install a plugin into the Claude user plugin registry.
  *
- * The source is read first: one that is not there is refused
- * ({@link PLUGIN_SOURCE_UNREADABLE_CODE}) with nothing created. Then 5 steps in
+ * The names and version are checked first: each becomes one directory under
+ * ~/.claude, so one that is not a single path segment is refused
+ * ({@link PLUGIN_KEY_INVALID_CODE}). Then the source is read: one that is not
+ * there is refused ({@link PLUGIN_SOURCE_UNREADABLE_CODE}) with nothing created. Then 5 steps in
  * order; a failure throws, coded (see the two user-state codes above).
  * 1. Copy plugin files to marketplacesDir
  * 2. Update known_marketplaces.json
  * 3. Copy plugin files to pluginsCacheDir
  * 4. Update installed_plugins.json
  * 5. Enable plugin in user settings.json
+ *
+ * @returns `warnings`: cleanup that did not happen — the install itself is complete
  */
-export async function installPlugin(opts: InstallPluginOptions): Promise<void> {
+export async function installPlugin(opts: InstallPluginOptions): Promise<{ warnings: string[] }> {
   const { marketplaceName, pluginName, pluginDir, version, source, paths } = opts;
 
   const pluginKey = `${pluginName}@${marketplaceName}`;
+  requirePluginPathSegment(pluginName, 'plugin name', pluginKey);
+  requirePluginPathSegment(marketplaceName, 'marketplace name', pluginKey);
+  requirePluginPathSegment(version, 'version', pluginKey);
   requirePluginSource(pluginDir);
-  await codedUserStateWrite(`register plugin ${pluginKey}`, () => {
+  return codedUserStateWrite(`register plugin ${pluginKey}`, () => {
     const now = new Date().toISOString();
     // The directory itself, not a link to it: a copied link would collide with the directory it lands on.
     const realPluginDir = normalizePath(safePath.resolve(pluginDir));
@@ -238,9 +322,7 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<void> {
     // Step 3: Copy plugin to pluginsCacheDir/<marketplaceName>/<pluginName>/<version>/
     // Skip when the source IS the destination on disk (or inside it) — replacing it would delete the source
     const cacheDest = safePath.join(paths.pluginsCacheDir, marketplaceName, pluginName, version);
-    if (!resolvesInto(pluginDir, cacheDest)) {
-      replaceDirectory(realPluginDir, cacheDest);
-    }
+    const warnings = resolvesInto(pluginDir, cacheDest) ? [] : replaceDirectory(realPluginDir, cacheDest);
 
     // Step 4: Update installed_plugins.json
     const installedPlugins = readInstalledPlugins(paths);
@@ -257,6 +339,7 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<void> {
 
     // Step 5: Enable plugin in user settings.json
     updateUserSettings(paths, pluginKey);
+    return { warnings };
   });
 }
 

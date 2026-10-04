@@ -64,7 +64,8 @@ Output (YAML report on stdout):
 Exit Codes:
   0 - Uninstalled, or nothing to remove (a warning does not fail the run)
   2 - The run could not uninstall: no key and no --all, a key that is not
-      <plugin>@<marketplace>, or --all outside an npm package (USAGE_INVALID);
+      <plugin>@<marketplace> (each half one path segment: no path separator,
+      not "." or ".."), or --all outside an npm package (USAGE_INVALID);
       --all over a package.json that is unreadable or not JSON, or a Claude
       registry that is (INPUT_UNREADABLE); a removal or registry rewrite that
       failed partway (RUN_INCOMPLETE — plugins already uninstalled are still listed)

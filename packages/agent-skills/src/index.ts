@@ -172,7 +172,7 @@ export {
 } from './import.js';
 
 // Packaging refusals of a skill's own content, told apart from defects by code
-export { isSkillPackagingInputError, SKILL_PACKAGING_INPUT_INVALID_CODE, SKILL_PACKAGING_OUTPUT_FAILED_CODE } from './packaging-errors.js';
+export { isSkillPackagingInputError, SKILL_PACKAGING_INPUT_INVALID_CODE, SKILL_PACKAGING_OUTPUT_FAILED_CODE, SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE } from './packaging-errors.js';
 
 // Skill source primitives
 export { cloneGitSource, GIT_SUBPATH_INVALID_CODE, type GitCloneResult } from './skill-source/git-clone.js';

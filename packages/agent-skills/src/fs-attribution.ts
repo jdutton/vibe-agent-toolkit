@@ -36,18 +36,23 @@ export const READ_REMEDY =
   "Check the file's permissions and ownership, and that every directory above it is traversable.";
 
 /**
- * Which tree the guarded work touches: the author's `source`, or the build's `output`.
+ * Which tree the guarded work touches: the author's `source`; the build's
+ * `output` root, a path the operator chose (`--output`, `dist/`); or a path
+ * inside the `bundle`, whose layout the skill's own config decides.
  *
  * It decides the CODE, so it is required — a refusal is coded at its cause, and
  * the cause is known only at the call site. The errno cannot say: `EACCES` is
- * raised for an unreadable source and for an unwritable output directory alike.
+ * raised for an unreadable source and for an unwritable output directory alike,
+ * and `ENOTDIR` for a file in the way of `--output` and for one `files:` dest
+ * landing under another's file alike.
  */
-export type FsSide = 'source' | 'output';
+export type FsSide = 'source' | 'output' | 'bundle';
 
 /**
- * Errnos that, raised by the OUTPUT, still describe the skill: the bundle layout
- * its config asked for cannot exist — one `files:` dest landing on, or under,
+ * Errnos that, raised INSIDE the bundle, still describe the skill: the layout its
+ * config asked for cannot exist — one `files:` dest landing on, or under,
  * another's file. No disk or permission is involved, and a rerun fails the same way.
+ * Never applied to the output root: the operator chose that path, not the skill.
  */
 const BUNDLE_LAYOUT_ERRNOS: ReadonlySet<unknown> = new Set(['EEXIST', 'ENOTDIR', 'EISDIR']);
 
@@ -71,10 +76,11 @@ const BUNDLE_LAYOUT_ERRNOS: ReadonlySet<unknown> = new Set(['EEXIST', 'ENOTDIR',
  *   the adopter's to fix, published by every packaging lane as a
  *   `SKILL_PACKAGING_FAILED` finding (`isSkillPackagingInputError`).
  * - `output` — `packagingOutputError`: a full disk, a read-only or unwritable
- *   output directory. Nothing about the skill is wrong, so it is never that
- *   finding; the run did not finish. The one exception is an errno that says the
- *   bundle's own layout is impossible ({@link BUNDLE_LAYOUT_ERRNOS}), which the
- *   skill's config decides: that stays the skill's.
+ *   output directory, a file in the way of the output path. Nothing about the
+ *   skill is wrong, so it is never that finding; the run did not finish.
+ * - `bundle` — as `output`, except for an errno that says the bundle's own layout
+ *   is impossible ({@link BUNDLE_LAYOUT_ERRNOS}), which the skill's config
+ *   decides: that stays the skill's.
  *
  * The remedy follows the side too: a failed READ has nothing to do with whether
  * the output directory is writable or the disk is full, and padding a message
@@ -100,7 +106,7 @@ export async function withFsAttribution<T>(
       throw packagingInputError(`${subject}, but it could not be ${action}: ${reason}. ${READ_REMEDY}`, { cause: error });
     }
     const message = `${subject}, but it could not be ${action}: ${reason}. ${WRITE_REMEDY}`;
-    throw BUNDLE_LAYOUT_ERRNOS.has((error as { code?: unknown }).code)
+    throw side === 'bundle' && BUNDLE_LAYOUT_ERRNOS.has((error as { code?: unknown }).code)
       ? packagingInputError(message, { cause: error })
       : packagingOutputError(message, { cause: error });
   }
@@ -111,7 +117,7 @@ export async function withFsAttribution<T>(
  *
  * A copy touches both trees and its errno names neither, so the two sides are
  * separate steps: the source is checked for reading first (the `source` side),
- * and only then is the destination made and written (the `output` side).
+ * and only then is the destination made and written (the `bundle` side).
  *
  * @param subject As {@link withFsAttribution}
  * @param sourcePath The author's file
@@ -119,7 +125,7 @@ export async function withFsAttribution<T>(
  */
 export async function copyIntoBundle(subject: string, sourcePath: string, targetPath: string): Promise<void> {
   await withFsAttribution(subject, 'source', () => access(sourcePath, constants.R_OK));
-  await withFsAttribution(subject, 'output', async () => {
+  await withFsAttribution(subject, 'bundle', async () => {
     await mkdir(dirname(targetPath), { recursive: true });
     await copyFile(sourcePath, targetPath);
   });

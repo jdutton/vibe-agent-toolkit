@@ -7,8 +7,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { AGENT_MANIFEST_INVALID_CODE, loadAgentManifest, type LoadedAgentManifest } from '@vibe-agent-toolkit/agent-config';
-import { copyDirectory, isFilesystemAccessError, isPathAbsentError, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { copyDirectory, isFilesystemAccessError, isPathAbsentError, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
 
+import { withFsAttribution } from './fs-attribution.js';
 import { packageSkill } from './skill-packager.js';
 
 /**
@@ -45,6 +46,17 @@ async function readingSource<T>(target: string, read: () => Promise<T>): Promise
     if (!isFilesystemAccessError(error)) throw error;
     throw sourceUnreadable((error as NodeJS.ErrnoException).path ?? target, error);
   }
+}
+
+/**
+ * Do `write`, which touches only the build's OUTPUT at `target`. A filesystem
+ * refusal — an unwritable or read-only output directory, a full disk, a file in
+ * the way of `--output` — is the run not finishing (`packagingOutputError`), the
+ * same code the packager gives its own output: never a defect in VAT, and never
+ * a finding against the agent.
+ */
+function writingOutput<T>(target: string, write: () => Promise<T>, action = 'written'): Promise<T> {
+  return withFsAttribution(`agent build output ${toForwardSlash(target)}`, 'output', write, action);
 }
 
 /** Refuse a source tree the OS will not let the build list or read, before any of it is copied. */
@@ -152,7 +164,7 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
   const outputPath = safePath.join(baseOutputPath, manifest.metadata.name);
 
   // Ensure output directory exists
-  await fs.mkdir(outputPath, { recursive: true });
+  await writingOutput(outputPath, () => fs.mkdir(outputPath, { recursive: true }), 'created');
 
   const files: string[] = [];
 
@@ -173,7 +185,8 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
   if (sourcePresent(scriptsPath)) {
     const outputScriptsPath = safePath.join(outputPath, 'scripts');
     await requireReadableTree(scriptsPath);
-    await copyDirectory(scriptsPath, outputScriptsPath);
+    // The source tree was read above, so a refusal here is the output's.
+    await writingOutput(outputScriptsPath, () => copyDirectory(scriptsPath, outputScriptsPath));
     files.push(outputScriptsPath);
   }
 
@@ -182,7 +195,7 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
   if (sourcePresent(licensePath)) {
     const outputLicensePath = safePath.join(outputPath, 'LICENSE.txt');
     const license = await readingSource(licensePath, () => fs.readFile(licensePath));
-    await fs.writeFile(outputLicensePath, license);
+    await writingOutput(outputLicensePath, () => fs.writeFile(outputLicensePath, license));
     files.push(outputLicensePath);
   }
 
@@ -298,7 +311,7 @@ spec:
 
   // Write SKILL.md
   const skillPath = safePath.join(outputPath, 'SKILL.md');
-  await fs.writeFile(skillPath, skillContent, 'utf-8');
+  await writingOutput(skillPath, () => fs.writeFile(skillPath, skillContent, 'utf-8'));
 
   return skillPath;
 }
@@ -672,7 +685,7 @@ spec:
 `;
 
   const guidePath = safePath.join(outputPath, 'agent-manifest-guide.md');
-  await fs.writeFile(guidePath, guide, 'utf-8');
+  await writingOutput(guidePath, () => fs.writeFile(guidePath, guide, 'utf-8'));
 
   return guidePath;
 }

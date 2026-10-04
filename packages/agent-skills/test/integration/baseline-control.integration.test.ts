@@ -1303,7 +1303,8 @@ describe('baseline control arm (integration)', () => {
    */
   const seedPreviousResults = (): Record<string, string> => {
     const dir = defaultResultsDir();
-    mkdirSyncReal(dir, { recursive: true });
+    // 0700, as the previous VAT run left the harness root: VAT never re-modes an --out it did not create.
+    mkdirSyncReal(dir, { recursive: true, mode: 0o700 });
     const seeded: Record<string, string> = {};
     for (const name of MERGED_ARTIFACTS) {
       const body = `{"sentinel":"the previous run's ${name}"}\n`;

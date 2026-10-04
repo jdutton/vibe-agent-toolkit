@@ -70,7 +70,7 @@ Two installers exist and they write to different places:
 
 | Command | Writes to | Use for |
 |---|---|---|
-| `vat claude plugin install <npm:pkg \| dir \| zip>` | `~/.claude/plugins/` when the package ships a built marketplace (`dist/.claude/plugins/marketplaces/`), else `~/.claude/skills/` | Claude Code. Runs automatically from `postinstall` (`--npm-postinstall`, global installs only). `--dev` symlinks `dist/skills/` so rebuilds show up after `/reload-plugins`; `--build` builds first. For a claude.ai upload, package instead: `vat skills package ./SKILL.md -o ./dist/ --target claude-web`. |
+| `vat claude plugin install <npm:pkg \| dir \| zip>` | `~/.claude/plugins/` when the package ships a built marketplace (`dist/.claude/plugins/marketplaces/`), else `~/.claude/skills/` | Claude Code. Runs automatically from `postinstall` (`--npm-postinstall`, global installs only). `--dev` symlinks `dist/skills/` so rebuilds show up after `/reload-plugins`; `--build` builds first. For a claude.ai upload, package instead: `vat skills package ./SKILL.md -o ./dist/my-skill --target claude-web` (`-o` names the package directory itself, and one that already holds anything is refused unless `--force`). |
 | `vat skills install <source> --target <t> --scope <user\|project>` | The target's skill directory (`claude`, `codex`, `copilot`, `gemini`, `cursor`, `windsurf`, `agents`; e.g. `~/.claude/skills/` or `.claude/skills/`) | Any of the seven platforms. **Both `--target` and `--scope` are required** — there are no defaults. |
 
 Inspect what is installed with `vat skills list --user` (reads `~/.claude` only) and

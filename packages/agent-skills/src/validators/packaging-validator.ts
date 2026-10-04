@@ -41,6 +41,7 @@ import {
 } from '@vibe-agent-toolkit/schema';
 import {
   findProjectRoot,
+  isFilesystemAccessError,
   issueLocation,
   normalizedTmpdir,
   toForwardSlash,
@@ -52,6 +53,7 @@ import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { collectPreBuildGlobFindings, preBuildGlobFindingsToIssues } from '../files-config.js';
+import { READ_REMEDY } from '../fs-attribution.js';
 import {
   conventionalSuiteProbe,
   partitionTestInputFileEntries,
@@ -264,6 +266,30 @@ function validateFilesConfig(
   }
 
   return issues;
+}
+
+/**
+ * A bundled markdown file's text, or `undefined` when the OS will not read it —
+ * reported as `LINK_TARGET_UNREADABLE` at that file, the code the walker gives a
+ * link target it cannot stat. The skill's source refusing a read is a finding
+ * against the skill; uncaught, it escaped every lane as a defect in VAT.
+ */
+async function readBundledMarkdown(
+  file: string,
+  location: string,
+  issues: ValidationIssue[],
+): Promise<string | undefined> {
+  try {
+    return await readFile(file, 'utf-8');
+  } catch (error) {
+    if (!isFilesystemAccessError(error)) throw error;
+    issues.push(registryIssueAt(
+      'LINK_TARGET_UNREADABLE',
+      `Linked file ${location} is bundled, but it could not be read: ${(error as Error).message}. ${READ_REMEDY}`,
+      location,
+    ));
+    return undefined;
+  }
 }
 
 /**
@@ -973,10 +999,11 @@ export async function validateSkillForPackaging(
   let totalLines = skillLines;
   for (const bundledFile of bundledFiles) {
     if (bundledFile.endsWith('.md')) {
-      const content = await readFile(bundledFile, 'utf-8');
-      totalLines += content.split('\n').length;
       // Anchor contract: never hand a producer an absolute path as `location`.
       const bundledLocation = issueLocation(bundledFile, locationRoot);
+      const content = await readBundledMarkdown(bundledFile, bundledLocation, rawIssues);
+      if (content === undefined) continue;
+      totalLines += content.split('\n').length;
       collectNonPortableAssetReferenceIssues(content, bundledLocation, rawIssues);
       collectNonPortableCommandIssues(content, bundledLocation, rawIssues);
       // Whole-file bytes, frontmatter included — safe because the detector

@@ -6,6 +6,7 @@ import { CANNOT_DENY_READS, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/u
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE, buildAgentSkill } from '../src/builder.js';
+import { SKILL_PACKAGING_OUTPUT_FAILED_CODE } from '../src/packaging-errors.js';
 
 const AGENT_YAML = 'agent.yaml';
 const PACKAGE_JSON_NAME = 'package.json';
@@ -375,5 +376,30 @@ spec:
     createSymlink(cap, PACKAGE_JSON_NAME, safePath.join(agentDir, PACKAGE_JSON_NAME), 'file');
 
     await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject({ code: AGENT_SOURCE_UNREADABLE_CODE });
+  });
+
+  // The output the operator chose refusing a write says nothing about the agent:
+  // the run did not finish, and it is never a defect in VAT.
+  it('codes a file in the way of the output path as an unfinished run', async () => {
+    const { manifestPath } = await writeMinimalAgent(tempDir, 'output-blocked');
+    const blocker = safePath.join(tempDir, 'blocker');
+    await fs.writeFile(blocker, 'x');
+
+    await expect(buildAgentSkill({ agentPath: manifestPath, outputPath: safePath.join(blocker, 'out') }))
+      .rejects.toMatchObject({ code: SKILL_PACKAGING_OUTPUT_FAILED_CODE });
+  });
+
+  it.skipIf(CANNOT_DENY_READS)('codes an unwritable output directory as an unfinished run', async () => {
+    const { manifestPath } = await writeMinimalAgent(tempDir, 'output-readonly');
+    const readOnly = safePath.join(tempDir, 'ro');
+    await fs.mkdir(readOnly);
+    await fs.chmod(readOnly, 0o555);
+
+    try {
+      await expect(buildAgentSkill({ agentPath: manifestPath, outputPath: safePath.join(readOnly, 'out') }))
+        .rejects.toMatchObject({ code: SKILL_PACKAGING_OUTPUT_FAILED_CODE, message: expect.stringContaining('ro/out') as unknown });
+    } finally {
+      await fs.chmod(readOnly, 0o755);
+    }
   });
 });

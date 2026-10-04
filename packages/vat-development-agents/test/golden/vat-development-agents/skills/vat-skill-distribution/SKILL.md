@@ -416,8 +416,10 @@ The config schema accepts `claude.managedSettings: <path>`, but **no command rea
 For uploading skills directly to `claude.ai/settings/capabilities`:
 
 ```bash
-vat skills package ./SKILL.md -o ./dist/ --target claude-web
+vat skills package ./SKILL.md -o ./dist/my-skill --target claude-web
 ```
+
+`-o` names the package directory itself, and the ZIP lands beside it (`./dist/my-skill.zip`). An `-o` that already holds anything is refused (`USAGE_INVALID`) and left untouched; pass `--force` to replace a previous package there.
 
 Produces a ZIP:
 ```
@@ -470,7 +472,7 @@ already exists at build time — run your own build step first and point `files:
 | Install via npx (developer/IT) | `npx vibe-agent-toolkit claude plugin install npm:@org/pkg` |
 | List installed plugins | `vat claude plugin list` |
 | Uninstall a plugin | `vat claude plugin uninstall --all` |
-| Package for claude.ai upload | `vat skills package ./SKILL.md -o ./dist/ --target claude-web` |
+| Package for claude.ai upload | `vat skills package ./SKILL.md -o ./dist/my-skill --target claude-web` |
 
 ## Running VAT Without Global Install
 

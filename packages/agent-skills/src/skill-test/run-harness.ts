@@ -98,6 +98,7 @@ import { GradingReportSchema } from './grading-schema.js';
 import {
   assertSafeHarnessRoot,
   assertSafeWorkdir,
+  createHarnessRoot,
   HarnessLocationError,
   prepareHarnessRoot,
   resolveHarnessRoot,
@@ -2880,7 +2881,7 @@ function assertVatWroteArtifacts(paths: ArtifactPaths, baselineRun: boolean): vo
  */
 function resolveHarnessLocation(
   opts: Pick<RunHarnessOptions, 'out' | 'workdir' | 'subject'>,
-): { harnessRoot: string; harnessCreated: boolean } {
+): { harnessRoot: string; harnessCreated: boolean; rootOwner: 'vat' | 'operator' } {
   if (opts.out !== undefined && opts.workdir !== undefined) {
     throw new HarnessLocationError(
       '--out and --workdir are mutually exclusive: --out names the harness root exactly, ' +
@@ -2918,11 +2919,13 @@ function resolveHarnessLocation(
       ? resolveHarnessRoot([opts.subject], opts.workdir)
       : safePath.resolve(opts.out),
     harnessCreated: opts.out === undefined && opts.workdir === undefined,
+    // `--out` names the root exactly, and the operator made it: VAT never re-modes it.
+    rootOwner: opts.out === undefined ? 'vat' : 'operator',
   };
 }
 
 export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunHarnessResult> {
-  const { harnessRoot, harnessCreated } = resolveHarnessLocation(opts);
+  const { harnessRoot, harnessCreated, rootOwner } = resolveHarnessLocation(opts);
   const repoRoot = opts.repoRoot ?? harnessRoot;
   // Two distinct questions, deliberately not one value. `evalsRef` is what the
   // adopter ASKED FOR — a `test.evals`/`--evals` value, or `undefined` for the
@@ -2934,13 +2937,13 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   const evalsSubpath = evalsRef ?? DEFAULT_EVALS_SUBPATH;
   const currentUid = typeof process.getuid === 'function' ? process.getuid() : 0;
 
-  // Tighten an existing directory to 0700 (if present) BEFORE mkdir — adopter
-  // may have created the --out dir with default umask (0755). This is strictly
-  // safer: we only remove access, never grant it. Symlink still throws.
-  prepareHarnessRoot(harnessRoot);
+  // Tighten an existing VAT-derived directory to 0700 (if present) BEFORE mkdir.
+  // An --out the operator supplied is never re-moded: the safety check below
+  // refuses one that is not 0700, naming the fix. Symlink still throws.
+  prepareHarnessRoot(harnessRoot, rootOwner);
 
   // Ensure the harness root directory exists before validating it.
-  mkdirSyncReal(harnessRoot, { recursive: true, mode: 0o700 });
+  createHarnessRoot(harnessRoot);
 
   // Step 1: Assert safe harness root (symlink/ownership/mode checks) BEFORE
   // acquiring the lock — never write a lockfile into a directory we have not yet

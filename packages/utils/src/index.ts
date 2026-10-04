@@ -26,7 +26,7 @@
 // The base of every error VAT throws on purpose; `code` is what a catch
 // block dispatches on, never `message`.
 export * from './errors/vat-error.js';
-export { RAG_INDEX_EMPTY_CODE } from './errors/rag-index-empty.js';
+export { RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE } from './errors/rag-index-empty.js';
 // The code alone: its error class is on `./crawl`, and the CLI's refusal map needs only the code.
 export { DIRECTORY_LISTING_REFUSED_CODE } from './listing-refusal.js';
 

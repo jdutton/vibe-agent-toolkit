@@ -28,7 +28,7 @@ import {
   skillTestFailureReason,
 } from '../../src/skill-test/failure-reason.js';
 import { GradingNonceError, GradingSkewError } from '../../src/skill-test/grading-adapter.js';
-import { HarnessLocationError } from '../../src/skill-test/harness-location.js';
+import { HarnessLocationError, HarnessOutputError } from '../../src/skill-test/harness-location.js';
 import { HarnessLockBusyError } from '../../src/skill-test/lock.js';
 import { PromptInvariantError } from '../../src/skill-test/prompt-invariants.js';
 
@@ -41,6 +41,7 @@ describe('skillTestFailureReason', () => {
     ['BootstrapNeededError', new BootstrapNeededError('/p/evals/evals.json'), 'bootstrap'],
     ['AuthPreflightError', new AuthPreflightError('x'), 'preflight'],
     ['HarnessLocationError', new HarnessLocationError('x'), 'preflight'],
+    ['HarnessOutputError', new HarnessOutputError('x'), 'preflight'],
     ['PromptInvariantError (a VAT-built prompt lost a safety directive)', new PromptInvariantError('x'), 'preflight'],
     ['SkillBuildError', new SkillBuildError('build blew up'), 'preflight'],
     ['SecurityAckError (missing ack before a build)', new SecurityAckError(), 'preflight'],
@@ -141,6 +142,7 @@ describe('SKILL_TEST_REFUSAL_BY_ERROR_CODE', () => {
     ['EvalInputError (a suite or declared input that is not usable)', new EvalInputError('bad suite'), 'INPUT_UNREADABLE'],
     ['AuthPreflightError', new AuthPreflightError('x'), 'USAGE_INVALID'],
     ['HarnessLocationError', new HarnessLocationError('x'), 'USAGE_INVALID'],
+    ['HarnessOutputError (a harness root the OS will not let the run create)', new HarnessOutputError('x'), 'RUN_INCOMPLETE'],
     ['PromptInvariantError', new PromptInvariantError('x'), 'USAGE_INVALID'],
     ['SkillBuildError', new SkillBuildError('x'), 'USAGE_INVALID'],
     ['SecurityAckError', new SecurityAckError(), 'USAGE_INVALID'],

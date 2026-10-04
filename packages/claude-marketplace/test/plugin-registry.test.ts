@@ -5,7 +5,7 @@
 
 // Test helper — file paths are controlled by test code, not user input
 
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 
@@ -16,7 +16,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CLAUDE_USER_STATE_UNREADABLE_CODE,
   installPlugin,
+  type InstallPluginOptions,
   CLAUDE_USER_STATE_WRITE_FAILED_CODE,
+  PLUGIN_KEY_INVALID_CODE,
   PLUGIN_SOURCE_UNREADABLE_CODE,
   readInstalledPlugins,
   readKnownMarketplaces,
@@ -186,8 +188,41 @@ function builtPlugin(dir: string): string {
   return pluginDir;
 }
 
+/**
+ * A link-capable process's test paths and the cache version path, or `null`
+ * once `skip` has been called because this process cannot create symlinks.
+ */
+function cacheLinkFixture(
+  dir: string,
+  skip: (note?: string) => void,
+): { cap: NonNullable<ReturnType<typeof symlinkCapability>>; paths: ReturnType<typeof buildTestPaths>; cacheDest: string } | null {
+  const cap = symlinkCapability();
+  if (cap === null) {
+    skip('this process cannot create symlinks');
+    return null;
+  }
+  const paths = buildTestPaths(dir);
+  return { cap, paths, cacheDest: safePath.join(paths.pluginsCacheDir, MARKETPLACE_NAME, PLUGIN_NAME, VERSION) };
+}
+
+/** Install the plugin at `pluginDir` into `paths` under the suite's names. */
+function installAt(pluginDir: string, paths: ReturnType<typeof buildTestPaths>): ReturnType<typeof installPlugin> {
+  return installPlugin({
+    marketplaceName: MARKETPLACE_NAME,
+    pluginName: PLUGIN_NAME,
+    pluginDir,
+    version: VERSION,
+    source: { source: 'npm', package: NPM_PACKAGE, version: VERSION },
+    paths,
+  });
+}
+
 /** Register a plugin built under `dir` into `paths`, returning what it threw (or undefined). */
-async function registrationError(dir: string, paths: ReturnType<typeof buildTestPaths>): Promise<unknown> {
+async function registrationError(
+  dir: string,
+  paths: ReturnType<typeof buildTestPaths>,
+  names: Partial<Pick<InstallPluginOptions, 'marketplaceName' | 'pluginName' | 'version'>> = {},
+): Promise<unknown> {
   try {
     await installPlugin({
       marketplaceName: MARKETPLACE_NAME,
@@ -196,6 +231,7 @@ async function registrationError(dir: string, paths: ReturnType<typeof buildTest
       version: VERSION,
       source: { source: 'npm', package: NPM_PACKAGE, version: VERSION },
       paths,
+      ...names,
     });
     return undefined;
   } catch (error) {
@@ -248,6 +284,22 @@ describe('installPlugin', () => {
     expect(existsSync(paths.claudeDir)).toBe(false);
   });
 
+  // Each name becomes a directory under ~/.claude that is replaced recursively: a
+  // version of `../../../escape` (it comes from the package's own package.json) would land outside it.
+  it.each([
+    ['version', { version: '../../../../escape' }],
+    ['plugin name', { pluginName: '../escape' }],
+    ['marketplace name', { marketplaceName: 'a/b' }],
+  ])('refuses a %s that is not one path segment as PLUGIN_KEY_INVALID, before creating anything', async (_what, names) => {
+    const paths = buildTestPaths(getDir());
+
+    const error = await registrationError(getDir(), paths, names);
+
+    expect(isVatError(error, PLUGIN_KEY_INVALID_CODE), String(error)).toBe(true);
+    expect(existsSync(paths.claudeDir)).toBe(false);
+    expect(existsSync(safePath.join(getDir(), 'escape'))).toBe(false);
+  });
+
   it('codes a registration it could not write as CLAUDE_USER_STATE_WRITE_FAILED', async () => {
     const paths = buildTestPaths(getDir());
     // A FILE where the cache directory must go: the copy into it cannot happen.
@@ -273,22 +325,15 @@ describe('installPlugin', () => {
     plantFile(safePath.join(pluginDir, PLUGIN_JSON), JSON.stringify({ name: PLUGIN_NAME }));
     mkdirSyncReal(safePath.join(pluginDir, 'skills'), { recursive: true });
     createSymlink(cap, build, safePath.join(pluginDir, 'skills', 'linked'), 'dir');
-    const register = (): Promise<void> => installPlugin({
-      marketplaceName: MARKETPLACE_NAME,
-      pluginName: PLUGIN_NAME,
-      pluginDir,
-      version: VERSION,
-      source: { source: 'npm', package: NPM_PACKAGE, version: VERSION },
-      paths,
-    });
+    const register = (): Promise<unknown> => installAt(pluginDir, paths);
 
     await register();
-    await expect(register()).resolves.toBeUndefined();
+    await expect(register()).resolves.toEqual({ warnings: [] });
     expect(existsSync(safePath.join(paths.pluginsCacheDir, MARKETPLACE_NAME, PLUGIN_NAME, VERSION, 'skills', 'linked', 'SKILL.md'))).toBe(true);
   });
 
   // Needs a source file the OS refuses to read; Windows and root cannot deny a read by mode.
-  it.skipIf(CANNOT_DENY_READS)('keeps the previous cache intact when a re-install cannot copy the plugin', async () => {
+  it.skipIf(CANNOT_DENY_READS)('refuses a plugin with an unreadable file deep inside as PLUGIN_SOURCE_UNREADABLE, naming that file, and keeps the previous cache', async () => {
     const paths = buildTestPaths(getDir());
     // Registered in place, so the cache copy (step 3) is the first copy to run.
     const pluginDir = safePath.join(paths.marketplacesDir, MARKETPLACE_NAME, 'plugins', PLUGIN_NAME);
@@ -317,27 +362,85 @@ describe('installPlugin', () => {
     expect(readdirSync(safePath.join(versionsDir, VERSION)).toSorted((a, b) => a.localeCompare(b))).toEqual(firstInstall);
 
     rmSync(firstOnly);
-    const refused = safePath.join(pluginDir, 'refused.txt');
-    writeFileSync(refused, 'x');
+    // Below the top level, which is all the source check used to list: the copy then
+    // failed inside ~/.claude and was reported as Claude's state, naming the destination.
+    const refused = safePath.join(pluginDir, 'nested', 'deeper', 'refused.txt');
+    plantFile(refused, 'x');
     chmodSync(refused, 0o000);
     const error = await register();
     chmodSync(refused, 0o644);
 
-    expect(isVatError(error, CLAUDE_USER_STATE_WRITE_FAILED_CODE), String(error)).toBe(true);
+    expect(isVatError(error, PLUGIN_SOURCE_UNREADABLE_CODE), String(error)).toBe(true);
+    expect(String(error)).toContain(refused);
     // The tree the registry still points at is the one the first install left.
     expect(readdirSync(safePath.join(versionsDir, VERSION)).toSorted((a, b) => a.localeCompare(b))).toEqual(firstInstall);
     // And no half-copied sibling is left beside it to read as another version.
     expect(readdirSync(versionsDir)).toEqual([VERSION]);
   });
 
-  it('never deletes a pluginDir that resolves to the cache destination through a link', async ({ skip }) => {
-    const cap = symlinkCapability();
-    if (cap === null) {
-      skip('this process cannot create symlinks');
-      return;
-    }
+  // The previous tree is removed only after the new one is in place. A removal the OS
+  // refuses then (a read-only directory in the old tree, a Windows file handle) must not
+  // abort an install whose files are already live: the registry and settings still get written.
+  it.skipIf(CANNOT_DENY_READS)('finishes a re-install whose previous tree cannot be removed, and leaves it where no inventory reads it as a version', async () => {
     const paths = buildTestPaths(getDir());
-    const cacheDest = safePath.join(paths.pluginsCacheDir, MARKETPLACE_NAME, PLUGIN_NAME, VERSION);
+    const pluginDir = builtPlugin(getDir());
+    const install = (): Promise<unknown> => installAt(pluginDir, paths);
+    await install();
+    const versionsDir = safePath.join(paths.pluginsCacheDir, MARKETPLACE_NAME, PLUGIN_NAME);
+    const locked = safePath.join(versionsDir, VERSION, 'locked');
+    plantFile(safePath.join(locked, 'held.txt'), 'x');
+    chmodSync(locked, 0o555);
+    writeFileSync(safePath.join(pluginDir, 'second.txt'), 'v2');
+    rmSync(paths.installedPluginsPath);
+    rmSync(paths.userSettingsPath);
+
+    let error: unknown;
+    let result: unknown;
+    try {
+      result = await install();
+    } catch (caught) {
+      error = caught;
+    } finally {
+      for (const entry of readdirSync(versionsDir)) {
+        const leftover = safePath.join(versionsDir, entry, 'locked');
+        if (existsSync(leftover)) chmodSync(leftover, 0o755);
+      }
+    }
+
+    expect(error).toBeUndefined();
+    expect(readFileSync(safePath.join(versionsDir, VERSION, 'second.txt'), 'utf-8')).toBe('v2');
+    expect(readInstalledPlugins(paths).plugins[`${PLUGIN_NAME}@${MARKETPLACE_NAME}`]).toHaveLength(1);
+    expect(readUserSettings(paths)['enabledPlugins']).toEqual({ [`${PLUGIN_NAME}@${MARKETPLACE_NAME}`]: true });
+    expect(readdirSync(versionsDir).filter((entry) => !entry.startsWith('.'))).toEqual([VERSION]);
+    expect(result).toEqual({ warnings: [expect.stringContaining('could not be removed')] });
+  });
+
+  // mkdtemp makes its directory 0700, and a copy into an existing directory keeps that mode.
+  it.skipIf(process.platform === 'win32')('gives the cached version directory the source directory\'s mode, not mkdtemp\'s 0700', async () => {
+    const paths = buildTestPaths(getDir());
+    const pluginDir = builtPlugin(getDir());
+    chmodSync(pluginDir, 0o755);
+
+    await registrationError(getDir(), paths);
+
+    expect(statSync(safePath.join(paths.pluginsCacheDir, MARKETPLACE_NAME, PLUGIN_NAME, VERSION)).mode & 0o777).toBe(0o755);
+  });
+
+  it('replaces a dangling link at the cache version path instead of refusing', async ({ skip }) => {
+    const fixture = cacheLinkFixture(getDir(), skip);
+    if (fixture === null) return;
+    const { cap, paths, cacheDest } = fixture;
+    mkdirSyncReal(dirname(cacheDest), { recursive: true });
+    createSymlink(cap, safePath.join(getDir(), 'gone'), cacheDest, 'dir');
+
+    expect(await registrationError(getDir(), paths)).toBeUndefined();
+    expect(existsSync(safePath.join(cacheDest, PLUGIN_JSON))).toBe(true);
+  });
+
+  it('never deletes a pluginDir that resolves to the cache destination through a link', async ({ skip }) => {
+    const fixture = cacheLinkFixture(getDir(), skip);
+    if (fixture === null) return;
+    const { cap, paths, cacheDest } = fixture;
     plantFile(safePath.join(cacheDest, PLUGIN_JSON), JSON.stringify({ name: PLUGIN_NAME }));
     // Textually a different path; on disk, the cache destination itself.
     const pluginDir = safePath.join(getDir(), 'linked-plugin');

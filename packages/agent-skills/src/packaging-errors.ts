@@ -23,6 +23,14 @@ export const SKILL_PACKAGING_INPUT_INVALID_CODE = 'SKILL_PACKAGING_INPUT_INVALID
 /** The `VatError` code of a build whose output the OS would not let it write: the run did not finish. */
 export const SKILL_PACKAGING_OUTPUT_FAILED_CODE = 'SKILL_PACKAGING_OUTPUT_FAILED';
 
+/**
+ * The `VatError` code of an explicit output path that already holds something
+ * the packager did not produce — a non-empty directory, a file, an archive
+ * beside it. The packager never deletes what it cannot tell is its own, so the
+ * invocation is refused before anything is written.
+ */
+export const SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE = 'SKILL_PACKAGING_OUTPUT_OCCUPIED';
+
 /** The name-not-a-path-segment refusal `packageSkill` raises for an unusable skill name. */
 export const SKILL_NAME_NOT_A_SEGMENT_CODE = 'SKILL_NAME_NOT_A_SEGMENT';
 

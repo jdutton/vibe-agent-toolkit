@@ -4,11 +4,12 @@
  */
 
 import { AGENT_MANIFEST_INVALID_CODE, AGENT_MANIFEST_NOT_FOUND_CODE, AGENT_MANIFEST_UNREADABLE_CODE } from '@vibe-agent-toolkit/agent-config';
-import { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE, SKILL_PACKAGING_OUTPUT_FAILED_CODE } from '@vibe-agent-toolkit/agent-skills';
+import { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE, SKILL_PACKAGING_OUTPUT_FAILED_CODE, SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE } from '@vibe-agent-toolkit/agent-skills';
 import { ApiRequestError, ApiTransportError, OrgApiClient, PLUGIN_SOURCE_UNREADABLE_CODE } from '@vibe-agent-toolkit/claude-marketplace';
 import { CONFIG_UNREADABLE_CODE, LinkAuthConfigError, OKF_UNKNOWN_BUNDLE_CODE, okfBundleRuns, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
 import { ExitCode, type ErrorReport } from '@vibe-agent-toolkit/schema';
-import { COPY_LINK_ESCAPES_SOURCE_CODE, CopyLinkEscapesSourceError, DIRECTORY_LISTING_REFUSED_CODE, DIRECTORY_WALK_REVISITED_CODE, DirectoryWalkRevisitedError, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
+import { COPY_LINK_ESCAPES_SOURCE_CODE, CopyLinkEscapesSourceError, DIRECTORY_LISTING_REFUSED_CODE, DIRECTORY_WALK_REVISITED_CODE, DirectoryWalkRevisitedError, RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
+import { GIT_SNAPSHOT_UNREADABLE_CODE } from '@vibe-agent-toolkit/utils/git';
 import { updateYamlIn } from '@vibe-agent-toolkit/utils/yaml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -53,6 +54,16 @@ describe('refusalCodeOf', () => {
   // A full disk or an unwritable output directory: the build did not finish, and nothing about the skill is wrong.
   it('reads a skill build stopped by its own output as RUN_INCOMPLETE, never as a defect in VAT', () => {
     expect(refusalCodeOf(new VatError(SKILL_PACKAGING_OUTPUT_FAILED_CODE, 'ENOSPC'))).toBe('RUN_INCOMPLETE');
+  });
+
+  // An explicit `-o` already holding something VAT did not produce: refused before anything is written.
+  it('reads an occupied package output path as the invocation\'s USAGE_INVALID', () => {
+    expect(refusalCodeOf(new VatError(SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE, 'keep/ already exists'))).toBe('USAGE_INVALID');
+  });
+
+  // One unreadable file in a git repository refuses the whole snapshot: the input, never a VAT defect.
+  it('reads a git snapshot refused by an unreadable file as INPUT_UNREADABLE', () => {
+    expect(refusalCodeOf(new VatError(GIT_SNAPSHOT_UNREADABLE_CODE, 'secret.txt'))).toBe('INPUT_UNREADABLE');
   });
 
   it('reads a plugin symlink no bundle can ship as the input\'s refusal', () => {
@@ -110,6 +121,10 @@ describe('refusalCodeOf', () => {
 
   it('reads a RAG query over an index with nothing in it as INPUT_UNREADABLE, by the code rag-lancedb throws', () => {
     expect(refusalCodeOf(new VatError(RAG_INDEX_EMPTY_CODE, 'No data indexed yet'))).toBe('INPUT_UNREADABLE');
+  });
+
+  it('reads a RAG database whose table cannot be opened as INPUT_UNREADABLE, never a defect in VAT', () => {
+    expect(refusalCodeOf(new VatError(RAG_DATABASE_UNREADABLE_CODE, 'cannot be read'))).toBe('INPUT_UNREADABLE');
   });
 
   it('reads the coded config read failure as INPUT_UNREADABLE', () => {

@@ -87,6 +87,7 @@ import {
   gitLsOthers,
   gitTreeSnapshot,
   isGitIgnored,
+  unreadableSnapshotRefusal,
 } from '@vibe-agent-toolkit/utils/git';
 
 import type { PathShape } from './realizations.js';
@@ -624,7 +625,10 @@ export class GitCrawlSource implements CrawlSource {
   } {
     const snapshot = gitTreeSnapshot({ cwd: this.#root });
     if (snapshot === null) {
-      throw new Error(
+      // The common refusal inside a real repository: one file git could not read.
+      // It is the input's, and names the file; only a refusal with no such cause
+      // falls through to the uncoded error below.
+      throw unreadableSnapshotRefusal(this.#root) ?? new Error(
         `git did not answer for "${this.#root}" — it is not a git repository, or git could not read it.`
         + ' Returning an empty population would be indistinguishable from an empty repository, so this is an error.',
       );

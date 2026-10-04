@@ -4,8 +4,6 @@
  * Implements both RAGQueryProvider and RAGAdminProvider using LanceDB.
  */
 
-import fs from 'node:fs';
-
 import type { Connection, Table } from '@lancedb/lancedb';
 import * as lancedb from '@lancedb/lancedb';
 import type {
@@ -36,10 +34,11 @@ import {
   type ContentTransformOptions,
   type ResourceMetadata,
 } from '@vibe-agent-toolkit/resources';
-import { RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
+import { RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape } from 'zod';
 
 import { resolveChunkingConfig } from './chunking-config.js';
+import { DOCUMENTS_TABLE_NAME, removeRagDatabase, TABLE_NAME } from './database-directory.js';
 import { getDirectorySize } from './directory-size.js';
 import {
   createDocumentRecord,
@@ -174,9 +173,6 @@ function progressAfter(
 function arrowColumn(field: { name: string; type: { toString(): string } }): DocumentColumn {
   return { name: field.name, type: String(field.type) };
 }
-
-const TABLE_NAME = 'rag_chunks';
-const DOCUMENTS_TABLE_NAME = 'rag_documents';
 
 /**
  * What the documents table remembers about a resource, minus its content.
@@ -324,7 +320,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
 
     const tableNames = await listAllTableNames(connection);
     if (tableNames.includes(TABLE_NAME)) {
-      this.table = await connection.openTable(TABLE_NAME);
+      this.table = await this.openChunkTable(connection);
     } else {
       // Table doesn't exist
       // In admin mode: will be created on first insert
@@ -332,6 +328,28 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       this.table = null;
     }
     return connection;
+  }
+
+  /**
+   * Open the chunk table the listing says is there. A table LanceDB lists and
+   * cannot open has damaged files: the caller's store is unreadable, coded so,
+   * and `removeRagDatabase` can still remove it without opening it.
+   *
+   * @param connection - The connection whose listing holds the table
+   * @returns The opened table
+   * @throws {VatError} `RAG_DATABASE_UNREADABLE` when LanceDB cannot open it
+   */
+  private async openChunkTable(connection: Connection): Promise<Table> {
+    try {
+      return await connection.openTable(TABLE_NAME);
+    } catch (error) {
+      throw new VatError(
+        RAG_DATABASE_UNREADABLE_CODE,
+        `The '${TABLE_NAME}' table at ${this.config.dbPath} cannot be read (its files are damaged): ${error instanceof Error ? error.message : String(error)}. ` +
+          'Remove the database and index again.',
+        { cause: error },
+      );
+    }
   }
 
   /**
@@ -1003,6 +1021,9 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    *
    * Deletes all data and removes the database directory.
    * This is a destructive operation that cannot be undone.
+   *
+   * @throws {Error} When the directory holds anything a RAG database does not
+   *   (see `removeRagDatabase`); nothing is removed then
    */
   async clear(): Promise<void> {
     if (this.config.readonly) {
@@ -1012,10 +1033,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // Close connection first
     await this.close();
 
-    // Delete entire database directory
-    if (fs.existsSync(this.config.dbPath)) {
-      fs.rmSync(this.config.dbPath, { recursive: true, force: true });
-    }
+    // Delete the database directory — refused if it holds anything a database does not.
+    removeRagDatabase(this.config.dbPath);
   }
 
   /**

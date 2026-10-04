@@ -388,7 +388,9 @@ Exit Codes:
       unsupported --format value: Commander's message on stderr, no document),
       or refused: error.code USAGE_INVALID (a path outside the corpus root),
       BACKEND_UNAVAILABLE (the projection store's optional backend is not
-      installed), INPUT_UNREADABLE (a tree the OS will not read), or
+      installed), INPUT_UNREADABLE (a tree the OS will not read, including
+      one file in a git repository the OS will not let git read — the
+      message names it), or
       INTERNAL_ERROR (a VAT bug, e.g. a memory file reached with no derived
       harness facts — its stack goes to stderr)
 

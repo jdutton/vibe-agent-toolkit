@@ -1650,7 +1650,8 @@ Artifacts:
   it are removed.
 
   --out or --workdir spares only the harness ROOT: it is a location you own, so
-  vat never deletes it, and the staged (untrusted) skill bytes inside it stay
+  vat never deletes it (nor changes an existing --out's mode: it must already be
+  0700, or not exist yet), and the staged (untrusted) skill bytes inside it stay
   until you delete them yourself. It is NOT a blanket "keep everything". Three
   vat-owned directories live OUTSIDE that root -- the grader's output dir, the
   held eval suite, and the per-eval executor WORKSPACES (every eval's working
@@ -1701,11 +1702,15 @@ Exit Codes:
         preflight - the operator can fix it. BACKEND_UNAVAILABLE: no claude
                     binary, or one too old for a flag the spawn needs.
                     USAGE_INVALID: an invalid flag, an auth mismatch, the missing
-                    ack, an unsafe --workdir, a held harness lock, a skill name
-                    the config does not declare (or --no-build with no dist),
-                    a bad env token or test.build hook. RUN_INCOMPLETE: the
-                    packager refused the skill's content (with a
-                    SKILL_PACKAGING_FAILED finding). A build that threw keeps
+                    ack, an unsafe --workdir, an --out that exists and is not a
+                    0700 directory (VAT never changes its mode), a held harness
+                    lock, a skill name the config does not declare (or
+                    --no-build with no dist), a bad env token or test.build
+                    hook. RUN_INCOMPLETE: the packager refused the skill's
+                    content (with a SKILL_PACKAGING_FAILED finding), or the OS
+                    would not let the run write its output (the harness root,
+                    a dist bundle: a full disk, a read-only directory; no
+                    finding). A build that threw keeps
                     its cause's code; an uncoded one is INTERNAL_ERROR.
                     CONFIG_INVALID: a broken project config. INPUT_UNREADABLE: a
                     declared eval input or dependency absent, an evals.json that

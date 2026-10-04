@@ -102,7 +102,8 @@ Exit Codes (derived from the document):
       a run that validated no skill
   2 - status error: the run did not finish — USAGE_INVALID for a [path] that
       names no directory holding a config, an unknown --skill, or no project
-      root; INPUT_UNREADABLE for a directory the OS will not list;
+      root; INPUT_UNREADABLE for a directory the OS will not list, or a file
+      in the git repository the OS will not let git read (named);
       CONFIG_INVALID for a config that does not parse
 
 Requirements:

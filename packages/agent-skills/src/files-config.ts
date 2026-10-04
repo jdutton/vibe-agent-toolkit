@@ -529,33 +529,47 @@ export interface ApplyFilesConfigOptions {
  * missing dest. Intended to be called after a copy operation to assert the
  * copy was faithful. Exported so it can be tested directly without running a
  * full applyFilesConfig round-trip.
+ *
+ * The check reads BOTH trees, so each read is guarded as the side it touches: a
+ * source the OS will not read is the skill's refusal, a dest it will not stat or
+ * read is the output's. One guard over the whole pair coded a dest-side errno as
+ * the skill's, with a remedy pointing at the source.
+ *
+ * @param subject - The `files:` entry, phrased for the refusal's message
  */
-export function verifyFilesIntegrity(
+export async function verifyFilesIntegrity(
+  subject: string,
   pairs: { absSource: string; absDest: string }[],
-): void {
+): Promise<void> {
   for (const { absSource, absDest } of pairs) {
-    // `statSync` in a guard rather than `existsSync`, because `existsSync`
-    // answers FALSE for a file that is present but unreadable — so a permissions
-    // problem on the dest was reported as "dest file missing", sending the author
-    // to look for a file that is sitting right there. Only a real ENOENT is
-    // missing; anything else is the filesystem refusing the path, and is rethrown
-    // for the caller to attribute to the `files:` entry.
-    try {
-      statSync(absDest);
-    } catch (error) {
-      if ((error as { code?: string }).code !== 'ENOENT') throw error;
-      throw new Error(
-        `files: integrity check failed — dest file missing: ${toForwardSlash(absDest)}`,
-      );
-    }
-    const srcHash = fileContentHash(absSource);
-    const dstHash = fileContentHash(absDest);
+    const srcHash = await withFsAttribution(subject, 'source', async () => fileContentHash(absSource), 'read for verification');
+    const dstHash = await withFsAttribution(subject, 'bundle', async () => destContentHash(absDest), 'verified');
     if (srcHash !== dstHash) {
       throw new Error(
         `files: integrity check failed — content mismatch at dest: ${toForwardSlash(absDest)}`,
       );
     }
   }
+}
+
+/**
+ * The dest's content hash. `statSync` in a guard rather than `existsSync`,
+ * because `existsSync` answers FALSE for a file that is present but unreadable —
+ * so a permissions problem on the dest was reported as "dest file missing",
+ * sending the author to look for a file that is sitting right there. Only a real
+ * ENOENT is missing; anything else is the filesystem refusing the path, and is
+ * rethrown for the caller's guard to code.
+ */
+function destContentHash(absDest: string): string {
+  try {
+    statSync(absDest);
+  } catch (error) {
+    if ((error as { code?: string }).code !== 'ENOENT') throw error;
+    throw new Error(
+      `files: integrity check failed — dest file missing: ${toForwardSlash(absDest)}`,
+    );
+  }
+  return fileContentHash(absDest);
 }
 
 /**
@@ -1298,15 +1312,12 @@ async function runDeferredIntegrity(
   projectRoot: string,
 ): Promise<void> {
   for (const { entry, pairs, rels } of pending) {
-    // Through the same attribution point as the copy. `verifyFilesIntegrity`
-    // hashes both sides, so an unreadable source or dest surfaces here as a raw
-    // errno carrying an absolute path and no entry name — the same defect the
-    // copy loop had, in the one lane that had not been routed through the guard.
     // Anchored at the ENTRY, not at `pairs[0]`: any of the entry's files can be
     // the one that failed, and naming the first while the errno names another is
-    // worse than naming none. The errno itself carries the offending path.
-    await attributed(entry, safePath.resolve(safePath.join(projectRoot, entry.source)), projectRoot,
-      async () => { verifyFilesIntegrity(pairs); }, 'verified');
+    // worse than naming none. The errno itself carries the offending path, and
+    // each read is coded by the tree it touched (see `verifyFilesIntegrity`).
+    const subject = entrySubject(entry, safePath.resolve(safePath.join(projectRoot, entry.source)), projectRoot);
+    await verifyFilesIntegrity(subject, pairs);
     if (rels === undefined) continue;
 
     const destRoot = normalizeRelPath(entry.dest);
@@ -1315,10 +1326,13 @@ async function runDeferredIntegrity(
       const rel = relUnderDest(destRoot, dest);
       if (rel !== null && rel !== '') expected.add(rel);
     }
-    await verifyDestSet(
-      safePath.joinUnderRoot(skillOutputDir, entry.dest),
-      [...expected],
-      entry.source,
+    const destDir = safePath.joinUnderRoot(skillOutputDir, entry.dest);
+    // Lists the bundle the build just wrote: a refusal is the output's.
+    await withFsAttribution(
+      subject,
+      'bundle',
+      () => verifyDestSet(destDir, [...expected], entry.source),
+      'verified',
     );
   }
 }

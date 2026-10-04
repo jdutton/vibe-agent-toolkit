@@ -6,6 +6,7 @@ import * as fs from 'node:fs';
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
@@ -1243,6 +1244,30 @@ describe('validateSkillForPackaging - Files config validation', () => {
 });
 
 describe('validateSkillForPackaging - Link collection integration', () => {
+	// A bundled markdown file the OS will not read is the skill's source refusing,
+	// reported as a finding at that file — never an uncoded throw read as a defect in VAT.
+	it.skipIf(CANNOT_DENY_READS)('reports a bundled markdown file it cannot read as LINK_TARGET_UNREADABLE at that file', async () => {
+		const tempDir = getTempDir();
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			'\n# Test Skill\n\nSee [guide](./guide.md).',
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, { 'guide.md': '# Guide\n\nText.' }, skillContent);
+		const guide = safePath.join(tempDir, 'guide.md');
+		fs.chmodSync(guide, 0o000);
+
+		try {
+			const result = await validateSkillForPackaging(skillPath, {} as never);
+
+			const unreadable = activeErrorsOf(result).filter((issue: ValidationIssue) => issue.code === 'LINK_TARGET_UNREADABLE');
+			expect(unreadable, JSON.stringify(result.allErrors)).toHaveLength(1);
+			expect(unreadable[0]?.location).toMatch(/guide\.md$/);
+			expect(unreadable[0]?.message).toContain('could not be read');
+		} finally {
+			fs.chmodSync(guide, 0o644);
+		}
+	});
+
 	it('should limit bundled files to depth 1 when linkFollowDepth is 1', async () => {
 		const { skillPath } = createThreeLevelChain(getTempDir());
 

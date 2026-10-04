@@ -164,6 +164,20 @@ describe('extractClaudeInstallInventory', () => {
 			expect(await refusedCacheLevel(tempDir, 'refused-plugin', ['mp', 'plugin'])).toEqual([expect.stringContaining('EACCES')]);
 		});
 
+		// installPlugin stages and parks under dot-names beside the version it replaces; one a
+		// crash or a failed cleanup leaves behind must not read as a second installed version.
+		it('reads no dot-named directory beside the versions as an installed version', async () => {
+			const claudeDir = safePath.join(tempDir, 'dot-named-leftover', '.claude');
+			const pluginCache = safePath.join(claudeDir, 'plugins', 'cache', 'mp', 'plugin');
+			mkdirSyncReal(safePath.join(pluginCache, '1.0.0'), { recursive: true });
+			mkdirSyncReal(safePath.join(pluginCache, '.1.0.0.vat-staged-AbC123.previous'), { recursive: true });
+
+			const inv = await extractClaudeInstallInventory({ pathsOrRoot: claudeDir, gitTrackerSource: NO_GIT_TRACKER });
+
+			expect(inv.parseErrors).toEqual([]);
+			expect(inv.plugins).toHaveLength(1);
+		});
+
 		it('walks valid cache structure with empty marketplace and plugin dirs', async () => {
 			const claudeDir = safePath.join(tempDir, 'empty-cache-dirs', '.claude');
 			const cacheDir = safePath.join(claudeDir, 'plugins', 'cache');

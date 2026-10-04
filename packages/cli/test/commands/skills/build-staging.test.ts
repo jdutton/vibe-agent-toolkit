@@ -226,6 +226,20 @@ describe('runSkillBuild - dist/skills is replaced only by a build that succeeded
     await expect(distEntries(cwd)).resolves.toEqual(['skills']);
   });
 
+  // A staging root from `mkdtemp` is 0700, and a full build promotes the root
+  // itself: `dist/skills` must get the mode any directory the build makes gets.
+  it.skipIf(process.platform === 'win32')('promotes dist/skills with the ordinary directory mode, not a temp dir\'s 0700', async () => {
+    const cwd = createTempDir();
+    const probe = safePath.join(cwd, 'mode-probe');
+    await mkdir(probe);
+    const ordinary = statSync(probe).mode & 0o777;
+
+    const run = await build(cwd, [['good', CLEAN_BODY]]);
+
+    expect(run.outputCommitted).toBe(true);
+    expect((statSync(safePath.join(cwd, 'dist', 'skills')).mode & 0o777).toString(8)).toBe(ordinary.toString(8));
+  });
+
   it('reports the FINAL output path, never the path it staged through', async () => {
     const cwd = createTempDir();
     const run = await build(cwd, [['good', CLEAN_BODY]]);

@@ -80,6 +80,7 @@ export type {
 export {
   CLAUDE_USER_STATE_UNREADABLE_CODE,
   CLAUDE_USER_STATE_WRITE_FAILED_CODE,
+  PLUGIN_KEY_INVALID_CODE,
   PLUGIN_SOURCE_UNREADABLE_CODE,
   codedUserStateWrite,
   installPlugin,
@@ -94,7 +95,7 @@ export type {
   UninstallPluginOptions,
   UninstallPluginResult,
 } from './install/plugin-uninstall.js';
-export { findPluginsByPackage, parsePluginKey, PLUGIN_KEY_INVALID_CODE, uninstallPlugin } from './install/plugin-uninstall.js';
+export { findPluginsByPackage, parsePluginKey, uninstallPlugin } from './install/plugin-uninstall.js';
 
 // Plugin list
 export type {

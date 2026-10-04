@@ -163,7 +163,7 @@ The suite is never copied into anything the executor can reach. Each eval's decl
 | `--refresh` | Force a full re-stage, ignoring existing staged content. |
 | `--keep` | Keep the harness directory after the run (needed to inspect `results/`). |
 | `--dry-run` | Build and stage exactly as a real run would, then stop without spawning Claude — no session, no tokens. It **does build** (when `--i-understand-this-runs-skill-code` is passed), because the question a dry run answers is "what happens if I drop this flag", and a preview built from a stale `dist/` answers it wrongly. **Without** the acknowledgement it does not build — building runs the repo's `test.build` hook, an arbitrary shell command — so it falls back to an existing `dist/` and warns it may be stale. `--no-build` skips the build either way. |
-| `--out <dir>` / `--workdir <dir>` | Override the harness output / working directory. |
+| `--out <dir>` / `--workdir <dir>` | Override the harness output / working directory. An existing `--out` must already be a `0700` directory: VAT creates a new one `0700`, and never changes the mode of one you made. |
 | `--allow-eval-failure` | Opt out of fail-closed: each failed eval is published as a `warning` finding instead of an `error`, so the run exits `0`. For interactive iteration. |
 | `--allow-unverified-skill-source` | Skip the vendored manifest integrity check. |
 | `--debug` | Enable debug logging. |
@@ -208,11 +208,11 @@ that could not run.
 | `error.code` | `Reason:` | When |
 |---|---|---|
 | `BACKEND_UNAVAILABLE` | `preflight` | No `claude` binary on `PATH`, or one too old for a flag the spawn needs |
-| `USAGE_INVALID` | `preflight` | An invalid flag value, an auth guard the credentials do not meet, the missing security ack, an unsafe `--workdir`, a held harness lock, a skill name the config does not declare (or `--no-build` with no dist), a bad `env` token, a failing `test.build` hook, a repeated staged name |
+| `USAGE_INVALID` | `preflight` | An invalid flag value, an auth guard the credentials do not meet, the missing security ack, an unsafe `--workdir`, an `--out` that exists and is not a `0700` directory (VAT never changes its mode — `chmod 700` it, or name one that does not exist yet), a held harness lock, a skill name the config does not declare (or `--no-build` with no dist), a bad `env` token, a failing `test.build` hook, a repeated staged name |
 | `CONFIG_INVALID` | `preflight` | The governing `vibe-agent-toolkit.config.yaml` does not parse or fails its schema (subject's or a companion's) |
 | `INPUT_UNREADABLE` | `preflight` | A declared eval input or dependency is absent, the `evals.json` is not a valid suite, the vendored copy fails its manifest, a config or directory the OS will not read |
 | `INPUT_UNREADABLE` | `bootstrap` | `evals.json` was absent, so VAT wrote a starter template next to the skill source; fill it in and re-run |
-| `RUN_INCOMPLETE` | `preflight` | The packager refused the subject's (or a required companion's) own content — a `files:` source absent, a `SKILL.md` bundled as a resource. A `SKILL_PACKAGING_FAILED` finding at the skill's `SKILL.md` says what to change |
+| `RUN_INCOMPLETE` | `preflight` | The packager refused the subject's (or a required companion's) own content — a `files:` source absent, a `SKILL.md` bundled as a resource. A `SKILL_PACKAGING_FAILED` finding at the skill's `SKILL.md` says what to change. Also, with no finding: an output the OS will not let the run write — the harness root (`--out` under a read-only directory), a dist bundle, a full disk |
 | `INTERNAL_ERROR` | `internal` | The harness broke (executor/grader crash, stall, timeout, grader nonce or skew failure); the stack is on stderr |
 
 ```bash

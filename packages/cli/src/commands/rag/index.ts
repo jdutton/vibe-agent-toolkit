@@ -139,7 +139,9 @@ Exit Codes:
   0 - Searched
   2 - Could not run (error.code: INPUT_UNREADABLE when nothing is indexed yet
       or the database cannot be read, USAGE_INVALID with no --db and no
-      project or a --db that names no database, BACKEND_UNAVAILABLE)
+      project or a --db that is not a RAG database — nothing there, a file,
+      or a directory holding anything but the tables vat rag index writes —
+      BACKEND_UNAVAILABLE)
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)
@@ -179,9 +181,10 @@ Output:
 Exit Codes:
   0 - Reported (an existing database holding nothing reports zeros)
   2 - Could not run (error.code: USAGE_INVALID with no --db and no project or
-      a --db that names no database, INPUT_UNREADABLE when the project has no
-      database yet or it cannot be read, BACKEND_UNAVAILABLE). Never creates
-      the database.
+      a --db that is not a RAG database — nothing there, a file, or a
+      directory holding anything but the tables vat rag index writes —
+      INPUT_UNREADABLE when the project has no database yet or it cannot be
+      read, BACKEND_UNAVAILABLE). Never creates the database.
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)
@@ -213,15 +216,22 @@ Warning:
   This operation cannot be undone. The database directory will be
   permanently deleted. Re-run 'vat rag index' to rebuild from source.
 
+  Only a RAG database is removed: a directory holding nothing but the tables
+  vat rag index writes. It is removed without being opened, so a database
+  whose files are damaged can still be cleared. Any other directory is
+  refused and left untouched.
+
 Output:
   A YAML report on stdout (status ok, or error); examined is 1, the database
-  opened. Its data is { cleared: true }.
+  removed. Its data is { cleared: true }.
 
 Exit Codes:
   0 - Cleared
   2 - Could not run (error.code: USAGE_INVALID with no --db and no project or
-      a --db that names no database, INPUT_UNREADABLE when the project has no
-      database yet or it cannot be read, BACKEND_UNAVAILABLE)
+      a --db that is not a RAG database — nothing there, a file, or a
+      directory holding anything but the tables vat rag index writes —
+      INPUT_UNREADABLE when the project has no database yet or it cannot be
+      listed, BACKEND_UNAVAILABLE)
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)

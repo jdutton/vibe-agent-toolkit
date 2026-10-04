@@ -7,8 +7,9 @@
  * validates, and packages into dist/skills/<name>/.
  */
 
+import { randomBytes } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
-import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
+import { mkdir, rename, rm } from 'node:fs/promises';
 
 import {
   conventionalSuiteProbe,
@@ -182,9 +183,12 @@ Exit Codes:
   2 - The build could not run (error.code): USAGE_INVALID (a [path] naming no
       directory or none holding a config, an unknown --skill, no project
       root), INPUT_UNREADABLE (a [path], directory or previous dist/skills the
-      OS will not read), CONFIG_INVALID, or RUN_INCOMPLETE (the staging area
-      under dist/ could not be opened, or the promotion of dist/skills failed —
-      the report then still carries the findings and data.promotionError).
+      OS will not read, or a file in the git repository the OS will not let
+      git read — named in the message), CONFIG_INVALID, or RUN_INCOMPLETE (an
+      output the OS will not let the build write: the staging area under
+      dist/ could not be opened, a bundle could not be written, or the
+      promotion of dist/skills failed — the report then still carries the
+      skills examined, the findings and data.promotionError).
       Any other throw from the packager stops the run under its own code
       (INPUT_UNREADABLE for a directory the OS will not list); one that
       carries no code is a defect in VAT (INTERNAL_ERROR). Either way
@@ -621,7 +625,7 @@ function replacePathPrefix(value: string, from: string, to: string): string | un
  * on — the ONE re-anchoring, applied to every path a result publishes.
  *
  * Staging is transient in BOTH outcomes: `dist/.vat-skills-<rand>` is renamed
- * away on success and deleted on failure, and the `mkdtemp` suffix means a
+ * away on success and deleted on failure, and the random suffix means a
  * reader cannot even reconstruct it. Any path that escapes this mapping is
  * therefore unopenable by the time anyone reads it — which is what the published
  * `outputPath` was fixed for, while the per-finding `location` strings kept
@@ -728,7 +732,7 @@ export interface BuildStaging {
    * Where the previous output is held while the run is in flight.
    *
    * Published so a failure on the promotion path can NAME it. It is a
-   * `mkdtemp`-suffixed sibling, so a reader who is not told the path cannot
+   * random-suffixed sibling, so a reader who is not told the path cannot
    * reconstruct it — which is the difference between "recover with one `mv`" and
    * "your previous output is gone".
    */
@@ -797,7 +801,7 @@ export interface StagingResidue {
  *    delete-up-front flow guaranteed — so no lane can read a half-replaced
  *    `dist/skills`, and a stale bundle cannot leak into the new output.
  *
- * `mkdtemp` rather than a fixed name: two builds in one `dist/` must not share a
+ * A random suffix rather than a fixed name: two builds in one `dist/` must not share a
  * staging root, and a leftover root from a killed run must not be adopted.
  *
  * KNOWN WINDOW, deliberately not closed here: a run killed between the park and
@@ -806,7 +810,7 @@ export interface StagingResidue {
  * `dist/.vat-skills-<rand>.previous`. That is no worse than the delete-up-front
  * flow this replaces — there, the same interrupt lost the tree outright — and the
  * output is recoverable with a single `mv`. Auto-recovering it on the next run is
- * NOT safe as long as `mkdtemp` allows concurrent builds in one `dist/`: a sweep
+ * NOT safe as long as the suffix allows concurrent builds in one `dist/`: a sweep
  * cannot tell a dead run's parked tree from a live run's, and adopting the wrong
  * one would restore stale bundles over fresh output. Closing this needs a lock on
  * `dist/`, not a heuristic.
@@ -840,9 +844,12 @@ export async function beginStagedBuild(
   // Asked before anything is created, so a refusal leaves the disk as it was.
   const hadPreviousOutput = outputExists(promoteTo);
   await stagingWrite(`create ${distDir}`, () => mkdir(distDir, { recursive: true }), undefined);
-  const root = toForwardSlash(
-    await stagingWrite(`create a staging directory under ${distDir}`, () => mkdtemp(safePath.join(distDir, '.vat-skills-')), undefined),
-  );
+  // A random suffix and a NON-recursive `mkdir`, not `mkdtemp`: the name is as
+  // unique (a collision is `EEXIST`, never a shared root), and the directory gets
+  // the mode every other directory the build makes gets. `mkdtemp` makes it 0700,
+  // and a full build promotes this root AS `dist/skills`.
+  const root = toForwardSlash(safePath.join(distDir, `.vat-skills-${randomBytes(6).toString('hex')}`));
+  await stagingWrite(`create a staging directory under ${distDir}`, () => mkdir(root), undefined);
   const promoteFrom = subPath === undefined ? root : safePath.join(root, subPath);
   const parked = `${root}.previous`;
 
@@ -970,7 +977,7 @@ async function removalFailure(path: string): Promise<string> {
  * promotion `rename`, the restore `rename`, either cleanup — propagated to
  * `buildCommand`'s catch, which exits 2 WITHOUT emitting the YAML document. The
  * measured result: `dist/skills` absent, the user's previous output orphaned at
- * `dist/.vat-skills-<rand>.previous` under a name the `mkdtemp` suffix makes
+ * `dist/.vat-skills-<rand>.previous` under a name the random suffix makes
  * unguessable, and not one byte of the report whose `outputCommitted` field
  * `--help` tells an operator to read when they see a non-zero exit.
  *
@@ -1586,6 +1593,10 @@ export async function runSkillsBuildPhase(
   options: SkillsBuildCommandOptions,
 ): Promise<PhaseOutcome> {
   const { logger, cwd, startTime } = setupCommandContext(pathArg, options.debug);
+  // What a refusal carries: nothing until discovery has run, then the skills it
+  // found — a staging refusal comes AFTER "Found N skill(s)", and `examined: 0`
+  // there contradicted the line the operator just read.
+  let finished: FinishedWork = NOTHING_FINISHED;
 
   try {
     // A `[path]` naming no directory, or none holding a config, is the
@@ -1595,6 +1606,9 @@ export async function runSkillsBuildPhase(
     const prepared = await prepareBuild(cwd, options, logger, startTime);
     if (prepared.kind === 'done') return prepared;
     const { buildSpecs, setAside, projectSkills } = prepared;
+    finished = skillsBuildWork({
+      cwd, skills: buildSpecs.map((spec) => spec.skill), setAside, dryRun: false, run: undefined, setAsideIssues: [],
+    });
 
     const run = await runSkillBuild({
       specs: buildSpecs,
@@ -1623,7 +1637,7 @@ export async function runSkillsBuildPhase(
     }
     return { report: buildReport({ ...work, gate: GATE, durationMs: Date.now() - startTime }) };
   } catch (error) {
-    return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED) };
+    return { report: refusalReport(refusalCodeOf(error), error, GATE, finished) };
   }
 }
 

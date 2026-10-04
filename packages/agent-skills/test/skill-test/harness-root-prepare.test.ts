@@ -31,13 +31,13 @@ describe('prepareHarnessRoot', () => {
   it('does nothing when the path does not yet exist', () => {
     const dir = safePath.join(tmpBase, 'nonexistent');
     // Should not throw — caller will create it later.
-    expect(() => prepareHarnessRoot(dir)).not.toThrow();
+    expect(() => prepareHarnessRoot(dir, 'vat')).not.toThrow();
   });
 
   it('does not throw when an existing directory is already 0700', () => {
     const dir = safePath.join(tmpBase, 'good');
     mkdirSyncReal(dir, { mode: 0o700 });
-    expect(() => prepareHarnessRoot(dir)).not.toThrow();
+    expect(() => prepareHarnessRoot(dir, 'vat')).not.toThrow();
     if (process.platform !== 'win32') {
       expect(statSync(dir).mode & 0o777).toBe(0o700);
     }
@@ -52,7 +52,7 @@ describe('prepareHarnessRoot', () => {
       // Confirm starting mode
       expect(statSync(dir).mode & 0o777).toBe(0o755);
 
-      expect(() => prepareHarnessRoot(dir)).not.toThrow();
+      expect(() => prepareHarnessRoot(dir, 'vat')).not.toThrow();
 
       expect(statSync(dir).mode & 0o777).toBe(0o700);
     },
@@ -61,7 +61,32 @@ describe('prepareHarnessRoot', () => {
   it('still throws HarnessLocationError when the path is a symlink', ({ skip }) => {
     const cap = symlinkCapability() ?? skip();
     const { link } = createSymlinkedDir(tmpBase, cap);
-    expect(() => prepareHarnessRoot(link)).toThrow(HarnessLocationError);
+    expect(() => prepareHarnessRoot(link, 'vat')).toThrow(HarnessLocationError);
+  });
+
+  // `--out` names a directory the OPERATOR owns. Re-moding it is never VAT's to do:
+  // 0555 → 0700 ADDS owner write, which also defeated the unwritable-output refusal.
+  it.each([{ mode: 0o555, label: '0555' }, { mode: 0o755, label: '0755' }])(
+    'never changes the mode of an operator-supplied directory ($label)',
+    { skip: process.platform === 'win32' },
+    ({ mode }) => {
+      const dir = safePath.join(tmpBase, `operator-${mode.toString(8)}`);
+      mkdirSyncReal(dir, { mode: 0o755 });
+      chmodSync(dir, mode);
+
+      try {
+        expect(() => prepareHarnessRoot(dir, 'operator')).not.toThrow();
+        expect(statSync(dir).mode & 0o777).toBe(mode);
+      } finally {
+        chmodSync(dir, 0o755);
+      }
+    },
+  );
+
+  it('still refuses an operator-supplied symlink', ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const { link } = createSymlinkedDir(tmpBase, cap);
+    expect(() => prepareHarnessRoot(link, 'operator')).toThrow(HarnessLocationError);
   });
 
   it(
@@ -74,7 +99,7 @@ describe('prepareHarnessRoot', () => {
       chmodSync(dir, 0o644);
       expect(statSync(dir).mode & 0o777).toBe(0o644);
 
-      expect(() => prepareHarnessRoot(dir)).not.toThrow();
+      expect(() => prepareHarnessRoot(dir, 'vat')).not.toThrow();
 
       expect(statSync(dir).mode & 0o777).toBe(0o700);
     },

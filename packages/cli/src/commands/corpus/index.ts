@@ -14,7 +14,7 @@ export function createCorpusCommand(): Command {
     .helpCommand(false);
 
   corpus
-    .command('scan [seed-file]')
+    .command('scan')
     .description('Audit each plugin in the seed; write a per-run snapshot under --out')
     .argument('[seed-file]', 'Path to seed YAML (default: corpus/seed.yaml)')
     .requiredOption('--out <dir>', 'Output directory for the run snapshot (no default — must be specified)')

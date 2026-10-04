@@ -178,7 +178,7 @@ async function registerPlugin(
   paths: ReturnType<typeof getClaudeUserPaths>,
   logger: Logger,
 ): Promise<void> {
-  await installPlugin({
+  const { warnings } = await installPlugin({
     marketplaceName: ctx.mpName,
     pluginName: ctx.pluginName,
     pluginDir: ctx.pluginDir,
@@ -187,6 +187,7 @@ async function registerPlugin(
     paths,
   });
   logger.info(`   Registered plugin ${ctx.pluginName}@${ctx.mpName} in Claude plugin registry`);
+  for (const warning of warnings) logger.warn(`   ${warning}`);
 }
 
 /**

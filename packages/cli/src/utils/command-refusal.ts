@@ -24,6 +24,7 @@ import {
   AGENT_SOURCE_UNREADABLE_CODE,
   GIT_SUBPATH_INVALID_CODE,
   SKILL_PACKAGING_OUTPUT_FAILED_CODE,
+  SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE,
   SKILL_TEST_REFUSAL_BY_ERROR_CODE,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
@@ -48,9 +49,11 @@ import {
   DIRECTORY_LISTING_REFUSED_CODE,
   DIRECTORY_WALK_REVISITED_CODE,
   isVatError,
+  RAG_DATABASE_UNREADABLE_CODE,
   RAG_INDEX_EMPTY_CODE,
   VatError,
 } from '@vibe-agent-toolkit/utils';
+import { GIT_SNAPSHOT_UNREADABLE_CODE } from '@vibe-agent-toolkit/utils/git';
 import { YAML_EDIT_INPUT_REFUSED_CODE } from '@vibe-agent-toolkit/utils/yaml';
 
 import { AGENT_NAME_ESCAPES_SCOPE_CODE } from '../commands/agent/install-path.js';
@@ -115,6 +118,10 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   // A skill build whose OUTPUT the OS would not let it write (full disk, read-only or unwritable directory):
   // the run stopped, and nothing about the skill is wrong — so never the `SKILL_PACKAGING_FAILED` finding.
   [SKILL_PACKAGING_OUTPUT_FAILED_CODE]: 'RUN_INCOMPLETE',
+  // An explicit package output path already holding something VAT did not produce: refused, never deleted.
+  [SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE]: 'USAGE_INVALID',
+  // A git snapshot refused because a file in the repository is unreadable: the input, named, not VAT.
+  [GIT_SNAPSHOT_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
   // An org command run without the key its endpoint authenticates with: nothing was sent.
   [ORG_API_KEY_MISSING_CODE]: 'USAGE_INVALID',
   // The Anthropic API answered with a non-success status (`ApiRequestError`)…
@@ -124,6 +131,8 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   // `vat rag query` over an index with no chunk table (rag-lancedb's query): nothing to search.
   // The constant lives in utils so this map need not load the optional backend that throws it.
   [RAG_INDEX_EMPTY_CODE]: 'INPUT_UNREADABLE',
+  // A RAG database whose chunk table LanceDB lists and cannot open: its files are damaged.
+  [RAG_DATABASE_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
   // `vat skill test run`: why the harness could not run, decided beside its error classes.
   ...SKILL_TEST_REFUSAL_BY_ERROR_CODE,
 };

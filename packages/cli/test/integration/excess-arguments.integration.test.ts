@@ -133,6 +133,18 @@ describe('every vat verb refuses an excess positional argument', () => {
     expect(variadic.toSorted((a, b) => a.localeCompare(b))).toEqual(VARIADIC_LEAVES);
   });
 
+  // The leaf test above fills EVERY registered argument before the extra one, so it
+  // proves "N+1 is too many", never "the action consumes N". A command that declares
+  // one argument twice (`.command('scan [seed-file]')` and `.argument('[seed-file]')`)
+  // registers two, reads one, and silently eats the second operand.
+  it('registers no argument name twice on any command', () => {
+    const repeated = nodes.flatMap((node) => {
+      const names = node.command.registeredArguments.map((argument) => argument.name());
+      return names.filter((name, index) => names.indexOf(name) !== index).map((name) => `${node.path.join(' ')} <${name}>`);
+    });
+    expect(repeated).toEqual([]);
+  });
+
   it('leaves build, validate and verify to refuse operands with their own message', async () => {
     for (const name of HAND_REFUSING) {
       const ending = await parseEnding(root, [name, EXTRA]);

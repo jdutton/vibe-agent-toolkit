@@ -9,8 +9,8 @@ import { isVatError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { refuseSyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
-import { CLAUDE_USER_STATE_WRITE_FAILED_CODE } from '../../src/install/plugin-registry.js';
-import { findPluginsByPackage, parsePluginKey, PLUGIN_KEY_INVALID_CODE, uninstallPlugin } from '../../src/install/plugin-uninstall.js';
+import { CLAUDE_USER_STATE_WRITE_FAILED_CODE, PLUGIN_KEY_INVALID_CODE } from '../../src/install/plugin-registry.js';
+import { findPluginsByPackage, parsePluginKey, uninstallPlugin } from '../../src/install/plugin-uninstall.js';
 import type { ClaudeUserPaths } from '../../src/paths/claude-paths.js';
 import { setupPluginTestPaths } from '../test-helpers.js';
 
@@ -134,12 +134,32 @@ describe('uninstallPlugin', () => {
   });
 });
 
+describe('uninstallPlugin with a key that is not two path segments', () => {
+  const { getPaths } = setupPluginTestPaths();
+
+  it('refuses before removing anything outside the Claude config dir', async () => {
+    const paths = getPaths();
+    // marketplaces/../../../victim — a sibling of the Claude config dir's plugins tree.
+    const victim = safePath.join(paths.marketplacesDir, 'x', 'plugins', '..', '..', '..', 'victim');
+    mkdirSyncReal(victim, { recursive: true });
+    writeFileSync(safePath.join(victim, 'data.txt'), 'precious');
+
+    await expect(uninstallPlugin({ pluginKey: '../../../victim@x', paths })).rejects.toMatchObject({ code: PLUGIN_KEY_INVALID_CODE });
+    expect(readFileSync(safePath.join(victim, 'data.txt'), 'utf8')).toBe('precious');
+  });
+});
+
 describe('parsePluginKey', () => {
-  it('splits at the LAST @, so a scoped plugin name keeps its own', () => {
-    expect(parsePluginKey('@scope/p@mp')).toStrictEqual({ pluginName: '@scope/p', marketplace: 'mp' });
+  it('splits at the LAST @, so a plugin name keeps its own', () => {
+    expect(parsePluginKey('a@b@mp')).toStrictEqual({ pluginName: 'a@b', marketplace: 'mp' });
   });
 
-  it.each(['no-marketplace', '@mp', 'p@'])('refuses %s with PLUGIN_KEY_INVALID', (key) => {
+  // Each half is joined into ~/.claude and removed recursively: `../../../../../victim@x`
+  // used to resolve outside the Claude config dir and be deleted as an "orphan".
+  it.each([
+    'no-marketplace', '@mp', 'p@',
+    '../../../../../victim@x', '..@x', '.@x', 'p@..', 'p@.', 'a/b@mp', String.raw`a\b@mp`, 'p@m/n', '/abs@mp', 'C:evil@mp', '@scope/p@mp',
+  ])('refuses %s with PLUGIN_KEY_INVALID', (key) => {
     let thrown: unknown;
     try {
       parsePluginKey(key);

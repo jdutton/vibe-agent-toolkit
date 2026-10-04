@@ -302,9 +302,11 @@ skills }, externalPlugins[] }`). Paths are relative to the directory holding
   `reason` names it), or no marketplace is configured
 - `2` - The build could not run: an undeclared `--marketplace` (`USAGE_INVALID`),
   a missing config or an invalid plugin declaration (`CONFIG_INVALID`), an input
-  nothing built or that is not what it should be (`INPUT_UNREADABLE`), or the packager
+  nothing built or that is not what it should be (`INPUT_UNREADABLE`), the packager
   refusing a plugin-local skill's content, such as a skill `files:` source that does
-  not exist (`RUN_INCOMPLETE`, with a `SKILL_PACKAGING_FAILED` finding at the skill)
+  not exist (`RUN_INCOMPLETE`, with a `SKILL_PACKAGING_FAILED` finding at the skill), or
+  an output the OS will not let the build write — a full disk, a read-only `dist/`
+  (`RUN_INCOMPLETE`, no finding)
 
 **Examples:**
 

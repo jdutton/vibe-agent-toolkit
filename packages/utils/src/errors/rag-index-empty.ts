@@ -7,3 +7,10 @@
  * One constant, imported on both sides, so the thrower and the map cannot drift.
  */
 export const RAG_INDEX_EMPTY_CODE = 'RAG_INDEX_EMPTY';
+
+/**
+ * The `VatError` code for a RAG database whose table LanceDB cannot open — its
+ * files are damaged or truncated. The store is the caller's input, unreadable;
+ * kept here for the same reason as {@link RAG_INDEX_EMPTY_CODE}.
+ */
+export const RAG_DATABASE_UNREADABLE_CODE = 'RAG_DATABASE_UNREADABLE';

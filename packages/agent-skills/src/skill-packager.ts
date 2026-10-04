@@ -15,7 +15,7 @@
  * for link resolution and rewriting (replacing the previous inline regex approach).
  */
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, statSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
@@ -50,6 +50,7 @@ import {
 import {
   direntKindFollowingSync,
   findProjectRoot,
+  isFilesystemAccessError,
   isGlob,
   isSingleFsSegment,
   issueLocation,
@@ -76,7 +77,7 @@ import {
 } from './files-config.js';
 import { copyIntoBundle, withFsAttribution } from './fs-attribution.js';
 import { LINK_GRAPH_MEMBER_GLOBS } from './link-graph-members.js';
-import { packagingInputError, SKILL_NAME_NOT_A_SEGMENT_CODE } from './packaging-errors.js';
+import { packagingInputError, SKILL_NAME_NOT_A_SEGMENT_CODE, SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE } from './packaging-errors.js';
 import { checkBrokenPackagedLinks, checkMissingReferencedPaths, checkUnreferencedFiles } from './post-build-checks.js';
 import {
   checkPackagedTestInput,
@@ -180,6 +181,17 @@ export interface PackageSkillOptions {
    * Default: <skill-package-root>/dist/skills/<skill-name>
    */
   outputPath?: string;
+
+  /**
+   * Whether the caller owns `outputPath` — a build directory VAT manages, such
+   * as `dist/skills/<name>` — so whatever is there is a previous build, and is
+   * replaced. Default `false`: an explicit `outputPath` that already holds
+   * anything (a non-empty directory, a file, the archive a requested format
+   * writes beside it) is refused with {@link SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE}
+   * and left exactly as it was. The default location (no `outputPath`) is VAT's,
+   * and is always replaced.
+   */
+  replaceExistingOutput?: boolean;
 
   /**
    * Package format(s) to generate
@@ -346,6 +358,10 @@ export function packagingConfigToPackageOptions(
 ): PackageSkillOptions {
   return {
     outputPath: anchors.outputPath,
+    // Every lane converting through here builds into a directory VAT manages —
+    // `dist/skills/<name>`, its staging root, a marketplace tree it rebuilds — so
+    // what is there is a previous build of this skill, and is replaced.
+    replaceExistingOutput: true,
     formats: ['directory'],
     rewriteLinks: true,
     basePath: dirname(anchors.skillPath),
@@ -687,11 +703,18 @@ export async function packageSkill(
   const outputPath = options.outputPath ??
     getDefaultSkillOutputPath(skillPath, skillMetadata.name);
 
-  // 7. Clean stale output (skip when source SKILL.md lives inside the output, e.g. builder flow)
+  // 7. Clear the way for the output (skip when source SKILL.md lives inside the
+  // output, e.g. builder flow). Only a location the caller owns is emptied; an
+  // explicit path holding anything else is refused, never deleted.
   const resolvedOutput = safePath.resolve(outputPath);
   const sourceInOutput = safePath.resolve(skillPath).startsWith(resolvedOutput + '/');
-  if (!sourceInOutput && existsSync(resolvedOutput)) {
-    await rm(resolvedOutput, { recursive: true });
+  if (!sourceInOutput) {
+    await clearOutputPath({
+      outputPath: resolvedOutput,
+      owned: options.outputPath === undefined || options.replaceExistingOutput === true,
+      siblings: artifactSiblingPaths(resolvedOutput, skillMetadata.name, options.formats ?? ['directory']),
+      subject: `skill '${skillMetadata.name}' output ${issueLocation(outputPath, projectRoot) || '.'}`,
+    });
   }
 
   // 8. Build path map for file copying and link rewriting
@@ -2144,7 +2167,7 @@ async function copyAndRewriteFile(
   );
   const writeIntoBundle = (text: string): Promise<void> => withFsAttribution(
     subject,
-    'output',
+    'bundle',
     async () => {
       await mkdir(dirname(targetPath), { recursive: true });
       await writeFile(targetPath, text, 'utf-8');
@@ -2604,6 +2627,10 @@ async function generatePackageArtifacts(
  * Uses adm-zip for fast, cross-platform ZIP creation.
  * ZIP format preferred over TAR for Windows compatibility.
  *
+ * The archive is built in memory and written with our own `writeFile`: adm-zip's
+ * `writeZip` swallows the write's errno (without a callback it reports nothing at
+ * all), so a ZIP the OS refused was announced as written.
+ *
  * @param sourceDir - Directory to archive
  * @param zipPath - Output ZIP file path
  */
@@ -2616,8 +2643,80 @@ async function createZipArchive(sourceDir: string, zipPath: string): Promise<voi
   // Add directory contents to ZIP
   zip.addLocalFolder(sourceDir);
 
-  // Write ZIP file
-  zip.writeZip(zipPath);
+  await withFsAttribution(`ZIP archive ${zipPath}`, 'output', () => writeFile(zipPath, zip.toBuffer()), 'written');
+}
+
+/**
+ * The files a package writes BESIDE its output directory, for the formats asked
+ * for: the ZIP (`<output>.zip`) and the marketplace manifest. They are output
+ * too, and the same ownership rule covers them.
+ */
+function artifactSiblingPaths(outputPath: string, skillName: string, formats: readonly string[]): string[] {
+  const siblings: string[] = [];
+  if (formats.includes('zip')) siblings.push(`${outputPath}.zip`);
+  if (formats.includes('marketplace')) siblings.push(safePath.join(dirname(outputPath), `${skillName}.marketplace.json`));
+  return siblings;
+}
+
+/**
+ * Make the output path ready to receive this package, never at the cost of
+ * something the packager did not produce.
+ *
+ * An OWNED location (the default `dist/skills/<name>`, or a caller that says it
+ * manages the path) holds a previous build, and is removed — a refusal of that
+ * removal is the run not finishing. Anything else must be absent, or an empty
+ * directory: a non-empty directory, a file, or an archive in a sibling's place is
+ * refused BEFORE anything is written, naming the path and the fix. That used to
+ * be an `rm -rf` of whatever `--output` named, with exit 0.
+ */
+async function clearOutputPath(target: {
+  outputPath: string;
+  owned: boolean;
+  siblings: readonly string[];
+  subject: string;
+}): Promise<void> {
+  const { outputPath, owned, siblings, subject } = target;
+  if (owned) {
+    await withFsAttribution(subject, 'output', () => rm(outputPath, { recursive: true, force: true }), 'removed');
+    return;
+  }
+  const occupied = [
+    ...(isOccupied(outputPath, true) ? [outputPath] : []),
+    ...siblings.filter((sibling) => isOccupied(sibling, false)),
+  ];
+  if (occupied.length > 0) {
+    throw new VatError(
+      SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE,
+      `${subject}: ${occupied.map((path) => toForwardSlash(path)).join(', ')} already exists, and VAT never deletes `
+        + 'or overwrites what it did not produce. Remove it yourself if it is a previous package, or choose '
+        + 'an output path that does not exist yet (or is an empty directory).',
+    );
+  }
+}
+
+/**
+ * Whether something is at `path` that a package write would destroy. An empty
+ * directory at the output itself is not: the package lands inside it unharmed.
+ * A path the OS will not stat counts as occupied — nothing is assumed absent.
+ */
+function isOccupied(path: string, emptyDirectoryIsFree: boolean): boolean {
+  let stats: ReturnType<typeof lstatSync>;
+  try {
+    stats = lstatSync(path);
+  } catch (error) {
+    // Absent — or a FILE above it (`ENOTDIR`), which the write itself then refuses
+    // as the output it is. Anything else the OS says is not proof of absence.
+    const code = (error as NodeJS.ErrnoException).code;
+    return code !== 'ENOENT' && code !== 'ENOTDIR';
+  }
+  if (!emptyDirectoryIsFree || !stats.isDirectory()) return true;
+  try {
+    return readdirSync(path).length > 0;
+  } catch (error) {
+    // A directory it cannot list is not proof of emptiness: refuse, never assume.
+    if (isFilesystemAccessError(error)) return true;
+    throw error;
+  }
 }
 
 /**
