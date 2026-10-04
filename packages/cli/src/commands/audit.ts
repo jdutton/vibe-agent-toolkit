@@ -1488,8 +1488,8 @@ export async function auditCommand(
  *
  * ONLY the root. A sub-path inside a readable tree is never the invocation's
  * fault and stays a finding. Pinned by the `audit → error` rows of
- * `exit-codes.system.test.ts` and the unreadable-root row of
- * `exit-code-matrix.system.test.ts`.
+ * `exit-codes.system.test.ts` and the `audit` row of
+ * `exit-code-matrix-path-unlistable.system.test.ts`.
  */
 async function unusableRootRefusal(scanPath: string): Promise<CommandRefusalError | undefined> {
   let isDirectory: boolean;

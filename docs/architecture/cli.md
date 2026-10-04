@@ -772,8 +772,15 @@ change's call to make.
   is how one outcome shipped with different codes in different verbs. Under `packages/cli/src/`
   the rule's `derived` option refuses naming `ExitCode.FINDINGS` at all and any exit that is not
   `OK`, `ERROR` or a derivation; a child's code is forwarded through `exitCodeOfChild`. No file is
-  exempt, and `test/system/exit-code-matrix.system.test.ts` proves the derivation by running every
-  envelope verb and asserting every external adapter outcome.
+  exempt, and the exit-code matrix proves the derivation by running every envelope verb and
+  asserting every external adapter outcome. The matrix is one scenario table
+  (`test/system/test-helpers/exit-code-matrix.ts`) run by several spec files —
+  `test/system/exit-code-matrix-shard-<name>.system.test.ts`, one per key of `MATRIX_SHARDS`, and
+  `exit-code-matrix-path-*.system.test.ts` for the path outcomes — because one file spawning every
+  scenario runs past the per-file duration budget. `test/system/exit-code-matrix.system.test.ts`
+  asserts what holds them together: the table covers exactly the registered verbs, the shards
+  partition the table, and the shard and path files on disk are exactly the declared ones. A new
+  report verb needs its scenarios in the table AND a shard.
 - Always flush stdout before writing to stderr
 - Test format errors must include file:line:column
 
