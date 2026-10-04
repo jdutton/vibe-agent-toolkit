@@ -3,7 +3,7 @@
  * Build, validate, and package agent skills in the Agent Skills format
  */
 
-export { buildAgentSkill, type BuildOptions, type BuildResult } from './builder.js';
+export { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE, buildAgentSkill, type BuildOptions, type BuildResult } from './builder.js';
 
 export {
   createProjectRegistry,
@@ -122,6 +122,7 @@ export {
   runCompatDetectors,
   type DetectorOutput,
 } from './validators/compat-detectors.js';
+export { describeIssues } from './validators/describe-issues.js';
 export { validateMarketplace } from './validators/marketplace-validator.js';
 export { validateSkill } from './validators/skill-validator.js';
 export { validate, type UnifiedValidateOptions } from './validators/unified-validator.js';
@@ -170,8 +171,11 @@ export {
   type ImportResult,
 } from './import.js';
 
+// Packaging refusals of a skill's own content, told apart from defects by code
+export { isSkillPackagingInputError, SKILL_PACKAGING_INPUT_INVALID_CODE } from './packaging-errors.js';
+
 // Skill source primitives
-export { cloneGitSource, type GitCloneResult } from './skill-source/git-clone.js';
+export { cloneGitSource, GIT_SUBPATH_INVALID_CODE, type GitCloneResult } from './skill-source/git-clone.js';
 
 // Unified skill-source resolution (spec §11c)
 export { resolveSkillSource, type ResolveSkillSourceOptions } from './skill-source/resolve-skill-source.js';
@@ -208,6 +212,8 @@ export type {
   DeclaredList,
   HookRef,
   InstallInventory,
+  InventoryProjection,
+  InventorySerialized,
   LspRef,
   MarketplaceInventory,
   McpRef,
@@ -222,8 +228,10 @@ export {
   isMarketplaceInventory,
   isPluginInventory,
   isSkillInventory,
-  serializeInventory,
-  serializeInventoryShallow,
+  countInventories,
+  InventorySerializedSchema,
+  serializedInventory,
+  unreadableParseErrors,
   detectDeclaredButMissing,
   detectMarketplacePluginSourceMissing,
   detectPresentButUndeclared,

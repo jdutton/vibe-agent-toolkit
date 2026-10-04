@@ -61,7 +61,7 @@ describe('analyzeCompatibility — skills reached through a symlink', () => {
     const result = await analyzeCompatibility(pluginDir, pluginDir);
 
     expect(bashEvidenceFiles(result)).toEqual(LINKED_SKILL_FILES);
-    expect(result.summary.skillFiles).toBe(2);
+    expect(result.fileCounts.skillFiles).toBe(2);
     expect(result.unchecked).toEqual([]);
   });
 
@@ -98,7 +98,7 @@ describe.skipIf(CANNOT_DENY_READS)('analyzeCompatibility — a path the filesyst
     // Counts describe what was ANALYZED — every skill here declares Bash, so the
     // skills read are exactly the files with that evidence; the refused one is
     // accounted for under `unchecked`, not counted as a skill file.
-    expect(result.summary.skillFiles).toBe(bashEvidenceFiles(result).length);
+    expect(result.fileCounts.skillFiles).toBe(bashEvidenceFiles(result).length);
   });
 
   it('lists an unlistable skill directory under `unchecked` with the scandir reason, and still analyzes its siblings', async () => {
@@ -140,7 +140,7 @@ describe('analyzeCompatibility — a file the analyzer cannot parse', () => {
     expect(bashEvidenceFiles(result)).toContain(PLAIN_SKILL);
     const unchecked = result.unchecked.find((u) => u.path === 'hooks.json');
     expect(unchecked?.reason).toMatch(/JSON/);
-    expect(result.summary.hookFiles).toBe(0);
+    expect(result.fileCounts.hookFiles).toBe(0);
   });
 
   it('reports nothing unchecked for a plugin whose every file it read', async () => {

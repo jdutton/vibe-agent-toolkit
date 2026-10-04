@@ -144,7 +144,7 @@ const PROJECT_CONFIG_FILE = 'vibe-agent-toolkit.config.yaml';
 
 /** Anchor `findProjectRoot` at `dir`. */
 function writeProjectConfig(dir: string): void {
-  writeFixtureFile(safePath.join(dir, PROJECT_CONFIG_FILE), 'version: 1\n');
+  writeFixtureFile(safePath.join(dir, PROJECT_CONFIG_FILE), '{}\n');
 }
 
 /** A plugin manifest plus one skill per {@link SKILL_NAMES}, each linking one sibling doc. */

@@ -5,26 +5,30 @@
 import type { Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
-import yaml from 'yaml';
+import { materializeIssue } from '@vibe-agent-toolkit/agent-skills';
+import { buildReport, toFindings, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
-import { handleCommandError } from '../../utils/command-error.js';
-import { createLogger } from '../../utils/logger.js';
+import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
+import { createLogger, type Logger } from '../../utils/logger.js';
 import { SCOPE_LOCATIONS } from '../../utils/scope-locations.js';
 
+import type { AgentInstalledData, AgentInstalledReport } from './installed-schema.js';
+
 export interface InstalledCommandOptions {
-  scope?: 'user' | 'project' | 'all';
+  scope?: string;
   runtime?: string;
   debug?: boolean;
 }
 
-interface InstalledSkill {
-  name: string;
-  scope: string;
-  type: 'installed' | 'symlink';
-  path: string;
-}
+type InstalledSkill = AgentInstalledData['skills'][number];
+
+/** `vat agent installed` has no `--strict`; an unreadable scope is a warning: the gate is fixed. */
+const GATE: Gate = { strict: false };
+
+/** The `--scope` value that scans every scope the runtime has. */
+const ALL_SCOPES = 'all';
 
 /**
  * List installed agents command
@@ -33,118 +37,131 @@ export async function installedCommand(options: InstalledCommandOptions): Promis
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
+  let report: AgentInstalledReport;
   try {
-    const { runtime = 'agent-skill', scope = 'all' } = options;
+    const { runtime = 'agent-skill', scope = ALL_SCOPES } = options;
+    const scopeLocations = scopeLocationsFor(runtime);
+    const scopesToScan = scopesFor(scope, scopeLocations);
 
-    const scopeLocations = SCOPE_LOCATIONS[runtime];
-    if (!scopeLocations) {
-      throw new Error(`Runtime '${runtime}' not implemented`);
-    }
+    const { skills, unreadable } = await scanForInstalledSkills(scopeLocations, scopesToScan);
+    logInstalledSkills(skills, logger);
 
-    // Determine which scopes to scan
-    const scopesToScan =
-      scope === 'all' ? Object.keys(scopeLocations) : [scope];
-
-    const skills = await scanForInstalledSkills(scopeLocations, scopesToScan);
-
-    if (skills.length === 0) {
-      logger.info('No installed skills found');
-      const duration = Date.now() - startTime;
-      logger.debug(`List completed in ${duration}ms`);
-
-      // Output YAML for programmatic parsing
-      const output = {
-        status: 'success',
-        skills: [],
-        scanned: scopesToScan,
-        duration,
-      };
-      console.log(yaml.stringify(output));
-
-      process.exit(ExitCode.OK);
-      return;
-    }
-
-    // Output to stderr (human-readable)
-    logger.info('\nInstalled Skills:\n');
-    for (const skill of skills) {
-      const typeIndicator = skill.type === 'symlink' ? '→' : '✓';
-      logger.info(`  ${typeIndicator} ${skill.name} (${skill.scope})`);
-      if (skill.type === 'symlink') {
-        logger.info(`    ${skill.path}`);
-      }
-    }
-    logger.info('');
-
-    const duration = Date.now() - startTime;
-    logger.debug(`List completed in ${duration}ms`);
-
-    // Output YAML to stdout for programmatic parsing
-    const output = {
-      status: 'success',
-      skills: skills.map((s) => ({
-        name: s.name,
-        scope: s.scope,
-        type: s.type,
-        path: s.path,
-      })),
-      scanned: scopesToScan,
-      duration,
-    };
-    console.log(yaml.stringify(output));
-
-    process.exit(ExitCode.OK);
+    report = buildReport({
+      examined: scopesToScan.length,
+      findings: toFindings(unreadable),
+      data: { scanned: scopesToScan, skills },
+      gate: GATE,
+      durationMs: Date.now() - startTime,
+    });
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'Installed');
+    endWithRefusal('agent installed', refusalCodeOf(error), error, 'yaml', GATE, NOTHING_FINISHED);
   }
+  endWithReport('agent installed', report, 'yaml');
+}
+
+/** The scope directories of `runtime`, or the invocation's mistake. */
+function scopeLocationsFor(runtime: string): Record<string, string> {
+  const scopeLocations = SCOPE_LOCATIONS[runtime];
+  if (!scopeLocations) {
+    throw new CommandRefusalError('USAGE_INVALID', `Unknown runtime '${runtime}' (known: ${Object.keys(SCOPE_LOCATIONS).join(', ')})`);
+  }
+  return scopeLocations;
+}
+
+/** The scopes `--scope` names, or the invocation's mistake. */
+function scopesFor(scope: string, scopeLocations: Record<string, string>): string[] {
+  const known = Object.keys(scopeLocations);
+  if (scope === ALL_SCOPES) return known;
+  if (!known.includes(scope)) {
+    throw new CommandRefusalError('USAGE_INVALID', `Unknown scope '${scope}' (known: ${[ALL_SCOPES, ...known].join(', ')})`);
+  }
+  return [scope];
+}
+
+/** The human listing, on stderr. */
+function logInstalledSkills(skills: readonly InstalledSkill[], logger: Logger): void {
+  if (skills.length === 0) {
+    logger.info('No installed skills found');
+    return;
+  }
+  logger.info('\nInstalled Skills:\n');
+  for (const skill of skills) {
+    logger.info(`  ${skill.type === 'symlink' ? '→' : '✓'} ${skill.name} (${skill.scope})`);
+    if (skill.type === 'symlink') logger.info(`    ${skill.path}`);
+  }
+  logger.info('');
 }
 
 /**
- * Scan locations for installed skills
+ * Scan locations for installed skills. A scope directory the OS will not list
+ * is a `SCAN_PATH_UNREADABLE` warning, and the other scopes are still listed.
  */
 async function scanForInstalledSkills(
   scopeLocations: Record<string, string>,
-  scopesToScan: string[]
-): Promise<InstalledSkill[]> {
+  scopesToScan: readonly string[]
+): Promise<{ skills: InstalledSkill[]; unreadable: ValidationIssue[] }> {
   const skills: InstalledSkill[] = [];
+  const unreadable: ValidationIssue[] = [];
 
   for (const currentScope of scopesToScan) {
     const location = scopeLocations[currentScope];
     if (!location) continue;
 
-    const entries = await listScopeLocation(location);
-    if (entries === null) continue;
-
-    for (const entry of entries) {
-      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-
-      const skillPath = safePath.join(location, entry.name);
-      const stats = await fs.lstat(skillPath);
-      const isSymlink = stats.isSymbolicLink();
-
-      skills.push({
-        name: entry.name,
-        scope: currentScope,
-        type: isSymlink ? 'symlink' : 'installed',
-        path: skillPath,
-      });
+    const listing = await listScopeLocation(location);
+    if (listing === null) continue;
+    if (!Array.isArray(listing)) {
+      unreadable.push(unlistableScopeFinding(currentScope, location, listing.errno));
+      continue;
     }
+
+    skills.push(...installedSkillsIn(listing, currentScope, location));
   }
 
-  return skills;
+  return { skills, unreadable };
+}
+
+/** The installs in one scope's listing: each directory, or link, directly under it. */
+function installedSkillsIn(listing: readonly Dirent[], scope: string, location: string): InstalledSkill[] {
+  return listing
+    .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+    .map((entry) => ({
+      name: entry.name,
+      scope,
+      type: entry.isSymbolicLink() ? 'symlink' : 'directory',
+      path: safePath.join(location, entry.name),
+    }));
 }
 
 /**
- * The entries of one scope location, or `null` when there is no such directory.
+ * The entries of one scope location; `null` when there is no such directory;
+ * the errno when the OS refuses to list it.
  *
  * Only an ABSENCE is `null`. A scope directory the OS refuses to list is not an
  * empty one, and reading it as empty would list fewer installs than there are.
  */
-async function listScopeLocation(location: string): Promise<Dirent[] | null> {
+async function listScopeLocation(location: string): Promise<Dirent[] | null | { errno: string }> {
   try {
     return await fs.readdir(location, { withFileTypes: true });
   } catch (error) {
     if (isPathAbsentError(error)) return null;
-    throw error;
+    return { errno: (error as NodeJS.ErrnoException).code ?? 'unknown error' };
   }
+}
+
+/**
+ * The warning for a scope directory the listing could not read: the list is
+ * then a floor. A finding's `location` is relative, and this document has no
+ * one root — the scopes live under `$HOME` and under the working directory —
+ * so it is the directory relative to its scope's base (`.claude/skills`, the
+ * last two segments of every `SCOPE_LOCATIONS` entry). Two scopes read the
+ * same location, so `field` is the scope name; the detail adds the full path.
+ */
+function unlistableScopeFinding(scope: string, location: string, errno: string): ValidationIssue {
+  const where = toForwardSlash(safePath.relative(safePath.resolve(location, '..', '..'), location));
+  return materializeIssue('SCAN_PATH_UNREADABLE', {
+    location: where,
+    // Every scope's directory is `.claude/skills` under its own base: the scope says which.
+    field: scope,
+    detail: `${scope} scope ${toForwardSlash(location)}: listing was refused with ${errno}; any skill installed beneath it is missing from this list`,
+  });
 }

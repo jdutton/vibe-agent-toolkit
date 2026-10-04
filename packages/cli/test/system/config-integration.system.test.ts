@@ -27,8 +27,7 @@ describe('Config loading integration (system test)', () => {
   it('should scan all markdown files when no path argument provided', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'default-scan-test',
-      config: `version: 1
-resources:
+      config: `resources:
   exclude:
     - "other/**"
 `,
@@ -46,14 +45,13 @@ resources:
 
     expect(result.status).toBe(0);
     // Should find docs/test.md and README.md (other/test.md excluded)
-    expect(parsed.filesScanned).toBeGreaterThanOrEqual(2);
+    expect(parsed.examined).toBeGreaterThanOrEqual(2);
   });
 
   it('should respect exclude patterns from config', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'exclude-test',
-      config: `version: 1
-resources:
+      config: `resources:
   exclude:
     - "test/**"
     - "**/*.test.md"
@@ -71,7 +69,7 @@ resources:
 
     expect(result.status).toBe(0);
     // Should find docs/guide.md and CLAUDE.md, but not test/* or *.test.md
-    expect(parsed.filesScanned).toBeGreaterThanOrEqual(1);
+    expect(parsed.examined).toBeGreaterThanOrEqual(1);
   });
 
   it('should use default config when no config file exists', () => {
@@ -85,16 +83,15 @@ resources:
     const { result, parsed } = executeScanAndParse(binPath, projectDir);
 
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    expect(parsed.status).toBe('ok');
     // Should use default **/*.md pattern
-    expect(parsed.filesScanned).toBeGreaterThan(0);
+    expect(parsed.examined).toBeGreaterThan(0);
   });
 
   it('should find config in parent directory', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'parent-config',
-      config: `version: 1
-resources:
+      config: `resources:
   include:
     - "**/*.md"
   exclude:
@@ -130,14 +127,13 @@ resources:
     // every root-relative include AND exclude, so naming a directory scanned trees
     // the project had deliberately excluded. A path argument now narrows `include`
     // only; `exclude` is never discarded.
-    expect(parsed.filesScanned).toBe(1);
+    expect(parsed.examined).toBe(1);
   });
 
   it('should respect config exclude patterns when no path argument provided', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'config-exclude-test',
-      config: `version: 1
-resources:
+      config: `resources:
   exclude:
     - "excluded/**"
 `,
@@ -161,14 +157,13 @@ resources:
 
     expect(result.status).toBe(0);
     // Config exclude should be respected: finds docs/included.md (not excluded/test.md)
-    expect(parsed.filesScanned).toBeGreaterThanOrEqual(1);
+    expect(parsed.examined).toBeGreaterThanOrEqual(1);
   });
 
   it('should handle validation config options', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'validation-config',
-      config: `version: 1
-resources:
+      config: `resources:
   validation:
     severity:
       EXTERNAL_URL_DEAD: ignore
@@ -186,13 +181,13 @@ resources:
 
     // Config should be loaded and used (even if not all options implemented yet)
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    expect(parsed.status).toBe('ok');
   });
 
   it('should handle config with only version field', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'minimal-config',
-      config: 'version: 1\n',
+      config: '{}\n',
       withDocs: true,
     });
 
@@ -202,14 +197,13 @@ resources:
 
     // Should use default patterns
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    expect(parsed.status).toBe('ok');
   });
 
   it('should handle complex nested patterns', () => {
     const projectDir = setupTestProject(tempDir, {
       name: 'nested-patterns',
-      config: `version: 1
-resources:
+      config: `resources:
   exclude:
     - "**/node_modules/**"
     - "**/test/fixtures/**"
@@ -233,6 +227,6 @@ resources:
     expect(result.status).toBe(0);
     // Should find README, docs/api/auth, guides/tutorials/intro, plus CLAUDE.md
     // Should exclude wip.draft.md and test/fixtures/mock.md
-    expect(parsed.filesScanned).toBeGreaterThanOrEqual(3);
+    expect(parsed.examined).toBeGreaterThanOrEqual(3);
   });
 });

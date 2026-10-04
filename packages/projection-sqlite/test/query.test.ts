@@ -25,8 +25,8 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import type { ExtentKey } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { PROJECTION_STATEMENT_REFUSED_CODE, type ExtentKey } from '@vibe-agent-toolkit/resources';
+import { isVatError, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -54,6 +54,43 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await store.close();
+});
+
+describe('a refused statement carries a code, not only a message', () => {
+  // The caller learns WHICH failure this is — the caller's statement, not the
+  // store — from `code`, never from the words. One case per refusal site.
+  it.each([
+    ['a write', 'DELETE FROM "blobs"'],
+    ['a second statement', 'SELECT 1; SELECT 2'],
+    ['an unbound placeholder', 'SELECT ? AS x'],
+    ['a name the schema lacks', 'SELECT "no_such_column" FROM "blobs"'],
+  ])('%s', (_label, sql) => {
+    let caught: unknown;
+    try {
+      store.query(sql);
+    } catch (error) {
+      caught = error;
+    }
+    expect(isVatError(caught, PROJECTION_STATEMENT_REFUSED_CODE), String(caught)).toBe(true);
+  });
+});
+
+describe('columns', () => {
+  it('names a statement\'s result columns in order, even when it would select no row', () => {
+    // A zero-row answer is still an answer with a SHAPE: rows alone cannot say
+    // which columns it had, so a document built from them would publish none.
+    expect(store.columns('SELECT "contentKey" AS key, "encoding" FROM "blobs" WHERE 0')).toEqual(['key', 'encoding']);
+  });
+
+  it('binds the same parameters as query and runs nothing', () => {
+    expect(store.columns('SELECT COUNT(*) AS n FROM "blobs" WHERE "encoding" = ?', 'utf-16le')).toEqual(['n']);
+    expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
+  });
+
+  it('refuses what query refuses', () => {
+    expect(() => store.columns('DELETE FROM "blobs"')).toThrow(/read/i);
+    expect(() => store.columns('SELECT "no_such_column" FROM "blobs"')).toThrow(/no such column/);
+  });
 });
 
 describe('query', () => {
@@ -369,7 +406,7 @@ describe('every placeholder must be bound', () => {
     (sql, form) => {
       // `StatementSync` never binds positional values into a `:a` slot, and on
       // the declared floor it does not bind them into `?NNN` either — measured,
-      // Node 22.13.0 and 22.14.0 throw `column index out of range` for
+      // Node 22.13.0, 22.14.0 and 22.16.0 throw `column index out of range` for
       // `SELECT ?1 AS x` with one value, while 22.22.3 and 24.x bind it. The
       // engine's message is about a column, for a statement with no column
       // problem; a form that works on one supported runtime and fails on

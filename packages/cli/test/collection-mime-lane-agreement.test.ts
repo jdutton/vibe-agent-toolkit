@@ -89,7 +89,7 @@ const COLLECTIONS: Readonly<Record<string, CollectionConfig>> = {
 };
 
 /** The same declarations as a whole project config — ONE source, no drift. */
-const CONFIG: ProjectConfig = { version: 1, resources: { collections: COLLECTIONS } };
+const CONFIG: ProjectConfig = { resources: { collections: COLLECTIONS } };
 
 /**
  * The corpus, config file included.

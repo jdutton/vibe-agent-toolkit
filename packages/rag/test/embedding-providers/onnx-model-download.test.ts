@@ -142,6 +142,30 @@ describe('ensureModelFiles publication', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it('reports download progress on stderr, never stdout — stdout is the calling command\'s document', async () => {
+    // `vat rag index`/`query` publish a YAML report on stdout; a first run with no
+    // cached model used to print these lines ahead of it, and the report no longer parsed.
+    stubFetch();
+    // `console.log` is spied too: vitest intercepts it before it reaches `process.stdout.write`,
+    // so a stdout spy alone would pass over the very call this test exists to catch.
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await ensureModelFiles(MODEL_ID, cacheDir, true);
+
+      expect(log).not.toHaveBeenCalled();
+      expect(stdout).not.toHaveBeenCalled();
+      const written = stderr.mock.calls.map(([chunk]) => String(chunk)).join('');
+      expect(written).toContain('[vat-onnx] Downloading model');
+      expect(written).toContain('[vat-onnx] Vocab download complete.');
+    } finally {
+      log.mockRestore();
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
   it('leaves no temp files behind after a successful download', async () => {
     stubFetch();
 

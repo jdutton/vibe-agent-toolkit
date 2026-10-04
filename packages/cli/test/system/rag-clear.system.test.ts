@@ -5,6 +5,8 @@
  * the vector database and deletes the database directory.
  */
 
+import { RAG_CLEAR_REPORT_SCHEMA } from '../../src/commands/rag/admin-schema.js';
+
 import { describe, executeCliAndParseYaml, expect, fs, getBinPath, getTestOutputDir, it, setupRagTestSuite } from './rag-test-setup.js';
 
 const binPath = getBinPath(import.meta.url);
@@ -25,8 +27,8 @@ describe('RAG clear command (system test)', () => {
       { cwd: suite.projectDir }
     );
 
-    expect(statsBefore.status).toBe('success');
-    expect(statsBefore.totalChunks).toBeGreaterThan(0);
+    expect(statsBefore).toMatchObject({ status: 'ok', data: { totalChunks: expect.any(Number) } });
+    expect((statsBefore['data'] as { totalChunks: number }).totalChunks).toBeGreaterThan(0);
 
     // Clear database
     const { result, parsed } = await executeCliAndParseYaml(
@@ -36,9 +38,7 @@ describe('RAG clear command (system test)', () => {
     );
 
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
-    expect(parsed.message).toBe('Database cleared');
-    expect(parsed.duration).toBeDefined();
+    expect(RAG_CLEAR_REPORT_SCHEMA.parse(parsed)).toMatchObject({ status: 'ok', examined: 1, data: { cleared: true } });
 
     // Verify database directory is deleted
     expect(fs.existsSync(suite.dbPath)).toBe(false);

@@ -1,0 +1,162 @@
+# The verdict facet's expected deltas — committed and reviewed.
+#
+# Every entry is keyed by subject ALIAS (never an adopter name), verb (a row
+# name: a verb, or `resources-query:<file>`), and the changelog bullet that
+# explains it. `vat-lab verdict compare` checks this file BOTH ways: an observed
+# delta no entry declares fails, and a declared delta that did not occur fails.
+# `baseline` is the baseline arm's vat version every entry is a move away from;
+# a compare against any other baseline is refused.
+#
+# `findings: itemized` declares that the candidate itemizes exactly the findings the baseline
+# published only as tallies — the same count per code and per severity, none removed
+# (compare.ts `itemizedTallies`). It covers no code the baseline did not tally.
+#
+# A finding is declared by its full identity. Where its location — a path inside the subject —
+# would name the subject, `locationDigest` (the SHA-256 of the location; a compare prints it
+# beside every observed finding) pins the same identity without committing the path.
+#
+# `refusal` declares a move in the refusal codes an unmeasured row's document published;
+# `(uncoded)` is an older build's refusal sentence, which carries no code.
+#
+# `changelog: <file>#<id>` names the ONE bullet of <file> carrying `<!-- verdict-delta:<id> -->`.
+#
+# Schema and rules: packages/lab/src/facets/verdict/deltas.ts.
+# How to run a crucible pass: packages/lab/docs/facets.md ("verdict").
+baseline: 0.2.0-rc.11
+deltas:
+  - subject: crucible-1
+    verb: resources-check
+    document: reshaped
+    reason: the report envelope now carries the required gate object
+    changelog: .changes/v020-report-contract.md#report-union-and-gate
+  - subject: crucible-2
+    verb: resources-check
+    document: reshaped
+    reason: the report envelope now carries the required gate object
+    changelog: .changes/v020-report-contract.md#report-union-and-gate
+  - subject: crucible-3
+    verb: resources-check
+    document: reshaped
+    reason: the report envelope now carries the required gate object
+    changelog: .changes/v020-report-contract.md#report-union-and-gate
+  - subject: crucible-4
+    verb: resources-check
+    document: reshaped
+    reason: the report envelope now carries the required gate object
+    changelog: .changes/v020-report-contract.md#report-union-and-gate
+  - subject: crucible-1
+    verb: audit
+    document: reshaped
+    reason: vat audit publishes the report contract (status ok|findings|error, files[].issues[] -> findings[], issueCounts -> summary)
+    changelog: .changes/v020-report-contract.md#audit-report-contract
+  - subject: crucible-1
+    verb: resources-validate
+    document: reshaped
+    reason: vat resources validate publishes the report contract (findings[] with location, summary, data)
+    changelog: .changes/v020-report-contract.md#resources-validate-report-contract
+  - subject: crucible-2
+    verb: audit
+    document: reshaped
+    reason: vat audit publishes the report contract (status ok|findings|error, files[].issues[] -> findings[], issueCounts -> summary)
+    changelog: .changes/v020-report-contract.md#audit-report-contract
+  - subject: crucible-2
+    verb: resources-validate
+    document: reshaped
+    reason: vat resources validate publishes the report contract (findings[] with location, summary, data)
+    changelog: .changes/v020-report-contract.md#resources-validate-report-contract
+  - subject: crucible-3
+    verb: audit
+    document: reshaped
+    reason: vat audit publishes the report contract (status ok|findings|error, files[].issues[] -> findings[], issueCounts -> summary)
+    changelog: .changes/v020-report-contract.md#audit-report-contract
+  - subject: crucible-3
+    verb: resources-validate
+    document: reshaped
+    reason: vat resources validate publishes the report contract (findings[] with location, summary, data)
+    changelog: .changes/v020-report-contract.md#resources-validate-report-contract
+  - subject: crucible-4
+    verb: audit
+    document: reshaped
+    reason: vat audit publishes the report contract (status ok|findings|error, files[].issues[] -> findings[], issueCounts -> summary)
+    changelog: .changes/v020-report-contract.md#audit-report-contract
+  - subject: crucible-4
+    verb: resources-validate
+    document: reshaped
+    reason: vat resources validate publishes the report contract (findings[] with location, summary, data)
+    changelog: .changes/v020-report-contract.md#resources-validate-report-contract
+  - subject: crucible-1
+    verb: skills-validate
+    document: reshaped
+    reason: vat skills validate publishes the report contract (results[] -> data.skills[], issues -> findings[])
+    changelog: .changes/v020-report-contract.md#skills-validate-report-contract
+  - subject: crucible-2
+    verb: skills-validate
+    document: reshaped
+    reason: vat skills validate publishes the report contract (results[] -> data.skills[], issues -> findings[])
+    changelog: .changes/v020-report-contract.md#skills-validate-report-contract
+  - subject: crucible-1
+    verb: resources-query:sql/crucible-1-facts.sql
+    document: reshaped
+    reason: vat resources query publishes the report contract (rows -> data.rows)
+    changelog: .changes/v020-report-contract.md#resources-query-report-contract
+  - subject: crucible-1
+    verb: verify
+    document: reshaped
+    findings: itemized
+    # One per missing files: dest. The locations name the subject, so each is pinned by digest;
+    # a subject commit that changes the set fails here.
+    findingsAdded:
+      - code: FILES_CONFIG_DEST_MISSING
+        severity: error
+        locationDigest: 150541d9f1b4308df71855e4b5d9fa15f30c0a9255a6e08f5241e7db8fe01d5e
+        scope: null
+      - code: FILES_CONFIG_DEST_MISSING
+        severity: error
+        locationDigest: 2097a8f8044a8ac3c4edaa5c91816b581b1c1284527bd5a04d38fffc2f17ffc2
+        scope: null
+      - code: FILES_CONFIG_DEST_MISSING
+        severity: error
+        locationDigest: 4ad9f83a72afe6b26b00be422926e9567fa9e5f65a561e79ca00be677aa00157
+        scope: null
+      - code: FILES_CONFIG_DEST_MISSING
+        severity: error
+        locationDigest: 6459052ac5f6a6a13081927ec7739f71d3cd1f996f083a7ed2567af9257f1b51
+        scope: null
+      - code: FILES_CONFIG_DEST_MISSING
+        severity: error
+        locationDigest: 85eefd8f0d928d552b426b281b1ea4924df3d451df479b93c28051186b9e5d36
+        scope: null
+      - code: FILES_CONFIG_DEST_MISSING
+        severity: error
+        locationDigest: bac52022cddf364838996f73461c30895b527bdd11fdf80c9b7d5c3354f30da7
+        scope: null
+      - code: FILES_CONFIG_DEST_MISSING
+        severity: error
+        locationDigest: cf9582984799b4eba72306b0dd3648030fb398d307732d420e18de49ef2892e1
+        scope: null
+      - code: FILES_CONFIG_DEST_MISSING
+        severity: error
+        locationDigest: da498f3d10c5fcce08d10fb865937704abb6e4db2758c9551eaac7bc24a3ea2e
+        scope: null
+      - code: FILES_CONFIG_DEST_MISSING
+        severity: error
+        locationDigest: f6ed75a2d45e7f3ad2348e1e939dfd80124544e586df09e718a530912bc7fece
+        scope: null
+    reason: vat verify publishes the report contract — every phase's findings flat in findings[], where the baseline published most of them only as per-skill and per-file tallies (same count per code, per severity and per phase; exit code unchanged) — and files-config-dests publishes one FILES_CONFIG_DEST_MISSING error finding per missing dest where the baseline published a per-skill error count and no finding
+    changelog: .changes/v020-report-contract.md#orchestrators-report-contract
+  - subject: crucible-1
+    verb: build
+    refusal:
+      # The baseline sentence appears three times: on the run, on the claude phase, and on that
+      # phase's own report.
+      from: ["(uncoded)", "claude:(uncoded)", "(uncoded)"]
+      to: [RUN_INCOMPLETE, "claude:RUN_INCOMPLETE"]
+    reason: both arms exit 2 on a plugin-local skill whose files source the checkout does not hold (the subjects file excludes the row as unmeasurable); the baseline's document carries a sentence and no refusal code, the tree's carries RUN_INCOMPLETE for the run and for the claude phase that stopped
+    changelog: .changes/v020-report-contract.md#plugin-build-packaging-refusal
+  - subject: crucible-1
+    verb: marketplace-publish-dry-run
+    refusal:
+      from: ["(uncoded)"]
+      to: [INPUT_UNREADABLE]
+    reason: both arms exit 2 on build output the unfinished build left without a marketplace manifest (the subjects file excludes the row as unmeasurable); the baseline's document carries a raw errno sentence and no refusal code, the tree's carries INPUT_UNREADABLE
+    changelog: .changes/v020-report-contract.md#publish-unbuilt-marketplace

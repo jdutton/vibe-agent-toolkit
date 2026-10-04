@@ -29,14 +29,17 @@ import { fileURLToPath } from 'node:url';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { buildAgentListOutput } from '../../src/commands/agent/list.js';
+import { buildAgentListData } from '../../src/commands/agent/list.js';
+import type { MarketplaceValidateReport } from '../../src/commands/claude/marketplace/validate-schema.js';
 import {
   buildMarketplaceValidateReport,
   collectMarketplaceFindings,
 } from '../../src/commands/claude/marketplace/validate.js';
 import { buildQueryOutputData } from '../../src/commands/rag/query-command.js';
-import { buildScanOutputData } from '../../src/commands/resources/scan.js';
-import { formatSkillsYaml } from '../../src/commands/skills/list.js';
+import { RESOURCES_SCAN_REPORT_SCHEMA } from '../../src/commands/resources/scan-schema.js';
+import { buildScanReport } from '../../src/commands/resources/scan.js';
+import { SKILLS_LIST_REPORT_SCHEMA } from '../../src/commands/skills/list-schema.js';
+import { buildSkillsListReport } from '../../src/commands/skills/list.js';
 import {
   anchorContractViolations,
   anchorsBelowRoot,
@@ -72,18 +75,20 @@ const SCAN_RESOURCE = {
   checksum: 'a'.repeat(64),
 };
 
-/** The scan payload for one README, with and without `--verbose`. */
+/** The scan report's `data` for one README, with and without `--verbose` — parsed with the published schema. */
 function scanPayload(verbose: boolean, lane: 'walk' | 'projection' = 'walk') {
-  return buildScanOutputData({
+  const report = buildScanReport({
     resources: [SCAN_RESOURCE],
     root: ROOT,
     lane,
     // The walk sources no extent; these cases are about path coordinates.
     extentSource: null,
     durationMs: 234,
-    collections: undefined,
+    collections: {},
     verbose,
   });
+  RESOURCES_SCAN_REPORT_SCHEMA.parse(report);
+  return report.data;
 }
 
 describe('resources scan payload', () => {
@@ -106,16 +111,22 @@ describe('resources scan payload', () => {
     expect(scanPayload(true, 'projection').lane).toBe('projection');
   });
 
-  it('names the duration field `durationSecs`, in seconds', () => {
-    // The shipped help doc and the emitted payload have to agree on the field
-    // name; a doc that says `duration: 234ms` describes a field that does not
-    // exist.
-    const data = scanPayload(false);
+  it('counts the files scanned as the envelope\'s examined, and keeps the duration on the envelope', () => {
+    // The lab's population facet reads `examined` as the file count; the run's
+    // wall time is the envelope's `durationMs`, never a `durationSecs` in `data`.
+    const report = buildScanReport({
+      resources: [SCAN_RESOURCE, { ...SCAN_RESOURCE, filePath: SKILL }],
+      root: ROOT,
+      lane: 'walk',
+      extentSource: null,
+      durationMs: 234,
+      collections: {},
+      verbose: false,
+    });
 
-    // A 5e-11 window: an EXACTNESS check, not a tolerance. The failure it guards
-    // is `234` (milliseconds) leaking into a field named `...Secs`.
-    expect(data.durationSecs).toBeCloseTo(0.234, 10);
-    expect(data).not.toHaveProperty('duration');
+    expect(report.examined).toBe(2);
+    expect(report.durationMs).toBe(234);
+    expect(report.data).not.toHaveProperty('durationSecs');
   });
 
   it('omits the file list entirely without --verbose', () => {
@@ -125,37 +136,40 @@ describe('resources scan payload', () => {
 
 describe('skills list payload', () => {
   const skills = [{ name: 'alpha', path: SKILL, valid: true }];
+  const listing = (unreadable: Parameters<typeof buildSkillsListReport>[0]['unreadable']) =>
+    buildSkillsListReport({ skills, context: 'project', root: ROOT, unreadable, examined: 1 }, 7);
 
   it('publishes each skill path relative to the stated root', () => {
-    const yamlText = formatSkillsYaml(skills, 'project', ROOT, []);
+    const report = SKILLS_LIST_REPORT_SCHEMA.parse(listing([]));
 
-    expect(yamlText).toContain(`root: ${ROOT}\n`);
-    expect(yamlText).toContain(`    path: ${SKILL_REL}\n`);
-    expect(yamlText).not.toContain(`path: ${SKILL}`);
-    expect(yamlText).toContain('status: success\n');
-    expect(yamlText).not.toContain('unreadable:');
+    expect(report.status).toBe('ok');
+    expect(report.data?.root).toBe(ROOT);
+    expect(report.data?.skills).toStrictEqual([{ name: 'alpha', path: SKILL_REL, valid: true }]);
+    expect(report.findings).toStrictEqual([]);
   });
 
   it('leaves the entries it was handed unmutated', () => {
-    formatSkillsYaml(skills, 'project', ROOT, []);
+    listing([]);
 
     expect(skills[0]?.path).toBe(SKILL);
   });
 
   // A directory the scan could not list is a skill count the reader cannot
   // trust; the machine-readable document — the one a CI wrapper diffs — must
-  // say so, in the same root-relative coordinates as every other path in it.
-  it('publishes the directories it could not list, root-relative, and degrades the status', () => {
+  // say so, as a finding in the same root-relative coordinates as every path.
+  it('publishes each directory it could not list as a root-relative SCAN_PATH_UNREADABLE warning', () => {
     const locked = safePath.join(ROOT, 'skills', 'locked');
-    const yamlText = formatSkillsYaml(skills, 'project', ROOT, [
+    const report = SKILLS_LIST_REPORT_SCHEMA.parse(listing([
       { kind: 'directory_unreadable', code: 'EACCES', directory: locked, transient: false },
-    ]);
+    ]));
 
-    expect(yamlText).toContain('status: warning\n');
-    expect(yamlText).toContain('unreadable:\n  - path: skills/locked\n    code: EACCES\n');
-    expect(yamlText).not.toContain(locked);
+    expect(report.status).toBe('findings');
+    expect(report.findings.map((finding) => [finding.code, finding.severity, finding.location])).toStrictEqual([
+      ['SCAN_PATH_UNREADABLE', 'warning', 'skills/locked'],
+    ]);
+    expect(JSON.stringify(report)).not.toContain(locked);
     // The skills that WERE listed are still published.
-    expect(yamlText).toContain(`    path: ${SKILL_REL}\n`);
+    expect(report.data?.skills.map((skill) => skill.path)).toStrictEqual([SKILL_REL]);
   });
 });
 
@@ -165,12 +179,9 @@ describe('agent list payload', () => {
   ];
 
   it('publishes each agent path relative to the stated root', () => {
-    const data = buildAgentListOutput(agents, ROOT, 19);
+    const data = buildAgentListData(agents, ROOT);
 
-    expect(data.root).toBe(ROOT);
-    expect(data.agents).toEqual([{ name: 'alpha', version: '0.1.0', path: AGENT_REL }]);
-    expect(data.count).toBe(1);
-    expect(data.duration).toBe('19ms');
+    expect(data).toStrictEqual({ root: ROOT, agents: [{ name: 'alpha', version: '0.1.0', path: AGENT_REL }] });
     expectNoAbsolutePaths(data.agents);
   });
 });
@@ -196,15 +207,14 @@ describe('rag query payload', () => {
       queryText: 'hello',
       chunks: [chunk],
       stats: { totalMatches: 1, searchDurationMs: 3 },
-      durationMs: 12,
       root: ROOT,
     });
 
     expect(data.root).toBe(ROOT);
-    const chunks = data.chunks as Array<{ filePath: string; resourceId: string }>;
-    expect(chunks[0]?.filePath).toBe(README_REL);
-    expect(chunks[0]?.resourceId).toBe(README_REL);
-    expect(data.duration).toBe('12ms');
+    expect(data.chunks[0]?.filePath).toBe(README_REL);
+    expect(data.chunks[0]?.resourceId).toBe(README_REL);
+    // A Date has no JSON form: the published document carries ISO 8601.
+    expect(data.chunks[0]?.embeddedAt).toBe(new Date(0).toISOString());
     expectNoAbsolutePaths(data.chunks);
   });
 });
@@ -222,8 +232,8 @@ describe('marketplace validate payload', () => {
   const pluginResult = {
     path: PLUGIN_DIR,
     type: 'claude-plugin',
-    status: 'error',
-    summary: 'Found 1 issue(s)',
+    status: 'findings',
+    description: '1 errors, 0 warnings, 0 info',
     issues: [
       {
         severity: 'error',
@@ -233,59 +243,58 @@ describe('marketplace validate payload', () => {
         fix: 'Add a "version" field to plugin.json',
       },
     ],
-    issueCounts: { errors: 1, warnings: 0, info: 0 },
+    summary: { errors: 1, warnings: 0, info: 0 },
     metadata: { name: 'alpha' },
   } as const;
 
   it('states the marketplace root once and publishes each plugin path relative to it', () => {
-    const data = buildMarketplaceValidateReport({
+    const report = buildMarketplaceValidateReport({
       root: ROOT,
       marketplace: { name: 'mp', version: '1.0.0' },
-      pluginResults: [{ name: 'alpha', source: './plugins/alpha', result: pluginResult }],
+      pluginResults: [{ name: 'alpha', source: './plugins/alpha', result: pluginResult, manifestRead: true }],
       undeclared: [],
       refused: [],
       issues: pluginResult.issues,
-      duration: '7ms',
+      durationMs: 7,
     });
 
-    expect(data['root']).toBe(ROOT);
+    expect(report.data.root).toBe(ROOT);
     // The root is stated under its own name; a second absolute `path` beside it
     // is how a document ends up naming the machine it ran on twice.
-    expect(data).not.toHaveProperty('path');
-    expect(data['plugins']).toEqual([
+    expect(report.data).not.toHaveProperty('path');
+    expect(report.data.plugins).toEqual([
       {
         name: 'alpha',
         source: './plugins/alpha',
         path: PLUGIN_REL,
-        status: 'error',
-        metadata: { name: 'alpha' },
-        // Re-basing is not idempotent: a `location` that arrives root-relative
-        // must be published byte-for-byte, not run through `relative()` again.
-        issues: pluginResult.issues,
+        manifestRead: true,
+        status: 'findings',
+        summary: { errors: 1, warnings: 0, info: 0 },
       },
     ]);
-    expectNoAbsolutePaths(data['plugins']);
-    expectNoAbsolutePaths(data['issues']);
+    // Re-basing is not idempotent: a `location` that arrives root-relative
+    // must be published byte-for-byte, not run through `relative()` again.
+    expect(report.findings).toEqual(pluginResult.issues);
+    expectNoAbsolutePaths(report.data.plugins);
+    expectNoAbsolutePaths(report.findings);
   });
 
   it('states the root on the manifest-missing bail payload too', () => {
     // The early exit is a second emission site, and it leaked the same absolute
     // path — a document shape that only the happy path was ever checked for.
-    const data = buildMarketplaceValidateReport({
+    const report = buildMarketplaceValidateReport({
       root: ROOT,
       marketplace: undefined,
       pluginResults: [],
       undeclared: [],
       refused: [],
       issues: [],
-      bailSummary: 'Marketplace manifest missing',
-      duration: '2ms',
+      durationMs: 2,
     });
 
-    expect(data['root']).toBe(ROOT);
-    expect(data).not.toHaveProperty('path');
-    expect(data).not.toHaveProperty('marketplace');
-    expect(data['summary']).toBe('Marketplace manifest missing');
+    expect(report.data.root).toBe(ROOT);
+    expect(report.data).not.toHaveProperty('path');
+    expect(report.data.marketplace).toBeNull();
   });
 });
 
@@ -310,7 +319,7 @@ describe('marketplace validate payload', () => {
 const MANIFEST_DIR = '.claude-plugin';
 
 /** Emit the document the command would, for a marketplace on disk. */
-async function marketplaceReportFor(root: string): Promise<Record<string, unknown>> {
+async function marketplaceReportFor(root: string): Promise<MarketplaceValidateReport> {
   const { marketplaceResult, pluginResults, undeclared, refused, issues } = await collectMarketplaceFindings(
     root,
     silentLogger,
@@ -322,7 +331,7 @@ async function marketplaceReportFor(root: string): Promise<Record<string, unknow
     undeclared,
     refused,
     issues,
-    duration: '9ms',
+    durationMs: 9,
   });
 }
 
@@ -336,13 +345,13 @@ describe('marketplace validate — every producer anchored at the stated root', 
   let projectRoot: string;
   /** The marketplace under test: a SUBDIRECTORY of the project root. */
   let marketplaceRoot: string;
-  let report: Record<string, unknown>;
+  let report: MarketplaceValidateReport;
 
   beforeAll(async () => {
     projectRoot = safePath.resolve(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-mp-anchor-')));
     // What makes the project root discoverable — and therefore what makes the
     // wrong anchor a DIFFERENT string from the right one.
-    writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+    writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), '{}\n');
 
     marketplaceRoot = safePath.join(projectRoot, 'mp');
     // DECLARED, because only declared sources are validated: an undeclared
@@ -431,9 +440,13 @@ describe('packages/cli/docs/resources.md — the shipped scan reference', () => 
     expect(scanSection).toContain('`--collection <id>`');
   });
 
-  it('shows the duration field the command actually emits', () => {
-    expect(scanSection).toContain('durationSecs:');
-    expect(scanSection).not.toContain('duration: 234ms');
+  it('shows the duration field and the count the command actually emits', () => {
+    // The envelope's `durationMs` and `examined`, never the retired
+    // `durationSecs` / `filesScanned` the legacy document carried.
+    expect(scanSection).toContain('durationMs:');
+    expect(scanSection).toContain('examined:');
+    expect(scanSection).not.toContain('durationSecs:');
+    expect(scanSection).not.toContain('filesScanned');
   });
 
   it('shows relative file paths under a stated root', () => {

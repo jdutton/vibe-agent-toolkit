@@ -5,8 +5,6 @@
  * <dir>/manifest.json
  * <dir>/oracle/enumeration.<laneId>.txt
  * <dir>/oracle/parse-facts.txt
- * <dir>/command/<name>.stdout.txt
- * <dir>/command/<name>.stderr.txt
  * ```
  *
  * Two rules here are about the failure modes of a *comparison*, not about
@@ -31,7 +29,6 @@ import { dirname } from 'node:path';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 
 import {
-  COMMAND_DIR,
   MANIFEST_FILENAME,
   ORACLE_DIR,
   SnapshotManifestSchema,
@@ -39,28 +36,25 @@ import {
   type SnapshotManifest,
 } from './types.js';
 
-/** The three fixed locations inside a snapshot directory. */
+/** The two fixed locations inside a snapshot directory. */
 export interface SnapshotPaths {
   /** Absolute path to `manifest.json`. */
   manifest: string;
   /** Absolute path to the oracle-artifact subdirectory. */
   oracleDir: string;
-  /** Absolute path to the whole-command-artifact subdirectory. */
-  commandDir: string;
 }
 
 /**
  * Resolve the fixed locations inside a snapshot directory.
  *
  * @param dir - Snapshot directory, absolute or relative to the cwd
- * @returns Absolute, forward-slashed paths for the manifest and both subdirectories
+ * @returns Absolute, forward-slashed paths for the manifest and the oracle subdirectory
  */
 export function snapshotPaths(dir: string): SnapshotPaths {
   const root = safePath.resolve(dir);
   return {
     manifest: safePath.join(root, MANIFEST_FILENAME),
     oracleDir: safePath.join(root, ORACLE_DIR),
-    commandDir: safePath.join(root, COMMAND_DIR),
   };
 }
 
@@ -90,11 +84,8 @@ export function writeSnapshot(
 
   // Wholesale replacement, not a merge: an artifact from a previous capture
   // that this one does not produce would otherwise read as "unchanged".
-  for (const subdir of [paths.oracleDir, paths.commandDir]) {
-    rmSync(subdir, { recursive: true, force: true });
-  }
+  rmSync(paths.oracleDir, { recursive: true, force: true });
   mkdirSyncReal(paths.oracleDir, { recursive: true });
-  mkdirSyncReal(paths.commandDir, { recursive: true });
 
   for (const [name, text] of artifacts) {
     // joinUnderRoot, not join: an artifact name is manifest data, and a `..`
@@ -202,7 +193,7 @@ function readManifest(root: string, manifestPath: string): SnapshotManifest {
  * Every artifact path the manifest names, in a stable order.
  *
  * @param manifest - The loaded manifest
- * @returns Artifact relative paths: lanes, then parse facts, then commands
+ * @returns Artifact relative paths: lanes, then parse facts
  */
 function manifestArtifactNames(manifest: SnapshotManifest): string[] {
   const names: string[] = [];
@@ -212,9 +203,6 @@ function manifestArtifactNames(manifest: SnapshotManifest): string[] {
   }
   if (typeof manifest.parseFactArtifact === 'string') {
     names.push(manifest.parseFactArtifact);
-  }
-  for (const command of Array.isArray(manifest.commands) ? manifest.commands : []) {
-    names.push(command.stdoutArtifact, command.stderrArtifact);
   }
 
   return names;

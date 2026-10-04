@@ -14,6 +14,9 @@ export type {
 
 // Loader
 export {
+  AGENT_MANIFEST_INVALID_CODE,
+  AGENT_MANIFEST_NOT_FOUND_CODE,
+  AGENT_MANIFEST_UNREADABLE_CODE,
   findManifestPath,
   loadAgentManifest,
   type LoadedAgentManifest,
@@ -22,5 +25,6 @@ export {
 // Validator
 export {
   validateAgent,
+  type ValidateAgentOptions,
   type ValidationResult,
 } from './validator/agent-validator.js';

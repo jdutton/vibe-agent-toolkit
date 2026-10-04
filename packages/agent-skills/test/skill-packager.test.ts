@@ -1569,7 +1569,7 @@ const OUTSIDE_CODE = 'LINK_OUTSIDE_SKILL_DIR';
 async function packOutsideLink(severity: 'error' | 'warning' | undefined) {
   const tmp = getTempDir();
   // The project root the packager bounds `LINK_OUTSIDE_PROJECT` by — without it the skill dir is the root.
-  await writeFile(safePath.join(tmp, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+  await writeFile(safePath.join(tmp, 'vibe-agent-toolkit.config.yaml'), '{}\n');
   await writeFile(safePath.join(tmp, 'shared.md'), '# Shared');
   const skillDir = safePath.join(tmp, 'skill');
   await mkdir(skillDir, { recursive: true });

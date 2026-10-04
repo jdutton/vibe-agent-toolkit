@@ -22,12 +22,12 @@ import type {
 } from '@vibe-agent-toolkit/rag';
 import {
   ApproximateTokenCounter,
-  assertQuerySupported,
   chunkResource,
   DefaultRAGMetadataSchema,
   enrichChunks,
   generateContentHash,
   OnnxEmbeddingProvider,
+  RAGQuerySchema,
 } from '@vibe-agent-toolkit/rag';
 import {
   isParserUnavailable,
@@ -36,6 +36,7 @@ import {
   type ContentTransformOptions,
   type ResourceMetadata,
 } from '@vibe-agent-toolkit/resources';
+import { RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape } from 'zod';
 
 import { resolveChunkingConfig } from './chunking-config.js';
@@ -49,7 +50,7 @@ import {
   type DocumentColumn,
   type DocumentRecord,
 } from './document-helpers.js';
-import { buildWhereClause, escapeSQLString, LANCEDB_QUERY_SUPPORT } from './filter-builder.js';
+import { buildWhereClause, escapeSQLString } from './filter-builder.js';
 import {
   chunkToLanceRow,
   deserializeMetadata,
@@ -356,28 +357,20 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * Query the RAG database
    */
   async query(query: RAGQuery<TMetadata>): Promise<RAGResult<TMetadata>> {
-    // Refuse a query this provider cannot honour BEFORE doing any work — the check is
-    // deterministic and needs neither a connection nor an embedding, so an unindexed
-    // provider reports the unsupported field rather than reporting that nothing is
-    // indexed yet.
-    //
-    // One call covers BOTH halves, so a query carrying an unsupported filter AND an
-    // unsupported `hybridSearch` reports all of them together. An earlier shape threw on
-    // `hybridSearch` first and reached the filter check only afterwards, which reported
-    // one offender out of three and made the caller fix the same query twice.
-    //
-    // The check lives in `@vibe-agent-toolkit/rag`, not here: the query surface it
-    // enforces is declared there, and a second provider (the RAG skill actively invites
-    // pgvector/Qdrant implementations) would otherwise inherit the declared fields and
-    // none of the enforcement. What THIS provider supports is data it declares.
-    assertQuerySupported(query as { filters?: Record<string, unknown> }, LANCEDB_QUERY_SUPPORT);
+    // Refuse a malformed query BEFORE doing any work. The schema is strict, so an unknown
+    // filter key or a removed field (`hybridSearch`, `filters.tags`) is an error here, and the
+    // check needs neither a connection nor an embedding.
+    RAGQuerySchema.parse(query);
 
     // Workaround for the @lancedb/lancedb + Bun Arrow buffer lifecycle bug:
     // after table modifications we recreate the connection entirely before reading.
     await this.reconnectAndOpenTable();
 
     if (!this.table) {
-      throw new Error(
+      // Coded: the caller's index holds nothing to search — its input, not a
+      // defect. `vat rag query` maps the code to its INPUT_UNREADABLE refusal.
+      throw new VatError(
+        RAG_INDEX_EMPTY_CODE,
         `No data indexed yet: no '${TABLE_NAME}' table at ${this.config.dbPath}. ` +
           'If indexResources() was called, check its returned `errors` for resources that failed to chunk or embed, ' +
           'and `resourcesEmpty` for resources that had no prose to index (frontmatter-only or blank).',

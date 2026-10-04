@@ -17,6 +17,7 @@ import {
   verifyDestSet,
   type SkillFileEntry,
 } from '../src/files-config.js';
+import { SKILL_PACKAGING_INPUT_INVALID_CODE } from '../src/packaging-errors.js';
 
 const CLI_SOURCE = 'dist/bin/cli.mjs';
 const CLI_DEST = 'scripts/cli.mjs';
@@ -634,6 +635,10 @@ describe('applyFilesConfig', () => {
     await expect(
       applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles }),
     ).rejects.toThrow(/content mismatch/);
+    // An integrity post-condition failing is VAT's defect: uncoded.
+    await expect(
+      applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles }),
+    ).rejects.not.toMatchObject({ code: SKILL_PACKAGING_INPUT_INVALID_CODE });
   });
 
   it('throws when a declared source does not exist', async () => {
@@ -643,6 +648,10 @@ describe('applyFilesConfig', () => {
     await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).rejects.toThrow(
       /does not exist/,
     );
+    // The adopter's to fix, so coded as such — a caller tells it from a defect by code, never message.
+    await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).rejects.toMatchObject({
+      code: SKILL_PACKAGING_INPUT_INVALID_CODE,
+    });
   });
 
   it('throws a helpful error when non-glob source is a directory', async () => {
@@ -1383,7 +1392,7 @@ describe('applyFilesConfig never-package defaults', () => {
 // A thrown message from this module is MACHINE-READABLE OUTPUT.
 //
 // Every throw here reaches `vat skills build`'s stdout verbatim, as
-// `failedSkills[].message` — the document adopters paste into issues and CI
+// a `SKILL_PACKAGING_FAILED` finding's `message` — the document adopters paste into issues and CI
 // logs. So each path a message states has to be project-relative: an absolute
 // one publishes the developer's home directory and whatever the directories
 // above the project are called, which this project treats as worse than
@@ -1392,7 +1401,7 @@ describe('applyFilesConfig never-package defaults', () => {
 // Parameterized over EVERY route that throws, deliberately. The pre-existing
 // guard for this contract (`build-run-ledger.test.ts`) drove a single NON-GLOB
 // fixture, which is the one route whose message never interpolated a path —
-// so it certified "no absolute path in failedSkills[]" for a feature where the
+// so it certified "no absolute path in the published message" for a feature where the
 // glob routes published one ([[fixtures-that-cannot-distinguish]]).
 // ---------------------------------------------------------------------------
 

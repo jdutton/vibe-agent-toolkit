@@ -111,12 +111,13 @@ import {
   type ProjectionColumnType,
   type ProjectionStore,
   allDerivedSpecs,
+  PROJECTION_STATEMENT_REFUSED_CODE,
   projectionColumnTypes,
   projectionShapeDigest,
   quoteIdentifier,
   vatCacheNamespaceRoot,
 } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 
 import {
@@ -342,7 +343,7 @@ const DIGIT = /\d/;
  * reported rather than counted, because positional values cannot reach it on
  * every Node this package supports: a `:x`, `@x` or `$x` name never binds
  * positionally, and `?NNN` does not either on the declared floor — measured,
- * Node 22.13.0 and 22.14.0 throw `column index out of range` for
+ * Node 22.13.0, 22.14.0 and 22.16.0 throw `column index out of range` for
  * `SELECT ?1 AS x` with one value, while 22.22.3 and 24.x bind it. A form that
  * works on one supported runtime and throws an unrelated error on another is
  * refused on all of them, with a message that names the form.
@@ -435,7 +436,8 @@ function indexPastRun(sql: string, from: number, pattern: RegExp): number {
 function assertParametersBound(sql: string, parameters: readonly SqliteValue[]): void {
   const { slots, unreachable } = countBoundParameters(sql);
   if (unreachable !== undefined) {
-    throw new Error(
+    throw new VatError(
+      PROJECTION_STATEMENT_REFUSED_CODE,
       `This statement has a named or numbered parameter (\`${unreachable}\`), and this surface binds`
       + ' values positionally into bare `?` slots only — write `?` instead, once per value.',
     );
@@ -447,7 +449,8 @@ function assertParametersBound(sql: string, parameters: readonly SqliteValue[]):
     ? 'SQLite binds a missing value as NULL, so an under-bound statement compares against nothing'
       + ' and reports that it succeeded'
     : 'there is no placeholder for the extra value';
-  throw new Error(
+  throw new VatError(
+    PROJECTION_STATEMENT_REFUSED_CODE,
     `This statement has ${placeholders} and ${values}; ${consequence}. Bind exactly one value per placeholder.`,
   );
 }
@@ -759,6 +762,23 @@ export interface SqlQueryableStore extends ProjectionStore {
   query(sql: string, ...parameters: readonly SqliteValue[]): readonly Record<string, unknown>[];
 
   /**
+   * The result columns one read-only statement would produce, in order —
+   * without running it.
+   *
+   * 🔑 Beside {@link SqlQueryableStore.query} rather than folded into it,
+   * because rows cannot carry this: a statement that selects nothing still has
+   * a shape, and a caller that read its column names off the first row would
+   * publish none for every empty answer. SQLite knows the names at PREPARE
+   * time, so this compiles and never steps — no row is computed.
+   *
+   * @param sql - One `SELECT`, `WITH` or `VALUES` statement
+   * @param parameters - The values {@link SqlQueryableStore.query} would bind, gated the same way
+   * @returns Each result column's name — its alias where the statement gives one
+   * @throws Everything {@link SqlQueryableStore.query} throws for a statement it would refuse
+   */
+  columns(sql: string, ...parameters: readonly SqliteValue[]): readonly string[];
+
+  /**
    * Write the rows one lens evaluation produced, so SQL can ask about them.
    *
    * ## 🚨 "A lens's output never reaches the shared on-disk store" is enforced
@@ -979,7 +999,8 @@ function assertSingleStatement(sql: string): void {
   // correct and expected behaviour. A stray LITERAL after the `;` is still
   // refused, because that one really is text the caller meant and SQLite drops.
   if (separator >= 0 && indexPastSpaceAndComments(sql, separator + 1) < sql.length) {
-    throw new Error(
+    throw new VatError(
+      PROJECTION_STATEMENT_REFUSED_CODE,
       'A projection query must be a single statement. SQLite compiles only the first and discards'
       + ' the rest without error, so the trailing text would be ignored rather than run.',
     );
@@ -1019,7 +1040,8 @@ function assertIsQuery(sql: string): void {
 
   const admitted = QUERY_STATEMENT_KEYWORDS.map((word) => `\`${word}\``).join(', ');
   const found = keyword === '' ? 'none of them' : `\`${keyword}\``;
-  throw new Error(
+  throw new VatError(
+    PROJECTION_STATEMENT_REFUSED_CODE,
     `A projection query must be a read-only query, so it has to begin with one of ${admitted}.`
     + ` This one begins with ${found}, and a statement the engine accepts without producing rows`
     + ' cannot be told apart from a check that passed — on this surface, selecting nothing IS'
@@ -1184,8 +1206,10 @@ function createSchema(database: DatabaseSync): void {
  * @returns Whatever `step` returns
  * @throws The kind, single-statement and placeholder-count refusals, or
  *   SQLite's own for a name the schema lacks
+ *
+ * Exported for its unit test only; not on the package barrel.
  */
-function runGated<T>(
+export function runGated<T>(
   database: DatabaseSync,
   sql: string,
   parameters: readonly SqliteValue[],
@@ -1195,12 +1219,84 @@ function runGated<T>(
   assertIsQuery(sql);
   assertParametersBound(sql, parameters);
   database.exec('PRAGMA query_only = 1');
+  let failed = false;
   try {
     return step(database.prepare(sql));
+  } catch (error) {
+    failed = true;
+    // The engine refusing the CALLER'S statement — a name the schema lacks, a
+    // write `query_only` stopped — is the same claim the gates above make, so it
+    // carries the same code. Anything else — a corrupt file, a lock timeout, a
+    // full disk — is the STORE failing and propagates as it was thrown.
+    if (isStatementRefusal(error)) throw new VatError(PROJECTION_STATEMENT_REFUSED_CODE, error.message, { cause: error });
+    throw error;
   } finally {
+    restoreConnection(database, failed);
+  }
+}
+
+/**
+ * Put the connection back the way `runGated` found it: writable, with no
+ * foreign schema attached.
+ *
+ * 🔑 After a failed step the ORIGINAL failure wins. A connection the fault left
+ * unusable (closed, corrupt) makes this restore throw too, and a `finally` that
+ * throws replaces the error in flight — so the one thing the caller needed to
+ * see, what actually went wrong, would be lost to a secondary "database is not
+ * open". The secondary failure is dropped; the connection it concerns is
+ * already the subject of the error being thrown. After a SUCCESSFUL step a
+ * restore failure is the only failure, and it propagates.
+ *
+ * @param database - The connection
+ * @param stepFailed - Whether an error is already propagating
+ */
+function restoreConnection(database: DatabaseSync, stepFailed: boolean): void {
+  try {
     database.exec('PRAGMA query_only = 0');
     detachForeignSchemas(database);
+  } catch (restoreError) {
+    if (!stepFailed) throw restoreError;
   }
+}
+
+/**
+ * SQLite's EXTENDED result codes that mean the STATEMENT was refused, matched
+ * exactly:
+ *
+ * - `SQLITE_ERROR` (1) — a name the schema lacks, a syntax error
+ * - `SQLITE_ERROR_MISSING_COLLSEQ` (257) — the statement names a collation that
+ *   does not exist
+ * - `SQLITE_READONLY` (8) — a write `PRAGMA query_only` stopped
+ * - `SQLITE_RANGE` (25) — a bind index out of range
+ *
+ * 🚨 Never masked to the primary code. `& 0xff` folds whole families in, and
+ * the READONLY family is mostly the ENVIRONMENT: `READONLY_RECOVERY`,
+ * `CANTLOCK`, `ROLLBACK`, `DBMOVED`, `CANTINIT` and `DIRECTORY` are a store
+ * whose directory or file went read-only — which a WAL-mode SELECT can meet.
+ * `ERROR_RETRY` (513) and `ERROR_SNAPSHOT` (769) are not the statement's
+ * fault either.
+ */
+const STATEMENT_REFUSAL_RESULT_CODES: ReadonlySet<number> = new Set([1, 8, 25, 257]);
+
+/**
+ * Whether `error` is SQLite refusing the caller's statement, as opposed to the
+ * store itself failing.
+ *
+ * 🚨 `node:sqlite` reports EVERY SQLite failure under one `code`,
+ * `ERR_SQLITE_ERROR` — `SQLITE_BUSY`, `SQLITE_IOERR`, `SQLITE_CORRUPT`,
+ * `SQLITE_NOTADB`, `SQLITE_FULL` and `SQLITE_NOMEM` included. Keying on that
+ * `code` published a corrupt database as "your statement is wrong". The
+ * EXTENDED result code in `errcode`, matched exactly against
+ * {@link STATEMENT_REFUSAL_RESULT_CODES}, is what says which failure this is.
+ *
+ * Exported for its unit test only; not on the package barrel.
+ */
+export function isStatementRefusal(error: unknown): error is Error {
+  if (!(error instanceof Error)) return false;
+  const { code, errcode } = error as Error & { code?: unknown; errcode?: unknown };
+  return code === 'ERR_SQLITE_ERROR'
+    && typeof errcode === 'number'
+    && STATEMENT_REFUSAL_RESULT_CODES.has(errcode);
 }
 
 /** The {@link ProjectionCompileProbe} contract over one in-memory connection. */
@@ -1664,6 +1760,16 @@ class SqliteProjectionStore implements SqlQueryableStore {
       parameters,
       (statement) => statement.all(...parameters) as readonly Record<string, unknown>[],
     );
+  }
+
+  /** @inheritdoc */
+  columns(sql: string, ...parameters: readonly SqliteValue[]): readonly string[] {
+    this.#assertOpen();
+    // Through the same gates as `query`, and then prepared but never stepped.
+    // `StatementSync.columns()` is why the engines floor is 22.16.0, not 22.13.0:
+    // Node added it in 22.16.0 (see the package header for the rejected
+    // alternative).
+    return runGated(this.#database, sql, parameters, (statement) => statement.columns().map((column) => column.name));
   }
 
   /** @inheritdoc */

@@ -31,7 +31,7 @@ export function createOrgCostCommand(): Command {
     .option('--debug', 'Enable debug logging')
     .action(
       async (options: { from?: string; to?: string; groupBy?: string; debug?: boolean }) => {
-        await executeOrgCommand('OrgCost', options.debug, async ({ client }) => {
+        await executeOrgCommand('claude org cost', options.debug, async ({ client }) => {
           let startingAt = options.from ?? defaultFirstOfMonth();
           const endingAt = options.to ?? new Date().toISOString();
           const allData: CostBucket[] = [];
@@ -75,7 +75,6 @@ Description:
   Note: amount is a string (not a number) in the API response.
 
 Output:
-  - status: success
   - count: number of cost entries
   - data[]: array of cost entries with amount as string
 

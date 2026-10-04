@@ -64,7 +64,9 @@ describe('runSkillTestHarness — security ack gate', () => {
 
     expect(result.exitCode).toBe(ExitCode.ERROR);
     expect(result.reason).toBe('preflight');
-    expect(result.summary).toContain('Security acknowledgment required');
+    // The missing flag is the invocation's mistake, coded where the harness decides it.
+    expect(result).toMatchObject({ refusal: 'USAGE_INVALID' });
+    expect(result.description).toContain('Security acknowledgment required');
     // The gate must short-circuit BEFORE any executor/grader spawn.
     expect(vi.mocked(spawnHeadlessClaude)).not.toHaveBeenCalled();
   });

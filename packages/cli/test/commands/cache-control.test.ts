@@ -183,28 +183,25 @@ describe('clearCacheDirectory', () => {
   it('removes a populated cache tree and reports what went', async () => {
     const fake = await createFakeCache(workDir);
 
-    const report = await clearCacheDirectory(fake.root);
+    const outcome = await clearCacheDirectory(fake.root);
 
-    expect(report.status).toBe('success');
-    expect(report.existed).toBe(true);
-    expect(report.entriesRemoved).toBe(fake.fileCount);
-    expect(report.bytesRemoved).toBe(fake.totalBytes);
-    expect(report.removed).toEqual([AUTH_TENANT, EXTERNAL_LINKS, 'parse']);
+    expect(outcome.complete).toBe(true);
+    expect(outcome.data.existed).toBe(true);
+    expect(outcome.data.entriesRemoved).toBe(fake.fileCount);
+    expect(outcome.data.bytesRemoved).toBe(fake.totalBytes);
+    expect(outcome.data.removed).toEqual([AUTH_TENANT, EXTERNAL_LINKS, 'parse']);
+    expect(outcome.data.remaining).toEqual([]);
     await expect(fs.access(fake.root)).rejects.toThrow();
   });
 
   it('succeeds on a directory that does not exist', async () => {
     const missing = safePath.join(workDir, 'never-created');
 
-    const report = await clearCacheDirectory(missing);
+    const outcome = await clearCacheDirectory(missing);
 
-    expect(report).toEqual({
-      status: 'success',
-      cacheDir: missing,
-      existed: false,
-      removed: [],
-      entriesRemoved: 0,
-      bytesRemoved: 0,
+    expect(outcome).toEqual({
+      complete: true,
+      data: { cacheDir: missing, existed: false, removed: [], remaining: [], entriesRemoved: 0, bytesRemoved: 0 },
     });
   });
 
@@ -213,9 +210,9 @@ describe('clearCacheDirectory', () => {
     // an operator would be left with a cache they can neither use nor remove.
     await withVatCache(DISABLED, async () => {
       const fake = await createFakeCache(workDir);
-      const report = await clearCacheDirectory(fake.root);
-      expect(report.existed).toBe(true);
-      expect(report.entriesRemoved).toBe(fake.fileCount);
+      const { data } = await clearCacheDirectory(fake.root);
+      expect(data.existed).toBe(true);
+      expect(data.entriesRemoved).toBe(fake.fileCount);
       await expect(fs.access(fake.root)).rejects.toThrow();
     });
   });
@@ -239,12 +236,13 @@ describe('clearCacheDirectory', () => {
     });
 
     try {
-      const report = await clearCacheDirectory(fake.root);
+      const outcome = await clearCacheDirectory(fake.root);
+      if (outcome.complete) throw new Error('expected the clear to stop part-way');
+      const report = outcome.data;
 
-      expect(report.status).toBe('partial');
       expect(report.removed).toEqual([AUTH_TENANT, EXTERNAL_LINKS]);
       expect(report.remaining).toEqual(['parse']);
-      expect(report.reason).toContain('ENOTEMPTY');
+      expect(outcome.reason).toContain('ENOTEMPTY');
       // The counts describe what actually went. Reporting the pre-delete
       // measurement here would claim the whole cache was reclaimed while most
       // of it is still on disk — the failure this branch exists to prevent.
@@ -253,6 +251,36 @@ describe('clearCacheDirectory', () => {
       expect(report.bytesRemoved).toBeLessThan(fake.totalBytes);
     } finally {
       rm.mockRestore();
+    }
+  });
+
+  it('keeps a stopped-short delete RUN_INCOMPLETE when the re-read of the survivors is refused too', async () => {
+    // The re-read after a failed rm is what names what went; if the OS refuses
+    // it, what finished is unknowable — but the run still stopped part-way, and
+    // "could not read the cache" would lose the cause (the rm's own error).
+    const fake = await createFakeCache(workDir);
+    const realReaddir = fs.readdir;
+    let deleted = false;
+    const rm = vi.spyOn(fs, 'rm').mockImplementation(async () => {
+      deleted = true;
+      throw Object.assign(new Error('ENOTEMPTY: directory not empty'), { code: 'ENOTEMPTY' });
+    });
+    const readdir = vi.spyOn(fs, 'readdir').mockImplementation(async (...args: unknown[]) => {
+      if (deleted) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      return (realReaddir as (...rest: unknown[]) => Promise<never>)(...args);
+    });
+
+    try {
+      const outcome = await clearCacheDirectory(fake.root);
+
+      expect(outcome.complete).toBe(false);
+      expect(outcome.data).toBeNull();
+      if (outcome.complete) return;
+      expect(outcome.reason).toContain('ENOTEMPTY');
+      expect(outcome.reason).toContain('EACCES');
+    } finally {
+      rm.mockRestore();
+      readdir.mockRestore();
     }
   });
 
@@ -271,11 +299,11 @@ describe('clearCacheDirectory', () => {
       return (realLstat as (...args: unknown[]) => Promise<never>)(target, ...rest);
     });
     try {
-      const report = await clearCacheDirectory(fake.root);
-      expect(report.status).toBe('success');
+      const outcome = await clearCacheDirectory(fake.root);
+      expect(outcome.complete).toBe(true);
       // The vanished file was listed (so it counts as an entry) but weighs nothing.
-      expect(report.entriesRemoved).toBe(fake.fileCount + 1);
-      expect(report.bytesRemoved).toBe(fake.totalBytes);
+      expect(outcome.data.entriesRemoved).toBe(fake.fileCount + 1);
+      expect(outcome.data.bytesRemoved).toBe(fake.totalBytes);
     } finally {
       lstat.mockRestore();
     }
@@ -285,7 +313,8 @@ describe('clearCacheDirectory', () => {
       Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }),
     );
     try {
-      await expect(clearCacheDirectory(refused.root)).rejects.toMatchObject({ code: 'EACCES' });
+      // Refused, and coded as the input's refusal at the entry — never "reclaimed", never INTERNAL_ERROR.
+      await expect(clearCacheDirectory(refused.root)).rejects.toMatchObject({ refusal: 'INPUT_UNREADABLE' });
     } finally {
       denied.mockRestore();
     }
@@ -295,11 +324,11 @@ describe('clearCacheDirectory', () => {
     const empty = safePath.join(workDir, CACHE_DIR_NAME);
     await fs.mkdir(empty, { recursive: true });
 
-    const report = await clearCacheDirectory(empty);
+    const { data } = await clearCacheDirectory(empty);
 
-    expect(report.existed).toBe(true);
-    expect(report.entriesRemoved).toBe(0);
-    expect(report.removed).toEqual([]);
+    expect(data.existed).toBe(true);
+    expect(data.entriesRemoved).toBe(0);
+    expect(data.removed).toEqual([]);
   });
 });
 

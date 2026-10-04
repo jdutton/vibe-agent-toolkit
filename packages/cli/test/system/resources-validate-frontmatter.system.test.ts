@@ -9,7 +9,7 @@ const binPath = getBinPath(import.meta.url);
 const SCHEMA_JSON = 'schema.json';
 const SCHEMA_YAML = 'schema.yaml';
 const TEST_CONTENT = '# Content';
-const STATUS_SUCCESS = 'status: success';
+const STATUS_OK = 'status: ok';
 const TEST_TITLE = 'Test Document';
 
 // Common schemas for tests
@@ -31,7 +31,7 @@ const TITLE_ONLY_SCHEMA = {
 };
 
 /**
- * Helper to validate with text format and return stderr output
+ * Helper to validate with text format (one line per finding, on stdout)
  */
 function validateWithTextFormat(dir: string, schemaFilename: string) {
   return executeCli(binPath, [
@@ -71,7 +71,7 @@ describe('vat resources validate --frontmatter-schema (system test)', () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(STATUS_SUCCESS);
+    expect(result.stdout).toContain(STATUS_OK);
   });
 
   it('should report frontmatter validation errors', () => {
@@ -90,10 +90,10 @@ describe('vat resources validate --frontmatter-schema (system test)', () => {
 
     expect(result.status).toBe(1);
 
-    // Check error details in stderr (use text format)
+    // Check error details in the text rendering (one line per finding, stdout)
     const textResult = validateWithTextFormat(tempDir, SCHEMA_JSON);
-    expect(textResult.stderr).toContain('Frontmatter validation');
-    expect(textResult.stderr).toContain('description');
+    expect(textResult.stdout).toContain('Frontmatter validation');
+    expect(textResult.stdout).toContain('description');
   });
 
   it('should support YAML schema files', () => {
@@ -110,7 +110,7 @@ describe('vat resources validate --frontmatter-schema (system test)', () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(STATUS_SUCCESS);
+    expect(result.stdout).toContain(STATUS_OK);
   });
 
   it('should allow extra frontmatter fields by default', () => {
@@ -129,7 +129,7 @@ describe('vat resources validate --frontmatter-schema (system test)', () => {
     );
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(STATUS_SUCCESS);
+    expect(result.stdout).toContain(STATUS_OK);
   });
 
   it('should report missing frontmatter when required', () => {
@@ -145,9 +145,9 @@ describe('vat resources validate --frontmatter-schema (system test)', () => {
 
     expect(result.status).toBe(1);
 
-    // Check error details in stderr (use text format)
+    // Check error details in the text rendering (one line per finding, stdout)
     const textResult = validateWithTextFormat(tempDir, SCHEMA_JSON);
-    expect(textResult.stderr).toContain('No frontmatter found');
-    expect(textResult.stderr).toContain('title');
+    expect(textResult.stdout).toContain('No frontmatter found');
+    expect(textResult.stdout).toContain('title');
   });
 });

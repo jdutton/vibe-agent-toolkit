@@ -4,12 +4,56 @@
  * Discovers and parses project configuration files with directory tree walk-up.
  */
 
-import { findConfigFile } from '@vibe-agent-toolkit/utils';
-import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
+import { findConfigFile, isFilesystemAccessError, VatError } from '@vibe-agent-toolkit/utils';
+import { readTextContent, readTextContentSync } from '@vibe-agent-toolkit/utils/fs';
 import { parse as parseYaml } from 'yaml';
 
-import { parseConfigAllowingUnknownKeys } from './config-issues.js';
+import { CONFIG_LOAD_CODE, CONFIG_UNREADABLE_CODE, parseConfigAllowingUnknownKeys } from './config-issues.js';
 import { ProjectConfigSchema, type ProjectConfig } from './schemas/project-config.js';
+
+/**
+ * Code a failed config read: an errno is about the adopter's own file, so it
+ * becomes {@link CONFIG_UNREADABLE_CODE}; anything else is a defect and
+ * propagates as thrown.
+ */
+function configReadFailure(configPath: string, error: unknown): unknown {
+  if (!isFilesystemAccessError(error)) return error;
+  const detail = error instanceof Error ? error.message : String(error);
+  return new VatError(CONFIG_UNREADABLE_CODE, `Cannot read config file ${configPath}: ${detail}`, { cause: error });
+}
+
+/**
+ * Read a `vibe-agent-toolkit.config.yaml` through the one decoder — an adopter's
+ * config may be UTF-16LE (PowerShell 5.1's default) or BOM-prefixed — coding a
+ * read the OS refused. The ONE config read every reader shares, so one broken
+ * file gets one refusal code whichever verb met it.
+ *
+ * @param configPath - Path to the config file
+ * @returns The decoded text
+ * @throws `VatError` `CONFIG_UNREADABLE` when the OS refuses the read
+ */
+export async function readConfigText(configPath: string): Promise<string> {
+  try {
+    return (await readTextContent(configPath)).text;
+  } catch (error) {
+    throw configReadFailure(configPath, error);
+  }
+}
+
+/**
+ * {@link readConfigText}, synchronously.
+ *
+ * @param configPath - Path to the config file
+ * @returns The decoded text
+ * @throws `VatError` `CONFIG_UNREADABLE` when the OS refuses the read
+ */
+export function readConfigTextSync(configPath: string): string {
+  try {
+    return readTextContentSync(configPath).text;
+  } catch (error) {
+    throw configReadFailure(configPath, error);
+  }
+}
 
 /**
  * Parse a project configuration file.
@@ -26,13 +70,12 @@ import { ProjectConfigSchema, type ProjectConfig } from './schemas/project-confi
  * @param configPath - Absolute path to config file
  * @param onUnknownKeys - Receives a warning when unknown keys were dropped
  * @returns Parsed and validated configuration
- * @throws Error if file cannot be read, YAML is invalid, or validation fails for
- *   any reason other than an unknown key
+ * @throws `VatError` `CONFIG_UNREADABLE` if the OS refuses the read; `VatError` `CONFIG_LOAD` if YAML is
+ *   invalid, or validation fails for any reason other than an unknown key
  *
  * @example
  * ```typescript
  * const config = await parseConfigFile('/project/vibe-agent-toolkit.config.yaml', console.warn);
- * console.log(`Version: ${config.version}`);
  * console.log(`Collections: ${Object.keys(config.resources?.collections ?? {}).join(', ')}`);
  * ```
  */
@@ -40,18 +83,14 @@ export async function parseConfigFile(
   configPath: string,
   onUnknownKeys: (message: string) => void = (message) => process.stderr.write(`${message}\n`),
 ): Promise<ProjectConfig> {
-  // Read file content through the one decoder. An adopter's config file is
-  // authored by hand on whatever platform they use — PowerShell 5.1 writes
-  // UTF-16LE by default — and `readFile(path, 'utf-8')` would hand the YAML
-  // parser mojibake, or a BOM that makes the first key unparseable.
-  const { text: content } = await readTextContent(configPath);
+  const content = await readConfigText(configPath);
 
   // Parse YAML
   let parsed: unknown;
   try {
     parsed = parseYaml(content);
   } catch (error) {
-    throw new Error(`Invalid YAML in config file: ${error instanceof Error ? error.message : String(error)}`);
+    throw new VatError(CONFIG_LOAD_CODE, `Invalid YAML in config file: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
 
   // Validate against schema. The message is built by the ONE formatter all THREE

@@ -41,18 +41,32 @@ Description:
     - file:// URL (local bare-repo testing)
 
 Output:
-  <--out>/<UTC-date>-<vat-short-sha>/
+  A YAML report on stdout (status ok, findings or error); examined counts the
+  seed entries. Its data holds:
+  - outDir:  the resolved --out
+  - entries: one row per entry — name, audit (ok | findings | unloadable),
+             review (ok | skipped | error), outputPath (its audit file,
+             relative to outDir; null when unloadable)
+  An entry the scan could not finish — its audit could not run, or its
+  requested review did not — is a CORPUS_ENTRY_INCOMPLETE warning naming it.
+  What the plugins' audits found is in their audit files, not in this report.
+
+  Files, under <--out>/<UTC-date>-<vat-short-sha>/:
     summary.yaml          # index: per-plugin status + totals
-    <name>-audit.yaml     # full audit output per plugin
-                          #   results: one entry per audited file; issues: run-level
-                          #   findings. An audit over 0 files is audit.status: error
-                          #   with one RESOURCE_CHECK_BROKEN, never a clean row.
+    <name>-audit.yaml     # the vat audit report for the plugin — the same
+                          #   envelope and schema (packages/cli/schemas/corpus-audit.json).
+                          #   An audit over 0 files carries one RESOURCE_CHECK_BROKEN,
+                          #   never a clean row.
     <name>-review.md      # full skill-review output (only with --with-review)
 
-Exit codes:
-  0  - scan completed (regardless of unloadable plugins)
-  2  - scan failed to start (seed missing, --out missing, etc.)
-  130 - interrupted by SIGINT (partial results written)
+Exit Codes:
+  0 - Scanned, whatever the plugins held (an entry that could not be finished is a
+      CORPUS_ENTRY_INCOMPLETE warning: status findings, still exit 0; this verb never exits 1)
+  2 - Could not run (error.code: USAGE_INVALID for a seed file that is not
+      there, CONFIG_INVALID for a seed that does not parse or validate — an
+      empty plugins list included,
+      INPUT_UNREADABLE for one the OS will not read, RUN_INCOMPLETE when a
+      write under --out failed — the entries that finished are in data)
 
 Requirements:
   projectRoot: optional (tolerates absence)

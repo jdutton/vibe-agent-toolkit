@@ -74,6 +74,7 @@ describe('marketplace publish with an oversized commit message', () => {
       publishDir,
       branch: 'claude-marketplace',
       remote: bareRemote,
+      remoteFromConfig: true,
       commitMessage,
       force: false,
       dryRun: false,

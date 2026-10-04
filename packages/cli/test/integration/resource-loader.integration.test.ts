@@ -108,7 +108,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
       await writeFile(
         safePath.join(projectDir, CONFIG_FILE),
-        'version: 1\nresources:\n  exclude:\n    - "docs/drafts/**"\n'
+        'resources:\n  exclude:\n    - "docs/drafts/**"\n'
       );
 
       await inProjectDir(projectDir, async () => {
@@ -151,7 +151,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
       // Create config that excludes 'other'
       await writeFile(
         safePath.join(projectDir, CONFIG_FILE),
-        'version: 1\nresources:\n  exclude:\n    - "other/**"\n'
+        'resources:\n  exclude:\n    - "other/**"\n'
       );
 
       await inProjectDir(projectDir, async () => {
@@ -174,7 +174,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
       // Create config that only includes docs/
         await writeFile(
         safePath.join(projectDir, CONFIG_FILE),
-        'version: 1\nresources:\n  include:\n    - "docs/**/*.md"\n'
+        'resources:\n  include:\n    - "docs/**/*.md"\n'
       );
 
       await inProjectDir(projectDir, async () => {
@@ -227,8 +227,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
       // Create config with collections
         await writeFile(
         safePath.join(projectDir, CONFIG_FILE),
-        `version: 1
-resources:
+        `resources:
   collections:
     guides:
       include:

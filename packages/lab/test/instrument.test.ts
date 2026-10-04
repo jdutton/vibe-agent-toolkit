@@ -43,6 +43,9 @@ import type { InstrumentSource } from '../src/harness/types.js';
 /** This checkout — packages/lab/test → packages/lab → packages → root. */
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '../../..');
 
+/** A closure digest: SHA-256, lowercase hex. */
+const CLOSURE_DIGEST = /^[0-9a-f]{64}$/;
+
 const SEMVER = /^\d+\.\d+\.\d+/;
 const SHA1 = /^[0-9a-f]{40}$/;
 const VAT_BIN_SUFFIX = /packages\/cli\/dist\/bin\.js$/;
@@ -205,6 +208,22 @@ describe('resolveInstrument — kind: tree', () => {
 
     expect(resolved.version.version).toMatch(SEMVER);
     expect(resolved.version.commit).toMatch(SHA1);
+    expect(resolved.version.closure).toMatch(CLOSURE_DIGEST);
+  });
+
+  it('stamps the SAME closure for this checkout named as tree: and as dist:', async () => {
+    // The two routes start the closure walk from different inputs — the checkout
+    // root and the dist directory — and must land on one package root. A route
+    // that digested from the wrong directory would stamp a different (or no)
+    // closure for the very same bytes.
+    const tree = await resolveInstrument({ kind: 'tree', path: REPO_ROOT });
+    const dist = await resolveInstrument({
+      kind: 'dist',
+      path: safePath.join(REPO_ROOT, CLI_DIST_DIR),
+    });
+
+    expect(tree.version.closure).toMatch(CLOSURE_DIGEST);
+    expect(dist.version.closure).toBe(tree.version.closure);
   });
 
   it('distinguishes two builds carrying the same version by their commit', async () => {
@@ -327,6 +346,8 @@ describe('resolveInstrument — kind: dist', () => {
     expect(toForwardSlash(resolved.leadingArgs[0] ?? '')).toMatch(VAT_BIN_SUFFIX);
     expect(resolved.version.version).toMatch(SEMVER);
     expect(resolved.version.commit).toBeNull();
+    // A dist: arm has no commit, so the closure is the only thing naming its bytes.
+    expect(resolved.version.closure).toMatch(CLOSURE_DIGEST);
   });
 
   it('resolves a bin file named directly, and reads the nearest package.json', async () => {
@@ -445,7 +466,7 @@ describe('resolveInstrument — kind: npx', () => {
     expect(resolved.leadingArgs).toEqual(['--yes', spec]);
     // `dirty: null`, never `false`: a published tarball has no checkout, so
     // there is nothing that could have been dirty and nothing to claim clean.
-    expect(resolved.version).toEqual({ version, commit: null, dirty: null });
+    expect(resolved.version).toEqual({ version, commit: null, dirty: null, closure: null });
   });
 
   /**

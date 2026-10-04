@@ -343,7 +343,7 @@ function routedSpelling(rel: string, target: PackagingTarget): string {
  *   production caller ever passed either: the only caller is the packager, via
  *   `checkMissingReferencedPaths`, and it genuinely does not know the plugin root
  *   — it packages one skill into its own output directory before any plugin is
- *   assembled. `vat build`'s `validateShippedPluginSkillLinks` does walk a whole
+ *   assembled. `vat build`'s `checkShippedPluginSkillLinks` does walk a whole
  *   plugin tree, and wiring this there was considered and REJECTED: it runs only
  *   `checkBrokenPackagedLinks`, its documented stance is the opposite one (a skill
  *   is a self-contained portable unit, so an escape from its own directory is a

@@ -5,10 +5,12 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { isVatError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { refuseSyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
-import { findPluginsByPackage, uninstallPlugin } from '../../src/install/plugin-uninstall.js';
+import { CLAUDE_USER_STATE_WRITE_FAILED_CODE } from '../../src/install/plugin-registry.js';
+import { findPluginsByPackage, parsePluginKey, PLUGIN_KEY_INVALID_CODE, uninstallPlugin } from '../../src/install/plugin-uninstall.js';
 import type { ClaudeUserPaths } from '../../src/paths/claude-paths.js';
 import { setupPluginTestPaths } from '../test-helpers.js';
 
@@ -101,6 +103,25 @@ describe('uninstallPlugin', () => {
     expect(existsSync(safePath.join(paths.marketplacesDir, 'my-market', 'plugins', 'my-skill'))).toBe(true);
   });
 
+  it.each(['installedPluginsPath', 'userSettingsPath'] as const)(
+    'codes a %s write it could not make as CLAUDE_USER_STATE_WRITE_FAILED, never an uncoded throw',
+    async (file) => {
+      const paths = getPaths();
+      setupInstalledPlugin(paths, 'my-skill', 'my-market', '@test/pkg');
+      const restore = refuseSyncFs('writeFileSync', paths[file], 'EACCES');
+      let thrown: unknown;
+      try {
+        await uninstallPlugin({ pluginKey: 'my-skill@my-market', paths });
+      } catch (error) {
+        thrown = error;
+      } finally {
+        restore();
+      }
+      expect(isVatError(thrown, CLAUDE_USER_STATE_WRITE_FAILED_CODE), String(thrown)).toBe(true);
+      expect(String(thrown)).toContain('my-skill@my-market');
+    },
+  );
+
   it('warns and cleans if plugin dir exists but not in registry', async () => {
     const paths = getPaths();
     // Only artifact 1 (dir) exists — not VAT-installed
@@ -110,6 +131,22 @@ describe('uninstallPlugin', () => {
     expect(result.removed).toBe(true);
     expect(result.warning).toContain('not installed via VAT');
     expect(existsSync(mpPluginDir)).toBe(false);
+  });
+});
+
+describe('parsePluginKey', () => {
+  it('splits at the LAST @, so a scoped plugin name keeps its own', () => {
+    expect(parsePluginKey('@scope/p@mp')).toStrictEqual({ pluginName: '@scope/p', marketplace: 'mp' });
+  });
+
+  it.each(['no-marketplace', '@mp', 'p@'])('refuses %s with PLUGIN_KEY_INVALID', (key) => {
+    let thrown: unknown;
+    try {
+      parsePluginKey(key);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(isVatError(thrown, PLUGIN_KEY_INVALID_CODE), String(thrown)).toBe(true);
   });
 });
 

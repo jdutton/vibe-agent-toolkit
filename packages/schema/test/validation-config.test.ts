@@ -204,6 +204,17 @@ describe('ValidationConfigSchema — the CUSTOM: override namespace', () => {
     expect(result.success).toBe(false);
   });
 
+  // `vat skills build` / `vat skills package` / `vat verify` / `vat skill test run` / `vat doctor` / `vat rag index` / `vat corpus scan` decide these codes' severity themselves; an override would parse and do nothing.
+  it.each(['SKILL_BUILD_TARGET_NOT_BUILDABLE', 'SKILL_PACKAGING_FAILED', 'SKILL_PACKAGE_TOO_LARGE', 'FILES_CONFIG_DEST_MISSING', 'SKILL_TEST_EVAL_FAILED', 'DOCTOR_CHECK_FAILED', 'DOCTOR_CHECK_WARNED', 'RAG_DOCUMENT_INDEX_FAILED', 'CORPUS_ENTRY_INCOMPLETE'])(
+    'rejects the non-overridable packaging code %s as a severity or allow key',
+    (code) => {
+      // Control: the same shapes parse for an overridable code, so a refusal below is about the key.
+      expect(ValidationConfigSchema.safeParse({ allow: { LINK_DROPPED_BY_DEPTH: [{ paths: ['**'], reason: 'x' }] } }).success).toBe(true);
+      expect(ValidationConfigSchema.safeParse({ severity: { [code]: 'ignore' } }).success).toBe(false);
+      expect(ValidationConfigSchema.safeParse({ allow: { [code]: [{ paths: ['**'], reason: 'x' }] } }).success).toBe(false);
+    },
+  );
+
   /**
    * The refusal MESSAGE, which used to send half its readers to the wrong place.
    *
@@ -277,5 +288,29 @@ describe('customCheckCode', () => {
     expect(customCheckCode('my-check')).toBe('CUSTOM:my-check');
     expect(isCustomCheckCode(customCheckCode('my-check'))).toBe(true);
     expect(isCustomCheckCode(CUSTOM_CHECK_CODE_PREFIX)).toBe(false);
+  });
+});
+
+describe('ValidationConfigSchema — refusal codes are not config keys', () => {
+  // 🔑 A refusal says a run could not do its job. It has no legitimate
+  // `ignore` and no path to waive, so it is refused under BOTH maps — and the
+  // severity refusal still names the code as deliberately non-overridable.
+  it.each(['RESOURCE_CHECK_BROKEN', 'INTERNAL_ERROR'])(
+    'refuses a refusal code as a severity key and as an allow key (%s)',
+    (code) => {
+      const message = refusalFor(code);
+      expect(message).toContain(code);
+      expect(message).toContain('refusal');
+      const allow = ValidationConfigSchema.safeParse({ allow: { [code]: [{ reason: 'no' }] } });
+      expect(allow.success).toBe(false);
+    },
+  );
+
+  it('still parses a finding code under both maps', () => {
+    const result = ValidationConfigSchema.safeParse({
+      severity: { LINK_MISSING_TARGET: 'warning' },
+      allow: { LINK_MISSING_TARGET: [{ reason: 'positive control' }] },
+    });
+    expect(result.success).toBe(true);
   });
 });

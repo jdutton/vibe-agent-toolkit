@@ -1,10 +1,11 @@
 import fs from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { AGENT_MANIFEST_INVALID_CODE } from '@vibe-agent-toolkit/agent-config';
+import { createSymlink, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { buildAgentSkill } from '../src/builder.js';
+import { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE, buildAgentSkill } from '../src/builder.js';
 
 const AGENT_YAML = 'agent.yaml';
 const PACKAGE_JSON_NAME = 'package.json';
@@ -302,8 +303,55 @@ spec:
     const manifestPath = safePath.join(agentDir, AGENT_YAML);
     await fs.writeFile(manifestPath, manifestContent);
 
+    // Coded as the manifest's mistake, so the CLI refuses CONFIG_INVALID — never a VAT defect.
     await expect(buildAgentSkill({ agentPath: manifestPath }))
       .rejects
-      .toThrow('Agent must have a system prompt');
+      .toMatchObject({ code: AGENT_MANIFEST_INVALID_CODE, message: expect.stringContaining('Agent must have a system prompt') });
+  });
+
+  it('refuses a build with no output path and no enclosing package.json as a coded refusal', async () => {
+    const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'no-package');
+    await fs.rm(safePath.join(agentDir, PACKAGE_JSON_NAME));
+
+    await expect(buildAgentSkill({ agentPath: manifestPath }))
+      .rejects
+      .toMatchObject({ code: AGENT_PACKAGE_ROOT_MISSING_CODE });
+  });
+
+  it('refuses a system prompt $ref naming no file as the manifest\'s mistake', async () => {
+    const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'prompt-gone');
+    await fs.rm(safePath.join(agentDir, PROMPTS_DIR, SYSTEM_MD));
+
+    await expect(buildAgentSkill({ agentPath: manifestPath }))
+      .rejects
+      .toMatchObject({ code: AGENT_MANIFEST_INVALID_CODE, message: expect.stringContaining('./prompts/system.md') });
+  });
+
+  // Only an ABSENCE is "not there". Anything else the OS says about an agent's
+  // own source is that source being unreadable — coded, so the CLI refuses
+  // INPUT_UNREADABLE rather than publishing a VAT defect or skipping it.
+  it('refuses a system prompt $ref naming a directory as an unreadable source', async () => {
+    const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'prompt-is-dir');
+    await fs.rm(safePath.join(agentDir, PROMPTS_DIR, SYSTEM_MD));
+    await fs.mkdir(safePath.join(agentDir, PROMPTS_DIR, SYSTEM_MD));
+
+    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject({ code: AGENT_SOURCE_UNREADABLE_CODE });
+  });
+
+  it('refuses a scripts/ it cannot stat instead of building without it', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'scripts-loop');
+    createSymlink(cap, 'scripts', safePath.join(agentDir, 'scripts'), 'dir');
+
+    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject({ code: AGENT_SOURCE_UNREADABLE_CODE });
+  });
+
+  it('refuses a package.json it cannot stat instead of walking past it', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'package-loop');
+    await fs.rm(safePath.join(agentDir, PACKAGE_JSON_NAME));
+    createSymlink(cap, PACKAGE_JSON_NAME, safePath.join(agentDir, PACKAGE_JSON_NAME), 'file');
+
+    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject({ code: AGENT_SOURCE_UNREADABLE_CODE });
   });
 });

@@ -14,34 +14,40 @@
  * extracted to fix.
  */
 
-import type {
-  PackageSkillResult,
-  PackagingValidationResult,
-  ValidationResult,
+import {
+  SKILL_PACKAGING_INPUT_INVALID_CODE,
+  ZipSizeLimitError,
+  type PackageSkillResult,
+  type PackagingValidationResult,
+  type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
+  buildReport,
   countBySeverity,
+  exitCodeForReport,
+  resultStatus,
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
+import { safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { summarizePackagedSkillIssues } from '../../src/commands/claude/plugin/build.js';
 import {
-  buildYamlSummary,
   formatPostBuildIssueReport,
   formatPreBuildIssueReport,
+  skillsBuildWork,
   type SkillBuildRun,
 } from '../../src/commands/skills/build.js';
 import {
-  buildPackageHeader,
+  buildSkillsPackageReport,
   formatSkillValidationLines,
+  packagingRefusalCode,
 } from '../../src/commands/skills/package.js';
 import {
-  buildValidateSummary as buildValidateSummaryFor,
+  buildSkillsValidateReport,
   formatSkillProgressLine,
-  formatValidationReportLines as formatValidationReportLinesFor,
-  type SkillDiscoveryPatterns,
+  formatValidationReportLines,
 } from '../../src/commands/skills/validate.js';
 import {
   collectPostBuildIssues,
@@ -61,20 +67,13 @@ import {
 // Fixtures
 // ---------------------------------------------------------------------------
 
-/**
- * The discovery globs every batch below was "found" by. The two `vat skills
- * validate` renderers take them so a ZERO-skill run can name what matched
- * nothing; every batch in this file has at least one skill, so the value is
- * never read — the zero-denominator refusal is pinned in
- * `commands/skills/validate-nothing-checked.test.ts`.
- */
-const PATTERNS: SkillDiscoveryPatterns = { include: ['skills/*/SKILL.md'] };
-const buildValidateSummary = (
-  ...args: Parameters<typeof buildValidateSummaryFor> extends [...infer Head, SkillDiscoveryPatterns] ? Head : never
-) => buildValidateSummaryFor(...args, PATTERNS);
-const formatValidationReportLines = (
-  ...args: Parameters<typeof formatValidationReportLinesFor> extends [...infer Head, SkillDiscoveryPatterns] ? Head : never
-) => formatValidationReportLinesFor(...args, PATTERNS);
+/** A `vat skills validate` report over `results`, anchored at a fixed root. */
+function validateReport(
+  results: readonly PackagingValidationResult[],
+  runIssues: readonly ValidationIssue[] = [],
+): ReturnType<typeof buildSkillsValidateReport> {
+  return buildSkillsValidateReport({ root: '/project', results, runIssues, durationMs: 1 });
+}
 
 function issue(
   severity: ValidationIssue['severity'],
@@ -98,8 +97,8 @@ function packagingResult(
 ): PackagingValidationResult {
   return {
     skillName,
-    // The real two-valued gate verdict: `error` iff there is an active error.
-    status: issues.some((i) => i.severity === 'error') ? 'error' : 'success',
+    status: resultStatus(issues),
+    summary: countBySeverity(issues),
     allErrors: issues,
     ignoredErrors,
     observations: [],
@@ -138,18 +137,14 @@ function packageResult(
 }
 
 /** A skill-validator ValidationResult. */
-function validationResult(issues: ValidationIssue[], status: ValidationResult['status']): ValidationResult {
+function validationResult(issues: ValidationIssue[]): ValidationResult {
   return {
     path: '/src/SKILL.md',
     type: 'agent-skill',
-    status,
-    summary: `${issues.length} finding(s)`,
+    status: resultStatus(issues),
+    description: `${issues.length} finding(s)`,
     issues,
-    issueCounts: {
-      errors: issues.filter((i) => i.severity === 'error').length,
-      warnings: issues.filter((i) => i.severity === 'warning').length,
-      info: issues.filter((i) => i.severity === 'info').length,
-    },
+    summary: countBySeverity(issues),
   };
 }
 
@@ -163,33 +158,12 @@ function allowRecord(code: string): PackagingValidationResult['ignoredErrors'][n
 }
 
 /**
- * Re-add a validate summary's header total from the ROWS it publishes, reading
- * whichever of the two published row shapes each row uses: the default per-asset
- * row (flat `warnings: 3`, zero buckets absent) or the verbose row (`issueCounts`).
- *
- * An absent bucket contributes zero, which is what makes this an identity check
- * rather than a restatement of the producer's arithmetic: a row the producer
- * dropped, or a bucket it forgot, is invisible here and the sum falls short of
- * the header by exactly that addend.
+ * Re-add a report's per-skill `summary` rows. Every validated skill has a row,
+ * so a row the producer dropped is invisible here and the sum falls short of
+ * the envelope's `summary` by exactly that addend.
  */
-function countsFromValidateRows(rows: readonly unknown[]): SeverityCounts {
-  return sumSeverityCounts(
-    rows.map((r) => {
-      const row = r as {
-        errors?: number;
-        warnings?: number;
-        info?: number;
-        issueCounts?: SeverityCounts;
-      };
-      return (
-        row.issueCounts ?? {
-          errors: row.errors ?? 0,
-          warnings: row.warnings ?? 0,
-          info: row.info ?? 0,
-        }
-      );
-    }),
-  );
+function countsFromSkillRows(rows: readonly { summary: SeverityCounts }[]): SeverityCounts {
+  return sumSeverityCounts(rows.map((row) => row.summary));
 }
 
 /**
@@ -483,172 +457,107 @@ describe('summarizeFindings', () => {
 // `vat skills validate`
 // ---------------------------------------------------------------------------
 
-describe('vat skills validate — buildValidateSummary', () => {
-  it('says `warning` for a warning-only batch instead of `success`', () => {
-    const results = [packagingResult('a', [issue('warning', 'W1'), issue('warning', 'W2')])];
-    const summary = buildValidateSummary(results, 25, false, []);
+describe('vat skills validate — buildSkillsValidateReport', () => {
+  it('is `findings` for a warning-only batch, never a clean status', () => {
+    const report = validateReport([packagingResult('a', [issue('warning', 'W1'), issue('warning', 'W2')])]);
 
     // The defect: `results.some(r => r.status === 'error') ? 'error' : 'success'`
-    // could never say `warning`, so 33 active warnings reported as `success`.
-    expect(summary.status).toBe('warning');
-    expect(summary.issueCounts).toEqual({ errors: 0, warnings: 2, info: 0 });
+    // could never say anything but `success` over 33 active warnings.
+    expect(report.status).toBe('findings');
+    expect(report.summary).toEqual({ errors: 0, warnings: 2, info: 0 });
   });
 
-  it('says `success` for an info-only batch but still publishes the info count', () => {
-    const summary = buildValidateSummary([packagingResult('a', [issue('info', 'I1')])], 1, false, []);
-    expect(summary.status).toBe('success');
-    expect(summary.issueCounts).toEqual({ errors: 0, warnings: 0, info: 1 });
+  it('is `findings` for an info-only batch, and publishes the info count', () => {
+    const report = validateReport([packagingResult('a', [issue('info', 'I1')])]);
+    expect(report.status).toBe('findings');
+    expect(report.summary).toEqual({ errors: 0, warnings: 0, info: 1 });
   });
 
   it('aggregates the whole batch, not just the worst skill', () => {
-    const summary = buildValidateSummary(
-      [
-        packagingResult('a', [issue('error', 'E1')]),
-        packagingResult('b', [issue('warning', 'W1'), issue('info', 'I1')]),
-      ],
-      1,
-      false,
-      [],
-    );
-    expect(summary.status).toBe('error');
-    expect(summary.issueCounts).toEqual({ errors: 1, warnings: 1, info: 1 });
-  });
-
-  it('publishes a per-asset row of COUNTS only — no findings arrays, no metadata', () => {
-    // The default row is what a reader scans at corpus scale: which asset has
-    // problems, how many, and of what code. The arrays it used to carry are what
-    // made the skills phase 17,363 of `vat verify`'s 22,156 stdout lines.
-    const summary = buildValidateSummary(
-      [
-        packagingResult(
-          'a',
-          [issue('warning', 'W1'), issue('warning', 'W1'), issue('info', 'I1')],
-          [{ path: 'x.md', reason: 'gitignored' }],
-        ),
-      ],
-      1,
-      false,
-      [],
-    );
-    const [row] = summary.results;
-    expect(row).toStrictEqual({
-      skillName: 'a',
-      status: 'success',
-      warnings: 2,
-      info: 1,
-      codes: { W1: 2, I1: 1 },
-    });
-    // A zero bucket is an ABSENT key, never `0` — `errors: 0` beside a red exit
-    // code reads as a contradiction rather than as "this asset is not the one".
-    expect('errors' in (row as object)).toBe(false);
-  });
-
-  it('publishes an allowed COUNT, and keeps the row of a skill whose findings were all allowed', () => {
-    // A skill with an empty `allErrors` and a non-empty `ignoredErrors` is the
-    // only fixture that can tell "drop rows with no EMITTED findings" apart from
-    // "drop rows with nothing to say": under the first rule this fact — the
-    // adopter is suppressing something here — silently disappears.
-    const [row] = buildValidateSummary(
-      [packagingResult('a', [], [], [allowRecord('LINK_BROKEN'), allowRecord('LINK_BROKEN')])],
-      1,
-      false,
-      [],
-    ).results;
-    expect(row).toStrictEqual({ skillName: 'a', status: 'success', allowed: 2, codes: {} });
-  });
-
-  it('omits a clean skill from the default rows while still counting it in skillsValidated', () => {
-    // Two skills, exactly one of them clean: a fixture where every skill has a
-    // finding cannot distinguish "clean rows omitted" from "all rows published",
-    // and one where every skill is clean cannot tell an omission from an empty run.
-    const summary = buildValidateSummary(
-      [packagingResult('clean', []), packagingResult('noisy', [issue('warning', 'W1')])],
-      1,
-      false,
-      [],
-    );
-    expect(summary.results.map((r) => (r as { skillName: string }).skillName)).toEqual(['noisy']);
-    expect(summary.skillsValidated).toBe(2);
-  });
-
-  it('restores the full per-skill detail under verbose, clean skills included', () => {
-    const summary = buildValidateSummary(
-      [packagingResult('clean', []), packagingResult('noisy', [issue('warning', 'W1')])],
-      1,
-      true,
-      [],
-    );
-    expect(summary.results.map((r) => (r as { skillName: string }).skillName)).toEqual([
-      'clean',
-      'noisy',
+    const report = validateReport([
+      packagingResult('a', [issue('error', 'E1')]),
+      packagingResult('b', [issue('warning', 'W1'), issue('info', 'I1')]),
     ]);
-    const noisy = summary.results[1] as { allErrors: unknown; issueCounts: unknown; metadata: unknown };
-    expect(noisy.allErrors).toEqual([issue('warning', 'W1')]);
-    expect(noisy.issueCounts).toEqual({ errors: 0, warnings: 1, info: 0 });
-    expect(noisy.metadata).toBeDefined();
+    expect(report.summary).toEqual({ errors: 1, warnings: 1, info: 1 });
+    expect(report.findings.map((finding) => finding.code)).toEqual(['E1', 'W1', 'I1']);
   });
 
-  it('closes the accounting: the header equals the per-skill sum plus the run-level counts', () => {
+  it('publishes one row of COUNTS per skill — no findings arrays, no metadata', () => {
+    // The row is what a reader scans at corpus scale: which skill has problems
+    // and how many. The arrays it used to carry are what made the skills phase
+    // 17,363 of `vat verify`'s 22,156 stdout lines; the findings themselves are
+    // the envelope's, once.
+    const report = validateReport([
+      packagingResult('a', [issue('warning', 'W1'), issue('warning', 'W1'), issue('info', 'I1')], [{ path: 'x.md', reason: 'gitignored' }]),
+    ]);
+    expect(report.data.skills).toStrictEqual([
+      { name: 'a', status: 'findings', summary: { errors: 0, warnings: 2, info: 1 }, allowed: 0 },
+    ]);
+  });
+
+  it('publishes an allowed COUNT, and the row of a skill whose findings were all allowed', () => {
+    // A skill with an empty `allErrors` and a non-empty `ignoredErrors`: the
+    // adopter is suppressing something here, and that fact must not vanish.
+    const report = validateReport([packagingResult('a', [], [], [allowRecord('LINK_BROKEN'), allowRecord('LINK_BROKEN')])]);
+    expect(report.data.skills).toStrictEqual([{ name: 'a', status: 'ok', summary: { errors: 0, warnings: 0, info: 0 }, allowed: 2 }]);
+    expect(report.findings).toEqual([]);
+  });
+
+  it('lists a clean skill beside a noisy one — examined and the rows agree', () => {
+    // Two skills, exactly one clean: the old default rows dropped the clean one,
+    // and a reader reconciling 92 validated against 62 rows could not tell
+    // "validated and clean" from "never validated". Every validated skill is a row.
+    const report = validateReport([packagingResult('clean', []), packagingResult('noisy', [issue('warning', 'W1')])]);
+    expect(report.data.skills.map((row) => row.name)).toEqual(['clean', 'noisy']);
+    expect(report.examined).toBe(2);
+  });
+
+  it('closes the accounting: the envelope summary is the per-skill sum plus the run-level findings', () => {
     // The observed symptom on a large real repo: the header said 1814 warnings
-    // while the per-skill counts summed to 1800. The 14 missing ones are
-    // run-level ALLOW_UNUSED warnings — legitimately in the header (the exit
-    // code is derived from them too), but published only as a bare LIST, with
-    // no counts block, so no consumer could reconcile the two numbers without
-    // hand-counting the list. The invariant below is what makes the header
-    // accountable; dropping run issues from the header instead would have
-    // divorced it from the exit code, which is the worse of the two failures.
-    // The batch deliberately contains a CLEAN skill, which the default rows drop:
-    // the identity is only worth asserting on the shape that actually omits rows.
-    // A fixture where every skill has a finding cannot see a dropped addend.
+    // while the per-skill counts summed to 1800. The 14 missing ones were
+    // run-level ALLOW_UNUSED warnings. The batch deliberately contains a CLEAN
+    // skill and a non-empty run bucket, so a dropped addend shows.
     const results = [
-      packagingResult('a', [issue('warning', 'W1'), issue('info', 'I1')], [], [
-        allowRecord('LINK_BROKEN'),
-      ]),
+      packagingResult('a', [issue('warning', 'W1'), issue('info', 'I1')], [], [allowRecord('LINK_BROKEN')]),
       packagingResult('clean', []),
       packagingResult('b', [issue('error', 'E1')]),
     ];
     const runIssues = [issue('warning', 'ALLOW_UNUSED'), issue('warning', 'ALLOW_UNUSED')];
 
-    for (const verbose of [false, true]) {
-      const summary = buildValidateSummary(results, 1, verbose, runIssues);
-      const perSkill = countsFromValidateRows(summary.results);
-      // Guards against a vacuous pass: all three buckets have to be non-trivial
-      // and the run bucket has to be non-empty, or the identity proves nothing.
-      expect(perSkill).toEqual({ errors: 1, warnings: 1, info: 1 });
-      expect(summary.runIssueCounts).toEqual({ errors: 0, warnings: 2, info: 0 });
-
-      expect(summary.issueCounts).toEqual(sumSeverityCounts([perSkill, summary.runIssueCounts]));
-      // The header keeps its complete shape in BOTH modes — it is the
-      // reconciliation identity, not a per-asset row, so its zeros stay.
-      expect(Object.keys(summary.issueCounts)).toEqual(['errors', 'warnings', 'info']);
-      expect(summary.runIssues).toHaveLength(2);
-    }
+    const report = validateReport(results, runIssues);
+    const perSkill = countsFromSkillRows(report.data.skills);
+    // Guards against a vacuous pass: every bucket non-trivial, the run bucket non-empty.
+    expect(perSkill).toEqual({ errors: 1, warnings: 1, info: 1 });
+    expect(report.summary).toEqual(sumSeverityCounts([perSkill, { errors: 0, warnings: 2, info: 0 }]));
+    expect(report.findings.filter((finding) => finding.code === 'ALLOW_UNUSED')).toHaveLength(2);
   });
 
-  it('counts an allow-suppressed issue in neither the per-skill nor the run total', () => {
-    const summary = buildValidateSummary(
-      [packagingResult('a', [issue('warning', 'W1')], [], [allowRecord('LINK_BROKEN')])],
-      1,
-      false,
-      [],
-    );
-    expect(summary.issueCounts).toEqual({ errors: 0, warnings: 1, info: 0 });
-    expect(summary.runIssueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
+  it('counts an allow-suppressed issue nowhere but `allowed`', () => {
+    const report = validateReport([packagingResult('a', [issue('warning', 'W1')], [], [allowRecord('LINK_BROKEN')])]);
+    expect(report.summary).toEqual({ errors: 0, warnings: 1, info: 0 });
+    expect(report.data.skills[0]?.allowed).toBe(1);
+    expect(report.findings.map((finding) => finding.code)).toEqual(['W1']);
   });
 
-  it('carries excludedReferences under verbose, where the full metadata lives', () => {
-    const results = [
-      packagingResult('a', [issue('warning', 'W1')], [{ path: 'x.md', reason: 'gitignored' }]),
-    ];
-    const verbose = buildValidateSummary(results, 1, true, []).results[0] as {
-      metadata: Record<string, unknown>;
-    };
-    expect(verbose.metadata).toHaveProperty('excludedReferences');
-    expect(verbose.metadata['excludedReferenceCount']).toBe(1);
+  it('publishes an issue the adopter resolved to `ignore` nowhere', () => {
+    const report = validateReport([packagingResult('a', [issue('ignore', 'SILENCED'), issue('warning', 'W1')])]);
+    expect(report.findings.map((finding) => finding.code)).toEqual(['W1']);
+    expect(report.data.skills[0]?.summary).toEqual({ errors: 0, warnings: 1, info: 0 });
   });
 });
 
 describe('vat skills validate — formatValidationReportLines', () => {
+  it('names the excluded references under verbose, and only there', () => {
+    // They left the published document with the verbose rows; stderr is where
+    // `--verbose` still shows which reference paths a skill's bundle leaves out.
+    const results = [packagingResult('a', [issue('warning', 'W1')], [{ path: 'x.md', reason: 'gitignored' }])];
+
+    expect(formatValidationReportLines(results, [], true)).toEqual(
+      expect.arrayContaining(['  Excluded references (1):', '    x.md (gitignored)']),
+    );
+    expect(formatValidationReportLines(results, [], false).join('\n')).not.toContain('Excluded references');
+  });
+
   it('does not print the all-clear banner over active warnings', () => {
     const lines = formatValidationReportLines([
       packagingResult('a', [issue('warning', 'W1'), issue('warning', 'W2')]),
@@ -755,6 +664,13 @@ describe('vat skills validate — formatSkillProgressLine', () => {
   it('still marks a clean skill clean, with no breakdown noise', () => {
     expect(formatSkillProgressLine('a', packagingResult('a', []))).toEqual(['   ✅ a']);
   });
+
+  it('rates an info-only skill ✅, as the orchestrator rates an info-only phase success', () => {
+    // Info never rates a word: `statusFromEnvelope` reads an info-only phase as
+    // `success`, so the glyph must not warn where the phase status does not.
+    const [line] = formatSkillProgressLine('a', packagingResult('a', [issue('info', 'I1')]));
+    expect(line).toBe('   ✅ a: 1 info');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -854,41 +770,21 @@ describe('vat skills build — formatPreBuildIssueReport', () => {
   });
 });
 
-/**
- * Re-add a build summary's header total from the ROWS it publishes, exactly as a
- * consumer must: one bucket per row across ALL THREE row lists, plus the single
- * run-level bucket.
- *
- * A row that publishes no bucket contributes zero on purpose — that is what makes
- * this an identity check rather than a restatement of the producer's own
- * arithmetic. A header addend with no row of its own is invisible here, and the
- * sum falls short of the header by exactly that addend.
- */
-function countsFromPublishedRows(summary: ReturnType<typeof buildYamlSummary>): SeverityCounts {
-  const zero: SeverityCounts = { errors: 0, warnings: 0, info: 0 };
-  const rows: ReadonlyArray<{ issueCounts?: SeverityCounts | undefined }> = [
-    ...summary.skills,
-    // Same population as `skills` under the name a NOT-promoted run publishes it
-    // under; exactly one of the two is ever non-empty, so this adds each packaged
-    // bundle once and the identity holds in both outcomes.
-    ...summary.skillsStaged,
-    ...summary.failedSkills,
-    ...summary.validationFailedSkills,
-  ];
-  return sumSeverityCounts([...rows.map((r) => r.issueCounts ?? zero), summary.runIssueCounts]);
-}
+/** Sources for the report fixtures, under one project root. */
+const PROJECT = safePath.resolve('/project');
+const sourceOf = (name: string): string => safePath.join(PROJECT, 'skills', name, 'SKILL.md');
 
 /**
- * `buildYamlSummary` over ONE run, with every population empty unless named.
- *
- * The run carries four populations and a committed/not-committed fact now, and
- * most of these cases care about exactly one of them. Naming only what a case
- * exercises keeps the fixture from restating five empty lists per test — and
- * makes the two same-shaped failure lists impossible to transpose by accident.
+ * `vat skills build`'s report over ONE run, with every population empty unless
+ * named. The rows are the skills named in `run`, in the order given.
  */
-function summaryOf(run: Partial<SkillBuildRun>, duration: number): ReturnType<typeof buildYamlSummary> {
-  return buildYamlSummary(
-    {
+function reportOf(run: Partial<SkillBuildRun>, names: readonly string[]) {
+  const work = skillsBuildWork({
+    cwd: PROJECT,
+    skills: names.map((name) => ({ name, sourcePath: sourceOf(name) })),
+    setAside: { inPlace: [], pluginOnly: [] },
+    dryRun: false,
+    run: {
       results: [],
       failures: [],
       runIssues: [],
@@ -897,329 +793,119 @@ function summaryOf(run: Partial<SkillBuildRun>, duration: number): ReturnType<ty
       outputCommitted: true,
       ...run,
     },
-    duration,
-  );
+    setAsideIssues: [],
+  });
+  return buildReport({ ...work, gate: { strict: false } });
 }
 
-describe('vat skills build — buildYamlSummary', () => {
-  it('does not publish `success` for a build that emitted post-build errors', () => {
-    const summary = summaryOf(
-      {
-        results: [{ name: 'a', result: packageResult(undefined, [issue('error', 'BUILT_ONLY')]) }],
-        failures: [],
-        runIssues: [],
-        skillsWithErrors: [],
-      },
-      12,
-    );
-    // The defect: `status: success` was a literal, printed alongside exit code 1.
-    expect(summary.status).toBe('error');
-    expect(summary.issueCounts).toEqual({ errors: 1, warnings: 0, info: 0 });
+const statusesOf = (report: ReturnType<typeof reportOf>): string[] => report.data.skills.map((row) => row.status);
+
+describe('vat skills build — skillsBuildWork', () => {
+  it('does not publish `ok` for a build that emitted post-build errors', () => {
+    const report = reportOf({ results: [{ name: 'a', result: packageResult(undefined, [issue('error', 'BUILT_ONLY')]) }] }, ['a']);
+
+    expect(report.status).toBe('findings');
+    expect(report.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(exitCodeForReport(report)).toBe(1);
+    expect(statusesOf(report)).toEqual(['findings']);
   });
 
-  it('says `warning` when the build shipped warnings and no errors', () => {
-    const summary = summaryOf(
-      {
-        results: [{ name: 'a', result: packageResult([issue('warning', 'W1')], undefined) }],
-        failures: [],
-        runIssues: [],
-        skillsWithErrors: [],
-      },
-      1,
-    );
-    expect(summary.status).toBe('warning');
-  });
-
-  it('says `success` for info-only findings, with the info count beside it', () => {
-    const summary = summaryOf(
-      {
-        results: [{ name: 'a', result: packageResult([issue('info', 'I1')], undefined) }],
-        failures: [],
-        runIssues: [],
-        skillsWithErrors: [],
-      },
-      1,
-    );
-    expect(summary.status).toBe('success');
-    expect(summary.issueCounts).toEqual({ errors: 0, warnings: 0, info: 1 });
-  });
-
-  it('publishes per-skill counts and sums them for the run', () => {
-    const summary = summaryOf(
-      {
-        results: [
+  it('publishes warnings and info as findings that do not fail the build', () => {
+    const report = reportOf({
+      results: [
         { name: 'a', result: packageResult([issue('warning', 'W1')], undefined) },
         { name: 'b', result: packageResult([issue('info', 'I1')], [issue('info', 'I2')]) },
       ],
-        failures: [],
-        runIssues: [],
-        skillsWithErrors: [],
-      },
-      1,
-    );
-    expect(summary.skills.map((s) => s.issueCounts)).toEqual([
-      { errors: 0, warnings: 1, info: 0 },
-      { errors: 0, warnings: 0, info: 2 },
+    }, ['a', 'b']);
+
+    expect(report.summary).toEqual({ errors: 0, warnings: 1, info: 2 });
+    expect(exitCodeForReport(report)).toBe(0);
+    expect(statusesOf(report)).toEqual(['findings', 'findings']);
+  });
+
+  it('says `ok` for a clean build, every row `ok`', () => {
+    const report = reportOf({ results: [{ name: 'a', result: packageResult(undefined, undefined) }] }, ['a']);
+
+    expect(report.status).toBe('ok');
+    expect(statusesOf(report)).toEqual(['ok']);
+  });
+
+  it('puts the run-level findings on the envelope, and lets a run-level error decide the exit', () => {
+    // ALLOW_UNUSED belongs to no skill: it is on the envelope, and on no row.
+    const report = reportOf({
+      results: [{ name: 'a', result: packageResult(undefined, undefined) }],
+      runIssues: [issue('error', 'ALLOW_UNUSED')],
+    }, ['a']);
+
+    expect(report.findings.map((finding) => finding.code)).toEqual(['ALLOW_UNUSED']);
+    expect(exitCodeForReport(report)).toBe(1);
+    expect(statusesOf(report)).toEqual(['ok']);
+  });
+
+  const THREW = 'files entry for skill \'boom\': source \'dist/x\' does not exist.';
+
+  it('publishes a skill whose packaging THREW as a located SKILL_PACKAGING_FAILED error', () => {
+    // A skill that never built emits no issues at all, so a report derived only
+    // from issue channels called the run clean while the command exited 1.
+    const report = reportOf({
+      results: [{ name: 'ok', result: packageResult(undefined, undefined) }],
+      failures: [{ name: 'boom', message: THREW }],
+    }, ['ok', 'boom']);
+
+    expect(report.findings).toEqual([
+      expect.objectContaining({ code: 'SKILL_PACKAGING_FAILED', severity: 'error', message: THREW, location: 'skills/boom/SKILL.md' }),
     ]);
-    expect(summary.issueCounts).toEqual({ errors: 0, warnings: 1, info: 2 });
+    expect(report.data).toMatchObject({ skillsBuilt: 1, skillsFailed: 1 });
+    expect(statusesOf(report)).toEqual(['ok', 'findings']);
   });
 
-  it('closes the accounting: the header equals the per-skill sum plus the run-level counts', () => {
-    // Same identity `vat skills validate` publishes. ALLOW_UNUSED belongs to no
-    // skill, so a header that omitted it would report fewer findings than the
-    // human stream renders — and the run-level bucket is what lets a consumer
-    // reconcile the two without hand-counting a list.
-    const summary = summaryOf(
-      {
-        results: [
-        { name: 'a', result: packageResult([issue('warning', 'W1')], undefined) },
-        { name: 'b', result: packageResult(undefined, [issue('info', 'I1')]) },
-      ],
-        failures: [],
-        runIssues: [issue('warning', 'ALLOW_UNUSED'), issue('warning', 'ALLOW_UNUSED')],
-        skillsWithErrors: [],
-      },
-      1,
-    );
+  it('keeps built-then-invalid apart from could-not-package: one is built, the other failed', () => {
+    const report = reportOf({
+      results: [{ name: 'invalid', result: packageResult(undefined, [issue('error', 'E1')]) }],
+      failures: [{ name: 'threw', message: THREW }],
+      skillsWithErrors: ['invalid'],
+    }, ['invalid', 'threw']);
 
-    const perSkill = sumSeverityCounts(summary.skills.map((s) => s.issueCounts));
-    // Guards against a vacuous pass: both buckets must be non-empty.
-    expect(perSkill).toEqual({ errors: 0, warnings: 1, info: 1 });
-    expect(summary.runIssueCounts).toEqual({ errors: 0, warnings: 2, info: 0 });
-
-    expect(summary.issueCounts).toEqual(sumSeverityCounts([perSkill, summary.runIssueCounts]));
-    expect(summary.runIssues).toHaveLength(2);
+    expect(report.data).toMatchObject({ skillsBuilt: 1, skillsFailed: 1 });
+    expect(report.findings.map((finding) => finding.code)).toEqual(['E1', 'SKILL_PACKAGING_FAILED']);
   });
 
-  it('lets a run-level error decide the status no skill could', () => {
-    const summary = summaryOf(
-      {
-        results: [{ name: 'a', result: packageResult(undefined, undefined) }],
-        failures: [],
-        runIssues: [issue('error', 'ALLOW_UNUSED')],
-        skillsWithErrors: [],
-      },
-      1,
-    );
-    expect(summary.status).toBe('error');
+  it('names the findings that rejected a skill before the build, not just their count', () => {
+    const rejecting = [issue('error', 'LINK_MISSING_TARGET'), issue('warning', 'W1'), issue('info', 'I1')];
+    const report = reportOf({ validationFailures: [{ name: 'rejected', issues: rejecting }] }, ['rejected']);
+
+    expect(report.data).toMatchObject({ skillsFailedValidation: 1, skillsFailed: 0, skillsBuilt: 0 });
+    expect(report.findings.map((finding) => finding.code)).toEqual(['LINK_MISSING_TARGET', 'W1', 'I1']);
+    expect(statusesOf(report)).toEqual(['findings']);
   });
 
-  const THREW = 'Filename collision detected';
+  it('sums the envelope from every population at once, and drops what the config ignored', () => {
+    const report = reportOf({
+      results: [{ name: 'invalid', result: packageResult([issue('warning', 'W1'), issue('ignore', 'SILENCED')], [issue('error', 'E1')]) }],
+      failures: [{ name: 'threw', message: THREW }],
+      validationFailures: [{ name: 'rejected', issues: [issue('error', 'E2'), issue('info', 'I1')] }],
+      runIssues: [issue('warning', 'ALLOW_UNUSED')],
+      skillsWithErrors: ['invalid'],
+      outputCommitted: false,
+    }, ['invalid', 'threw', 'rejected']);
 
-  it('publishes `error` and a non-zero error count for a skill whose packaging THREW', () => {
-    // A skill that never built emits no issues at all, so a summary derived
-    // only from issue channels called the run `success` while the command
-    // exited 1 — the reassuring contradiction this summary exists to prevent.
-    const summary = summaryOf(
-      {
-        results: [{ name: 'ok', result: packageResult(undefined, undefined) }],
-        failures: [{ name: 'boom', message: THREW }],
-        runIssues: [],
-        skillsWithErrors: [],
-      },
-      1,
-    );
-    expect(summary.status).toBe('error');
-    expect(summary.issueCounts).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(report.summary).toEqual({ errors: 3, warnings: 2, info: 1 });
+    expect(report.summary).toEqual(countBySeverity(report.findings));
+    expect(report.findings.map((finding) => finding.code)).not.toContain('SILENCED');
   });
 
-  it('counts a thrown skill as failed, not built, and names it', () => {
-    const summary = summaryOf(
-      {
-        results: [{ name: 'ok', result: packageResult(undefined, undefined) }],
-        failures: [{ name: 'boom', message: THREW }],
-        runIssues: [],
-        skillsWithErrors: [],
-      },
-      1,
-    );
-    expect(summary.skillsBuilt).toBe(1);
-    expect(summary.skillsFailed).toBe(1);
-    expect(summary.failedSkills).toEqual([
-      { name: 'boom', error: THREW, issueCounts: { errors: 1, warnings: 0, info: 0 } },
-    ]);
-    // The failed skill never produced an artifact, so it must not appear beside
-    // the built ones with a fabricated file count.
-    expect(summary.skills.map((s) => s.name)).toEqual(['ok']);
-  });
+  it('publishes each finding whole — code, location and fix — at every verbosity', () => {
+    const finding = issue('warning', 'LINK_DROPPED_BY_DEPTH', { location: 'dist/skills/a/docs/deep.md', fix: 'raise linkFollowDepth' });
+    const report = reportOf({ results: [{ name: 'a', result: packageResult([finding], undefined) }] }, ['a']);
 
-  it('publishes a header total its own rows add up to, with a failure in the batch', () => {
-    // The defect: the failure was counted ONCE in the header and represented
-    // NOWHERE in the rows, so `issueCounts: {errors: 1}` sat above rows summing
-    // to `{errors: 0}` — the same unreconcilable header (1814 vs 1800) that
-    // `vat skills validate` was fixed for one command over.
-    const summary = summaryOf(
-      {
-        results: [{ name: 'ok', result: packageResult([issue('warning', 'W1')], [issue('info', 'I1')]) }],
-        failures: [{ name: 'boom', message: THREW }],
-        runIssues: [issue('warning', 'ALLOW_UNUSED')],
-        skillsWithErrors: [],
-      },
-      1,
-    );
-    expect(summary.issueCounts).toEqual({ errors: 1, warnings: 2, info: 1 });
-    expect(countsFromPublishedRows(summary)).toEqual(summary.issueCounts);
-  });
-
-  /** A skill that produced a bundle and then failed its own post-build validation. */
-  const BUILT_BUT_INVALID = 'built-but-invalid';
-
-  it('names the skills that BUILT and then emitted post-build errors', () => {
-    // The defect, measured on a 90-skill adopter: the human stream said "Build
-    // failed: 3 skill(s) emitted post-build validation errors" and the command
-    // exited 1, while the document said `skillsFailed: 0` and `failedSkills: []`.
-    // Two definitions of "failed" — could-not-package vs packaged-then-invalid —
-    // and only the first had a machine field. A CI job reading either one saw a
-    // clean build.
-    const summary = summaryOf(
-      {
-        results: [{ name: BUILT_BUT_INVALID, result: packageResult(undefined, [issue('error', 'E1')]) }],
-        failures: [],
-        runIssues: [],
-        skillsWithErrors: [BUILT_BUT_INVALID],
-      },
-      1,
-    );
-
-    // It IS built — it produced a bundle — so the pre-existing fields keep their
-    // documented meaning rather than being redefined to paper over the gap.
-    expect(summary.skillsBuilt).toBe(1);
-    expect(summary.skillsFailed).toBe(0);
-    expect(summary.failedSkills).toEqual([]);
-    // ...and the category the exit code actually follows is now named.
-    expect(summary.skillsWithErrors).toEqual([BUILT_BUT_INVALID]);
-    expect(summary.status).toBe('error');
-  });
-
-  it('keeps the two failure categories separate rather than merging them', () => {
-    // A guard against the tempting "fix": folding both into `skillsFailed` would
-    // make `skillsBuilt + skillsFailed` exceed the number of skills, and would
-    // put a row in `failedSkills` for a bundle that exists on disk.
-    const summary = summaryOf(
-      {
-        results: [{ name: 'invalid', result: packageResult(undefined, [issue('error', 'E1')]) }],
-        failures: [{ name: 'threw', message: 'Filename collision detected' }],
-        runIssues: [],
-        skillsWithErrors: ['invalid'],
-      },
-      1,
-    );
-
-    expect(summary.skillsFailed).toBe(1);
-    expect(summary.failedSkills.map((s) => s.name)).toEqual(['threw']);
-    expect(summary.skillsWithErrors).toEqual(['invalid']);
-    // The header identity still closes with both categories present.
-    expect(countsFromPublishedRows(summary)).toEqual(summary.issueCounts);
-  });
-
-  it('publishes an empty list, not a missing field, on a clean build', () => {
-    const summary = summaryOf(
-      {
-        results: [{ name: 'a', result: packageResult(undefined, undefined) }],
-        failures: [],
-        runIssues: [],
-        skillsWithErrors: [],
-      },
-      1,
-    );
-    expect(summary.skillsWithErrors).toEqual([]);
-    expect(summary.status).toBe('success');
-  });
-
-  it('gives a skill rejected before the build its own row, with its own counts', () => {
-    // The THIRD failure mode: the pre-build source validation rejected it, so
-    // packaging never ran. It is neither a `failedSkills` (packaging threw) nor
-    // a `skills` (a bundle exists), and unlike a throw it has a real severity
-    // distribution — a flat one-error stand-in would under-report the 5 warnings.
-    const summary = summaryOf(
-      { validationFailures: [{ name: 'rejected', issueCounts: { errors: 2, warnings: 5, info: 1 } }] },
-      1,
-    );
-
-    expect(summary.skillsFailedValidation).toBe(1);
-    expect(summary.validationFailedSkills).toEqual([
-      { name: 'rejected', issueCounts: { errors: 2, warnings: 5, info: 1 } },
-    ]);
-    // Not folded into either neighbour.
-    expect(summary.skillsFailed).toBe(0);
-    expect(summary.failedSkills).toEqual([]);
-    expect(summary.skills).toEqual([]);
-    expect(summary.status).toBe('error');
-  });
-
-  it('closes the header identity with all four populations present at once', () => {
-    const summary = summaryOf(
-      {
-        results: [{ name: 'invalid', result: packageResult([issue('warning', 'W1')], [issue('error', 'E1')]) }],
-        failures: [{ name: 'threw', message: THREW }],
-        validationFailures: [{ name: 'rejected', issueCounts: { errors: 2, warnings: 0, info: 3 } }],
-        runIssues: [issue('warning', 'ALLOW_UNUSED')],
-        skillsWithErrors: ['invalid'],
-        outputCommitted: false,
-      },
-      1,
-    );
-
-    // Guards against a vacuous pass: every population contributes something.
-    expect(summary.issueCounts).toEqual({ errors: 4, warnings: 2, info: 3 });
-    expect(countsFromPublishedRows(summary)).toEqual(summary.issueCounts);
-  });
-
-  it('publishes each row\'s findings, not just how many there were', () => {
-    // The defect: the issues were collected here and dropped at the publish step,
-    // so a build report carried counts with no code, no location and no fix
-    // string at ANY verbosity — an adopter run published 67 warnings and zero
-    // findings, and the four detectors this lane added were invisible to CI.
-    const finding = issue('warning', 'LINK_DROPPED_BY_DEPTH', {
-      location: 'dist/skills/a/docs/deep.md',
-      fix: 'raise linkFollowDepth',
-    });
-    const summary = summaryOf(
-      { results: [{ name: 'a', result: packageResult([finding], undefined) }] },
-      1,
-    );
-
-    expect(summary.skills[0]?.issues).toEqual([finding]);
-  });
-
-  it('publishes no `skills[]` row when the output was never promoted', () => {
-    // The defect, measured on a 90-skill adopter: 86 rows carrying
-    // `dist/skills/<name>` paths of which 85 did not exist, because the run
-    // staged its bundles and then aborted the promotion. `skills` is documented
-    // as what exists on disk, so on a failed run it lists nothing — the rows move
-    // to a key that promises nothing about the disk, and carry no path at all.
-    const summary = summaryOf(
-      {
-        results: [{ name: 'a', result: packageResult([issue('warning', 'W1')], undefined) }],
-        failures: [{ name: 'boom', message: THREW }],
-        outputCommitted: false,
-      },
-      1,
-    );
-
-    expect(summary.skills).toEqual([]);
-    expect(summary.skillsStaged.map((s) => s.name)).toEqual(['a']);
-    expect(summary.skillsStaged[0]).not.toHaveProperty('outputPath');
-    // The findings and the counts survive the move, so the header still closes.
-    expect(summary.skillsStaged[0]?.issueCounts).toEqual({ errors: 0, warnings: 1, info: 0 });
-    expect(countsFromPublishedRows(summary)).toEqual(summary.issueCounts);
-  });
-
-  it('keeps the rows in `skills[]`, with their paths, when the swap did happen', () => {
-    const summary = summaryOf(
-      { results: [{ name: 'a', result: packageResult(undefined, undefined) }] },
-      1,
-    );
-
-    expect(summary.skillsStaged).toEqual([]);
-    expect(summary.skills.map((s) => s.outputPath)).toEqual(['/out/skill']);
+    expect(report.findings).toEqual([finding]);
   });
 
   it('publishes whether dist/skills was actually replaced', () => {
     // Exit 1 with no way to tell "your previous output is intact" from "your
     // output tree is gone" is the ambiguity this field exists to remove.
-    expect(summaryOf({ outputCommitted: false }, 1).outputCommitted).toBe(false);
-    expect(summaryOf({}, 1).outputCommitted).toBe(true);
+    expect(reportOf({ outputCommitted: false }, []).data.outputCommitted).toBe(false);
+    expect(reportOf({}, []).data.outputCommitted).toBe(true);
   });
 });
 
@@ -1227,37 +913,68 @@ describe('vat skills build — buildYamlSummary', () => {
 // `vat skills package`
 // ---------------------------------------------------------------------------
 
-describe('vat skills package — buildPackageHeader', () => {
-  it('publishes the verdict of the validation it ran, not a hardcoded success', () => {
-    // The defect: `status: success` was written as a LITERAL beside counts drawn
-    // from the validation whose verdict it contradicted, so a skill that
-    // `vat skills build` reports as `warning` was reported here as `success`.
-    // Two lanes, one skill, two answers.
-    expect(buildPackageHeader(validationResult([issue('warning', 'W1')], 'warning'))).toEqual({
-      status: 'warning',
-      issueCounts: { errors: 0, warnings: 1, info: 0 },
-    });
+describe('vat skills package — buildSkillsPackageReport', () => {
+  const PACKAGED = { skill: 'a', version: '1.0.0', outputPath: '/out/a', dryRun: false } as const;
+
+  it('publishes the validation it ran as findings, not a hardcoded success', () => {
+    // The defect this lane shipped: `status: success` was a LITERAL beside counts
+    // drawn from the validation whose verdict it contradicted.
+    const report = buildSkillsPackageReport({ validation: validationResult([issue('warning', 'W1')]), data: PACKAGED });
+
+    expect(report.status).toBe('findings');
+    expect(report.summary).toEqual({ errors: 0, warnings: 1, info: 0 });
+    expect(exitCodeForReport(report)).toBe(0);
   });
 
-  it('still says success for a genuinely clean run', () => {
-    expect(buildPackageHeader(validationResult([], 'success'))).toEqual({
-      status: 'success',
-      issueCounts: { errors: 0, warnings: 0, info: 0 },
-    });
+  it('publishes ok for a genuinely clean run over the one skill', () => {
+    const report = buildSkillsPackageReport({ validation: validationResult([]), data: PACKAGED });
+
+    expect(report).toMatchObject({ status: 'ok', examined: 1, data: PACKAGED });
   });
 
-  it('publishes the info distribution behind a success verdict', () => {
-    expect(buildPackageHeader(validationResult([issue('info', 'I1')], 'success'))).toEqual({
-      status: 'success',
-      issueCounts: { errors: 0, warnings: 0, info: 1 },
+  it('publishes a ZIP over the claude.ai ceiling as SKILL_PACKAGE_TOO_LARGE at the skill, exit 1', () => {
+    const report = buildSkillsPackageReport({
+      validation: validationResult([]),
+      data: { ...PACKAGED, version: null },
+      refused: { code: 'SKILL_PACKAGE_TOO_LARGE', message: 'ZIP size 9.1MB exceeds 8MB limit for Claude.ai upload.', location: 'skills/a/SKILL.md' },
     });
+
+    expect(report.findings).toEqual([expect.objectContaining({
+      code: 'SKILL_PACKAGE_TOO_LARGE',
+      severity: 'error',
+      location: 'skills/a/SKILL.md',
+      message: expect.stringContaining('9.1MB'),
+    })]);
+    expect(report.status).toBe('findings');
+    expect(exitCodeForReport(report)).toBe(1);
+  });
+
+  it('publishes the packager refusing the skill\'s content as T19\'s SKILL_PACKAGING_FAILED, exit 1', () => {
+    const report = buildSkillsPackageReport({
+      validation: validationResult([]),
+      data: { ...PACKAGED, outputPath: null },
+      refused: { code: 'SKILL_PACKAGING_FAILED', message: 'SKILL.md found inside skill "a"', location: 'skills/a/SKILL.md' },
+    });
+
+    expect(report.findings).toEqual([expect.objectContaining({ code: 'SKILL_PACKAGING_FAILED', severity: 'error', location: 'skills/a/SKILL.md' })]);
+    expect(exitCodeForReport(report)).toBe(1);
+  });
+});
+
+describe('vat skills package — packagingRefusalCode', () => {
+  it('reads the ZIP ceiling and a coded content refusal as findings, anything else as a defect', () => {
+    expect(packagingRefusalCode(new ZipSizeLimitError(9 * 1024 * 1024, 8 * 1024 * 1024))).toBe('SKILL_PACKAGE_TOO_LARGE');
+    expect(packagingRefusalCode(new VatError(SKILL_PACKAGING_INPUT_INVALID_CODE, 'files: source missing'))).toBe('SKILL_PACKAGING_FAILED');
+    // An uncoded throw is VAT's: the command publishes INTERNAL_ERROR for it.
+    expect(packagingRefusalCode(new Error('files: integrity check failed'))).toBeUndefined();
+    expect(packagingRefusalCode(new VatError('SOMETHING_ELSE', 'x'))).toBeUndefined();
   });
 });
 
 describe('vat skills package — formatSkillValidationLines', () => {
   it('does not drop info findings from the report', () => {
     const lines = formatSkillValidationLines(
-      validationResult([issue('error', 'E1'), issue('warning', 'W1'), issue('info', 'I1')], 'error'),
+      validationResult([issue('error', 'E1'), issue('warning', 'W1'), issue('info', 'I1')]),
     );
     // The defect: the renderer filtered to error+warning, so info vanished.
     expect(renderedLabels(lines)).toEqual(['ERROR', 'WARNING', 'INFO']);
@@ -1265,7 +982,7 @@ describe('vat skills package — formatSkillValidationLines', () => {
 
   it('reports a warning-only result instead of a bare success line', () => {
     const lines = formatSkillValidationLines(
-      validationResult([issue('warning', 'W1')], 'warning'),
+      validationResult([issue('warning', 'W1')]),
     );
     // The defect: `status === 'error'` gated the whole report, so a `warning`
     // status printed only "✅ Validation passed".
@@ -1275,7 +992,7 @@ describe('vat skills package — formatSkillValidationLines', () => {
   });
 
   it('keeps a clean result a one-liner', () => {
-    expect(formatSkillValidationLines(validationResult([], 'success'))).toEqual([
+    expect(formatSkillValidationLines(validationResult([]))).toEqual([
       '✅ Validation passed — no findings',
     ]);
   });
@@ -1294,7 +1011,7 @@ describe('vat claude plugin build — summarizePackagedSkillIssues', () => {
   });
 
   it('renders every severity across every packaged skill', () => {
-    const { lines, issueCounts } = summarizePackagedSkillIssues([
+    const { lines, issues } = summarizePackagedSkillIssues([
       { skillDirPath: 'a', result: packageResult([issue('warning', 'W1')], undefined) },
       {
         skillDirPath: 'b',
@@ -1302,7 +1019,7 @@ describe('vat claude plugin build — summarizePackagedSkillIssues', () => {
       },
     ], true);
     expect(renderedLabels(lines)).toEqual(['WARNING', 'INFO', 'ERROR']);
-    expect(issueCounts).toEqual({ errors: 1, warnings: 1, info: 1 });
+    expect(countBySeverity(issues)).toEqual({ errors: 1, warnings: 1, info: 1 });
   });
 
   it('shows the findings when a skill failed purely on postBuildValidation', () => {
@@ -1315,12 +1032,12 @@ describe('vat claude plugin build — summarizePackagedSkillIssues', () => {
   });
 
   it('renders nothing and counts nothing for a clean set', () => {
-    const { lines, withErrors, issueCounts } = summarizePackagedSkillIssues([
+    const { lines, withErrors, issues } = summarizePackagedSkillIssues([
       { skillDirPath: 'a', result: packageResult([], undefined) },
     ], false);
     expect(lines).toEqual([]);
     expect(withErrors).toEqual([]);
-    expect(issueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
+    expect(countBySeverity(issues)).toEqual({ errors: 0, warnings: 0, info: 0 });
   });
 });
 
@@ -1451,7 +1168,7 @@ describe('vat skills build — formatPreBuildIssueReport verbosity', () => {
 
 describe('vat claude plugin build — summarizePackagedSkillIssues verbosity', () => {
   it('collapses the non-errors while the per-skill heading keeps the full counts', () => {
-    const { lines, withErrors, issueCounts } = summarizePackagedSkillIssues(
+    const { lines, withErrors, issues } = summarizePackagedSkillIssues(
       [{ skillDirPath: 'csvsum', result: packageResult2(mixedIssues()) }],
       false,
     );
@@ -1462,17 +1179,17 @@ describe('vat claude plugin build — summarizePackagedSkillIssues verbosity', (
     // Verbosity is a RENDERING decision: the gate and the published counts are
     // computed from the whole set either way.
     expect(withErrors).toEqual(['csvsum']);
-    expect(issueCounts).toEqual({ errors: 1, warnings: 3, info: 1 });
+    expect(countBySeverity(issues)).toEqual({ errors: 1, warnings: 3, info: 1 });
   });
 
   it('renders every emitted severity under --verbose, with unchanged counts', () => {
-    const { lines, issueCounts } = summarizePackagedSkillIssues(
+    const { lines, issues } = summarizePackagedSkillIssues(
       [{ skillDirPath: 'csvsum', result: packageResult2(mixedIssues()) }],
       true,
     );
 
     expect(renderedLabels(lines)).toEqual(['ERROR', 'WARNING', 'WARNING', 'WARNING', 'INFO']);
-    expect(issueCounts).toEqual({ errors: 1, warnings: 3, info: 1 });
+    expect(countBySeverity(issues)).toEqual({ errors: 1, warnings: 3, info: 1 });
   });
 
   it('keeps a warning-only skill visible as its heading', () => {

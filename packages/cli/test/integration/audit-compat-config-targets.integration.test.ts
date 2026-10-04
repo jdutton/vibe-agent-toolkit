@@ -77,9 +77,10 @@ function makePluginResult(pluginDir: string): ValidationResult {
   return {
     path: pluginDir,
     type: 'claude-plugin',
-    status: 'success',
-    summary: '0 errors, 0 warnings, 0 info',
+    status: 'ok',
+    description: '0 errors, 0 warnings, 0 info',
     issues: [],
+    summary: { errors: 0, warnings: 0, info: 0 },
   };
 }
 

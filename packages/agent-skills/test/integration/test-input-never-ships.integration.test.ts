@@ -54,7 +54,7 @@ function writeProject(opts: { alsoLink?: string } = {}): {
   mkdirSyncReal(evalsDir, { recursive: true });
   // Anchor the project root so `files:` sources resolve repo-relative (as they do in
   // a real adopter) rather than collapsing onto the skill dir.
-  writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n', 'utf8');
+  writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), '{}\n', 'utf8');
 
   writeFileSync(
     safePath.join(skillDir, 'SKILL.md'),
@@ -106,7 +106,7 @@ function writeCrossSkillProject(): void {
   otherDir = safePath.join(projectRoot, 'skills', 'example-skill');
   mkdirSyncReal(safePath.join(subjectDir, 'evals'), { recursive: true });
   mkdirSyncReal(safePath.join(otherDir, 'evals'), { recursive: true });
-  writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n', 'utf8');
+  writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), '{}\n', 'utf8');
 
   writeFileSync(
     safePath.join(subjectDir, SKILL_MD),
@@ -265,7 +265,7 @@ describe('declared test input never ships (integration)', () => {
     });
     expect(codesOf(activeErrorsOf(validated))).toContain(BROKEN_LINK_CODE);
     expect(codesOf(validated.allErrors)).not.toContain('LINK_DEFERRED_ARTIFACT');
-    expect(validated.status).toBe('error');
+    expect(validated.summary.errors).toBeGreaterThan(0);
   });
 
   it('still packages a files: entry that points OUTSIDE test input', async () => {

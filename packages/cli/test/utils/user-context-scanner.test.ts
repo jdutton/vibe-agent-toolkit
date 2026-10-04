@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 
 import * as claudePaths from '@vibe-agent-toolkit/claude-marketplace';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { removeScratchDir, withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
+import { removeScratchDir, withReaddirSyncRefused, withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 
 import { scanUserContext } from '../../src/utils/user-context-scanner.js';
@@ -132,6 +132,20 @@ describe('scanUserContext', () => {
 
     expect(result.plugins.map((r) => r.relativePath)).toEqual([safePath.join('open', 'SKILL.md')]);
     expect(result.unreadable.map((r) => [r.code, r.directory])).toEqual([['EACCES', lockedDir]]);
+  });
+
+  // An untraversable ~/.claude makes each root's `stat` fail with EACCES. That
+  // is not "absent": `skills list --user` would publish `ok, examined: 2` over
+  // roots it never read. The root itself is the refusal.
+  it('reports a root whose stat the OS refuses as unreadable, never as absent', async () => {
+    await writeFile(safePath.join(mockSkillsDir, 'SKILL.md'), '# Standalone');
+
+    const result = await withSyncFsRefused('statSync', mockPluginsDir, 'EACCES', () => scanUserContext());
+
+    expect(result.unreadable.map((r) => [r.code, r.directory])).toEqual([['EACCES', mockPluginsDir]]);
+    expect(result.plugins).toEqual([]);
+    // The other root is still scanned.
+    expect(result.skills).toHaveLength(1);
   });
 
   it('should find skills in nested directories', async () => {

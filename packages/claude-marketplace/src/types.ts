@@ -111,9 +111,10 @@ export interface CompatibilityResult {
   unchecked: CompatibilityUnchecked[];
   /**
    * `totalFiles` is every file the walk found; the per-kind counts are what
-   * was ANALYZED — a file under `unchecked` is in none of them.
+   * was ANALYZED — a file under `unchecked` is in none of them. Not `summary`,
+   * which in every report counts findings.
    */
-  summary: {
+  fileCounts: {
     totalFiles: number;
     skillFiles: number;
     scriptFiles: number;

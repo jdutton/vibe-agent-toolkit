@@ -33,17 +33,93 @@ function scanDocument(overrides: Record<string, unknown> = {}): string {
   });
 }
 
-/** What this runtime's JSON.parse says about `text` — the wording differs by engine. */
-function parseFailureReason(text: string): string {
-  try {
-    JSON.parse(text);
-  } catch (error) {
-    return (error as SyntaxError).message;
-  }
-  throw new Error('expected the text not to parse');
+/** A minimal `Report<T>` envelope — only the fields this reader needs, so each case varies one. */
+function reportScanDocument(dataOverrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    status: 'ok',
+    examined: 2,
+    findings: [],
+    summary: { errors: 0, warnings: 0, info: 0 },
+    data: {
+      root: '/fixture/project',
+      lane: 'walk',
+      files: [
+        { path: 'b.md', checksum: 'bbb' },
+        { path: 'a.md', checksum: 'aaa' },
+      ],
+      ...dataOverrides,
+    },
+  });
 }
 
+/**
+ * `vat resources scan --verbose --format json` as the Report envelope prints it
+ * (wave 3): the count is `examined`, the population is `data.files`, the arm is
+ * `data.lane` / `data.extentSource`. Byte-for-byte the shape
+ * `RESOURCES_SCAN_REPORT_SCHEMA` accepts.
+ */
+const REPORT_SHAPED_SCAN = JSON.stringify({
+  status: 'ok',
+  examined: 2,
+  findings: [],
+  summary: { errors: 0, warnings: 0, info: 0 },
+  gate: { strict: false },
+  durationMs: 41,
+  data: {
+    root: '/fixture/project',
+    lane: 'projection',
+    extentSource: 'git',
+    collections: {},
+    files: [
+      { path: 'docs/b.md', links: 1, anchors: 1, checksum: 'bbb' },
+      { path: 'docs/a.md', links: 2, anchors: 3, checksum: 'aaa' },
+    ],
+  },
+});
+
 describe('readPopulationDocument', () => {
+  it('reads a Report-shaped scan: examined and data.files', () => {
+    const result = readPopulationDocument(REPORT_SHAPED_SCAN);
+
+    expect(result.ok, result.ok ? '' : result.refusal).toBe(true);
+    if (!result.ok) return;
+    expect(result.document).toEqual({
+      root: '/fixture/project',
+      lane: 'projection',
+      extentSource: 'git',
+      files: [
+        { path: 'docs/a.md', checksum: 'aaa' },
+        { path: 'docs/b.md', checksum: 'bbb' },
+      ],
+    });
+  });
+
+  it('reads a report-shaped document, taking the file count from the envelope\'s examined', () => {
+    // `data` carries no `filesScanned` of its own — the envelope's `examined`
+    // IS the denominator, and this facet must not require a per-command
+    // restatement of it.
+    const result = readPopulationDocument(reportScanDocument());
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.document.root).toBe('/fixture/project');
+    expect(result.document.files.map((entry) => entry.path)).toEqual(['a.md', 'b.md']);
+  });
+
+  it('REFUSES a report whose data reported files but no verbose list, using examined in the message', () => {
+    const result = readPopulationDocument(JSON.stringify({
+      status: 'ok',
+      examined: 5,
+      findings: [],
+      summary: { errors: 0, warnings: 0, info: 0 },
+      data: { root: '/fixture/project', lane: 'walk' },
+    }));
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.refusal).toContain('5 files scanned but listed none');
+  });
+
   it('reads the root, the lane and the files', () => {
     const result = readPopulationDocument(scanDocument());
 
@@ -181,16 +257,25 @@ describe('readPopulationDocument', () => {
     expect(result.document.files).toEqual([]);
   });
 
-  it('REFUSES output that is not JSON at all, carrying the parser\'s reason', () => {
-    const yaml = '---\nstatus: success\nfilesScanned: 2\n';
+  it('reads the default YAML scan (opened with ---), now that YAML is parsed', () => {
+    // `vat resources scan` prints this by default; `--format json` is no
+    // longer required for this facet to read it.
+    const yaml = '---\nroot: /fixture/project\nstatus: success\nfilesScanned: 1\nfiles:\n  - path: a.md\n    checksum: aaa\n';
     const result = readPopulationDocument(yaml);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.document.root).toBe('/fixture/project');
+    expect(result.document.files).toEqual([{ path: 'a.md', checksum: 'aaa' }]);
+  });
+
+  it('REFUSES output that is neither JSON nor YAML, carrying the reason', () => {
+    const notADocument = 'a: [1, 2\n';
+    const result = readPopulationDocument(notADocument);
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.refusal).toContain('no JSON document');
-    // The parser's own reason travels with the refusal, so a reader can tell
-    // YAML from truncated JSON without re-running the command.
-    expect(result.refusal).toContain(parseFailureReason(yaml));
+    expect(result.refusal).toContain('no document this facet can read');
   });
 
   it('REFUSES a JSON document that is not a scan document', () => {

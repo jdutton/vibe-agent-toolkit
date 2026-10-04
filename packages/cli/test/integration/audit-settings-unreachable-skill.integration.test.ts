@@ -78,7 +78,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit --compat --settings over a plugin 
     expect(exit).toBe(ExitCode.OK);
     // Once across the whole document — on the skill's own row for a locked
     // SKILL.md, on the plugin's row for a locked skill directory.
-    const codes = report.files.flatMap((f) => f.issues ?? []).map((i) => i.code);
+    const codes = report.findings.map((i) => i.code);
     expect(codes.filter((c) => c === 'SCAN_PATH_UNREADABLE')).toHaveLength(1);
     expect(codes).not.toContain('PLUGIN_INVALID_JSON');
     // The analyzer analyzed everything it could read: the readable sibling's
@@ -126,7 +126,7 @@ describe('vat audit --compat --settings over a plugin whose skills are symlinks'
 
     expect(exit).toBe(0);
     // The control: the validator lane sees both skills in the same document.
-    const validated = report.files.filter((f) => f.type === 'agent-skill').map((f) => f.path).sort((a, b) => a.localeCompare(b));
+    const validated = report.data.files.filter((f) => f.type === 'agent-skill').map((f) => f.path).sort((a, b) => a.localeCompare(b));
     expect(validated).toEqual([`skills/${LINKED_DIR}/SKILL.md`, `skills/${LINKED_FILE}/SKILL.md`]);
     // So the settings lane must reach them the same way.
     expect(bashConflictFiles(plugin).sort((a, b) => a.localeCompare(b))).toEqual(validated);

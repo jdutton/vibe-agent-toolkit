@@ -8,6 +8,14 @@ import { resolveAssetReference } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  countByOutcome,
+  formatDoctorSummary,
+  renderDoctorBlock,
+  renderDoctorText,
+  selectDisplayChecks,
+} from '../../src/commands/doctor-render.js';
+import type { DoctorCheckResult } from '../../src/commands/doctor-schema.js';
+import {
   checkCliBuildSync,
   checkConfigFile,
   checkConfigValid,
@@ -15,10 +23,7 @@ import {
   checkGitRepository,
   checkNodeVersion,
   checkVatVersion,
-  countByOutcome,
-  formatDoctorSummary,
-  selectDisplayChecks,
-  type DoctorCheckResult,
+  doctorReport,
 } from '../../src/commands/doctor.js';
 import { errno } from '../helpers/refusal-doubles.js';
 import {
@@ -96,11 +101,11 @@ describe('doctor command - unit tests', () => {
     });
 
     it('passes on the declared floor itself', async () => {
-      await mockDoctorEnvironment({ nodeVersion: 'v22.13.0' });
+      await mockDoctorEnvironment({ nodeVersion: 'v22.16.0' });
 
       const result = checkNodeVersion();
 
-      assertCheckPassed(result, CHECK_NODE_VERSION, 'v22.13.0');
+      assertCheckPassed(result, CHECK_NODE_VERSION, 'v22.16.0');
       assertCheckPassed(result, CHECK_NODE_VERSION, 'meets requirement');
     });
 
@@ -113,8 +118,9 @@ describe('doctor command - unit tests', () => {
     });
 
     /*
-     * ⭐ The first two rows are the point. The boundary is a MINOR — `node:sqlite`
-     * is absent from 22.12.0 and present in 22.13.0 — so the old `major >= 20`
+     * ⭐ The first three rows are the point. The boundary is a MINOR —
+     * `StatementSync.columns()` is absent from 22.15.1 and present in 22.16.0,
+     * and `node:sqlite` itself is absent from 22.12.0 — so the old `major >= 20`
      * test could not see the difference between the only two versions that
      * matter, and reported BOTH `v22.0.0` and `v20.0.0` as healthy environments
      * in which `vat resources query|check` cannot run at all. A doctor that
@@ -122,7 +128,8 @@ describe('doctor command - unit tests', () => {
      * doctor: it ends the user's investigation at exactly the wrong moment.
      */
     it.each([
-      ['v22.12.0', 'one patch below the floor, where node:sqlite is still absent'],
+      ['v22.15.1', 'the last release below the floor, where StatementSync.columns() is absent'],
+      ['v22.12.0', 'below the floor, where node:sqlite is still absent'],
       ['v22.0.0', 'the version the old major-only check called healthy'],
       ['v20.0.0', 'two majors below the floor'],
     ])('fails on %s — %s', async (nodeVersion) => {
@@ -660,6 +667,71 @@ describe('doctor command - unit tests', () => {
       const summary = formatDoctorSummary(counts, 2).join('\n');
 
       expect(summary).toContain('All checks passed');
+    });
+  });
+
+  describe('the published report', () => {
+    const CONTEXT = { currentDir: '/work/sub', projectRoot: '/work', configPath: '/work/vibe-agent-toolkit.config.yaml' };
+    const CHECKS: DoctorCheckResult[] = [
+      { name: 'ok', outcome: 'pass', message: 'fine' },
+      { name: 'bad', outcome: 'fail', message: 'broken', suggestion: 'mend it' },
+      { name: 'unsure', outcome: 'undetermined', message: 'no answer' },
+      { name: 'n/a', outcome: 'skipped', message: 'does not apply' },
+    ];
+
+    it('is one row per check, a finding per failed or undetermined one, examined the checks run', () => {
+      const report = doctorReport({ checks: CHECKS, projectContext: CONTEXT });
+
+      expect(report.status).toBe('findings');
+      expect(report.examined).toBe(CHECKS.length);
+      expect(report.data).toEqual({ currentDir: '/work/sub', projectRoot: '/work', configPath: CONTEXT.configPath, checks: CHECKS });
+      expect(report.findings).toEqual([
+        { code: 'DOCTOR_CHECK_FAILED', severity: 'error', message: 'bad: broken', fix: 'mend it' },
+        { code: 'DOCTOR_CHECK_WARNED', severity: 'warning', message: 'unsure: no answer' },
+      ]);
+      expect(report.gate).toEqual({ strict: false });
+    });
+
+    it('is ok with no finding when every check passed or did not apply', () => {
+      const report = doctorReport({ checks: [CHECKS[0], CHECKS[3]].filter((c) => c !== undefined), projectContext: CONTEXT });
+
+      expect(report.status).toBe('ok');
+      expect(report.findings).toEqual([]);
+    });
+
+    it('renders the block with the project context when run below the root, verbose or concise', () => {
+      const data = doctorReport({ checks: CHECKS, projectContext: CONTEXT }).data;
+
+      const concise = renderDoctorBlock(data, false);
+      expect(concise).toContain('📍 Project Context');
+      expect(concise).toContain('Current directory: /work/sub');
+      expect(concise).toContain('❌ bad');
+      expect(concise).not.toContain('✅ ok');
+      expect(concise).toContain('2 not shown');
+      expect(renderDoctorBlock({ ...data, currentDir: '/work' }, true)).not.toContain('📍 Project Context');
+    });
+
+    it('renders --format text from the document alone, never from the process working directory', () => {
+      // process.cwd() is not /work/sub: the context block comes from data.currentDir.
+      const report = doctorReport({ checks: CHECKS, projectContext: CONTEXT });
+
+      const text = renderDoctorText(report);
+      expect(text).toContain('Current directory: /work/sub');
+      expect(text).toContain('✅ ok');
+    });
+
+    it('renders a refusal as its one error line under --format text', () => {
+      const text = renderDoctorText({
+        status: 'error',
+        error: { code: 'INTERNAL_ERROR', message: 'boom' },
+        gate: { strict: false },
+        summary: { errors: 0, warnings: 0, info: 0 },
+        examined: 0,
+        findings: [],
+        data: null,
+      });
+
+      expect(text).toBe('error: boom [INTERNAL_ERROR]\n');
     });
   });
 });

@@ -11,7 +11,7 @@ import { gitFindRoot, gitLsFiles } from './git-utils.js';
 import { requireUnreadablePolicy, settleRefusal, type UnreadablePolicy } from './listing-refusal.js';
 import { toForwardSlash, safePath } from './path-utils.js';
 
-export type { DirectoryRefusal } from './fs-utils.js';
+export { rootListingRefusal, type DirectoryRefusal } from './fs-utils.js';
 // The refusal vocabulary lives in `listing-refusal.ts` so `git-utils.ts` can
 // share it without importing this module (which imports that one). Re-exported
 // here because `./crawl` is where every caller of the walk already looks.

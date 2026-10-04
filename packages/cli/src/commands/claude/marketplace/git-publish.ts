@@ -7,9 +7,11 @@
 
 import { cpSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 
+import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
+import { CommandRefusalError } from '../../../utils/command-refusal.js';
 import type { Logger } from '../../../utils/logger.js';
 import { redactUrlCredentials } from '../../../utils/url-redact.js';
 
@@ -22,6 +24,8 @@ export interface PublishGitOptions {
   publishDir: string;
   branch: string;
   remote: string;
+  /** Whether `remote` came from `publish.remote` (true) or is the default (false) — named when it is not found. */
+  remoteFromConfig: boolean;
   commitMessage: string;
   force: boolean;
   dryRun: boolean;
@@ -59,7 +63,9 @@ export function createCommitMessage(
 
 /**
  * Execute a git command and return the result.
- * Throws on non-zero exit code unless allowFailure is true.
+ * Refuses on non-zero exit code unless allowFailure is true: `refusal` (default
+ * `RUN_INCOMPLETE` — a publish step stopped) names what the failure means, so
+ * the one step that talks to the remote (the push) says `EXTERNAL_API_FAILED`.
  *
  * 🔴 Running through `runGit` is a data-loss guard, not a style choice. Every
  * call here targets the private staging repo under the temp directory — a
@@ -71,7 +77,7 @@ export function createCommitMessage(
  */
 function git(
   args: string[],
-  options: { cwd: string; allowFailure?: boolean; timeout?: number; input?: string; trim?: boolean }
+  options: { cwd: string; allowFailure?: boolean; timeout?: number; input?: string; trim?: boolean; refusal?: RefusalCode }
 ): { stdout: string; stderr: string; status: number } {
   const result = runGit(args, {
     cwd: options.cwd,
@@ -89,13 +95,14 @@ function git(
   // "ran and exited non-zero". Collapsing the first into an exit code invents a
   // failure git never reported and discards the only diagnostic there is — the
   // symptom is a confident "exit 1" with empty stderr.
+  const refusal = options.refusal ?? 'RUN_INCOMPLETE';
   if (result.error && !options.allowFailure) {
-    throw new Error(`git ${label} could not run: ${result.error.message}`);
+    throw new CommandRefusalError(refusal, `git ${label} could not run: ${result.error.message}`, { cause: result.error });
   }
 
   const status = result.status === -1 ? 1 : result.status;
   if (status !== 0 && !options.allowFailure) {
-    throw new Error(`git ${label} failed (exit ${status}):\n${result.stderr}`);
+    throw new CommandRefusalError(refusal, `git ${label} failed (exit ${status}):\n${result.stderr}`);
   }
 
   return { stdout: result.stdout, stderr: result.stderr, status };
@@ -118,14 +125,18 @@ function listedPaths(cwd: string, args: string[], allowFailure = false): string[
  * If the value already looks like a URL, returns it as-is.
  * In CI, injects GITHUB_TOKEN into HTTPS URLs for push authentication.
  */
-function resolveRemoteUrl(remote: string, cwd: string): string {
+function resolveRemoteUrl(remote: string, remoteFromConfig: boolean, cwd: string): string {
   let url: string;
   if (remote.includes('/') || remote.includes(':')) {
     url = remote;
   } else {
     const urlResult = git(['remote', 'get-url', remote], { cwd, allowFailure: true });
     if (urlResult.status !== 0) {
-      throw new Error(`Git remote "${remote}" not found. Configure it or use a full URL.`);
+      const origin = remoteFromConfig ? 'from publish.remote' : 'the default — publish.remote is not set';
+      throw new CommandRefusalError(
+        'CONFIG_INVALID',
+        `Git remote "${remote}" (${origin}) not found. Add it with git remote add, or set publish.remote to a remote name or a full URL.`,
+      );
     }
     url = urlResult.stdout;
   }
@@ -142,7 +153,7 @@ function resolveRemoteUrl(remote: string, cwd: string): string {
 /**
  * Deliver the commit: dry-run (show info), no-push (local branch), or push to remote.
  */
-function deliverCommit(
+export function deliverCommit(
   tmpRepo: string,
   cwd: string,
   options: Pick<
@@ -177,7 +188,7 @@ function deliverCommit(
   if (force) {
     pushArgs.splice(1, 0, '--force');
   }
-  git(pushArgs, { cwd: tmpRepo });
+  git(pushArgs, { cwd: tmpRepo, refusal: 'EXTERNAL_API_FAILED' });
   logger.info(`   Pushed to ${redactUrlCredentials(remoteUrl)} branch ${branch}`);
 }
 
@@ -195,7 +206,7 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<vo
   const { publishDir, branch, commitMessage, force, dryRun, logger } = options;
 
   const cwd = process.cwd();
-  const remoteUrl = resolveRemoteUrl(options.remote, cwd);
+  const remoteUrl = resolveRemoteUrl(options.remote, options.remoteFromConfig, cwd);
 
   logger.info(`   Remote: ${redactUrlCredentials(remoteUrl)}`);
   logger.info(`   Branch: ${branch}`);

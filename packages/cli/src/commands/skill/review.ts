@@ -10,7 +10,7 @@
  * the automated portion is the same code path used by `vat skills validate`.
  */
 
-import { existsSync, statSync } from 'node:fs';
+import { statSync, type Stats } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
@@ -21,24 +21,22 @@ import {
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
 import {
   buildReport,
-  calculateValidationStatus,
   countBySeverity,
-  exitCodeForReport,
-  reportSchema,
   toFindings,
-  type Report,
+  withDurationMs,
+  type Gate,
+  type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
-import { z } from 'zod';
 
 import { resolveProjectDeclaredEvalSuites, resolveSkillPackagingConfig } from '../../skill-resolution/packaging-config.js';
-import { handleReportCommandError } from '../../utils/command-error.js';
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { formatIssueAnchor } from '../../utils/issue-anchor.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { writeYamlOutput } from '../../utils/output.js';
-import { projectRootOrNull } from '../../utils/project-root-policy.js';
+import { projectRootOrNull, unstatablePathRefusal } from '../../utils/project-root-policy.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 
@@ -48,6 +46,7 @@ import {
   sectionForCode,
   type ChecklistSection,
 } from './review-checklist.js';
+import type { SkillReviewData, SkillReviewReport } from './review-schema.js';
 
 export interface SkillReviewCommandOptions {
   yaml?: boolean;
@@ -56,47 +55,6 @@ export interface SkillReviewCommandOptions {
   debug?: boolean;
 }
 
-/** One checklist section: which automated findings landed in it, and what a reviewer walks through by hand. */
-const ReviewSectionSchema = z.object({
-  section: z.string(),
-  /** Codes of the envelope's findings that belong to this section, in finding order. */
-  codes: z.array(z.string()),
-  /** The judgment-call items a reviewer completes for this section. */
-  manual: z.array(z.string()),
-}).strict();
-
-/** What the review reports beyond its findings. */
-export const SkillReviewDataSchema = z.object({
-  skill: z.string(),
-  /** The path the caller named. */
-  source: z.string(),
-  metadata: z.object({
-    skillLines: z.number().int().nonnegative(),
-    totalLines: z.number().int().nonnegative(),
-    fileCount: z.number().int().nonnegative(),
-    directFileCount: z.number().int().nonnegative(),
-    maxLinkDepth: z.number().int().nonnegative(),
-    excludedReferenceCount: z.number().int().nonnegative(),
-    excludedReferences: z.array(z.object({
-      path: z.string(),
-      reason: z.string(),
-      matchedPattern: z.string().optional(),
-    }).strict()),
-  }).strict(),
-  /**
-   * Every checklist section, in rubric order — including the ones no finding
-   * landed in, because the manual items are the point of a review and a
-   * section with nothing automated still has to be walked through.
-   */
-  sections: z.array(ReviewSectionSchema),
-}).strict();
-
-export type SkillReviewData = z.infer<typeof SkillReviewDataSchema>;
-
-/** The document `--yaml` publishes. */
-export const SKILL_REVIEW_REPORT_SCHEMA = reportSchema(SkillReviewDataSchema);
-
-export type SkillReviewReport = Report<SkillReviewData>;
 
 /**
  * Resolve the caller's argument to the absolute path of a skill markdown file.
@@ -106,39 +64,51 @@ export type SkillReviewReport = Report<SkillReviewData>;
  * - a path to any single-file skill (.md)
  * - a directory that contains SKILL.md at its root
  *
- * Throws a user-friendly error for other inputs (missing path, non-.md file,
- * directory without SKILL.md). Frontmatter validity is not checked here —
- * the downstream packaging validator handles that.
+ * Refuses other inputs (missing path, non-.md file, directory without
+ * SKILL.md) as `USAGE_INVALID`: each is the invocation naming nothing
+ * reviewable. Frontmatter validity is not checked here — the downstream
+ * packaging validator handles that.
  */
 export function resolveSkillPath(pathArg: string): string {
   const absolute = safePath.resolve(pathArg);
 
-  if (!existsSync(absolute)) {
-    throw new Error(`Path does not exist: ${pathArg}`);
+  let stat: Stats;
+  try {
+    stat = statSync(absolute);
+  } catch (error) {
+    // Absent is the invocation's mistake; an `EACCES` parent is the input's refusal.
+    throw unstatablePathRefusal(absolute, error);
   }
-
-  const stat = statSync(absolute);
 
   if (stat.isFile()) {
     if (!absolute.endsWith('.md')) {
-      throw new Error(
-        `Expected a markdown file (.md) or a skill directory. Got: ${pathArg}`,
-      );
+      throw new CommandRefusalError('USAGE_INVALID', `Expected a markdown file (.md) or a skill directory. Got: ${pathArg}`);
     }
     return absolute;
   }
 
   if (stat.isDirectory()) {
     const candidate = safePath.join(absolute, 'SKILL.md');
-    if (!existsSync(candidate)) {
-      throw new Error(
+    // `stat`, not `existsSync`: a directory the OS will not read answers
+    // `existsSync` false too, and that is not "no SKILL.md" — the user's own
+    // directory refused the read, so it is INPUT_UNREADABLE.
+    try {
+      statSync(candidate);
+    } catch (error) {
+      if (isFilesystemAccessError(error) && !isPathAbsentError(error)) {
+        throw new CommandRefusalError('INPUT_UNREADABLE', `Cannot read ${pathArg}: ${errorMessageOf(error)}`, { cause: error });
+      }
+      if (!isPathAbsentError(error)) throw error;
+      throw new CommandRefusalError(
+        'USAGE_INVALID',
         `No SKILL.md found in directory: ${pathArg}. Point at the skill directory (containing SKILL.md) or the SKILL.md file directly.`,
+        { cause: error },
       );
     }
     return candidate;
   }
 
-  throw new Error(`Path is neither a file nor a directory: ${pathArg}`);
+  throw new CommandRefusalError('USAGE_INVALID', `Path is neither a file nor a directory: ${pathArg}`);
 }
 
 /**
@@ -241,12 +211,14 @@ function renderIssue(issue: ValidationIssue, logger: Logger): void {
  * @param result - The validator's result
  * @param skillPath - The path the caller named
  * @param grouped - The findings by checklist section
+ * @param gate - The gate the review is judged by (`--strict`)
  * @returns The report
  */
 export function buildReviewReport(
   result: PackagingValidationResult,
   skillPath: string,
   grouped: ReadonlyMap<ChecklistSection, readonly ValidationIssue[]>,
+  gate: Gate,
 ): SkillReviewReport {
   const findings = CHECKLIST_SECTIONS.flatMap((section) => toFindings(grouped.get(section) ?? []));
   const sections = CHECKLIST_SECTIONS.map((section) => ({
@@ -255,6 +227,7 @@ export function buildReviewReport(
     manual: [...MANUAL_CHECKLIST_ITEMS[section]],
   }));
   return buildReport<SkillReviewData>({
+    gate,
     examined: 1,
     findings,
     data: {
@@ -273,14 +246,17 @@ export function buildReviewReport(
   });
 }
 
-/** Footer: share the checklist link when any skill-level finding fires. */
-function renderFooter(result: PackagingValidationResult, logger: Logger): void {
+/**
+ * Footer: share the checklist link when any skill-level finding fires. Whether
+ * one did is read from the report's own `summary` — an error or a warning —
+ * so the footer and the written document cannot disagree.
+ */
+function renderFooter(result: PackagingValidationResult, summary: SeverityCounts, logger: Logger): void {
   const emittedCodes = new Set<string>();
   for (const issue of result.allErrors) {
     emittedCodes.add(issue.code);
   }
-  const hasSkillFindings = calculateValidationStatus(result.allErrors) !== 'success';
-  renderSkillQualityFooter(logger, hasSkillFindings, emittedCodes);
+  renderSkillQualityFooter(logger, summary.errors + summary.warnings > 0, emittedCodes);
 }
 
 export async function reviewCommand(
@@ -289,10 +265,12 @@ export async function reviewCommand(
 ): Promise<void> {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
+  const format = options.yaml === true ? 'yaml' : 'text';
+  const gate: Gate = { strict: options.strict === true };
 
   try {
     if (pathArg === undefined || pathArg === '') {
-      throw new Error('Missing required argument: <path> (path to SKILL.md or a skill directory)');
+      throw new CommandRefusalError('USAGE_INVALID', 'Missing required argument: <path> (path to SKILL.md or a skill directory)');
     }
 
     // Spec §7: `vat skill review` uses `tolerate null` (single-skill review
@@ -306,8 +284,9 @@ export async function reviewCommand(
 
     // `'refuse'` on both: a review that cannot tell whether this skill is
     // declared, or which suites are the project's, would report against the
-    // wrong rules at exit 0. The throw lands in the catch below →
-    // `handleReportCommandError`, exit 2.
+    // wrong rules at exit 0. The throw lands in the catch below → a refusal
+    // (`CONFIG_INVALID` for a broken config, `INPUT_UNREADABLE` for a refused
+    // listing), exit 2.
     const packagingConfig = (await resolveSkillPackagingConfig(skillPath, 'refuse')) ?? undefined;
     // Project-wide test input: a review of skill A must not count skill B's eval
     // suite as content A ships. Memoized per config root; `[]` in wild mode.
@@ -329,22 +308,17 @@ export async function reviewCommand(
 
     const grouped = groupIssuesBySection(result.allErrors);
 
-    const report = buildReviewReport(result, skillPath, grouped);
-    if (options.yaml) {
-      writeYamlOutput({ ...report, durationMs: Date.now() - startTime });
-    } else {
-      renderHumanReport(result, skillPath, grouped, logger);
-    }
+    const report = withDurationMs(buildReviewReport(result, skillPath, grouped, gate), Date.now() - startTime);
+    if (!options.yaml) renderHumanReport(result, skillPath, grouped, logger);
+    renderFooter(result, report.summary, logger);
 
-    renderFooter(result, logger);
-
-    // Same counts the status channel is derived from, so the two agree by
-    // construction. Errors fail; warnings fail only under `--strict` — this
-    // used to exit 1 on a warning while every sibling exited 1 on errors only,
-    // so the one verb meant for a human's review was the strictest gate.
-    process.exit(exitCodeForReport(report, { strict: options.strict === true }));
+    // The code derives from the written document. Errors fail; warnings fail
+    // only under `--strict`, which the report records as its `gate` — this
+    // used to exit 1 on a warning while every sibling exited 1 on errors only.
+    // Without `--yaml` the human report is on stderr and stdout carries nothing.
+    endWithReport('skill review', report, format);
   } catch (error) {
-    handleReportCommandError(error, logger, startTime, 'SkillReview');
+    endWithRefusal('skill review', refusalCodeOf(error), error, format, gate, NOTHING_FINISHED);
   }
 }
 
@@ -378,13 +352,16 @@ Description:
              examined (always 1), findings, summary {errors, warnings, info},
              and data.sections: every checklist section with the codes of
              the findings that landed in it and its manual items. The exit
-             code is derived from the same summary: exit 1 iff
-             summary.errors + summary.warnings > 0.
+             code is derived from the same document: exit 1 iff
+             summary.errors > 0, or summary.warnings > 0 under --strict.
 
 Exit Codes:
   0 - No error-severity finding (warnings and info are in the report; --strict promotes warnings)
   1 - At least one error present, or any warning under --strict
-  2 - System error (path missing, internal failure)
+  2 - The command could not do its job; with --yaml, \`error.code\` says which:
+      USAGE_INVALID (a path naming no skill), CONFIG_INVALID (a config that does
+      not parse), INPUT_UNREADABLE (a directory the OS would not read),
+      INTERNAL_ERROR (a VAT defect)
 
 Requirements:
   projectRoot: optional (tolerates absence)

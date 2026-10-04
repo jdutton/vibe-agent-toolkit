@@ -154,7 +154,7 @@ describe('${fixturesDir} wiring (integration)', () => {
 
     // Carry the harness's own summary into the failure message: exit 2 is preflight,
     // which has ~8 distinct causes, and a bare "expected 2 to be 0" names none of them.
-    expect(result.exitCode, `harness exit ${result.exitCode}: ${result.summary ?? '(no summary)'}`).toBe(0);
+    expect(result.exitCode, `harness exit ${result.exitCode}: ${result.description ?? '(no description)'}`).toBe(0);
     expect(injected, 'the declared env var never reached the executor').toBeDefined();
 
     // The assertion that matters: the interpolated path RESOLVES. Asserting the
@@ -187,7 +187,7 @@ describe('external eval suite (integration)', () => {
     // Exit 3 is bootstrap — "no suite found, here is a template". Before the fix
     // that is exactly what an absolute path produced: it was folded under the
     // skill dir, did not exist, and a starter template was written there.
-    expect(result.exitCode, `harness exit ${result.exitCode}: ${result.summary ?? '(no summary)'}`).toBe(0);
+    expect(result.exitCode, `harness exit ${result.exitCode}: ${result.description ?? '(no description)'}`).toBe(0);
 
     // The suite really drove a run; a pass with zero spawns would mean the
     // harness found nothing to grade and said so quietly.
@@ -225,7 +225,7 @@ describe('external eval suite (integration)', () => {
       optsFor(layout.subjectDir, fake.spawn, { evalsSubpath: layout.evalsPath }),
     );
 
-    expect(result.exitCode, result.summary).toBe(0);
+    expect(result.exitCode, result.description).toBe(0);
     expect(result.workspacesPath, 'a non-keep run named a workspaces dir it did not retain').toBeUndefined();
     const workspacesRoot = /^(.*\/vat-skill-test-ws-[^/]+)\//.exec(toForwardSlash(executorCwd))?.[1];
     expect(workspacesRoot, `no workspaces root in the executor cwd: ${executorCwd}`).toBeDefined();

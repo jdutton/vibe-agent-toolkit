@@ -16,7 +16,7 @@ import {
   getBinPath,
   resolve,
 } from './test-common.js';
-import { MCPTestClient } from './test-helpers/index.js';
+import { executeCli, MCPTestClient } from './test-helpers/index.js';
 
 const binPath = getBinPath(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -109,4 +109,16 @@ describe('MCP stdio protocol compliance (system test)', () => {
       await client.close();
     }
   }, 20_000);
+
+  it('mcp serve --print-config writes only the JSON config to stdout', () => {
+    const result = executeCli(binPath, ['mcp', 'serve', CAT_AGENTS_PACKAGE, '--print-config']);
+
+    expect(result.status, result.stderr).toBe(0);
+    // stdout is the artifact an operator redirects into a file: the config and nothing else.
+    expect(JSON.parse(result.stdout)).toStrictEqual({
+      mcpServers: { 'vat-vat-example-cat-agents': { command: 'vat', args: ['mcp', 'serve', CAT_AGENTS_PACKAGE] } },
+    });
+    // The instructions around it are for the human, on stderr.
+    expect(result.stderr).toContain('Claude Desktop configuration');
+  });
 });

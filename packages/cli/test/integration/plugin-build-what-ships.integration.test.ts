@@ -26,6 +26,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
+import { countBySeverity } from '@vibe-agent-toolkit/schema';
 import { createSymlink, direntKindFollowingSync, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -72,8 +73,7 @@ function writeSkillWithEvals(skillsDir: string, dirPath: string, name: string): 
 }
 
 function configYaml(poolSelector: string): string {
-  return `version: 1
-skills:
+  return `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
   config:
     ${PACKAGED_SKILL}:
@@ -284,8 +284,7 @@ function guidedConfig(
   extraPluginKeys: readonly string[] = [],
 ): string {
   const extra = extraPluginKeys.map((line) => `\n          ${line}`).join('');
-  return `version: 1
-skills:
+  return `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
 claude:
   marketplaces:
@@ -380,10 +379,10 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
   });
 
   // The whole point of the finding: an `exclude:` pattern that no-oped has to
-  // reach the plugin's PUBLISHED counts. It used to be a bare stderr line beside
+  // reach the plugin's PUBLISHED findings. It used to be a bare stderr line beside
   // `issueCounts: {errors: 0, warnings: 0, info: 0}` — so a CI consumer read
   // "clean" for a build whose exclusions demonstrably changed what shipped.
-  it('publishes a dead exclude pattern in the plugin issueCounts, and only the dead ones', async () => {
+  it('publishes a dead exclude pattern in the plugin issues, and only the dead ones', async () => {
     tempDir = createTestTempDir('vat-plugin-dead-exclude-');
     const outDir = writeGuidedFixture(tempDir, [LIVE_EXCLUDE, 'no-such-dir/**', '*.nope']);
 
@@ -395,7 +394,7 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
     const plugin = results[0]?.plugins[0];
     // Two dead patterns, one live — the live one must NOT be accused, or the
     // author is sent to delete a line of config that is doing work.
-    expect(plugin?.issueCounts).toEqual({ errors: 0, warnings: 2, info: 0 });
+    expect(countBySeverity(plugin?.issues ?? [])).toEqual({ errors: 0, warnings: 2, info: 0 });
 
     // ...and the live pattern really did exclude, so this is not a build that
     // no-oped everything. A fixture where the exclusion did nothing could not
@@ -442,7 +441,7 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
 
     // BOTH patterns, including the one that is live in every other fixture: with
     // no tree to walk, "live" is not a property any pattern can have here.
-    expect(results[0]?.plugins[0]?.issueCounts).toEqual({ errors: 0, warnings: 2, info: 0 });
+    expect(countBySeverity(results[0]?.plugins[0]?.issues ?? [])).toEqual({ errors: 0, warnings: 2, info: 0 });
     const rendered = lines.join('\n');
     expect(rendered).toContain('PLUGIN_EXCLUDE_PATTERN_UNUSED');
     expect(rendered).toContain(`'${LIVE_EXCLUDE}'`);
@@ -455,7 +454,7 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
 
     const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
 
-    expect(results[0]?.plugins[0]?.issueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
+    expect(countBySeverity(results[0]?.plugins[0]?.issues ?? [])).toEqual({ errors: 0, warnings: 0, info: 0 });
     // No symlink in the fixture, so the tell is empty — and PRESENT, never undefined.
     expect(results[0]?.plugins[0]?.symlinksCopied).toEqual([]);
   });

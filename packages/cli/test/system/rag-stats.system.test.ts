@@ -5,6 +5,8 @@
  * including total chunks, resources, and embedding model information.
  */
 
+import { RAG_STATS_REPORT_SCHEMA } from '../../src/commands/rag/admin-schema.js';
+
 import {
   describe,
   executeCliAndParseYaml,
@@ -30,13 +32,14 @@ describe('RAG stats command (system test)', () => {
       { cwd: suite.projectDir }
     );
 
+    const report = RAG_STATS_REPORT_SCHEMA.parse(parsed);
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
-    expect(parsed.totalChunks).toBeGreaterThan(0);
-    expect(parsed.totalResources).toBeGreaterThan(0);
-    expect(parsed.embeddingModel).toBeDefined();
-    expect(typeof parsed.embeddingModel).toBe('string');
-    expect(parsed.duration).toBeDefined();
+    expect(report.status).toBe('ok');
+    expect(report.examined).toBe(1);
+    expect(report.data?.totalChunks).toBeGreaterThan(0);
+    expect(report.data?.totalResources).toBeGreaterThan(0);
+    expect(report.data?.embeddingModel).not.toBe('');
+    expect(Number.isNaN(Date.parse(report.data?.lastIndexed ?? ''))).toBe(false);
   });
 
   it('should return empty stats when database has no data', () => {
@@ -47,8 +50,6 @@ describe('RAG stats command (system test)', () => {
     );
 
     expect(result.status).toBe(0); // Success (empty is valid)
-    expect(parsed.status).toBe('success');
-    expect(parsed.totalChunks).toBe(0);
-    expect(parsed.totalResources).toBe(0);
+    expect(RAG_STATS_REPORT_SCHEMA.parse(parsed)).toMatchObject({ status: 'ok', data: { totalChunks: 0, totalResources: 0 } });
   });
 });

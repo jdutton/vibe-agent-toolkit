@@ -619,7 +619,7 @@ async function runBaseline(
  * that the run survives an arm it could not use.
  */
 function expectRanCleanly(result: BaselineRun['result']): void {
-  expect(result.exitCode, result.summary).toBe(0);
+  expect(result.exitCode, result.description).toBe(0);
 }
 
 describe('baseline control arm (integration)', () => {

@@ -4,15 +4,23 @@
  * Tests that:
  * - `--target claude-web` produces references/ directory (not resources/)
  * - `--target claude-code` (default) still produces resources/ directory
- * - ZIP size validation works (warn at 4MB, error at 8MB)
+ * - the document is the report envelope (`SKILLS_PACKAGE_REPORT_SCHEMA`), and the
+ *   validation gate's failure is a findings report at exit 1
+ * - a claude-web ZIP over claude.ai's 8 MB limit is a `SKILL_PACKAGE_TOO_LARGE`
+ *   findings report at exit 1 (one incompressible fixture, written once)
  */
 
-import { existsSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { existsSync, writeFileSync } from 'node:fs';
 
 
+import { exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import yaml from 'yaml';
+
+import { SKILLS_PACKAGE_REPORT_SCHEMA } from '../../src/commands/skills/package-schema.js';
 
 import {
   createSkillMarkdown,
@@ -37,16 +45,15 @@ const TARGET_CLAUDE_CODE = 'claude-code';
 /**
  * "Packaged successfully" means the gate passed: exit 0 and ZERO errors.
  *
- * The published `status` is now the verdict of the validation the command
- * actually ran, so it legitimately reads `warning` for a run that shipped
- * non-blocking findings — and this fixture's frontmatter carries a `version`
- * field, which is exactly one such warning. Pinning it to `success` asserted
- * that the status could not tell the truth, which is the defect rather than the
- * contract. Mirrors `assertSuccessfulBuild` in `skills-build.system.test.ts`.
+ * The document is the report envelope, so `status` is the literal `ok` /
+ * `findings` — this fixture's frontmatter carries a `version` field, a
+ * non-blocking finding, so `findings` at exit 0 is a successful package.
  */
 function assertPackagedWithoutErrors(parsed: Record<string, unknown>): void {
-  expect(['success', 'warning']).toContain(parsed['status']);
-  expect(parsed['issueCounts']).toMatchObject({ errors: 0 });
+  const report = SKILLS_PACKAGE_REPORT_SCHEMA.parse(parsed);
+  expect(['ok', 'findings']).toContain(report.status);
+  expect(report.summary).toMatchObject({ errors: 0 });
+  expect(report.examined).toBe(1);
 }
 
 /**
@@ -289,6 +296,47 @@ See [Extra](./extra.md).
     expect(hasReferences).toBe(false);
   });
 
+  it('package gate failure publishes findings with the skill as location, exit 1', async () => {
+    const tempDir = suite.createTempDir();
+    const skillDir = safePath.join(tempDir, 'broken-skill');
+    mkdirSyncReal(skillDir, { recursive: true });
+    // No frontmatter at all: the validation gate's own error, before packaging.
+    writeTestFile(safePath.join(skillDir, 'SKILL.md'), '# broken\n\nNo frontmatter.\n');
+    const outputDir = safePath.join(tempDir, 'output-broken');
+
+    const { result, parsed } = await suite.runPackageCommand(safePath.join(skillDir, 'SKILL.md'), outputDir);
+    const report = SKILLS_PACKAGE_REPORT_SCHEMA.parse(parsed);
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(exitCodeForReport(report)).toBe(1);
+    expect(report.status).toBe('findings');
+    expect(report.findings).toContainEqual(expect.objectContaining({
+      code: 'SKILL_MISSING_FRONTMATTER',
+      severity: 'error',
+      location: expect.stringMatching(/SKILL\.md$/),
+    }));
+    // Nothing was packaged, and the document says so.
+    expect(report.data).toMatchObject({ outputPath: null, dryRun: false });
+    expect(existsSync(outputDir)).toBe(false);
+  });
+
+  // Run from inside this repo, so the project root is found and the ARGUMENT is
+  // what is judged: a SKILL.md path naming nothing is the invocation's mistake,
+  // in both lanes — never a finding about a skill that was never there.
+  it.each([[[]], [['--dry-run']]])('refuses a SKILL.md path naming nothing as USAGE_INVALID, exit 2 (%j)', async (extra) => {
+    const tempDir = suite.createTempDir();
+    const result = await executeCli(
+      suite.binPath,
+      ['skills', 'package', safePath.join(tempDir, 'never-created', 'SKILL.md'), '-o', safePath.join(tempDir, 'out'), ...extra],
+    );
+
+    expect(result.status, result.stderr).toBe(2);
+    expect(SKILLS_PACKAGE_REPORT_SCHEMA.parse(yaml.parse(result.stdout))).toMatchObject({
+      status: 'error',
+      error: { code: 'USAGE_INVALID' },
+    });
+  });
+
   it('--target with invalid value exits with error', async () => {
     const tempDir = suite.createTempDir();
     const skillDir = suite.createMinimalSkill(tempDir);
@@ -300,7 +348,11 @@ See [Extra](./extra.md).
       ['skills', 'package', skillMdPath, '-o', outputDir, '--target', 'invalid-target']
     );
 
-    expect(result.status).not.toBe(0);
+    expect(result.status).toBe(2);
+    expect(SKILLS_PACKAGE_REPORT_SCHEMA.parse(yaml.parse(result.stdout))).toMatchObject({
+      status: 'error',
+      error: { code: 'USAGE_INVALID' },
+    });
   });
 
   it('shows --target option in help text', async () => {
@@ -309,5 +361,48 @@ See [Extra](./extra.md).
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('--target');
     expect(result.stdout).toContain(TARGET_CLAUDE_WEB);
+  });
+});
+
+describe('skills package — the claude.ai ZIP ceiling (system test)', () => {
+  const binPath = getBinPath(import.meta.url);
+  const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-package-zip-ceiling-');
+  let skillMdPath: string;
+  let outputDir: string;
+
+  beforeAll(() => {
+    const tempDir = createTempDir();
+    const skillDir = safePath.join(tempDir, 'big-skill');
+    mkdirSyncReal(skillDir, { recursive: true });
+    // Random bytes do not compress: just over 8 MiB of them is a ZIP over the ceiling.
+    writeFileSync(safePath.join(skillDir, 'blob.bin'), randomBytes(8_500_000));
+    writeTestFile(
+      safePath.join(skillDir, 'SKILL.md'),
+      `---\nname: ${SKILL_NAME}\ndescription: ${SKILL_NAME} - comprehensive test skill for validation and packaging\n---\n\n# ${SKILL_NAME}\n\nSee [blob](./blob.bin).\n`,
+    );
+    skillMdPath = safePath.join(skillDir, 'SKILL.md');
+    outputDir = safePath.join(tempDir, 'out');
+  });
+
+  afterAll(() => {
+    cleanupTempDirs();
+  });
+
+  it('publishes SKILL_PACKAGE_TOO_LARGE at the skill, exit 1, with the bundle on disk', async () => {
+    const { result, parsed } = await executeCliAndParseYaml(
+      binPath,
+      ['skills', 'package', skillMdPath, '-o', outputDir, '--target', TARGET_CLAUDE_WEB, '-f', 'zip'],
+    );
+    const report = SKILLS_PACKAGE_REPORT_SCHEMA.parse(parsed);
+
+    expect(result.status, result.stderr).toBe(1);
+    expect(report.status).toBe('findings');
+    expect(report.findings).toEqual([expect.objectContaining({
+      code: 'SKILL_PACKAGE_TOO_LARGE',
+      severity: 'error',
+      location: expect.stringMatching(/SKILL\.md$/),
+    })]);
+    expect(report.data.outputPath).not.toBeNull();
+    expect(existsSync(`${outputDir}.zip`)).toBe(true);
   });
 });

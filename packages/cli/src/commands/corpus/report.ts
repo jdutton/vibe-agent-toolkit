@@ -8,30 +8,28 @@
  * compute aggregates.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 
 import type { SeverityCounts } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'yaml';
+import { isFilesystemAccessError, safePath } from '@vibe-agent-toolkit/utils';
 
-export type AuditStatus = 'success' | 'warning' | 'error' | 'unloadable';
+import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
+import { writeArtifactFile } from '../../utils/document-writer.js';
+
+/** A row's audit: the `vat audit` report's own status, or `unloadable` when the audit could not run. */
+export type AuditStatus = 'ok' | 'findings' | 'unloadable';
 export type ReviewStatus = 'ok' | 'error' | 'skipped';
 
 /**
- * Extends `SeverityCounts` rather than re-declaring `errors`/`warnings`/`info`:
- * `runner.ts` builds this by spreading `countBySeverity()`, so the two are
- * already the same shape by construction. Deriving makes the compiler enforce
- * that, instead of leaving it as a fact someone has to re-verify by hand every
- * time a severity bucket is added.
+ * One plugin's audit row. `summary` is the audit report's own — FINDINGS by
+ * severity, the one meaning `summary` has — and `files_scanned` is the report's
+ * `examined`, FILES: two denominators, so two keys, never one block mixing them.
  */
-export interface AuditSummary extends SeverityCounts {
-  files_scanned: number;
-}
-
 export interface AuditOutcome {
   status: AuditStatus;
   duration_ms: number;
-  summary?: AuditSummary;        // present when status != unloadable
+  summary?: SeverityCounts;      // present when status != unloadable
+  files_scanned?: number;        // present when status != unloadable
   findings_emitted?: number;     // present when status != unloadable
   output_path?: string;          // relative to run dir; absent on unloadable
   error?: string;                // present only on unloadable
@@ -39,7 +37,7 @@ export interface AuditOutcome {
 
 /**
  * Outcome distribution for one plugin's review lane — the review-side mirror
- * of `AuditSummary`. `skills_scanned` counts SKILLS (the denominator, like
+ * of the audit row's counts. `skills_scanned` counts SKILLS (the denominator, like
  * `files_scanned`); `reviewed` and `failed` bucket those skills by whether
  * `vat skill review` ran to completion, and always sum to `skills_scanned`.
  */
@@ -76,9 +74,12 @@ export interface RunReport {
 
 export interface RunTotals {
   plugins: number;
-  audit_clean: number;
-  audit_warning: number;
-  audit_error: number;
+  /** Rows whose audit found nothing. */
+  audit_ok: number;
+  /** Rows whose audit found something — at any severity. */
+  audit_findings: number;
+  /** The subset of `audit_findings` with at least one error-severity finding. */
+  audit_with_errors: number;
   unloadable: number;
   reviewed?: number;             // rows whose review lane ran; present iff flags.with_review
   review_error?: number;         // subset of `reviewed` that failed; present iff flags.with_review
@@ -90,24 +91,21 @@ export interface RunTotals {
 export function computeTotals(report: RunReport): RunTotals {
   const totals: RunTotals = {
     plugins: report.plugins.length,
-    audit_clean: 0,
-    audit_warning: 0,
-    audit_error: 0,
+    audit_ok: 0,
+    audit_findings: 0,
+    audit_with_errors: 0,
     unloadable: 0,
   };
 
   for (const row of report.plugins) {
     switch (row.audit.status) {
-      case 'success': {
-        totals.audit_clean += 1;
+      case 'ok': {
+        totals.audit_ok += 1;
         break;
       }
-      case 'warning': {
-        totals.audit_warning += 1;
-        break;
-      }
-      case 'error': {
-        totals.audit_error += 1;
+      case 'findings': {
+        totals.audit_findings += 1;
+        if ((row.audit.summary?.errors ?? 0) > 0) totals.audit_with_errors += 1;
         break;
       }
       case 'unloadable': {
@@ -134,15 +132,41 @@ export function runDirectoryName(report: RunReport): string {
 }
 
 /**
+ * Run one write of the scan's output, refusing an OS refusal as the run's.
+ *
+ * Classified by errno at the cause: the filesystem refusing a path under
+ * `--out` (a full disk and a failing device included) means the scan could not
+ * finish its output — `RUN_INCOMPLETE`, in every lane — while anything else (a
+ * schema the writer rejects, a bug) is not the environment's and propagates as
+ * VAT's defect. Only `--out` writes go through here: the validation overlay
+ * writes into the SOURCE, and a refusal there is the entry's unloadable row.
+ *
+ * @param what - The file or directory being written, for the message
+ * @param write - The write
+ * @throws {CommandRefusalError} `RUN_INCOMPLETE` when the OS refused the write
+ */
+export function writeRunOutput(what: string, write: () => void): void {
+  try {
+    write();
+  } catch (error) {
+    if (!isFilesystemAccessError(error)) throw error;
+    throw new CommandRefusalError('RUN_INCOMPLETE', `Could not write ${what}: ${errorMessageOf(error)}`, { cause: error });
+  }
+}
+
+/**
  * Write `summary.yaml` (and create the run directory) under `outDir`.
  * Returns the absolute path of the created run directory. Per-plugin
  * sibling files (audit outputs, review outputs) are written by the
- * runner — this function only writes the summary index.
+ * runner — this function only writes the summary index, through the
+ * writer's `corpus-summary` artifact.
+ *
+ * @throws {CommandRefusalError} `RUN_INCOMPLETE` when the OS refuses the directory or the file
  */
 export async function writeRunReport(report: RunReport, outDir: string): Promise<string> {
   const runDir = safePath.join(outDir, runDirectoryName(report));
   // eslint-disable-next-line local/no-fs-mkdirSync -- the corpus output dir is caller-supplied; mkdir-recursive is the right call here
-  mkdirSync(runDir, { recursive: true });
+  writeRunOutput(runDir, () => mkdirSync(runDir, { recursive: true }));
 
   const totals = computeTotals(report);
   const dump = {
@@ -156,7 +180,7 @@ export async function writeRunReport(report: RunReport, outDir: string): Promise
   };
 
   const summaryPath = safePath.join(runDir, 'summary.yaml');
-  writeFileSync(summaryPath, yaml.stringify(dump, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
+  writeRunOutput(summaryPath, () => writeArtifactFile('corpus-summary', summaryPath, dump));
 
   return runDir;
 }

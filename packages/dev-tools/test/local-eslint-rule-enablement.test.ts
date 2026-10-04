@@ -107,6 +107,9 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   'no-literal-process-exit': REPO_WIDE_PROBE,
   // Scoped to `packages/*/src/**`: tests build schemas as fixtures.
   'explicit-zod-strictness': REPO_WIDE_PROBE,
+  // Scoped by its own `paths` option to the CLI's command modules; the probe
+  // publishes through the document writer, so it is NOT on the `allowFiles` ratchet.
+  'no-stdout-outside-writer': 'packages/cli/src/commands/okf/validate.ts',
 };
 
 /** `error` as ESLint normalizes it out of `calculateConfigForFile`. */

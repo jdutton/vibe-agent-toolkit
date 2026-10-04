@@ -1,7 +1,7 @@
 import { assembleClaudeArgs } from '@vibe-agent-toolkit/utils/skill-test';
 import { describe, expect, it } from 'vitest';
 
-import { runPreflight, type PreflightInput } from '../../src/skill-test/preflight.js';
+import { preflightRefusal, runPreflight, type PreflightInput } from '../../src/skill-test/preflight.js';
 
 function baseInput(overrides: Partial<PreflightInput> = {}): PreflightInput {
   return {
@@ -89,6 +89,27 @@ describe('runPreflight', () => {
     }));
     expect(r.passed).toBe(false);
     expect(r.checks.some(c => /require-auth|mechanism/i.test(c.message))).toBe(true);
+  });
+
+  // The refusal is decided at the check that failed, never read back out of its
+  // message: an absent runtime is the backend's, a mismatched credential the
+  // invocation's, a vendored copy that fails its manifest the input's.
+  it.each([
+    ['an unreachable claude binary', { claudeVersionProbe: () => null }, 'BACKEND_UNAVAILABLE'],
+    ['a claude too old for a flag the spawn needs', { flagParseProbe: (f: string) => f !== '--plugin-dir' }, 'BACKEND_UNAVAILABLE'],
+    ['a vendored copy that fails its manifest', { integrityOk: () => false }, 'INPUT_UNREADABLE'],
+    ['credentials the --auth mode cannot use', { authMode: 'api-key', sourceEnv: { CLAUDE_CONFIG_DIR: '/c' } as NodeJS.ProcessEnv }, 'USAGE_INVALID'],
+  ] as const)('refuses %s with the code of the check that failed', (_label, overrides, code) => {
+    expect(preflightRefusal(runPreflight(baseInput(overrides)))).toBe(code);
+  });
+
+  it('refuses with the FIRST failed check: no claude binary outranks the auth it also breaks', () => {
+    const r = runPreflight(baseInput({ claudeVersionProbe: () => null, authMode: 'api-key', sourceEnv: { CLAUDE_CONFIG_DIR: '/c' } as NodeJS.ProcessEnv }));
+    expect(preflightRefusal(r)).toBe('BACKEND_UNAVAILABLE');
+  });
+
+  it('names no refusal for a preflight that passed', () => {
+    expect(preflightRefusal(runPreflight(baseInput()))).toBeUndefined();
   });
 
   it('reports the cost estimate as a passing informational check', () => {

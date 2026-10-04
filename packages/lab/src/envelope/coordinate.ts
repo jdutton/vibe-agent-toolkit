@@ -106,17 +106,32 @@ export interface InstrumentVersion {
    * {@link InstrumentVersionSchema} enforces the pairing, because a `false` on a
    * `dist:` arm would be a confident claim of cleanliness nobody checked.
    *
-   * **There is deliberately no instrument working-fingerprint**, and that is not
-   * an oversight of the kind {@link SubjectVersion.workingFingerprint} fixes.
-   * What ran is the *built* output, not the source tree: a fingerprint over the
-   * checkout would be a precise identifier for something that is not the thing
-   * measured — you can edit source and never rebuild, which is the very failure
-   * this field exists to disclose. So a dirty instrument is not identified by
-   * anything the harness can cheaply read, and the honest substitute is to say
-   * so loudly wherever two reports are held together. See `instrumentTrustNotes`
-   * in `harness/render.ts`.
+   * A dirty arm's bytes are identified by {@link InstrumentVersion.closure},
+   * not by anything read from its source checkout: what ran is the BUILT
+   * output, and a fingerprint over the source would precisely identify
+   * something that is not the thing measured (you can edit source and never
+   * rebuild — the very failure this field exists to disclose).
    */
   readonly dirty: boolean | null;
+  /**
+   * SHA-256 over the arm's whole module closure — the cli package and every
+   * `@vibe-agent-toolkit/*` package it resolves, transitively, each as its
+   * `package.json` plus every file under its `dist/` (see
+   * `harness/closure.ts`) — or `null` for an `npx:` arm.
+   *
+   * **The field that identifies the BYTES.** A `dist:` arm has no commit, so
+   * before this two `dist:` arms of one version were the same instrument to
+   * every comparison whatever they were built from; and a dependency's `dist/`
+   * can be rebuilt while every version string stays put. A dirty `tree:` arm
+   * is identified by it too, which is what lets two dirty builds at one commit
+   * finally compare unequal when their outputs differ.
+   *
+   * `null` for `npx:` because a published tarball's closure is not on disk
+   * until npx unpacks it at run time; its pinned version pins the bytes.
+   * Required and `.strict()`: a stored report from before the field existed is
+   * refused, not defaulted — the lab's documented refusal policy.
+   */
+  readonly closure: string | null;
 }
 
 /** A complete three-axis coordinate. */
@@ -189,6 +204,10 @@ export const InstrumentVersionSchema = z
     version: z.string().min(1),
     commit: z.string().min(1).nullable(),
     dirty: z.boolean().nullable(),
+    closure: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/, 'a closure digest is 64 lowercase hex characters')
+      .nullable(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -253,23 +272,24 @@ function sameSubjectVersion(a: SubjectVersion, b: SubjectVersion): boolean {
  * Is this the same build of the instrument?
  *
  * `dirty` participates because a dirty build and a clean build at one commit are
- * not the same binary, however identical their stamps look otherwise.
+ * not the same binary, however identical their stamps look otherwise; `closure`
+ * participates because it is the one field that names the bytes — two `dist:`
+ * arms of one version, or two dirty builds at one commit, differ only there.
  *
- * **Two dirty arms at one commit still compare equal here, and that is a known
- * limit rather than a claim.** Nothing cheap identifies a dirty build's bytes —
- * see {@link InstrumentVersion.dirty} — so equality is the only answer this
- * function can honestly give, and it is `instrumentTrustNotes` in
- * `harness/render.ts` that tells the reader not to lean on it. Silently
- * returning `false` instead would break reflexivity and make a `--control` run
- * (the same instrument entered as both arms, to measure the noise floor) report
- * that the instrument axis moved.
+ * Reflexive by construction: `--control` enters ONE resolved instrument as both
+ * arms, so its closure matches itself and the instrument axis never moves.
  *
  * @param a - One instrument version
  * @param b - The other
- * @returns `true` when version, commit and dirtiness all match
+ * @returns `true` when version, commit, dirtiness and closure all match
  */
-function sameInstrument(a: InstrumentVersion, b: InstrumentVersion): boolean {
-  return a.version === b.version && a.commit === b.commit && a.dirty === b.dirty;
+export function sameInstrument(a: InstrumentVersion, b: InstrumentVersion): boolean {
+  return (
+    a.version === b.version &&
+    a.commit === b.commit &&
+    a.dirty === b.dirty &&
+    a.closure === b.closure
+  );
 }
 
 /**

@@ -79,7 +79,6 @@ function loadedSnapshot(overrides: SnapshotOverrides = {}): LoadedSnapshot {
         buildError: null,
       },
     ],
-    commands: [],
     parseFactArtifact: overrides.parseFactArtifact ?? null,
     parseFactBlobCount: null,
     parseFactKeyDisagreementCount: null,
@@ -194,42 +193,23 @@ describe('the blind spot in the cheap line counter', () => {
 
 describe('extractHeaderFacts', () => {
   it('stops at the first blank line and ignores a key/value in a body row', () => {
-    const facts = extractHeaderFacts(oracleText(265, ['bodyKey: not-a-header']), 'oracle');
+    const facts = extractHeaderFacts(oracleText(265, ['bodyKey: not-a-header']));
 
     expect(facts.get('lane')).toBe('resources');
     expect(facts.get('enumeratedCount')).toBe('265');
     expect(facts.has('bodyKey')).toBe(false);
   });
-
-  it('reads indent-0 scalars from a YAML capture and skips containers', () => {
-    const yaml = ['status: success', 'filesScanned: 1041', 'findings:', '  - code: X', ''].join('\n');
-    const facts = extractHeaderFacts(yaml, 'command');
-
-    expect(facts.get('status')).toBe('success');
-    expect(facts.get('filesScanned')).toBe('1041');
-    expect(facts.has('findings')).toBe(false);
-    expect(facts.has('code')).toBe(false);
-  });
-
-  it('reads indent-2 scalars from a JSON capture, unquoting the value', () => {
-    const json = ['{', '  "status": "success",', '  "linksFound": 8123,', '  "errors": [', '    {', ''].join('\n');
-    const facts = extractHeaderFacts(json, 'command');
-
-    expect(facts.get('status')).toBe('success');
-    expect(facts.get('linksFound')).toBe('8123');
-    expect(facts.has('errors')).toBe(false);
-  });
 });
 
 describe('headlineChanges', () => {
   it('reports only the keys whose value moved, as name before→after', () => {
-    expect(headlineChanges(oracleText(265, []), oracleText(267, []), 'oracle')).toEqual([
+    expect(headlineChanges(oracleText(265, []), oracleText(267, []))).toEqual([
       'enumeratedCount 265→267',
     ]);
   });
 
   it('reports nothing when every header value held', () => {
-    expect(headlineChanges(oracleText(265, ['x']), oracleText(265, ['y']), 'oracle')).toEqual([]);
+    expect(headlineChanges(oracleText(265, ['x']), oracleText(265, ['y']))).toEqual([]);
   });
 });
 

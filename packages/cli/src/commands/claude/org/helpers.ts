@@ -3,18 +3,16 @@
  */
 import type { OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
 import { createOrgApiClientFromEnv } from '@vibe-agent-toolkit/claude-marketplace';
-import { ExitCode, type ExitCodeValue } from '@vibe-agent-toolkit/schema';
 import type { Command } from 'commander';
 
-import { handleCommandError } from '../../../utils/command-error.js';
+import type { ExternalOutcome, ExternalVerb } from '../../../report-schemas.js';
+import { endWithExternalRefusal, writeExternalDocument } from '../../../utils/document-writer.js';
 import type { Logger } from '../../../utils/logger.js';
 import { createLogger } from '../../../utils/logger.js';
-import { writeYamlOutput } from '../../../utils/output.js';
 
 interface OrgCommandContext {
   client: OrgApiClient;
   logger: Logger;
-  startTime: number;
 }
 
 export type QueryParams = Record<string, string | number | undefined>;
@@ -167,19 +165,22 @@ export function addPaginationOptions(cmd: Command): Command {
     .option('--debug', 'Enable debug logging');
 }
 
+/** What a write that did not fully land did — the outcomes the adapter ends on `ERROR`. */
+export type OrgFailureOutcome = Exclude<ExternalOutcome, { kind: 'ok' }>;
+
 /**
  * An org command's document, tagged as one that must NOT end in a success exit.
  *
- * A batch command's failures are part of its REPORT, not an exception: the
+ * A batch command's failures are part of its PAYLOAD, not an exception: the
  * document has to be published (which skills landed, which did not, and why),
- * and the run still has to end non-zero — on `FINDINGS`: the command ran,
- * produced its document, and that document reports something that went wrong.
- * `ERROR` stays for the run that could not happen at all (no credential, no
- * such source), which is what {@link handleCommandError} ends on. Throwing
- * would end non-zero but discard the report; returning plainly publishes the
- * report but claims success. This wrapper is the third option, and it keeps
- * the "did this fail?" decision in one place instead of letting each command
- * invent a status field.
+ * and the run still has to end non-zero. Throwing would end non-zero but
+ * discard the payload; returning plainly publishes it but claims success. This
+ * wrapper is the third option: the payload is published verbatim and
+ * `outcome` — `partial` (some writes landed) or `failed` (none did) — is what
+ * the external entry's adapter maps to the exit code (both `ERROR`: the
+ * workspace is not in the state the operator asked for). It keeps the "did
+ * this fail?" decision in one place instead of letting each command invent a
+ * status field.
  *
  * 🔑 It exists because a batch command has an ending the old code could not
  * express. `skills install --from-npm` catches each per-skill upload failure and
@@ -191,51 +192,50 @@ export function addPaginationOptions(cmd: Command): Command {
 export interface OrgCommandFailure {
   readonly orgCommandFailed: true;
   readonly document: object;
+  readonly outcome: OrgFailureOutcome;
 }
 
-/** Tag `document` as the report of a run that failed. */
-export function orgCommandFailure(document: object): OrgCommandFailure {
-  return { orgCommandFailed: true, document };
+/** Tag `document` as the payload of a write that did not fully land. */
+export function orgCommandFailure(document: object, outcome: OrgFailureOutcome): OrgCommandFailure {
+  return { orgCommandFailed: true, document, outcome };
 }
 
 function isOrgCommandFailure(result: object): result is OrgCommandFailure {
   return (result as Partial<OrgCommandFailure>).orgCommandFailed === true;
 }
 
-/** What an org command writes to stdout, and the code it ends on. */
+/** What an org command publishes, and the outcome its adapter ends on. */
 export interface OrgCommandEnding {
-  readonly document: Record<string, unknown>;
-  readonly exitCode: ExitCodeValue;
+  readonly document: object;
+  readonly outcome: ExternalOutcome;
 }
 
 /**
- * Pure: the document and exit code an org command's result ends on.
+ * Pure: the payload an org command's result publishes, and the outcome.
  *
  * Split out of {@link executeOrgCommand} because it is the whole of the
- * status/exit-code decision and the only part of it that is testable without
- * spawning a process — `executeOrgCommand` itself ends in `process.exit`.
+ * outcome decision and the only part of it that is testable without spawning
+ * a process — `executeOrgCommand` itself ends in `process.exit`. The payload is
+ * the action's own document, unwrapped: an external verb adds no status word
+ * and no duration to it — the exit code, derived from the outcome by the
+ * registered adapter, is the verdict.
  */
-export function buildOrgCommandEnding(result: object, durationMs: number): OrgCommandEnding {
-  const failed = isOrgCommandFailure(result);
-  const payload = (failed ? result.document : result) as Record<string, unknown>;
-  return {
-    document: {
-      status: failed ? 'error' : 'success',
-      ...payload,
-      duration: `${String(durationMs)}ms`,
-    },
-    exitCode: failed ? ExitCode.FINDINGS : ExitCode.OK,
-  };
+export function buildOrgCommandEnding(result: object): OrgCommandEnding {
+  return isOrgCommandFailure(result)
+    ? { document: result.document, outcome: result.outcome }
+    : { document: result, outcome: { kind: 'ok' } };
 }
 
 /**
- * Execute an org command with standard error handling.
- * Sets up client, logger, timer, and catches errors uniformly.
+ * Execute an org command: set up the client and logger, run the action, and
+ * end through the document writer.
  *
- * An action may return its document plainly (success, `OK`) or wrapped in
- * {@link orgCommandFailure} (the document is still published, the run ends on
- * `FINDINGS`). Anything thrown is the system error and ends on
- * {@link handleCommandError}'s `ERROR`.
+ * An action may return its payload plainly (`ok` → exit 0) or wrapped in
+ * {@link orgCommandFailure} (the payload is still published; `partial` or
+ * `failed` → exit 2). Anything thrown ends on
+ * `endWithExternalRefusal`: `{ error: { code, message } }` at exit 2, the code
+ * decided by the thrown value (`USAGE_INVALID` for a missing key or a bad
+ * argument, `EXTERNAL_API_FAILED` for a refused or unanswered API call).
  *
  * 🔑 Usage guards belong INSIDE the action, not in the Commander action that
  * calls this. `bin.ts` runs the synchronous `program.parse()`, so a throw from
@@ -243,21 +243,22 @@ export function buildOrgCommandEnding(result: object, durationMs: number): OrgCo
  * prints a raw stack trace carrying absolute `$HOME` paths, writes nothing to
  * stdout, and exits 1 — which this CLI's contract reads as "at least one
  * error-severity finding" for a run in which nothing executed.
+ *
+ * @param verb - The registered external verb, as typed after `vat`
+ * @param debug - `--debug`
+ * @param action - The command's work
  */
 export async function executeOrgCommand(
-  commandName: string,
+  verb: ExternalVerb,
   debug: boolean | undefined,
   action: (ctx: OrgCommandContext) => Promise<object>,
 ): Promise<void> {
   const logger = createLogger(debug ? { debug: true } : {});
-  const startTime = Date.now();
   try {
     const client = createOrgApiClientFromEnv();
-    const ctx: OrgCommandContext = { client, logger, startTime };
-    const ending = buildOrgCommandEnding(await action(ctx), Date.now() - startTime);
-    writeYamlOutput(ending.document);
-    process.exit(ending.exitCode);
+    const ending = buildOrgCommandEnding(await action({ client, logger }));
+    writeExternalDocument(verb, ending.document, 'yaml', ending.outcome);
   } catch (error) {
-    handleCommandError(error, logger, startTime, commandName);
+    endWithExternalRefusal(verb, error, 'yaml');
   }
 }

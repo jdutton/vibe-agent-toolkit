@@ -1,3 +1,4 @@
+import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 import { isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
 /**
@@ -60,6 +61,41 @@ export function skillTestFailureReason(err: unknown): SkillTestFailureReason {
 }
 
 /**
+ * WHICH refusal each error this feature throws for an operator-fixable reason
+ * is, keyed by its code — the published `error.code` of a `vat skill test run`
+ * that could not run. Decided here, beside the classes, and read by the CLI's
+ * one refusal lookup (`refusalCodeOf`), so a throw is classified by its code and
+ * never by its message.
+ *
+ * - `INPUT_UNREADABLE` — an input the run must read is absent or unusable: no
+ *   `evals.json` (bootstrap), or a suite / declared input file that is not.
+ * - `USAGE_INVALID` — everything else the operator fixes: a flag, a declared
+ *   `env` token, the `test.build` hook, a skill reference the config does not
+ *   declare (or `--no-build` with no dist), an unsafe `--workdir`, a held harness
+ *   lock, the missing security ack. A `SkillBuildError` carrying a `cause` is
+ *   classified by that cause, not by this row (see {@link SkillBuildError}).
+ *
+ * An absent runtime (`claude` not on PATH, or too old for a flag the spawn
+ * needs) is `BACKEND_UNAVAILABLE`, and is decided by the preflight check that
+ * saw it (see `preflightRefusal`), not by a throw. A code missing from this map
+ * is `INTERNAL_ERROR` — right for the `internal` classes, a defect for any other.
+ */
+export const SKILL_TEST_REFUSAL_BY_ERROR_CODE = {
+  SKILL_TEST_BOOTSTRAP_NEEDED: 'INPUT_UNREADABLE',
+  EVAL_INPUT: 'INPUT_UNREADABLE',
+  AUTH_PREFLIGHT: 'USAGE_INVALID',
+  BUILD_HOOK: 'USAGE_INVALID',
+  HARNESS_LOCATION: 'USAGE_INVALID',
+  HARNESS_LOCK_BUSY: 'USAGE_INVALID',
+  PROMPT_INVARIANT: 'USAGE_INVALID',
+  SKILL_TEST_BUILD_FAILED: 'USAGE_INVALID',
+  SKILL_TEST_DUPLICATE_STAGED_SKILL: 'USAGE_INVALID',
+  SKILL_TEST_SECURITY_ACK_MISSING: 'USAGE_INVALID',
+  UNKNOWN_ENV_TOKEN: 'USAGE_INVALID',
+  UNRESOLVABLE_ENV_TOKEN: 'USAGE_INVALID',
+} as const satisfies Readonly<Record<string, RefusalCode>>;
+
+/**
  * A required input is absent in a way vat can scaffold (missing evals.json).
  * Reason `bootstrap`, NOT a failure. `expectedPath` is the persistent location
  * of the annotated starter template.
@@ -100,11 +136,25 @@ export class BootstrapNeededError extends VatError {
   }
 }
 
-/** Thrown when building a declared skill (pool packageSkill or plugin build) fails. Reason `preflight`. */
+/**
+ * Thrown when a declared skill cannot be built or staged (pool packageSkill or
+ * plugin build, a name the config does not declare, `--no-build` with no dist).
+ * Reason `preflight`.
+ *
+ * A build that THREW is wrapped with the throw as `cause` and the skill's
+ * `sourcePath`, and the wrap does not decide the refusal: the CLI publishes the
+ * cause's own coded refusal (an unlistable directory is `INPUT_UNREADABLE`, a
+ * broken config `CONFIG_INVALID`), a packager refusal of the skill's content as a
+ * finding at `sourcePath`, and an uncoded cause — a defect — as `INTERNAL_ERROR`.
+ * Only a SkillBuildError with no cause is `USAGE_INVALID` by its own code.
+ */
 export class SkillBuildError extends VatError {
   readonly reason = 'preflight' as const;
-  constructor(message: string) {
-    super('SKILL_TEST_BUILD_FAILED', message);
+  /** The declared skill's `SKILL.md`, when the failure is a build of that skill. */
+  readonly sourcePath: string | undefined;
+  constructor(message: string, options?: { cause: unknown; sourcePath: string }) {
+    super('SKILL_TEST_BUILD_FAILED', message, options === undefined ? undefined : { cause: options.cause });
+    this.sourcePath = options?.sourcePath;
   }
 }
 

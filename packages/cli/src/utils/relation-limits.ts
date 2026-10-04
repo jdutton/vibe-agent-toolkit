@@ -38,9 +38,9 @@ import { CLAUDE_CONTEXT_LENS } from './projection-lenses.js';
 /** What a report carries when a lens with stated bounds was evaluated. */
 interface RelationBounds {
   /** The prose frame the limits are read under, stated once. */
-  readonly boundsStatement?: string;
+  boundsStatement?: string;
   /** The signed, directional list — what the rows do NOT settle. */
-  readonly limits?: readonly StatedLimit[];
+  limits?: StatedLimit[];
 }
 
 /**
@@ -51,6 +51,11 @@ interface RelationBounds {
  * `limits: []` would read as "nothing bounds this answer", which is a stronger
  * claim than "this answer contains no row anything bounds".
  *
+ * The limits are COPIED out of the readonly registry list: the answer is
+ * spread into a published document, and a published document owns no
+ * reference into module state a later render could mutate. `vat resources
+ * check` and `vat resources query` both publish it, through this one function.
+ *
  * @param lensesEvaluated - The run's `lensesEvaluated`, as the provenance names them
  * @returns The bounds keys, or an empty object
  */
@@ -58,6 +63,6 @@ export function relationBoundsFor(lensesEvaluated: readonly string[]): RelationB
   if (!lensesEvaluated.includes(CLAUDE_CONTEXT_LENS.name)) return {};
   return {
     boundsStatement: CLAUDE_CONTEXT_BOUNDS_STATEMENT,
-    limits: CLAUDE_CONTEXT_RELATION_LIMITS,
+    limits: CLAUDE_CONTEXT_RELATION_LIMITS.map((limit) => ({ ...limit })),
   };
 }

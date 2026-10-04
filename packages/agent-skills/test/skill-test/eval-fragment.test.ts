@@ -28,6 +28,12 @@ const validFragment = {
   friction: [{ severity: 'high', category: PATH_ASSUMPTION, message: FRICTION_MESSAGE }],
 } as const;
 
+/** `validFragment` after ingestion: the grader's `high` is the shared `error`. */
+const validFragmentIngested = {
+  ...validFragment,
+  friction: [{ severity: 'error', category: PATH_ASSUMPTION, message: FRICTION_MESSAGE }],
+};
+
 /**
  * ESC built from its char code, never written literally: a raw escape byte in a
  * test file makes it binary to `grep` and invisible in review — the same reason
@@ -145,7 +151,7 @@ describe('EvalFragmentSchema', () => {
 
 describe('parseEvalFragment', () => {
   it('returns the parsed fragment on valid input', () => {
-    expect(parseEvalFragment(validFragment, warnUnwatched)).toEqual(validFragment);
+    expect(parseEvalFragment(validFragment, warnUnwatched)).toEqual(validFragmentIngested);
   });
 
   it('throws EvalFragmentError on a missing runNonce', () => {
@@ -236,7 +242,7 @@ describe('parseEvalFragment — lenient friction (PR #147 defense-in-depth)', ()
       ...fragmentWithStringFriction,
       friction: [good, 'a bare string', { severity: 'nope', category: 'x', message: '' }],
     }, warnUnwatched);
-    expect(fragment.friction).toEqual([good]);
+    expect(fragment.friction).toEqual([{ ...good, severity: 'error' }]);
   });
 
   it('drops a `friction` that is not an array at all (e.g. a bare string) without failing the run', () => {
@@ -257,7 +263,7 @@ describe('parseEvalFragment — lenient friction (PR #147 defense-in-depth)', ()
     const warnings: string[] = [];
     const fragment = parseEvalFragment(validFragment, (m) => warnings.push(m));
     expect(warnings).toHaveLength(0);
-    expect(fragment).toEqual(validFragment);
+    expect(fragment).toEqual(validFragmentIngested);
   });
 
   it('keeps the VERDICT channels strict — a bad expectation still throws despite lenient friction', () => {
@@ -289,7 +295,7 @@ describe('parseEvalFragment — grader text cannot forge an operator line', () =
       }),
     );
     expect(fragment.friction?.[0]).toEqual({
-      severity: 'high',
+      severity: 'error',
       category: PATH_ASSUMPTION,
       message: FORGED_CLEAN,
       evidence: FORGED_CLEAN,
@@ -371,5 +377,27 @@ describe('parseEvalFragment — grader text cannot forge an operator line', () =
     expect(fragment.friction).toHaveLength(1);
     expect(fragment.friction?.[0]?.message).toBe('(unprintable)');
     expect(warnings).toHaveLength(0);
+  });
+});
+
+describe('parseEvalFragment — friction severity vocabulary', () => {
+  const graderItem = (severity: string) => ({ severity, category: PATH_ASSUMPTION, message: FRICTION_MESSAGE });
+
+  it('maps the grader vocabulary to the shared severities at ingestion', () => {
+    const fragment = parseEvalFragment(
+      { ...validFragment, friction: [graderItem('high'), graderItem('medium'), graderItem('low')] },
+      warnUnwatched,
+    );
+    expect(fragment.friction?.map((item) => item.severity)).toEqual(['error', 'warning', 'info']);
+  });
+
+  it('drops an item that already speaks the shared vocabulary (the grader is asked for high|medium|low)', () => {
+    const warnings: string[] = [];
+    const fragment = parseEvalFragment(
+      { ...validFragment, friction: [graderItem('error')] },
+      (m) => warnings.push(m),
+    );
+    expect(fragment.friction).toEqual([]);
+    expect(warnings).toHaveLength(1);
   });
 });

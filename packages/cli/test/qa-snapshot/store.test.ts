@@ -20,7 +20,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { readSnapshot, snapshotPaths, writeSnapshot } from '../../src/qa-snapshot/store.js';
 import {
   MANIFEST_FILENAME,
-  type CommandManifestEntry,
   type LaneManifestEntry,
   type SnapshotManifest,
 } from '../../src/qa-snapshot/types.js';
@@ -28,13 +27,10 @@ import {
 const RESOURCES_ARTIFACT = 'oracle/enumeration.resources.txt';
 const AUDIT_ARTIFACT = 'oracle/enumeration.audit.txt';
 const PARSE_FACT_ARTIFACT = 'oracle/parse-facts.txt';
-const STDOUT_ARTIFACT = 'command/audit.stdout.txt';
-const STDERR_ARTIFACT = 'command/audit.stderr.txt';
 
 const RESOURCES_TEXT = '# enumeration-snapshot\nlane: resources\n';
 const AUDIT_TEXT = '# enumeration-snapshot\nlane: audit\n';
 const PARSE_FACT_TEXT = '# parse-fact-snapshot\nblobCount: 3\n';
-const STDOUT_TEXT = 'status: success\n';
 const STRAY_TEXT = 'a file the user cares about\n';
 
 const suite = setupSyncTempDirSuite('vat-qa-snapshot-store');
@@ -81,25 +77,6 @@ function laneEntry(laneId: LaneManifestEntry['laneId'], artifact: string): LaneM
 }
 
 /**
- * A minimal command manifest entry naming both stream artifacts.
- *
- * @returns The entry
- */
-function commandEntry(): CommandManifestEntry {
-  return {
-    name: 'audit',
-    args: ['audit', '/corpus'],
-    exitCode: 0,
-    signal: null,
-    wallMs: 0,
-    stdoutArtifact: STDOUT_ARTIFACT,
-    stderrArtifact: STDERR_ARTIFACT,
-    stdoutBytes: STDOUT_TEXT.length,
-    stderrBytes: 0,
-  };
-}
-
-/**
  * A manifest with every required field filled in.
  *
  * @param overrides - Fields this test cares about
@@ -117,7 +94,6 @@ function makeManifest(overrides: Partial<SnapshotManifest> = {}): SnapshotManife
     corpusGitHead: null,
     corpusGitDirty: null,
     lanes: [],
-    commands: [],
     parseFactArtifact: null,
     parseFactBlobCount: null,
     parseFactKeyDisagreementCount: null,
@@ -145,14 +121,13 @@ describe('qa-snapshot store', () => {
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
 
-  it('names the manifest and both artifact subdirectories', () => {
+  it('names the manifest and the oracle artifact subdirectory', () => {
     const dir = snapshotDir();
     const root = safePath.resolve(dir);
 
     expect(snapshotPaths(dir)).toEqual({
       manifest: `${root}/${MANIFEST_FILENAME}`,
       oracleDir: `${root}/oracle`,
-      commandDir: `${root}/command`,
     });
   });
 
@@ -160,7 +135,6 @@ describe('qa-snapshot store', () => {
     const dir = snapshotDir();
     const manifest = makeManifest({
       lanes: [laneEntry('resources', RESOURCES_ARTIFACT)],
-      commands: [commandEntry()],
       parseFactArtifact: PARSE_FACT_ARTIFACT,
       parseFactBlobCount: 3,
       parseFactKeyDisagreementCount: 0,
@@ -168,8 +142,6 @@ describe('qa-snapshot store', () => {
     const artifacts = new Map([
       [RESOURCES_ARTIFACT, RESOURCES_TEXT],
       [PARSE_FACT_ARTIFACT, PARSE_FACT_TEXT],
-      [STDOUT_ARTIFACT, STDOUT_TEXT],
-      [STDERR_ARTIFACT, ''],
     ]);
 
     writeSnapshot(dir, manifest, artifacts);

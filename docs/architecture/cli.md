@@ -131,10 +131,20 @@ Remember: **Other agent repos won't have packages/cli/**. If an agent package ne
 Provides explicit control when needed, automatic detection otherwise.
 
 **Priority order:**
-1. **Explicit override:** `VAT_ROOT_DIR` environment variable
-2. **Dev mode:** Detect if running inside vibe-agent-toolkit repo
-3. **Local install:** Walk up from project root to find `node_modules/@vibe-agent-toolkit/cli`
-4. **Global install:** Use globally installed version
+1. **`VAT_BIN`:** an explicit path to a built `dist/bin.js`, highest precedence. A path that
+   does not exist, or that names the wrapper itself (`dist/bin/vat.js`, which would re-resolve
+   and spawn itself forever), is a hard error (exit 2) — never a silent fall-through to a lower
+   priority.
+2. **`VAT_ROOT_DIR`:** a monorepo checkout root. `<root>/packages/cli/dist/bin.js` must already
+   be built, or this is a hard error (exit 2) — it no longer falls through to dev/local/global
+   resolution the way an unbuilt `VAT_ROOT_DIR` used to.
+3. **Dev mode:** Detect if running inside vibe-agent-toolkit repo
+4. **Local install:** Walk up from project root to find `node_modules/@vibe-agent-toolkit/cli`
+5. **Global install:** Use globally installed version
+
+`VAT_TEST_ROOT` is orthogonal to this list: it only changes the directory priorities 3–4 start
+their detection from — it never names a binary, and it has no effect once `VAT_BIN` or
+`VAT_ROOT_DIR` is set. For every `VAT_*` variable above, an empty string is treated as unset.
 
 ### Implementation
 
@@ -144,8 +154,8 @@ Context detection in `packages/cli/src/bin/vat.ts` spawns the actual CLI with `V
 
 ```bash
 # Dev mode
-vat --version → 0.1.0-dev (/Users/jeff/Workspaces/vibe-agent-toolkit)
-                 binary: /Users/jeff/Workspaces/vibe-agent-toolkit/packages/cli/dist/bin.js
+vat --version → 0.1.0-dev (/work/vibe-agent-toolkit)
+                 binary: /work/vibe-agent-toolkit/packages/cli/dist/bin.js
 
 # Local install
 vat --version → 0.1.0 (local: /path/to/project)
@@ -196,33 +206,27 @@ Either indicates project root.
 
 ```typescript
 // commands/mycommand.ts
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { buildReport, toFindings } from '@vibe-agent-toolkit/schema';
 
-export interface MyCommandOptions {
-  debug?: boolean;
-  // ... other options
-}
+import { endWithRefusal, endWithReport, NOTHING_FINISHED, refusalCodeOf } from '../utils/document-writer.js';
 
-export async function myCommand(
-  pathArg: string | undefined,
-  options: MyCommandOptions
-): Promise<void> {
-  const logger = createLogger(options.debug ? { debug: true } : {});
-  const startTime = Date.now();
-
+export async function myCommand(pathArg: string | undefined, options: MyCommandOptions): Promise<void> {
+  const format = options.format ?? 'yaml';
+  const gate = { strict: options.strict === true };
   try {
-    // 1. Validate inputs
+    // 1. Validate inputs — a mistake is `throw new CommandRefusalError('USAGE_INVALID', …)`
     // 2. Process
-    // 3. Output results (YAML to stdout)
-    // 4. Exit with the code the published document DERIVES — never one
-    //    decided beside it (`local/no-literal-process-exit`, `derived`)
-
-    process.exit(exitCodeForReport(report));
+    const report = buildReport({ examined, findings: toFindings(issues), data, gate });
+    // 3. The writer validates, renders and exits on the code the document derives
+    endWithReport('my command', report, format);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'MyCommand');
+    endWithRefusal('my command', refusalCodeOf(error), error, format, gate, NOTHING_FINISHED);
   }
 }
 ```
+
+The verb must be registered in `PUBLISHED_SHAPES` (`src/report-schemas.ts`) — see "The report
+contract" below.
 
 ## Configuration
 
@@ -262,21 +266,26 @@ resources:
 
 ### YAML by Default
 
-All commands output YAML on stdout (readable by humans and agents):
+Commands output YAML on stdout (readable by humans and agents); `--format json` renders the same
+document. A report verb's document is the envelope described under
+[The report contract](#the-report-contract):
 
 ```yaml
 ---
-status: success
-filesScanned: 12
-durationSecs: 0.234
----
+status: ok
+examined: 12
+findings: []
+summary: { errors: 0, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 234
+data: { ... }
 ```
-
-Future: `--format json` flag for JSON output
 
 ### Dual Output for Errors
 
-Commands that find errors produce both formats:
+Legacy commands that find errors produce both formats below. A report verb renders the same
+compiler-style lines under `--format text`, on stdout, from its published findings
+(`location:line:column: severity: message [code]`) — see [The report contract](#the-report-contract).
 
 #### Test Format (stderr)
 
@@ -300,25 +309,19 @@ which lines they have to act on.
 
 ```yaml
 ---
-# status is the worst ACTIONABLE severity: success | warning | error.
-# Info-only findings report `success` — read issueCounts for what was seen.
-status: error
-errorsFound: 2
-issueCounts: { errors: 2, warnings: 0, info: 0 }
-issues:
-  - file: docs/README.md
-    issues:
-      - line: 15
-        column: 25
-        code: LINK_BROKEN_FILE
-        severity: error
-        message: Link target not found: ./missing.md
-  - file: docs/guide.md
-    line: 42
-    column: 10
-    type: broken-anchor
-    message: Broken anchor: #non-existent-section
----
+# status: ok (nothing found) | findings (anything found, at any severity) |
+# error (the run could not finish). summary counts findings by severity.
+status: findings
+examined: 12
+findings:
+  - code: LINK_BROKEN_FILE
+    severity: error
+    message: "File not found: docs/missing.md"
+    location: docs/README.md
+    line: 15
+summary: { errors: 1, warnings: 0, info: 0 }
+gate: { strict: false }
+data: { root: /abs/path/to/project, collections: {} }
 ```
 
 **Purpose:**
@@ -423,27 +426,32 @@ Each command group exports its verbose help function.
 
 **Behavior:**
 - Scans directory for markdown files (vat-aware discovery)
-- Shows what files would be validated
-- Displays stats: file count, link count, etc.
-- Helps decide inclusions/exclusions before validation
-- Always exits 0 (informational only)
+- Shows what files would be validated, and helps decide inclusions/exclusions before validation
+- Publishes the report envelope: `examined` is the number of files scanned; a scan has no finding
+  of its own, so a scan of NOTHING is the writer's `RESOURCE_CHECK_BROKEN` at exit 1 — it is not a
+  population. Exits 0 when it scanned at least one file, 2 when it could not run
 - Defaults to project root if no path provided
+- The lab's population facet reads it: the count from `examined`, the population from `data.files`
 
-**Example output:**
+**Example output (`--verbose`):**
 ```yaml
 ---
-status: success
-root: /abs/path/to/project
-filesScanned: 12
-linksFound: 47
-anchorsFound: 23
-files:
-  - path: docs/README.md
-    links: 5
-    anchors: 3
-    checksum: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-durationSecs: 0.234
----
+status: ok
+examined: 12
+findings: []
+summary: { errors: 0, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 234
+data:
+  root: /abs/path/to/project
+  lane: projection
+  extentSource: git
+  collections: {}
+  files:
+    - path: docs/README.md
+      links: 5
+      anchors: 3
+      checksum: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 ```
 
 ### `vat resources validate [path]`
@@ -452,48 +460,46 @@ durationSecs: 0.234
 
 **Behavior:**
 - Validates discovered resources (link integrity, anchors, structure)
-- Exits 0 if valid, non-zero if errors found
+- Publishes every finding flat, `location` relative to `data.root`; `examined` is the number of
+  resources validated
+- Exits on the code the document derives: 0 with no error-severity finding, 1 with one (or when
+  nothing was validated), 2 when the run could not finish
+- `--collection` scopes the whole report — findings, `examined`, exit code — to that collection
 - Defaults to project root if no path provided
-- Dual output: test format (stderr) + YAML (stdout)
-- CI/CD gate
-
-**Success output:**
-```yaml
----
-status: success
-filesScanned: 12
-linksChecked: 47
-anchorsChecked: 23
-duration: 456ms
----
-```
+- CI/CD gate; also a phase of `vat validate` and `vat verify`, which fold its report into their
+  own (see "The orchestrators" below)
 
 **Error output:**
-
-*stderr:*
-```
-docs/README.md:15:25: error: Link target not found: ./missing.md
-```
-
-*stdout:*
 ```yaml
 ---
-status: error
-filesScanned: 12
-errorsFound: 1
-filesWithErrors: 1
-issueCounts: { errors: 1, warnings: 0, info: 0 }
-issueSummary: { LINK_BROKEN_FILE: 1 }
-issues:
-  - file: docs/README.md
-    issues:
-      - line: 15
-        column: 25
-        code: LINK_BROKEN_FILE
-        severity: error
-        message: Link target not found: ./missing.md
----
+status: findings
+examined: 12
+findings:
+  - code: LINK_BROKEN_FILE
+    severity: error
+    message: "File not found: docs/missing.md"
+    location: docs/README.md
+    link: ./missing.md
+    line: 15
+summary: { errors: 1, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 456
+data:
+  root: /abs/path/to/project
+  collections: {}
 ```
+
+### `vat resources query <sql> [path]`
+
+**Purpose:** Ask the resource projection one read-only SQL question
+
+**Behavior:**
+- `examined` is the POPULATION the statement ran over, never the rows it selected: zero rows over a
+  populated tree is `ok` (an empty answer is an answer); a population of nothing is refused
+- `data.columns` names the result columns even when no row was selected; `data.rows` holds the rows
+  exactly as SQLite holds them; `data.population` / `populationSecs` are the cache tell
+- A statement the store refuses (not a query, a second statement, an unbound `?`, a name the schema
+  lacks) is `USAGE_INVALID` by its code, `PROJECTION_STATEMENT_REFUSED`, never by its message
 
 ### `vat resources check [path]`
 
@@ -525,7 +531,7 @@ severity under one non-overridable code, `RESOURCE_CHECK_BROKEN`:
 
 The empty-corpus case is the one that shipped: a broad `.gitignore`, a shallow or sparse CI
 checkout, or a root that resolved somewhere else ran every declared check over nothing and reported
-`status: success` on exit 0 with empty stderr. Population declines ignored members rather than
+`status: ok` on exit 0 with empty stderr. Population declines ignored members rather than
 flagging them, so the tables held no trace of it either.
 
 The fourth case changed meaning once a DEFAULT SET existed. `checksRun` counts the built-in set plus
@@ -765,25 +771,73 @@ change's call to make.
   DERIVED from the document's `status` and `summary`, never chosen beside it. Choosing it by hand
   is how one outcome shipped with different codes in different verbs. Under `packages/cli/src/`
   the rule's `derived` option refuses naming `ExitCode.FINDINGS` at all and any exit that is not
-  `OK`, `ERROR` or a derivation; a child's code is forwarded through `exitCodeOfChild`. The files
-  not yet migrated are the shrink-only `EXIT_CODE_DERIVATION_RATCHET` in `eslint.config.js`, and
-  `test/system/exit-code-matrix.system.test.ts` proves the derivation by running every envelope verb.
+  `OK`, `ERROR` or a derivation; a child's code is forwarded through `exitCodeOfChild`. No file is
+  exempt, and `test/system/exit-code-matrix.system.test.ts` proves the derivation by running every
+  envelope verb and asserting every external adapter outcome.
 - Always flush stdout before writing to stderr
 - Test format errors must include file:line:column
 
-Use the `handleCommandError` helper for consistent error handling:
+Every verb ends its failures through the writer (`endWithRefusal`, next section); a protocol leaf
+(`agent run`, `mcp serve`), whose stdout is not a document, writes its failure to stderr and ends on
+`ERROR`. Build-time scripts that are not `vat` verbs (`validate-help-files.ts`) throw, and the build
+runner exits on the uncaught throw.
 
-```typescript
-try {
-  // Command implementation
-} catch (error) {
-  handleCommandError(error, logger, startTime, 'CommandName');
-  // handleCommandError calls process.exit() internally
-}
-```
+## The report contract
 
-This ensures a consistent error format, duration logging, and the exit codes above (`FINDINGS`
-for a gate the tree failed, `ERROR` for a command that could not do its job).
+- **One writer.** Under `packages/cli/src/commands/`, stdout is written by
+  `utils/document-writer.ts` and nothing else — `local/no-stdout-outside-writer` refuses
+  `process.stdout.write`, the stdout `console` methods and the stdout helpers (called or handed on),
+  with one `allowFiles` entry, `commands/agent/run.ts` (the agent's reply is its stdout). A
+  supervised child's document is read with `readForwardedDocument` (parsed and validated; one that
+  is not the verb's document is the child's death, not a forward) and ends through
+  `endWithForwardedDocument`, on the code that document derives.
+- **One registry.** `src/report-schemas.ts` `PUBLISHED_SHAPES` lists every published shape — report
+  documents, external payloads, stdout and file artifacts, exported library result types, and the
+  JSON Schemas describing adopter input — and `test/published-shapes.test.ts` asserts each claim
+  both ways against the tree (writer calls, Commander leaves, schema files, barrel exports). A verb's
+  `<VERB>_REPORT_SCHEMA` lives in a sibling `*-schema.ts`, because the registry imports it and the
+  verb imports the writer that imports the registry.
+- **The union envelope.** A report is `Report<T>` from `@vibe-agent-toolkit/schema`: `status`
+  (`ok` | `findings` | `error`), a REQUIRED `examined`, `findings`, `summary`, `gate`, `data`, and on
+  `error` an `error: { code, message }` whose `code` is a registered refusal. The writer validates the
+  document against the entry's schema before a byte leaves, and adds the one `RESOURCE_CHECK_BROKEN`
+  refusal when `examined` is zero, named with the entry's declared unit.
+- **`gate` is in the document.** `gate.strict` records whether warnings fail the run, so the exit
+  code is derived from the published document alone.
+- **The exit table.** `exitCodeForReport(document)`: `2` when `status` is `error`; `1` for an
+  error-severity finding, or a warning under `gate.strict`; `0` otherwise. `endWithReport(verb,
+  report, format)` writes and exits on that; `endWithRefusal(verb, code, error, format, gate,
+  finished)` publishes the error branch with whatever finished (`NOTHING_FINISHED` spelled out) and
+  exits 2. `refusalCodeOf(error)` picks the code: a `CommandRefusalError`'s own (`USAGE_INVALID` for the
+  invocation's mistake), a library error's by its `code`, and `INTERNAL_ERROR` only for what nothing
+  anticipated.
+- **The orchestrators.** `vat build`, `vat validate` and `vat verify` publish ONE report
+  (`orchestrator` in the registry, `schemas/orchestrator.json`). Each phase function
+  (`run…Phase`) returns `{ report }` — its own command's report BEFORE the writer's run-integrity
+  pass, or `refusalReport(code, error, gate, finished)` on a refusal — and the command lane is
+  `endWithReport(verb, (await run()).report, format)`. `orchestratorReport` (`commands/phase-utils.ts`)
+  folds the phases: findings flat with `location` unchanged, `examined` the sum, and
+  `data.phases[]` one `{ name, status, examined, summary, error?, data }` per phase. The
+  orchestrator's schema holds a phase's `data` as `unknown`; what keeps it honest is that every
+  `Phase` names the schema its report is held to (`schema`, required) and `runPhase` parses the
+  report with it before the fold — a delegated phase names its verb's registered
+  `<VERB>_REPORT_SCHEMA`, an in-process one `DATALESS_PHASE_REPORT_SCHEMA` or
+  `PACKAGED_CONTENT_REPORT_SCHEMA`, and a report its schema rejects is that phase's
+  `INTERNAL_ERROR`. Run integrity
+  is applied ONCE, to the sum, so a project lacking one phase's config does not fail on the phase
+  that had nothing to examine. A phase that did not finish makes the run `error` /
+  `RUN_INCOMPLETE` with the finished phases still in `data.phases`; a refusal of the run itself (a
+  path argument, the retired `--only`, no project root) is the error branch with every phase that
+  already finished. There is no second status vocabulary.
+- **Formats.** `yaml` and `json` render the document; `text` renders one
+  `location:line:column: severity: message [code]` line per finding and a status line with the
+  counts and the denominator — or the entry's own `renderText` when its human rendering is a
+  published contract of its own.
+- **Documented examples are held to the schema.** A fenced block tagged `yaml vat-report=<verb>`
+  (or `json`; `<verb>` as typed after `vat`) in any tracked `.md` outside `CHANGELOG.md` and
+  `.changes/` must validate against that verb's registered schema, and every `report` entry needs
+  at least one (`tagged-report-examples.integration.test.ts`). Produce an example by running the
+  built CLI and trimming it; never write one by hand.
 
 ## Testing Patterns
 
@@ -807,7 +861,7 @@ describe('MyCommand (system test)', () => {
     const { result, parsed } = executeCommandAndParse(binPath, projectDir);
 
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    expect(parsed.status).toBe('ok');
   });
 
   it('should handle errors correctly', () => {

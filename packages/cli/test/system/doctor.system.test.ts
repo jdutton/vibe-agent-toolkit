@@ -8,10 +8,14 @@
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import yaml from 'yaml';
 
-import { executeCli, getBinPath } from './test-common.js';
+import { DOCTOR_REPORT_SCHEMA } from '../../src/commands/doctor-schema.js';
+
+import { cleanupTestTempDir, createTestTempDir, executeCli, getBinPath } from './test-common.js';
 
 // Get the project root (VAT repo root)
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -153,5 +157,52 @@ describe('vat doctor - system tests (self-hosting)', () => {
       expect(verbose.renderedChecks).toBeGreaterThanOrEqual(normal.renderedChecks);
       expectCountsToMatchRenderedList(verbose);
     });
+  });
+});
+
+describe('vat doctor - the published report (system test)', () => {
+  /** Under the OS temp dir: no `.git` and no config above it, so two checks fail. */
+  let outsideAnyProject: string;
+
+  beforeAll(() => {
+    outsideAnyProject = createTestTempDir('vat-doctor-report-');
+  });
+
+  afterAll(() => {
+    cleanupTestTempDir(outsideAnyProject);
+  });
+
+  it('a failing doctor check is a findings report, exit 1', async () => {
+    const result = await executeCli(CLI_BIN, ['doctor'], { cwd: outsideAnyProject });
+    const report = DOCTOR_REPORT_SCHEMA.parse(yaml.parse(result.stdout));
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(ExitCode.FINDINGS);
+    expect(report.status).toBe('findings');
+    expect(report.examined).toBe(report.data?.checks.length);
+    // One error finding per failed check, named for it — and every failed row is one.
+    const failed = report.data?.checks.filter((check) => check.outcome === 'fail').map((check) => check.name) ?? [];
+    expect(failed).toEqual(expect.arrayContaining(['Git repository', 'Configuration file']));
+    const errors = report.findings.filter((finding) => finding.code === 'DOCTOR_CHECK_FAILED');
+    expect(errors.map((finding) => finding.severity)).toEqual(failed.map(() => 'error'));
+    expect(errors.map((finding) => finding.message.split(':')[0])).toEqual(failed);
+    // The human block is on stderr; stdout holds the document and nothing else.
+    expect(result.stderr).toContain('vat doctor');
+    expect(result.stdout).not.toContain('🩺');
+  });
+
+  it('--format json publishes the same document as JSON', async () => {
+    const result = await executeCli(CLI_BIN, ['doctor', '--format', 'json'], { cwd: outsideAnyProject });
+
+    expect(DOCTOR_REPORT_SCHEMA.parse(JSON.parse(result.stdout)).status).toBe('findings');
+    expect(result.status).toBe(ExitCode.FINDINGS);
+  });
+
+  it('--format text puts the human block on stdout, once, and nothing on stderr', async () => {
+    const result = await executeCli(CLI_BIN, ['doctor', '--format', 'text'], { cwd: outsideAnyProject });
+
+    expect(result.status).toBe(ExitCode.FINDINGS);
+    expect(result.stdout.match(/🩺 vat doctor/g)).toHaveLength(1);
+    expect(result.stdout).toContain('❌ Git repository');
+    expect(result.stderr).not.toContain('🩺');
   });
 });

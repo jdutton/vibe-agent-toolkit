@@ -46,6 +46,7 @@ import {
   type PerfCommandStats,
   PerfBodySchema,
 } from '../src/facets/perf/types.js';
+import type { ArmEnvironment } from '../src/harness/arm-env.js';
 import type { MeasuredCommandSpec } from '../src/harness/commands.js';
 import { runRepeats } from '../src/harness/repeat.js';
 import type { ResolvedSubject } from '../src/harness/types.js';
@@ -125,8 +126,9 @@ function subjectAt(path: string): ResolvedSubject {
  */
 function capture(
   probe: Probe,
-  overrides: Partial<CapturePerfOptions> = {},
+  overrides: Omit<Partial<CapturePerfOptions>, 'env'> & { env?: ArmEnvironment['set'] } = {},
 ): ReportEnvelope<PerfBody> {
+  const { env, ...rest } = overrides;
   return capturePerf({
     instrument: probe.instrument,
     subject: subjectAt(probe.cwd),
@@ -134,7 +136,8 @@ function capture(
     runs: 3,
     cache: 'warm',
     capturedAt: CAPTURED_AT,
-    ...overrides,
+    ...rest,
+    env: { set: env ?? {}, unset: [] },
   });
 }
 

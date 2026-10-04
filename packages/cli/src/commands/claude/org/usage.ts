@@ -14,7 +14,7 @@ export function createOrgUsageCommand(): Command {
     .option('--to <datetime>', 'End datetime (ISO 8601, default: now)')
     .option('--debug', 'Enable debug logging')
     .action(async (options: { from?: string; to?: string; debug?: boolean }) => {
-      await executeOrgCommand('OrgUsage', options.debug, async ({ client }) => {
+      await executeOrgCommand('claude org usage', options.debug, async ({ client }) => {
         return autopaginateReport(client, '/v1/organizations/usage_report/messages', {
           starting_at: options.from ?? defaultDaysAgo(30),
           ending_at: options.to ?? new Date().toISOString(),
@@ -26,7 +26,6 @@ Description:
   Fetches daily token usage buckets from the Admin API. Autopaginates.
 
 Output:
-  - status: success
   - count: number of usage buckets
   - data[]: array of { starting_at, ending_at, results }
 

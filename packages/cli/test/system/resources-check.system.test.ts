@@ -84,7 +84,7 @@ function severityOverride(code: string, level: string): string {
 function writeChecksIn(root: string, checks: string, moreResources = ''): void {
   fs.writeFileSync(
     safePath.join(root, CONFIG_FILE),
-    `version: 1\nresources:\n  checks:\n${checks}${moreResources}`,
+    `resources:\n  checks:\n${checks}${moreResources}`,
     'utf-8',
   );
 }
@@ -358,11 +358,11 @@ describe('vat resources check', () => {
 
     // 2, not 1: a mistyped flag is an operator error, not a content violation.
     expect(status).toBe(2);
-    // The command-error document, not the report envelope: nothing ran.
+    // The envelope's error branch: nothing ran, and the refusal is the operator's.
     expect(doc['status']).toBe('error');
     // The typo AND the valid set, so the operator does not go read the config.
-    expect(doc['error']).toContain('declared-none');
-    expect(doc['error']).toContain('declared-one');
+    expect(doc['error']).toMatchObject({ code: 'USAGE_INVALID', message: expect.stringContaining('declared-none') });
+    expect(doc['error']).toMatchObject({ message: expect.stringContaining('declared-one') });
   });
 
   it('refuses a [path] that does not exist rather than running the checks it walked up to', () => {
@@ -411,7 +411,7 @@ describe('vat resources check', () => {
     // `noCheckRanFinding` — and the unit suite drives it at `costs: []`.
     fs.writeFileSync(
       safePath.join(projectDir, CONFIG_FILE),
-      'version: 1\nresources:\n  include:\n    - "**/*.md"\n',
+      'resources:\n  include:\n    - "**/*.md"\n',
       'utf-8',
     );
 
@@ -437,7 +437,7 @@ describe('vat resources check', () => {
     // when a project declares none.
     fs.writeFileSync(
       safePath.join(projectDir, CONFIG_FILE),
-      'version: 1\nresources:\n  include:\n    - "**/*.md"\n',
+      'resources:\n  include:\n    - "**/*.md"\n',
       'utf-8',
     );
 
@@ -456,8 +456,8 @@ describe('vat resources check', () => {
     const { status, doc } = check('--check', 'claude-rule-glob-inertt');
 
     expect(status).toBe(2);
-    expect(doc['error']).toContain('declared-one');
-    expect(doc['error']).toContain(BUILTIN_CHECK_NAMES[0] ?? '');
+    expect(doc['error']).toMatchObject({ code: 'USAGE_INVALID', message: expect.stringContaining('declared-one') });
+    expect(doc['error']).toMatchObject({ message: expect.stringContaining(BUILTIN_CHECK_NAMES[0] ?? '') });
   });
 });
 

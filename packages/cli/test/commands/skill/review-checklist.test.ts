@@ -4,7 +4,7 @@
  * command's design and must not drift away from the checklist.
  */
 
-import { CODE_REGISTRY } from '@vibe-agent-toolkit/schema';
+import { CODE_REGISTRY, FindingCodeSchema } from '@vibe-agent-toolkit/schema';
 import { describe, it, expect } from 'vitest';
 
 import {
@@ -27,7 +27,6 @@ describe('review-checklist.sectionForCode', () => {
     // Naming
     ['SKILL_NAME_INVALID', SEC_NAMING],
     ['RESERVED_WORD_IN_NAME', SEC_NAMING],
-    ['SKILL_NAME_XML_TAGS', SEC_NAMING],
     ['SKILL_NAME_MISMATCHES_DIR', SEC_NAMING],
     // Description
     ['SKILL_MISSING_DESCRIPTION', SEC_DESCRIPTION],
@@ -118,6 +117,12 @@ describe('review-checklist.sectionForCode', () => {
  * skill rather than the skill itself.
  */
 const FALLS_TO_CATCH_ALL: ReadonlySet<string> = new Set([
+  // About an agent manifest (agent.yaml), which `vat agent validate` reads and
+  // a skill review never does.
+  'AGENT_MANIFEST_INVALID',
+  'AGENT_RAG_NO_SOURCES',
+  'AGENT_REFERENCE_MISSING',
+  'AGENT_REFERENCE_UNREADABLE',
   'ALLOW_EXPIRED',
   'ALLOW_UNUSED',
   // Emitted over a project's `.claude/rules` tree, which a skill review does not walk —
@@ -174,10 +179,19 @@ const FALLS_TO_CATCH_ALL: ReadonlySet<string> = new Set([
   'PLUGIN_MISSING_LICENSE',
   'PLUGIN_NAME_NOT_KEBAB_CASE',
   'PLUGIN_TOPLEVEL_BIN_DIR',
+  // About a local Claude install `vat claude plugin uninstall` removes, never a skill's content.
+  'PLUGIN_UNINSTALL_INCOMPLETE',
   'REFERENCE_TARGET_MISSING',
   'REGISTRY_SHAPE_DRIFT',
   'RESOURCE_UNREADABLE',
   'SCAN_PATH_UNREADABLE',
+  // About Claude settings files, which `vat audit settings` reads and a skill
+  // review never does.
+  'SETTINGS_FILE_INVALID',
+  'SETTINGS_MARKETPLACE_TOKEN_MISSING',
+  'SETTINGS_PATH_DEPRECATED',
+  'SETTINGS_RULE_SHADOWED',
+  'SETTINGS_TYPE_AMBIGUOUS',
   'SKILL_BODY_NOT_IMPERATIVE',
   'SKILL_CLAUDE_PLUGIN_NAME_MISMATCH',
   'SKILL_NAME_NOT_KEBAB_CASE',
@@ -186,7 +200,10 @@ const FALLS_TO_CATCH_ALL: ReadonlySet<string> = new Set([
 ]);
 
 describe('review-checklist accounts for every registry code', () => {
-  const registryCodes = Object.keys(CODE_REGISTRY);
+  // FINDING codes only. A refusal code says the run could not do its job — the
+  // review ends on it (exit 2) or publishes it as a run-integrity finding — so
+  // it is never a checklist item to group under a section.
+  const registryCodes: readonly string[] = FindingCodeSchema.options;
 
   it('reads a non-empty registry, so the checks below cannot pass vacuously', () => {
     expect(registryCodes.length).toBeGreaterThan(50);

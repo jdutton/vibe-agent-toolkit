@@ -105,7 +105,7 @@ describe('sanitizeGraderText', () => {
  * NEUTRALIZED is (a) every bidi control — anything that reorders or re-directs the
  * text AROUND it — and (b) every invisible character with no orthographic job, which
  * can therefore only hide a difference from a reader or a string comparison. U+202E
- * is the loud one: it renders the REST of vat's own `[low] path-assumption: …`
+ * is the loud one: it renders the REST of vat's own `[info] path-assumption: …`
  * stderr line right-to-left, so a friction `message` repaints text vat wrote.
  *
  * PRESERVED is the other half of the invisible range: characters ordinary words are

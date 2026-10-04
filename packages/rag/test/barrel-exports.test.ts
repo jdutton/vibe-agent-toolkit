@@ -28,7 +28,6 @@ const BARREL_EXPORTS = [
   'RAGStatsJsonSchema',
   'RAGStatsSchema',
   'assertFiltersProducedConditions',
-  'assertQuerySupported',
   'calculateEffectiveTarget',
   'chunkByTokens',
   'chunkResource',

@@ -13,10 +13,16 @@ const COWORK: Target = 'claude-cowork';
 const CODE: Target = 'claude-code';
 
 function obs(code: string, payload?: Record<string, unknown>) {
-  return { code, summary: code, payload, supportingEvidence: [] };
+  return { code, description: code, payload, supportingEvidence: [] };
 }
 
 describe('computeVerdicts', () => {
+  it('carries its sentence as description, never summary (summary always means SeverityCounts)', () => {
+    const [first] = computeVerdicts({ observations: [obs(LOCAL_SHELL)], targets: [CHAT] });
+    expect(first?.description).toBe("Target 'claude-chat' has no local shell but skill requires one.");
+    expect(first).not.toHaveProperty('summary');
+  });
+
   it('expected: no verdict when target covers capability', () => {
     const verdicts = computeVerdicts({
       observations: [obs(LOCAL_SHELL)],

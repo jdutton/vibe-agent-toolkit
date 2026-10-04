@@ -122,7 +122,7 @@ The provider handles serialization/deserialization automatically based on your Z
 
 ### Filtering
 
-Filters are compiled into a SQL `WHERE` clause against the LanceDB table. **Two filter keys are honoured**; every other field on the query type is refused with an error rather than ignored (see [Declared but not implemented — these now throw](#declared-but-not-implemented--these-now-throw) below).
+Filters are compiled into a SQL `WHERE` clause against the LanceDB table. **Two filter keys are honoured**; every other field on the query type is refused with an error rather than ignored (see [Fields the query does not declare are refused](#fields-the-query-does-not-declare-are-refused) below).
 
 | Filter | Behaviour |
 |---|---|
@@ -163,47 +163,17 @@ same reason an empty list is: `LIKE '%%'` matches every row, which is the exact 
 what a filter means. The rule is about the emitted pattern, not about array length — see the
 `filters.metadata` row above.
 
-### Declared but not implemented — these now throw
+### Fields the query does not declare are refused
 
-Some fields are declared on the query types but **no shipped provider reads them**. Passing one **throws** an error naming the field and its remedy. It is not silently dropped.
+`RAGQuerySchema` is strict and declares only `text`, `limit`, `filters.resourceId` and `filters.metadata`. `query()` and `buildWhereClause` validate against it, so any other key **throws** before the query does any work (no connection, no embedding needed) — it is never dropped. Dropping widens: an unread filter contributes no SQL condition, so the query would run as an unfiltered full-recall search over the whole index.
 
-**They are refused rather than ignored because ignoring them widened your results instead of narrowing them.** The provider applies a `WHERE` clause only when the filter builder produced one, so a query whose only filter was an unimplemented one used to run as an **unfiltered, full-recall vector search over the entire index** — plausible-looking results drawn from exactly the documents the filter was meant to exclude, with nothing to tell you the filter had not applied. A RAG filter is usually a correctness or access boundary, so the silent version was closer to a data-exposure defect than to a missing feature.
+Removed fields (they were declared, never implemented by any provider):
 
-| Field | Declared in | Status |
-|---|---|---|
-| `filters.dateRange` | `RAGQuery` interface + `RAGQuerySchema` | Implemented nowhere. **Throws.** |
-| `hybridSearch.enabled: true` | `RAGQuery` interface + `RAGQuerySchema` | Implemented nowhere; search is always pure vector search. **Throws.** Omitting the field is fine, and so is `enabled: false` **on its own** — but a `keywordWeight` beside it throws too, because a weight reaches nothing either. |
-| `filters.tags`, `filters.type`, `filters.headingPath` | `RAGQuerySchema` only | **Throws at the top level of `filters`.** These are metadata fields — move them under `filters.metadata` and they are honoured. |
+- `filters.tags`, `filters.type`, `filters.headingPath` — move them under `filters.metadata`.
+- `filters.dateRange` — no replacement. Model the date as a field on your own metadata schema and filter on it via `filters.metadata`, or filter the returned chunks yourself.
+- `hybridSearch` (any value, including `{ enabled: false }`) — no replacement; search is always pure vector search.
 
-**If you already wrote one of these into your code, it never had any effect — and now it will fail loudly.** To recover:
-
-- `tags`, `type`, `headingPath` — move them under `filters.metadata`:
-
-  ```typescript
-  // ❌ Throws (before this was a guard, it ran a full-recall search with no filtering at all):
-  //
-  //   Unsupported RAG query field:
-  //     - `filters.tags`: move it to `filters.metadata.tags` — it is a metadata field and is
-  //       honoured only there.
-  //
-  //   These are refused rather than ignored because ignoring them widens the search: an unread
-  //   filter contributes no SQL condition, so the query would run as an unfiltered search over
-  //   the entire index and return results the filter was meant to exclude.
-  filters: { tags: ['validation'] }
-
-  // ✅ Honoured
-  filters: { metadata: { tags: ['validation'] } }
-  ```
-
-  Every offending key present is reported in one error, so a query carrying two of them does not
-  have to be fixed twice (the heading reads `Unsupported RAG query fields:` in that case).
-
-- `dateRange` — no replacement. Model the date as a field on your own metadata schema and filter on it via `filters.metadata`, or filter the returned chunks yourself after the query.
-- `hybridSearch` — no replacement. Remove it, or set `enabled: false` **and drop any `keywordWeight`** to state that a pure vector search is what you want. A weight is refused even when `enabled` is `false`: it reaches no keyword pass either way, and tuning it would produce results indistinguishable from not having tuned it.
-
-The refusal is deterministic and happens **before** the query does any work: it needs neither a database connection nor an embedding, so an unindexed provider reports the unsupported field rather than reporting that nothing is indexed yet.
-
-> **Note on `RAGQuerySchema`.** The Zod schema exported from `@vibe-agent-toolkit/rag` declares a `filters.metadata` key, so a query validated against that schema can express the filter path that works, and every object in it is `.strict()`, so a key it does not declare is a parse ERROR rather than a silent deletion. Both were the same defect: a Zod object *strips* unknown keys, so a `filters.metadata` used to be discarded before it reached a provider, and a typo'd `resourceID` used to be erased before this package's allowlist could refuse it — leaving an unfiltered full-recall search. Validating a query was the way to LOSE the refusal. Strictness stops at `filters.metadata`, whose shape is your own metadata schema. The schema still validates **structure, not provider support**: `dateRange` / `tags` / `type` / `headingPath` are declared, parse successfully there, and are refused at `query()`.
+`filters.metadata` is validated against your metadata schema, and an undeclared field throws.
 
 ## Quick Start
 

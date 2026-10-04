@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 
+import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { countBySeverity } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -15,6 +16,14 @@ import { validatePlugin } from '../../src/validators/plugin-validator.js';
 
 const CLAUDE_PLUGIN_DIR = '.claude-plugin';
 const TEST_AUTHOR_NAME = 'VAT Test Suite';
+
+/** An error-counted result carrying a PLUGIN_INVALID_SCHEMA issue whose message names `fragment`. */
+function expectSchemaErrorMentioning(result: ValidationResult, fragment: string): void {
+	expect(result.summary.errors).toBeGreaterThan(0);
+	expect(
+		result.issues.some((issue) => issue.code === 'PLUGIN_INVALID_SCHEMA' && issue.message.includes(fragment)),
+	).toBe(true);
+}
 
 describe('validatePlugin', () => {
 	const { getTempDir } = setupTempDir('plugin-validator-test-');
@@ -69,7 +78,7 @@ describe('validatePlugin', () => {
 
 		const result = await validatePlugin(pluginPath);
 
-		expect(result.status).toBe('error');
+		expect(result.summary.errors).toBeGreaterThan(0);
 		expect(result.issues.length).toBeGreaterThan(0);
 		// Schema error is the blocker; PLUGIN_NAME_NOT_KEBAB_CASE may also fire.
 		expect(
@@ -104,14 +113,7 @@ describe('validatePlugin', () => {
 
 		const result = await validatePlugin(pluginPath);
 
-		expect(result.status).toBe('error');
-		expect(
-			result.issues.some(
-				(issue) =>
-					issue.code === 'PLUGIN_INVALID_SCHEMA' &&
-					issue.message.includes('lowercase'),
-			),
-		).toBe(true);
+		expectSchemaErrorMentioning(result, 'lowercase');
 	});
 
 	it('should warn when plugin.json is missing version field', async () => {
@@ -123,7 +125,8 @@ describe('validatePlugin', () => {
 
 		const result = await validatePlugin(pluginPath);
 
-		expect(result.status).toBe('warning');
+		expect(result.summary).toMatchObject({ errors: 0 });
+		expect(result.summary.warnings).toBeGreaterThan(0);
 		expect(result.metadata?.name).toBe('no-version-plugin');
 		const versionIssue = result.issues.find(i => i.code === 'PLUGIN_MISSING_VERSION');
 		expect(versionIssue).toBeDefined();
@@ -157,14 +160,7 @@ describe('validatePlugin', () => {
 
 		const result = await validatePlugin(pluginPath);
 
-		expect(result.status).toBe('error');
-		expect(
-			result.issues.some(
-				(issue) =>
-					issue.code === 'PLUGIN_INVALID_SCHEMA' &&
-					issue.message.includes('semver'),
-			),
-		).toBe(true);
+		expectSchemaErrorMentioning(result, 'semver');
 	});
 
 	it('emits PLUGIN_NAME_NOT_KEBAB_CASE alongside schema error for invalid names', async () => {
@@ -203,7 +199,7 @@ describe('validatePlugin', () => {
 		}
 	});
 
-	describe('issueCounts agree with the issues actually reported', () => {
+	describe('summary counts agree with the issues actually reported', () => {
 		it('counts post-schema warning + info findings (not zeros)', async () => {
 			const tempDir = getTempDir();
 			// No version -> 1 warning; no description/author/license -> 3 info.
@@ -212,10 +208,11 @@ describe('validatePlugin', () => {
 			const result = await validatePlugin(pluginPath);
 
 			expect(result.issues).toHaveLength(4);
-			expect(result.issueCounts).toEqual({ errors: 0, warnings: 1, info: 3 });
-			expect(result.issueCounts).toEqual(countBySeverity(result.issues));
-			expect(result.status).toBe('warning');
-			expect(result.summary).toBe('Found 4 issue(s)');
+			expect(result.summary).toEqual({ errors: 0, warnings: 1, info: 3 });
+			expect(result.summary).toEqual(countBySeverity(result.issues));
+			expect(result.status).toBe('findings');
+			// The one describeIssues sentence: the counts, never a second wording.
+			expect(result.description).toBe('0 errors, 1 warnings, 3 info');
 		});
 
 		it('counts post-schema error + info findings under --strict', async () => {
@@ -226,9 +223,9 @@ describe('validatePlugin', () => {
 			const result = await validatePlugin(pluginPath, { strict: true });
 
 			expect(result.issues).toHaveLength(4);
-			expect(result.issueCounts).toEqual({ errors: 1, warnings: 0, info: 3 });
-			expect(result.issueCounts).toEqual(countBySeverity(result.issues));
-			expect(result.status).toBe('error');
+			expect(result.summary).toEqual({ errors: 1, warnings: 0, info: 3 });
+			expect(result.summary).toEqual(countBySeverity(result.issues));
+			expect(result.summary.errors).toBeGreaterThan(0);
 		});
 
 		// Positive control: distinguishes "correctly zero" from "never populated".
@@ -245,9 +242,9 @@ describe('validatePlugin', () => {
 			const result = await validatePlugin(pluginPath);
 
 			expect(result.issues).toHaveLength(0);
-			expect(result.issueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
-			expect(result.status).toBe('success');
-			expect(result.summary).toBe('Valid plugin');
+			expect(result.summary).toEqual({ errors: 0, warnings: 0, info: 0 });
+			expect(result.status).toBe('ok');
+			expect(result.description).toBe('Valid plugin');
 		});
 
 		it('counts schema errors on the failure path', async () => {
@@ -260,10 +257,10 @@ describe('validatePlugin', () => {
 
 			const result = await validatePlugin(pluginPath);
 
-			expect(result.issueCounts).toEqual(countBySeverity(result.issues));
-			expect(result.issueCounts.errors).toBeGreaterThan(0);
+			expect(result.summary).toEqual(countBySeverity(result.issues));
+			expect(result.summary.errors).toBeGreaterThan(0);
 			// The kebab-case observation rides along at info severity.
-			expect(result.issueCounts.info).toBe(1);
+			expect(result.summary.info).toBe(1);
 		});
 	});
 

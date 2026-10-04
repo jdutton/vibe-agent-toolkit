@@ -2,14 +2,49 @@
  * Agent Skill builder - converts VAT agents to Agent Skills
  */
 
-import { existsSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { loadAgentManifest, type LoadedAgentManifest } from '@vibe-agent-toolkit/agent-config';
-import { copyDirectory, safePath } from '@vibe-agent-toolkit/utils';
+import { AGENT_MANIFEST_INVALID_CODE, loadAgentManifest, type LoadedAgentManifest } from '@vibe-agent-toolkit/agent-config';
+import { copyDirectory, isPathAbsentError, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
 import { packageSkill } from './skill-packager.js';
+
+/**
+ * The `VatError` code of a build with no output location: no `outputPath` was
+ * given and no `package.json` encloses the agent to put the default one in.
+ * The invocation's to fix — pass an output path, or build from inside a package.
+ */
+export const AGENT_PACKAGE_ROOT_MISSING_CODE = 'AGENT_PACKAGE_ROOT_MISSING';
+
+/**
+ * The `VatError` code of a file of the agent's own source — its system prompt,
+ * `scripts/`, `LICENSE.txt`, the `package.json` above it — that is there and
+ * the OS will not read or stat (EACCES, EISDIR, ELOOP). Only an absence is
+ * "not there"; this is the input's refusal, never a VAT defect and never a skip.
+ */
+export const AGENT_SOURCE_UNREADABLE_CODE = 'AGENT_SOURCE_UNREADABLE';
+
+/** The refusal for an agent source path the OS would not read. */
+function sourceUnreadable(target: string, error: unknown): VatError {
+  const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
+  return new VatError(AGENT_SOURCE_UNREADABLE_CODE, `Agent source cannot be read (${code}): ${target}`, { cause: error });
+}
+
+/**
+ * Whether `target` resolves to something (`stat`, so a dangling link is
+ * absent). Anything the OS says other than absence is {@link sourceUnreadable}.
+ */
+function sourcePresent(target: string): boolean {
+  try {
+    statSync(target);
+    return true;
+  } catch (error) {
+    if (isPathAbsentError(error)) return false;
+    throw sourceUnreadable(target, error);
+  }
+}
 
 export interface BuildOptions {
   /**
@@ -109,7 +144,7 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
   // an unreadable entry) fails the build rather than shipping a bundle that
   // silently lacks its scripts.
   const scriptsPath = safePath.join(agentDir, 'scripts');
-  if (existsSync(scriptsPath)) {
+  if (sourcePresent(scriptsPath)) {
     const outputScriptsPath = safePath.join(outputPath, 'scripts');
     await copyDirectory(scriptsPath, outputScriptsPath);
     files.push(outputScriptsPath);
@@ -117,7 +152,7 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
 
   // Copy LICENSE.txt if it exists — same rule: absence skips, a failed copy throws.
   const licensePath = safePath.join(agentDir, 'LICENSE.txt');
-  if (existsSync(licensePath)) {
+  if (sourcePresent(licensePath)) {
     const outputLicensePath = safePath.join(outputPath, 'LICENSE.txt');
     await fs.copyFile(licensePath, outputLicensePath);
     files.push(outputLicensePath);
@@ -169,13 +204,21 @@ async function generateSkillFile(
   outputPath: string
 ): Promise<string> {
   // Read system prompt
+  // Both refusals are the manifest's to fix — coded so a caller never reports
+  // them as a defect in VAT.
   const systemPromptRef = manifest.spec.prompts?.system?.$ref;
   if (!systemPromptRef) {
-    throw new Error('Agent must have a system prompt (spec.prompts.system.$ref)');
+    throw new VatError(AGENT_MANIFEST_INVALID_CODE, 'Agent must have a system prompt (spec.prompts.system.$ref)');
   }
 
   const fullSystemPromptPath = safePath.resolve(agentDir, systemPromptRef);
-  const systemPrompt = await fs.readFile(fullSystemPromptPath, 'utf-8');
+  let systemPrompt: string;
+  try {
+    systemPrompt = await fs.readFile(fullSystemPromptPath, 'utf-8');
+  } catch (error) {
+    if (!isPathAbsentError(error)) throw sourceUnreadable(fullSystemPromptPath, error);
+    throw new VatError(AGENT_MANIFEST_INVALID_CODE, `spec.prompts.system.$ref names ${systemPromptRef}, which does not exist.`, { cause: error });
+  }
 
   // Build SKILL.md with frontmatter
   const frontmatter = `---
@@ -626,14 +669,15 @@ function findAgentPackageRoot(manifestPath: string): string {
   // Walk up until we find a package.json or hit the filesystem root
   while (currentDir !== path.dirname(currentDir)) {
     const packageJsonPath = safePath.join(currentDir, 'package.json');
-    if (existsSync(packageJsonPath)) {
+    if (sourcePresent(packageJsonPath)) {
       return currentDir;
     }
     currentDir = path.dirname(currentDir);
   }
 
-  throw new Error(
+  throw new VatError(
+    AGENT_PACKAGE_ROOT_MISSING_CODE,
     `Could not find package.json for agent at ${manifestPath}. ` +
-      `Agent must be within an npm package to build bundles.`
+      `Agent must be within an npm package to build bundles, or pass an output path.`
   );
 }

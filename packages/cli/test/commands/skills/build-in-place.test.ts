@@ -13,20 +13,20 @@ import type * as agentSkills from '@vibe-agent-toolkit/agent-skills';
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import * as yaml from 'yaml';
 
+import { type SKILLS_BUILD_REPORT_SCHEMA } from '../../../src/commands/skills/build-schema.js';
 import {
-  buildBuildDocument,
   formatBuiltSuccessLine,
   inPlaceSkillRefusal,
   logInPlaceSkills,
-  outputBuildYaml,
   partitionInPlaceSkills,
   runSkillsBuildPhase,
+  skillsBuildWork,
   type BuildSkillSpec,
 } from '../../../src/commands/skills/build.js';
 import type { DiscoveredSkill } from '../../../src/commands/skills/command-helpers.js';
 import { fakePluginLocalIndex } from '../../helpers/plugin-local-fixture.js';
+import { publishedPhase } from '../../helpers/published-phase.js';
 import { recordingLogger } from '../../test-doubles.js';
 
 const harness = vi.hoisted(() => ({
@@ -59,12 +59,13 @@ vi.mock('../../../src/utils/project-root-policy.js', async (importOriginal) => (
 }));
 vi.mock('../../../src/commands/skills/command-helpers.js', async (importOriginal) => {
   const { recordingLogger: recorder } = await import('../../test-doubles.js');
+  const { safePath: paths } = await import('@vibe-agent-toolkit/utils');
   return {
     ...(await importOriginal<object>()),
     setupCommandContext: () => {
       const { logger, lines } = recorder();
       harness.lines = lines;
-      return { logger, cwd: '/project', startTime: Date.now() };
+      return { logger, cwd: paths.resolve('/project'), startTime: Date.now() };
     },
   };
 });
@@ -121,21 +122,6 @@ function inPlaceLines(count: number): { names: string[]; lines: string[] } {
   const { logger, lines } = recordingLogger();
   logInPlaceSkills(specs(names), logger);
   return { names, lines };
-}
-
-/** Capture everything `fn` writes to stdout. */
-async function captureStdout(fn: () => unknown): Promise<string> {
-  const chunks: string[] = [];
-  const spy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
-    chunks.push(String(chunk));
-    return true;
-  });
-  try {
-    await fn();
-  } finally {
-    spy.mockRestore();
-  }
-  return chunks.join('');
 }
 
 describe('partitionInPlaceSkills', () => {
@@ -220,7 +206,7 @@ describe('inPlaceSkillRefusal — --skill on an in-place skill', () => {
   });
 });
 
-describe('the published build report carries the set-aside counts', () => {
+describe('the published build report carries the set-aside names', () => {
   const run = { results: [], failures: [], runIssues: [], skillsWithErrors: [], validationFailures: [], outputCommitted: true };
 
   it('formats the success line with each set-aside tail only when there is one', () => {
@@ -234,39 +220,38 @@ describe('the published build report carries the set-aside counts', () => {
     );
   });
 
-  it('publishes skillsInPlace and skillsPluginOnly in the header and their names in the body', async () => {
+  it('publishes skillsInPlace and skillsPluginOnly by name, and examines them beside the built ones', () => {
     const names = ['a', 'b'];
-    const document = buildBuildDocument(run, { inPlace: names, pluginOnly: [PLUGIN_LOCAL] }, 5);
-
-    expect(document).toMatchObject({
-      skillsInPlace: 2,
-      skillsPluginOnly: 1,
-      skillsInPlaceNames: names,
-      skillsPluginOnlyNames: [PLUGIN_LOCAL],
+    const work = skillsBuildWork({
+      cwd: safePath.resolve('/project'),
+      skills: [skill('built')],
+      setAside: { inPlace: names, pluginOnly: [PLUGIN_LOCAL] },
+      dryRun: false,
+      run,
+      setAsideIssues: [],
     });
-    expect(document['skillsInPlaceNames']).not.toBe(names);
 
-    const stdout = await captureStdout(() => outputBuildYaml(document));
-    const header = stdout.split('\n').slice(0, 5).join('\n');
-    expect(header).toContain('skillsInPlace: 2');
-    expect(header).toContain('skillsPluginOnly: 1');
-    expect(yaml.parse(stdout)).toMatchObject({ skillsInPlaceNames: names, skillsPluginOnlyNames: [PLUGIN_LOCAL] });
+    expect(work.examined).toBe(4);
+    expect(work.data).toMatchObject({ skillsInPlace: names, skillsPluginOnly: [PLUGIN_LOCAL] });
+    expect(work.data.skillsInPlace).not.toBe(names);
+    expect(work.data.skills).toEqual([{ name: 'built', source: 'skills/built/SKILL.md', output: 'dist/skills/built', status: 'ok' }]);
   });
 });
 
-/** Dry-run the stubbed project; return the exit code and the parsed stdout document. */
-async function dryRunDocument(): Promise<{ exitCode: number | undefined; document: unknown }> {
-  let outcome: Awaited<ReturnType<typeof runSkillsBuildPhase>> | undefined;
-  const stdout = await captureStdout(async () => {
-    outcome = await runSkillsBuildPhase(undefined, { dryRun: true });
-  });
-  return { exitCode: outcome?.exitCode, document: yaml.parse(stdout) };
+/** Dry-run the stubbed project; return the exit code and the published report. */
+/** The document `vat skills build` publishes, as its registry schema types it. */
+type SkillsBuildReport = ReturnType<typeof SKILLS_BUILD_REPORT_SCHEMA.parse>;
+
+async function dryRunDocument(): Promise<{ exitCode: number; document: SkillsBuildReport }> {
+  const { exitCode, document } = publishedPhase<SkillsBuildReport>('skills build', await runSkillsBuildPhase(undefined, { dryRun: true }));
+  return { exitCode, document };
 }
 
-/** `--skill <name>` against the stubbed project; return the exit code and the refusal text. */
-async function refusalFor(name: string): Promise<{ exitCode: number; error: string }> {
-  const outcome = await runSkillsBuildPhase(undefined, { skill: name });
-  return { exitCode: outcome.exitCode, error: String((outcome.document as { error: string }).error) };
+/** `--skill <name>` against the stubbed project; return the exit code and the one finding it published. */
+async function refusalFor(name: string): Promise<{ exitCode: number; code: string; error: string }> {
+  const { exitCode, document: report } = publishedPhase<SkillsBuildReport>('skills build', await runSkillsBuildPhase(undefined, { skill: name }));
+  expect(report.findings).toHaveLength(1);
+  return { exitCode, code: String(report.findings[0]?.code), error: String(report.findings[0]?.message) };
 }
 
 /** Whether the phase logged the one info line `Skipping <count> <label>…: <names>`. */
@@ -283,20 +268,35 @@ describe('runSkillsBuildPhase — in-place wiring', () => {
     const { exitCode, document } = await dryRunDocument();
 
     expect(exitCode).toBe(0);
-    expect(document).toMatchObject({ skillsFound: 1, skillsInPlace: 1, skillsInPlaceNames: [KEPT] });
+    expect(document).toMatchObject({ status: 'ok', examined: 2 });
+    expect(document.data).toMatchObject({ skillsInPlace: [KEPT] });
+    expect(document.data?.skills.map((row) => row.name)).toEqual(['built']);
     expect(harness.lines).toContain('Found 1 skill(s) to build');
     expect(loggedSetAside(1, 'in-place skill(s)', KEPT)).toBe(true);
   });
 
-  it('--skill naming an in-place skill exits 1 with the refusal as the document', async () => {
+  it('a dry run publishes validated: false', async () => {
     givenProject();
 
-    const outcome = await runSkillsBuildPhase(undefined, { skill: KEPT });
+    const { document } = await dryRunDocument();
 
-    expect(outcome.exitCode).toBe(1);
-    expect(outcome.failed).toBe(true);
-    expect(outcome.document).toMatchObject({ status: 'error' });
-    expect(String((outcome.document as { error: string }).error)).toContain('skills.config.kept.publish is false');
+    expect(document.data).toMatchObject({ dryRun: true, validated: false, skillsBuilt: 0, outputCommitted: false });
+  });
+
+  it('building an in-place skill by name is a findings report, exit 1', async () => {
+    givenProject();
+
+    const { exitCode, document: report } = publishedPhase<SkillsBuildReport>('skills build', await runSkillsBuildPhase(undefined, { skill: KEPT }));
+
+    expect(exitCode).toBe(1);
+    expect(report.status).toBe('findings');
+    expect(report.status).toBe('findings');
+    expect(report.examined).toBe(1);
+    expect(report.findings.map((finding) => [finding.code, finding.severity, finding.location])).toEqual([
+      ['SKILL_BUILD_TARGET_NOT_BUILDABLE', 'error', 'skills/kept/SKILL.md'],
+    ]);
+    expect(report.findings[0]?.message).toContain('skills.config.kept.publish is false');
+    expect(report.data).toMatchObject({ skillsInPlace: [KEPT], skills: [], validated: false });
   });
 
   it('a dry run counts the plugin-local skill as plugin-only, never as in-place', async () => {
@@ -305,13 +305,7 @@ describe('runSkillsBuildPhase — in-place wiring', () => {
     const { exitCode, document } = await dryRunDocument();
 
     expect(exitCode).toBe(0);
-    expect(document).toMatchObject({
-      skillsFound: 0,
-      skillsInPlace: 1,
-      skillsInPlaceNames: [KEPT],
-      skillsPluginOnly: 1,
-      skillsPluginOnlyNames: [PLUGIN_LOCAL],
-    });
+    expect(document.data).toMatchObject({ skills: [], skillsInPlace: [KEPT], skillsPluginOnly: [PLUGIN_LOCAL] });
     expect(loggedSetAside(1, 'in-place skill(s)', KEPT)).toBe(true);
     expect(harness.lines.filter((line) => line.includes(IN_PLACE) && line.includes(PLUGIN_LOCAL))).toEqual([]);
     expect(loggedSetAside(1, 'plugin-local skill(s)', PLUGIN_LOCAL)).toBe(true);
@@ -322,15 +316,16 @@ describe('runSkillsBuildPhase — in-place wiring', () => {
 
     const { document } = await dryRunDocument();
 
-    expect(document).toMatchObject({ skillsInPlace: 1, skillsPluginOnly: 1 });
+    expect(document.data).toMatchObject({ skillsInPlace: [PLUGIN_LOCAL], skillsPluginOnly: [PLUGIN_LOCAL] });
   });
 
   it('--skill naming a plugin-local publish:false skill exits 1 without calling it in-place', async () => {
     givenPluginProject();
 
-    const { exitCode, error } = await refusalFor(PLUGIN_LOCAL);
+    const { exitCode, code, error } = await refusalFor(PLUGIN_LOCAL);
 
     expect(exitCode).toBe(1);
+    expect(code).toBe('SKILL_BUILD_TARGET_NOT_BUILDABLE');
     expect(error).not.toContain(IN_PLACE);
     expect(error).toContain('plugin-local');
     expect(error).toContain('claude');

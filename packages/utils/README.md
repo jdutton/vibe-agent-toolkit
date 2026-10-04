@@ -246,6 +246,10 @@ Never dispatch on `error.message` — the repo's ESLint config refuses `.message
   default — a shorter list nothing can tell from a complete one is the failure this option exists
   to prevent, so the caller states which answer is honest for its lane, and an omitted policy is
   refused up front by name.
+- `rootListingRefusal(error, dir)` - for a caller that asks whether a scan ROOT exists before
+  walking it: the `DirectoryRefusal` a failed `stat`/`readdir` of `dir` stands for, or `undefined`
+  when it is simply absent (`ENOENT`/`ENOTDIR`) — never `existsSync`, which calls an untraversable
+  parent absent.
 
 Glob *pattern inspection* is a separate entry, `./glob`, and stays that way: `./glob` is dependency-free and reaches only `node:path`, whereas crawling reaches the filesystem, `git`, and `picomatch`.
 

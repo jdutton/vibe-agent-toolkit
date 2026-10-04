@@ -7,6 +7,10 @@
  * - LICENSE file must exist (error)
  * - README.md should exist (warning)
  * - CHANGELOG.md should exist (warning)
+ *
+ * Publishes the `Report<T>` envelope (`validate-schema.ts`): every finding flat
+ * with its `location` relative to `data.root`, one `data.plugins` row per
+ * declared local plugin walked.
  */
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
@@ -18,8 +22,10 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import { validatePlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import {
-  calculateValidationStatus,
-  countBySeverity,
+  buildReport,
+  summarizeIssues,
+  toFindings,
+  type Report,
   type Severity,
   type ValidationConfig,
   type ValidationIssue,
@@ -27,19 +33,24 @@ import {
 import { direntKindFollowingSync, findProjectRoot, isPathAbsentError, issueLocation, isVatError, normalizePath, PathEscapesRootError, relativeEscapesRoot, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
-import { formatDuration, reportCommandError } from '../../../utils/command-error.js';
+import { refusalCodeOf } from '../../../utils/command-refusal.js';
 import { loadConfig } from '../../../utils/config-loader.js';
-import { summarizeFindings, type FindingCountSummary } from '../../../utils/issue-rendering.js';
+import { endWithReport, NOTHING_FINISHED, publishedReport, refusalReport } from '../../../utils/document-writer.js';
 import { resolveIssueSeverity } from '../../../utils/issue-severity.js';
-import { createLogger } from '../../../utils/logger.js';
-import { writeYamlOutput } from '../../../utils/output.js';
-import { relativizePathEntries } from '../../../utils/relativize-paths.js';
-import { runIntegrityFinding } from '../../../utils/run-integrity.js';
-import { finishCommand, type PhaseOutcome } from '../../phase-utils.js';
+import { createLogger, type Logger } from '../../../utils/logger.js';
+import { assertReadableDirectoryArgument } from '../../../utils/project-root-policy.js';
+import { relativizePath } from '../../../utils/relativize-paths.js';
+import { RUN_INTEGRITY_CODE, runIntegrityFinding, warnRunIntegrity } from '../../../utils/run-integrity.js';
+import type { PhaseOutcome } from '../../phase-utils.js';
+
+import type { MarketplaceValidateData, MarketplaceValidateReport } from './validate-schema.js';
+
+/** `vat claude marketplace validate` offers no `--strict`: warnings never fail it. */
+const GATE = { strict: false } as const;
 
 interface MarketplaceValidateOptions {
   debug?: boolean;
-  /** Show all inspected assets, including those without issues (per-issue detail). */
+  /** Print every finding in full on stderr. The published document is the same either way. */
   verbose?: boolean;
 }
 
@@ -159,6 +170,13 @@ export interface LocalPluginSource {
 /** One declared local plugin the run validated, keyed by the entry it satisfies. */
 export interface LocalPluginResult extends LocalPluginSource {
   result: ValidationResult;
+  /**
+   * `false` when the plugin's manifest was refused (it resolves outside the
+   * marketplace root) and never opened. REQUIRED: the library `status` of an
+   * unread plugin is `ok` over an empty issue list, so without this bit the
+   * row would read as a clean plugin — see {@link validateContainedPlugin}.
+   */
+  manifestRead: boolean;
 }
 
 /**
@@ -259,11 +277,10 @@ function containedPluginDir(
  * `validation` is the governing project's severity map (see
  * {@link resolveProjectValidationConfig}). It is applied to each plugin result
  * HERE rather than to the flat list at the end because the emitted document
- * publishes both: `issues` and `plugins[].issues` are two views of the same
- * findings, plus `plugins[].status`. Resolving once, at the producer, is what
- * keeps them from disagreeing — a suppressed warning still listed under
- * `plugins[]`, or a plugin `status: warning` above an issue list that no longer
- * contains a warning.
+ * publishes both: the envelope's `findings` and each `data.plugins[]` row's
+ * `status` + `summary` tally the same findings. Resolving once, at the
+ * producer, is what keeps them from disagreeing — a row counting a warning
+ * the envelope suppressed, or a row `findings` over nothing published.
  */
 async function validateDeclaredPlugins(
   marketplacePath: string,
@@ -274,7 +291,7 @@ async function validateDeclaredPlugins(
   const issues: ValidationIssue[] = [];
   // Keyed by REAL path: one directory is validated once however many entries
   // name it, and the same key is what `undeclaredPluginDirs` compares against.
-  const validatedByDir = new Map<string, ValidationResult>();
+  const validatedByDir = new Map<string, ContainedPlugin>();
   const realRoot = toForwardSlash(normalizePath(marketplacePath));
   const boundary = new WalkBoundary(marketplacePath, realRoot);
 
@@ -291,14 +308,14 @@ async function validateDeclaredPlugins(
     // inspected once and its findings enter `issues` once.
     const seen = validatedByDir.get(dir.real);
     if (seen !== undefined) {
-      pluginResults.push({ ...entry, result: seen });
+      pluginResults.push({ ...entry, ...seen });
       continue;
     }
 
-    const result = await validateContainedPlugin(dir.lexical, marketplacePath, boundary, validation);
-    validatedByDir.set(dir.real, result);
-    pluginResults.push({ ...entry, result });
-    issues.push(...result.issues);
+    const contained = await validateContainedPlugin(dir.lexical, marketplacePath, boundary, validation);
+    validatedByDir.set(dir.real, contained);
+    pluginResults.push({ ...entry, ...contained });
+    issues.push(...contained.result.issues);
 
     issues.push(...await validatePluginSkills(dir.lexical, marketplacePath, boundary, validation));
   }
@@ -316,26 +333,29 @@ async function validateDeclaredPlugins(
  * of the root, in which case the manifest is refused by name and the plugin's
  * row says so instead of carrying findings about a file the run did not read.
  *
- * The row keeps `status: 'error'` with no issues: the error is the refusal
- * the builder publishes once for the run, and a `success` row for a plugin
- * whose manifest was never opened would be the reassuring lie this whole
- * boundary exists to refuse.
+ * The row is published with `manifestRead: false` and nothing counted: the
+ * error is the refusal the builder publishes once for the run, and a bare
+ * `ok` row for a plugin whose manifest was never opened would be the
+ * reassuring lie this whole boundary exists to refuse — `manifestRead` is
+ * what tells the two apart.
  */
 async function validateContainedPlugin(
   pluginDir: string,
   marketplacePath: string,
   boundary: WalkBoundary,
   validation: ValidationConfig | undefined,
-): Promise<ValidationResult> {
+): Promise<ContainedPlugin> {
   const manifestPath = safePath.join(pluginDir, '.claude-plugin', 'plugin.json');
   if (existsSync(manifestPath) && !boundary.contains(manifestPath)) {
     return {
-      path: pluginDir,
-      type: 'claude-plugin',
-      status: 'error',
-      summary: `Plugin manifest not read: ${issueLocation(manifestPath, marketplacePath)} resolves outside the marketplace root`,
-      issues: [],
-      issueCounts: countBySeverity([]),
+      manifestRead: false,
+      result: {
+        path: pluginDir,
+        type: 'claude-plugin',
+        ...summarizeIssues([]),
+        description: `Plugin manifest not read: ${issueLocation(manifestPath, marketplacePath)} resolves outside the marketplace root`,
+        issues: [],
+      },
     };
   }
 
@@ -347,12 +367,17 @@ async function validateContainedPlugin(
   const rawResult = await validatePlugin(pluginDir, { strict: true, locationRoot: marketplacePath });
   const pluginIssues = resolveIssueSeverity(rawResult.issues, validation);
   return {
-    ...rawResult,
-    issues: pluginIssues,
-    status: calculateValidationStatus(pluginIssues),
-    issueCounts: countBySeverity(pluginIssues),
+    manifestRead: true,
+    result: {
+      ...rawResult,
+      issues: pluginIssues,
+      ...summarizeIssues(pluginIssues),
+    },
   };
 }
+
+/** One contained plugin directory's validation, and whether its manifest was opened at all. */
+type ContainedPlugin = Pick<LocalPluginResult, 'result' | 'manifestRead'>;
 
 /**
  * Directories under `<root>/plugins/` that no declared source resolved to,
@@ -464,8 +489,8 @@ export interface MarketplaceFindings {
  *
  * Severity resolution is likewise INSIDE this function rather than a step the
  * command adds after it. Its absence is the whole defect this addressed, and a
- * command-body step is one a caller can forget: with it here, the flat `issues`
- * list and `plugins[].issues` derive from a single resolved set, and the
+ * command-body step is one a caller can forget: with it here, the envelope's
+ * `findings` and the `data.plugins[]` tallies derive from a single resolved set, and the
  * smallest testable entry point is the one that includes the filter. The run's
  * `status` — and with it the exit code — is derived one step later, in
  * {@link buildMarketplaceValidateReport}, from the issues the document actually
@@ -492,9 +517,8 @@ export async function collectMarketplaceFindings(
   // These issues are deliberately NOT severity-resolved: an override governs
   // findings ABOUT a marketplace that could be read, not the failure to read
   // one. Resolving them would let `MARKETPLACE_MISSING_MANIFEST: ignore` empty
-  // the list and report `status: success` beside a summary saying the manifest
-  // is missing — a run that never happened claiming it passed.
-  if (marketplaceResult.status === 'error') {
+  // the list and report `status: ok` beside a manifest that is missing — a run that never happened claiming it passed.
+  if (marketplaceResult.summary.errors > 0) {
     return {
       marketplaceResult,
       pluginResults: [],
@@ -554,78 +578,38 @@ export interface MarketplaceValidateReportInput {
    */
   refused: readonly string[];
   issues: readonly ValidationIssue[];
-  /**
-   * The manifest's own summary, present iff the run bailed on the manifest. A
-   * bailed run reports WHY it stopped; a completed run reports what it found,
-   * and the builder writes that counts line itself.
-   */
-  bailSummary?: string;
-  duration: string;
-  /**
-   * Publish the flat per-issue list instead of the per-location summary.
-   *
-   * Picks the UNIT of the `issues` listing, not the content: everything else in
-   * the document is a total about the run and is identical in both modes.
-   * Optional, and absent means the summary — a caller with no opinion gets the
-   * readable form rather than the corpus-scale one.
-   */
-  verbose?: boolean;
+  durationMs: number;
 }
 
 /**
- * Group key for findings that carry no `location` at all.
+ * The plugin entries the run examined: every REMOTE entry — the manifest's
+ * schema is its whole validation, and it passed — plus every declared local
+ * plugin the walk reached. A local entry whose source did not resolve is not
+ * counted; the builder's run-integrity finding names it.
  *
- * A symbol rather than a sentinel string, and it is deliberately NOT published
- * as one: every `location` in this document must satisfy the anchor contract —
- * `join(root, location)` names a real file — so a row keyed `(no location)`
- * would be a path that resolves to nothing, which is the coordinate lie `root`
- * exists to prevent. The row is published with `unlocated: true` and no
- * `location` instead. Dropping such findings was the other option and is the
- * worse one: grouping by `location` is exactly the operation that silently
- * loses them, and a shorter summary is the reassuring failure.
+ * Remote entries count because an all-remote marketplace is a real verdict
+ * about a manifest whose every entry validated, not a run over nothing.
  */
-const UNLOCATED = Symbol('unlocated');
+function pluginEntriesExamined(
+  marketplace: ValidationResult['metadata'],
+  pluginResults: readonly LocalPluginResult[],
+): number {
+  const declared = marketplace?.pluginEntries ?? 0;
+  const local = marketplace?.localPluginSources?.length ?? 0;
+  return declared - local + pluginResults.length;
+}
 
-/** One inspected asset's DEFAULT row: where, how many, of what code. */
-export type LocationIssueSummary = FindingCountSummary & {
-  /** The asset, relative to the report's `root`. Absent iff `unlocated`. */
-  location?: string;
-  /** Set instead of `location` when the findings named no file at all. */
-  unlocated?: true;
-};
-
-/**
- * Collapse a flat finding list onto one counts-only row per `location`.
- *
- * `location` is this command's per-asset unit: `plugins/alpha/.claude-plugin/
- * plugin.json`, `plugins/beta/skills/x/SKILL.md`. Rows come out in first-seen
- * order, and a location with no findings has no row — there is nothing to
- * filter here, because a location only exists in this listing by having emitted
- * something.
- *
- * Every value is passed through un-rebased: `location` is already relative to
- * the report's stated `root`, and `relative()` is not idempotent (see
- * {@link MarketplaceValidateReportInput.root}).
- */
-export function summarizeIssuesByLocation(
-  issues: readonly ValidationIssue[],
-): LocationIssueSummary[] {
-  const byLocation = new Map<string | symbol, ValidationIssue[]>();
-  for (const issue of issues) {
-    const key = issue.location ?? UNLOCATED;
-    const existing = byLocation.get(key);
-    if (existing) {
-      existing.push(issue);
-    } else {
-      byLocation.set(key, [issue]);
-    }
-  }
-
-  return [...byLocation.entries()].map(([key, locationIssues]) => {
-    const { codes, ...counts } = summarizeFindings(locationIssues);
-    const anchor = typeof key === 'string' ? { location: key } : { unlocated: true as const };
-    return { ...anchor, ...counts, codes };
-  });
+/** The manifest's facts the document publishes, or `null` when it did not validate. */
+function marketplaceData(marketplace: ValidationResult['metadata']): MarketplaceValidateData['marketplace'] {
+  if (marketplace === undefined) return null;
+  const { name, description, version, pluginEntries, localPluginSources } = marketplace;
+  return {
+    ...(name === undefined ? {} : { name }),
+    ...(description === undefined ? {} : { description }),
+    ...(version === undefined ? {} : { version }),
+    ...(pluginEntries === undefined ? {} : { pluginEntries }),
+    ...(localPluginSources === undefined ? {} : { localPluginSources }),
+  };
 }
 
 /**
@@ -636,6 +620,12 @@ export function summarizeIssuesByLocation(
  * builder serves both exits (manifest-missing bail and full run) so the
  * document has a single shape either way.
  *
+ * `status` and `summary` are derived by `buildReport` from the findings — the
+ * run-integrity refusal below included — so the status, the counts and the
+ * exit code cannot disagree. A plugin row's `summary` is the tally of the
+ * findings its own validator published; every finding itself is on the
+ * envelope, once.
+ *
  * Being pure is also the limit of what it can guarantee: it re-bases `path`,
  * and passes `issues` through verbatim. The single-coordinate-system property
  * is therefore only as true as its inputs — see `root` above — and is enforced
@@ -644,60 +634,40 @@ export function summarizeIssuesByLocation(
 export function buildMarketplaceValidateReport(
   input: MarketplaceValidateReportInput,
 ): MarketplaceValidateReport {
-  const { root, marketplace, pluginResults, undeclared, refused, bailSummary, duration, verbose } = input;
+  const { root, marketplace, pluginResults, undeclared, refused } = input;
 
-  const issues = [
+  const findings = toFindings([
     ...unfinishedRunFinding(marketplace, pluginResults, refused),
     ...input.issues,
-  ];
-  const issueCounts = countBySeverity(issues);
+  ]);
 
-  const plugins = pluginResults.map(({ name, source, result }) => ({
+  const plugins = pluginResults.map(({ name, source, result, manifestRead }) => ({
     name,
     source,
-    path: result.path,
-    status: result.status,
-    metadata: result.metadata,
-    issues: result.issues,
+    path: relativizePath(result.path, root),
+    manifestRead,
+    ...summarizeIssues(toFindings(result.issues)),
   }));
 
-  return {
-    // Derived from the issues THIS document publishes — the refusal above
-    // included — so the status, the counts and the listing cannot disagree, and
-    // the exit code the command takes from it cannot either.
-    status: calculateValidationStatus(issues),
-    // Stated once, and the only absolute path in the document.
-    root,
-    ...(marketplace ? { marketplace } : {}),
-    // The numerator. Beside `marketplace.localPluginSources` it says whether
-    // every declared source resolved; without it "three local plugins, all
-    // clean" and "three local plugins, none looked at" are the same document.
-    pluginsValidated: pluginResults.length,
-    plugins: relativizePathEntries(plugins, root),
-    // Named, not graded — see `validateDeclaredPlugins`. Always present, so an
-    // empty list is a statement that `plugins/` was looked at.
-    undeclared: [...undeclared],
-    // Paths the walk would not open (real path outside the root) — see
-    // `WalkBoundary`. Always present: an empty list says every path the run
-    // read was under `root`, which is the containment claim the help text makes.
-    refused: [...refused],
-    // One row per inspected asset by default; the flat per-issue list under
-    // `--verbose`. Either way every `location` stays relative to `root` above.
-    issues: verbose === true ? issues : summarizeIssuesByLocation(issues),
-    // Counts ride beside the status: `status` names only the worst ACTIONABLE
-    // severity, so an info-only run is `success` and the info would otherwise
-    // be unreported.
-    issueCounts,
-    summary: bailSummary
-      ?? `${issueCounts.errors} error(s), ${issueCounts.warnings} warning(s), ${issueCounts.info} info`,
-    duration,
-  };
-}
-
-/** The document `vat claude marketplace validate` publishes. */
-export interface MarketplaceValidateReport extends Record<string, unknown> {
-  status: ReturnType<typeof calculateValidationStatus>;
-  pluginsValidated: number;
+  return buildReport({
+    examined: pluginEntriesExamined(marketplace, pluginResults),
+    findings,
+    data: {
+      // Stated once, and the only absolute path in the document.
+      root,
+      marketplace: marketplaceData(marketplace),
+      plugins,
+      // Named, not graded — see `validateDeclaredPlugins`. Always present, so an
+      // empty list is a statement that `plugins/` was looked at.
+      undeclared: [...undeclared],
+      // Paths the walk would not open (real path outside the root) — see
+      // `WalkBoundary`. Always present: an empty list says every path the run
+      // read was under `root`, which is the containment claim the help text makes.
+      refused: [...refused],
+    },
+    gate: GATE,
+    durationMs: input.durationMs,
+  });
 }
 
 /**
@@ -781,15 +751,25 @@ function unfinishedRunFinding(
   return [runIntegrityFinding(parts.join(' '))];
 }
 
+/** The human half, on stderr: every error in full, and the rest under `--verbose`. */
+function logFindings(report: Report<unknown>, verbose: boolean, logger: Logger): void {
+  for (const finding of report.findings) {
+    if (!verbose && finding.severity !== 'error' && finding.code !== RUN_INTEGRITY_CODE) continue;
+    const anchor = finding.location === undefined ? '' : `${finding.location}: `;
+    logger.error(`  ${anchor}${finding.severity}: ${finding.message} [${finding.code}]`);
+  }
+  const { errors, warnings, info } = report.summary;
+  logger.info(`${errors} error(s), ${warnings} warning(s), ${info} info`);
+}
+
 /**
- * Validate a marketplace and hand back its document and exit code, printing
- * nothing on stdout.
+ * Validate a marketplace and hand back its report, printing nothing on stdout.
  *
  * The phase entry point for `vat verify`, which runs this once per configured
- * marketplace IN ITS OWN PROCESS. Progress and findings still go to stderr as
- * they always did; only the decision of where the document lands moves to the
- * caller — stdout for a command-line run, `phases[].report` for an orchestrated
- * one.
+ * marketplace, and the command's own. The report is the one BEFORE the
+ * writer's run-integrity pass: inside an orchestrator, zero examined is judged
+ * on the whole run, not on this phase. A refusal is the envelope's error
+ * branch, its message already on stderr.
  */
 export async function runMarketplaceValidatePhase(
   targetPath: string | undefined,
@@ -805,42 +785,54 @@ export async function runMarketplaceValidatePhase(
     const { marketplaceResult, pluginResults, undeclared, refused, issues } =
       await collectMarketplaceFindings(marketplacePath, logger);
 
-    // A bailed run reports WHY it stopped; a completed run reports what it
-    // found. Both emit through the one builder, so the document has a single
-    // shape either way.
-    const bailed = marketplaceResult.status === 'error';
-    const document = buildMarketplaceValidateReport({
+    const report = buildMarketplaceValidateReport({
       root: marketplacePath,
       marketplace: marketplaceResult.metadata,
       pluginResults,
       undeclared,
       refused,
       issues,
-      ...(bailed ? { bailSummary: marketplaceResult.summary } : {}),
-      duration: formatDuration(Date.now() - startTime),
-      verbose: options.verbose === true,
+      durationMs: Date.now() - startTime,
     });
-
-    // From the DOCUMENT, so the exit code and the published status are one
-    // derivation — the run-integrity refusal lands in the builder, and an exit
-    // code computed upstream of it would answer 0 over `status: error`.
-    return { document, exitCode: document.status === 'error' ? 1 : 0 };
+    logFindings(report, options.verbose === true, logger);
+    return { report };
   } catch (error) {
-    return {
-      document: reportCommandError(error, logger, startTime, 'MarketplaceValidate'),
-      exitCode: 2,
-      failed: true,
-    };
+    return { report: refusedReport(error) };
   }
 }
 
+/** The error branch for a run that could not do its job — classified by code, never by message. */
+function refusedReport(error: unknown): Report<unknown> {
+  return refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED);
+}
+
+/**
+ * The command lane: the operator's `[path]` is judged before anything runs.
+ *
+ * A path naming nothing is the invocation's mistake (`USAGE_INVALID`); one the
+ * OS will not list is the input's (`INPUT_UNREADABLE`). Neither is a finding
+ * about a marketplace. Only the TYPED argument is judged: `vat verify` hands
+ * the phase a path it computed (`dist/.claude/plugins/marketplaces/<name>`),
+ * where an absent directory is an unbuilt marketplace — a finding about the
+ * project (`MARKETPLACE_MISSING_MANIFEST`), not an invocation mistake.
+ */
 async function marketplaceValidateCommand(
   targetPath: string | undefined,
   options: MarketplaceValidateOptions,
 ): Promise<void> {
-  // `undefined`: this command offers no `--format`, so its failure envelope is
-  // YAML like its report.
-  finishCommand(await runMarketplaceValidatePhase(targetPath, options), writeYamlOutput, undefined);
+  let report: Report<unknown>;
+  try {
+    const marketplacePath = assertReadableDirectoryArgument(targetPath ?? '.');
+    ({ report } = await runMarketplaceValidatePhase(marketplacePath, options));
+  } catch (error) {
+    // Only the argument check throws here: the phase returns its own refusals.
+    report = refusedReport(error);
+  }
+  const published = publishedReport('claude marketplace validate', report);
+  // The writer's own zero-examined refusal, warned in the lane that publishes it.
+  if (published !== report) warnRunIntegrity(published);
+  // This command offers no `--format`: its document is YAML.
+  endWithReport('claude marketplace validate', published, 'yaml');
 }
 
 export function createMarketplaceValidateCommand(): Command {
@@ -850,7 +842,7 @@ export function createMarketplaceValidateCommand(): Command {
     .description('Validate a marketplace directory for publishing')
     .argument('[path]', 'Path to marketplace directory (default: current directory)')
     .option('-d, --debug', 'Enable debug logging')
-    .option('-v, --verbose', 'Show all scanned resources, including those without issues')
+    .option('-v, --verbose', 'Print every finding in full on stderr, not only the errors')
     .action(marketplaceValidateCommand)
     .addHelpText('after', `
 Description:
@@ -859,40 +851,47 @@ Description:
 
   Plugin versions are required (error, not warning) in strict marketplace validation.
 
-Output (YAML on stdout):
-  root: the marketplace directory — every location below is relative to it
-  status, issueCounts, summary, duration, marketplace, plugins
-  pluginsValidated: how many of the manifest's relative-path sources
-          (marketplace.localPluginSources) resolved to a directory and were
-          validated — each plugins[] row names the entry it satisfies. A
-          declared source that does not resolve is reported as
-          RESOURCE_CHECK_BROKEN at error (exit 1), naming it, rather than as
-          a pass — a plugin the manifest ships and this run never saw is not
-          a verdict. A source is never followed outside the root: an absolute
-          path or a ".." segment fails the manifest schema, and a symlink that
-          points out is refused like an unresolved source. Co-located
-          marketplaces (source: "./") are validated at the root. An
-          all-remote marketplace has nothing local and stays green.
-  undeclared: directories under plugins/ that no manifest entry names.
+Output (YAML on stdout — the report envelope):
+  status: ok | findings | error. findings means at least one finding was
+          published; error means the run did not finish (error.code says why).
+  examined: the plugin entries validated — every remote entry of
+          marketplace.json plus each declared local plugin the walk reached.
+  summary: the findings by severity.
+  findings[]: every finding, flat — {code, severity, message, location, …};
+          location is relative to data.root.
+  data.root: the marketplace directory — every path in the document is
+          relative to it.
+  data.marketplace: the manifest's name, version, pluginEntries and
+          localPluginSources; null when the manifest is missing or invalid.
+  data.plugins[]: one row per declared local plugin walked — {name, source,
+          path, manifestRead, status, summary}. A declared source that does
+          not resolve is reported as RESOURCE_CHECK_BROKEN at error (exit 1),
+          naming it, rather than as a pass — a plugin the manifest ships and
+          this run never saw is not a verdict. A source is never followed
+          outside the root: an absolute path or a ".." segment fails the
+          manifest schema, and a symlink that points out is refused like an
+          unresolved source. Co-located marketplaces (source: "./") are
+          validated at the root. An all-remote marketplace has nothing local
+          to walk; its entries still count as examined.
+  data.undeclared: directories under plugins/ that no manifest entry names.
           Listed only — they cannot be installed, so they are neither
           validated nor a failure.
-  refused: paths inside a validated plugin this run would not open because
-          they resolve outside the root (a skills/ dir, skill dir, SKILL.md
-          or plugin.json that is a symlink pointing out). Containment is by
-          real path at every depth, not only at the declared source; each is
-          named here and in the RESOURCE_CHECK_BROKEN finding (exit 1).
+  data.refused: paths inside a validated plugin this run would not open
+          because they resolve outside the root (a skills/ dir, skill dir,
+          SKILL.md or plugin.json that is a symlink pointing out). Containment
+          is by real path at every depth, not only at the declared source;
+          each is named here and in the RESOURCE_CHECK_BROKEN finding (exit 1).
 
-  issues: one row per inspected location, carrying only that location's counts
-          ({location, errors?, warnings?, info?, codes}). A zero bucket is
-          omitted, and a location with no findings has no row.
+  stderr prints every error in full; --verbose adds every warning and info.
+  The document is the same either way.
 
-  --verbose replaces those rows with the flat per-issue list (message, fix and
-  all). That form is for '> file' then grep, not for reading.
-
-Exit Codes:
-  0 - All validations passed (warnings allowed)
-  1 - Validation errors found
-  2 - System error (directory not found, etc.)
+Exit Codes (derived from the document):
+  0 - status ok, or findings with no error-severity finding
+  1 - status findings with at least one error-severity finding (including a
+      marketplace declaring no plugin entry: nothing was examined)
+  2 - status error: the run did not finish — USAGE_INVALID for a path that
+      does not exist or is not a directory, INPUT_UNREADABLE for one the OS
+      will not list
 
 Example:
   $ vat claude marketplace validate .         # Validate current directory

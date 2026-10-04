@@ -19,7 +19,7 @@ describe('Real agents integration', () => {
   });
 
   it('should validate agent-generator', async () => {
-    const result = await validateAgent(agentGeneratorPath);
+    const result = await validateAgent(agentGeneratorPath, { locationRoot: agentGeneratorPath });
 
     // May have warnings about missing resources, but schema should be valid
     expect(result.manifest.name).toBe('agent-generator');

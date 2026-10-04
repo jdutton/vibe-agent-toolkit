@@ -4,7 +4,6 @@
 # Claude Code through the archetype implementations. Those references are text
 # pointers, not bundled content.
 
-version: 1
 
 skills:
   include: ["resources/skills/SKILL.md"]

@@ -237,25 +237,23 @@ export function countBySeverity(issues: readonly Pick<ValidationIssue, 'severity
 }
 
 /**
- * The single answer to "issues → status": the worst ACTIONABLE severity.
- *
- * There were five implementations of this and three different answers for an
- * info-only set — `warning` here, `success` in `vat audit`, and in
- * `corpus/runner` a `statusFromCounts(errors, warnings)` whose signature could
- * not see info at all. Two lanes could therefore report different statuses for
- * the same artifact.
- *
- * Info-only resolves to `success` because an informational observation is not
- * something the consumer must act on. That is only defensible when the counts
- * ride alongside — pair every use of this with {@link countBySeverity}, or the
- * status becomes the silence it used to be.
+ * The ONE issues → status derivation, shared by every library result and
+ * `buildReport`. LITERAL: an info-only set is `findings`; how much is
+ * actionable is {@link countBySeverity}'s `summary`. `ignore` is never
+ * published, so a suppressed-only set is `ok`, agreeing with its zero summary.
  */
-export function calculateValidationStatus(
+export function resultStatus(issues: readonly Pick<ValidationIssue, 'severity'>[]): 'ok' | 'findings' {
+  return issues.some(issue => issue.severity !== 'ignore') ? 'findings' : 'ok';
+}
+
+/**
+ * The `status` and `summary` a result publishes, derived TOGETHER from one
+ * issue list — the one helper every producer spreads, so no result can carry a
+ * status or a count that disagrees with the issues beside it (a producer that
+ * appended findings after publishing its counts did exactly that).
+ */
+export function summarizeIssues(
   issues: readonly Pick<ValidationIssue, 'severity'>[],
-): 'success' | 'warning' | 'error' {
-  const { errors, warnings } = countBySeverity(issues);
-  if (errors > 0) {
-    return 'error';
-  }
-  return warnings > 0 ? 'warning' : 'success';
+): { status: 'ok' | 'findings'; summary: SeverityCounts } {
+  return { status: resultStatus(issues), summary: countBySeverity(issues) };
 }

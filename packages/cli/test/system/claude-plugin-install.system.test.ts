@@ -5,11 +5,15 @@
  */
 
 import * as fs from 'node:fs';
+import { chmodSync } from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import * as tar from 'tar';
 import { afterEach, describe, expect, it } from 'vitest';
+
+import { PLUGIN_INSTALL_REPORT_SCHEMA } from '../../src/commands/claude/plugin/install-schema.js';
 
 import {
   createTempDirTracker,
@@ -20,6 +24,12 @@ import {
 } from './test-common.js';
 
 const TEMP_DIR_PREFIX = 'vat-plugin-install-test-';
+
+/** Write `content` at `filePath`, creating its directory. */
+function plantFile(filePath: string, content: string): void {
+  mkdirSyncReal(safePath.join(filePath, '..'), { recursive: true });
+  writeTestFile(filePath, content);
+}
 
 // String constants to avoid sonarjs/no-duplicate-string violations
 // Used as suffix after claudeDir (which already includes '.claude')
@@ -86,21 +96,30 @@ function setupPluginTestProject(
   return { projectDir, marketplacesDir };
 }
 
-/**
- * Run `vat claude plugin install <projectDir>` and assert it exits 0 with status: success.
- * Returns parsed YAML output for further assertions.
- */
-async function runPluginInstall(
+type InstallReport = ReturnType<typeof PLUGIN_INSTALL_REPORT_SCHEMA.parse>;
+
+/** Run `vat claude plugin install <args>` under `fakeHome` and parse the report it publishes. */
+async function runInstall(
   binPath: string,
-  projectDir: string,
-  fakeHome: string
-): Promise<Awaited<ReturnType<typeof executeCliAndParseYaml>>> {
-  const out = await executeCliAndParseYaml(binPath, [
-    'claude', 'plugin', 'install', projectDir,
-  ], { env: fakeHomeEnv(fakeHome) });
-  expect(out.result.status).toBe(0);
-  expect(out.parsed.status).toBe('success');
-  return out;
+  fakeHome: string,
+  args: string[],
+  env: Record<string, string> = {},
+): Promise<{ status: number | null; output: string; report: InstallReport }> {
+  const { result, parsed } = await executeCliAndParseYaml(binPath, ['claude', 'plugin', 'install', ...args], {
+    env: { ...fakeHomeEnv(fakeHome), ...env },
+  });
+  return { status: result.status, output: `${result.stdout}${result.stderr}`, report: PLUGIN_INSTALL_REPORT_SCHEMA.parse(parsed) };
+}
+
+/**
+ * Run `vat claude plugin install <projectDir>` and assert it exits 0 with status: ok.
+ * Returns the parsed report for further assertions.
+ */
+async function runPluginInstall(binPath: string, projectDir: string, fakeHome: string): Promise<InstallReport> {
+  const { status, report } = await runInstall(binPath, fakeHome, [projectDir]);
+  expect(status).toBe(0);
+  expect(report.status).toBe('ok');
+  return report;
 }
 
 describe('claude plugin install command (system test)', () => {
@@ -130,32 +149,117 @@ describe('claude plugin install command (system test)', () => {
     expect(Object.keys(installed.plugins)).toContain('my-skill@test-market');
   });
 
-  it('shows structured stub for --target claude.ai', async () => {
+  it('refuses --target claude.ai as NOT_IMPLEMENTED, exit 2', async () => {
     const tempDir = createTempDir();
-    const { result, parsed } = await executeCliAndParseYaml(binPath, [
-      'claude', 'plugin', 'install', 'npm:@test/fake',
-      '--target', 'claude.ai',
-    ], { env: fakeHomeEnv(safePath.join(tempDir, 'home')) });
 
-    // ERROR: the command cannot do what was asked; it is not a finding about a skill.
-    expect(result.status).toBe(2);
-    expect(parsed.status).toBe('not-available');
-    expect(parsed.requestedTarget).toBe('claude.ai');
+    const { status, report } = await runInstall(binPath, safePath.join(tempDir, 'home'), ['npm:@test/fake', '--target', 'claude.ai']);
+
+    // The command cannot do what was asked; it is not a finding about a skill.
+    expect(status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'NOT_IMPLEMENTED' } });
   });
 
-  it('skips install when not a global npm install (--npm-postinstall)', async () => {
+  it('refuses an unknown --target as USAGE_INVALID, exit 2', async () => {
+    const tempDir = createTempDir();
+
+    const { status, report } = await runInstall(binPath, safePath.join(tempDir, 'home'), ['npm:@test/fake', '--target', 'bogus']);
+
+    expect(status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
+  });
+
+  it('refuses a missing source as USAGE_INVALID, never INTERNAL_ERROR', async () => {
+    const tempDir = createTempDir();
+
+    const { status, report } = await runInstall(binPath, safePath.join(tempDir, 'home'), []);
+
+    expect(status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
+  });
+
+  it('refuses a source path that names nothing as USAGE_INVALID', async () => {
+    const tempDir = createTempDir();
+
+    const { status, report } = await runInstall(binPath, safePath.join(tempDir, 'home'), [safePath.join(tempDir, 'never-created')]);
+
+    expect(status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
+  });
+
+  it('reports the skills already installed when a later one refuses', async () => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const packageDir = safePath.join(tempDir, 'two-skills');
+    plantFile(safePath.join(packageDir, 'package.json'), JSON.stringify({ name: '@test/two', version: '1.0.0', vat: { skills: [SKILL_ALPHA, SKILL_BETA] } }));
+    for (const skill of [SKILL_ALPHA, SKILL_BETA]) plantFile(safePath.join(packageDir, 'dist', 'skills', skill, 'SKILL.md'), `# ${skill}\n`);
+    // Skill 2 of 2 is already installed and --force is not passed.
+    plantFile(safePath.join(claudeDir, 'skills', SKILL_BETA, 'SKILL.md'), '# already here\n');
+
+    const { status, report } = await runInstall(binPath, fakeHome, [packageDir]);
+
+    expect(status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' }, examined: 1 });
+    // Skill 1 is on disk, so the report says so — not "nothing finished".
+    expect(report.data?.skills.map((skill) => skill.name)).toStrictEqual([SKILL_ALPHA]);
+    expect(fs.existsSync(safePath.join(claudeDir, 'skills', SKILL_ALPHA, 'SKILL.md'))).toBe(true);
+  });
+
+  it('refuses a plugin it could not register as INPUT_UNREADABLE — never ok', async () => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const { projectDir } = setupPluginTestProject(tempDir, 'unregistrable', 'reg-market', [{ name: 'reg-plugin', skills: ['reg-skill'] }]);
+    // settings.json is present and not JSON: registration cannot enable the plugin.
+    plantFile(safePath.join(claudeDir, 'settings.json'), '{ "enabledPlugins": ');
+
+    const { status, report } = await runInstall(binPath, fakeHome, [projectDir]);
+
+    expect(status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
+    expect(fs.readFileSync(safePath.join(claudeDir, 'settings.json'), 'utf-8')).toBe('{ "enabledPlugins": ');
+    // The marketplace was copied before registration refused: the report says what is on disk.
+    expect(report.data?.skills.map((skill) => skill.name)).toStrictEqual(['reg-skill']);
+    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'reg-market', 'plugins', 'reg-plugin', 'skills', 'reg-skill'))).toBe(true);
+  });
+
+  it.skipIf(CANNOT_DENY_READS)('refuses a skills directory it cannot examine as INPUT_UNREADABLE, never INTERNAL_ERROR', async () => {
+    const { tempDir, fakeHome } = createInstallTestContext(createTempDir);
+    const skillDir = safePath.join(tempDir, 'locked-target-skill');
+    plantFile(safePath.join(skillDir, 'SKILL.md'), '---\nname: locked-target\ndescription: A skill.\n---\n\n# locked-target\n');
+    const lockedSkillsDir = safePath.join(tempDir, 'locked-skills');
+    mkdirSyncReal(lockedSkillsDir, { recursive: true });
+    chmodSync(lockedSkillsDir, 0o000);
+    try {
+      const { status, report } = await runInstall(binPath, fakeHome, [skillDir, '-s', lockedSkillsDir]);
+
+      expect(status).toBe(2);
+      expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
+    } finally {
+      chmodSync(lockedSkillsDir, 0o755);
+    }
+  });
+
+  it('refuses a marketplace copy that failed as RUN_INCOMPLETE, never INTERNAL_ERROR', async () => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const { projectDir } = setupPluginTestProject(tempDir, 'uncopyable', 'copy-market', [{ name: 'copy-plugin', skills: ['copy-skill'] }]);
+    // A FILE where the marketplaces directory must go: the copy cannot land.
+    plantFile(safePath.join(claudeDir, PLUGINS_MARKETPLACES), 'not a directory');
+
+    const { status, report } = await runInstall(binPath, fakeHome, [projectDir]);
+
+    expect(status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'RUN_INCOMPLETE' } });
+  });
+
+  it('publishes an ok report with no skills when --npm-postinstall is not a global npm install', async () => {
     const tempDir = createTempDir();
     const fakeHome = safePath.join(tempDir, 'home');
     mkdirSyncReal(fakeHome, { recursive: true });
 
     // Build env without npm_config_global so isGlobalNpmInstall() returns false
-    const { result } = await executeCliAndParseYaml(binPath, ['claude', 'plugin', 'install', '--npm-postinstall'], {
-      env: { ...fakeHomeEnv(fakeHome), npm_lifecycle_event: '', npm_command: '' },
-    });
+    const { status, output, report } = await runInstall(binPath, fakeHome, ['--npm-postinstall'], { npm_lifecycle_event: '', npm_command: '' });
 
-    expect(result.status).toBe(0);
-    const combined = result.stdout + result.stderr;
-    expect(combined).toContain('Skipping');
+    // A skip is an answer — an `npm install -g` must never fail on it.
+    expect(status).toBe(0);
+    expect(report).toMatchObject({ status: 'ok', examined: 1, data: { sourceType: 'npm-postinstall', skills: [] } });
+    expect(output).toContain('Skipping');
   });
 
   it('installs multiple plugins from a single project directory', async () => {
@@ -183,12 +287,7 @@ describe('claude plugin install command (system test)', () => {
     const tgzPath = safePath.join(tempDir, 'my-pkg-1.0.0.tgz');
     await tar.create({ gzip: true, file: tgzPath, cwd: projectDir, prefix: 'package' }, ['.']);
 
-    const { result, parsed } = await executeCliAndParseYaml(binPath, [
-      'claude', 'plugin', 'install', tgzPath,
-    ], { env: fakeHomeEnv(fakeHome) });
-
-    expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
+    await runPluginInstall(binPath, tgzPath, fakeHome);
     expect(
       fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'tgz-market', 'plugins', 'tgz-skill'))
     ).toBe(true);
@@ -222,20 +321,19 @@ describe('claude plugin install command (system test)', () => {
     expect(fs.existsSync(safePath.join(installedSkillDir, 'extra-sentinel.txt'))).toBe(false);
   });
 
-  it('reports correct skillsInstalled count when plugin has skills/ subdirectory', async () => {
+  it('reports every installed skill when plugin has skills/ subdirectory', async () => {
     // Regression test: installPluginTreeAndExit previously passed [] to outputInstallSuccess
-    // regardless of how many skills were actually copied, always reporting skillsInstalled: 0.
+    // regardless of how many skills were actually copied, always reporting no installed skills.
     const { tempDir, fakeHome } = createInstallTestContext(createTempDir);
 
     const { projectDir } = setupPluginTestProject(tempDir, 'pkg-skills-count', 'skills-market', [
       { name: 'my-plugin', skills: [SKILL_ALPHA, SKILL_BETA, 'skill-gamma'] },
     ]);
 
-    const { parsed } = await runPluginInstall(binPath, projectDir, fakeHome);
+    const report = await runPluginInstall(binPath, projectDir, fakeHome);
 
-    expect(parsed.skillsInstalled).toBe(3);
-    expect(parsed.skills).toHaveLength(3);
-    const skillNames = (parsed.skills as Array<{ name: string }>).map(s => s.name);
+    expect(report.data?.skills).toHaveLength(3);
+    const skillNames = (report.data?.skills ?? []).map(s => s.name);
     expect(skillNames).toContain(SKILL_ALPHA);
     expect(skillNames).toContain(SKILL_BETA);
     expect(skillNames).toContain('skill-gamma');
@@ -255,9 +353,9 @@ describe('claude plugin install command (system test)', () => {
       '---\nname: declared-skill\ndescription: Declares a name unlike its folder.\n---\n\n# declared-skill\n',
     );
 
-    const { parsed } = await runPluginInstall(binPath, skillDir, fakeHome);
+    const report = await runPluginInstall(binPath, skillDir, fakeHome);
 
-    expect((parsed.skills as Array<{ name: string }>)[0]?.name).toBe('declared-skill');
+    expect(report.data?.skills[0]?.name).toBe('declared-skill');
     expect(fs.existsSync(safePath.join(claudeDir, 'skills', 'declared-skill', 'SKILL.md'))).toBe(
       true,
     );

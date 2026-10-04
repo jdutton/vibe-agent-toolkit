@@ -18,5 +18,4 @@ export {
   buildMetadataFilter,
   buildMetadataWhereClause,
   buildWhereClause,
-  LANCEDB_QUERY_SUPPORT,
 } from './filter-builder.js';

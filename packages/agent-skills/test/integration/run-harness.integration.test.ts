@@ -67,12 +67,19 @@ function harnessOpts(skillDir: string, spawn: RunHarnessOptions['spawn']): RunHa
 }
 
 /** Run the harness, mapping a thrown harness error to its exit code (mirrors run.ts). */
-async function runToExit(opts: RunHarnessOptions): Promise<{ exitCode: number; reason?: string; summary: string }> {
+async function runToExit(opts: RunHarnessOptions): Promise<{
+  exitCode: number;
+  reason?: string;
+  description: string;
+  evals?: ReadonlyArray<{ id: string; passed: boolean }>;
+}> {
   try {
     const result = await runSkillTestHarness(opts);
-    return { exitCode: result.exitCode, ...(result.reason === undefined ? {} : { reason: result.reason }), summary: result.summary };
+    return result.exitCode === ExitCode.ERROR
+      ? { exitCode: result.exitCode, reason: result.reason, description: result.description }
+      : { exitCode: result.exitCode, description: result.description, evals: result.evals };
   } catch (err) {
-    return { exitCode: ExitCode.ERROR, reason: skillTestFailureReason(err), summary: err instanceof Error ? err.message : String(err) };
+    return { exitCode: ExitCode.ERROR, reason: skillTestFailureReason(err), description: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -89,7 +96,7 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
     const fake = makeHarnessFakeSpawn();
     const result = await runToExit(harnessOpts(skillDir, fake.spawn));
 
-    expect(result.summary).toBe('PASS 2/2');
+    expect(result.description).toBe('PASS 2/2');
     expect(result.exitCode).toBe(0);
 
     const resultsDir = safePath.join(tempDir, 'harness', 'results');
@@ -130,7 +137,7 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
     const skillDir = writeFixtureSkill();
     const fake = makeHarnessFakeSpawn({ executorStatus: 1, graderPassed: false });
     const result = await runToExit(harnessOpts(skillDir, fake.spawn));
-    expect(result.summary).toBe('FAIL 0/2');
+    expect(result.description).toBe('FAIL 0/2');
     expect(result.exitCode).toBe(ExitCode.FINDINGS);
   });
 
@@ -145,8 +152,10 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
     const result = await runToExit(harnessOpts(skillDir, fake.spawn));
 
     // Output counts read all-green (1/1) but the tool suffix explains the composite FAIL.
-    expect(result.summary).toBe('FAIL 1/1 (1 tool)');
+    expect(result.description).toBe('FAIL 1/1 (1 tool)');
     expect(result.exitCode).toBe(ExitCode.FINDINGS);
+    // The per-eval verdict is the COMPOSITE one: a green output with a red tool verdict failed.
+    expect(result.evals).toEqual([{ id: 'gamma', passed: false }]);
 
     const resultsDir = safePath.join(tempDir, 'harness', 'results');
     const toolEvalPath = safePath.join(resultsDir, 'tool-eval.json');
@@ -173,8 +182,10 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
 
     // Fail-fast run = eval FAILURE → exit FINDINGS, and the summary names the skipped tier.
     expect(result.exitCode).toBe(ExitCode.FINDINGS);
-    expect(result.summary).toContain('FAIL');
-    expect(result.summary).toContain('SKIPPED (fail-fast): tier 1 and above (1 eval) — gated by tier 0 failure');
+    expect(result.description).toContain('FAIL');
+    expect(result.description).toContain('SKIPPED (fail-fast): tier 1 and above (1 eval) — gated by tier 0 failure');
+    // Only what ran is listed: the skipped eval was never graded, so it is neither passed nor failed.
+    expect(result.evals).toEqual([{ id: 'foundational', passed: false }]);
 
     // Only tier 0 was graded — the tier-1 eval was SKIPPED, never counted as passed.
     const resultsDir = safePath.join(tempDir, 'harness', 'results');
@@ -193,8 +204,8 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
     const result = await runToExit(harnessOpts(skillDir, fake.spawn));
 
     expect(result.exitCode).toBe(0);
-    expect(result.summary).toBe('PASS 2/2');
-    expect(result.summary).not.toContain('SKIPPED');
+    expect(result.description).toBe('PASS 2/2');
+    expect(result.description).not.toContain('SKIPPED');
 
     // Both tiers graded — the gate did not fire, so tier 1 ran too.
     const resultsDir = safePath.join(tempDir, 'harness', 'results');
@@ -212,7 +223,7 @@ describe('runSkillTestHarness — executor→grader pipeline (integration)', () 
     const frictionPath = safePath.join(resultsDir, 'friction.json');
     writeFileSync(
       frictionPath,
-      JSON.stringify({ items: [{ severity: 'high', category: 'path-assumption', message: 'STALE from a prior run' }] }),
+      JSON.stringify({ items: [{ severity: 'error', category: 'path-assumption', message: 'STALE from a prior run' }] }),
       'utf8',
     );
 

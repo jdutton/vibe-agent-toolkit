@@ -3,15 +3,55 @@
  *
  * Handles extracting tarballs and downloading npm packages to temp directories.
  * Callers are responsible for cleaning up temp directories after use.
+ *
+ * Every refusal is coded where it is raised: a source that is not a skill
+ * package is the invocation's mistake (`USAGE_INVALID`), one the OS or the
+ * archive reader will not read is the input's (`INPUT_UNREADABLE`), and a
+ * registry that will not hand the package over is `EXTERNAL_API_FAILED`
+ * (`downloadNpmPackage`).
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import * as tar from 'tar';
 
+import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
+import { unstatablePathRefusal } from '../../utils/project-root-policy.js';
 import { downloadNpmPackage } from '../claude/plugin/helpers.js';
+
+/**
+ * Whether `dir` holds a `SKILL.md`. Absent is `false`; a `stat` the OS refuses
+ * is the source's refusal (`INPUT_UNREADABLE`) — never "no skill here", which
+ * is what `existsSync` would have answered for both.
+ *
+ * @param dir - A source directory, or one of its immediate subdirectories
+ */
+export function holdsSkillMd(dir: string): boolean {
+  const skillMd = safePath.join(dir, 'SKILL.md');
+  try {
+    statSync(skillMd);
+    return true;
+  } catch (error) {
+    if (isPathAbsentError(error)) return false;
+    throw unstatablePathRefusal(skillMd, error);
+  }
+}
+
+/**
+ * The entries of a source directory, refused like a path argument when the OS
+ * will not list it (`INPUT_UNREADABLE`).
+ *
+ * @param dir - The source directory to list
+ */
+export function readSourceDir(dir: string): Dirent[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true });
+  } catch (error) {
+    throw unstatablePathRefusal(dir, error);
+  }
+}
 
 /**
  * Determine whether a source string is an npm: prefix or tarball path.
@@ -34,18 +74,50 @@ export function isNpmOrTarballSource(source: string): boolean {
 export async function extractTarballToTemp(
   tarballPath: string,
 ): Promise<{ tempDir: string; packageDir: string }> {
+  // The argument first: absent is the invocation's mistake, unreadable the input's.
+  try {
+    statSync(tarballPath);
+  } catch (error) {
+    throw unstatablePathRefusal(tarballPath, error);
+  }
   const tempDir = await mkdtemp(
     safePath.join(normalizedTmpdir(), 'vat-skills-tgz-'),
   );
   mkdirSyncReal(tempDir, { recursive: true });
-  await tar.extract({ file: tarballPath, cwd: tempDir });
-  const packageDir = safePath.join(tempDir, 'package');
-  if (!existsSync(packageDir)) {
-    throw new Error(
-      `Tarball does not contain a package/ directory: ${tarballPath}`,
-    );
-  }
+  const packageDir = await discardingOnFailure(tempDir, async () => {
+    try {
+      await tar.extract({ file: tarballPath, cwd: tempDir });
+    } catch (error) {
+      throw new CommandRefusalError('INPUT_UNREADABLE', `Tarball cannot be read: ${tarballPath} (${errorMessageOf(error)})`, { cause: error });
+    }
+    // A probe of the temp tree this process just extracted — VAT's own directory, not the user's path.
+    const extracted = safePath.join(tempDir, 'package');
+    if (!existsSync(extracted)) {
+      throw new CommandRefusalError(
+        'USAGE_INVALID',
+        `Tarball does not contain a package/ directory (not an npm pack tarball): ${tarballPath}`,
+      );
+    }
+    return extracted;
+  });
   return { tempDir, packageDir };
+}
+
+/**
+ * Run `work` over a temp directory this process minted, removing the
+ * directory when `work` throws: the caller only learns about a temp directory
+ * it is handed back, so one minted on a failing path is otherwise left behind.
+ *
+ * @param tempDir - The directory to remove on failure
+ * @param work - What to do with it
+ */
+export async function discardingOnFailure<T>(tempDir: string, work: () => T | Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    await rm(tempDir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 /**
@@ -57,7 +129,8 @@ export function findSkillsDirInNpmPackage(packageDir: string): string {
   if (existsSync(distSkills)) {
     return distSkills;
   }
-  throw new Error(
+  throw new CommandRefusalError(
+    'USAGE_INVALID',
     `npm package does not contain dist/skills/: ${packageDir}\n` +
       `Was the package built with "vat skills build"?`,
   );
@@ -83,19 +156,14 @@ export async function resolveNpmOrTarballSource(
       safePath.join(normalizedTmpdir(), 'vat-skills-npm-'),
     );
     mkdirSyncReal(tempDir, { recursive: true });
-    const packageDir = downloadNpmPackage(source, tempDir);
-    return {
-      skillsDir: findSkillsDirInNpmPackage(packageDir),
-      tempDirs: [tempDir],
-    };
+    const skillsDir = await discardingOnFailure(tempDir, () => findSkillsDirInNpmPackage(downloadNpmPackage(source, tempDir)));
+    return { skillsDir, tempDirs: [tempDir] };
   }
 
   // Local .tgz / .tar.gz tarball
   const { tempDir, packageDir } = await extractTarballToTemp(source);
-  return {
-    skillsDir: findSkillsDirInNpmPackage(packageDir),
-    tempDirs: [tempDir],
-  };
+  const skillsDir = await discardingOnFailure(tempDir, () => findSkillsDirInNpmPackage(packageDir));
+  return { skillsDir, tempDirs: [tempDir] };
 }
 
 /**

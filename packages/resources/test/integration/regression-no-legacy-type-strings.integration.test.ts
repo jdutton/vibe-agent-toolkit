@@ -79,7 +79,6 @@ See [the missing target](./does-not-exist.md) for more.
   await fs.writeFile(docPath, docContent, 'utf-8');
 
   return {
-    version: 1,
     resources: {
       collections: {
         docs: {

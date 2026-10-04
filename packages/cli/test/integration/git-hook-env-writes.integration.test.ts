@@ -130,6 +130,7 @@ describe('git writes under a worktree hook environment', () => {
       branch: 'test-branch',
       // Looks like a URL, so it is used verbatim and no remote lookup happens.
       remote: 'https://example.invalid/marketplace.git',
+      remoteFromConfig: true,
       commitMessage: 'publish test',
       force: false,
       dryRun: true,

@@ -23,14 +23,14 @@ describe('validateSkill', () => {
       createSkillContent({ name: 'my-skill', description: 'Does something useful' }),
     );
 
-    expect(result.status).toBe('success');
+    expect(result.summary).toMatchObject({ errors: 0, warnings: 0 });
     expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
   });
 
   it('should return error when file does not exist', async () => {
     const result = await validateSkill({ skillPath: '/nonexistent/path/SKILL.md', validation: {} });
 
-    expect(result.status).toBe('error');
+    expect(result.summary.errors).toBeGreaterThan(0);
     expect(result.type).toBe('agent-skill');
     expectError(result, 'SKILL_MISSING_FRONTMATTER');
     expect(result.issues).toHaveLength(1);
@@ -40,7 +40,7 @@ describe('validateSkill', () => {
   it('should detect missing frontmatter', async () => {
     const result = await createSkillAndValidate(getTempDir(), '# Just content, no frontmatter');
 
-    expect(result.status).toBe('error');
+    expect(result.summary.errors).toBeGreaterThan(0);
     expectError(result, 'SKILL_MISSING_FRONTMATTER');
   });
 
@@ -68,7 +68,7 @@ describe('validateSkill', () => {
       createSkillContent({ name: 'MySkill', description: 'Test' }, ''),
     );
 
-    expect(result.status).toBe('error');
+    expect(result.summary.errors).toBeGreaterThan(0);
     expectError(result, 'SKILL_NAME_INVALID');
     const issue = result.issues.find((i) => i.code === 'SKILL_NAME_INVALID');
     expect(issue?.fix).toBeDefined();
@@ -91,7 +91,7 @@ describe('validateSkill', () => {
       createSkillContent({ name: 'my-skill', description: '<test>content</test>' }, ''),
     );
 
-    expect(result.status).toBe('error');
+    expect(result.summary.errors).toBeGreaterThan(0);
     expectError(result, 'SKILL_DESCRIPTION_XML_TAGS');
   });
 
@@ -101,7 +101,7 @@ describe('validateSkill', () => {
       createSkillContent({ name: 'my-skill', description: 'x'.repeat(1025) }, ''),
     );
 
-    expect(result.status).toBe('error');
+    expect(result.summary.errors).toBeGreaterThan(0);
     expectError(result, 'SKILL_DESCRIPTION_TOO_LONG');
   });
 
@@ -111,8 +111,8 @@ describe('validateSkill', () => {
       createSkillContent({ name: 'my-skill', description: 'A valid skill' }, '\n# Content'),
     );
 
-    expect(result.status).toBe('success');
-    expect(result.summary).toContain('0 errors');
+    expect(result.summary).toMatchObject({ errors: 0, warnings: 0 });
+    expect(result.description).toContain('0 errors');
   });
 });
 
@@ -175,9 +175,10 @@ describe('warning-level validations', () => {
       createSkillContent({ name: 'my-skill', description: 'Test' }, `\n\n${longContent}`),
     );
 
-    expect(result.status).toBe('warning');
-    expect(result.summary).toContain('0 errors');
-    expect(result.summary).toContain('1 warning');
+    expect(result.summary).toMatchObject({ errors: 0 });
+    expect(result.summary.warnings).toBeGreaterThan(0);
+    expect(result.description).toContain('0 errors');
+    expect(result.description).toContain('1 warning');
   });
 });
 
@@ -281,7 +282,7 @@ describe('validateSkill on a frontmatter block that is not a mapping', () => {
     it(`reports SKILL_MISSING_FRONTMATTER for ${JSON.stringify(block)} instead of throwing`, async () => {
       const result = await createSkillAndValidate(getTempDir(), `---\n${block}\n---\n# x\n`);
 
-      expect(result.status).toBe('error');
+      expect(result.summary.errors).toBeGreaterThan(0);
       expectError(result, 'SKILL_MISSING_FRONTMATTER');
       // ONE finding: the per-character `SKILL_FRONTMATTER_EXTRA_FIELDS` cascade a
       // scalar produced ("h", "e", "l", "l", "o") is gone with it.

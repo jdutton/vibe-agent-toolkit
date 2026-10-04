@@ -59,13 +59,13 @@ let skillPath: string;
  * the case that still refuses, because it means VAT would otherwise act on a
  * config it misread.
  */
-const UNLOADABLE_CONFIG = 'version: 1\nresources:\n  exclude: not-an-array\n';
+const UNLOADABLE_CONFIG = 'resources:\n  exclude: not-an-array\n';
 
 /**
  * A config VAT cannot even PARSE. The failure comes out of `yaml.parse`, so the
  * message names no file at all — which is the whole point of this fixture.
  */
-const UNPARSEABLE_CONFIG = 'version: 1\nresources:\n  exclude: [unclosed\n';
+const UNPARSEABLE_CONFIG = 'resources:\n  exclude: [unclosed\n';
 
 const PLUGIN_MANIFEST = JSON.stringify({
   name: 'demo-plugin',
@@ -195,7 +195,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with a config the FILESYSTEM refus
   let eaccesConfig: string;
 
   beforeAll(() => {
-    eaccesDir = buildFixture('vat-eacces-cfg-', 'version: 1\n', false);
+    eaccesDir = buildFixture('vat-eacces-cfg-', '{}\n', false);
     eaccesConfig = safePath.join(eaccesDir, CONFIG_FILENAME);
     fs.chmodSync(eaccesConfig, UNREADABLE);
   });

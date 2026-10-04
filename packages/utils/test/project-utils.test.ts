@@ -17,7 +17,7 @@ import { createGitRepo } from './test-helpers.js';
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 const PACKAGE_JSON = 'package.json';
 const SEPARATOR = '/';
-const CONFIG_CONTENT = 'version: 1\n';
+const CONFIG_CONTENT = '{}\n';
 
 /**
  * Wires the standard `setupAsyncTempDirSuite` hooks plus a `resetProjectRootCaches()`
@@ -82,12 +82,12 @@ describe('findConfigFile', () => {
 
   it('prefers the nearest config when configs exist at multiple levels', () => {
     const outer = safePath.join(tempDir, CONFIG_FILENAME);
-    fs.writeFileSync(outer, 'version: 1\n# outer\n', 'utf-8');
+    fs.writeFileSync(outer, '# outer\n', 'utf-8');
 
     const innerDir = safePath.join(tempDir, 'pkg');
     fs.mkdirSync(innerDir, { recursive: true });
     const inner = safePath.join(innerDir, CONFIG_FILENAME);
-    fs.writeFileSync(inner, 'version: 1\n# inner\n', 'utf-8');
+    fs.writeFileSync(inner, '# inner\n', 'utf-8');
 
     expect(findConfigFile(innerDir)).toBe(inner);
   });

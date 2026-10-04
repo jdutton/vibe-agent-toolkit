@@ -6,10 +6,13 @@
  * directory ready to be committed to the publish branch.
  */
 
-import { cpSync, existsSync, readFileSync } from 'node:fs';
+import { cpSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
+
+import { CommandRefusalError } from '../../../utils/command-refusal.js';
+import { configNamedFileAbsent, readInputFile, requireInputPath } from '../../../utils/project-root-policy.js';
 
 import {
   parseUnreleasedSection,
@@ -114,7 +117,8 @@ async function extractChangelogDelta(
     const reason = derivedVersion
       ? `has neither a non-empty [Unreleased] section nor a [${derivedVersion}] section`
       : `has no non-empty [Unreleased] section`;
-    throw new Error(
+    throw new CommandRefusalError(
+      'INPUT_UNREADABLE',
       `Changelog "${changelog.sourcePath}" ${reason}. Document the release before publishing.`,
     );
   }
@@ -124,6 +128,57 @@ async function extractChangelogDelta(
   return stampedSection === '' ? unreleasedSection : stampedSection;
 }
 
+/**
+ * The staged copy of the build's `marketplace.json`, parsed.
+ *
+ * The build output is this command's INPUT. A directory holding no manifest is
+ * a build that stopped half-way, and a manifest that is not JSON is a damaged
+ * one: both are the project's state — `INPUT_UNREADABLE` — never a defect in
+ * VAT, which is what a raw errno or `SyntaxError` would publish.
+ *
+ * @throws {CommandRefusalError} `INPUT_UNREADABLE`, naming the build output project-relative
+ */
+function readBuiltMarketplaceJson(outputDir: string, marketplaceName: string): { plugins?: PublishedPluginInfo[] } {
+  const built = `dist/.claude/plugins/marketplaces/${marketplaceName}`;
+  const raw = readInputFile(safePath.join(outputDir, '.claude-plugin', 'marketplace.json'), {
+    code: 'INPUT_UNREADABLE',
+    message: `Marketplace build output at ${built} holds no .claude-plugin/marketplace.json — the build did not finish. Run "vat build" first.`,
+  });
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new CommandRefusalError(
+      'INPUT_UNREADABLE',
+      `${built}/.claude-plugin/marketplace.json is not valid JSON. Run "vat build" to regenerate it.`,
+      { cause: error },
+    );
+  }
+  if (!isMarketplaceManifest(parsed)) {
+    throw new CommandRefusalError(
+      'INPUT_UNREADABLE',
+      `${built}/.claude-plugin/marketplace.json is not a marketplace manifest (an object whose "plugins", when present, is a list of objects). Run "vat build" to regenerate it.`,
+    );
+  }
+  return parsed;
+}
+
+/** A non-null, non-array object. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Whether parsed JSON has the one shape this command reads from a built
+ * manifest: an object whose `plugins`, when present, is a list of objects.
+ * Each entry's own fields are read defensively by the caller.
+ */
+function isMarketplaceManifest(value: unknown): value is { plugins?: PublishedPluginInfo[] } {
+  if (!isRecord(value)) return false;
+  const { plugins } = value;
+  return plugins === undefined || (Array.isArray(plugins) && plugins.every(isRecord));
+}
+
 export async function composePublishTree(options: ComposeOptions): Promise<ComposeResult> {
   const { marketplaceName, configDir, outputDir } = options;
   const files: string[] = [];
@@ -131,11 +186,10 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
 
   // 1. Verify build output exists
   const buildDir = safePath.join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', marketplaceName);
-  if (!existsSync(buildDir)) {
-    throw new Error(
-      `Marketplace build output not found at ${buildDir}. Run "vat build" first.`,
-    );
-  }
+  requireInputPath(buildDir, {
+    code: 'INPUT_UNREADABLE',
+    message: `Marketplace build output not found at dist/.claude/plugins/marketplaces/${marketplaceName}. Run "vat build" first.`,
+  });
 
   // 2. Copy marketplace artifacts to output
   // Use cpSync instead of async cp() — Node 22 cp() drops files in nested directories
@@ -146,9 +200,7 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
   //     version for label derivation. The build pipeline writes this file; we
   //     just observe it here. Defensive parsing because marketplace.json is
   //     build output, not validated input at this layer.
-  const marketplaceJsonPath = safePath.join(outputDir, '.claude-plugin', 'marketplace.json');
-  const marketplaceJsonRaw = readFileSync(marketplaceJsonPath, 'utf-8');
-  const marketplaceJson = JSON.parse(marketplaceJsonRaw) as { plugins?: PublishedPluginInfo[] };
+  const marketplaceJson = readBuiltMarketplaceJson(outputDir, marketplaceName);
   // Plugins without a resolved version don't contribute to the label — skip them.
   const publishedPlugins = (marketplaceJson.plugins ?? [])
     .filter((p): p is { name: string; version: string } =>
@@ -169,7 +221,7 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
   // 4. Process readme
   if (options.readme) {
     const readmePath = safePath.resolve(configDir, options.readme.sourcePath);
-    const readmeContent = readFileSync(readmePath, 'utf-8');
+    const readmeContent = readInputFile(readmePath, configNamedFileAbsent('publish.readme', options.readme.sourcePath));
     await writeFile(safePath.join(outputDir, 'README.md'), readmeContent);
     files.push('README.md');
   }

@@ -23,7 +23,7 @@ import {
   type Target,
   type Verdict,
 } from '@vibe-agent-toolkit/claude-marketplace';
-import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { CODE_REGISTRY, summarizeIssues, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation } from '@vibe-agent-toolkit/utils';
 
 /**
@@ -35,7 +35,7 @@ export function verdictToIssue(verdict: Verdict, location: string): ValidationIs
   return {
     severity: entry.defaultSeverity,
     code: verdict.code,
-    message: verdict.summary,
+    message: verdict.description,
     location,
     fix: entry.fix,
     reference: entry.reference,
@@ -108,8 +108,8 @@ export function applyConfigVerdicts(
     return;
   }
   result.allErrors.push(...verdictIssues);
-  if (result.allErrors.some(issue => issue.severity === 'error')) {
-    result.status = 'error';
-  }
+  // Re-derive both from the grown list in the same step, so neither can go
+  // stale behind the issues it describes.
+  Object.assign(result, summarizeIssues(result.allErrors));
 }
 

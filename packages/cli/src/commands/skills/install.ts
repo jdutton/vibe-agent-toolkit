@@ -3,17 +3,27 @@
  *
  * Installs a SKILL.md-based skill to one of 7 supported platforms, at either
  * user scope (home dir) or project scope (CWD). Pre-verifies with validateSkill()
- * before making any filesystem changes.
+ * before making any filesystem changes, and publishes the `Report<T>` envelope
+ * (`install-schema.ts`).
  *
  * Supports local directory, ZIP file, .tgz tarball, and npm: package sources.
+ *
+ * Every refusal is coded where it is raised: an unusable invocation or source
+ * (`--target`, `--name`, no SKILL.md, a name collision, an existing skill
+ * without `--force`) is `USAGE_INVALID`; a source the OS or the archive reader
+ * will not read — or an install target whose existence the OS will not let
+ * VAT check — is `INPUT_UNREADABLE`; a registry that will not hand over an
+ * npm: package is `EXTERNAL_API_FAILED`; a copy that fails partway is
+ * `RUN_INCOMPLETE`, publishing the skills already installed. A skill that fails
+ * its validation is not a refusal: it is the skill's own error findings, and
+ * the whole batch installs nothing.
  */
 
-import { cpSync, existsSync, lstatSync, readdirSync, rmSync } from 'node:fs';
+import { cpSync, rmSync, statSync } from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
-import { basename } from 'node:path';
 
 import { validateSkill } from '@vibe-agent-toolkit/agent-skills';
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { buildReport, toFindings, withDurationMs, type Finding, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   direntKindFollowingSync,
   isSingleFsSegment,
@@ -26,29 +36,28 @@ import {
   type SkillScope,
   type SkillTarget,
   toForwardSlash,
-  VatError,
 } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
+import { pathPresent, unstatablePathRefusal } from '../../utils/project-root-policy.js';
 
+import type { SkillsInstallData, SkillsInstallReport } from './install-schema.js';
 import {
+  discardingOnFailure,
   extractTarballToTemp,
   findSkillsDirInNpmPackage,
+  holdsSkillMd,
+  readSourceDir,
   removeResolvedTempDirs,
   resolveNpmOrTarballSource,
 } from './source-resolvers.js';
 
-/**
- * Expected install failure (exit 1).
- */
-export class InstallError extends VatError {
-  constructor(message: string) {
-    super('INSTALL', message);
-  }
-}
+/** `vat skills install` has no `--strict`: a validation error already stops the batch. */
+const GATE = { strict: false } as const;
 
 export interface InstallCommandOptions {
   target: string;
@@ -78,24 +87,23 @@ interface DiscoveredSkill {
  * its frontmatter — see {@link preVerifySkill}.
  */
 function discoverSkillDirs(sourceDir: string): string[] {
-  const rootSkillMd = safePath.join(sourceDir, 'SKILL.md');
-  if (existsSync(rootSkillMd)) {
+  if (holdsSkillMd(sourceDir)) {
     return [sourceDir];
   }
 
   // Scan immediate subdirectories for any that contain a SKILL.md.
-  const entries = readdirSync(sourceDir, { withFileTypes: true });
   const dirs: string[] = [];
-  for (const entry of entries) {
+  for (const entry of readSourceDir(sourceDir)) {
     if (direntKindFollowingSync(sourceDir, entry) !== 'directory') continue;
     const candidate = safePath.join(sourceDir, entry.name);
-    if (existsSync(safePath.join(candidate, 'SKILL.md'))) {
+    if (holdsSkillMd(candidate)) {
       dirs.push(candidate);
     }
   }
 
   if (dirs.length === 0) {
-    throw new InstallError(
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
       `No SKILL.md found at root or in subdirectories of: ${sourceDir}`,
     );
   }
@@ -109,46 +117,51 @@ function discoverSkillDirs(sourceDir: string): string[] {
  */
 function assertInstallableName(name: string, origin: string): void {
   if (!isSingleFsSegment(name)) {
-    throw new InstallError(
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
       `Invalid skill name "${name}" (${origin}). ` +
         `Name must be a single path segment: no separators, not "." or "..".`,
     );
   }
 }
 
+/** One source skill after validation: its issues, and — when it has no error — the name it installs as. */
+interface VerifiedSkill {
+  dir: string;
+  issues: ValidationIssue[];
+  /** `undefined` when validation found an error: the batch installs nothing. */
+  declaredName: string | undefined;
+}
+
 /**
- * Validate a skill and return the name it declares for itself.
+ * Validate a skill and read the name it declares for itself.
  *
  * The frontmatter `name` is authoritative — it is what VAT keys on everywhere
  * else, and it is the only identity an archived skill carries. The directory
  * leaf is incidental: for a ZIP whose SKILL.md sits at the archive root, that
  * leaf is the extraction temp dir.
  */
-async function preVerifySkill(skillDir: string): Promise<string> {
+async function preVerifySkill(skillDir: string): Promise<VerifiedSkill> {
   const skillMdPath = safePath.join(skillDir, 'SKILL.md');
   // An install source (npm, ZIP, directory) carries no config that governs it.
   const result = await validateSkill({
     skillPath: skillMdPath,
     validation: {},
   });
-  if (result.status === 'error') {
-    const issueSummary = (result.issues ?? [])
-      .filter((i) => i.severity === 'error')
-      .map((i) => `  - ${i.message}`)
-      .join('\n');
-    throw new InstallError(
-      `Skill validation failed for ${skillDir}:\n${issueSummary || '  (no details)'}`,
-    );
+  const issues = result.issues ?? [];
+  if (result.summary.errors > 0) {
+    return { dir: skillDir, issues, declaredName: undefined };
   }
 
   const declared = result.metadata?.name;
   if (typeof declared !== 'string' || declared.trim() === '') {
-    throw new InstallError(
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
       `SKILL.md at ${skillDir} declares no name; cannot determine where to install it.`,
     );
   }
   assertInstallableName(declared, `declared in ${toForwardSlash(skillMdPath)}`);
-  return declared;
+  return { dir: skillDir, issues, declaredName: declared };
 }
 
 /**
@@ -160,7 +173,8 @@ function assertNoNameCollisions(skills: DiscoveredSkill[]): void {
   for (const skill of skills) {
     const prior = seen.get(skill.name);
     if (prior !== undefined) {
-      throw new InstallError(
+      throw new CommandRefusalError(
+        'USAGE_INVALID',
         `Two skills in this source both declare the name "${skill.name}":\n` +
           `  - ${toForwardSlash(prior)}\n` +
           `  - ${toForwardSlash(skill.dir)}\n` +
@@ -172,6 +186,7 @@ function assertNoNameCollisions(skills: DiscoveredSkill[]): void {
 }
 
 interface InstallPlan {
+  name: string;
   skillDir: string;
   installPath: string;
   alreadyExists: boolean;
@@ -184,63 +199,48 @@ function buildInstallPlan(
 ): InstallPlan {
   const installPath = safePath.join(installDir, skill.name);
 
-  const alreadyExists = existsSync(installPath);
+  const alreadyExists = pathPresent(installPath, 'entry');
 
   if (alreadyExists && !options.force && !options.dryRun) {
-    throw new InstallError(
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
       `Skill "${skill.name}" is already installed at ${installPath}. Use --force to overwrite.`,
     );
   }
 
-  return { skillDir: skill.dir, installPath, alreadyExists };
+  return { name: skill.name, skillDir: skill.dir, installPath, alreadyExists };
 }
 
-function executeInstallPlan(plan: InstallPlan, options: InstallCommandOptions): void {
-  if (options.dryRun) return;
-
-  if (plan.alreadyExists && options.force) {
-    rmSync(plan.installPath, { recursive: true, force: true });
-  }
-
-  const parentDir = safePath.join(plan.installPath, '..');
-  mkdirSyncReal(parentDir, { recursive: true });
-  cpSync(plan.skillDir, plan.installPath, { recursive: true, force: true });
-}
-
-function emitYamlSummary(args: {
-  source: string;
-  target: string;
-  scope: string;
-  skills: InstallPlan[];
-  dryRun: boolean;
-  duration: number;
-}): void {
-  const statusLine = args.dryRun ? 'status: dry-run' : 'status: success';
-  process.stdout.write(`---\n${statusLine}\n`);
-  process.stdout.write(`source: ${toForwardSlash(args.source)}\n`);
-  process.stdout.write(`target: ${args.target}\n`);
-  process.stdout.write(`scope: ${args.scope}\n`);
-  process.stdout.write(`skillsInstalled: ${args.skills.length}\n`);
-  process.stdout.write(`skills:\n`);
-  for (const plan of args.skills) {
-    process.stdout.write(`  - name: ${basename(plan.installPath)}\n`);
-    process.stdout.write(`    installPath: ${toForwardSlash(plan.installPath)}\n`);
-    if (args.dryRun) {
-      process.stdout.write(`    alreadyInstalled: ${plan.alreadyExists}\n`);
+/**
+ * Copy one planned skill into place. A copy the OS refuses partway is the run
+ * stopping (`RUN_INCOMPLETE`), not VAT's defect: the caller publishes the
+ * skills already installed.
+ */
+function executeInstallPlan(plan: InstallPlan): void {
+  try {
+    if (plan.alreadyExists) {
+      rmSync(plan.installPath, { recursive: true, force: true });
     }
+    mkdirSyncReal(safePath.join(plan.installPath, '..'), { recursive: true });
+    cpSync(plan.skillDir, plan.installPath, { recursive: true, force: true });
+  } catch (error) {
+    throw new CommandRefusalError('RUN_INCOMPLETE', `Could not install "${plan.name}" at ${plan.installPath}: ${errorMessageOf(error)}`, { cause: error });
   }
-  process.stdout.write(`duration: ${args.duration}ms\n`);
 }
 
 /**
  * Extract a ZIP file to a temp directory and return the extraction root.
- * Caller is responsible for cleanup.
+ * Caller is responsible for cleanup; a ZIP the reader refuses leaves nothing behind.
  */
 async function extractZipToTemp(zipPath: string): Promise<string> {
   const tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-skills-install-zip-'));
-  const zip = new AdmZip(zipPath);
-   
-  zip.extractAllTo(tempDir, /* overwrite */ true);
+  await discardingOnFailure(tempDir, () => {
+    try {
+      new AdmZip(zipPath).extractAllTo(tempDir, /* overwrite */ true);
+    } catch (error) {
+      throw new CommandRefusalError('INPUT_UNREADABLE', `ZIP cannot be read: ${zipPath} (${errorMessageOf(error)})`, { cause: error });
+    }
+  });
   return tempDir;
 }
 
@@ -249,19 +249,19 @@ async function extractZipToTemp(zipPath: string): Promise<string> {
  * top-level directory (e.g. `my-skill/SKILL.md`) or have SKILL.md at the root.
  */
 function findSkillRootInExtracted(extractedDir: string): string {
-  if (existsSync(safePath.join(extractedDir, 'SKILL.md'))) {
+  if (holdsSkillMd(extractedDir)) {
     return extractedDir;
   }
   // Otherwise look for a single subdirectory containing SKILL.md
-  const entries = readdirSync(extractedDir, { withFileTypes: true });
-  for (const entry of entries) {
+  for (const entry of readSourceDir(extractedDir)) {
     if (direntKindFollowingSync(extractedDir, entry) !== 'directory') continue;
     const candidate = safePath.join(extractedDir, entry.name);
-    if (existsSync(safePath.join(candidate, 'SKILL.md'))) {
+    if (holdsSkillMd(candidate)) {
       return candidate;
     }
   }
-  throw new InstallError(
+  throw new CommandRefusalError(
+    'USAGE_INVALID',
     `ZIP does not contain a SKILL.md at root or in a top-level directory: ${extractedDir}`,
   );
 }
@@ -284,24 +284,30 @@ async function resolveSource(source: string): Promise<ResolvedSource> {
     return { dir: resolved.skillsDir, tempDirs: resolved.tempDirs };
   }
 
+  // The source argument: absent is the invocation's mistake, unreadable the input's.
   const sourcePath = safePath.resolve(source);
-  if (!existsSync(sourcePath)) {
-    throw new InstallError(`Source path not found: ${sourcePath}`);
+  let stat: ReturnType<typeof statSync>;
+  try {
+    stat = statSync(sourcePath);
+  } catch (error) {
+    throw unstatablePathRefusal(sourcePath, error);
   }
-  const stat = lstatSync(sourcePath);
 
   if (stat.isFile() && sourcePath.endsWith('.zip')) {
     const extractRoot = await extractZipToTemp(sourcePath);
-    return { dir: findSkillRootInExtracted(extractRoot), tempDirs: [extractRoot] };
+    const dir = await discardingOnFailure(extractRoot, () => findSkillRootInExtracted(extractRoot));
+    return { dir, tempDirs: [extractRoot] };
   }
   if (stat.isFile() && (sourcePath.endsWith('.tgz') || sourcePath.endsWith('.tar.gz'))) {
     const { tempDir, packageDir } = await extractTarballToTemp(sourcePath);
-    return { dir: findSkillsDirInNpmPackage(packageDir), tempDirs: [tempDir] };
+    const dir = await discardingOnFailure(tempDir, () => findSkillsDirInNpmPackage(packageDir));
+    return { dir, tempDirs: [tempDir] };
   }
   if (stat.isDirectory()) {
     return { dir: sourcePath, tempDirs: [] };
   }
-  throw new InstallError(
+  throw new CommandRefusalError(
+    'USAGE_INVALID',
     `Source must be a directory, .zip, .tgz, or npm:@scope/package: ${sourcePath}`,
   );
 }
@@ -313,10 +319,86 @@ async function resolveSource(source: string): Promise<ResolvedSource> {
 function assertNameOverrideApplies(skillDirCount: number, name: string): void {
   assertInstallableName(name, '--name');
   if (skillDirCount > 1) {
-    throw new InstallError(
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
       `--name is only valid for single-skill sources; found ${skillDirCount} skills.`,
     );
   }
+}
+
+/** `--target` and `--scope` name a placement this command knows — checked before any source is fetched. */
+function assertPlacement(target: string, scope: string): asserts target is SkillTarget {
+  if (!(SKILL_TARGET_NAMES as readonly string[]).includes(target)) {
+    throw new CommandRefusalError('USAGE_INVALID', `Invalid --target "${target}". Valid targets: ${SKILL_TARGET_NAMES.join(', ')}`);
+  }
+  if (!(SKILL_SCOPE_NAMES as readonly string[]).includes(scope)) {
+    throw new CommandRefusalError('USAGE_INVALID', `Invalid --scope "${scope}". Valid scopes: ${SKILL_SCOPE_NAMES.join(', ')}`);
+  }
+}
+
+/** The published row for a plan: `alreadyInstalled` only under `--dry-run`, where it is the plan's warning. */
+function planRow(plan: InstallPlan, dryRun: boolean): SkillsInstallData['skills'][number] {
+  const row = { name: plan.name, installPath: toForwardSlash(plan.installPath) };
+  return dryRun ? { ...row, alreadyInstalled: plan.alreadyExists } : row;
+}
+
+/**
+ * What a run has finished, for a refusal to publish: the skills validated and
+ * their findings, and — once copying has started — the skills already installed.
+ */
+interface InstallProgress {
+  examined: number;
+  findings: Finding[];
+  data: SkillsInstallData | null;
+}
+
+/** Validate every skill, then (unless one failed) plan and install them all. */
+async function installFromDir(
+  sourceDir: string,
+  base: SkillsInstallData,
+  options: InstallCommandOptions,
+  progress: InstallProgress,
+): Promise<SkillsInstallReport> {
+  const skillDirs = discoverSkillDirs(sourceDir);
+  // Reject an unusable --name override before doing any real work.
+  if (options.name !== undefined) assertNameOverrideApplies(skillDirs.length, options.name);
+
+  // Pre-verify ALL skills before touching the filesystem. Verification also
+  // yields each skill's declared name, which is what it installs as.
+  const verified: VerifiedSkill[] = [];
+  for (const dir of skillDirs) verified.push(await preVerifySkill(dir));
+  const findings = toFindings(verified.flatMap((skill) => skill.issues));
+  progress.examined = verified.length;
+  progress.findings = findings;
+
+  const discovered: DiscoveredSkill[] = [];
+  for (const skill of verified) {
+    if (skill.declaredName !== undefined) discovered.push({ dir: skill.dir, name: options.name ?? skill.declaredName });
+  }
+  if (discovered.length < verified.length) {
+    // All-or-nothing: a skill with an error finding installs nothing in the batch.
+    return buildReport({ examined: verified.length, findings, data: base, gate: GATE });
+  }
+  assertNoNameCollisions(discovered);
+
+  // Build and check install plans (detect conflicts before copying).
+  const installDir = resolveSkillTarget(base.target as SkillTarget, base.scope as SkillScope, options.cwd ?? process.cwd());
+  const plans = discovered.map((skill) => buildInstallPlan(skill, installDir, options));
+
+  const installed: SkillsInstallData = { ...base, skills: [] };
+  if (!base.dryRun) {
+    progress.data = installed;
+    for (const plan of plans) {
+      executeInstallPlan(plan);
+      installed.skills.push(planRow(plan, false));
+    }
+  }
+  return buildReport({
+    examined: verified.length,
+    findings,
+    data: { ...base, skills: plans.map((plan) => planRow(plan, base.dryRun)) },
+    gate: GATE,
+  });
 }
 
 export async function installCommand(
@@ -325,76 +407,42 @@ export async function installCommand(
 ): Promise<void> {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
+  const progress: InstallProgress = { examined: 0, findings: [], data: null };
 
+  let report: SkillsInstallReport;
   try {
-    const cwd = options.cwd ?? process.cwd();
-    const target = options.target as SkillTarget;
-    const scope = options.scope as SkillScope;
-
-    // 1. Resolve source — dispatch by type (directory, ZIP, tgz, npm:).
-    // For display: use the raw source string for npm: prefixes, resolved path otherwise.
-    const displaySource = source.startsWith('npm:') ? source : safePath.resolve(source);
+    assertPlacement(options.target, options.scope);
+    const base: SkillsInstallData = {
+      // The raw source string for npm: prefixes, the resolved path otherwise.
+      source: source.startsWith('npm:') ? source : toForwardSlash(safePath.resolve(source)),
+      target: options.target,
+      scope: options.scope,
+      dryRun: options.dryRun === true,
+      skills: [],
+    };
     const resolved = await resolveSource(source);
-
     try {
-      // 2. Discover skill directories in source.
-      const skillDirs = discoverSkillDirs(resolved.dir);
-
-      // 3. Reject an unusable --name override before doing any real work.
-      if (options.name !== undefined) {
-        assertNameOverrideApplies(skillDirs.length, options.name);
-      }
-
-      // 4. Pre-verify ALL skills before touching the filesystem. Verification
-      //    also yields each skill's declared name, which is what it installs as.
-      const discovered: DiscoveredSkill[] = [];
-      for (const dir of skillDirs) {
-        const name = await preVerifySkill(dir);
-        discovered.push({ dir, name: options.name ?? name });
-      }
-      assertNoNameCollisions(discovered);
-
-      // 5. Resolve install directory.
-      const installDir = resolveSkillTarget(target, scope, cwd);
-
-      // 6. Build and check install plans (detect conflicts before copying).
-      const plans = discovered.map((skill) => buildInstallPlan(skill, installDir, options));
-
-      // 7. Execute install (no-op if dry-run).
-      for (const plan of plans) {
-        executeInstallPlan(plan, options);
-      }
-
-      const duration = Date.now() - startTime;
-      emitYamlSummary({
-        source: displaySource,
-        target,
-        scope,
-        skills: plans,
-        dryRun: options.dryRun === true,
-        duration,
-      });
-
-      if (options.dryRun) {
-        logger.info(`\nDry-run complete: ${plans.length} skill(s) would be installed.`);
-      } else {
-        logger.info(`\nInstalled ${plans.length} skill(s) to ${toForwardSlash(installDir)}`);
-      }
+      report = await installFromDir(resolved.dir, base, options, progress);
     } finally {
       await removeResolvedTempDirs(resolved.tempDirs, logger);
     }
   } catch (error) {
-    if (error instanceof InstallError) {
-      const duration = Date.now() - startTime;
-      const firstLine = error.message.split('\n')[0] ?? 'Unknown error';
-      logger.error(`Install failed: ${error.message}`);
-      process.stdout.write(
-        `---\nstatus: error\nerror: ${firstLine}\nduration: ${duration}ms\n`,
-      );
-      throw error;
-    }
-    handleCommandError(error, logger, startTime, 'SkillsInstall');
+    // Validation that finished is published even when nothing was installed.
+    const finished: FinishedWork = progress.examined === 0
+      ? NOTHING_FINISHED
+      : { examined: progress.examined, findings: progress.findings, data: progress.data };
+    endWithRefusal('skills install', refusalCodeOf(error), error, 'yaml', GATE, finished);
   }
+
+  const count = report.data?.skills.length ?? 0;
+  if (report.status === 'findings' && report.summary.errors > 0) {
+    logger.info('\nNothing installed: a skill failed validation (see the findings).');
+  } else if (options.dryRun) {
+    logger.info(`\nDry-run complete: ${count} skill(s) would be installed.`);
+  } else {
+    logger.info(`\nInstalled ${count} skill(s) to ${options.target} (${options.scope} scope)`);
+  }
+  endWithReport('skills install', withDurationMs(report, Date.now() - startTime), 'yaml');
 }
 
 export function createInstallCommand(): Command {
@@ -409,19 +457,7 @@ export function createInstallCommand(): Command {
     .option('-f, --force', 'Overwrite existing skill')
     .option('--dry-run', 'Preview install without writing files')
     .action(async (source: string) => {
-      try {
-        const opts = command.optsWithGlobals<InstallCommandOptions>();
-        await installCommand(source, opts);
-      } catch (err) {
-        // An `InstallError` is the command refusing on its own terms (a bad
-        // source, a skill already present); anything else is a crash. Both are
-        // the command failing to do its job — neither is a finding about a
-        // skill — so both end on `ERROR`, and the message is what tells them apart.
-        if (!(err instanceof InstallError)) {
-          process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
-        }
-        process.exit(ExitCode.ERROR);
-      }
+      await installCommand(source, command.optsWithGlobals<InstallCommandOptions>());
     })
     .addHelpText(
       'after',
@@ -449,10 +485,20 @@ Targets (user path / project path):
   windsurf  ~/.codeium/windsurf/skills/   .windsurf/skills/
   agents    ~/.agents/skills/       .agents/skills/
 
+Output (YAML report on stdout):
+  - status: ok, findings, or error when the install could not run
+  - examined: skills in the install plan
+  - findings: each skill's validation findings (an error installs nothing)
+  - data.skills[]: installed (or, with --dry-run, planned) skills;
+    alreadyInstalled on each under --dry-run
+
 Exit Codes:
-  0 - Install successful (or dry-run complete)
-  1 - Install error (validation failed, conflict without --force, bad source)
-  2 - System error
+  0 - Installed, or dry-run complete
+  1 - A skill failed validation: nothing installed
+  2 - Could not install: a bad --target/--scope/--name or source, a skill already
+      installed without --force, an unreadable source (or an install path the OS
+      will not let VAT check), an npm registry failure, or a copy that failed
+      partway (the skills already installed are listed)
 
 Example:
   $ vat skills install ./dist/skills/my-skill --target claude --scope user

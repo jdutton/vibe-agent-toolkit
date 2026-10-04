@@ -26,6 +26,7 @@
 // The base of every error VAT throws on purpose; `code` is what a catch
 // block dispatches on, never `message`.
 export * from './errors/vat-error.js';
+export { RAG_INDEX_EMPTY_CODE } from './errors/rag-index-empty.js';
 
 // Cross-platform path utilities
 export * from './path-utils.js';

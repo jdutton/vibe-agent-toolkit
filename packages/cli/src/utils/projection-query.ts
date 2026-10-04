@@ -55,6 +55,7 @@ import {
   splitProjectionByScope,
   type Projection,
 } from '@vibe-agent-toolkit/resources';
+import { isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
 import { gitTrackerForProjectRoot } from '../commands/audit/distributed-tree.js';
 
@@ -262,6 +263,28 @@ export type AskProjection = (
   ...parameters: readonly string[]
 ) => readonly Record<string, unknown>[];
 
+/** The result columns one statement would produce, in order, without running it. */
+type ColumnsOfStatement = (sql: string, ...parameters: readonly string[]) => readonly string[];
+
+/**
+ * A statement's failure, reworded by {@link describeQueryFailure} — keeping
+ * the thrown value's `code`.
+ *
+ * 🔑 The code is what tells the caller WHICH failure this is: the store's
+ * `PROJECTION_STATEMENT_REFUSED_CODE` means the statement is wrong (the
+ * author's to fix, a `USAGE_INVALID` refusal for `vat resources query`);
+ * anything uncoded is a defect. Rewording into a bare `Error` used to drop it,
+ * so every refused statement read as VAT's own failure.
+ *
+ * @param sql - The statement that was submitted
+ * @param error - What running or compiling it threw
+ * @returns The error to throw in its place
+ */
+function describedFailure(sql: string, error: unknown): Error {
+  const message = describeQueryFailure(sql, error instanceof Error ? error.message : String(error));
+  return isVatError(error) ? new VatError(error.code, message, { cause: error }) : new Error(message, { cause: error });
+}
+
 /**
  * Compile every statement a run intends to ask, against the schema and NO rows,
  * before anything is populated.
@@ -315,9 +338,7 @@ export async function assertQueriesCompile(statements: readonly PreflightStateme
       try {
         probe.assertCompiles(sql, parameters);
       } catch (error) {
-        throw new Error(
-          describeQueryFailure(sql, error instanceof Error ? error.message : String(error)),
-        );
+        throw describedFailure(sql, error);
       }
     }
   } finally {
@@ -364,6 +385,8 @@ export async function withQueriedProjection<T>(
     // ⚠️ Not a second way to ask the same question. Nothing here re-derives,
     // re-filters or re-scopes; a caller wanting a relational answer uses `ask`.
     projection: Projection,
+    // The shape of an answer, which its rows cannot carry when there are none.
+    columnsOf: ColumnsOfStatement,
   ) => Promise<T> | T,
 ): Promise<T> {
   const { root, logger } = options;
@@ -465,9 +488,14 @@ export async function withQueriedProjection<T>(
         try {
           return store.query(sql, ...parameters);
         } catch (error) {
-          throw new Error(
-            describeQueryFailure(sql, error instanceof Error ? error.message : String(error)),
-          );
+          throw describedFailure(sql, error);
+        }
+      };
+      const columnsOf: ColumnsOfStatement = (sql, ...parameters) => {
+        try {
+          return store.columns(sql, ...parameters);
+        } catch (error) {
+          throw describedFailure(sql, error);
         }
       };
 
@@ -485,6 +513,7 @@ export async function withQueriedProjection<T>(
         // exists to survive, and it is the population's size either way.
         { membersEnumerated: projection.resourceRealizations.length },
         projection,
+        columnsOf,
       );
     } finally {
       // Closed however the work ends. An in-memory database is reclaimed with the

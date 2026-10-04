@@ -5,7 +5,7 @@ import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { parseGitUrl } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { cloneGitSource } from '../../src/skill-source/git-clone.js';
+import { cloneGitSource, GIT_SUBPATH_INVALID_CODE } from '../../src/skill-source/git-clone.js';
 
 import { makeBareRepoWithSkill } from './test-helpers.js';
 
@@ -43,8 +43,9 @@ describe('cloneGitSource', () => {
 
   it('rejects a subpath that escapes the clone', () => {
     const tempdir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-gc-esc-'));
+    // Coded, so a caller can tell the argument's mistake from an unreachable source without reading prose.
     expect(() => cloneGitSource(parseGitUrl(`${bareUrl}#main:../../etc`), tempdir)).toThrow(
-      /escapes the cloned repository/i,
+      expect.objectContaining({ code: GIT_SUBPATH_INVALID_CODE, message: expect.stringMatching(/escapes the cloned repository/i) }),
     );
     rmSync(tempdir, { recursive: true, force: true });
   });
@@ -77,7 +78,7 @@ describe('cloneGitSource', () => {
   it('throws "Subpath not found" when the ref exists but the subpath is absent', () => {
     const tempdir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-gc-nosub-'));
     expect(() => cloneGitSource(parseGitUrl(`${bareUrl}#main:plugins/missing`), tempdir)).toThrow(
-      /Subpath not found in cloned repo/i,
+      expect.objectContaining({ code: GIT_SUBPATH_INVALID_CODE, message: expect.stringMatching(/Subpath not found in cloned repo/i) }),
     );
     rmSync(tempdir, { recursive: true, force: true });
   });

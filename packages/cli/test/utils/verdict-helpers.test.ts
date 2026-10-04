@@ -23,7 +23,7 @@ import { computeConfigVerdicts } from '../../src/utils/verdict-helpers.js';
 /** A local-shell observation, which `claude-chat` cannot satisfy. */
 const SHELL_OBSERVATION: Observation = {
   code: 'CAPABILITY_LOCAL_SHELL',
-  summary: 'Skill requires a local shell environment.',
+  description: 'Skill requires a local shell environment.',
   supportingEvidence: ['bash-fence'],
 };
 

@@ -222,7 +222,8 @@ export type RefusableSyncFsMethod =
   | 'realpathSync'
   | 'renameSync'
   | 'rmSync'
-  | 'unlinkSync';
+  | 'unlinkSync'
+  | 'writeFileSync';
 
 /** The `node:fs/promises` calls a refusal can be injected into. */
 export type RefusableAsyncFsMethod = 'readdir' | 'readFile' | 'stat' | 'lstat' | 'access';

@@ -1,11 +1,12 @@
 /**
  * `vat claude org workspaces` — manage organization workspaces via Admin API.
  */
-import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { Command } from 'commander';
 
+import { endWithRefusal, NOTHING_FINISHED } from '../../../utils/document-writer.js';
+
 import { addPaginationOptions, buildPaginationParams, executeOrgCommand } from './helpers.js';
-import { writeNotYetImplementedStub } from './stubs.js';
+import { NOT_IMPLEMENTED_MESSAGE } from './stubs.js';
 
 const WS_ID_ARG = '<workspace-id>';
 const WS_ID_DESC = 'Workspace ID';
@@ -52,7 +53,7 @@ function createMembersSubgroup(): Command {
         workspaceId: string,
         options: { limit?: string; afterId?: string; debug?: boolean },
       ) => {
-        await executeOrgCommand('OrgWorkspaceMembersList', options.debug, async ({ client }) => {
+        await executeOrgCommand('claude org workspaces members list', options.debug, async ({ client }) => {
           const params = buildPaginationParams(options);
           // Encoded, not spliced: the id is opaque and comes straight from argv, and one
           // carrying a `/` would address a different resource.
@@ -79,8 +80,7 @@ function createMembersSubgroup(): Command {
     .requiredOption(USER_ID_FLAG, USER_ID_DESC)
     .requiredOption('--role <role>', 'Role (workspace_user, workspace_developer, workspace_admin)')
     .action(() => {
-      writeNotYetImplementedStub('org workspaces members add');
-      process.exit(ExitCode.ERROR);
+      endWithRefusal('claude org workspaces members add', 'NOT_IMPLEMENTED', NOT_IMPLEMENTED_MESSAGE, 'yaml', { strict: false }, NOTHING_FINISHED);
     });
 
   // update (stub)
@@ -91,8 +91,7 @@ function createMembersSubgroup(): Command {
     .requiredOption(USER_ID_FLAG, USER_ID_DESC)
     .requiredOption('--role <role>', 'New role')
     .action(() => {
-      writeNotYetImplementedStub('org workspaces members update');
-      process.exit(ExitCode.ERROR);
+      endWithRefusal('claude org workspaces members update', 'NOT_IMPLEMENTED', NOT_IMPLEMENTED_MESSAGE, 'yaml', { strict: false }, NOTHING_FINISHED);
     });
 
   // remove (stub)
@@ -102,8 +101,7 @@ function createMembersSubgroup(): Command {
     .argument(WS_ID_ARG, WS_ID_DESC)
     .requiredOption(USER_ID_FLAG, USER_ID_DESC)
     .action(() => {
-      writeNotYetImplementedStub('org workspaces members remove');
-      process.exit(ExitCode.ERROR);
+      endWithRefusal('claude org workspaces members remove', 'NOT_IMPLEMENTED', NOT_IMPLEMENTED_MESSAGE, 'yaml', { strict: false }, NOTHING_FINISHED);
     });
 
   members.addCommand(listCmd);
@@ -125,7 +123,7 @@ export function createOrgWorkspacesCommand(): Command {
   const listCmd = new Command('list');
   addPaginationOptions(listCmd.description('List organization workspaces'))
     .action(async (options: { limit?: string; afterId?: string; debug?: boolean }) => {
-      await executeOrgCommand('OrgWorkspacesList', options.debug, async ({ client }) => {
+      await executeOrgCommand('claude org workspaces list', options.debug, async ({ client }) => {
         const params = buildPaginationParams(options);
         const resp = await client.get<WorkspacesListResponse>(
           '/v1/organizations/workspaces',
@@ -154,7 +152,7 @@ Example:
     .argument(WS_ID_ARG, WS_ID_DESC)
     .option('--debug', 'Enable debug logging')
     .action(async (workspaceId: string, options: { debug?: boolean }) => {
-      await executeOrgCommand('OrgWorkspacesGet', options.debug, async ({ client }) => {
+      await executeOrgCommand('claude org workspaces get', options.debug, async ({ client }) => {
         // Encoded, not spliced: same opaque-id-from-argv class as `skillVersionsPath`.
         return client.get<Workspace>(`/v1/organizations/workspaces/${encodeURIComponent(workspaceId)}`);
       });
@@ -170,8 +168,7 @@ Example:
     .description('Create a workspace (not yet implemented)')
     .requiredOption('--name <name>', 'Workspace name')
     .action(() => {
-      writeNotYetImplementedStub('org workspaces create');
-      process.exit(ExitCode.ERROR);
+      endWithRefusal('claude org workspaces create', 'NOT_IMPLEMENTED', NOT_IMPLEMENTED_MESSAGE, 'yaml', { strict: false }, NOTHING_FINISHED);
     });
 
   // archive (stub)
@@ -180,8 +177,7 @@ Example:
     .description('Archive a workspace (not yet implemented)')
     .argument(WS_ID_ARG, WS_ID_DESC)
     .action(() => {
-      writeNotYetImplementedStub('org workspaces archive');
-      process.exit(ExitCode.ERROR);
+      endWithRefusal('claude org workspaces archive', 'NOT_IMPLEMENTED', NOT_IMPLEMENTED_MESSAGE, 'yaml', { strict: false }, NOTHING_FINISHED);
     });
 
   command.addCommand(listCmd);

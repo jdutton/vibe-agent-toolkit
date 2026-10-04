@@ -62,26 +62,40 @@ describe('settings auditor answer shapes', () => {
     it('publishes per-severity counts beside the status', async () => {
       const result = await validateSettingsFile(validUserFile);
 
-      expect(result.status).toBe('success');
-      expect(result.issueCounts).toEqual({
+      // The ambiguity note is an info finding, so a valid file is `findings`.
+      expect(result.status).toBe('findings');
+      expect(result.summary).toEqual({
         errors: 0,
         warnings: 0,
-        info: result.issueCounts.info,
+        info: result.summary.info,
       });
-      expect(result.issueCounts.errors).toBe(0);
+      expect(result.summary.errors).toBe(0);
     });
 
     it('reports schema violations as error-severity findings, and counts them', async () => {
       const result = await validateSettingsFile(invalidFile);
 
-      expect(result.status).toBe('error');
+      expect(result.summary.errors).toBeGreaterThan(0);
       expect(result.findings.length).toBeGreaterThan(0);
-      expect(result.issueCounts.errors).toBe(
+      expect(result.summary.errors).toBe(
         result.findings.filter(f => f.severity === 'error').length,
       );
       for (const finding of result.findings) {
         expect(['error', 'warning', 'info']).toContain(finding.severity);
       }
+    });
+
+    it('publishes a registered code and the key path as field, and status findings for an error', async () => {
+      const result = await validateSettingsFile(invalidFile);
+
+      expect(result.status).toBe('findings');
+      expect(result.summary.errors).toBeGreaterThan(0);
+      expect(result).not.toHaveProperty('issueCounts');
+      const modelFinding = result.findings.find(f => f.severity === 'error');
+      // `location` is the FILE to open — the caller's; the key path inside it is `field`.
+      expect(modelFinding).toMatchObject({ code: 'SETTINGS_FILE_INVALID', field: 'model' });
+      expect(modelFinding).not.toHaveProperty('location');
+      expect(modelFinding).not.toHaveProperty('path');
     });
 
     it('says the type was AMBIGUOUS rather than silently answering "user"', async () => {
@@ -91,8 +105,8 @@ describe('settings auditor answer shapes', () => {
       const result = await validateSettingsFile(validUserFile);
 
       expect(result.typeConfidence).toBe('ambiguous');
-      expect(result.issueCounts.info).toBe(1);
-      expect(result.findings.some(f => f.severity === 'info')).toBe(true);
+      expect(result.summary.info).toBe(1);
+      expect(result.findings).toContainEqual(expect.objectContaining({ code: 'SETTINGS_TYPE_AMBIGUOUS', severity: 'info' }));
     });
 
     it('reports a caller-declared type as declared, with no ambiguity note', async () => {
@@ -100,7 +114,7 @@ describe('settings auditor answer shapes', () => {
 
       expect(result.detectedType).toBe('project');
       expect(result.typeConfidence).toBe('declared');
-      expect(result.issueCounts.info).toBe(0);
+      expect(result.summary.info).toBe(0);
     });
 
     it('reports an inferred managed type as inferred', async () => {
@@ -108,15 +122,19 @@ describe('settings auditor answer shapes', () => {
 
       expect(result.detectedType).toBe('managed');
       expect(result.typeConfidence).toBe('inferred');
-      expect(result.issueCounts.info).toBe(0);
+      expect(result.summary.info).toBe(0);
     });
 
-    it('reports an unreadable file as undetermined type, not as a user file', async () => {
-      const result = await validateSettingsFile(missingFile);
+    it('reports content that is not JSON as an undetermined type, not as a user file', async () => {
+      const result = await validateSettingsFile(notJsonFile);
 
-      expect(result.status).toBe('error');
+      expect(result.findings.map((f) => f.code)).toEqual(['SETTINGS_FILE_INVALID']);
       expect(result.detectedType).toBe('unknown');
       expect(result.typeConfidence).toBe('undetermined');
+    });
+
+    it('throws for a file that is not there — nothing was read, so it is not a finding about the file', async () => {
+      await expect(validateSettingsFile(missingFile)).rejects.toMatchObject({ code: 'ENOENT' });
     });
   });
 

@@ -288,9 +288,12 @@ Exit codes:
 
 | Code | Meaning |
 |---|---|
-| `0` | Success |
-| `1` | The run happened and the outcome was not clean (e.g. `skills install --from-npm` uploaded some skills and failed others), or a stub command |
-| `2` | The run could not happen: missing key, API failure, unusable input |
+| `0` | Every write landed (or the read succeeded) |
+| `2` | A write that did not fully land (e.g. `skills install --from-npm` uploaded some skills and failed others — the payload still lists them), a refused run (missing key, API failure, unusable input), or a not-implemented command |
+
+Output is the API's payload, passed through with no VAT status word. A refused run publishes
+`{ error: { code, message } }` instead — `USAGE_INVALID` for a missing key or bad argument,
+`EXTERNAL_API_FAILED` for a refused or unanswered API call.
 
 **Skill deletion lifecycle:** The API refuses to delete a skill that still has versions (400).
 `vat claude org skills delete <skill-id> --all` deletes every version and then the skill in one
@@ -365,8 +368,9 @@ binary, then managed settings to enable it across all machines.
 
 ## Not Yet Implemented
 
-These commands exist with the correct CLI shape but return structured
-`not-yet-implemented` stubs (exit 1). Coming in a future release:
+These commands exist with the correct CLI shape but refuse: each publishes the report
+envelope's error branch (`status: error`, `error.code: NOT_IMPLEMENTED`) at exit 2. Use the
+Anthropic Console or the Admin API directly for:
 
 - `org users update/remove` — role changes, offboarding
 - `org invites create/delete` — programmatic invitations

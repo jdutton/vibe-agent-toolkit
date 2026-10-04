@@ -35,9 +35,8 @@
  *   `ExitCode.ERROR`, or a call to one of `derived.calls` (the derivations:
  *   `exitCodeForReport`, `exitCodeOfChild`, …). A ternary, a variable or a
  *   forwarded field is a code decided somewhere this rule cannot see.
- * - `derived.legacy` names the files not yet migrated. It is a RATCHET asserted
- *   both ways: a listed file that no longer decides a code by hand is itself an
- *   error (`staleLegacy`), so the list can only shrink and never holds a dead entry.
+ * - No file under `derived.paths` is exempt: the migration ratchet that once
+ *   listed the undelivered verbs reached zero and went, and the option with it.
  *
  * ⚠️ What this cannot see: a document verb ending on a bare `ExitCode.OK` over a
  * document that says `error`. That is a runtime fact, pinned by the exit-code
@@ -141,9 +140,8 @@ module.exports = {
             properties: {
               paths: { type: 'array', items: { type: 'string' }, uniqueItems: true },
               calls: { type: 'array', items: { type: 'string' }, uniqueItems: true },
-              legacy: { type: 'array', items: { type: 'string' }, uniqueItems: true },
             },
-            required: ['paths', 'calls', 'legacy'],
+            required: ['paths', 'calls'],
             additionalProperties: false,
           },
         },
@@ -164,9 +162,6 @@ module.exports = {
       exitNotDerived:
         'This exit code is decided here, beside the document, where it can disagree with it. Exit ' +
         'with ExitCode.OK, ExitCode.ERROR, or a derivation: {{calls}}.',
-      staleLegacy:
-        'This file is listed in no-literal-process-exit derived.legacy but decides no exit code by ' +
-        'hand any more. Remove it from the list — the ratchet only shrinks.',
     },
   },
 
@@ -181,14 +176,9 @@ module.exports = {
     const inDerived = derived !== undefined
       && !isTestFile(filename)
       && createExemptDirectoryMatcher(derived.paths)(filename);
-    const isLegacy = inDerived && createExemptPathMatcher(derived.legacy)(filename);
     const derivations = new Set(derived?.calls ?? []);
-    let handDecided = 0;
 
-    /** Report a derivation violation — or, in a legacy file, only count it. */
     function reportDerived(node, messageId) {
-      handDecided += 1;
-      if (isLegacy) return;
       context.report({ node, messageId, data: { calls: [...derivations].join(', ') } });
     }
 
@@ -221,9 +211,6 @@ module.exports = {
       },
       MemberExpression(node) {
         if (inDerived && isExitCodeMember(node, 'FINDINGS')) reportDerived(node, 'findingsNotDerived');
-      },
-      'Program:exit'(node) {
-        if (isLegacy && handDecided === 0) context.report({ node, messageId: 'staleLegacy' });
       },
     };
   },

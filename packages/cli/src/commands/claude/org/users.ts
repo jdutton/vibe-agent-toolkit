@@ -1,11 +1,12 @@
 /**
  * `vat claude org users` — manage organization users via Admin API.
  */
-import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { Command } from 'commander';
 
+import { endWithRefusal, NOTHING_FINISHED } from '../../../utils/document-writer.js';
+
 import { addPaginationOptions, buildPaginationParams, executeOrgCommand } from './helpers.js';
-import { writeNotYetImplementedStub } from './stubs.js';
+import { NOT_IMPLEMENTED_MESSAGE } from './stubs.js';
 
 interface OrgUser {
   id: string;
@@ -34,7 +35,7 @@ export function createOrgUsersCommand(): Command {
   const listCmd = new Command('list');
   addPaginationOptions(listCmd.description('List organization users'))
     .action(async (options: { limit?: string; afterId?: string; debug?: boolean }) => {
-      await executeOrgCommand('OrgUsersList', options.debug, async ({ client }) => {
+      await executeOrgCommand('claude org users list', options.debug, async ({ client }) => {
         const params = buildPaginationParams(options);
         const resp = await client.get<UsersListResponse>('/v1/organizations/users', params);
         return {
@@ -60,7 +61,7 @@ Example:
     .argument('<user-id>', 'User ID')
     .option('--debug', 'Enable debug logging')
     .action(async (userId: string, options: { debug?: boolean }) => {
-      await executeOrgCommand('OrgUsersGet', options.debug, async ({ client }) => {
+      await executeOrgCommand('claude org users get', options.debug, async ({ client }) => {
         // The id is opaque and comes straight from argv. Encoded, not spliced: one
         // carrying a `/` would otherwise address a different resource entirely.
         return client.get<OrgUser>(`/v1/organizations/users/${encodeURIComponent(userId)}`);
@@ -78,8 +79,7 @@ Example:
     .argument('<user-id>', 'User ID')
     .requiredOption('--role <role>', 'New role (user, developer, admin)')
     .action(() => {
-      writeNotYetImplementedStub('org users update');
-      process.exit(ExitCode.ERROR);
+      endWithRefusal('claude org users update', 'NOT_IMPLEMENTED', NOT_IMPLEMENTED_MESSAGE, 'yaml', { strict: false }, NOTHING_FINISHED);
     });
 
   // remove (stub)
@@ -88,8 +88,7 @@ Example:
     .description('Remove a user from the organization (not yet implemented)')
     .argument('<user-id>', 'User ID')
     .action(() => {
-      writeNotYetImplementedStub('org users remove');
-      process.exit(ExitCode.ERROR);
+      endWithRefusal('claude org users remove', 'NOT_IMPLEMENTED', NOT_IMPLEMENTED_MESSAGE, 'yaml', { strict: false }, NOTHING_FINISHED);
     });
 
   command.addCommand(listCmd);

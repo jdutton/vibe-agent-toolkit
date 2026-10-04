@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 
+import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 import {
   AuthPreflightError,
   resolveAuth,
@@ -9,12 +10,14 @@ import {
   type ResolvedAuth,
 } from '@vibe-agent-toolkit/utils/skill-test';
 
-export interface PreflightCheck {
-  name: string;
-  passed: boolean;
-  message: string;
-  suggestion?: string;
-}
+/**
+ * One preflight check. A FAILED check names the refusal the run publishes when it
+ * is the first to fail — decided here, where the check knows what it looked at,
+ * so nothing downstream classifies a failure by its message.
+ */
+export type PreflightCheck =
+  | { name: string; passed: true; message: string }
+  | { name: string; passed: false; message: string; suggestion?: string; refusal: RefusalCode };
 
 export interface PreflightInput {
   claudeVersionProbe: () => string | null;
@@ -33,6 +36,18 @@ export interface PreflightResult {
   checks: PreflightCheck[];
   passed: boolean;
   resolvedAuth: ResolvedAuth | null;
+}
+
+/**
+ * The refusal a failed preflight publishes: the FIRST failed check's, in check
+ * order — so a missing `claude` binary (checked first) outranks the auth probe it
+ * also breaks. `undefined` when every check passed.
+ */
+export function preflightRefusal(result: PreflightResult): RefusalCode | undefined {
+  for (const check of result.checks) {
+    if (!check.passed) return check.refusal;
+  }
+  return undefined;
 }
 
 /**
@@ -68,7 +83,7 @@ function checkExists(label: string, paths: string[]): PreflightCheck {
   const missing = paths.filter(p => !existsSync(p));
   return missing.length === 0
     ? { name: label, passed: true, message: `all ${paths.length} present` }
-    : { name: label, passed: false, message: `missing: ${missing.join(', ')}`, suggestion: 'These are declared but absent (exit 2).' };
+    : { name: label, passed: false, message: `missing: ${missing.join(', ')}`, suggestion: 'These are declared but absent (exit 2).', refusal: 'INPUT_UNREADABLE' };
 }
 
 /**
@@ -90,13 +105,11 @@ function upgradeSuggestionFor(flag: string): string {
  */
 function flagChecks(probe: (flag: string) => boolean): PreflightCheck[] {
   const gated = REQUIRED_FLAGS.map((flag): PreflightCheck => {
-    const ok = probe(flag);
-    return {
-      name: `flag ${flag}`,
-      passed: ok,
-      message: ok ? 'supported' : 'NOT supported by this claude',
-      ...(ok ? {} : { suggestion: upgradeSuggestionFor(flag) }),
-    };
+    const name = `flag ${flag}`;
+    // A claude too old for a flag the spawn carries is the backend lacking what the run needs.
+    return probe(flag)
+      ? { name, passed: true, message: 'supported' }
+      : { name, passed: false, message: 'NOT supported by this claude', suggestion: upgradeSuggestionFor(flag), refusal: 'BACKEND_UNAVAILABLE' };
   });
   const informational = UNVERIFIABLE_FLAGS.map((flag): PreflightCheck => ({
     name: `flag ${flag}`,
@@ -113,11 +126,11 @@ export function runPreflight(input: PreflightInput): PreflightResult {
   checks.push(
     version
       ? { name: 'claude binary', passed: true, message: version }
-      : { name: 'claude binary', passed: false, message: 'not reachable', suggestion: 'Install Claude Code CLI.' },
+      : { name: 'claude binary', passed: false, message: 'not reachable', suggestion: 'Install Claude Code CLI.', refusal: 'BACKEND_UNAVAILABLE' },
     ...flagChecks(input.flagParseProbe),
     input.integrityOk()
       ? { name: 'vendored skill-creator integrity', passed: true, message: 'manifest verified' }
-      : { name: 'vendored skill-creator integrity', passed: false, message: 'hash manifest mismatch', suggestion: 'Re-sync the vendored copy.' },
+      : { name: 'vendored skill-creator integrity', passed: false, message: 'hash manifest mismatch', suggestion: 'Re-sync the vendored copy.', refusal: 'INPUT_UNREADABLE' },
     checkExists('eval input files', input.evalInputPaths),
     checkExists('declared dependencies', input.declaredDepDirs),
   );
@@ -140,7 +153,7 @@ export function runPreflight(input: PreflightInput): PreflightResult {
     });
   } catch (e) {
     const msg = e instanceof AuthPreflightError ? e.message : String(e);
-    checks.push({ name: 'auth', passed: false, message: msg, suggestion: 'Adjust --auth / --require-auth or your credentials.' });
+    checks.push({ name: 'auth', passed: false, message: msg, suggestion: 'Adjust --auth / --require-auth or your credentials.', refusal: 'USAGE_INVALID' });
   }
 
   const { evalCount, configurations, runsPerQuery, maxBudgetUsd } = input.costEstimate;

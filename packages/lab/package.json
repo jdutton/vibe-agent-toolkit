@@ -20,6 +20,7 @@
   "scripts": {
     "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
     "test:unit": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
@@ -35,6 +36,7 @@
     "@vibe-agent-toolkit/utils": "workspace:*",
     "commander": "^12.1.0",
     "which": "^5.0.0",
+    "yaml": "^2.9.0",
     "zod": "^3.25.0"
   },
   "license": "MIT",

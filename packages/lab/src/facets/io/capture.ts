@@ -41,8 +41,8 @@
  *    this one — both are files with distinct PIDs — so reuse inflates both the
  *    call counts and `processes`. Hence `withDumpDirs`: a fresh `mkdtemp` per
  *    repeat, freshness by construction rather than by deleting first.
- * 2. **`NODE_OPTIONS` assigned instead of appended.** `runRepeats` merges the
- *    capture's environment OVER `process.env`, so an assignment silently drops
+ * 2. **`NODE_OPTIONS` assigned instead of appended.** `runRepeats` applies the
+ *    arm's environment OVER `process.env`, so an assignment silently drops
  *    whatever the surrounding shell or CI had set — changing the process being
  *    measured while reporting it as the same one. See {@link nodeOptionsWith}.
  * 3. **The preload on `env` instead of `envFor`.** `env` reaches every child,
@@ -59,6 +59,7 @@ import { existsSync } from 'node:fs';
 import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
+import { buildArmEnv } from '../../harness/arm-env.js';
 import { withDumpDirs } from '../../harness/dumps.js';
 import { readLaneFromOutput } from '../../harness/lane.js';
 import { judgeLoad, readLoad } from '../../harness/load-guard.js';
@@ -147,7 +148,7 @@ function resolveCounterPath(override: string | undefined): string {
  * Build the `NODE_OPTIONS` for a measured run: whatever was already there, plus
  * the preload.
  *
- * **Appended, never assigned.** `runRepeats` merges this over `process.env`, so
+ * **Appended, never assigned.** `runRepeats` applies this over `process.env`, so
  * an assignment drops an inherited `--max-old-space-size` or `--no-warnings` and
  * measures a differently-configured process while reporting it as the same one.
  *
@@ -316,9 +317,12 @@ export async function captureIo(options: CaptureIoOptions): Promise<ReportEnvelo
     subjectPath: options.subject.path,
   };
 
+  // Read from the environment the child would actually get, not from
+  // `process.env`: an arm that unsets NODE_OPTIONS must not have the operator's
+  // shell value resurrected underneath the preload.
   const nodeOptions = nodeOptionsWith(
     counterPath,
-    options.env?.['NODE_OPTIONS'] ?? process.env['NODE_OPTIONS'],
+    buildArmEnv(process.env, options.env)['NODE_OPTIONS'],
   );
 
   const loadBefore = readLoad();

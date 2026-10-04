@@ -20,7 +20,7 @@ projection and judgement at once. Two consequences:
   from "a check now fires more often."
 - **Blind to population.** The safety story for any pipeline restructure is
   "each lane's population is unchanged" — and population is not directly
-  observable in command output. `filesScanned` catches gross changes; a file
+  observable in command output. `examined` catches gross changes; a file
   whose *classification* moves while its findings stay identical is invisible.
 
 ## What is here
@@ -274,19 +274,16 @@ bunx vitest run --config vitest.integration.config.ts \
 
 `src/qa-snapshot/` is the layer above the oracles. It packages a capture as a
 directory on disk, so two captures taken at different commits can be compared
-rather than only asserted against a golden, and it pairs the oracles with the
-other half of VAT's correctness evidence — whole-command stdout. The two halves
-answer different questions and neither is worth much alone. The oracles are
-narrow: they name a lane and a row. The whole-command captures are broad: they
-catch anything and localize nothing. *"Something changed"* plus *"here is where"*
-is the pair.
+rather than only asserted against a golden.
 
-⚠️ **The whole-command half has no caller today.** `captureSnapshot` still
-implements it behind `includeCommands`, but the only test that calls
-`captureSnapshot` passes `false` on purpose — spawning the built binary from a
-vitest run tests the build, not the instrument — and the caller that passed
-`true` was `vat pipeline snapshot`. Read the paragraph above as the design, not
-as a description of anything that runs.
+The other half of VAT's correctness evidence — whole-command output — is not
+here. The oracles are narrow: they name a lane and a row. Whole-command output is
+broad: it catches anything and localizes nothing. *"Something changed"* plus
+*"here is where"* is the pair, and the broad half is the lab's `verdict` facet
+(`vat-lab verdict run|compare`, `packages/lab/docs/facets.md`), which compares
+what two vat builds decide over a subject set and owns the one output
+normalizer. The snapshot's own whole-command capture had no caller once
+`vat pipeline snapshot` was deleted, and was removed when the facet absorbed it.
 
 ### Asking whether a capture is trustworthy at all
 

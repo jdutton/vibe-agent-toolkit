@@ -23,9 +23,10 @@
  * the only way a working predicate still ships a silent success.
  */
 
-import { writeFileSync } from 'node:fs';
+import { chmodSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import type { Command } from 'commander';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
@@ -33,6 +34,7 @@ import { parse as parseYaml } from 'yaml';
 import { createBuildCommand } from '../../../src/commands/skills/build.js';
 import { CONFIG_FILENAME, unscopableSkillsPath } from '../../../src/commands/skills/scope-guard.js';
 import { createValidateCommand } from '../../../src/commands/skills/validate-command.js';
+import { assertDirectoryArgument } from '../../../src/utils/project-root-policy.js';
 import { createTempDirTracker } from '../../system/test-common.js';
 import { captureProcessExit, type CapturedExit } from '../../test-doubles.js';
 
@@ -41,7 +43,7 @@ const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-skills-path
 /** A directory holding a real config — the scope the commands CAN honour. */
 function scopableDir(): string {
   const dir = createTempDir();
-  writeFileSync(safePath.join(dir, CONFIG_FILENAME), 'version: 1\n', 'utf-8');
+  writeFileSync(safePath.join(dir, CONFIG_FILENAME), '{}\n', 'utf-8');
   return dir;
 }
 
@@ -89,20 +91,47 @@ describe('unscopableSkillsPath', () => {
 
   it('rejects a path that does not exist', () => {
     const missing = safePath.join(createTempDir(), 'nope');
-    expect(unscopableSkillsPath(missing)).toBe('no such directory');
+    expect(unscopableSkillsPath(missing)).toEqual({ refusal: 'USAGE_INVALID', reason: `Path does not exist: ${missing}` });
   });
 
   it('rejects a path that exists but is a file', () => {
     const dir = createTempDir();
     const file = safePath.join(dir, CONFIG_FILENAME);
-    writeFileSync(file, 'version: 1\n', 'utf-8');
-    expect(unscopableSkillsPath(file)).toBe('not a directory');
+    writeFileSync(file, '{}\n', 'utf-8');
+    expect(unscopableSkillsPath(file)).toEqual({ refusal: 'USAGE_INVALID', reason: `Path is not a directory: ${file}` });
   });
 
   it('rejects a directory that holds no config — the run would find no skills there', () => {
     const empty = safePath.join(createTempDir(), 'sub');
     mkdirSyncReal(empty, { recursive: true });
-    expect(unscopableSkillsPath(empty)).toContain(CONFIG_FILENAME);
+    expect(unscopableSkillsPath(empty)).toEqual({ refusal: 'USAGE_INVALID', reason: `no ${CONFIG_FILENAME} there` });
+  });
+
+  // The config may well be in there: a directory the OS refuses is the INPUT's
+  // refusal, never "holds no config", which would send the reader to create one.
+  it.skipIf(CANNOT_DENY_READS)('refuses a directory the OS will not list as INPUT_UNREADABLE, not as holding no config', () => {
+    const locked = scopableDir();
+    chmodSync(locked, 0o000);
+    try {
+      expect(unscopableSkillsPath(locked)?.refusal).toBe('INPUT_UNREADABLE');
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+
+  // A path under a parent the process may not traverse cannot be stat'ed, so
+  // whether it exists is unknown: the input's refusal, never "does not exist".
+  it.skipIf(CANNOT_DENY_READS)('refuses a path under an untraversable parent as INPUT_UNREADABLE, not as absent', () => {
+    const parent = scopableDir();
+    const child = safePath.join(parent, 'sub');
+    mkdirSyncReal(child, { recursive: true });
+    chmodSync(parent, 0o000);
+    try {
+      expect(unscopableSkillsPath(child)?.refusal).toBe('INPUT_UNREADABLE');
+      expect(() => assertDirectoryArgument(child)).toThrow(expect.objectContaining({ refusal: 'INPUT_UNREADABLE' }));
+    } finally {
+      chmodSync(parent, 0o755);
+    }
   });
 
   it('honours VAT_TEST_CONFIG, which relocates the config off the named directory', () => {
@@ -111,7 +140,7 @@ describe('unscopableSkillsPath', () => {
     // looks for a config.
     const empty = safePath.join(createTempDir(), 'sub');
     mkdirSyncReal(empty, { recursive: true });
-    expect(unscopableSkillsPath(empty)).toContain(CONFIG_FILENAME);
+    expect(unscopableSkillsPath(empty)?.reason).toContain(CONFIG_FILENAME);
 
     process.env['VAT_TEST_CONFIG'] = safePath.join(scopableDir(), CONFIG_FILENAME);
     expect(unscopableSkillsPath(empty)).toBeUndefined();
@@ -135,24 +164,36 @@ describe('unscopableSkillsPath', () => {
  * a SUBSTRING of the banner but distinct from it, which is what lets the same
  * stderr be asserted to contain one and not the other.
  */
+/** What either command publishes on stdout for the refusal. */
+interface FailureDocument {
+  status?: string;
+  error?: string | { code: string; message: string };
+}
+
+/** The report envelope's error branch: a coded refusal — both commands publish it. */
+const refusalMessage = (document: FailureDocument): string | undefined =>
+  typeof document.error === 'object' && document.error.code === 'USAGE_INVALID' ? document.error.message : undefined;
+
 const SCOPED_COMMANDS = [
   {
     spelling: 'vat skills validate',
     create: createValidateCommand,
-    silentBanner: 'No skills section in config yaml',
+    silentBanner: 'declares no `skills:` block',
     quotedPhrase: 'nothing to validate',
+    errorMessage: refusalMessage,
   },
   {
     spelling: 'vat skills build',
     create: createBuildCommand,
     silentBanner: 'No skills configuration found',
     quotedPhrase: 'nothing to build',
+    errorMessage: refusalMessage,
   },
 ] as const;
 
 describe.each(SCOPED_COMMANDS)(
   '$spelling rejects an unscopable path argument',
-  ({ spelling, create, silentBanner, quotedPhrase }) => {
+  ({ spelling, create, silentBanner, quotedPhrase, errorMessage }) => {
     afterEach(() => {
       cleanupTempDirs();
     });
@@ -184,9 +225,9 @@ describe.each(SCOPED_COMMANDS)(
         stdoutSpy.mockRestore();
       }
 
-      const document = parseYaml(stdout) as { status?: string; error?: string } | null;
-      expect(document?.status).toBe('error');
-      expect(document?.error).toContain('cannot scope to');
+      const document = parseYaml(stdout) as FailureDocument;
+      expect(document.status).toBe('error');
+      expect(errorMessage(document)).toContain('cannot scope to');
     });
 
     it('names the path, the command, and what a path is supposed to point at', async () => {

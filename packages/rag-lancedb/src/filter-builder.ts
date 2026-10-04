@@ -5,7 +5,7 @@
  * Uses duck typing for Zod v3/v4 compatibility.
  */
 
-import { assertFiltersProducedConditions, assertQuerySupported, type QuerySupport } from '@vibe-agent-toolkit/rag';
+import { assertFiltersProducedConditions, RAGQuerySchema } from '@vibe-agent-toolkit/rag';
 import { getZodTypeName, unwrapZodType, ZodTypeNames } from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape, ZodTypeAny } from 'zod';
 
@@ -51,8 +51,8 @@ const LIKE_METACHARACTERS = /[\\%_]/u;
  * 🚨 THE MIRROR OF THE STRINGIFY-TO-NOTHING GUARD, and it was the half left open. That guard
  * closes "satisfiable by nothing"; this closes "satisfiable by EVERYTHING". Interpolating the
  * member raw made `['%']` emit `tags LIKE '%%%'` — every row in the index — and `['_']` emit
- * `tags LIKE '%_%'` — every non-empty one. Neither backstop can see it: `assertQuerySupported`
- * sees a supported key, and `assertFiltersProducedConditions` counts one condition and is
+ * `tags LIKE '%_%'` — every non-empty one. Neither backstop can see it: the strict filters schema
+ * sees a declared key, and `assertFiltersProducedConditions` counts one condition and is
  * satisfied, because counting cannot tell a condition that discriminates from one that does not.
  *
  * The escape character is escaped FIRST by being a member of the same class, so `['\\']`
@@ -241,20 +241,6 @@ export function buildMetadataWhereClause(
 }
 
 /**
- * What this provider can honour in a query.
- *
- * 🔑 An ALLOWLIST, and the whole point of the shape. Enumerating the four fields known
- * to be unimplemented would close four instances and leave the class open: any other
- * unrecognised key — a typo'd `resourceid`, a field lifted from a design document, a
- * field a future release declares before implementing — would still widen in silence.
- * Declaring what IS read refuses everything else by construction.
- */
-export const LANCEDB_QUERY_SUPPORT: QuerySupport = {
-  filterKeys: ['resourceId', 'metadata'],
-  hybridSearch: false,
-};
-
-/**
  * Build complete WHERE clause from RAG query filters
  *
  * Handles both core filters (resourceId) and custom metadata filters. A key this
@@ -278,11 +264,10 @@ export function buildWhereClause<TMetadata extends Record<string, unknown>>(
     return null;
   }
 
-  // Guarded here as well as in `query()` because this is public API: a caller can reach
-  // the filter→SQL path without going through the provider, and a guard with a bypass is
-  // worse than none because it advertises a safety it does not have. One implementation,
-  // two entry points.
-  assertQuerySupported({ filters: filters as Record<string, unknown> }, LANCEDB_QUERY_SUPPORT);
+  // One contract: the strict `RAGQuerySchema.shape.filters` refuses every key it does not
+  // declare. Validated here as well as in `query()` because this is public API: a caller can
+  // reach the filter->SQL path without going through the provider.
+  RAGQuerySchema.shape.filters.parse(filters);
 
   const conditions: string[] = [];
 

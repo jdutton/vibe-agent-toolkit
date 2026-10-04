@@ -501,9 +501,9 @@ production code and watch the test go red.
 ### A notice on stderr is not a finding
 
 A build that dropped two files from a bundle wrote `warning:` to stderr and reported
-`status: success, warnings: 0` in the YAML — the machine-readable contract said clean. Deleting the
+`status: ok` with `summary.warnings: 0` in the YAML — the machine-readable contract said clean. Deleting the
 stderr line left every test green.
-**Tell:** a human-visible line with no counterpart in `issueCounts`.
+**Tell:** a human-visible line with no counterpart in `summary`.
 **Remedy:** anything worth telling a human is a `ValidationIssue` through the findings channel;
 raw stderr is for progress chatter only.
 

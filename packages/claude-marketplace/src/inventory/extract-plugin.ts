@@ -9,7 +9,7 @@ import type {
 	McpRef,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import { isFilesystemAccessError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
@@ -20,6 +20,7 @@ import {
 	type SharedRegistrySource,
 } from './extract-skill.js';
 import { type InventoryPopulation, type SharedPopulationSource } from './inventory-population.js';
+import { recordedFailure } from './recorded-failure.js';
 import { ClaudePluginInventory, type ClaudeSkillInventory } from './types.js';
 
 type ParseErrors = ClaudePluginInventory['parseErrors'];
@@ -144,7 +145,7 @@ async function readManifest(manifestFilePath: string, parseErrors: ParseErrors):
 	}
 
 	const raw = await readFile(manifestFilePath, 'utf-8').catch((e: unknown) => {
-		parseErrors.push({ path: manifestFilePath, message: (e as Error).message });
+		parseErrors.push(recordedFailure(manifestFilePath, (e as Error).message, e));
 		return null;
 	});
 	if (raw === null) return { rawManifest: undefined, manifest: {} };
@@ -433,15 +434,6 @@ function describePopulationFailure(absolute: string, error: unknown): string {
 		`[vat] Warning: the projection membership lane failed for ${absolute}, ${consequence}:`
 		+ ` ${String(error)}`
 	);
-}
-
-/**
- * One `parseErrors[]` row, marked `unreadable` when the OS refused the path so
- * the consumer files it as a refusal, not a defect: an `EACCES` on `skills/<name>`
- * used to reach `vat audit` as `PLUGIN_INVALID_JSON` at error severity.
- */
-function recordedFailure(path: string, message: string, cause: unknown): ParseErrors[number] {
-	return isFilesystemAccessError(cause) ? { path, message, unreadable: true } : { path, message };
 }
 
 /**

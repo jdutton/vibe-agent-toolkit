@@ -2,7 +2,6 @@
 # Skills are discovered from SKILL.md files, built to dist/skills/, then
 # wrapped into Claude plugin structure at dist/.claude/plugins/marketplaces/.
 
-version: 1
 
 resources:
   # Skill-test eval suites are TEST INPUT, not project docs: their fixtures are

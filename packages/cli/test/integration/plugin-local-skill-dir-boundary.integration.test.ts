@@ -7,6 +7,7 @@
  * The plugin build must fail for it before the plugin is assembled, report it at
  * `warning`, and stay silent at the default `ignore`.
  */
+import { countBySeverity } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -36,8 +37,7 @@ function writeFixture(tempDir: string, skillsBlock: string): void {
   writeTestFile(safePath.join(tempDir, '.gitignore'), 'dist/\n');
   writeTestFile(
     safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1
-skills:
+    `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
 ${skillsBlock}
 claude:
@@ -108,7 +108,7 @@ describe('plugin build — LINK_OUTSIDE_SKILL_DIR on plugin-local skills (integr
     const { lines, run } = await build(tempDir);
     const results = await run;
 
-    expect(results[0]?.plugins[0]?.issueCounts.warnings).toBe(1);
+    expect(countBySeverity(results[0]?.plugins[0]?.issues ?? []).warnings).toBe(1);
     expect(lines.join('\n')).toContain(CODE);
   });
 
@@ -120,7 +120,7 @@ describe('plugin build — LINK_OUTSIDE_SKILL_DIR on plugin-local skills (integr
     const results = await run;
 
     expect(results[0]?.plugins[0]?.localSkillsPackaged).toBe(2);
-    expect(results[0]?.plugins[0]?.issueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
+    expect(countBySeverity(results[0]?.plugins[0]?.issues ?? [])).toEqual({ errors: 0, warnings: 0, info: 0 });
     expect(lines.join('\n')).not.toContain(CODE);
   });
 });

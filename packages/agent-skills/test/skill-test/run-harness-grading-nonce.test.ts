@@ -57,7 +57,6 @@ function runHarness(
   authoredDir: string,
   spawn: FakeSpawn,
   extra?: {
-    tolerateEvalFailure?: boolean;
     baseline?: boolean;
     dryRun?: boolean;
     env?: Record<string, string>;
@@ -75,7 +74,6 @@ function runHarness(
     subjectInPlace: extra?.subjectInPlace === true,
     acknowledgedRunsSkillCode: true,
     spawn,
-    ...(extra?.tolerateEvalFailure === undefined ? {} : { tolerateEvalFailure: extra.tolerateEvalFailure }),
     ...(extra?.baseline === undefined ? {} : { baseline: extra.baseline }),
     ...(extra?.dryRun === undefined ? {} : { dryRun: extra.dryRun }),
     ...(extra?.env === undefined ? {} : { env: extra.env }),
@@ -177,7 +175,7 @@ describe('runSkillTestHarness — per-eval grader integrity nonce', () => {
 
   it('accepts nonce-valid fragments and writes grading.json from the merge (PASS)', async () => {
     const result = await runHarness(getTempDir(), getAuthoredDir(), makeHarnessFakeSpawn().spawn);
-    expect(result.summary).toBe('PASS 1/1');
+    expect(result.description).toBe('PASS 1/1');
     expect(result.exitCode).toBe(0);
     const gradingPath = safePath.join(getTempDir(), 'harness', 'results', GRADING_JSON);
     expect(existsSync(gradingPath)).toBe(true);
@@ -190,23 +188,22 @@ describe('runSkillTestHarness — per-eval grader integrity nonce', () => {
   });
 });
 
-// End-to-end verdict → exit code (the fail-closed default). The fake grader emits
-// a nonce-valid FAILING fragment, so the run reaches verdictExitCode only after
-// every integrity gate has passed.
+// End-to-end verdict → exit code. The fake grader emits a nonce-valid FAILING
+// fragment, so the run reaches its verdict only after every integrity gate has
+// passed. The harness reports the verdict honestly; tolerating a failed eval is the
+// CLI's decision about a finding's severity (`--allow-eval-failure`), not the harness's.
 describe('runSkillTestHarness — eval verdict exit code (fail-closed default)', () => {
   const { getTempDir, getAuthoredDir } = setupStubbedHarnessSubject('vat-verdict-', vi.mocked(stageHarness));
 
   it('a completed run with a failing verdict exits FINDINGS by DEFAULT', async () => {
     const result = await runHarness(getTempDir(), getAuthoredDir(), makeHarnessFakeSpawn({ graderPassed: false }).spawn);
-    expect(result.summary).toBe('FAIL 0/1');
+    expect(result.description).toBe('FAIL 0/1');
     expect(result.exitCode).toBe(ExitCode.FINDINGS);
   });
 
-  it('the --allow-eval-failure opt-out downgrades a failing verdict to Ok (0)', async () => {
-    const failing = makeHarnessFakeSpawn({ graderPassed: false });
-    const result = await runHarness(getTempDir(), getAuthoredDir(), failing.spawn, { tolerateEvalFailure: true });
-    expect(result.summary).toBe('FAIL 0/1');
-    expect(result.exitCode).toBe(0);
+  it('names the failed eval and the suite it came from', async () => {
+    const result = await runHarness(getTempDir(), getAuthoredDir(), makeHarnessFakeSpawn({ graderPassed: false }).spawn);
+    expect(result).toMatchObject({ evals: [{ passed: false }], evalsPath: safePath.join(getAuthoredDir(), 'evals', 'evals.json') });
   });
 });
 
@@ -406,7 +403,7 @@ describe('runSkillTestHarness — an unparseable grader fragment', () => {
 
     const result = await runHarness(getTempDir(), getAuthoredDir(), stub.spawn);
 
-    expect(result.summary).toBe('PASS 2/2');
+    expect(result.description).toBe('PASS 2/2');
     expect(result.exitCode).toBe(0);
     // Two evals, one re-grade: three grader spawns, and the third is the retry.
     expect(stub.graderNonces).toHaveLength(3);
@@ -418,7 +415,7 @@ describe('runSkillTestHarness — an unparseable grader fragment', () => {
 
     const result = await runHarness(tempDir, getAuthoredDir(), graderWritingGarbageFor('e2', 2).spawn);
 
-    expect(result.summary).toBe('FAIL 1/2');
+    expect(result.description).toBe('FAIL 1/2');
     expect(result.exitCode).toBe(ExitCode.FINDINGS);
     const grading = readResult(tempDir, GRADING_JSON) as { expectations: Array<{ evalId: string; passed: boolean; evidence?: string }> };
     expect(grading.expectations).toEqual([
@@ -427,14 +424,12 @@ describe('runSkillTestHarness — an unparseable grader fragment', () => {
     ]);
   });
 
-  // The verdict path, not a harness exit: the interactive opt-out still applies.
-  it('the --allow-eval-failure opt-out downgrades it to Ok like any other failing verdict', async () => {
-    const result = await runHarness(getTempDir(), getAuthoredDir(), graderWritingGarbageFor('1', 2).spawn, {
-      tolerateEvalFailure: true,
-    });
+  // The verdict path, not a harness exit: a failing verdict like any other.
+  it('reaches a FINDINGS verdict like any other failing eval', async () => {
+    const result = await runHarness(getTempDir(), getAuthoredDir(), graderWritingGarbageFor('1', 2).spawn);
 
-    expect(result.summary).toBe('FAIL 0/1');
-    expect(result.exitCode).toBe(0);
+    expect(result.description).toBe('FAIL 0/1');
+    expect(result.exitCode).toBe(ExitCode.FINDINGS);
   });
 
   /**
@@ -553,7 +548,7 @@ describe('runSkillTestHarness — the --dry-run spawn plan', () => {
     ['leaves a plain run at one pair per eval', false, '3 executor→grader spawn pairs', '6 claude sessions'],
   ])('%s', async (_label, baseline, pairsNeedle, sessionsNeedle) => {
     writeEvalSuite(getAuthoredDir(), [{ id: 'e1' }, { id: 'e2' }, { id: 'e3' }]);
-    const { summary } = await runHarness(getTempDir(), getAuthoredDir(), makeHarnessFakeSpawn().spawn, {
+    const { description: summary } = await runHarness(getTempDir(), getAuthoredDir(), makeHarnessFakeSpawn().spawn, {
       dryRun: true,
       baseline,
     });
@@ -621,7 +616,7 @@ describe('runSkillTestHarness — a --dry-run must not touch results/', () => {
 
   // ...and the preview says WOULD, since it no longer writes the file it names.
   it('describes provenance as something a real run would write', async () => {
-    const { summary } = await runHarness(getTempDir(), getAuthoredDir(), makeHarnessFakeSpawn().spawn, {
+    const { description: summary } = await runHarness(getTempDir(), getAuthoredDir(), makeHarnessFakeSpawn().spawn, {
       dryRun: true,
     });
     expect(summary).toMatch(/Provenance would be written to: .*provenance\.json/);
@@ -783,7 +778,7 @@ describe('runSkillTestHarness — an in-place subject carries one harness-origin
     expect(result.exitCode).toBe(0);
     const items = frictionItems(getTempDir());
     expect(items).toHaveLength(1);
-    expect(items[0]).toMatchObject({ severity: 'low', category: 'path-assumption' });
+    expect(items[0]).toMatchObject({ severity: 'info', category: 'path-assumption' });
     expect(String(items[0]?.['message'])).toContain('publish: false');
     expect(String(items[0]?.['message'])).toContain('links that leave the skill directory');
   });

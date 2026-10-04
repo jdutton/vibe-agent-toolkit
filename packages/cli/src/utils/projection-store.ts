@@ -52,7 +52,7 @@ import type { PopulationCache, ProjectionStore } from '@vibe-agent-toolkit/resou
 import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
 import { freshGitTreeSnapshot, gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
-import { isModuleMissing, reportMissingBackend, type OptionalBackend } from './optional-backend.js';
+import { isModuleMissing, missingBackendError, type OptionalBackend } from './optional-backend.js';
 import { installSqliteWarningFilter } from './sqlite-experimental-warning.js';
 
 /**
@@ -277,7 +277,7 @@ export async function openPopulationCache(options: {
 }
 
 /**
- * Load the selected backend, or report it as uninstalled and exit.
+ * Load the selected backend, or throw its `BACKEND_UNAVAILABLE` refusal when it is uninstalled.
  *
  * 🪤 Only `ERR_MODULE_NOT_FOUND` means "not installed". A Node older than
  * 22.13.0 has no `node:sqlite` at all and fails with a *different* code, which
@@ -334,7 +334,7 @@ export async function openCompileProbe(): Promise<ProjectionSqlite.ProjectionCom
 }
 
 /**
- * Load the selected backend module, or report it as uninstalled and exit.
+ * Load the selected backend module, or throw its `BACKEND_UNAVAILABLE` refusal when it is uninstalled.
  *
  * @returns The backend's module namespace
  */
@@ -355,7 +355,8 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
     const floor = nodeSqliteFloorFailure(error);
     if (floor !== undefined) throw floor;
     if (!isModuleMissing(error)) throw error;
-    reportMissingBackend(PROJECTION_STORE_BACKEND);
+    // Thrown into the verb's own catch, which publishes BACKEND_UNAVAILABLE in its shape.
+    throw missingBackendError(PROJECTION_STORE_BACKEND);
   } finally {
     restoreWarnings();
   }
@@ -400,8 +401,8 @@ async function loadBackend(): Promise<typeof ProjectionSqlite> {
  * establishes it — but "every default run of those two commands" was a claim
  * nothing had counted.
  *
- * ✅ **VAT's declared floor is now `>=22.13.0`, so this no longer fires on a
- * SUPPORTED Node.** It used to: the manifests said `>=22.0.0` while these two
+ * ✅ **VAT's declared floor is now `>=22.16.0` (raised past 22.13.0 for
+ * `StatementSync.columns()`), so this no longer fires on a SUPPORTED Node.** It used to: the manifests said `>=22.0.0` while these two
  * commands could not run below 22.13.0, which meant thirteen Node patch
  * releases were advertised as supported and hard-failed here. The floor was
  * raised to stop advertising what VAT cannot do. The branch stays load-bearing
@@ -433,7 +434,7 @@ export function nodeSqliteFloorFailure(error: unknown): Error | undefined {
     // the next time the floor moves.
     + ` \`node:sqlite\` loads unflagged from Node 22.13.0 (added in 22.5.0 behind`
     + ` \`--experimental-sqlite\`) — you are on ${process.version}.`
-    + ' Upgrade Node to 22.13.0 or newer. Installing a package will not help:'
+    + ' Upgrade Node to the floor `vat doctor` reports. Installing a package will not help:'
     + ' the module is built into Node, not published to npm.',
   );
 }

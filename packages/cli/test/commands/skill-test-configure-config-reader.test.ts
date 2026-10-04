@@ -30,6 +30,7 @@ import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { updateSkillTestConfig } from '../../src/commands/skill/test/configure.js';
+import { refusalCodeOf } from '../../src/utils/command-refusal.js';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
@@ -73,7 +74,7 @@ describe('updateSkillTestConfig (the third config reader)', () => {
     // discarding for releases, in a section this command does not read.
     const configPath = writeConfig(
       tempDir,
-      `version: 1\nresources:\n  metadata:\n    frontmatter: true\n${SKILLS_BLOCK}`,
+      `resources:\n  metadata:\n    frontmatter: true\n${SKILLS_BLOCK}`,
     );
     const warnings: string[] = [];
 
@@ -97,7 +98,7 @@ describe('updateSkillTestConfig (the third config reader)', () => {
   it('still REFUSES a config it would misread, in words rather than a JSON dump', async () => {
     // The boundary the downgrade must not cross — a wrong type means VAT would
     // act on a config it misunderstood.
-    const configPath = writeConfig(tempDir, 'version: 1\nskills:\n  include: not-an-array\n');
+    const configPath = writeConfig(tempDir, 'skills:\n  include: not-an-array\n');
     const warnings: string[] = [];
 
     await expect(
@@ -123,7 +124,7 @@ describe('updateSkillTestConfig (the third config reader)', () => {
     // default. This command READS the config and WRITES it straight back, so
     // `readFileSync(path, 'utf-8')` did not merely misreport it: the mojibake was
     // what got serialized over the adopter's own file.
-    const source = `version: 1\n${SKILLS_BLOCK}  config:\n    my-skill:\n      publish: true\n`;
+    const source = `${SKILLS_BLOCK}  config:\n    my-skill:\n      publish: true\n`;
     const configPath = writeConfig(tempDir, Buffer.from(`${BOM}${source}`, 'utf16le'));
 
     const updated = await updateSkillTestConfig(configPath, 'my-skill', { maxTurns: 20 }, () => {});
@@ -133,5 +134,19 @@ describe('updateSkillTestConfig (the third config reader)', () => {
     // ...and nothing that would be written back carries the interleaved NULs.
     expect(updated).not.toContain(NUL);
     expect(updated).toContain('maxTurns: 20');
+  });
+
+  it('refuses a config the OS will not read INPUT_UNREADABLE, through the shared config read', async () => {
+    // A directory where the file should be: EISDIR on every platform, so no
+    // CANNOT_DENY_READS skip. One broken file, one refusal code, whichever verb.
+    const configPath = safePath.join(tempDir, CONFIG_FILENAME);
+    fs.mkdirSync(configPath);
+
+    const failure = await updateSkillTestConfig(configPath, 'my-skill', { maxTurns: 20 }, () => {}).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toMatchObject({ code: 'CONFIG_UNREADABLE' });
+    expect(refusalCodeOf(failure)).toBe('INPUT_UNREADABLE');
   });
 });

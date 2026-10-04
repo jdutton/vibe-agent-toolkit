@@ -21,7 +21,7 @@ Markdown resource scanning, link validation, and frontmatter validation (run bef
 3. Validates anchor links within files (#heading)
 4. Validates cross-file anchor links (file.md#heading)
 5. **Validates frontmatter against JSON Schemas** (per-collection)
-6. Reports broken links and validation errors to stderr
+6. Publishes every finding in the shared report envelope on stdout
 
 **Note:** External URLs are not validated (by design — avoids flaky network checks). Only internal file links and anchors are checked.
 
@@ -36,7 +36,7 @@ See [Collection Validation Guide](../../../docs/guides/collection-validation.md)
 **Exit codes:**
 
 - `0` - All links and frontmatter valid
-- `1` - Broken links or validation errors found (see stderr for details)
+- `1` - An error-severity finding (a broken link, a schema violation), or nothing validated
 - `2` - System error (invalid config, directory not found)
 
 **Creates/modifies:** None (read-only validation)
@@ -59,24 +59,28 @@ Discover markdown resources in directory and report statistics
 
 1. Recursively finds markdown files
 2. Counts links and anchors
-3. Outputs statistics as YAML to stdout
+3. Publishes the shared report envelope as YAML to stdout (`--format json` for JSON)
 
 **When to use:** Understanding markdown structure before processing
 
 **Exit codes:**
 
-- `0` - Scan completed successfully
+- `0` - Scanned at least one file
+- `1` - Scanned nothing (`RESOURCE_CHECK_BROKEN`)
+- `2` - The scan could not run (path names no directory, unreadable, bad config)
 
 **Creates/modifies:** None (read-only scan)
 
 **Output format:** YAML to stdout
 
 ```yaml
-status: success
-filesScanned: 42
-linksFound: 156
-anchorsFound: 89
-duration: 234
+status: ok
+examined: 42
+findings: []
+summary: { errors: 0, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 234
+data: { root: /abs/path/to/project, lane: projection, extentSource: git, collections: {} }
 ```
 
 **Examples:**
@@ -94,7 +98,7 @@ Diagnose vat setup and environment health
 
 **What it does:**
 
-- Checks Node.js version (>=22.13.0 required)
+- Checks Node.js version (>=22.16.0 required)
 - Checks Git installation and repository
 - Validates configuration file exists and is valid
 - Checks vat version and available updates
@@ -104,9 +108,13 @@ Diagnose vat setup and environment health
 
 **Exit codes:**
 
-- `0` - No check failed (a check that could not be determined is reported as ❓, not fatal)
-- `1` - One or more checks failed
+- `0` - No check failed (a check that could not be determined is a `DOCTOR_CHECK_WARNED` warning, not fatal)
+- `1` - One or more checks failed (`DOCTOR_CHECK_FAILED`)
 - `2` - Doctor itself could not run (an internal failure; no verdict was produced)
+
+**Output:** the report envelope on stdout (`--format yaml|json|text`, default yaml);
+`data.checks` lists every check. The human block goes to stderr, or is the stdout
+rendering under `--format text`.
 
 **Creates/modifies:** None (read-only diagnostics)
 
@@ -118,6 +126,40 @@ vat doctor --verbose                      # Show all checks (including passing)
 ```
 
 **More details:** `vat doctor --help` or see `packages/cli/docs/doctor.md`
+
+---
+
+### `inventory`
+
+Extract the structural inventory of a Claude plugin, marketplace, skill or install root
+
+**What it does:** enumerates what the subject contains — declared and discovered components,
+resolved references, unexpected manifests, and every manifest that did not parse. It runs no
+detectors; `vat audit` judges what it finds.
+
+**Exit codes:**
+
+- `0` - The subject was inventoried (`ok`), or a path inside it the OS would not read was skipped
+  (`findings`: one `SCAN_PATH_UNREADABLE` warning each — the inventory is then a floor)
+- `2` - Nothing could be inventoried: no path, a path that does not exist or is neither a directory
+  nor a SKILL.md, an unknown `--format` (`USAGE_INVALID`); a path the OS will not read
+  (`INPUT_UNREADABLE`); `--system` (`NOT_IMPLEMENTED`); the projection store's backend not
+  installed (`BACKEND_UNAVAILABLE`)
+
+**Output:** the report envelope on stdout (`--format yaml|json`, default yaml). `data.inventory` is
+the inventory (`kind`, `vendor`, `path`, per-kind lists, `parseErrors[]`); with `--shallow` it
+carries `projection: shallow` and every list it did not walk is `null`, never `[]`. `examined`
+counts the subject and each marketplace, plugin and skill inventory nested under it.
+
+**Creates/modifies:** None (read-only)
+
+**Examples:**
+
+```bash
+vat inventory my-plugin/                  # Inventory a plugin
+vat inventory my-plugin/ --shallow --format json
+vat inventory --user                      # The user-level Claude install
+```
 
 ---
 
@@ -199,9 +241,10 @@ Run a packaged skill's eval suite in a headless, context-isolated Claude session
 **Exit codes:**
 
 - `0` - Run completed, all expectations passed
-- `1` - Run completed and at least one eval failed
-- `2` - The harness could not run; a `Reason: internal | preflight | bootstrap` line on stderr says why
-- `4` - Eval failure (run completed, expectations did not all pass)
+- `1` - Run completed and at least one eval failed (a `SKILL_TEST_EVAL_FAILED` finding per failed eval)
+- `2` - The harness could not run; `error.code` in the published report says which refusal, and a `Reason: internal | preflight | bootstrap` line on stderr restates it
+
+**Output:** YAML report on stdout (schema `packages/cli/schemas/skill-test-run.json`); see [skill-test.md](./skill-test.md#the-report)
 
 **Creates/modifies:** A harness directory (removed unless `--keep`)
 
@@ -218,6 +261,114 @@ vat skill test configure my-skill --auth subscription
 
 **More details:** `packages/cli/docs/skill-test.md` — full knob table for the
 per-skill `skills.config.<skill>.test` block and the global `test:` node
+
+---
+
+### `claude plugin build`
+
+Assemble each Claude plugin bundle declared under `claude.marketplaces` into
+`dist/.claude/plugins/marketplaces/<marketplace>/`
+
+**What it does:**
+
+1. Packages each plugin-local skill (`plugins/<name>/skills/**`) with the same
+   packager as pool skills, and copies in the pool skills its `skills:` selector names
+2. Tree-copies the rest of `plugins/<name>/` (commands, hooks, agents, `.mcp.json`),
+   applies `files:` mappings, and merges `.claude-plugin/plugin.json`
+3. Writes `.claude-plugin/marketplace.json`; a plugin with `externalSource` is
+   listed there verbatim, never built
+
+**`plugin.json` author:** merged per subfield. The config owns `name` and
+`email` (from the marketplace `owner`; an omitted `owner.email` publishes no
+email even when plugin.json has one); every other subfield of an object
+`author` in the plugin's own plugin.json (`url`, ...) passes through. A
+plugin.json `name`/`email` that disagrees is overridden with a stderr warning,
+not an error. A non-object `author` (npm's `"Name <email>"` string form, say)
+has no subfields to merge: it is replaced by the config's object, with a
+warning. marketplace.json's entry for the plugin carries the same merged object.
+
+**Output:** a report on stdout — `status`, `summary`, `examined`
+(marketplaces built), `findings` (each with `location`), and `data`
+(`marketplacesBuilt`, `pluginsBuilt`, `pluginsReferenced`, `skillsPackaged`,
+`marketplaces[]` of `{ name, status, reason?, plugins[] { name, outputPath,
+skills }, externalPlugins[] }`). Paths are relative to the directory holding
+`vibe-agent-toolkit.config.yaml`.
+
+**Exit codes:**
+
+- `0` - Built; any findings are warnings or info
+- `1` - A plugin-local skill failed the post-build gate (the build stops there:
+  that plugin is not assembled, nothing after it is built, and its marketplace's
+  `reason` names it), or no marketplace is configured
+- `2` - The build could not run: an undeclared `--marketplace` (`USAGE_INVALID`),
+  a missing config or an invalid plugin declaration (`CONFIG_INVALID`), an input
+  nothing built or that is not what it should be (`INPUT_UNREADABLE`), or the packager
+  refusing a plugin-local skill's content, such as a skill `files:` source that does
+  not exist (`RUN_INCOMPLETE`, with a `SKILL_PACKAGING_FAILED` finding at the skill)
+
+**Examples:**
+
+```bash
+vat skills build && vat claude plugin build
+```
+
+---
+
+### `claude marketplace publish`
+
+Push a built marketplace to a git branch, with its CHANGELOG, README and LICENSE
+
+**Output:** a report on stdout; `examined` counts the marketplaces with a
+`publish:` block, and `data.published[]` is `{ marketplace, version, branch,
+files, dryRun }` (`version` is `null` for a multi-plugin marketplace). A refusal
+after one marketplace was published still lists it.
+
+**Exit codes:**
+
+- `0` - Published (or `--dry-run` completed)
+- `1` - No marketplace declares `publish:`
+- `2` - Publish could not run: `USAGE_INVALID`, `CONFIG_INVALID`,
+  `INPUT_UNREADABLE` (no build output, or build output with no readable
+  `marketplace.json` — run `vat build`; no release notes), `EXTERNAL_API_FAILED`
+  (push rejected), `RUN_INCOMPLETE` (a git step failed)
+
+**Examples:**
+
+```bash
+vat build && vat claude marketplace publish --no-push
+```
+
+---
+
+### `claude org`
+
+Anthropic organization administration (Admin API) and workspace skills (Skills API)
+
+**Output:** the one `external` entry in the published-shape registry. A
+successful run publishes the API's payload as the API returns it (`has_more`,
+`data[]`, snake_case) — VAT adds no status word and no duration. A batch or
+delete whose writes did not all land still publishes its payload (what landed,
+what did not, and why). A run that threw publishes
+`{ error: { code, message } }` instead: `USAGE_INVALID` (missing
+`ANTHROPIC_ADMIN_API_KEY` / `ANTHROPIC_API_KEY`, a bad argument, no such
+source), `INPUT_UNREADABLE` (a source the OS will not read),
+`EXTERNAL_API_FAILED` (the API refused, answered unusably, or never answered),
+or `INTERNAL_ERROR` (a VAT defect, stack on stderr).
+
+**Exit codes** — no envelope to derive one from, so the entry's adapter maps
+what the write did:
+
+| Outcome | Exit |
+|---|---|
+| `ok` — every write landed, or the read succeeded | `0` |
+| `partial` — some writes landed (`skills install --from-npm`, `skills delete --all`) | `2` |
+| `failed` — none landed, the API named another outcome, or the run was refused | `2` |
+
+**Not implemented:** `users update|remove`, `invites create|delete`,
+`workspaces create|archive`, `workspaces members add|update|remove` and
+`api-keys update` are report verbs (`claude-org-not-implemented`): each
+publishes the envelope's error branch — `status: error`,
+`error.code: NOT_IMPLEMENTED`, `examined: 0`, `data: null` — at exit `2`.
 
 ---
 
@@ -456,7 +607,7 @@ case $? in 0) ;; 1) echo findings ;; *) echo broken; exit 1 ;; esac
 
 **Structured output (YAML)** - Commands like `scan` output YAML to stdout for parsing:
 ```bash
-vat resources scan . | yq '.filesScanned'
+vat resources scan . | yq '.examined'
 ```
 
 **Error output (stderr)** - Validation errors use test format:
@@ -487,3 +638,372 @@ vat rag search "markdown validation"
 
 - **Documentation:** https://github.com/jdutton/vibe-agent-toolkit
 - **Issues:** https://github.com/jdutton/vibe-agent-toolkit/issues
+
+## Example reports
+
+Each block below is a real document from the built CLI, trimmed where noted; `packages/cli/test/integration/tagged-report-examples.integration.test.ts` validates every `vat-report=<verb>` block against that verb's registered schema.
+
+### `ard emit`
+
+A project declaring an ARD publisher but no skill entries. Produced by `vat ard emit --format json`.
+
+```json vat-report=ard emit
+{
+  "status": "findings",
+  "examined": 2,
+  "findings": [
+    {
+      "code": "ARD_SURFACE_SKIPPED",
+      "severity": "warning",
+      "message": "skipped skill \"(discovered skills)\": skills.config is empty, so no skill was advertised. ARD entries are derived per named skill; add `skills.config.<name>` for each skill you want announced. Discovery globs alone (`skills.include`) do not name them."
+    },
+    {
+      "code": "ARD_SURFACE_SKIPPED",
+      "severity": "warning",
+      "message": "skipped okf-bundle \"playbooks\": the ARD specification names no media type for surface kind \"okf-bundle\", so VAT derives none. Set `ard.entries.\"okf-bundle:playbooks\".type` to advertise it."
+    }
+  ],
+  "summary": {
+    "errors": 0,
+    "warnings": 2,
+    "info": 0
+  },
+  "gate": {
+    "strict": false
+  },
+  "data": {
+    "outputPath": "/work/project/.well-known/ard.json",
+    "entryCount": 0,
+    "skippedCount": 2,
+    "shadowedCount": 0
+  },
+  "durationMs": 2414
+}
+```
+
+### `okf validate`
+
+A bundle with one document missing its frontmatter. Produced by `vat okf validate`.
+
+```yaml vat-report=okf validate
+status: findings
+examined: 2
+findings:
+  - code: OKF_FRONTMATTER_MISSING
+    severity: error
+    message: No YAML frontmatter block. OKF §11.1 requires one on every non-reserved .md file; only index.md and log.md are exempt (§3.1).
+    location: knowledge/playbooks/notes.md
+summary:
+  errors: 1
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  bundles:
+    - bundle: playbooks
+      root: knowledge/playbooks
+      conceptDocuments:
+        - expenses.md
+        - notes.md
+      reservedDocuments: []
+durationMs: 77
+```
+
+### `cache clear`
+
+The cache directory emptied. Produced by `vat cache clear`.
+
+```yaml vat-report=cache clear
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  cacheDir: /tmp/.vat-cache
+  existed: true
+  removed:
+    - x.y.z
+  remaining: []
+  entriesRemoved: 3
+  bytesRemoved: 262998
+```
+
+### `corpus scan`
+
+A one-plugin seed. Produced by `vat corpus scan seed.yaml --out corpus`.
+
+```yaml vat-report=corpus scan
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 273
+data:
+  outDir: /work/corpus
+  entries:
+    - name: sample
+      audit: ok
+      review: skipped
+      outputPath: 2026-10-04-e61d62b6/sample-audit.yaml
+```
+
+### `validate`
+
+`validate`, `build` and `verify` share one shape: each phase folds into `data.phases`. Produced by `vat validate`.
+
+```yaml vat-report=validate
+status: ok
+examined: 2
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 18127
+data:
+  phases:
+    - name: skills
+      status: ok
+      examined: 2
+      summary:
+        errors: 0
+        warnings: 0
+        info: 0
+      data:
+        root: /work/project
+        skills:
+          - name: test-skill-1
+            status: ok
+            summary:
+              errors: 0
+              warnings: 0
+              info: 0
+            allowed: 0
+          - name: test-skill-2
+            status: ok
+            summary:
+              errors: 0
+              warnings: 0
+              info: 0
+            allowed: 0
+```
+
+### `claude plugin build`
+
+One marketplace with one plugin built. Produced by `vat claude plugin build`.
+
+```yaml vat-report=claude plugin build
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 12847
+data:
+  marketplacesBuilt: 1
+  pluginsBuilt: 1
+  pluginsReferenced: 0
+  skillsPackaged: 2
+  marketplaces:
+    - name: mp1
+      status: ok
+      plugins:
+        - name: sample
+          outputPath: dist/.claude/plugins/marketplaces/mp1/plugins/sample
+          skills:
+            - test-skill-1
+            - test-skill-2
+      externalPlugins: []
+```
+
+### `claude plugin install`
+
+A skill directory installed. Produced by `vat claude plugin install dist/skills/test-skill-1 --skills-dir ~/.claude/skills`.
+
+```yaml vat-report=claude plugin install
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 8
+data:
+  source: local:/work/project/dist/skills/test-skill-1
+  sourceType: local
+  dryRun: false
+  symlink: false
+  skills:
+    - name: test-skill-1
+      installPath: ~/.claude/skills/test-skill-1
+      sourcePath: null
+```
+
+### `claude plugin list`
+
+Nothing in the plugin registry; one flat skill. Produced by `vat claude plugin list`.
+
+```yaml vat-report=claude plugin list
+status: ok
+examined: 2
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 1
+data:
+  target: code
+  sources:
+    pluginRegistry: ~/.claude/plugins/installed_plugins.json
+    legacySkillsDir: ~/.claude/skills
+  plugins: []
+  legacySkills:
+    - name: test-skill-1
+      path: ~/.claude/skills/test-skill-1
+      type: directory
+```
+
+### `claude plugin uninstall`
+
+A key that was not installed: `removed: false`. Produced by `vat claude plugin uninstall sample@mp1`.
+
+```yaml vat-report=claude plugin uninstall
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 1
+data:
+  dryRun: false
+  plugins:
+    - key: sample@mp1
+      removed: false
+```
+
+### `claude marketplace validate`
+
+A built marketplace missing its LICENSE: `findings`, exit `1`. Produced by `vat claude marketplace validate dist/.claude/plugins/marketplaces/mp1`.
+
+```yaml vat-report=claude marketplace validate
+status: findings
+examined: 1
+findings:
+  - severity: error
+    code: MARKETPLACE_MISSING_LICENSE
+    message: Marketplace is missing a LICENSE — required for distribution
+    location: LICENSE
+    fix: Add a LICENSE to the marketplace root directory
+  - severity: warning
+    code: MARKETPLACE_MISSING_README
+    message: Marketplace is missing a README.md — recommended for documentation
+    location: README.md
+    fix: Add a README.md to the marketplace root directory
+  - severity: warning
+    code: MARKETPLACE_MISSING_CHANGELOG
+    message: Marketplace is missing a CHANGELOG.md — recommended for tracking changes
+    location: CHANGELOG.md
+    fix: Add a CHANGELOG.md to the marketplace root directory
+  - severity: info
+    code: PLUGIN_MISSING_LICENSE
+    message: plugin.json is missing the recommended `license` field.
+    location: plugins/sample/.claude-plugin/plugin.json
+    fix: Add a "license" SPDX identifier (e.g. "MIT") to plugin.json so redistribution terms are explicit.
+    reference: "#plugin_missing_license"
+summary:
+  errors: 1
+  warnings: 2
+  info: 1
+gate:
+  strict: false
+durationMs: 45
+data:
+  root: /work/project/dist/.claude/plugins/marketplaces/mp1
+  marketplace:
+    name: mp1
+    pluginEntries: 1
+    localPluginSources:
+      - name: sample
+        source: ./plugins/sample
+  plugins:
+    - name: sample
+      source: ./plugins/sample
+      path: plugins/sample
+      manifestRead: true
+      status: findings
+      summary:
+        errors: 0
+        warnings: 0
+        info: 1
+  undeclared: []
+  refused: []
+```
+
+### `claude marketplace publish`
+
+No marketplace declares a `publish:` block, so nothing was examined. Produced by `vat claude marketplace publish --dry-run`.
+
+```yaml vat-report=claude marketplace publish
+status: findings
+examined: 0
+findings:
+  - code: RESOURCE_CHECK_BROKEN
+    severity: error
+    message: "Nothing was examined: 0 marketplaces. No marketplace declares a publish: block — add claude.marketplaces.<name>.publish to vibe-agent-toolkit.config.yaml."
+summary:
+  errors: 1
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 151
+data:
+  published: []
+```
+
+### `claude org users remove`
+
+The not-implemented stubs publish only this `error` branch. Produced by `vat claude org users remove u1`.
+
+```yaml vat-report=claude org users remove
+status: error
+examined: 0
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+error:
+  code: NOT_IMPLEMENTED
+  message: This command is not implemented. Read operations (list/get) are implemented; mutating operations are not. Use the Anthropic Console or call the Admin API directly.
+data: null
+```

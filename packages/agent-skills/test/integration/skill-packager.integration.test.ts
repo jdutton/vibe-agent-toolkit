@@ -996,7 +996,7 @@ async function setupUnreferencedFixture(
   );
   await writeFile(
     safePath.join(rootDir, 'vibe-agent-toolkit.config.yaml'),
-    'version: 1\n',
+    '{}\n',
   );
   const skillDir = safePath.join(rootDir, 'skills', skillName);
   await mkdir(skillDir, { recursive: true });
@@ -1096,7 +1096,7 @@ describe('skill-packager: post-build integrity', () => {
       safePath.join(rootDir, PACKAGE_JSON),
       JSON.stringify({ name: 'files-payload-fixture', workspaces: ['skills/*'] }),
     );
-    await writeFile(safePath.join(rootDir, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+    await writeFile(safePath.join(rootDir, 'vibe-agent-toolkit.config.yaml'), '{}\n');
     await writeFile(safePath.join(rootDir, BUILD_ARTIFACTS, 'engine.wasm'), '\0asm');
     await writeFile(
       safePath.join(rootDir, BUILD_ARTIFACTS, 'schemas', 'record.schema.json'),

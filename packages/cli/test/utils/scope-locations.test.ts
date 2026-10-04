@@ -59,6 +59,12 @@ describe('scope-locations', () => {
       );
     });
 
+    // Coded at the cause: the command publishes the refusal the error carries.
+    it('refuses an unknown scope or runtime as USAGE_INVALID', () => {
+      expect(() => validateAndGetScopeLocation(AGENT_SKILL, 'invalid')).toThrow(expect.objectContaining({ refusal: 'USAGE_INVALID' }));
+      expect(() => validateAndGetScopeLocation('unknown', 'user')).toThrow(expect.objectContaining({ refusal: 'USAGE_INVALID' }));
+    });
+
     it('should throw error with available scopes in message', () => {
       expect(() => validateAndGetScopeLocation(AGENT_SKILL, 'global')).toThrow(
         'Valid scopes: user, project'
@@ -89,6 +95,7 @@ describe('scope-locations', () => {
         expect(() => validateAndGetScopeLocation(unwiredRuntime, 'user')).toThrow(
           "Scope 'user' not implemented for runtime 'unwired-runtime'"
         );
+        expect(() => validateAndGetScopeLocation(unwiredRuntime, 'user')).toThrow(expect.objectContaining({ refusal: 'NOT_IMPLEMENTED' }));
       } finally {
         delete VALID_SCOPES[unwiredRuntime];
       }

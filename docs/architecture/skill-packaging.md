@@ -111,7 +111,7 @@ The four inventory kinds:
 - **Skill** — `SKILL.md` frontmatter plus the linked and packaged files referenced from it.
 - **Install** — `~/.claude/plugins/` (or any install root) and the marketplaces and plugins under it.
 
-The inventory document carries no version label; it evolves freely under pre-1.0, and `kind` is its only discriminator. Output is available via `vat inventory <path>` (YAML, JSON, or `--shallow` projection).
+The inventory document carries no version label; it evolves freely under pre-1.0, and `kind` is its only discriminator. Output is available via `vat inventory <path>` as the `data.inventory` of its report (YAML or JSON; `--shallow` publishes the shallow projection, `serializedInventory` in agent-skills, under the same key).
 
 ## Skill Reference Resolution
 

@@ -15,6 +15,7 @@ import {
   resetPackagingRegistryCache,
   detectPresentButUndeclared,
   detectReferenceTargetMissing,
+  describeIssues,
   detectResourceFormat,
   enumerateSurfaces,
   materializeIssue,
@@ -50,12 +51,19 @@ import {
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
 import { listingRefusalRemedy, type RegistryUnreadablePolicy } from '@vibe-agent-toolkit/resources';
 import {
-  calculateValidationStatus,
+  buildReport,
   countBySeverity,
-  ExitCode,
+  exitCodeForReport,
+  summarizeIssues,
+  toFindings,
+  type Finding,
+  type FindingsReport,
+  type Gate,
+  type OkReport,
+  type Report,
+  type SeverityConfig,
   type SeverityCounts,
   type ValidationIssue,
-  type SeverityConfig,
 } from '@vibe-agent-toolkit/schema';
 import {
   findProjectRoot,
@@ -82,25 +90,25 @@ import {
   resolveSkillPackagingConfig,
   stripValidationAllowForDisplay,
 } from '../skill-resolution/packaging-config.js';
-import { handleCommandError, handleExpectedFailure } from '../utils/command-error.js';
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../utils/command-refusal.js';
 import {
   ConfigLoadError,
   loadConfig,
   resetLoadedConfigCache,
 } from '../utils/config-loader.js';
+import { endWithRefusal, NOTHING_FINISHED, writeDocument } from '../utils/document-writer.js';
 import {
   countCollapsedFindings,
   formatCollapsedFindingsHint,
   formatIssueLines,
   formatSeverityBreakdown,
   issuesToRenderAtVerbosity,
-  sumSeverityCounts,
 } from '../utils/issue-rendering.js';
 import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import { createLogger } from '../utils/logger.js';
-import { writeYamlOutput } from '../utils/output.js';
-import { relativizePathEntries } from '../utils/relativize-paths.js';
-import { nothingCheckedFinding } from '../utils/run-integrity.js';
+import { unlistableDirectoryRefusal, unstatablePathRefusal } from '../utils/project-root-policy.js';
+import { relativizePath } from '../utils/relativize-paths.js';
+import { RUN_INTEGRITY_CODE } from '../utils/run-integrity.js';
 import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';
 import { computeConfigVerdicts } from '../utils/verdict-helpers.js';
@@ -114,7 +122,7 @@ import {
   resetGitTrackerCache,
 } from './audit/distributed-tree.js';
 import { withClonedRepo } from './audit/git-url-clone.js';
-import { buildHierarchicalOutput } from './audit/hierarchical-output.js';
+import { addMisconfigurationIssues, buildHierarchicalOutput, type HierarchicalOutput } from './audit/hierarchical-output.js';
 import {
   renderProvenanceHeader,
   rewritePathsInResults,
@@ -236,23 +244,19 @@ async function buildVATProjectContext(
   return { skillConfigs };
 }
 
-/**
- * Convert PackagingValidationResult to ValidationResult for consistent audit output.
- * In audit mode, we merge allErrors (which includes both errors and warnings after
- * severity resolution but WITHOUT allow suppression) into the standard issues array.
- *
- * Compat verdicts (COMPAT_TARGET_*) are computed from the result's observations
- * and the config-level targets, then merged into the issue list.
- */
-/**
- * The one-line human summary of a severity distribution.
- *
- * Every result that carries findings renders its counts the same way, so a reader
- * comparing two entries is comparing the same sentence.
- */
-function formatCountsSummary(counts: SeverityCounts): string {
-  return `${counts.errors} errors, ${counts.warnings} warnings, ${counts.info} info`;
+/** A file carries an error-severity finding — the `filesWithErrors` bucket. */
+function hasErrors(result: ValidationResult): boolean {
+  return countBySeverity(result.issues).errors > 0;
 }
+
+/** A file's worst actionable finding is a warning — the `filesWithWarnings` bucket. */
+function hasOnlyWarnings(result: ValidationResult): boolean {
+  const { errors, warnings } = countBySeverity(result.issues);
+  return errors === 0 && warnings > 0;
+}
+
+/** `vat audit` has no `--strict`: warnings never move its exit code. */
+const AUDIT_GATE: Gate = { strict: false };
 
 /**
  * Append findings to a result and re-derive everything that describes them.
@@ -265,18 +269,26 @@ function formatCountsSummary(counts: SeverityCounts): string {
  *
  * Mutates in place, because the audit pipeline hands these results around by
  * reference and there is no single place a rebuilt copy could be swapped in.
+ * The sentence comes from the same `describeIssues` the producer used, so the
+ * re-derived one is exactly what the producer says for the grown list — never a
+ * second wording, and never a stale "Valid plugin" beside a warning.
  */
 function appendIssues(result: ValidationResult, issues: readonly ValidationIssue[]): void {
   if (issues.length === 0) {
     return;
   }
   result.issues.push(...issues);
-  const counts = countBySeverity(result.issues);
-  result.status = calculateValidationStatus(result.issues);
-  result.issueCounts = counts;
-  result.summary = formatCountsSummary(counts);
+  Object.assign(result, describeIssues(result.issues, result.type));
 }
 
+/**
+ * Convert PackagingValidationResult to ValidationResult for consistent audit output.
+ * In audit mode, we merge allErrors (which includes both errors and warnings after
+ * severity resolution but WITHOUT allow suppression) into the standard issues array.
+ *
+ * Compat verdicts (COMPAT_TARGET_*) are computed from the result's observations
+ * and the config-level targets, then merged into the issue list.
+ */
 function packagingResultToValidationResult(
   skillPath: string,
   result: PackagingValidationResult,
@@ -295,15 +307,11 @@ function packagingResultToValidationResult(
   const issues = verdictIssues.length > 0
     ? [...result.allErrors, ...verdictIssues]
     : result.allErrors;
-  const issueCounts = countBySeverity(issues);
-
   const out: ValidationResult = {
     path: skillPath,
     type: RESOURCE_TYPE_AGENT_SKILL,
-    status: calculateValidationStatus(issues),
-    summary: formatCountsSummary(issueCounts),
+    ...describeIssues(issues, RESOURCE_TYPE_AGENT_SKILL),
     issues,
-    issueCounts,
     metadata: {
       lineCount: result.metadata.skillLines,
       name: result.skillName,
@@ -750,13 +758,13 @@ function collect(value: string, previous: string[]): string[] {
  * Create audit command
  * Top-level command: vat audit [path]
  *
- * The exit code follows the document's `status`, under the one exit-code
- * contract every verb shares: `OK` when nothing is at error severity,
- * `FINDINGS` when something is (or the run audited zero files), `ERROR` when
- * the audit could not run at all. This command used to be the one exception —
- * "advisory", exit 0 over `status: error` — which a CI author reading the
- * shared contract got wrong on exactly this verb. Warnings never move the
- * exit code; `validation.severity` is the dial that decides what counts.
+ * Publishes the report envelope through the one writer, and ends on the code
+ * the written document derives — the rule every report verb shares: `OK` when
+ * no finding is at error severity, `FINDINGS` when one is (a run that audited
+ * zero files carries the writer's `RESOURCE_CHECK_BROKEN`), `ERROR` only when
+ * the audit did not finish (`status: error`, with the refusal in `error.code`).
+ * Warnings never move the exit code — audit has no `--strict`;
+ * `validation.severity` is the dial that decides what counts.
  */
 export function createAuditCommand(): Command {
   const audit = new Command('audit');
@@ -830,12 +838,19 @@ Description:
   (See packages/cli/docs/audit.md for details.)
 
 Output:
-  The YAML 'status' describes the findings, and the exit code follows it, as
-  in every other command of this CLI.
+  The report envelope every report verb publishes (YAML on stdout):
+  - status: ok (no findings) | findings (at least one) | error (did not finish)
+  - examined: files read; summary: findings by severity; gate: { strict: false }
+  - findings: every finding, each with the file to open as 'location'
+  - data.root: the scan root every path is relative to (null for a git URL,
+      whose data.provenance names the source instead)
+  - data.counts: filesPassed / filesWithWarnings / filesWithErrors /
+      pathsUnreadable; data.files: one row per file (status, summary,
+      compatibility, settings); data.hierarchical: the --user grouping
+  - error: { code, message } when status is error
 
-  A run that audited ZERO files is refused, not passed: 'status: error' with one
-  non-overridable RESOURCE_CHECK_BROKEN under a top-level 'issues:' (the claim is
-  about the run, so it is not a files[] row), and exit 1.
+  A run that audited ZERO files is not a pass: the report carries one
+  non-overridable RESOURCE_CHECK_BROKEN finding and ends on exit 1.
 
 Validation Behavior:
   Audit surfaces all validation issues for inspection.
@@ -843,9 +858,8 @@ Validation Behavior:
   - NEVER applies validation.allow (allowed codes are always shown)
   - Respects validation.severity: a code set to 'ignore' is hidden; warnings
     and errors are both reported, each at its configured severity
-  - ALWAYS exits 0 for validation results (never gates on errors)
 
-  For gated validation (CI/CD), use: vat skills validate
+  For gated validation that honours validation.allow, use: vat skills validate
   For the full list of codes and severity defaults, see: docs/validation-codes.md
 
   Default: Validates SKILL.md and all transitively linked markdown files
@@ -902,20 +916,19 @@ Config-Aware Validation:
     skills.config.<name>.validation...     that one skill
 
 Exit Codes:
-  0 - The audit completed with nothing at error severity (warnings and
+  0 - The audit finished and no finding is at error severity (warnings and
       informational findings are in the report, not the exit code).
-  1 - The audit completed and reports 'status: error': at least one
-      error-severity finding, or zero files audited. A path inside the tree
-      the scan could not read, or a governing config that cannot be loaded
-      or whose skills.include reaches an unreadable directory, is
-      SCAN_PATH_UNREADABLE (warning): the run is degraded, not failed —
-      readable siblings are still validated, the config's skills
-      config-free, and the refused path is not counted in filesScanned.
-  2 - The audit could not run at all: the path does not exist, is a
-      directory the OS will not list, or is a file no audit lane
-      recognises, --user with no Claude config dir, a git URL
-      that would not clone, an unknown flag, an internal failure. There is
-      no report to read.
+  1 - The audit finished with at least one error-severity finding
+      ('status: findings'), including zero files audited. A path inside the
+      tree the scan could not read, or a governing config that cannot be
+      loaded, is SCAN_PATH_UNREADABLE (warning): the run is degraded, not
+      failed, and the refused path is counted in data.counts.pathsUnreadable,
+      never in 'examined'.
+  2 - The audit did not finish ('status: error', the reason in error.code):
+      USAGE_INVALID for a path that does not exist, a file no audit lane
+      recognises, a git URL that does not parse, or --user with no Claude
+      config dir; INPUT_UNREADABLE for a root directory the OS will not list
+      or a git URL that would not clone; INTERNAL_ERROR for a defect in VAT.
 
 Examples:
   $ vat audit ./plugins/              # Audit recursively (default)
@@ -968,7 +981,7 @@ export function userScanTargets(candidates: readonly string[], recursive: boolea
 
 /**
  * Handle --user audit: scans ~/.claude/plugins, ~/.claude/skills, ~/.claude/marketplaces
- * and outputs hierarchical YAML. Calls process.exit() when done.
+ * and publishes the report with its `data.hierarchical` view. Calls process.exit() when done.
  */
 async function auditUserDirectories(
   recursive: boolean,
@@ -986,12 +999,11 @@ async function auditUserDirectories(
   const marketplacesDirExists = fs.existsSync(marketplacesDir);
 
   if (!pluginsDirExists && !skillsDirExists && !marketplacesDirExists) {
-    logger.error(`No user-level Claude directories found:`);
-    logger.error(`  Plugins: ${pluginsDir}`);
-    logger.error(`  Skills: ${skillsDir}`);
-    logger.error(`  Marketplaces: ${marketplacesDir}`);
-    logger.error('Claude plugins/skills/marketplaces have not been installed yet.');
-    process.exit(ExitCode.ERROR);
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
+      `No user-level Claude directories found (plugins: ${pluginsDir}, skills: ${skillsDir}, marketplaces: ${marketplacesDir}). `
+      + 'Claude plugins, skills and marketplaces have not been installed yet — set CLAUDE_CONFIG_DIR to the config dir to audit.',
+    );
   }
 
   const scanned: ValidationResult[] = [];
@@ -1010,8 +1022,9 @@ async function auditUserDirectories(
 
   // The `--user` report is assembled here rather than by `buildAuditReport`, so
   // it needs its own append or the config findings would reach stderr and not the
-  // document — see the same call in `buildAuditReport`.
-  const results = withDegradedConfigFindings(scanned);
+  // document — see the same call in `buildAuditReport`. The misconfiguration
+  // findings join the RESULTS, not only the hierarchy, so the envelope counts them.
+  const results = addMisconfigurationIssues(withDegradedConfigFindings(scanned), scanRoot);
 
   // Run compatibility analysis if --compat flag is set
   const compatMap = options.compat
@@ -1021,12 +1034,19 @@ async function auditUserDirectories(
   const verbose = options.verbose ?? false;
   const skillResults = results.filter((r: ValidationResult) => SKILL_RESULT_TYPES.has(r.type));
   const hierarchical = buildHierarchicalOutput(skillResults, verbose, scanRoot);
-  const summary = calculateHierarchicalSummary(results, hierarchical, startTime, compatMap, verbose, scanRoot);
-  writeYamlOutput(summary);
+  const report = buildAuditDocument(results, {
+    root: scanRoot,
+    compatMap,
+    verbose,
+    hierarchical,
+    durationMs: Date.now() - startTime,
+  });
+  const written = writeDocument('audit', report, 'yaml');
   if (verbose) {
     renderVerboseEvidence(results, scanRoot, logger);
   }
-  logHierarchicalSummary(results, summary.issues, logger);
+  logHierarchicalSummary({ results, written, data: report.data, root: scanRoot, verbose }, logger);
+  process.exit(exitCodeForReport(written));
 }
 
 /** Skill resource types that can have per-skill validation config. */
@@ -1089,16 +1109,12 @@ function buildFilteredResult(
   result: ValidationResult,
   filteredIssues: ValidationResult['issues']
 ): ValidationResult {
-  const counts = countBySeverity(filteredIssues);
-
   return {
     ...result,
-    status: calculateValidationStatus(filteredIssues),
-    // Spreading `result` carried the PRE-filter `issueCounts` forward, so a
+    // Spreading `result` carried the PRE-filter counts forward, so a
     // `severity: ignore` config left the counts describing findings the report
     // no longer contained. The counts are re-derived, never inherited.
-    issueCounts: counts,
-    summary: formatCountsSummary(counts),
+    ...describeIssues(filteredIssues, result.type),
     issues: filteredIssues,
   };
 }
@@ -1263,9 +1279,12 @@ interface AuditAtPathOverrides {
 }
 
 /**
- * Run the audit pipeline at `scanPath` and assemble the report document,
- * without writing anything. The document states its coordinate system once
- * (`root`) and every `path`/`location` beneath it is relative to that root.
+ * Run the audit pipeline at `scanPath` and assemble the report, without
+ * writing anything. The report states its coordinate system once
+ * (`data.root`) and every `path`/`location` beneath it is relative to that root.
+ *
+ * The zero-files refusal is NOT here: the writer adds it from the registry's
+ * denominator on the way out, as it does for every report verb.
  *
  * @internal Exported for integration testing only — not part of the public CLI API.
  */
@@ -1276,7 +1295,7 @@ export async function buildAuditReport(
   logger: ReturnType<typeof createLogger>,
 ): Promise<{
   results: ValidationResult[];
-  document: ReturnType<typeof calculateSummary>;
+  report: CompletedAuditReport;
 }> {
   const recursive: boolean = options.recursive !== false;
   logger.debug(`Auditing resources at: ${scanPath}`);
@@ -1336,15 +1355,25 @@ export async function buildAuditReport(
   const verbose = options.verbose ?? false;
   return {
     results,
-    document: calculateSummary(results, startTime, compatMap, verbose, scanRoot),
+    report: buildAuditDocument(results, {
+      root: scanRoot,
+      compatMap,
+      verbose,
+      hierarchical: null,
+      durationMs: Date.now() - startTime,
+    }),
   };
 }
 
-/** Strip the run root from a report whose base cannot be named as a path. */
-function withoutRoot<T extends { root: string }>(document: T): Omit<T, 'root'> {
-  const copy: Record<string, unknown> = { ...document };
-  delete copy['root'];
-  return copy as Omit<T, 'root'>;
+/**
+ * A URL audit's report: its run root is a random tempdir — not reproducible and
+ * useless to a reader — so `data.root` is `null`, `data.provenance` states the
+ * base instead (url @ ref @ commit), and any string still spelling the tempdir
+ * is rewritten relative to the clone.
+ */
+export function urlAuditReport(report: CompletedAuditReport, provenance: Provenance, tempRoot: string): CompletedAuditReport {
+  const rewritten = rewritePathsInResults(report, tempRoot);
+  return { ...rewritten, data: { ...rewritten.data, root: null, provenance } };
 }
 
 async function runAuditAtPath(
@@ -1356,27 +1385,33 @@ async function runAuditAtPath(
   const startTime = Date.now();
   const verbose = options.verbose ?? false;
 
-  const { results, document } = await buildAuditReport(scanPath, options, startTime, logger);
+  const { results, report } = await buildAuditReport(scanPath, options, startTime, logger);
+  const scanRoot = deriveScanRoot(scanPath);
 
-  // A URL audit's run root is a random tempdir: not reproducible and useless to
-  // a reader. The provenance header states the base instead (url @ ref @ commit)
-  // and every path below is already relative to the clone, so drop `root`
-  // rather than print a path nobody can resolve.
-  const finalDocument =
-    overrides.tempRoot === undefined ? document : rewritePathsInResults(withoutRoot(document), overrides.tempRoot);
-  if (overrides.provenance) {
-    process.stdout.write(renderProvenanceHeader(overrides.provenance));
+  if (overrides.provenance !== undefined) {
+    // The human half of the provenance: the machine half is `data.provenance`.
+    logger.info(renderProvenanceHeader(overrides.provenance).trimEnd());
   }
-  writeYamlOutput(finalDocument);
+  const published = overrides.provenance === undefined || overrides.tempRoot === undefined
+    ? report
+    : urlAuditReport(report, overrides.provenance, overrides.tempRoot);
+  const written = writeDocument('audit', published, 'yaml');
   if (verbose) {
-    renderVerboseEvidence(results, document.root, logger);
+    renderVerboseEvidence(results, scanRoot, logger);
   }
-  handleAuditResults(results, document, logger, verbose);
+  handleAuditResults({ results, written, data: published.data, root: scanRoot, verbose }, logger);
   logger.debug(`Audit complete in ${Date.now() - startTime}ms`);
+  process.exit(exitCodeForReport(written));
 }
 
 async function runUrlAudit(rawInput: string, options: AuditCommandOptions): Promise<void> {
-  const parsed = parseGitUrl(rawInput);
+  let parsed: ReturnType<typeof parseGitUrl>;
+  try {
+    parsed = parseGitUrl(rawInput);
+  } catch (error) {
+    // The argument is the operator's, and it does not name a source.
+    throw new CommandRefusalError('USAGE_INVALID', errorMessageOf(error), { cause: error });
+  }
   await withClonedRepo(
     parsed,
     { keepTempForDebug: options.debug === true },
@@ -1423,18 +1458,12 @@ export async function auditCommand(
     }
 
     const scanPath = targetPath ? safePath.resolve(targetPath) : process.cwd();
-    const unusable = await unusableRootReason(scanPath);
-    if (unusable !== undefined) {
-      // `return` the call though its type is `never`: under test `process.exit`
-      // is a spy that returns, and a bare call would fall through into the scan.
-      return handleExpectedFailure(unusable, ExitCode.ERROR, startTime);
-    }
+    const unusable = await unusableRootRefusal(scanPath);
+    if (unusable !== undefined) throw unusable;
     await runAuditAtPath(scanPath, options);
   } catch (error) {
-    // 'Audit', not 'AgentAudit'. The old name was copy-pasted from the agent
-    // command family and named a command that does not exist, so the one line an
-    // operator has to search for did not match what they typed.
-    handleCommandError(error, logger, startTime, 'Audit');
+    logger.debug(`Audit did not finish after ${Date.now() - startTime}ms`);
+    endWithRefusal('audit', refusalCodeOf(error), error, 'yaml', AUDIT_GATE, NOTHING_FINISHED);
   }
 }
 
@@ -1443,9 +1472,9 @@ export async function auditCommand(
  * may start.
  *
  * The exit-code contract every verb shares: a path that does not exist, or a
- * file no audit lane recognises, is the INVOCATION's mistake — `ExitCode.ERROR`
- * (2) before any scan, the same ending `vat resources validate` and `vat skill
- * review` give the same argument. Until this check the audit ran anyway and
+ * file no audit lane recognises, is the INVOCATION's mistake — a `USAGE_INVALID`
+ * refusal (exit 2) before any scan, the same ending `vat resources validate` and
+ * `vat skill review` give the same argument. Until this check the audit ran anyway and
  * published `UNKNOWN_FORMAT` as a finding at exit 1 with `filesScanned: 1`: a
  * typo in a CI step read as "the tree failed its gate", and the denominator
  * counted a file that was never there.
@@ -1455,42 +1484,29 @@ export async function auditCommand(
  * zero-files refusal at exit 1 — while `vat resources validate`, `check`,
  * `query` and `scan` all end the same argument at exit 2. One outcome, two
  * codes. Nothing under an unlistable root can be examined, so the audit could
- * not do its job: that is the INVOCATION's ending, the same as a missing path.
+ * not do its job: an `INPUT_UNREADABLE` refusal, exit 2 like a missing path.
  *
  * ONLY the root. A sub-path inside a readable tree is never the invocation's
  * fault and stays a finding. Pinned by the `audit → error` rows of
  * `exit-codes.system.test.ts` and the unreadable-root row of
  * `exit-code-matrix.system.test.ts`.
  */
-async function unusableRootReason(scanPath: string): Promise<string | undefined> {
+async function unusableRootRefusal(scanPath: string): Promise<CommandRefusalError | undefined> {
   let isDirectory: boolean;
   try {
     isDirectory = fs.lstatSync(scanPath).isDirectory();
   } catch (error) {
-    if (isPathAbsentError(error)) return `Path does not exist: ${scanPath}`;
-    return undefined;
+    // The shared predicate: absent is the invocation's mistake; any other error
+    // (an `EACCES` parent) is the input's refusal — never a scan that starts anyway.
+    return unstatablePathRefusal(scanPath, error);
   }
-  if (isDirectory) return unlistableRootReason(scanPath);
+  if (isDirectory) return unlistableDirectoryRefusal(scanPath);
   if (detectFormat(scanPath) === RESOURCE_TYPE_AGENT_SKILL) return undefined;
   if ((await detectResourceFormat(scanPath)).type !== 'unknown') return undefined;
-  return `Path is not a resource this command can audit (a SKILL.md, a plugin or marketplace directory, or a Claude registry file): ${scanPath}`;
-}
-
-/**
- * Why a root DIRECTORY cannot be audited, or `undefined` when it can be listed.
- *
- * @param scanPath - The root the operator named, known to be a directory
- * @returns The refusal, or undefined
- */
-function unlistableRootReason(scanPath: string): string | undefined {
-  try {
-    // A probe, not a listing: the crawl owns enumeration, this only asks whether it can start.
-    fs.accessSync(scanPath, fs.constants.R_OK | fs.constants.X_OK);
-    return undefined;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
-    return `Path cannot be read (${code}): ${scanPath}`;
-  }
+  return new CommandRefusalError(
+    'USAGE_INVALID',
+    `Path is not a resource this command can audit (a SKILL.md, a plugin or marketplace directory, or a Claude registry file): ${scanPath}`,
+  );
 }
 
 /**
@@ -1678,7 +1694,7 @@ function appendInventoryParseErrors(
 		refusalsFiled.add(location);
 		parseIssues.push(materializeIssue('SCAN_PATH_UNREADABLE', { location, detail: `${location}: ${message}` }));
 	}
-	// Status was hand-set to 'error' here while `issueCounts` and `summary` kept
+	// Status was hand-set to 'error' here while the counts and description kept
 	// describing the pre-append list. One appender derives all three.
 	appendIssues(result, parseIssues);
 }
@@ -1800,13 +1816,10 @@ function withoutHostedRefusals(result: ValidationResult, hosted: ReadonlySet<str
 	);
 	if (issues.length === 0) return [];
 	if (issues.length === result.issues.length) return [result];
-	const issueCounts = countBySeverity(issues);
 	return [{
 		...result,
-		status: calculateValidationStatus(issues),
-		summary: formatCountsSummary(issueCounts),
+		...describeIssues(issues, result.type),
 		issues,
-		issueCounts,
 	}];
 }
 
@@ -2237,56 +2250,113 @@ function applyCompatMap(
 }
 
 /**
- * Strip `evidence` from per-file results and `compatibility.evidence` when
- * the audit is not running in --verbose mode. Producing the field at all
- * (even as `[]`) would clutter terse YAML; we omit the key entirely.
+ * `compatibility.evidence` is published only under `--verbose`. Producing the
+ * field at all (even as `[]`) would clutter terse YAML; the key is omitted.
  */
-function stripCompatEvidence(compat: CompatibilityBlock): Omit<CompatibilityBlock, 'evidence'> {
+function stripCompatEvidence(compat: CompatibilityBlock): CompatibilityBlock {
   const out: Record<string, unknown> = { ...compat };
   delete out['evidence'];
-  return out as Omit<CompatibilityBlock, 'evidence'>;
+  return out as unknown as CompatibilityBlock;
 }
 
-function applyVerboseFilter<T extends ResultWithCompat>(
-  results: T[],
-  verbose: boolean,
-): T[] {
-  if (verbose) return results;
-  return results.map(r => {
-    const stripped = { ...r } as Record<string, unknown>;
-    delete stripped['evidence'];
-    if (r.compatibility !== undefined) {
-      stripped['compatibility'] = stripCompatEvidence(r.compatibility);
-    }
-    return stripped as unknown as T;
-  });
+/** One `data.files[]` row: what the file is and how its findings are distributed — its findings are the envelope's. */
+interface AuditFileRow {
+  path: string;
+  type: ValidationResult['type'];
+  status: 'ok' | 'findings';
+  summary: SeverityCounts;
+  compatibility?: CompatibilityBlock;
+  settings?: SettingsBlock;
+}
+
+/** What `vat audit` publishes under `data` — the TS twin of `AUDIT_REPORT_SCHEMA`'s data, which the writer validates against. */
+export interface AuditData {
+  root: string | null;
+  provenance: Provenance | null;
+  counts: FileStatusCounts;
+  files: AuditFileRow[];
+  hierarchical: HierarchicalOutput | null;
+}
+
+export type AuditReport = Report<AuditData>;
+
+/** A report the audit FINISHED — the only kind its builder produces. */
+export type CompletedAuditReport = OkReport<AuditData> | FindingsReport<AuditData>;
+
+/** What the stderr half reads: the published report, and the data and results behind it. */
+interface AuditOutcomeView {
+  results: ValidationResult[];
+  /** The report as written — the writer may have added the run's refusal finding. */
+  written: AuditReport;
+  data: AuditData;
+  /** The scan root the results' absolute paths are relative to. */
+  root: string;
+  verbose: boolean;
+}
+
+/** Everything {@link buildAuditDocument} needs beyond the results. */
+interface AuditDocumentContext {
+  /** The scan root every path and location is relative to. */
+  root: string;
+  compatMap: Map<string, PluginCompatEntry> | undefined;
+  verbose: boolean;
+  /** `--user` only. */
+  hierarchical: HierarchicalOutput | null;
+  durationMs: number;
 }
 
 /**
- * Nested carriers inside a file entry that publish their own `path`.
- *
- * `linkedFiles[].path` sat absolute in every document while every sibling
- * `path` and `location` beside it was root-relative — 532 of them in a single
- * `vat audit --user` run. Naming the carrier here is what re-bases it; a new
- * carrier that is not named keeps shipping absolute paths.
+ * A result's row. `status` and `summary` are re-derived from its FINAL issue
+ * list here — a producer that appended findings after publishing its counts
+ * cannot leave the row describing the list as it was.
  */
-const NESTED_PATH_CARRIERS = ['linkedFiles'] as const;
+function fileRow(result: ResultWithCompat, root: string, verbose: boolean): AuditFileRow {
+  const row: AuditFileRow = { path: relativizePath(result.path, root), type: result.type, ...summarizeIssues(result.issues) };
+  if (result.compatibility !== undefined) row.compatibility = verbose ? result.compatibility : stripCompatEvidence(result.compatibility);
+  if (result.settings !== undefined) row.settings = result.settings;
+  return row;
+}
 
-function calculateSummary(
-  results: ValidationResult[],
-  startTime: number,
-  compatMap: Map<string, PluginCompatEntry> | undefined,
-  verbose: boolean,
-  root: string,
-) {
-  const { entries, ...base } = buildBaseSummary(results, startTime);
-  const withCompat = applyCompatMap(entries, compatMap, root);
-  return {
-    // Stated once, first, and the only absolute path in the document.
-    root,
-    ...base,
-    files: relativizePathEntries(applyVerboseFilter(withCompat, verbose), root, NESTED_PATH_CARRIERS),
-  };
+/**
+ * Every file's findings, flattened, each naming the file to open. A finding a
+ * validator published without a `location` inherits its file's row path, so a
+ * consumer never has to join a finding back to the row it came from.
+ */
+function auditFindings(results: readonly ValidationResult[], root: string): Finding[] {
+  return toFindings(results.flatMap((result) => result.issues.map((issue) =>
+    issue.location === undefined ? { ...issue, location: relativizePath(result.path, root) } : issue)));
+}
+
+/**
+ * Assemble the report envelope from the per-file results.
+ *
+ * ONE builder for the directory lane, the `--user` lane and the corpus scan's
+ * per-plugin document, so none of them can publish a status or a count the
+ * others would not. `examined` is the files READ — a refused path is counted
+ * in `data.counts.pathsUnreadable` and nowhere else — and the writer turns a
+ * zero into the run's `RESOURCE_CHECK_BROKEN` finding.
+ *
+ * @param results - One result per audited file or refused path
+ * @param context - The root, the compat lanes' output and the `--user` view
+ * @returns The report, before the writer's run-integrity pass
+ */
+export function buildAuditDocument(results: readonly ValidationResult[], context: AuditDocumentContext): CompletedAuditReport {
+  const { root, compatMap, verbose, hierarchical, durationMs } = context;
+  const { examined, counts } = countFilesByStatus(results);
+  return buildReport<AuditData>({
+    examined,
+    findings: auditFindings(results, root),
+    data: {
+      // Stated once, and the only absolute path in the document.
+      root,
+      provenance: null,
+      counts,
+      files: applyCompatMap([...results], compatMap, root).map((result) => fileRow(result, root, verbose)),
+      hierarchical,
+    },
+    gate: AUDIT_GATE,
+    durationMs,
+  });
 }
 
 /**
@@ -2398,23 +2468,24 @@ function renderVerboseEvidence(
 }
 
 /**
- * The stderr half of a run-level refusal, so the human channel says what the
- * document says. The document is derived in `buildBaseSummary`; this only
- * RENDERS it. Both stderr lanes call it first, because "Audit successful: 0
- * file(s) passed" over `status: error` is the exact disagreement the refusal
- * exists to end (invariant 6 of `run-integrity.ts`). The run ends on
- * `FINDINGS`, like every other `status: error` this command publishes.
+ * The stderr half of the run-level refusal, so the human channel says what the
+ * document says. The writer derives it (the registry's denominator for `audit`
+ * is files); this only RENDERS the finding the WRITTEN report carries. Both
+ * stderr lanes call it first, because "Audit successful: 0 file(s) passed"
+ * over a refused run is the exact disagreement the refusal exists to end
+ * (invariant 6 of `run-integrity.ts`).
  *
  * @returns Whether a refusal was rendered, so the caller skips its verdict line
  */
 function logRunIntegrity(
-  runIssues: readonly ValidationIssue[] | undefined,
+  written: AuditReport,
   logger: ReturnType<typeof createLogger>,
 ): boolean {
-  if (runIssues === undefined || runIssues.length === 0) return false;
-  logger.error('Audit is not a verdict: it audited 0 files');
-  for (const issue of runIssues) {
-    for (const line of formatIssueLines(issue, '  ')) logger.error(line);
+  const refusals = written.findings.filter((finding) => finding.code === RUN_INTEGRITY_CODE);
+  if (refusals.length === 0) return false;
+  logger.error(`Audit is not a verdict: it audited ${written.examined} files`);
+  for (const refusal of refusals) {
+    for (const line of formatIssueLines(refusal, '  ')) logger.error(line);
   }
   return true;
 }
@@ -2457,42 +2528,34 @@ function logSettingsTotals(
   }
 }
 
+/**
+ * The human channel for the directory lane, read off the WRITTEN report — the
+ * file counts, and the findings of the files that carry an actionable one. The
+ * exit code is not decided here: the caller ends on `exitCodeForReport`.
+ */
 function handleAuditResults(
-  results: ValidationResult[],
-  summary: {
-    root: string;
-    summary: FileStatusCounts;
-    issues?: readonly ValidationIssue[];
-    files?: Array<{ compatibility?: CompatibilityBlock; settings?: SettingsBlock }>;
-  },
+  { results, written, data, root, verbose }: AuditOutcomeView,
   logger: ReturnType<typeof createLogger>,
-  verbose: boolean,
 ): void {
   const {
     filesWithErrors: errorCount,
     filesWithWarnings: warningCount,
     filesPassed: successCount,
-  } = summary.summary;
+  } = data.counts;
 
-  logSettingsTotals(summary.files ?? [], logger);
+  logSettingsTotals(data.files, logger);
 
-  // The exit code follows the document's `status`, as it does in every other
-  // command of this CLI: `status: error` — an error-severity finding, or a run
-  // that audited zero files — ends on `FINDINGS`. This used to be the one
-  // command that exited 0 over `status: error` ("advisory"), and an adopter
-  // wiring it into CI read "Audit failed" on stderr beside a green step.
-  const refused = logRunIntegrity(summary.issues, logger);
-  if (refused) {
+  if (logRunIntegrity(written, logger)) {
     // Rendered above; there is no file verdict to print over zero files.
   } else if (errorCount > 0) {
     logger.error(`Audit found ${errorCount} file(s) with errors`);
-    logFindingsForStatus(results, 'error', summary.root, logger.error.bind(logger), verbose);
+    logFindingsForStatus(results, hasErrors, root, logger.error.bind(logger), verbose);
   } else if (warningCount > 0) {
     logger.info(`Audit passed with warnings: ${warningCount} file(s)`);
-    logFindingsForStatus(results, 'warning', summary.root, logger.info.bind(logger), verbose);
+    logFindingsForStatus(results, hasOnlyWarnings, root, logger.info.bind(logger), verbose);
   } else {
-    // `success` means "nothing actionable", NOT "nothing to see" — name the
-    // informational findings or the YAML and the stderr line disagree.
+    // `ok` over info findings still means "nothing actionable", NOT "nothing
+    // to see" — name them or the YAML and the stderr line disagree.
     const withFindings = countResultsWithFindings(results);
     logger.info(
       withFindings > 0
@@ -2502,7 +2565,6 @@ function handleAuditResults(
   }
 
   renderAuditFooter(results, logger);
-  process.exit(refused || errorCount > 0 ? ExitCode.FINDINGS : ExitCode.OK);
 }
 
 /**
@@ -2608,12 +2670,12 @@ export function formatAuditFindingsLines(
  */
 function logFindingsForStatus(
   results: ValidationResult[],
-  status: ValidationResult['status'],
+  inBucket: (result: ValidationResult) => boolean,
   root: string,
   logFn: (message: string) => void,
   verbose: boolean,
 ): void {
-  const selected = results.filter((r: ValidationResult) => r.status === status);
+  const selected = results.filter(inBucket);
   for (const line of formatAuditFindingsLines(selected, root, verbose)) {
     logFn(line);
   }
@@ -2930,11 +2992,11 @@ async function resolveScanContext(
  * is no longer the ONLY thing the run says — the code, the location and the fix
  * come from the registry.
  *
- * This result is a `files[]` row but NOT a scanned file: `countFilesByStatus`
+ * This result is a `data.files[]` row but NOT a file read: `countFilesByStatus`
  * recognises it ({@link isUnreadablePathResult}) and reports it under
- * `summary.pathsUnreadable`, outside `filesScanned` and the status counts. A
- * root the OS refused therefore audits zero files and ends on the zero-files
- * refusal, instead of `filesScanned: 1` over a path nothing read.
+ * `data.counts.pathsUnreadable`, outside `examined` and the status counts. A
+ * root the OS refused therefore examines zero files and ends on the zero-files
+ * refusal, instead of `examined: 1` over a path nothing read.
  */
 function unreadablePathResult(
   dirPath: string,
@@ -2959,14 +3021,11 @@ function unreadablePathResult(
       detail: `${location}: ${reason}`,
     }),
   ];
-  const issueCounts = countBySeverity(issues);
   return {
     path: dirPath,
     type: 'unknown',
-    status: calculateValidationStatus(issues),
-    summary: formatCountsSummary(issueCounts),
+    ...describeIssues(issues, 'unknown'),
     issues,
-    issueCounts,
   };
 }
 
@@ -3087,22 +3146,6 @@ async function scanDirectory(
 }
 
 /**
- * Calculate overall status from validation results
- */
-function calculateOverallStatus(results: ValidationResult[]): 'success' | 'warning' | 'error' {
-  const errorCount = results.filter((r: ValidationResult) => r.status === 'error').length;
-  const warningCount = results.filter((r: ValidationResult) => r.status === 'warning').length;
-
-  if (errorCount > 0) {
-    return 'error';
-  }
-  if (warningCount > 0) {
-    return 'warning';
-  }
-  return 'success';
-}
-
-/**
  * How many results carry at least one finding.
  *
  * Counted from the results, not from the rendered hierarchy. The hierarchy is a
@@ -3110,27 +3153,24 @@ function calculateOverallStatus(results: ValidationResult[]): 'success' | 'warni
  * findings or not, so counting its entries reported "N with issues" equal to the
  * number scanned. The predicate itself is the only thing that answers this.
  */
-function countResultsWithFindings(results: ValidationResult[]): number {
+function countResultsWithFindings(results: readonly ValidationResult[]): number {
   return results.filter((r: ValidationResult) => r.issues.length > 0).length;
 }
 
 /**
- * How many FILES ended in each status. A different denominator from
- * {@link SeverityCounts}, which counts FINDINGS — hence the `files` prefix on
- * every field. `summary.warnings: 0` used to sit one line above
- * `issues.warnings: 1` in the same document: the same word, two units, and no
- * way for a reader to tell which one they were looking at.
+ * How many FILES ended in each state — `data.counts`. A different denominator
+ * from the envelope's `summary`, which counts FINDINGS, hence the `files`
+ * prefix on every field. The files READ are the envelope's `examined`.
  */
 interface FileStatusCounts {
-  filesScanned: number;
   filesPassed: number;
   filesWithWarnings: number;
   filesWithErrors: number;
   /**
    * `files[]` rows that are a refused path, not a scanned file — a
-   * {@link unreadablePathResult}. Outside `filesScanned` and the three status
-   * counts above, so `filesScanned` is the number of files the audit READ and
-   * the identity is `files.length === filesScanned + pathsUnreadable`.
+   * {@link unreadablePathResult}. Outside `examined` and the three status
+   * counts above, so `examined` is the number of files the audit READ and
+   * the identity is `files.length === examined + pathsUnreadable`.
    */
   pathsUnreadable: number;
 }
@@ -3148,172 +3188,54 @@ function isUnreadablePathResult(result: ValidationResult): boolean {
 }
 
 /**
- * Count files by their own status.
+ * Count files by their worst actionable severity, and the files read.
  *
  * A refused path is NOT a scanned file. It used to be counted as one, which
  * made the zero-files refusal unreachable for exactly the tree it exists for:
- * `chmod 000` on the whole root gave `filesScanned: 1, filesPassed: 0`,
- * `status: warning`, exit 0 — nothing read, gate green. Kept out of every
- * status count too, or `filesWithWarnings` would exceed `filesScanned`.
+ * `chmod 000` on the whole root gave one file scanned, none passed, a warning
+ * status and exit 0 — nothing read, gate green. Kept out of every status count
+ * too, or `filesWithWarnings` would exceed the files read.
  */
-function countFilesByStatus(results: ValidationResult[]): FileStatusCounts {
+function countFilesByStatus(results: readonly ValidationResult[]): { examined: number; counts: FileStatusCounts } {
   const scanned = results.filter((r) => !isUnreadablePathResult(r));
+  const withErrors = scanned.filter(hasErrors).length;
+  const withWarnings = scanned.filter(hasOnlyWarnings).length;
   return {
-    filesScanned: scanned.length,
-    filesPassed: scanned.filter((r: ValidationResult) => r.status === 'success').length,
-    filesWithWarnings: scanned.filter((r: ValidationResult) => r.status === 'warning').length,
-    filesWithErrors: scanned.filter((r: ValidationResult) => r.status === 'error').length,
-    pathsUnreadable: results.length - scanned.length,
-  };
-}
-
-/**
- * Build base summary structure (used by both flat and hierarchical), together
- * with the entries the document will publish.
- *
- * `issueCounts` is named exactly as it is on every individual file entry, and
- * means the same thing at both levels: findings, by severity. `summary` only ever
- * counts files.
- *
- * The header total and every per-file total come from ONE traversal of the
- * final issue set, and the entries carrying those per-file totals are returned
- * from the same pass. Before that, the header was derived from the issue
- * records while each file's `issueCounts` was whatever its producer had
- * published — and a producer that appends findings after publishing (or never
- * sets the counts at all: `validatePlugin` writes `status` and `summary` but
- * not `issueCounts`) left the two disagreeing inside one document. A real
- * `vat audit --user` run said 55/422/504 in the header over per-file counts
- * summing to 55/360/405, with 91 of 614 entries declaring `{0,0,0}` above the
- * findings they listed. Re-deriving here means the header and the sum are the
- * same arithmetic on the same array, so they cannot drift again no matter what
- * a producer forgets.
- *
- * `linkedFiles[].issues` are deliberately NOT added: every linked finding is
- * also present in its owner's `issues`, so the nested list is a VIEW of records
- * already counted, not extra records. `audit-report-coherence.integration.test.ts`
- * pins that subset relation, because counting once is only correct while it holds.
- *
- * 🚨 **Zero files audited is an ERROR, not "an empty tree audits cleanly".**
- * `calculateOverallStatus([])` is `success`, so an existing directory holding
- * nothing auditable — moved plugins, a wrong subdirectory, an excluded tree, a
- * tree of files no lane recognises — published `status: success` beside
- * `filesScanned: 0`, and this command's own documentation tells CI to gate on
- * that `status`. Derived HERE, in the one builder both the directory lane
- * (`calculateSummary`) and the `--user` lane (`calculateHierarchicalSummary`)
- * pass through, so neither can publish a clean status over a zero denominator.
- * Through the shared mechanism in `run-integrity.ts`: one non-overridable
- * `RESOURCE_CHECK_BROKEN` at `error`, published under a top-level `issues` —
- * the claim is about the RUN, so it is not a `files[]` row and does not count
- * toward `filesScanned` — and counted in the header `issueCounts`, so the
- * identity becomes `issueCounts === Σ files[].issueCounts + Σ issues`.
- *
- * The exit code is NOT touched by this: `status` describes the findings and the
- * exit code describes whether the run completed, and this run completed. See
- * {@link createAuditCommand}.
- */
-function buildBaseSummary<T extends ValidationResult>(
-  results: T[],
-  startTime: number
-): {
-  entries: T[];
-  status: string;
-  summary: FileStatusCounts;
-  issueCounts: SeverityCounts;
-  issues?: ValidationIssue[];
-  duration: string;
-} {
-  const issueCounts: SeverityCounts = { errors: 0, warnings: 0, info: 0 };
-  const entries = results.map((result) => {
-    const counts = countBySeverity(result.issues);
-    issueCounts.errors += counts.errors;
-    issueCounts.warnings += counts.warnings;
-    issueCounts.info += counts.info;
-    return { ...result, issueCounts: counts };
-  });
-
-  const summary = countFilesByStatus(entries);
-  // The denominator is files READ: a tree whose every path was refused audited
-  // nothing, and says so through the same refusal as an empty tree.
-  const runIssues = nothingCheckedFinding(summary.filesScanned, entries.flatMap((entry) => entry.issues), () =>
-    'The audit ran over 0 files, so this report is not a verdict: a tree with nothing'
-    + ' to audit produces the same counts as a clean one. The path resolved to a tree'
-    + ' holding no auditable file — usually a wrong subdirectory, plugins or skills that'
-    + ' have moved, an excluded tree, files no audit lane recognises, or `--no-recursive`'
-    + ' over a tree whose resources sit deeper. Point the command at the plugin,'
-    + ' marketplace, registry or SKILL.md tree it should read.');
-
-  return {
-    entries,
-    // Every run-integrity finding is `error` by construction (invariant 2 of
-    // `run-integrity.ts`), so a non-empty refusal IS the status; otherwise the
-    // files decide it, as before.
-    status: runIssues.length > 0 ? 'error' : calculateOverallStatus(entries),
-    summary,
-    issueCounts: sumSeverityCounts([issueCounts, countBySeverity(runIssues)]),
-    ...(runIssues.length === 0 ? {} : { issues: [...runIssues] }),
-    duration: `${Date.now() - startTime}ms`,
-  };
-}
-
-/**
- * Calculate summary for hierarchical output
- */
-function calculateHierarchicalSummary(
-  results: ValidationResult[],
-  hierarchical: ReturnType<typeof buildHierarchicalOutput>,
-  startTime: number,
-  compatMap: Map<string, PluginCompatEntry> | undefined,
-  verbose: boolean,
-  root: string,
-) {
-  const { entries, ...base } = buildBaseSummary(results, startTime);
-  const withCompat = applyCompatMap(entries, compatMap, root);
-
-  return {
-    root,
-    ...base,
-    summary: {
-      ...base.summary,
-      marketplaces: hierarchical.marketplaces.length,
-      cachedPlugins: hierarchical.cachedPlugins.length,
-      standalonePlugins: hierarchical.standalonePlugins.length,
-      standaloneSkills: hierarchical.standaloneSkills.length,
+    examined: scanned.length,
+    counts: {
+      filesPassed: scanned.length - withErrors - withWarnings,
+      filesWithWarnings: withWarnings,
+      filesWithErrors: withErrors,
+      pathsUnreadable: results.length - scanned.length,
     },
-    files: relativizePathEntries(applyVerboseFilter(withCompat, verbose), root, NESTED_PATH_CARRIERS),
-    hierarchical,
   };
 }
 
 /**
- * Log hierarchical summary to stderr
+ * The human channel for the `--user` lane, read off the WRITTEN report. The
+ * exit code is not decided here: the caller ends on `exitCodeForReport`.
  */
 function logHierarchicalSummary(
-  results: ValidationResult[],
-  runIssues: readonly ValidationIssue[] | undefined,
+  { results, written, data }: AuditOutcomeView,
   logger: ReturnType<typeof createLogger>
 ): void {
-  const status = calculateOverallStatus(results);
+  const { filesWithErrors, filesWithWarnings } = data.counts;
   const skillsWithIssues = countResultsWithFindings(results);
   const totalSkills = results.length;
 
-  // Same rule as the per-file lane: the exit code follows `status`.
-  const refused = logRunIntegrity(runIssues, logger);
-  if (refused) {
+  if (logRunIntegrity(written, logger)) {
     // Rendered above; there is no skill verdict to print over zero skills.
-  } else if (status === 'error') {
-    const errorCount = results.filter((r: ValidationResult) => r.status === 'error').length;
-    logger.error(`Audit found ${errorCount} skill(s) with errors (${totalSkills} scanned, ${skillsWithIssues} with issues)`);
-  } else if (status === 'warning') {
-    const warningCount = results.filter((r: ValidationResult) => r.status === 'warning').length;
-    logger.info(`Audit passed with warnings: ${warningCount} skill(s) (${totalSkills} scanned, ${skillsWithIssues} with issues)`);
+  } else if (filesWithErrors > 0) {
+    logger.error(`Audit found ${filesWithErrors} skill(s) with errors (${totalSkills} scanned, ${skillsWithIssues} with issues)`);
+  } else if (filesWithWarnings > 0) {
+    logger.info(`Audit passed with warnings: ${filesWithWarnings} skill(s) (${totalSkills} scanned, ${skillsWithIssues} with issues)`);
   } else if (skillsWithIssues > 0) {
-    // `success` means "nothing actionable", NOT "nothing to see". Saying only
-    // "N passed" over a pile of info findings is how they stayed invisible.
+    // Nothing actionable is NOT "nothing to see". Saying only "N passed" over
+    // a pile of info findings is how they stayed invisible.
     logger.info(`Audit successful: ${totalSkills} skill(s) passed (${skillsWithIssues} with informational findings)`);
   } else {
     logger.info(`Audit successful: ${totalSkills} skill(s) passed`);
   }
 
   renderAuditFooter(results, logger);
-  process.exit(refused || status === 'error' ? ExitCode.FINDINGS : ExitCode.OK);
 }

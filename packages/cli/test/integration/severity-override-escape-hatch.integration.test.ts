@@ -25,6 +25,7 @@
 import { writeFileSync } from 'node:fs';
 
 import { indexPluginLocalSkills } from '@vibe-agent-toolkit/agent-skills';
+import { exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -93,7 +94,7 @@ function severityBlock(indent: string, severity: OverrideSeverity): string {
  * because the `per-skill` scope has nowhere else to write its override.
  */
 function configYaml(scope: OverrideScope, severity: OverrideSeverity = 'ignore'): string {
-  const base = `version: 1\nskills:\n  include:\n    - "skills/**/SKILL.md"\n`;
+  const base = `skills:\n  include:\n    - "skills/**/SKILL.md"\n`;
   const defaults = scope === 'defaults' ? `  defaults:\n${severityBlock('    ', severity)}` : '';
   const perSkillBody =
     scope === 'per-skill' ? severityBlock('      ', severity) : '      publish: true\n';
@@ -204,31 +205,33 @@ function projectWithMarketplace(
 /**
  * What `vat verify`'s `marketplace:<name>` phase publishes for a marketplace tree.
  *
- * `status` is read from the DOCUMENT the builder publishes, not recomputed here:
- * it is the value the command turns into its exit code (`status === 'error' ?
- * 1 : 0`), and `vat verify` reads that reported status as the phase's status.
- * Asserting it is how the promote direction is shown to reach the exit code
- * rather than merely relabelling a warning.
+ * The exit code and the counts are read from the DOCUMENT the builder
+ * publishes, not recomputed here: the exit code is what the command ends on
+ * (`exitCodeForReport`), and `vat verify` reads the document's `summary` as the
+ * phase's status. Asserting them is how the promote direction is shown to reach
+ * the exit code rather than merely relabelling a warning.
  */
 async function marketplaceOutcome(
   marketplace: string,
-): Promise<{ findings: { location: string; severity: string }[]; status: string }> {
+): Promise<{ findings: { location: string; severity: string }[]; exitCode: number; errors: number; warnings: number }> {
   const { marketplaceResult, pluginResults, undeclared, refused, issues } =
     await collectMarketplaceFindings(marketplace, silentLogger);
-  const { status } = buildMarketplaceValidateReport({
+  const report = buildMarketplaceValidateReport({
     root: marketplace,
     marketplace: marketplaceResult.metadata,
     pluginResults,
     undeclared,
     refused,
     issues,
-    duration: '0ms',
+    durationMs: 0,
   });
   return {
-    findings: issues
+    findings: report.findings
       .filter((i) => i.code === CODE)
       .map((i) => ({ location: String(i.location), severity: String(i.severity) })),
-    status,
+    exitCode: exitCodeForReport(report),
+    errors: report.summary.errors,
+    warnings: report.summary.warnings,
   };
 }
 
@@ -236,7 +239,7 @@ async function marketplaceOutcome(
 async function verifyFindings(root: string): Promise<string[]> {
   const config = loadConfig(root);
   const discovered = config?.skills ? await discoverSkillsFromConfig(config.skills, root, 'refuse') : [];
-  const pluginLocal = indexPluginLocalSkills(config ?? { version: 1 }, root);
+  const pluginLocal = indexPluginLocalSkills(config ?? {}, root);
   return checkPackagedAgentInstructionFiles(root, discovered, pluginLocal, await readPluginLocalSkillNames(pluginLocal)).issues.map((i) => String(i.location));
 }
 
@@ -256,10 +259,13 @@ async function auditFindings(target: string): Promise<string[]> {
 }
 
 /** The report-level status `vat audit <target>` publishes for the result carrying the finding. */
+/** Each carrying result's worst actionable severity, read from its `summary` counts. */
 async function auditStatuses(target: string): Promise<string[]> {
   resetAuditCaches();
   const { results } = await buildAuditReport(target, {}, Date.now(), silentLogger);
-  return results.filter((r) => r.issues.some((i) => i.code === CODE)).map((r) => String(r.status));
+  return results
+    .filter((r) => r.issues.some((i) => i.code === CODE))
+    .map((r) => (r.summary.errors > 0 ? 'error' : 'warning'));
 }
 
 describe('severity escape hatch: PACKAGED_AGENT_INSTRUCTION_FILE (integration)', () => {
@@ -364,15 +370,19 @@ describe('severity escape hatch: PACKAGED_AGENT_INSTRUCTION_FILE (integration)',
       const { marketplace } = projectWithMarketplace('none');
       await expect(marketplaceOutcome(marketplace)).resolves.toEqual({
         findings: [{ location: `plugins/${PLUGIN_NAME}/CLAUDE.md`, severity: 'warning' }],
-        status: 'warning',
+        exitCode: 0,
+        errors: 0,
+        warnings: 1,
       });
     });
 
-    it('honours skills.defaults.validation.severity, and the run reaches success', async () => {
+    it('honours skills.defaults.validation.severity, and the run reaches no warning at all', async () => {
       const { marketplace } = projectWithMarketplace('defaults');
       await expect(marketplaceOutcome(marketplace)).resolves.toEqual({
         findings: [],
-        status: 'success',
+        exitCode: 0,
+        errors: 0,
+        warnings: 0,
       });
     });
 
@@ -380,21 +390,23 @@ describe('severity escape hatch: PACKAGED_AGENT_INSTRUCTION_FILE (integration)',
       const { marketplace } = projectWithMarketplace('defaults', 'error');
       await expect(marketplaceOutcome(marketplace)).resolves.toEqual({
         findings: [{ location: `plugins/${PLUGIN_NAME}/CLAUDE.md`, severity: 'error' }],
-        status: 'error',
+        exitCode: 1,
+        errors: 1,
+        warnings: 0,
       });
     });
 
     it('resolves the per-plugin issue list the report publishes, not just the flat one', async () => {
-      // `plugins[].issues` is a second copy of the same findings in the emitted
-      // document. Resolving only the flat list would publish a suppressed warning
-      // under `plugins[]` while `issues` omitted it, and leave `plugins[].status`
+      // Each `data.plugins[]` row tallies its plugin's findings beside the flat
+      // `findings`. Resolving only the flat list would count a suppressed warning
+      // on the row while `findings` omitted it, and leave the row's `status`
       // contradicting the run's.
       const { marketplace } = projectWithMarketplace('defaults');
       const { pluginResults } = await collectMarketplaceFindings(marketplace, silentLogger);
       expect(pluginResults.map(({ result }) => ({
         status: result.status,
         codes: result.issues.filter((i) => i.code === CODE).length,
-      }))).toEqual([{ status: 'success', codes: 0 }]);
+      }))).toEqual([{ status: 'ok', codes: 0 }]);
     });
   });
 });

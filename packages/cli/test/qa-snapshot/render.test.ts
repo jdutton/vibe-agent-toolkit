@@ -30,7 +30,6 @@ const ADVISORY_NOTE = 'advisory';
 function delta(overrides: Partial<ArtifactDelta> = {}): ArtifactDelta {
   return {
     name: 'enumeration.resources',
-    kind: 'oracle',
     artifact: 'oracle/enumeration.resources.txt',
     status: 'changed',
     addedLines: 0,
@@ -41,12 +40,11 @@ function delta(overrides: Partial<ArtifactDelta> = {}): ArtifactDelta {
 }
 
 describe('renderDetailHeader', () => {
-  it('states the artifact, its kind, its status and its counts', () => {
+  it('states the artifact, its status and its counts', () => {
     const text = renderDetailHeader(delta({ addedLines: 3, removedLines: 1 }));
 
     expect(text).toContain('enumeration.resources');
     expect(text).toContain('oracle/enumeration.resources.txt');
-    expect(text).toContain('kind: oracle');
     expect(text).toContain('status: changed');
     expect(text).toContain('+3/-1');
     expect(text.endsWith('\n')).toBe(true);

@@ -63,6 +63,17 @@ Description:
     - agents/
     - . (current directory)
 
+Output (YAML on stdout; the human list on stderr):
+  status: ok | findings;  examined: 3 (the search paths scanned)
+  findings[]: SCAN_PATH_UNREADABLE (warning) per search path, agent
+    directory or manifest the OS would not read — the list is then a
+    floor, not the answer
+  data: { root, agents: [{ name, version, path }] } — path relative to root
+
+Exit Codes (derived from the document):
+  0 - ok, or findings (an unreadable path is a warning)
+  2 - error: only a defect in VAT (INTERNAL_ERROR)
+
 Requirements:
   projectRoot: optional (tolerates absence)
   config:      not used
@@ -95,11 +106,22 @@ Targets:
   - skill: Agent Skills (for Claude Desktop/Code)
   - More targets coming soon (langchain, etc.)
 
-Output:
-  Default location: dist/vat-bundles/<target>/<agent-name>/
+Output (YAML on stdout):
+  status: ok | error;  examined: 1 (the agent built)
+  data: { agent, target, output, files }
+  findings[]: only SKILL_PACKAGING_FAILED, on the error branch
+  Default build location: dist/vat-bundles/<target>/<agent-name>/
 
-Exit Codes:
-  0 - Success  |  1 - Build error  |  2 - System error
+Exit Codes (derived from the document):
+  0 - ok: the agent was built
+  2 - error: nothing was built — USAGE_INVALID (a --target other than
+      skill, no projectRoot, the path or name names no manifest, or no
+      package.json encloses the agent and --output was not given),
+      CONFIG_INVALID (the manifest does not validate, declares no system
+      prompt, or its $ref names no file), INPUT_UNREADABLE (an agent
+      search path looked up by name, the manifest, its system prompt,
+      scripts/, LICENSE.txt or package.json cannot be read), RUN_INCOMPLETE (the packager refused the bundle's content — a
+      SKILL_PACKAGING_FAILED finding at the agent)
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -130,7 +152,7 @@ Description:
   User input: The input text/query for the agent
 
 Exit Codes:
-  0 - Success  |  1 - Execution error  |  2 - System error
+  0 - Success  |  2 - Any failure (the agent did not load, or the run failed)
 
 Examples:
   $ vat agent run agent-generator "Create a code review agent"
@@ -160,19 +182,28 @@ Requirements:
 Description:
   Validates agent manifest schema (using @vibe-agent-toolkit/schema),
   LLM configuration, tool definitions, and resource availability. Outputs
-  YAML validation report to stdout, errors to stderr.
+  the report envelope (YAML) to stdout, findings to stderr.
 
   Argument: agent name OR path to agent directory/manifest file
 
 Validation Checks:
-  - Manifest schema (apiVersion, kind, metadata, spec)
-  - LLM provider and model configuration
-  - Tool configurations (RAG databases)
-  - Resource files (prompts, docs, templates)
-  - Prompt references ($ref paths)
+  - Manifest schema (apiVersion, kind, metadata, spec) — AGENT_MANIFEST_INVALID
+  - Tool configurations (RAG databases) — AGENT_REFERENCE_MISSING,
+    AGENT_RAG_NO_SOURCES
+  - Resource files and prompt $ref paths — AGENT_REFERENCE_MISSING,
+    AGENT_REFERENCE_UNREADABLE
 
-Exit Codes:
-  0 - Valid  |  1 - Validation errors  |  2 - System error
+Output (YAML on stdout):
+  status: ok | findings | error;  examined: 1 (the manifest read)
+  findings[]: each located at the manifest, relative to data.root
+  data: { root, manifest: { name, version, path } }
+
+Exit Codes (derived from the document):
+  0 - ok, or findings with no error-severity finding
+  1 - findings with an error-severity finding
+  2 - error: no manifest to judge — USAGE_INVALID (the path or name names
+      no manifest), INPUT_UNREADABLE (the manifest is unreadable or not
+      YAML, or an agent search path looked up by name cannot be read)
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -211,8 +242,17 @@ Conversion:
   - Preserves version from metadata.version or defaults to 0.1.0
   - Validates frontmatter before conversion
 
-Exit Codes:
-  0 - Success  |  1 - Validation/conversion error  |  2 - System error
+Output (YAML on stdout):
+  status: ok | error;  examined: 1 (the skill imported)
+  data: { agentPath }
+
+Exit Codes (derived from the document):
+  0 - ok: agent.yaml was written
+  2 - error: nothing was written — USAGE_INVALID (no SKILL.md at the path,
+      or agent.yaml exists and --force was not given), INPUT_UNREADABLE (the
+      SKILL.md cannot be read, or no Agent Skills schema accepts its
+      frontmatter), RUN_INCOMPLETE (the agent.yaml write failed); a
+      --output whose directory does not exist is USAGE_INVALID
 
 Examples:
   $ vat agent import ./my-skill/SKILL.md              # Import to same directory
@@ -242,8 +282,21 @@ Scopes:
   - user: ~/.claude/skills/ (default, personal skills)
   - project: ./.claude/skills/ (project-local skills)
 
-Exit Codes:
-  0 - Success  |  1 - Installation error  |  2 - System error
+Output (YAML on stdout):
+  status: ok | error;  examined: 1 (the agent named)
+  data: { agent, installPath, symlink } — symlink is true under --dev
+
+Exit Codes (derived from the document):
+  0 - ok: the agent was installed
+  2 - error: nothing was installed — USAGE_INVALID (an unknown --scope or
+      --runtime, a name that is not one path segment or names no agent,
+      the agent is already installed and --force was not given, or no
+      package.json encloses the agent), NOT_IMPLEMENTED (--dev on Windows),
+      CONFIG_INVALID (the manifest does not validate), INPUT_UNREADABLE (the
+      bundle was never built, or a search path, the manifest, the bundle or
+      the install path cannot be read),
+      RUN_INCOMPLETE (a write under the scope directory failed; under
+      --force the message says when the previous install was already removed)
 
 Examples:
   $ vat agent install agent-generator                  # Install to user scope
@@ -273,8 +326,17 @@ Scopes:
   - user: ~/.claude/skills/ (default)
   - project: ./.claude/skills/
 
-Exit Codes:
-  0 - Success  |  1 - Not installed  |  2 - System error
+Output (YAML on stdout):
+  status: ok | error;  examined: 1 (the agent named)
+  data: { agent, installPath, wasSymlink } — wasSymlink for a --dev install
+    (only the link is removed, never its target)
+
+Exit Codes (derived from the document):
+  0 - ok: the install was removed
+  2 - error: nothing was removed — USAGE_INVALID (an unknown --scope or
+      --runtime, a name that is not one path segment, or the agent is not
+      installed in that scope), INPUT_UNREADABLE (the install path cannot be
+      read), RUN_INCOMPLETE (the removal failed)
 
 Examples:
   $ vat agent uninstall agent-generator                  # Remove from user scope
@@ -301,12 +363,16 @@ Scopes:
   - user: Only ~/.claude/skills/
   - project: Only ./.claude/skills/
 
-Output:
-  YAML summary → stdout (for programmatic parsing)
-  Human-readable list → stderr
+Output (YAML on stdout; the human list on stderr):
+  status: ok | findings | error;  examined: the scopes scanned
+  findings[]: SCAN_PATH_UNREADABLE (warning) per scope directory the OS
+    would not list — the list is then a floor, not the answer; its field
+    is the scope, its location .claude/skills under that scope's base
+  data: { scanned, skills: [{ name, scope, type: symlink | directory, path }] }
 
-Exit Codes:
-  0 - Success  |  2 - System error
+Exit Codes (derived from the document):
+  0 - ok, or findings (an unreadable scope is a warning)
+  2 - error: USAGE_INVALID (a --scope or --runtime it does not know)
 
 Examples:
   $ vat agent installed                    # List all installed skills

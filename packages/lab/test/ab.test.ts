@@ -37,6 +37,7 @@ import {
   renderAb,
   runAb,
 } from '../src/harness/ab.js';
+import { type ArmEnvironment, EMPTY_ARM_ENVIRONMENT } from '../src/harness/arm-env.js';
 import { MEASURABLE_COMMANDS } from '../src/harness/commands.js';
 import { buildReportEnvelope } from '../src/harness/report.js';
 import type { CaptureRequest, ResolvedInstrument, ResolvedSubject } from '../src/harness/types.js';
@@ -77,7 +78,7 @@ function arm(commit: string): ResolvedInstrument {
   return {
     command: 'node',
     leadingArgs: ['/nowhere/bin.js'],
-    version: { version: '0.2.0', commit: commit.repeat(40), dirty: false },
+    version: { version: '0.2.0', commit: commit.repeat(40), dirty: false, closure: null },
   };
 }
 
@@ -107,10 +108,10 @@ interface FixtureOptions {
   readonly script: readonly PairScript[];
   readonly control?: boolean;
   readonly noiseFloor?: number;
-  /** Extra environment for arm A's children only. */
-  readonly envA?: Readonly<Record<string, string>>;
-  /** Extra environment for arm B's children only. */
-  readonly envB?: Readonly<Record<string, string>>;
+  /** Arm A's environment; absent means it sets nothing. */
+  readonly envA?: ArmEnvironment;
+  /** Arm B's environment; absent means it sets nothing. */
+  readonly envB?: ArmEnvironment;
 }
 
 /** A run's outcome plus the capture order it produced. */
@@ -119,7 +120,7 @@ interface FixtureRun {
   /** One entry per capture, naming the arm — the ordering evidence. */
   readonly order: readonly string[];
   /** The `env` each capture was asked for, in capture order. */
-  readonly envs: readonly (Readonly<Record<string, string>> | undefined)[];
+  readonly envs: readonly ArmEnvironment[];
 }
 
 /**
@@ -150,7 +151,7 @@ function comparisonFor(script: PairScript | undefined): RefusalLike | Comparison
  */
 async function runFixture(options: FixtureOptions, label: string): Promise<FixtureRun> {
   const order: string[] = [];
-  const envs: (Readonly<Record<string, string>> | undefined)[] = [];
+  const envs: ArmEnvironment[] = [];
   let compared = 0;
 
   const capture = (request: CaptureRequest): Promise<ReportEnvelope<FakeBody>> => {
@@ -181,8 +182,8 @@ async function runFixture(options: FixtureOptions, label: string): Promise<Fixtu
     control: options.control === true,
     noiseFloor: options.noiseFloor ?? null,
     outDir: safePath.join(tempDir, label),
-    ...(options.envA === undefined ? {} : { envA: options.envA }),
-    ...(options.envB === undefined ? {} : { envB: options.envB }),
+    envA: options.envA ?? EMPTY_ARM_ENVIRONMENT,
+    envB: options.envB ?? EMPTY_ARM_ENVIRONMENT,
     now: () => new Date().toISOString(),
     capture,
     compare: () => comparisonFor(options.script[compared++]),
@@ -250,7 +251,7 @@ describe('runAb — the arms alternate', () => {
 });
 
 describe('runAb — an arm can carry its own configuration', () => {
-  const POOL_ON = { VAT_PARSE_POOL: '1' };
+  const POOL_ON: ArmEnvironment = { set: { VAT_PARSE_POOL: '1' }, unset: [] };
 
   it('hands each arm its OWN env, so one build can be measured in two configurations', async () => {
     // The pool-on/pool-off A/B: one build, two settings. Without this the only
@@ -269,7 +270,7 @@ describe('runAb — an arm can carry its own configuration', () => {
     );
 
     // Capture order is A B A B, so B's env must land on captures 1 and 3 only.
-    expect(envs).toEqual([undefined, POOL_ON, undefined, POOL_ON]);
+    expect(envs).toEqual([EMPTY_ARM_ENVIRONMENT, POOL_ON, EMPTY_ARM_ENVIRONMENT, POOL_ON]);
   });
 
   it('does not leak one arm’s env into the other when BOTH are set', async () => {
@@ -279,13 +280,13 @@ describe('runAb — an arm can carry its own configuration', () => {
         aValues: [10],
         bValues: [20],
         script: ['changed'],
-        envA: { VAT_PARSE_POOL: '0' },
+        envA: { set: { VAT_PARSE_POOL: '0' }, unset: [] },
         envB: POOL_ON,
       },
       'env-both-arms',
     );
 
-    expect(envs).toEqual([{ VAT_PARSE_POOL: '0' }, POOL_ON]);
+    expect(envs).toEqual([{ set: { VAT_PARSE_POOL: '0' }, unset: [] }, POOL_ON]);
   });
 
   it('publishes each arm’s env on the result, so the report can disclose it', async () => {
@@ -303,7 +304,7 @@ describe('runAb — an arm can carry its own configuration', () => {
       'env-published',
     );
 
-    expect(result.envA).toBeUndefined();
+    expect(result.envA).toEqual(EMPTY_ARM_ENVIRONMENT);
     expect(result.envB).toEqual(POOL_ON);
   });
 });
@@ -483,7 +484,7 @@ describe('renderAb', () => {
         aValues: [100],
         bValues: [60],
         script: ['changed'],
-        envB: { VAT_PARSE_POOL: '1' },
+        envB: { set: { VAT_PARSE_POOL: '1' }, unset: [] },
       },
       'render-config',
     );
@@ -491,6 +492,25 @@ describe('renderAb', () => {
     const rendered = renderAb(result);
     expect(rendered).toContain('Config A: (none)');
     expect(rendered).toContain('Config B: VAT_PARSE_POOL=1');
+  });
+
+  it('discloses an UNSET as configuration, not as an arm that set nothing', async () => {
+    // Removing a variable the operator's shell carries is a real difference
+    // between arms; rendering it as `(none)` would hide the only visible axis.
+    const { result } = await runFixture(
+      {
+        pairs: 1,
+        aValues: [100],
+        bValues: [60],
+        script: ['changed'],
+        envB: { set: {}, unset: ['CLAUDE_CONFIG_DIR'] },
+      },
+      'render-unset',
+    );
+
+    const rendered = renderAb(result);
+    expect(rendered).toContain('Config A: (none)');
+    expect(rendered).toContain('Config B: -CLAUDE_CONFIG_DIR');
   });
 
   it('says nothing about config when neither arm set any, rather than printing empty lines', async () => {

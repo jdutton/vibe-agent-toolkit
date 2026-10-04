@@ -26,9 +26,9 @@ export class EvalInputError extends VatError {
 
 /**
  * Neutralize a SUITE-AUTHORED string before it is quoted into an
- * {@link EvalInputError}, whose message reaches `process.stdout` on the
- * `Summary:` line — the one channel deliberately kept machine-readable — and
- * renders twice on the way there.
+ * {@link EvalInputError}, whose message reaches `process.stdout` as the
+ * published report's `error.message` — the one channel deliberately kept
+ * machine-readable — and stderr beside it, rendering twice on the way there.
  *
  * The suite is nominally adopter-authored, but `resolveEvalSuitePath` will
  * harvest one out of a FETCHED npm/url artifact, i.e. out of the skill under

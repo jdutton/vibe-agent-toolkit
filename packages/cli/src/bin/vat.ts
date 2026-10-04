@@ -3,10 +3,21 @@
 /**
  * Smart vat wrapper with context-aware execution
  *
- * Automatically detects execution context and delegates to appropriate binary:
- * - Developer mode: Inside vibe-agent-toolkit repo → packages/cli/dist/bin.js (unpackaged dev build)
- * - Local install: Project has vibe-agent-toolkit → node_modules version (packaged)
- * - Global install: Fallback → globally installed version (packaged)
+ * Resolution precedence:
+ * 1. `VAT_BIN` — an explicit `dist/bin.js` path, highest precedence. A path
+ *    that does not exist, or that names this wrapper itself (`dist/bin/vat.js`,
+ *    which would re-resolve and spawn itself forever), is a hard error
+ *    (exit 2) — never a silent fall-through to a lower priority.
+ * 2. `VAT_ROOT_DIR` — a monorepo checkout root; `<root>/packages/cli/dist/bin.js`
+ *    must already be built, or this is a hard error (exit 2).
+ * 3. Dev mode: Inside vibe-agent-toolkit repo → packages/cli/dist/bin.js (unpackaged dev build)
+ * 4. Local install: Project has vibe-agent-toolkit → node_modules version (packaged)
+ * 5. Global install: Fallback → globally installed version (packaged)
+ *
+ * `VAT_TEST_ROOT` is separate from the above: it only changes the directory
+ * project-root detection (priorities 3–5) starts from — it never names a
+ * binary. For every `VAT_*` variable above, an empty string is treated as
+ * unset (`if (process.env[...])`), matching the historical behaviour.
  *
  * Features:
  * - Version detection and comparison
@@ -19,10 +30,10 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import {  dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { exitCodeOfChild, installLastResortExit } from '@vibe-agent-toolkit/schema';
+import { ExitCode, exitCodeOfChild, installLastResortExit } from '@vibe-agent-toolkit/schema';
 import {
   findNodeWorkspaceRoot,
   isPathAbsentError,
@@ -83,6 +94,38 @@ function spawnCli(binPath: string, context: Context, contextPath?: string): neve
 }
 
 /**
+ * The explicit overrides, in precedence order. A named target that cannot be
+ * run is an error, never a fall-through — see the header docstring.
+ */
+function explicitOverride(
+  env: NodeJS.ProcessEnv,
+): { binPath: string; contextPath: string; variable: 'VAT_BIN' | 'VAT_ROOT_DIR' } | null {
+  const vatBin = env['VAT_BIN'];
+  if (vatBin) {
+    const binPath = safePath.resolve(vatBin);
+    if (basename(binPath) === 'vat.js' && basename(dirname(binPath)) === 'bin') {
+      refuseOverride('VAT_BIN', binPath, 'names the context-detecting wrapper, which would re-resolve and run itself; point it at dist/bin.js');
+    }
+    if (!existsSync(binPath)) refuseOverride('VAT_BIN', binPath, 'does not exist');
+    // <root>/packages/cli/dist/bin.js: dist → cli → packages → <root> is FOUR hops.
+    return { binPath, contextPath: dirname(dirname(dirname(dirname(binPath)))), variable: 'VAT_BIN' };
+  }
+  const rootDir = env['VAT_ROOT_DIR'];
+  if (rootDir) {
+    const binPath = safePath.join(rootDir, 'packages/cli/dist/bin.js');
+    if (!existsSync(binPath)) refuseOverride('VAT_ROOT_DIR', binPath, 'has no built CLI (run `bun run build` there)');
+    return { binPath, contextPath: rootDir, variable: 'VAT_ROOT_DIR' };
+  }
+  return null;
+}
+
+/** Print why the named override was refused and exit with {@link ExitCode.ERROR}. */
+function refuseOverride(variable: string, path: string, why: string): never {
+  process.stderr.write(`vat: ${variable} ${why}: ${path}\nUnset ${variable} to use normal resolution.\n`);
+  process.exit(ExitCode.ERROR);
+}
+
+/**
  * Check if we're in vibe-agent-toolkit repo (developer mode)
  * Simple detection: both wrapper and bin.js must exist in project structure
  *
@@ -115,8 +158,8 @@ function getDevModeBinary(projectRoot: string): string | null {
  * layout and **does not exist under pnpm**. An adopter depending on
  * the umbrella `vibe-agent-toolkit` package gets no top-level
  * `node_modules/@vibe-agent-toolkit/` directory at all; the real CLI lives under
- * `node_modules/.pnpm/@vibe-agent-toolkit+cli@<ver>_<hash>/…`. So priority 3 never
- * fired for them, resolution fell through to priority 4, and whichever copy of
+ * `node_modules/.pnpm/@vibe-agent-toolkit+cli@<ver>_<hash>/…`. So priority 4 never
+ * fired for them, resolution fell through to priority 5, and whichever copy of
  * `vat.js` happened to be invoked won — silently ignoring the version they pinned.
  * That is the exact failure `findLocalInstall` exists to prevent, and it was
  * invisible on npm/bun, where the flat layout makes the probe succeed.
@@ -167,7 +210,7 @@ function findLocalInstall(projectRoot: string): string | null {
 /**
  * `require.resolve` reduced to "found it, or didn't".
  *
- * A NOT-FOUND is priority 3's ordinary "not applicable" answer — no local
+ * A NOT-FOUND is priority 4's ordinary "not applicable" answer — no local
  * install on this base — so it falls through to the next base and ultimately to
  * the global install rather than failing the run. Two codes spell it: the
  * package is not installed (`MODULE_NOT_FOUND`), or it is installed but too old
@@ -229,16 +272,16 @@ function main(): void {
   // path below ends in `spawnCli`, which never returns.
   reportStdioBlocking(debug);
 
-  // Priority 1: Explicit override via VAT_ROOT_DIR
-  if (process.env['VAT_ROOT_DIR']) {
-    const binPath = safePath.join(process.env['VAT_ROOT_DIR'], 'packages/cli/dist/bin.js');
-    if (existsSync(binPath)) {
-      if (debug) {
-        console.error('[vat debug] Using VAT_ROOT_DIR override');
-        console.error(`[vat debug] Binary: ${binPath}`);
-      }
-      spawnCli(binPath, 'dev', process.env['VAT_ROOT_DIR']);
+  // Priority 1 & 2: Explicit override via VAT_BIN or VAT_ROOT_DIR. A named
+  // target that cannot be run exits here (ExitCode.ERROR) — it never falls
+  // through to dev/local/global resolution below.
+  const override = explicitOverride(process.env);
+  if (override) {
+    if (debug) {
+      console.error(`[vat debug] Using ${override.variable} override`);
+      console.error(`[vat debug] Binary: ${override.binPath}`);
     }
+    spawnCli(override.binPath, 'dev', override.contextPath);
   }
 
   // Find the Node monorepo workspace root from the current working directory.
@@ -250,14 +293,14 @@ function main(): void {
   let context: Context;
   let binDir: string;
 
-  // Priority 2: Check for developer mode (inside vibe-agent-toolkit repo)
+  // Priority 3: Check for developer mode (inside vibe-agent-toolkit repo)
   const devBin = getDevModeBinary(projectRoot);
   if (devBin) {
     binPath = devBin;
     context = 'dev';
     binDir = dirname(dirname(devBin)); // packages/cli/dist -> packages/cli
   }
-  // Priority 3: Check for local install (node_modules)
+  // Priority 4: Check for local install (node_modules)
   else {
     const localBin = findLocalInstall(projectRoot);
     if (localBin) {
@@ -265,7 +308,7 @@ function main(): void {
       context = 'local';
       binDir = dirname(dirname(localBin)); // node_modules/@vibe-agent-toolkit/cli/dist -> node_modules/@vibe-agent-toolkit/cli
     }
-    // Priority 4: Use global install (this script's location)
+    // Priority 5: Use global install (this script's location)
     else {
       binPath = safePath.resolve(__dirname, '../bin.js');
       context = 'global';

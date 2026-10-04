@@ -17,7 +17,6 @@ export { createLogger, type Logger, type LoggerOptions } from './utils/logger.js
 // the top of the dependency chain and VAT's second published bin could not reach
 // it here.
 export {
-  writeYamlOutput,
   writeTestFormatError,
   writeStdoutSync,
 } from './utils/output.js';

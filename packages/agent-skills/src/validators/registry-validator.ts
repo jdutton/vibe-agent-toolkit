@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { CODE_REGISTRY, calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation } from '@vibe-agent-toolkit/utils';
 import type { z } from 'zod';
 
@@ -16,6 +16,7 @@ import {
 } from '../schemas/known-marketplaces-registry.js';
 
 import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
+import { describeIssues } from './describe-issues.js';
 import type { ValidationResult } from './types.js';
 import { generateFixSuggestion } from './validation-utils.js';
 
@@ -28,7 +29,6 @@ const REGISTRY_FILE_NOT_FOUND_MESSAGE = 'Registry file not found';
 function validateRegistryFile(
 	filePath: string,
 	schema: z.ZodType,
-	successMessage: string,
 	locationRoot: string | undefined,
 	/**
 	 * Reports what the schema's `.passthrough()` absorbed. Registries VAT does not
@@ -56,10 +56,8 @@ function validateRegistryFile(
 		return {
 			path: filePath,
 			type: REGISTRY_TYPE,
-			status: 'error',
-			summary: REGISTRY_FILE_NOT_FOUND_MESSAGE,
+			...describeIssues(issues, REGISTRY_TYPE, REGISTRY_FILE_NOT_FOUND_MESSAGE),
 			issues,
-			issueCounts: countBySeverity(issues),
 		};
 	}
 
@@ -80,10 +78,8 @@ function validateRegistryFile(
 		return {
 			path: filePath,
 			type: REGISTRY_TYPE,
-			status: 'error',
-			summary: 'Registry file is invalid JSON',
+			...describeIssues(issues, REGISTRY_TYPE, 'Registry file is invalid JSON'),
 			issues,
-			issueCounts: countBySeverity(issues),
 		};
 	}
 
@@ -116,16 +112,11 @@ function validateRegistryFile(
 		}
 	}
 
-	const status = calculateValidationStatus(issues);
-
 	return {
 		path: filePath,
 		type: REGISTRY_TYPE,
-		status,
-		summary:
-			status === 'success' ? successMessage : `Found ${issues.length} issue(s)`,
+		...describeIssues(issues, REGISTRY_TYPE),
 		issues,
-		issueCounts: countBySeverity(issues),
 	};
 }
 
@@ -143,7 +134,6 @@ export async function validateInstalledPluginsRegistry(
 	return validateRegistryFile(
 		filePath,
 		InstalledPluginsRegistrySchema,
-		'Valid installed plugins registry',
 		options?.locationRoot,
 		detectInstalledPluginsRegistryDrift,
 	);
@@ -163,7 +153,6 @@ export async function validateKnownMarketplacesRegistry(
 	return validateRegistryFile(
 		filePath,
 		KnownMarketplacesRegistrySchema,
-		'Valid known marketplaces registry',
 		options?.locationRoot,
 		detectKnownMarketplacesRegistryDrift,
 	);
