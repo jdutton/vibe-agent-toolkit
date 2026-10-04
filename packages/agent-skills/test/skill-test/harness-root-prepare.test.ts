@@ -6,7 +6,7 @@
  * platform guard).
  */
 
-import { chmodSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -26,6 +26,16 @@ describe('prepareHarnessRoot', () => {
 
   afterEach(() => {
     rmSync(tmpBase, { recursive: true, force: true });
+  });
+
+  // A file where the harness root must be a directory is the operator's input
+  // (USAGE_INVALID), named, and left as it is — not a write the OS refused.
+  it('refuses a harness root that exists and is not a directory, leaving the file untouched', () => {
+    const file = safePath.join(tmpBase, 'out-file');
+    writeFileSync(file, 'precious');
+    expect(() => prepareHarnessRoot(file, 'operator')).toThrow(HarnessLocationError);
+    expect(() => prepareHarnessRoot(file, 'operator')).toThrow(/is not a directory/);
+    expect(readFileSync(file, 'utf8')).toBe('precious');
   });
 
   it('does nothing when the path does not yet exist', () => {

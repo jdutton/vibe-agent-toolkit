@@ -12,6 +12,7 @@ import {
   fillPathSpellings,
   fillRealpaths,
   FsLookupCache,
+  openEachFileForReading,
   pathSpellingFrom,
   realpathFrom,
   spellingWalkRoot,
@@ -19,7 +20,7 @@ import {
 import type { DirectoryListing, RealpathTable } from '../src/fs-utils.js';
 import { toForwardSlash } from '../src/path-core.js';
 import type { SymlinkCapability } from '../src/test-helpers.js';
-import { createSymlinkAsync, symlinkCapability } from '../src/test-helpers.js';
+import { createSymlinkAsync, refuseSyncFs, symlinkCapability } from '../src/test-helpers.js';
 import { PERMISSIONS_ENFORCED } from '../src/testing/platform-gates.js';
 import { setupAsyncTempDirSuite } from '../src/testing/temp-dir.js';
 
@@ -1507,5 +1508,33 @@ describe('fs-utils', () => {
         expect(spelling.verified).toEqual({ match: 'exact', askedPath: '', actualPath: '' });
       });
     });
+  });
+});
+
+describe('openEachFileForReading', () => {
+  const suite = setupAsyncTempDirSuite('open-each');
+  let dir: string;
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(async () => {
+    await suite.beforeEach();
+    dir = suite.getTempDir();
+    await fs.mkdir(safePath.join(dir, 'sub'));
+    await fs.writeFile(safePath.join(dir, 'a.md'), 'a');
+    await fs.writeFile(safePath.join(dir, 'sub', 'b.md'), 'b');
+  });
+
+  it('passes a tree whose every file opens', () => {
+    expect(() => openEachFileForReading(dir)).not.toThrow();
+  });
+
+  it('throws the first refusal as the OS raised it, its path naming the nested file', () => {
+    const nested = safePath.join(dir, 'sub', 'b.md');
+    const restore = refuseSyncFs('openSync', nested, 'EACCES');
+    try {
+      expect(() => openEachFileForReading(dir)).toThrow(expect.objectContaining({ code: 'EACCES', path: nested }));
+    } finally {
+      restore();
+    }
   });
 });

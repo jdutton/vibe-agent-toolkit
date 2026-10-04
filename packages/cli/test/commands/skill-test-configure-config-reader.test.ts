@@ -50,6 +50,15 @@ const NUL = String.fromCodePoint(0);
 /** `skills:` is only valid alongside an `include:`, so every fixture carries one. */
 const SKILLS_BLOCK = 'skills:\n  include:\n    - "skills/**/SKILL.md"\n';
 
+/** Declare `name` under `dir`, where {@link SKILLS_BLOCK}'s include discovers it — configure refuses an undeclared skill. */
+function writeSkill(dir: string, name: string): void {
+  fs.mkdirSync(safePath.join(dir, 'skills', name), { recursive: true });
+  fs.writeFileSync(
+    safePath.join(dir, 'skills', name, 'SKILL.md'),
+    `---\nname: ${name}\ndescription: A skill whose test block a test configures.\n---\n\n# ${name}\n`,
+  );
+}
+
 /** Write a config file into `dir` and return its path. */
 function writeConfig(dir: string, content: string | Buffer): string {
   const configPath = safePath.join(dir, CONFIG_FILENAME);
@@ -72,6 +81,7 @@ describe('updateSkillTestConfig (the third config reader)', () => {
   it('WARNS about an unknown key and still writes the change', async () => {
     // The adopter's exact shape: a key VAT removed and had been silently
     // discarding for releases, in a section this command does not read.
+    writeSkill(tempDir, 'my-skill');
     const configPath = writeConfig(
       tempDir,
       `resources:\n  metadata:\n    frontmatter: true\n${SKILLS_BLOCK}`,
@@ -125,6 +135,7 @@ describe('updateSkillTestConfig (the third config reader)', () => {
     // `readFileSync(path, 'utf-8')` did not merely misreport it: the mojibake was
     // what got serialized over the adopter's own file.
     const source = `${SKILLS_BLOCK}  config:\n    my-skill:\n      publish: true\n`;
+    writeSkill(tempDir, 'my-skill');
     const configPath = writeConfig(tempDir, Buffer.from(`${BOM}${source}`, 'utf16le'));
 
     const updated = await updateSkillTestConfig(configPath, 'my-skill', { maxTurns: 20 }, () => {});
@@ -134,6 +145,23 @@ describe('updateSkillTestConfig (the third config reader)', () => {
     // ...and nothing that would be written back carries the interleaved NULs.
     expect(updated).not.toContain(NUL);
     expect(updated).toContain('maxTurns: 20');
+  });
+
+  it('refuses a skill the config does not declare as USAGE_INVALID, naming it and the declared ones', async () => {
+    // A typo used to be written as `skills.config.<typo>.test`, exit 0, and only
+    // the next `vat skill test run <typo>` refused it.
+    writeSkill(tempDir, 'my-skill');
+    const configPath = writeConfig(tempDir, SKILLS_BLOCK);
+
+    const failure = await updateSkillTestConfig(configPath, 'my-skil', { maxTurns: 5 }, () => {}).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(refusalCodeOf(failure)).toBe('USAGE_INVALID');
+    expect(String((failure as Error).message)).toContain("'my-skil'");
+    expect(String((failure as Error).message)).toContain('my-skill');
+    expect(fs.readFileSync(configPath, 'utf8')).toBe(SKILLS_BLOCK);
   });
 
   it('refuses a config the OS will not read INPUT_UNREADABLE, through the shared config read', async () => {

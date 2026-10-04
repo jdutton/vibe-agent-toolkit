@@ -119,7 +119,7 @@ export const CLEAN_EVALS = JSON.stringify({ skill_name: 'clean', evals: [{ id: '
  * harness preflight still probes the binary (version, `--help` flags, `auth status`)
  * before it stages anything, so without one every run refuses BACKEND_UNAVAILABLE.
  */
-export function hasClaude(): boolean {
+function hasClaude(): boolean {
   return probeExitsZero('claude', ['--version']);
 }
 
@@ -355,9 +355,11 @@ interface ScenarioBase {
   readonly run: (home: string) => ScenarioRun;
   /**
    * Why this scenario cannot run on this platform — it still counts as present.
-   * Asked only by the shard that runs the scenario, when it declares the test:
-   * two of the reasons probe the machine (a `claude` binary, the npm registry),
-   * and every matrix file imports this table.
+   * Asked only by the shard that runs the scenario, once, in that file's
+   * `beforeAll` ({@link useExitCodeMatrixShard}): two of the reasons probe the
+   * machine (a `claude` binary, the npm registry with its own 30 s timeout), so
+   * the probe spends the hook's budget, never the scenario's — and every matrix
+   * file imports this table, so it is never asked at module load.
    */
   readonly skipReason?: () => string | undefined;
 }
@@ -587,7 +589,7 @@ export const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> =
     },
   ],
   'skill test configure': [
-    { status: 'ok', run: () => ({ args: ['skill', 'test', 'configure', 'clean', '--max-turns', '5'], cwd: project('configure-ok', SKILLS_CONFIG) }) },
+    { status: 'ok', run: () => ({ args: ['skill', 'test', 'configure', 'clean', '--max-turns', '5'], cwd: project('configure-ok', SKILLS_CONFIG, { 'skills/clean/SKILL.md': CLEAN_SKILL }) }) },
     { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['skill', 'test', 'configure', 'clean', '--max-turns', '0'], cwd: project('configure-error', SKILLS_CONFIG) }) },
   ],
   'skill test run': [
@@ -1045,7 +1047,7 @@ type MatrixCase = Scenario & { readonly verb: string };
  * file names no declared shard, the shard names a verb the table lacks, or the
  * shard would run nothing.
  */
-export function exitCodeMatrixShard(specFileUrl: string): readonly MatrixCase[] {
+function exitCodeMatrixShard(specFileUrl: string): readonly MatrixCase[] {
   const shard = shardNameOf(specFileUrl);
   const verbs = MATRIX_SHARDS[shard];
   if (verbs === undefined) throw new Error(`MATRIX_SHARDS declares no shard named "${shard}"`);
@@ -1060,13 +1062,50 @@ export function exitCodeMatrixShard(specFileUrl: string): readonly MatrixCase[] 
 }
 
 /**
+ * Each of this file's cases, mapped to its skip reason (`undefined`: it runs).
+ * Filled by the shard's `beforeAll`; a case missing here was never declared by
+ * {@link useExitCodeMatrixShard}, and running it throws.
+ */
+const skipReasons = new Map<MatrixCase, string | undefined>();
+
+/**
+ * The budget of the `beforeAll` that asks every skip reason: the npm probe
+ * alone may take 30 s, and the `claude` one rides on top of it.
+ */
+const SKIP_PROBE_TIMEOUT_MS = 90_000;
+
+/**
+ * Declare the enclosing suite a matrix shard: its temp dir, and its cases'
+ * skip reasons asked ONCE in `beforeAll` — outside every scenario's
+ * {@link MATRIX_SCENARIO_TIMEOUT_MS}, so a slow registry the probe waits on
+ * cannot eat the time `vat doctor` then needs to ask it again. Returns the
+ * shard's cases (see {@link exitCodeMatrixShard}) for `it.for`.
+ */
+export function useExitCodeMatrixShard(specFileUrl: string): readonly MatrixCase[] {
+  const cases = exitCodeMatrixShard(specFileUrl);
+  useMatrixTempDir();
+  beforeAll(() => {
+    for (const scenario of cases) skipReasons.set(scenario, scenario.skipReason?.());
+  }, SKIP_PROBE_TIMEOUT_MS);
+  return cases;
+}
+
+/** What one scenario's run published and ended on — returned so the shard asserts at its call site too. */
+interface ScenarioOutcome {
+  readonly document: ExitDeterminingDocument & Record<string, unknown>;
+  readonly exitCode: number | null;
+}
+
+/**
  * Run one scenario under its own fake HOME and expect: the status the scenario
  * names, the refusal code an `error` names, the gate in the document, and the
  * exit code that document derives. A scenario this platform cannot run is
- * skipped with its reason — it is still a test of the shard, never absent.
+ * skipped with the reason its shard's `beforeAll` recorded — it is still a test
+ * of the shard, never absent. Returns what it asserted on.
  */
-export function expectScenarioEndsOnItsDerivedCode(scenario: MatrixCase, context: TestContext): void {
-  const skipReason = scenario.skipReason?.();
+export function expectScenarioEndsOnItsDerivedCode(scenario: MatrixCase, context: TestContext): ScenarioOutcome {
+  if (!skipReasons.has(scenario)) throw new Error(`${scenario.verb} → ${scenario.status} was not declared by useExitCodeMatrixShard, so its skip reason was never asked`);
+  const skipReason = skipReasons.get(scenario);
   if (skipReason !== undefined) context.skip(skipReason);
 
   const home = safePath.join(tempDir, 'homes', `${scenario.verb.replaceAll(' ', '-')}-${scenario.status}`);
@@ -1082,6 +1121,7 @@ export function expectScenarioEndsOnItsDerivedCode(scenario: MatrixCase, context
   // The gate is IN the document — the exit code derives from nothing else.
   expect(document.gate, `${result.stdout}\n${result.stderr}`).toStrictEqual({ strict: expect.any(Boolean) });
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCodeForReport(document));
+  return { document, exitCode: result.status };
 }
 
 /** The per-test timeout of a scenario: one spawn of the built CLI, two for a scenario that indexes first. */

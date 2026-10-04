@@ -12,7 +12,7 @@ import { isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { SCOPE_LOCATIONS } from '../../utils/scope-locations.js';
+import { knownScopeRuntimes, scopeLocationsFor } from '../../utils/scope-locations.js';
 
 import type { AgentInstalledData, AgentInstalledReport } from './installed-schema.js';
 
@@ -40,7 +40,7 @@ export async function installedCommand(options: InstalledCommandOptions): Promis
   let report: AgentInstalledReport;
   try {
     const { runtime = 'agent-skill', scope = ALL_SCOPES } = options;
-    const scopeLocations = scopeLocationsFor(runtime);
+    const scopeLocations = requireScopeLocations(runtime);
     const scopesToScan = scopesFor(scope, scopeLocations);
 
     const { skills, unreadable } = await scanForInstalledSkills(scopeLocations, scopesToScan);
@@ -60,10 +60,10 @@ export async function installedCommand(options: InstalledCommandOptions): Promis
 }
 
 /** The scope directories of `runtime`, or the invocation's mistake. */
-function scopeLocationsFor(runtime: string): Record<string, string> {
-  const scopeLocations = SCOPE_LOCATIONS[runtime];
+function requireScopeLocations(runtime: string): Record<string, string> {
+  const scopeLocations = scopeLocationsFor(runtime);
   if (!scopeLocations) {
-    throw new CommandRefusalError('USAGE_INVALID', `Unknown runtime '${runtime}' (known: ${Object.keys(SCOPE_LOCATIONS).join(', ')})`);
+    throw new CommandRefusalError('USAGE_INVALID', `Unknown runtime '${runtime}' (known: ${knownScopeRuntimes().join(', ')})`);
   }
   return scopeLocations;
 }
@@ -151,16 +151,16 @@ async function listScopeLocation(location: string): Promise<Dirent[] | null | { 
 /**
  * The warning for a scope directory the listing could not read: the list is
  * then a floor. A finding's `location` is relative, and this document has no
- * one root — the scopes live under `$HOME` and under the working directory —
- * so it is the directory relative to its scope's base (`.claude/skills`, the
- * last two segments of every `SCOPE_LOCATIONS` entry). Two scopes read the
- * same location, so `field` is the scope name; the detail adds the full path.
+ * one root — the scopes live under the Claude config dir and under the working
+ * directory — so it is the scope directory's last two segments
+ * (`.claude/skills` by default). Two scopes can read the same location, so
+ * `field` is the scope name; the detail adds the full path.
  */
 function unlistableScopeFinding(scope: string, location: string, errno: string): ValidationIssue {
   const where = toForwardSlash(safePath.relative(safePath.resolve(location, '..', '..'), location));
   return materializeIssue('SCAN_PATH_UNREADABLE', {
     location: where,
-    // Every scope's directory is `.claude/skills` under its own base: the scope says which.
+    // Two scopes can share these segments: the scope says which.
     field: scope,
     detail: `${scope} scope ${toForwardSlash(location)}: listing was refused with ${errno}; any skill installed beneath it is missing from this list`,
   });

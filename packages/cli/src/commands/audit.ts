@@ -1028,7 +1028,7 @@ async function auditUserDirectories(
 
   // Run compatibility analysis if --compat flag is set
   const compatMap = options.compat
-    ? await runCompatAnalysis(results, logger, scanRoot)  // --settings not supported in --user mode
+    ? await runCompatAnalysis(results, logger, scanRoot)  // --settings is refused under --user
     : undefined;
 
   const verbose = options.verbose ?? false;
@@ -1251,25 +1251,52 @@ function isEmptiedUnreadablePathResult(result: ValidationResult): boolean {
 }
 
 /**
- * Resolve `--settings`-driven EffectiveSettings if both --settings and
- * --compat flags are present. Logs warnings for misconfiguration paths.
+ * Refuse a `--settings` the run would otherwise ignore, before any scan or clone.
+ *
+ * Every arm used to be a stderr line and exit 0: without `--compat` a warning
+ * and no settings check; under `--user` nothing at all; and a named file that
+ * is absent read as "no settings", so `--compat --settings /typo.json` printed
+ * `findings: []` for a check that never compared anything. The sibling verb
+ * `audit settings --file <missing>` refuses the same path.
+ *
+ * @throws {CommandRefusalError} `USAGE_INVALID` for a flag the run cannot honour
+ *   or a named file that is absent; `INPUT_UNREADABLE` for one the OS refuses
+ */
+function refuseUnusableSettingsFlag(options: AuditCommandOptions): void {
+  if (options.settings === undefined || options.settings === false) return;
+  if (!options.compat) {
+    throw new CommandRefusalError('USAGE_INVALID', '--settings requires --compat: the settings check runs inside the compatibility analysis. Add --compat, or drop --settings.');
+  }
+  if (options.user) {
+    throw new CommandRefusalError('USAGE_INVALID', '--settings is not supported with --user. Audit the plugin directory with --compat --settings instead, or drop --settings.');
+  }
+  if (typeof options.settings !== 'string') return;
+  try {
+    fs.readFileSync(options.settings);
+  } catch (error) {
+    throw unstatablePathRefusal(safePath.resolve(options.settings), error);
+  }
+}
+
+/**
+ * The EffectiveSettings `--settings` asks the compat analysis to check against.
+ * Called only under `--compat`; {@link refuseUnusableSettingsFlag} has already
+ * refused every combination the run cannot honour.
+ *
+ * @throws {CommandRefusalError} `INPUT_UNREADABLE` when a settings file does
+ *   not parse or fails its schema — the check cannot run, and a warning beside
+ *   an unchecked report was how it used to pass silently
  */
 async function resolveEffectiveSettings(
   options: AuditCommandOptions,
   scanPath: string,
-  logger: ReturnType<typeof createLogger>,
 ): Promise<EffectiveSettings | undefined> {
   if (!options.settings) return undefined;
-  if (!options.compat) {
-    logger.error('Warning: --settings requires --compat to be effective');
-    return undefined;
-  }
   const settingsFile = typeof options.settings === 'string' ? options.settings : undefined;
   try {
     return await readEffectiveSettings({ settingsFile, projectDir: scanPath });
-  } catch (err) {
-    logger.error(`Warning: could not load settings: ${String(err)}`);
-    return undefined;
+  } catch (error) {
+    throw new CommandRefusalError('INPUT_UNREADABLE', `Claude settings could not be loaded for --settings: ${errorMessageOf(error)}`, { cause: error });
   }
 }
 
@@ -1345,11 +1372,9 @@ export async function buildAuditReport(
   // Allow is deliberately NOT applied — audit shows every finding.
   const results = applySeverityFilter(rawResults, config);
 
-  const effectiveSettings = await resolveEffectiveSettings(options, scanPath, logger);
-
   // Run compatibility analysis if --compat flag is set
   const compatMap = options.compat
-    ? await runCompatAnalysis(results, logger, scanRoot, effectiveSettings, vatContextForCompat)
+    ? await runCompatAnalysis(results, logger, scanRoot, await resolveEffectiveSettings(options, scanPath), vatContextForCompat)
     : undefined;
 
   const verbose = options.verbose ?? false;
@@ -1437,6 +1462,8 @@ export async function auditCommand(
   resetAuditCaches();
 
   try {
+    refuseUnusableSettingsFlag(options);
+
     // A local path always wins. `isGitUrl` accepts bare `owner/repo` GitHub
     // shorthand, which is indistinguishable from an ordinary two-segment
     // relative path (`plugins/arc`, `docs/guides`, `packages/cli`). Asking

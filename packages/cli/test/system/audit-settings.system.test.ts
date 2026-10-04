@@ -39,8 +39,9 @@ function pathsIn(node: unknown, trail: string, out: Array<{ trail: string; value
 }
 
 /** `vat audit settings` in `cwd`, with `home` as the user's Claude config, parsed by the verb's registered schema. */
-async function runSettings(cwd: string, home: string, args: string[]) {
-  const result = await executeCli(binPath, ['audit', 'settings', ...args], { cwd, env: { ...process.env, ...fakeHomeEnv(home) } });
+async function runSettings(cwd: string, home: string, args: string[], configDir?: string) {
+  const env = { ...process.env, ...fakeHomeEnv(home), ...(configDir === undefined ? {} : { CLAUDE_CONFIG_DIR: configDir }) };
+  const result = await executeCli(binPath, ['audit', 'settings', ...args], { cwd, env });
   return { result, report: AUDIT_SETTINGS_REPORT_SCHEMA.parse(yaml.parse(result.stdout)) };
 }
 
@@ -93,5 +94,26 @@ describe('vat audit settings — one stated root (system test)', () => {
     expect(paths.length).toBeGreaterThan(0);
     // A candidate path may not exist — that is what the probe reports — but it is never absolute.
     expect(paths.filter((p) => isAbsoluteAnyPlatform(p.value))).toEqual([]);
+  });
+
+  // The default mode and --show-paths name the same user file: the one CLAUDE_CONFIG_DIR says.
+  it('reads the user layer from CLAUDE_CONFIG_DIR, the file --show-paths names', async () => {
+    const base = fs.realpathSync(tempDir);
+    const configDir = safePath.join(base, 'relocated-config');
+    const bareHome = safePath.join(base, 'bare-home');
+    const bareProject = safePath.join(base, 'bare-project');
+    fs.mkdirSync(bareHome, { recursive: true });
+    fs.mkdirSync(bareProject, { recursive: true });
+    fs.mkdirSync(configDir, { recursive: true });
+    writeTestFile(safePath.join(configDir, 'settings.json'), JSON.stringify({ permissions: { allow: ['WebSearch'] } }));
+
+    const effective = await runSettings(bareProject, bareHome, [], configDir);
+    const shown = await runSettings(bareProject, bareHome, ['--show-paths'], configDir);
+
+    expect(effective.result.status, effective.result.stderr).toBe(0);
+    const userLayers = effective.report.data.mode === 'effective' ? effective.report.data.layers.filter((l) => l.level === 'user') : [];
+    expect(userLayers.map((l) => l.file)).toEqual(['../relocated-config/settings.json']);
+    const shownUser = shown.report.data.mode === 'paths' ? shown.report.data.paths.filter((p) => p.level === 'user') : [];
+    expect(shownUser.map((p) => p.path)).toEqual(['../relocated-config/settings.json']);
   });
 });

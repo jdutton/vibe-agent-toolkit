@@ -19,7 +19,7 @@ import {  mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
-import { codedUserStateWrite, getClaudeUserPaths, installPlugin, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
+import { codedUserStateWrite, getClaudeUserPaths, installPlugin, PLUGIN_KEY_INVALID_CODE, requirePluginInstallNames, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import { buildReport, createRegistryIssue, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { direntKindFollowingSync, isPathAbsentError, isSingleFsSegment, isVatError, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
@@ -174,10 +174,11 @@ function listSubdirectories(dir: string): string[] {
  * that is not registered is never reported installed.
  */
 async function registerPlugin(
+  run: InstallRun,
   ctx: { mpName: string; pluginName: string; pluginDir: string; version: string; packageName: string },
   paths: ReturnType<typeof getClaudeUserPaths>,
-  logger: Logger,
 ): Promise<void> {
+  const pluginKey = `${ctx.pluginName}@${ctx.mpName}`;
   const { warnings } = await installPlugin({
     marketplaceName: ctx.mpName,
     pluginName: ctx.pluginName,
@@ -186,8 +187,49 @@ async function registerPlugin(
     source: { source: 'npm', package: ctx.packageName, version: ctx.version },
     paths,
   });
-  logger.info(`   Registered plugin ${ctx.pluginName}@${ctx.mpName} in Claude plugin registry`);
-  for (const warning of warnings) logger.warn(`   ${warning}`);
+  run.logger.info(`   Registered plugin ${pluginKey} in Claude plugin registry`);
+  for (const warning of warnings) {
+    run.logger.warn(`   ${warning}`);
+    // The install is complete; what it could not clean up still belongs in the report.
+    run.issues.push({
+      code: 'PLUGIN_INSTALL_CLEANUP_INCOMPLETE',
+      severity: 'warning',
+      message: warning,
+      location: pluginKey,
+      fix: 'Remove the directory the message names yourself (make it writable first if the OS refused); the installed plugin does not use it.',
+    });
+  }
+}
+
+/**
+ * Refuse, before anything under ~/.claude changes, a package whose plugin tree
+ * or `vat.replaces.plugins` names a plugin that cannot be installed: a plugin or
+ * marketplace directory, the package version, or a replaced plugin that is not
+ * one path segment (or a dot-led version). Each came from the PACKAGE, so the
+ * refusal is the input's (`INPUT_UNREADABLE`), not the invocation's.
+ */
+function assertPackagePluginNames(
+  marketplacesDir: string,
+  marketplaceNames: readonly string[],
+  packageJson: Pick<PackageJson, 'name' | 'vat'>,
+  version: string,
+): void {
+  const check = (names: { marketplaceName: string; pluginName: string }, origin: string): void => {
+    try {
+      requirePluginInstallNames({ ...names, version });
+    } catch (error) {
+      if (!isVatError(error, PLUGIN_KEY_INVALID_CODE)) throw error;
+      throw new CommandRefusalError('INPUT_UNREADABLE', `Package ${packageJson.name} cannot be installed, nothing was changed: ${error.message} (${origin}).`, { cause: error });
+    }
+  };
+  for (const marketplaceName of marketplaceNames) {
+    for (const pluginName of listSubdirectories(safePath.join(marketplacesDir, marketplaceName, 'plugins'))) {
+      check({ marketplaceName, pluginName }, 'its built plugin tree and package.json version');
+    }
+    for (const pluginName of packageJson.vat?.replaces?.plugins ?? []) {
+      check({ marketplaceName, pluginName }, 'package.json vat.replaces.plugins');
+    }
+  }
 }
 
 /**
@@ -279,13 +321,19 @@ Output (YAML report on stdout):
   - data.source / data.sourceType: what was installed from (npm/local/zip/tgz/dev/npm-postinstall)
   - data.dryRun, data.symlink (true for --dev)
   - data.skills[]: { name, installPath, sourcePath } — sourcePath is the --dev link target, else null
-  - findings: COMPONENT_DECLARED_BUT_MISSING (warning) for a --dev plugin skill whose build is missing
+  - findings: COMPONENT_DECLARED_BUT_MISSING (warning) for a --dev plugin skill whose build is missing;
+    PLUGIN_INSTALL_CLEANUP_INCOMPLETE (warning, at the plugin key) when a re-install could
+    not remove the previous plugin cache it replaced — the install itself is complete
 
 Exit Codes:
   0 - Installed (a warning does not fail the run)
   2 - The run could not install: a missing or unknown source, a skill that exists
-      without --force, an unknown --target (USAGE_INVALID); --target claude.ai
-      (NOT_IMPLEMENTED); an unreadable source (INPUT_UNREADABLE); npm pack failing
+      without --force, an unknown --target, a plain directory with no SKILL.md
+      (USAGE_INVALID); --target claude.ai (NOT_IMPLEMENTED); an unreadable
+      source, a .zip that is not a ZIP archive, or a package whose plugin or
+      marketplace directory, version or vat.replaces.plugins entry is not one path
+      segment (or whose version begins with "."), refused before anything changes
+      (INPUT_UNREADABLE); npm pack failing
       (EXTERNAL_API_FAILED); --build whose vat build failed, or a copy or registry
       write that failed partway (RUN_INCOMPLETE). A refusal lists the skills already on disk.
 
@@ -475,9 +523,13 @@ async function handleLocalInstall(source: string, run: InstallRun): Promise<void
     return;
   }
 
-  // Plain skill directory. The package.json branch above installs each skill
-  // under its declared name; do the same here rather than under whatever the
-  // source directory happens to be called.
+  // Plain skill directory: it must hold a SKILL.md, or any directory would
+  // install as a skill. A source that names nothing keeps its own refusal below.
+  if (pathExists(sourcePath) && !pathExists(safePath.join(sourcePath, 'SKILL.md'))) {
+    throw new CommandRefusalError('USAGE_INVALID', `No SKILL.md found at the root of: ${sourcePath}`);
+  }
+  // The package.json branch above installs each skill under its declared name;
+  // do the same here rather than under whatever the source directory is called.
   const skillName =
     options.name ??
     readDeclaredSkillName(safePath.join(sourcePath, 'SKILL.md')) ??
@@ -496,12 +548,19 @@ async function handleZipInstall(source: string, run: InstallRun): Promise<void> 
   logger.info(`📥 Installing skill from ZIP: ${sourcePath}`);
   assertSourceFile(sourcePath);
 
+  // Opened before prepareInstallation: --force removes the skill being replaced there.
+  let zip: AdmZip;
+  try {
+    zip = new AdmZip(sourcePath);
+  } catch (error) {
+    throw new CommandRefusalError('INPUT_UNREADABLE', `${sourcePath} could not be read as a ZIP archive: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
+
   const skillName = options.name ?? basename(sourcePath, '.zip');
   const installPath = await prepareInstallation(run, skillName);
 
   if (!run.dryRun) {
     logger.info('   Extracting ZIP...');
-    const zip = new AdmZip(sourcePath);
     zip.extractAllTo(installPath, /* overwrite */ true);
   }
   run.skills.push({ name: skillName, installPath, sourcePath: null });
@@ -671,7 +730,7 @@ async function devInstallPlugin(run: InstallRun, ctx: DevPluginContext): Promise
   await symlinkPluginSkills(run, ctx);
 
   if (!run.dryRun) {
-    await registerPlugin({ ...ctx, pluginDir: ctx.destPluginDir }, ctx.paths, run.logger);
+    await registerPlugin(run, { ...ctx, pluginDir: ctx.destPluginDir }, ctx.paths);
   }
 }
 
@@ -756,13 +815,16 @@ async function handleDevInstall(run: InstallRun): Promise<void> {
   setSource(run, packageJson.name, 'dev', true);
   logger.info(`📥 Dev-installing plugin tree from ${packageJson.name}`);
 
+  const packageInfo = { name: packageJson.name, version: packageJson.version ?? '0.0.0', cwd };
+  const marketplaceNames = listSubdirectories(marketplacesDir);
+  assertPackagePluginNames(marketplacesDir, marketplaceNames, packageJson, packageInfo.version);
+
   // Remove old plugins/flat skills this package replaces, before installing
   if (packageJson.vat?.replaces) {
-    await executeReplaces(packageJson.vat.replaces, listSubdirectories(marketplacesDir), getClaudeUserPaths(), run.dryRun, logger);
+    await executeReplaces(packageJson.vat.replaces, marketplaceNames, getClaudeUserPaths(), run.dryRun, logger);
   }
 
-  const packageInfo = { name: packageJson.name, version: packageJson.version ?? '0.0.0', cwd };
-  for (const mpName of listSubdirectories(marketplacesDir)) {
+  for (const mpName of marketplaceNames) {
     await devInstallMarketplace(run, mpName, safePath.join(marketplacesDir, mpName), packageInfo);
   }
 }
@@ -940,7 +1002,7 @@ async function copyMarketplace(
   }
   if (dryRun) return;
   for (const pluginName of pluginNames) {
-    await registerPlugin({ ...ctx, pluginName, pluginDir: safePath.join(destMpDir, 'plugins', pluginName) }, ctx.paths, logger);
+    await registerPlugin(run, { ...ctx, pluginName, pluginDir: safePath.join(destMpDir, 'plugins', pluginName) }, ctx.paths);
   }
 }
 
@@ -962,6 +1024,7 @@ async function copyPluginTree(
   const paths = getClaudeUserPaths();
   const version = packageJson.version ?? '0.0.0';
   const marketplaceNames = listSubdirectories(marketplacesDir);
+  assertPackagePluginNames(marketplacesDir, marketplaceNames, packageJson, version);
 
   // Remove any old plugins/flat skills this package replaces, before installing
   if (packageJson.vat?.replaces) {

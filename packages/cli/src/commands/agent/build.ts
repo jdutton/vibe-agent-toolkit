@@ -93,7 +93,7 @@ function buildRefusalOf(
 ): { code: ReturnType<typeof refusalCodeOf>; finished: FinishedWork } {
   const code = refusalCodeOf(error);
   if (code !== 'INTERNAL_ERROR' || !isSkillPackagingInputError(error)) return { code, finished: NOTHING_FINISHED };
-  const issue = packagingFailedIssue(error instanceof Error ? error.message : String(error), agentLocation(agentPath, projectRoot));
+  const issue = packagingFailedIssue(error instanceof Error ? error.message : String(error), agentLocation(agentPath, projectRoot), 'rebuild');
   return { code: 'RUN_INCOMPLETE', finished: { examined: 0, findings: toFindings([issue]), data: null } };
 }
 

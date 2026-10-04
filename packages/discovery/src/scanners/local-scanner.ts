@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, type DirectoryRefusal, NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
@@ -27,6 +27,24 @@ import type { DetectedFormat, ScanOptions, ScanResult, ScanSummary } from '../ty
 const PERFORMANCE_POISON: readonly string[] = NEVER_CRAWL_GLOBS;
 
 /**
+ * Stat the scan root, telling absence from refusal. `existsSync` answers false
+ * for a path under a directory without search permission, which used to be
+ * reported as "does not exist". A refusal keeps the OS error as `cause`, so a
+ * caller classifying by errno (`isFilesystemAccessError`) still sees it.
+ */
+function statScanRoot(absolutePath: string): fs.Stats {
+  try {
+    return fs.statSync(absolutePath);
+  } catch (error) {
+    if (isPathAbsentError(error)) {
+      throw new Error(`Path does not exist: ${absolutePath}`, { cause: error });
+    }
+    if (!isFilesystemAccessError(error)) throw error;
+    throw new Error(`Path cannot be read (${String((error as NodeJS.ErrnoException).code)}): ${absolutePath}`, { cause: error });
+  }
+}
+
+/**
  * Scan local filesystem for VAT agents and Agent Skills
  *
  * @param options - Scan options
@@ -38,12 +56,7 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
   // Resolve to absolute path
   const absolutePath = safePath.resolve(targetPath);
 
-  // Check if target exists
-  if (!fs.existsSync(absolutePath)) {
-    throw new Error(`Path does not exist: ${absolutePath}`);
-  }
-
-  const stat = fs.statSync(absolutePath);
+  const stat = statScanRoot(absolutePath);
 
   // Determine scan root for relative paths
   const scanRoot = stat.isDirectory() ? absolutePath : path.dirname(absolutePath);

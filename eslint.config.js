@@ -139,7 +139,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/lab/test/crawl-dump.test.ts',
   'packages/lab/test/instrument.test.ts',
   'packages/lab/test/io-capture.test.ts',
-  'packages/lab/test/io-counter.test.ts',
   'packages/lab/test/io-dump.test.ts',
   'packages/lab/test/parse-capture.test.ts',
   'packages/lab/test/parse-dump.test.ts',
@@ -253,7 +252,6 @@ const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
   'packages/cli/src/commands/skills/install.ts',                      // rm/cp/mkdtemp/stat — install-dir mutation, source probes
   'packages/cli/src/commands/skills/package.ts',                      // existsSync/stat probes
   'packages/cli/src/commands/skills/scope-guard.ts',                  // existsSync/stat probes
-  'packages/cli/src/commands/skills/shared.ts',                       // existsSync probes, readFile
   'packages/cli/src/commands/skills/skill-discovery.ts',              // existsSync probe
   'packages/cli/src/commands/skills/source-resolvers.ts',             // ENUM: readdirSync of an install/list source dir; mkdtemp/stat/rm — source staging
   'packages/cli/src/commands/verify.ts',                              // stat/existsSync probes

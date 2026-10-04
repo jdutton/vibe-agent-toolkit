@@ -313,4 +313,15 @@ describe('ValidationConfigSchema — refusal codes are not config keys', () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it.each(['my-check', 'INTERNAL_ERROR', 'RESOURCE_CHECK_BROKEN'])(
+    'still parses the severity key CUSTOM:%s — a refusal-code guard must not reach the custom namespace',
+    (name) => {
+      // The CUSTOM: positive control for this block's refusals: a check NAMED
+      // after a refusal code is the adopter's own and is overridable, so a guard
+      // matching the code by substring or suffix would wrongly refuse it here.
+      const result = ValidationConfigSchema.safeParse({ severity: { [customCheckCode(name)]: 'ignore' } });
+      expect(result.success).toBe(true);
+    },
+  );
 });

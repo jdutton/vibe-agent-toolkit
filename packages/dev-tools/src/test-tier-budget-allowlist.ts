@@ -155,7 +155,6 @@ export const TEST_TIER_BUDGET_ALLOWLIST: readonly TestTierBudgetEntry[] = [
   { file: 'packages/lab/test/subject.test.ts', measuredMs: 1574, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.refusal] },
   { file: 'packages/agent-skills/test/validators/packaging-validator.test.ts', measuredMs: 1396, mechanisms: [MECHANISM.tempTree] },
   { file: 'packages/cli/test/org-skills-adopter-findings.test.ts', measuredMs: 1347, mechanisms: [MECHANISM.tempTree, MECHANISM.refusal], note: 'import of the org/skills command module dominates' },
-  { file: 'packages/lab/test/io-counter.test.ts', measuredMs: 1328, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn] },
   { file: 'packages/lab/test/perf-capture.test.ts', measuredMs: 1316, mechanisms: [MECHANISM.unclassified], note: 'repeats real child-process runs to build the statistic under test' },
   { file: 'packages/lab/test/instrument.test.ts', measuredMs: 1310, mechanisms: [MECHANISM.tempTree, MECHANISM.git, MECHANISM.spawn], note: 'local serial run; 762 ms on the floor' },
   { file: 'packages/cli/test/commands/audit/distributed-tree.test.ts', measuredMs: 1220, mechanisms: [MECHANISM.tempTree, MECHANISM.git], note: 'local serial run; 885 ms on the floor' },

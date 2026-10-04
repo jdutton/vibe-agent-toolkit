@@ -413,6 +413,24 @@ export function assertSingleError(
 	expect(result.issues[0]?.severity).toBe('error');
 }
 
+/**
+ * A manifest the OS would not read is reported as a path that was not scanned
+ * (`SCAN_PATH_UNREADABLE`, naming the errno) — never as `*_INVALID_JSON`, whose
+ * fix ("fix the JSON syntax") would send the reader to a file they cannot open.
+ */
+export function assertSingleUnreadable(
+	result: ValidationResult,
+	location: string,
+	errno: string,
+): void {
+	expect(result.issues.map((issue) => issue.code)).toEqual(['SCAN_PATH_UNREADABLE']);
+	expect(result.issues[0]?.severity).toBe('warning');
+	expect(result.issues[0]?.location).toBe(location);
+	expect(result.issues[0]?.message).toContain(errno);
+	expect(result.issues[0]?.message).not.toMatch(/parse|syntax/i);
+	expect(result.issues[0]?.fix).not.toMatch(/syntax/i);
+}
+
 const CLAUDE_PLUGIN_DIR = '.claude-plugin';
 
 /**

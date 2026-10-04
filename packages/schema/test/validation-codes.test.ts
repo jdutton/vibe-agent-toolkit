@@ -288,11 +288,12 @@ describe('CONSISTENCY_CODES', () => {
 });
 
 describe('findings of verbs that read no validation config', () => {
-  // `vat claude plugin uninstall`, `vat audit settings` and `vat agent validate`
+  // `vat claude plugin install|uninstall`, `vat audit settings` and `vat agent validate`
   // examine Claude user state, a settings file and an agent manifest. None loads a
   // project `validation:` block, so a registry entry for one of their codes would
   // let the config accept a key nothing applies.
   const LANE_OWNED = [
+    'PLUGIN_INSTALL_CLEANUP_INCOMPLETE',
     'PLUGIN_UNINSTALL_INCOMPLETE',
     'SETTINGS_FILE_INVALID',
     'SETTINGS_TYPE_AMBIGUOUS',

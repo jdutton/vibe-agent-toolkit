@@ -13,4 +13,11 @@ describe('foreignDatabaseEntries', () => {
     expect(foreignDatabaseEntries(['docs', 'rag_chunks.lance', 'vibe-agent-toolkit.config.yaml'])).toEqual(['docs', 'vibe-agent-toolkit.config.yaml']);
     expect(foreignDatabaseEntries(['other.lance', 'rag_chunks'])).toEqual(['other.lance', 'rag_chunks']);
   });
+
+  // The OS writes these into any folder a person opens (Finder, Explorer, a copy to a FAT/SMB
+  // volume). A database that holds one is still the database vat rag index wrote.
+  it('ignores operating-system litter beside the tables', () => {
+    expect(foreignDatabaseEntries(['.DS_Store', 'rag_chunks.lance', 'Thumbs.db', 'desktop.ini', '._rag_chunks.lance'])).toEqual([]);
+    expect(foreignDatabaseEntries(['.DS_Store', 'notes.md'])).toEqual(['notes.md']);
+  });
 });

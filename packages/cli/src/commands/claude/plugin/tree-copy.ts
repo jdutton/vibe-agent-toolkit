@@ -20,14 +20,16 @@
  */
 
 import { existsSync } from 'node:fs';
-import { copyFile, lstat, mkdir, readdir, realpath, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 
 import { AGENT_INSTRUCTION_FILE_PATTERNS, toAnyDepthGlobs } from '@vibe-agent-toolkit/agent-skills';
 import { isGlob, isPathAbsentError, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, crawlPathFilter } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 import picomatch from 'picomatch';
+
+import { PLUGIN_SYMLINK_REFUSED_CODE } from '../../../utils/command-error-codes.js';
+import { copyFileIntoMarketplace } from '../../../utils/marketplace-io.js';
 
 export interface TreeCopyOptions {
   sourceDir: string;
@@ -164,9 +166,6 @@ function describeRefusal(entry: RefusedSymlink): string {
  * build host's absolute paths, and names the remedy — the `exclude:` knob — in
  * the same terms the listing refusal does.
  */
-/** The code {@link PluginSymlinkRefusedError} carries — the CLI maps it to `INPUT_UNREADABLE`. */
-export const PLUGIN_SYMLINK_REFUSED_CODE = 'PLUGIN_SYMLINK_REFUSED';
-
 export class PluginSymlinkRefusedError extends VatError {
   readonly refused: readonly RefusedSymlink[];
 
@@ -517,10 +516,10 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
 
   for (const entry of [...shippedRegular, ...copyable]) {
     const target = safePath.join(destDir, entry.rel);
-    await mkdir(dirname(target), { recursive: true });
     // `copyFile` follows a symlink, which is the point for the in-tree file
-    // links that reach here: the bundle carries the target's bytes.
-    await copyFile(entry.abs, target);
+    // links that reach here: the bundle carries the target's bytes. The plugin
+    // file is read first (INPUT_UNREADABLE), then the bundle written (RUN_INCOMPLETE).
+    await copyFileIntoMarketplace(entry.abs, target, `plugin file ${entry.rel}`, `${entry.rel} into the plugin bundle`);
     result.filesCopied += 1;
 
     const bucket = classifyRelative(entry.rel);

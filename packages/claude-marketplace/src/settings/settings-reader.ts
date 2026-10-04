@@ -5,14 +5,12 @@
  * 1. managed (system-wide, IT admin)
  * 2. project-local (<projectDir>/.claude/settings.local.json)
  * 3. project (<projectDir>/.claude/settings.json)
- * 4. user (~/.claude/settings.json)
+ * 4. user (`getClaudeUserPaths().userSettingsPath` — honours `CLAUDE_CONFIG_DIR`)
  */
 
 import * as fs from 'node:fs/promises';
-import { homedir } from 'node:os';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
-
+import { getClaudeProjectPaths, getClaudeUserPaths } from '../paths/claude-paths.js';
 import { getManagedSettingsCandidatePaths } from '../paths/managed-settings-path.js';
 import {
   ManagedSettingsSchema,
@@ -108,7 +106,6 @@ export async function readSettingsLayers(
   options: ReadSettingsOptions = {}
 ): Promise<SettingsLayer[]> {
   const layers: SettingsLayer[] = [];
-  const home = homedir();
 
   // 1. Managed settings (or explicit override)
   const managedLayer = await readManagedLayer(options);
@@ -116,12 +113,13 @@ export async function readSettingsLayers(
 
   // 2 & 3. Project settings (local overrides base)
   if (options.projectDir) {
-    await tryAddLayer(layers, `${options.projectDir}/.claude/settings.local.json`, 'project-local');
-    await tryAddLayer(layers, `${options.projectDir}/.claude/settings.json`, 'project');
+    const { projectSettingsLocalPath, projectSettingsPath } = getClaudeProjectPaths(options.projectDir);
+    await tryAddLayer(layers, projectSettingsLocalPath, 'project-local');
+    await tryAddLayer(layers, projectSettingsPath, 'project');
   }
 
   // 4. User settings
-  await tryAddLayer(layers, safePath.join(home, '.claude', 'settings.json'), 'user');
+  await tryAddLayer(layers, getClaudeUserPaths().userSettingsPath, 'user');
 
   return layers;
 }

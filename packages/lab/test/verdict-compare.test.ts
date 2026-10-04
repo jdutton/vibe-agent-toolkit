@@ -12,7 +12,7 @@ import type { ReportEnvelope } from '../src/envelope/envelope.js';
 import { compareVerdict, type VerdictComparison } from '../src/facets/verdict/compare.js';
 import type { VerdictDeltas } from '../src/facets/verdict/deltas.js';
 import { UNCODED_REFUSAL } from '../src/facets/verdict/extract.js';
-import { type VerdictBody, VerdictBodySchema } from '../src/facets/verdict/types.js';
+import { type VerdictBody, VerdictBodySchema, type VerdictRow } from '../src/facets/verdict/types.js';
 
 import { PROBE_VERSION } from './command-probe.js';
 import { verdictDeltaEntryFactory } from './verdict-deltas-fixtures.js';
@@ -131,6 +131,22 @@ describe('compareVerdict — the verdict is derived from the stored document', (
     const stale = { arm: { set: {}, unset: [] }, rows: [{ ...row, verdict: { exitCode: 0, shape: 'legacy', findings: [] } }] };
 
     expect(VerdictBodySchema.safeParse(stale).success).toBe(false);
+  });
+
+  it('refuses a row whose outcome and exit code disagree, rather than read it as measured', () => {
+    // Capture never writes these pairs; a hand-edited envelope can. An `exited`
+    // row with no exit code would read as measured with no findings.
+    const { body } = envelope('crucible-1', ARM_A);
+    const [row] = body.rows;
+    if (row === undefined) throw new Error('fixture has one row');
+    const withRow = (patch: Partial<VerdictRow>): VerdictBody => ({ ...body, rows: [{ ...row, ...patch }] });
+
+    expect(VerdictBodySchema.safeParse(body).success).toBe(true); // positive control
+    expect(VerdictBodySchema.safeParse(withRow({ outcome: 'not-run', exitCode: null, spawnError: 'ENOENT' })).success).toBe(true);
+    const exitedWithoutCode = VerdictBodySchema.safeParse(withRow({ exitCode: null }));
+    expect(exitedWithoutCode.success).toBe(false);
+    expect(exitedWithoutCode.error?.issues[0]?.path).toEqual(['rows', 0, 'exitCode']);
+    expect(VerdictBodySchema.safeParse(withRow({ outcome: 'not-run', exitCode: 0, spawnError: 'ENOENT' })).success).toBe(false);
   });
 });
 

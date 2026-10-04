@@ -45,24 +45,31 @@ const DERIVED_RELATIONS_HELP = `Derived relations (evaluated only when a stateme
   count is what stops a chain whose largest file could not be sized from
   passing. (A WHERE on 'charged' would also filter those rows away.)`;
 
-/** The two serializations `scan` and `query` offer of one document. */
+/** The serializations the resources verbs offer of one document. */
 const OUTPUT_YAML = 'yaml';
 const OUTPUT_JSON = 'json';
+const OUTPUT_TEXT = 'text';
 
 /**
- * The `--format` option `scan` and `query` share.
+ * A verb's `--format` option, refusing any value it does not offer.
  *
  * A factory rather than a shared instance: Commander mutates an `Option` as it
  * is added, so one object handed to two commands is one object two commands
- * disagree about. `validate` deliberately does NOT use this — it offers a third
- * format, `text`, which is a different question.
+ * disagree about. `.choices()` because a bare `.option()` let `validate
+ * --format bogus` fall through to YAML at exit 0.
  *
+ * @param choices - The formats this verb offers; the first is the default
  * @returns A fresh option for one command
  */
+function formatOption(...choices: [string, ...string[]]): Option {
+  return new Option('--format <format>', `Output format: ${choices.join(', ')} (default ${choices[0]})`)
+    .choices(choices)
+    .default(choices[0]);
+}
+
+/** The `--format` option `scan`, `query` and `check` share. */
 function yamlOrJsonFormat(): Option {
-  return new Option('--format <format>', 'Output format: yaml (default) or json')
-    .choices([OUTPUT_YAML, OUTPUT_JSON])
-    .default(OUTPUT_YAML);
+  return formatOption(OUTPUT_YAML, OUTPUT_JSON);
 }
 
 export function createResourcesCommand(): Command {
@@ -543,8 +550,12 @@ Examples:
     .option('--debug', DEBUG_HELP)
     .option('-v, --verbose', 'Show all scanned resources, including those without issues')
     .option('--frontmatter-schema <path>', 'Validate frontmatter against JSON Schema file (.json or .yaml)')
-    .option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive', 'strict')
-    .option('--format <format>', 'Output format: yaml (default), json, or text', 'yaml')
+    .addOption(
+      new Option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive')
+        .choices(['strict', 'permissive'])
+        .default('strict'),
+    )
+    .addOption(formatOption(OUTPUT_YAML, OUTPUT_JSON, OUTPUT_TEXT))
     .option('--collection <id>', 'Filter by collection ID')
     .option('--check-external-urls', 'Validate external URLs (default: false, slow operation)')
     .option('--check-html-anchors', 'Strictly validate HTML fragment anchors against element ids (default: false; HTML fragments are often runtime-defined by JS)')

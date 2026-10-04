@@ -28,6 +28,8 @@ import { z } from 'zod';
 
 import { buildWhereClause } from '../src/filter-builder.js';
 
+import { caughtFrom, expectUnrecognizedKeys } from './refusal-assertions.js';
+
 /**
  * Reach the runtime guard with a shape the TypeScript surface already rejects.
  *
@@ -61,8 +63,8 @@ describe('unsupported filters refuse rather than widen', () => {
       ['headingPath', { headingPath: 'Architecture > RAG Design' }],
       ['resourceid', { resourceid: 'doc-1' }],
       ['keywords', { keywords: ['oauth'] }],
-    ])('throws on %s, naming the key', (key, filters) => {
-      expect(() => buildWhereClause(asUntypedFilters(filters), schema)).toThrow(key);
+    ])('throws on %s, naming the key', async (key, filters) => {
+      expectUnrecognizedKeys(await caughtFrom(() => buildWhereClause(asUntypedFilters(filters), schema)), [key], []);
     });
 
     it('honours the same fields under filters.metadata', () => {
@@ -162,15 +164,24 @@ describe('unsupported filters refuse rather than widen', () => {
   });
 
   describe('the guard reports every offender at once', () => {
-    it('names all present unknown keys in one error', () => {
-      let message = '';
-      try {
-        buildWhereClause(asUntypedFilters({ tags: ['auth'], type: 'guide' }), schema);
-      } catch (error) {
-        message = (error as Error).message;
-      }
-      expect(message).toMatch(/tags/);
-      expect(message).toMatch(/type/);
+    it('names all present unknown keys in one error', async () => {
+      const error = await caughtFrom(() => buildWhereClause(asUntypedFilters({ tags: ['auth'], type: 'guide' }), schema));
+      expectUnrecognizedKeys(error, ['tags', 'type'], []);
+    });
+
+    it('is not satisfied by a neighbouring refusal that merely mentions the same fields', () => {
+      // The shape the old `/tags/` + `/type/` message match also accepted: a strict
+      // schema that DECLARES both keys and refuses their values. Same field names in the
+      // message, the opposite verdict about whether the key is supported.
+      const neighbour = z.object({ tags: z.string(), type: z.string() }).strict().safeParse({ tags: 1, type: 2 });
+      expect(neighbour.success).toBe(false);
+      const error = neighbour.error;
+      expect(error?.message).toMatch(/tags/);
+      expect(error?.message).toMatch(/type/);
+      expect(() => expectUnrecognizedKeys(error, ['tags', 'type'], [])).toThrow();
+      // And an unknown-key refusal naming only ONE of them is not "every offender".
+      const partial = z.object({ type: z.string() }).strict().safeParse({ tags: ['auth'], type: 'guide' });
+      expect(() => expectUnrecognizedKeys(partial.error, ['tags', 'type'], [])).toThrow();
     });
   });
 

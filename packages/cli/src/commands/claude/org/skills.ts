@@ -29,7 +29,7 @@ import type {
   OrgApiClient,
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { createAllowUsageLedger, runValidationFramework } from '@vibe-agent-toolkit/schema';
-import type { ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
+import type { RefusalCode, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   direntKindFollowingSync,
   isAbsoluteAnyPlatform,
@@ -44,7 +44,7 @@ import type AdmZipArchive from 'adm-zip';
 import { Command } from 'commander';
 
 import { resolveSkillPackagingConfig } from '../../../skill-resolution/packaging-config.js';
-import { CommandRefusalError, errorMessageOf } from '../../../utils/command-refusal.js';
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { unstatablePathRefusal } from '../../../utils/project-root-policy.js';
 import { downloadNpmPackage } from '../plugin/helpers.js';
 
@@ -1428,10 +1428,21 @@ export function findSkillsDir(packageDir: string): string | undefined {
 	return undefined;
 }
 
-/** One skill the batch could not publish, and why. */
+/**
+ * One skill the batch could not publish, and why — in the same `{ code, message }`
+ * shape the run's own refusal publishes, so one payload carries one error shape.
+ */
 export interface SkillUploadFailure {
 	readonly skill: string;
-	readonly error: string;
+	readonly error: { readonly code: RefusalCode; readonly message: string };
+}
+
+/**
+ * The failure row for one skill, coded by the thrown value exactly as a run-level
+ * refusal would be. Exported for testing.
+ */
+export function skillUploadFailure(skill: string, error: unknown): SkillUploadFailure {
+	return { skill, error: { code: refusalCodeOf(error), message: errorMessageOf(error) } };
 }
 
 /** The document `install --from-npm` publishes. */
@@ -1525,9 +1536,9 @@ async function installFromNpm(
 				const result = await uploadSkillDir(client, skillDir, undefined, logger);
 				results.push(result);
 			} catch (error) {
-				const msg = error instanceof Error ? error.message : String(error);
-				logger.info(`   ⚠ ${skillName}: ${msg}`);
-				errors.push({ skill: skillName, error: msg });
+				const failure = skillUploadFailure(skillName, error);
+				logger.info(`   ⚠ ${skillName}: ${failure.error.message}`);
+				errors.push(failure);
 			}
 		}
 
@@ -1976,7 +1987,8 @@ Description:
 Exit Codes:
   0 - Every skill uploaded
   2 - At least one skill failed to upload (--from-npm uploads several; the ones
-      that landed are still listed under skills), or the run was refused: no
+      that landed are still listed under skills, each failure under errors as
+      { skill, error: { code, message } }), or the run was refused: no
       API key, no such source, unusable input ({ error: { code, message } })
 
 Examples:

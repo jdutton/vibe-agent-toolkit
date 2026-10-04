@@ -79,7 +79,7 @@ export async function validateAgent(pathArg: string, options: ValidateAgentOptio
 
 /**
  * Record a finding when `fullPath` cannot be reached: `AGENT_REFERENCE_MISSING`
- * when absent, `AGENT_REFERENCE_UNREADABLE` (with the OS message) for any other
+ * when absent, `AGENT_REFERENCE_UNREADABLE` (the errno, never the absolute path) for any other
  * refusal — "not found" would send the reader to create a file that is there.
  */
 async function requireReachable(
@@ -96,7 +96,8 @@ async function requireReachable(
       report(sink, { code: 'AGENT_REFERENCE_MISSING', severity: 'error', message: `${subject} not found: ${shown}${absentHint}` });
       return;
     }
-    const reason = error instanceof Error ? error.message : String(error);
+    const errno = (error as NodeJS.ErrnoException).code;
+    const reason = errno ?? (error instanceof Error ? error.message : String(error));
     report(sink, { code: 'AGENT_REFERENCE_UNREADABLE', severity: 'error', message: `${subject} could not be checked: ${shown} (${reason})` });
   }
 }
@@ -112,7 +113,7 @@ async function validateRAGConfig(
   // Check if RAG database exists
   // Default location is .rag-db in agent directory
   const ragDbPath = safePath.join(agentDir, '.rag-db');
-  await requireReachable(ragDbPath, 'RAG database', ragDbPath, sink, ". Run 'vat rag index' to create database.");
+  await requireReachable(ragDbPath, 'RAG database', '.rag-db', sink, ". Run 'vat rag index' to create database.");
 
   // Warn if no RAG sources defined
   if (manifest.spec.rag) {

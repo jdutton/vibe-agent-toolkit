@@ -44,6 +44,15 @@ const binPath = getBinPath(import.meta.url);
 
 /** `chmod 000` denies nothing to uid 0 and does not exist on Windows — see the file header. */
 
+/** `vat rag index [--db <db>]` from `cwd`: the exit code, the published refusal code and its message. */
+async function indexRefusal(cwd: string, db?: string): Promise<{ exit: number | null; code: unknown; message: unknown }> {
+  const { result } = await executeCliAndParseYaml(binPath, ['rag', 'index', ...(db === undefined ? [] : ['--db', db])], { cwd });
+  const report = RAG_INDEX_REPORT_SCHEMA.parse(yaml.parse(result.stdout));
+  return report.status === 'error'
+    ? { exit: result.status, code: report.error.code, message: report.error.message }
+    : { exit: result.status, code: report.status, message: undefined };
+}
+
 describe('RAG index command (system test)', () => {
   let tempDir: string;
   let projectDir: string;
@@ -172,5 +181,61 @@ describe('RAG index command (system test)', () => {
     expect(result.status).toBe(2); // System error
     expect(RAG_INDEX_REPORT_SCHEMA.parse(yaml.parse(result.stdout))).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
     expect(result.stderr).toContain('No database path');
+  });
+
+  // Where the database cannot go is the input (a file) or the run not finishing (unwritable) —
+  // LanceDB's own failure for either used to publish INTERNAL_ERROR.
+  it('a project .rag-db that is a file is INPUT_UNREADABLE; a --db that is one is USAGE_INVALID', async () => {
+    const project = setupTestProject(tempDir, { name: 'index-rag-db-file', withDocs: true });
+    fs.writeFileSync(safePath.join(project, '.rag-db'), 'not a database');
+
+    expect(await indexRefusal(project)).toMatchObject({ exit: 2, code: 'INPUT_UNREADABLE' });
+    expect(await indexRefusal(project, safePath.join(project, '.rag-db'))).toMatchObject({ exit: 2, code: 'USAGE_INVALID' });
+  });
+
+  // stats, query and clear refuse a directory that is not a RAG database; index wrote LanceDB
+  // tables into it — `vat rag index --db .` filled the project root with `*.lance` directories.
+  it('a --db directory holding foreign entries is USAGE_INVALID naming them, and nothing is written', async () => {
+    const notDb = safePath.join(tempDir, 'index-into-foreign');
+    fs.mkdirSync(notDb);
+    fs.writeFileSync(safePath.join(notDb, 'keep.txt'), 'precious');
+
+    const outcome = await indexRefusal(projectDir, notDb);
+
+    expect(outcome).toMatchObject({ exit: 2, code: 'USAGE_INVALID' });
+    expect(String(outcome.message)).toContain(notDb);
+    expect(String(outcome.message)).toContain('keep.txt');
+    expect(fs.readdirSync(notDb)).toEqual(['keep.txt']);
+  });
+
+  // No --db was given, so the project's own `.rag-db` holding other things is its state, not the invocation.
+  it('a project .rag-db holding foreign entries is INPUT_UNREADABLE, and nothing is written', async () => {
+    const project = setupTestProject(tempDir, { name: 'index-rag-db-foreign', withDocs: true });
+    const projectDb = safePath.join(project, '.rag-db');
+    fs.mkdirSync(projectDb);
+    fs.writeFileSync(safePath.join(projectDb, 'notes.md'), 'mine');
+
+    expect(await indexRefusal(project)).toMatchObject({ exit: 2, code: 'INPUT_UNREADABLE' });
+    expect(fs.readdirSync(projectDb)).toEqual(['notes.md']);
+  });
+
+  // Operating-system litter says nothing about whose directory it is, as stats and clear already hold.
+  it('a --db directory holding only OS litter is indexed into', async () => {
+    const littered = safePath.join(tempDir, 'index-into-littered');
+    fs.mkdirSync(littered);
+    fs.writeFileSync(safePath.join(littered, '.DS_Store'), '');
+
+    expect(await indexRefusal(projectDir, littered)).toMatchObject({ exit: 0, code: 'ok' });
+  });
+
+  it.skipIf(CANNOT_DENY_READS)('a --db whose parent is read-only is RUN_INCOMPLETE', async () => {
+    const readOnly = safePath.join(tempDir, 'read-only-parent');
+    fs.mkdirSync(readOnly);
+    fs.chmodSync(readOnly, 0o555);
+    try {
+      expect(await indexRefusal(projectDir, safePath.join(readOnly, 'db'))).toMatchObject({ exit: 2, code: 'RUN_INCOMPLETE' });
+    } finally {
+      fs.chmodSync(readOnly, 0o755);
+    }
   });
 });

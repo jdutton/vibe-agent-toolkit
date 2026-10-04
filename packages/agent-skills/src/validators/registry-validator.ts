@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
@@ -17,6 +17,7 @@ import {
 
 import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
 import { describeIssues } from './describe-issues.js';
+import { manifestReadFailure } from './marketplace-validator.js';
 import type { ValidationResult } from './types.js';
 import { generateFixSuggestion } from './validation-utils.js';
 
@@ -43,28 +44,27 @@ function validateRegistryFile(
 	// enclosing project is discovered the same way the skills lane discovers it.
 	const location = issueLocation(filePath, resolveAnchorRoot(locationRoot, dirname(filePath)));
 
-	// Check file exists
-	if (!existsSync(filePath)) {
-		issues.push({
-			severity: 'error',
+	// One read decides missing / unreadable / unparseable — see manifestReadFailure.
+	let content: string;
+	try {
+		content = readFileSync(filePath, 'utf-8');
+	} catch (error) {
+		const halted = manifestReadFailure(error, location, {
 			code: 'REGISTRY_MISSING_FILE',
 			message: REGISTRY_FILE_NOT_FOUND_MESSAGE,
-			location,
 			fix: 'Create the registry file at the specified path',
 		});
-
+		issues.push(halted);
 		return {
 			path: filePath,
 			type: REGISTRY_TYPE,
-			...describeIssues(issues, REGISTRY_TYPE, REGISTRY_FILE_NOT_FOUND_MESSAGE),
+			...describeIssues(issues, REGISTRY_TYPE, halted.code === 'REGISTRY_MISSING_FILE' ? REGISTRY_FILE_NOT_FOUND_MESSAGE : 'Registry file unreadable'),
 			issues,
 		};
 	}
 
-	// Parse JSON
 	let data: unknown;
 	try {
-		const content = readFileSync(filePath, 'utf-8');
 		data = JSON.parse(content);
 	} catch (error) {
 		issues.push({

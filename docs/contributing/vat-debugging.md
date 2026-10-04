@@ -120,8 +120,10 @@ node /path/to/vibe-agent-toolkit/packages/cli/dist/bin.js resources validate .
 Before changing VAT source code, write a test that reproduces the bug:
 
 - **Unit bug** → add a test in `packages/<package>/test/`
-- **CLI behavior** → add an integration test in `packages/cli/test/integration/`
-- **End-to-end workflow** → add a system test in `packages/cli/test/system/`
+- **CLI behavior** (anything that spawns `vat`, or the built `dist/bin.js`) → add a system test in
+  `packages/cli/test/system/`
+- **Wiring between real modules** (real fs/git, no spawned process) → add an integration test in
+  `packages/cli/test/integration/`
 
 See [docs/writing-tests.md](../writing-tests.md) for test patterns and
 the unit/integration/system classification guide.

@@ -81,15 +81,19 @@ describe('claude plugin install command (system test)', () => {
 
   describe('source detection', () => {
     it('should detect ZIP source', async () => {
+      // A real archive: install opens it before deciding anything, so a dry run
+      // refuses a `.zip` that is not one.
+      const zip = new AdmZip();
+      zip.addLocalFolder(await createSimpleSkill(suite.tempDir, 'test-skill'));
       const zipPath = safePath.join(suite.tempDir, 'test-skill.zip');
-      await writeFile(zipPath, 'fake zip content');
+      zip.writeZip(zipPath);
 
       expectDryRunDetects(zipPath, 'zip');
     });
 
     it('should detect local directory source', async () => {
-      const dirPath = safePath.join(suite.tempDir, 'test-skill-dir');
-      await mkdir(dirPath, { recursive: true });
+      // A directory with a root SKILL.md: a bare directory is refused.
+      const dirPath = await createSimpleSkill(suite.tempDir, 'test-skill-dir');
 
       expectDryRunDetects(dirPath, 'local');
     });

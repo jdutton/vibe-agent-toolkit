@@ -350,9 +350,9 @@ export const CODE_REGISTRY = {
     'finding',
     'warning',
     'A path the command had to read could not be read — a directory it could not enter, or a file it could not open — so it was not scanned; findings from every readable sibling are still reported.',
-    // `--exclude` leads, and the severity override is qualified, because the
-    // override is NOT reachable in the case that produces this finding most
-    // often: `applySeverityFilter` early-returns unless a VAT config is found
+    // Restoring access leads; `--exclude` is the deliberate drop. The severity
+    // override is qualified because it is NOT reachable in the case that produces
+    // this finding most often: `applySeverityFilter` early-returns unless a VAT config is found
     // above the scan path, and there is normally none above `~/.claude/plugins`.
     // Advertising a remedy an adopter cannot apply is worse than not offering it.
     'Make the path readable — check its permissions and ownership — then re-run. To drop it deliberately instead: vat audit takes --exclude, and a verb that reads a project config VAT can find honours severity.SCAN_PATH_UNREADABLE: ignore; other verbs have no lever, and their result stays a floor.',
@@ -1290,6 +1290,8 @@ export type NonOverridableCode =
   | 'RAG_DOCUMENT_INDEX_FAILED'
   // `vat corpus scan`
   | 'CORPUS_ENTRY_INCOMPLETE'
+  // `vat claude plugin install`
+  | 'PLUGIN_INSTALL_CLEANUP_INCOMPLETE'
   // `vat claude plugin uninstall`
   | 'PLUGIN_UNINSTALL_INCOMPLETE'
   // `vat audit settings`

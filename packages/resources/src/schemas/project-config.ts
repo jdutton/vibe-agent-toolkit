@@ -1,5 +1,5 @@
 import { ValidationConfigSchema } from '@vibe-agent-toolkit/schema';
-import { globMagicRemainder, hasParentTraversalSegment, isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { globMagicRemainder, hasParentTraversalSegment, isAbsoluteAnyPlatform, isSingleFsSegment } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import {
@@ -794,7 +794,14 @@ export type ClaudeMarketplaceConfig = z.infer<typeof ClaudeMarketplaceSchema>;
 export const ClaudeConfigSchema = z.object({
   managedSettings: z.string().optional()
     .describe('Path to managed-settings.json for schema validation (relative to config file)'),
-  marketplaces: z.record(z.string(), ClaudeMarketplaceSchema).optional()
+  // The name is a directory under dist/.claude/plugins/marketplaces/ that `vat claude plugin
+  // build` removes and rebuilds, so it must be exactly one path segment.
+  marketplaces: z.record(
+    z.string().refine(isSingleFsSegment, {
+      message: String.raw`marketplace name must be a single path segment (not empty, ".", or "..", and no "/", "\", NUL or drive prefix)`,
+    }),
+    ClaudeMarketplaceSchema,
+  ).optional()
     .describe('Named map of Claude plugin marketplaces (never singleton)'),
 }).strict().describe('Claude-specific project configuration');
 

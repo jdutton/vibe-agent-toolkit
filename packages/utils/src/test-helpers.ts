@@ -207,14 +207,17 @@ export function detachGitEnv(): () => void {
 
 /**
  * The errno-shaped error a refused `fs` call throws: a message, the `code`,
- * and the `syscall`, exactly as Node shapes one.
+ * the `syscall` and the `path`, exactly as Node shapes one — a caller that names
+ * the refused file from `path` (a tree probe naming the nested file) reads it.
  */
 export function errnoError(code: string, syscall: string, target: string): NodeJS.ErrnoException {
-  return Object.assign(new Error(`${code}: refused, ${syscall} '${target}'`), { code, syscall });
+  return Object.assign(new Error(`${code}: refused, ${syscall} '${target}'`), { code, syscall, path: target });
 }
 
 /** The sync `node:fs` calls a refusal can be injected into. */
 export type RefusableSyncFsMethod =
+  | 'cpSync'
+  | 'openSync'
   | 'readdirSync'
   | 'readFileSync'
   | 'statSync'
@@ -226,7 +229,7 @@ export type RefusableSyncFsMethod =
   | 'writeFileSync';
 
 /** The `node:fs/promises` calls a refusal can be injected into. */
-export type RefusableAsyncFsMethod = 'readdir' | 'readFile' | 'stat' | 'lstat' | 'access';
+export type RefusableAsyncFsMethod = 'readdir' | 'readFile' | 'stat' | 'lstat' | 'access' | 'copyFile' | 'mkdir' | 'writeFile';
 
 /**
  * Assign `fn` over `module[method]` and republish the builtin's ESM bindings.
@@ -270,12 +273,23 @@ export function refuseSyncFs(method: RefusableSyncFsMethod, targetPath: string, 
 /**
  * `fs/promises[method]` rejects with `code` for exactly `targetPath` until the
  * returned restore is called; every other path, and every other method, is real.
+ * `beforeRefusing`, when given, runs first on each refused call — a write that
+ * fails partway (a full disk) leaves a truncated file behind, and a test of the
+ * cleanup needs that file to exist.
  */
-export function refuseAsyncFs(method: RefusableAsyncFsMethod, targetPath: string, code: string): () => void {
+export function refuseAsyncFs(
+  method: RefusableAsyncFsMethod,
+  targetPath: string,
+  code: string,
+  beforeRefusing?: () => void,
+): () => void {
   const original = (fs[method] as (...args: unknown[]) => Promise<unknown>).bind(fs);
   const refused = toForwardSlash(targetPath);
   republish(fs, method, async (target: unknown, ...rest: unknown[]): Promise<unknown> => {
-    if (toForwardSlash(String(target)) === refused) throw errnoError(code, method, String(target));
+    if (toForwardSlash(String(target)) === refused) {
+      beforeRefusing?.();
+      throw errnoError(code, method, String(target));
+    }
     return original(target, ...rest);
   });
   return () => republish(fs, method, original);

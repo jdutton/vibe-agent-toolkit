@@ -87,6 +87,18 @@ export const VerdictBodySchema: z.ZodType<VerdictBody> = z
   })
   .strict()
   .superRefine((body, ctx) => {
+    // `exited` IS "produced an exit code". Read otherwise, an exited row with no
+    // code would pass as measured with no findings.
+    for (const [index, row] of body.rows.entries()) {
+      if ((row.outcome === 'exited') === (row.exitCode !== null)) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['rows', index, 'exitCode'],
+        message: `row '${row.name}' is '${row.outcome}' with exit code ${String(row.exitCode)}; only an exited row has one`,
+      });
+    }
+  })
+  .superRefine((body, ctx) => {
     // The two captures are matched row to row BY NAME, so a name names one row.
     for (const [index, row] of body.rows.entries()) {
       if (body.rows.findIndex((other) => other.name === row.name) === index) continue;

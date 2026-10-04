@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
 	assertSingleError,
+	assertSingleUnreadable,
 	assertValidationSuccess,
 	cleanupTestFiles,
 	createTestPlugin,
@@ -68,6 +69,17 @@ describe('validatePlugin', () => {
 		const result = await validatePlugin(pluginPath);
 
 		assertSingleError(result, 'PLUGIN_INVALID_JSON');
+	});
+
+	it('reports a plugin.json the OS will not read as unreadable, not as invalid JSON', async () => {
+		const pluginPath = createTestPlugin(getTempDir(), { name: 'unreadable-manifest' });
+		const manifest = safePath.join(pluginPath, CLAUDE_PLUGIN_DIR, 'plugin.json');
+		fs.rmSync(manifest);
+		fs.mkdirSync(manifest);
+
+		const result = await validatePlugin(pluginPath);
+
+		assertSingleUnreadable(result, `${CLAUDE_PLUGIN_DIR}/plugin.json`, 'EISDIR');
 	});
 
 	it('should return error when plugin.json fails schema validation', async () => {

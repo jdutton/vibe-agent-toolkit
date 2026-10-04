@@ -1283,3 +1283,21 @@ export function realpathFrom(table: RealpathTable, filePath: string): string {
 
   return realPath;
 }
+
+/**
+ * Open every regular file under `dir` for reading, and close it again — the
+ * probe a copier runs BEFORE it writes anything, so an unreadable source is
+ * named as the input it is rather than surfacing mid-copy as an output failure.
+ * Links are not followed (a copy takes a link as a link), and on Windows a file
+ * is opened rather than `access`ed because `access` does not consult ACLs.
+ *
+ * @param dir - The directory whose files the caller is about to copy
+ * @throws The first refusal exactly as the OS raised it; its `path` names the
+ *   directory it could not list or the file it could not open
+ */
+export function openEachFileForReading(dir: string): void {
+  for (const entry of nodeFs.readdirSync(dir, { recursive: true, withFileTypes: true })) {
+    if (entry.isSymbolicLink() || !entry.isFile()) continue;
+    nodeFs.closeSync(nodeFs.openSync(safePath.join(entry.parentPath, entry.name), 'r'));
+  }
+}

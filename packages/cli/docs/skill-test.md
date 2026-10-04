@@ -57,7 +57,8 @@ hand-editing. It publishes the report envelope on stdout (schema
 `--print` it writes nothing to disk and stdout is the updated config text alone — no
 report — so `vat skill test configure my-skill --max-turns 20 --print > new.yaml`
 yields a usable file. A refusal exits `2` with `error.code`: `USAGE_INVALID` (an invalid
-knob value, no project root), `CONFIG_INVALID` (no config file at the project root, or
+knob value, a skill the config's `skills.include` does not discover — configure a skill
+after declaring it — or no project root), `CONFIG_INVALID` (no config file at the project root, or
 the edit would leave it failing its schema), `INPUT_UNREADABLE`, or `RUN_INCOMPLETE`
 (the write failed). An unknown key already in the config is a stderr warning, never a
 refusal.
@@ -163,7 +164,7 @@ The suite is never copied into anything the executor can reach. Each eval's decl
 | `--refresh` | Force a full re-stage, ignoring existing staged content. |
 | `--keep` | Keep the harness directory after the run (needed to inspect `results/`). |
 | `--dry-run` | Build and stage exactly as a real run would, then stop without spawning Claude — no session, no tokens. It **does build** (when `--i-understand-this-runs-skill-code` is passed), because the question a dry run answers is "what happens if I drop this flag", and a preview built from a stale `dist/` answers it wrongly. **Without** the acknowledgement it does not build — building runs the repo's `test.build` hook, an arbitrary shell command — so it falls back to an existing `dist/` and warns it may be stale. `--no-build` skips the build either way. |
-| `--out <dir>` / `--workdir <dir>` | Override the harness output / working directory. An existing `--out` must already be a `0700` directory: VAT creates a new one `0700`, and never changes the mode of one you made. |
+| `--out <dir>` / `--workdir <dir>` | Override the harness output / working directory. An existing `--out` must already be a directory and, on POSIX, `0700`: VAT creates a new one `0700`, and never changes the mode of one you made (Windows has no mode check). |
 | `--allow-eval-failure` | Opt out of fail-closed: each failed eval is published as a `warning` finding instead of an `error`, so the run exits `0`. For interactive iteration. |
 | `--allow-unverified-skill-source` | Skip the vendored manifest integrity check. |
 | `--debug` | Enable debug logging. |
@@ -208,11 +209,11 @@ that could not run.
 | `error.code` | `Reason:` | When |
 |---|---|---|
 | `BACKEND_UNAVAILABLE` | `preflight` | No `claude` binary on `PATH`, or one too old for a flag the spawn needs |
-| `USAGE_INVALID` | `preflight` | An invalid flag value, an auth guard the credentials do not meet, the missing security ack, an unsafe `--workdir`, an `--out` that exists and is not a `0700` directory (VAT never changes its mode — `chmod 700` it, or name one that does not exist yet), a held harness lock, a skill name the config does not declare (or `--no-build` with no dist), a bad `env` token, a failing `test.build` hook, a repeated staged name |
+| `USAGE_INVALID` | `preflight` | An invalid flag value, an auth guard the credentials do not meet, the missing security ack, an unsafe `--workdir`, an `--out` that exists and is not a directory, or (POSIX only — Windows has no mode check) is not `0700` (VAT never changes its mode — `chmod 700` it, or name one that does not exist yet), a held harness lock, a skill name the config does not declare (or `--no-build` with no dist), a bad `env` token, a failing `test.build` hook, a repeated staged name |
 | `CONFIG_INVALID` | `preflight` | The governing `vibe-agent-toolkit.config.yaml` does not parse or fails its schema (subject's or a companion's) |
 | `INPUT_UNREADABLE` | `preflight` | A declared eval input or dependency is absent, the `evals.json` is not a valid suite, the vendored copy fails its manifest, a config or directory the OS will not read |
 | `INPUT_UNREADABLE` | `bootstrap` | `evals.json` was absent, so VAT wrote a starter template next to the skill source; fill it in and re-run |
-| `RUN_INCOMPLETE` | `preflight` | The packager refused the subject's (or a required companion's) own content — a `files:` source absent, a `SKILL.md` bundled as a resource. A `SKILL_PACKAGING_FAILED` finding at the skill's `SKILL.md` says what to change. Also, with no finding: an output the OS will not let the run write — the harness root (`--out` under a read-only directory), a dist bundle, a full disk |
+| `RUN_INCOMPLETE` | `preflight` | The packager refused the subject's (or a required companion's) own content — a `files:` source absent, a `SKILL.md` bundled as a resource. A `SKILL_PACKAGING_FAILED` finding at the skill's `SKILL.md` says what to change. Also, with no finding: an output the OS will not let the run write — the harness root (`--out` under a read-only directory), its lockfile, the staged skill copies and manifest, the `results/` files, a dist bundle — a full disk or a read-only directory. Known gap: a disk so full that a skill build's git snapshot of the project fails first is still `INTERNAL_ERROR` |
 | `INTERNAL_ERROR` | `internal` | The harness broke (executor/grader crash, stall, timeout, grader nonce or skew failure); the stack is on stderr |
 
 ```bash
@@ -252,8 +253,10 @@ vat skill test run my-skill --model claude-opus-5 --grader-model claude-sonnet-5
 vat skill test run router-skill --with helper=path:./skills/helper \
   --i-understand-this-runs-skill-code
 
-# Persist knobs instead of passing them every time
-vat skill test configure my-skill --auth subscription --require-auth subscription
+# Persist knobs instead of passing them every time (`requireAuth` has no
+# configure flag: set it under the skill's `test:` block by hand, or pass
+# --require-auth to each `run`)
+vat skill test configure my-skill --auth subscription
 ```
 
 ## See Also
@@ -285,6 +288,33 @@ data:
 ```
 
 ### `skill test run`
+
+A dry run: what a real run would do, with nothing spawned and no eval graded. Produced by `vat skill test run ./test-skill-1 --dry-run --i-understand-this-runs-skill-code --out ./out`; the absolute paths are shortened.
+
+```yaml vat-report=skill test run
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  skill: ./test-skill-1
+  description: |-
+    [dry-run] A real run would: stage the source dir as-is, then spawn claude.
+    [dry-run] Would run 1 executor→grader spawn pair at concurrency 4 — 2 claude sessions in total.
+    [dry-run] --max-budget-usd is PER SPAWN ($5), not per run: worst case ≈ $10.00 across those 2 sessions.
+    [dry-run] Executor (no --model; claude default); grader model claude-sonnet-5 (prompt via stdin).
+    [dry-run] Staged manifest: 1 entry | fingerprint: 33dee44374157bdc92af00c90fc5de39d2a3d974795a707a73c575ecf6488b4d
+    [dry-run] Provenance would be written to: /home/me/project/out/results/provenance.json
+  evals: []
+  artifacts:
+    frictionReport: null
+    outputDir: /home/me/project/out
+```
 
 Refused without the security acknowledgment: an `error` document, exit `2`. Produced by `vat skill test run test-skill-1`.
 

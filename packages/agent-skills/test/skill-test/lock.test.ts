@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { acquireHarnessLock, HarnessLockBusyError, installSignalCleanup } from '../../src/skill-test/lock.js';
@@ -25,6 +26,14 @@ describe('acquireHarnessLock', () => {
   it('acquires then releases', () => {
     const lock = acquireHarnessLock(root);
     expect(() => lock.release()).not.toThrow();
+  });
+
+  // A lockfile the OS will not let the run create (a full disk, a read-only root) is
+  // the run not finishing — RUN_INCOMPLETE — never an uncoded errno (INTERNAL_ERROR).
+  it('codes a lockfile the OS refuses to create as the run\'s output (HARNESS_OUTPUT_UNWRITABLE)', async () => {
+    await withSyncFsRefused('openSync', safePath.join(root, '.vat-skill-test.lock'), 'ENOSPC', () => {
+      expect(() => acquireHarnessLock(root)).toThrow(expect.objectContaining({ code: 'HARNESS_OUTPUT_UNWRITABLE' }));
+    });
   });
 
   it('a second acquire fails fast while held', () => {

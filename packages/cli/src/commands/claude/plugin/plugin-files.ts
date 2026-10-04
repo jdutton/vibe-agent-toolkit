@@ -10,14 +10,14 @@
  */
 
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
 
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
 import { issueLocation, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from '../../../utils/command-refusal.js';
+import { copyFileIntoMarketplace } from '../../../utils/marketplace-io.js';
 import { requireInputPath } from '../../../utils/project-root-policy.js';
+
 
 /** A `files[].dest` the config may not declare. */
 function invalidDest(message: string): CommandRefusalError {
@@ -76,7 +76,11 @@ export async function applyPluginFiles(args: ApplyPluginFilesArgs): Promise<void
       info(`plugin files[]: overwriting existing ${toForwardSlashAnyPlatform(entry.dest)}`);
     }
 
-    await mkdir(dirname(destAbs), { recursive: true });
-    await copyFile(sourceAbs, destAbs);
+    await copyFileIntoMarketplace(
+      sourceAbs,
+      destAbs,
+      `plugin files[].source ${issueLocation(sourceAbs, projectRoot) || '.'}`,
+      `plugin files[].dest ${toForwardSlashAnyPlatform(entry.dest)}`,
+    );
   }
 }

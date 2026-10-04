@@ -7,22 +7,24 @@
  * what keeps the shards a partition of the table.
  */
 
-import { describe, it } from 'vitest';
+import { exitCodeForReport } from '@vibe-agent-toolkit/schema';
+import { describe, expect, it } from 'vitest';
 
 import {
-  exitCodeMatrixShard,
   expectScenarioEndsOnItsDerivedCode,
   MATRIX_SCENARIO_TIMEOUT_MS,
-  useMatrixTempDir,
+  useExitCodeMatrixShard,
 } from './test-helpers/exit-code-matrix.js';
 
+// `expectScenarioEndsOnItsDerivedCode` asserts status, refusal code, gate and derived exit code, and
+// returns what it read, so the call site re-asserts the derivation (docs/writing-tests.md).
 describe('exit codes are derived from the published document — shard skills-distribution (system test)', () => {
-  useMatrixTempDir();
-
-  // The assertions are in `expectScenarioEndsOnItsDerivedCode`: status, refusal code, gate, derived exit code.
-  it.for(exitCodeMatrixShard(import.meta.url))(
-    '$verb → $status ends on the code its document derives',
+  it.for(useExitCodeMatrixShard(import.meta.url))(
+    '$verb → $status ends on the code its document derives (skills-distribution)',
     { timeout: MATRIX_SCENARIO_TIMEOUT_MS },
-    expectScenarioEndsOnItsDerivedCode,
+    (scenario, context) => {
+      const run = expectScenarioEndsOnItsDerivedCode(scenario, context);
+      expect(run.exitCode).toBe(exitCodeForReport(run.document));
+    },
   );
 });

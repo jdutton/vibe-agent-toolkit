@@ -165,7 +165,8 @@
                         "type": "string",
                         "enum": [
                           "ok",
-                          "findings"
+                          "findings",
+                          "not-built"
                         ]
                       }
                     },

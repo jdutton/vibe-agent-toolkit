@@ -8,9 +8,10 @@
  */
 
 import { writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import { upsertTestConfig } from '@vibe-agent-toolkit/agent-skills';
-import { parseConfigAllowingUnknownKeys, ProjectConfigSchema, readConfigText } from '@vibe-agent-toolkit/resources';
+import { parseConfigAllowingUnknownKeys, type ProjectConfig, ProjectConfigSchema, readConfigText } from '@vibe-agent-toolkit/resources';
 import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
@@ -20,6 +21,7 @@ import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../uti
 import { endWithRefusal, endWithReport, NOTHING_FINISHED, writeArtifact } from '../../../utils/document-writer.js';
 import { createLogger } from '../../../utils/logger.js';
 import { requireInputPath, requireProjectRoot } from '../../../utils/project-root-policy.js';
+import { discoverSkillsFromConfig } from '../../skills/skill-discovery.js';
 
 import { assertValidAuth, type AuthValue } from './auth-flags.js';
 
@@ -142,7 +144,8 @@ export function buildKnobs(
  * @returns The updated YAML, comments and key ordering preserved
  * @throws {CommandRefusalError} `CONFIG_INVALID` when the project has no config
  *   file, or the UPDATED config would fail validation for any reason other than
- *   an unknown key; `VatError` `CONFIG_UNREADABLE` (→ `INPUT_UNREADABLE`) when the OS refuses the read
+ *   an unknown key; `USAGE_INVALID` when `skills.include` discovers no skill named
+ *   `skillName`; `VatError` `CONFIG_UNREADABLE` (→ `INPUT_UNREADABLE`) when the OS refuses the read
  */
 export async function updateSkillTestConfig(
   configPath: string,
@@ -160,8 +163,9 @@ export async function updateSkillTestConfig(
 
   // Validate the FULL updated config before it can be written.
   const parsed = yaml.parse(updatedYaml) as unknown;
+  let config: ProjectConfig;
   try {
-    parseConfigAllowingUnknownKeys(ProjectConfigSchema, parsed, onWarn, { configPath });
+    config = parseConfigAllowingUnknownKeys(ProjectConfigSchema, parsed, onWarn, { configPath });
   } catch (validationError) {
     // The prefix is kept because it carries information the shared formatter
     // cannot know: what is being judged is the config AFTER this command's
@@ -170,7 +174,27 @@ export async function updateSkillTestConfig(
     throw new CommandRefusalError('CONFIG_INVALID', `Updated config would fail schema validation.\n${detail}`);
   }
 
+  await requireDeclaredSkill(configPath, config.skills, skillName);
   return updatedYaml;
+}
+
+/**
+ * Refuse a skill name `skills.include` does not discover. A typo used to be
+ * persisted as `skills.config.<typo>.test`, exit 0, and only the next
+ * `vat skill test run <typo>` refused it — against the same discovery used here.
+ */
+async function requireDeclaredSkill(
+  configPath: string,
+  skills: ProjectConfig['skills'],
+  skillName: string,
+): Promise<void> {
+  const declared = skills === undefined ? [] : await discoverSkillsFromConfig(skills, dirname(configPath), 'refuse');
+  if (declared.some((skill) => skill.name === skillName)) return;
+  const known = declared.map((skill) => skill.name).sort((a, b) => a.localeCompare(b)).join(', ') || '(none)';
+  throw new CommandRefusalError(
+    'USAGE_INVALID',
+    `No skill named '${skillName}' is declared by ${configPath} (declared: ${known}). Name a skill its skills.include discovers — the SKILL.md frontmatter name — or declare the skill before configuring its tests.`,
+  );
 }
 
 /** Write the updated config over the file — a failed write stopped the run, it is not VAT's defect. */
@@ -223,7 +247,7 @@ export function createSkillTestConfigureCommand(): Command {
 
   command
     .description('Upsert the test block for a skill in vibe-agent-toolkit.config.yaml')
-    .argument('<skill>', 'Skill name (key under skills.config)')
+    .argument('<skill>', 'Skill name (key under skills.config); must be a skill skills.include discovers')
     .option('--auth <mode>', 'Auth mechanism: inherit | subscription | api-key | auto')
     .option('--max-turns <n>', 'Per-spawn cap on executor/grader turns (positive integer)')
     .option('--max-budget-usd <n>', 'Per-spawn USD budget cap, applied to EACH executor and grader spawn (positive number). Not a whole-run ceiling: a baseline run has twice the spawns, so twice the worst-case spend.')
@@ -267,8 +291,9 @@ Output:
 
 Exit Codes:
   0 - Config updated (or printed with --print)
-  2 - Refused; error.code says why: USAGE_INVALID (an invalid option value, or
-      no project root), CONFIG_INVALID (no config file, or the updated config
+  2 - Refused; error.code says why: USAGE_INVALID (an invalid option value, a
+      skill the config's skills.include does not discover, or no project
+      root), CONFIG_INVALID (no config file, or the updated config
       fails its schema), INPUT_UNREADABLE (the config cannot be read),
       RUN_INCOMPLETE (the config could not be written)
 

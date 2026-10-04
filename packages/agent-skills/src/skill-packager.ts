@@ -51,9 +51,12 @@ import {
   direntKindFollowingSync,
   findProjectRoot,
   isFilesystemAccessError,
+  isPathAbsentError,
   isGlob,
   isSingleFsSegment,
   issueLocation,
+  isUnderRoot,
+  normalizePath,
   resolveAssetReference,
   safePath,
   toForwardSlash,
@@ -192,6 +195,16 @@ export interface PackageSkillOptions {
    * and is always replaced.
    */
   replaceExistingOutput?: boolean;
+
+  /**
+   * The caller generated the SKILL.md INTO `outputPath` itself (the agent
+   * builder), so the output holding the source is expected and is packaged in
+   * place, never cleared. Without it, an output that holds the SKILL.md or any
+   * file it bundles is refused with {@link SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE},
+   * `replaceExistingOutput` or not: the package would be written over the tree
+   * it reads.
+   */
+  sourceGeneratedInOutput?: boolean;
 
   /**
    * Package format(s) to generate
@@ -703,18 +716,16 @@ export async function packageSkill(
   const outputPath = options.outputPath ??
     getDefaultSkillOutputPath(skillPath, skillMetadata.name);
 
-  // 7. Clear the way for the output (skip when source SKILL.md lives inside the
-  // output, e.g. builder flow). Only a location the caller owns is emptied; an
-  // explicit path holding anything else is refused, never deleted.
-  const resolvedOutput = safePath.resolve(outputPath);
-  const sourceInOutput = safePath.resolve(skillPath).startsWith(resolvedOutput + '/');
-  if (!sourceInOutput) {
-    await clearOutputPath({
-      outputPath: resolvedOutput,
-      owned: options.outputPath === undefined || options.replaceExistingOutput === true,
-      siblings: artifactSiblingPaths(resolvedOutput, skillMetadata.name, options.formats ?? ['directory']),
-      subject: `skill '${skillMetadata.name}' output ${issueLocation(outputPath, projectRoot) || '.'}`,
-    });
+  // 7. Clear the way for the output. Only a location the caller owns is emptied; an
+  // explicit path holding anything else is refused, never deleted — and an output
+  // holding the source is refused outright unless the caller generated it there.
+  if (options.sourceGeneratedInOutput !== true) {
+    const owned = options.outputPath === undefined || options.replaceExistingOutput === true;
+    checkPackageOutput({ outputPath, skillName: skillMetadata.name, formats, sources: allFiles, projectRoot, replaceExistingOutput: owned });
+    if (owned) {
+      const subject = packageOutputSubject(outputPath, skillMetadata.name, projectRoot);
+      await withFsAttribution(subject, 'output', () => rm(safePath.resolve(outputPath), { recursive: true, force: true }), 'removed');
+    }
   }
 
   // 8. Build path map for file copying and link rewriting
@@ -973,6 +984,7 @@ export async function packageSkill(
     outputPath,
     skillMetadata,
     formats,
+    projectRoot,
     target
   );
 
@@ -1973,7 +1985,7 @@ async function copyAndRewriteFiles(
   // Copy SKILL.md
   const skillTargetPath = ctx.pathMap.get(toForwardSlash(skillPath));
   if (skillTargetPath) {
-    await copyAndRewriteFile(skillPath, skillTargetPath, ctx);
+    await copyAndRewriteFile(skillPath, skillTargetPath, ctx, 'entry file');
   }
 
   // Copy all linked files
@@ -1983,7 +1995,7 @@ async function copyAndRewriteFiles(
       continue;
     }
 
-    await copyAndRewriteFile(linkedFile, targetPath, ctx);
+    await copyAndRewriteFile(linkedFile, targetPath, ctx, 'linked file');
   }
 }
 
@@ -2111,6 +2123,7 @@ async function copyAndRewriteFile(
   sourcePath: string,
   targetPath: string,
   ctx: CopyRewriteContext,
+  role: 'entry file' | 'linked file',
 ): Promise<void> {
   // Through the SAME attribution point as the `files:` lanes. This is the default
   // path for every ordinary markdown-linked file in a build — the most-travelled
@@ -2118,7 +2131,9 @@ async function copyAndRewriteFile(
   // the build's whole explanation: `EACCES: permission denied, open '/abs/path'`,
   // with no skill named and no remedy. Easy to believe it was covered because the
   // `files:` fix landed in this same file; it is a different function.
-  const subject = `linked file ${issueLocation(sourcePath, ctx.projectRoot) || '.'}`;
+  // `role` names what the file IS to the skill: calling the entry SKILL.md a
+  // "linked file" sends the author looking for a link that does not exist.
+  const subject = `${role} ${issueLocation(sourcePath, ctx.projectRoot) || '.'}`;
 
   const lower = sourcePath.toLowerCase();
   const isMarkdown = lower.endsWith('.md');
@@ -2583,6 +2598,7 @@ function validateZipSize(zipPath: string): void {
  * @param outputPath - Directory containing packaged skill
  * @param metadata - Skill metadata
  * @param formats - Formats to generate
+ * @param projectRoot - The project root, so a refused write names its path relative to it
  * @param target - Packaging target (for ZIP size validation on claude-web)
  * @returns Paths to generated artifacts
  */
@@ -2590,6 +2606,7 @@ async function generatePackageArtifacts(
   outputPath: string,
   metadata: SkillMetadata,
   formats: string[],
+  projectRoot: string,
   target: PackagingTarget = DEFAULT_PACKAGING_TARGET
 ): Promise<Record<string, string>> {
   const artifacts: Record<string, string> = {};
@@ -2600,7 +2617,7 @@ async function generatePackageArtifacts(
 
   if (formats.includes('zip')) {
     const zipPath = `${outputPath}.zip`;
-    await createZipArchive(outputPath, zipPath);
+    await createZipArchive(outputPath, zipPath, projectRoot);
     // Validate ZIP size for claude-web target (Anthropic upload limit)
     if (target === 'claude-web') {
       validateZipSize(zipPath);
@@ -2609,12 +2626,12 @@ async function generatePackageArtifacts(
   }
 
   if (formats.includes('npm')) {
-    const tgzPath = await createNpmPackage(outputPath, metadata);
+    const tgzPath = await createNpmPackage(outputPath, metadata, projectRoot);
     artifacts['npm'] = tgzPath;
   }
 
   if (formats.includes('marketplace')) {
-    const manifestPath = await createMarketplaceManifest(outputPath, metadata);
+    const manifestPath = await createMarketplaceManifest(outputPath, metadata, projectRoot);
     artifacts['marketplace'] = manifestPath;
   }
 
@@ -2633,8 +2650,9 @@ async function generatePackageArtifacts(
  *
  * @param sourceDir - Directory to archive
  * @param zipPath - Output ZIP file path
+ * @param projectRoot - The project root, so a refused write names the ZIP relative to it
  */
-async function createZipArchive(sourceDir: string, zipPath: string): Promise<void> {
+async function createZipArchive(sourceDir: string, zipPath: string, projectRoot: string): Promise<void> {
   // Import adm-zip dynamically (will be added as dependency)
   const AdmZip = (await import('adm-zip')).default;
 
@@ -2643,7 +2661,49 @@ async function createZipArchive(sourceDir: string, zipPath: string): Promise<voi
   // Add directory contents to ZIP
   zip.addLocalFolder(sourceDir);
 
-  await withFsAttribution(`ZIP archive ${zipPath}`, 'output', () => writeFile(zipPath, zip.toBuffer()), 'written');
+  await writeArtifactFile('ZIP archive', zipPath, zip.toBuffer(), projectRoot);
+}
+
+/**
+ * Write one file of the package's output. A write the OS refuses (a full disk, an
+ * unwritable directory, a directory in the way) is the run not finishing
+ * (`SKILL_PACKAGING_OUTPUT_FAILED`), naming the file relative to the project; and
+ * a file the failed write itself created — truncated — is removed, so the next run
+ * does not refuse it as "a previous package". Nothing that was there before the
+ * write is removed.
+ */
+async function writeArtifactFile(what: string, path: string, data: string | Buffer, projectRoot: string): Promise<void> {
+  const existedBefore = entryExists(path);
+  try {
+    await withFsAttribution(`${what} ${issueLocation(path, projectRoot)}`, 'output', () => writeFile(path, data), 'written');
+  } catch (error) {
+    if (!existedBefore) await removeOwnPartialFile(path);
+    throw error;
+  }
+}
+
+/** Whether anything — a dangling link included — is at `path`. */
+function entryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (isPathAbsentError(error)) return false;
+    throw error;
+  }
+}
+
+/**
+ * Remove a regular file a failed write created. Best effort: the write's own
+ * refusal is what the run reports, so a removal the OS refuses too must not
+ * replace it.
+ */
+async function removeOwnPartialFile(path: string): Promise<void> {
+  try {
+    if (lstatSync(path).isFile()) await rm(path, { force: true });
+  } catch (error) {
+    if (!isFilesystemAccessError(error)) throw error;
+  }
 }
 
 /**
@@ -2658,40 +2718,75 @@ function artifactSiblingPaths(outputPath: string, skillName: string, formats: re
   return siblings;
 }
 
-/**
- * Make the output path ready to receive this package, never at the cost of
- * something the packager did not produce.
- *
- * An OWNED location (the default `dist/skills/<name>`, or a caller that says it
- * manages the path) holds a previous build, and is removed — a refusal of that
- * removal is the run not finishing. Anything else must be absent, or an empty
- * directory: a non-empty directory, a file, or an archive in a sibling's place is
- * refused BEFORE anything is written, naming the path and the fix. That used to
- * be an `rm -rf` of whatever `--output` named, with exit 0.
- */
-async function clearOutputPath(target: {
+/** What a package output is called in a refusal: the skill, and its output relative to the project. */
+function packageOutputSubject(outputPath: string, skillName: string, projectRoot: string): string {
+  return `skill '${skillName}' output ${issueLocation(outputPath, projectRoot) || '.'}`;
+}
+
+/** The output `checkPackageOutput` judges, and what it may be told about it. */
+export interface PackageOutputCheck {
+  /** The package's output directory. */
   outputPath: string;
-  owned: boolean;
-  siblings: readonly string[];
-  subject: string;
-}): Promise<void> {
-  const { outputPath, owned, siblings, subject } = target;
-  if (owned) {
-    await withFsAttribution(subject, 'output', () => rm(outputPath, { recursive: true, force: true }), 'removed');
-    return;
-  }
+  /** The skill's name — it names the marketplace manifest beside the output. */
+  skillName: string;
+  /** The formats asked for: which archives land beside the output. */
+  formats: readonly string[];
+  /** Every file the package reads (the SKILL.md and what it bundles). */
+  sources: readonly string[];
+  /** The project root, so a refusal names the output relative to it. */
+  projectRoot: string;
+  /** The output holds a previous package to replace (`--force`); only the source check applies. */
+  replaceExistingOutput?: boolean;
+}
+
+/**
+ * Whether a package may be written at `outputPath` — the same answer for a dry
+ * run as for the real one, decided before anything is written.
+ *
+ * An output that is, or contains, a file the package reads is refused,
+ * `replaceExistingOutput` or not: the bundle would overwrite the author's
+ * source. Unless told the output holds a previous package to replace, anything
+ * at it — a non-empty directory, a file, or a `<output>.zip` /
+ * `<name>.marketplace.json` a requested format writes beside it — is refused,
+ * never deleted, naming the path and the fix. An empty directory is free.
+ *
+ * @throws VatError {@link SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE}
+ */
+export function checkPackageOutput(check: PackageOutputCheck): void {
+  const resolvedOutput = safePath.resolve(check.outputPath);
+  const subject = packageOutputSubject(check.outputPath, check.skillName, check.projectRoot);
+  refuseOutputHoldingSource(resolvedOutput, check.sources, subject);
+  if (check.replaceExistingOutput === true) return;
   const occupied = [
-    ...(isOccupied(outputPath, true) ? [outputPath] : []),
-    ...siblings.filter((sibling) => isOccupied(sibling, false)),
+    ...(isOccupied(resolvedOutput, true) ? [resolvedOutput] : []),
+    ...artifactSiblingPaths(resolvedOutput, check.skillName, check.formats).filter((sibling) => isOccupied(sibling, false)),
   ];
   if (occupied.length > 0) {
     throw new VatError(
       SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE,
       `${subject}: ${occupied.map((path) => toForwardSlash(path)).join(', ')} already exists, and VAT never deletes `
-        + 'or overwrites what it did not produce. Remove it yourself if it is a previous package, or choose '
-        + 'an output path that does not exist yet (or is an empty directory).',
+        + 'or overwrites what it did not produce. If it is a previous package, pass --force to replace it '
+        + '(`replaceExistingOutput: true` in the library); otherwise remove it yourself, or choose an output path '
+        + 'that does not exist yet (or is an empty directory).',
     );
   }
+}
+
+/**
+ * Refuse an output that is, or contains, a file the package reads — writing the
+ * bundle there would overwrite the author's source. `--force` does not lift it.
+ */
+function refuseOutputHoldingSource(resolvedOutput: string, sources: readonly string[], subject: string): void {
+  // Canonical on both sides: an output reached through a symlink is the tree it names.
+  const real = (path: string): string => toForwardSlash(normalizePath(safePath.resolve(path)));
+  const outputReal = real(resolvedOutput);
+  const held = sources.find((source) => isUnderRoot(resolvedOutput, source) !== 'outside' || real(source) === outputReal);
+  if (held === undefined) return;
+  throw new VatError(
+    SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE,
+    `${subject}: it holds the source being packaged (${toForwardSlash(held)}), and VAT never writes a package over `
+      + 'the tree it reads, --force or not. Choose an output path outside the skill and the files it links to.',
+  );
 }
 
 /**
@@ -2728,7 +2823,8 @@ function isOccupied(path: string, emptyDirectoryIsFree: boolean): boolean {
  */
 async function createNpmPackage(
   outputPath: string,
-  metadata: SkillMetadata
+  metadata: SkillMetadata,
+  projectRoot: string
 ): Promise<string> {
   // Generate package.json
   const packageJson = {
@@ -2742,11 +2838,7 @@ async function createNpmPackage(
   };
 
   const packageJsonPath = safePath.join(outputPath, PACKAGE_JSON_FILENAME);
-  await writeFile(
-    packageJsonPath,
-    JSON.stringify(packageJson, null, 2),
-    'utf-8'
-  );
+  await writeArtifactFile('npm package manifest', packageJsonPath, JSON.stringify(packageJson, null, 2), projectRoot);
 
   // For now, just return a placeholder path
   // Full npm pack implementation would require running `npm pack`
@@ -2762,7 +2854,8 @@ async function createNpmPackage(
  */
 async function createMarketplaceManifest(
   outputPath: string,
-  metadata: SkillMetadata
+  metadata: SkillMetadata,
+  projectRoot: string
 ): Promise<string> {
   const manifest = {
     name: metadata.name,
@@ -2776,11 +2869,7 @@ async function createMarketplaceManifest(
   };
 
   const manifestPath = safePath.join(dirname(outputPath), `${metadata.name}.marketplace.json`);
-  await writeFile(
-    manifestPath,
-    JSON.stringify(manifest, null, 2),
-    'utf-8'
-  );
+  await writeArtifactFile('marketplace manifest', manifestPath, JSON.stringify(manifest, null, 2), projectRoot);
 
   return manifestPath;
 }

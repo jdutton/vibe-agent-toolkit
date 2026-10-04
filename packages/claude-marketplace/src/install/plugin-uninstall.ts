@@ -8,12 +8,13 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { mkdirSyncReal, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { isVatError, mkdirSyncReal, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
 import type { InstalledPlugins } from './plugin-registry.js';
 import {
+  CLAUDE_USER_STATE_UNREADABLE_CODE,
   codedUserStateWrite,
   PLUGIN_KEY_INVALID_CODE,
   readInstalledPlugins,
@@ -159,7 +160,8 @@ export async function uninstallPlugin(opts: UninstallPluginOptions): Promise<Uni
   const artifacts = { pluginDir, cacheDir, installedPlugins: installedPluginsRemoved, knownMarketplaces, settings };
 
   if (isOrphan) {
-    return { removed: true, warning: `Plugin "${pluginKey}" directory exists but was not installed via VAT — cleaning up`, artifacts };
+    const action = dryRun ? 'it would be removed' : 'cleaning up';
+    return { removed: true, warning: `Plugin "${pluginKey}" directory exists but was not installed via VAT — ${action}`, artifacts };
   }
 
   return { removed: true, artifacts };
@@ -168,6 +170,12 @@ export async function uninstallPlugin(opts: UninstallPluginOptions): Promise<Uni
 /**
  * Find all plugin keys (name@marketplace) installed from a given npm package.
  * Uses known_marketplaces.json source.package to match.
+ *
+ * Every key returned is a valid plugin key: one in the registry that is not
+ * would aim the removal outside ~/.claude, and it was READ, not typed — so it is
+ * the registry's fault, refused before the caller uninstalls anything.
+ *
+ * @throws VatError {@link CLAUDE_USER_STATE_UNREADABLE_CODE} naming the key and the registry
  */
 export function findPluginsByPackage(npmPackage: string, paths: ClaudeUserPaths): string[] {
   const knownMarketplaces = readKnownMarketplaces(paths);
@@ -185,11 +193,24 @@ export function findPluginsByPackage(npmPackage: string, paths: ClaudeUserPaths)
       .map(([name]) => name),
   );
 
-  return Object.keys(installedPlugins.plugins).filter(key => {
+  const keys = Object.keys(installedPlugins.plugins).filter(key => {
     const atIdx = key.lastIndexOf('@');
     if (atIdx <= 0) return false;
     return matchingMarketplaces.has(key.slice(atIdx + 1));
   });
+  for (const key of keys) {
+    try {
+      parsePluginKey(key);
+    } catch (error) {
+      if (!isVatError(error, PLUGIN_KEY_INVALID_CODE)) throw error;
+      throw new VatError(
+        CLAUDE_USER_STATE_UNREADABLE_CODE,
+        `${paths.installedPluginsPath} holds "${key}", which is not a plugin key (${error.message}); nothing was uninstalled. Remove that entry from the file, or uninstall the others one key at a time.`,
+        { cause: error },
+      );
+    }
+  }
+  return keys;
 }
 
 async function removeFromSettings(paths: ClaudeUserPaths, pluginKey: string, dryRun: boolean): Promise<boolean> {

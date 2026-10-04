@@ -290,6 +290,8 @@ describe('installPlugin', () => {
     ['version', { version: '../../../../escape' }],
     ['plugin name', { pluginName: '../escape' }],
     ['marketplace name', { marketplaceName: 'a/b' }],
+    // One segment, but dot-led: the cache's version directory would be hidden from inventory.
+    ['dot-led version', { version: '.1' }],
   ])('refuses a %s that is not one path segment as PLUGIN_KEY_INVALID, before creating anything', async (_what, names) => {
     const paths = buildTestPaths(getDir());
 
@@ -416,14 +418,43 @@ describe('installPlugin', () => {
   });
 
   // mkdtemp makes its directory 0700, and a copy into an existing directory keeps that mode.
+  // 0750 is a mode no default umask produces, so only taking the source's own mode passes.
   it.skipIf(process.platform === 'win32')('gives the cached version directory the source directory\'s mode, not mkdtemp\'s 0700', async () => {
     const paths = buildTestPaths(getDir());
     const pluginDir = builtPlugin(getDir());
-    chmodSync(pluginDir, 0o755);
+    chmodSync(pluginDir, 0o750);
 
-    await registrationError(getDir(), paths);
+    expect(await registrationError(getDir(), paths)).toBeUndefined();
 
-    expect(statSync(safePath.join(paths.pluginsCacheDir, MARKETPLACE_NAME, PLUGIN_NAME, VERSION)).mode & 0o777).toBe(0o755);
+    expect(statSync(safePath.join(paths.pluginsCacheDir, MARKETPLACE_NAME, PLUGIN_NAME, VERSION)).mode & 0o777).toBe(0o750);
+  });
+
+  // The source's mode used to be applied to the staging directory BEFORE the copy:
+  // a read-only plugin left the copy nowhere to write, and Node's native copy
+  // aborted the whole process (SIGABRT) with a read-only staging dir left behind.
+  it.skipIf(CANNOT_DENY_READS)('installs a read-only plugin directory, takes its mode, and leaves no staging directory', async () => {
+    const paths = buildTestPaths(getDir());
+    const pluginDir = builtPlugin(getDir());
+    plantFile(safePath.join(pluginDir, 'skills', 's', 'SKILL.md'), '# s\n');
+    chmodSync(pluginDir, 0o555);
+    const versionsDir = safePath.join(paths.pluginsCacheDir, MARKETPLACE_NAME, PLUGIN_NAME);
+    let error: unknown;
+    let cachedMode: number | undefined;
+    try {
+      error = await registrationError(getDir(), paths);
+      cachedMode = statSync(safePath.join(versionsDir, VERSION)).mode & 0o777;
+    } finally {
+      chmodSync(pluginDir, 0o755);
+      // Both trees are swapped in and take the source's mode, so both need it back for teardown.
+      for (const tree of [safePath.join(versionsDir, VERSION), safePath.join(paths.marketplacesDir, MARKETPLACE_NAME, 'plugins', PLUGIN_NAME)]) {
+        if (existsSync(tree)) chmodSync(tree, 0o755);
+      }
+    }
+
+    expect(error).toBeUndefined();
+    expect(cachedMode).toBe(0o555);
+    expect(readdirSync(versionsDir)).toEqual([VERSION]);
+    expect(existsSync(safePath.join(versionsDir, VERSION, 'skills', 's', 'SKILL.md'))).toBe(true);
   });
 
   it('replaces a dangling link at the cache version path instead of refusing', async ({ skip }) => {
@@ -456,6 +487,21 @@ describe('installPlugin', () => {
     });
 
     expect(existsSync(safePath.join(cacheDest, PLUGIN_JSON))).toBe(true);
+  });
+
+  it('re-install leaves no file the plugin deleted in the marketplace copy — replaced, like the cache', async () => {
+    const paths = buildTestPaths(getDir());
+    const pluginDir = builtPlugin(getDir());
+    const oldFile = safePath.join(pluginDir, 'old.txt');
+    writeFileSync(oldFile, 'stale');
+    await installAt(pluginDir, paths);
+    rmSync(oldFile);
+
+    await installAt(pluginDir, paths);
+
+    const marketplacePluginPath = safePath.join(paths.marketplacesDir, MARKETPLACE_NAME, 'plugins', PLUGIN_NAME);
+    expect(readdirSync(marketplacePluginPath)).toStrictEqual([PLUGIN_JSON]);
+    expect(readdirSync(safePath.join(paths.pluginsCacheDir, MARKETPLACE_NAME, PLUGIN_NAME, VERSION))).toStrictEqual([PLUGIN_JSON]);
   });
 
   it('full flow: creates dirs, writes registry files, updates settings.json', async () => {

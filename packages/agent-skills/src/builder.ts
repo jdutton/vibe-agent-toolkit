@@ -2,14 +2,14 @@
  * Agent Skill builder - converts VAT agents to Agent Skills
  */
 
-import { constants, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { AGENT_MANIFEST_INVALID_CODE, loadAgentManifest, type LoadedAgentManifest } from '@vibe-agent-toolkit/agent-config';
 import { copyDirectory, isFilesystemAccessError, isPathAbsentError, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
 
-import { withFsAttribution } from './fs-attribution.js';
+import { proveReadable, withFsAttribution } from './fs-attribution.js';
 import { packageSkill } from './skill-packager.js';
 
 /**
@@ -65,7 +65,7 @@ async function requireReadableTree(dir: string): Promise<void> {
   for (const entry of entries) {
     if (entry.isDirectory()) continue;
     const file = safePath.join(entry.parentPath, entry.name);
-    await readingSource(file, () => fs.access(file, constants.R_OK));
+    await readingSource(file, () => proveReadable(file));
   }
 }
 
@@ -203,6 +203,8 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
   if (shouldPackage) {
     const packageResult = await packageSkill(skillPath, {
       outputPath,
+      // The SKILL.md was generated into outputPath above: package it in place.
+      sourceGeneratedInOutput: true,
       formats: options.formats ?? ['directory'],
       basePath: agentDir,
     });

@@ -16,6 +16,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
+import { caughtFrom, expectUnrecognizedKeys } from '../refusal-assertions.js';
 import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
 
 const PUBLIC_DOC = 'public-doc';
@@ -96,13 +97,14 @@ describe('unsupported queries are refused rather than widened', () => {
   it('refuses a query filtered only by dateRange instead of returning both documents', async () => {
     suite.provider = await indexTwoDocuments();
 
-    await expect(
-      suite.provider.query({
+    const error = await caughtFrom(() =>
+      suite.provider?.query({
         text: QUERY_TEXT,
         limit: 10,
         filters: asUntypedFilters({ dateRange: { start: new Date(0), end: new Date(1) } }),
       }),
-    ).rejects.toThrow(/dateRange/);
+    );
+    expectUnrecognizedKeys(error, ['dateRange'], ['filters']);
   });
 
   it('refuses hybridSearch, even disabled, before touching the database', async () => {
@@ -111,9 +113,10 @@ describe('unsupported queries are refused rather than widened', () => {
     // was removed.
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
 
-    await expect(
-      suite.provider.query({ text: QUERY_TEXT, hybridSearch: { enabled: false } } as never),
-    ).rejects.toThrow(/hybridSearch/);
+    const error = await caughtFrom(() =>
+      suite.provider?.query({ text: QUERY_TEXT, hybridSearch: { enabled: false } } as never),
+    );
+    expectUnrecognizedKeys(error, ['hybridSearch'], []);
   });
 
   it('refuses an unknown FILTER before touching the database too', async () => {
@@ -121,26 +124,24 @@ describe('unsupported queries are refused rather than widened', () => {
     // this assertion cannot match — so the test distinguishes the guard from its absence.
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
 
-    await expect(
-      suite.provider.query({ text: QUERY_TEXT, filters: asUntypedFilters({ tags: ['auth'] }) }),
-    ).rejects.toThrow(/tags/);
+    const error = await caughtFrom(() =>
+      suite.provider?.query({ text: QUERY_TEXT, filters: asUntypedFilters({ tags: ['auth'] }) }),
+    );
+    expectUnrecognizedKeys(error, ['tags'], ['filters']);
   });
 
   it('reports every unknown key present in one error', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
 
-    let message = '';
-    try {
-      await suite.provider.query({
+    const error = await caughtFrom(() =>
+      suite.provider?.query({
         text: QUERY_TEXT,
         filters: asUntypedFilters({ tags: ['auth'], type: 'guide' }),
-      });
-    } catch (error) {
-      message = (error as Error).message;
-    }
+      }),
+    );
 
-    expect(message).toMatch(/tags/);
-    expect(message).toMatch(/type/);
+    // Exact issue list, not `/type/`: an `invalid_type` refusal mentions the same word.
+    expectUnrecognizedKeys(error, ['tags', 'type'], ['filters']);
   });
 
   it('returns NOTHING for an empty tag list, rather than the whole index', async () => {

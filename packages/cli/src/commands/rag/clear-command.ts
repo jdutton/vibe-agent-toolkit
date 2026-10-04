@@ -6,6 +6,7 @@ import { removeRagDatabase } from '@vibe-agent-toolkit/rag-lancedb';
 import { buildReport } from '@vibe-agent-toolkit/schema';
 
 import { endWithReport } from '../../utils/document-writer.js';
+import { refuseLinkedDatabase } from '../../utils/rag-database.js';
 
 import type { RagClearReport } from './admin-schema.js';
 import { onRagDatabase, RAG_GATE } from './command-helpers.js';
@@ -25,6 +26,7 @@ export async function clearCommand(options: ClearOptions): Promise<void> {
   // opened, and clearing it is the documented way out. `onRagDatabase` has
   // already refused any path that is not a RAG database.
   await onRagDatabase('rag clear', options, (dbPath) => {
+    refuseLinkedDatabase(dbPath, options.db !== undefined && options.db !== '');
     removeRagDatabase(dbPath);
   });
 

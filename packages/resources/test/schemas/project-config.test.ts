@@ -707,3 +707,25 @@ describe('ClaudeMarketplaceSchema (pool filter)', () => {
     expect(result.success).toBe(true);
   });
 });
+
+describe('ClaudeConfigSchema marketplace names', () => {
+  // A marketplace name is joined into dist/.claude/plugins/marketplaces/<name>, and `vat claude
+  // plugin build` removes that directory before rebuilding it — a name that is not one path
+  // segment would aim the removal outside dist/.
+  const marketplace = { owner: { name: 'Test Org' }, plugins: [{ name: 'p1', skills: [] }] };
+  const parseWithMarketplace = (name: string) =>
+    ProjectConfigSchema.safeParse({ claude: { marketplaces: { [name]: marketplace } } });
+
+  it.each(['../../../../victim', '..', '.', 'a/b', String.raw`a\b`, '', 'C:evil'])(
+    'refuses marketplace name %j',
+    (name) => {
+      const result = parseWithMarketplace(name);
+      expect(result.success).toBe(false);
+      expect(JSON.stringify(result.error?.issues)).toContain('marketplace name');
+    },
+  );
+
+  it('accepts a single-segment marketplace name', () => {
+    expect(parseWithMarketplace('my-marketplace').success).toBe(true);
+  });
+});

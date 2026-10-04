@@ -340,13 +340,26 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * @throws {VatError} `RAG_DATABASE_UNREADABLE` when LanceDB cannot open it
    */
   private async openChunkTable(connection: Connection): Promise<Table> {
+    return this.readingChunkTable(() => connection.openTable(TABLE_NAME));
+  }
+
+  /**
+   * Run a LanceDB read of the chunk table. A table opens from its manifest
+   * alone, so damaged DATA files surface only here, on the first read — the
+   * same unreadable store as a manifest that will not open, coded the same.
+   *
+   * @param read - The open, count, scan or search
+   * @returns What it returned
+   * @throws {VatError} `RAG_DATABASE_UNREADABLE` when LanceDB fails the read
+   */
+  private async readingChunkTable<T>(read: () => Promise<T>): Promise<T> {
     try {
-      return await connection.openTable(TABLE_NAME);
+      return await read();
     } catch (error) {
       throw new VatError(
         RAG_DATABASE_UNREADABLE_CODE,
         `The '${TABLE_NAME}' table at ${this.config.dbPath} cannot be read (its files are damaged): ${error instanceof Error ? error.message : String(error)}. ` +
-          'Remove the database and index again.',
+          'Remove the database (vat rag clear) and index again.',
         { cause: error },
       );
     }
@@ -411,7 +424,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       }
     }
 
-    const results = await search.toArray();
+    const results = await this.readingChunkTable(() => search.toArray());
 
     // Convert results to plain objects immediately to avoid Arrow buffer issues
     // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
@@ -453,14 +466,13 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       };
     }
 
-    const count = await this.table.countRows();
+    const table = this.table;
+    const count = await this.readingChunkTable(() => table.countRows());
 
-    // Get unique resource count (use a condition that matches all rows)
-    const allRows = await this.table.query().where('1 = 1').toArray();
-    // Materialize immediately to avoid Arrow buffer issues
-    // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
-    const rows = JSON.parse(JSON.stringify(allRows)) as LanceDBRow[];
-    const uniqueResources = new Set(rows.map((r) => r.resourceid)).size;
+    // Distinct resources, from the one column that names them — never the text and vectors.
+    // Each id is copied out to a primitive at once, before the Arrow buffers can detach.
+    const idRows = await this.readingChunkTable(() => table.query().select(['resourceid']).toArray());
+    const uniqueResources = new Set(idRows.map((row: Pick<LanceDBRow, 'resourceid'>) => String(row.resourceid))).size;
 
     // Calculate database size by traversing the directory
     const dbSizeBytes = getDirectorySize(this.config.dbPath);

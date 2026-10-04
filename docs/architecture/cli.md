@@ -531,7 +531,7 @@ severity under one non-overridable code, `RESOURCE_CHECK_BROKEN`:
 
 The empty-corpus case is the one that shipped: a broad `.gitignore`, a shallow or sparse CI
 checkout, or a root that resolved somewhere else ran every declared check over nothing and reported
-`status: ok` on exit 0 with empty stderr. Population declines ignored members rather than
+a passing status (`status: success` in the build that shipped it; `ok` today) on exit 0 with empty stderr. Population declines ignored members rather than
 flagging them, so the tables held no trace of it either.
 
 The fourth case changed meaning once a DEFAULT SET existed. `checksRun` counts the built-in set plus

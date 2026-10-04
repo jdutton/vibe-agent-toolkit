@@ -51,7 +51,8 @@ const SkillsBuildDataSchema = z.object({
     source: z.string(),
     /** Where the bundle lands once the run earns the swap — on disk only when `outputCommitted`. */
     output: z.string(),
-    status: z.enum(['ok', 'findings']),
+    /** `not-built` when the run validated and built nothing (a refusal before the build, a dry run). */
+    status: z.enum(['ok', 'findings', 'not-built']),
   }).strict()),
 }).strict();
 

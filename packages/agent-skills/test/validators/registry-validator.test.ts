@@ -10,6 +10,7 @@ import {
 import type { ValidationResult } from '../../src/validators/types.js';
 import {
 	assertSingleError,
+	assertSingleUnreadable,
 	assertValidationSuccess,
 	setupTempDir,
 } from '../test-helpers.js';
@@ -105,6 +106,15 @@ describe('validateInstalledPluginsRegistry', () => {
 		expect(result.description).toBe('Registry file is invalid JSON: 1 errors, 0 warnings, 0 info');
 		expect(result.issues[0]?.location).toBe('invalid.json');
 		expect(result.issues[0]?.message).toContain('Failed to parse');
+	});
+
+	it('reports a registry path the OS will not read as unreadable, not as invalid JSON', async () => {
+		const registryPath = safePath.join(getTempDir(), 'unreadable.json');
+		fs.mkdirSync(registryPath);
+
+		const result = await validateInstalledPluginsRegistry(registryPath);
+
+		assertSingleUnreadable(result, 'unreadable.json', 'EISDIR');
 	});
 
 	it('should fail when registry is missing version field', async () => {

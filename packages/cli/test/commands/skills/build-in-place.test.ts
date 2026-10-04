@@ -236,6 +236,22 @@ describe('the published build report carries the set-aside names', () => {
     expect(work.data.skillsInPlace).not.toBe(names);
     expect(work.data.skills).toEqual([{ name: 'built', source: 'skills/built/SKILL.md', output: 'dist/skills/built', status: 'ok' }]);
   });
+
+  // A run refused (or previewed) before it validated or built anything: a row reading
+  // `ok` beside an output path that does not exist would read as a clean build.
+  it('reports a skill the run never built as not-built, never ok', () => {
+    const work = skillsBuildWork({
+      cwd: safePath.resolve('/project'),
+      skills: [skill('found')],
+      setAside: { inPlace: [], pluginOnly: [] },
+      dryRun: false,
+      run: undefined,
+      setAsideIssues: [],
+    });
+
+    expect(work.data).toMatchObject({ validated: false, skillsBuilt: 0 });
+    expect(work.data.skills).toEqual([{ name: 'found', source: 'skills/found/SKILL.md', output: 'dist/skills/found', status: 'not-built' }]);
+  });
 });
 
 /** Dry-run the stubbed project; return the exit code and the published report. */

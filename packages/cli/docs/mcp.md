@@ -88,7 +88,9 @@ vat mcp serve <package> [options]
   report document
 - `--print-config` writes the Claude Desktop config as JSON on stdout and
   nothing else, so it can be redirected straight into a file; the
-  instructions around it go to stderr. Exits 0
+  instructions around it go to stderr. Exits 0. The package is resolved
+  first, so one that does not load is the same failure as without the flag
+  (exit 2, nothing on stdout) — never a config for a server that cannot start
 
 **Example - Production:**
 ```bash

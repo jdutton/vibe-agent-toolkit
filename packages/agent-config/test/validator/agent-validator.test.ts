@@ -52,6 +52,11 @@ describe('agent-validator', () => {
 
       const result = await validateAgent(agentDir, { locationRoot: tempDir });
       assertValidationHasError(result, 'AGENT_REFERENCE_MISSING', ['RAG', 'database']);
+      // Shown relative to the manifest, like every other reference — never the
+      // developer's absolute path, which a published finding must not carry.
+      const message = result.issues.find((issue) => issue.code === 'AGENT_REFERENCE_MISSING')?.message;
+      expect(message).toContain('RAG database not found: .rag-db.');
+      expect(message).not.toContain(tempDir);
     });
 
     it('should validate agent with existing RAG database', async () => {
@@ -277,6 +282,7 @@ describe('agent-validator', () => {
         expect(result.issues[0]?.code).toBe('AGENT_REFERENCE_UNREADABLE');
         expect(result.issues[0]?.message).toMatch(/Resource 'docs' could not be checked: .*guide\.md.*EACCES/);
         expect(result.issues[0]?.message).not.toContain('not found');
+        expect(result.issues[0]?.message).not.toContain(tempDir);
       });
     });
   });

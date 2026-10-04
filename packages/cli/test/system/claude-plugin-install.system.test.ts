@@ -8,7 +8,7 @@ import * as fs from 'node:fs';
 import { chmodSync } from 'node:fs';
 
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import * as tar from 'tar';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -360,5 +360,110 @@ describe('claude plugin install command (system test)', () => {
       true,
     );
     expect(fs.existsSync(safePath.join(claudeDir, 'skills', 'checkout-folder'))).toBe(false);
+  });
+
+  // A directory with no plugin tree, no package.json and no SKILL.md is not a skill: it used to
+  // be copied whole into ~/.claude/skills and reported installed (`vat skills install` refuses it).
+  it('refuses a plain directory with no SKILL.md as USAGE_INVALID, installing nothing', async () => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const docsDir = safePath.join(tempDir, 'docs');
+    plantFile(safePath.join(docsDir, 'README.md'), '# not a skill\n');
+
+    const { status, report } = await runInstall(binPath, fakeHome, [docsDir]);
+
+    expect(status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
+    expect(report.error?.message).toContain('No SKILL.md');
+    expect(report.error?.message).toContain(docsDir);
+    expect(fs.existsSync(safePath.join(claudeDir, 'skills', 'docs'))).toBe(false);
+  });
+
+  // `new AdmZip()` threw uncoded (INTERNAL_ERROR) — and only AFTER --force had removed the skill
+  // it was about to replace.
+  it('refuses a .zip that is not a zip as INPUT_UNREADABLE, naming it, and keeps the skill --force would replace', async () => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const notZip = safePath.join(tempDir, 'bad-skill.zip');
+    writeTestFile(notZip, 'hi\n');
+    const existing = safePath.join(claudeDir, 'skills', 'bad-skill', 'SKILL.md');
+    plantFile(existing, '# keep me\n');
+
+    const { status, report } = await runInstall(binPath, fakeHome, [notZip, '--force']);
+
+    expect(status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
+    expect(report.error?.message).toContain(notZip);
+    expect(fs.readFileSync(existing, 'utf-8')).toBe('# keep me\n');
+  });
+
+  // The version (and plugin/marketplace names) come from the PACKAGE: one that cannot name a
+  // directory under ~/.claude is the input's fault, and is refused before the marketplace copy
+  // replaces what the previous install left — which used to happen first, leaving a half-replaced tree.
+  it.each([
+    ['a version that climbs out of the cache', '../../../../victim'],
+    ['a dot-led version inventory would hide', '.1'],
+  ])('refuses a package with %s as INPUT_UNREADABLE, before changing anything', async (_label, badVersion) => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const { projectDir } = setupPluginTestProject(tempDir, 'good-pkg', 'v-market', [{ name: 'v-plugin', skills: ['v-skill'] }]);
+    await runPluginInstall(binPath, projectDir, fakeHome);
+    const installedSkill = safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'v-market', 'plugins', 'v-plugin', 'skills', 'v-skill', 'SKILL.md');
+    const before = fs.readFileSync(installedSkill, 'utf-8');
+    const hostile = setupPluginTestProject(tempDir, 'hostile-pkg', 'v-market', [{ name: 'v-plugin', skills: ['v-skill'] }]);
+    writeTestFile(safePath.join(hostile.projectDir, 'package.json'), JSON.stringify({ name: '@test/my-plugin-pkg', version: badVersion }));
+    writeTestFile(safePath.join(hostile.marketplacesDir, 'v-market', 'plugins', 'v-plugin', 'skills', 'v-skill', 'SKILL.md'), '# hostile body');
+
+    const { status, report } = await runInstall(binPath, fakeHome, [hostile.projectDir]);
+
+    expect(status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
+    expect(fs.readFileSync(installedSkill, 'utf-8')).toBe(before);
+    expect(fs.existsSync(safePath.join(tempDir, 'victim'))).toBe(false);
+  });
+
+  // A re-install whose previous cache cannot be removed is complete — and the leftover is
+  // reported as a finding, not only printed on stderr.
+  it.skipIf(CANNOT_DENY_READS)('reports a previous cache it could not remove as PLUGIN_INSTALL_CLEANUP_INCOMPLETE, exit 0', async () => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const { projectDir } = setupPluginTestProject(tempDir, 'cleanup-pkg', 'c-market', [{ name: 'c-plugin', skills: ['c-skill'] }]);
+    await runPluginInstall(binPath, projectDir, fakeHome);
+    const versionsDir = safePath.join(claudeDir, 'plugins', 'cache', 'c-market', 'c-plugin');
+    const locked = safePath.join(versionsDir, '1.2.3', 'locked');
+    plantFile(safePath.join(locked, 'held.txt'), 'x');
+    chmodSync(locked, 0o555);
+    try {
+      const { status, report } = await runInstall(binPath, fakeHome, [projectDir]);
+
+      expect(status, JSON.stringify(report)).toBe(0);
+      expect(report.findings).toMatchObject([{ code: 'PLUGIN_INSTALL_CLEANUP_INCOMPLETE', severity: 'warning', location: 'c-plugin@c-market' }]);
+    } finally {
+      for (const entry of fs.readdirSync(versionsDir)) {
+        const leftover = safePath.join(versionsDir, entry, 'locked');
+        if (fs.existsSync(leftover)) chmodSync(leftover, 0o755);
+      }
+    }
+  });
+
+  // A plugin directory the package ships read-only (here through a link, so the cache copy reads
+  // the 0555 directory itself): the install used to abort the process (SIGABRT, no report).
+  it.skipIf(CANNOT_DENY_READS)('installs a read-only plugin directory, exit 0, and leaves no staging directory', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const { projectDir, marketplacesDir } = setupPluginTestProject(tempDir, 'ro-pkg', 'ro-market', [{ name: 'ro-plugin', skills: ['ro-skill'] }]);
+    const pluginLink = safePath.join(marketplacesDir, 'ro-market', 'plugins', 'ro-plugin');
+    const readOnly = safePath.join(tempDir, 'ro-source');
+    fs.renameSync(pluginLink, readOnly);
+    createSymlink(cap, readOnly, pluginLink, 'dir');
+    chmodSync(readOnly, 0o555);
+    const versionsDir = safePath.join(claudeDir, 'plugins', 'cache', 'ro-market', 'ro-plugin');
+    try {
+      const { status, report } = await runInstall(binPath, fakeHome, [projectDir]);
+
+      expect(status, JSON.stringify(report)).toBe(0);
+      expect(fs.readdirSync(versionsDir)).toEqual(['1.2.3']);
+    } finally {
+      chmodSync(readOnly, 0o755);
+      if (fs.existsSync(versionsDir)) {
+        for (const entry of fs.readdirSync(versionsDir)) chmodSync(safePath.join(versionsDir, entry), 0o755);
+      }
+    }
   });
 });

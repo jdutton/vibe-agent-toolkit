@@ -115,14 +115,16 @@ frontmatter is not YAML, or no Agent Skills schema accepts it), `RUN_INCOMPLETE`
 ### `vat agent installed`
 
 List installed agent skills across scopes (`--scope user|project|all`, default
-`all`): `user` is `~/.claude/skills/`, `project` is `./.claude/skills/`.
+`all`): `user` is `skills/` under the Claude config dir (`$CLAUDE_CONFIG_DIR`,
+else `~/.claude`), `project` is `.claude/skills/` under the working directory
+(the one `--cwd` names, when given).
 
 **Output**: the report envelope (YAML) on stdout; the human list on stderr.
 `examined` counts the scopes scanned. An absent scope directory is scanned and
 empty. One the OS will not list is a `SCAN_PATH_UNREADABLE` warning finding —
-the list is then a floor, not the answer — located at `.claude/skills` relative
-to that scope's base, with `field` naming the scope (both scopes share that
-location) and the full path in the message; the other scopes are still listed.
+the list is then a floor, not the answer — located at the scope directory's
+last two path segments (`.claude/skills` by default), with `field` naming the
+scope (both scopes can share that location) and the full path in the message; the other scopes are still listed.
 
 ```yaml
 status: ok                # ok | findings | error
@@ -165,8 +167,10 @@ warning); `2` only for a defect in VAT (`INTERNAL_ERROR`).
 ### `vat agent install <agentName>`
 
 Install a built agent's bundle (`dist/vat-bundles/<runtime>/<name>/` in the
-agent's package) into a scope: `user` (`~/.claude/skills/`, default) or
-`project` (`./.claude/skills/`). `--dev` symlinks instead of copying (not on
+agent's package) into a scope: `user` (`skills/` under `$CLAUDE_CONFIG_DIR`,
+else `~/.claude/skills/`; default) or `project` (`.claude/skills/` under the
+working directory, which `--cwd` sets). `vat agent uninstall` resolves both
+scopes the same way. `--dev` symlinks instead of copying (not on
 Windows); `--force` replaces an existing install.
 
 **Output**: the report envelope (YAML) on stdout, `examined: 1`, and

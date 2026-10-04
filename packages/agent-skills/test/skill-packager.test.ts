@@ -678,6 +678,44 @@ describe('packageSkill - an explicit output path it does not own', () => {
   });
 });
 
+/** A skill at `<tmp>/skills/demo/SKILL.md` beside an operator file at `<tmp>/skills/SKILL.md`. */
+async function nestedSkill(tmp: string): Promise<{ sp: string; skills: string; operatorFile: string }> {
+  const skills = safePath.join(tmp, 'skills');
+  await mkdir(safePath.join(skills, 'demo'), { recursive: true });
+  const operatorFile = safePath.join(skills, 'SKILL.md');
+  await writeFile(operatorFile, 'PRECIOUS router skill');
+  return { sp: await writeSkillMd(safePath.join(skills, 'demo'), UNIT_SKILL_NAME, '# Nested'), skills, operatorFile };
+}
+
+describe('packageSkill - an output that holds the source it reads', () => {
+  it.each([
+    ['without replaceExistingOutput', false],
+    ['even with replaceExistingOutput (--force)', true],
+  ])('refuses an output directory that contains the SKILL.md, %s, and writes nothing', async (_label, force) => {
+    const tmp = getTempDir();
+    const { sp, skills, operatorFile } = await nestedSkill(tmp);
+    const sourceBefore = readFileSync(sp, 'utf-8');
+
+    await expect(packageSkill(sp, { outputPath: skills, ...(force && { replaceExistingOutput: true }) }))
+      .rejects.toMatchObject({
+        code: SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE,
+        message: expect.stringContaining('holds the source') as unknown,
+      });
+    expect(readFileSync(operatorFile, 'utf-8')).toBe('PRECIOUS router skill');
+    expect(readFileSync(sp, 'utf-8')).toBe(sourceBefore);
+  });
+
+  it('refuses the skill\'s own directory as the output, and the SKILL.md is untouched', async () => {
+    const tmp = getTempDir();
+    const { sp } = await nestedSkill(tmp);
+    const sourceBefore = readFileSync(sp, 'utf-8');
+
+    await expect(packageSkill(sp, { outputPath: safePath.join(tmp, 'skills', 'demo') }))
+      .rejects.toMatchObject({ code: SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE });
+    expect(readFileSync(sp, 'utf-8')).toBe(sourceBefore);
+  });
+});
+
 describe('packageSkill - an output the OS will not let it write', () => {
   it('codes a file in the way of the output root as an unfinished run, never as the skill\'s content', async () => {
     const tmp = getTempDir();
@@ -807,9 +845,9 @@ describe('packageSkill - unreadable/unwritable linked file attribution', () => {
     'attributes an unwritable output subdirectory instead of a bare EACCES (copyAndRewriteFile write)',
     async () => {
       const dir = getTempDir();
-      // Source lives INSIDE outputPath: packageSkill skips its stale-output
-      // `rm(resolvedOutput, { recursive: true })` in that case (see 'source-in-output
-      // check' above), which is required here — otherwise it would delete and
+      // Source generated INSIDE outputPath (the agent-builder flow): packageSkill
+      // skips its stale-output `rm(resolvedOutput, { recursive: true })` then,
+      // which is required here — otherwise it would delete and
       // recreate our locked resources/ dir with default permissions before the
       // guarded write ever runs.
       const outputPath = safePath.join(dir, 'out');
@@ -825,7 +863,7 @@ describe('packageSkill - unreadable/unwritable linked file attribution', () => {
       chmodSync(lockedResourcesDir, 0o500); // r-x: traversable, not writable
 
       try {
-        await expect(packageSkill(sp, { outputPath })).rejects.toMatchObject({
+        await expect(packageSkill(sp, { outputPath, sourceGeneratedInOutput: true })).rejects.toMatchObject({
           code: SKILL_PACKAGING_OUTPUT_FAILED_CODE,
           message: expect.stringMatching(
             /linked file[\s\S]*guide\.md[\s\S]*could not be written into the bundle[\s\S]*output directory is writable/,
@@ -833,6 +871,28 @@ describe('packageSkill - unreadable/unwritable linked file attribution', () => {
         });
       } finally {
         chmodSync(lockedResourcesDir, 0o755);
+      }
+    },
+  );
+
+  it.skipIf(CANNOT_DENY_READS)(
+    'names the entry SKILL.md as the entry file, never as a "linked file", when it cannot be written',
+    async () => {
+      const dir = getTempDir();
+      const sp = await writeSkillMd(dir, UNIT_SKILL_NAME, SIMPLE_SKILL_BODY);
+      const outputPath = safePath.join(dir, 'out');
+      await mkdir(outputPath, { recursive: true });
+      chmodSync(outputPath, 0o555);
+
+      try {
+        const error: unknown = await packageSkill(sp, { outputPath }).then(() => undefined, (caught: unknown) => caught);
+        expect(error).toMatchObject({
+          code: SKILL_PACKAGING_OUTPUT_FAILED_CODE,
+          message: expect.stringMatching(/entry file [^,]*SKILL\.md, but it could not be written into the bundle/) as unknown,
+        });
+        expect((error as Error).message).not.toMatch(/linked file/);
+      } finally {
+        chmodSync(outputPath, 0o755);
       }
     },
   );
@@ -978,7 +1038,7 @@ describe('packageSkill - excluded resource filtering', () => {
 // ============================================================================
 
 describe('packageSkill - source-in-output check', () => {
-  it('should not delete output dir when SKILL.md lives inside it', async () => {
+  it('should not delete output dir when the caller generated SKILL.md inside it (agent builder)', async () => {
     const tmp = getTempDir();
     const outDir = safePath.join(tmp, 'output');
     await mkdir(outDir, { recursive: true });
@@ -991,11 +1051,11 @@ describe('packageSkill - source-in-output check', () => {
     const markerPath = safePath.join(outDir, 'marker.txt');
     await writeFile(markerPath, 'should survive');
 
-    const result = await packageSkill(sp, { outputPath: outDir });
+    const result = await packageSkill(sp, { outputPath: outDir, sourceGeneratedInOutput: true });
 
     // The SKILL.md should be in the output
     expect(existsSync(safePath.join(result.outputPath, 'SKILL.md'))).toBe(true);
-    // The marker file should survive because source is inside output (no cleanup)
+    // The marker file should survive because the source was generated there (no cleanup)
     expect(existsSync(markerPath)).toBe(true);
   });
 

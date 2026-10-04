@@ -30,7 +30,7 @@ vat audit [git-url-or-path] [options]
 - `--user` - Audit user-level Claude plugins installation (`~/.claude/plugins`)
 - `--no-recursive` - Scan the top level only (recursive scanning is the default; there is no `--recursive` flag)
 - `--compat` - Run compatibility analysis for each plugin; adds a `compatibility:` block to its entry (see [Compatibility and settings blocks](#compatibility-and-settings-blocks))
-- `--settings [file]` - Check each plugin against Claude settings (auto-discovered, or the given file); adds a `settings:` block. Requires `--compat`
+- `--settings [file]` - Check each plugin against Claude settings (auto-discovered, or the given file); adds a `settings:` block. Requires `--compat`: without it, or with `--user`, the run is refused (`USAGE_INVALID`, exit 2). A named file that does not exist is `USAGE_INVALID`; one the OS refuses, or that does not parse or fails the settings schema, is `INPUT_UNREADABLE` — the settings check never runs silently unchecked
 - `--debug` - Enable debug logging (outputs to stderr)
 
 ### Gitignore-aware scanning
@@ -707,7 +707,9 @@ Pass `--debug` to preserve the cloned tempdir for inspection (its location is pr
 Shows what Claude is allowed to do from the current directory — the managed,
 user and project settings layers merged, each value with the chain of values it
 overrode — or validates one settings file (`--file`), or probes every settings
-path (`--show-paths`). It publishes the same report envelope as `vat audit`
+path (`--show-paths`). Every mode reads the user layer from the same place:
+`settings.json` under `$CLAUDE_CONFIG_DIR`, else `~/.claude`. It publishes the
+same report envelope as `vat audit`
 (schema: `packages/cli/schemas/audit-settings.json`):
 
 - `data.mode` says which mode ran: `effective` (default: `layers`,

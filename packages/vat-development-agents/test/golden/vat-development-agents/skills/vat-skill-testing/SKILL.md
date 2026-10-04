@@ -422,8 +422,10 @@ Supported values: `subscription`, `api-key`.
 `vat skill test configure` writes knobs to `skills.config.<skill>.test` in `vibe-agent-toolkit.config.yaml` using a comment-preserving YAML upsert — your existing comments are not destroyed:
 
 ```bash
-vat skill test configure my-skill --auth subscription --require-auth subscription
+vat skill test configure my-skill --auth subscription
 ```
+
+`configure` has no `--require-auth` flag. Persist the guard by adding `requireAuth:` under the skill's `test:` block by hand, or pass `--require-auth` to each `run`.
 
 Prefer `configure` over adding raw YAML by hand; it validates the values before writing.
 
@@ -508,8 +510,8 @@ vat skill test run https://github.com/org/repo.git#main:dist/skills/my-skill/ \
   --allow-unverified-skill-source \
   --i-understand-this-runs-skill-code
 
-# Persist auth knobs to config
-vat skill test configure my-skill --auth subscription --require-auth subscription
+# Persist the auth knob to config (requireAuth has no configure flag)
+vat skill test configure my-skill --auth subscription
 
 # Get full help
 vat skill test --help

@@ -131,6 +131,19 @@
       "cache": true,
       "env": ["CI"]
     },
+    // lab: `instrument.test.ts` and `vat-lab-cli.test.ts` resolve THIS checkout's
+    // built CLI as a `dist:` arm and digest its whole module closure — the `dist/`
+    // of the cli and of every `@vibe-agent-toolkit/*` package it depends on. lab
+    // declares only `schema` and `utils`, so `^build` orders neither the cli nor
+    // the rest of that closure: a cold run can test before they exist. The cli's
+    // own `build` depends on `^build`, so this one edge orders the whole closure,
+    // and folds its hash in so a rebuilt closure re-runs the suite. Not a
+    // workspace dependency: that would make lab's BUILD wait on the cli too.
+    "@vibe-agent-toolkit/lab#test:unit": {
+      "dependsOn": ["^build", "build", "@vibe-agent-toolkit/cli#build"],
+      "outputs": [],
+      "cache": true
+    },
     "test:system": {
       "dependsOn": ["^build", "build"],
       "outputs": [],

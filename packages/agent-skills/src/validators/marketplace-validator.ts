@@ -1,7 +1,7 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { isFilesystemAccessError, isPathAbsentError, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { MarketplaceManifestSchema } from '../schemas/marketplace-manifest.js';
 
@@ -11,6 +11,7 @@ import type { ValidationResult } from './types.js';
 import { generateFixSuggestion } from './validation-utils.js';
 
 const MARKETPLACE_TYPE = 'marketplace' as const;
+const UNREADABLE_CODE = 'SCAN_PATH_UNREADABLE' as const;
 
 /**
  * Validate a marketplace directory structure against the MarketplaceManifestSchema.
@@ -29,28 +30,29 @@ export async function validateMarketplace(
 	// Anchor contract: relative to the run's ONE stated root, never absolute.
 	const location = issueLocation(marketplaceJsonPath, resolveAnchorRoot(options?.locationRoot, marketplacePath));
 
-	// Check marketplace.json exists
-	if (!existsSync(marketplaceJsonPath)) {
-		issues.push({
-			severity: 'error',
+	// One read decides all three outcomes. A separate `existsSync` would read a
+	// refused parent as "absent", and one `try` around read + parse would read a
+	// refused file as "invalid JSON" — both send the reader to the wrong fix.
+	let content: string;
+	try {
+		content = readFileSync(marketplaceJsonPath, 'utf-8');
+	} catch (error) {
+		const halted = manifestReadFailure(error, location, {
 			code: 'MARKETPLACE_MISSING_MANIFEST',
 			message: 'Marketplace manifest not found',
-			location,
 			fix: 'Create .claude-plugin/marketplace.json with required fields (name, owner, plugins)',
 		});
-
+		issues.push(halted);
 		return {
 			path: marketplacePath,
 			type: MARKETPLACE_TYPE,
-			...describeIssues(issues, MARKETPLACE_TYPE, 'Marketplace manifest missing'),
+			...describeIssues(issues, MARKETPLACE_TYPE, `Marketplace manifest ${halted.code === UNREADABLE_CODE ? 'unreadable' : 'missing'}`),
 			issues,
 		};
 	}
 
-	// Parse and validate marketplace.json
 	let marketplaceData: unknown;
 	try {
-		const content = readFileSync(marketplaceJsonPath, 'utf-8');
 		marketplaceData = JSON.parse(content);
 	} catch (error) {
 		issues.push({
@@ -108,4 +110,44 @@ export async function validateMarketplace(
 	}
 
 	return validationResult;
+}
+
+/** The finding a manifest validator files when its manifest is absent. */
+interface MissingManifestFinding {
+	code: ValidationIssue['code'];
+	message: string;
+	fix: string;
+}
+
+/**
+ * Classify a failed manifest read: absence (`ENOENT`, `ENOTDIR`) is the
+ * validator's own "missing" finding; any other refusal the OS gave is
+ * `SCAN_PATH_UNREADABLE` naming the errno — never the absolute path, which the
+ * OS message carries and a published finding must not. Anything that is not a
+ * filesystem refusal is a defect and is rethrown.
+ *
+ * Shared by every JSON manifest/registry validator in this package so the three
+ * cannot drift on what counts as "missing" versus "unreadable".
+ */
+export function manifestReadFailure(
+	error: unknown,
+	location: string,
+	missing: MissingManifestFinding,
+): ValidationIssue {
+	if (isPathAbsentError(error)) {
+		return { severity: 'error', code: missing.code, message: missing.message, location, fix: missing.fix };
+	}
+	if (!isFilesystemAccessError(error)) {
+		throw error;
+	}
+	const entry = CODE_REGISTRY.SCAN_PATH_UNREADABLE;
+	const errno = (error as { code?: unknown }).code;
+	return {
+		severity: entry.defaultSeverity,
+		code: UNREADABLE_CODE,
+		message: `${entry.description} (${location}: read refused with ${String(errno)})`,
+		location,
+		fix: entry.fix,
+		reference: entry.reference,
+	};
 }

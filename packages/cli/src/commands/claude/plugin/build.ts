@@ -7,13 +7,13 @@
  * imports pool skills (from dist/skills/) via the `skills:` selector.
  */
 
-import { cpSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 
 import { conventionalSuiteProbe, createProjectRegistry, getPluginOutputDir, getPluginSourceDir, isSkillPackagingInputError, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
-import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
+import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ProjectConfig, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Finding, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowing, isFilesystemAccessError, issueLocation, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, isSingleFsSegment, issueLocation, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { readPluginLocalSkillName } from '../../../commands/skills/skill-discovery.js';
@@ -28,6 +28,7 @@ import {
   issuesToRenderAtVerbosity,
 } from '../../../utils/issue-rendering.js';
 import { createLogger } from '../../../utils/logger.js';
+import { copyFileIntoMarketplace, copyTreeIntoMarketplace, writingMarketplace } from '../../../utils/marketplace-io.js';
 import { readPackageJsonOrAbsent } from '../../../utils/package-json.js';
 import { requireInputPath } from '../../../utils/project-root-policy.js';
 import { withResourcePopulationSource } from '../../../utils/resource-loader.js';
@@ -195,11 +196,15 @@ Exit Codes:
       --marketplace), CONFIG_INVALID (no config; an empty or colliding plugin
       declaration; an invalid files[].dest), INPUT_UNREADABLE (a plugin file
       that is not JSON, a pool skill or files[].source nothing built, a
-      symlink no bundle can ship), RUN_INCOMPLETE (the packager refused a
+      symlink no bundle can ship, a file the build copies -- LICENSE,
+      README.md, CHANGELOG.md, a plugin file, a files[].source, a built skill
+      in dist/skills -- that the OS will not read), RUN_INCOMPLETE (the packager refused a
       plugin-local skill's content, e.g. a skill files: source that does not
       exist — the SKILL_PACKAGING_FAILED finding names the skill — or the OS
       would not let the build write its output: a full disk, a read-only
-      dist/; no finding)
+      dist/; no finding). Known gap: a disk so full that the git snapshot
+      of the project fails first is still INTERNAL_ERROR ("git did not
+      answer ...").
 
 Example:
   $ vat skills build && vat claude plugin build    # Build skills then wrap for Claude
@@ -236,7 +241,9 @@ async function discoverBuiltSkills(configDir: string): Promise<string[]> {
  *
  * `configDir` is threaded in (the project root that holds
  * vibe-agent-toolkit.config.yaml), so callers that already know the root build
- * against it rather than re-discovering from cwd. `options.marketplace` restricts
+ * against it rather than re-discovering from cwd. `projectConfig` is the config
+ * the caller already parsed from it, so the file is read (and any unknown-key
+ * warning printed) once per run. `options.marketplace` restricts
  * the build to a single marketplace by name, and refuses a name the config does
  * not declare.
  *
@@ -245,6 +252,7 @@ async function discoverBuiltSkills(configDir: string): Promise<string[]> {
  */
 async function buildClaudePluginMarketplaces(
   configDir: string,
+  projectConfig: ProjectConfig | undefined,
   options: {
     marketplace?: string | undefined;
     logger: ReturnType<typeof createLogger>;
@@ -254,7 +262,6 @@ async function buildClaudePluginMarketplaces(
 ): Promise<void> {
   const { logger, verbose } = options;
 
-  const projectConfig = loadConfig(configDir);
   const marketplaces = projectConfig?.claude?.marketplaces ?? {};
   assertMarketplaceDeclared(options.marketplace, Object.keys(marketplaces));
   if (Object.keys(marketplaces).length === 0) {
@@ -378,6 +385,7 @@ export async function runClaudePluginBuild(
   const built: MarketplaceBuildResult[] = [];
   await buildClaudePluginMarketplaces(
     configDir,
+    loadConfig(configDir),
     { marketplace: options.marketplace, logger: options.logger ?? createLogger({}), verbose: options.verbose === true },
     built,
   );
@@ -446,21 +454,6 @@ class SkillPackagingStop extends CommandRefusalError {
 }
 
 /**
- * One write into the marketplace tree this build owns (`dist/.claude/plugins/…`).
- * A refusal — an unwritable or read-only `dist/`, a full disk, a file in the way —
- * is the run stopping (`RUN_INCOMPLETE`), naming what it was doing: never an
- * uncoded throw read as a defect in VAT, and never a finding against a plugin.
- */
-async function writingMarketplace<T>(what: string, write: () => Promise<T>): Promise<T> {
-  try {
-    return await write();
-  } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
-    throw new CommandRefusalError('RUN_INCOMPLETE', `Could not ${what}: ${errorMessageOf(error)}`, { cause: error });
-  }
-}
-
-/**
  * `finished`, plus the `SKILL_PACKAGING_FAILED` finding a {@link SkillPackagingStop} stands for.
  *
  * @param finished - What the run finished before it stopped
@@ -471,7 +464,7 @@ function withPackagingStop(finished: FinishedWork, error: unknown, configDir: st
   if (!(error instanceof SkillPackagingStop)) return finished;
   const relative = configDir === undefined ? undefined : issueLocation(error.skillPath, configDir);
   const location = relative === undefined || relativeEscapesRoot(relative) ? undefined : relative;
-  return { ...finished, findings: [...finished.findings, ...toFindings([packagingFailedIssue(error.message, location)])] };
+  return { ...finished, findings: [...finished.findings, ...toFindings([packagingFailedIssue(error.message, location, 'rebuild')])] };
 }
 
 /** What the marketplaces built so far are, as the report or a refusal's finished work. */
@@ -502,8 +495,11 @@ export async function runClaudePluginBuildPhase(options: PluginBuildCommandOptio
   try {
     const loaded = await loadClaudeProjectConfig();
     configDir = loaded.configDir;
+    // The config this lane already parsed is handed down, so the build reads it
+    // once (and warns about an unknown key once).
     await buildClaudePluginMarketplaces(
       configDir,
+      loaded.projectConfig,
       { marketplace: options.marketplace, logger, verbose: options.verbose === true },
       built,
     );
@@ -539,7 +535,8 @@ async function copyDistributionFiles(
     const override = overrides[file];
     const srcPath = override ? safePath.join(configDir, override) : safePath.join(configDir, file);
     if (existsSync(srcPath)) {
-      cpSync(srcPath, safePath.join(marketplaceDir, file));
+      const target = safePath.join(marketplaceDir, file);
+      await copyFileIntoMarketplace(srcPath, target, issueLocation(srcPath, configDir), issueLocation(target, configDir));
       if (override) {
         logger.info(`   ${file} (from publish.${file === 'README.md' ? 'readme' : 'changelog'}: ${override})`);
       } else {
@@ -578,13 +575,14 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
   const plugins: PluginBuildResult[] = [];
   const externalPlugins: ExternalPluginBuildResult[] = [];
 
-  // Clean stale marketplace directory before rebuilding — removes orphaned plugins
-  const marketplaceBaseDir = safePath.join(
-    configDir,
-    'dist',
-    '.claude',
-    'plugins',
-    'marketplaces',
+  // Clean stale marketplace directory before rebuilding — removes orphaned plugins.
+  // The config schema already refuses a name that is not one path segment; this re-check
+  // keeps the recursive removal below from ever aiming outside dist/ if a caller skips it.
+  if (!isSingleFsSegment(name)) {
+    throw new CommandRefusalError('CONFIG_INVALID', `Marketplace name ${JSON.stringify(name)} is not a single path segment; rename it in vibe-agent-toolkit.config.yaml under claude.marketplaces.`);
+  }
+  const marketplaceBaseDir = safePath.joinUnderRoot(
+    safePath.join(configDir, 'dist', '.claude', 'plugins', 'marketplaces'),
     name,
   );
   if (existsSync(marketplaceBaseDir)) {
@@ -799,8 +797,15 @@ async function copyPoolSkills(
 
     const fsPath = destOverrides.get(skillName) ?? skillNameToFsPath(skillName);
     const destPath = safePath.join(pluginDir, 'skills', fsPath);
-    await mkdir(destPath, { recursive: true });
-    cpSync(skillDistPath, destPath, { recursive: true });
+    // dist/skills is this build's INPUT (another build wrote it): a file there the OS
+    // will not read is INPUT_UNREADABLE, fixed by rebuilding it; only then is the copy written.
+    await copyTreeIntoMarketplace(
+      skillDistPath,
+      destPath,
+      `dist/skills/${skillName}`,
+      issueLocation(destPath, configDir),
+      'Rebuild it (vat skills build), or fix the file\'s permissions.',
+    );
     copied.push(fsPath);
     logger.info(`         ${skillName} -> skills/${fsPath}`);
   }
@@ -1408,7 +1413,13 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildOutcome>
   // copyDistributionFiles) is unaffected.
   const changelogPath = resolvePluginChangelogPath(pluginSourceDir, pluginDef);
   if (changelogPath) {
-    cpSync(changelogPath, safePath.join(pluginDir, 'CHANGELOG.md'));
+    const changelogTarget = safePath.join(pluginDir, 'CHANGELOG.md');
+    await copyFileIntoMarketplace(
+      changelogPath,
+      changelogTarget,
+      issueLocation(changelogPath, configDir),
+      issueLocation(changelogTarget, configDir),
+    );
     logger.info(`         CHANGELOG.md`);
   }
 

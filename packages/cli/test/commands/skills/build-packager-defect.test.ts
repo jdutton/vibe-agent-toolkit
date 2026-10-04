@@ -17,7 +17,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 
-import type * as agentSkills from '@vibe-agent-toolkit/agent-skills';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -31,20 +30,17 @@ import { silentLogger } from '../../test-doubles.js';
 const harness = vi.hoisted(() => ({
   /** What each skill's packaging threw, in spec order. */
   thrown: [] as Error[],
+  /** When set, the whole packaging call rejects with it (a refusal inside the build bracket). */
+  rejectWith: undefined as Error | undefined,
 }));
 
-vi.mock('@vibe-agent-toolkit/agent-skills', async (importOriginal) => {
-  const original = await importOriginal<typeof agentSkills>();
-  return {
-    ...original,
-    packageSkills: (specs: agentSkills.SkillBuildSpec[]): Promise<agentSkills.SkillPackageOutcome[]> =>
-      Promise.resolve(specs.map(({ skillPath }, i) => ({
-        status: 'failed' as const,
-        skillPath,
-        error: harness.thrown[i] ?? new Error(`no throw staged for spec ${i}`),
-      }))),
-  };
-});
+vi.mock('@vibe-agent-toolkit/agent-skills', async (importOriginal) =>
+  (await import('../../helpers/stubbed-packager.js')).withStubbedPackager(importOriginal, (specs) =>
+    harness.rejectWith === undefined ? Promise.resolve(specs.map(({ skillPath }, i) => ({
+      status: 'failed' as const,
+      skillPath,
+      error: harness.thrown[i] ?? new Error(`no throw staged for spec ${i}`),
+    }))) : Promise.reject(harness.rejectWith)));
 const PREVIOUS_BUNDLE = 'dist/skills/previous/SKILL.md';
 const PREVIOUS_CONTENT = 'the previous build\n';
 const REFUSAL_MESSAGE = 'files: source does not exist';
@@ -110,6 +106,23 @@ describe('runSkillBuild - a packager throw is the skill\'s finding only when the
     await expect(buildWithPackagerThrowing(cwd, [DEFECT])).rejects.toBe(DEFECT);
 
     expect(existsSync(safePath.join(cwd, PREVIOUS_BUNDLE))).toBe(true);
+    expect(readFileSync(safePath.join(cwd, PREVIOUS_BUNDLE), 'utf8')).toBe(PREVIOUS_CONTENT);
+    expect(readdirSync(safePath.join(cwd, 'dist'))).toStrictEqual(['skills']);
+  });
+
+  // A refusal thrown INSIDE the build bracket (a git snapshot naming an unreadable
+  // file) used to skip settling, leaving a `dist/.vat-skills-*` staging dir behind
+  // that every later build kept beside dist/skills.
+  it('settles staging when the build bracket itself throws: no residue, the previous dist/skills restored', async () => {
+    const cwd = createTempDir();
+    const refusal = new VatError('GIT_SNAPSHOT_UNREADABLE', 'private.txt is unreadable');
+    harness.rejectWith = refusal;
+    try {
+      await expect(buildWithPackagerThrowing(cwd, [codedRefusal()])).rejects.toBe(refusal);
+    } finally {
+      harness.rejectWith = undefined;
+    }
+
     expect(readFileSync(safePath.join(cwd, PREVIOUS_BUNDLE), 'utf8')).toBe(PREVIOUS_CONTENT);
     expect(readdirSync(safePath.join(cwd, 'dist'))).toStrictEqual(['skills']);
   });

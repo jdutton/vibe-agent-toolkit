@@ -12,6 +12,7 @@ import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
 import { assertReadableDirectoryArgument, projectRootOrNull } from '../../utils/project-root-policy.js';
+import { requireWritableDatabase } from '../../utils/rag-database.js';
 import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
 
 import { RAG_GATE, resolveDbPath } from './command-helpers.js';
@@ -154,6 +155,8 @@ export async function indexCommand(
       // failures, so a caller reading only the exit code still sees the name.
       logger.warn(`[vat-rag] ${issue.message}`);
     }
+
+    requireWritableDatabase(dbPath, options.db !== undefined && options.db !== '');
 
     // Create RAG provider in admin mode (readonly: false)
     const ragProvider = await LanceDBRAGProvider.create({

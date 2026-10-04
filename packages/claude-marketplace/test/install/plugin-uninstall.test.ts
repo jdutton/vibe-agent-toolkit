@@ -9,7 +9,7 @@ import { isVatError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { refuseSyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
-import { CLAUDE_USER_STATE_WRITE_FAILED_CODE, PLUGIN_KEY_INVALID_CODE } from '../../src/install/plugin-registry.js';
+import { CLAUDE_USER_STATE_UNREADABLE_CODE, CLAUDE_USER_STATE_WRITE_FAILED_CODE, PLUGIN_KEY_INVALID_CODE } from '../../src/install/plugin-registry.js';
 import { findPluginsByPackage, parsePluginKey, uninstallPlugin } from '../../src/install/plugin-uninstall.js';
 import type { ClaudeUserPaths } from '../../src/paths/claude-paths.js';
 import { setupPluginTestPaths } from '../test-helpers.js';
@@ -132,6 +132,18 @@ describe('uninstallPlugin', () => {
     expect(result.warning).toContain('not installed via VAT');
     expect(existsSync(mpPluginDir)).toBe(false);
   });
+
+  it('a dry-run over an orphan says the directory WOULD be removed, never that it is cleaning up', async () => {
+    const paths = getPaths();
+    const mpPluginDir = safePath.join(paths.marketplacesDir, 'my-market', 'plugins', 'orphan');
+    mkdirSyncReal(mpPluginDir, { recursive: true });
+    const result = await uninstallPlugin({ pluginKey: 'orphan@my-market', paths, dryRun: true });
+    expect(result.removed).toBe(true);
+    expect(result.warning).toContain('not installed via VAT');
+    expect(result.warning).toContain('would be removed');
+    expect(result.warning).not.toContain('cleaning up');
+    expect(existsSync(mpPluginDir)).toBe(true);
+  });
 });
 
 describe('uninstallPlugin with a key that is not two path segments', () => {
@@ -195,5 +207,27 @@ describe('findPluginsByPackage', () => {
   it('returns empty array when no plugins match', () => {
     const keys = findPluginsByPackage('@test/other-pkg', getPaths());
     expect(keys).toHaveLength(0);
+  });
+
+  // The key was READ from Claude's registry, not typed: the registry is the input
+  // at fault, and it is refused before any plugin is uninstalled.
+  it('refuses a registry key of the package that is not a plugin key, coded as unreadable user state', () => {
+    const myPkg = '@test/my-pkg';
+    const paths = getPaths();
+    setupInstalledPlugin(paths, 'skill-a', 'market-a', myPkg);
+    const ip = JSON.parse(readFileSync(paths.installedPluginsPath, 'utf-8'));
+    ip.plugins['../../victim@market-a'] = [];
+    writeFileSync(paths.installedPluginsPath, JSON.stringify(ip));
+
+    let error: unknown;
+    try {
+      findPluginsByPackage(myPkg, paths);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(isVatError(error, CLAUDE_USER_STATE_UNREADABLE_CODE), String(error)).toBe(true);
+    expect(String(error)).toContain('../../victim@market-a');
+    expect(String(error)).toContain(paths.installedPluginsPath);
   });
 });

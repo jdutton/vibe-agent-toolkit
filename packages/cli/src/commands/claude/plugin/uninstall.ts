@@ -65,9 +65,12 @@ Exit Codes:
   0 - Uninstalled, or nothing to remove (a warning does not fail the run)
   2 - The run could not uninstall: no key and no --all, a key that is not
       <plugin>@<marketplace> (each half one path segment: no path separator,
-      not "." or ".."), or --all outside an npm package (USAGE_INVALID);
+      not "." or ".."), a key together with --all, or --all outside an npm
+      package (USAGE_INVALID);
       --all over a package.json that is unreadable or not JSON, or a Claude
-      registry that is (INPUT_UNREADABLE); a removal or registry rewrite that
+      registry that is, or that holds a key of the package that is not
+      <plugin>@<marketplace> — refused before anything is removed
+      (INPUT_UNREADABLE); a removal or registry rewrite that
       failed partway (RUN_INCOMPLETE — plugins already uninstalled are still listed)
 
 Example:
@@ -181,6 +184,13 @@ function resolvePluginKeys(
   logger: ReturnType<typeof createLogger>
 ): string[] {
   if (options.all) {
+    // --all answers for the package in cwd; an operand beside it would be ignored while the run reports success.
+    if (pluginKeyArg !== undefined) {
+      throw new CommandRefusalError(
+        'USAGE_INVALID',
+        `Give a plugin key or --all, not both: "${pluginKeyArg}" would be ignored by --all, which uninstalls the plugins of the npm package in the current directory.`
+      );
+    }
     const packageName = packageNameIn(process.cwd());
     logger.info(`📦 Finding all plugins from ${packageName}...`);
     return findPluginsByPackage(packageName, getClaudeUserPaths());

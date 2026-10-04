@@ -231,6 +231,73 @@ claude:
     }
   });
 
+  // A plugin build's INPUTS the OS will not read are the build's input, named —
+  // never INTERNAL_ERROR from an unwrapped copy: a marketplace LICENSE, a plugin
+  // files[] source, a skill another build left in dist/skills.
+  describe.skipIf(CANNOT_DENY_READS)('an input the OS will not read is INPUT_UNREADABLE, naming it', () => {
+    const lockedPaths: string[] = [];
+    const lockFile = (path: string): void => {
+      chmodSync(path, 0o000);
+      lockedPaths.push(path);
+    };
+    afterEach(() => {
+      for (const path of lockedPaths.splice(0)) chmodSync(path, 0o644);
+    });
+
+    it('a marketplace LICENSE', async () => {
+      const tempDir = createTempDir();
+      seedPluginP1WithMinimalConfig(tempDir);
+      writeTestFile(safePath.join(tempDir, 'LICENSE'), 'MIT\n');
+      lockFile(safePath.join(tempDir, 'LICENSE'));
+
+      const result = await runSkillsThenPluginBuild(tempDir);
+
+      expectRefusal(result, 'INPUT_UNREADABLE');
+      expect(result.stderr).toContain('LICENSE');
+    });
+
+    it('a plugin files[] source', async () => {
+      const tempDir = createTempDir();
+      seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
+      writeTestFile(
+        safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
+        configMin('        - name: p1\n          skills: []\n          files:\n            - source: gen/hook.mjs\n              dest: hooks/hook.mjs\n'),
+      );
+      mkdirSyncReal(safePath.join(tempDir, 'gen'));
+      writeTestFile(safePath.join(tempDir, 'gen', 'hook.mjs'), 'export {};\n');
+      lockFile(safePath.join(tempDir, 'gen', 'hook.mjs'));
+
+      const result = await runSkillsThenPluginBuild(tempDir);
+
+      expectRefusal(result, 'INPUT_UNREADABLE');
+      expect(result.stderr).toContain('gen/hook.mjs');
+    });
+
+    it('a pool skill in dist/skills', async () => {
+      const tempDir = createTempDir();
+      writeConfigAndPkg(tempDir, `skills:
+  include: ["skills/**/SKILL.md"]
+claude:
+  marketplaces:
+    mp1:
+      owner:
+        name: Test
+      plugins:
+        - name: p1
+          skills: [pool-a]
+`);
+      mkdirSyncReal(safePath.join(tempDir, 'skills', 'pool-a'), { recursive: true });
+      writeTestFile(safePath.join(tempDir, 'skills', 'pool-a', 'SKILL.md'), createSkillMarkdown('pool-a'));
+      expect((await executeCli(binPath, ['skills', 'build'], { cwd: tempDir })).status).toBe(0);
+      lockFile(safePath.join(tempDir, 'dist', 'skills', 'pool-a', 'SKILL.md'));
+
+      const result = await executeCli(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
+
+      expectRefusal(result, 'INPUT_UNREADABLE');
+      expect(result.stderr).toContain('dist/skills/pool-a/SKILL.md');
+    });
+  });
+
   it('errors when the same plugin name is declared in two marketplaces', async () => {
     const tempDir = createTempDir();
     seedPluginLocalSkill(tempDir, 'dup', 'skill-a');
@@ -273,6 +340,31 @@ claude:
     const result = await executeCli(binPath, ['claude', 'plugin', 'build', '--marketplace', 'nope'], { cwd: tempDir });
     expectRefusal(result, 'USAGE_INVALID');
     expect(result.stderr).toContain('declared: mp1');
+  });
+
+  it('refuses a marketplace name that climbs out of dist/ as CONFIG_INVALID, and removes nothing', async () => {
+    const tempDir = createTempDir();
+    seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
+    mkdirSyncReal(safePath.join(tempDir, 'victim'));
+    const keep = safePath.join(tempDir, 'victim', 'keep.txt');
+    writeTestFile(keep, 'operator file');
+    writeTestFile(
+      safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
+      `skills:
+  include: ["plugins/*/skills/**/SKILL.md"]
+claude:
+  marketplaces:
+    "../../../../victim":
+      owner:
+        name: Test
+      plugins:
+        - name: p1
+          skills: []
+`,
+    );
+    const result = await executeCli(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
+    expectRefusal(result, 'CONFIG_INVALID');
+    expect(existsSync(keep)).toBe(true);
   });
 
   it('refuses outside a project as CONFIG_INVALID', async () => {

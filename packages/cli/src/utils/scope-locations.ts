@@ -2,21 +2,35 @@
  * Scope locations and validation for agent installation
  */
 
-import os from 'node:os';
-
+import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from './command-refusal.js';
 
 /**
- * Map of runtime to scope locations
+ * Map of runtime to scope resolvers. Each resolves when it is called, never at
+ * module load: `--cwd` changes the working directory after every module is
+ * loaded, and the user scope is whatever the one Claude-user-paths resolver
+ * says (it honours `CLAUDE_CONFIG_DIR`).
  */
-export const SCOPE_LOCATIONS: Record<string, Record<string, string>> = {
+const SCOPE_RESOLVERS: Record<string, Record<string, () => string>> = {
   'agent-skill': {
-    user: safePath.join(os.homedir(), '.claude', 'skills'),
-    project: safePath.join(process.cwd(), '.claude', 'skills'),
+    user: () => getClaudeUserPaths().skillsDir,
+    project: () => safePath.join(process.cwd(), '.claude', 'skills'),
   },
 };
+
+/** The scope directories of `runtime`, resolved now; `undefined` for an unknown runtime. */
+export function scopeLocationsFor(runtime: string): Record<string, string> | undefined {
+  const resolvers = SCOPE_RESOLVERS[runtime];
+  if (!resolvers) return undefined;
+  return Object.fromEntries(Object.entries(resolvers).map(([scope, resolve]) => [scope, resolve()]));
+}
+
+/** The runtimes that have scope locations. */
+export function knownScopeRuntimes(): string[] {
+  return Object.keys(SCOPE_RESOLVERS);
+}
 
 /**
  * Map of runtime to valid scopes
@@ -47,10 +61,10 @@ export function validateAndGetScopeLocation(
   }
 
   // Get scope location
-  const targetLocation = SCOPE_LOCATIONS[runtime]?.[scope];
-  if (!targetLocation) {
+  const resolve = SCOPE_RESOLVERS[runtime]?.[scope];
+  if (!resolve) {
     throw new CommandRefusalError('NOT_IMPLEMENTED', `Scope '${scope}' not implemented for runtime '${runtime}'`);
   }
 
-  return targetLocation;
+  return resolve();
 }

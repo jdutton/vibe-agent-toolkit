@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
 import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { stageDirInto } from '../../src/skill-source/stage.js';
@@ -31,6 +32,17 @@ describe('stageDirInto', () => {
     const staged = await stageDirInto(src, ctx, 'abc123');
     expect(staged).toBe(safePath.join(ctx.stagingRoot, 'abc123'));
     expect(statSync(safePath.join(staged, 'SKILL.md')).isFile()).toBe(true);
+  });
+
+  // The staged copy is VAT's own output: a copy the OS refuses to write (a full disk)
+  // is the run not finishing, coded on the output side — never an uncoded errno.
+  it('codes a copy the OS refuses to write as an output failure (SKILL_PACKAGING_OUTPUT_FAILED)', async () => {
+    const restore = refuseAsyncFs('copyFile', safePath.join(src, 'SKILL.md'), 'ENOSPC');
+    try {
+      await expect(stageDirInto(src, ctx, 'abc123')).rejects.toMatchObject({ code: 'SKILL_PACKAGING_OUTPUT_FAILED' });
+    } finally {
+      restore();
+    }
   });
 
   // Windows has no POSIX mode bits — mkdir(mode 0o700) yields 0o666; skip there.

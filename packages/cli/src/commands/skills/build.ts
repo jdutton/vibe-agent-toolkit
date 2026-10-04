@@ -162,7 +162,9 @@ Output:
   rejected them), skillsInPlace / skillsPluginOnly (names set aside by
   publish: false), outputCommitted (whether dist/skills was REPLACED — false
   leaves the previous output untouched), promotionError (only when the
-  promotion itself failed), and skills[] of { name, source, output, status }.
+  promotion itself failed), and skills[] of { name, source, output, status }
+  (status ok | findings, or not-built when nothing was validated or built: a
+  dry run, a refusal before the build).
   Paths are relative to the directory holding vibe-agent-toolkit.config.yaml.
   Build progress -> stderr
 
@@ -502,15 +504,17 @@ function notBuildableIssue(message: string, location: string | undefined): Valid
 
 /**
  * A skill whose content the packager refused (`isSkillPackagingInputError`) — see
- * {@link notBuildableIssue} for why it is not overridable. Shared with `vat skills package`, whose packager refusals are the same finding.
+ * {@link notBuildableIssue} for why it is not overridable. Shared by every lane
+ * whose packager refusals are the same finding; `next` is that lane's own next
+ * step, because "rebuild" is wrong advice from a verb that does not build.
  */
-export function packagingFailedIssue(message: string, location: string | undefined): ValidationIssue {
+export function packagingFailedIssue(message: string, location: string | undefined, next: string): ValidationIssue {
   return {
     severity: 'error',
     code: 'SKILL_PACKAGING_FAILED',
     message,
     ...(location === undefined ? {} : { location }),
-    fix: 'Fix what the message names in the skill or its skills.config entry, then rebuild.',
+    fix: `Fix what the message names in the skill or its skills.config entry, then ${next}.`,
   };
 }
 
@@ -537,7 +541,7 @@ function issuesBySkill(input: SkillsBuildWorkInput): Map<string, ValidationIssue
   for (const { name, issues } of run.validationFailures) bySkill.set(name, [...issues]);
   for (const { name, message } of run.failures) {
     const source = sources.get(name);
-    bySkill.set(name, [packagingFailedIssue(message, source === undefined ? undefined : reportLocation(cwd, source))]);
+    bySkill.set(name, [packagingFailedIssue(message, source === undefined ? undefined : reportLocation(cwd, source), 'rebuild')]);
   }
   for (const { name, result } of run.results) bySkill.set(name, collectPostBuildIssues(result));
   return bySkill;
@@ -566,7 +570,7 @@ export function skillsBuildWork(input: SkillsBuildWorkInput): FinishedWork & { d
     name: skill.name,
     source: reportPath(cwd, skill.sourcePath),
     output: reportPath(cwd, finalOutputPath(cwd, skill.name)),
-    status: toFindings(bySkill.get(skill.name) ?? []).length === 0 ? 'ok' as const : 'findings' as const,
+    status: rowStatus(run, toFindings(bySkill.get(skill.name) ?? []).length),
   }));
   const issues = [...setAsideIssues, ...skills.flatMap((skill) => bySkill.get(skill.name) ?? []), ...(run?.runIssues ?? [])];
   return {
@@ -585,6 +589,16 @@ export function skillsBuildWork(input: SkillsBuildWorkInput): FinishedWork & { d
       skills: rows,
     },
   };
+}
+
+/**
+ * A row's status: `not-built` when the run never validated or built anything (a
+ * refusal before the build, or a dry run) — `ok` there would read as a clean
+ * build beside an output that does not exist — else whether it has findings.
+ */
+function rowStatus(run: SkillBuildRun | undefined, findingCount: number): 'ok' | 'findings' | 'not-built' {
+  if (run === undefined) return 'not-built';
+  return findingCount === 0 ? 'ok' : 'findings';
 }
 
 /** How the human stream names the output tree. One spelling, one place. */
@@ -911,6 +925,11 @@ export async function beginStagedBuild(
             // with this refusal beside it — and the caller still names the real cause.
             residue.push({ path: parked, reason: `restore failed: ${describeThrown(error)}` });
           }
+        } else if (promoted) {
+          // The target holds THIS run's output, so the parked copy is only still
+          // here because removing it failed: retry, and name that refusal.
+          const failure = await removalError(parked);
+          if (failure !== undefined) residue.push({ path: parked, reason: `removal failed: ${failure}` });
         } else {
           residue.push({ path: parked, reason: 'the promotion target is already occupied' });
         }
@@ -918,11 +937,8 @@ export async function beginStagedBuild(
       // This run's own staging root is always safe to drop: it holds output this
       // run produced and can rebuild. Leaving it is what accumulated a complete
       // copy of the build output in `dist/` on every failed promotion.
-      try {
-        await rm(root, { recursive: true, force: true });
-      } catch (error) {
-        residue.push({ path: root, reason: `removal failed: ${describeThrown(error)}` });
-      }
+      const rootFailure = await removalError(root);
+      if (rootFailure !== undefined) residue.push({ path: root, reason: `removal failed: ${rootFailure}` });
       return { restoredPrevious, residue };
     },
   };
@@ -961,11 +977,17 @@ async function stagingWrite<T>(what: string, write: () => Promise<T>, created: s
 
 /** Remove `path`; `''` when it went, else the sentence naming what stayed — a second refusal never hides the first. */
 async function removalFailure(path: string): Promise<string> {
+  const failure = await removalError(path);
+  return failure === undefined ? '' : ` (and ${path} could not be removed: ${failure})`;
+}
+
+/** Remove `path`; `undefined` when it went, else why the OS refused. */
+async function removalError(path: string): Promise<string | undefined> {
   try {
     await rm(path, { recursive: true, force: true });
-    return '';
+    return undefined;
   } catch (error) {
-    return ` (and ${path} could not be removed: ${describeThrown(error)})`;
+    return describeThrown(error);
   }
 }
 
@@ -1296,7 +1318,7 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
   // run would keep answering for a tree that has since changed.
   const suiteProbe = conventionalSuiteProbe();
 
-  const outcomes = await withResourcePopulationSource({ root: cwd }, async (populationSource) => {
+  const outcomes = await settlingOnThrow(staging, logger, () => withResourcePopulationSource({ root: cwd }, async (populationSource) => {
     for (const spec of specs) {
       const { skill, packagingConfig } = spec;
       logger.info(`\nBuilding skill: ${skill.name}`);
@@ -1350,7 +1372,7 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
     return packageSkills(buildSpecs, cwd, allowLedger, {
       ...(populationSource !== undefined && { populationSource }),
     });
-  });
+  }));
 
   await stopOnPackagerDefect(outcomes, staging, logger);
 
@@ -1433,6 +1455,26 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
 }
 
 /**
+ * Run the build bracket; if it throws — a git snapshot refusing an unreadable
+ * file, a listing the OS refused — settle staging before the throw leaves, so no
+ * `dist/.vat-skills-*` directory outlives the run and the previous `dist/skills`
+ * is restored. Staging is transient in both outcomes, a refusal included.
+ */
+async function settlingOnThrow<T>(
+  staging: BuildStaging,
+  logger: ReturnType<typeof createLogger>,
+  work: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    const { promotionError } = await settleStaging(staging, true, logger);
+    if (promotionError !== undefined) logger.error(promotionError);
+    throw error;
+  }
+}
+
+/**
  * Leave the run on the first packager throw that is not the packager refusing
  * the skill's own content — the contract `vat skills package`, `vat agent
  * build`, `vat claude plugin build` and `vat skill test run` implement, through
@@ -1451,8 +1493,13 @@ async function stopOnPackagerDefect(
   const defect = outcomes.find((outcome) => outcome.status === 'failed' && !isSkillPackagingInputError(outcome.error));
   if (defect?.status !== 'failed') return;
   const { promotionError } = await settleStaging(staging, true, logger);
-  if (promotionError !== undefined) logger.error(promotionError);
-  throw defect.error;
+  if (promotionError === undefined) throw defect.error;
+  // The defect stays the refusal's code and cause; the recovery rides in its
+  // message, because the document is where an operator looks for the parked path.
+  const refusal = new CommandRefusalError(refusalCodeOf(defect.error), `${describeThrown(defect.error)}\n${promotionError}`, { cause: defect.error });
+  // An INTERNAL_ERROR prints its stack: keep the defect's frames, not this wrapper's.
+  if (defect.error instanceof Error && defect.error.stack !== undefined) refusal.stack = `${refusal.message}\nCaused by: ${defect.error.stack}`;
+  throw refusal;
 }
 
 /**

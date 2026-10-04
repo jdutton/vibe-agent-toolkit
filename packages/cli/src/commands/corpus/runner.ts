@@ -17,6 +17,7 @@ import { dirname } from 'node:path';
 
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { scan } from '@vibe-agent-toolkit/discovery';
+import { ExitCode, exitCodeOfChild } from '@vibe-agent-toolkit/schema';
 import { isFilesystemAccessError, safePath, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 import { isGitUrl, parseGitUrl } from '@vibe-agent-toolkit/utils/git';
@@ -144,10 +145,23 @@ function localSourceUnusable(source: string): string | undefined {
   try {
     return pathPresent(source, 'follow') ? undefined : `Source path not found: ${source}`;
   } catch (error) {
-    // Only the probe's coded refusal is the entry's; anything uncoded is a defect and stays loud.
-    if (refusalCodeOf(error) === 'INTERNAL_ERROR') throw error;
+    if (!isEntryRefusal(error)) throw error;
     return errorMessageOf(error);
   }
+}
+
+/**
+ * Whether a thrown value is this ENTRY's outcome (an unloadable row) rather than
+ * the scan's. One rule for every catch in the runner, decided by code:
+ * - an uncoded throw (`INTERNAL_ERROR`) is a VAT defect, never a property of the
+ *   plugin — swallowing it into a warning row would exit 0 over a broken build;
+ * - `RUN_INCOMPLETE` is a write under `--out` the OS refused: the RUN's refusal,
+ *   the same in both lanes.
+ * Every other coded refusal (a failed clone, an unreadable source) is the entry's.
+ */
+function isEntryRefusal(error: unknown): boolean {
+  const code = refusalCodeOf(error);
+  return code !== 'INTERNAL_ERROR' && code !== 'RUN_INCOMPLETE';
 }
 
 async function runUrlEntry(entry: PluginEntry, opts: RunnerOptions): Promise<PluginRow> {
@@ -158,9 +172,7 @@ async function runUrlEntry(entry: PluginEntry, opts: RunnerOptions): Promise<Plu
       async ({ targetDir, tempdir, provenance }) => auditAndRecord(entry, targetDir, opts, { provenance, tempRoot: tempdir })
     );
   } catch (err) {
-    // A write under --out the OS refused is the RUN's refusal — the same in both lanes —
-    // never this entry's unloadable row. Matched by code, not by class.
-    if (refusalCodeOf(err) === 'RUN_INCOMPLETE') throw err;
+    if (!isEntryRefusal(err)) throw err;
     return unloadableRow(entry, errorMessageOf(err), 0);
   }
 }
@@ -190,6 +202,7 @@ async function auditAndRecord(
     outcome = buildAuditOutcome(results, Date.now() - start, outputPath, root, cloned);
     audit = outcome.audit;
   } catch (err) {
+    if (!isEntryRefusal(err)) throw err;
     audit = {
       status: 'unloadable',
       duration_ms: Date.now() - start,
@@ -237,12 +250,9 @@ function reviewOneSkill(bin: string, skillDir: string, relativePath: string): Sk
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  // `vat skill review` exit semantics:
-  //   0 — review clean
-  //   1 — review completed but found warnings/errors (still a successful review for corpus purposes)
-  //   2 (or other non-zero / null) — system error, the review did not run to completion
-  const SKILL_REVIEW_FINDINGS_EXIT = 1;
-  const reviewRan = result.status === 0 || result.status === SKILL_REVIEW_FINDINGS_EXIT;
+  // Findings (exit 1) are still a review that ran; only ERROR — or a status off the
+  // contract, which `exitCodeOfChild` reads as ERROR — means it did not finish.
+  const reviewRan = exitCodeOfChild(result.status) !== ExitCode.ERROR;
 
   if (!reviewRan) {
     const stderr = (result.stderr ?? '').trim();

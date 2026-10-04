@@ -52,6 +52,7 @@ import {
   reportVersionDelete,
   resolveSourceArgument,
   SKILL_DELETED_TYPES,
+  skillUploadFailure,
   SKILL_VERSION_DELETED_TYPES,
   summarizeNpmInstall,
   VERSION_NAME_MISMATCH_REFUSAL,
@@ -1463,6 +1464,26 @@ function ending(result: object): { document: Record<string, unknown>; outcome: E
   return { document: document as Record<string, unknown>, outcome, exitCode: exitCodeForExternal('claude org skills install', outcome) };
 }
 
+describe('skillUploadFailure', () => {
+  // One payload, one error shape: a per-skill row carries the same `{ code, message }`
+  // the top-level refusal does, so a reader branches on `code` in both places.
+  it('carries the refusal code the thrown value maps to, beside its message', () => {
+    const vendor403 = new ApiRequestError('API error 403: forbidden', 403, undefined);
+
+    expect(skillUploadFailure('a', vendor403)).toStrictEqual({
+      skill: 'a',
+      error: { code: 'EXTERNAL_API_FAILED', message: 'API error 403: forbidden' },
+    });
+  });
+
+  it('codes an uncoded throw INTERNAL_ERROR rather than passing it off as the vendor\'s', () => {
+    expect(skillUploadFailure('b', new TypeError('defect'))).toStrictEqual({
+      skill: 'b',
+      error: { code: 'INTERNAL_ERROR', message: 'defect' },
+    });
+  });
+});
+
 describe('summarizeNpmInstall', () => {
   it('exits 0 on an ok outcome when every skill uploaded', () => {
     const result = ending(summarizeNpmInstall('pkg@1.0.0', [uploaded('a')], []));
@@ -1474,9 +1495,9 @@ describe('summarizeNpmInstall', () => {
 
   it('does not report success when EVERY skill failed', () => {
     const errors = [
-      { skill: 'a', error: '403 forbidden' },
-      { skill: 'b', error: 'over the upload ceiling' },
-      { skill: 'c', error: 'SKILL.md has no usable frontmatter "name" field' },
+      { skill: 'a', error: { code: 'EXTERNAL_API_FAILED', message: '403 forbidden' } },
+      { skill: 'b', error: { code: 'USAGE_INVALID', message: 'over the upload ceiling' } },
+      { skill: 'c', error: { code: 'USAGE_INVALID', message: 'SKILL.md has no usable frontmatter "name" field' } },
     ];
     const result = ending(summarizeNpmInstall('pkg@1.0.0', [], errors));
 
@@ -1491,7 +1512,7 @@ describe('summarizeNpmInstall', () => {
     const result = ending(summarizeNpmInstall(
       'pkg@1.0.0',
       [uploaded('a')],
-      [{ skill: 'b', error: '413 payload too large' }],
+      [{ skill: 'b', error: { code: 'EXTERNAL_API_FAILED', message: '413 payload too large' } }],
     ));
 
     expect(result.exitCode).toBe(2);

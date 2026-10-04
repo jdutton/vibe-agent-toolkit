@@ -21,20 +21,36 @@ const CONFIG = '# kept by the edit\nskills:\n  include:\n    - "skills/*/SKILL.m
 const binPath = getBinPath(import.meta.url);
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-skill-test-configure-');
 
-/** A project directory holding `config`, or only a `.git/` when `config` is undefined. */
+/**
+ * A project directory holding `config` and a declared `my-skill` (configure refuses
+ * an undeclared skill), or only a `.git/` when `config` is undefined.
+ */
 function projectWith(config: string | undefined): string {
   const dir = createTempDir();
   if (config === undefined) {
     mkdirSyncReal(safePath.join(dir, '.git'), { recursive: true });
   } else {
     writeTestFile(safePath.join(dir, CONFIG_FILENAME), config);
+    mkdirSyncReal(safePath.join(dir, 'skills', 'my-skill'), { recursive: true });
+    writeTestFile(safePath.join(dir, 'skills', 'my-skill', 'SKILL.md'), '---\nname: my-skill\ndescription: A skill configured by a test.\n---\n\n# my-skill\n');
   }
   return dir;
 }
 
+/** `vat skill test configure <skill> <args>` in `cwd`. */
+async function configureSkill(cwd: string, skill: string, ...args: string[]): ReturnType<typeof executeCli> {
+  return executeCli(binPath, ['skill', 'test', 'configure', skill, ...args], { cwd });
+}
+
 /** `vat skill test configure my-skill <args>` in `cwd`. */
 async function configure(cwd: string, ...args: string[]): ReturnType<typeof executeCli> {
-  return executeCli(binPath, ['skill', 'test', 'configure', 'my-skill', ...args], { cwd });
+  return configureSkill(cwd, 'my-skill', ...args);
+}
+
+/** The run refused, exit 2, publishing the report's error branch carrying `error`. */
+function expectRefused(result: Awaited<ReturnType<typeof executeCli>>, error: Record<string, unknown>): void {
+  expect(result.status, result.stderr).toBe(2);
+  expect(SKILL_TEST_CONFIGURE_REPORT_SCHEMA.parse(yaml.parse(result.stdout))).toMatchObject({ status: 'error', error });
 }
 
 describe('vat skill test configure (system)', () => {
@@ -69,11 +85,7 @@ describe('vat skill test configure (system)', () => {
     const project = projectWith(CONFIG);
     const result = await configure(project, '--max-turns', '0');
 
-    expect(result.status).toBe(2);
-    expect(SKILL_TEST_CONFIGURE_REPORT_SCHEMA.parse(yaml.parse(result.stdout))).toMatchObject({
-      status: 'error',
-      error: { code: 'USAGE_INVALID' },
-    });
+    expectRefused(result, { code: 'USAGE_INVALID' });
     expect(result.stderr).not.toContain('VAT bug');
   });
 
@@ -86,22 +98,22 @@ describe('vat skill test configure (system)', () => {
     const project = projectWith(config);
     const result = await configure(project, '--max-turns', '5');
 
-    expect(result.status, result.stderr).toBe(2);
-    expect(SKILL_TEST_CONFIGURE_REPORT_SCHEMA.parse(yaml.parse(result.stdout))).toMatchObject({
-      status: 'error',
-      error: { code: 'CONFIG_INVALID' },
-    });
+    expectRefused(result, { code: 'CONFIG_INVALID' });
     expect(readFileSync(safePath.join(project, CONFIG_FILENAME), 'utf-8')).toBe(config);
+  });
+
+  it('refuses a skill the config does not declare as USAGE_INVALID, exit 2, leaving the config untouched', async () => {
+    const project = projectWith(CONFIG);
+    const result = await configureSkill(project, 'nosuch', '--max-turns', '5');
+
+    expectRefused(result, { code: 'USAGE_INVALID', message: expect.stringContaining("'nosuch'") });
+    expect(readFileSync(safePath.join(project, CONFIG_FILENAME), 'utf-8')).toBe(CONFIG);
   });
 
   it('refuses a project with no config file as CONFIG_INVALID, exit 2', async () => {
     const project = projectWith(undefined);
     const result = await configure(project, '--max-turns', '5');
 
-    expect(result.status).toBe(2);
-    expect(SKILL_TEST_CONFIGURE_REPORT_SCHEMA.parse(yaml.parse(result.stdout))).toMatchObject({
-      status: 'error',
-      error: { code: 'CONFIG_INVALID' },
-    });
+    expectRefused(result, { code: 'CONFIG_INVALID' });
   });
 });

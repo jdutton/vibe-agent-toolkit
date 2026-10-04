@@ -54,7 +54,7 @@ vat rag clear
 **Exit Codes:** derived from the published report (`status: ok | findings | error`)
 - `0` - `ok`: every submitted file is indexed, or skipped as unchanged
 - `1` - `findings`: the run finished and at least one file is NOT in the index — each is a `RAG_DOCUMENT_INDEX_FAILED` error finding located at its path, whether the provider failed to chunk or embed it or the crawl enumerated it and could not read it (a permission-denied file is reported here, never silently dropped). A run that found no file at all is a `RESOURCE_CHECK_BROKEN` finding: it examined nothing
-- `2` - `error`: the run could not do its job; `error.code` says why — `USAGE_INVALID` (a path argument that names nothing, or no `--db` and no project root), `INPUT_UNREADABLE` (a path the OS will not list), `CONFIG_INVALID`, `BACKEND_UNAVAILABLE` (the optional RAG backend is not installed; the message names the package), or `INTERNAL_ERROR` (a database error such as a `rag_documents` table whose columns an earlier build typed differently — the message names the columns and `vat rag clear` is the remedy)
+- `2` - `error`: the run could not do its job; `error.code` says why — `USAGE_INVALID` (a path argument that names nothing, or no `--db` and no project root), `INPUT_UNREADABLE` (a path the OS will not list, or a project `.rag-db` that is a file — a `--db` that is, or lies under, a file is `USAGE_INVALID`), `RUN_INCOMPLETE` (the database directory cannot be created or written — a read-only parent, say), `CONFIG_INVALID`, `BACKEND_UNAVAILABLE` (the optional RAG backend is not installed; the message names the package), or `INTERNAL_ERROR` (a database error such as a `rag_documents` table whose columns an earlier build typed differently — the message names the columns and `vat rag clear` is the remedy)
 
 **Output:** the report envelope as YAML on stdout (schema `packages/cli/schemas/rag-index.json`). `examined` counts the files submitted, read or not; `data` holds the counters.
 
@@ -120,7 +120,7 @@ vat rag index docs/
 
 **Exit Codes:**
 - `0` - `ok`: the index was searched — a query matching nothing is `ok` with `chunks: []`
-- `2` - `error`: `INPUT_UNREADABLE` when nothing is indexed yet — no project database, no chunk table, or a table of zero chunks, one outcome every way (run `vat rag index`) — or when the database directory cannot be read; `USAGE_INVALID` with no `--db` and no project root, or a `--db` that is not a RAG database — nothing there, a file, or a directory holding anything but the tables `vat rag index` writes (nothing is read, created or removed); `BACKEND_UNAVAILABLE`; or `INTERNAL_ERROR` (an embedding failure). A database whose files are damaged is `INPUT_UNREADABLE`; `vat rag clear` removes it
+- `2` - `error`: `INPUT_UNREADABLE` when nothing is indexed yet — no project database, no chunk table, or a table of zero chunks, one outcome every way (run `vat rag index`) — or when the database directory cannot be read; `USAGE_INVALID` with no `--db` and no project root, or a `--db` that is not a RAG database — nothing there, a file, or a directory holding anything but the tables `vat rag index` writes, operating-system litter such as `.DS_Store` aside (nothing is read, created or removed; the project's own `.rag-db` holding anything else is `INPUT_UNREADABLE`); `BACKEND_UNAVAILABLE`; or `INTERNAL_ERROR` (an embedding failure). A database whose files are damaged — a table manifest that will not open, or data files that will not read — is `INPUT_UNREADABLE`; `vat rag clear` removes it
 
 **Output:** the report envelope as YAML on stdout (schema `packages/cli/schemas/rag-query.json`). `examined` counts the chunks in the index searched; `data` holds `root` (the directory every `filePath` is relative to), `query`, `stats` and `chunks`.
 
@@ -213,7 +213,7 @@ Each chunk includes comprehensive metadata:
 
 **Exit Codes:**
 - `0` - `ok`: the database was read — an existing database that holds nothing reports zeros
-- `2` - `error`: `USAGE_INVALID` with no `--db` and no project root, or a `--db` that is not a RAG database — nothing there, a file, or a directory holding anything but the tables `vat rag index` writes (nothing is read, created or removed); `INPUT_UNREADABLE` when the project has no database yet (run `vat rag index`), its `.rag-db` is a file, or the database cannot be read (a directory the OS will not list, or damaged table files — `vat rag clear` removes it); `BACKEND_UNAVAILABLE`; or `INTERNAL_ERROR`
+- `2` - `error`: `USAGE_INVALID` with no `--db` and no project root, or a `--db` that is not a RAG database — nothing there, a file, or a directory holding anything but the tables `vat rag index` writes, operating-system litter such as `.DS_Store` aside (nothing is read, created or removed); `INPUT_UNREADABLE` when the project has no database yet (run `vat rag index`), its `.rag-db` is a file or holds anything else, or the database cannot be read (a directory the OS will not list, or damaged table manifests or data files — `vat rag clear` removes it); `BACKEND_UNAVAILABLE`; or `INTERNAL_ERROR`
 
 `vat rag stats` only reads: it never creates the database it is asked about.
 
@@ -266,9 +266,9 @@ vat rag stats
 
 **Exit Codes:**
 - `0` - `ok`: the database was cleared
-- `2` - `error`: `USAGE_INVALID` with no `--db` and no project root, or a `--db` that is not a RAG database — nothing there, a file, or a directory holding anything but the tables `vat rag index` writes (nothing is read, created or removed); `INPUT_UNREADABLE` when the project has no database to clear, its `.rag-db` is a file, or the database directory cannot be listed; `BACKEND_UNAVAILABLE`; or `INTERNAL_ERROR`
+- `2` - `error`: `USAGE_INVALID` with no `--db` and no project root, or a `--db` that is not a RAG database — nothing there, a file, a symbolic link (the refusal names the real path to clear), or a directory holding anything but the tables `vat rag index` writes (nothing is read, created or removed); `INPUT_UNREADABLE` when the project has no database to clear, its `.rag-db` is a file, a link or holds anything else, or the database directory cannot be listed; `RUN_INCOMPLETE` when the OS stopped the removal partway (part of the database may be gone — make it writable and clear again); `BACKEND_UNAVAILABLE`; or `INTERNAL_ERROR`
 
-`vat rag clear` removes a database without opening it, so a database whose files are damaged can still be cleared. It removes only a directory holding nothing but the tables `vat rag index` writes (or nothing at all); any other directory is refused and left as it is.
+`vat rag clear` removes a database without opening it, so a database whose files are damaged can still be cleared. It removes only a directory holding nothing but the tables `vat rag index` writes (or nothing at all), operating-system litter such as `.DS_Store`, `Thumbs.db`, `desktop.ini` and `._*` files aside; any other directory is refused and left as it is, and so is a symbolic link to a database — removing the link would leave the database in place.
 
 **Output:** the report envelope as YAML on stdout (schema `packages/cli/schemas/rag-clear.json`); `examined` is 1, the database removed, and `data` is `{ cleared: true }`.
 

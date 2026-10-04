@@ -89,8 +89,11 @@ Exit Codes:
   0 - Every submitted file indexed (or skipped as unchanged)
   1 - Findings: at least one file is not in the index
   2 - Could not run (error.code says why: USAGE_INVALID for a missing path or
-      --db, INPUT_UNREADABLE, CONFIG_INVALID, BACKEND_UNAVAILABLE when the RAG
-      backend is not installed)
+      --db, a --db that is (or lies under) a file, or a --db directory holding
+      anything but a RAG database; INPUT_UNREADABLE, also for a project
+      .rag-db that is a file or holds anything else; RUN_INCOMPLETE when the
+      database directory cannot be created or written; CONFIG_INVALID;
+      BACKEND_UNAVAILABLE when the RAG backend is not installed)
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)
@@ -137,11 +140,12 @@ Each chunk includes:
 
 Exit Codes:
   0 - Searched
-  2 - Could not run (error.code: INPUT_UNREADABLE when nothing is indexed yet
-      or the database cannot be read, USAGE_INVALID with no --db and no
+  2 - Could not run (error.code: INPUT_UNREADABLE when nothing is indexed yet,
+      the database cannot be read (damaged table files included), or the
+      project .rag-db holds anything else; USAGE_INVALID with no --db and no
       project or a --db that is not a RAG database — nothing there, a file,
-      or a directory holding anything but the tables vat rag index writes —
-      BACKEND_UNAVAILABLE)
+      or a directory holding anything but the tables vat rag index writes
+      (operating-system litter such as .DS_Store aside); BACKEND_UNAVAILABLE)
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)
@@ -182,9 +186,11 @@ Exit Codes:
   0 - Reported (an existing database holding nothing reports zeros)
   2 - Could not run (error.code: USAGE_INVALID with no --db and no project or
       a --db that is not a RAG database — nothing there, a file, or a
-      directory holding anything but the tables vat rag index writes —
-      INPUT_UNREADABLE when the project has no database yet or it cannot be
-      read, BACKEND_UNAVAILABLE). Never creates the database.
+      directory holding anything but the tables vat rag index writes
+      (operating-system litter such as .DS_Store aside) — INPUT_UNREADABLE
+      when the project has no database yet, its .rag-db holds anything else,
+      or the database cannot be read (damaged table files included),
+      BACKEND_UNAVAILABLE). Never creates the database.
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)
@@ -217,9 +223,11 @@ Warning:
   permanently deleted. Re-run 'vat rag index' to rebuild from source.
 
   Only a RAG database is removed: a directory holding nothing but the tables
-  vat rag index writes. It is removed without being opened, so a database
-  whose files are damaged can still be cleared. Any other directory is
-  refused and left untouched.
+  vat rag index writes (and operating-system litter such as .DS_Store). It is
+  removed without being opened, so a database whose files are damaged can
+  still be cleared. Any other directory is refused and left untouched, and so
+  is a --db that is a symbolic link: removing the link would leave the
+  database in place, so the refusal names the real path to clear instead.
 
 Output:
   A YAML report on stdout (status ok, or error); examined is 1, the database
@@ -228,10 +236,13 @@ Output:
 Exit Codes:
   0 - Cleared
   2 - Could not run (error.code: USAGE_INVALID with no --db and no project or
-      a --db that is not a RAG database — nothing there, a file, or a
-      directory holding anything but the tables vat rag index writes —
-      INPUT_UNREADABLE when the project has no database yet or it cannot be
-      listed, BACKEND_UNAVAILABLE)
+      a --db that is not a RAG database — nothing there, a file, a symbolic
+      link, or a directory holding anything but the tables vat rag index
+      writes — INPUT_UNREADABLE when the project has no database yet, its
+      .rag-db is a link or holds anything else, or it cannot be listed;
+      RUN_INCOMPLETE when the OS stopped the removal partway (part of the
+      database may be gone; make it writable and clear again);
+      BACKEND_UNAVAILABLE)
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)

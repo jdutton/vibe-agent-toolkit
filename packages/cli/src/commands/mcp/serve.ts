@@ -69,7 +69,12 @@ export async function serveCommand(
   const startTime = Date.now();
 
   try {
-    // Handle --print-config flag
+    // Resolved BEFORE `--print-config`: a config for a package that does not
+    // load is a paste-ready block for a server that cannot start — it exited 0
+    // where the same argument without the flag exits 2.
+    logger.debug(`Resolving MCP collection from: ${packageOrPath}`);
+    const collection = await resolveCollection(packageOrPath);
+
     if (options.printConfig) {
       logger.info(`\nClaude Desktop configuration for '${packageOrPath}':\n`);
       logger.info('Add this to ~/.claude/config.json:\n');
@@ -77,10 +82,6 @@ export async function serveCommand(
       logger.info('\nThen restart Claude Desktop to load the MCP server.');
       return;
     }
-
-    // Resolve collection from package name or file path
-    logger.debug(`Resolving MCP collection from: ${packageOrPath}`);
-    const collection = await resolveCollection(packageOrPath);
 
     logger.debug(`Collection resolved: ${collection.name}`);
     logger.debug(`Agents: ${collection.agents.map((a) => a.name).join(', ')}`);

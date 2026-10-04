@@ -19,7 +19,6 @@ import {
   CLEAN_EVALS,
   CLEAN_SKILL,
   documentOf,
-  hasClaude,
   MATRIX_BIN_PATH,
   PLUGIN_BUILD_CONFIG,
   PLUGIN_BUILD_FILES,
@@ -50,6 +49,22 @@ function run(cwd: string, args: string[]): { status: number | null; document: Re
 /** The refusal a document published: its status and error code. */
 function refusalOf(document: Record<string, unknown>): { status: unknown; code: unknown } {
   return { status: document['status'], code: (document['error'] as { code?: unknown } | undefined)?.code };
+}
+
+/**
+ * A `vat skill test run --dry-run` over an existing `--out` that `prepare` made,
+ * asserted refused `USAGE_INVALID`, exit 2. Returns the `--out` path.
+ */
+function runSkillTestOverOut(name: string, prepare: (out: string) => void): string {
+  const cwd = project(name, SKILLS_CONFIG, { [SKILL_MD]: CLEAN_SKILL, 'skills/clean/evals/evals.json': CLEAN_EVALS });
+  const out = safePath.join(cwd, 'harness');
+  prepare(out);
+
+  const { status, document, output } = run(cwd, ['skill', 'test', 'run', './skills/clean', '--dry-run', '--i-understand-this-runs-skill-code', '--out', out]);
+
+  expect(refusalOf(document), output).toStrictEqual({ status: 'error', code: 'USAGE_INVALID' });
+  expect(status).toBe(2);
+  return out;
 }
 
 function skillsProject(name: string): string {
@@ -130,7 +145,9 @@ describe('an output a skill-packaging lane cannot write ends RUN_INCOMPLETE (sys
     expect(status).toBe(2);
   });
 
-  it.skipIf(CANNOT_DENY_READS || !hasClaude())(
+  // Neither skill-test refusal needs `claude`: the harness root is prepared before the
+  // preflight looks for it, so these run on every CI runner (none installs claude).
+  it.skipIf(CANNOT_DENY_READS)(
     'vat skill test run: an --out whose parent is unwritable',
     { timeout: PER_TEST_TIMEOUT_MS },
     () => {
@@ -165,7 +182,41 @@ describe('a lane never deletes or re-modes what the operator owns (system test)'
     expect(status).toBe(2);
     expect(readFileSync(safePath.join(cwd, 'keep', 'important.txt'), 'utf-8')).toBe('precious');
     expect(existsSync(safePath.join(cwd, 'keep', 'SKILL.md'))).toBe(false);
+    // The refusal names the flag that replaces a previous package, not only manual deletion.
+    expect((document['error'] as { message?: string }).message).toContain('--force');
   });
+
+  // A preview must say what the real run would: an occupied --output is refused there too.
+  it('vat skills package --dry-run refuses an occupied --output, as the real run does', { timeout: PER_TEST_TIMEOUT_MS }, () => {
+    const cwd = skillsProject('package-occupied-dry');
+    mkdirSyncReal(safePath.join(cwd, 'keep'));
+    writeFileSync(safePath.join(cwd, 'keep', 'important.txt'), 'precious');
+
+    const { status, document, output } = run(cwd, ['skills', 'package', SKILL_MD, '-o', 'keep', '--dry-run']);
+
+    expect(refusalOf(document), output).toStrictEqual({ status: 'error', code: 'USAGE_INVALID' });
+    expect(status).toBe(2);
+    expect(run(cwd, ['skills', 'package', SKILL_MD, '-o', 'keep', '--dry-run', '--force']).status).toBe(0);
+  });
+
+  // An --output holding the SKILL.md skipped the occupancy check entirely, and the package
+  // was written over the author's source and the operator's files beside it.
+  it.each([['without --force', []], ['with --force', ['--force']]])(
+    'vat skills package refuses an --output that holds the skill\'s own source, %s, and writes nothing',
+    { timeout: PER_TEST_TIMEOUT_MS },
+    (_label, force) => {
+      const cwd = skillsProject(`package-over-source-${force.length}`);
+      writeFileSync(safePath.join(cwd, 'skills', 'SKILL.md'), 'PRECIOUS router skill');
+      const source = readFileSync(safePath.join(cwd, SKILL_MD), 'utf-8');
+
+      const { status, document, output } = run(cwd, ['skills', 'package', SKILL_MD, '-o', 'skills', ...force]);
+
+      expect(refusalOf(document), output).toStrictEqual({ status: 'error', code: 'USAGE_INVALID' });
+      expect(status).toBe(2);
+      expect(readFileSync(safePath.join(cwd, 'skills', 'SKILL.md'), 'utf-8')).toBe('PRECIOUS router skill');
+      expect(readFileSync(safePath.join(cwd, SKILL_MD), 'utf-8')).toBe(source);
+    },
+  );
 
   it('vat skills package --force replaces a previous package', { timeout: PER_TEST_TIMEOUT_MS }, () => {
     const cwd = skillsProject('package-force');
@@ -179,19 +230,22 @@ describe('a lane never deletes or re-modes what the operator owns (system test)'
     expect(existsSync(safePath.join(cwd, 'out', 'SKILL.md'))).toBe(true);
   });
 
-  it.skipIf(CANNOT_DENY_READS || process.platform === 'win32' || !hasClaude())(
+  // A file where the harness root must be a directory is the operator's input, not a write the OS refused.
+  it('vat skill test run refuses an --out that is a file, USAGE_INVALID, and leaves it alone', { timeout: PER_TEST_TIMEOUT_MS }, () => {
+    const out = runSkillTestOverOut('skill-test-out-file', (path) => writeFileSync(path, 'precious'));
+
+    expect(readFileSync(out, 'utf-8')).toBe('precious');
+  });
+
+  it.skipIf(CANNOT_DENY_READS || process.platform === 'win32')(
     'vat skill test run refuses an --out that is not 0700, and leaves its mode alone',
     { timeout: PER_TEST_TIMEOUT_MS },
     () => {
-      const cwd = project('skill-test-out-mode', SKILLS_CONFIG, { [SKILL_MD]: CLEAN_SKILL, 'skills/clean/evals/evals.json': CLEAN_EVALS });
-      const out = safePath.join(cwd, 'harness');
-      mkdirSyncReal(out);
-      lock(out, UNWRITABLE);
+      const out = runSkillTestOverOut('skill-test-out-mode', (path) => {
+        mkdirSyncReal(path);
+        lock(path, UNWRITABLE);
+      });
 
-      const { status, document, output } = run(cwd, ['skill', 'test', 'run', './skills/clean', '--dry-run', '--i-understand-this-runs-skill-code', '--out', out]);
-
-      expect(refusalOf(document), output).toStrictEqual({ status: 'error', code: 'USAGE_INVALID' });
-      expect(status).toBe(2);
       expect((statSync(out).mode & 0o777).toString(8)).toBe('555');
     },
   );

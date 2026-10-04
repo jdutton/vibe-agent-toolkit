@@ -3,7 +3,7 @@ import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeF
 import { basename } from 'node:path';
 
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, openEachFileForReading, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { ZodError } from 'zod';
 
 import type {
@@ -13,7 +13,7 @@ import type {
 } from '../skill-source/types.js';
 
 import { DEFAULT_EVALS_SUBPATH, isolateEvalSuite } from './eval-suite-isolation.js';
-import { assertSafeHarnessRoot } from './harness-location.js';
+import { assertSafeHarnessRoot, createHarnessRoot, writingHarnessOutput } from './harness-location.js';
 import { StagedManifestSchema, type StagedEntry, type StagedManifest } from './manifest.js';
 import type { PluginLayout } from './plugin-layout.js';
 
@@ -148,8 +148,10 @@ function stageOneItem(
     const dest = safePath.joinUnderRoot(harnessRoot, stagedDirName(item.name));
     // v1 re-stages fully every run; wipe dest first so each re-stage is a clean
     // mirror of source (a stale staged evals/evals.json must not survive).
-    rmSync(dest, { recursive: true, force: true });
-    cpSync(resolvedStagedDir, dest, { recursive: true });
+    writingHarnessOutput(`the staged copy of ${item.name} at ${dest}`, () => {
+      rmSync(dest, { recursive: true, force: true });
+      cpSync(resolvedStagedDir, dest, { recursive: true });
+    });
     return { pluginDir: dest, skillDir: dest, pluginRoot: null };
   }
 
@@ -170,19 +172,26 @@ function stageOneItem(
     // First item for this plugin root in this stageHarness run: wipe the stale
     // staged tree (clean re-stage) and copy the plugin's manifest dir so the
     // staged tree is recognized as a plugin.
-    rmSync(pluginStageRoot, { recursive: true, force: true });
     const realManifestDir = safePath.join(realPluginDir, '.claude-plugin');
     const stagedManifestDir = safePath.joinUnderRoot(pluginStageRoot, '.claude-plugin');
-    mkdirSyncReal(stagedManifestDir, { recursive: true });
-    cpSync(realManifestDir, stagedManifestDir, { recursive: true });
+    // The manifest dir is the author's: read it first, so a file the OS will not
+    // read there is never coded as the run's output failing.
+    openEachFileForReading(realManifestDir);
+    writingHarnessOutput(`the staged plugin root ${pluginStageRoot}`, () => {
+      rmSync(pluginStageRoot, { recursive: true, force: true });
+      mkdirSyncReal(stagedManifestDir, { recursive: true });
+      cpSync(realManifestDir, stagedManifestDir, { recursive: true });
+    });
     preparedPluginRoots.add(pluginStageRoot);
   }
 
   // Copy the skill contents (the resolved flat copy) INTO the nested skill slot so
   // `${pluginStageRoot}/skills/<name>/...` resolves like a real install.
   const stagedSkillDir = safePath.joinUnderRoot(pluginStageRoot, relPathUnderPlugin);
-  mkdirSyncReal(stagedSkillDir, { recursive: true });
-  cpSync(resolvedStagedDir, stagedSkillDir, { recursive: true });
+  writingHarnessOutput(`the staged copy of ${item.name} at ${stagedSkillDir}`, () => {
+    mkdirSyncReal(stagedSkillDir, { recursive: true });
+    cpSync(resolvedStagedDir, stagedSkillDir, { recursive: true });
+  });
 
   return { pluginDir: pluginStageRoot, skillDir: stagedSkillDir, pluginRoot: pluginStageRoot };
 }
@@ -256,7 +265,7 @@ function readExistingManifest(harnessRoot: string): StagedManifest | null {
 
 export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarnessResult> {
   assertSafeHarnessRoot(opts.harnessRoot, opts.currentUid);
-  mkdirSyncReal(opts.harnessRoot, { recursive: true, mode: 0o700 });
+  createHarnessRoot(opts.harnessRoot);
 
   // v1: full re-stage every run. Task 15 wires reconcile-reuse via this return value.
   readExistingManifest(opts.harnessRoot);
@@ -353,11 +362,10 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
     .update(entries.map(e => `${e.name}:${e.identity}:${e.contentHash}`).join('|'))
     .digest('hex');
   const manifest: StagedManifest = { fingerprint, entries };
-  writeFileSync(
-    safePath.joinUnderRoot(opts.harnessRoot, 'staged.manifest.json'),
-    JSON.stringify(manifest, null, 2) + '\n',
-    'utf8',
-  );
+  const manifestPath = safePath.joinUnderRoot(opts.harnessRoot, 'staged.manifest.json');
+  writingHarnessOutput(`the staged manifest ${manifestPath}`, () => {
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+  });
 
   return { manifest, pluginDirs, subjectStagedDir, subjectPluginRoot, skippedOptional, subjectEvalSuiteHeld };
 }

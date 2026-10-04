@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import * as yaml from 'yaml';
 
 import { AUDIT_REPORT_SCHEMA } from '../../../src/commands/audit-schema.js';
+import type * as Audit from '../../../src/commands/audit.js';
 import {
   auditOnePlugin,
   buildAuditOutcome,
@@ -19,6 +20,14 @@ import {
 import type { PluginEntry } from '../../../src/commands/corpus/seed.js';
 import { CommandRefusalError } from '../../../src/utils/command-refusal.js';
 import type * as ProjectRootPolicy from '../../../src/utils/project-root-policy.js';
+
+/** The in-process audit, replaced only where a test makes it throw; every other call runs the real one. */
+const { getValidationResults } = vi.hoisted(() => ({ getValidationResults: vi.fn() }));
+vi.mock('../../../src/commands/audit.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof Audit>();
+  getValidationResults.mockImplementation(actual.getValidationResults);
+  return { ...actual, getValidationResults };
+});
 
 /** The local-source probe, replaced only where a test makes it throw; every other call runs the real one. */
 const { pathPresent } = vi.hoisted(() => ({ pathPresent: vi.fn() }));
@@ -191,6 +200,37 @@ describe('auditOnePlugin — URL source', () => {
 
     expect(row.audit.status).toBe('unloadable');
     expect(row.audit.error).toMatch(/clone failed|fatal|repository|not appear/i);
+  });
+});
+
+describe('auditOnePlugin — a defect inside the audit', () => {
+  // An uncoded throw from a validator is a VAT defect, not a property of the plugin:
+  // it must end the scan loudly, never become an unloadable row at exit 0.
+  const defect = (): TypeError => new TypeError('validator defect');
+
+  it('lets it through for a local source', async () => {
+    const thrown = defect();
+    getValidationResults.mockRejectedValueOnce(thrown);
+    const entry: PluginEntry = { source: makePluginDir('A test skill whose audit is made to throw a defect in the runner unit test.'), name: 'local-defect', ...META };
+
+    await expect(auditOnePlugin(entry, { runDir: makeRunDir(), withReview: false, debug: false })).rejects.toBe(thrown);
+  });
+
+  it('lets it through for a URL source, past the clone lane\'s own catch', async () => {
+    const thrown = defect();
+    getValidationResults.mockRejectedValueOnce(thrown);
+    const entry: PluginEntry = { source: pathToFileURL(makeBareRepoWithSkill()).href, name: 'url-defect', ...META };
+
+    await expect(auditOnePlugin(entry, { runDir: makeRunDir(), withReview: false, debug: false })).rejects.toBe(thrown);
+  });
+
+  it('still records a coded audit refusal as the entry\'s unloadable row', async () => {
+    getValidationResults.mockRejectedValueOnce(new CommandRefusalError('INPUT_UNREADABLE', 'Path cannot be read (EACCES): x'));
+    const entry: PluginEntry = { source: makePluginDir('A test skill whose audit is made to refuse in the runner unit test.'), name: 'local-refused', ...META };
+
+    const row = await auditOnePlugin(entry, { runDir: makeRunDir(), withReview: false, debug: false });
+
+    expect(row.audit).toMatchObject({ status: 'unloadable', error: 'Path cannot be read (EACCES): x' });
   });
 });
 

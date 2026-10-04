@@ -98,7 +98,7 @@ import { ExitCode, exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import { findProjectRoot } from '@vibe-agent-toolkit/utils';
 import { Command, Option } from 'commander';
 
-import { refusalCodeOf } from '../../utils/command-refusal.js';
+import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { targetPathWithin } from '../../utils/corpus-target.js';
 import { NOTHING_FINISHED, refusalReport, writeLegacyDocument } from '../../utils/document-writer.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
@@ -351,8 +351,8 @@ Description:
   the TOTAL of that launch floor and what fires on demand there (a path-scoped
   rule fires for some directories and not others, so the on-demand half is
   never borrowed from a region-mate). Directories are ranked by that total. It
-  emits no per-path documents; name paths for those. --discoverable applies to
-  named paths only.
+  emits no per-path documents; name paths for those. --all with a path or
+  with --discoverable (which applies to named paths only) is refused.
 
 Output:
   - kind:    context-answers for named paths, context-cost-map for --all —
@@ -386,7 +386,8 @@ Exit Codes:
   0 - An answer was produced (there is no threshold and no gate)
   2 - Invalid usage rejected before the verb runs (an unknown option, or an
       unsupported --format value: Commander's message on stderr, no document),
-      or refused: error.code USAGE_INVALID (a path outside the corpus root),
+      or refused: error.code USAGE_INVALID (a path outside the corpus root,
+      or --all with a path or --discoverable),
       BACKEND_UNAVAILABLE (the projection store's optional backend is not
       installed), INPUT_UNREADABLE (a tree the OS will not read, including
       one file in a git repository the OS will not let git read — the
@@ -424,8 +425,8 @@ export async function claudeContextCommand(
     // 🔑 Every argument is resolved BEFORE the population, not inside the map.
     // A path outside the corpus is a usage error, and finding it afterwards
     // would charge the caller a full population — minutes on a cold cache — to
-    // be told they mistyped. `--all` has no arguments to check.
-    const requested = sweep ? [] : targetsWithin(root, pathArgs);
+    // be told they mistyped.
+    const requested = requestedTargets(root, pathArgs, options);
     const projection = await populateContext(root, logger);
     if (sweep) {
       // Every number in the map is decided in `@vibe-agent-toolkit/resources`.
@@ -452,6 +453,30 @@ export async function claudeContextCommand(
     writeLegacyDocument('claude context', report, format, undefined);
     process.exit(exitCodeForReport(report));
   }
+}
+
+/**
+ * The paths a run answers for, checked before anything is populated.
+ *
+ * `--all` answers the whole tree and emits no per-path document, so a path or
+ * `--discoverable` beside it would be silently dropped: refused instead.
+ *
+ * @param root - The corpus root
+ * @param pathArgs - The path arguments, possibly empty
+ * @param options - The command's flags
+ * @returns The root-relative targets; empty under `--all`
+ */
+function requestedTargets(root: string, pathArgs: readonly string[], options: ClaudeContextOptions): string[] {
+  if (options.all !== true) return targetsWithin(root, pathArgs);
+  const ignored = [...pathArgs, ...(options.discoverable === true ? ['--discoverable'] : [])];
+  if (ignored.length > 0) {
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
+      `--all reports the whole tree and answers no named path, so it cannot take ${ignored.join(', ')}.`
+      + ' Drop --all to answer for named paths (with --discoverable if wanted), or drop the rest for the cost map.',
+    );
+  }
+  return [];
 }
 
 /**
@@ -1000,7 +1025,7 @@ function renderUnknownText(document: ContextUnknownDocument): string {
 }
 
 /** Test seam: the non-answer's document and its text rendering. */
-export const __internal = { renderUnknownText, unknownDocumentFor };
+export const __internal = { renderUnknownText, requestedTargets, unknownDocumentFor };
 
 /**
  * Render the answer for a person.

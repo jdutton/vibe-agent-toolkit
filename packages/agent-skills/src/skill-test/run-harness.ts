@@ -102,6 +102,7 @@ import {
   HarnessLocationError,
   prepareHarnessRoot,
   resolveHarnessRoot,
+  writingHarnessOutput,
 } from './harness-location.js';
 import { acquireHarnessLock, installSignalCleanup } from './lock.js';
 import { RateLimitSignal, runPipeline } from './pipeline.js';
@@ -2377,8 +2378,20 @@ function openResultsDir(input: {
   // verbatim in each expectation's evidence, so whatever the skill read out of its
   // input files ends up here as text — and unlike the workspaces, results/ SURVIVES
   // `--keep` by design.
-  mkdirSyncReal(input.resultsDir, { recursive: true, mode: 0o700 });
-  writeFileSync(input.provenancePath, JSON.stringify(input.provenance, null, 2) + '\n', 'utf-8');
+  writingHarnessOutput(`the results directory ${input.resultsDir}`, () => {
+    mkdirSyncReal(input.resultsDir, { recursive: true, mode: 0o700 });
+  });
+  writeResultJson(input.provenancePath, input.provenance);
+}
+
+/**
+ * Write one results artifact as JSON. A write the OS refuses (a full disk) is the
+ * run not finishing ({@link HarnessOutputError}, `RUN_INCOMPLETE`).
+ */
+function writeResultJson(path: string, value: unknown): void {
+  writingHarnessOutput(`the results file ${path}`, () => {
+    writeFileSync(path, JSON.stringify(value, null, 2) + '\n', 'utf-8');
+  });
 }
 
 /**
@@ -2552,16 +2565,16 @@ function writeRunArtifactsAndReconcile(
   let baselineReport: string | undefined;
 
   const grading = mergeFragmentsToGrading(withArm, runNonce, 'with');
-  writeFileSync(paths.gradingOut, JSON.stringify(grading, null, 2) + '\n', 'utf-8');
+  writeResultJson(paths.gradingOut, grading);
 
   const merged = mergeFragmentsToFriction(fragments);
   const friction = input.subjectInPlace ? { items: [IN_PLACE_SUBJECT_FRICTION, ...merged.items] } : merged;
-  writeFileSync(paths.frictionOut, JSON.stringify(friction, null, 2) + '\n', 'utf-8');
+  writeResultJson(paths.frictionOut, friction);
 
   // Tool verdicts come from the WITH arm ONLY — the WITHOUT/skill-absent arm never
   // carries toolExpectations, so its fragments have no `tool` body to merge.
   const toolEval = mergeFragmentsToToolEval(withArm);
-  writeFileSync(paths.toolEvalOut, JSON.stringify(toolEval, null, 2) + '\n', 'utf-8');
+  writeResultJson(paths.toolEvalOut, toolEval);
 
   // `controlFailures` is the second disjunct, and it is load-bearing: when EVERY
   // control eval died there are no WITHOUT-arm fragments at all, and gating on the
@@ -2641,11 +2654,7 @@ function writeRunArtifactsAndReconcile(
     // qualifies it would also mean a reader who wants only the lift has to
     // understand the contamination vocabulary first. (GradingReportSchema is
     // .passthrough(), so both extra keys are contract-legal — see the comment above.)
-    writeFileSync(
-      paths.baselineOut,
-      JSON.stringify({ ...baseline, baselineIntegrity: integrity, baselineDelta: delta }, null, 2) + '\n',
-      'utf-8',
-    );
+    writeResultJson(paths.baselineOut, { ...baseline, baselineIntegrity: integrity, baselineDelta: delta });
     // RETURNED, not written. The delta line and the ⚠️ banner must not be separated
     // from each other by the friction report: `emitFrictionReport` runs from the
     // harness `finally`, long after this point, and its two caps (50 lines × 2000

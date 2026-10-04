@@ -14,3 +14,16 @@ export const RAG_INDEX_EMPTY_CODE = 'RAG_INDEX_EMPTY';
  * kept here for the same reason as {@link RAG_INDEX_EMPTY_CODE}.
  */
 export const RAG_DATABASE_UNREADABLE_CODE = 'RAG_DATABASE_UNREADABLE';
+
+/**
+ * The `VatError` code for a RAG database path that `removeRagDatabase` will not
+ * remove: a directory holding anything a database does not, or a symbolic link
+ * (removing the link would leave the index it names in place). Nothing is removed.
+ */
+export const RAG_DATABASE_NOT_REMOVABLE_CODE = 'RAG_DATABASE_NOT_REMOVABLE';
+
+/**
+ * The `VatError` code for a RAG database removal the OS stopped partway: part
+ * of the database may already be gone. The run did not finish; nothing is wrong with VAT.
+ */
+export const RAG_DATABASE_REMOVAL_INCOMPLETE_CODE = 'RAG_DATABASE_REMOVAL_INCOMPLETE';

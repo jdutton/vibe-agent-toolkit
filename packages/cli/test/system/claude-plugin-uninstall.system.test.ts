@@ -4,7 +4,7 @@
  * System tests for `vat claude plugin uninstall` command.
  */
 
-import { chmodSync, existsSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync } from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
@@ -173,5 +173,45 @@ describe('claude plugin uninstall command (system test)', () => {
 
     expect(status).toBe(2);
     expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
+  });
+
+  // --all used to ignore the operand and answer for the package in cwd: exit 0, plugins: [], and
+  // the named plugin still installed.
+  it('refuses a plugin key together with --all as USAGE_INVALID, removing nothing', async () => {
+    const fakeHome = createUninstallTestHome(createTempDir);
+    setupInstalledPlugin(fakeHome, 'real', 'mk');
+    const projectDir = safePath.join(fakeHome, 'owns-nothing');
+    mkdirSyncReal(projectDir, { recursive: true });
+    writeTestFile(safePath.join(projectDir, 'package.json'), JSON.stringify({ name: '@test/owns-nothing', version: '1.0.0' }));
+
+    const { result, parsed } = await executeCliAndParseYaml(binPath, ['claude', 'plugin', 'uninstall', 'real@mk', '--all'], { cwd: projectDir, env: fakeHomeEnv(fakeHome) });
+    const report = PLUGIN_UNINSTALL_REPORT_SCHEMA.parse(parsed);
+
+    expect(result.status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
+    expect(report.error?.message).toContain('real@mk');
+    expect(existsSync(safePath.join(fakeHome, '.claude', 'plugins', 'marketplaces', 'mk', 'plugins', 'real'))).toBe(true);
+  });
+
+  // The bad key was READ from Claude's registry: the operator typed nothing wrong. It is the
+  // registry's fault (INPUT_UNREADABLE), and refused before any plugin is removed — it used to
+  // be USAGE_INVALID mid-loop, after the plugins ahead of it were already gone.
+  it('refuses --all over a registry key that is not a plugin key as INPUT_UNREADABLE, removing nothing', async () => {
+    const fakeHome = createUninstallTestHome(createTempDir);
+    setupInstalledPlugin(fakeHome, 'good-plugin', 'all-market');
+    const registry = safePath.join(fakeHome, '.claude', 'plugins', 'installed_plugins.json');
+    const installed = JSON.parse(readFileSync(registry, 'utf-8')) as { plugins: Record<string, unknown> };
+    installed.plugins['../../victim@all-market'] = [];
+    writeTestFile(registry, JSON.stringify(installed));
+    const projectDir = safePath.join(fakeHome, 'project');
+    mkdirSyncReal(projectDir, { recursive: true });
+    writeTestFile(safePath.join(projectDir, 'package.json'), JSON.stringify({ name: '@test/pkg', version: '1.0.0' }));
+
+    const { result, parsed } = await executeCliAndParseYaml(binPath, ['claude', 'plugin', 'uninstall', '--all'], { cwd: projectDir, env: fakeHomeEnv(fakeHome) });
+    const report = PLUGIN_UNINSTALL_REPORT_SCHEMA.parse(parsed);
+
+    expect(result.status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
+    expect(existsSync(safePath.join(fakeHome, '.claude', 'plugins', 'marketplaces', 'all-market', 'plugins', 'good-plugin'))).toBe(true);
   });
 });

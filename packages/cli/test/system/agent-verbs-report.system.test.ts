@@ -345,4 +345,37 @@ describe('vat agent build / import / installed / list / install / uninstall (sys
       expectRefusal(await vat(AGENT_UNINSTALL_REPORT_SCHEMA, UNINSTALL, tempDir), 'USAGE_INVALID');
     });
   });
+
+  // Both scopes resolve when the verb runs: `--cwd` moves the project scope, and
+  // the user scope is wherever CLAUDE_CONFIG_DIR points — not where HOME does.
+  describe('scope resolution', () => {
+    it('--cwd moves the project scope: uninstall removes from the named tree, not the launch directory', async () => {
+      const target = project('scope-cwd-target', { '.claude/skills/widget-reviewer/SKILL.md': CLEAN_SKILL });
+      const launch = project('scope-cwd-launch', { '.claude/skills/widget-reviewer/SKILL.md': CLEAN_SKILL });
+
+      const { status, stderr, report } = await vat(AGENT_UNINSTALL_REPORT_SCHEMA, ['--cwd', target, ...UNINSTALL, '--scope', 'project'], launch);
+
+      expect(status, stderr).toBe(ExitCode.OK);
+      expect(report.status === 'ok' && toForwardSlash(normalizePath(report.data.installPath)))
+        .toBe(toForwardSlash(normalizePath(safePath.join(target, '.claude', 'skills', 'widget-reviewer'))));
+      expect(() => lstatSync(safePath.join(target, '.claude', 'skills', 'widget-reviewer'))).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+      expect(lstatSync(safePath.join(launch, '.claude', 'skills', 'widget-reviewer')).isDirectory()).toBe(true);
+    });
+
+    it('installs the user scope under CLAUDE_CONFIG_DIR, where installed then finds it', async () => {
+      const root = installableProject('scope-config-dir');
+      const home = freshHome('scope-config-dir');
+      const configDir = safePath.join(tempDir, 'relocated-claude');
+      const env = { ...fakeHomeEnv(home), CLAUDE_CONFIG_DIR: configDir };
+
+      const install = await executeCli(binPath, INSTALL, { cwd: root, env });
+      const installed = await executeCli(binPath, INSTALLED_USER, { cwd: root, env });
+
+      expect(install.status, install.stderr).toBe(ExitCode.OK);
+      expect(lstatSync(safePath.join(configDir, 'skills', 'widget-reviewer', 'SKILL.md')).isFile()).toBe(true);
+      expect(() => lstatSync(safePath.join(home, '.claude', 'skills', 'widget-reviewer'))).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+      const listed = AGENT_INSTALLED_REPORT_SCHEMA.parse(yaml.parse(installed.stdout));
+      expect(listed.status === 'error' ? [] : listed.data.skills.map((s) => s.name)).toEqual(['widget-reviewer']);
+    });
+  });
 });

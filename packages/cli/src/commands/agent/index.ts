@@ -277,12 +277,12 @@ Examples:
       `
 Description:
   Installs a built agent skill to Agent Skills directory. By default,
-  copies to user scope (~/.claude/skills/). Use --dev for symlink mode
+  copies to user scope. Use --dev for symlink mode
   (rapid development iteration).
 
 Scopes:
-  - user: ~/.claude/skills/ (default, personal skills)
-  - project: ./.claude/skills/ (project-local skills)
+  - user: $CLAUDE_CONFIG_DIR/skills/, else ~/.claude/skills/ (default, personal skills)
+  - project: .claude/skills/ under the working directory (--cwd sets it)
 
 Output (YAML on stdout):
   status: ok | error;  examined: 1 (the agent named)
@@ -325,8 +325,8 @@ Description:
   Handles both copied installations and symlinks.
 
 Scopes:
-  - user: ~/.claude/skills/ (default)
-  - project: ./.claude/skills/
+  - user: $CLAUDE_CONFIG_DIR/skills/, else ~/.claude/skills/ (default)
+  - project: .claude/skills/ under the working directory (--cwd sets it)
 
 Output (YAML on stdout):
   status: ok | error;  examined: 1 (the agent named)
@@ -362,14 +362,14 @@ Description:
 
 Scopes:
   - all: Scan all scopes (default)
-  - user: Only ~/.claude/skills/
-  - project: Only ./.claude/skills/
+  - user: Only $CLAUDE_CONFIG_DIR/skills/, else ~/.claude/skills/
+  - project: Only .claude/skills/ under the working directory (--cwd sets it)
 
 Output (YAML on stdout; the human list on stderr):
   status: ok | findings | error;  examined: the scopes scanned
   findings[]: SCAN_PATH_UNREADABLE (warning) per scope directory the OS
     would not list — the list is then a floor, not the answer; its field
-    is the scope, its location .claude/skills under that scope's base
+    is the scope, its location the scope directory's last two segments
   data: { scanned, skills: [{ name, scope, type: symlink | directory, path }] }
 
 Exit Codes (derived from the document):

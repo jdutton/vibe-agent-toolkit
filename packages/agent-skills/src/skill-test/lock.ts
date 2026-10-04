@@ -2,6 +2,8 @@ import { closeSync, openSync, rmSync } from 'node:fs';
 
 import { safePath, VatError } from '@vibe-agent-toolkit/utils';
 
+import { writingHarnessOutput } from './harness-location.js';
+
 /**
  * The harness root for a subject set is already locked.
  *
@@ -83,16 +85,16 @@ export function acquireHarnessLock(harnessRoot: string, opts: { wait?: boolean }
   const lockPath = safePath.joinUnderRoot(harnessRoot, '.vat-skill-test.lock');
   // eslint-disable-next-line no-void, sonarjs/void-use -- v1: fail-fast only; reserved for future polling
   void opts.wait;
-  let fd: number;
-  try {
-    // 'wx' = O_CREAT | O_EXCL — fails with EEXIST if the lockfile already exists.
-    fd = openSync(lockPath, 'wx');
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new HarnessLockBusyError(lockPath);
+  // Any refusal but EEXIST (a full disk, a read-only root) is the run's output, not a held lock.
+  const fd = writingHarnessOutput(`the harness lockfile ${lockPath}`, () => {
+    try {
+      // 'wx' = O_CREAT | O_EXCL — fails with EEXIST if the lockfile already exists.
+      return openSync(lockPath, 'wx');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'EEXIST') throw new HarnessLockBusyError(lockPath);
+      throw err;
     }
-    throw err;
-  }
+  });
   closeSync(fd);
   let released = false;
   return {

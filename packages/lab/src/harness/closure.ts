@@ -18,6 +18,11 @@
  * required them would refuse every real one. Third-party dependencies are out
  * of scope: the lab measures vat, and a lockfile pins those.
  *
+ * Nothing else in a package directory is read. A package that ships a sibling
+ * tree beside `dist/` — `vendor/`, `schemas/`, or any other `files:` entry —
+ * contributes only its `package.json` and `dist/`, so two `dist:` arms that
+ * differ ONLY in such a tree digest identically and read as one instrument.
+ *
  * ## Errors, never fallbacks
  *
  * A declared `@vibe-agent-toolkit/*` dependency that does not resolve THROWS,

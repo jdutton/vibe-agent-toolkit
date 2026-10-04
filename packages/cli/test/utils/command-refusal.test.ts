@@ -8,7 +8,7 @@ import { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE, SKILL_PA
 import { ApiRequestError, ApiTransportError, OrgApiClient, PLUGIN_SOURCE_UNREADABLE_CODE } from '@vibe-agent-toolkit/claude-marketplace';
 import { CONFIG_UNREADABLE_CODE, LinkAuthConfigError, OKF_UNKNOWN_BUNDLE_CODE, okfBundleRuns, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
 import { ExitCode, type ErrorReport } from '@vibe-agent-toolkit/schema';
-import { COPY_LINK_ESCAPES_SOURCE_CODE, CopyLinkEscapesSourceError, DIRECTORY_LISTING_REFUSED_CODE, DIRECTORY_WALK_REVISITED_CODE, DirectoryWalkRevisitedError, RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
+import { COPY_LINK_ESCAPES_SOURCE_CODE, CopyLinkEscapesSourceError, DIRECTORY_LISTING_REFUSED_CODE, DIRECTORY_WALK_REVISITED_CODE, DirectoryWalkRevisitedError, RAG_DATABASE_NOT_REMOVABLE_CODE, RAG_DATABASE_REMOVAL_INCOMPLETE_CODE, RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
 import { GIT_SNAPSHOT_UNREADABLE_CODE } from '@vibe-agent-toolkit/utils/git';
 import { updateYamlIn } from '@vibe-agent-toolkit/utils/yaml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -125,6 +125,11 @@ describe('refusalCodeOf', () => {
 
   it('reads a RAG database whose table cannot be opened as INPUT_UNREADABLE, never a defect in VAT', () => {
     expect(refusalCodeOf(new VatError(RAG_DATABASE_UNREADABLE_CODE, 'cannot be read'))).toBe('INPUT_UNREADABLE');
+  });
+
+  it('reads a RAG database path that will not be removed as USAGE_INVALID, and one removed partway as RUN_INCOMPLETE', () => {
+    expect(refusalCodeOf(new VatError(RAG_DATABASE_NOT_REMOVABLE_CODE, 'a symbolic link'))).toBe('USAGE_INVALID');
+    expect(refusalCodeOf(new VatError(RAG_DATABASE_REMOVAL_INCOMPLETE_CODE, 'ENOTEMPTY'))).toBe('RUN_INCOMPLETE');
   });
 
   it('reads the coded config read failure as INPUT_UNREADABLE', () => {

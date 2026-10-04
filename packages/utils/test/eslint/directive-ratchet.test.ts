@@ -93,7 +93,7 @@ const CEILINGS: Readonly<Record<string, number>> = {
   'sonarjs/regex-complexity': 2,
   'sonarjs/unused-import': 4,
   'sonarjs/void-use': 1,
-  'unicorn/prefer-structured-clone': 5,
+  'unicorn/prefer-structured-clone': 4,
 };
 
 /** `// eslint-disable…` or `/* eslint-disable…` — a directive, as opposed to prose that mentions one. */

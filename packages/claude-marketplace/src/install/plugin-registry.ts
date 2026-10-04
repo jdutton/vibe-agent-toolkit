@@ -91,6 +91,30 @@ export function requirePluginPathSegment(value: string, what: string, context: s
   }
 }
 
+/**
+ * Refuse names and a version {@link installPlugin} cannot install under: each
+ * must be one path segment, and the version must not begin with `.` — the
+ * cache's version directory would then be dot-named, which `vat inventory`
+ * skips as a staging leftover, so the plugin would install and never be seen.
+ * Pure: a caller validates every plugin a package ships before it mutates
+ * anything for the first one.
+ *
+ * @throws VatError {@link PLUGIN_KEY_INVALID_CODE} naming what is wrong
+ */
+export function requirePluginInstallNames(names: Pick<InstallPluginOptions, 'marketplaceName' | 'pluginName' | 'version'>): void {
+  const { marketplaceName, pluginName, version } = names;
+  const pluginKey = `${pluginName}@${marketplaceName}`;
+  requirePluginPathSegment(pluginName, 'plugin name', pluginKey);
+  requirePluginPathSegment(marketplaceName, 'marketplace name', pluginKey);
+  requirePluginPathSegment(version, 'version', pluginKey);
+  if (version.startsWith('.')) {
+    throw new VatError(
+      PLUGIN_KEY_INVALID_CODE,
+      `Invalid version "${version}" in "${pluginKey}": a version must not begin with "." (its cache directory would be hidden from inventory).`,
+    );
+  }
+}
+
 /** The refusal for a plugin source path the OS will not list or read. */
 function pluginSourceUnreadable(path: string, error: unknown): VatError {
   return new VatError(PLUGIN_SOURCE_UNREADABLE_CODE, `Could not read the plugin to install at ${path}: ${String(error)}`, { cause: error });
@@ -175,13 +199,25 @@ function replaceDirectory(source: string, dest: string): string[] {
   mkdirSyncReal(parent, { recursive: true });
   const staged = mkdtempSync(safePath.join(parent, `.${basename(dest)}.vat-staged-`));
   try {
-    chmodSync(staged, statSync(source).mode & 0o7777);
     cpSync(source, staged, { recursive: true });
+    // AFTER the copy: a read-only source mode applied first leaves the copy no
+    // directory it may write into (Node's native copy then aborts the process).
+    chmodSync(staged, statSync(source).mode & 0o7777);
     return swapIn(staged, dest);
   } finally {
     // Gone already once swapped in; otherwise the half-copied sibling must not stay.
-    rmSync(staged, { recursive: true, force: true });
+    removeTree(staged);
   }
+}
+
+/**
+ * Remove a tree VAT made under ~/.claude, its root's own mode notwithstanding:
+ * a root that took a read-only source's mode refuses the removal of its entries.
+ */
+function removeTree(path: string): void {
+  if (!entryExists(path)) return;
+  if (!lstatSync(path).isSymbolicLink()) chmodSync(path, 0o700);
+  rmSync(path, { recursive: true, force: true });
 }
 
 /**
@@ -206,7 +242,7 @@ function swapIn(staged: string, dest: string): string[] {
     throw error;
   }
   try {
-    rmSync(previous, { recursive: true, force: true });
+    removeTree(previous);
     return [];
   } catch (error) {
     return [`The previous ${basename(dest)} tree could not be removed and is left at ${previous}: ${String(error)}`];
@@ -281,9 +317,9 @@ export function writeInstalledPlugins(paths: ClaudeUserPaths, data: InstalledPlu
  * ({@link PLUGIN_KEY_INVALID_CODE}). Then the source is read: one that is not
  * there is refused ({@link PLUGIN_SOURCE_UNREADABLE_CODE}) with nothing created. Then 5 steps in
  * order; a failure throws, coded (see the two user-state codes above).
- * 1. Copy plugin files to marketplacesDir
+ * 1. Replace the plugin's tree in marketplacesDir
  * 2. Update known_marketplaces.json
- * 3. Copy plugin files to pluginsCacheDir
+ * 3. Replace the plugin's tree in pluginsCacheDir
  * 4. Update installed_plugins.json
  * 5. Enable plugin in user settings.json
  *
@@ -293,22 +329,18 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<{ warni
   const { marketplaceName, pluginName, pluginDir, version, source, paths } = opts;
 
   const pluginKey = `${pluginName}@${marketplaceName}`;
-  requirePluginPathSegment(pluginName, 'plugin name', pluginKey);
-  requirePluginPathSegment(marketplaceName, 'marketplace name', pluginKey);
-  requirePluginPathSegment(version, 'version', pluginKey);
+  requirePluginInstallNames(opts);
   requirePluginSource(pluginDir);
   return codedUserStateWrite(`register plugin ${pluginKey}`, () => {
     const now = new Date().toISOString();
     // The directory itself, not a link to it: a copied link would collide with the directory it lands on.
     const realPluginDir = normalizePath(safePath.resolve(pluginDir));
 
-    // Step 1: Copy plugin to marketplacesDir/<marketplaceName>/plugins/<pluginName>/
+    // Step 1: Replace marketplacesDir/<marketplaceName>/plugins/<pluginName>/ with the plugin.
+    // Replaced, not copied into, so a file the plugin dropped does not survive a re-install.
     // Skip if pluginDir is already at the destination (e.g. copyPluginTree already did the copy)
     const marketplacePluginDest = safePath.join(paths.marketplacesDir, marketplaceName, 'plugins', pluginName);
-    if (!resolvesInto(pluginDir, marketplacePluginDest)) {
-      mkdirSyncReal(marketplacePluginDest, { recursive: true });
-      cpSync(realPluginDir, marketplacePluginDest, { recursive: true });
-    }
+    const marketplaceWarnings = resolvesInto(pluginDir, marketplacePluginDest) ? [] : replaceDirectory(realPluginDir, marketplacePluginDest);
 
     // Step 2: Update known_marketplaces.json
     const knownMarketplaces = readKnownMarketplaces(paths);
@@ -322,7 +354,7 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<{ warni
     // Step 3: Copy plugin to pluginsCacheDir/<marketplaceName>/<pluginName>/<version>/
     // Skip when the source IS the destination on disk (or inside it) — replacing it would delete the source
     const cacheDest = safePath.join(paths.pluginsCacheDir, marketplaceName, pluginName, version);
-    const warnings = resolvesInto(pluginDir, cacheDest) ? [] : replaceDirectory(realPluginDir, cacheDest);
+    const cacheWarnings = resolvesInto(pluginDir, cacheDest) ? [] : replaceDirectory(realPluginDir, cacheDest);
 
     // Step 4: Update installed_plugins.json
     const installedPlugins = readInstalledPlugins(paths);
@@ -339,7 +371,7 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<{ warni
 
     // Step 5: Enable plugin in user settings.json
     updateUserSettings(paths, pluginKey);
-    return { warnings };
+    return { warnings: [...marketplaceWarnings, ...cacheWarnings] };
   });
 }
 

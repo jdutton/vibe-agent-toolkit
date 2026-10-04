@@ -1330,7 +1330,7 @@ function buildFailureOf(err: SkillBuildError, cause: unknown): Pick<RunFailure, 
   if (causeCode !== 'INTERNAL_ERROR') return { code: causeCode, findings: [] };
   if (!isSkillPackagingInputError(cause)) return { code: 'INTERNAL_ERROR', findings: [] };
   const location = err.sourcePath === undefined ? undefined : projectLocation(err.sourcePath);
-  return { code: 'RUN_INCOMPLETE', findings: [packagingFailedIssue(err.message, location)] };
+  return { code: 'RUN_INCOMPLETE', findings: [packagingFailedIssue(err.message, location, 're-run vat skill test run')] };
 }
 
 /**
@@ -1650,8 +1650,9 @@ Artifacts:
   it are removed.
 
   --out or --workdir spares only the harness ROOT: it is a location you own, so
-  vat never deletes it (nor changes an existing --out's mode: it must already be
-  0700, or not exist yet), and the staged (untrusted) skill bytes inside it stay
+  vat never deletes it (nor changes an existing --out's mode: on POSIX it must
+  already be a 0700 directory, or not exist yet; Windows has no mode check, so
+  there it need only be a directory), and the staged (untrusted) skill bytes inside it stay
   until you delete them yourself. It is NOT a blanket "keep everything". Three
   vat-owned directories live OUTSIDE that root -- the grader's output dir, the
   held eval suite, and the per-eval executor WORKSPACES (every eval's working
@@ -1703,14 +1704,17 @@ Exit Codes:
                     binary, or one too old for a flag the spawn needs.
                     USAGE_INVALID: an invalid flag, an auth mismatch, the missing
                     ack, an unsafe --workdir, an --out that exists and is not a
-                    0700 directory (VAT never changes its mode), a held harness
-                    lock, a skill name the config does not declare (or
-                    --no-build with no dist), a bad env token or test.build
-                    hook. RUN_INCOMPLETE: the packager refused the skill's
-                    content (with a SKILL_PACKAGING_FAILED finding), or the OS
-                    would not let the run write its output (the harness root,
-                    a dist bundle: a full disk, a read-only directory; no
-                    finding). A build that threw keeps
+                    directory (or, on POSIX, not 0700: VAT never changes its
+                    mode), a held harness lock, a skill name the config does not
+                    declare (or --no-build with no dist), a bad env token or
+                    test.build hook. RUN_INCOMPLETE: the packager refused the
+                    skill's content (with a SKILL_PACKAGING_FAILED finding), or
+                    the OS would not let the run write its output -- the harness
+                    root, its lockfile, the staged skill copies and manifest, the
+                    results/ files, a dist bundle: a full disk, a read-only
+                    directory; no finding (known gap: a disk so full that a
+                    skill build's git snapshot fails first is still
+                    INTERNAL_ERROR). A build that threw keeps
                     its cause's code; an uncoded one is INTERNAL_ERROR.
                     CONFIG_INVALID: a broken project config. INPUT_UNREADABLE: a
                     declared eval input or dependency absent, an evals.json that

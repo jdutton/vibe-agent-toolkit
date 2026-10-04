@@ -18,8 +18,7 @@
  * the packager, and both get identical structure with a subject that fits.
  */
 
-import { constants } from 'node:fs';
-import { access, copyFile, mkdir } from 'node:fs/promises';
+import { copyFile, mkdir, open } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { isFilesystemAccessError } from '@vibe-agent-toolkit/utils';
@@ -113,6 +112,20 @@ export async function withFsAttribution<T>(
 }
 
 /**
+ * Prove `path` readable by opening it for reading and closing it.
+ *
+ * Never `access(R_OK)`: Node documents that on Windows it ignores ACLs, so an
+ * ACL-denied source passed it and then failed inside the copy, under the guard of
+ * the wrong side.
+ *
+ * @param path A file the build is about to read
+ */
+export async function proveReadable(path: string): Promise<void> {
+  const handle = await open(path, 'r');
+  await handle.close();
+}
+
+/**
  * Copy one file into the bundle, creating the directory it lands in.
  *
  * A copy touches both trees and its errno names neither, so the two sides are
@@ -124,7 +137,7 @@ export async function withFsAttribution<T>(
  * @param targetPath Where it lands in the bundle
  */
 export async function copyIntoBundle(subject: string, sourcePath: string, targetPath: string): Promise<void> {
-  await withFsAttribution(subject, 'source', () => access(sourcePath, constants.R_OK));
+  await withFsAttribution(subject, 'source', () => proveReadable(sourcePath));
   await withFsAttribution(subject, 'bundle', async () => {
     await mkdir(dirname(targetPath), { recursive: true });
     await copyFile(sourcePath, targetPath);

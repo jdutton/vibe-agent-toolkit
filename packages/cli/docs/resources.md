@@ -135,7 +135,8 @@ for the loud-cwd fallback policy and the projectRoot discovery ladder.
   `resources.collections` does not declare is refused (`USAGE_INVALID`, exit 2)
 - `--format <format>` - `yaml` (default), `json` (the same document), or `text`
   (one `location:line: severity: message [code]` line per finding, then a status
-  line, on stdout)
+  line, on stdout). Any other value is a usage error (exit 2) naming the three
+  accepted values; so is a `--validation-mode` other than `strict` or `permissive`
 - `--no-check-frontmatter-links` - Skip frontmatter URI-reference link validation across all collections (default: enabled)
 
 **Exit Codes:** derived from the published document, never chosen beside it.

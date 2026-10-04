@@ -6,12 +6,14 @@
 export { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE, buildAgentSkill, type BuildOptions, type BuildResult } from './builder.js';
 
 export {
+  checkPackageOutput,
   createProjectRegistry,
   extractH1Title,
   packageSkill,
   packageSkills,
   packagingConfigToPackageOptions,
   ZipSizeLimitError,
+  type PackageOutputCheck,
   type PackageSkillOptions,
   type PackageSkillResult,
   type ProjectRegistryOptions,

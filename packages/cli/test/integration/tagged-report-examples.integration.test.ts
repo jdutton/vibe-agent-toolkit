@@ -44,7 +44,12 @@ const TAG = 'vat-report=';
 const MAX_FENCE_INDENT = 3;
 const MIN_FENCE_LENGTH = 3;
 
-/** A fence line split into its marker run and the rest of the line; undefined when `text` is not a fence. */
+/**
+ * A fence line split into its marker run and the rest of the line; undefined when `text` is not a fence.
+ *
+ * CommonMark: a backtick fence's info string cannot contain a backtick, so such a line is
+ * text, not an opener. Reading it as one would flip fence pairing for the rest of the file.
+ */
 function parseFence(text: string): { marker: string; rest: string } | undefined {
   const indent = text.length - text.trimStart().length;
   if (indent > MAX_FENCE_INDENT) return undefined;
@@ -53,7 +58,24 @@ function parseFence(text: string): { marker: string; rest: string } | undefined 
   if (char !== '`' && char !== '~') return undefined;
   let length = 0;
   while (body.charAt(length) === char) length++;
-  return length < MIN_FENCE_LENGTH ? undefined : { marker: body.slice(0, length), rest: body.slice(length) };
+  if (length < MIN_FENCE_LENGTH) return undefined;
+  const rest = body.slice(length);
+  return char === '`' && rest.includes('`') ? undefined : { marker: body.slice(0, length), rest };
+}
+
+/**
+ * Whether `text` LOOKS like a fence line carrying the tag, read with no fence state at all:
+ * any indentation, any blockquote depth, any marker. The independent count the scan is
+ * reconciled against, so a shape the state machine walks past is a problem, not a skip.
+ */
+function looksLikeTaggedFence(text: string): boolean {
+  let at = 0;
+  while (at < text.length && (text.charAt(at) === '>' || text.charAt(at).trim() === '')) at++;
+  const char = text.charAt(at);
+  if (char !== '`' && char !== '~') return false;
+  let end = at;
+  while (text.charAt(end) === char) end++;
+  return end - at >= MIN_FENCE_LENGTH && mentionsTag(text.slice(end));
 }
 
 interface TaggedBlock {
@@ -118,22 +140,41 @@ function closes(text: string, fence: OpenFence): boolean {
   return match.marker.startsWith(fence.marker.charAt(0)) && match.marker.length >= fence.marker.length && match.rest.trim() === '';
 }
 
-/** The tagged blocks of `markdown` and every tag it could not read; every other fence is skipped whole. */
+/**
+ * The tagged blocks of `markdown` and every tag it could not read; every other fence is skipped whole.
+ *
+ * Reconciled against {@link looksLikeTaggedFence}: every line that looks like a tagged fence
+ * must have been met either as an opening fence (a block or a problem) or as content inside
+ * another fence (an example of a tag, quoted). Any other such line — indented four or more
+ * spaces, inside a blockquote — is a problem, so a tag can never be skipped silently.
+ */
 function collectTaggedBlocks(file: string, markdown: string): TaggedScan {
   const scan: TaggedScan = { blocks: [], problems: [] };
+  const accounted = new Set<number>();
+  // CRLF too: a trailing \r would reach the parser as part of the last scalar.
+  const lines = markdown.split(/\r?\n/);
   let open: OpenFence | undefined;
-  for (const [index, text] of markdown.split('\n').entries()) {
+  for (const [index, text] of lines.entries()) {
     if (open === undefined) {
       const match = parseFence(text);
-      if (match !== undefined) open = { marker: match.marker, line: index + 1, info: match.rest.trim(), body: [] };
+      if (match !== undefined) {
+        open = { marker: match.marker, line: index + 1, info: match.rest.trim(), body: [] };
+        accounted.add(index);
+      }
     } else if (closes(text, open)) {
       recordFence(file, open, scan);
       open = undefined;
     } else {
       open.body.push(text);
+      accounted.add(index);
     }
   }
   if (open !== undefined && mentionsTag(open.info)) scan.problems.push(`${file}:${open.line}: fence tagged vat-report is never closed`);
+  for (const [index, text] of lines.entries()) {
+    if (looksLikeTaggedFence(text) && !accounted.has(index)) {
+      scan.problems.push(`${file}:${index + 1}: a vat-report fence the checker cannot read as one (indented 4+ spaces, or inside a blockquote): "${text.trim()}"`);
+    }
+  }
   return scan;
 }
 
@@ -260,6 +301,42 @@ describe('tagged report examples — a tag can never be skipped silently', () =>
 
   it('reports a tag with an empty verb', () => {
     expect(scanProblems(fenced('yaml vat-report=', GOOD_DOCUMENT))).toHaveLength(1);
+  });
+
+  it('reports a tagged fence indented four spaces, as inside a list item', () => {
+    const markdown = '- item\n\n    ```yaml vat-report=cache clear\n    status: ok\n    ```\n';
+    expect(scanProblems(markdown)).toEqual([
+      'x.md:3: a vat-report fence the checker cannot read as one (indented 4+ spaces, or inside a blockquote): "```yaml vat-report=cache clear"',
+    ]);
+  });
+
+  it('reports a tagged fence inside a blockquote', () => {
+    const markdown = '> quoted\n>\n> ```yaml vat-report=cache clear\n> status: ok\n> ```\n';
+    expect(scanProblems(markdown)).toEqual([
+      'x.md:3: a vat-report fence the checker cannot read as one (indented 4+ spaces, or inside a blockquote): "> ```yaml vat-report=cache clear"',
+    ]);
+  });
+
+  it('does not let a backtick in an info string flip fence pairing for the rest of the file', () => {
+    // "```js `x`" is text under CommonMark, not an opener. Read as one, it swallows the
+    // tagged fence below as quoted content and the bad document is never checked.
+    const markdown = `\`\`\`js \`x\`\n\n${fenced('yaml vat-report=cache clear', 'status: success\n')}`;
+    const problems = scanProblems(markdown);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/^x\.md:5: not a valid cache clear report: /);
+  });
+
+  it('reads a tilde fence and a CRLF file the same as a backtick LF one', () => {
+    const tilde = `intro\n\n~~~yaml vat-report=cache clear\n${GOOD_DOCUMENT}~~~\n`;
+    const lf = fenced('yaml vat-report=cache clear', GOOD_DOCUMENT);
+    const reference = problemsIn(collectTaggedBlocks('x.md', lf).blocks);
+    for (const markdown of [tilde, lf.replaceAll('\n', '\r\n')]) {
+      const scan = collectTaggedBlocks('x.md', markdown);
+      expect(scan.problems).toEqual([]);
+      expect(scan.blocks.map((block) => [block.line, block.verb])).toEqual([[3, 'cache clear']]);
+      // The body reaches the schema intact: the same verdict as the LF backtick block.
+      expect(problemsIn(scan.blocks)).toEqual(reference);
+    }
   });
 });
 

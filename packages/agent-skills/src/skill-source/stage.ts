@@ -3,6 +3,8 @@ import { copyFile, mkdir } from 'node:fs/promises';
 
 import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
+import { proveReadable, withFsAttribution } from '../fs-attribution.js';
+
 import type { ResolveSkillSourceContext } from './types.js';
 
 /** Test seam: lets unit tests simulate a foreign-owned dir without a second OS user. */
@@ -31,12 +33,12 @@ export async function stageDirInto(
   opts: StageOptions = {},
 ): Promise<string> {
   const currentUid = opts.uidOverride ?? (process.getuid?.() ?? -1);
-  ensureOwned0700Dir(ctx.stagingRoot, currentUid);
+  await withFsAttribution(`Staging ${srcDir}`, 'output', async () => ensureOwned0700Dir(ctx.stagingRoot, currentUid), 'staged');
 
   const dest = safePath.join(ctx.stagingRoot, key);
   assertOwnedIfExists(dest, currentUid);
 
-  await mkdir(dest, { recursive: true });
+  await withFsAttribution(`Staging ${srcDir}`, 'output', () => mkdir(dest, { recursive: true }), 'staged');
   await copyTreeNoSymlinks(srcDir, dest);
   return toForwardSlash(dest);
 }
@@ -68,7 +70,11 @@ function assertOwnedIfExists(dir: string, currentUid: number): void {
   }
 }
 
-/** Recursively copy `src` into `dest`, refusing any symlinked entry. */
+/**
+ * Recursively copy `src` into `dest`, refusing any symlinked entry. A write the OS
+ * refuses (a full disk, an unwritable staging root) is coded as the run's output
+ * (`SKILL_PACKAGING_OUTPUT_FAILED`, `RUN_INCOMPLETE`).
+ */
 async function copyTreeNoSymlinks(src: string, dest: string): Promise<void> {
   const entries = readdirSync(src, { withFileTypes: true });
   for (const entry of entries) {
@@ -82,10 +88,12 @@ async function copyTreeNoSymlinks(src: string, dest: string): Promise<void> {
       );
     }
     if (st.isDirectory()) {
-      await mkdir(destPath, { recursive: true });
+      await withFsAttribution(`Staging ${srcPath}`, 'output', () => mkdir(destPath, { recursive: true }), 'staged');
       await copyTreeNoSymlinks(srcPath, destPath);
     } else if (st.isFile()) {
-      await copyFile(srcPath, destPath);
+      // Read side first, uncoded as before: an unreadable source is never the staging output's failure.
+      await proveReadable(srcPath);
+      await withFsAttribution(`Staging ${srcPath}`, 'output', () => copyFile(srcPath, destPath), 'staged');
     }
   }
 }

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, statSync } from 'node:fs';
 
-import { isFilesystemAccessError, mkdirSyncReal, normalizedTmpdir, relativeEscapesRoot, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, isVatError, mkdirSyncReal, normalizedTmpdir, relativeEscapesRoot, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
 /** Harness-location failure — maps to exit code 2. */
 export class HarnessLocationError extends VatError {
@@ -12,14 +12,35 @@ export class HarnessLocationError extends VatError {
 }
 
 /**
- * The harness root could not be created: the OS refused the write (an
- * unwritable or read-only parent, a full disk, a file in the way). The run did
- * not finish — `RUN_INCOMPLETE` — and nothing about the skill is wrong.
+ * The run could not write its own output — the harness root, its lock, the staged
+ * copies of the skills, the staged manifest: the OS refused the write (an
+ * unwritable or read-only parent, a full disk). The run did not finish —
+ * `RUN_INCOMPLETE` — and nothing about the skill is wrong.
  */
 export class HarnessOutputError extends VatError {
   readonly reason = 'preflight' as const;
   constructor(message: string, options?: ErrorOptions) {
     super('HARNESS_OUTPUT_UNWRITABLE', message, options);
+  }
+}
+
+/**
+ * Run a write into the run's own output and code a refusal from the OS as
+ * {@link HarnessOutputError}, naming `what` was being written. A `VatError` (an
+ * already-coded refusal) and a non-filesystem throw pass through untouched, so a
+ * defect is never relabelled as the disk's fault. The work must not READ the
+ * author's tree: an unreadable source is not the output's failure.
+ */
+export function writingHarnessOutput<T>(what: string, work: () => T): T {
+  try {
+    return work();
+  } catch (error) {
+    if (isVatError(error) || !isFilesystemAccessError(error)) throw error;
+    throw new HarnessOutputError(
+      `Could not write ${what}: ${(error as Error).message}. `
+        + 'Check that the directory is writable and that there is space on the device.',
+      { cause: error },
+    );
   }
 }
 
@@ -102,6 +123,12 @@ export function prepareHarnessRoot(dir: string, owner: 'vat' | 'operator'): void
   if (ls.isSymbolicLink()) {
     throw new HarnessLocationError(`Refusing to use a symlinked harness root: ${dir}.`);
   }
+  if (!ls.isDirectory()) {
+    throw new HarnessLocationError(
+      `Harness root ${dir} exists and is not a directory. VAT never removes what it did not create: `
+        + 'move it aside, or pass an --out that names a directory (or does not exist yet).',
+    );
+  }
 
   if (owner === 'vat' && process.platform !== 'win32') {
     const mode = statSync(dir).mode & 0o777;
@@ -117,16 +144,7 @@ export function prepareHarnessRoot(dir: string, owner: 'vat' | 'operator'): void
  * defect in VAT.
  */
 export function createHarnessRoot(dir: string): void {
-  try {
-    mkdirSyncReal(dir, { recursive: true, mode: 0o700 });
-  } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
-    throw new HarnessOutputError(
-      `Could not create the harness root ${dir}: ${(error as Error).message}. `
-        + 'Check that its parent directory is writable and that there is space on the device.',
-      { cause: error },
-    );
-  }
+  writingHarnessOutput(`the harness root ${dir}`, () => mkdirSyncReal(dir, { recursive: true, mode: 0o700 }));
 }
 
 /** True when `child` is a strict descendant of `root` (neither equal nor escaping). */

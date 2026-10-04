@@ -49,6 +49,8 @@ import {
   DIRECTORY_LISTING_REFUSED_CODE,
   DIRECTORY_WALK_REVISITED_CODE,
   isVatError,
+  RAG_DATABASE_NOT_REMOVABLE_CODE,
+  RAG_DATABASE_REMOVAL_INCOMPLETE_CODE,
   RAG_DATABASE_UNREADABLE_CODE,
   RAG_INDEX_EMPTY_CODE,
   VatError,
@@ -56,8 +58,8 @@ import {
 import { GIT_SNAPSHOT_UNREADABLE_CODE } from '@vibe-agent-toolkit/utils/git';
 import { YAML_EDIT_INPUT_REFUSED_CODE } from '@vibe-agent-toolkit/utils/yaml';
 
-import { AGENT_NAME_ESCAPES_SCOPE_CODE } from '../commands/agent/install-path.js';
-import { PLUGIN_SYMLINK_REFUSED_CODE } from '../commands/claude/plugin/tree-copy.js';
+import { AGENT_NAME_ESCAPES_SCOPE_CODE, PLUGIN_SYMLINK_REFUSED_CODE } from './command-error-codes.js';
+import { MARKETPLACE_SOURCE_UNREADABLE_CODE, MARKETPLACE_WRITE_FAILED_CODE } from './marketplace-io.js';
 
 const COMMAND_REFUSAL = 'COMMAND_REFUSAL';
 
@@ -107,6 +109,10 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   [CLAUDE_USER_STATE_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
   // A plugin key argument that is not `<plugin>@<marketplace>`.
   [PLUGIN_KEY_INVALID_CODE]: 'USAGE_INVALID',
+  // A file the marketplace build reads (a LICENSE, a plugin file, a files[] source, dist/skills) the OS will not read.
+  [MARKETPLACE_SOURCE_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
+  // A marketplace write the OS refused (a full disk, a read-only dist/, a file in the way): the run stopped.
+  [MARKETPLACE_WRITE_FAILED_CODE]: 'RUN_INCOMPLETE',
   // A plugin source holding a symlink no bundle can ship (`PluginSymlinkRefusedError`): the input, not VAT.
   [PLUGIN_SYMLINK_REFUSED_CODE]: 'INPUT_UNREADABLE',
   // An adopter's YAML (their config) that the surgical editor cannot take the edit into: not YAML, or the wrong shape at the path.
@@ -131,8 +137,12 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   // `vat rag query` over an index with no chunk table (rag-lancedb's query): nothing to search.
   // The constant lives in utils so this map need not load the optional backend that throws it.
   [RAG_INDEX_EMPTY_CODE]: 'INPUT_UNREADABLE',
-  // A RAG database whose chunk table LanceDB lists and cannot open: its files are damaged.
+  // A RAG database LanceDB cannot open or read (a table's manifest or data files are damaged).
   [RAG_DATABASE_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
+  // A RAG database path `removeRagDatabase` will not remove (a link, or foreign entries): nothing removed.
+  [RAG_DATABASE_NOT_REMOVABLE_CODE]: 'USAGE_INVALID',
+  // A RAG database removal the OS stopped partway: the run did not finish, not VAT's defect.
+  [RAG_DATABASE_REMOVAL_INCOMPLETE_CODE]: 'RUN_INCOMPLETE',
   // `vat skill test run`: why the harness could not run, decided beside its error classes.
   ...SKILL_TEST_REFUSAL_BY_ERROR_CODE,
 };

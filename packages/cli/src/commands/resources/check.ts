@@ -1498,7 +1498,7 @@ export async function checkCommand(
 ): Promise<void> {
   const logger = createLogger({ debug: options.debug ?? false });
   const startTime = Date.now();
-  // The two formats this verb offers; anything else was always YAML.
+  // The two formats this verb offers (Commander refuses any other).
   const format = options.format === 'json' ? 'json' : 'yaml';
 
   try {

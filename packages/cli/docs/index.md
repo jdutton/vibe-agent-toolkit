@@ -302,11 +302,15 @@ skills }, externalPlugins[] }`). Paths are relative to the directory holding
   `reason` names it), or no marketplace is configured
 - `2` - The build could not run: an undeclared `--marketplace` (`USAGE_INVALID`),
   a missing config or an invalid plugin declaration (`CONFIG_INVALID`), an input
-  nothing built or that is not what it should be (`INPUT_UNREADABLE`), the packager
+  nothing built or that is not what it should be, or a file the build copies that the
+  OS will not read — `LICENSE`, `README.md`, `CHANGELOG.md`, a plugin file, a
+  `files[].source`, a built skill in `dist/skills` (`INPUT_UNREADABLE`, naming it), the packager
   refusing a plugin-local skill's content, such as a skill `files:` source that does
   not exist (`RUN_INCOMPLETE`, with a `SKILL_PACKAGING_FAILED` finding at the skill), or
-  an output the OS will not let the build write — a full disk, a read-only `dist/`
-  (`RUN_INCOMPLETE`, no finding)
+  an output the OS will not let the build write — a full disk, a read-only `dist/`,
+  every copy into the marketplace tree included (`RUN_INCOMPLETE`, no finding). Known gap: a
+  disk so full that the git snapshot of the project fails before anything is written is still
+  `INTERNAL_ERROR` ("git did not answer …")
 
 **Examples:**
 
@@ -987,6 +991,33 @@ gate:
 durationMs: 151
 data:
   published: []
+```
+
+One declared marketplace, previewed. Produced by `vat claude marketplace publish --dry-run` in a project whose `my-mp` marketplace declares a `publish:` block and has been built.
+
+```yaml vat-report=claude marketplace publish
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 199
+data:
+  published:
+    - marketplace: my-mp
+      version: 1.0.0
+      branch: claude-marketplace
+      files:
+        - .claude-plugin/marketplace.json
+        - plugins/
+        - CHANGELOG.md
+        - README.md
+        - LICENSE
+      dryRun: true
 ```
 
 ### `claude org users remove`

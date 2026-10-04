@@ -32,6 +32,29 @@ describe('scan', () => {
     expect(result.results[0]?.path).toBe(skillPath);
   });
 
+  // A path under a directory without search permission is not absent — the OS
+  // refused to look. `existsSync` answers false there, which used to become
+  // "Path does not exist" and send the reader hunting for a typo.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'reports a root under an untraversable directory as unreadable, not as nonexistent',
+    async () => {
+      const locked = safePath.join(tempDir, 'locked');
+      fs.mkdirSync(safePath.join(locked, 'skills'), { recursive: true });
+      fs.chmodSync(locked, 0o000);
+      try {
+        const failure = await scan({ path: safePath.join(locked, 'skills') }).then(
+          () => undefined,
+          (error: unknown) => error as NodeJS.ErrnoException,
+        );
+        expect(failure?.message).not.toMatch(/does not exist/);
+        expect(failure?.message).toMatch(/cannot be read \(EACCES\)/);
+        expect((failure?.cause as NodeJS.ErrnoException | undefined)?.code).toBe('EACCES');
+      } finally {
+        fs.chmodSync(locked, 0o755);
+      }
+    },
+  );
+
   it('should scan directory non-recursively', async () => {
     fs.writeFileSync(safePath.join(tempDir, 'SKILL.md'), '# Skill');
     fs.writeFileSync(safePath.join(tempDir, 'README.md'), '# Readme');

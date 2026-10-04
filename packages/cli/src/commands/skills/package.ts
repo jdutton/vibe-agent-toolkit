@@ -9,6 +9,7 @@ import { basename, dirname } from 'node:path';
 
 
 import {
+  checkPackageOutput,
   isSkillPackagingInputError,
   packageSkill,
   validateSkill,
@@ -36,6 +37,12 @@ import type { SkillsPackageData } from './package-schema.js';
 const DEFAULT_TARGET: PackagingTarget = 'claude-code';
 /** Valid packaging targets */
 const VALID_TARGETS: readonly PackagingTarget[] = ['claude-code', 'claude-web'];
+/** One format `packageSkill` can produce. */
+type PackageFormat = NonNullable<PackageSkillOptions['formats']>[number];
+/** Every `--formats` value, in the order the help text lists them. */
+const VALID_FORMATS: readonly PackageFormat[] = ['directory', 'zip', 'npm', 'marketplace'];
+/** The formats produced when `--formats` is not given. */
+const DEFAULT_FORMATS: readonly PackageFormat[] = ['directory', 'zip'];
 
 export interface SkillsPackageCommandOptions {
   output: string;
@@ -89,13 +96,13 @@ export function createPackageCommand(): Command {
     .requiredOption('-o, --output <path>', 'Output directory for packaged skill')
     .option(
       '-f, --formats <formats>',
-      'Package formats (comma-separated: directory,zip,npm,marketplace)',
-      'directory,zip'
+      `Package formats (comma-separated: ${VALID_FORMATS.join(',')}; an unknown name is refused)`,
+      DEFAULT_FORMATS.join(',')
     )
     .option('--no-rewrite-links', 'Skip rewriting relative links in copied files')
     .option('-b, --base-path <path>', 'Base path for resolving relative links (default: dirname of SKILL.md)')
-    .option('--dry-run', 'Preview packaging without creating files')
-    .option('--force', 'Replace whatever is already at --output (and the archive beside it); without it, an --output that holds anything is refused')
+    .option('--dry-run', 'Preview packaging without creating files (an --output the real run would refuse is refused here too)')
+    .option('--force', 'Replace a previous package: remove and rebuild --output, overwrite a <output>.zip / <name>.marketplace.json file beside it (a directory there is not removed); without it, an --output that holds anything is refused')
     .option('--debug', 'Enable debug logging')
     .option(
       '--target <target>',
@@ -120,7 +127,12 @@ Description:
   anything — a non-empty directory, a file, or (with the zip / marketplace
   formats) the <output>.zip or <name>.marketplace.json beside it — is refused
   (USAGE_INVALID) and left exactly as it was, unless --force says it is a
-  previous package to replace. An empty directory is used as-is.
+  previous package to replace: --force removes the --output and overwrites
+  a <output>.zip / <name>.marketplace.json FILE beside it, but never removes
+  a directory standing in an archive's place (that write ends RUN_INCOMPLETE).
+  --dry-run runs the same check. An empty directory is used as-is. An --output
+  that is, or contains, the SKILL.md or a file it bundles is refused
+  (USAGE_INVALID) even with --force: VAT never writes over what it reads.
 
 Output:
   YAML report on stdout (schema: packages/cli/schemas/skills-package.json):
@@ -136,13 +148,16 @@ Exit Codes:
       packaged), packaging refused the skill's content (SKILL_PACKAGING_FAILED),
       or its claude-web ZIP exceeds 8 MB (SKILL_PACKAGE_TOO_LARGE)
   2 - The run could not start or finish; error.code says why: USAGE_INVALID
-      (a <skill-path> naming nothing, an invalid --target, no project root,
-      an --output already holding something and no --force), INPUT_UNREADABLE
-      (a <skill-path> the OS will not stat or read, or a file in the git
-      repository it will not read), RUN_INCOMPLETE (an output the OS will not
-      let the build write: a full disk, a read-only or unwritable output
-      directory, a file in the way, a ZIP that could not be written), or
-      INTERNAL_ERROR (an unexpected failure)
+      (a <skill-path> naming nothing, an invalid --target, an unknown or
+      empty --formats value, no project root,
+      an --output already holding something and no --force, an --output
+      holding the skill's own source), INPUT_UNREADABLE
+      (a <skill-path> the OS will not stat or read; this verb takes no git
+      snapshot), RUN_INCOMPLETE (an output the OS will not let the build
+      write: a full disk, a read-only or unwritable output directory, a file
+      in the way, a ZIP, npm package.json or marketplace manifest that could
+      not be written -- its partial file removed), or INTERNAL_ERROR (an
+      unexpected failure)
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -224,7 +239,7 @@ interface SkillsPackageReportInput {
 function refusedIssue(refused: NonNullable<SkillsPackageReportInput['refused']>): ValidationIssue {
   return refused.code === 'SKILL_PACKAGE_TOO_LARGE'
     ? packageTooLargeIssue(refused.message, refused.location)
-    : packagingFailedIssue(refused.message, refused.location);
+    : packagingFailedIssue(refused.message, refused.location, 're-run vat skills package');
 }
 
 /**
@@ -362,8 +377,25 @@ function frontmatterVersion(parseResult: ParseResult): string | null {
   return typeof version === 'string' || typeof version === 'number' ? String(version) : null;
 }
 
-/** Test seam: the report's pure field derivations. */
-export const __internal = { extractSkillName, frontmatterVersion, reportPath };
+/**
+ * The `--formats` value, or the invocation's mistake. An unknown name used to
+ * be dropped by the packager, so `--formats zpi` wrote only the directory and
+ * exited 0.
+ */
+function resolvePackageFormats(rawFormats: string | undefined): PackageFormat[] {
+  if (rawFormats === undefined) return [...DEFAULT_FORMATS];
+  const requested = rawFormats.split(',').map((format) => format.trim()).filter((format) => format !== '');
+  const unknown = requested.filter((format) => !(VALID_FORMATS as readonly string[]).includes(format));
+  if (requested.length === 0 || unknown.length > 0) {
+    const quoted = unknown.map((format) => JSON.stringify(format)).join(', ');
+    const named = unknown.length > 0 ? `Unknown --formats value(s): ${quoted}` : '--formats names no format';
+    throw new CommandRefusalError('USAGE_INVALID', `${named}. Valid formats are: ${VALID_FORMATS.join(', ')}`);
+  }
+  return requested as PackageFormat[];
+}
+
+/** Test seam: the report's pure field derivations, and the `--formats` resolver. */
+export const __internal = { extractSkillName, frontmatterVersion, reportPath, resolvePackageFormats };
 
 /**
  * Perform dry-run preview of packaging operation. Runs after the validation
@@ -372,6 +404,7 @@ export const __internal = { extractSkillName, frontmatterVersion, reportPath };
 async function performDryRun(
   skillPath: string,
   options: SkillsPackageCommandOptions,
+  formats: readonly PackageFormat[],
   logger: ReturnType<typeof createLogger>
 ): Promise<SkillsPackageData> {
   logger.info(`🔍 Dry-run: Analyzing skill packaging...`);
@@ -395,12 +428,20 @@ async function performDryRun(
   }
   logger.info(`\n   Total: ${linkedFiles.length + 1} files`);
 
-  // Parse and display formats
-  const formats = options.formats?.split(',').map(f => f.trim()) ?? ['directory', 'zip'];
   logger.info(`\n📦 Formats to create:`);
   for (const format of formats) {
     logger.info(`   - ${format}`);
   }
+
+  // The real run's output check, so a preview never says ok to an output the run refuses.
+  checkPackageOutput({
+    outputPath: options.output,
+    skillName,
+    formats,
+    sources: [skillPath, ...linkedFiles],
+    projectRoot: findProjectRoot(dirname(skillPath)) ?? dirname(skillPath),
+    replaceExistingOutput: options.force === true,
+  });
 
   // Estimate ZIP size if needed
   if (formats.includes('zip')) {
@@ -444,15 +485,13 @@ async function packageAndReport(
   skillPath: string,
   options: SkillsPackageCommandOptions,
   target: PackagingTarget,
+  formats: readonly PackageFormat[],
   validation: ValidationResult,
   locationRoot: string,
   logger: ReturnType<typeof createLogger>
 ): Promise<Report<SkillsPackageData>> {
-  const formats = options.formats
-    ?.split(',')
-    .map(f => f.trim() as 'directory' | 'zip' | 'npm' | 'marketplace') ?? ['directory', 'zip'];
   const packageOptions: PackageSkillOptions = {
-    formats,
+    formats: [...formats],
     rewriteLinks: resolveRewriteLinks(options),
     outputPath: options.output,
     target,
@@ -517,6 +556,7 @@ async function runPackage(
 
   logger.info(`📦 Packaging skill: ${skillPathArg}`);
   const target = resolveTarget(options.target ?? DEFAULT_TARGET);
+  const formats = resolvePackageFormats(options.formats);
 
   // VALIDATE FIRST - shift left to catch errors early.
   const skillDir = dirname(skillPath);
@@ -530,9 +570,9 @@ async function runPackage(
     return buildSkillsPackageReport({ validation, data: { skill, version: null, outputPath: null, dryRun: options.dryRun === true } });
   }
   if (options.dryRun) {
-    return buildSkillsPackageReport({ validation, data: await performDryRun(skillPath, options, logger) });
+    return buildSkillsPackageReport({ validation, data: await performDryRun(skillPath, options, formats, logger) });
   }
-  return packageAndReport(skillPath, options, target, validation, locationRoot, logger);
+  return packageAndReport(skillPath, options, target, formats, validation, locationRoot, logger);
 }
 
 async function packageCommand(

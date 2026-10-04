@@ -403,6 +403,24 @@ describe('stageHarness — manifest re-stage behavior (readExistingManifest)', (
     });
   });
 
+  // The staged manifest and the staged copy are the run's own output: a write the OS
+  // refuses (a full disk) is RUN_INCOMPLETE, never an uncoded errno.
+  it('codes a manifest write the OS refuses as the run\'s output (HARNESS_OUTPUT_UNWRITABLE)', async () => {
+    const sourceDir = writeSourceSkill(getTempDir());
+    const harnessRoot = makeHarnessRoot();
+    await withSyncFsRefused('writeFileSync', safePath.join(harnessRoot, MANIFEST_FILE), 'ENOSPC', async () => {
+      await expect(stageFlat(harnessRoot, sourceDir)).rejects.toMatchObject({ code: 'HARNESS_OUTPUT_UNWRITABLE' });
+    });
+  });
+
+  it('codes a staged copy the OS refuses as the run\'s output (HARNESS_OUTPUT_UNWRITABLE)', async () => {
+    const sourceDir = writeSourceSkill(getTempDir());
+    const harnessRoot = makeHarnessRoot();
+    await withSyncFsRefused('cpSync', sourceDir, 'ENOSPC', async () => {
+      await expect(stageFlat(harnessRoot, sourceDir)).rejects.toMatchObject({ code: 'HARNESS_OUTPUT_UNWRITABLE' });
+    });
+  });
+
   it('treats a schema-invalid manifest as corrupt too (valid JSON, wrong shape) and re-stages', async () => {
     const sourceDir = writeSourceSkill(getTempDir());
     const harnessRoot = makeHarnessRoot();

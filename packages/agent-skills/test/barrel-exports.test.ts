@@ -104,6 +104,7 @@ const BARREL_EXPORTS = [
   'buildGraderPrompt',
   'buildStaleDistWarningLines',
   'checkBrokenPackagedLinks',
+  'checkPackageOutput',
   'checkPackagedTestInput',
   'cloneGitSource',
   'collectNonPortableAssetReferenceIssues',

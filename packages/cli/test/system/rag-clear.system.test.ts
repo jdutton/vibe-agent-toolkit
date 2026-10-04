@@ -5,7 +5,10 @@
  * the vector database and deletes the database directory.
  */
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { basename } from 'node:path';
+
+import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 
 import { RAG_CLEAR_REPORT_SCHEMA } from '../../src/commands/rag/admin-schema.js';
 
@@ -22,13 +25,25 @@ async function runRag(args: string[], cwd: string): Promise<{ exit: number | nul
   return { exit: result.status, code: error?.code, message: error?.message };
 }
 
-/** Overwrite every file under `dir` with bytes LanceDB cannot read, keeping the tree's shape. */
-function corrupt(dir: string): void {
+/**
+ * Overwrite files under `dir` with bytes LanceDB cannot read, keeping the tree's shape —
+ * every file, or (`dataOnly`) only the `data/` fragments, which leaves each table's
+ * manifest intact so the table OPENS and the failure comes on the first read.
+ */
+function corrupt(dir: string, dataOnly = false): void {
   for (const entry of fs.readdirSync(dir, { recursive: true, withFileTypes: true })) {
     // A database LanceDB wrote holds no links; one would be written through, outside `dir`.
     if (entry.isSymbolicLink()) throw new Error(`unexpected link in a RAG database: ${entry.name}`);
-    if (entry.isFile()) fs.writeFileSync(safePath.join(entry.parentPath, entry.name), 'garbage');
+    if (!entry.isFile() || (dataOnly && basename(entry.parentPath) !== 'data')) continue;
+    fs.writeFileSync(safePath.join(entry.parentPath, entry.name), 'garbage');
   }
+}
+
+/** A copy of the suite's indexed database at `<tempDir>/<name>`. */
+function copyOfDatabase(name: string): string {
+  const copy = safePath.join(suite.tempDir, name);
+  fs.cpSync(suite.dbPath, copy, { recursive: true });
+  return copy;
 }
 
 describe('RAG clear command (system test)', () => {
@@ -53,8 +68,7 @@ describe('RAG clear command (system test)', () => {
   // docs/architecture/rag.md tells a user with an unreadable database to `vat rag clear` it:
   // that only works if clear does not have to OPEN the database it is removing.
   it('a corrupt database: stats is INPUT_UNREADABLE, and clear removes it', async () => {
-    const corrupted = safePath.join(suite.tempDir, 'corrupt-db');
-    fs.cpSync(suite.dbPath, corrupted, { recursive: true });
+    const corrupted = copyOfDatabase('corrupt-db');
     corrupt(corrupted);
 
     expect(await runRag(['stats', '--db', corrupted], suite.projectDir)).toMatchObject({ exit: 2, code: 'INPUT_UNREADABLE' });
@@ -63,6 +77,60 @@ describe('RAG clear command (system test)', () => {
     expect(result.status).toBe(0);
     expect(RAG_CLEAR_REPORT_SCHEMA.parse(parsed)).toMatchObject({ status: 'ok', data: { cleared: true } });
     expect(fs.existsSync(corrupted)).toBe(false);
+  });
+
+  // Damaged data files behind an intact manifest: the table opens, and the READ fails.
+  // That read failure was uncoded, so stats and query ended INTERNAL_ERROR.
+  it.each([['stats'], ['query', 'widgets']])('rag %s over damaged data files is INPUT_UNREADABLE, never INTERNAL_ERROR', async (...verb) => {
+    const damaged = copyOfDatabase(`damaged-data-${verb[0]}`);
+    corrupt(damaged, true);
+
+    expect(await runRag([...verb, '--db', damaged], suite.projectDir)).toMatchObject({ exit: 2, code: 'INPUT_UNREADABLE' });
+  });
+
+  // Finder writes `.DS_Store` into any folder a person opens: still the database vat rag index wrote.
+  it('a database holding .DS_Store is still a database', async () => {
+    const littered = copyOfDatabase('littered-db');
+    fs.writeFileSync(safePath.join(littered, '.DS_Store'), '');
+
+    expect(await runRag(['stats', '--db', littered], suite.projectDir)).toMatchObject({ exit: 0 });
+  });
+
+  // Removing a link removes only the link: the index it names survived a `cleared: true` report.
+  it('rag clear --db <a link to a database> is USAGE_INVALID naming the real path, and removes nothing', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const real = copyOfDatabase('linked-real-db');
+    const link = safePath.join(suite.tempDir, 'linked-db');
+    createSymlink(cap, real, link, 'dir');
+
+    const outcome = await runRag(['clear', '--db', link], suite.projectDir);
+
+    expect(outcome).toMatchObject({ exit: 2, code: 'USAGE_INVALID' });
+    expect(String(outcome.message)).toContain('linked-real-db');
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(fs.readdirSync(real)).toContain('rag_chunks.lance');
+  });
+
+  // The project's own `.rag-db` holding other things: no --db was given, so the project's state is at fault.
+  it('a project .rag-db holding foreign entries is INPUT_UNREADABLE, not USAGE_INVALID', async () => {
+    const project = setupTestProject(suite.tempDir, { name: 'rag-db-foreign', withDocs: true });
+    mkdirSyncReal(safePath.join(project, '.rag-db'), { recursive: true });
+    fs.writeFileSync(safePath.join(project, '.rag-db', 'notes.md'), 'mine');
+
+    expect(await runRag(['clear'], project)).toMatchObject({ exit: 2, code: 'INPUT_UNREADABLE' });
+    expect(fs.existsSync(safePath.join(project, '.rag-db', 'notes.md'))).toBe(true);
+  });
+
+  // A removal the OS stops partway leaves part of the database gone: the run did not finish.
+  it.skipIf(CANNOT_DENY_READS)('a clear the OS stops partway is RUN_INCOMPLETE, never INTERNAL_ERROR', async () => {
+    const partial = copyOfDatabase('partial-db');
+    const locked = safePath.join(partial, 'rag_chunks.lance', 'data');
+    fs.chmodSync(locked, 0o555);
+    try {
+      expect(await runRag(['clear', '--db', partial], suite.projectDir)).toMatchObject({ exit: 2, code: 'RUN_INCOMPLETE' });
+    } finally {
+      fs.chmodSync(locked, 0o755);
+    }
   });
 
   // The project's default `.rag-db` is a FILE: that is not "nothing indexed yet".
