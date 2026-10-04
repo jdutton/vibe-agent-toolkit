@@ -16,7 +16,7 @@
  */
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import {
@@ -74,7 +74,7 @@ import {
   skippedGlobMatchesToIssues,
   type SkillFileEntry,
 } from './files-config.js';
-import { READ_REMEDY, withFsAttribution } from './fs-attribution.js';
+import { copyIntoBundle, withFsAttribution } from './fs-attribution.js';
 import { LINK_GRAPH_MEMBER_GLOBS } from './link-graph-members.js';
 import { packagingInputError, SKILL_NAME_NOT_A_SEGMENT_CODE } from './packaging-errors.js';
 import { checkBrokenPackagedLinks, checkMissingReferencedPaths, checkUnreferencedFiles } from './post-build-checks.js';
@@ -782,6 +782,7 @@ export async function packageSkill(
   // same shape as the copiers, at the step before any of them run.
   await withFsAttribution(
     `skill '${skillMetadata.name}' output directory ${issueLocation(outputPath, projectRoot) || '.'}`,
+    'output',
     () => mkdir(outputPath, { recursive: true }),
     'created',
   );
@@ -1304,11 +1305,11 @@ async function registerBundledAssets(
       // earlier, and the step that fires first.
       await withFsAttribution(
         `linked file ${issueLocation(assetPath, projectRoot) || '.'}`,
+        'source',
         () => registry.addResource(assetPath),
         // The file is read to discover its links before anything is copied, so
         // naming the copy would point past the step that actually failed.
         'read while collecting the files this skill links to',
-        READ_REMEDY,
       );
     } catch (error) {
       // `addResource` (singular) THROWS on a collision and — unlike
@@ -2096,18 +2097,13 @@ async function copyAndRewriteFile(
   // `files:` fix landed in this same file; it is a different function.
   const subject = `linked file ${issueLocation(sourcePath, ctx.projectRoot) || '.'}`;
 
-  // Ensure target directory exists
-  await withFsAttribution(subject, async () => {
-    await mkdir(dirname(targetPath), { recursive: true });
-  });
-
   const lower = sourcePath.toLowerCase();
   const isMarkdown = lower.endsWith('.md');
   const isHtml = lower.endsWith('.html') || lower.endsWith('.htm');
 
   // Non-rewritable files or rewriting disabled: plain binary copy
   if ((!isMarkdown && !isHtml) || !ctx.rewriteLinks) {
-    await withFsAttribution(subject, () => copyFile(sourcePath, targetPath));
+    await copyIntoBundle(subject, sourcePath, targetPath);
     return;
   }
 
@@ -2140,11 +2136,20 @@ async function copyAndRewriteFile(
   // `utf-8` read did on the copy as well as the rewrite.
   const { text: content } = await withFsAttribution(
     subject,
+    'source',
     () => readTextContent(sourcePath),
     // Not "copied": the read is the step that failed, and this lane reads before
     // it rewrites, so naming the copy would point past the actual failure.
     'read for link rewriting',
-    READ_REMEDY,
+  );
+  const writeIntoBundle = (text: string): Promise<void> => withFsAttribution(
+    subject,
+    'output',
+    async () => {
+      await mkdir(dirname(targetPath), { recursive: true });
+      await writeFile(targetPath, text, 'utf-8');
+    },
+    WRITE_ACTION,
   );
 
   // Look up the resource in the "from" registry
@@ -2167,11 +2172,7 @@ async function copyAndRewriteFile(
         : `Copied '${sourcePath}' verbatim without link rewriting: it lost a resource-id collision to ` +
             `'${winner}', which was registered first and holds the id. Source-relative links inside it are not rewritten.`,
     );
-    await withFsAttribution(
-      subject,
-      () => writeFile(targetPath, content, 'utf-8'),
-      WRITE_ACTION,
-    );
+    await writeIntoBundle(content);
     return;
   }
 
@@ -2190,11 +2191,7 @@ async function copyAndRewriteFile(
           `the original value was kept.`,
       );
     });
-    await withFsAttribution(
-      subject,
-      () => writeFile(targetPath, rewritten, 'utf-8'),
-      WRITE_ACTION,
-    );
+    await writeIntoBundle(rewritten);
     return;
   }
 
@@ -2242,11 +2239,7 @@ async function copyAndRewriteFile(
     }
   }
 
-  await withFsAttribution(
-    subject,
-    () => writeFile(targetPath, editor.toString(), 'utf-8'),
-    WRITE_ACTION,
-  );
+  await writeIntoBundle(editor.toString());
 }
 
 /**

@@ -27,6 +27,8 @@
 // block dispatches on, never `message`.
 export * from './errors/vat-error.js';
 export { RAG_INDEX_EMPTY_CODE } from './errors/rag-index-empty.js';
+// The code alone: its error class is on `./crawl`, and the CLI's refusal map needs only the code.
+export { DIRECTORY_LISTING_REFUSED_CODE } from './listing-refusal.js';
 
 // Cross-platform path utilities
 export * from './path-utils.js';
@@ -89,6 +91,7 @@ export * from './asset-reference.js';
 // The lookups themselves, plus the memo every fill shares.
 export { isFilesystemAccessError, isPathAbsentError } from './errors/errno.js';
 export {
+  COPY_LINK_ESCAPES_SOURCE_CODE,
   copyDirectory,
   CopyLinkEscapesSourceError,
   FsLookupCache,

@@ -839,88 +839,6 @@ export const CODE_REGISTRY = {
     "No action needed — VAT reads registries it does not own liberally, so the unknown value passed through untouched. Report the field so VAT's model can catch up, or set severity.REGISTRY_SHAPE_DRIFT to ignore.",
     'registry_shape_drift',
   ),
-  // `vat claude plugin uninstall` — a warning, not an error: the cleanup ran and
-  // removed what was there; what the operator learns is that the install was not
-  // VAT's, so artifacts VAT never recorded may remain.
-  PLUGIN_UNINSTALL_INCOMPLETE: entry(
-    'finding',
-    'warning',
-    'An uninstalled plugin had a directory under the Claude marketplaces tree but no entry in the plugin registry, so it was not installed by VAT; the directory was removed, and anything its installer wrote elsewhere may remain.',
-    'Check Claude Code for leftovers of the plugin the message names (run /plugin), and remove them there. Set severity.PLUGIN_UNINSTALL_INCOMPLETE to ignore if half-removed installs are expected.',
-    'plugin_uninstall_incomplete',
-  ),
-
-  // `vat audit settings` — Claude settings files and the settings they merge
-  // into. Registered so the verb publishes findings with codes like every other
-  // report, not a private vocabulary carried in its messages.
-  SETTINGS_FILE_INVALID: entry(
-    'finding',
-    'error',
-    'A Claude settings file is not valid: its content does not parse as JSON, or a field violates the settings schema for its type.',
-    'Fix the field the finding names (its `field` is the dotted key path), or the JSON syntax, then re-run vat audit settings --file.',
-    'settings_file_invalid',
-  ),
-  SETTINGS_TYPE_AMBIGUOUS: entry(
-    'finding',
-    'info',
-    'A settings file could be a user or a project settings file — they share one schema — so it was validated as a user file.',
-    'Pass --type user or --type project to state which it is.',
-    'settings_type_ambiguous',
-  ),
-  SETTINGS_PATH_DEPRECATED: entry(
-    'finding',
-    'error',
-    'A managed settings file is present at a path Claude Code no longer reads, so the policy it carries is not in effect.',
-    'Move the managed settings file to the current managed-settings path (vat audit settings --show-paths lists it) and remove the legacy file.',
-    'settings_path_deprecated',
-  ),
-  SETTINGS_RULE_SHADOWED: entry(
-    'finding',
-    'warning',
-    'A permission rule can never take effect: a rule in a higher-priority list (deny over ask over allow) or a duplicate in its own list already decides it.',
-    'Remove the shadowed rule, or narrow the rule that shadows it.',
-    'settings_rule_shadowed',
-  ),
-  SETTINGS_MARKETPLACE_TOKEN_MISSING: entry(
-    'finding',
-    'warning',
-    'A registered marketplace is sourced from GitHub and GITHUB_TOKEN is not set, so a private repository cannot be fetched.',
-    'Set GITHUB_TOKEN in the environment Claude Code runs in, or register the marketplace from a public source.',
-    'settings_marketplace_token_missing',
-  ),
-
-  // `vat agent validate` — an agent manifest (agent.yaml) and the files it
-  // references. A manifest that cannot be read at all is a refusal, not one of
-  // these: these are statements about a manifest the run did read.
-  AGENT_MANIFEST_INVALID: entry(
-    'finding',
-    'error',
-    'An agent manifest was read but does not satisfy the agent manifest schema.',
-    'Fix the field the finding names (its `field` is the dotted key path) so agent.yaml matches the manifest schema, then re-run vat agent validate.',
-    'agent_manifest_invalid',
-  ),
-  AGENT_REFERENCE_MISSING: entry(
-    'finding',
-    'error',
-    'A file or directory the agent manifest references — a prompt, a resource, the RAG database — does not exist.',
-    'Create the referenced file, correct its path in agent.yaml, or (for the RAG database) run vat rag index.',
-    'agent_reference_missing',
-  ),
-  AGENT_REFERENCE_UNREADABLE: entry(
-    'finding',
-    'error',
-    'A file or directory the agent manifest references exists, but the operating system refused access to it, so it could not be checked.',
-    'Make the referenced path readable — check its permissions and ownership — then re-run vat agent validate.',
-    'agent_reference_unreadable',
-  ),
-  AGENT_RAG_NO_SOURCES: entry(
-    'finding',
-    'warning',
-    'The agent manifest declares a RAG configuration that names no sources, so nothing can be indexed for it.',
-    'Add sources to the spec.rag entry, or remove the RAG configuration if the agent does not use one.',
-    'agent_rag_no_sources',
-  ),
-
   // Resources path — link / frontmatter / external-URL codes
   // Promotions of existing resources-package validator behavior (formerly free-form
   // lowercase `type` strings). Severities are locked by the design spec and reflect
@@ -1297,14 +1215,8 @@ export const FindingCodeSchema = z.enum(codesOfKind('finding'));
  * `consistency-check.ts` in the CLI): config.yaml discovery cross-referenced
  * against `package.json` `vat.skills` and the plugin assignments.
  *
- * Deliberately NOT `CODE_REGISTRY` entries. Each is emitted with a fixed
- * severity from its one site and nothing reads a `validation.severity`
- * override for it, so making it an `IssueCode` would let an adopter write
- * `severity: { PUBLISHED_SKILL_NOT_IN_PLUGIN: ignore }`, watch it parse, and
- * see no effect — the declared-but-inert shape this registry exists to prevent.
- * They are documented beside the registry in docs/validation-codes.md under
- * "Codes outside the overridable framework", and that doc is held to the
- * emit sites by `test/docs/emitted-codes-documented.test.ts`.
+ * Deliberately NOT `CODE_REGISTRY` entries, for the reason every lane-owned
+ * code in {@link NonOverridableCode} is not: nothing reads an override for them.
  */
 export const CONSISTENCY_CODES = [
   'CONFIG_REFERENCES_UNKNOWN_SKILL',
@@ -1339,11 +1251,8 @@ export type NonOverridableCode =
   | 'SKILL_DESCRIPTION_EMPTY'
   | 'SKILL_MISCONFIGURED_LOCATION'
   | 'LINK_INTEGRITY_BROKEN'
-  // FILENAME_COLLISION is NOT here: it has a CODE_REGISTRY entry and is emitted
-  // through the same framework as every other packaging finding. Listing a code
-  // in both places is a contradiction, not a belt-and-braces — `finalize()` finds
-  // the registry entry and resolves severity, so the NonOverridable claim would
-  // simply be false.
+  // FILENAME_COLLISION is NOT here: it has a CODE_REGISTRY entry, so `finalize()`
+  // resolves its severity and a NonOverridable claim would be false.
   | 'DUPLICATE_FILES_DEST'
   | 'PLUGIN_MISSING_MANIFEST'
   | 'PLUGIN_INVALID_JSON'
@@ -1360,33 +1269,37 @@ export type NonOverridableCode =
   | 'REGISTRY_INVALID_SCHEMA'
   | 'UNKNOWN_FORMAT'
   | 'SKILL_TOO_LONG'
-  // `vat skills build`: a `--skill` naming a `publish: false` skill, and a skill
-  // whose content the packager refused. Always `error` — nothing reads an override for them,
-  // so a registry entry would let `validation.severity` accept an inert key.
+  // Lane-owned findings: the verb that emits each fixes its severity and reads no
+  // `validation.severity`, so a registry entry would let the config accept an inert
+  // key — the declared-but-inert shape this registry exists to prevent. Each is
+  // documented in docs/validation-codes.md, "Codes outside the overridable
+  // framework", which `test/docs/emitted-codes-documented.test.ts` holds to the emit sites.
+  // `vat skills build`
   | 'SKILL_BUILD_TARGET_NOT_BUILDABLE'
   | 'SKILL_PACKAGING_FAILED'
-  // `vat skills package`: a claude-web ZIP over the 8 MB claude.ai upload
-  // ceiling (not PACKAGED_SIZE_EXCEEDS_API_LIMIT, the 30 MiB Skills API
-  // warning). The verb reads no project config, so an override would be inert.
+  // `vat skills package` (not PACKAGED_SIZE_EXCEEDS_API_LIMIT, the Skills API warning)
   | 'SKILL_PACKAGE_TOO_LARGE'
-  // `vat verify`'s files-config-dests phase: a declared `files:` dest the built
-  // output lacks. Always `error` — the phase reads no `validation.severity`, so a
-  // registry entry would let the config accept a key nothing applies.
+  // `vat verify`, files-config-dests phase
   | 'FILES_CONFIG_DEST_MISSING'
-  // `vat skill test run`: an eval that ran and did not pass, at `error` — or
-  // `warning` under `--allow-eval-failure`, a flag, not config. The verb reads no
-  // `validation.severity`, so a registry entry would let config accept an inert key.
+  // `vat skill test run` (`warning` under `--allow-eval-failure`, a flag, not config)
   | 'SKILL_TEST_EVAL_FAILED'
-  // `vat doctor`: a check that failed (`error`) or could not reach an answer
-  // (`warning`). Doctor reads no project config for severity — it diagnoses a
-  // config that may not exist — so a registry entry would be an inert key.
+  // `vat doctor`
   | 'DOCTOR_CHECK_FAILED'
   | 'DOCTOR_CHECK_WARNED'
-  // `vat rag index`: a document the index does not hold — the crawl could not
-  // read it, or the provider could not chunk or embed it. Always `error`; the
-  // verb reads no `validation.severity`, so a registry entry would be an inert key.
+  // `vat rag index`
   | 'RAG_DOCUMENT_INDEX_FAILED'
-  // `vat corpus scan`: a seed entry whose audit could not run, or whose requested
-  // review did not finish. Always `warning` — the scan finished and the entry is
-  // named; the verb reads no project config, so a registry entry would be inert.
-  | 'CORPUS_ENTRY_INCOMPLETE';
+  // `vat corpus scan`
+  | 'CORPUS_ENTRY_INCOMPLETE'
+  // `vat claude plugin uninstall`
+  | 'PLUGIN_UNINSTALL_INCOMPLETE'
+  // `vat audit settings`
+  | 'SETTINGS_FILE_INVALID'
+  | 'SETTINGS_TYPE_AMBIGUOUS'
+  | 'SETTINGS_PATH_DEPRECATED'
+  | 'SETTINGS_RULE_SHADOWED'
+  | 'SETTINGS_MARKETPLACE_TOKEN_MISSING'
+  // `vat agent validate`
+  | 'AGENT_MANIFEST_INVALID'
+  | 'AGENT_REFERENCE_MISSING'
+  | 'AGENT_REFERENCE_UNREADABLE'
+  | 'AGENT_RAG_NO_SOURCES';

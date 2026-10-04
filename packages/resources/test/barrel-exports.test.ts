@@ -115,6 +115,7 @@ const BARREL_EXPORTS = [
   'MissingCapabilityError',
   'NO_DECLARED_MIME_TYPES',
   'OKF_FINDING_CODES',
+  'OKF_UNKNOWN_BUNDLE_CODE',
   'OkfBundleConfigSchema',
   'OkfConceptFrontmatterSchema',
   'OkfConfigSchema',

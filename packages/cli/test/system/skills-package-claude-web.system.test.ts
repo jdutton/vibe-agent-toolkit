@@ -11,11 +11,12 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, writeFileSync } from 'node:fs';
 
 
 import { exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import AdmZip from 'adm-zip';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
@@ -318,6 +319,27 @@ See [Extra](./extra.md).
     // Nothing was packaged, and the document says so.
     expect(report.data).toMatchObject({ outputPath: null, dryRun: false });
     expect(existsSync(outputDir)).toBe(false);
+  });
+
+  // An output directory the OS will not let the build write says nothing about the
+  // skill: the run did not finish (exit 2), and no finding is published against it.
+  // Needs a directory whose mode denies a write; Windows and root cannot deny one by mode.
+  it.skipIf(CANNOT_DENY_READS)('an output directory that cannot be written is RUN_INCOMPLETE, exit 2 — never a finding about the skill', async () => {
+    const tempDir = suite.createTempDir();
+    const skillDir = suite.createMinimalSkill(tempDir);
+    const readOnly = safePath.join(tempDir, 'read-only');
+    mkdirSyncReal(readOnly, { recursive: true });
+    chmodSync(readOnly, 0o555);
+
+    try {
+      const result = await executeCli(suite.binPath, ['skills', 'package', safePath.join(skillDir, 'SKILL.md'), '-o', safePath.join(readOnly, 'out')]);
+      const report = SKILLS_PACKAGE_REPORT_SCHEMA.parse(yaml.parse(result.stdout));
+
+      expect(result.status, result.stderr).toBe(2);
+      expect(report).toMatchObject({ status: 'error', error: { code: 'RUN_INCOMPLETE' }, findings: [] });
+    } finally {
+      chmodSync(readOnly, 0o755);
+    }
   });
 
   // Run from inside this repo, so the project root is found and the ARGUMENT is

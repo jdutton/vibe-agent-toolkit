@@ -11,6 +11,7 @@ import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.
 import { endWithRefusal, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { projectRootOrNull } from '../../utils/project-root-policy.js';
+import { requireExistingDatabase } from '../../utils/rag-database.js';
 
 /** No `vat rag` leaf has a `--strict`, and none reports a warning: the gate is fixed. */
 export const RAG_GATE: Gate = { strict: false };
@@ -39,7 +40,7 @@ export function resolveDbPath(
 }
 
 /**
- * Execute a RAG operation with standard setup/teardown pattern.
+ * Execute a RAG operation on an EXISTING database, with standard setup/teardown.
  *
  * Per CLI-boundary rule (spec §5/§7), `projectRoot` is resolved here using
  * the `tolerate null` policy — null is fine, the existing rag config-loading
@@ -66,6 +67,7 @@ export async function executeRagOperation<T>(
     const projectRoot = projectRootOrNull(process.cwd());
     const dbPath = resolveDbPath(options.db, projectRoot ?? undefined);
     logger.debug(`Database path: ${dbPath}`);
+    requireExistingDatabase(dbPath, options.db !== undefined && options.db !== '');
 
     // Create RAG provider (readonly mode by default, can be overridden)
     const ragProvider = await LanceDBRAGProvider.create({

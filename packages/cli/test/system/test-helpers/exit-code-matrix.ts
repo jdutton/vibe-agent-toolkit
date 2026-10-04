@@ -299,6 +299,18 @@ export function ragDb(name: string): string {
 }
 
 /**
+ * A RAG database that EXISTS and holds no chunk: `vat rag index` over one
+ * frontmatter-only document, which indexes as empty and loads no embedding
+ * model. `stats`, `query` and `clear` refuse a database that was never created,
+ * so a scenario about an empty one has to make it first.
+ */
+function emptyRagDb(name: string, home: string): string {
+  const cwd = project(`rag-${name}-seed`, '{}\n', { 'docs/a.md': '---\ntitle: A\n---\n' });
+  executeCli(MATRIX_BIN_PATH, ['rag', 'index', '.', '--db', ragDb(name)], { cwd, env: { ...process.env, ...scenarioEnv(home) } });
+  return ragDb(name);
+}
+
+/**
  * `vat corpus scan` over a one-entry seed naming `source` under a fresh
  * directory holding `files`, into `--out` beside it. The verb publishes YAML;
  * it takes no `--format`.
@@ -872,15 +884,16 @@ export const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> =
       },
     },
     // A database nothing was indexed into: the index the query must read holds nothing.
-    { status: 'error', code: 'INPUT_UNREADABLE', run: () => ({ args: ['rag', 'query', 'widgets', '--db', ragDb('query-empty')], cwd: noProject('rag-query-error') }) },
+    { status: 'error', code: 'INPUT_UNREADABLE', run: (home) => ({ args: ['rag', 'query', 'widgets', '--db', emptyRagDb('query-empty', home)], cwd: noProject('rag-query-error') }) },
   ],
   'rag stats': [
-    { status: 'ok', run: () => ({ args: ['rag', 'stats', '--db', ragDb('stats-ok')], cwd: noProject('rag-stats-ok') }) },
-    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['rag', 'stats'], cwd: noProject('rag-stats-error') }) },
+    // An existing database holding nothing reports zeros; one that was never created is refused.
+    { status: 'ok', run: (home) => ({ args: ['rag', 'stats', '--db', emptyRagDb('stats-ok', home)], cwd: noProject('rag-stats-ok') }) },
+    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['rag', 'stats', '--db', ragDb('stats-never-created')], cwd: noProject('rag-stats-error') }) },
   ],
   'rag clear': [
-    { status: 'ok', run: () => ({ args: ['rag', 'clear', '--db', ragDb('clear-ok')], cwd: noProject('rag-clear-ok') }) },
-    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['rag', 'clear'], cwd: noProject('rag-clear-error') }) },
+    { status: 'ok', run: (home) => ({ args: ['rag', 'clear', '--db', emptyRagDb('clear-ok', home)], cwd: noProject('rag-clear-ok') }) },
+    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['rag', 'clear', '--db', ragDb('clear-never-created')], cwd: noProject('rag-clear-error') }) },
   ],
   'mcp list-collections': [
     { status: 'ok', run: () => ({ args: ['mcp', 'list-collections'], cwd: tempDir }) },
@@ -1071,5 +1084,5 @@ export function expectScenarioEndsOnItsDerivedCode(scenario: MatrixCase, context
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCodeForReport(document));
 }
 
-/** The per-test timeout of a scenario: one spawn of the built CLI, two for the scenario that indexes first. */
+/** The per-test timeout of a scenario: one spawn of the built CLI, two for a scenario that indexes first. */
 export const MATRIX_SCENARIO_TIMEOUT_MS = 60_000;

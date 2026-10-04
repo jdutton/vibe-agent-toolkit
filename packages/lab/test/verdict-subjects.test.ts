@@ -83,6 +83,20 @@ describe('parseVerdictSubjects', () => {
     });
   });
 
+  // A verb, or a SQL file, is a ROW NAME: listed twice it would capture two rows
+  // under one name, and the compare would hold both baseline rows to one candidate row.
+  it('refuses a verb listed twice, and a SQL file listed twice', () => {
+    expect(parseVerdictSubjects(doc({ verbs: ['audit', 'audit'] }))).toMatchObject({
+      ok: false,
+      refusal: expect.stringContaining("'audit' is listed twice"),
+    });
+    expect(parseVerdictSubjects(doc({ verbs: ['resources-query'], sqlFiles: ['sql/a.sql', 'sql/b.sql'] }))).toMatchObject({ ok: true });
+    expect(parseVerdictSubjects(doc({ verbs: ['resources-query'], sqlFiles: ['sql/a.sql', 'sql/a.sql'] }))).toMatchObject({
+      ok: false,
+      refusal: expect.stringContaining("'sql/a.sql' is listed twice"),
+    });
+  });
+
   it('refuses an alias that is not lowercase-hyphenated, and a repeated alias', () => {
     expect(parseVerdictSubjects(doc({ alias: 'Some Adopter' }))).toMatchObject({ ok: false });
     const twice = { subjects: [{ alias: 'a', path: 'x', verbs: ['audit'] }, { alias: 'a', path: 'y', verbs: ['audit'] }] };

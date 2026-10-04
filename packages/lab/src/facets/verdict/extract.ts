@@ -92,7 +92,11 @@ export function findingIdentity(finding: FindingKey): readonly [string, FindingS
  */
 export function extractVerdict(outcome: Extract<RunOutcome, { kind: 'exited' }>): Verdict {
   const parsed = parseDocument(outcome.stdout);
-  return { exitCode: outcome.exitCode, shape: parsed.shape, findings: findingsOf(parsed) };
+  const findings = findingsOf(parsed);
+  // A report holding a finding the lab cannot read is a document the lab cannot
+  // read: the row measured nothing, which the compare reports as UNMEASURED.
+  if (findings === null) return { exitCode: outcome.exitCode, shape: 'unparsed', findings: [] };
+  return { exitCode: outcome.exitCode, shape: parsed.shape, findings };
 }
 
 /**
@@ -271,7 +275,7 @@ export interface PublishedTallies {
  * findings reads as thousands of added ones. These counts are what lets a
  * compare tell "the same findings, now itemized" from "new findings".
  *
- * One structural rule, like {@link isLegacyFinding}'s: an object is a tally
+ * One structural rule, like {@link isFinding}'s: an object is a tally
  * owner when its `codes` maps finding codes to non-negative integers AND its
  * own `errors` / `warnings` / `info` counts (absent reads as zero) sum to the
  * same total. An owner whose two counts disagree is not read at all — half a
@@ -362,12 +366,13 @@ function isCount(value: unknown): value is number {
 
 /**
  * @param parsed - A parsed document, of any shape
- * @returns Its findings, sorted; empty (never a guess) when unparsed
+ * @returns Its findings, sorted; empty (never a guess) when unparsed; `null`
+ *   for a report whose `findings[]` holds an element that is not a finding
  */
-function findingsOf(parsed: ParsedDocument): readonly FindingKey[] {
+function findingsOf(parsed: ParsedDocument): readonly FindingKey[] | null {
   if (parsed.shape === 'unparsed') return [];
   const raw = parsed.shape === 'report' ? reportFindings(parsed.document) : legacyFindings(parsed.document);
-  return sortFindings(raw);
+  return raw === null ? null : sortFindings(raw);
 }
 
 /**
@@ -379,26 +384,31 @@ function findingsOf(parsed: ParsedDocument): readonly FindingKey[] {
  * module's own trigger for existing: `scope`, carried by a gate-aware report but
  * absent from today's shipped `Finding`) must not become unreadable here.
  *
+ * ⛔ Strict about the two fields a finding IS — a string `code` and a published
+ * `severity` — exactly as the legacy walker is ({@link isFinding}). An element
+ * without them is never coerced (a missing code to `''`, an unknown severity to
+ * `info`): a build that re-grades `warning` to a word the lab does not know
+ * would then read as a quiet move to `info`, rather than as a document the lab
+ * cannot read.
+ *
  * @param document - The envelope root, already confirmed to carry `findings`
- * @returns One key per element of `findings`, in array order
+ * @returns One key per element of `findings`, in array order; `null` when any
+ *   element is not a finding
  */
-function reportFindings(document: Record<string, unknown>): FindingKey[] {
+function reportFindings(document: Record<string, unknown>): FindingKey[] | null {
   const findings = document['findings'];
   if (!Array.isArray(findings)) return [];
-  return findings.filter(isPlainObject).map(reportFindingKey);
-}
-
-/**
- * @param finding - One element of a report's `findings[]`
- * @returns Its key, `location` and `scope` each `null` when the field is absent
- */
-function reportFindingKey(finding: Record<string, unknown>): FindingKey {
-  return {
-    code: typeof finding['code'] === 'string' ? finding['code'] : '',
-    severity: isFindingSeverity(finding['severity']) ? finding['severity'] : 'info',
-    location: typeof finding['location'] === 'string' ? finding['location'] : null,
-    scope: 'scope' in finding ? JSON.stringify(finding['scope']) : null,
-  };
+  const keys: FindingKey[] = [];
+  for (const finding of findings) {
+    if (!isPlainObject(finding) || !isFinding(finding)) return null;
+    keys.push({
+      code: finding['code'] as string,
+      severity: finding['severity'] as FindingSeverity,
+      location: typeof finding['location'] === 'string' ? finding['location'] : null,
+      scope: 'scope' in finding ? JSON.stringify(finding['scope']) : null,
+    });
+  }
+  return keys;
 }
 
 /**
@@ -431,7 +441,7 @@ function walk(node: unknown, ancestorPath: string | null, out: FindingKey[]): vo
   }
   if (!isPlainObject(node)) return;
 
-  if (isLegacyFinding(node)) out.push(legacyFindingKey(node, ancestorPath));
+  if (isFinding(node)) out.push(legacyFindingKey(node, ancestorPath));
   const inherited = namedLocation(node) ?? ancestorPath;
   for (const value of Object.values(node)) walk(value, inherited, out);
 }
@@ -459,18 +469,19 @@ function isFindingSeverity(value: unknown): value is FindingSeverity {
 }
 
 /**
- * The one structural rule that stands in for every legacy command's finding
- * shape — see this module's docstring.
+ * The one structural rule for what a finding IS, in both shapes: it stands in
+ * for every legacy command's finding shape (see this module's docstring), and a
+ * report's `findings[]` element is held to it too.
  *
  * @param node - A candidate object
  * @returns True iff it carries a string `code` and a finding-shaped `severity`
  */
-function isLegacyFinding(node: Record<string, unknown>): boolean {
+function isFinding(node: Record<string, unknown>): boolean {
   return typeof node['code'] === 'string' && isFindingSeverity(node['severity']);
 }
 
 /**
- * @param node - A node that passed {@link isLegacyFinding}
+ * @param node - A node that passed {@link isFinding}
  * @param ancestorPath - The nearest ancestor's named location, used when
  *   `node` names none of its own
  * @returns Its key; legacy documents carry no `scope`, so that field is always `null`
@@ -488,7 +499,7 @@ function legacyFindingKey(node: Record<string, unknown>, ancestorPath: string | 
  * A finding's OWN location first, then the enclosing object's: an rc.11 `claude
  * context` answer's `file` is the QUESTION's file; each condition names its own `path`.
  *
- * @param node - A node that passed {@link isLegacyFinding}
+ * @param node - A node that passed {@link isFinding}
  * @param ancestorPath - The nearest ancestor's named location
  * @returns The node's own `location`, else its own `path`/`file`, else `ancestorPath`
  */

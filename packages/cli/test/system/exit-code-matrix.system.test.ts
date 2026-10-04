@@ -91,8 +91,54 @@ function namedOnDisk(pattern: RegExp): string[] {
   });
 }
 
+/**
+ * Every scenario that may SKIP, and what its skip costs — the whole list, both ways.
+ *
+ * A skipped scenario "still counts as present" in every check above, so a green
+ * run says nothing about a status whose scenario did not run. This list is
+ * where that is said out loud:
+ *
+ * - `platform` — skips only where the platform cannot do what the scenario sets
+ *   up: a mode that denies a read or a write (Windows, or root), or a `--dev`
+ *   symlink install (Windows). It RUNS on the ubuntu CI leg.
+ * - `network` — skips when the npm registry does not answer. It runs on CI.
+ * - `never-on-ci` — ⚠️ needs something NO CI runner provisions: a `claude` binary
+ *   on PATH, or the ONNX embedding model already cached under the real home. On
+ *   CI these scenarios always skip, so the matrix never observes that status of
+ *   that verb there — it is checked only on a developer machine that has both.
+ *
+ * Adding a `skipReason` to a scenario, or removing one, is a red test here until
+ * this list says which kind it is.
+ */
+const SKIPPABLE_SCENARIOS: Readonly<Record<string, 'platform' | 'network' | 'never-on-ci'>> = {
+  'agent installed → findings': 'platform',
+  'agent list → findings': 'platform',
+  'cache clear → error': 'platform',
+  'claude plugin install → findings': 'platform',
+  'doctor → ok': 'network',
+  'inventory → findings': 'platform',
+  'rag index → findings': 'platform',
+  'rag query → ok': 'never-on-ci',
+  'skill test run → ok': 'never-on-ci',
+  'skills list → findings': 'platform',
+};
+
 describe('exit codes are derived from the published document (system test)', () => {
   useMatrixTempDir();
+
+  it('names every scenario that may skip — no scenario skips unlisted, and no listed one always runs', () => {
+    const skippable = Object.entries(ENVELOPE_SCENARIOS).flatMap(([verb, scenarios]) =>
+      scenarios.filter((scenario) => scenario.skipReason !== undefined).map((scenario) => `${verb} → ${scenario.status}`));
+
+    expect(skippable.toSorted(byName)).toStrictEqual(Object.keys(SKIPPABLE_SCENARIOS).sort(byName));
+  });
+
+  // The bound on what a green CI run does not show: two statuses, of two verbs, and no third.
+  it('leaves exactly two scenarios that no CI runner can run', () => {
+    const neverOnCi = Object.entries(SKIPPABLE_SCENARIOS).flatMap(([scenario, kind]) => (kind === 'never-on-ci' ? [scenario] : []));
+
+    expect(neverOnCi.toSorted(byName)).toStrictEqual(['rag query → ok', 'skill test run → ok']);
+  });
 
   it('covers EXACTLY the registered envelope verbs — no more, no fewer', () => {
     expect(Object.keys(ENVELOPE_SCENARIOS).sort(byName)).toStrictEqual([...REGISTERED_ENVELOPE_VERBS].sort(byName));

@@ -26,7 +26,6 @@ import {
   toFindings,
   type Finding,
   type Gate,
-  type IssueCode,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import { isAbsoluteAnyPlatform, isFilesystemAccessError, isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -121,18 +120,20 @@ function spell(file: string, root: string): string {
 }
 
 /**
- * A registered settings finding at its default severity, located at `file`
- * relative to `root`. A finding's `location` must be relative, so a file with
- * no relative spelling (another Windows drive) leads the message instead — it
- * is said, never silently dropped.
+ * `issue` located at `file`, relative to `root`. A finding's `location` must be
+ * relative, so a file with no relative spelling (another Windows drive) leads
+ * the message instead — it is said, never silently dropped.
+ *
+ * The `SETTINGS_*` findings carry their severity from their emit site: this
+ * verb reads Claude settings, never a project's `validation:` config, so no
+ * override exists to resolve and none of them is a `validation.severity` key.
  */
-function settingsFinding(code: IssueCode, message: string, file: string, root: string, field?: string): ValidationIssue {
-  const extras = field === undefined || field === '' ? {} : { field };
-  if (file === '') return createRegistryIssue(code, message, extras);
+function locatedAt(issue: ValidationIssue, file: string, root: string): ValidationIssue {
+  if (file === '') return issue;
   const spelled = spell(file, root);
   return isAbsoluteAnyPlatform(spelled)
-    ? createRegistryIssue(code, `${spelled}: ${message}`, extras)
-    : createRegistryIssue(code, message, { ...extras, location: spelled });
+    ? { ...issue, message: `${spelled}: ${issue.message}` }
+    : { ...issue, location: spelled };
 }
 
 async function runShowPaths(root: string, logger: Logger): Promise<AuditSettingsReport> {
@@ -141,12 +142,19 @@ async function runShowPaths(root: string, logger: Logger): Promise<AuditSettings
   const issues: ValidationIssue[] = [];
   for (const p of result.paths) {
     if (p.status === 'error' && p.exists !== false) {
-      issues.push(settingsFinding('SETTINGS_PATH_DEPRECATED', p.message ?? 'Deprecated settings path is present', p.path, root));
+      issues.push(locatedAt({
+        code: 'SETTINGS_PATH_DEPRECATED',
+        severity: 'error',
+        message: p.message ?? 'Deprecated settings path is present',
+        fix: 'Move the managed settings file to the current managed-settings path (vat audit settings --show-paths lists it) and remove the legacy file.',
+      }, p.path, root));
     }
     if (p.exists === 'undetermined' || p.readable === 'undetermined') {
-      issues.push(settingsFinding(
-        'SCAN_PATH_UNREADABLE',
-        `Could not determine access to ${p.path} (${p.accessError ?? 'unknown error'}) — this path was not checked`,
+      issues.push(locatedAt(
+        createRegistryIssue(
+          'SCAN_PATH_UNREADABLE',
+          `Could not determine access to ${p.path} (${p.accessError ?? 'unknown error'}) — this path was not checked`,
+        ),
         p.path,
         root,
       ));
@@ -198,8 +206,7 @@ async function runValidateFile(filePath: string, type: string | undefined, root:
   // published as `fields: null` rather than as an empty list.
   const fields = await readSettingsFile(filePath, () => getSettingsFileFields(filePath));
 
-  const issues: ValidationIssue[] = result.findings.map((finding) =>
-    settingsFinding(finding.code, finding.message, filePath, root, finding.field));
+  const issues: ValidationIssue[] = result.findings.map((finding) => locatedAt(finding, filePath, root));
 
   if (result.summary.errors > 0) {
     logger.error(`Settings file is invalid: ${result.summary.errors} error(s)`);
@@ -348,16 +355,21 @@ export function settingsAuditFindings(
   marketplaceWarnings: readonly MarketplaceWarning[],
   root: string,
 ): Finding[] {
-  const issues: ValidationIssue[] = conflicts.map(c => settingsFinding(
-    'SETTINGS_RULE_SHADOWED',
-    `Rule "${c.rule.rule}" (${c.rule.provenance.level}, ${getRuleList(c.kind)}) is shadowed by ` +
-    `"${c.shadowedBy.rule}" (${c.shadowedBy.provenance.level}, ${getShadowedByList(c.kind)}) — ${c.kind}.`,
-    c.rule.provenance.file,
-    root,
-  ));
+  const issues: ValidationIssue[] = conflicts.map(c => locatedAt({
+    code: 'SETTINGS_RULE_SHADOWED',
+    severity: 'warning',
+    message: `Rule "${c.rule.rule}" (${c.rule.provenance.level}, ${getRuleList(c.kind)}) is shadowed by ` +
+      `"${c.shadowedBy.rule}" (${c.shadowedBy.provenance.level}, ${getShadowedByList(c.kind)}) — ${c.kind}.`,
+    fix: 'Remove the shadowed rule, or narrow the rule that shadows it.',
+  }, c.rule.provenance.file, root));
 
   for (const warning of marketplaceWarnings) {
-    issues.push(settingsFinding('SETTINGS_MARKETPLACE_TOKEN_MISSING', warning.message, warning.file, root));
+    issues.push(locatedAt({
+      code: 'SETTINGS_MARKETPLACE_TOKEN_MISSING',
+      severity: 'warning',
+      message: warning.message,
+      fix: 'Set GITHUB_TOKEN in the environment Claude Code runs in, or register the marketplace from a public source.',
+    }, warning.file, root));
   }
 
   return toFindings(issues);

@@ -87,6 +87,17 @@ export const VerdictBodySchema: z.ZodType<VerdictBody> = z
   })
   .strict()
   .superRefine((body, ctx) => {
+    // The two captures are matched row to row BY NAME, so a name names one row.
+    for (const [index, row] of body.rows.entries()) {
+      if (body.rows.findIndex((other) => other.name === row.name) === index) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['rows', index, 'name'],
+        message: `two rows are named '${row.name}'; a row name is what the two captures are matched by`,
+      });
+    }
+  })
+  .superRefine((body, ctx) => {
     // An exclusion with no row would be a verb nobody ran and nobody can check —
     // exactly the hidden row an exclusion must never become.
     for (const [index, exclusion] of body.excluded.entries()) {

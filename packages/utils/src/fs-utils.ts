@@ -466,11 +466,14 @@ export class FsLookupCache {
   }
 }
 
+/** The `VatError` code of a {@link CopyLinkEscapesSourceError}. */
+export const COPY_LINK_ESCAPES_SOURCE_CODE = 'COPY_LINK_ESCAPES_SOURCE';
+
 /** Thrown when a link inside the tree being copied points outside it. */
 export class CopyLinkEscapesSourceError extends VatError {
   constructor(link: string, src: string) {
     super(
-      'COPY_LINK_ESCAPES_SOURCE',
+      COPY_LINK_ESCAPES_SOURCE_CODE,
       `Refusing to copy ${link}: it is a symlink to a path outside ${src}. ` +
         'A copy follows links, so this would ship content the source tree does not own — ' +
         'replace the link with the files, or point it inside the tree.',

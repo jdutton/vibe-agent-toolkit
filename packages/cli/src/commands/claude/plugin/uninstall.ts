@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs';
 
 import { findPluginsByPackage, getClaudeUserPaths, parsePluginKey, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
-import { buildReport, createRegistryIssue, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
@@ -95,7 +95,14 @@ interface PluginUninstallOutcome {
 /** The finding for a plugin uninstalled from a directory no registry recorded. */
 function incompleteFinding(outcome: PluginUninstallOutcome): ValidationIssue[] {
   if (outcome.warning === undefined) return [];
-  return [createRegistryIssue('PLUGIN_UNINSTALL_INCOMPLETE', outcome.warning, { location: outcome.key })];
+  return [{
+    code: 'PLUGIN_UNINSTALL_INCOMPLETE',
+    // Fixed: the cleanup ran, and this verb reads no project config to move it.
+    severity: 'warning',
+    message: outcome.warning,
+    location: outcome.key,
+    fix: 'Check Claude Code for leftovers of the plugin the message names (run /plugin), and remove them there.',
+  }];
 }
 
 /** The work done so far: the report's `data` and findings, for a finished or an interrupted run. */

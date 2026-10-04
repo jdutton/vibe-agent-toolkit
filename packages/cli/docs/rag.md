@@ -120,7 +120,7 @@ vat rag index docs/
 
 **Exit Codes:**
 - `0` - `ok`: the index was searched — a query matching nothing is `ok` with `chunks: []`
-- `2` - `error`: `INPUT_UNREADABLE` when nothing is indexed yet — no chunk table, or a table of zero chunks, one outcome either way (run `vat rag index`), `USAGE_INVALID` with no `--db` and no project root, `BACKEND_UNAVAILABLE`, or `INTERNAL_ERROR` (an embedding or database failure)
+- `2` - `error`: `INPUT_UNREADABLE` when nothing is indexed yet — no project database, no chunk table, or a table of zero chunks, one outcome every way (run `vat rag index`) — or when the database directory cannot be read; `USAGE_INVALID` with no `--db` and no project root, or a `--db` that names no database (the path is not created); `BACKEND_UNAVAILABLE`; or `INTERNAL_ERROR` (an embedding or database failure)
 
 **Output:** the report envelope as YAML on stdout (schema `packages/cli/schemas/rag-query.json`). `examined` counts the chunks in the index searched; `data` holds `root` (the directory every `filePath` is relative to), `query`, `stats` and `chunks`.
 
@@ -212,8 +212,10 @@ Each chunk includes comprehensive metadata:
 - `--debug` - Enable debug logging
 
 **Exit Codes:**
-- `0` - `ok`: the database was read — an empty or absent database reports zeros
-- `2` - `error`: `USAGE_INVALID` with no `--db` and no project root, `BACKEND_UNAVAILABLE`, or `INTERNAL_ERROR`
+- `0` - `ok`: the database was read — an existing database that holds nothing reports zeros
+- `2` - `error`: `USAGE_INVALID` with no `--db` and no project root, or a `--db` that names no database or names a file; `INPUT_UNREADABLE` when the project has no database yet (run `vat rag index`) or the database directory cannot be read; `BACKEND_UNAVAILABLE`; or `INTERNAL_ERROR`
+
+`vat rag stats` only reads: it never creates the database it is asked about.
 
 **Output:** the report envelope as YAML on stdout (schema `packages/cli/schemas/rag-stats.json`); `examined` is 1, the database opened.
 
@@ -264,7 +266,7 @@ vat rag stats
 
 **Exit Codes:**
 - `0` - `ok`: the database was cleared
-- `2` - `error`: `USAGE_INVALID` with no `--db` and no project root, `BACKEND_UNAVAILABLE`, or `INTERNAL_ERROR`
+- `2` - `error`: `USAGE_INVALID` with no `--db` and no project root, or a `--db` that names no database; `INPUT_UNREADABLE` when the project has no database to clear or the database directory cannot be read; `BACKEND_UNAVAILABLE`; or `INTERNAL_ERROR`
 
 **Output:** the report envelope as YAML on stdout (schema `packages/cli/schemas/rag-clear.json`); `examined` is 1, the database opened, and `data` is `{ cleared: true }`.
 

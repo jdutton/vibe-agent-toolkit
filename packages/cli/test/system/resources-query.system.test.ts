@@ -627,8 +627,10 @@ describe('vat resources query', () => {
     // SQLite, which would leave this case asserting the gate's message and no
     // longer proving `PRAGMA query_only` is armed. This spelling is real SQLite
     // grammar, passes the kind gate on its first token, and is refused by the
-    // ENGINE — which is the property under test.
-    const write = query('WITH c(a) AS (VALUES (1)) DELETE FROM blobs');
+    // ENGINE — which is the property under test. `RETURNING` gives it a result
+    // column, so the store's result-shape check (a write with no result column
+    // is not a read) passes it too; without it that check answers first.
+    const write = query('WITH c(a) AS (VALUES (1)) DELETE FROM blobs RETURNING contentKey');
     expect(write.status).toBe(2);
     expect(write.stderr).toContain('readonly database');
 

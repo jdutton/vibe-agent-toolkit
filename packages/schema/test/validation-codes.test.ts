@@ -10,6 +10,7 @@ import {
   type ConsistencyCode,
   type IssueCode,
 } from '../src/validation-codes.js';
+import { ValidationConfigSchema } from '../src/validation-config.js';
 
 describe('CODE_REGISTRY', () => {
   it('contains every overridable code with a default severity', () => {
@@ -283,6 +284,45 @@ describe('CONSISTENCY_CODES', () => {
     for (const code of CONSISTENCY_CODES) {
       expect(code in CODE_REGISTRY, `${code} must not be overridable`).toBe(false);
     }
+  });
+});
+
+describe('findings of verbs that read no validation config', () => {
+  // `vat claude plugin uninstall`, `vat audit settings` and `vat agent validate`
+  // examine Claude user state, a settings file and an agent manifest. None loads a
+  // project `validation:` block, so a registry entry for one of their codes would
+  // let the config accept a key nothing applies.
+  const LANE_OWNED = [
+    'PLUGIN_UNINSTALL_INCOMPLETE',
+    'SETTINGS_FILE_INVALID',
+    'SETTINGS_TYPE_AMBIGUOUS',
+    'SETTINGS_PATH_DEPRECATED',
+    'SETTINGS_RULE_SHADOWED',
+    'SETTINGS_MARKETPLACE_TOKEN_MISSING',
+    'AGENT_MANIFEST_INVALID',
+    'AGENT_REFERENCE_MISSING',
+    'AGENT_REFERENCE_UNREADABLE',
+    'AGENT_RAG_NO_SOURCES',
+  ];
+  const ALLOW_ENTRY = [{ reason: 'expected here' }];
+
+  it('accepts a real finding code under both maps, so the refusals below are about the code', () => {
+    expect(ValidationConfigSchema.safeParse({ severity: { LINK_OUTSIDE_PROJECT: 'ignore' } }).success).toBe(true);
+    expect(ValidationConfigSchema.safeParse({ allow: { LINK_OUTSIDE_PROJECT: ALLOW_ENTRY } }).success).toBe(true);
+  });
+
+  it.each(LANE_OWNED)('%s is neither a registry entry nor a validation.severity / validation.allow key', (code) => {
+    expect(code in CODE_REGISTRY).toBe(false);
+    expect(ValidationConfigSchema.safeParse({ severity: { [code]: 'ignore' } }).success).toBe(false);
+    expect(ValidationConfigSchema.safeParse({ allow: { [code]: ALLOW_ENTRY } }).success).toBe(false);
+  });
+
+  it('never tells a reader to set a severity override on a code that is not a key', () => {
+    const inert = Object.entries(CODE_REGISTRY).flatMap(([code, entry]) => {
+      const named = /severity\.([A-Z][A-Z0-9_]*)/.exec(entry.fix)?.[1];
+      return named !== undefined && !FindingCodeSchema.safeParse(named).success ? [`${code} -> ${named}`] : [];
+    });
+    expect(inert).toEqual([]);
   });
 });
 

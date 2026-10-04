@@ -137,8 +137,9 @@ Each chunk includes:
 
 Exit Codes:
   0 - Searched
-  2 - Could not run (error.code: INPUT_UNREADABLE when nothing is indexed yet,
-      USAGE_INVALID with no --db and no project, BACKEND_UNAVAILABLE)
+  2 - Could not run (error.code: INPUT_UNREADABLE when nothing is indexed yet
+      or the database cannot be read, USAGE_INVALID with no --db and no
+      project or a --db that names no database, BACKEND_UNAVAILABLE)
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)
@@ -176,9 +177,11 @@ Output:
   - lastIndexed: ISO 8601 timestamp of the most recent indexing
 
 Exit Codes:
-  0 - Reported (an empty database reports zeros)
-  2 - Could not run (error.code: USAGE_INVALID with no --db and no project,
-      BACKEND_UNAVAILABLE)
+  0 - Reported (an existing database holding nothing reports zeros)
+  2 - Could not run (error.code: USAGE_INVALID with no --db and no project or
+      a --db that names no database, INPUT_UNREADABLE when the project has no
+      database yet or it cannot be read, BACKEND_UNAVAILABLE). Never creates
+      the database.
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)
@@ -216,8 +219,9 @@ Output:
 
 Exit Codes:
   0 - Cleared
-  2 - Could not run (error.code: USAGE_INVALID with no --db and no project,
-      BACKEND_UNAVAILABLE)
+  2 - Could not run (error.code: USAGE_INVALID with no --db and no project or
+      a --db that names no database, INPUT_UNREADABLE when the project has no
+      database yet or it cannot be read, BACKEND_UNAVAILABLE)
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)

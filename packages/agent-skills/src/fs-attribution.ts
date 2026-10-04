@@ -18,9 +18,13 @@
  * the packager, and both get identical structure with a subject that fits.
  */
 
+import { constants } from 'node:fs';
+import { access, copyFile, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
+
 import { isFilesystemAccessError } from '@vibe-agent-toolkit/utils';
 
-import { packagingInputError } from './packaging-errors.js';
+import { packagingInputError, packagingOutputError } from './packaging-errors.js';
 
 /** For a failure that moved bytes INTO the bundle. */
 export const WRITE_REMEDY =
@@ -32,26 +36,49 @@ export const READ_REMEDY =
   "Check the file's permissions and ownership, and that every directory above it is traversable.";
 
 /**
+ * Which tree the guarded work touches: the author's `source`, or the build's `output`.
+ *
+ * It decides the CODE, so it is required — a refusal is coded at its cause, and
+ * the cause is known only at the call site. The errno cannot say: `EACCES` is
+ * raised for an unreadable source and for an unwritable output directory alike.
+ */
+export type FsSide = 'source' | 'output';
+
+/**
+ * Errnos that, raised by the OUTPUT, still describe the skill: the bundle layout
+ * its config asked for cannot exist — one `files:` dest landing on, or under,
+ * another's file. No disk or permission is involved, and a rerun fails the same way.
+ */
+const BUNDLE_LAYOUT_ERRNOS: ReadonlySet<unknown> = new Set(['EEXIST', 'ENOTDIR', 'EISDIR']);
+
+/**
  * Run filesystem work, and if the OS refuses it, say what was being attempted.
  *
  * @param subject What the build was doing, phrased so it names something the
  *   author can locate — a `files:` entry, a linked file, a skill. This is the
  *   whole point: the errno already has the path.
+ * @param side Which tree `work` touches. Work that touches both is split by the
+ *   caller ({@link copyIntoBundle}), never guessed here — so `work` must not
+ *   itself contain a guarded call for the other side: the errno is read down the
+ *   `cause` chain, and an outer guard would re-code the inner refusal as its own.
  * @param action What was being done to it, completing "it could not be …".
  *   Defaults to the copy case; the integrity lane passes its own, because telling
  *   an author a file "could not be copied" when the copy SUCCEEDED and the
  *   verification failed sends them to look at the wrong step.
- * @param remedy What to check. Split from `action` because the two do not track
- *   each other: a failed READ has nothing to do with whether the output directory
- *   is writable or the disk is full, and padding a message with checks that
- *   cannot apply teaches people to stop reading the message.
  *
- * What it throws is a CODED packaging refusal (`packagingInputError`, the original
- * error as `cause`): the message is addressed to the adopter and ends in a remedy,
- * so every packaging lane must publish it as theirs to fix, and each dispatches on
- * the code (`isSkillPackagingInputError`). An uncoded `Error` here was read by
- * those lanes as a defect in VAT. Output-side causes (a full disk, an unwritable
- * output directory) carry the same code — no code separates them today.
+ * What it throws is CODED by `side`, the original error as `cause`:
+ * - `source` — a packaging refusal of the skill's content (`packagingInputError`):
+ *   the adopter's to fix, published by every packaging lane as a
+ *   `SKILL_PACKAGING_FAILED` finding (`isSkillPackagingInputError`).
+ * - `output` — `packagingOutputError`: a full disk, a read-only or unwritable
+ *   output directory. Nothing about the skill is wrong, so it is never that
+ *   finding; the run did not finish. The one exception is an errno that says the
+ *   bundle's own layout is impossible ({@link BUNDLE_LAYOUT_ERRNOS}), which the
+ *   skill's config decides: that stays the skill's.
+ *
+ * The remedy follows the side too: a failed READ has nothing to do with whether
+ * the output directory is writable or the disk is full, and padding a message
+ * with checks that cannot apply teaches people to stop reading the message.
  *
  * A non-filesystem throw is rethrown untouched. Re-wrapping a defect in our own
  * code as "check your permissions" would send the author to fix something that is
@@ -60,18 +87,40 @@ export const READ_REMEDY =
  */
 export async function withFsAttribution<T>(
   subject: string,
+  side: FsSide,
   work: () => Promise<T>,
   action = 'copied into the bundle',
-  remedy = WRITE_REMEDY,
 ): Promise<T> {
   try {
     return await work();
   } catch (error) {
     if (!isFilesystemAccessError(error)) throw error;
     const reason = error instanceof Error ? error.message : String(error);
-    throw packagingInputError(
-      `${subject}, but it could not be ${action}: ${reason}. ${remedy}`,
-      { cause: error },
-    );
+    if (side === 'source') {
+      throw packagingInputError(`${subject}, but it could not be ${action}: ${reason}. ${READ_REMEDY}`, { cause: error });
+    }
+    const message = `${subject}, but it could not be ${action}: ${reason}. ${WRITE_REMEDY}`;
+    throw BUNDLE_LAYOUT_ERRNOS.has((error as { code?: unknown }).code)
+      ? packagingInputError(message, { cause: error })
+      : packagingOutputError(message, { cause: error });
   }
+}
+
+/**
+ * Copy one file into the bundle, creating the directory it lands in.
+ *
+ * A copy touches both trees and its errno names neither, so the two sides are
+ * separate steps: the source is checked for reading first (the `source` side),
+ * and only then is the destination made and written (the `output` side).
+ *
+ * @param subject As {@link withFsAttribution}
+ * @param sourcePath The author's file
+ * @param targetPath Where it lands in the bundle
+ */
+export async function copyIntoBundle(subject: string, sourcePath: string, targetPath: string): Promise<void> {
+  await withFsAttribution(subject, 'source', () => access(sourcePath, constants.R_OK));
+  await withFsAttribution(subject, 'output', async () => {
+    await mkdir(dirname(targetPath), { recursive: true });
+    await copyFile(sourcePath, targetPath);
+  });
 }

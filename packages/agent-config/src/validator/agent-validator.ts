@@ -29,8 +29,8 @@ interface IssueSink {
   readonly location: string;
 }
 
-function report(sink: IssueSink, code: ValidationIssue['code'], severity: ValidationIssue['severity'], message: string): void {
-  sink.issues.push({ code, severity, message, location: sink.location });
+function report(sink: IssueSink, issue: Pick<ValidationIssue, 'code' | 'severity' | 'message'>): void {
+  sink.issues.push({ ...issue, location: sink.location });
 }
 
 /**
@@ -93,11 +93,11 @@ async function requireReachable(
     await fs.access(fullPath);
   } catch (error) {
     if (isPathAbsentError(error)) {
-      report(sink, 'AGENT_REFERENCE_MISSING', 'error', `${subject} not found: ${shown}${absentHint}`);
+      report(sink, { code: 'AGENT_REFERENCE_MISSING', severity: 'error', message: `${subject} not found: ${shown}${absentHint}` });
       return;
     }
     const reason = error instanceof Error ? error.message : String(error);
-    report(sink, 'AGENT_REFERENCE_UNREADABLE', 'error', `${subject} could not be checked: ${shown} (${reason})`);
+    report(sink, { code: 'AGENT_REFERENCE_UNREADABLE', severity: 'error', message: `${subject} could not be checked: ${shown} (${reason})` });
   }
 }
 
@@ -119,7 +119,7 @@ async function validateRAGConfig(
     const ragConfigs = Object.values(manifest.spec.rag);
     const hasSources = ragConfigs.some(config => config.sources);
     if (!hasSources) {
-      report(sink, 'AGENT_RAG_NO_SOURCES', 'warning', 'RAG configuration defined but no sources specified');
+      report(sink, { code: 'AGENT_RAG_NO_SOURCES', severity: 'warning', message: 'RAG configuration defined but no sources specified' });
     }
   }
 }

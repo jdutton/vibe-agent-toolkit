@@ -476,6 +476,18 @@ function compareRows(
   after: VerdictBody,
   reasons: ReadonlyMap<string, string>,
 ): Validated<SubjectComparison> {
+  // Matched by name below, so a repeated name would hold two baseline rows to
+  // one candidate row and leave the other candidate row compared to nothing.
+  const [repeated] = [before, after].flatMap((body) =>
+    body.rows.filter((row, index) => body.rows.findIndex((other) => other.name === row.name) !== index));
+  if (repeated !== undefined) {
+    return {
+      ok: false,
+      refusal:
+        `REFUSED: subject '${alias}' holds two rows named '${repeated.name}' in one capture. A row name is what the ` +
+        'two captures are matched by; list each verb and each SQL file once, and re-capture both arms.',
+    };
+  }
   const afterByName = new Map(after.rows.map((row) => [row.name, row]));
   const oneSided = [
     ...before.rows.filter((row) => !afterByName.has(row.name)),

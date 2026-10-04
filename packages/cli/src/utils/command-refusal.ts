@@ -19,7 +19,13 @@
  */
 
 import { AGENT_MANIFEST_INVALID_CODE, AGENT_MANIFEST_NOT_FOUND_CODE, AGENT_MANIFEST_UNREADABLE_CODE } from '@vibe-agent-toolkit/agent-config';
-import { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE, GIT_SUBPATH_INVALID_CODE, SKILL_TEST_REFUSAL_BY_ERROR_CODE } from '@vibe-agent-toolkit/agent-skills';
+import {
+  AGENT_PACKAGE_ROOT_MISSING_CODE,
+  AGENT_SOURCE_UNREADABLE_CODE,
+  GIT_SUBPATH_INVALID_CODE,
+  SKILL_PACKAGING_OUTPUT_FAILED_CODE,
+  SKILL_TEST_REFUSAL_BY_ERROR_CODE,
+} from '@vibe-agent-toolkit/agent-skills';
 import {
   API_REQUEST_CODE,
   API_TRANSPORT_CODE,
@@ -27,10 +33,24 @@ import {
   CLAUDE_USER_STATE_WRITE_FAILED_CODE,
   ORG_API_KEY_MISSING_CODE,
   PLUGIN_KEY_INVALID_CODE,
+  PLUGIN_SOURCE_UNREADABLE_CODE,
 } from '@vibe-agent-toolkit/claude-marketplace';
-import { CONFIG_LOAD_CODE, CONFIG_UNREADABLE_CODE, LINK_AUTH_CONFIG_CODE, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
+import {
+  CONFIG_LOAD_CODE,
+  CONFIG_UNREADABLE_CODE,
+  LINK_AUTH_CONFIG_CODE,
+  OKF_UNKNOWN_BUNDLE_CODE,
+  PROJECTION_STATEMENT_REFUSED_CODE,
+} from '@vibe-agent-toolkit/resources';
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
-import { isVatError, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
+import {
+  COPY_LINK_ESCAPES_SOURCE_CODE,
+  DIRECTORY_LISTING_REFUSED_CODE,
+  DIRECTORY_WALK_REVISITED_CODE,
+  isVatError,
+  RAG_INDEX_EMPTY_CODE,
+  VatError,
+} from '@vibe-agent-toolkit/utils';
 import { YAML_EDIT_INPUT_REFUSED_CODE } from '@vibe-agent-toolkit/utils/yaml';
 
 import { AGENT_NAME_ESCAPES_SCOPE_CODE } from '../commands/agent/install-path.js';
@@ -55,13 +75,13 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   // A config file that exists and the OS would not let VAT read (resources' shared `readConfigText`).
   [CONFIG_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
   // A bundle argument the project does not declare under `okf.bundles`.
-  OKF_UNKNOWN_BUNDLE: 'USAGE_INVALID',
+  [OKF_UNKNOWN_BUNDLE_CODE]: 'USAGE_INVALID',
   // A directory the OS would not list, under a `refuse` policy.
-  DIRECTORY_LISTING_REFUSED: 'INPUT_UNREADABLE',
+  [DIRECTORY_LISTING_REFUSED_CODE]: 'INPUT_UNREADABLE',
   // A symlink inside a tree being copied that points outside it (`CopyLinkEscapesSourceError`): the input's link.
-  COPY_LINK_ESCAPES_SOURCE: 'INPUT_UNREADABLE',
+  [COPY_LINK_ESCAPES_SOURCE_CODE]: 'INPUT_UNREADABLE',
   // A symlink that leads a following walk back into a directory it already entered: the input's loop.
-  DIRECTORY_WALK_REVISITED: 'INPUT_UNREADABLE',
+  [DIRECTORY_WALK_REVISITED_CODE]: 'INPUT_UNREADABLE',
   // A git URL's `#ref:subpath` naming a path the clone does not hold, or one escaping it.
   [GIT_SUBPATH_INVALID_CODE]: 'USAGE_INVALID',
   // A `resources.linkAuth` provider that does not compile (`LinkAuthConfigError`): the config's mistake.
@@ -88,8 +108,13 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   [PLUGIN_SYMLINK_REFUSED_CODE]: 'INPUT_UNREADABLE',
   // An adopter's YAML (their config) that the surgical editor cannot take the edit into: not YAML, or the wrong shape at the path.
   [YAML_EDIT_INPUT_REFUSED_CODE]: 'CONFIG_INVALID',
+  // The plugin directory to install is absent or the OS will not list it: the input, not Claude's state.
+  [PLUGIN_SOURCE_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
   // A copy, write or removal in ~/.claude failed partway (install or uninstall): the run stopped, not VAT's defect.
   [CLAUDE_USER_STATE_WRITE_FAILED_CODE]: 'RUN_INCOMPLETE',
+  // A skill build whose OUTPUT the OS would not let it write (full disk, read-only or unwritable directory):
+  // the run stopped, and nothing about the skill is wrong — so never the `SKILL_PACKAGING_FAILED` finding.
+  [SKILL_PACKAGING_OUTPUT_FAILED_CODE]: 'RUN_INCOMPLETE',
   // An org command run without the key its endpoint authenticates with: nothing was sent.
   [ORG_API_KEY_MISSING_CODE]: 'USAGE_INVALID',
   // The Anthropic API answered with a non-success status (`ApiRequestError`)…

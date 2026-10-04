@@ -2,12 +2,12 @@
  * Agent Skill builder - converts VAT agents to Agent Skills
  */
 
-import { statSync } from 'node:fs';
+import { constants, statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { AGENT_MANIFEST_INVALID_CODE, loadAgentManifest, type LoadedAgentManifest } from '@vibe-agent-toolkit/agent-config';
-import { copyDirectory, isPathAbsentError, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { copyDirectory, isFilesystemAccessError, isPathAbsentError, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
 import { packageSkill } from './skill-packager.js';
 
@@ -30,6 +30,31 @@ export const AGENT_SOURCE_UNREADABLE_CODE = 'AGENT_SOURCE_UNREADABLE';
 function sourceUnreadable(target: string, error: unknown): VatError {
   const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
   return new VatError(AGENT_SOURCE_UNREADABLE_CODE, `Agent source cannot be read (${code}): ${target}`, { cause: error });
+}
+
+/**
+ * Do `read`, which touches only the agent's own source at `target`; a
+ * filesystem refusal is {@link sourceUnreadable}, naming the path the OS named
+ * when it names one. A copy is never passed here whole — its errno does not say
+ * which side refused — so each copy reads its source through this first.
+ */
+async function readingSource<T>(target: string, read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (!isFilesystemAccessError(error)) throw error;
+    throw sourceUnreadable((error as NodeJS.ErrnoException).path ?? target, error);
+  }
+}
+
+/** Refuse a source tree the OS will not let the build list or read, before any of it is copied. */
+async function requireReadableTree(dir: string): Promise<void> {
+  const entries = await readingSource(dir, () => fs.readdir(dir, { recursive: true, withFileTypes: true }));
+  for (const entry of entries) {
+    if (entry.isDirectory()) continue;
+    const file = safePath.join(entry.parentPath, entry.name);
+    await readingSource(file, () => fs.access(file, constants.R_OK));
+  }
 }
 
 /**
@@ -142,19 +167,22 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
   // Copy scripts/ directory if it exists (supports .js and .py). Only ABSENCE
   // skips the copy: a scripts/ that is there but cannot be copied (a plain file,
   // an unreadable entry) fails the build rather than shipping a bundle that
-  // silently lacks its scripts.
+  // silently lacks its scripts — coded as the source's refusal, which is why the
+  // tree is read before it is copied.
   const scriptsPath = safePath.join(agentDir, 'scripts');
   if (sourcePresent(scriptsPath)) {
     const outputScriptsPath = safePath.join(outputPath, 'scripts');
+    await requireReadableTree(scriptsPath);
     await copyDirectory(scriptsPath, outputScriptsPath);
     files.push(outputScriptsPath);
   }
 
-  // Copy LICENSE.txt if it exists — same rule: absence skips, a failed copy throws.
+  // Copy LICENSE.txt if it exists — same rule: absence skips, an unreadable one is refused.
   const licensePath = safePath.join(agentDir, 'LICENSE.txt');
   if (sourcePresent(licensePath)) {
     const outputLicensePath = safePath.join(outputPath, 'LICENSE.txt');
-    await fs.copyFile(licensePath, outputLicensePath);
+    const license = await readingSource(licensePath, () => fs.readFile(licensePath));
+    await fs.writeFile(outputLicensePath, license);
     files.push(outputLicensePath);
   }
 

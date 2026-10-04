@@ -756,8 +756,8 @@ export interface SqlQueryableStore extends ProjectionStore {
    * @throws If the statement is not a query (`SELECT`, `WITH` or `VALUES`), if
    *   it is not read-only, if it is more than one statement, if its
    *   placeholders and `parameters` do not pair off exactly, if it names a
-   *   parameter (`:x`) positional values cannot reach, or if SQLite rejects it
-   *   — an unknown column included
+   *   parameter (`:x`) positional values cannot reach, if two result columns
+   *   share a name, or if SQLite rejects it — an unknown column included
    */
   query(sql: string, ...parameters: readonly SqliteValue[]): readonly Record<string, unknown>[];
 
@@ -774,7 +774,11 @@ export interface SqlQueryableStore extends ProjectionStore {
    * @param sql - One `SELECT`, `WITH` or `VALUES` statement
    * @param parameters - The values {@link SqlQueryableStore.query} would bind, gated the same way
    * @returns Each result column's name — its alias where the statement gives one
-   * @throws Everything {@link SqlQueryableStore.query} throws for a statement it would refuse
+   * @throws What {@link SqlQueryableStore.query} throws for a statement refused
+   *   by its gates or when it COMPILES — a write, an unknown name, a statement
+   *   with no result column, two columns under one name. ⚠️ Not a refusal SQLite
+   *   raises only when the statement RUNS (`json('{bad')`, a value over the
+   *   length limit): this never steps, so it cannot see one.
    */
   columns(sql: string, ...parameters: readonly SqliteValue[]): readonly string[];
 
@@ -1221,7 +1225,9 @@ export function runGated<T>(
   database.exec('PRAGMA query_only = 1');
   let failed = false;
   try {
-    return step(database.prepare(sql));
+    const statement = database.prepare(sql);
+    assertResultColumns(statement);
+    return step(statement);
   } catch (error) {
     failed = true;
     // The engine refusing the CALLER'S statement — a name the schema lacks, a
@@ -1232,6 +1238,35 @@ export function runGated<T>(
     throw error;
   } finally {
     restoreConnection(database, failed);
+  }
+}
+
+/**
+ * Refuse a compiled statement whose RESULT SHAPE cannot be published, read off
+ * the statement itself — so `query` and `columns` refuse it identically, though
+ * `columns` never steps:
+ *
+ * - **no result column** — the statement is not a query. `WITH x AS (…) INSERT …`
+ *   passes the kind gate on its first keyword and compiles; `query` then meets
+ *   `query_only` when it steps, but `columns` would answer `[]` for a write.
+ * - **two result columns under one name** — a row is keyed by column name, so
+ *   `SELECT 1 AS a, 2 AS a` returns `{ a: 2 }`: one value silently lost, while
+ *   `columns` reports two.
+ *
+ * @param statement - The compiled statement
+ * @throws VatError `PROJECTION_STATEMENT_REFUSED`
+ */
+function assertResultColumns(statement: StatementSync): void {
+  const names = statement.columns().map((column) => column.name);
+  if (names.length === 0) {
+    throw new VatError(PROJECTION_STATEMENT_REFUSED_CODE, 'The statement produces no result column, so it is not a read: only a SELECT, WITH or VALUES that returns rows is admitted.');
+  }
+  const repeated = names.find((name, index) => names.indexOf(name) !== index);
+  if (repeated !== undefined) {
+    throw new VatError(
+      PROJECTION_STATEMENT_REFUSED_CODE,
+      `Two result columns are named "${repeated}". A row is keyed by column name, so one of the two values would be lost — give each column its own alias (AS).`,
+    );
   }
 }
 
@@ -1267,7 +1302,12 @@ function restoreConnection(database: DatabaseSync, stepFailed: boolean): void {
  * - `SQLITE_ERROR_MISSING_COLLSEQ` (257) — the statement names a collation that
  *   does not exist
  * - `SQLITE_READONLY` (8) — a write `PRAGMA query_only` stopped
+ * - `SQLITE_TOOBIG` (18) — the statement built a string or blob over SQLite's
+ *   length limit (`zeroblob(2147483647)`, a `group_concat` over a large corpus)
  * - `SQLITE_RANGE` (25) — a bind index out of range
+ *
+ * `SQLITE_MISMATCH` (20) is deliberately absent: only a write raises it (a
+ * non-integer rowid), and `query_only` refuses every write first, as 8.
  *
  * 🚨 Never masked to the primary code. `& 0xff` folds whole families in, and
  * the READONLY family is mostly the ENVIRONMENT: `READONLY_RECOVERY`,
@@ -1276,7 +1316,7 @@ function restoreConnection(database: DatabaseSync, stepFailed: boolean): void {
  * `ERROR_RETRY` (513) and `ERROR_SNAPSHOT` (769) are not the statement's
  * fault either.
  */
-const STATEMENT_REFUSAL_RESULT_CODES: ReadonlySet<number> = new Set([1, 8, 25, 257]);
+const STATEMENT_REFUSAL_RESULT_CODES: ReadonlySet<number> = new Set([1, 8, 18, 25, 257]);
 
 /**
  * Whether `error` is SQLite refusing the caller's statement, as opposed to the

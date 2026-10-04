@@ -8,6 +8,7 @@ import { buildHostileTree, HOSTILE_NAMES , CANNOT_DENY_READS } from '@vibe-agent
 import { describe, expect, it } from 'vitest';
 
 import { getResourceSubdirForFile } from '../src/content-type-routing.js';
+import { SKILL_PACKAGING_OUTPUT_FAILED_CODE } from '../src/packaging-errors.js';
 import {
   extractH1Title,
   findCommonAncestor,
@@ -721,9 +722,12 @@ describe('packageSkill - unreadable/unwritable linked file attribution', () => {
       chmodSync(lockedResourcesDir, 0o500); // r-x: traversable, not writable
 
       try {
-        await expect(packageSkill(sp, { outputPath })).rejects.toThrow(
-          /linked file[\s\S]*guide\.md[\s\S]*could not be written into the bundle[\s\S]*output directory is writable/,
-        );
+        await expect(packageSkill(sp, { outputPath })).rejects.toMatchObject({
+          code: SKILL_PACKAGING_OUTPUT_FAILED_CODE,
+          message: expect.stringMatching(
+            /linked file[\s\S]*guide\.md[\s\S]*could not be written into the bundle[\s\S]*output directory is writable/,
+          ) as unknown,
+        });
       } finally {
         chmodSync(lockedResourcesDir, 0o755);
       }

@@ -24,6 +24,7 @@ describe('isStatementRefusal — exact extended codes only', () => {
   it.each([
     [1, 'SQLITE_ERROR — a name the schema lacks, a syntax error'],
     [8, 'SQLITE_READONLY — a write PRAGMA query_only stopped'],
+    [18, 'SQLITE_TOOBIG — the statement built a string or blob over the engine\'s limit'],
     [25, 'SQLITE_RANGE — a bind index out of range'],
     [257, 'SQLITE_ERROR_MISSING_COLLSEQ — the statement names a collation that does not exist'],
   ])('codes %i (%s) as the statement\'s refusal', (errcode) => {

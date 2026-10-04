@@ -5,17 +5,19 @@
 
 // Test helper — file paths are controlled by test code, not user input
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 
 import { createSymlink, isVatError, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   CLAUDE_USER_STATE_UNREADABLE_CODE,
   installPlugin,
   CLAUDE_USER_STATE_WRITE_FAILED_CODE,
+  PLUGIN_SOURCE_UNREADABLE_CODE,
   readInstalledPlugins,
   readKnownMarketplaces,
   readUserSettings,
@@ -223,6 +225,29 @@ describe('installPlugin', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  // The plugin to install is the INPUT. A source that is not there is not a failed
+  // write to Claude's state — and nothing may be created for it: an empty plugin
+  // directory under marketplaces/ is what uninstall later reports as an orphan.
+  it('refuses a plugin source that is not there as PLUGIN_SOURCE_UNREADABLE, before creating anything', async () => {
+    const paths = buildTestPaths(getDir());
+    let error: unknown;
+    try {
+      await installPlugin({
+        marketplaceName: MARKETPLACE_NAME,
+        pluginName: PLUGIN_NAME,
+        pluginDir: safePath.join(getDir(), 'never-built'),
+        version: VERSION,
+        source: { source: 'npm', package: NPM_PACKAGE, version: VERSION },
+        paths,
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(isVatError(error, PLUGIN_SOURCE_UNREADABLE_CODE), String(error)).toBe(true);
+    expect(existsSync(paths.claudeDir)).toBe(false);
+  });
+
   it('codes a registration it could not write as CLAUDE_USER_STATE_WRITE_FAILED', async () => {
     const paths = buildTestPaths(getDir());
     // A FILE where the cache directory must go: the copy into it cannot happen.
@@ -260,6 +285,49 @@ describe('installPlugin', () => {
     await register();
     await expect(register()).resolves.toBeUndefined();
     expect(existsSync(safePath.join(paths.pluginsCacheDir, MARKETPLACE_NAME, PLUGIN_NAME, VERSION, 'skills', 'linked', 'SKILL.md'))).toBe(true);
+  });
+
+  // Needs a source file the OS refuses to read; Windows and root cannot deny a read by mode.
+  it.skipIf(CANNOT_DENY_READS)('keeps the previous cache intact when a re-install cannot copy the plugin', async () => {
+    const paths = buildTestPaths(getDir());
+    // Registered in place, so the cache copy (step 3) is the first copy to run.
+    const pluginDir = safePath.join(paths.marketplacesDir, MARKETPLACE_NAME, 'plugins', PLUGIN_NAME);
+    plantFile(safePath.join(pluginDir, PLUGIN_JSON), JSON.stringify({ name: PLUGIN_NAME }));
+    // In the first install only: a partial second copy cannot put it back.
+    const firstOnly = safePath.join(pluginDir, 'first-only.txt');
+    writeFileSync(firstOnly, 'x');
+    const register = async (): Promise<unknown> => {
+      try {
+        await installPlugin({
+          marketplaceName: MARKETPLACE_NAME,
+          pluginName: PLUGIN_NAME,
+          pluginDir,
+          version: VERSION,
+          source: { source: 'npm', package: NPM_PACKAGE, version: VERSION },
+          paths,
+        });
+        return undefined;
+      } catch (error) {
+        return error;
+      }
+    };
+    expect(await register()).toBeUndefined();
+    const versionsDir = safePath.join(paths.pluginsCacheDir, MARKETPLACE_NAME, PLUGIN_NAME);
+    const firstInstall = ['first-only.txt', PLUGIN_JSON];
+    expect(readdirSync(safePath.join(versionsDir, VERSION)).toSorted((a, b) => a.localeCompare(b))).toEqual(firstInstall);
+
+    rmSync(firstOnly);
+    const refused = safePath.join(pluginDir, 'refused.txt');
+    writeFileSync(refused, 'x');
+    chmodSync(refused, 0o000);
+    const error = await register();
+    chmodSync(refused, 0o644);
+
+    expect(isVatError(error, CLAUDE_USER_STATE_WRITE_FAILED_CODE), String(error)).toBe(true);
+    // The tree the registry still points at is the one the first install left.
+    expect(readdirSync(safePath.join(versionsDir, VERSION)).toSorted((a, b) => a.localeCompare(b))).toEqual(firstInstall);
+    // And no half-copied sibling is left beside it to read as another version.
+    expect(readdirSync(versionsDir)).toEqual([VERSION]);
   });
 
   it('never deletes a pluginDir that resolves to the cache destination through a link', async ({ skip }) => {

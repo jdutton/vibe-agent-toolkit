@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 
 import { AGENT_MANIFEST_INVALID_CODE } from '@vibe-agent-toolkit/agent-config';
 import { createSymlink, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
-import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE, buildAgentSkill } from '../src/builder.js';
@@ -262,18 +262,40 @@ spec:
   // "Copy X if it exists" used to be spelled `try { access(X); copy(X) } catch {}`,
   // so a copy that FAILED — not a copy that was never needed — produced a bundle
   // silently missing X. Only absence may skip; a failed copy is the build's error.
-  it('rejects when LICENSE.txt exists but cannot be copied (it is a directory)', async () => {
+  //
+  // And it is CODED: the agent's own source being the wrong shape, or refused by
+  // the OS, is the input's — a bare errno here was published as a defect in VAT.
+  it('refuses a LICENSE.txt that is a directory as an unreadable source', async () => {
     const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'license-is-a-dir');
     await fs.mkdir(safePath.join(agentDir, LICENSE_FILE));
-    // The errno is platform-specific (EISDIR on Linux, ENOTSUP on macOS, EPERM on
-    // Windows); the syscall in Node's message is not.
-    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toThrow(/copyfile/);
+    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject({ code: AGENT_SOURCE_UNREADABLE_CODE });
   });
 
-  it('rejects when scripts/ exists but cannot be copied (it is a plain file)', async () => {
+  it('refuses a scripts/ that is a plain file as an unreadable source', async () => {
     const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'scripts-is-a-file');
     await fs.writeFile(safePath.join(agentDir, 'scripts'), 'not a directory');
-    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toThrow(/ENOTDIR|not a directory/);
+    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject({ code: AGENT_SOURCE_UNREADABLE_CODE });
+  });
+
+  // Needs a file whose mode denies reading it; Windows and root cannot deny a read by mode.
+  it.skipIf(CANNOT_DENY_READS).each([
+    ['LICENSE.txt', 'unreadable-license', LICENSE_FILE],
+    ['a file under scripts/', 'unreadable-script', 'scripts/run.js'],
+  ])('refuses %s the OS will not read as an unreadable source, naming it', async (_what, agentName, relative) => {
+    const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, agentName);
+    const locked = safePath.join(agentDir, relative);
+    await fs.mkdir(safePath.join(locked, '..'), { recursive: true });
+    await fs.writeFile(locked, 'content');
+    await fs.chmod(locked, 0o000);
+
+    try {
+      await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject({
+        code: AGENT_SOURCE_UNREADABLE_CODE,
+        message: expect.stringContaining(relative) as unknown,
+      });
+    } finally {
+      await fs.chmod(locked, 0o644);
+    }
   });
 
   it('builds without scripts/ or LICENSE.txt when neither exists (absence still skips)', async () => {

@@ -80,6 +80,7 @@ export type {
 export {
   CLAUDE_USER_STATE_UNREADABLE_CODE,
   CLAUDE_USER_STATE_WRITE_FAILED_CODE,
+  PLUGIN_SOURCE_UNREADABLE_CODE,
   codedUserStateWrite,
   installPlugin,
   readInstalledPlugins,

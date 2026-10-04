@@ -7,7 +7,6 @@ import { platform } from 'node:os';
 
 import {
   summarizeIssues,
-  type IssueCode,
   type IssueSeverity,
   type SeverityCounts,
 } from '@vibe-agent-toolkit/schema';
@@ -95,10 +94,12 @@ export type SettingsTypeConfidence =
  * becomes the finding's `location`, the file you would open.
  */
 export interface SettingsFinding {
-  /** A registered `SETTINGS_*` code. */
-  code: IssueCode;
+  /** Not a `validation.severity` key: nothing that validates a settings file reads a project's validation config. */
+  code: 'SETTINGS_FILE_INVALID' | 'SETTINGS_TYPE_AMBIGUOUS';
   severity: IssueSeverity;
   message: string;
+  /** What to do about it. */
+  fix: string;
   /** Dotted key path inside the settings document; absent when the finding is about the document as a whole. */
   field?: string;
 }
@@ -291,6 +292,9 @@ function detectSettingsType(
   return { detectedType: 'user', typeConfidence: 'ambiguous' };
 }
 
+const INVALID_FILE_FIX =
+  'Fix the field the finding names (its `field` is the dotted key path), or the JSON syntax, then re-run vat audit settings --file.';
+
 /**
  * Validate a specific settings file against the appropriate schema.
  *
@@ -307,7 +311,7 @@ export async function validateSettingsFile(
     raw = JSON.parse(content) as unknown;
   } catch (err) {
     return buildValidateResult(
-      [{ code: 'SETTINGS_FILE_INVALID', message: `Not valid JSON: ${err instanceof Error ? err.message : String(err)}`, severity: 'error' }],
+      [{ code: 'SETTINGS_FILE_INVALID', message: `Not valid JSON: ${err instanceof Error ? err.message : String(err)}`, severity: 'error', fix: INVALID_FILE_FIX }],
       'unknown',
       'undetermined',
     );
@@ -327,13 +331,16 @@ export async function validateSettingsFile(
         'Could not determine whether this is a user or project settings file — they share one ' +
         'schema. Validated as "user"; pass --type to state which it is.',
       severity: 'info',
+      fix: 'Pass --type user or --type project to state which it is.',
     });
   }
 
   const result = schema.safeParse(raw);
   if (!result.success) {
     for (const e of result.error.errors) {
-      findings.push({ code: 'SETTINGS_FILE_INVALID', field: e.path.join('.'), message: e.message, severity: 'error' });
+      // A violation at the document's root has no key path: the finding is about the whole file.
+      const field = e.path.join('.');
+      findings.push({ code: 'SETTINGS_FILE_INVALID', ...(field === '' ? {} : { field }), message: e.message, severity: 'error', fix: INVALID_FILE_FIX });
     }
   }
 

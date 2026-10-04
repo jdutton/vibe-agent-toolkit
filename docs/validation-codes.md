@@ -1036,13 +1036,6 @@ These files are external data: VAT reads them, Claude Code writes them. Per VAT'
 - **Why it matters:** Liberal parsing alone would trade false errors for total blindness: Claude Code could add three new fields and a new install scope and VAT would report a clean run forever. This code is the visible half of the trade — VAT accepts the shape it does not understand *and says so*. It is the signal that VAT's registry model has fallen behind, and the input for updating it.
 - **Fix:** No action needed — the unknown value was preserved, not rejected. Report the field so VAT's model can catch up, or set `severity.REGISTRY_SHAPE_DRIFT` to `ignore`.
 
-### `PLUGIN_UNINSTALL_INCOMPLETE`
-
-- **Default:** `warning`
-- **What:** `vat claude plugin uninstall` found the plugin's directory under the Claude marketplaces tree with no entry in `installed_plugins.json` — a half-removed install, or one VAT never made. The directory, cache and settings entry were removed; `data.plugins[]` still reports `removed: true`. The finding's `location` is the plugin key.
-- **Why it matters:** VAT reverses only the artifacts its own install writes. An install it did not record may have written others it cannot see, so "removed" is VAT's side of the uninstall, not a guarantee the plugin is gone.
-- **Fix:** Check Claude Code for leftovers of the plugin (`/plugin`) and remove them there. Set `severity.PLUGIN_UNINSTALL_INCOMPLETE` to `ignore` if half-removed installs are expected.
-
 ## Compat Codes
 
 *Stance: see [Compatibility](./skill-quality-and-compatibility.md#compatibility).*
@@ -1169,77 +1162,6 @@ A rules file with a `paths:` list is **path-scoped**: Claude Code does not load 
 - **A link at `.claude` itself is reported too.** `sub/.claude -> ../.claude` carries a whole rules directory with it, and the link's own path never contains the `rules` segment — so a predicate that looked for `.claude` followed by `rules` read the commonest shape of this defect as "not a rules link" and said nothing.
 - **Blind spots:** it reports what the enumerators declined, so it sees a link only where the crawl's `include`/`exclude` would admit the link's path. VAT never follows the link either way: the `paths:` globs and frontmatter of the linked file stay unread, and this code says so rather than guessing at them. **A link at a higher ancestor is not reported at all** — `sub -> ../shared`, where the target holds `sub/.claude/rules/*.md`, hides a whole rules tree and draws nothing here. That is a narrowing, not an oversight: the condition row is at `sub`, VAT follows no link, and no column says what the target holds, so the only predicate that would catch it is "every declined link is a possible hidden rule set" — which reports `CLAUDE.md -> AGENTS.md` and every vendored tree in the corpus. The code claims the narrow thing, and closing the wider class needs a column describing what a declined link's target contains.
 - **Fix:** For a target inside the project root the rule is in force and unchecked: replace the link with the file itself, or with an `@` import of the shared file from a rules file that is not a link, if you want VAT to check its globs and frontmatter. For a target outside it the rule is in force nowhere, because Claude Code skips the link too — copy or vendor those rules into the repository, since sharing one rule set across repositories by symlink does not work. For a link that resolves to nothing no rule is loaded through it: point it at a file that exists or delete it. Keep the link and set `resources.validation.severity.CLAUDE_RULE_LINK_UNCHECKED` to `ignore` to accept the blind spot.
-
-## Claude Settings Codes
-
-Published by `vat audit settings` — about a Claude settings file (`--file`), the settings paths Claude Code reads (`--show-paths`), or the settings the layers merge into (the default mode). Each finding's `location` is the settings file, relative to the report's `data.root` (the directory the command ran in); `field` is the dotted key path inside it when there is one.
-
-### `SETTINGS_FILE_INVALID`
-
-- **Default:** `error`
-- **What:** The file given to `--file` was read, and its content does not parse as JSON, or a field violates the settings schema for its type (managed, user or project). One finding per schema violation, with the dotted key path in `field`. A file that is absent or that the OS refuses is not this finding: nothing was read, so the run is refused instead (`USAGE_INVALID` / `INPUT_UNREADABLE`, exit 2).
-- **Why it matters:** Claude Code ignores a settings file it cannot parse, and a field of the wrong shape is not applied — the policy the file was written to carry is silently not in effect.
-- **Fix:** Fix the field the finding names (its `field` is the dotted key path), or the JSON syntax, then re-run `vat audit settings --file`.
-
-### `SETTINGS_TYPE_AMBIGUOUS`
-
-- **Default:** `info`
-- **What:** The file could be a user or a project settings file. The two share one schema, so nothing in the file tells them apart; it was validated as a user file.
-- **Why it matters:** The verdict does not depend on the answer — the schema is the same — but the reported `detectedType` does, and `typeConfidence: ambiguous` says so rather than presenting a guess as a detection.
-- **Fix:** Pass `--type user` or `--type project` to state which it is.
-
-### `SETTINGS_PATH_DEPRECATED`
-
-- **Default:** `error`
-- **What:** A managed settings file exists at a path Claude Code no longer reads (the legacy Windows managed-settings location).
-- **Why it matters:** The organisation's managed policy in that file is not in effect, while the file's presence suggests it is.
-- **Fix:** Move the managed settings file to the current managed-settings path (`vat audit settings --show-paths` lists it) and remove the legacy file.
-
-### `SETTINGS_RULE_SHADOWED`
-
-- **Default:** `warning`
-- **What:** A permission rule can never take effect: a `deny` rule shadows an `ask` or `allow` rule for the same tool, an `ask` rule shadows an `allow` rule, or a duplicate in the same list already decides it.
-- **Why it matters:** The shadowed rule reads as policy and is not — a reader of that settings file is told something Claude Code will never do.
-- **Fix:** Remove the shadowed rule, or narrow the rule that shadows it.
-
-### `SETTINGS_MARKETPLACE_TOKEN_MISSING`
-
-- **Default:** `warning`
-- **What:** A marketplace registered in the effective settings is sourced from GitHub and `GITHUB_TOKEN` is not set in the environment the audit ran in.
-- **Why it matters:** A private repository cannot be fetched without the token, so the marketplace's plugins would not install or update.
-- **Fix:** Set `GITHUB_TOKEN` in the environment Claude Code runs in, or register the marketplace from a public source.
-
-## Agent Manifest Codes
-
-Emitted by `vat agent validate` about an agent manifest (`agent.yaml`) the run read. A manifest that cannot be read at all — no manifest at the path (`USAGE_INVALID`), or one the OS refuses or that is not YAML (`INPUT_UNREADABLE`) — is a refusal, not one of these.
-
-### `AGENT_MANIFEST_INVALID`
-
-- **Default:** `error`
-- **What:** The manifest was read and parsed, but violates the agent manifest schema. One finding per violation; `field` is the dotted key path.
-- **Why it matters:** Every command that loads the agent (`vat agent run`, `build`, `install`) refuses a manifest the schema rejects.
-- **Fix:** Correct the named field in `agent.yaml`, then re-run `vat agent validate`.
-
-### `AGENT_REFERENCE_MISSING`
-
-- **Default:** `error`
-- **What:** A file or directory the manifest references does not exist: a `spec.prompts` `$ref`, a `spec.resources` path, or the RAG database (`.rag-db`) a `spec.rag` block needs.
-- **Why it matters:** The agent fails at run time on the first use of the missing file.
-- **Fix:** Create the file, correct its path in `agent.yaml`, or run `vat rag index` to create the RAG database.
-
-### `AGENT_REFERENCE_UNREADABLE`
-
-- **Default:** `error`
-- **What:** A referenced file or directory exists, but the operating system refused access, so the run could not check it.
-- **Why it matters:** "Not found" would send you to create a file that is already there; this names the real cause.
-- **Fix:** Make the path readable — check its permissions and ownership — then re-run.
-
-### `AGENT_RAG_NO_SOURCES`
-
-- **Default:** `warning`
-- **What:** `spec.rag` is declared but no entry names any `sources`.
-- **Why it matters:** Nothing can be indexed, so retrieval answers from an empty store.
-- **Fix:** Add `sources` to the RAG entry, or remove the RAG configuration.
 
 ## Meta Codes
 
@@ -1405,7 +1327,7 @@ skill's `SKILL.md`.
 | Code | Severity | What | Fix |
 |---|---|---|---|
 | `SKILL_BUILD_TARGET_NOT_BUILDABLE` | error | `--skill <name>` named a skill whose merged config says `publish: false`: an in-place skill (validated at source by `vat validate`, never bundled) or a plugin-local one (shipped with its plugin by the claude phase). `data.skillsInPlace` / `data.skillsPluginOnly` name it. Building nothing and exiting 0 would tell a release step the skill it asked for was built | Drop `--skill`, set `publish: true` to distribute it through `dist/skills`, or — for a plugin-local skill — run `vat build --only claude` |
-| `SKILL_PACKAGING_FAILED` | error | Packaging stopped before it produced a bundle — an absent or unreadable `files:` source, a file the OS would not let the build read or write, a `SKILL.md` bundled as a resource, a name that is not a single path segment; the message is the packager's own. Only the packager's CODED refusals (`SKILL_PACKAGING_INPUT_INVALID`, `SKILL_NAME_NOT_A_SEGMENT`) are this finding, in every lane that emits it; any other packager throw stops the run under its own refusal code (`INPUT_UNREADABLE` for a directory the OS will not list), or `INTERNAL_ERROR` when it carries none. Counted in `data.skillsFailed` (`vat skills build`) | Fix what the message names in the skill or its `skills.config` entry, then rebuild |
+| `SKILL_PACKAGING_FAILED` | error | Packaging stopped before it produced a bundle — an absent or unreadable `files:` source, a source file the OS would not let the build read, two `files:` dests where one lands on or under the other's file, a `SKILL.md` bundled as a resource, a name that is not a single path segment; the message is the packager's own. Only the packager's CODED refusals (`SKILL_PACKAGING_INPUT_INVALID`, `SKILL_NAME_NOT_A_SEGMENT`) are this finding, in every lane that emits it; any other packager throw stops the run under its own refusal code (`INPUT_UNREADABLE` for a directory the OS will not list; `RUN_INCOMPLETE` for an output the OS would not let the build write — a full disk, a read-only or unwritable output directory, coded `SKILL_PACKAGING_OUTPUT_FAILED` — which says nothing about the skill and is never this finding), or `INTERNAL_ERROR` when it carries none. Counted in `data.skillsFailed` (`vat skills build`) | Fix what the message names in the skill or its `skills.config` entry, then rebuild |
 
 ### `vat skills package` findings (never overridable)
 
@@ -1484,6 +1406,52 @@ dropped.
 | Code | Severity | What | Fix |
 |---|---|---|---|
 | `CORPUS_ENTRY_INCOMPLETE` | warning | A seed entry whose audit could not run (`audit: unloadable` — a source path that is not there, a clone that failed, a source that refused the validation overlay), or whose review, asked for with `--with-review`, did not finish (`review: error`) | Fix what the message names — the entry's `source`, network access for a clone, or the failing skill review in `<name>-review.md` — and re-run the scan |
+
+### `vat claude plugin uninstall` findings (never overridable)
+
+Emitted only by `vat claude plugin uninstall`, always at `warning`, and declared as
+`NonOverridableCode` in `packages/schema/src/validation-codes.ts` — the verb acts on Claude user
+state and reads no project config, so a `validation.severity` or `validation.allow` key for it
+would parse and do nothing, and both refuse it. `location` is the plugin key.
+
+| Code | Severity | What | Fix |
+|---|---|---|---|
+| `PLUGIN_UNINSTALL_INCOMPLETE` | warning | The plugin's directory was under the Claude marketplaces tree with no entry in `installed_plugins.json` — a half-removed install, or one VAT never made. The directory, cache and settings entry were removed, and `data.plugins[]` still reports `removed: true`; but VAT reverses only the artifacts its own install writes, so an install it did not record may have written others it cannot see | Check Claude Code for leftovers of the plugin (`/plugin`) and remove them there |
+
+### Claude Settings Codes
+
+Emitted only by `vat audit settings` — about a Claude settings file (`--file`), the settings paths
+Claude Code reads (`--show-paths`), or the settings the layers merge into (the default mode) — and
+declared as `NonOverridableCode` in `packages/schema/src/validation-codes.ts`: the verb reads
+Claude settings, never a project's `validation:` block, so a `validation.severity` or
+`validation.allow` key for any of them would parse and do nothing, and both refuse it. Each
+finding's `location` is the settings file, relative to the report's `data.root` (the directory the
+command ran in); `field` is the dotted key path inside it when there is one, and is absent for a
+finding about the document as a whole.
+
+| Code | Severity | What | Fix |
+|---|---|---|---|
+| `SETTINGS_FILE_INVALID` | error | The file given to `--file` was read, and its content does not parse as JSON, or a field violates the settings schema for its type (managed, user or project) — one finding per schema violation. Claude Code ignores a settings file it cannot parse and does not apply a field of the wrong shape, so the policy the file carries is silently not in effect. A file that is absent or that the OS refuses is not this finding: nothing was read, so the run is refused instead (`USAGE_INVALID` / `INPUT_UNREADABLE`, exit 2) | Fix the field the finding names, or the JSON syntax, then re-run `vat audit settings --file` |
+| `SETTINGS_TYPE_AMBIGUOUS` | info | The file could be a user or a project settings file. The two share one schema, so nothing in the file tells them apart; it was validated as a user file. The verdict does not depend on the answer, but the reported `detectedType` does, and `typeConfidence: ambiguous` says so rather than presenting a guess as a detection | Pass `--type user` or `--type project` to state which it is |
+| `SETTINGS_PATH_DEPRECATED` | error | A managed settings file exists at a path Claude Code no longer reads (the legacy Windows managed-settings location): the organisation's managed policy in that file is not in effect, while the file's presence suggests it is | Move the managed settings file to the current managed-settings path (`vat audit settings --show-paths` lists it) and remove the legacy file |
+| `SETTINGS_RULE_SHADOWED` | warning | A permission rule can never take effect: a `deny` rule shadows an `ask` or `allow` rule for the same tool, an `ask` rule shadows an `allow` rule, or a duplicate in the same list already decides it. The shadowed rule reads as policy and is not | Remove the shadowed rule, or narrow the rule that shadows it |
+| `SETTINGS_MARKETPLACE_TOKEN_MISSING` | warning | A marketplace registered in the effective settings is sourced from GitHub and `GITHUB_TOKEN` is not set in the environment the audit ran in, so a private repository cannot be fetched and its plugins would not install or update | Set `GITHUB_TOKEN` in the environment Claude Code runs in, or register the marketplace from a public source |
+
+### Agent Manifest Codes
+
+Emitted only by `vat agent validate`, about an agent manifest (`agent.yaml`) the run read, and
+declared as `NonOverridableCode` in `packages/schema/src/validation-codes.ts` — the validator is
+handed no validation config, so a `validation.severity` or `validation.allow` key for any of them
+would parse and do nothing, and both refuse it. `location` is the manifest. A manifest that cannot
+be read at all — no manifest at the path (`USAGE_INVALID`), or one the OS refuses or that is not
+YAML (`INPUT_UNREADABLE`) — is a refusal, not one of these.
+
+| Code | Severity | What | Fix |
+|---|---|---|---|
+| `AGENT_MANIFEST_INVALID` | error | The manifest was read and parsed, but violates the agent manifest schema. One finding per violation; `field` is the dotted key path. Every command that loads the agent (`vat agent run`, `build`, `install`) refuses a manifest the schema rejects | Correct the named field in `agent.yaml`, then re-run `vat agent validate` |
+| `AGENT_REFERENCE_MISSING` | error | A file or directory the manifest references does not exist: a `spec.prompts` `$ref`, a `spec.resources` path, or the RAG database (`.rag-db`) a `spec.rag` block needs. The agent fails at run time on the first use of the missing file | Create the file, correct its path in `agent.yaml`, or run `vat rag index` to create the RAG database |
+| `AGENT_REFERENCE_UNREADABLE` | error | A referenced file or directory exists, but the operating system refused access, so the run could not check it. "Not found" would send you to create a file that is already there; this names the real cause | Make the path readable — check its permissions and ownership — then re-run |
+| `AGENT_RAG_NO_SOURCES` | warning | `spec.rag` is declared but no entry names any `sources`, so nothing can be indexed and retrieval answers from an empty store | Add `sources` to the RAG entry, or remove the RAG configuration |
 
 ### Structural reports (info, always emitted)
 

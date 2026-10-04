@@ -1092,6 +1092,7 @@ export {
 // See docs/concepts/knowledge-interop-formats.md.
 export {
   OKF_FINDING_CODES,
+  OKF_UNKNOWN_BUNDLE_CODE,
   discoverOkfBundle,
   okfBundleRuns,
   validateOkfBundle,

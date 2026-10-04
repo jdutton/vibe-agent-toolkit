@@ -51,6 +51,7 @@ const BARREL_EXPORTS = [
   'PLUGIN_KEY_INVALID_CODE',
   'PLUGIN_KIND',
   'PLUGIN_NOT_INSTALLED',
+  'PLUGIN_SOURCE_UNREADABLE_CODE',
   'PermissionsConfigSchema',
   'PluginExtentContributor',
   'ProjectSettingsSchema',

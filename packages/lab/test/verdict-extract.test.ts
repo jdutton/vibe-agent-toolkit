@@ -114,6 +114,29 @@ describe('extractVerdict', () => {
     expect(duplicates).toHaveLength(2);
   });
 
+  // A report finding the lab cannot read is not a quiet `info` with no code: the
+  // document is unreadable, so the row measured nothing — as strict as the legacy
+  // reader, which never takes an object without a code and a known severity for a finding.
+  it.each([
+    ['no code', { severity: 'error', message: 'x' }],
+    ['a code that is not a string', { code: 7, severity: 'error' }],
+    ['a severity outside error|warning|info', { code: 'LINK_BROKEN_FILE', severity: 'notice' }],
+    ['no severity', { code: 'LINK_BROKEN_FILE' }],
+    ['an element that is not an object', 'LINK_BROKEN_FILE'],
+  ])('reads a report whose findings[] holds %s as unparsed, never as a coerced finding', (_label, malformed) => {
+    const report = (findings: unknown[]): Extract<RunOutcome, { kind: 'exited' }> => ({
+      kind: 'exited',
+      exitCode: 1,
+      stdout: JSON.stringify({ status: 'findings', examined: 1, findings, summary: { errors: 1, warnings: 0, info: 0 }, data: {} }),
+      stderr: '',
+    });
+    const wellFormed = { code: 'LINK_BROKEN_FILE', severity: 'error', location: 'docs/a.md' };
+
+    // Positive control: the same document with only well-formed findings is a report.
+    expect(extractVerdict(report([wellFormed]))).toMatchObject({ shape: 'report', findings: [{ code: 'LINK_BROKEN_FILE' }] });
+    expect(extractVerdict(report([wellFormed, malformed]))).toEqual({ exitCode: 1, shape: 'unparsed', findings: [] });
+  });
+
   it('returns an empty list, not a guess, for an unparsed document', () => {
     const verdict = extractVerdict({ kind: 'exited', exitCode: 2, stdout: 'a: [1, 2\n', stderr: 'boom' });
     expect(verdict.shape).toBe('unparsed');

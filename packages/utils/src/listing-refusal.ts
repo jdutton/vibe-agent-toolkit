@@ -64,6 +64,9 @@ export type UnreadablePolicy =
   | { readonly refuse: RefuseListingContext }
   | { readonly degrade: (refusal: DirectoryRefusal) => void };
 
+/** The `VatError` code of a {@link DirectoryListingRefusedError}. */
+export const DIRECTORY_LISTING_REFUSED_CODE = 'DIRECTORY_LISTING_REFUSED';
+
 /**
  * Thrown by a listing under `{ refuse }` when a directory refused to be
  * listed. The message is the adopter's sentence — see {@link refusedListingMessage}.
@@ -72,7 +75,7 @@ export class DirectoryListingRefusedError extends VatError {
   readonly refusal: DirectoryRefusal;
 
   constructor(refusal: DirectoryRefusal, context: RefuseListingContext) {
-    super('DIRECTORY_LISTING_REFUSED', refusedListingMessage(refusal, context));
+    super(DIRECTORY_LISTING_REFUSED_CODE, refusedListingMessage(refusal, context));
     this.refusal = refusal;
   }
 }

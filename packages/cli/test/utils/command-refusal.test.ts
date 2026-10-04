@@ -4,11 +4,11 @@
  */
 
 import { AGENT_MANIFEST_INVALID_CODE, AGENT_MANIFEST_NOT_FOUND_CODE, AGENT_MANIFEST_UNREADABLE_CODE } from '@vibe-agent-toolkit/agent-config';
-import { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE } from '@vibe-agent-toolkit/agent-skills';
-import { ApiRequestError, ApiTransportError, OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
-import { CONFIG_UNREADABLE_CODE, LinkAuthConfigError, okfBundleRuns, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
+import { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE, SKILL_PACKAGING_OUTPUT_FAILED_CODE } from '@vibe-agent-toolkit/agent-skills';
+import { ApiRequestError, ApiTransportError, OrgApiClient, PLUGIN_SOURCE_UNREADABLE_CODE } from '@vibe-agent-toolkit/claude-marketplace';
+import { CONFIG_UNREADABLE_CODE, LinkAuthConfigError, OKF_UNKNOWN_BUNDLE_CODE, okfBundleRuns, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
 import { ExitCode, type ErrorReport } from '@vibe-agent-toolkit/schema';
-import { CopyLinkEscapesSourceError, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
+import { COPY_LINK_ESCAPES_SOURCE_CODE, CopyLinkEscapesSourceError, DIRECTORY_LISTING_REFUSED_CODE, DIRECTORY_WALK_REVISITED_CODE, DirectoryWalkRevisitedError, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
 import { updateYamlIn } from '@vibe-agent-toolkit/utils/yaml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -40,12 +40,27 @@ describe('refusalCodeOf', () => {
   it('reads a CommandRefusalError\'s own code and a library error\'s by its code', () => {
     expect(refusalCodeOf(new CommandRefusalError('USAGE_INVALID', 'no such bundle'))).toBe('USAGE_INVALID');
     expect(refusalCodeOf(new VatError('CONFIG_LOAD', 'bad yaml'))).toBe('CONFIG_INVALID');
-    expect(refusalCodeOf(new VatError('OKF_UNKNOWN_BUNDLE', 'nope'))).toBe('USAGE_INVALID');
-    expect(refusalCodeOf(new VatError('DIRECTORY_LISTING_REFUSED', 'EACCES'))).toBe('INPUT_UNREADABLE');
+    expect(refusalCodeOf(new VatError(OKF_UNKNOWN_BUNDLE_CODE, 'nope'))).toBe('USAGE_INVALID');
+    expect(refusalCodeOf(new VatError(DIRECTORY_LISTING_REFUSED_CODE, 'EACCES'))).toBe('INPUT_UNREADABLE');
+  });
+
+  // The constant the map is keyed with is the one its thrower throws: a renamed code cannot leave one side behind.
+  it('keys the copy-escape and walk-revisit refusals with the code their throwers carry', () => {
+    expect(new CopyLinkEscapesSourceError('/bundle/link', '/bundle').code).toBe(COPY_LINK_ESCAPES_SOURCE_CODE);
+    expect(new DirectoryWalkRevisitedError('/bundle/loop', '/bundle').code).toBe(DIRECTORY_WALK_REVISITED_CODE);
+  });
+
+  // A full disk or an unwritable output directory: the build did not finish, and nothing about the skill is wrong.
+  it('reads a skill build stopped by its own output as RUN_INCOMPLETE, never as a defect in VAT', () => {
+    expect(refusalCodeOf(new VatError(SKILL_PACKAGING_OUTPUT_FAILED_CODE, 'ENOSPC'))).toBe('RUN_INCOMPLETE');
   });
 
   it('reads a plugin symlink no bundle can ship as the input\'s refusal', () => {
     expect(refusalCodeOf(new PluginSymlinkRefusedError([{ path: 'hooks/out.json', reason: 'escapes-source' }]))).toBe('INPUT_UNREADABLE');
+  });
+
+  it('reads a plugin source that is not there to install as the input\'s refusal, not a failed write', () => {
+    expect(refusalCodeOf(new VatError(PLUGIN_SOURCE_UNREADABLE_CODE, 'ENOENT'))).toBe('INPUT_UNREADABLE');
   });
 
   it('reads a statement the projection store refused as the operator\'s USAGE_INVALID', () => {
@@ -78,7 +93,7 @@ describe('refusalCodeOf', () => {
   // A copied tree whose link escapes it, or leads a following walk back into itself: the input, not VAT.
   it('reads a symlink that escapes a copied tree, or loops a walk, as INPUT_UNREADABLE', () => {
     expect(refusalCodeOf(new CopyLinkEscapesSourceError('/bundle/link', '/bundle'))).toBe('INPUT_UNREADABLE');
-    expect(refusalCodeOf(new VatError('DIRECTORY_WALK_REVISITED', 'Refusing to enter /bundle/loop'))).toBe('INPUT_UNREADABLE');
+    expect(refusalCodeOf(new DirectoryWalkRevisitedError('/bundle/loop', '/bundle'))).toBe('INPUT_UNREADABLE');
   });
 
   it('reads an agent source file the OS will not read as INPUT_UNREADABLE', () => {

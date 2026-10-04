@@ -98,6 +98,19 @@ describe('settings auditor answer shapes', () => {
       expect(modelFinding).not.toHaveProperty('path');
     });
 
+    // A settings file that is JSON and not an object violates the schema at its ROOT:
+    // there is no key path, so the finding carries no `field` — never an empty one.
+    it('omits field for a violation about the document as a whole', async () => {
+      const arrayFile = safePath.join(dir, 'array.json');
+      await fs.writeFile(arrayFile, JSON.stringify([1, 2]));
+
+      const result = await validateSettingsFile(arrayFile);
+
+      const invalid = result.findings.filter((f) => f.code === 'SETTINGS_FILE_INVALID');
+      expect(invalid.length).toBeGreaterThan(0);
+      for (const finding of invalid) expect(finding).not.toHaveProperty('field');
+    });
+
     it('says the type was AMBIGUOUS rather than silently answering "user"', async () => {
       // user and project settings share one schema, so a file without
       // managed-only fields could be either. Reporting `user` as though it were

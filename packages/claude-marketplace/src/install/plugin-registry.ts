@@ -8,8 +8,8 @@
  * Follows Postel's Law: reads with fallbacks (liberal), writes with structured data.
  */
 
-import { cpSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
 
 import { isPathAbsentError, isUnderRoot, isVatError, mkdirSyncReal, normalizePath, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
 
@@ -62,6 +62,22 @@ export const CLAUDE_USER_STATE_UNREADABLE_CODE = 'CLAUDE_USER_STATE_UNREADABLE';
 /** A copy, write or removal in Claude user state failed partway (install or uninstall). */
 export const CLAUDE_USER_STATE_WRITE_FAILED_CODE = 'CLAUDE_USER_STATE_WRITE_FAILED';
 
+/** The plugin directory to install is absent, not a directory, or one the OS will not list: the input, not Claude's state. */
+export const PLUGIN_SOURCE_UNREADABLE_CODE = 'PLUGIN_SOURCE_UNREADABLE';
+
+/**
+ * Refuse a plugin source that cannot be listed, before anything is written for it.
+ *
+ * @throws VatError {@link PLUGIN_SOURCE_UNREADABLE_CODE}
+ */
+function requirePluginSource(pluginDir: string): void {
+  try {
+    readdirSync(pluginDir);
+  } catch (error) {
+    throw new VatError(PLUGIN_SOURCE_UNREADABLE_CODE, `Could not read the plugin to install at ${pluginDir}: ${String(error)}`, { cause: error });
+  }
+}
+
 /**
  * Run a mutation of Claude user state; a failure that is not already coded is
  * rethrown as {@link CLAUDE_USER_STATE_WRITE_FAILED_CODE}, naming `what`.
@@ -79,6 +95,45 @@ export async function codedUserStateWrite<T>(what: string, mutate: () => T | Pro
 function resolvesInto(source: string, dest: string): boolean {
   const real = (p: string): string => toForwardSlash(normalizePath(safePath.resolve(p)));
   return real(source) === real(dest) || isUnderRoot(dest, source) === 'inside';
+}
+
+/**
+ * Make `dest` a copy of `source`, replacing whatever tree is there.
+ *
+ * Replaced, never copied into: a re-install's links would copy onto their own
+ * targets. And never deleted first: the registry already points at `dest`, so a
+ * copy that fails must leave the previous tree in place. The copy goes to a
+ * sibling directory and is swapped in only once it is whole; a failure removes
+ * the sibling and, if the swap itself failed, puts the previous tree back.
+ */
+function replaceDirectory(source: string, dest: string): void {
+  const parent = dirname(dest);
+  mkdirSyncReal(parent, { recursive: true });
+  const staged = mkdtempSync(safePath.join(parent, `${basename(dest)}.tmp-`));
+  try {
+    cpSync(source, staged, { recursive: true });
+    swapIn(staged, dest);
+  } finally {
+    // Gone already once swapped in; otherwise the half-copied sibling must not stay to read as a version.
+    rmSync(staged, { recursive: true, force: true });
+  }
+}
+
+/** Move the whole tree `staged` to `dest`; the tree `dest` held is removed only after `staged` is in its place. */
+function swapIn(staged: string, dest: string): void {
+  if (!existsSync(dest)) {
+    renameSync(staged, dest);
+    return;
+  }
+  const previous = `${staged}.previous`;
+  renameSync(dest, previous);
+  try {
+    renameSync(staged, dest);
+  } catch (error) {
+    renameSync(previous, dest);
+    throw error;
+  }
+  rmSync(previous, { recursive: true, force: true });
 }
 
 /**
@@ -144,7 +199,9 @@ export function writeInstalledPlugins(paths: ClaudeUserPaths, data: InstalledPlu
 /**
  * Install a plugin into the Claude user plugin registry.
  *
- * Performs 5 steps in order; a failure throws, coded (see the two codes above).
+ * The source is read first: one that is not there is refused
+ * ({@link PLUGIN_SOURCE_UNREADABLE_CODE}) with nothing created. Then 5 steps in
+ * order; a failure throws, coded (see the two user-state codes above).
  * 1. Copy plugin files to marketplacesDir
  * 2. Update known_marketplaces.json
  * 3. Copy plugin files to pluginsCacheDir
@@ -155,6 +212,7 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<void> {
   const { marketplaceName, pluginName, pluginDir, version, source, paths } = opts;
 
   const pluginKey = `${pluginName}@${marketplaceName}`;
+  requirePluginSource(pluginDir);
   await codedUserStateWrite(`register plugin ${pluginKey}`, () => {
     const now = new Date().toISOString();
     // The directory itself, not a link to it: a copied link would collide with the directory it lands on.
@@ -178,13 +236,10 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<void> {
     writeKnownMarketplaces(paths, knownMarketplaces);
 
     // Step 3: Copy plugin to pluginsCacheDir/<marketplaceName>/<pluginName>/<version>/
-    // Skip when the source IS the destination on disk (or inside it) — then the rm below would delete it
+    // Skip when the source IS the destination on disk (or inside it) — replacing it would delete the source
     const cacheDest = safePath.join(paths.pluginsCacheDir, marketplaceName, pluginName, version);
     if (!resolvesInto(pluginDir, cacheDest)) {
-      // Replaced, never copied into: a re-install's links would copy onto their own targets.
-      rmSync(cacheDest, { recursive: true, force: true });
-      mkdirSyncReal(cacheDest, { recursive: true });
-      cpSync(realPluginDir, cacheDest, { recursive: true });
+      replaceDirectory(realPluginDir, cacheDest);
     }
 
     // Step 4: Update installed_plugins.json

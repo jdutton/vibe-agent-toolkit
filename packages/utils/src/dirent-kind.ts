@@ -91,11 +91,14 @@ export async function direntKindFollowing(dir: string, entry: Dirent): Promise<F
   }
 }
 
+/** The `VatError` code of a {@link DirectoryWalkRevisitedError}. */
+export const DIRECTORY_WALK_REVISITED_CODE = 'DIRECTORY_WALK_REVISITED';
+
 /** Thrown when a following walk is led back into a directory it has already entered. */
 export class DirectoryWalkRevisitedError extends VatError {
   constructor(dir: string, enteredAs: string) {
     super(
-      'DIRECTORY_WALK_REVISITED',
+      DIRECTORY_WALK_REVISITED_CODE,
       `Refusing to enter ${dir}: it is the directory already walked as ${enteredAs} — a symlink leads the walk back into itself.`,
     );
   }

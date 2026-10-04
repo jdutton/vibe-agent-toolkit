@@ -489,10 +489,10 @@ jobs:
       - name: Install dependencies
         run: bun install
 
+      # A fresh checkout holds no database, so there is nothing to clear first
+      # (`vat rag clear` refuses a database that is not there).
       - name: Build RAG database
-        run: |
-          bun run vat rag clear
-          bun run vat rag index docs/
+        run: bun run vat rag index docs/
 
       - name: Upload RAG database
         uses: actions/upload-artifact@v4

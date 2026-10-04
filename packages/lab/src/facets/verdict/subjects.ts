@@ -77,6 +77,21 @@ const VerdictSubjectSchema = z
     }
   })
   .superRefine((subject, ctx) => {
+    // A verb and a SQL file are each a ROW NAME. Listed twice it captures two
+    // rows under one name, and the compare matches rows by name.
+    for (const field of ['verbs', 'sqlFiles'] as const) {
+      const listed: readonly string[] = subject[field];
+      for (const [index, value] of listed.entries()) {
+        if (listed.indexOf(value) === index) continue;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [field, index],
+          message: `'${value}' is listed twice — each names one row, and a row name is what the two captures are matched by`,
+        });
+      }
+    }
+  })
+  .superRefine((subject, ctx) => {
     const wantsPath = subject.verbs.includes('context-path');
     if (wantsPath === (subject.contextPath !== undefined)) return;
     ctx.addIssue({

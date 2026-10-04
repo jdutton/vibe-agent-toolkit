@@ -9,8 +9,7 @@
  */
 
 import { statSync } from 'node:fs';
-import { copyFile, lstat, mkdir, stat } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { lstat, stat } from 'node:fs/promises';
 
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
@@ -29,7 +28,7 @@ import {
 import { glob } from 'glob';
 import picomatch from 'picomatch';
 
-import { withFsAttribution } from './fs-attribution.js';
+import { copyIntoBundle, withFsAttribution } from './fs-attribution.js';
 import { packagingInputError } from './packaging-errors.js';
 import { materializeIssue } from './validators/rule-engine/index.js';
 import { isNeverPackagedBasename } from './validators/validation-rules.js';
@@ -191,11 +190,17 @@ async function attributed<T>(
   work: () => Promise<T>,
   action?: string,
 ): Promise<T> {
-  return withFsAttribution(
-    `files: source '${entry.source}' resolved to ${anchoredPath(absPath, projectRoot)}`,
-    work,
-    action,
-  );
+  return withFsAttribution(entrySubject(entry, absPath, projectRoot), 'source', work, action);
+}
+
+/** How a failure names a `files:` entry: the `source:` the author wrote, and where it resolved. */
+function entrySubject(entry: SkillFileEntry, absPath: string, projectRoot: string): string {
+  return `files: source '${entry.source}' resolved to ${anchoredPath(absPath, projectRoot)}`;
+}
+
+/** Copy one file a `files:` entry names into the bundle, each side's refusal coded as that side's. */
+function copyEntryFile(entry: SkillFileEntry, absSource: string, absDest: string, projectRoot: string): Promise<void> {
+  return copyIntoBundle(entrySubject(entry, absSource, projectRoot), absSource, absDest);
 }
 
 /** One file a GLOB `files:` entry matched and the never-package list refused. */
@@ -631,27 +636,33 @@ async function copyNonGlobEntry(
   // For a `dist/` source that also appended `buildArtifactHint`, telling the
   // author to run a build that would not have helped: a confidently wrong
   // diagnosis plus a confidently wrong remedy. Only ENOENT is absence; anything
-  // else is the filesystem refusing the path, and `attributed` at the call site
-  // names the entry.
-  let sourceStat;
-  try {
-    sourceStat = statSync(absoluteSource);
-  } catch (error) {
-    if ((error as { code?: string }).code !== 'ENOENT') throw error;
-    throw packagingInputError(
-      `files: source '${entry.source}' does not exist (resolved to ${anchoredPath(absoluteSource, projectRoot)}).${buildArtifactHint(entry.source)}`,
-    );
-  }
-  if (sourceStat.isDirectory()) {
-    throw packagingInputError(
-      `files: source '${entry.source}' is a directory; use a glob like '${entry.source}/**/*' to copy its contents.`,
-    );
-  }
+  // else is the filesystem refusing the path, and `attributed` names the entry.
+  //
+  // The source's `stat` is guarded as well as its copy. Guarding the copy alone
+  // left a source under a directory the process cannot traverse escaping as a bare
+  // errno — and an EXPLICIT entry is the spelling that unambiguously says "ship
+  // this file", so the build owes its author an error that names it back. (The two
+  // deliberate errors below carry no errno, so `attributed` passes them through.)
+  await attributed(entry, absoluteSource, projectRoot, async () => {
+    let sourceStat;
+    try {
+      sourceStat = statSync(absoluteSource);
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'ENOENT') throw error;
+      throw packagingInputError(
+        `files: source '${entry.source}' does not exist (resolved to ${anchoredPath(absoluteSource, projectRoot)}).${buildArtifactHint(entry.source)}`,
+      );
+    }
+    if (sourceStat.isDirectory()) {
+      throw packagingInputError(
+        `files: source '${entry.source}' is a directory; use a glob like '${entry.source}/**/*' to copy its contents.`,
+      );
+    }
+  });
   // joinUnderRoot rejects a dest that escapes the skill output dir (absolute /
   // drive-letter / '..'), defense-in-depth beyond the schema refine.
   const absoluteDest = safePath.joinUnderRoot(skillOutputDir, entry.dest);
-  await mkdir(dirname(absoluteDest), { recursive: true });
-  await copyFile(absoluteSource, absoluteDest);
+  await copyEntryFile(entry, absoluteSource, absoluteDest, projectRoot);
   return { relDest: normalizeRelPath(entry.dest), absSource: absoluteSource, absDest: absoluteDest };
 }
 
@@ -862,10 +873,7 @@ async function copyGlobEntry(
     // the author DECLARED and expects in the bundle, so shipping silently without
     // it would change the artifact behind their back. A non-regular match can
     // never be packaged at all, which is why that one degrades instead.
-    await attributed(entry, absSource, projectRoot, async () => {
-      await mkdir(dirname(absDest), { recursive: true });
-      await copyFile(absSource, absDest);
-    });
+    await copyEntryFile(entry, absSource, absDest, projectRoot);
 
     copied.push(relDest);
     pairs.push({ absSource, absDest });
@@ -1253,18 +1261,7 @@ async function applyNonGlobFileEntry(
     };
   }
 
-  // The WHOLE entry's filesystem work is guarded, not just its copy. Guarding the
-  // copy alone left the source `statSync` outside — so a source under a directory
-  // the process cannot traverse still escaped as a bare errno, which is the same
-  // defect one call earlier. An EXPLICIT entry is the spelling that unambiguously
-  // says "ship this file", so a bare errno here is if anything worse than on a
-  // glob: the author named the path, and the build owes them an error that names
-  // it back. (`copyNonGlobEntry`'s own deliberate errors — "does not exist", "is a
-  // directory" — carry no errno, so `attributed` passes them through untouched.)
-  const { relDest, absSource, absDest } = await attributed(
-    fileEntry, absoluteSource, opts.projectRoot,
-    () => copyNonGlobEntry(fileEntry, absoluteSource, opts.projectRoot, opts.skillOutputDir),
-  );
+  const { relDest, absSource, absDest } = await copyNonGlobEntry(fileEntry, absoluteSource, opts.projectRoot, opts.skillOutputDir);
   return {
     dests: [relDest],
     dropped: [],

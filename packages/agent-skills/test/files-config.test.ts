@@ -17,7 +17,7 @@ import {
   verifyDestSet,
   type SkillFileEntry,
 } from '../src/files-config.js';
-import { SKILL_PACKAGING_INPUT_INVALID_CODE } from '../src/packaging-errors.js';
+import { SKILL_PACKAGING_INPUT_INVALID_CODE, SKILL_PACKAGING_OUTPUT_FAILED_CODE } from '../src/packaging-errors.js';
 
 const CLI_SOURCE = 'dist/bin/cli.mjs';
 const CLI_DEST = 'scripts/cli.mjs';
@@ -1051,7 +1051,11 @@ describe('applyFilesConfig', () => {
           // Literal, not a RegExp built from the constant: escaping the path's
           // separators back into a pattern is noise, and the point of the case is
           // that the ENTRY's own `source:` string appears verbatim in the message.
-        ).rejects.toThrow(`files: source '${DATA_SOURCE}'`);
+          // Coded as the skill's content: the unreadable file is the author's own.
+        ).rejects.toMatchObject({
+          code: SKILL_PACKAGING_INPUT_INVALID_CODE,
+          message: expect.stringContaining(`files: source '${DATA_SOURCE}'`) as unknown,
+        });
       } finally {
         chmodSync(locked, 0o644);
       }
@@ -1074,7 +1078,12 @@ describe('applyFilesConfig', () => {
             projectRoot,
             skillOutputDir,
           }),
-        ).rejects.toThrow(/could not be copied into the bundle[\s\S]*output directory is writable/);
+          // Coded as the OUTPUT's refusal: nothing about the skill is wrong, so no
+          // lane may publish it as a finding against the skill.
+        ).rejects.toMatchObject({
+          code: SKILL_PACKAGING_OUTPUT_FAILED_CODE,
+          message: expect.stringMatching(/could not be copied into the bundle[\s\S]*output directory is writable/) as unknown,
+        });
       } finally {
         chmodSync(skillOutputDir, 0o755);
       }

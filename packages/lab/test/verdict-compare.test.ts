@@ -491,6 +491,25 @@ describe('compareVerdict — an exclusion pins a published refusal at exit 2 in 
     expect(result).toMatchObject({ ok: false, refusal: expect.stringContaining('excludes different verbs') });
   });
 
+  // Rows are matched across the two captures by NAME. Two rows under one name
+  // would both be compared to whichever candidate row came last, and the other
+  // candidate row to nothing — so a repeated name is refused, never collapsed.
+  it('refuses a body holding two rows of one name, in the schema and in the compare', () => {
+    const once = envelope('crucible-1', ARM_A);
+    const [row] = once.body.rows;
+    if (row === undefined) throw new Error('fixture has one row');
+    const twice = (instrument: InstrumentVersion): ReportEnvelope<VerdictBody> => {
+      const base = envelope('crucible-1', instrument);
+      return { ...base, body: { ...base.body, rows: [row, { ...row, exitCode: 1 }] } };
+    };
+
+    expect(VerdictBodySchema.safeParse(once.body).success).toBe(true); // positive control
+    expect(VerdictBodySchema.safeParse(twice(ARM_A).body).success).toBe(false);
+    expect(compareVerdict([once], [envelope('crucible-1', ARM_B)], OPTIONS)).toMatchObject({ ok: true }); // positive control
+    expect(compareVerdict([twice(ARM_A)], [twice(ARM_B)], OPTIONS))
+      .toMatchObject({ ok: false, refusal: expect.stringContaining("two rows named 'audit'") });
+  });
+
   it('refuses a stored body whose exclusion names no row — an excluded verb nobody ran', () => {
     const { body } = excluding(ARM_A, EXIT_2);
     expect(VerdictBodySchema.safeParse(body).success).toBe(true); // positive control
