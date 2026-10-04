@@ -34,7 +34,7 @@ import {
   type ReportStatus,
 } from '@vibe-agent-toolkit/schema';
 import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS, gitExecutable } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, findExecutable, gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, expect, type TestContext } from 'vitest';
 import yaml from 'yaml';
 
@@ -119,7 +119,8 @@ const CLEAN_EVALS = JSON.stringify({ skill_name: 'clean', evals: [{ id: 'one', p
  * before it stages anything, so without one every run refuses BACKEND_UNAVAILABLE.
  */
 function hasClaude(): boolean {
-  return spawnSync('claude', ['--version'], { stdio: 'ignore' }).status === 0;
+  const claude = findExecutable('claude');
+  return claude !== undefined && spawnSync(claude, ['--version'], { stdio: 'ignore' }).status === 0;
 }
 /** A marketplace declaring one local plugin, with every file the strict validation asks for. */
 const MARKETPLACE_FILES: Readonly<Record<string, string>> = {
@@ -251,9 +252,13 @@ function scenarioCacheDir(): string {
  * scenario needs a registry to reach.
  */
 function npmReachable(): boolean {
-  return spawnSync('npm', ['view', 'vibe-agent-toolkit', 'version'], {
+  const npm = findExecutable('npm');
+  if (npm === undefined) return false;
+  // On Windows npm is `npm.cmd`, which only a shell runs — and the shell splits an unquoted path at a space.
+  const windows = process.platform === 'win32';
+  return spawnSync(windows ? `"${npm}"` : npm, ['view', 'vibe-agent-toolkit', 'version'], {
     stdio: 'ignore',
-    shell: process.platform === 'win32',
+    shell: windows,
     timeout: 30_000,
   }).status === 0;
 }

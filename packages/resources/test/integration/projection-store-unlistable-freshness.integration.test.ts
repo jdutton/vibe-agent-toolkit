@@ -26,11 +26,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   EXTENT_DIRECTORY_UNLISTABLE,
-} from '../src/projection/contributors/filesystem-extent.js';
-import type { Projection } from '../src/projection/projection.js';
-
-import { FakeProjectionStore, populateExtentThrough } from './fake-projection-store.js';
-import { createCommittedRepo, writeFileIn } from './test-helpers.js';
+} from '../../src/projection/contributors/filesystem-extent.js';
+import type { Projection } from '../../src/projection/projection.js';
+import { FakeProjectionStore, populateExtentThrough } from '../fake-projection-store.js';
+import { createCommittedRepo, writeFileIn } from '../test-helpers.js';
 
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
 

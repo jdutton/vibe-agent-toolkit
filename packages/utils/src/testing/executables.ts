@@ -45,13 +45,11 @@ function isExecutableFile(full: string): boolean {
 }
 
 /**
- * The first executable named `name` on `PATH`, absolute.
- *
- * @throws {Error} when nothing on `PATH` is executable under that name — a
- *   fixture that needs `git` and has none should fail at the first spawn with
- *   the reason, not with the OS's `ENOENT` for a bare word.
+ * The first executable named `name` on `PATH`, absolute — or `undefined` when
+ * there is none. For a test that asks WHETHER a tool is installed (and skips
+ * without it) rather than one that needs it.
  */
-export function resolveExecutable(name: string): string {
+export function findExecutable(name: string): string | undefined {
   const candidates = executableCandidates(name, process.platform, process.env['PATHEXT']);
   for (const dir of (process.env['PATH'] ?? '').split(delimiter)) {
     if (dir === '') continue;
@@ -60,7 +58,20 @@ export function resolveExecutable(name: string): string {
       if (isExecutableFile(full)) return full;
     }
   }
-  throw new Error(`No executable named "${name}" on PATH (${process.env['PATH'] ?? '<unset>'})`);
+  return undefined;
+}
+
+/**
+ * The first executable named `name` on `PATH`, absolute.
+ *
+ * @throws {Error} when nothing on `PATH` is executable under that name — a
+ *   fixture that needs `git` and has none should fail at the first spawn with
+ *   the reason, not with the OS's `ENOENT` for a bare word.
+ */
+export function resolveExecutable(name: string): string {
+  const found = findExecutable(name);
+  if (found === undefined) throw new Error(`No executable named "${name}" on PATH (${process.env['PATH'] ?? '<unset>'})`);
+  return found;
 }
 
 let resolvedGit: string | undefined;
