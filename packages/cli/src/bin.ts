@@ -12,6 +12,7 @@ import { describeStdioBlocking, makeStdioBlocking } from '@vibe-agent-toolkit/ut
 import { Command, CommanderError } from 'commander';
 
 import { COMMAND_LOADERS } from './command-loaders.js';
+import { applyCommandTreePolicy } from './command-tree.js';
 import { registerCacheControl } from './commands/cache/cache-control.js';
 import { exitCodeForCommanderEnding } from './utils/commander-ending.js';
 import { setDebugDiagnostics } from './utils/debug-diagnostics.js';
@@ -209,26 +210,9 @@ program.on('command:*', (operands) => {
   program.help({ error: true });
 });
 
-/**
- * Route EVERY command's usage errors through VAT's exit-code contract.
- *
- * 🪤 **`exitOverride()` on the root alone reaches nothing.** Commander's
- * `_exit` reads `this._exitCallback` off the command that actually errored and
- * never walks up to a parent, and `addCommand()` — how every command here is
- * registered — does NOT copy inherited settings (only the `.command()` factory
- * does, at command.js:164). So the override has to be applied to each node.
- *
- * This must run AFTER the lazy dispatcher above has added whichever commands
- * this invocation needs, and after `loadDoctor()`, or it walks a tree that is
- * still empty and the very commands being invoked keep commander's default.
- *
- * @param command - The command whose subtree gets the override
- */
-function overrideExitAcrossTree(command: Command): void {
-  command.exitOverride();
-  for (const sub of command.commands) overrideExitAcrossTree(sub);
-}
-overrideExitAcrossTree(program);
+// Every node's parse policy (exit codes, excess operands) — see command-tree.ts.
+// After the lazy dispatcher and loadDoctor(), or it walks a tree still empty.
+applyCommandTreePolicy(program);
 
 try {
   program.parse();

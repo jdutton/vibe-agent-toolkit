@@ -27,6 +27,7 @@
 import { type ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { Command } from 'commander';
 
+import { marksOperandRefusalByHand } from '../command-tree.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { endWithReport } from '../utils/document-writer.js';
 import { createLogger } from '../utils/logger.js';
@@ -85,7 +86,8 @@ const VALIDATE_FULL_RUN_SECONDS = 35;
 const COMMAND_NAME = 'vat validate';
 
 export function createValidateTopLevelCommand(): Command {
-  const command = new Command('validate');
+  // Refuses operands in its action, with a better message than commander's.
+  const command = marksOperandRefusalByHand(new Command('validate'));
 
   addRetiredOnlyOption(command)
     .description('Validate configured surfaces from source (resources + skills) — no build required')

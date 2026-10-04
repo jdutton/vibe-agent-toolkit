@@ -109,6 +109,18 @@ describe('the exit-code contract, across verbs (system test)', () => {
     if (outcome === 'error') expect(result.stderr.trim()).not.toBe('');
   });
 
+  // Commander's default discarded an operand a verb never declared: this audited
+  // the first path, never mentioned the second, and exited 0. Every verb's
+  // refusal is pinned in-process (excess-arguments.integration.test.ts); this
+  // proves the shipped binary carries it to the exit-code contract.
+  it('an excess positional argument is a usage error, not silently dropped (audit)', async () => {
+    const tempDir = ctx.createTempDir();
+    const dir = skillDir(tempDir, 'audit-excess', cleanSkill('audit-excess'));
+    const result = await executeCli(ctx.binPath, ['audit', dir, 'does-not-exist'], { cwd: tempDir });
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(ExitCode.ERROR);
+    expect(result.stderr).toContain('too many arguments');
+  });
+
   it('a warning alone is OK; --strict promotes it (skill review)', async () => {
     const tempDir = ctx.createTempDir();
     const dir = skillDir(tempDir, 'warned', warnedSkill('warned'));

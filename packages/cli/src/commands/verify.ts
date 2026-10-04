@@ -37,6 +37,7 @@ import {
 import { isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
+import { marksOperandRefusalByHand } from '../command-tree.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { endWithReport } from '../utils/document-writer.js';
 import { formatIssueLines } from '../utils/issue-rendering.js';
@@ -96,7 +97,8 @@ const VERIFY_FULL_RUN_SECONDS = 32;
 const COMMAND_NAME = 'vat verify';
 
 export function createVerifyTopLevelCommand(): Command {
-  const command = new Command('verify');
+  // Refuses operands in its action, with a better message than commander's.
+  const command = marksOperandRefusalByHand(new Command('verify'));
 
   addRetiredOnlyOption(command)
     .description('Verify built artifacts (resources + skills + marketplace + consistency); marketplace/consistency read dist/ — run after vat build')

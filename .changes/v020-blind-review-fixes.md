@@ -4,6 +4,9 @@
   2, and no longer create it: `USAGE_INVALID` for a `--db` that names nothing (or names a file),
   `INPUT_UNREADABLE` when the project has no database yet or the directory cannot be read (was:
   `stats` reported zeros and `clear` reported `cleared: true`, exit 0). Run `vat rag index` first.
+- **Every `vat` verb refuses a positional argument it does not declare**, exit 2 (`too many
+  arguments`); it was silently discarded and the run reported success (`vat audit a b` audited
+  only `a`). Drop the extra argument, or run the verb once per path.
 
 ### Changed
 

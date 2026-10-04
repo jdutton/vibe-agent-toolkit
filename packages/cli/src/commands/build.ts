@@ -21,6 +21,7 @@ import {
 import { direntKindFollowing, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
+import { marksOperandRefusalByHand } from '../command-tree.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { endWithReport } from '../utils/document-writer.js';
 import { formatIssueLines } from '../utils/issue-rendering.js';
@@ -53,7 +54,8 @@ export interface BuildCommandOptions {
 }
 
 export function createBuildTopLevelCommand(): Command {
-  const command = new Command('build');
+  // Refuses operands in its action, with a better message than commander's.
+  const command = marksOperandRefusalByHand(new Command('build'));
 
   command
     .description('Build all project artifacts in dependency order (skills → claude plugin tree)')

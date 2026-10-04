@@ -171,7 +171,7 @@ async function findBuiltSkill(
     throw new CommandRefusalError(
       'INPUT_UNREADABLE',
       `Built skill not found at ${builtPath}\n` +
-        `Run: vat agent build ${agentName} --runtime ${runtime}`
+        `Run: vat agent build ${agentName} --target ${runtimeDir}`
     );
   }
   return builtPath;

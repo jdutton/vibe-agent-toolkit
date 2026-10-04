@@ -400,7 +400,6 @@ Create vector embeddings for semantic search over documentation
 
 ```bash
 vat rag index docs/                       # Index documentation
-vat rag index docs/ --chunk-size 512
 ```
 
 ---

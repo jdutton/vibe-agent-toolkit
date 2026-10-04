@@ -20,6 +20,11 @@ import { CommandRefusalError } from '../utils/command-refusal.js';
  * guess. The whole point of this fix is diagnosability, so the message is
  * written by hand and this rejection runs first in the action instead.
  *
+ * ⚠️ Every other command DOES get `.allowExcessArguments(false)`, from
+ * `applyCommandTreePolicy` (`command-tree.ts`), which would reject the operand
+ * before this action ever ran. A caller of this function must therefore build
+ * its command through `marksOperandRefusalByHand` to keep its operands.
+ *
  * **Why a refusal (`USAGE_INVALID`, exit 2), not Commander's usage-error 1.**
  * Exit 1 is "findings". A usage error reported as 1 tells a CI gate the
  * project's artifacts are broken when in fact nothing was inspected. The
