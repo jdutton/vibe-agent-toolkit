@@ -1,5 +1,5 @@
 /**
- * Integration test: an UNLOADABLE governing config degrades the scan, it does
+ * System test: an UNLOADABLE governing config degrades the scan, it does
  * not destroy it — and says so on BOTH channels.
  *
  * 🚨 This file exists because `vat audit`'s two skill-validation lanes carried

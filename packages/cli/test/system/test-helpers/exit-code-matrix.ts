@@ -34,6 +34,7 @@ import {
   type ReportStatus,
 } from '@vibe-agent-toolkit/schema';
 import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { buildWindowsShellLine, shouldUseShell } from '@vibe-agent-toolkit/utils/process';
 import { CANNOT_DENY_READS, findExecutable, gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, expect, type TestContext } from 'vitest';
 import yaml from 'yaml';
@@ -119,8 +120,24 @@ const CLEAN_EVALS = JSON.stringify({ skill_name: 'clean', evals: [{ id: 'one', p
  * before it stages anything, so without one every run refuses BACKEND_UNAVAILABLE.
  */
 function hasClaude(): boolean {
-  const claude = findExecutable('claude');
-  return claude !== undefined && spawnSync(claude, ['--version'], { stdio: 'ignore' }).status === 0;
+  return probeExitsZero('claude', ['--version']);
+}
+
+/**
+ * Whether the tool `name` is on PATH and exits 0 for `args`. One spawn
+ * convention for every machine probe: the resolved absolute path, and on
+ * Windows a `.cmd` shim (how npm installs both `npm` and `claude`) through the
+ * one shell line `buildWindowsShellLine` builds — never an args array beside
+ * `shell: true`.
+ */
+function probeExitsZero(name: string, args: string[], timeout?: number): boolean {
+  const executable = findExecutable(name);
+  if (executable === undefined) return false;
+  const options = { stdio: 'ignore' as const, ...(timeout === undefined ? {} : { timeout }) };
+  const result = shouldUseShell(executable)
+    ? spawnSync(buildWindowsShellLine(`"${executable}"`, args), { ...options, shell: true })
+    : spawnSync(executable, args, options);
+  return result.status === 0;
 }
 /** A marketplace declaring one local plugin, with every file the strict validation asks for. */
 const MARKETPLACE_FILES: Readonly<Record<string, string>> = {
@@ -252,15 +269,7 @@ function scenarioCacheDir(): string {
  * scenario needs a registry to reach.
  */
 function npmReachable(): boolean {
-  const npm = findExecutable('npm');
-  if (npm === undefined) return false;
-  // On Windows npm is `npm.cmd`, which only a shell runs — and the shell splits an unquoted path at a space.
-  const windows = process.platform === 'win32';
-  return spawnSync(windows ? `"${npm}"` : npm, ['view', 'vibe-agent-toolkit', 'version'], {
-    stdio: 'ignore',
-    shell: windows,
-    timeout: 30_000,
-  }).status === 0;
+  return probeExitsZero('npm', ['view', 'vibe-agent-toolkit', 'version'], 30_000);
 }
 
 /**
