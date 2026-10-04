@@ -34,7 +34,7 @@ const SkillsBuildDataSchema = z.object({
   /** `false` on a dry run, and on a run refused before validating: nothing was validated. */
   validated: z.boolean(),
   skillsBuilt: z.number().int().nonnegative(),
-  /** Skills whose packaging threw — no bundle exists for them. */
+  /** Skills whose content the packager refused — no bundle exists for them. */
   skillsFailed: z.number().int().nonnegative(),
   /** Skills the PRE-build source validation rejected — packaging never ran for them. */
   skillsFailedValidation: z.number().int().nonnegative(),

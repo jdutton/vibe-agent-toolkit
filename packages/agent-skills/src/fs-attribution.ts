@@ -20,6 +20,8 @@
 
 import { isFilesystemAccessError } from '@vibe-agent-toolkit/utils';
 
+import { packagingInputError } from './packaging-errors.js';
+
 /** For a failure that moved bytes INTO the bundle. */
 export const WRITE_REMEDY =
   "Check the file's permissions and ownership, that the output directory is writable, "
@@ -44,6 +46,13 @@ export const READ_REMEDY =
  *   is writable or the disk is full, and padding a message with checks that
  *   cannot apply teaches people to stop reading the message.
  *
+ * What it throws is a CODED packaging refusal (`packagingInputError`, the original
+ * error as `cause`): the message is addressed to the adopter and ends in a remedy,
+ * so every packaging lane must publish it as theirs to fix, and each dispatches on
+ * the code (`isSkillPackagingInputError`). An uncoded `Error` here was read by
+ * those lanes as a defect in VAT. Output-side causes (a full disk, an unwritable
+ * output directory) carry the same code — no code separates them today.
+ *
  * A non-filesystem throw is rethrown untouched. Re-wrapping a defect in our own
  * code as "check your permissions" would send the author to fix something that is
  * not theirs to fix — and it is the same "make the tool quietest when it is most
@@ -60,8 +69,9 @@ export async function withFsAttribution<T>(
   } catch (error) {
     if (!isFilesystemAccessError(error)) throw error;
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(
+    throw packagingInputError(
       `${subject}, but it could not be ${action}: ${reason}. ${remedy}`,
+      { cause: error },
     );
   }
 }

@@ -98,7 +98,7 @@ export default defineConfig({
       // justified file by file. Never lower one by hand: a drop is a coverage
       // regression to fix, or an exclusion to justify in place.
       thresholds: {
-        statements: 83,
+        statements: 84,
         branches: 78,
         functions: 87,
         lines: 84,

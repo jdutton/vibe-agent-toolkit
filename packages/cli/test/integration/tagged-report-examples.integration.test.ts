@@ -1,6 +1,7 @@
 /**
  * Every tagged fenced example in the docs is a valid report, and every report
- * verb has one.
+ * entry of the registry has one — one per ENTRY, not per verb: verbs that share
+ * an entry (`build` and `verify` publish `validate`'s) share its example.
  *
  * ## The tag
  *
@@ -15,7 +16,7 @@
  * `git ls-files '*.md'` minus `CHANGELOG.md` and `.changes/` (history that
  * quotes retired shapes).
  *
- * Both ways: an unknown verb in a tag fails; a report verb with no tagged
+ * Both ways: an unknown verb in a tag fails; a report entry with no tagged
  * example fails; a tagged block that does not parse or validate fails with its
  * file and line. An example is produced by running the built CLI and trimming,
  * never written by hand.
@@ -221,7 +222,7 @@ describe('tagged report examples — the checker itself', () => {
     expect(problemsIn(blocks)[0]).toMatch(/^x\.md:3: does not parse as json: /);
   });
 
-  it('reports every report verb as uncovered when nothing is tagged', () => {
+  it('reports every report entry as uncovered when nothing is tagged', () => {
     const uncovered = uncoveredIn([]);
     expect(uncovered).toHaveLength(REPORT_ENTRIES.length);
     expect(uncovered).toContain('no tagged example for cache clear');
@@ -269,7 +270,7 @@ describe('tagged report examples — the docs', () => {
     expect([...problems, ...problemsIn(blocks)]).toEqual([]);
   });
 
-  it('every report verb has at least one tagged example', () => {
+  it('every report entry has at least one tagged example', () => {
     expect(uncoveredIn(blocks)).toEqual([]);
   });
 });

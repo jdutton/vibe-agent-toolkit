@@ -2,11 +2,12 @@
  * The packager's refusal of a skill's own CONTENT — a `files:` entry whose
  * source is absent, unreadable, a directory or a glob matching nothing
  * shippable; a `SKILL.md` bundled as a resource; a name that is not one path
- * segment. The adopter fixes these by editing the skill or its config.
+ * segment; a file the OS would not let the build read or write
+ * (`withFsAttribution`). The adopter fixes these by editing the skill, its
+ * config, or the permissions the message names.
  *
  * Coded at the throw so a caller can tell them apart from a defect in VAT
- * (an integrity post-condition failing, an unanticipated errno), which stays
- * an uncoded `Error`: dispatching on a message is how that distinction was
+ * (an integrity post-condition failing), which stays an uncoded `Error`: dispatching on a message is how that distinction was
  * lost before.
  */
 

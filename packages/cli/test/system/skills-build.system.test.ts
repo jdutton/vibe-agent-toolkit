@@ -5,10 +5,11 @@
  * globs to discover SKILL.md files, instead of reading package.json vat.skills objects.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { chmodSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it, afterEach, beforeAll } from 'vitest';
 
 import { SKILLS_BUILD_REPORT_SCHEMA } from '../../src/commands/skills/build-schema.js';
@@ -361,6 +362,41 @@ describe('skills build command (system test)', () => {
     const expectedDest = safePath.join(tempDir, 'dist', 'skills', TEST_SKILL_NAME, 'scripts', 'tool.mjs');
     const content = readFileSync(expectedDest, 'utf-8');
     expect(content).toContain('console.log("tool")');
+  });
+
+  // A `files:` source that is THERE and the OS will not read passes the
+  // packager's existence check; the copy is what fails. That is the skill's
+  // content refused — a contained finding beside the other skills' builds, not
+  // a defect in VAT that drops the whole run.
+  it.skipIf(CANNOT_DENY_READS)('a files: source the OS will not read is that skill\'s SKILL_PACKAGING_FAILED, exit 1, and the other skill still builds', async () => {
+    const tempDir = suite.createTempDir();
+    writeTestFile(safePath.join(tempDir, PACKAGE_JSON_FILENAME), JSON.stringify({ name: 'unreadable-source-workspace', workspaces: [] }));
+    suite.createSkillSource(tempDir, 'resources/skills/skill-a.md', SKILL_A_NAME);
+    suite.createSkillSource(tempDir, 'resources/skills/skill-b.md', SKILL_B_NAME);
+    const locked = safePath.join(tempDir, 'assets', 'locked.bin');
+    mkdirSyncReal(safePath.join(tempDir, 'assets'), { recursive: true });
+    writeTestFile(locked, 'payload\n');
+    writeTestFile(
+      safePath.join(tempDir, VAT_CONFIG_FILENAME),
+      ['skills:', '  include:', '    - "resources/skills/*.md"', '  config:', `    ${SKILL_A_NAME}:`, '      files:', '        - source: assets/locked.bin', '          dest: scripts/locked.bin', ''].join('\n'),
+    );
+    chmodSync(locked, 0o000);
+
+    try {
+      const { result, report } = await suite.runBuildCommand(tempDir);
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+      expect(report.status).toBe('findings');
+      expect(report.findings.filter((finding) => finding.severity === 'error').map(({ code, location }) => ({ code, location }))).toEqual([
+        { code: 'SKILL_PACKAGING_FAILED', location: 'resources/skills/skill-a.md' },
+      ]);
+      expect(report.findings.find((finding) => finding.code === 'SKILL_PACKAGING_FAILED')?.message).toContain('could not be copied into the bundle');
+      expect(suite.dataOf(report)).toMatchObject({ skillsBuilt: 1, skillsFailed: 1, outputCommitted: false });
+      // Both rows are published; only the refused skill's is in error.
+      expect(suite.dataOf(report).skills.map((row) => row.name)).toEqual([SKILL_A_NAME, SKILL_B_NAME]);
+    } finally {
+      chmodSync(locked, 0o644);
+    }
   });
 });
 

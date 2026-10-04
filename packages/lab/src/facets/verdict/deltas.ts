@@ -62,6 +62,18 @@ import { readYamlDocument, type Validated, validateDocument } from './yaml-file.
 /** What a deltas document is, in a refusal. */
 const DELTAS_FILE = 'a verdict deltas file';
 
+/** The lab package root; this module sits three directories below it in `src/` and in `dist/` alike. */
+const LAB_ROOT = safePath.resolve(import.meta.dirname, '..', '..', '..');
+
+/**
+ * The committed deltas file — resolved from the lab package, never the cwd, so
+ * `verdict compare` means one file wherever it is run from.
+ */
+export const COMMITTED_VERDICT_DELTAS = safePath.join(LAB_ROOT, 'data', 'verdict-deltas.yaml');
+
+/** The repository root, which a deltas entry's changelog reference is relative to. */
+export const CHANGELOG_REFERENCE_ROOT = safePath.resolve(LAB_ROOT, '..', '..');
+
 /** A finding named by the digest of its location — see this module's docstring. */
 export interface FindingDigestKey {
   readonly code: string;

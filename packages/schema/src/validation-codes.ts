@@ -1361,7 +1361,7 @@ export type NonOverridableCode =
   | 'UNKNOWN_FORMAT'
   | 'SKILL_TOO_LONG'
   // `vat skills build`: a `--skill` naming a `publish: false` skill, and a skill
-  // whose packaging threw. Always `error` — nothing reads an override for them,
+  // whose content the packager refused. Always `error` — nothing reads an override for them,
   // so a registry entry would let `validation.severity` accept an inert key.
   | 'SKILL_BUILD_TARGET_NOT_BUILDABLE'
   | 'SKILL_PACKAGING_FAILED'

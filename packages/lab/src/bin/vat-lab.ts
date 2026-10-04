@@ -33,7 +33,7 @@ import {
 } from '../facets/population/render.js';
 import { captureVerdict } from '../facets/verdict/capture.js';
 import { compareVerdict, readVerdictDirectory } from '../facets/verdict/compare.js';
-import { loadVerdictDeltas, readChangelogSources } from '../facets/verdict/deltas.js';
+import { CHANGELOG_REFERENCE_ROOT, COMMITTED_VERDICT_DELTAS, loadVerdictDeltas, readChangelogSources } from '../facets/verdict/deltas.js';
 import { renderVerdictComparison, renderVerdictReport } from '../facets/verdict/render.js';
 import { loadVerdictSubjects } from '../facets/verdict/subjects.js';
 import {
@@ -788,18 +788,6 @@ function refuse(refusal: string): void {
   process.exitCode = ExitCode.ERROR;
 }
 
-/** The lab package root, from this module's compiled home (`dist/bin/`). */
-const LAB_ROOT = safePath.resolve(import.meta.dirname, '..', '..');
-
-/**
- * The committed deltas file — resolved from the lab package, never the cwd, so
- * `verdict compare` means one file wherever it is run from.
- */
-const DEFAULT_VERDICT_DELTAS = safePath.join(LAB_ROOT, 'data', 'verdict-deltas.yaml');
-
-/** The repository root, which a deltas entry's changelog reference is relative to. */
-const REPO_ROOT = safePath.resolve(LAB_ROOT, '..', '..');
-
 /** Options Commander collects for `verdict run`. */
 interface VerdictRunOptions {
   readonly subjects: string;
@@ -868,7 +856,7 @@ function createVerdictCommand(): Command {
     .command('compare')
     .argument('<baselineDir>', "The baseline arm's `verdict run --out` directory")
     .argument('<candidateDir>', "The candidate arm's `verdict run --out` directory")
-    .option('--deltas <file>', 'The committed expected-deltas file', DEFAULT_VERDICT_DELTAS)
+    .option('--deltas <file>', 'The committed expected-deltas file', COMMITTED_VERDICT_DELTAS)
     .option('--control', 'Both directories are the SAME instrument, on purpose', false)
     .description('Diff two arms and check the result both ways against the committed deltas')
     .action(async (baselineDir: string, candidateDir: string, options: VerdictCompareCliOptions) => {
@@ -881,7 +869,7 @@ function createVerdictCommand(): Command {
       const comparison = compareVerdict(baseline.value, candidate.value, {
         control: options.control,
         deltas: deltas.deltas,
-        changelog: readChangelogSources(deltas.deltas, REPO_ROOT),
+        changelog: readChangelogSources(deltas.deltas, CHANGELOG_REFERENCE_ROOT),
       });
       if (!comparison.ok) return refuse(comparison.refusal);
       process.stdout.write(`${renderVerdictComparison(comparison)}\n`);

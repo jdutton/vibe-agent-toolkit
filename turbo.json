@@ -96,6 +96,41 @@
       // entering the hash — see that key below.
       "env": ["CI"]
     },
+    // --- Suites that read committed files OUTSIDE their package ---
+    // A task's default inputs are its own package's files, so a suite that reads
+    // the repository replays a cached pass over an edit it never saw. Each entry
+    // below names what its suite reads; `$TURBO_DEFAULT$` keeps the package's own
+    // files. When an integration suite starts reading another tree, add it here.
+    //
+    // cli: `tagged-report-examples.integration.test.ts` validates every tagged
+    // fenced example in every tracked `.md` of the repository. An input glob
+    // outside the package is matched on disk, not against git, so the four
+    // untracked trees that hold markdown are excluded — they would only churn
+    // the hash. Erring wide is safe here (a spare cache miss); erring narrow is
+    // the cached pass this entry exists to prevent.
+    "@vibe-agent-toolkit/cli#test:integration": {
+      "dependsOn": ["^build", "build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/**/*.md",
+        "!$TURBO_ROOT$/**/node_modules/**",
+        "!$TURBO_ROOT$/**/dist/**",
+        "!$TURBO_ROOT$/.superpowers/**",
+        "!$TURBO_ROOT$/.claude/worktrees/**"
+      ],
+      "outputs": [],
+      "cache": true,
+      "env": ["CI"]
+    },
+    // lab: `committed-verdict-deltas.integration.test.ts` resolves every
+    // `changelog:` reference of the committed deltas file against the changelog.
+    "@vibe-agent-toolkit/lab#test:integration": {
+      "dependsOn": ["^build", "build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/CHANGELOG.md", "$TURBO_ROOT$/.changes/**"],
+      "outputs": [],
+      "cache": true,
+      "env": ["CI"]
+    },
     "test:system": {
       "dependsOn": ["^build", "build"],
       "outputs": [],

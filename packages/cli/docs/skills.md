@@ -150,14 +150,17 @@ discovery rule that this command participates in.
 
 **Exit Codes:**
 - `0` - Built; findings, if any, are warnings or info (or a dry-run preview)
-- `1` - An error-severity finding: a skill failed validation, could not be packaged
-  (`SKILL_PACKAGING_FAILED`), or emitted post-build errors; `--skill` named a `publish: false`
+- `1` - An error-severity finding: a skill failed validation, had its content refused by the
+  packager (`SKILL_PACKAGING_FAILED`), or emitted post-build errors; `--skill` named a `publish: false`
   skill (`SKILL_BUILD_TARGET_NOT_BUILDABLE`); or nothing was examined — no `skills:` block, or
   globs matching no SKILL.md (`RESOURCE_CHECK_BROKEN`)
 - `2` - The build could not run (`error.code`): `USAGE_INVALID` (a bad `[path]`, an unknown
   `--skill`), `INPUT_UNREADABLE` (including a previous `dist/skills` the OS will not stat),
   `CONFIG_INVALID`, or `RUN_INCOMPLETE` (the staging area under `dist/` could not be opened, or
-  promoting `dist/skills` failed — `data.promotionError` names what is on disk and how to recover it)
+  promoting `dist/skills` failed — `data.promotionError` names what is on disk and how to recover it).
+  Any other throw from the packager stops the run under its own code (`INPUT_UNREADABLE` for a
+  directory the OS will not list); one that carries no code is a defect in VAT
+  (`INTERNAL_ERROR`). Either way `dist/skills` is left untouched
 
 **Output Format** (the report contract — schema `packages/cli/schemas/skills-build.json`):
 ```yaml
@@ -175,7 +178,7 @@ data:
   dryRun: false
   validated: true          # false on a dry run: nothing was validated
   skillsBuilt: 2
-  skillsFailed: 0          # packaging threw
+  skillsFailed: 0          # the packager refused the skill's content
   skillsFailedValidation: 0
   skillsInPlace: [skill3]  # publish: false, never bundled here
   skillsPluginOnly: []     # publish: false, shipped with their plugin

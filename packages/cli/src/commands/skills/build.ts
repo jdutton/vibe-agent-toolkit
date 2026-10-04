@@ -13,6 +13,7 @@ import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
 import {
   conventionalSuiteProbe,
   indexPluginLocalSkills,
+  isSkillPackagingInputError,
   packageSkills,
   packagingConfigToPackageOptions,
   skillNameToFsPath,
@@ -23,6 +24,7 @@ import {
   type PackagingValidationResult,
   type PluginLocalSkillIndex,
   type SkillBuildSpec,
+  type SkillPackageOutcome,
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
@@ -154,7 +156,7 @@ Output:
   (skills discovered after --skill, the publish: false ones and a dry run's
   included), findings (every finding, each with its location), and data:
   dryRun, validated (false when nothing was validated: a dry run, a refused
-  --skill), skillsBuilt, skillsFailed (packaging threw:
+  --skill), skillsBuilt, skillsFailed (packaging refused the skill's content:
   SKILL_PACKAGING_FAILED), skillsFailedValidation (the pre-build source check
   rejected them), skillsInPlace / skillsPluginOnly (names set aside by
   publish: false), outputCommitted (whether dist/skills was REPLACED — false
@@ -170,9 +172,10 @@ Output:
 
 Exit Codes:
   0 - Built; findings, if any, are warnings or info (or a dry-run preview)
-  1 - An error-severity finding: a skill failed pre-build validation, could
-      not be packaged, or emitted post-build errors (every failure of every
-      kind is collected in ONE pass, and dist/skills is left untouched);
+  1 - An error-severity finding: a skill failed pre-build validation, had its
+      content refused by the packager (SKILL_PACKAGING_FAILED), or emitted
+      post-build errors (every such failure is collected in ONE pass, and
+      dist/skills is left untouched);
       --skill named a publish: false skill (SKILL_BUILD_TARGET_NOT_BUILDABLE);
       or nothing was examined — no skills: block, or globs matching no
       SKILL.md (RESOURCE_CHECK_BROKEN)
@@ -181,7 +184,11 @@ Exit Codes:
       root), INPUT_UNREADABLE (a [path], directory or previous dist/skills the
       OS will not read), CONFIG_INVALID, or RUN_INCOMPLETE (the staging area
       under dist/ could not be opened, or the promotion of dist/skills failed —
-      the report then still carries the findings and data.promotionError)
+      the report then still carries the findings and data.promotionError).
+      Any other throw from the packager stops the run under its own code
+      (INPUT_UNREADABLE for a directory the OS will not list); one that
+      carries no code is a defect in VAT (INTERNAL_ERROR). Either way
+      dist/skills is left untouched
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -490,8 +497,8 @@ function notBuildableIssue(message: string, location: string | undefined): Valid
 }
 
 /**
- * A skill whose packaging threw — see {@link notBuildableIssue} for why it is not
- * overridable. Shared with `vat skills package`, whose packager refusals are the same finding.
+ * A skill whose content the packager refused (`isSkillPackagingInputError`) — see
+ * {@link notBuildableIssue} for why it is not overridable. Shared with `vat skills package`, whose packager refusals are the same finding.
  */
 export function packagingFailedIssue(message: string, location: string | undefined): ValidationIssue {
   return {
@@ -515,7 +522,7 @@ function reportLocation(cwd: string, path: string): string | undefined {
 
 /**
  * Every issue ONE skill contributed, keyed by skill name: its pre-build
- * rejection, its packaging throw (as a `SKILL_PACKAGING_FAILED`
+ * rejection, the packager's refusal of its content (as a `SKILL_PACKAGING_FAILED`
  * finding at its source), or its post-build findings.
  */
 function issuesBySkill(input: SkillsBuildWorkInput): Map<string, ValidationIssue[]> {
@@ -1162,7 +1169,7 @@ export interface SkillBuildFailure {
  * attempted for it.
  *
  * The third of four populations, and deliberately not merged into either
- * neighbour: {@link SkillBuildFailure} means packaging ran and threw, and
+ * neighbour: {@link SkillBuildFailure} means packaging ran and refused the skill's content, and
  * `skillsWithErrors` means a bundle exists and is invalid. This one means the
  * source never qualified, and carries the whole emitted finding set that said so.
  */
@@ -1178,7 +1185,7 @@ export interface SkillBuildRun {
   runIssues: ValidationIssue[];
   /** Names of skills that BUILT and whose own post-build validation errored. */
   skillsWithErrors: string[];
-  /** Skills that never built because packaging threw. */
+  /** Skills that never built because the packager refused their content. */
   failures: SkillBuildFailure[];
   /** Skills that never built because their SOURCE failed validation. */
   validationFailures: SkillValidationFailure[];
@@ -1235,8 +1242,9 @@ export interface SkillBuildRunInput {
  *
  * Extracted from the command body so the span is testable without driving
  * `process.exit` — the drain seam is the thing worth asserting. Nothing in here
- * exits: every failure of every kind is COLLECTED and returned, so one run
- * surfaces all the work rather than the first item of it.
+ * exits: every failure that is the adopter's to fix is COLLECTED and returned, so
+ * one run surfaces all the work rather than the first item of it. A packager
+ * defect is the exception — see {@link stopOnPackagerDefect}.
  */
 export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBuildRun> {
   const { specs, cwd, logger, projectSkills, onlySkill, verbose } = input;
@@ -1337,6 +1345,8 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
     });
   });
 
+  await stopOnPackagerDefect(outcomes, staging, logger);
+
   const results: Array<{ name: string; result: PackageSkillResult }> = [];
   const skillsWithErrors: string[] = [];
   const failures: SkillBuildFailure[] = [];
@@ -1413,6 +1423,29 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
     outputCommitted,
     ...(promotionError === undefined ? {} : { promotionError }),
   };
+}
+
+/**
+ * Leave the run on the first packager throw that is not the packager refusing
+ * the skill's own content — the contract `vat skills package`, `vat agent
+ * build`, `vat claude plugin build` and `vat skill test run` implement, through
+ * the same predicate. Such a throw is not the adopter's to fix, so it is never a
+ * `SKILL_PACKAGING_FAILED` finding telling them to: it is rethrown as itself and
+ * published by its own code (`INTERNAL_ERROR` when it has none).
+ *
+ * Staging is settled first. The previous `dist/skills` was parked when the run
+ * began, so a bare rethrow would leave the path absent.
+ */
+async function stopOnPackagerDefect(
+  outcomes: readonly SkillPackageOutcome[],
+  staging: BuildStaging,
+  logger: ReturnType<typeof createLogger>,
+): Promise<void> {
+  const defect = outcomes.find((outcome) => outcome.status === 'failed' && !isSkillPackagingInputError(outcome.error));
+  if (defect?.status !== 'failed') return;
+  const { promotionError } = await settleStaging(staging, true, logger);
+  if (promotionError !== undefined) logger.error(promotionError);
+  throw defect.error;
 }
 
 /**

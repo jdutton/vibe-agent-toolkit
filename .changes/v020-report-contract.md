@@ -323,8 +323,8 @@
   one `skills[]` of `{ name, source, output, status: ok|findings }` — `outputPath` (absolute) ->
   `output`, and `source` is new, both relative to the directory holding
   `vibe-agent-toolkit.config.yaml`; `output` exists only when `outputCommitted`; `filesPackaged` is
-  removed; a skill whose packaging threw is a `SKILL_PACKAGING_FAILED` error finding (new, non-overridable: refused as a `validation.severity` / `allow` key)
-  instead of a `failedSkills[].error` string. `--dry-run` publishes the same report
+  removed; a skill whose content the packager refused is a `SKILL_PACKAGING_FAILED` error finding (new, non-overridable: refused as a `validation.severity` / `allow` key)
+  instead of a `failedSkills[].error` string — any other packager throw stops the run at exit 2 with `dist/skills` left untouched, under its own refusal code or `INTERNAL_ERROR` when it carries none (was a `failedSkills[]` row at exit 1). A file the OS will not let the build read or write is the packager's coded refusal — `SKILL_PACKAGING_FAILED` — in every packaging lane. `--dry-run` publishes the same report
   (`data.dryRun: true`, `validated: false`, `examined` = skills discovered); `skillsFound` is
   removed (read `examined`).
 - **`vat skills build` exit codes.** `--skill` naming a `publish: false` skill is a
