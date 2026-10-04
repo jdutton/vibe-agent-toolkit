@@ -34,7 +34,7 @@ import {
   type ContentTransformOptions,
   type ResourceMetadata,
 } from '@vibe-agent-toolkit/resources';
-import { RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
+import { isVatError, RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape } from 'zod';
 
 import { resolveChunkingConfig } from './chunking-config.js';
@@ -537,6 +537,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * @throws {ParserUnavailableError} If the markdown parser module cannot be
    *   loaded — a broken install fails the whole batch rather than becoming one
    *   error entry per resource
+   * @throws {VatError} `RAG_DATABASE_UNREADABLE` when the chunk table's files are
+   *   damaged — the store's failure, so the whole batch, for the same reason
    */
   async indexResources(
     resources: ResourceMetadata[],
@@ -609,6 +611,9 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
         // type VAT constructs at one place, so it is complete by construction —
         // not the guessed blocklist of Node loader codes that was deleted.
         if (isParserUnavailable(error)) throw error;
+        // A damaged STORE, not a damaged resource: every later resource would fail
+        // the same read, so the batch is refused once, as stats and query refuse it.
+        if (isVatError(error, RAG_DATABASE_UNREADABLE_CODE)) throw error;
 
         const message = describeError(error);
         // Also surfaced on stderr: a caller that ignores `result.errors` would
@@ -805,7 +810,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       return { action: 'new', deleteCount: 0 };
     }
 
-    const existingRows = await this.table.query().where(`resourceid = '${escapeSQLString(resourceId)}'`).toArray();
+    const table = this.table;
+    const existingRows = await this.readingChunkTable(() => table.query().where(`resourceid = '${escapeSQLString(resourceId)}'`).toArray());
     // Materialize immediately to avoid Arrow buffer issues
     // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
     const existing = JSON.parse(JSON.stringify(existingRows)) as LanceDBRow[];

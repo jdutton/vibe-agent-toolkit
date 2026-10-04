@@ -1,4 +1,4 @@
-import { readdirSync, readlinkSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync, readlinkSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
@@ -91,7 +91,7 @@ export function cloneGitSource(parsed: ParsedGitUrl, targetTempdir: string): Git
   // Containment is judged on REAL paths: the repository being cloned is
   // untrusted, and a committed `skills -> /somewhere/outside` passes any lexical
   // check while every later read lands outside the clone.
-  const placement = cloneContainment(targetTempdir, targetDir);
+  const placement = subpathPlacement(targetTempdir, targetDir);
   if (placement === 'outside') {
     throw new VatError(
       GIT_SUBPATH_INVALID_CODE,
@@ -109,6 +109,31 @@ export function cloneGitSource(parsed: ParsedGitUrl, targetTempdir: string): Git
   refuseEscapingLinks(targetTempdir, targetDir);
 
   return { ref, commit, targetDir };
+}
+
+/**
+ * Where the subpath stands relative to the clone. A subpath that is itself a
+ * link is judged by its own text too, as {@link followLink} judges one found
+ * while walking: a DANGLING link aimed outside escapes, and one aimed inside
+ * names nothing — either way the subpath's refusal, never a raw ENOENT.
+ */
+function subpathPlacement(cloneRoot: string, targetDir: string): 'inside' | 'outside' | 'absent' {
+  const placement = cloneContainment(cloneRoot, targetDir);
+  if (placement !== 'inside' || targetDir === cloneRoot) return placement;
+  try {
+    if (!lstatSync(targetDir).isSymbolicLink()) return placement;
+  } catch (error) {
+    if (isPathAbsentError(error)) return 'absent';
+    throw error;
+  }
+  if (cloneContainment(cloneRoot, safePath.resolve(dirname(targetDir), readlinkSync(targetDir))) === 'outside') return 'outside';
+  try {
+    statSync(targetDir);
+  } catch (error) {
+    if (isPathAbsentError(error)) return 'absent';
+    throw error;
+  }
+  return placement;
 }
 
 /**

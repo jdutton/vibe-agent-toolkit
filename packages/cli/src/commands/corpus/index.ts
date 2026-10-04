@@ -60,13 +60,15 @@ Output:
     <name>-review.md      # full skill-review output (only with --with-review)
 
 Exit Codes:
-  0 - Scanned, whatever the plugins held (an entry that could not be finished is a
+  0 - Scanned, whatever the plugins held (an entry refused for a coded reason is a
       CORPUS_ENTRY_INCOMPLETE warning: status findings, still exit 0; this verb never exits 1)
   2 - Could not run (error.code: USAGE_INVALID for a seed file that is not
       there, CONFIG_INVALID for a seed that does not parse or validate — an
       empty plugins list included,
       INPUT_UNREADABLE for one the OS will not read, RUN_INCOMPLETE when a
-      write under --out failed — the entries that finished are in data)
+      write under --out failed — the entries that finished are in data —
+      and INTERNAL_ERROR when an entry's audit throws something VAT did not
+      code: a defect in VAT ends the scan rather than becoming a warning row)
 
 Requirements:
   projectRoot: optional (tolerates absence)

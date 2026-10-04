@@ -35,12 +35,8 @@ const harness = vi.hoisted(() => ({
 }));
 
 vi.mock('@vibe-agent-toolkit/agent-skills', async (importOriginal) =>
-  (await import('../../helpers/stubbed-packager.js')).withStubbedPackager(importOriginal, (specs) =>
-    harness.rejectWith === undefined ? Promise.resolve(specs.map(({ skillPath }, i) => ({
-      status: 'failed' as const,
-      skillPath,
-      error: harness.thrown[i] ?? new Error(`no throw staged for spec ${i}`),
-    }))) : Promise.reject(harness.rejectWith)));
+  (await import('../../helpers/stubbed-packager.js')).withPackagerFailing(importOriginal, harness, (i) =>
+    harness.thrown[i] ?? new Error(`no throw staged for spec ${i}`)));
 const PREVIOUS_BUNDLE = 'dist/skills/previous/SKILL.md';
 const PREVIOUS_CONTENT = 'the previous build\n';
 const REFUSAL_MESSAGE = 'files: source does not exist';

@@ -14,6 +14,7 @@ import { isVatError, safePath } from '@vibe-agent-toolkit/utils';
 import { AuthPreflightError } from '@vibe-agent-toolkit/utils/skill-test';
 import { describe, expect, it } from 'vitest';
 
+import { SkillSourceUnreadableError } from '../../src/skill-source/source-unreadable.js';
 import { BuildHookError } from '../../src/skill-test/build-hook.js';
 import { UnknownEnvTokenError, UnresolvableEnvTokenError } from '../../src/skill-test/declared-env.js';
 import { EvalFragmentError } from '../../src/skill-test/eval-fragment.js';
@@ -121,7 +122,7 @@ describe('skillTestFailureReason', () => {
  */
 function declaredOperatorFixableClasses(): string[] {
   const here = dirname(fileURLToPath(import.meta.url));
-  const dirs = [safePath.resolve(here, '../../src/skill-test'), safePath.resolve(here, '../../../utils/src/skill-test')];
+  const dirs = [safePath.resolve(here, '../../src/skill-test'), safePath.resolve(here, '../../src/skill-source'), safePath.resolve(here, '../../../utils/src/skill-test')];
   const declaration = /export class (\w+) extends VatError \{\s*readonly reason = '(?:preflight|bootstrap)' as const;/g;
   return dirs
     .flatMap((dir) => readdirSync(dir).filter((file) => file.endsWith('.ts')).map((file) => readFileSync(safePath.join(dir, file), 'utf-8')))
@@ -140,6 +141,7 @@ describe('SKILL_TEST_REFUSAL_BY_ERROR_CODE', () => {
   const ROWS = [
     ['BootstrapNeededError (no evals.json: the input is absent)', new BootstrapNeededError('/p/evals/evals.json'), 'INPUT_UNREADABLE'],
     ['EvalInputError (a suite or declared input that is not usable)', new EvalInputError('bad suite'), 'INPUT_UNREADABLE'],
+    ['SkillSourceUnreadableError (a --with companion the OS will not read)', new SkillSourceUnreadableError('x'), 'INPUT_UNREADABLE'],
     ['AuthPreflightError', new AuthPreflightError('x'), 'USAGE_INVALID'],
     ['HarnessLocationError', new HarnessLocationError('x'), 'USAGE_INVALID'],
     ['HarnessOutputError (a harness root the OS will not let the run create)', new HarnessOutputError('x'), 'RUN_INCOMPLETE'],

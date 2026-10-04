@@ -19,7 +19,7 @@ import {  mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
-import { codedUserStateWrite, getClaudeUserPaths, installPlugin, PLUGIN_KEY_INVALID_CODE, requirePluginInstallNames, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
+import { codedUserStateWrite, getClaudeUserPaths, installPlugin, PLUGIN_KEY_INVALID_CODE, replaceDirectory, requirePluginInstallNames, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import { buildReport, createRegistryIssue, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { direntKindFollowingSync, isPathAbsentError, isSingleFsSegment, isVatError, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
@@ -188,14 +188,23 @@ async function registerPlugin(
     paths,
   });
   run.logger.info(`   Registered plugin ${pluginKey} in Claude plugin registry`);
+  reportCleanupWarnings(run, warnings, pluginKey);
+}
+
+/**
+ * Each previous tree a staged replace could not remove, as a warning: the
+ * install is complete, and what it could not clean up still belongs in the report.
+ *
+ * @param location - The plugin key, or the marketplace name for its own copy
+ */
+function reportCleanupWarnings(run: InstallRun, warnings: readonly string[], location: string): void {
   for (const warning of warnings) {
     run.logger.warn(`   ${warning}`);
-    // The install is complete; what it could not clean up still belongs in the report.
     run.issues.push({
       code: 'PLUGIN_INSTALL_CLEANUP_INCOMPLETE',
       severity: 'warning',
       message: warning,
-      location: pluginKey,
+      location,
       fix: 'Remove the directory the message names yourself (make it writable first if the OS refused); the installed plugin does not use it.',
     });
   }
@@ -203,10 +212,12 @@ async function registerPlugin(
 
 /**
  * Refuse, before anything under ~/.claude changes, a package whose plugin tree
- * or `vat.replaces.plugins` names a plugin that cannot be installed: a plugin or
- * marketplace directory, the package version, or a replaced plugin that is not
- * one path segment (or a dot-led version). Each came from the PACKAGE, so the
- * refusal is the input's (`INPUT_UNREADABLE`), not the invocation's.
+ * or `vat.replaces` names something that cannot be installed or removed: a
+ * plugin or marketplace directory, the package version, a replaced plugin, or a
+ * replaced flat skill that is not one path segment (or a dot-led version). Each
+ * came from the PACKAGE, so the refusal is the input's (`INPUT_UNREADABLE`), not
+ * the invocation's. `vat.replaces.flatSkills` is checked here, not only where it
+ * is removed: that removal runs AFTER `vat.replaces.plugins` are uninstalled.
  */
 function assertPackagePluginNames(
   marketplacesDir: string,
@@ -222,6 +233,15 @@ function assertPackagePluginNames(
       throw new CommandRefusalError('INPUT_UNREADABLE', `Package ${packageJson.name} cannot be installed, nothing was changed: ${error.message} (${origin}).`, { cause: error });
     }
   };
+  for (const skillName of packageJson.vat?.replaces?.flatSkills ?? []) {
+    if (!isSingleFsSegment(skillName)) {
+      throw new CommandRefusalError(
+        'INPUT_UNREADABLE',
+        `Package ${packageJson.name} cannot be installed, nothing was changed: the legacy flat skill "${skillName}" it ` +
+          'replaces (package.json vat.replaces.flatSkills) must be a single path segment (no separators, not "." or "..").',
+      );
+    }
+  }
   for (const marketplaceName of marketplaceNames) {
     for (const pluginName of listSubdirectories(safePath.join(marketplacesDir, marketplaceName, 'plugins'))) {
       check({ marketplaceName, pluginName }, 'its built plugin tree and package.json version');
@@ -322,17 +342,21 @@ Output (YAML report on stdout):
   - data.dryRun, data.symlink (true for --dev)
   - data.skills[]: { name, installPath, sourcePath } — sourcePath is the --dev link target, else null
   - findings: COMPONENT_DECLARED_BUT_MISSING (warning) for a --dev plugin skill whose build is missing;
-    PLUGIN_INSTALL_CLEANUP_INCOMPLETE (warning, at the plugin key) when a re-install could
-    not remove the previous plugin cache it replaced — the install itself is complete
+    PLUGIN_INSTALL_CLEANUP_INCOMPLETE (warning) when a re-install could not remove a
+    previous tree it replaced: the plugin cache (at the plugin key, left as
+    .<version>.vat-staged-*.previous beside the version) or the marketplace copy (at
+    the marketplace name, left as .<marketplace>.vat-staged-*.previous in
+    ~/.claude/plugins/marketplaces/) — the install itself is complete
 
 Exit Codes:
   0 - Installed (a warning does not fail the run)
   2 - The run could not install: a missing or unknown source, a skill that exists
       without --force, an unknown --target, a plain directory with no SKILL.md
       (USAGE_INVALID); --target claude.ai (NOT_IMPLEMENTED); an unreadable
-      source, a .zip that is not a ZIP archive, or a package whose plugin or
-      marketplace directory, version or vat.replaces.plugins entry is not one path
-      segment (or whose version begins with "."), refused before anything changes
+      source, a .zip that is not a ZIP archive or holds an entry that does not
+      inflate, or a package whose plugin or marketplace directory, version,
+      vat.replaces.plugins or vat.replaces.flatSkills entry is not one path segment
+      (or whose version begins with "."), refused before anything changes
       (INPUT_UNREADABLE); npm pack failing
       (EXTERNAL_API_FAILED); --build whose vat build failed, or a copy or registry
       write that failed partway (RUN_INCOMPLETE). A refusal lists the skills already on disk.
@@ -548,10 +572,14 @@ async function handleZipInstall(source: string, run: InstallRun): Promise<void> 
   logger.info(`📥 Installing skill from ZIP: ${sourcePath}`);
   assertSourceFile(sourcePath);
 
-  // Opened before prepareInstallation: --force removes the skill being replaced there.
+  // Read WHOLE before prepareInstallation: --force removes the skill being
+  // replaced there. Opening parses only the central directory — entry data is
+  // inflated (and its CRC checked) lazily, so a corrupt entry used to throw from
+  // `extractAllTo`, uncoded, after the previous skill was already gone.
   let zip: AdmZip;
   try {
     zip = new AdmZip(sourcePath);
+    for (const entry of zip.getEntries()) entry.getData();
   } catch (error) {
     throw new CommandRefusalError('INPUT_UNREADABLE', `${sourcePath} could not be read as a ZIP archive: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
@@ -940,15 +968,20 @@ export async function executeReplaces(
   dryRun: boolean,
   logger: Logger
 ): Promise<void> {
+  // Every flat-skill entry is checked BEFORE the first removal: each comes from
+  // the INSTALLED package's package.json and becomes an `rm -rf` with no flag in
+  // front of it (`"../victim"` used to remove a sibling of the skills dir; with
+  // the default paths `"../.."` is $HOME), and a refusal after the plugins below
+  // were uninstalled would leave the user with neither the old nor the new.
+  const skillPaths = (replaces.flatSkills ?? []).map(
+    (skillName) => safePath.join(paths.skillsDir, assertSkillEntryName(skillName, 'vat.replaces.flatSkills')),
+  );
+
   // Remove old plugin entries from all marketplaces this package ships into
   await removeOldPlugins(replaces.plugins, marketplaceNames, paths, dryRun, logger);
 
   // Remove legacy flat-skill installs from ~/.claude/skills/<name>
-  for (const skillName of replaces.flatSkills ?? []) {
-    // The entry comes from the INSTALLED package's package.json, and this is
-    // an `rm -rf` with no flag in front of it: `"../victim"` used to remove a
-    // sibling of the skills dir (with the default paths, `"../.."` is $HOME).
-    const skillPath = safePath.join(paths.skillsDir, assertSkillEntryName(skillName, 'vat.replaces.flatSkills'));
+  for (const skillPath of skillPaths) {
     let pathExists = false;
     try {
       lstatSync(skillPath); // throws if path itself doesn't exist (doesn't follow symlinks)
@@ -984,14 +1017,13 @@ async function copyMarketplace(
   const destMpDir = safePath.join(ctx.paths.marketplacesDir, ctx.mpName);
 
   // Replace the marketplace directory entirely so skills removed from the
-  // package do not persist in the user's Claude installation.
+  // package do not persist in the user's Claude installation — staged and
+  // swapped, never deleted first: a copy the OS refuses must leave the
+  // installed marketplace (which the registry still points at) whole.
   logger.info(`   ${dryRun ? '[dry-run] Would copy' : 'Copying'} marketplace: ${ctx.mpName} → ${destMpDir}`);
   if (!dryRun) {
-    await codedUserStateWrite(`copy marketplace ${ctx.mpName} to ${destMpDir}`, async () => {
-      await rm(destMpDir, { recursive: true, force: true });
-      await mkdir(destMpDir, { recursive: true });
-      cpSync(srcMpDir, destMpDir, { recursive: true, force: true });
-    });
+    const warnings = await codedUserStateWrite(`copy marketplace ${ctx.mpName} to ${destMpDir}`, () => replaceDirectory(srcMpDir, destMpDir));
+    reportCleanupWarnings(run, warnings, ctx.mpName);
   }
 
   const pluginNames = listSubdirectories(safePath.join(srcMpDir, 'plugins'));

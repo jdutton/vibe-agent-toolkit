@@ -59,12 +59,22 @@ function writingOutput<T>(target: string, write: () => Promise<T>, action = 'wri
   return withFsAttribution(`agent build output ${toForwardSlash(target)}`, 'output', write, action);
 }
 
-/** Refuse a source tree the OS will not let the build list or read, before any of it is copied. */
+/**
+ * Refuse a source tree the OS will not let the build list or read, before any
+ * of it is copied. Only a regular file is opened: a named pipe, socket or device
+ * (or a link to one) has no bytes to ship, and opening a pipe blocks until a
+ * writer appears, so it is refused as the source's without being opened.
+ */
 async function requireReadableTree(dir: string): Promise<void> {
   const entries = await readingSource(dir, () => fs.readdir(dir, { recursive: true, withFileTypes: true }));
   for (const entry of entries) {
     if (entry.isDirectory()) continue;
     const file = safePath.join(entry.parentPath, entry.name);
+    const target = entry.isSymbolicLink() ? await readingSource(file, () => fs.stat(file)) : entry;
+    if (target.isDirectory()) continue;
+    if (!target.isFile()) {
+      throw new VatError(AGENT_SOURCE_UNREADABLE_CODE, `Agent source cannot be read (not a regular file: a named pipe, socket or device): ${file}`);
+    }
     await readingSource(file, () => proveReadable(file));
   }
 }

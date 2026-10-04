@@ -1468,10 +1468,23 @@ async function settlingOnThrow<T>(
   try {
     return await work();
   } catch (error) {
-    const { promotionError } = await settleStaging(staging, true, logger);
-    if (promotionError !== undefined) logger.error(promotionError);
-    throw error;
+    return await settleAndRethrow(error, staging, logger);
   }
+}
+
+/**
+ * Settle staging as a failed run, then leave with `error`. When settling could
+ * not restore the parked previous output, the recovery rides in the refusal's
+ * message — the document is where an operator looks for the parked path — while
+ * `error` stays the refusal's code and cause.
+ */
+async function settleAndRethrow(error: unknown, staging: BuildStaging, logger: ReturnType<typeof createLogger>): Promise<never> {
+  const { promotionError } = await settleStaging(staging, true, logger);
+  if (promotionError === undefined) throw error;
+  const refusal = new CommandRefusalError(refusalCodeOf(error), `${describeThrown(error)}\n${promotionError}`, { cause: error });
+  // An INTERNAL_ERROR prints its stack: keep the original's frames, not this wrapper's.
+  if (error instanceof Error && error.stack !== undefined) refusal.stack = `${refusal.message}\nCaused by: ${error.stack}`;
+  throw refusal;
 }
 
 /**
@@ -1492,14 +1505,7 @@ async function stopOnPackagerDefect(
 ): Promise<void> {
   const defect = outcomes.find((outcome) => outcome.status === 'failed' && !isSkillPackagingInputError(outcome.error));
   if (defect?.status !== 'failed') return;
-  const { promotionError } = await settleStaging(staging, true, logger);
-  if (promotionError === undefined) throw defect.error;
-  // The defect stays the refusal's code and cause; the recovery rides in its
-  // message, because the document is where an operator looks for the parked path.
-  const refusal = new CommandRefusalError(refusalCodeOf(defect.error), `${describeThrown(defect.error)}\n${promotionError}`, { cause: defect.error });
-  // An INTERNAL_ERROR prints its stack: keep the defect's frames, not this wrapper's.
-  if (defect.error instanceof Error && defect.error.stack !== undefined) refusal.stack = `${refusal.message}\nCaused by: ${defect.error.stack}`;
-  throw refusal;
+  await settleAndRethrow(defect.error, staging, logger);
 }
 
 /**

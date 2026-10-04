@@ -3,6 +3,8 @@ import { readdir, readFile } from 'node:fs/promises';
 
 import { direntKindFollowing, FollowedWalk, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
+import { readingSkillSource } from './source-unreadable.js';
+
 /**
  * Deterministic SHA-256 content hash of a directory tree.
  *
@@ -13,6 +15,7 @@ import { direntKindFollowing, FollowedWalk, safePath, toForwardSlash } from '@vi
  *
  * @param dir Absolute path to the directory to hash.
  * @returns 64-char lowercase hex SHA-256.
+ * @throws {SkillSourceUnreadableError} When the OS will not read a file or list a directory in it.
  */
 export async function hashDirectory(dir: string): Promise<string> {
   const walk = new FollowedWalk();
@@ -28,7 +31,7 @@ export async function hashDirectory(dir: string): Promise<string> {
   for (const { rel, abs } of files) {
     hash.update(rel, 'utf-8');
     hash.update('\0');
-    hash.update(await readFile(abs));
+    hash.update(await readingSkillSource(abs, () => readFile(abs)));
     hash.update('\0');
   }
   return hash.digest('hex');
@@ -39,7 +42,7 @@ async function collectFiles(
   current: string,
   walk: FollowedWalk,
 ): Promise<Array<{ rel: string; abs: string }>> {
-  const entries = await readdir(current, { withFileTypes: true });
+  const entries = await readingSkillSource(current, () => readdir(current, { withFileTypes: true }));
   const out: Array<{ rel: string; abs: string }> = [];
   for (const entry of entries) {
     const abs = safePath.join(current, entry.name);
@@ -48,7 +51,7 @@ async function collectFiles(
     // nothing — decided here, by name, rather than by falling off the end.
     // A link back into the tree is refused by the walk guard rather than
     // followed until the stack gives out.
-    switch (await direntKindFollowing(current, entry)) {
+    switch (await readingSkillSource(abs, () => direntKindFollowing(current, entry))) {
       case 'directory':
         walk.enter(abs);
         out.push(...(await collectFiles(root, abs, walk)));

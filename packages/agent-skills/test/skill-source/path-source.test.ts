@@ -1,8 +1,10 @@
-import { statSync, writeFileSync } from 'node:fs';
+import { chmodSync, statSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { SKILL_SOURCE_UNREADABLE_CODE } from '../../src/skill-source/source-unreadable.js';
 import { resolvePathSource } from '../../src/skill-source/sources/path-source.js';
 
 import { setupSkillSourceTestSuite } from './test-helpers.js';
@@ -35,4 +37,25 @@ describe('resolvePathSource', () => {
     const after = await resolvePathSource(localPluginPath, suite.ctx);
     expect(before.identity).not.toBe(after.identity);
   });
+
+  // `vat skill test run --with x=path:<dir>`: a file (or directory) the OS will not read is the
+  // operator's input, refused naming it — once a raw EACCES from the content hash, INTERNAL_ERROR.
+  it.skipIf(CANNOT_DENY_READS).each([['a file', 'locked.txt'], ['a directory', 'locked-dir']])(
+    'refuses a source holding %s the OS will not read, coded as the input, naming it',
+    async (_what, name) => {
+      const locked = safePath.join(local, name);
+      if (name.endsWith('-dir')) mkdirSyncReal(locked);
+      else writeFileSync(locked, 'secret');
+      chmodSync(locked, 0o000);
+      try {
+        await expect(resolvePathSource(localPluginPath, suite.ctx)).rejects.toMatchObject({
+          code: SKILL_SOURCE_UNREADABLE_CODE,
+          reason: 'preflight',
+          message: expect.stringContaining(name) as unknown,
+        });
+      } finally {
+        chmodSync(locked, 0o755);
+      }
+    },
+  );
 });

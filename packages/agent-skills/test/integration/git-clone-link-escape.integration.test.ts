@@ -86,6 +86,20 @@ describe.skipIf(process.platform === 'win32')('cloneGitSource refuses links out 
     expect(clone).toThrow(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE }));
   });
 
+  // The SUBPATH itself dangling: followLink's rule covered only links found while walking, so
+  // this one reached readdir and left as a raw ENOENT instead of the subpath's refusal.
+  it.for([
+    ['aimed outside the clone', (): string => safePath.join(outside, 'not-there'), /escapes the cloned repository: skills\/esc/],
+    ['aimed inside the clone', (): string => 'nowhere', /not found in cloned repo: skills\/esc/],
+  ] as const)('refuses a subpath that is itself a dangling link %s, as the subpath', ([, target, message], { skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const clone = cloneShaped((work) => {
+      mkdirSyncReal(safePath.join(work, 'skills'));
+      createSymlink(cap, target(), safePath.join(work, 'skills', 'esc'));
+    }, 'skills/esc');
+    expect(clone).toThrow(expect.objectContaining({ code: GIT_SUBPATH_INVALID_CODE, message: expect.stringMatching(message) }));
+  });
+
   it('accepts links that stay inside the clone, including a cycle', ({ skip }) => {
     const cap = symlinkCapability() ?? skip();
     const clone = cloneShaped((work) => {

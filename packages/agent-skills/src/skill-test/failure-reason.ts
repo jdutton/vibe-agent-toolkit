@@ -1,6 +1,8 @@
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 import { isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
+import { SKILL_SOURCE_UNREADABLE_CODE } from '../skill-source/source-unreadable.js';
+
 /**
  * WHY a `vat skill test run` ended on `ExitCode.ERROR`.
  *
@@ -68,7 +70,8 @@ export function skillTestFailureReason(err: unknown): SkillTestFailureReason {
  * never by its message.
  *
  * - `INPUT_UNREADABLE` — an input the run must read is absent or unusable: no
- *   `evals.json` (bootstrap), or a suite / declared input file that is not.
+ *   `evals.json` (bootstrap), a suite / declared input file that is not, or a
+ *   staged skill source (a `--with` companion) the OS will not read.
  * - `USAGE_INVALID` — everything else the operator fixes: a flag, a declared
  *   `env` token, the `test.build` hook, a skill reference the config does not
  *   declare (or `--no-build` with no dist), an unsafe `--workdir`, a held harness
@@ -84,6 +87,7 @@ export function skillTestFailureReason(err: unknown): SkillTestFailureReason {
 export const SKILL_TEST_REFUSAL_BY_ERROR_CODE = {
   SKILL_TEST_BOOTSTRAP_NEEDED: 'INPUT_UNREADABLE',
   EVAL_INPUT: 'INPUT_UNREADABLE',
+  [SKILL_SOURCE_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
   AUTH_PREFLIGHT: 'USAGE_INVALID',
   BUILD_HOOK: 'USAGE_INVALID',
   HARNESS_LOCATION: 'USAGE_INVALID',

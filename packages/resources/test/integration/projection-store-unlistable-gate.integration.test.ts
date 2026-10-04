@@ -1,8 +1,8 @@
 /**
- * The driver's store-freshness gate for `EXTENT_DIRECTORY_UNLISTABLE` rows, at
- * unit tier.
+ * The driver's store-freshness gate for `EXTENT_DIRECTORY_UNLISTABLE` rows,
+ * without a permission bit. Integration tier: it populates a real temp tree.
  *
- * The real-`chmod` suite (`integration/projection-store-unlistable-freshness`)
+ * The real-`chmod` suite (`projection-store-unlistable-freshness`)
  * pins the end-to-end hazard against a locked directory. What it leaves to this
  * file is the gate's MISS arm on its own: a stored extent carrying an
  * unlistable row for a directory that is gone — or that lists perfectly — must
@@ -18,17 +18,16 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { ContributorRegistry } from '../src/projection/contributor.js';
+import { ContributorRegistry } from '../../src/projection/contributor.js';
 import {
   EXTENT_DIRECTORY_UNLISTABLE,
   FilesystemExtentContributor,
-} from '../src/projection/contributors/filesystem-extent.js';
-import { DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
-import type { ExtentKey, ExtentScopedRows } from '../src/projection/store.js';
-import { CONDITION_WITHOUT_REFERENCE } from '../src/schemas/projection-resources.js';
-
-import { FakeProjectionStore } from './fake-projection-store.js';
-import { setupSubdirTestSuite } from './test-helpers.js';
+} from '../../src/projection/contributors/filesystem-extent.js';
+import { DISCARD_BLOB_POPULATION, populate } from '../../src/projection/merge.js';
+import type { ExtentKey, ExtentScopedRows } from '../../src/projection/store.js';
+import { CONDITION_WITHOUT_REFERENCE } from '../../src/schemas/projection-resources.js';
+import { FakeProjectionStore } from '../fake-projection-store.js';
+import { setupSubdirTestSuite } from '../test-helpers.js';
 
 const suite = setupSubdirTestSuite('projection-store-unlistable-gate-');
 

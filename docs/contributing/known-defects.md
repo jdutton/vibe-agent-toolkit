@@ -47,10 +47,16 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   - `inventory` does the same in `data.inventory.path`;
   - `doctor` does the same in `currentDir`, `projectRoot` and `configPath`;
   - every "Path does not exist" refusal puts one in `error.message`;
+  - `skill test configure <undeclared>` names the config file by its absolute path in
+    `error.message` ("No skill named 'typo' is declared by /…/vibe-agent-toolkit.config.yaml");
+  - `skills package -o <occupied>` (dry or real) puts the output's absolute path in
+    `error.message` ("output occ: /…/occ already exists");
   - node's errno text, which names an absolute path, is interpolated unchanged into
     `SKILL_PACKAGING_FAILED` messages for OS refusals (`withFsAttribution`'s `reason`; traced).
 - **Reproduce:** `vat skill review skills/foo --yaml`, then read `data.source`.
-- **Where:** the verbs above;
+- **Where:** the verbs above; `requireDeclaredSkill` in
+  [`configure.ts`](../../packages/cli/src/commands/skill/test/configure.ts);
+  `checkPackageOutput` in [`skill-packager.ts`](../../packages/agent-skills/src/skill-packager.ts);
   [`fs-attribution.ts:103`](../../packages/agent-skills/src/fs-attribution.ts) for the errno text.
 - **Fix:** relativize to a stated root, or document each exception in the schema docstrings.
 
@@ -159,11 +165,24 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Mechanism:** install copies the source root's mode onto both the marketplace copy and the cache
   copy. `removePluginDirs` then removes each tree with a plain recursive `rm`. A root that took
   mode 0555 refuses the removal of its own entries, so uninstall fails partway with
-  `RUN_INCOMPLETE`. Install's own `removeTree` already chmods the root first. Traced, not run.
+  `RUN_INCOMPLETE`. Install's own `removeTree` already chmods the root first. Reproduced.
 - **Where:** [`plugin-uninstall.ts:86, 92`](../../packages/claude-marketplace/src/install/plugin-uninstall.ts),
   [`plugin-registry.ts:217-221`](../../packages/claude-marketplace/src/install/plugin-registry.ts)
   (`removeTree`, the pattern to copy)
 - **Fix:** chmod each root before removing it, as `removeTree` does, or share `removeTree`.
+
+### `vat claude plugin install --dev` deletes the installed marketplace before rebuilding it
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes
+- **Mechanism:** `devInstallMarketplace` removes the installed marketplace directory, then copies
+  its non-plugin content and links each plugin's skills one by one. A failure partway (a refused
+  copy, a symlink that cannot be made) leaves a partial tree on disk that `registerPlugin` never
+  registers. The non-dev lanes stage and swap through `replaceDirectory`; this lane builds its
+  tree in several steps, so it needs a staging root of its own. Traced, not run.
+- **Where:** [`install.ts:768-790`](../../packages/cli/src/commands/claude/plugin/install.ts)
+  (`devInstallMarketplace`)
+- **Fix:** build the whole dev marketplace under a staging directory, then swap it in with
+  `replaceDirectory`.
 
 ### The plugin-source readability probe re-implements `openEachFileForReading`
 
@@ -353,55 +372,17 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** run the hostile-name set on the Windows box first. Then refuse trailing dot/space, `:`
   and reserved device names.
 
-### Two Windows outcomes are unverified
-
-- **Severity:** Minor · **Effort:** S (one run on the Windows box) · **User-visible:** no
-- **Mechanism:** two things are not known on Windows:
-  - whether the exit-code matrix's `doctor → ok` scenario *runs* or *skips* there. The CI log has
-    no per-test output.
-  - how much headroom the four CLI specs moved from integration to system have. They went from a
-    900 s/test Windows ceiling to 120 s/test, and they passed, but no per-file duration was
-    measured.
-- **Where:** [`exit-code-matrix-shard-machine.system.test.ts`](../../packages/cli/test/system/exit-code-matrix-shard-machine.system.test.ts),
-  the moved `audit-unloadable-config`, `resources-scan`, `projection-store-cache-control` and
-  `projection-store-equivalence` system specs
-- **Fix:** run the machine shard and the four specs on the Windows box, and record the outcome.
-
 ## Test-suite health
 
 ### Tests in the wrong tier
 
 - **Severity:** Minor · **Effort:** M · **User-visible:** no
-- **Mechanism:** the tier table puts "spawns child processes" in System. Two places break it:
-  - `lab/test/integration/io-counter.integration.test.ts` spawns real `node` via
-    `spawnSync(process.execPath, …)`. The spawning half was split out of the unit file, but into
-    integration rather than system.
-  - About 19 of the 60 `packages/cli/test/integration` files spawn a process, counted by grepping
-    for `child_process`, `executeCli`, `bin.js` and similar.
-- **Where:** [`io-counter.integration.test.ts:64, 120`](../../packages/lab/test/integration/io-counter.integration.test.ts),
-  [`packages/cli/test/integration/`](../../packages/cli/test/integration/)
+- **Mechanism:** the tier table puts "spawns child processes" in System. About 19 of the 60
+  `packages/cli/test/integration` files spawn a process, counted by grepping for
+  `child_process`, `executeCli`, `bin.js` and similar.
+- **Where:** [`packages/cli/test/integration/`](../../packages/cli/test/integration/)
 - **Fix:** move each spawning file to `*.system.test.ts` by rename. Never raise a budget or add
   an allowlist entry for one.
-
-### Files near their tier's duration budget
-
-- **Severity:** Minor · **Effort:** — (watch item) · **User-visible:** no
-- **Mechanism:** the budgets are 5,000 ms for integration and 30,000 ms for system. Last measured
-  on CI:
-
-  | File | Tier | CI ms |
-  |---|---|---:|
-  | `dev-tools` `dist-visibility` | integration | 4,619 |
-  | `projection-sqlite` `store-sharing` | integration | 4,221 |
-  | `cli` `claude-org` | system | 21,069 |
-  | `cli` `resources-check` | system | 20,353 |
-  | `cli` `claude-context` | system | 19,537 |
-  | matrix `path-unlistable` | system | 14,422 |
-
-  Measured locally only: `plugin-build-what-ships` 3,323 ms, `projection-store-cross-root` 3,264
-  ms and `cli-projectroot-policy` 3,172 ms. These are integration files, and CI runs about 2×
-  local, yet they passed the CI ratchet.
-- **Fix:** when one crosses, move it by tier if it spawns, or split it. Never raise the budget.
 
 ### Exit-code matrix scenarios that never run on CI
 
@@ -481,15 +462,6 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   [`committed-verdict-deltas.integration.test.ts`](../../packages/lab/test/integration/committed-verdict-deltas.integration.test.ts)
 - **Fix:** refuse an orphan marker, and strip markers in the stable fold once the deltas file is
   re-baselined.
-
-### The build-verb clone path is covered only on macOS
-
-- **Severity:** Minor · **Effort:** L · **User-visible:** no
-- **Mechanism:** `inClone` / `executeClonePlan` run only under `it.runIf(darwin)`, because APFS
-  clones are macOS-only by design. CI runs ubuntu and Windows, so a green CI says nothing about
-  this path.
-- **Where:** [`verdict-capture-guards.integration.test.ts:130`](../../packages/lab/test/integration/verdict-capture-guards.integration.test.ts)
-- **Fix:** none needed for correctness. Keep it in mind when reading a green CI.
 
 ## Docs
 

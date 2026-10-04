@@ -2779,8 +2779,20 @@ export function checkPackageOutput(check: PackageOutputCheck): void {
 function refuseOutputHoldingSource(resolvedOutput: string, sources: readonly string[], subject: string): void {
   // Canonical on both sides: an output reached through a symlink is the tree it names.
   const real = (path: string): string => toForwardSlash(normalizePath(safePath.resolve(path)));
-  const outputReal = real(resolvedOutput);
-  const held = sources.find((source) => isUnderRoot(resolvedOutput, source) !== 'outside' || real(source) === outputReal);
+  let held: string | undefined;
+  try {
+    const outputReal = real(resolvedOutput);
+    held = sources.find((source) => isUnderRoot(resolvedOutput, source) !== 'outside' || real(source) === outputReal);
+  } catch (error) {
+    if (!isFilesystemAccessError(error)) throw error;
+    // Not examinable is not "holds nothing": refused like an output that will not stat (`isOccupied`).
+    throw new VatError(
+      SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE,
+      `${subject}: the OS will not let VAT examine it (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}), so VAT cannot tell `
+        + 'whether it holds the source being packaged. Make the output path and its parents readable, or choose another output path.',
+      { cause: error },
+    );
+  }
   if (held === undefined) return;
   throw new VatError(
     SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE,

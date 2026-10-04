@@ -126,7 +126,8 @@ describe('verdict capture — refusals', () => {
 describe('verdict capture — a build verb the subject cannot complete', () => {
   const reason = 'the subject needs a build artifact it has not produced';
 
-  // The build verbs run in an APFS clone (`cp -c`), so this path exists on macOS only.
+  // The build verbs run in an APFS clone (`cp -c`), so this path exists on macOS only. CI runs
+  // ubuntu and Windows, so a green CI says nothing about it: run this file on a Mac after touching it.
   it.runIf(process.platform === 'darwin')('still runs it — last — and records the exclusion beside its row', async () => {
     const result = await capture({ set: {}, unset: [] }, fixtureSubject(), tempDir('lab-verdict-out-'), {
       buildVerbs: true,

@@ -5,7 +5,7 @@
  */
 
 export { LanceDBRAGProvider, type LanceDBConfig } from './lancedb-rag-provider.js';
-export { foreignDatabaseEntries, removeRagDatabase } from './database-directory.js';
+export { foreignDatabaseEntries, removeRagDatabase, type DatabaseDirectoryEntry } from './database-directory.js';
 export {
   ESTIMATOR_DIVERGENCE_FACTOR,
   SPECIAL_TOKEN_OVERHEAD,

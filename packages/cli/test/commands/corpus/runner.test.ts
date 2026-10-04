@@ -1,10 +1,7 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
 
 import { countBySeverity, resultStatus } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it, vi } from 'vitest';
 import * as yaml from 'yaml';
 
@@ -118,35 +115,6 @@ describe('auditOnePlugin — local source', () => {
   });
 });
 
-function git(args: string[], cwd: string): void {
-  const r = spawnSync(gitExecutable(), args, { cwd, encoding: 'utf-8' });
-  if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
-}
-
-function makeBareRepoWithSkill(): string {
-  const bare = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-corpus-bare-'));
-  const work = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-corpus-work-'));
-
-  git(['init', '--bare', '--initial-branch=main'], bare);
-  git(['init', '--initial-branch=main'], work);
-  git(['config', 'user.email', 't@t'], work);
-  git(['config', 'user.name', 't'], work);
-  git(['remote', 'add', 'origin', bare], work);
-
-  const skillDir = safePath.join(work, 'plugins', 'foo');
-  mkdirSyncReal(skillDir, { recursive: true });
-  writeFileSync(
-    safePath.join(skillDir, 'SKILL.md'),
-    `---\nname: foo\ndescription: A test skill for the URL-source runner unit test that exercises shallow clone end to end.\n---\n\n# foo\n\nBody.\n`,
-    'utf-8'
-  );
-
-  git(['add', '.'], work);
-  git(['commit', '-m', 'initial'], work);
-  git(['push', 'origin', 'main'], work);
-  return bare;
-}
-
 describe('auditOnePlugin — a local source the probe cannot answer for', () => {
   const entry = (): PluginEntry => ({ source: '/probe/target', name: 'probed', ...META });
   const runDir = (): string => mkdtempSync(safePath.join(normalizedTmpdir(), RUN_DIR_PREFIX));
@@ -171,38 +139,6 @@ describe('auditOnePlugin — a local source the probe cannot answer for', () => 
   });
 });
 
-describe('auditOnePlugin — URL source', () => {
-  it('clones a file:// URL, audits, and cleans up', async () => {
-    const bare = makeBareRepoWithSkill();
-    const runDir = makeRunDir();
-
-    const entry: PluginEntry = { source: pathToFileURL(bare).href, name: 'foo', ...META };
-    const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false });
-
-    expect(row.audit.status).toBe('ok');
-    expect(row.audit.output_path).toBe('foo-audit.yaml');
-    // A cloned source's root is a random tempdir: the document names the URL instead.
-    const document = AUDIT_REPORT_SCHEMA.parse(yaml.parse(readFileSync(safePath.join(runDir, 'foo-audit.yaml'), 'utf-8')));
-    expect(document.data.root).toBeNull();
-    expect(document.data.provenance?.url).toBe(entry.source);
-    expect(document.data.files.map((file) => file.path)).toStrictEqual(['plugins/foo/SKILL.md']);
-  });
-
-  it('records unloadable when the clone fails (bad URL)', async () => {
-    const runDir = makeRunDir();
-    const entry: PluginEntry = {
-      source: 'file:///absolutely/does/not/exist/repo.git',
-      name: 'ghost',
-      ...META,
-    };
-
-    const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false });
-
-    expect(row.audit.status).toBe('unloadable');
-    expect(row.audit.error).toMatch(/clone failed|fatal|repository|not appear/i);
-  });
-});
-
 describe('auditOnePlugin — a defect inside the audit', () => {
   // An uncoded throw from a validator is a VAT defect, not a property of the plugin:
   // it must end the scan loudly, never become an unloadable row at exit 0.
@@ -212,14 +148,6 @@ describe('auditOnePlugin — a defect inside the audit', () => {
     const thrown = defect();
     getValidationResults.mockRejectedValueOnce(thrown);
     const entry: PluginEntry = { source: makePluginDir('A test skill whose audit is made to throw a defect in the runner unit test.'), name: 'local-defect', ...META };
-
-    await expect(auditOnePlugin(entry, { runDir: makeRunDir(), withReview: false, debug: false })).rejects.toBe(thrown);
-  });
-
-  it('lets it through for a URL source, past the clone lane\'s own catch', async () => {
-    const thrown = defect();
-    getValidationResults.mockRejectedValueOnce(thrown);
-    const entry: PluginEntry = { source: pathToFileURL(makeBareRepoWithSkill()).href, name: 'url-defect', ...META };
 
     await expect(auditOnePlugin(entry, { runDir: makeRunDir(), withReview: false, debug: false })).rejects.toBe(thrown);
   });

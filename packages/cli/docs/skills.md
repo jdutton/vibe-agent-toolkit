@@ -252,7 +252,9 @@ for terminology.
   non-empty directory, a file, or one of those siblings — is refused (`USAGE_INVALID`, the message
   naming `--force`) and left exactly as it was: VAT never deletes what it did not produce. An empty
   directory is used as-is. An `--output` that is, or contains, the SKILL.md or any file it bundles
-  is refused (`USAGE_INVALID`) even with `--force`: the package would be written over its own source
+  is refused (`USAGE_INVALID`) even with `--force`: the package would be written over its own source.
+  So is an `--output` under a directory the OS will not let VAT examine (`EACCES`), dry run or real,
+  `--force` or not: VAT cannot tell whether it holds the source
 - `--debug` - Enable debug logging
 
 **Exit Codes:** derived from the published report — `0` when no finding is an error (warnings
@@ -914,6 +916,40 @@ data:
       source: packages/test-skill-2/resources/skills/SKILL.md
       output: dist/skills/test-skill-2
       status: ok
+```
+
+A dry run of a two-skill project: nothing validated or built, so every row is `not-built` and
+`dist/skills` is untouched. Produced by `vat skills build --dry-run`.
+
+```yaml vat-report=skills build
+status: ok
+examined: 2
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 119
+data:
+  dryRun: true
+  validated: false
+  skillsBuilt: 0
+  skillsFailed: 0
+  skillsFailedValidation: 0
+  skillsInPlace: []
+  skillsPluginOnly: []
+  outputCommitted: false
+  skills:
+    - name: skill1
+      source: skills/skill1/SKILL.md
+      output: dist/skills/skill1
+      status: not-built
+    - name: skill2
+      source: skills/skill2/SKILL.md
+      output: dist/skills/skill2
+      status: not-built
 ```
 
 ### `skills package`

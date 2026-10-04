@@ -203,7 +203,9 @@ describe('RAG index command (system test)', () => {
     const outcome = await indexRefusal(projectDir, notDb);
 
     expect(outcome).toMatchObject({ exit: 2, code: 'USAGE_INVALID' });
-    expect(String(outcome.message)).toContain(notDb);
+    // The directory by its basename, not its absolute path: an absolute path in error.message is a
+    // registered defect (docs/contributing/known-defects.md), so this test must not pin it.
+    expect(String(outcome.message)).toContain('index-into-foreign');
     expect(String(outcome.message)).toContain('keep.txt');
     expect(fs.readdirSync(notDb)).toEqual(['keep.txt']);
   });

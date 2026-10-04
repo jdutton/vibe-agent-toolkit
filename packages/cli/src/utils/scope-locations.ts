@@ -20,9 +20,18 @@ const SCOPE_RESOLVERS: Record<string, Record<string, () => string>> = {
   },
 };
 
+/**
+ * `record[key]` for an OWN key only. `runtime` and `scope` are user input: a
+ * plain index reads `constructor`, `toString` and `__proto__` off
+ * `Object.prototype`, which once turned `--runtime constructor` into a crash.
+ */
+function ownEntry<T>(record: Readonly<Record<string, T>> | undefined, key: string): T | undefined {
+  return record !== undefined && Object.hasOwn(record, key) ? record[key] : undefined;
+}
+
 /** The scope directories of `runtime`, resolved now; `undefined` for an unknown runtime. */
 export function scopeLocationsFor(runtime: string): Record<string, string> | undefined {
-  const resolvers = SCOPE_RESOLVERS[runtime];
+  const resolvers = ownEntry(SCOPE_RESOLVERS, runtime);
   if (!resolvers) return undefined;
   return Object.fromEntries(Object.entries(resolvers).map(([scope, resolve]) => [scope, resolve()]));
 }
@@ -50,7 +59,7 @@ export function validateAndGetScopeLocation(
   scope: string
 ): string {
   // Validate scope for runtime
-  const validScopes = VALID_SCOPES[runtime];
+  const validScopes = ownEntry(VALID_SCOPES, runtime);
   if (!validScopes?.includes(scope)) {
     const available = validScopes?.join(', ') ?? 'none';
     throw new CommandRefusalError(
@@ -61,7 +70,7 @@ export function validateAndGetScopeLocation(
   }
 
   // Get scope location
-  const resolve = SCOPE_RESOLVERS[runtime]?.[scope];
+  const resolve = ownEntry(ownEntry(SCOPE_RESOLVERS, runtime), scope);
   if (!resolve) {
     throw new CommandRefusalError('NOT_IMPLEMENTED', `Scope '${scope}' not implemented for runtime '${runtime}'`);
   }

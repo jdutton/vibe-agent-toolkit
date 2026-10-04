@@ -151,7 +151,8 @@ Exit Codes:
       (a <skill-path> naming nothing, an invalid --target, an unknown or
       empty --formats value, no project root,
       an --output already holding something and no --force, an --output
-      holding the skill's own source), INPUT_UNREADABLE
+      holding the skill's own source, or one under a directory the OS will
+      not let VAT examine, so it cannot tell), INPUT_UNREADABLE
       (a <skill-path> the OS will not stat or read; this verb takes no git
       snapshot), RUN_INCOMPLETE (an output the OS will not let the build
       write: a full disk, a read-only or unwritable output directory, a file

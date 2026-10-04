@@ -15,7 +15,7 @@
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { beginStagedBuild, runSkillsBuildPhase, settleStaging } from '../../../src/commands/skills/build.js';
@@ -29,9 +29,10 @@ vi.mock('node:fs/promises', async (importOriginal) =>
 
 const DEFECT = new TypeError("Cannot read properties of undefined (reading 'size')");
 
+const harness = vi.hoisted(() => ({ rejectWith: undefined as Error | undefined }));
+
 vi.mock('@vibe-agent-toolkit/agent-skills', async (importOriginal) =>
-  (await import('../../helpers/stubbed-packager.js')).withStubbedPackager(importOriginal, (specs) =>
-    Promise.resolve(specs.map(({ skillPath }) => ({ status: 'failed' as const, skillPath, error: DEFECT })))));
+  (await import('../../helpers/stubbed-packager.js')).withPackagerFailing(importOriginal, harness, () => DEFECT));
 
 /** Seed `dist/skills/kept/SKILL.md`, as a previous good build would have. */
 async function seedPrevious(cwd: string): Promise<void> {
@@ -63,26 +64,50 @@ describe('vat skills build - a failed staging repair names its real reason, in t
   });
 
   it('carries the recovery of a failed abort on the defect path into the published refusal', async () => {
-    const cwd = createTempDir();
-    await seedPrevious(cwd);
-    await mkdir(safePath.join(cwd, 'skills', 'demo'), { recursive: true });
-    await writeFile(
-      safePath.join(cwd, 'skills', 'demo', 'SKILL.md'),
-      '---\nname: demo\ndescription: A skill whose packaging is made to throw in a test.\n---\n\n# demo\n\nNothing to see.\n',
-    );
-    await writeFile(safePath.join(cwd, 'vibe-agent-toolkit.config.yaml'), 'skills:\n  include: ["skills/**/SKILL.md"]\n');
-    // Restoring the parked previous output is refused, both in `abort()` and in the repair after it.
-    const real = realBehind(rename);
-    vi.mocked(rename).mockImplementation((from, to) =>
-      String(from).endsWith('.previous') ? Promise.reject(errno('EACCES', 'EACCES: permission denied')) : real(from, to));
+    const message = await refusalWithRestoreRefused(createTempDir(), 'INTERNAL_ERROR');
 
-    const { exitCode, document } = publishedPhase('skills build', await runSkillsBuildPhase(cwd, {}));
-
-    expect(exitCode).toBe(ExitCode.ERROR);
-    expect(document).toMatchObject({ status: 'error', error: { code: 'INTERNAL_ERROR' } });
-    const message = (document as unknown as { error: { message: string } }).error.message;
     expect(message).toContain(DEFECT.message);
-    expect(message).toMatch(/is parked at \S+\.previous/);
-    expect(message).toContain('Recover it with: mv ');
+  });
+
+  // The build bracket itself throwing (a git snapshot refusing an unreadable file) took the same
+  // settle, but its recovery went to stderr only: the document never named the parked tree.
+  it('carries the recovery of a failed abort into the refusal when the build bracket itself throws', async () => {
+    const refusal = new VatError('GIT_SNAPSHOT_UNREADABLE', 'private.txt is unreadable');
+    harness.rejectWith = refusal;
+    try {
+      const message = await refusalWithRestoreRefused(createTempDir(), 'INPUT_UNREADABLE');
+
+      expect(message).toContain(refusal.message);
+    } finally {
+      harness.rejectWith = undefined;
+    }
   });
 });
+
+/**
+ * Build one skill over a previous `dist/skills` while every restore of the parked previous
+ * output is refused, and return the published refusal's message — after checking its code
+ * and that it names the parked tree and how to recover it.
+ */
+async function refusalWithRestoreRefused(cwd: string, code: string): Promise<string> {
+  await seedPrevious(cwd);
+  await mkdir(safePath.join(cwd, 'skills', 'demo'), { recursive: true });
+  await writeFile(
+    safePath.join(cwd, 'skills', 'demo', 'SKILL.md'),
+    '---\nname: demo\ndescription: A skill whose packaging is made to throw in a test.\n---\n\n# demo\n\nNothing to see.\n',
+  );
+  await writeFile(safePath.join(cwd, 'vibe-agent-toolkit.config.yaml'), 'skills:\n  include: ["skills/**/SKILL.md"]\n');
+  // Restoring the parked previous output is refused, both in `abort()` and in the repair after it.
+  const real = realBehind(rename);
+  vi.mocked(rename).mockImplementation((from, to) =>
+    String(from).endsWith('.previous') ? Promise.reject(errno('EACCES', 'EACCES: permission denied')) : real(from, to));
+
+  const { exitCode, document } = publishedPhase('skills build', await runSkillsBuildPhase(cwd, {}));
+
+  expect(exitCode).toBe(ExitCode.ERROR);
+  expect(document).toMatchObject({ status: 'error', error: { code } });
+  const message = (document as unknown as { error: { message: string } }).error.message;
+  expect(message).toMatch(/is parked at \S+\.previous/);
+  expect(message).toContain('Recover it with: mv ');
+  return message;
+}

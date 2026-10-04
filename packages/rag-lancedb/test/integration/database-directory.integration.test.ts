@@ -50,6 +50,27 @@ describe('removeRagDatabase', () => {
     expect(existsSync(safePath.join(db, 'notes.md'))).toBe(true);
   });
 
+  // Litter is a FILE the OS wrote. A directory (or a link) that merely carries a litter name is
+  // the user's: `._notes/` full of files once made the whole tree removable.
+  it('refuses a directory whose litter-named entries are not regular files, and removes nothing', ({ skip }) => {
+    const db = database(dir, 'db');
+    mkdirSyncReal(safePath.join(db, '._notes'));
+    writeFileSync(safePath.join(db, '._notes', 'a.txt'), 'precious');
+    writeFileSync(safePath.join(db, '.DS_Store'), '');
+
+    const error = removalError(db);
+
+    expect(isVatError(error, RAG_DATABASE_NOT_REMOVABLE_CODE), String(error)).toBe(true);
+    expect(String(error)).toContain('._notes');
+    expect(existsSync(safePath.join(db, '._notes', 'a.txt'))).toBe(true);
+
+    const cap = symlinkCapability() ?? skip();
+    rmSync(safePath.join(db, '._notes'), { recursive: true });
+    createSymlink(cap, safePath.join(dir, 'elsewhere'), safePath.join(db, 'Thumbs.db'), 'file');
+    expect(isVatError(removalError(db), RAG_DATABASE_NOT_REMOVABLE_CODE)).toBe(true);
+    expect(existsSync(db)).toBe(true);
+  });
+
   // Removing a link removes only the link: the index it names would survive a "cleared" report.
   it('refuses a symbolic link to a database, naming the real path, and removes nothing', ({ skip }) => {
     const cap = symlinkCapability() ?? skip();

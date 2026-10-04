@@ -178,6 +178,19 @@ describe('extractClaudeInstallInventory', () => {
 			expect(inv.plugins).toHaveLength(1);
 		});
 
+		// The marketplace copy is staged and swapped the same way, one level up.
+		it('reads no staged or parked marketplace copy as a marketplace', async () => {
+			const claudeDir = safePath.join(tempDir, 'staged-marketplace', '.claude');
+			const marketplacesDir = safePath.join(claudeDir, 'plugins', 'marketplaces');
+			mkdirSyncReal(safePath.join(marketplacesDir, 'mp'), { recursive: true });
+			mkdirSyncReal(safePath.join(marketplacesDir, '.mp.vat-staged-AbC123.previous'), { recursive: true });
+			mkdirSyncReal(safePath.join(marketplacesDir, '.mp.vat-staged-XyZ789'), { recursive: true });
+
+			const inv = await extractClaudeInstallInventory({ pathsOrRoot: claudeDir, gitTrackerSource: NO_GIT_TRACKER });
+
+			expect(inv.marketplaces).toHaveLength(1);
+		});
+
 		it('walks valid cache structure with empty marketplace and plugin dirs', async () => {
 			const claudeDir = safePath.join(tempDir, 'empty-cache-dirs', '.claude');
 			const cacheDir = safePath.join(claudeDir, 'plugins', 'cache');

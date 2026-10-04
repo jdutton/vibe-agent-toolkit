@@ -86,6 +86,7 @@ export {
   installPlugin,
   readInstalledPlugins,
   readKnownMarketplaces,
+  replaceDirectory,
   requirePluginInstallNames,
   writeInstalledPlugins,
   writeKnownMarketplaces,

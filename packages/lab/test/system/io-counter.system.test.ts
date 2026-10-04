@@ -2,7 +2,7 @@
  * The `io` counter injected into a REAL node process — the end-to-end half of
  * `../io-counter.test.ts`, whose header names the four properties pinned. This
  * half spawns a child (and two grandchildren) under `NODE_OPTIONS=--require`,
- * so it belongs in the integration tier, not the unit tier.
+ * so it belongs in the system tier: anything that spawns a process does.
  *
  * The end-to-end tests run against the BUILT `dist/facets/io/counter.cjs` —
  * `--require` only accepts CommonJS, and the emitted `.cjs` is the artifact that

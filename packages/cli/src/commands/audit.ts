@@ -926,9 +926,13 @@ Exit Codes:
       never in 'examined'.
   2 - The audit did not finish ('status: error', the reason in error.code):
       USAGE_INVALID for a path that does not exist, a file no audit lane
-      recognises, a git URL that does not parse, or --user with no Claude
-      config dir; INPUT_UNREADABLE for a root directory the OS will not list
-      or a git URL that would not clone; INTERNAL_ERROR for a defect in VAT.
+      recognises, a git URL that does not parse, --user with no Claude
+      config dir, --settings without --compat or together with --user, or a
+      --settings file that does not exist; INPUT_UNREADABLE for a root
+      directory the OS will not list, a git URL that would not clone, or a
+      settings file (named or auto-discovered) the OS refuses, that does not
+      parse, or that fails the settings schema; INTERNAL_ERROR for a defect
+      in VAT.
 
 Examples:
   $ vat audit ./plugins/              # Audit recursively (default)

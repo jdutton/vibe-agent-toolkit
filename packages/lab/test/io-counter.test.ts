@@ -17,7 +17,7 @@
  *    *2* before asserting the real one is *1*, so it cannot pass vacuously.
  * 3. **The promise API is patched at all.** Measured on `vat resources scan
  *    docs/`: sync-only attribution reported 40 calls where the truth was 436.
- *    The end-to-end child in `integration/io-counter.integration.test.ts`
+ *    The end-to-end child in `system/io-counter.system.test.ts`
  *    reads through `fs/promises` and through `fs.promises`, and asserts a total
  *    that is 0 under a sync-only counter.
  * 4. **Attribution.** 6,371 of 6,411 fs calls on a real run came from Node's own
@@ -26,7 +26,7 @@
  *
  * The tests here run against the BUILT `dist/facets/io/counter.cjs` in-process:
  * the emitted `.cjs` is the artifact that ships. Anything that spawns a process
- * lives in the integration half.
+ * lives in the system half.
  */
 
 import { readFileSync } from 'node:fs';

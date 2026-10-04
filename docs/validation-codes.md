@@ -624,7 +624,7 @@ Only meaningful when a skill is actually being bundled. Most fire from `vat skil
 - **What:** A path the command had to read could not be read (`EACCES`, a vanished mount, a permissions quirk), so it was not scanned. **Both halves count**: a *directory* the scan could not enter, and a *file* it could not open. One finding per unreadable path, naming it and the operating system's own message. Every readable sibling is still scanned and every finding already collected is still reported.
 - **Second producer: the packaged-size walk** behind [`PACKAGED_SIZE_EXCEEDS_API_LIMIT`](#packaged_size_exceeds_api_limit). Any entry whose bytes it cannot establish — `readdir` threw, `stat` threw, the entry is a **symbolic link** of any kind (the uploader refuses one rather than following it), or it is otherwise not a regular file (a device, a socket) — gets one finding here instead of being summed as **zero**, and the message says the measured packaged size is a **lower bound**. That direction of error is the dangerous one: a `stat` failure on the 35.7 MB `.wasm` took a bundle's total from ~36 MB to ~2 MB, the build reported no warnings, and the upload ate a `413` eleven seconds later. Nothing else stats those bytes, so a silent zero there is a silent zero everywhere.
 - **Third producer: `vat audit settings --show-paths`**, for a settings path whose existence or readability the probe could not determine (a permission error on a parent directory) — that path was not checked, which is not the same answer as "absent".
-- **Fourth producer: the plugin, marketplace and registry validators**, for a `plugin.json`, `marketplace.json` or registry file that exists but that the operating system would not read (`EACCES`, `EISDIR`, …). Before, the read and the JSON parse shared one `try`, so the refusal was reported as `*_INVALID_JSON` with the fix "fix the JSON syntax". The detail names the errno only; the rest of that manifest's checks did not run.
+- **Fourth producer: the plugin, marketplace and registry validators**, for a `plugin.json`, `marketplace.json` or registry file that exists but that the operating system would not read (`EACCES`, `EISDIR`, …). Before, the read and the JSON parse shared one `try`, so the refusal was reported as `*_INVALID_JSON` with the fix "fix the JSON syntax". The detail names the errno only; the rest of that manifest's checks did not run. **The publish gates do not stop at the warning:** `vat claude marketplace validate`, and `vat verify` through it, mark that plugin's row `manifestRead: false` and add it to their [`RESOURCE_CHECK_BROKEN`](#resource_check_broken) finding (error, exit 1, not downgradable) — a gate over the author's own build never passes a manifest it could not read. `vat audit` keeps the warning alone.
 - **Why it matters:** One unreadable path used to abort the **entire** `vat audit` run — `status: error`, exit code 2, and **zero findings**, including the ones already collected from readable siblings. A single root-owned or quarantined entry under `~/.claude/plugins` killed the flagship `vat audit --user` invocation outright. `vat audit` is a bulk linter over trees it does not own, so an entry it cannot read is an ordinary condition rather than an exceptional one, and the scan must degrade rather than destroy the work it has already done.
 - **Files matter as much as directories.** Under `~/.claude/plugins` — populated by `sudo` installs and macOS quarantine — a root-owned `SKILL.md` is at least as likely as a root-owned directory, and it produced exactly the same total failure. Guarding only the directory walk would have left the flagship scenario broken while appearing fixed.
 - **Why not silence:** a scan that reports `success` while having skipped part of the tree is the same failure shape as a detector that silently disables itself — the report would be *reassuring* precisely where it is least informed. The same stance as [`TREE_PROVENANCE_INDETERMINATE`](#tree_provenance_indeterminate): a missing answer is reported as a missing answer.
@@ -1298,7 +1298,7 @@ judged at all — no frontmatter, no manifest, unparseable JSON. Declared as `No
 | `LINK_INTEGRITY_BROKEN` | error | A link target in the skill's link graph does not exist, or exists but could not be parsed | Fix or remove the link, or repair the target file |
 | `DUPLICATE_FILES_DEST` | error | Two `files:` entries declare the same `dest` | Give each `files:` entry a unique `dest` |
 | `PLUGIN_MISSING_MANIFEST` | error | No `.claude-plugin/plugin.json` | Create `.claude-plugin/plugin.json` with `name`, `description`, `version` |
-| `PLUGIN_INVALID_JSON` | error | `plugin.json` was read and is not valid JSON. A `plugin.json` the operating system refused (`EACCES`, `EISDIR`, …) is [`SCAN_PATH_UNREADABLE`](#scan_path_unreadable) instead | Fix the JSON syntax |
+| `PLUGIN_INVALID_JSON` | error | `plugin.json` was read and is not valid JSON. A `plugin.json` the operating system refused (`EACCES`, `EISDIR`, …) is [`SCAN_PATH_UNREADABLE`](#scan_path_unreadable) instead, and in `vat claude marketplace validate` / `vat verify` also fails the run as [`RESOURCE_CHECK_BROKEN`](#resource_check_broken) | Fix the JSON syntax |
 | `PLUGIN_INVALID_SCHEMA` | error | `plugin.json` fails schema validation (the message names the field) | Correct the named field |
 | `PLUGIN_MISSING_VERSION` | error | `plugin.json` has no `version`; Claude Code caches the plugin as `unknown/`, so upgrades resolve stale skills | Add a semver `version` |
 | `MARKETPLACE_MISSING_MANIFEST` | error | No `.claude-plugin/marketplace.json` | Create it with `name`, `owner`, `plugins` |
@@ -1392,7 +1392,7 @@ message carries the reason. The counters in `data` still report everything that 
 
 | Code | Severity | What | Fix |
 |---|---|---|---|
-| `RAG_DOCUMENT_INDEX_FAILED` | error | A document the crawl enumerated is not in the index: the crawl could not read it (the OS refused it), or the provider could not chunk or embed it. Its content is not searchable | Fix what the message names — the file's permissions, or the content the chunker or embedder rejected — then re-run `vat rag index`; unchanged documents are skipped |
+| `RAG_DOCUMENT_INDEX_FAILED` | error | A document the crawl enumerated is not in the index: the crawl could not read it (the OS refused it), or the provider could not chunk or embed it. Its content is not searchable. A database whose table files are damaged is not this finding: the run is refused `INPUT_UNREADABLE` | Fix what the message names — the file's permissions, or the content the chunker or embedder rejected — then re-run `vat rag index`; unchanged documents are skipped |
 
 ### `vat corpus scan` findings (never overridable)
 
@@ -1402,7 +1402,10 @@ config, so a `validation.severity` or `validation.allow` key for it would parse 
 both refuse it. No `location`: the entry is named by `field` (`plugins[<index>]` in the seed) and in
 the message. The row itself is in `data.entries`. A `warning`, so the scan still exits 0: every
 other entry's outcome is trustworthy, and the one that could not be done is named rather than
-dropped.
+dropped. Only a **coded** refusal becomes this row: an uncoded throw inside an entry's audit is a
+defect in VAT, not a property of the plugin, so it ends the whole scan as `INTERNAL_ERROR` (exit
+2) instead of being swallowed into a warning over a broken build — and a write under `--out` the OS
+refuses ends it as `RUN_INCOMPLETE`.
 
 | Code | Severity | What | Fix |
 |---|---|---|---|
@@ -1417,7 +1420,7 @@ would parse and do nothing, and both refuse it. `location` is the plugin key.
 
 | Code | Severity | What | Fix |
 |---|---|---|---|
-| `PLUGIN_INSTALL_CLEANUP_INCOMPLETE` | warning | A re-install put the new plugin cache in place, but the OS would not let it remove the previous one (a read-only directory inside it, a file another process holds). The install is complete and the plugin is registered; the previous tree is left under a dot-named `.<version>.vat-staged-*.previous` directory beside the version, which `vat inventory --user` does not read as a version | Remove the directory the message names yourself, making it writable first if the OS refused |
+| `PLUGIN_INSTALL_CLEANUP_INCOMPLETE` | warning | A re-install put a new tree in place, but the OS would not let it remove the previous one (a read-only directory inside it, a file another process holds). The install is complete and the plugin is registered; the previous tree is left under a dot-named `*.vat-staged-*.previous` directory beside the one it replaced, which `vat inventory --user` does not read as a version or a marketplace. Three trees are replaced this way: the plugin **cache** (`.<version>.vat-staged-*.previous` beside the version, location: the plugin key), the **marketplace copy** (`.<marketplace>.vat-staged-*.previous` in `~/.claude/plugins/marketplaces/`, location: the marketplace name), and — when the library's `installPlugin` copies a plugin itself — the plugin's marketplace directory (`.<plugin>.vat-staged-*.previous` in `marketplaces/<marketplace>/plugins/`, location: the plugin key) | Remove the directory the message names yourself, making it writable first if the OS refused |
 
 ### `vat claude plugin uninstall` findings (never overridable)
 

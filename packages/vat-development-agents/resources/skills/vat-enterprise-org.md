@@ -335,7 +335,7 @@ N matches, and a wrong match would append your version to somebody else's skill.
 an id rather than a title.
 
 When uploading multiple skills, each failure is reported and the run continues, but **a partial
-failure is still a failure**: `install --from-npm` exits `1` whenever any skill failed — some-
+failure is still a failure**: `install --from-npm` exits `2` whenever any skill failed — some-
 succeeded is tagged the same way as none-succeeded, deliberately, because the workspace is left in
 a mixed state a human has to look at. What did land stays in the printed document.
 

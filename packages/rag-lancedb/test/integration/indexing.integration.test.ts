@@ -22,10 +22,10 @@
  * connections are long-lived.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { RAG_DATABASE_UNREADABLE_CODE, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { resolveChunkingConfig } from '../../src/chunking-config.js';
@@ -264,6 +264,21 @@ More content in section 2.`
     expect(existsSync(safePath.join(dbPath, 'rag_chunks.lance'))).toBe(true);
   });
 
+
+  // Damaged data files behind an intact manifest fail on the first READ of the chunk table.
+  // In `indexResources` that read is change detection, inside the per-resource catch: the
+  // store's failure was reported as one content failure per resource, never as the store's.
+  it('refuses an index into a database whose data files are damaged, as the store\'s failure', async () => {
+    provider = await LanceDBRAGProvider.create({ dbPath });
+    const resource = await createTestResource(testFilePath);
+    await provider.indexResources([resource]);
+    await provider.close();
+    const data = safePath.join(dbPath, 'rag_chunks.lance', 'data');
+    for (const file of readdirSync(data)) writeFileSync(safePath.join(data, file), 'garbage');
+
+    provider = await LanceDBRAGProvider.create({ dbPath });
+    await expect(provider.indexResources([resource])).rejects.toMatchObject({ code: RAG_DATABASE_UNREADABLE_CODE });
+  });
 
   it('should respect limit parameter in queries', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });

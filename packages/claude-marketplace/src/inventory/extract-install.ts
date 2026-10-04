@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import type { MarketplaceInventory, PluginInventory } from '@vibe-agent-toolkit/agent-skills';
 import { direntKindFollowing, direntKindFollowingSync, safePath } from '@vibe-agent-toolkit/utils';
 
+import { isStagedReplaceLeftover } from '../install/plugin-registry.js';
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 import { buildClaudeUserPaths, getClaudeUserPaths } from '../paths/claude-paths.js';
 
@@ -90,6 +91,8 @@ async function collectMarketplaces(
 	try {
 		const entries = await readdir(marketplacesDir, { withFileTypes: true });
 		for (const entry of entries) {
+			// `vat claude plugin install` stages and parks a marketplace it replaces beside it.
+			if (isStagedReplaceLeftover(entry.name)) continue;
 			// A symlinked marketplace (a dev install) is a marketplace: follow it.
 			if ((await direntKindFollowing(marketplacesDir, entry)) !== 'directory') continue;
 			const mpPath = safePath.join(marketplacesDir, entry.name);

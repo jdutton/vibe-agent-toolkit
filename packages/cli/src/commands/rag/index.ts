@@ -91,7 +91,8 @@ Exit Codes:
   2 - Could not run (error.code says why: USAGE_INVALID for a missing path or
       --db, a --db that is (or lies under) a file, or a --db directory holding
       anything but a RAG database; INPUT_UNREADABLE, also for a project
-      .rag-db that is a file or holds anything else; RUN_INCOMPLETE when the
+      .rag-db that is a file or holds anything else, and for a database whose
+      table files are damaged (vat rag clear removes it); RUN_INCOMPLETE when the
       database directory cannot be created or written; CONFIG_INVALID;
       BACKEND_UNAVAILABLE when the RAG backend is not installed)
 
@@ -223,7 +224,8 @@ Warning:
   permanently deleted. Re-run 'vat rag index' to rebuild from source.
 
   Only a RAG database is removed: a directory holding nothing but the tables
-  vat rag index writes (and operating-system litter such as .DS_Store). It is
+  vat rag index writes (and operating-system litter files such as .DS_Store;
+  a directory or link with a litter name is not litter). It is
   removed without being opened, so a database whose files are damaged can
   still be cleared. Any other directory is refused and left untouched, and so
   is a --db that is a symbolic link: removing the link would leave the

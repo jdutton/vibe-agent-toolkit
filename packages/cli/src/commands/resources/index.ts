@@ -705,7 +705,9 @@ Exit Codes:
       (RESOURCE_CHECK_BROKEN)
   2 - The run could not finish: [path] or --frontmatter-schema names nothing
       (USAGE_INVALID), an input the OS will not read (INPUT_UNREADABLE), or an
-      unusable config (CONFIG_INVALID)
+      unusable config (CONFIG_INVALID). Also invalid usage rejected before the
+      verb runs -- an unknown option, or a --format or --validation-mode value
+      outside its choices: Commander's message on stderr, no document
   The code is derived from the document's status and summary, never chosen
   beside it.
 

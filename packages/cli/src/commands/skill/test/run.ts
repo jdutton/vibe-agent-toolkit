@@ -1718,7 +1718,9 @@ Exit Codes:
                     its cause's code; an uncoded one is INTERNAL_ERROR.
                     CONFIG_INVALID: a broken project config. INPUT_UNREADABLE: a
                     declared eval input or dependency absent, an evals.json that
-                    is not a valid suite, a vendored copy failing its manifest.
+                    is not a valid suite, a vendored copy failing its manifest,
+                    a --with path: companion holding a file or directory the
+                    OS will not read (named).
         bootstrap - INPUT_UNREADABLE: evals.json was absent, so VAT wrote a
                     starter template next to the skill source. Fill it in, re-run.
         internal  - INTERNAL_ERROR: the harness broke (grader fragment absent or

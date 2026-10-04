@@ -5,6 +5,7 @@ import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/uti
 
 import { proveReadable, withFsAttribution } from '../fs-attribution.js';
 
+import { readingSkillSource } from './source-unreadable.js';
 import type { ResolveSkillSourceContext } from './types.js';
 
 /** Test seam: lets unit tests simulate a foreign-owned dir without a second OS user. */
@@ -73,15 +74,16 @@ function assertOwnedIfExists(dir: string, currentUid: number): void {
 /**
  * Recursively copy `src` into `dest`, refusing any symlinked entry. A write the OS
  * refuses (a full disk, an unwritable staging root) is coded as the run's output
- * (`SKILL_PACKAGING_OUTPUT_FAILED`, `RUN_INCOMPLETE`).
+ * (`SKILL_PACKAGING_OUTPUT_FAILED`, `RUN_INCOMPLETE`); a source entry it will not
+ * read or list is the input's (`SKILL_SOURCE_UNREADABLE`, `INPUT_UNREADABLE`).
  */
 async function copyTreeNoSymlinks(src: string, dest: string): Promise<void> {
-  const entries = readdirSync(src, { withFileTypes: true });
+  const entries = await readingSkillSource(src, () => readdirSync(src, { withFileTypes: true }));
   for (const entry of entries) {
     const srcPath = safePath.join(src, entry.name);
     const destPath = safePath.join(dest, entry.name);
     // lstat (not stat) so a symlink is detected, never followed.
-    const st = lstatSync(srcPath);
+    const st = await readingSkillSource(srcPath, () => lstatSync(srcPath));
     if (st.isSymbolicLink()) {
       throw new Error(
         `Refusing to stage symlink '${srcPath}': staging never traverses symlinked components (§7).`,
@@ -91,8 +93,8 @@ async function copyTreeNoSymlinks(src: string, dest: string): Promise<void> {
       await withFsAttribution(`Staging ${srcPath}`, 'output', () => mkdir(destPath, { recursive: true }), 'staged');
       await copyTreeNoSymlinks(srcPath, destPath);
     } else if (st.isFile()) {
-      // Read side first, uncoded as before: an unreadable source is never the staging output's failure.
-      await proveReadable(srcPath);
+      // Read side first, coded as the input: an unreadable source is never the staging output's failure.
+      await readingSkillSource(srcPath, () => proveReadable(srcPath));
       await withFsAttribution(`Staging ${srcPath}`, 'output', () => copyFile(srcPath, destPath), 'staged');
     }
   }

@@ -102,6 +102,7 @@ const BARREL_EXPORTS = [
   'readKnownMarketplaces',
   'readMarketplaceDefaultTargets',
   'readSettingsLayers',
+  'replaceDirectory',
   'requirePluginInstallNames',
   'resolveEffectiveTargets',
   'resolveSettingsPaths',

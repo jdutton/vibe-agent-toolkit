@@ -81,7 +81,9 @@ describe('RAG clear command (system test)', () => {
 
   // Damaged data files behind an intact manifest: the table opens, and the READ fails.
   // That read failure was uncoded, so stats and query ended INTERNAL_ERROR.
-  it.each([['stats'], ['query', 'widgets']])('rag %s over damaged data files is INPUT_UNREADABLE, never INTERNAL_ERROR', async (...verb) => {
+  // `index` too: its change-detection read is that same first read, and it reported the store's
+  // failure as one RAG_DOCUMENT_INDEX_FAILED finding per resource (exit 1).
+  it.each([['stats'], ['query', 'widgets'], ['index']])('rag %s over damaged data files is INPUT_UNREADABLE, never INTERNAL_ERROR', async (...verb) => {
     const damaged = copyOfDatabase(`damaged-data-${verb[0]}`);
     corrupt(damaged, true);
 
@@ -94,6 +96,20 @@ describe('RAG clear command (system test)', () => {
     fs.writeFileSync(safePath.join(littered, '.DS_Store'), '');
 
     expect(await runRag(['stats', '--db', littered], suite.projectDir)).toMatchObject({ exit: 0 });
+  });
+
+  // Litter is a FILE the OS wrote: a `._notes/` DIRECTORY of the user's files once let clear rm -rf the tree.
+  it('rag clear --db <a directory whose litter-named entry is a directory> is USAGE_INVALID and removes nothing', async () => {
+    const lookalike = safePath.join(suite.tempDir, 'litter-lookalike');
+    mkdirSyncReal(safePath.join(lookalike, '._notes'), { recursive: true });
+    fs.writeFileSync(safePath.join(lookalike, '._notes', 'a.txt'), 'precious');
+    fs.writeFileSync(safePath.join(lookalike, '.DS_Store'), '');
+
+    const outcome = await runRag(['clear', '--db', lookalike], suite.projectDir);
+
+    expect(outcome).toMatchObject({ exit: 2, code: 'USAGE_INVALID' });
+    expect(String(outcome.message)).toContain('._notes');
+    expect(fs.readFileSync(safePath.join(lookalike, '._notes', 'a.txt'), 'utf8')).toBe('precious');
   });
 
   // Removing a link removes only the link: the index it names survived a `cleared: true` report.

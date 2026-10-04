@@ -8,6 +8,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE, buildAgentSkill } from '../src/builder.js';
 import { SKILL_PACKAGING_OUTPUT_FAILED_CODE } from '../src/packaging-errors.js';
 
+import { writeMinimalAgent } from './test-helpers.js';
+
 const AGENT_YAML = 'agent.yaml';
 const PACKAGE_JSON_NAME = 'package.json';
 const PROMPTS_DIR = 'prompts';
@@ -19,24 +21,6 @@ const TEST_AGENT_LICENSE_NAME = 'test-agent-license';
 const TEST_AGENT_NO_PROMPT_NAME = 'test-agent-no-prompt';
 const LICENSE_FILE = 'LICENSE.txt';
 const MINIMAL_SYSTEM_PROMPT = 'Test agent';
-
-/**
- * A minimal buildable agent dir — package.json, prompts/system.md, agent.yaml —
- * for the cases that only care what sits BESIDE the manifest.
- */
-async function writeMinimalAgent(tempDir: string, name: string): Promise<{ agentDir: string; manifestPath: string }> {
-  const agentDir = safePath.join(tempDir, name);
-  await fs.mkdir(safePath.join(agentDir, PROMPTS_DIR), { recursive: true });
-  await fs.writeFile(safePath.join(agentDir, PACKAGE_JSON_NAME), JSON.stringify({ name }));
-  await fs.writeFile(safePath.join(agentDir, PROMPTS_DIR, SYSTEM_MD), MINIMAL_SYSTEM_PROMPT);
-  const manifestPath = safePath.join(agentDir, AGENT_YAML);
-  await fs.writeFile(
-    manifestPath,
-    `metadata:\n  name: ${name}\n  description: Minimal\n\nspec:\n  llm:\n    provider: anthropic\n` +
-      `    model: claude-sonnet-5\n  prompts:\n    system:\n      $ref: ./prompts/system.md\n`,
-  );
-  return { agentDir, manifestPath };
-}
 
 describe('buildAgentSkill', () => {
   const suite = setupAsyncTempDirSuite('agent-skill');

@@ -1,9 +1,9 @@
 /**
- * What the `io` counter's unit and integration tests share: the built counter's
+ * What the `io` counter's unit and system tests share: the built counter's
  * testing surface, the dump's row shape, and the method labels both halves
  * assert on. The unit half (`io-counter.test.ts`) drives the counter's
- * internals in-process; the integration half
- * (`integration/io-counter.integration.test.ts`) injects it into real node
+ * internals in-process; the system half
+ * (`system/io-counter.system.test.ts`) injects it into real node
  * children.
  */
 

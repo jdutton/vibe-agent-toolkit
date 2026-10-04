@@ -259,6 +259,29 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     expect(issues.map((i) => i.code)).toContain('PLUGIN_MISSING_MANIFEST');
   });
 
+  it('refuses the RUN when the OS will not read a declared plugin\'s plugin.json — a gate never passes a manifest it did not read', async () => {
+    // The validator degrades an unreadable manifest to a `SCAN_PATH_UNREADABLE`
+    // WARNING (right for `vat audit`), which alone left this publish gate — and
+    // `vat verify` through it — at exit 0 over a plugin nothing checked. A
+    // DIRECTORY where the file belongs refuses the read (EISDIR) on every
+    // platform, without a chmod the test's user might be exempt from.
+    const root = safePath.join(tmp, 'manifest-unreadable');
+    writeMarketplace(root, [DECLARED_A]);
+    mkdirSyncReal(safePath.join(root, PLUGIN_A, MANIFEST_DIR, PLUGIN_JSON), { recursive: true });
+
+    const { exitCode, doc } = await validate(root, true);
+    const integrity = doc.findings.filter((i) => i.code === RUN_INTEGRITY_CODE);
+
+    expect(exitCode).toBe(1);
+    expect(integrity).toHaveLength(1);
+    expect(integrity[0]?.severity).toBe('error');
+    expect(integrity[0]?.message).toContain('`plugins/a/.claude-plugin/plugin.json`');
+    // The per-path finding still names the errno; the row says it was not read.
+    expect(doc.findings.map((i) => i.code)).toContain('SCAN_PATH_UNREADABLE');
+    expect(doc.data.plugins.map((p) => [p.path, p.manifestRead])).toEqual([['plugins/a', false]]);
+    expect(doc.data.refused).toEqual([]);
+  });
+
   it('stays green for a manifest whose entries are all remote, with no `plugins/` at all', async () => {
     // The over-correction guard: nothing local is declared, so nothing local
     // is owed, and the manifest itself WAS validated.

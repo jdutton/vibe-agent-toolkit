@@ -590,7 +590,8 @@ export const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> =
   ],
   'skill test configure': [
     { status: 'ok', run: () => ({ args: ['skill', 'test', 'configure', 'clean', '--max-turns', '5'], cwd: project('configure-ok', SKILLS_CONFIG, { 'skills/clean/SKILL.md': CLEAN_SKILL }) }) },
-    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['skill', 'test', 'configure', 'clean', '--max-turns', '0'], cwd: project('configure-error', SKILLS_CONFIG) }) },
+    // The skill is declared, so --max-turns is the ONLY cause of the refusal (an undeclared skill is USAGE_INVALID too).
+    { status: 'error', code: 'USAGE_INVALID', run: () => ({ args: ['skill', 'test', 'configure', 'clean', '--max-turns', '0'], cwd: project('configure-error', SKILLS_CONFIG, { 'skills/clean/SKILL.md': CLEAN_SKILL }) }) },
   ],
   'skill test run': [
     // A dry run stages the suite and spawns nothing: `examined` is the one eval it staged.
@@ -1090,11 +1091,23 @@ export function useExitCodeMatrixShard(specFileUrl: string): readonly MatrixCase
   return cases;
 }
 
-/** What one scenario's run published and ended on — returned so the shard asserts at its call site too. */
+/** What one scenario's run ended on — returned so the shard asserts at its call site too. */
 interface ScenarioOutcome {
-  readonly document: ExitDeterminingDocument & Record<string, unknown>;
   readonly exitCode: number | null;
 }
+
+/**
+ * The exit codes the contract lets each status end on, written as literals — NOT
+ * derived through `exitCodeForReport`. The helper checks the run against the
+ * derivation; the shard checks it against this table, so a derivation that drifts
+ * together with the CLI (both wrong the same way) still fails at the call site.
+ * `findings` allows 0: a document whose findings are all warnings, gate not strict.
+ */
+export const EXIT_CODES_A_STATUS_ALLOWS: Readonly<Record<MatrixCase['status'], readonly number[]>> = {
+  ok: [0],
+  findings: [0, 1],
+  error: [2],
+};
 
 /**
  * Run one scenario under its own fake HOME and expect: the status the scenario
@@ -1121,7 +1134,7 @@ export function expectScenarioEndsOnItsDerivedCode(scenario: MatrixCase, context
   // The gate is IN the document — the exit code derives from nothing else.
   expect(document.gate, `${result.stdout}\n${result.stderr}`).toStrictEqual({ strict: expect.any(Boolean) });
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCodeForReport(document));
-  return { document, exitCode: result.status };
+  return { exitCode: result.status };
 }
 
 /** The per-test timeout of a scenario: one spawn of the built CLI, two for a scenario that indexes first. */

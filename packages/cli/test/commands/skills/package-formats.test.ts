@@ -8,16 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { __internal } from '../../../src/commands/skills/package.js';
 import { refusalCodeOf } from '../../../src/utils/command-refusal.js';
-
-/** What `fn` threw. */
-function thrownBy(fn: () => unknown): unknown {
-  try {
-    fn();
-  } catch (error) {
-    return error;
-  }
-  throw new Error('expected a throw');
-}
+import { thrownBy } from '../../helpers/refusal-doubles.js';
 
 describe('skills package --formats', () => {
   it('defaults to directory and zip', () => {

@@ -10,6 +10,7 @@ import { chmodSync } from 'node:fs';
 
 import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
+import AdmZip from 'adm-zip';
 import * as tar from 'tar';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -120,6 +121,30 @@ async function runPluginInstall(binPath: string, projectDir: string, fakeHome: s
   expect(status).toBe(0);
   expect(report.status).toBe('ok');
   return report;
+}
+
+/**
+ * Lock a directory (holding a file) inside `<parentDir>/<entry>/<lockedRel>` of a previous
+ * install, re-install `projectDir`, and restore the lock on every copy of it under `parentDir`
+ * — the re-install parks the previous tree beside `entry`, so the locked copy may have moved.
+ */
+async function reinstallOverLockedEntry(
+  binPath: string,
+  fakeHome: string,
+  projectDir: string,
+  where: { parentDir: string; entry: string; lockedRel: string[] },
+): Promise<{ status: number | null; report: InstallReport }> {
+  const locked = safePath.join(where.parentDir, where.entry, ...where.lockedRel);
+  plantFile(safePath.join(locked, 'held.txt'), 'x');
+  chmodSync(locked, 0o555);
+  try {
+    return await runInstall(binPath, fakeHome, [projectDir]);
+  } finally {
+    for (const entry of fs.readdirSync(where.parentDir)) {
+      const leftover = safePath.join(where.parentDir, entry, ...where.lockedRel);
+      if (fs.existsSync(leftover)) chmodSync(leftover, 0o755);
+    }
+  }
 }
 
 describe('claude plugin install command (system test)', () => {
@@ -395,6 +420,71 @@ describe('claude plugin install command (system test)', () => {
     expect(fs.readFileSync(existing, 'utf-8')).toBe('# keep me\n');
   });
 
+  // adm-zip reads only the central directory when it opens an archive; entry data is inflated
+  // in `extractAllTo` — which ran AFTER --force had removed the skill, and threw uncoded.
+  it('refuses a .zip whose entry data is corrupt as INPUT_UNREADABLE, and keeps the skill --force would replace', async () => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const zip = new AdmZip();
+    zip.addFile('SKILL.md', Buffer.from('# crc\n'.repeat(200)));
+    const bytes = zip.toBuffer();
+    // Inside the first entry's data: past its 30-byte local header and its name.
+    const dataStart = 30 + bytes.readUInt16LE(26) + bytes.readUInt16LE(28);
+    for (const offset of [dataStart + 2, dataStart + 3]) bytes[offset] = (bytes[offset] ?? 0) ^ 0xff;
+    const corrupt = safePath.join(tempDir, 'crc.zip');
+    fs.writeFileSync(corrupt, bytes);
+    const existing = safePath.join(claudeDir, 'skills', 'crc', 'SKILL.md');
+    plantFile(existing, '# previous\n');
+
+    const { status, report } = await runInstall(binPath, fakeHome, [corrupt, '--force']);
+
+    expect(status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
+    expect(report.error?.message).toContain(corrupt);
+    expect(fs.readFileSync(existing, 'utf-8')).toBe('# previous\n');
+  });
+
+  // `vat.replaces.plugins` was uninstalled BEFORE a bad `vat.replaces.flatSkills` entry was refused,
+  // so the refused run had already removed the user's plugin and installed nothing in its place.
+  it('refuses a vat.replaces.flatSkills entry that is not one path segment before uninstalling any replaced plugin', async () => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const old = setupPluginTestProject(tempDir, 'old-pkg', 'r-market', [{ name: 'old-plugin', skills: ['old-skill'] }]);
+    await runPluginInstall(binPath, old.projectDir, fakeHome);
+    const replacing = setupPluginTestProject(tempDir, 'new-pkg', 'r-market', [{ name: 'new-plugin', skills: ['new-skill'] }]);
+    writeTestFile(safePath.join(replacing.projectDir, 'package.json'), JSON.stringify({
+      name: '@test/new-pkg', version: '1.2.3', vat: { replaces: { plugins: ['old-plugin'], flatSkills: ['../victim'] } },
+    }));
+
+    const { status, report } = await runInstall(binPath, fakeHome, [replacing.projectDir]);
+
+    expect(status).toBe(2);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
+    expect(report.error?.message).toContain('nothing was changed');
+    expect(report.error?.message).toContain('vat.replaces.flatSkills');
+    const registry = JSON.parse(fs.readFileSync(safePath.join(claudeDir, 'plugins', 'installed_plugins.json'), 'utf-8')) as { plugins: Record<string, unknown> };
+    expect(Object.keys(registry.plugins)).toEqual(['old-plugin@r-market']);
+    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'r-market', 'plugins', 'old-plugin', 'skills', 'old-skill', 'SKILL.md'))).toBe(true);
+  });
+
+  // The marketplace copy was rm -rf, mkdir, copy: one entry the OS would not let it remove
+  // failed the run with the user's marketplace already half-deleted (its manifest gone).
+  it.skipIf(CANNOT_DENY_READS)('replaces an installed marketplace by staging and swapping, so an entry it cannot remove never half-deletes it', async () => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const { projectDir } = setupPluginTestProject(tempDir, 'swap-pkg', 's-market', [{ name: 's-plugin', skills: ['s-skill'] }]);
+    plantFile(safePath.join(projectDir, 'dist', '.claude', 'plugins', 'marketplaces', 's-market', '.claude-plugin', 'marketplace.json'), '{}');
+    await runPluginInstall(binPath, projectDir, fakeHome);
+    const marketplacesDir = safePath.join(claudeDir, PLUGINS_MARKETPLACES);
+
+    const { status, report } = await reinstallOverLockedEntry(binPath, fakeHome, projectDir, {
+      parentDir: marketplacesDir, entry: 's-market', lockedRel: ['plugins', 's-plugin', 'ro'],
+    });
+
+    expect(status, JSON.stringify(report)).toBe(0);
+    expect(fs.existsSync(safePath.join(marketplacesDir, 's-market', '.claude-plugin', 'marketplace.json'))).toBe(true);
+    expect(fs.existsSync(safePath.join(marketplacesDir, 's-market', 'plugins', 's-plugin', 'ro'))).toBe(false);
+    expect(report.findings).toMatchObject([{ code: 'PLUGIN_INSTALL_CLEANUP_INCOMPLETE', severity: 'warning', location: 's-market' }]);
+    expect(report.findings[0]?.message).toMatch(/\.s-market\.vat-staged-\w+\.previous/);
+  });
+
   // The version (and plugin/marketplace names) come from the PACKAGE: one that cannot name a
   // directory under ~/.claude is the input's fault, and is refused before the marketplace copy
   // replaces what the previous install left — which used to happen first, leaving a half-replaced tree.
@@ -426,20 +516,13 @@ describe('claude plugin install command (system test)', () => {
     const { projectDir } = setupPluginTestProject(tempDir, 'cleanup-pkg', 'c-market', [{ name: 'c-plugin', skills: ['c-skill'] }]);
     await runPluginInstall(binPath, projectDir, fakeHome);
     const versionsDir = safePath.join(claudeDir, 'plugins', 'cache', 'c-market', 'c-plugin');
-    const locked = safePath.join(versionsDir, '1.2.3', 'locked');
-    plantFile(safePath.join(locked, 'held.txt'), 'x');
-    chmodSync(locked, 0o555);
-    try {
-      const { status, report } = await runInstall(binPath, fakeHome, [projectDir]);
 
-      expect(status, JSON.stringify(report)).toBe(0);
-      expect(report.findings).toMatchObject([{ code: 'PLUGIN_INSTALL_CLEANUP_INCOMPLETE', severity: 'warning', location: 'c-plugin@c-market' }]);
-    } finally {
-      for (const entry of fs.readdirSync(versionsDir)) {
-        const leftover = safePath.join(versionsDir, entry, 'locked');
-        if (fs.existsSync(leftover)) chmodSync(leftover, 0o755);
-      }
-    }
+    const { status, report } = await reinstallOverLockedEntry(binPath, fakeHome, projectDir, {
+      parentDir: versionsDir, entry: '1.2.3', lockedRel: ['locked'],
+    });
+
+    expect(status, JSON.stringify(report)).toBe(0);
+    expect(report.findings).toMatchObject([{ code: 'PLUGIN_INSTALL_CLEANUP_INCOMPLETE', severity: 'warning', location: 'c-plugin@c-market' }]);
   });
 
   // A plugin directory the package ships read-only (here through a link, so the cache copy reads

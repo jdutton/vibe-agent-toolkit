@@ -337,7 +337,8 @@ async function validateDeclaredPlugins(
  * error is the refusal the builder publishes once for the run, and a bare
  * `ok` row for a plugin whose manifest was never opened would be the
  * reassuring lie this whole boundary exists to refuse — `manifestRead` is
- * what tells the two apart.
+ * what tells the two apart. A manifest the OS will not read is the same
+ * claim: the row is `manifestRead: false` and the builder names it in that refusal.
  */
 async function validateContainedPlugin(
   pluginDir: string,
@@ -365,9 +366,16 @@ async function validateContainedPlugin(
   // and skill findings beside them — and every plugin's manifest collapses to
   // the same `.claude-plugin/plugin.json`.
   const rawResult = await validatePlugin(pluginDir, { strict: true, locationRoot: marketplacePath });
+  // A manifest the OS refused is a `SCAN_PATH_UNREADABLE` WARNING from the
+  // validator — right for `vat audit`, a pass for this gate. Read off the RAW
+  // issues, so a severity override cannot turn "not read" back into "read".
+  const manifestLocation = issueLocation(manifestPath, marketplacePath);
+  const manifestRead = !rawResult.issues.some(
+    (issue) => issue.code === 'SCAN_PATH_UNREADABLE' && issue.location === manifestLocation,
+  );
   const pluginIssues = resolveIssueSeverity(rawResult.issues, validation);
   return {
-    manifestRead: true,
+    manifestRead,
     result: {
       ...rawResult,
       issues: pluginIssues,
@@ -637,7 +645,7 @@ export function buildMarketplaceValidateReport(
   const { root, marketplace, pluginResults, undeclared, refused } = input;
 
   const findings = toFindings([
-    ...unfinishedRunFinding(marketplace, pluginResults, refused),
+    ...unfinishedRunFinding(marketplace, pluginResults, refused, unreadManifests(pluginResults, refused, root)),
     ...input.issues,
   ]);
 
@@ -717,12 +725,13 @@ function unfinishedRunFinding(
   marketplace: ValidationResult['metadata'],
   validated: readonly LocalPluginResult[],
   refused: readonly string[],
+  unread: readonly string[],
 ): readonly ValidationIssue[] {
   const declared = marketplace?.localPluginSources ?? [];
   const unresolved = declared.filter(
     (entry) => !validated.some((v) => v.name === entry.name && v.source === entry.source),
   );
-  if (unresolved.length === 0 && refused.length === 0) return [];
+  if (unresolved.length === 0 && refused.length === 0 && unread.length === 0) return [];
   const parts: string[] = [];
   if (unresolved.length > 0) {
     const named = unresolved.map((entry) => `\`${entry.name}\` (${entry.source})`).join(', ');
@@ -748,7 +757,33 @@ function unfinishedRunFinding(
       + ' with the files it points at, or move its target under the marketplace root.',
     );
   }
+  if (unread.length > 0) {
+    const named = unread.map((path) => `\`${path}\``).join(', ');
+    parts.push(
+      `The operating system refused to let this run read ${unread.length} plugin manifest(s): ${named}`
+      + ' (the SCAN_PATH_UNREADABLE finding beside this one names the errno). None of those plugins\''
+      + ' manifest checks ran, so this document is not a verdict about them. Make each file readable'
+      + ' — check its permissions and ownership — and re-run.',
+    );
+  }
   return [runIntegrityFinding(parts.join(' '))];
+}
+
+/**
+ * The root-relative manifest of every plugin row whose manifest was not read
+ * for a reason OTHER than a link out of the root — those are already named in
+ * `refused`. Derived from the document's own rows, like the rest of the refusal.
+ */
+function unreadManifests(
+  pluginResults: readonly LocalPluginResult[],
+  refused: readonly string[],
+  root: string,
+): string[] {
+  const manifests = pluginResults
+    .filter((row) => !row.manifestRead)
+    .map((row) => toForwardSlash(safePath.join(relativizePath(row.result.path, root), '.claude-plugin', 'plugin.json')))
+    .filter((manifest) => !refused.includes(manifest));
+  return [...new Set(manifests)];
 }
 
 /** The human half, on stderr: every error in full, and the rest under `--verbose`. */
@@ -881,6 +916,9 @@ Output (YAML on stdout — the report envelope):
           SKILL.md or plugin.json that is a symlink pointing out). Containment
           is by real path at every depth, not only at the declared source;
           each is named here and in the RESOURCE_CHECK_BROKEN finding (exit 1).
+          A plugin.json the OS will not read is the same: its row is
+          manifestRead: false and the RESOURCE_CHECK_BROKEN finding names it
+          (exit 1) beside the SCAN_PATH_UNREADABLE warning — never a pass.
 
   stderr prints every error in full; --verbose adds every warning and info.
   The document is the same either way.

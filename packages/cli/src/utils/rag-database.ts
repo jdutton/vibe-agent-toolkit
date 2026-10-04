@@ -6,7 +6,7 @@
 
 import { accessSync, constants, lstatSync, readdirSync, statSync } from 'node:fs';
 
-import { foreignDatabaseEntries } from '@vibe-agent-toolkit/rag-lancedb';
+import { foreignDatabaseEntries, type DatabaseDirectoryEntry } from '@vibe-agent-toolkit/rag-lancedb';
 import { isFilesystemAccessError, isPathAbsentError, mkdirSyncReal, normalizePath, RAG_INDEX_EMPTY_CODE, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from './command-refusal.js';
@@ -37,11 +37,11 @@ function notADirectory(dbPath: string): string {
  *
  * @param dbPath - The resolved database path
  * @param explicit - Whether `--db` named it
- * @returns Its entries
+ * @returns Its typed entries
  */
-function listDatabase(dbPath: string, explicit: boolean): string[] {
+function listDatabase(dbPath: string, explicit: boolean): DatabaseDirectoryEntry[] {
   try {
-    return readdirSync(dbPath);
+    return readdirSync(dbPath, { withFileTypes: true });
   } catch (error) {
     const errno = (error as NodeJS.ErrnoException).code;
     if (errno === 'ENOTDIR') {
@@ -85,14 +85,14 @@ export function requireExistingDatabase(dbPath: string, explicit: boolean): void
  * would not hold.
  *
  * @param dbPath - The resolved database path
- * @param entries - Its listing
+ * @param entries - Its typed listing
  * @param explicit - Whether `--db` named it; otherwise it is the project default
  * @param untouched - What the refusal left alone, the sentence that opens its fix
  * @param wanted - What a `--db` should name instead
  * @throws {CommandRefusalError} `USAGE_INVALID` for a `--db`, `INPUT_UNREADABLE`
  *   for the project's own `.rag-db`
  */
-function refuseForeignEntries(dbPath: string, entries: string[], explicit: boolean, untouched: string, wanted: string): void {
+function refuseForeignEntries(dbPath: string, entries: readonly DatabaseDirectoryEntry[], explicit: boolean, untouched: string, wanted: string): void {
   const foreign = foreignDatabaseEntries(entries);
   if (foreign.length === 0) return;
   const named = foreign.slice(0, NAMED_ENTRIES).join(', ');

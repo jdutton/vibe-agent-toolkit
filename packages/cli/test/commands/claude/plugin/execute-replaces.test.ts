@@ -308,6 +308,15 @@ describe('executeReplaces — edge cases', () => {
     expect(rm).not.toHaveBeenCalled();
   });
 
+  it('refuses a flat skill that is not one path segment BEFORE uninstalling any replaced plugin', async () => {
+    const replaces: PackageJsonVatReplaces = { plugins: [OLD_PLUGIN_NAME], flatSkills: ['ok-skill', '../victim'] };
+
+    await expect(executeReplaces(replaces, ['market-a'], makePaths(), false, makeLogger())).rejects.toThrow(/\.\.\/victim/);
+
+    expect(uninstallPlugin).not.toHaveBeenCalled();
+    expect(rm).not.toHaveBeenCalled();
+  });
+
   it('processes both plugins and flatSkills when both are provided', async () => {
     vi.mocked(lstatSync).mockReturnValue({} as any);
 

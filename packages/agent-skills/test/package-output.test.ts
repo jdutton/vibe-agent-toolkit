@@ -6,11 +6,11 @@
  * of it is removed; an occupied output is refused naming `--force`.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { SKILL_PACKAGING_OUTPUT_FAILED_CODE, SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE } from '../src/packaging-errors.js';
@@ -131,5 +131,23 @@ describe('checkPackageOutput - the check a dry run shares with the real run', ()
 
     expect(() => checkPackageOutput({ outputPath: tmp, skillName: SKILL_NAME, formats: [DIRECTORY], sources: [sp], projectRoot: tmp, replaceExistingOutput: true }))
       .toThrow(expect.objectContaining({ code: SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE }));
+  });
+
+  // The OS will not let VAT examine the output, so it cannot tell whether the output holds the
+  // source: refused, coded, naming the errno — once a raw EACCES from realpath, INTERNAL_ERROR.
+  it.skipIf(CANNOT_DENY_READS)('refuses an output under a directory the OS will not examine, coded, --force or not', async () => {
+    const tmp = getTempDir();
+    const sp = await writeSkill(tmp);
+    const lockout = safePath.join(tmp, 'lockout');
+    await mkdir(lockout);
+    chmodSync(lockout, 0o000);
+    try {
+      for (const replaceExistingOutput of [false, true]) {
+        expect(() => checkPackageOutput({ outputPath: safePath.join(lockout, 'out'), skillName: SKILL_NAME, formats: [DIRECTORY], sources: [sp], projectRoot: tmp, replaceExistingOutput }))
+          .toThrow(expect.objectContaining({ code: SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE, message: expect.stringContaining('EACCES') as unknown }));
+      }
+    } finally {
+      chmodSync(lockout, 0o755);
+    }
   });
 });

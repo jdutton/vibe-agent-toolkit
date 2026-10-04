@@ -125,6 +125,13 @@ describe('scope-locations', () => {
       }
     });
 
+    // `--runtime constructor` once read Object.prototype: INTERNAL_ERROR on install, a defect exit on installed.
+    it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty'])('refuses the inherited key %s as a runtime, USAGE_INVALID', (key) => {
+      expect(() => validateAndGetScopeLocation(key, 'user')).toThrow(expect.objectContaining({ refusal: 'USAGE_INVALID' }));
+      expect(scopeLocationsFor(key)).toBeUndefined();
+      expect(() => validateAndGetScopeLocation(AGENT_SKILL, key)).toThrow(expect.objectContaining({ refusal: 'USAGE_INVALID' }));
+    });
+
     it('should handle case-sensitive scope names', () => {
       // Scopes are case-sensitive
       expect(() => validateAndGetScopeLocation(AGENT_SKILL, 'User')).toThrow(

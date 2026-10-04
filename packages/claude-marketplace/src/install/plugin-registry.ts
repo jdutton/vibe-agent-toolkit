@@ -179,6 +179,18 @@ function entryExists(path: string): boolean {
   }
 }
 
+/** What {@link replaceDirectory} puts in the name of its staged copy and of the tree it parks. */
+const STAGED_INFIX = '.vat-staged-';
+
+/**
+ * Whether a directory entry is {@link replaceDirectory}'s staged copy or parked
+ * previous tree (`.<dest>.vat-staged-XXXXXX[.previous]`) — left beside `dest` by
+ * a crash or by a removal the OS refused, and never one of the entries it sits among.
+ */
+export function isStagedReplaceLeftover(name: string): boolean {
+  return name.startsWith('.') && name.includes(STAGED_INFIX);
+}
+
 /**
  * Make `dest` a copy of `source`, replacing whatever tree is there.
  *
@@ -194,10 +206,10 @@ function entryExists(path: string): boolean {
  *
  * @returns Warnings: the previous tree, when it could not be removed once replaced
  */
-function replaceDirectory(source: string, dest: string): string[] {
+export function replaceDirectory(source: string, dest: string): string[] {
   const parent = dirname(dest);
   mkdirSyncReal(parent, { recursive: true });
-  const staged = mkdtempSync(safePath.join(parent, `.${basename(dest)}.vat-staged-`));
+  const staged = mkdtempSync(safePath.join(parent, `.${basename(dest)}${STAGED_INFIX}`));
   try {
     cpSync(source, staged, { recursive: true });
     // AFTER the copy: a read-only source mode applied first leaves the copy no

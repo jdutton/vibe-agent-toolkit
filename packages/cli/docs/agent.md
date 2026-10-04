@@ -91,7 +91,8 @@ no manifest at the path or name, or no `package.json` for the default output),
 `spec.prompts.system.$ref`, or that `$ref` names no file), `INPUT_UNREADABLE` (an
 agent search path a name is looked up in cannot be read, the
 manifest is unreadable or not YAML, or the OS refuses its system prompt,
-`scripts/`, `LICENSE.txt` or `package.json` — only an absence is "not there"),
+`scripts/`, `LICENSE.txt` or `package.json` — only an absence is "not there"; a named pipe,
+socket or device under `scripts/` is refused unopened),
 `RUN_INCOMPLETE` (the packager refused the bundle's content, e.g. a stale nested
 `SKILL.md` in the output: one `SKILL_PACKAGING_FAILED` error finding at the agent,
 relative to the project root; or an output the OS will not let the build write — a

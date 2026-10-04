@@ -21,24 +21,35 @@ export const DOCUMENTS_TABLE_NAME = 'rag_documents';
 /** LanceDB stores a table as a directory named `<table>.lance` under the database root. */
 const DATABASE_ENTRIES: ReadonlySet<string> = new Set([TABLE_NAME, DOCUMENTS_TABLE_NAME].map((table) => `${table}.lance`));
 
+/** One entry of a directory listing, as `readdirSync(dir, { withFileTypes: true })` gives it. */
+export interface DatabaseDirectoryEntry {
+  readonly name: string;
+  /** True for a regular file only: a directory or a symbolic link (followed or not) is not one. */
+  isFile(): boolean;
+}
+
 /**
  * Files an operating system writes into any folder a person opens or copies —
  * Finder's `.DS_Store` and AppleDouble `._*` files, Explorer's `Thumbs.db` and
- * `desktop.ini`. Their presence says nothing about whose directory it is.
+ * `desktop.ini`. Their presence says nothing about whose directory it is. The
+ * OS only ever writes them as regular files: a directory or a link carrying one
+ * of these names is the user's, and makes the directory not a database.
  */
-function isOsLitter(entry: string): boolean {
-  return entry === '.DS_Store' || entry === 'Thumbs.db' || entry === 'desktop.ini' || entry.startsWith('._');
+function isOsLitter(entry: DatabaseDirectoryEntry): boolean {
+  const { name } = entry;
+  return (name === '.DS_Store' || name === 'Thumbs.db' || name === 'desktop.ini' || name.startsWith('._')) && entry.isFile();
 }
 
 /**
  * The entries of a database directory's listing that no database this
  * provider made would hold. Operating-system litter is not foreign.
  *
- * @param entries - The directory's entry names
+ * @param entries - The directory's typed listing (`withFileTypes: true`, which
+ *   reports a symbolic link as a link, not as what it names)
  * @returns The foreign names, in listing order; empty for a RAG database
  */
-export function foreignDatabaseEntries(entries: readonly string[]): string[] {
-  return entries.filter((entry) => !DATABASE_ENTRIES.has(entry) && !isOsLitter(entry));
+export function foreignDatabaseEntries(entries: readonly DatabaseDirectoryEntry[]): string[] {
+  return entries.filter((entry) => !DATABASE_ENTRIES.has(entry.name) && !isOsLitter(entry)).map((entry) => entry.name);
 }
 
 /**
@@ -59,7 +70,7 @@ export function removeRagDatabase(dbPath: string): void {
       `Refusing to remove ${dbPath}: it is a symbolic link to ${fs.realpathSync(dbPath)}, and removing the link would leave that database in place. Name the database directory itself.`,
     );
   }
-  const foreign = foreignDatabaseEntries(fs.readdirSync(dbPath));
+  const foreign = foreignDatabaseEntries(fs.readdirSync(dbPath, { withFileTypes: true }));
   if (foreign.length > 0) {
     throw new VatError(RAG_DATABASE_NOT_REMOVABLE_CODE, `Refusing to remove ${dbPath}: it is not a RAG database (it holds ${foreign.join(', ')}).`);
   }
