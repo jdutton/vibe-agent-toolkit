@@ -3,6 +3,7 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { RESOURCES_SCAN_REPORT_SCHEMA } from '../../src/commands/resources/scan-schema.js';
+
 import {
   getBinPath,
   createTestTempDir,
@@ -10,11 +11,11 @@ import {
   writeTestFile,
   executeCli,
   executeCliAndParseYaml,
-} from '../system/test-common.js';
+} from './test-common.js';
 
 const binPath = getBinPath(import.meta.url);
 
-describe('vat resources scan (integration)', () => {
+describe('vat resources scan (system test)', () => {
   let tempDir: string;
 
   beforeEach(() => {

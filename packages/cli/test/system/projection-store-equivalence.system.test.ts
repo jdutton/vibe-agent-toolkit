@@ -88,8 +88,9 @@ import {
   rowsStoredUnder,
   storeFilesUnder,
 } from '../helpers/projection-store-probe.js';
-import { createSuiteContext, executeCli, join, writeTestFile } from '../system/test-common.js';
 import { commitTestFixture } from '../test-helpers.js';
+
+import { createSuiteContext, executeCli, join, writeTestFile } from './test-common.js';
 
 const context = createSuiteContext('vat-store-equivalence-', import.meta.url);
 

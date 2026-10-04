@@ -53,8 +53,9 @@ import {
   rowsStoredUnder,
   storeFilesUnder,
 } from '../helpers/projection-store-probe.js';
-import { executeCli, getBinPath } from '../system/test-common.js';
 import { commitTestFixture } from '../test-helpers.js';
+
+import { executeCli, getBinPath } from './test-common.js';
 
 const binPath = getBinPath(import.meta.url);
 
