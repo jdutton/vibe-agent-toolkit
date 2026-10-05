@@ -33,9 +33,9 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   code to `error`: the finding is then published at its default severity, and the run can exit 0.
 - **Reproduce:** use a project with a malformed config and a severity override that raises a
   warning to error. Run `vat claude marketplace validate`: it exits 0.
-- **Where:** [`marketplace/validate.ts:425-450`](../../packages/cli/src/commands/claude/marketplace/validate.ts)
+- **Where:** [`marketplace/validate.ts:499-514`](../../packages/cli/src/commands/claude/marketplace/validate.ts)
   (`resolveProjectValidationConfig`),
-  [`audit.ts:1349-1368`](../../packages/cli/src/commands/audit.ts)
+  [`audit.ts:1353-1372`](../../packages/cli/src/commands/audit.ts)
 - **Fix:** publish the same `SCAN_PATH_UNREADABLE` finding in the marketplace document, and correct
   both comments.
 
@@ -52,12 +52,18 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   - `skills package -o <occupied>` (dry or real) puts the output's absolute path in
     `error.message` ("output occ: /…/occ already exists");
   - node's errno text, which names an absolute path, is interpolated unchanged into
-    `SKILL_PACKAGING_FAILED` messages for OS refusals (`withFsAttribution`'s `reason`; traced).
+    `SKILL_PACKAGING_FAILED` messages for OS refusals (`withFsAttribution`'s `reason`; traced);
+  - `agent build` refusing a pipe, socket or device under `scripts/` names it by its absolute
+    path in `error.message` ("Agent source cannot be read (not a regular file…): /…/scripts/pipe");
+  - `SkillSourceUnreadableError` says "Cannot read the skill source at <path>" with the path
+    `resolveAssetReference` resolved, so absolute (`skill test run --with name=path:<dir>`).
 - **Reproduce:** `vat skill review skills/foo --yaml`, then read `data.source`.
 - **Where:** the verbs above; `requireDeclaredSkill` in
   [`configure.ts`](../../packages/cli/src/commands/skill/test/configure.ts);
   `checkPackageOutput` in [`skill-packager.ts`](../../packages/agent-skills/src/skill-packager.ts);
-  [`fs-attribution.ts:103`](../../packages/agent-skills/src/fs-attribution.ts) for the errno text.
+  [`fs-attribution.ts:115-117`](../../packages/agent-skills/src/fs-attribution.ts) for the errno text;
+  [`builder.ts`](../../packages/agent-skills/src/builder.ts) (the agent-source refusal);
+  [`source-unreadable.ts`](../../packages/agent-skills/src/skill-source/source-unreadable.ts).
 - **Fix:** relativize to a stated root, or document each exception in the schema docstrings.
 
 ### A Commander usage error publishes no document
@@ -73,7 +79,7 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   everywhere else.
 - **Reproduce:** traced. Any verb with an unknown option, such as `vat resources validate --bogus`,
   should exit 2 with an empty stdout.
-- **Where:** [`bin.ts:213-225`](../../packages/cli/src/bin.ts),
+- **Where:** [`bin.ts:217-226`](../../packages/cli/src/bin.ts),
   [`command-tree.ts`](../../packages/cli/src/command-tree.ts) (`applyCommandTreePolicy`),
   [`commander-ending.ts`](../../packages/cli/src/utils/commander-ending.ts)
 - **Fix:** decide before 0.2.0 stable. Either publish a `USAGE_INVALID` document from the ending
@@ -134,8 +140,8 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 - **Severity:** Minor · **Effort:** S · **User-visible:** no
 - **Mechanism:** each item below changes no behaviour:
-  - [`plugin/install.ts:18, 22`](../../packages/cli/src/commands/claude/plugin/install.ts) has a double space in an import and a long single-line import;
-  - the literal `'agent-skill'` is used twice in [`skill-validator.ts:691-692`](../../packages/agent-skills/src/validators/skill-validator.ts);
+  - [`plugin/install.ts:22`](../../packages/cli/src/commands/claude/plugin/install.ts) has a long single-line import;
+  - the literal `'agent-skill'` is used twice in [`skill-validator.ts:718-719`](../../packages/agent-skills/src/validators/skill-validator.ts);
   - `CLEAN_SENTENCE` is typed as `Partial<Record>` ([`describe-issues.ts:19`](../../packages/agent-skills/src/validators/describe-issues.ts));
   - `graderSeverityToShared` is a one-line wrapper ([`friction-schema.ts:27`](../../packages/agent-skills/src/skill-test/friction-schema.ts));
   - prose sits between two `@param` tags in [`cache/clear.ts`](../../packages/cli/src/commands/cache/clear.ts) (`partialOutcome`);
@@ -154,7 +160,8 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   the source is moved, such as a temp clone or an extracted tarball.
 - **Reproduce:** use a plugin with `alias -> real` and run `installPlugin`. In both the
   marketplace tree and the cache, `alias` then points at `<source>/real`.
-- **Where:** [`plugin-registry.ts:202`](../../packages/claude-marketplace/src/install/plugin-registry.ts)
+- **Where:** [`plugin-registry.ts:214`](../../packages/claude-marketplace/src/install/plugin-registry.ts)
+  (the `cpSync` in `replaceDirectory`)
 - **Fix:** pass `verbatimSymlinks: true`, and add a re-install test with a relative link.
   **Decision:** with `verbatimSymlinks`, a relative link that resolves outside the plugin dangles
   in the cache. Refuse such links (the tree-copy lane already does), or keep resolving those alone.
@@ -165,9 +172,13 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Mechanism:** install copies the source root's mode onto both the marketplace copy and the cache
   copy. `removePluginDirs` then removes each tree with a plain recursive `rm`. A root that took
   mode 0555 refuses the removal of its own entries, so uninstall fails partway with
-  `RUN_INCOMPLETE`. Install's own `removeTree` already chmods the root first. Reproduced.
+  `RUN_INCOMPLETE`. Install's own `removeTree` already chmods the root first. Reproduced through
+  the library: `installPlugin` with a 0555 `pluginDir`, then `uninstallPlugin`, fails `EACCES`
+  (`CLAUDE_USER_STATE_WRITE_FAILED`). Not reproduced through the CLI: `vat claude plugin install
+  <dir>` with a 0555 plugin dir copies the plugin roots at 0755, and install and uninstall both
+  exit 0.
 - **Where:** [`plugin-uninstall.ts:86, 92`](../../packages/claude-marketplace/src/install/plugin-uninstall.ts),
-  [`plugin-registry.ts:217-221`](../../packages/claude-marketplace/src/install/plugin-registry.ts)
+  [`plugin-registry.ts:229-233`](../../packages/claude-marketplace/src/install/plugin-registry.ts)
   (`removeTree`, the pattern to copy)
 - **Fix:** chmod each root before removing it, as `removeTree` does, or share `removeTree`.
 
@@ -179,7 +190,7 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   copy, a symlink that cannot be made) leaves a partial tree on disk that `registerPlugin` never
   registers. The non-dev lanes stage and swap through `replaceDirectory`; this lane builds its
   tree in several steps, so it needs a staging root of its own. Traced, not run.
-- **Where:** [`install.ts:768-790`](../../packages/cli/src/commands/claude/plugin/install.ts)
+- **Where:** [`install.ts:786-820`](../../packages/cli/src/commands/claude/plugin/install.ts)
   (`devInstallMarketplace`)
 - **Fix:** build the whole dev marketplace under a staging directory, then swap it in with
   `replaceDirectory`.
@@ -188,14 +199,44 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 - **Severity:** Minor · **Effort:** S · **User-visible:** no
 - **Mechanism:** `requirePluginSource` lists the tree recursively and opens each regular file,
-  skipping links. `openEachFileForReading` in utils is the same probe, written for copiers. Two
-  copies of one probe can drift on what counts as readable.
+  skipping links. It is exported from `claude-marketplace` and now gates every copy install —
+  `installPlugin`, each marketplace of a plugin-tree install, and a skill installed from a path.
+  `openEachFileForReading` in utils is the same probe, written for copiers. Two copies of one
+  probe can drift on what counts as readable, and the drift now reaches every install lane.
 - **Where:** [`plugin-registry.ts:133-150`](../../packages/claude-marketplace/src/install/plugin-registry.ts),
+  [`install.ts:1084, 1151`](../../packages/cli/src/commands/claude/plugin/install.ts),
   [`fs-utils.ts:1298`](../../packages/utils/src/fs-utils.ts)
 - **Fix:** call `openEachFileForReading` and wrap its error with `pluginSourceUnreadable`, using the
   error's `path`.
 
+### `vat claude plugin install <zip> --dry-run` passes a zip the real run refuses
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** yes
+- **Mechanism:** the dry run does not extract the archive, so nothing checks that its entries
+  can coexist on disk. A zip holding both a file `a` and a file `a/b` passes the dry run, and the
+  real run refuses it `INPUT_UNREADABLE` when the extraction collides. The dry run is not a
+  faithful preview.
+- **Reproduce:** build a zip with entries `a` and `a/b`. `vat claude plugin install x.zip
+  --dry-run` exits 0; without `--dry-run` it exits 2 `INPUT_UNREADABLE`.
+- **Where:** `handleZipInstall` in [`install.ts`](../../packages/cli/src/commands/claude/plugin/install.ts)
+- **Fix:** extract into the dry run's temp directory too (it removes nothing), or check the entry
+  names for a file/directory clash before either run extracts.
+
 ## Packaging and build
+
+### A library packaging validation dropped a link silently in a repo with no config file
+
+- **Severity:** Minor (cause unknown) · **Effort:** L · **User-visible:** yes
+- **Mechanism:** observed, not traced. `validateSkillForPackaging` called as a library in a git
+  repository with no `vibe-agent-toolkit.config.yaml` reported `fileCount: 1` for a skill that
+  links a second file, and recorded no exclusion for the link. With a config file present, the
+  same call walked the link. A link the walk drops without a word is a packaged skill missing a
+  file nobody was told about.
+- **Reproduce:** a git repo with a `SKILL.md` that links `ref.md`, no config file; call
+  `validateSkillForPackaging` and read its file count. Add an empty config file and call it again.
+- **Where:** [`packaging-validator.ts`](../../packages/agent-skills/src/validators/packaging-validator.ts)
+  and the crawl it delegates to
+- **Fix:** root-cause first: find which population or exclusion rule the absent config changes.
 
 ### A failed `vat claude plugin build` destroys the previous marketplace tree
 
@@ -223,7 +264,7 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Mechanism:** `createNpmPackage` writes a `package.json` and returns a placeholder path. No
   `.tgz` is ever made, yet `--help` lists `npm`.
 - **Reproduce:** `vat skills package … -f directory,npm` exits 0, and no tarball exists.
-- **Where:** [`skill-packager.ts:2824-2843`](../../packages/agent-skills/src/skill-packager.ts)
+- **Where:** [`skill-packager.ts:2860-2882`](../../packages/agent-skills/src/skill-packager.ts)
 - **Fix:** run `npm pack` on the written directory, or remove `npm` from the formats.
 
 ### `existsSync` reads `EACCES` as "absent" in plugin build and the inventory extractors
@@ -252,7 +293,7 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   `DATABASES_OPENED = 1`, so the verb's `whenZero` can never fire.
 - **Reproduce:** run `vat rag stats` twice a minute apart on an unchanged index. `lastIndexed`
   moves.
-- **Where:** [`lancedb-rag-provider.ts:465, 485`](../../packages/rag-lancedb/src/lancedb-rag-provider.ts),
+- **Where:** [`lancedb-rag-provider.ts:467, 487`](../../packages/rag-lancedb/src/lancedb-rag-provider.ts),
   [`stats-command.ts:18, 26`](../../packages/cli/src/commands/rag/stats-command.ts),
   [`admin-schema.ts:30`](../../packages/cli/src/commands/rag/admin-schema.ts)
 - **Fix:** record the index time when `rag index` writes, and make `lastIndexed` nullable.
@@ -277,7 +318,7 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   presence check, and the packaged-size check. The document then publishes a
   `SCAN_PATH_UNREADABLE` finding while `pathsUnreadable` stays 0, and the refused path is counted
   as a scanned file. Traced.
-- **Where:** [`audit.ts:3211-3239`](../../packages/cli/src/commands/audit.ts)
+- **Where:** [`audit.ts:3215-3243`](../../packages/cli/src/commands/audit.ts)
   (`isUnreadablePathResult`, `countFilesByStatus`)
 - **Fix:** decide what the count means, then either count every `SCAN_PATH_UNREADABLE` issue's
   path or state in the schema docstring that only whole-path refusals are counted.
@@ -351,7 +392,7 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   then the restore both fail, the restore's error replaces the original. The destination is then
   absent while the registry points at it. Two concurrent installs of one version can also
   interleave. Traced, not run.
-- **Where:** [`plugin-registry.ts:230-250`](../../packages/claude-marketplace/src/install/plugin-registry.ts)
+- **Where:** [`plugin-registry.ts:242-262`](../../packages/claude-marketplace/src/install/plugin-registry.ts)
 - **Fix:** retry the renames with backoff as graceful-fs does, and keep the original error when
   the restore fails.
 
@@ -377,10 +418,12 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 ### Tests in the wrong tier
 
 - **Severity:** Minor · **Effort:** M · **User-visible:** no
-- **Mechanism:** the tier table puts "spawns child processes" in System. About 19 of the 60
+- **Mechanism:** the tier table puts "spawns child processes" in System. About 19 of the
   `packages/cli/test/integration` files spawn a process, counted by grepping for
-  `child_process`, `executeCli`, `bin.js` and similar.
-- **Where:** [`packages/cli/test/integration/`](../../packages/cli/test/integration/)
+  `child_process`, `executeCli`, `bin.js` and similar. Outside the CLI, five `utils` integration
+  files spawn too (git, eslint, `spawn-hardened`).
+- **Where:** [`packages/cli/test/integration/`](../../packages/cli/test/integration/),
+  [`packages/utils/test/integration/`](../../packages/utils/test/integration/)
 - **Fix:** move each spawning file to `*.system.test.ts` by rename. Never raise a budget or add
   an allowlist entry for one.
 
@@ -395,7 +438,7 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
     so the two can race.
 
   The skips are named, but these rows are verified only on a developer's machine.
-- **Where:** [`exit-code-matrix.ts:599, 827, 880`](../../packages/cli/test/system/test-helpers/exit-code-matrix.ts)
+- **Where:** [`exit-code-matrix.ts:600, 828, 881`](../../packages/cli/test/system/test-helpers/exit-code-matrix.ts)
 - **Fix:** make each hermetic:
   - put a fake `claude` and a fake `npm` on the child's `PATH`;
   - add a tiny fixture embedding model;

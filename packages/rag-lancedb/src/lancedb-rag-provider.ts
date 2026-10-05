@@ -37,6 +37,7 @@ import {
 import { isVatError, RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape } from 'zod';
 
+import { chunkTableReadFailure } from './chunk-table-failure.js';
 import { resolveChunkingConfig } from './chunking-config.js';
 import { DOCUMENTS_TABLE_NAME, removeRagDatabase, TABLE_NAME } from './database-directory.js';
 import { getDirectorySize } from './directory-size.js';
@@ -332,8 +333,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
 
   /**
    * Open the chunk table the listing says is there. A table LanceDB lists and
-   * cannot open has damaged files: the caller's store is unreadable, coded so,
-   * and `removeRagDatabase` can still remove it without opening it.
+   * cannot open is the caller's store being unreadable, coded so, and
+   * `removeRagDatabase` can still remove it without opening it.
    *
    * @param connection - The connection whose listing holds the table
    * @returns The opened table
@@ -345,22 +346,23 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
 
   /**
    * Run a LanceDB read of the chunk table. A table opens from its manifest
-   * alone, so damaged DATA files surface only here, on the first read — the
-   * same unreadable store as a manifest that will not open, coded the same.
+   * alone, so damaged DATA files, refused permissions and a foreign schema
+   * surface only here, on the first read — the store's failure either way, and
+   * {@link chunkTableReadFailure} names which, so the remedy it gives is right.
    *
    * @param read - The open, count, scan or search
+   * @param table - The open table the read is of; absent for the open itself
    * @returns What it returned
    * @throws {VatError} `RAG_DATABASE_UNREADABLE` when LanceDB fails the read
    */
-  private async readingChunkTable<T>(read: () => Promise<T>): Promise<T> {
+  private async readingChunkTable<T>(read: () => Promise<T>, table?: Table): Promise<T> {
     try {
       return await read();
     } catch (error) {
-      throw new VatError(
-        RAG_DATABASE_UNREADABLE_CODE,
-        `The '${TABLE_NAME}' table at ${this.config.dbPath} cannot be read (its files are damaged): ${error instanceof Error ? error.message : String(error)}. ` +
-          'Remove the database (vat rag clear) and index again.',
-        { cause: error },
+      throw await chunkTableReadFailure(
+        { dbPath: this.config.dbPath, metadataSchema: this.metadataSchema, dimensions: this.config.embeddingProvider.dimensions },
+        error,
+        table,
       );
     }
   }
@@ -424,7 +426,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       }
     }
 
-    const results = await this.readingChunkTable(() => search.toArray());
+    const results = await this.readingChunkTable(() => search.toArray(), this.table);
 
     // Convert results to plain objects immediately to avoid Arrow buffer issues
     // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
@@ -467,11 +469,11 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     }
 
     const table = this.table;
-    const count = await this.readingChunkTable(() => table.countRows());
+    const count = await this.readingChunkTable(() => table.countRows(), table);
 
     // Distinct resources, from the one column that names them — never the text and vectors.
     // Each id is copied out to a primitive at once, before the Arrow buffers can detach.
-    const idRows = await this.readingChunkTable(() => table.query().select(['resourceid']).toArray());
+    const idRows = await this.readingChunkTable(() => table.query().select(['resourceid']).toArray(), table);
     const uniqueResources = new Set(idRows.map((row: Pick<LanceDBRow, 'resourceid'>) => String(row.resourceid))).size;
 
     // Calculate database size by traversing the directory
@@ -537,8 +539,9 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * @throws {ParserUnavailableError} If the markdown parser module cannot be
    *   loaded — a broken install fails the whole batch rather than becoming one
    *   error entry per resource
-   * @throws {VatError} `RAG_DATABASE_UNREADABLE` when the chunk table's files are
-   *   damaged — the store's failure, so the whole batch, for the same reason
+   * @throws {VatError} `RAG_DATABASE_UNREADABLE` when the chunk table cannot be
+   *   read — files the OS refuses, a foreign schema, or damage, the message says
+   *   which — the store's failure, so the whole batch, for the same reason
    */
   async indexResources(
     resources: ResourceMetadata[],
@@ -811,7 +814,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     }
 
     const table = this.table;
-    const existingRows = await this.readingChunkTable(() => table.query().where(`resourceid = '${escapeSQLString(resourceId)}'`).toArray());
+    const existingRows = await this.readingChunkTable(() => table.query().where(`resourceid = '${escapeSQLString(resourceId)}'`).toArray(), table);
     // Materialize immediately to avoid Arrow buffer issues
     // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
     const existing = JSON.parse(JSON.stringify(existingRows)) as LanceDBRow[];

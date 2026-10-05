@@ -130,7 +130,7 @@ function pluginSourceUnreadable(path: string, error: unknown): VatError {
  *
  * @throws VatError {@link PLUGIN_SOURCE_UNREADABLE_CODE} naming the path that failed
  */
-function requirePluginSource(pluginDir: string): void {
+export function requirePluginSource(pluginDir: string): void {
   let entries: Dirent[];
   try {
     entries = readdirSync(pluginDir, { recursive: true, withFileTypes: true });

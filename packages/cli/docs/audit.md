@@ -30,7 +30,7 @@ vat audit [git-url-or-path] [options]
 - `--user` - Audit user-level Claude plugins installation (`~/.claude/plugins`)
 - `--no-recursive` - Scan the top level only (recursive scanning is the default; there is no `--recursive` flag)
 - `--compat` - Run compatibility analysis for each plugin; adds a `compatibility:` block to its entry (see [Compatibility and settings blocks](#compatibility-and-settings-blocks))
-- `--settings [file]` - Check each plugin against Claude settings (auto-discovered, or the given file); adds a `settings:` block. Requires `--compat`: without it, or with `--user`, the run is refused (`USAGE_INVALID`, exit 2). A named file that does not exist is `USAGE_INVALID`; one the OS refuses, or that does not parse or fails the settings schema, is `INPUT_UNREADABLE` — the settings check never runs silently unchecked
+- `--settings [file]` - Check each plugin against Claude settings (auto-discovered, or the given file); adds a `settings:` block. Requires `--compat`: without it, or with `--user`, the run is refused (`USAGE_INVALID`, exit 2). A named file that does not exist is `USAGE_INVALID`; one the OS refuses, or that does not parse or fails the settings schema, is `INPUT_UNREADABLE` — and so is an auto-discovered managed, project or user settings file in any of those states (only an absent one is skipped) — the settings check never runs silently unchecked
 - `--debug` - Enable debug logging (outputs to stderr)
 
 ### Gitignore-aware scanning
@@ -737,8 +737,10 @@ same report envelope as `vat audit`
 - Exit codes follow the one rule: `1` for an error-severity finding (an invalid
   settings file, a legacy managed-settings path) or nothing read; `2` when it did
   not finish (`USAGE_INVALID` for a `--file` that does not exist or an unknown
-  `--type`, `INPUT_UNREADABLE` for a `--file` the OS will not let it read — a
-  file nothing could be read from is a refusal, never a finding about it).
+  `--type`, `INPUT_UNREADABLE` for a `--file` the OS will not let it read, or, in
+  the default mode, for a discovered settings layer the OS refuses, that does not
+  parse, or that fails its schema — a file nothing could be read from is a
+  refusal, never a finding about it, and never a layer silently left out).
 
 ## Cross-Platform Considerations
 

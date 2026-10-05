@@ -1287,8 +1287,8 @@ function refuseUnusableSettingsFlag(options: AuditCommandOptions): void {
  * Called only under `--compat`; {@link refuseUnusableSettingsFlag} has already
  * refused every combination the run cannot honour.
  *
- * @throws {CommandRefusalError} `INPUT_UNREADABLE` when a settings file does
- *   not parse or fails its schema — the check cannot run, and a warning beside
+ * @throws {CommandRefusalError} `INPUT_UNREADABLE` when a settings file (named
+ *   or auto-discovered) the OS refuses, does not parse, or fails its schema — the check cannot run, and a warning beside
  *   an unchecked report was how it used to pass silently
  */
 async function resolveEffectiveSettings(

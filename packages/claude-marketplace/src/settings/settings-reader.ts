@@ -10,6 +10,9 @@
 
 import * as fs from 'node:fs/promises';
 
+import { VatError } from '@vibe-agent-toolkit/utils';
+
+import { CLAUDE_USER_STATE_UNREADABLE_CODE } from '../install/plugin-registry.js';
 import { getClaudeProjectPaths, getClaudeUserPaths } from '../paths/claude-paths.js';
 import { getManagedSettingsCandidatePaths } from '../paths/managed-settings-path.js';
 import {
@@ -31,15 +34,26 @@ export interface ReadSettingsOptions {
   settingsFile?: string | undefined;
 }
 
+/**
+ * Only an ABSENT file is no layer. One the OS refuses is present and unread, so
+ * skipping it would let the run answer as if that layer said nothing.
+ *
+ * @throws VatError {@link CLAUDE_USER_STATE_UNREADABLE_CODE} naming the file
+ */
 async function tryReadJson(filePath: string): Promise<unknown> {
   try {
     const content = await fs.readFile(filePath, 'utf-8');
     return JSON.parse(content) as unknown;
   } catch (err) {
-    if (isNodeError(err) && (err.code === 'ENOENT' || err.code === 'EACCES')) {
-      return null;
+    if (isNodeError(err) && err.code === 'ENOENT') return null;
+    if (isNodeError(err) && (err.code === 'EACCES' || err.code === 'EPERM')) {
+      throw new VatError(
+        CLAUDE_USER_STATE_UNREADABLE_CODE,
+        `Cannot read settings file ${filePath} (${err.code}): check its permissions and ownership.`,
+        { cause: err },
+      );
     }
-    throw new Error(`Failed to parse settings file ${filePath}: ${String(err)}`);
+    throw new VatError(CLAUDE_USER_STATE_UNREADABLE_CODE, `Failed to parse settings file ${filePath}: ${String(err)}`, { cause: err });
   }
 }
 
@@ -64,7 +78,8 @@ async function tryReadLayer(
   const result = schema.safeParse(raw);
 
   if (!result.success) {
-    throw new Error(
+    throw new VatError(
+      CLAUDE_USER_STATE_UNREADABLE_CODE,
       `Invalid settings file ${filePath}: ${JSON.stringify(result.error)}`
     );
   }
@@ -99,8 +114,8 @@ async function readManagedLayer(options: ReadSettingsOptions): Promise<SettingsL
 
 /**
  * Read all available settings layers in precedence order (highest first).
- * Skips files that don't exist or aren't readable.
- * Throws for malformed JSON/YAML in files that DO exist.
+ * Skips files that don't exist. Throws {@link CLAUDE_USER_STATE_UNREADABLE_CODE}
+ * for a file that exists and the OS refuses, does not parse, or fails its schema.
  */
 export async function readSettingsLayers(
   options: ReadSettingsOptions = {}

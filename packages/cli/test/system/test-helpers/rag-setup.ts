@@ -16,6 +16,12 @@ import { executeAndParseYaml } from './cli-runner.js';
 import { setupTestProject } from './project-setup.js';
 
 /**
+ * The first bytes of a `.DS_Store` Finder writes (a "Bud1" buddy allocator): the
+ * signature, not the name, is what makes the file operating-system litter.
+ */
+export const FINDER_DS_STORE = Buffer.from([0x00, 0x00, 0x00, 0x01, 0x42, 0x75, 0x64, 0x31, 0x00]);
+
+/**
  * Setup RAG test project with markdown files
  * Creates project with docs directory and sample markdown files
  */

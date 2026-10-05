@@ -7,9 +7,15 @@ function entry(name: string, kind: 'file' | 'dir' | 'link' = name.endsWith('.lan
   return { name, isFile: () => kind === 'file' };
 }
 
+/**
+ * A directory no test creates: a litter-named FILE is read from it and, absent,
+ * is not proven litter. Litter told apart by its bytes is the integration test's.
+ */
+const NOWHERE = '/vat-no-such-database-directory';
+
 /** `foreignDatabaseEntries` over entries of the default kind. */
 function foreign(...names: string[]): string[] {
-  return foreignDatabaseEntries(names.map((name) => entry(name)));
+  return foreignDatabaseEntries(NOWHERE, names.map((name) => entry(name)));
 }
 
 describe('foreignDatabaseEntries', () => {
@@ -24,16 +30,21 @@ describe('foreignDatabaseEntries', () => {
     expect(foreign('other.lance', 'rag_chunks')).toEqual(['other.lance', 'rag_chunks']);
   });
 
-  // The OS writes these into any folder a person opens (Finder, Explorer, a copy to a FAT/SMB
-  // volume). A database that holds one is still the database vat rag index wrote.
-  it('ignores operating-system litter beside the tables', () => {
-    expect(foreign('.DS_Store', 'rag_chunks.lance', 'Thumbs.db', 'desktop.ini', '._rag_chunks.lance')).toEqual([]);
-    expect(foreign('.DS_Store', 'notes.md')).toEqual(['notes.md']);
+  // Explorer writes desktop.ini into any folder a person customises; it is INI text with no
+  // signature, so its name and being a regular file are the whole rule.
+  it('ignores desktop.ini beside the tables, and still names what is foreign', () => {
+    expect(foreign('desktop.ini', 'rag_chunks.lance')).toEqual([]);
+    expect(foreign('desktop.ini', 'notes.md')).toEqual(['notes.md']);
+  });
+
+  // The other litter names carry a signature: a file that cannot be read cannot show it.
+  it('counts a signed litter name whose bytes it cannot read as foreign', () => {
+    expect(foreign('.DS_Store', 'Thumbs.db', '._rag_chunks.lance')).toEqual(['.DS_Store', 'Thumbs.db', '._rag_chunks.lance']);
   });
 
   // The OS only ever writes these as regular files. A directory or a link carrying the name is the
   // user's, and a database holding one must not be removed recursively.
   it('counts a litter name that is a directory or a link as foreign', () => {
-    expect(foreignDatabaseEntries([entry('rag_chunks.lance'), entry('._notes', 'dir'), entry('.DS_Store', 'link'), entry('Thumbs.db')])).toEqual(['._notes', '.DS_Store']);
+    expect(foreignDatabaseEntries(NOWHERE, [entry('rag_chunks.lance'), entry('._notes', 'dir'), entry('.DS_Store', 'link'), entry('desktop.ini')])).toEqual(['._notes', '.DS_Store']);
   });
 });

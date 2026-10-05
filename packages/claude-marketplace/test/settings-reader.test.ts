@@ -1,7 +1,7 @@
 /**
  * `readSettingsLayers` / `readEffectiveSettings` against a FAKE filesystem: each
  * case scripts what `readFile` answers per path, so the layer order, the skip of
- * an absent or unreadable file, and the refusal of a malformed one are pinned
+ * an absent file, and the refusal of an unreadable or malformed one are pinned
  * with no real settings file. The real-file wiring is in
  * `integration/settings-reader.integration.test.ts`.
  */
@@ -10,6 +10,7 @@ import type * as FsPromises from 'node:fs/promises';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { CLAUDE_USER_STATE_UNREADABLE_CODE } from '../src/install/plugin-registry.js';
 import { readEffectiveSettings, readSettingsLayers } from '../src/settings/settings-reader.js';
 
 const files = vi.hoisted(() => new Map<string, string | NodeJS.ErrnoException>());
@@ -74,14 +75,22 @@ describe('readSettingsLayers', () => {
     expect(layers).toEqual([{ level: 'managed', file: '/given.json', settings: { model: SONNET } }]);
   });
 
-  it('skips a file the OS refuses to read, as it skips an absent one', async () => {
-    files.set(USER, refused('EACCES'));
-    expect(await readSettingsLayers()).toEqual([]);
+  it.each(['EACCES', 'EPERM'])('refuses a file the OS will not let it read (%s), naming the file and the errno — never skipped as absent', async (code) => {
+    files.set('/p/.claude/settings.json', refused(code));
+    const failure = readSettingsLayers({ projectDir: '/p' });
+    await expect(failure).rejects.toMatchObject({ code: CLAUDE_USER_STATE_UNREADABLE_CODE });
+    await expect(failure).rejects.toThrow(`Cannot read settings file /p/.claude/settings.json (${code})`);
+  });
+
+  it('refuses an unreadable managed candidate rather than falling through to the next one', async () => {
+    files.set('/sys/a.json', refused('EACCES'));
+    files.set('/sys/b.json', JSON.stringify({ model: 'managed-b' }));
+    await expect(readSettingsLayers()).rejects.toThrow('Cannot read settings file /sys/a.json (EACCES)');
   });
 
   it('refuses a file that exists and does not parse, naming it', async () => {
     files.set(USER, '{ not json');
-    await expect(readSettingsLayers()).rejects.toThrow(`Failed to parse settings file ${USER}`);
+    await expect(readSettingsLayers()).rejects.toMatchObject({ code: CLAUDE_USER_STATE_UNREADABLE_CODE, message: expect.stringContaining(`Failed to parse settings file ${USER}`) });
   });
 
   it('refuses any other read failure, naming the file', async () => {
@@ -91,7 +100,7 @@ describe('readSettingsLayers', () => {
 
   it('refuses a file that parses and fails its level\'s schema, naming it', async () => {
     files.set(USER, JSON.stringify({ model: 42 }));
-    await expect(readSettingsLayers()).rejects.toThrow(`Invalid settings file ${USER}`);
+    await expect(readSettingsLayers()).rejects.toMatchObject({ code: CLAUDE_USER_STATE_UNREADABLE_CODE, message: expect.stringContaining(`Invalid settings file ${USER}`) });
   });
 });
 

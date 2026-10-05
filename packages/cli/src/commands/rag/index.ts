@@ -91,10 +91,15 @@ Exit Codes:
   2 - Could not run (error.code says why: USAGE_INVALID for a missing path or
       --db, a --db that is (or lies under) a file, or a --db directory holding
       anything but a RAG database; INPUT_UNREADABLE, also for a project
-      .rag-db that is a file or holds anything else, and for a database whose
-      table files are damaged (vat rag clear removes it); RUN_INCOMPLETE when the
+      .rag-db that is a file or holds anything else, and for a chunk table that
+      cannot be read — files the OS refuses (the message names the path and
+      errno: fix the permissions), a table another tool or build wrote, or
+      damaged files (vat rag clear removes either); RUN_INCOMPLETE when the
       database directory cannot be created or written; CONFIG_INVALID;
-      BACKEND_UNAVAILABLE when the RAG backend is not installed)
+      BACKEND_UNAVAILABLE when the RAG backend is not installed; INTERNAL_ERROR
+      for a database error such as a rag_documents table whose columns an
+      earlier build typed differently — the message names the columns, and
+      vat rag clear is the remedy)
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)
@@ -146,7 +151,8 @@ Exit Codes:
       project .rag-db holds anything else; USAGE_INVALID with no --db and no
       project or a --db that is not a RAG database — nothing there, a file,
       or a directory holding anything but the tables vat rag index writes
-      (operating-system litter such as .DS_Store aside); BACKEND_UNAVAILABLE)
+      (operating-system litter such as .DS_Store aside); BACKEND_UNAVAILABLE;
+      INTERNAL_ERROR for an embedding failure)
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)
@@ -191,7 +197,8 @@ Exit Codes:
       (operating-system litter such as .DS_Store aside) — INPUT_UNREADABLE
       when the project has no database yet, its .rag-db holds anything else,
       or the database cannot be read (damaged table files included),
-      BACKEND_UNAVAILABLE). Never creates the database.
+      BACKEND_UNAVAILABLE, INTERNAL_ERROR for a defect in VAT). Never creates
+      the database.
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)
@@ -224,8 +231,10 @@ Warning:
   permanently deleted. Re-run 'vat rag index' to rebuild from source.
 
   Only a RAG database is removed: a directory holding nothing but the tables
-  vat rag index writes (and operating-system litter files such as .DS_Store;
-  a directory or link with a litter name is not litter). It is
+  vat rag index writes (and operating-system litter files such as .DS_Store:
+  a regular file that starts with the bytes the OS writes into it — a ._*
+  file of your own, or a directory or link with a litter name, is not
+  litter). It is
   removed without being opened, so a database whose files are damaged can
   still be cleared. Any other directory is refused and left untouched, and so
   is a --db that is a symbolic link: removing the link would leave the
@@ -244,7 +253,7 @@ Exit Codes:
       .rag-db is a link or holds anything else, or it cannot be listed;
       RUN_INCOMPLETE when the OS stopped the removal partway (part of the
       database may be gone; make it writable and clear again);
-      BACKEND_UNAVAILABLE)
+      BACKEND_UNAVAILABLE; INTERNAL_ERROR for a defect in VAT)
 
 Requirements:
   projectRoot: optional (tolerates absence — use --db to specify path)

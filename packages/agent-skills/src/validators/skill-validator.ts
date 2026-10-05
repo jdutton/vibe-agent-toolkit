@@ -190,6 +190,16 @@ function isExemptFromUnreferencedCheck(fileName: string): boolean {
 }
 
 /**
+ * Whether `path` (followed through links) is neither a regular file nor a
+ * directory. Asked only after `existsSync` said the path is there; one gone in
+ * between answers `false`, and the parse that follows reports it.
+ */
+function isSpecialFile(path: string): boolean {
+  const stats = fs.statSync(path, { throwIfNoEntry: false });
+  return stats !== undefined && !stats.isFile() && !stats.isDirectory();
+}
+
+/**
  * Validate a single local_file link: boundary check, existence check.
  *
  * @returns 'boundary' | 'broken' | 'valid' indicating the link status
@@ -230,6 +240,23 @@ function validateLocalLink(
       link: link.href,
       fix: 'Fix link path or restore missing file',
     });
+    return { status: 'broken', resolvedPath };
+  }
+
+  // A named pipe, socket or device has no content to check or bundle, and opening
+  // a pipe blocks until a writer appears — so it is refused here, before the walk
+  // would parse it or the packager copy it (a non-markdown one used to be dropped
+  // from the bundle silently, leaving the packaged link dangling).
+  if (isSpecialFile(resolvedPath)) {
+    issues.push(createRegistryIssue(
+      'LINK_TARGET_UNREADABLE',
+      `Link target is not a regular file (a named pipe, socket or device), so it has no content to check or bundle: ${link.href}`,
+      {
+        location: issueLocation(currentPath, locationRoot),
+        ...(link.line !== undefined && { line: link.line }),
+        link: link.href,
+      },
+    ));
     return { status: 'broken', resolvedPath };
   }
 

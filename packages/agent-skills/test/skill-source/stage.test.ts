@@ -4,6 +4,7 @@ import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapabi
 import { refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { SKILL_SOURCE_UNREADABLE_CODE } from '../../src/skill-source/source-unreadable.js';
 import { stageDirInto } from '../../src/skill-source/stage.js';
 import type { ResolveSkillSourceContext } from '../../src/skill-source/types.js';
 
@@ -59,7 +60,11 @@ describe('stageDirInto', () => {
     const cap = symlinkCapability() ?? skip();
     mkdirSyncReal(safePath.join(src, 'sub'));
     createSymlink(cap, '/etc', safePath.join(src, 'sub', 'evil'));
-    await expect(stageDirInto(src, ctx, 'sym')).rejects.toThrow(/symlink/i);
+    // Coded as the operator's input (`INPUT_UNREADABLE` in `vat skill test run`), never an uncoded throw.
+    await expect(stageDirInto(src, ctx, 'sym')).rejects.toMatchObject({
+      code: SKILL_SOURCE_UNREADABLE_CODE,
+      message: expect.stringMatching(/symlink.*sub\/evil/i) as unknown,
+    });
   });
 
   it('refuses a pre-existing staged dir not owned by the current uid', async () => {

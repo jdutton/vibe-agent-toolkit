@@ -9,7 +9,6 @@ import { basename, dirname } from 'node:path';
 
 
 import {
-  checkPackageOutput,
   isSkillPackagingInputError,
   packageSkill,
   validateSkill,
@@ -101,7 +100,7 @@ export function createPackageCommand(): Command {
     )
     .option('--no-rewrite-links', 'Skip rewriting relative links in copied files')
     .option('-b, --base-path <path>', 'Base path for resolving relative links (default: dirname of SKILL.md)')
-    .option('--dry-run', 'Preview packaging without creating files (an --output the real run would refuse is refused here too)')
+    .option('--dry-run', 'Preview packaging without creating files: the real run stopped before its first write, so what it would refuse before writing is refused here too')
     .option('--force', 'Replace a previous package: remove and rebuild --output, overwrite a <output>.zip / <name>.marketplace.json file beside it (a directory there is not removed); without it, an --output that holds anything is refused')
     .option('--debug', 'Enable debug logging')
     .option(
@@ -153,8 +152,9 @@ Exit Codes:
       an --output already holding something and no --force, an --output
       holding the skill's own source, or one under a directory the OS will
       not let VAT examine, so it cannot tell), INPUT_UNREADABLE
-      (a <skill-path> the OS will not stat or read; this verb takes no git
-      snapshot), RUN_INCOMPLETE (an output the OS will not let the build
+      (a <skill-path> the OS will not stat or read, or a directory in the
+      project the OS will not list -- the crawl names it, dry run or real;
+      this verb takes no git snapshot), RUN_INCOMPLETE (an output the OS will not let the build
       write: a full disk, a read-only or unwritable output directory, a file
       in the way, a ZIP, npm package.json or marketplace manifest that could
       not be written -- its partial file removed), or INTERNAL_ERROR (an
@@ -289,48 +289,6 @@ export function formatSkillValidationLines(validationResult: ValidationResult): 
 }
 
 /**
- * Recursively collect linked markdown files
- */
-async function collectLinkedFiles(
-  markdownPath: string,
-  basePath: string,
-  visited: Set<string>
-): Promise<string[]> {
-  const normalizedPath = safePath.resolve(markdownPath);
-  if (visited.has(normalizedPath)) {
-    return [];
-  }
-  visited.add(normalizedPath);
-
-  const parseResult = await parseFileCached(markdownPath, 'markdown');
-  const linkedFiles: string[] = [];
-
-  for (const link of parseResult.links) {
-    if (link.type !== 'local_file') continue;
-
-    const hrefWithoutAnchor = link.href.split('#')[0] ?? link.href;
-    if (hrefWithoutAnchor === '') continue;
-
-    const resolvedPath = safePath.resolve(dirname(markdownPath), hrefWithoutAnchor);
-
-    // Only include markdown files (no basePath filtering - collect all valid linked files)
-    if (!resolvedPath.endsWith('.md')) continue;
-
-    // Skip missing files
-    if (!existsSync(resolvedPath)) continue;
-
-    linkedFiles.push(resolvedPath);
-
-    // Recursively collect from this file
-    const transitive = await collectLinkedFiles(resolvedPath, basePath, visited);
-    linkedFiles.push(...transitive);
-  }
-
-  // Deduplicate
-  return [...new Set(linkedFiles)];
-}
-
-/**
  * Extract skill name from parse result
  */
 function extractSkillName(parseResult: ParseResult): string {
@@ -399,60 +357,45 @@ function resolvePackageFormats(rawFormats: string | undefined): PackageFormat[] 
 export const __internal = { extractSkillName, frontmatterVersion, reportPath, resolvePackageFormats };
 
 /**
- * Perform dry-run preview of packaging operation. Runs after the validation
- * gate passed, so the SKILL.md exists and parses.
+ * Preview the package: the packager's own dry run (`dryRun: true`), so the
+ * project crawl, the link walk and the output check that can refuse the real run
+ * refuse the preview the same way — and the file list is the one the real run
+ * would copy. Runs after the validation gate passed.
  */
-async function performDryRun(
+async function previewPackage(
   skillPath: string,
   options: SkillsPackageCommandOptions,
-  formats: readonly PackageFormat[],
+  packageOptions: PackageSkillOptions,
   logger: ReturnType<typeof createLogger>
 ): Promise<SkillsPackageData> {
   logger.info(`🔍 Dry-run: Analyzing skill packaging...`);
   logger.info(`   Source: ${skillPath}`);
   logger.info(`   Output: ${options.output}`);
 
-  // Parse SKILL.md and extract metadata
-  const parseResult = await parseFileCached(skillPath, 'markdown');
-  const skillName = extractSkillName(parseResult);
-  logger.info(`   Skill: ${skillName}`);
-
-  // Collect linked files (recursively)
-  const basePath = resolveBasePath(options, skillPath);
-  const linkedFiles = await collectLinkedFiles(skillPath, basePath, new Set());
+  const plan = await packageSkill(skillPath, { ...packageOptions, dryRun: true });
+  logger.info(`   Skill: ${plan.skill.name}`);
 
   logger.info(`\n📁 Files to be packaged:`);
   logger.info(`   - SKILL.md (root)`);
-  for (const file of linkedFiles) {
-    const relPath = safePath.relative(basePath, file);
-    logger.info(`   - ${relPath}`);
+  for (const file of plan.files.dependencies) {
+    logger.info(`   - ${toForwardSlash(file)}`);
   }
-  logger.info(`\n   Total: ${linkedFiles.length + 1} files`);
+  logger.info(`\n   Total: ${plan.files.dependencies.length + 1} files`);
 
+  const formats = packageOptions.formats ?? [];
   logger.info(`\n📦 Formats to create:`);
   for (const format of formats) {
     logger.info(`   - ${format}`);
   }
 
-  // The real run's output check, so a preview never says ok to an output the run refuses.
-  checkPackageOutput({
-    outputPath: options.output,
-    skillName,
-    formats,
-    sources: [skillPath, ...linkedFiles],
-    projectRoot: findProjectRoot(dirname(skillPath)) ?? dirname(skillPath),
-    replaceExistingOutput: options.force === true,
-  });
-
-  // Estimate ZIP size if needed
   if (formats.includes('zip')) {
-    const estimatedZipSize = calculateZipSize(skillPath, linkedFiles);
+    const estimatedZipSize = calculateZipSize(skillPath, (plan.plannedSources ?? []).filter((file) => file !== skillPath));
     logger.info(`\n📊 Estimated ZIP size: ~${estimatedZipSize}KB`);
   }
 
   logger.info(`\n✅ Dry-run complete (no files created)`);
   logger.info(`   Run without --dry-run to create the package`);
-  return { skill: skillName, version: frontmatterVersion(parseResult), outputPath: reportPath(options.output), dryRun: true };
+  return { skill: plan.skill.name, version: plan.skill.version ?? null, outputPath: reportPath(options.output), dryRun: true };
 }
 
 /**
@@ -478,9 +421,10 @@ function resolveTarget(rawTarget: string): PackagingTarget {
 }
 
 /**
- * Package the skill. A claude-web ZIP over the 8 MB claude.ai ceiling, and the
- * packager refusing the skill's own content, are FINDINGS about the skill, not
- * failures of the run; every other throw reaches the command's refusal.
+ * Package the skill — or, with `--dry-run`, preview it through the same packager
+ * call. A claude-web ZIP over the 8 MB claude.ai ceiling, and the packager
+ * refusing the skill's own content, are FINDINGS about the skill, not failures of
+ * the run; every other throw reaches the command's refusal.
  */
 async function packageAndReport(
   skillPath: string,
@@ -505,6 +449,9 @@ async function packageAndReport(
   }
 
   try {
+    if (options.dryRun === true) {
+      return buildSkillsPackageReport({ validation, data: await previewPackage(skillPath, options, packageOptions, logger) });
+    }
     const result = await packageSkill(skillPath, packageOptions);
     logger.info(`✅ Packaged skill: ${result.skill.name}`);
     logger.info(`   Output: ${result.outputPath}`);
@@ -525,7 +472,7 @@ async function packageAndReport(
     return buildSkillsPackageReport({
       validation,
       // A too-large ZIP is on disk beside its directory; a refused skill left no bundle.
-      data: { skill: extractSkillName(parseResult), version: frontmatterVersion(parseResult), outputPath: tooLarge ? reportPath(options.output) : null, dryRun: false },
+      data: { skill: extractSkillName(parseResult), version: frontmatterVersion(parseResult), outputPath: tooLarge ? reportPath(options.output) : null, dryRun: options.dryRun === true },
       refused: { code, message, location: issueLocation(skillPath, locationRoot) },
     });
   }
@@ -569,9 +516,6 @@ async function runPackage(
     // The gate stopped it: nothing was packaged, and the document says so.
     const skill = validation.metadata?.name ?? basename(skillDir);
     return buildSkillsPackageReport({ validation, data: { skill, version: null, outputPath: null, dryRun: options.dryRun === true } });
-  }
-  if (options.dryRun) {
-    return buildSkillsPackageReport({ validation, data: await performDryRun(skillPath, options, formats, logger) });
   }
   return packageAndReport(skillPath, options, target, formats, validation, locationRoot, logger);
 }

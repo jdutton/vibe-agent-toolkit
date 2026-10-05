@@ -91,6 +91,7 @@ Example:
     .description('Build agent for deployment target')
     .option('--target <type>', 'Build target (skill, langchain, etc.)', 'skill')
     .option('--output <path>', 'Output directory (default: dist/vat-bundles/<target>/<agent>)')
+    .option('--force', 'Replace a previous build: remove and rebuild <output>/<agent>; without it, one that holds anything is refused')
     .option('--debug', DEBUG_OPTION_DESC)
     .action(buildCommand)
     .addHelpText(
@@ -101,6 +102,14 @@ Description:
   prompts, and resources into target-specific format.
 
   Argument: agent name OR path to agent directory/manifest file
+
+  VAT never deletes or overwrites what it did not produce. With --output, an
+  <output>/<agent-name>/ that already holds anything is refused (USAGE_INVALID)
+  and left exactly as it was, unless --force says it is a previous build to
+  replace (removed and rebuilt). An empty directory is used as-is; an output
+  holding the agent's own source is refused even with --force. The default
+  location is VAT's and is built into in place. Every source is read before
+  anything is written.
 
 Targets:
   - skill: Agent Skills (for Claude Desktop/Code)
@@ -115,13 +124,16 @@ Output (YAML on stdout):
 Exit Codes (derived from the document):
   0 - ok: the agent was built
   2 - error: nothing was built — USAGE_INVALID (a --target other than
-      skill, no projectRoot, the path or name names no manifest, or no
-      package.json encloses the agent and --output was not given),
+      skill, no projectRoot, the path or name names no manifest, no
+      package.json encloses the agent and --output was not given, an
+      --output whose agent directory holds something and no --force, or an
+      output holding the agent's own source),
       CONFIG_INVALID (the manifest does not validate, declares no system
       prompt, or its $ref names no file), INPUT_UNREADABLE (an agent
       search path looked up by name, the manifest, its system prompt,
-      scripts/, LICENSE.txt or package.json cannot be read, or scripts/
-      holds a named pipe, socket or device), RUN_INCOMPLETE (the packager refused the bundle's content — a
+      scripts/, LICENSE.txt or package.json cannot be read, or the system
+      prompt, LICENSE.txt or a file under scripts/ is a named pipe, socket or
+      device), RUN_INCOMPLETE (the packager refused the bundle's content — a
       SKILL_PACKAGING_FAILED finding at the agent — or the OS would not let
       the build write its output: a full disk, a read-only or unwritable
       --output, a file in its way; no finding)
@@ -136,6 +148,7 @@ Examples:
   $ vat agent build agent-generator                    # Build as Agent Skill
   $ vat agent build agent-generator --target skill     # Explicit target
   $ vat agent build ./my-agent --output ./my-skill     # Custom output path
+  $ vat agent build ./my-agent --output ./my-skill --force  # Replace the previous build there
 `
     );
 

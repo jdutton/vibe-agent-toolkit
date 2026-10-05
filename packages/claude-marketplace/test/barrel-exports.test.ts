@@ -104,6 +104,7 @@ const BARREL_EXPORTS = [
   'readSettingsLayers',
   'replaceDirectory',
   'requirePluginInstallNames',
+  'requirePluginSource',
   'resolveEffectiveTargets',
   'resolveSettingsPaths',
   'skillVersionsPath',

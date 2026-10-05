@@ -93,7 +93,7 @@ export function requireExistingDatabase(dbPath: string, explicit: boolean): void
  *   for the project's own `.rag-db`
  */
 function refuseForeignEntries(dbPath: string, entries: readonly DatabaseDirectoryEntry[], explicit: boolean, untouched: string, wanted: string): void {
-  const foreign = foreignDatabaseEntries(entries);
+  const foreign = foreignDatabaseEntries(dbPath, entries);
   if (foreign.length === 0) return;
   const named = foreign.slice(0, NAMED_ENTRIES).join(', ');
   const more = foreign.length > NAMED_ENTRIES ? ` and ${foreign.length - NAMED_ENTRIES} more` : '';

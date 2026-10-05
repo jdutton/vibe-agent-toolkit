@@ -243,8 +243,11 @@ for terminology.
 - `-f, --formats <formats>` - Comma-separated formats: directory,zip,npm,marketplace (default: directory,zip). An unknown or empty name is refused (`USAGE_INVALID`)
 - `--no-rewrite-links` - Skip rewriting relative links in copied files
 - `-b, --base-path <path>` - Base path for resolving relative links (default: dirname of SKILL.md)
-- `--dry-run` - Preview packaging without creating files. It runs the same `--output` check as a
-  real run, so an output the real run would refuse is refused here too (`USAGE_INVALID`)
+- `--dry-run` - Preview packaging without creating files. It is the real run's own packaging pass
+  stopped before the first write: the project crawl, the link walk and the `--output` check all
+  run, so whatever the real run would refuse before writing is refused here too, with the same
+  code — and the file list is the one the real run copies. Only the checks on the written bundle
+  (and the ZIP's size) are not run
 - `--force` - Replace a previous package: the `--output` directory (or file) is removed and
   rebuilt, and a `<output>.zip` / `<name>.marketplace.json` FILE beside it is overwritten. A
   directory standing where one of those archives goes is not removed: the write fails and the run
@@ -254,7 +257,8 @@ for terminology.
   directory is used as-is. An `--output` that is, or contains, the SKILL.md or any file it bundles
   is refused (`USAGE_INVALID`) even with `--force`: the package would be written over its own source.
   So is an `--output` under a directory the OS will not let VAT examine (`EACCES`), dry run or real,
-  `--force` or not: VAT cannot tell whether it holds the source
+  `--force` or not: VAT cannot tell whether it holds the source — unless that directory is inside
+  the project and not gitignored, when the crawl refuses the run first (`INPUT_UNREADABLE`)
 - `--debug` - Enable debug logging
 
 **Exit Codes:** derived from the published report — `0` when no finding is an error (warnings
@@ -265,8 +269,9 @@ and info never block: the verb has no `--strict`), `1` when one is, `2` when the
   claude.ai's 8 MB upload limit (`SKILL_PACKAGE_TOO_LARGE`; the directory and the ZIP are on disk)
 - `2` — `error.code` says why: `USAGE_INVALID` (a `<skill-path>` naming nothing, an invalid
   `--target`, an unknown or empty `--formats` value, no project root, an `--output` already holding something without `--force`),
-  `INPUT_UNREADABLE` (a `<skill-path>` the OS will not stat or read — this verb takes no git
-  snapshot, so an unreadable file elsewhere in the repository does not stop it),
+  `INPUT_UNREADABLE` (a `<skill-path>` the OS will not stat or read, or a directory in the project
+  the OS will not list — the crawl that finds what the skill links to names it; this verb takes no
+  git snapshot, so an unreadable FILE elsewhere in the repository does not stop it),
   `RUN_INCOMPLETE` (an output the OS will not let the build write — a full disk, a read-only or
   unwritable output directory, a file in the way, a ZIP, npm `package.json` or marketplace
   manifest that could not be written, whose partial file is removed; never a finding against the
@@ -274,7 +279,9 @@ and info never block: the verb has no `--strict`), `1` when one is, `2` when the
 
 A bundled markdown file the OS will not read is a `SKILL_PACKAGING_FAILED` finding here (exit 1),
 next to a `LINK_INTEGRITY_BROKEN` warning from the validator: `vat skills package` does not run
-the packaging validation that reports it as `LINK_TARGET_UNREADABLE` in `vat skills build`.
+the packaging validation that reports it as `LINK_TARGET_UNREADABLE` in `vat skills build`. A
+linked file that is not a regular file — a named pipe, socket or device — is refused unread by the
+validator itself, as a `LINK_TARGET_UNREADABLE` error (exit 1), in both verbs.
 
 **What Gets Packaged:**
 - Root SKILL.md file

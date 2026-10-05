@@ -1,6 +1,6 @@
 /**
  * `auditOnePlugin` over a URL source: the runner shallow-clones a real bare
- * repository with git, so these cases live in the integration tier. The
+ * repository with git — a spawned process — so these cases live in the system tier. The
  * local-source and pure cases stay in `test/commands/corpus/runner.test.ts`.
  */
 

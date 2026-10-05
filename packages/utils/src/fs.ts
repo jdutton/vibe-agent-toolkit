@@ -22,6 +22,7 @@ export {
 export {
   exceedsDecodableLength,
   MAX_DECODABLE_BYTES,
+  openForReading,
   readDecodableBytes,
   readTextContent,
   readTextContentSync,

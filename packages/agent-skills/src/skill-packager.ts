@@ -207,6 +207,16 @@ export interface PackageSkillOptions {
   sourceGeneratedInOutput?: boolean;
 
   /**
+   * Plan the package without writing it: run everything that can refuse the run
+   * before a byte is written — the project crawl, the link walk, the output check
+   * — exactly as the real run does, then return without removing or writing
+   * anything. The result names the files the package would hold (and
+   * `plannedSources`); it has no `artifacts`, and the checks on the written bundle
+   * (`postBuildIssues`) do not run.
+   */
+  dryRun?: boolean;
+
+  /**
    * Package format(s) to generate
    * Default: ['directory']
    */
@@ -448,6 +458,9 @@ export interface PackageSkillResult {
 
   /** References excluded from bundle */
   excludedReferences?: string[] | undefined;
+
+  /** A dry run's plan: the absolute path of every file the package would copy, SKILL.md first. */
+  plannedSources?: string[] | undefined;
 
   /**
    * Post-build integrity issues — issues that the override config did NOT suppress.
@@ -722,10 +735,21 @@ export async function packageSkill(
   if (options.sourceGeneratedInOutput !== true) {
     const owned = options.outputPath === undefined || options.replaceExistingOutput === true;
     checkPackageOutput({ outputPath, skillName: skillMetadata.name, formats, sources: allFiles, projectRoot, replaceExistingOutput: owned });
-    if (owned) {
+    if (owned && options.dryRun !== true) {
       const subject = packageOutputSubject(outputPath, skillMetadata.name, projectRoot);
       await withFsAttribution(subject, 'output', () => rm(safePath.resolve(outputPath), { recursive: true, force: true }), 'removed');
     }
+  }
+
+  // A dry run stops here: every refusal that can come before a write has had its chance.
+  if (options.dryRun === true) {
+    return {
+      outputPath,
+      skill: skillMetadata,
+      files: { root: 'SKILL.md', dependencies: bundledFiles.map((file) => safePath.relative(effectiveBasePath, file)) },
+      plannedSources: allFiles,
+      hasErrors: false,
+    };
   }
 
   // 8. Build path map for file copying and link rewriting

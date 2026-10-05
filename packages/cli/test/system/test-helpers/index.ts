@@ -28,6 +28,7 @@ export type { TestProjectOptions } from './project-setup.js';
 export {
   executeRagCommandInEmptyProject,
   executeRagQueryAndExpectSuccess,
+  FINDER_DS_STORE,
   setupIndexedRagTest,
   setupRagTestProject,
   setupRagTestSuite,

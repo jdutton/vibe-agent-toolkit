@@ -11,6 +11,7 @@
 import * as fs from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { cleanupTestTempDir, createTestTempDir, fakeHomeEnv, getBinPath, writeFileTree } from './test-common.js';
@@ -112,6 +113,17 @@ describe('input a verb used to ignore is refused (system test)', () => {
 
     it('naming a file that does not parse is INPUT_UNREADABLE, not a warning beside an unchecked report', () => {
       expectAuditRefusal(['--compat', '--settings', 'malformed-settings.json'], 'INPUT_UNREADABLE', 'malformed-settings.json');
+    });
+
+    it.skipIf(CANNOT_DENY_READS)('an auto-discovered project settings file the OS refuses is INPUT_UNREADABLE naming it, never skipped as absent', () => {
+      const lockedSettings = safePath.join(pluginDir, '.claude', 'settings.json');
+      writeFileTree(pluginDir, { '.claude/settings.json': JSON.stringify({ permissions: { deny: ['Bash'] } }) });
+      fs.chmodSync(lockedSettings, 0o000);
+      try {
+        expectAuditRefusal(['--compat', '--settings'], 'INPUT_UNREADABLE', '.claude/settings.json');
+      } finally {
+        fs.rmSync(safePath.join(pluginDir, '.claude'), { recursive: true, force: true });
+      }
     });
 
     it('control: --compat with a readable settings file runs the settings check', () => {

@@ -13,9 +13,10 @@
  * declared local plugin walked.
  */
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
 
 import {
+  materializeIssue,
   validateMarketplace,
   validateSkill,
   type ValidationResult,
@@ -30,7 +31,7 @@ import {
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, findProjectRoot, isPathAbsentError, issueLocation, isVatError, normalizePath, PathEscapesRootError, relativeEscapesRoot, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, findProjectRoot, isFilesystemAccessError, isPathAbsentError, issueLocation, isVatError, normalizePath, PathEscapesRootError, relativeEscapesRoot, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { refusalCodeOf } from '../../../utils/command-refusal.js';
@@ -104,6 +105,8 @@ function checkMarketplaceFiles(marketplacePath: string): ValidationIssue[] {
  */
 class WalkBoundary {
   readonly refused: string[] = [];
+  /** Root-relative paths inside a validated plugin the OS would not let the walk read. */
+  readonly unread: string[] = [];
 
   constructor(
     private readonly marketplacePath: string,
@@ -120,6 +123,21 @@ class WalkBoundary {
     if (!relativeEscapesRoot(safePath.relative(this.realRoot, real))) return true;
     this.refused.push(issueLocation(abs, this.marketplacePath));
     return false;
+  }
+
+  /**
+   * Record `abs` as a path the OS refused to let the walk read, and return its
+   * `SCAN_PATH_UNREADABLE` warning. The record, not the warning, is what the
+   * builder turns into the run-integrity refusal: a severity override may
+   * silence the warning, never the fact that nothing behind the path was read.
+   * Anything that is not a filesystem refusal is a defect and is rethrown.
+   */
+  unreadable(abs: string, error: unknown): ValidationIssue {
+    if (!isFilesystemAccessError(error)) throw error;
+    const location = issueLocation(abs, this.marketplacePath);
+    this.unread.push(location);
+    const errnoCode = String((error as NodeJS.ErrnoException).code);
+    return materializeIssue('SCAN_PATH_UNREADABLE', { location, detail: `${location}: read refused with ${errnoCode}` });
   }
 }
 
@@ -142,23 +160,49 @@ async function validatePluginSkills(
   const skillsDir = safePath.join(pluginDir, 'skills');
   if (!existsSync(skillsDir) || !boundary.contains(skillsDir)) return [];
 
+  let skillEntries: Dirent[];
+  try {
+    skillEntries = readdirSync(skillsDir, { withFileTypes: true });
+  } catch (error) {
+    return resolveIssueSeverity([boundary.unreadable(skillsDir, error)], validation);
+  }
+
   const issues: ValidationIssue[] = [];
-  const skillEntries = readdirSync(skillsDir, { withFileTypes: true });
-
   for (const skillEntry of skillEntries) {
-    const skillDir = safePath.join(skillsDir, skillEntry.name);
-    if (!isDirectory(skillDir) || !boundary.contains(skillDir)) continue;
+    issues.push(...await validateOneSkill(safePath.join(skillsDir, skillEntry.name), marketplacePath, boundary, validation));
+  }
+  return issues;
+}
 
-    const skillMdPath = safePath.join(skillDir, 'SKILL.md');
-    if (!existsSync(skillMdPath) || !boundary.contains(skillMdPath)) continue;
-
+/**
+ * Validate one entry of a plugin's `skills/`: nothing when it is not a skill
+ * directory holding a SKILL.md under the root. A skill the OS will not let the
+ * run stat or read is one this gate did not check — named through `boundary`
+ * and refused by the builder, never a crash (it was INTERNAL_ERROR, exit 2).
+ */
+async function validateOneSkill(
+  skillDir: string,
+  marketplacePath: string,
+  boundary: WalkBoundary,
+  validation: ValidationConfig | undefined,
+): Promise<ValidationIssue[]> {
+  const refusedAt = (path: string, error: unknown): ValidationIssue[] =>
+    resolveIssueSeverity([boundary.unreadable(path, error)], validation);
+  try {
+    if (!isDirectory(skillDir) || !boundary.contains(skillDir)) return [];
+  } catch (error) {
+    return refusedAt(skillDir, error);
+  }
+  const skillMdPath = safePath.join(skillDir, 'SKILL.md');
+  try {
+    if (!isPresent(skillMdPath) || !boundary.contains(skillMdPath)) return [];
     // Severity only (no `allow`), resolved here so a default-`ignore` code can still be raised.
     const severity = validation?.severity === undefined ? {} : { severity: validation.severity };
     const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir, locationRoot: marketplacePath, validation: severity });
-    issues.push(...skillResult.issues);
+    return skillResult.issues;
+  } catch (error) {
+    return refusedAt(skillMdPath, error);
   }
-
-  return issues;
 }
 
 /** One manifest entry with a relative-path `source`, as the manifest wrote it. */
@@ -189,6 +233,17 @@ export interface LocalPluginResult extends LocalPluginSource {
 function isDirectory(dir: string): boolean {
   try {
     return statSync(dir).isDirectory();
+  } catch (error) {
+    if (isPathAbsentError(error)) return false;
+    throw error;
+  }
+}
+
+/** Whether anything is at `path`; absent is `false`, a refused stat propagates (`existsSync` says `false` to both). */
+function isPresent(path: string): boolean {
+  try {
+    statSync(path);
+    return true;
   } catch (error) {
     if (isPathAbsentError(error)) return false;
     throw error;
@@ -286,7 +341,7 @@ async function validateDeclaredPlugins(
   marketplacePath: string,
   declared: readonly LocalPluginSource[],
   validation: ValidationConfig | undefined,
-): Promise<{ pluginResults: LocalPluginResult[]; undeclared: string[]; refused: string[]; issues: ValidationIssue[] }> {
+): Promise<{ pluginResults: LocalPluginResult[]; undeclared: string[]; refused: string[]; unread: string[]; issues: ValidationIssue[] }> {
   const pluginResults: LocalPluginResult[] = [];
   const issues: ValidationIssue[] = [];
   // Keyed by REAL path: one directory is validated once however many entries
@@ -324,6 +379,7 @@ async function validateDeclaredPlugins(
     pluginResults,
     undeclared: undeclaredPluginDirs(marketplacePath, new Set(validatedByDir.keys())),
     refused: boundary.refused,
+    unread: boundary.unread,
     issues,
   };
 }
@@ -472,6 +528,12 @@ export interface MarketplaceFindings {
    */
   refused: string[];
   /**
+   * Paths inside a validated plugin's `skills/` the OS would not let the walk
+   * list or read (a `skills/` dir, a skill dir, a `SKILL.md`), relative to the
+   * root. Each also has its `SCAN_PATH_UNREADABLE` warning in `issues`.
+   */
+  unread: string[];
+  /**
    * Manifest, required-file, plugin and skill issues, in report order, with
    * every severity already resolved against the governing project's
    * `validation.severity` map.
@@ -532,13 +594,14 @@ export async function collectMarketplaceFindings(
       pluginResults: [],
       undeclared: [],
       refused: [],
+      unread: [],
       issues: [...marketplaceResult.issues],
     };
   }
 
   const validation = resolveProjectValidationConfig(marketplacePath, logger);
   const fileIssues = checkMarketplaceFiles(marketplacePath);
-  const { pluginResults, undeclared, refused, issues: pluginIssues } = await validateDeclaredPlugins(
+  const { pluginResults, undeclared, refused, unread, issues: pluginIssues } = await validateDeclaredPlugins(
     marketplacePath,
     marketplaceResult.metadata?.localPluginSources ?? [],
     validation,
@@ -550,7 +613,7 @@ export async function collectMarketplaceFindings(
     ...pluginIssues,
   ];
 
-  return { marketplaceResult, pluginResults, undeclared, refused, issues };
+  return { marketplaceResult, pluginResults, undeclared, refused, unread, issues };
 }
 
 /** Everything the emitted report is built from. */
@@ -585,6 +648,12 @@ export interface MarketplaceValidateReportInput {
    * refusal.
    */
   refused: readonly string[];
+  /**
+   * Root-relative paths in a validated plugin's `skills/` the OS would not let
+   * the walk read. Required for the same reason as `refused`: the builder turns
+   * a non-empty list into the run-integrity refusal.
+   */
+  unread: readonly string[];
   issues: readonly ValidationIssue[];
   durationMs: number;
 }
@@ -643,9 +712,10 @@ export function buildMarketplaceValidateReport(
   input: MarketplaceValidateReportInput,
 ): MarketplaceValidateReport {
   const { root, marketplace, pluginResults, undeclared, refused } = input;
+  const unread = [...unreadManifests(pluginResults, refused, root), ...input.unread];
 
   const findings = toFindings([
-    ...unfinishedRunFinding(marketplace, pluginResults, refused, unreadManifests(pluginResults, refused, root)),
+    ...unfinishedRunFinding(marketplace, pluginResults, refused, unread),
     ...input.issues,
   ]);
 
@@ -760,10 +830,10 @@ function unfinishedRunFinding(
   if (unread.length > 0) {
     const named = unread.map((path) => `\`${path}\``).join(', ');
     parts.push(
-      `The operating system refused to let this run read ${unread.length} plugin manifest(s): ${named}`
-      + ' (the SCAN_PATH_UNREADABLE finding beside this one names the errno). None of those plugins\''
-      + ' manifest checks ran, so this document is not a verdict about them. Make each file readable'
-      + ' — check its permissions and ownership — and re-run.',
+      `The operating system refused to let this run read ${unread.length} path(s) inside a validated plugin: ${named}`
+      + ' (the SCAN_PATH_UNREADABLE finding beside each names the errno). Nothing behind them was'
+      + ' checked — a plugin.json\'s manifest checks, a skill\'s SKILL.md checks — so this document is'
+      + ' not a verdict about them. Make each path readable — check its permissions and ownership — and re-run.',
     );
   }
   return [runIntegrityFinding(parts.join(' '))];
@@ -817,7 +887,7 @@ export async function runMarketplaceValidatePhase(
     const marketplacePath = safePath.resolve(targetPath ?? '.');
     logger.info(`Validating marketplace: ${marketplacePath}`);
 
-    const { marketplaceResult, pluginResults, undeclared, refused, issues } =
+    const { marketplaceResult, pluginResults, undeclared, refused, unread, issues } =
       await collectMarketplaceFindings(marketplacePath, logger);
 
     const report = buildMarketplaceValidateReport({
@@ -826,6 +896,7 @@ export async function runMarketplaceValidatePhase(
       pluginResults,
       undeclared,
       refused,
+      unread,
       issues,
       durationMs: Date.now() - startTime,
     });
@@ -918,7 +989,10 @@ Output (YAML on stdout — the report envelope):
           each is named here and in the RESOURCE_CHECK_BROKEN finding (exit 1).
           A plugin.json the OS will not read is the same: its row is
           manifestRead: false and the RESOURCE_CHECK_BROKEN finding names it
-          (exit 1) beside the SCAN_PATH_UNREADABLE warning — never a pass.
+          (exit 1) beside the SCAN_PATH_UNREADABLE warning — never a pass. So
+          is a plugin's skills/ directory the OS will not list, or a skill
+          directory or SKILL.md it will not stat or read: named in that
+          finding (exit 1), each beside its SCAN_PATH_UNREADABLE warning.
 
   stderr prints every error in full; --verbose adds every warning and info.
   The document is the same either way.

@@ -88,6 +88,7 @@ export {
   readKnownMarketplaces,
   replaceDirectory,
   requirePluginInstallNames,
+  requirePluginSource,
   writeInstalledPlugins,
   writeKnownMarketplaces,
 } from './install/plugin-registry.js';

@@ -18,6 +18,7 @@ import type { AgentBuildReport } from './build-schema.js';
 export interface BuildCommandOptions {
   target?: string;
   output?: string;
+  force?: boolean;
   debug?: boolean;
 }
 
@@ -59,7 +60,12 @@ export async function buildCommand(
 
     logger.info('Building Agent Skill...');
     // Only pass outputPath if explicitly provided by user
-    const result = await buildAgentSkill(options.output ? { agentPath, target, outputPath: options.output } : { agentPath, target });
+    const result = await buildAgentSkill({
+      agentPath,
+      target,
+      ...(options.output ? { outputPath: options.output } : {}),
+      ...(options.force === true && { replaceExistingOutput: true }),
+    });
 
     const durationMs = Date.now() - startTime;
     logger.info(`Build completed in ${durationMs}ms`);

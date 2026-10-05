@@ -96,6 +96,7 @@ function reportFor(
     pluginResults: results,
     undeclared: [],
     refused: [],
+    unread: [],
     issues: [],
     durationMs: 3,
     ...extra,
@@ -231,6 +232,7 @@ describe('marketplace validate — a declared local plugin the run did not valid
       pluginResults: [],
       undeclared: [],
       refused: [],
+      unread: [],
       issues: [{ code: 'MARKETPLACE_MISSING_MANIFEST', severity: 'error', message: 'missing' }],
       durationMs: 2,
     }));

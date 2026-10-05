@@ -88,6 +88,21 @@ describe('an output a skill-packaging lane cannot write ends RUN_INCOMPLETE (sys
     expect(status).toBe(2);
   });
 
+  // The dry run is the real run's packaging pass stopped before its first write, so
+  // the project crawl's refusal of an unlistable directory reaches both alike.
+  it.skipIf(CANNOT_DENY_READS)('vat skills package: --dry-run refuses an unlistable project directory as the real run does', { timeout: PER_TEST_TIMEOUT_MS }, () => {
+    const cwd = skillsProject('package-dry-crawl');
+    mkdirSyncReal(safePath.join(cwd, 'locked'));
+    lock(safePath.join(cwd, 'locked'), 0o000);
+    const out = safePath.join(cwd, '..', 'package-dry-crawl-out');
+
+    for (const extra of [['--dry-run'], []]) {
+      const { status, document, output } = run(cwd, ['skills', 'package', SKILL_MD, '-o', out, ...extra]);
+      expect(refusalOf(document), output).toStrictEqual({ status: 'error', code: 'INPUT_UNREADABLE' });
+      expect(status).toBe(2);
+    }
+  });
+
   it('vat skills package: a file in the way of --output is the run, not the skill', { timeout: PER_TEST_TIMEOUT_MS }, () => {
     const cwd = skillsProject('package-blocked');
     writeFileSync(safePath.join(cwd, 'blocker'), 'x');

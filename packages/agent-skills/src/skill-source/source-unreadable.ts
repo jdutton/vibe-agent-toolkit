@@ -6,7 +6,7 @@
  * `INPUT_UNREADABLE` (`SKILL_TEST_REFUSAL_BY_ERROR_CODE`).
  */
 
-import { isFilesystemAccessError, VatError } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, isPathAbsentError, VatError } from '@vibe-agent-toolkit/utils';
 
 /** The `VatError` code of a skill source the OS will not read. */
 export const SKILL_SOURCE_UNREADABLE_CODE = 'SKILL_SOURCE_UNREADABLE';
@@ -20,8 +20,9 @@ export class SkillSourceUnreadableError extends VatError {
 }
 
 /**
- * Run a read of `path` in a skill source, coding an OS refusal as
- * {@link SkillSourceUnreadableError} naming the path. Anything else is rethrown.
+ * Run a read of `path` in a skill source, coding an OS refusal — or an absence,
+ * with its own remedy — as {@link SkillSourceUnreadableError} naming the path.
+ * Anything else is rethrown.
  *
  * @param path - The file or directory being read
  * @param read - The read
@@ -31,6 +32,14 @@ export async function readingSkillSource<T>(path: string, read: () => T | Promis
     return await read();
   } catch (error) {
     if (!isFilesystemAccessError(error)) throw error;
+    // An absence has no permissions to fix: name the path, which is what to correct.
+    if (isPathAbsentError(error)) {
+      throw new SkillSourceUnreadableError(
+        `The skill source at ${path} does not exist (${(error as NodeJS.ErrnoException).code ?? 'ENOENT'}). `
+          + 'Check the path, and that it names a directory.',
+        { cause: error },
+      );
+    }
     throw new SkillSourceUnreadableError(
       `Cannot read the skill source at ${path} (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}). `
         + "Check the file's permissions and ownership, and that every directory above it is traversable.",

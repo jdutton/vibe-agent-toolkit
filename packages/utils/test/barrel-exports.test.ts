@@ -95,6 +95,7 @@ const BARREL_EXPORTS = [
   'normalizeTimingDirectory',
   'normalizedTmpdir',
   'openEachFileForReading',
+  'openForReading',
   'parseEnvBoolean',
   'parseWholeNumberAtLeast',
   'pathSpellingFrom',

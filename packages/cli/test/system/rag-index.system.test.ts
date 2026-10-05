@@ -38,7 +38,7 @@ import {
   getBinPath,
   safePath,
 } from './test-common.js';
-import { setupRagTestProject, setupTestProject } from './test-helpers/index.js';
+import { FINDER_DS_STORE, setupRagTestProject, setupTestProject } from './test-helpers/index.js';
 
 const binPath = getBinPath(import.meta.url);
 
@@ -203,8 +203,8 @@ describe('RAG index command (system test)', () => {
     const outcome = await indexRefusal(projectDir, notDb);
 
     expect(outcome).toMatchObject({ exit: 2, code: 'USAGE_INVALID' });
-    // The directory by its basename, not its absolute path: an absolute path in error.message is a
-    // registered defect (docs/contributing/known-defects.md), so this test must not pin it.
+    // The directory by its basename: the refusal echoes --db as typed (`--db ../look` prints
+    // `../look`), and this test types an absolute temp path, which is not the part worth pinning.
     expect(String(outcome.message)).toContain('index-into-foreign');
     expect(String(outcome.message)).toContain('keep.txt');
     expect(fs.readdirSync(notDb)).toEqual(['keep.txt']);
@@ -225,7 +225,7 @@ describe('RAG index command (system test)', () => {
   it('a --db directory holding only OS litter is indexed into', async () => {
     const littered = safePath.join(tempDir, 'index-into-littered');
     fs.mkdirSync(littered);
-    fs.writeFileSync(safePath.join(littered, '.DS_Store'), '');
+    fs.writeFileSync(safePath.join(littered, '.DS_Store'), FINDER_DS_STORE);
 
     expect(await indexRefusal(projectDir, littered)).toMatchObject({ exit: 0, code: 'ok' });
   });

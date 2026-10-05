@@ -12,7 +12,7 @@ import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 
 import { RAG_CLEAR_REPORT_SCHEMA } from '../../src/commands/rag/admin-schema.js';
 
-import { describe, executeCliAndParseYaml, expect, fs, getBinPath, getTestOutputDir, it, setupRagTestSuite } from './rag-test-setup.js';
+import { describe, executeCliAndParseYaml, expect, FINDER_DS_STORE, fs, getBinPath, getTestOutputDir, it, setupRagTestSuite } from './rag-test-setup.js';
 import { setupTestProject } from './test-helpers/index.js';
 
 const binPath = getBinPath(import.meta.url);
@@ -93,7 +93,7 @@ describe('RAG clear command (system test)', () => {
   // Finder writes `.DS_Store` into any folder a person opens: still the database vat rag index wrote.
   it('a database holding .DS_Store is still a database', async () => {
     const littered = copyOfDatabase('littered-db');
-    fs.writeFileSync(safePath.join(littered, '.DS_Store'), '');
+    fs.writeFileSync(safePath.join(littered, '.DS_Store'), FINDER_DS_STORE);
 
     expect(await runRag(['stats', '--db', littered], suite.projectDir)).toMatchObject({ exit: 0 });
   });
@@ -103,13 +103,25 @@ describe('RAG clear command (system test)', () => {
     const lookalike = safePath.join(suite.tempDir, 'litter-lookalike');
     mkdirSyncReal(safePath.join(lookalike, '._notes'), { recursive: true });
     fs.writeFileSync(safePath.join(lookalike, '._notes', 'a.txt'), 'precious');
-    fs.writeFileSync(safePath.join(lookalike, '.DS_Store'), '');
+    fs.writeFileSync(safePath.join(lookalike, '.DS_Store'), FINDER_DS_STORE);
 
     const outcome = await runRag(['clear', '--db', lookalike], suite.projectDir);
 
     expect(outcome).toMatchObject({ exit: 2, code: 'USAGE_INVALID' });
     expect(String(outcome.message)).toContain('._notes');
     expect(fs.readFileSync(safePath.join(lookalike, '._notes', 'a.txt'), 'utf8')).toBe('precious');
+  });
+
+  // A litter NAME is not litter: a user's own `._notes` file once went with the database.
+  it('rag clear --db <a database beside a user file named ._notes> is USAGE_INVALID and removes nothing', async () => {
+    const beside = copyOfDatabase('apple-double-lookalike');
+    fs.writeFileSync(safePath.join(beside, '._notes'), 'my notes');
+
+    const outcome = await runRag(['clear', '--db', beside], suite.projectDir);
+
+    expect(outcome).toMatchObject({ exit: 2, code: 'USAGE_INVALID' });
+    expect(String(outcome.message)).toContain('._notes');
+    expect(fs.readFileSync(safePath.join(beside, '._notes'), 'utf8')).toBe('my notes');
   });
 
   // Removing a link removes only the link: the index it names survived a `cleared: true` report.

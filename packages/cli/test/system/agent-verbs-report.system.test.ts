@@ -138,6 +138,22 @@ describe('vat agent build / import / installed / list / install / uninstall (sys
       expect(run.report.findings.map(({ code, location }) => ({ code, location }))).toStrictEqual([{ code: 'SKILL_PACKAGING_FAILED', location: 'agent' }]);
     });
 
+    // VAT never overwrites what it did not produce: the `skills package -o` rule, and its check.
+    it('refuses an --output already holding the user\'s files as USAGE_INVALID naming it, and --force replaces it', async () => {
+      const cwd = agentProject('build-occupied');
+      writeFileTree(cwd, { 'userout/widget-reviewer/SKILL.md': 'USER precious\n' });
+      const userSkill = safePath.join(cwd, 'userout', 'widget-reviewer', 'SKILL.md');
+
+      const refused = await vat(AGENT_BUILD_REPORT_SCHEMA, ['agent', 'build', './agent', '--output', 'userout'], cwd);
+      expectRefusal(refused, 'USAGE_INVALID');
+      expect(refused.report.status === 'error' ? refused.report.error.message : '').toContain('userout/widget-reviewer');
+      expect(readFileSync(userSkill, 'utf-8')).toBe('USER precious\n');
+
+      const forced = await vat(AGENT_BUILD_REPORT_SCHEMA, ['agent', 'build', './agent', '--output', 'userout', '--force'], cwd);
+      expect(forced.status, forced.stderr).toBe(ExitCode.OK);
+      expect(readFileSync(userSkill, 'utf-8')).toContain('name: widget-reviewer');
+    });
+
     it('refuses a manifest with no system prompt as CONFIG_INVALID, exit 2 — the manifest, not a VAT defect', async () => {
       expectRefusal(await vat(AGENT_BUILD_REPORT_SCHEMA, ['agent', 'build', './agent'], agentProject('build-no-prompt', MANIFEST)), 'CONFIG_INVALID');
     });

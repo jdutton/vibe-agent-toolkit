@@ -14,7 +14,6 @@
  */
 
 import { existsSync, statSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import {
@@ -49,11 +48,12 @@ import {
   safePath,
 } from '@vibe-agent-toolkit/utils';
 import { type DirectoryRefusal, DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
+import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { collectPreBuildGlobFindings, preBuildGlobFindingsToIssues } from '../files-config.js';
-import { READ_REMEDY } from '../fs-attribution.js';
+import { readRemedyFor } from '../fs-attribution.js';
 import {
   conventionalSuiteProbe,
   partitionTestInputFileEntries,
@@ -272,7 +272,9 @@ function validateFilesConfig(
  * A bundled markdown file's text, or `undefined` when the OS will not read it —
  * reported as `LINK_TARGET_UNREADABLE` at that file, the code the walker gives a
  * link target it cannot stat. The skill's source refusing a read is a finding
- * against the skill; uncaught, it escaped every lane as a defect in VAT.
+ * against the skill; uncaught, it escaped every lane as a defect in VAT. Read
+ * through `readTextContent`, which refuses a named pipe unread (`EFTYPE`) — a
+ * bare `readFile` blocked on one until a writer appeared, hanging the build.
  */
 async function readBundledMarkdown(
   file: string,
@@ -280,12 +282,12 @@ async function readBundledMarkdown(
   issues: ValidationIssue[],
 ): Promise<string | undefined> {
   try {
-    return await readFile(file, 'utf-8');
+    return (await readTextContent(file)).text;
   } catch (error) {
     if (!isFilesystemAccessError(error)) throw error;
     issues.push(registryIssueAt(
       'LINK_TARGET_UNREADABLE',
-      `Linked file ${location} is bundled, but it could not be read: ${(error as Error).message}. ${READ_REMEDY}`,
+      `Linked file ${location} is bundled, but it could not be read: ${(error as Error).message}. ${readRemedyFor(error)}`,
       location,
     ));
     return undefined;

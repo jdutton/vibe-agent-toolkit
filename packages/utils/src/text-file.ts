@@ -21,8 +21,8 @@
  */
 
 import { constants } from 'node:buffer';
-import { closeSync, fstatSync, openSync, readFileSync } from 'node:fs';
-import { open } from 'node:fs/promises';
+import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync, type Stats } from 'node:fs';
+import { open, type FileHandle } from 'node:fs/promises';
 
 import { decodeTextContent, TextTooLargeError, type DecodedText } from './text-content.js';
 
@@ -52,9 +52,11 @@ export async function readTextContent(filePath: string): Promise<DecodedText> {
  * @throws Whatever `readFileSync` throws, and {@link TextTooLargeError} as {@link readDecodableBytes} does
  */
 export function readTextContentSync(filePath: string): DecodedText {
-  const handle = openSync(filePath, 'r');
+  const handle = openSync(filePath, readWithoutBlocking());
   try {
-    refuseUndecodableSize(fstatSync(handle).size);
+    const stats = fstatSync(handle);
+    refuseSpecialFile(stats, filePath);
+    refuseUndecodableSize(stats.size);
     return decodeTextContent(readFileSync(handle));
   } finally {
     closeSync(handle);
@@ -82,12 +84,61 @@ export function exceedsDecodableLength(byteLength: number): boolean {
 }
 
 /**
- * Throw {@link TextTooLargeError} for a size no decode can hold.
- *
- * @param byteLength - The content's size in bytes
+ * The flags to open for reading without waiting on a writer. Opening a named
+ * pipe blocks until one appears — a FIFO reached by a parse lane hung the whole
+ * run — and `O_NONBLOCK` returns at once so the handle's `fstat` can refuse it.
+ * It changes nothing for a regular file. Windows defines no `O_NONBLOCK` (and no
+ * FIFOs). Read at the call, not at import, so a test's partial `node:fs` mock
+ * that never reads a file does not have to supply `constants`.
  */
+function readWithoutBlocking(): number {
+  const nonBlocking: number | undefined = fsConstants.O_NONBLOCK;
+  return fsConstants.O_RDONLY | (nonBlocking ?? 0);
+}
+
+/** An OS errno (BSD's "inappropriate file type"), not a VAT code: the shape every errno predicate reads. */
+const NOT_A_REGULAR_FILE_ERRNO = 'EFTYPE';
+
+/**
+ * Refuse, before reading a byte, something that is not a regular file: a named
+ * pipe, socket or device has no content to read, only a stream that may never
+ * end. It is an `EFTYPE` errno ("inappropriate file type"), so every caller's
+ * own environmental-refusal convention codes it. A directory is left to the
+ * read, which raises the OS's own `EISDIR`.
+ */
+function refuseSpecialFile(stats: Stats, filePath: string): void {
+  if (stats.isFile() || stats.isDirectory()) return;
+  throw Object.assign(
+    new Error(`${NOT_A_REGULAR_FILE_ERRNO}: not a regular file (a named pipe, socket or device), refused unread: ${filePath}`),
+    { code: NOT_A_REGULAR_FILE_ERRNO, path: filePath, syscall: 'open' },
+  );
+}
+
+/** Throw {@link TextTooLargeError} for a size no decode can hold. */
 function refuseUndecodableSize(byteLength: number): void {
   if (exceedsDecodableLength(byteLength)) throw new TextTooLargeError(byteLength);
+}
+
+/**
+ * Open `filePath` for reading without ever blocking on it: a named pipe, socket
+ * or device is refused (`EFTYPE`) and its handle closed, so only a regular file
+ * (or a directory, which the read refuses itself) comes back. The open a caller
+ * uses to PROVE a source readable before copying it — a bare `open(path, 'r')`
+ * of a pipe waits for a writer forever.
+ *
+ * @param filePath - Path to open
+ * @returns The open handle; the caller closes it
+ * @throws an `EFTYPE` errno for a special file, and whatever `open` throws otherwise
+ */
+export async function openForReading(filePath: string): Promise<FileHandle> {
+  const handle = await open(filePath, readWithoutBlocking());
+  try {
+    refuseSpecialFile(await handle.stat(), filePath);
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
 }
 
 /**
@@ -109,10 +160,10 @@ function refuseUndecodableSize(byteLength: number): void {
  * @param filePath - Path to read
  * @returns The file's bytes
  * @throws {@link TextTooLargeError} when the file is past {@link MAX_DECODABLE_BYTES},
- *   and whatever `open`/`readFile` throw otherwise
+ *   an `EFTYPE` errno when it is not a regular file, and whatever `open`/`readFile` throw otherwise
  */
 export async function readDecodableBytes(filePath: string): Promise<Buffer> {
-  const handle = await open(filePath, 'r');
+  const handle = await openForReading(filePath);
   try {
     refuseUndecodableSize((await handle.stat()).size);
     return await handle.readFile();

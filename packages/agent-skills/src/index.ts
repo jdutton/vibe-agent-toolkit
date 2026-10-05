@@ -181,6 +181,8 @@ export { cloneGitSource, GIT_SUBPATH_INVALID_CODE, type GitCloneResult } from '.
 
 // Unified skill-source resolution (spec §11c)
 export { resolveSkillSource, type ResolveSkillSourceOptions } from './skill-source/resolve-skill-source.js';
+// What `resolveSkillSource` throws for a source tree the OS will not read, that is absent, or that holds a symlink.
+export { SKILL_SOURCE_UNREADABLE_CODE, SkillSourceUnreadableError } from './skill-source/source-unreadable.js';
 export type {
   SkillSource,
   ResolvedSkillSource,

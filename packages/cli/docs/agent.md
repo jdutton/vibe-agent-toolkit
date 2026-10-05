@@ -68,7 +68,16 @@ data:
 
 Build an agent as an Agent Skill (`--target skill`, the one target VAT builds).
 The default output is `<package root>/dist/vat-bundles/skill/<agent-name>/`, so
-without `--output` the agent must sit inside an npm package.
+without `--output` the agent must sit inside an npm package. The default location
+is VAT's and is built into in place.
+
+VAT never deletes or overwrites what it did not produce. With `--output <dir>`, a
+`<dir>/<agent-name>/` that already holds anything is refused (`USAGE_INVALID`,
+naming the path) and left exactly as it was, unless `--force` says it is a previous
+build: `--force` removes it and rebuilds. An empty directory is used as-is. An
+output that is, or holds, the agent's own source is refused even with `--force`.
+Every source is read before anything is written, so a refused source leaves the
+output untouched.
 
 **Output**: the report envelope (YAML) on stdout. One agent per run: `examined`
 is 1 when it was built, and a build publishes `ok` or `error` — nothing it
@@ -86,13 +95,15 @@ data:
 
 **Exit codes** (derived from the document): `0` built; `2` nothing built, with
 `error.code`: `USAGE_INVALID` (a `--target` other than `skill`, no `projectRoot`,
-no manifest at the path or name, or no `package.json` for the default output),
+no manifest at the path or name, no `package.json` for the default output, an
+`--output` whose agent directory already holds something and no `--force`, or an
+output holding the agent's own source),
 `CONFIG_INVALID` (the manifest does not validate, declares no
 `spec.prompts.system.$ref`, or that `$ref` names no file), `INPUT_UNREADABLE` (an
 agent search path a name is looked up in cannot be read, the
 manifest is unreadable or not YAML, or the OS refuses its system prompt,
 `scripts/`, `LICENSE.txt` or `package.json` — only an absence is "not there"; a named pipe,
-socket or device under `scripts/` is refused unopened),
+socket or device as the system prompt, as `LICENSE.txt` or under `scripts/` is refused unopened),
 `RUN_INCOMPLETE` (the packager refused the bundle's content, e.g. a stale nested
 `SKILL.md` in the output: one `SKILL_PACKAGING_FAILED` error finding at the agent,
 relative to the project root; or an output the OS will not let the build write — a

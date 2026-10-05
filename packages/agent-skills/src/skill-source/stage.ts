@@ -5,7 +5,7 @@ import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/uti
 
 import { proveReadable, withFsAttribution } from '../fs-attribution.js';
 
-import { readingSkillSource } from './source-unreadable.js';
+import { readingSkillSource, SkillSourceUnreadableError } from './source-unreadable.js';
 import type { ResolveSkillSourceContext } from './types.js';
 
 /** Test seam: lets unit tests simulate a foreign-owned dir without a second OS user. */
@@ -75,7 +75,7 @@ function assertOwnedIfExists(dir: string, currentUid: number): void {
  * Recursively copy `src` into `dest`, refusing any symlinked entry. A write the OS
  * refuses (a full disk, an unwritable staging root) is coded as the run's output
  * (`SKILL_PACKAGING_OUTPUT_FAILED`, `RUN_INCOMPLETE`); a source entry it will not
- * read or list is the input's (`SKILL_SOURCE_UNREADABLE`, `INPUT_UNREADABLE`).
+ * read or list, and a symlink, are the input's (`SKILL_SOURCE_UNREADABLE`, `INPUT_UNREADABLE`).
  */
 async function copyTreeNoSymlinks(src: string, dest: string): Promise<void> {
   const entries = await readingSkillSource(src, () => readdirSync(src, { withFileTypes: true }));
@@ -85,8 +85,10 @@ async function copyTreeNoSymlinks(src: string, dest: string): Promise<void> {
     // lstat (not stat) so a symlink is detected, never followed.
     const st = await readingSkillSource(srcPath, () => lstatSync(srcPath));
     if (st.isSymbolicLink()) {
-      throw new Error(
-        `Refusing to stage symlink '${srcPath}': staging never traverses symlinked components (§7).`,
+      // The operator's input refused on purpose — coded, so it is never published as a VAT defect.
+      throw new SkillSourceUnreadableError(
+        `Refusing to stage symlink '${srcPath}': staging never traverses symlinked components (§7). `
+          + 'Replace the link with the file or directory it points at.',
       );
     }
     if (st.isDirectory()) {

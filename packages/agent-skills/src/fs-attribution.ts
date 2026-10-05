@@ -18,10 +18,11 @@
  * the packager, and both get identical structure with a subject that fits.
  */
 
-import { copyFile, mkdir, open } from 'node:fs/promises';
+import { copyFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { isFilesystemAccessError } from '@vibe-agent-toolkit/utils';
+import { openForReading } from '@vibe-agent-toolkit/utils/fs';
 
 import { packagingInputError, packagingOutputError } from './packaging-errors.js';
 
@@ -33,6 +34,17 @@ export const WRITE_REMEDY =
 /** For a failure that only tried to READ the author's own tree. */
 export const READ_REMEDY =
   "Check the file's permissions and ownership, and that every directory above it is traversable.";
+
+/**
+ * The remedy for a read of the author's tree the OS refused: {@link READ_REMEDY},
+ * except for a named pipe, socket or device (`EFTYPE`), which has no permissions
+ * to fix — only a regular file to put in its place.
+ */
+export function readRemedyFor(error: unknown): string {
+  return (error as NodeJS.ErrnoException).code === 'EFTYPE'
+    ? 'Link a regular file in its place (a named pipe, socket or device has no content to bundle), or remove the link.'
+    : READ_REMEDY;
+}
 
 /**
  * Which tree the guarded work touches: the author's `source`; the build's
@@ -102,7 +114,7 @@ export async function withFsAttribution<T>(
     if (!isFilesystemAccessError(error)) throw error;
     const reason = error instanceof Error ? error.message : String(error);
     if (side === 'source') {
-      throw packagingInputError(`${subject}, but it could not be ${action}: ${reason}. ${READ_REMEDY}`, { cause: error });
+      throw packagingInputError(`${subject}, but it could not be ${action}: ${reason}. ${readRemedyFor(error)}`, { cause: error });
     }
     const message = `${subject}, but it could not be ${action}: ${reason}. ${WRITE_REMEDY}`;
     throw side === 'bundle' && BUNDLE_LAYOUT_ERRNOS.has((error as { code?: unknown }).code)
@@ -121,7 +133,8 @@ export async function withFsAttribution<T>(
  * @param path A file the build is about to read
  */
 export async function proveReadable(path: string): Promise<void> {
-  const handle = await open(path, 'r');
+  // Never blocks: a named pipe is refused (`EFTYPE`), not waited on for a writer.
+  const handle = await openForReading(path);
   await handle.close();
 }
 

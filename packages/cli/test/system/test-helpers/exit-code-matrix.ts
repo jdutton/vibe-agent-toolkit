@@ -1094,20 +1094,26 @@ export function useExitCodeMatrixShard(specFileUrl: string): readonly MatrixCase
 /** What one scenario's run ended on — returned so the shard asserts at its call site too. */
 interface ScenarioOutcome {
   readonly exitCode: number | null;
+  readonly document: ExitDeterminingDocument & Record<string, unknown>;
 }
 
 /**
- * The exit codes the contract lets each status end on, written as literals — NOT
- * derived through `exitCodeForReport`. The helper checks the run against the
- * derivation; the shard checks it against this table, so a derivation that drifts
- * together with the CLI (both wrong the same way) still fails at the call site.
- * `findings` allows 0: a document whose findings are all warnings, gate not strict.
+ * The exit code the contract gives `document`, from its literal rules and read
+ * from its `findings` LIST — NOT derived through `exitCodeForReport`, and not
+ * from the `summary` counts the CLI derives. The helper checks the run against
+ * the derivation; the shard checks it against this, so a derivation that drifts
+ * together with the CLI (both wrong the same way — exit 0 on a document holding
+ * an error finding, say) still fails at the call site.
  */
-export const EXIT_CODES_A_STATUS_ALLOWS: Readonly<Record<MatrixCase['status'], readonly number[]>> = {
-  ok: [0],
-  findings: [0, 1],
-  error: [2],
-};
+export function exitCodeTheContractGives(document: ExitDeterminingDocument & Record<string, unknown>): number {
+  if (document.status === 'error') return 2;
+  const findings: unknown = document['findings'];
+  if (!Array.isArray(findings)) throw new Error(`a ${document.status} document carries no findings list`);
+  const severities = new Set(findings.map((finding) => (finding as { severity?: unknown }).severity));
+  if (severities.has('error')) return 1;
+  if (document.gate.strict && severities.has('warning')) return 1;
+  return 0;
+}
 
 /**
  * Run one scenario under its own fake HOME and expect: the status the scenario
@@ -1134,7 +1140,7 @@ export function expectScenarioEndsOnItsDerivedCode(scenario: MatrixCase, context
   // The gate is IN the document — the exit code derives from nothing else.
   expect(document.gate, `${result.stdout}\n${result.stderr}`).toStrictEqual({ strict: expect.any(Boolean) });
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCodeForReport(document));
-  return { exitCode: result.status };
+  return { exitCode: result.status, document };
 }
 
 /** The per-test timeout of a scenario: one spawn of the built CLI, two for a scenario that indexes first. */

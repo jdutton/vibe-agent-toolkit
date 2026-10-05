@@ -38,6 +38,17 @@ describe('resolvePathSource', () => {
     expect(before.identity).not.toBe(after.identity);
   });
 
+  // An absent source is the same refusal, but its remedy is the path, not permissions.
+  it('refuses a source path that does not exist, saying so rather than blaming permissions', async () => {
+    await expect(resolvePathSource('./no-such-companion', suite.ctx)).rejects.toMatchObject({
+      code: SKILL_SOURCE_UNREADABLE_CODE,
+      message: expect.stringMatching(/no-such-companion.*does not exist/) as unknown,
+    });
+    await expect(resolvePathSource('./no-such-companion', suite.ctx)).rejects.not.toMatchObject({
+      message: expect.stringContaining('permissions') as unknown,
+    });
+  });
+
   // `vat skill test run --with x=path:<dir>`: a file (or directory) the OS will not read is the
   // operator's input, refused naming it — once a raw EACCES from the content hash, INTERNAL_ERROR.
   it.skipIf(CANNOT_DENY_READS).each([['a file', 'locked.txt'], ['a directory', 'locked-dir']])(

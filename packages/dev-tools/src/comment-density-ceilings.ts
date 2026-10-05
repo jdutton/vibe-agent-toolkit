@@ -29,7 +29,7 @@ export const COMMENT_DENSITY_CEILINGS: Readonly<Record<string, number>> = {
   'lab': 54,
   'projection-sqlite': 63.6,
   'rag': 48.9,
-  'rag-lancedb': 48.8,
+  'rag-lancedb': 47.3,
   'resource-compiler': 38.6,
   'resources': 62.8,
   'runtime-claude-agent-sdk': 42.3,

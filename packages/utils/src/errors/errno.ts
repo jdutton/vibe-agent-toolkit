@@ -40,6 +40,8 @@ const FILESYSTEM_ACCESS_ERRNOS: ReadonlySet<string> = new Set([
   'EACCES', 'EPERM', 'EROFS',
   // Presence and shape
   'ENOENT', 'EEXIST', 'ENOTDIR', 'EISDIR', 'ENOTEMPTY', 'ELOOP', 'ENAMETOOLONG',
+  // A named pipe, socket or device where content was expected (BSD's errno; `readDecodableBytes` raises it)
+  'EFTYPE',
   // Capability of the object or filesystem
   'ENOTSUP', 'EOPNOTSUPP', 'EXDEV', 'ETXTBSY', 'EINVAL',
   // Resource exhaustion and transient device state

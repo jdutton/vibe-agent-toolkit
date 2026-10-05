@@ -14,6 +14,7 @@ import { readFile } from 'node:fs/promises';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import * as tar from 'tar';
+import { z } from 'zod';
 
 import { CommandRefusalError } from '../../../utils/command-refusal.js';
 import { unstatablePathRefusal } from '../../../utils/project-root-policy.js';
@@ -21,12 +22,20 @@ import { unstatablePathRefusal } from '../../../utils/project-root-policy.js';
 
 export type SkillSource = 'npm' | 'local' | 'zip' | 'tgz' | 'npm-postinstall' | 'dev';
 
-export interface PackageJsonVatReplaces {
+/**
+ * `package.json` `vat.replaces`: what an install removes once the package is in
+ * place. Strict, because every entry becomes an uninstall or an `rm -rf` — a
+ * string where the array belongs was walked letter by letter, each letter
+ * uninstalled or removed as a name.
+ */
+const PackageJsonVatReplacesSchema = z.object({
   /** Old plugin names (without marketplace) this package used to publish under */
-  plugins?: string[];
+  plugins: z.array(z.string()).optional(),
   /** Old skill names previously installed to ~/.claude/skills/<name> (legacy flat location) */
-  flatSkills?: string[];
-}
+  flatSkills: z.array(z.string()).optional(),
+}).strict();
+
+export type PackageJsonVatReplaces = z.infer<typeof PackageJsonVatReplacesSchema>;
 
 export interface PackageJsonVat {
   version?: string;
@@ -103,11 +112,35 @@ export async function readPackageJson(dir: string): Promise<PackageJson> {
   } catch (error) {
     throw unstatablePathRefusal(packageJsonPath, error);
   }
+  let packageJson: PackageJson;
   try {
-    return JSON.parse(content) as PackageJson;
+    packageJson = JSON.parse(content) as PackageJson;
   } catch (error) {
     throw new CommandRefusalError('INPUT_UNREADABLE', `${packageJsonPath} is not valid JSON: ${String(error)}`, { cause: error });
   }
+  assertVatReplacesShape(packageJson, packageJsonPath);
+  return packageJson;
+}
+
+/**
+ * Refuse, before anything is read further or changed, a `vat.replaces` that is
+ * not `{ plugins?: string[], flatSkills?: string[] }`. The package is the
+ * input, so its malformed field is the input's refusal (`INPUT_UNREADABLE`),
+ * naming the package and the field.
+ */
+function assertVatReplacesShape(packageJson: PackageJson, packageJsonPath: string): void {
+  const replaces: unknown = (packageJson as { vat?: { replaces?: unknown } } | null)?.vat?.replaces;
+  if (replaces === undefined) return;
+  const result = PackageJsonVatReplacesSchema.safeParse(replaces);
+  if (result.success) return;
+  const problems = result.error.issues
+    .map((issue) => `${['vat', 'replaces', ...issue.path.map(String)].join('.')}: ${issue.message}`)
+    .join('; ');
+  throw new CommandRefusalError(
+    'INPUT_UNREADABLE',
+    `Package ${String(packageJson.name)} cannot be installed, nothing was changed: ${packageJsonPath} ${problems}. ` +
+      'vat.replaces is { plugins?: string[], flatSkills?: string[] }.',
+  );
 }
 
 /**

@@ -57,7 +57,7 @@ beforeEach(() => {
 describe('requireExistingDatabase', () => {
   it('passes an empty directory, a RAG database, and one holding only OS litter', () => {
     expect(() => requireExistingDatabase(DB, true)).not.toThrow();
-    fakeFs.readdirSync.mockReturnValue([entry('rag_chunks.lance'), entry('rag_documents.lance'), entry('.DS_Store', true)]);
+    fakeFs.readdirSync.mockReturnValue([entry('rag_chunks.lance'), entry('rag_documents.lance'), entry('desktop.ini', true)]);
     expect(() => requireExistingDatabase(DB, true)).not.toThrow();
   });
 

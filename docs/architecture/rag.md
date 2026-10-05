@@ -571,6 +571,12 @@ declaring one.
 3. Verify no concurrent writes
 4. Update LanceDB: `bun update @lancedb/lancedb`
 
+The refusal names its cause, and two causes are not corruption. "The OS refuses <path> (EACCES)"
+is a permissions problem: fix the ownership or mode of the path it names — `vat rag clear` would
+fail on the same files. "Is not one this build of vat rag index writes" names the columns or vector
+size that differ (another tool's table, or an index built with another metadata schema or embedding
+model): clear and rebuild, as for damage.
+
 ### Problem: Query results not relevant
 
 **Symptoms**: Returned chunks don't match query intent

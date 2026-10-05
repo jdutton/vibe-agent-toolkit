@@ -158,9 +158,9 @@ Output:
     is expected for it; a run whose every discovered skill is in place passes
     with nothing to inspect. A plugin-local skill (a git-tracked skill dir under
     a plugin's skills/) is never in place: it is expected in its plugin tree.
-    'marketplace:<name>': a plugin.json the OS will not read is refused as
-    RESOURCE_CHECK_BROKEN at error (exit 1), naming it — a manifest this run
-    could not read is not a verdict on what ships.
+    'marketplace:<name>': a plugin.json, a skills/ directory or a SKILL.md the
+    OS will not read is refused as RESOURCE_CHECK_BROKEN at error (exit 1),
+    naming it — a file this run could not read is not a verdict on what ships.
   Progress and validation errors → stderr (streamed live)
 
   By default each delegated phase reports a per-asset summary plus the assets

@@ -147,6 +147,43 @@ async function reinstallOverLockedEntry(
   }
 }
 
+/** Run the install and assert it was refused as the input's (exit 2), its message naming each of `mentions`. */
+async function expectInputRefusal(binPath: string, fakeHome: string, args: string[], mentions: string[]): Promise<void> {
+  const { status, report } = await runInstall(binPath, fakeHome, args);
+  expect(status).toBe(2);
+  expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
+  for (const mention of mentions) expect(report.error?.message).toContain(mention);
+}
+
+/** The plugin keys Claude's registry under `claudeDir` holds. */
+function installedKeys(claudeDir: string): string[] {
+  const registry = JSON.parse(fs.readFileSync(safePath.join(claudeDir, 'plugins', 'installed_plugins.json'), 'utf-8')) as { plugins: Record<string, unknown> };
+  return Object.keys(registry.plugins).sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * An installed `old-plugin@r-market` (unless `installOld` is false), a legacy
+ * flat skill `legacy` under the skills dir, and a package `new-pkg` (one plugin,
+ * `new-plugin`) whose `vat.replaces` is `replaces` — every replaces case's start.
+ */
+async function setupReplacesCase(
+  binPath: string,
+  createTempDir: () => string,
+  replaces: unknown,
+  installOld = true,
+): Promise<{ tempDir: string; fakeHome: string; claudeDir: string; projectDir: string; marketplacesDir: string; legacySkill: string }> {
+  const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+  if (installOld) {
+    const old = setupPluginTestProject(tempDir, 'old-pkg', 'r-market', [{ name: 'old-plugin', skills: ['old-skill'] }]);
+    await runPluginInstall(binPath, old.projectDir, fakeHome);
+  }
+  const legacySkill = safePath.join(claudeDir, 'skills', 'legacy', 'SKILL.md');
+  plantFile(legacySkill, '# legacy\n');
+  const replacing = setupPluginTestProject(tempDir, 'new-pkg', 'r-market', [{ name: 'new-plugin', skills: ['new-skill'] }]);
+  writeTestFile(safePath.join(replacing.projectDir, 'package.json'), JSON.stringify({ name: '@test/new-pkg', version: '1.2.3', vat: { replaces } }));
+  return { tempDir, fakeHome, claudeDir, legacySkill, ...replacing };
+}
+
 describe('claude plugin install command (system test)', () => {
   const binPath = getBinPath(import.meta.url);
   const { createTempDir, cleanupTempDirs } = createTempDirTracker(TEMP_DIR_PREFIX);
@@ -446,23 +483,83 @@ describe('claude plugin install command (system test)', () => {
   // `vat.replaces.plugins` was uninstalled BEFORE a bad `vat.replaces.flatSkills` entry was refused,
   // so the refused run had already removed the user's plugin and installed nothing in its place.
   it('refuses a vat.replaces.flatSkills entry that is not one path segment before uninstalling any replaced plugin', async () => {
-    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
-    const old = setupPluginTestProject(tempDir, 'old-pkg', 'r-market', [{ name: 'old-plugin', skills: ['old-skill'] }]);
-    await runPluginInstall(binPath, old.projectDir, fakeHome);
-    const replacing = setupPluginTestProject(tempDir, 'new-pkg', 'r-market', [{ name: 'new-plugin', skills: ['new-skill'] }]);
-    writeTestFile(safePath.join(replacing.projectDir, 'package.json'), JSON.stringify({
-      name: '@test/new-pkg', version: '1.2.3', vat: { replaces: { plugins: ['old-plugin'], flatSkills: ['../victim'] } },
-    }));
+    const { fakeHome, claudeDir, projectDir } = await setupReplacesCase(binPath, createTempDir, { plugins: ['old-plugin'], flatSkills: ['../victim'] });
 
-    const { status, report } = await runInstall(binPath, fakeHome, [replacing.projectDir]);
+    await expectInputRefusal(binPath, fakeHome, [projectDir], ['nothing was changed', 'vat.replaces.flatSkills']);
+    expect(installedKeys(claudeDir)).toEqual(['old-plugin@r-market']);
+    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'r-market', 'plugins', 'old-plugin', 'skills', 'old-skill', 'SKILL.md'))).toBe(true);
+  });
+
+  // `vat.replaces` was never shape-checked: a string `flatSkills` crashed (INTERNAL_ERROR), a
+  // non-string entry crashed, and a string `plugins` was walked letter by letter — each letter
+  // uninstalled as a plugin name.
+  it.each([
+    ['a string flatSkills', { flatSkills: 'legacy' }, 'vat.replaces.flatSkills'],
+    ['a non-string flatSkills entry', { flatSkills: [123] }, 'vat.replaces.flatSkills.0'],
+    ['a string plugins', { plugins: 'old-plugin' }, 'vat.replaces.plugins'],
+    ['an unknown key', { flatskills: ['legacy'] }, 'flatskills'],
+  ])('refuses %s as INPUT_UNREADABLE naming the field, before anything changes', async (_label, replaces, field) => {
+    const { fakeHome, claudeDir, projectDir, legacySkill } = await setupReplacesCase(binPath, createTempDir, replaces, false);
+    // `l`, `e`, `g`… are what a letter-by-letter walk of "legacy" removed.
+    plantFile(safePath.join(claudeDir, 'skills', 'l', 'SKILL.md'), '# l\n');
+
+    await expectInputRefusal(binPath, fakeHome, [projectDir], ['@test/new-pkg', field]);
+    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES))).toBe(false);
+    expect(fs.existsSync(legacySkill)).toBe(true);
+    expect(fs.existsSync(safePath.join(claudeDir, 'skills', 'l', 'SKILL.md'))).toBe(true);
+  });
+
+  // The replaced plugin and the legacy flat skill were removed BEFORE the marketplace copy, so a
+  // copy that then failed left the user with neither the old nor the new.
+  it.skipIf(CANNOT_DENY_READS)('refuses a package it cannot read before removing what it replaces', async () => {
+    const { fakeHome, claudeDir, marketplacesDir, projectDir, legacySkill } = await setupReplacesCase(
+      binPath, createTempDir, { plugins: ['old-plugin'], flatSkills: ['legacy'] },
+    );
+    const unreadable = safePath.join(marketplacesDir, 'r-market', 'plugins', 'new-plugin', 'skills', 'new-skill', 'secret.md');
+    plantFile(unreadable, 'x');
+    chmodSync(unreadable, 0o000);
+    try {
+      await expectInputRefusal(binPath, fakeHome, [projectDir], ['secret.md']);
+      expect(installedKeys(claudeDir)).toEqual(['old-plugin@r-market']);
+      expect(fs.existsSync(legacySkill)).toBe(true);
+    } finally {
+      chmodSync(unreadable, 0o644);
+    }
+  });
+
+  // A legacy flat skill the OS would not let it remove was INTERNAL_ERROR, after the replaced
+  // plugin was already uninstalled and before anything new was installed.
+  it.skipIf(CANNOT_DENY_READS)('installs first, then reports a legacy flat skill it could not remove as RUN_INCOMPLETE', async () => {
+    const { fakeHome, claudeDir, projectDir } = await setupReplacesCase(
+      binPath, createTempDir, { plugins: ['old-plugin'], flatSkills: ['legacy'] },
+    );
+
+    const { status, report } = await reinstallOverLockedEntry(binPath, fakeHome, projectDir, {
+      parentDir: safePath.join(claudeDir, 'skills'), entry: 'legacy', lockedRel: ['ro'],
+    });
 
     expect(status).toBe(2);
-    expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
-    expect(report.error?.message).toContain('nothing was changed');
-    expect(report.error?.message).toContain('vat.replaces.flatSkills');
-    const registry = JSON.parse(fs.readFileSync(safePath.join(claudeDir, 'plugins', 'installed_plugins.json'), 'utf-8')) as { plugins: Record<string, unknown> };
-    expect(Object.keys(registry.plugins)).toEqual(['old-plugin@r-market']);
-    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'r-market', 'plugins', 'old-plugin', 'skills', 'old-skill', 'SKILL.md'))).toBe(true);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'RUN_INCOMPLETE' } });
+    expect(report.error?.message).toContain('legacy');
+    expect(installedKeys(claudeDir)).toEqual(['new-plugin@r-market']);
+    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'r-market', 'plugins', 'new-plugin', 'skills', 'new-skill', 'SKILL.md'))).toBe(true);
+  });
+
+  // The pre-read inflates every entry, but a file `a` beside a file `a/b` fails only at
+  // EXTRACTION — which ran in place, after --force had removed the skill being replaced.
+  it('refuses a .zip that cannot be extracted as INPUT_UNREADABLE, and keeps the skill --force would replace', async () => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const zip = new AdmZip();
+    zip.addFile('a', Buffer.from('file a\n'));
+    zip.addFile('a/b', Buffer.from('file a/b\n'));
+    const clash = safePath.join(tempDir, 'clash.zip');
+    zip.writeZip(clash);
+    const existing = safePath.join(claudeDir, 'skills', 'clash', 'SKILL.md');
+    plantFile(existing, '# precious\n');
+
+    await expectInputRefusal(binPath, fakeHome, [clash, '--force'], [clash]);
+    expect(fs.readdirSync(safePath.join(claudeDir, 'skills', 'clash'))).toEqual(['SKILL.md']);
+    expect(fs.readFileSync(existing, 'utf-8')).toBe('# precious\n');
   });
 
   // The marketplace copy was rm -rf, mkdir, copy: one entry the OS would not let it remove

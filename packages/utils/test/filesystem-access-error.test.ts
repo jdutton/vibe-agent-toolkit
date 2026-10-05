@@ -32,6 +32,7 @@ describe('isFilesystemAccessError', () => {
       'ENOTSUP',  // copyFile on a symlink-to-directory — issue #183
       'EEXIST',   // mkdir where a file already sits — reachable with no chmod at all
       'EISDIR',
+      'EFTYPE',   // a named pipe where content was expected — readDecodableBytes refuses it unread
       'ENOTDIR',
       'ELOOP',
       'ENOSPC',   // full disk mid-build

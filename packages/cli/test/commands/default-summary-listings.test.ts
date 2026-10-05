@@ -147,6 +147,7 @@ const MARKETPLACE_INPUT = {
   pluginResults: [],
   undeclared: [],
   refused: [],
+  unread: [],
   issues: MARKETPLACE_ISSUES,
   durationMs: 7,
 };

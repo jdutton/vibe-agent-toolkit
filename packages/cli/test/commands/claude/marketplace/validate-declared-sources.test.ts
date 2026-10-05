@@ -26,7 +26,7 @@
  * resolution — the half that was wrong — is what is under test.
  */
 
-import { cpSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
 import type { SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import {
@@ -44,10 +44,11 @@ import { runMarketplaceValidatePhase } from '../../../../src/commands/claude/mar
 import { publishedPhase } from '../../../helpers/published-phase.js';
 import { errno, realBehind, refusingOnly } from '../../../helpers/refusal-doubles.js';
 
-// `statSync` is a named import in the command, so the one refused-source case
-// injects at the module seam. Every other case stats for real through it.
+// `statSync` and `readdirSync` are named imports in the command, so the
+// refused-source and refused-`skills/` cases inject at the module seam. Every
+// other case stats and lists for real through them.
 vi.mock('node:fs', async (importOriginal) =>
-  (await import('../../../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['statSync']));
+  (await import('../../../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['statSync', 'readdirSync']));
 
 const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
 /**
@@ -137,6 +138,22 @@ async function expectPassedValidating(
   expect(doc.examined).toBe(rows.length);
   expect(plugins.map((p) => [p.name, p.path])).toEqual(rows);
   return { doc, plugins };
+}
+
+/**
+ * Run over `root` and assert the run was refused for a path it could not read:
+ * exit 1, ONE run-integrity finding at error naming `unreadPath` (root-relative).
+ */
+async function expectUnreadRefusal(root: string, unreadPath: string): Promise<MarketplaceValidateReport> {
+  const { exitCode, doc } = await validate(root, true);
+  const integrity = doc.findings.filter((i) => i.code === RUN_INTEGRITY_CODE);
+
+  expect(exitCode).toBe(1);
+  expect(doc.status).toBe('findings');
+  expect(integrity).toHaveLength(1);
+  expect(integrity[0]?.severity).toBe('error');
+  expect(integrity[0]?.message).toContain(`\`${unreadPath}\``);
+  return doc;
 }
 
 describe('marketplace validate — the denominator is the DECLARED local sources', () => {
@@ -269,17 +286,45 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     writeMarketplace(root, [DECLARED_A]);
     mkdirSyncReal(safePath.join(root, PLUGIN_A, MANIFEST_DIR, PLUGIN_JSON), { recursive: true });
 
-    const { exitCode, doc } = await validate(root, true);
-    const integrity = doc.findings.filter((i) => i.code === RUN_INTEGRITY_CODE);
-
-    expect(exitCode).toBe(1);
-    expect(integrity).toHaveLength(1);
-    expect(integrity[0]?.severity).toBe('error');
-    expect(integrity[0]?.message).toContain('`plugins/a/.claude-plugin/plugin.json`');
+    const doc = await expectUnreadRefusal(root, 'plugins/a/.claude-plugin/plugin.json');
     // The per-path finding still names the errno; the row says it was not read.
     expect(doc.findings.map((i) => i.code)).toContain('SCAN_PATH_UNREADABLE');
     expect(doc.data.plugins.map((p) => [p.path, p.manifestRead])).toEqual([['plugins/a', false]]);
     expect(doc.data.refused).toEqual([]);
+  });
+
+  it('refuses the RUN when the OS will not read a plugin skill\'s SKILL.md — never INTERNAL_ERROR, never a pass', async () => {
+    // A DIRECTORY where SKILL.md belongs refuses the read (EISDIR) on every
+    // platform. The skill validator's bare read used to throw it out of the
+    // whole run: exit 2, INTERNAL_ERROR, with a stack.
+    const root = safePath.join(tmp, 'skill-md-unreadable');
+    writeMarketplace(root, [DECLARED_A]);
+    writePlugin(safePath.join(root, PLUGIN_A), 'a');
+    mkdirSyncReal(safePath.join(root, PLUGIN_A, 'skills', 's1', 'SKILL.md'), { recursive: true });
+
+    const doc = await expectUnreadRefusal(root, 'plugins/a/skills/s1/SKILL.md');
+    expect(doc.findings.filter((i) => i.code === 'SCAN_PATH_UNREADABLE').map((i) => i.location)).toEqual(['plugins/a/skills/s1/SKILL.md']);
+    // The plugin's own manifest WAS read; only the skill was not.
+    expect(doc.data.plugins.map((p) => [p.path, p.manifestRead])).toEqual([['plugins/a', true]]);
+  });
+
+  it('refuses the RUN when the OS will not list a plugin\'s skills/ directory — never INTERNAL_ERROR, never a pass', async () => {
+    const root = safePath.join(tmp, 'skills-dir-unlistable');
+    writeMarketplace(root, [DECLARED_A]);
+    writePlugin(safePath.join(root, PLUGIN_A), 'a');
+    mkdirSyncReal(safePath.join(root, PLUGIN_A, 'skills', 's1'), { recursive: true });
+    vi.mocked(readdirSync).mockImplementation(
+      refusingOnly(safePath.join(root, PLUGIN_A, 'skills'), errno('EACCES'), realBehind(readdirSync)),
+    );
+
+    try {
+      const doc = await expectUnreadRefusal(root, 'plugins/a/skills');
+      const unreadable = doc.findings.filter((i) => i.code === 'SCAN_PATH_UNREADABLE');
+      expect(unreadable.map((i) => i.location)).toEqual(['plugins/a/skills']);
+      expect(unreadable[0]?.message).toContain('EACCES');
+    } finally {
+      vi.mocked(readdirSync).mockRestore();
+    }
   });
 
   it('stays green for a manifest whose entries are all remote, with no `plugins/` at all', async () => {

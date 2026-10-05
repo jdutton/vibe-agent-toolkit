@@ -214,7 +214,7 @@ function projectWithMarketplace(
 async function marketplaceOutcome(
   marketplace: string,
 ): Promise<{ findings: { location: string; severity: string }[]; exitCode: number; errors: number; warnings: number }> {
-  const { marketplaceResult, pluginResults, undeclared, refused, issues } =
+  const { marketplaceResult, pluginResults, undeclared, refused, unread, issues } =
     await collectMarketplaceFindings(marketplace, silentLogger);
   const report = buildMarketplaceValidateReport({
     root: marketplace,
@@ -222,6 +222,7 @@ async function marketplaceOutcome(
     pluginResults,
     undeclared,
     refused,
+    unread,
     issues,
     durationMs: 0,
   });

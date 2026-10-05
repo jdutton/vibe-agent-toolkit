@@ -514,7 +514,9 @@ Exit Codes:
       path), or no settings document could be read at all
   2 - Did not finish ('status: error'): USAGE_INVALID for a --file that does
       not exist or a --type the command does not know, INPUT_UNREADABLE for a
-      --file the OS will not let it read
+      --file the OS will not let it read, or (default mode) for a discovered
+      settings layer the OS refuses, that does not parse, or that fails its
+      schema
 
 Example:
   $ cd ~/my-project && vat audit settings       # What can Claude do here?

@@ -101,7 +101,7 @@ This is the scenario where `vat.replaces` is needed:
 
 ### How it works
 
-When a VAT package is installed (via postinstall hook or `--dev`), the installer reads `vat.replaces` from `package.json` and — **before** installing the new plugin:
+When a VAT package is installed (via postinstall hook or `--dev`), the installer reads `vat.replaces` from `package.json` and checks every entry **before anything changes** — a malformed entry refuses the install with nothing removed. It applies them only **after** the new marketplace is copied and registered, so a failed install never leaves the old plugin gone and the new one absent:
 
 1. For each name in `replaces.plugins`: uninstalls `<name>@<marketplace>` — removes plugin directory, cache entry, registry entry, and `settings.json` entry
 2. For each name in `replaces.flatSkills`: deletes `~/.claude/skills/<name>` — removes legacy pre-0.1.20 flat installs

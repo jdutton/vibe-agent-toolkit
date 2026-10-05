@@ -7,10 +7,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { AGENT_MANIFEST_INVALID_CODE, loadAgentManifest, type LoadedAgentManifest } from '@vibe-agent-toolkit/agent-config';
-import { copyDirectory, isFilesystemAccessError, isPathAbsentError, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
+import { copyDirectory, findProjectRoot, isFilesystemAccessError, isPathAbsentError, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
 
 import { proveReadable, withFsAttribution } from './fs-attribution.js';
-import { packageSkill } from './skill-packager.js';
+import { checkPackageOutput, packageSkill } from './skill-packager.js';
 
 /**
  * The `VatError` code of a build with no output location: no `outputPath` was
@@ -60,10 +60,30 @@ function writingOutput<T>(target: string, write: () => Promise<T>, action = 'wri
 }
 
 /**
+ * Refuse `file` when it is neither a regular file nor a directory. A named pipe,
+ * socket or device (or a link to one) has no bytes to ship, and opening a pipe
+ * blocks until a writer appears, so it is refused as the source's without being
+ * opened. A directory is left to the read, which raises the OS's own `EISDIR`.
+ */
+function refuseSpecialFile(file: string, kind: { isFile(): boolean; isDirectory(): boolean }): void {
+  if (!kind.isFile() && !kind.isDirectory()) {
+    throw new VatError(AGENT_SOURCE_UNREADABLE_CODE, `Agent source cannot be read (not a regular file: a named pipe, socket or device): ${file}`);
+  }
+}
+
+/**
+ * Read one source file the build ships, refusing a special file unopened
+ * ({@link refuseSpecialFile}). The OS's own refusals propagate raw, for the
+ * caller to code: an absent system prompt is the manifest's mistake, not this.
+ */
+async function readSourceFile(file: string): Promise<Buffer> {
+  refuseSpecialFile(file, await fs.stat(file));
+  return fs.readFile(file);
+}
+
+/**
  * Refuse a source tree the OS will not let the build list or read, before any
- * of it is copied. Only a regular file is opened: a named pipe, socket or device
- * (or a link to one) has no bytes to ship, and opening a pipe blocks until a
- * writer appears, so it is refused as the source's without being opened.
+ * of it is copied — each file held to {@link refuseSpecialFile}.
  */
 async function requireReadableTree(dir: string): Promise<void> {
   const entries = await readingSource(dir, () => fs.readdir(dir, { recursive: true, withFileTypes: true }));
@@ -72,9 +92,7 @@ async function requireReadableTree(dir: string): Promise<void> {
     const file = safePath.join(entry.parentPath, entry.name);
     const target = entry.isSymbolicLink() ? await readingSource(file, () => fs.stat(file)) : entry;
     if (target.isDirectory()) continue;
-    if (!target.isFile()) {
-      throw new VatError(AGENT_SOURCE_UNREADABLE_CODE, `Agent source cannot be read (not a regular file: a named pipe, socket or device): ${file}`);
-    }
+    refuseSpecialFile(file, target);
     await readingSource(file, () => proveReadable(file));
   }
 }
@@ -122,6 +140,18 @@ export interface BuildOptions {
    * @default ['directory']
    */
   formats?: ('directory' | 'zip' | 'npm' | 'marketplace')[];
+
+  /**
+   * Whether `<outputPath>/<agent-name>/` holds a previous build to replace
+   * (`--force`). Default `false`: an explicit `outputPath` whose agent directory
+   * already holds anything (or the archive a requested format writes beside it)
+   * is refused with `SKILL_PACKAGING_OUTPUT_OCCUPIED` and left exactly as it was —
+   * the rule, and the check (`checkPackageOutput`), of `packageSkill`. With it,
+   * the agent directory is removed and rebuilt. The default location (no
+   * `outputPath`) is VAT's, and is built into in place. An output that is, or
+   * holds, the agent's own source is refused either way.
+   */
+  replaceExistingOutput?: boolean;
 }
 
 export interface BuildResult {
@@ -172,39 +202,50 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
 
   // Append agent name to output path
   const outputPath = safePath.join(baseOutputPath, manifest.metadata.name);
+  const formats = options.formats ?? ['directory'];
 
-  // Ensure output directory exists
+  // Every source is read, or proven readable, BEFORE the output is touched: a
+  // refused source must never leave a half-written bundle, nor a previous
+  // build's SKILL.md overwritten beside its stale scripts/.
+  const sources = await readAgentSources(manifest, agentDir);
+
+  // An explicit output holding anything is refused, never deleted, unless --force
+  // says it is a previous build — which is then removed, not written over. The
+  // default location is VAT's and is built into in place. One holding the source
+  // is refused outright.
+  const replace = options.replaceExistingOutput === true;
+  checkPackageOutput({
+    outputPath,
+    skillName: manifest.metadata.name,
+    formats,
+    sources: sources.paths,
+    projectRoot: findProjectRoot(agentDir) ?? agentDir,
+    replaceExistingOutput: replace || options.outputPath === undefined,
+  });
+  if (replace) await writingOutput(outputPath, () => fs.rm(outputPath, { recursive: true, force: true }), 'removed');
   await writingOutput(outputPath, () => fs.mkdir(outputPath, { recursive: true }), 'created');
 
   const files: string[] = [];
 
   // STEP 1: Generate SKILL.md from agent.yml
-  const skillPath = await generateSkillFile(manifest, agentDir, outputPath);
+  const skillPath = await generateSkillFile(manifest, sources.systemPrompt, outputPath);
   files.push(skillPath);
 
   // Generate agent-manifest-guide.md
   const guidePath = await generateManifestGuide(outputPath);
   files.push(guidePath);
 
-  // Copy scripts/ directory if it exists (supports .js and .py). Only ABSENCE
-  // skips the copy: a scripts/ that is there but cannot be copied (a plain file,
-  // an unreadable entry) fails the build rather than shipping a bundle that
-  // silently lacks its scripts — coded as the source's refusal, which is why the
-  // tree is read before it is copied.
-  const scriptsPath = safePath.join(agentDir, 'scripts');
-  if (sourcePresent(scriptsPath)) {
+  // Copy scripts/ (supports .js and .py). Its tree was read above, so a refusal here is the output's.
+  if (sources.scriptsPath !== undefined) {
+    const scriptsPath = sources.scriptsPath;
     const outputScriptsPath = safePath.join(outputPath, 'scripts');
-    await requireReadableTree(scriptsPath);
-    // The source tree was read above, so a refusal here is the output's.
     await writingOutput(outputScriptsPath, () => copyDirectory(scriptsPath, outputScriptsPath));
     files.push(outputScriptsPath);
   }
 
-  // Copy LICENSE.txt if it exists — same rule: absence skips, an unreadable one is refused.
-  const licensePath = safePath.join(agentDir, 'LICENSE.txt');
-  if (sourcePresent(licensePath)) {
+  if (sources.license !== undefined) {
+    const license = sources.license;
     const outputLicensePath = safePath.join(outputPath, 'LICENSE.txt');
-    const license = await readingSource(licensePath, () => fs.readFile(licensePath));
     await writingOutput(outputLicensePath, () => fs.writeFile(outputLicensePath, license));
     files.push(outputLicensePath);
   }
@@ -215,7 +256,7 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
       outputPath,
       // The SKILL.md was generated into outputPath above: package it in place.
       sourceGeneratedInOutput: true,
-      formats: options.formats ?? ['directory'],
+      formats,
       basePath: agentDir,
     });
 
@@ -247,32 +288,73 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
   };
 }
 
+/** What the build reads from the agent's own source, all of it before writing anything. */
+interface AgentSources {
+  /** The system prompt's text. */
+  systemPrompt: string;
+  /** `scripts/`, proven listable and readable, or `undefined` when absent. */
+  scriptsPath: string | undefined;
+  /** `LICENSE.txt`'s bytes, or `undefined` when absent. */
+  license: Buffer | undefined;
+  /** Every source path, for the output check: an output holding one is refused. */
+  paths: string[];
+}
+
 /**
- * Generate SKILL.md from agent manifest
- * Following Anthropic best practices: frontmatter + concise content + references
+ * Read the agent's sources. Only ABSENCE skips `scripts/` or `LICENSE.txt`:
+ * one that is there but cannot be read fails the build, coded as the source's,
+ * rather than shipping a bundle that silently lacks it.
  */
-async function generateSkillFile(
-  manifest: LoadedAgentManifest,
-  agentDir: string,
-  outputPath: string
-): Promise<string> {
-  // Read system prompt
-  // Both refusals are the manifest's to fix — coded so a caller never reports
-  // them as a defect in VAT.
+async function readAgentSources(manifest: LoadedAgentManifest, agentDir: string): Promise<AgentSources> {
+  const { path: systemPromptPath, text: systemPrompt } = await readSystemPrompt(manifest, agentDir);
+  const paths = [manifest.__manifestPath ?? agentDir, systemPromptPath];
+
+  const scriptsCandidate = safePath.join(agentDir, 'scripts');
+  const scriptsPath = sourcePresent(scriptsCandidate) ? scriptsCandidate : undefined;
+  if (scriptsPath !== undefined) {
+    await requireReadableTree(scriptsPath);
+    paths.push(scriptsPath);
+  }
+
+  const licensePath = safePath.join(agentDir, 'LICENSE.txt');
+  let license: Buffer | undefined;
+  if (sourcePresent(licensePath)) {
+    license = await readingSource(licensePath, () => readSourceFile(licensePath));
+    paths.push(licensePath);
+  }
+  return { systemPrompt, scriptsPath, license, paths };
+}
+
+/**
+ * The system prompt the manifest names. Both refusals of the reference itself
+ * are the manifest's to fix — coded so a caller never reports them as a defect
+ * in VAT; one the OS will not read is the source's.
+ */
+async function readSystemPrompt(manifest: LoadedAgentManifest, agentDir: string): Promise<{ path: string; text: string }> {
   const systemPromptRef = manifest.spec.prompts?.system?.$ref;
   if (!systemPromptRef) {
     throw new VatError(AGENT_MANIFEST_INVALID_CODE, 'Agent must have a system prompt (spec.prompts.system.$ref)');
   }
 
   const fullSystemPromptPath = safePath.resolve(agentDir, systemPromptRef);
-  let systemPrompt: string;
   try {
-    systemPrompt = await fs.readFile(fullSystemPromptPath, 'utf-8');
+    return { path: fullSystemPromptPath, text: (await readSourceFile(fullSystemPromptPath)).toString('utf-8') };
   } catch (error) {
+    if (error instanceof VatError) throw error;
     if (!isPathAbsentError(error)) throw sourceUnreadable(fullSystemPromptPath, error);
     throw new VatError(AGENT_MANIFEST_INVALID_CODE, `spec.prompts.system.$ref names ${systemPromptRef}, which does not exist.`, { cause: error });
   }
+}
 
+/**
+ * Generate SKILL.md from agent manifest
+ * Following Anthropic best practices: frontmatter + concise content + references
+ */
+async function generateSkillFile(
+  manifest: LoadedAgentManifest,
+  systemPrompt: string,
+  outputPath: string
+): Promise<string> {
   // Build SKILL.md with frontmatter
   const frontmatter = `---
 name: ${manifest.metadata.name}
