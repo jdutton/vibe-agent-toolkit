@@ -20,9 +20,11 @@ import { fileURLToPath } from 'node:url';
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
 import { ExitCode, type RefusalCode } from '@vibe-agent-toolkit/schema';
 import {
+  ASSET_REFERENCE_UNRESOLVED_CODE,
   direntKind,
   everyInOrder,
   isPathAbsentError,
+  isVatError,
   mkdirSyncReal,
   normalizedTmpdir,
   prefixMessageOnce,
@@ -86,6 +88,7 @@ import { writeEvalsTemplate } from './evals-template.js';
 import {
   BootstrapNeededError,
   DuplicateStagedSkillError,
+  EvalsReferenceUnresolvedError,
   InternalHarnessError,
   SKILL_TEST_REFUSAL_BY_ERROR_CODE,
   type SkillTestFailureReason,
@@ -477,7 +480,15 @@ function detectItemPluginLayout(
   repoRoot: string,
 ): StageItem['pluginLayout'] | undefined {
   if (!('path' in source)) return undefined;
-  const sourceDir = resolveAssetReference(source.path, repoRoot);
+  let sourceDir: string;
+  try {
+    sourceDir = resolveAssetReference(source.path, repoRoot);
+  } catch (error) {
+    // A path naming nothing has no layout to detect. Staging resolves it again and
+    // fails there, where an optional companion is skipped rather than refused.
+    if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE)) throw error;
+    return undefined;
+  }
   return detectPluginLayout(sourceDir, existsSync) ?? undefined;
 }
 
@@ -836,10 +847,15 @@ function resolveScaffoldEvalsPath(
   repoRoot: string,
   evalsRef: string | undefined,
 ): string {
-  const resolveFrom = (baseDir: string): string =>
-    evalsRef === undefined
-      ? safePath.join(baseDir, DEFAULT_EVALS_SUBPATH)
-      : resolveAssetReference(evalsRef, baseDir);
+  const resolveFrom = (baseDir: string): string => {
+    if (evalsRef === undefined) return safePath.join(baseDir, DEFAULT_EVALS_SUBPATH);
+    try {
+      return resolveAssetReference(evalsRef, baseDir);
+    } catch (error) {
+      if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE)) throw error;
+      throw new EvalsReferenceUnresolvedError(`test.evals names no eval suite: ${error.message}`, { cause: error });
+    }
+  };
 
   // Prefer the explicit authored source dir resolved by run.ts (the staged/built
   // tree is ephemeral; this is where the user can edit the scaffolded template).

@@ -563,7 +563,7 @@ declaring one.
 
 ### Problem: Database corruption
 
-**Symptoms**: `vat rag stats` or `vat rag query` refuses with `INPUT_UNREADABLE`, saying the `rag_chunks` table cannot be read (its files are damaged)
+**Symptoms**: `vat rag index`, `vat rag stats` or `vat rag query` refuses with `INPUT_UNREADABLE`, saying the `rag_chunks` table cannot be read (its files are damaged)
 
 **Solutions**:
 1. Clear and rebuild: `vat rag clear && vat rag index` — `clear` removes the database without opening it, so it works on a damaged one
@@ -575,7 +575,9 @@ The refusal names its cause, and two causes are not corruption. "The OS refuses 
 is a permissions problem: fix the ownership or mode of the path it names — `vat rag clear` would
 fail on the same files. "Is not one this build of vat rag index writes" names the columns or vector
 size that differ (another tool's table, or an index built with another metadata schema or embedding
-model): clear and rebuild, as for damage.
+model): clear and rebuild, as for damage. All three verbs check the table's columns and vector size
+before they read or write it, so `vat rag index` refuses such a table without adding or removing a
+row.
 
 ### Problem: Query results not relevant
 

@@ -18,7 +18,9 @@ import { findBarrelDrift } from '../../dev-tools/src/pin-barrel-exports.js';
 // is for. Test scaffolding (the temp-dir suite family, the fs-refusal fakes,
 // the crawl-timing `__*ForTest` seams) is on `./testing`, never here.
 const BARREL_EXPORTS = [
+  'ASSET_REFERENCE_UNRESOLVED_CODE',
   'COPY_LINK_ESCAPES_SOURCE_CODE',
+  'COPY_SOURCE_NOT_REGULAR_CODE',
   'CRAWL_BLOB_POPULATE_ID',
   'CRAWL_CLOSURE_CONTRIBUTE_ID',
   'CRAWL_CLOSURE_RESOLVE_ID',

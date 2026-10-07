@@ -373,22 +373,22 @@ function validateNoShellScripts(): void {
  * Staging directories should be temporary and not committed
  */
 function validateNoStagingDirectories(): void {
-  function checkFixturesDir(dir: string, relativePath: string): void {
-    walkDirectory(dir, relativePath, {
-      onDirectory: ({ name, relPath }) => {
-        if (name === 'staging') {
-          errors.push({
-            type: ERROR_TYPES.FORBIDDEN_DIRECTORY,
-            path: relPath,
-            message: `Staging directories should not be committed. Add to .gitignore and remove from git.`,
-            severity: 'error',
-          });
-        }
-      },
-    });
-  }
+  forEachPackageFixturesDir(checkFixturesDirForStaging);
+}
 
-  forEachPackageFixturesDir(checkFixturesDir);
+function checkFixturesDirForStaging(dir: string, relativePath: string): void {
+  walkDirectory(dir, relativePath, {
+    onDirectory: ({ name, relPath }) => {
+      if (name === 'staging') {
+        errors.push({
+          type: ERROR_TYPES.FORBIDDEN_DIRECTORY,
+          path: relPath,
+          message: `Staging directories should not be committed. Add to .gitignore and remove from git.`,
+          severity: 'error',
+        });
+      }
+    },
+  });
 }
 
 /**

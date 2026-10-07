@@ -22,6 +22,7 @@ import { EvalInputError } from '../../src/skill-test/eval-inputs.js';
 import {
   BootstrapNeededError,
   DuplicateStagedSkillError,
+  EvalsReferenceUnresolvedError,
   InternalHarnessError,
   SecurityAckError,
   SKILL_TEST_REFUSAL_BY_ERROR_CODE,
@@ -149,6 +150,7 @@ describe('SKILL_TEST_REFUSAL_BY_ERROR_CODE', () => {
     ['SkillBuildError', new SkillBuildError('x'), 'USAGE_INVALID'],
     ['SecurityAckError', new SecurityAckError(), 'USAGE_INVALID'],
     ['DuplicateStagedSkillError', new DuplicateStagedSkillError('helper'), 'USAGE_INVALID'],
+    ['EvalsReferenceUnresolvedError (a test.evals in the config that names nothing)', new EvalsReferenceUnresolvedError('x'), 'CONFIG_INVALID'],
     ['HarnessLockBusyError', new HarnessLockBusyError('/t/.lock'), 'USAGE_INVALID'],
     ['BuildHookError', new BuildHookError('hook failed', 1), 'USAGE_INVALID'],
     ['UnknownEnvTokenError', new UnknownEnvTokenError('nope', 'API_URL'), 'USAGE_INVALID'],

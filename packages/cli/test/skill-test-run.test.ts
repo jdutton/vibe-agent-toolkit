@@ -731,6 +731,23 @@ describe('vat skill test run (--evals resolves against the cwd)', () => {
     });
     expect(opts.evalsSubpath).toBeUndefined();
   });
+
+  // A reference on the command line that names nothing is the invocation's mistake,
+  // refused before the harness runs — never an INTERNAL_ERROR out of staging.
+  it.each([
+    ['--evals', { evals: '@vat-absent-fixture/pkg/evals.json' }],
+    ['a --with npm source', { with: ['dep=npm:@vat-absent-fixture/pkg@1.0.0/skill'] }],
+    ['a --with npm source with no version pin', { with: ['dep=npm:@vat-absent-fixture/pkg'] }],
+  ])('refuses %s that names nothing as USAGE_INVALID, never reaching the harness', async (_label, flags) => {
+    const { harnessSpy } = installRunSpies();
+    const stdout = vi.spyOn(process.stdout, 'write');
+    await runSkillTestRun(ENV_TEST_SKILL, { ...flags, iUnderstandThisRunsSkillCode: true });
+    expect(harnessSpy).not.toHaveBeenCalled();
+    expect(publishedDocument(stdout.mock.calls.map((c) => String(c[0])))['error']).toMatchObject({
+      code: 'USAGE_INVALID',
+      message: expect.stringContaining('@vat-absent-fixture/pkg') as unknown,
+    });
+  });
 });
 
 describe('vat skill test run (output routing)', () => {

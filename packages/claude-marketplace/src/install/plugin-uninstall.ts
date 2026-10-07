@@ -4,11 +4,11 @@
  * Idempotent: exits cleanly if plugin is not found.
  */
 
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { isVatError, mkdirSyncReal, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, isVatError, mkdirSyncReal, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
@@ -73,25 +73,73 @@ interface RemoveDirsResult {
   cacheDir: boolean;
 }
 
+/**
+ * The on-disk identity of the entry at `path` itself (a link is not followed), or
+ * `undefined` when nothing is there. One the OS refuses to examine is rethrown:
+ * guessing "not the same" would let the removal go ahead.
+ */
+function entryIdentity(path: string): string | undefined {
+  try {
+    const stats = lstatSync(path, { bigint: true });
+    return stats.ino === 0n ? undefined : `${stats.dev}:${stats.ino}`;
+  } catch (error) {
+    if (isPathAbsentError(error)) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * The registered plugin, other than `pluginKey`, whose own directory `dir` IS on disk —
+ * `<plugin>@<marketplace>` — or `undefined`. A case-insensitive filesystem makes
+ * `plugins/Old` and `plugins/old` one directory, and so does a linked marketplace:
+ * the name differs, the directory does not, and removing it removes that plugin.
+ * Decided by identity (device + inode), never by comparing the names.
+ */
+function registeredOwnerOf(
+  dir: string,
+  pluginKey: string,
+  installed: InstalledPlugins,
+  dirOf: (pluginName: string, marketplace: string) => string,
+): string | undefined {
+  const identity = entryIdentity(dir);
+  if (identity === undefined) return undefined;
+  return Object.keys(installed.plugins).find((key) => {
+    if (key === pluginKey) return false;
+    const atIdx = key.lastIndexOf('@');
+    if (atIdx <= 0) return false;
+    // Read-only: an ill-formed key only names a path to lstat, never one to remove.
+    return entryIdentity(dirOf(key.slice(0, atIdx), key.slice(atIdx + 1))) === identity;
+  });
+}
+
 async function removePluginDirs(
   paths: ClaudeUserPaths,
-  pluginName: string,
-  marketplace: string,
+  target: { pluginKey: string; pluginName: string; marketplace: string; installed: InstalledPlugins },
   mpPluginDir: string,
   mpPluginExists: boolean,
   dryRun: boolean,
-): Promise<RemoveDirsResult> {
+): Promise<RemoveDirsResult & { kept: string[] }> {
+  const { pluginKey, pluginName, marketplace, installed } = target;
+  const mpDirOf = (name: string, mp: string): string => safePath.join(paths.marketplacesDir, mp, 'plugins', name);
+  const cacheDirOf = (name: string, mp: string): string => safePath.join(paths.pluginsCacheDir, mp, name);
+  const kept: string[] = [];
+  const removable = (dir: string, dirOf: (name: string, mp: string) => string): boolean => {
+    const owner = registeredOwnerOf(dir, pluginKey, installed, dirOf);
+    if (owner !== undefined) kept.push(`${dir} (it is where ${owner} is installed)`);
+    return owner === undefined;
+  };
+
   let pluginDir = false;
-  if (mpPluginExists) {
+  if (mpPluginExists && removable(mpPluginDir, mpDirOf)) {
     if (!dryRun) await rm(mpPluginDir, { recursive: true, force: true });
     pluginDir = true;
   }
 
-  const cachePluginDir = safePath.join(paths.pluginsCacheDir, marketplace, pluginName);
-  const cacheDir = existsSync(cachePluginDir);
+  const cachePluginDir = cacheDirOf(pluginName, marketplace);
+  const cacheDir = existsSync(cachePluginDir) && removable(cachePluginDir, cacheDirOf);
   if (cacheDir && !dryRun) await rm(cachePluginDir, { recursive: true, force: true });
 
-  return { pluginDir, cacheDir };
+  return { pluginDir, cacheDir, kept };
 }
 
 function removeRegistryEntries(
@@ -151,20 +199,26 @@ export async function uninstallPlugin(opts: UninstallPluginOptions): Promise<Uni
 
   const isOrphan = mpPluginExists && !inRegistry;
 
-  const { pluginDir, cacheDir, installedPluginsRemoved, knownMarketplaces, settings } = await codedUserStateWrite(what, async () => {
-    const dirs = await removePluginDirs(paths, pluginName, marketplace, mpPluginDir, mpPluginExists, dryRun);
+  const { pluginDir, cacheDir, kept, installedPluginsRemoved, knownMarketplaces, settings } = await codedUserStateWrite(what, async () => {
+    const dirs = await removePluginDirs(paths, { pluginKey, pluginName, marketplace, installed: installedPlugins }, mpPluginDir, mpPluginExists, dryRun);
     const entries = removeRegistryEntries(paths, pluginKey, marketplace, inRegistry, dryRun, installedPlugins);
     return { ...dirs, installedPluginsRemoved: entries.installedPlugins, knownMarketplaces: entries.knownMarketplaces, settings: removeFromSettings(paths, pluginKey, dryRun) };
   });
 
   const artifacts = { pluginDir, cacheDir, installedPlugins: installedPluginsRemoved, knownMarketplaces, settings };
-
-  if (isOrphan) {
+  const warnings: string[] = [];
+  if (isOrphan && kept.length === 0) {
     const action = dryRun ? 'it would be removed' : 'cleaning up';
-    return { removed: true, warning: `Plugin "${pluginKey}" directory exists but was not installed via VAT — ${action}`, artifacts };
+    warnings.push(`Plugin "${pluginKey}" directory exists but was not installed via VAT — ${action}`);
+  }
+  if (kept.length > 0) {
+    const keptList = kept.join('; ');
+    warnings.push(dryRun
+      ? `Plugin "${pluginKey}" would be removed from the registry, but these would be kept: ${keptList}`
+      : `Plugin "${pluginKey}" was removed from the registry, but these were kept: ${keptList}`);
   }
 
-  return { removed: true, artifacts };
+  return warnings.length === 0 ? { removed: true, artifacts } : { removed: true, warning: warnings.join(' '), artifacts };
 }
 
 /**

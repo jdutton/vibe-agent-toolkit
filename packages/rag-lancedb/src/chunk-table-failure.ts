@@ -28,7 +28,7 @@ const CORE_CHUNK_COLUMNS = [
 ] as const satisfies ReadonlyArray<keyof LanceDBRow>;
 
 /** What this provider expects of the chunk table it reads. */
-interface ChunkTableShape {
+export interface ChunkTableShape {
   readonly dbPath: string;
   readonly metadataSchema: ZodObject<ZodRawShape>;
   /** The embedding model's vector length. */
@@ -108,6 +108,26 @@ function columnDifferences(fields: ReadonlyArray<{ name: string; type: unknown }
 }
 
 /**
+ * The refusal for a chunk table whose columns or vector size are not this
+ * provider's; undefined when they are. A table of another vector size reads
+ * without error, so every verb checks up front, not only after a failed read.
+ */
+export function foreignTableRefusal(
+  shape: ChunkTableShape,
+  fields: ReadonlyArray<{ name: string; type: unknown }>,
+  cause?: unknown,
+): VatError | undefined {
+  const differences = columnDifferences(fields, shape);
+  if (differences.length === 0) return undefined;
+  return new VatError(
+    RAG_DATABASE_UNREADABLE_CODE,
+    `The '${TABLE_NAME}' table at ${shape.dbPath} is not one this build of vat rag index writes: ${differences.join('; ')}. ` +
+      'Another tool, or a build with another metadata schema or embedding model, wrote it. Remove the database (vat rag clear) and index again.',
+    cause === undefined ? undefined : { cause },
+  );
+}
+
+/**
  * The refusal for a failed read of the chunk table, naming its cause.
  *
  * @param shape - Where the database is and what this provider expects of it
@@ -127,15 +147,8 @@ export async function chunkTableReadFailure(shape: ChunkTableShape, cause: unkno
     );
   }
   const stored = table === undefined ? undefined : await storedColumns(table);
-  const differences = stored !== undefined && 'fields' in stored ? columnDifferences(stored.fields, shape) : [];
-  if (differences.length > 0) {
-    return new VatError(
-      RAG_DATABASE_UNREADABLE_CODE,
-      `${where} is not one this build of vat rag index writes: ${differences.join('; ')}. ` +
-        'Another tool, or a build with another metadata schema or embedding model, wrote it. Remove the database (vat rag clear) and index again.',
-      { cause },
-    );
-  }
+  const foreign = stored !== undefined && 'fields' in stored ? foreignTableRefusal(shape, stored.fields, cause) : undefined;
+  if (foreign) return foreign;
   const schemaFailure = stored !== undefined && 'schemaError' in stored ? ` (its schema will not read either: ${messageOf(stored.schemaError)})` : '';
   return new VatError(
     RAG_DATABASE_UNREADABLE_CODE,
@@ -144,3 +157,5 @@ export async function chunkTableReadFailure(shape: ChunkTableShape, cause: unkno
     { cause },
   );
 }
+
+export const __internal = { CORE_CHUNK_COLUMNS } as const;

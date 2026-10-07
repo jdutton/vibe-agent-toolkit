@@ -332,7 +332,7 @@ Validation codes that fire when a collection's frontmatter schema declares a URI
 ### `FRONTMATTER_SCHEMA_ERROR`
 
 - **Default:** `error`
-- **What:** The file's frontmatter parsed as YAML but failed JSON Schema validation for its collection.
+- **What:** The file's frontmatter parsed as YAML but failed JSON Schema validation for its collection — or the collection's `frontmatterSchema` could not be loaded: a path naming no file, a schema that does not parse or compile, or an npm bare specifier that resolves to nothing (the package is not installed, or its `exports` target is not on disk). The message says which; for the last, install or rebuild the package it names.
 - **Why it matters:** A schema validation failure means the metadata violates the contract the collection declares — a missing required field, a wrong type, or a disallowed extra field under `strict` mode. Downstream consumers relying on the schema's guarantees will misbehave.
 - **Fix:** Make the frontmatter conform to the collection's schema — add missing required fields, correct field types, or remove disallowed fields.
 
@@ -1209,7 +1209,7 @@ section are registry entries of kind **refusal**: a statement that the *run* cou
 ### `CONFIG_INVALID`
 
 - **Default:** `error`
-- **What:** The project configuration could not be used: `vibe-agent-toolkit.config.yaml` is missing where the verb needs one, does not parse, or fails its schema.
+- **What:** The project configuration could not be used: `vibe-agent-toolkit.config.yaml` is missing where the verb needs one, does not parse, fails its schema, or carries a reference the run must follow that names nothing (a `vat skill test run` `test.with` source or `test.evals` suite that is not installed). A reference a verb can report as one unit's failure is a finding instead — a collection `frontmatterSchema` is `FRONTMATTER_SCHEMA_ERROR`.
 - **Fix:** Fix the config file at the path the message names; the message carries the schema error. Run the verb from inside the project it configures.
 
 ### `INPUT_UNREADABLE`
@@ -1431,7 +1431,7 @@ would parse and do nothing, and both refuse it. `location` is the plugin key.
 
 | Code | Severity | What | Fix |
 |---|---|---|---|
-| `PLUGIN_UNINSTALL_INCOMPLETE` | warning | The plugin's directory was under the Claude marketplaces tree with no entry in `installed_plugins.json` — a half-removed install, or one VAT never made. The directory, cache and settings entry were removed (under `--dry-run`, would be removed), and `data.plugins[]` still reports `removed: true`; but VAT reverses only the artifacts its own install writes, so an install it did not record may have written others it cannot see | Check Claude Code for leftovers of the plugin (`/plugin`) and remove them there |
+| `PLUGIN_UNINSTALL_INCOMPLETE` | warning | The plugin's directory was under the Claude marketplaces tree with no entry in `installed_plugins.json` — a half-removed install, or one VAT never made. The directory, cache and settings entry were removed (under `--dry-run`, would be removed), and `data.plugins[]` still reports `removed: true`; but VAT reverses only the artifacts its own install writes, so an install it did not record may have written others it cannot see. Also raised when the plugin's directory (or cache) IS another registered plugin's on disk — `Old@mp` beside `old@mp` on a case-insensitive filesystem, or a linked marketplace: that directory is kept and only the registry and settings entries go, and the message names the plugin it belongs to | Check Claude Code for leftovers of the plugin (`/plugin`) and remove them there |
 
 ### Claude Settings Codes
 

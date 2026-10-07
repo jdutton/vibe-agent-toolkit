@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { mkdirSyncReal, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '../src/index.js';
+import { ASSET_REFERENCE_UNRESOLVED_CODE, isVatError, mkdirSyncReal, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '../src/index.js';
 
 const REPO_ROOT = safePath.resolve(import.meta.dirname, '..', '..', '..');
 const PACKAGE_JSON = 'package.json';
@@ -26,7 +26,7 @@ describe('resolveAssetReference', () => {
       } catch (e) {
         err = e;
       }
-      expect(err).toBeInstanceOf(Error);
+      expect(isVatError(err, ASSET_REFERENCE_UNRESOLVED_CODE)).toBe(true);
       expect((err as Error).message).toContain(MISSING_PKG_SPECIFIER);
       const cause = (err as { cause?: { code?: string } }).cause;
       expect(cause?.code).toBe('MODULE_NOT_FOUND');

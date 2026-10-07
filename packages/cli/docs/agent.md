@@ -193,10 +193,12 @@ installed, with `error.code`: `USAGE_INVALID` (an unknown `--scope` or
 `--runtime`, a name that is not one path segment or names no agent, already
 installed without `--force`, or no `package.json` encloses the agent),
 `NOT_IMPLEMENTED` (`--dev` on Windows), `CONFIG_INVALID` (the manifest does not
-validate), `INPUT_UNREADABLE` (the bundle was never built, or a search path, the
-manifest, the bundle or the install path cannot be read), `RUN_INCOMPLETE` (a
-write under the scope directory failed; under `--force` the message says when
-the previous install was already removed).
+validate), `INPUT_UNREADABLE` (the bundle was never built, holds a named pipe,
+socket or device, or a search path, the manifest, the bundle or the install path
+cannot be read), `RUN_INCOMPLETE` (a write under the scope directory failed). A
+copy replaces a previous install only once it is whole, so a refused `--force`
+copy keeps it; `--force --dev` removes it before linking, and a failed link says
+so in the message.
 
 ### `vat agent uninstall <agentName>`
 

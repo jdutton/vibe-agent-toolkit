@@ -23,7 +23,7 @@ import { existsSync } from 'node:fs';
 import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 
 import { AGENT_INSTRUCTION_FILE_PATTERNS, toAnyDepthGlobs } from '@vibe-agent-toolkit/agent-skills';
-import { forEachInOrder, isGlob, isPathAbsentError, mapWithConcurrency, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, isGlob, isPathAbsentError, mapConcurrentFailingInOrder, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, crawlPathFilter } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 import picomatch from 'picomatch';
@@ -291,22 +291,6 @@ interface SourceEntry {
 }
 
 /**
- * Read-only `fn` over `items`, bounded-parallel, results in input order. A failure
- * surfaces as the FIRST failing item in input order — what a sequential loop
- * reported — not whichever failed first in time.
- */
-async function mapReadOnly<T, R>(items: readonly T[], fn: (item: T) => Promise<R>): Promise<R[]> {
-  const settled = await mapWithConcurrency(items, (item) => fn(item).then(
-    (value) => ({ ok: true as const, value }),
-    (error: unknown) => ({ ok: false as const, error }),
-  ));
-  return settled.map((outcome) => {
-    if (!outcome.ok) throw outcome.error;
-    return outcome.value;
-  });
-}
-
-/**
  * Split the crawl's paths into regular files and symlinks by `lstat`, on BOTH
  * routes — this is the one predicate the two crawl lanes share. The walker
  * never yields a symlink (see {@link sweepSymlinks}), so there it finds none;
@@ -319,7 +303,7 @@ async function partitionByLstat(
 ): Promise<{ regular: SourceEntry[]; links: SourceEntry[] }> {
   const regular: SourceEntry[] = [];
   const links: SourceEntry[] = [];
-  const isLink = await mapReadOnly(files, async (abs) => (await lstat(abs)).isSymbolicLink());
+  const isLink = await mapConcurrentFailingInOrder(files, async (abs) => (await lstat(abs)).isSymbolicLink());
   for (const [index, abs] of files.entries()) {
     const entry = { abs, rel: toForwardSlash(safePath.relative(sourceDir, abs)) };
     (isLink[index] === true ? links : regular).push(entry);
@@ -434,7 +418,7 @@ async function judgeSymlinks(
   if (links.length === 0) return { copyable, refused };
   const realSource = toForwardSlash(await realpath(sourceDir));
   const sorted = [...links].toSorted((a, b) => a.rel.localeCompare(b.rel));
-  const verdicts = await mapReadOnly(sorted, (link) => classifySymlink(link, realSource, shipped));
+  const verdicts = await mapConcurrentFailingInOrder(sorted, (link) => classifySymlink(link, realSource, shipped));
   for (const [index, link] of sorted.entries()) {
     const verdict = verdicts[index];
     if (verdict === 'file') {

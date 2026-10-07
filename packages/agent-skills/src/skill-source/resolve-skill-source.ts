@@ -1,4 +1,6 @@
-import { resolveNpmSource } from './sources/npm-source.js';
+import { resolveAssetReference } from '@vibe-agent-toolkit/utils';
+
+import { locateNpmSource, resolveNpmSource } from './sources/npm-source.js';
 import { resolvePathSource } from './sources/path-source.js';
 import { resolveVendoredSource } from './sources/vendored-source.js';
 import { resolveWorkspaceSource } from './sources/workspace-source.js';
@@ -15,6 +17,24 @@ import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from
 export interface ResolveSkillSourceOptions {
   /** Map of workspace skill name -> absolute SKILL.md path (required for { workspace } sources). */
   workspaceSkillPaths?: Record<string, string>;
+}
+
+/**
+ * Where a `{ path }` or `{ npm }` source sits on disk, without staging it — or
+ * `undefined` for a source that has no local location to find until it is
+ * fetched or built.
+ *
+ * A caller that knows where the reference was WRITTEN (a flag, a positional, a
+ * config file) calls this first, so a reference that names nothing is refused
+ * as that input's mistake rather than surfacing from staging uncoded.
+ *
+ * @throws {VatError} `ASSET_REFERENCE_UNRESOLVED` for a specifier that names
+ *   nothing installed; `SKILL_SOURCE_SPEC_INVALID` for an npm spec with no version pin
+ */
+export function locateSkillSource(source: SkillSource, repoRoot: string): string | undefined {
+  if ('path' in source) return resolveAssetReference(source.path, repoRoot);
+  if ('npm' in source) return locateNpmSource(source.npm, repoRoot);
+  return undefined;
 }
 
 /**

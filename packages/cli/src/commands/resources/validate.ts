@@ -27,7 +27,7 @@ import {
   type Finding,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
+import { ASSET_REFERENCE_UNRESOLVED_CODE, isVatError, resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
 import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import * as yaml from 'yaml';
 
@@ -62,13 +62,20 @@ function unreadableSchema(resolvedPath: string, error: unknown): CommandRefusalE
  * Read the `--frontmatter-schema` file the operator named.
  *
  * Each way it can fail is a refusal by code, decided HERE — the one site that
- * knows the file is the operator's input: an unsupported extension or an
- * absent file → `USAGE_INVALID` (the flag names nothing usable), a read the OS
+ * knows the file is the operator's input: an unsupported extension, an
+ * absent file or a bare specifier that resolves to nothing → `USAGE_INVALID`
+ * (the flag names nothing usable), a read the OS
  * refuses → `INPUT_UNREADABLE`, and content that is not a JSON/YAML object →
  * `INPUT_UNREADABLE` (not the kind of thing the flag takes).
  */
 async function loadSchema(schemaPath: string): Promise<object> {
-  const resolvedPath = resolveAssetReference(schemaPath, process.cwd());
+  let resolvedPath: string;
+  try {
+    resolvedPath = resolveAssetReference(schemaPath, process.cwd());
+  } catch (error) {
+    if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE)) throw error;
+    throw new CommandRefusalError('USAGE_INVALID', `--frontmatter-schema names no file: ${error.message}`, { cause: error });
+  }
   const ext = path.extname(resolvedPath).toLowerCase();
   if (ext !== '.json' && ext !== '.yaml' && ext !== '.yml') {
     throw new CommandRefusalError('USAGE_INVALID', `Unsupported schema format: ${ext} (use .json or .yaml): ${schemaPath}`);

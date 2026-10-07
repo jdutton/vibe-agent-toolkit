@@ -2,7 +2,16 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
+import { VatError } from './errors/vat-error.js';
 import { isAbsolutePath, safePath } from './path-utils.js';
+
+/**
+ * A bare specifier Node could not resolve to a file: the package is not
+ * installed, its `exports` map does not expose the subpath, or the file it
+ * points at is not on disk. Always about the reference a user supplied, so a
+ * caller reports it against that input — never as VAT's defect.
+ */
+export const ASSET_REFERENCE_UNRESOLVED_CODE = 'ASSET_REFERENCE_UNRESOLVED';
 
 // First segment must be a valid npm package name (scoped or unscoped),
 // followed by `/` and at least one subpath segment. Paths starting with
@@ -41,7 +50,8 @@ const BARE_SPECIFIER_RE = /^(?:@[^/]+\/[^/]+|[a-z0-9][a-z0-9._-]*)\/.+/i;
  * @param specifier - The asset reference (path or bare npm specifier)
  * @param baseDir - Absolute directory used as the resolution anchor
  * @returns Absolute filesystem path to the asset
- * @throws Error with actionable message and `cause` on resolution failure
+ * @throws {VatError} `ASSET_REFERENCE_UNRESOLVED`, with an actionable message and
+ *   Node's error as `cause`, when a bare specifier does not resolve
  */
 export function resolveAssetReference(specifier: string, baseDir: string): string {
   if (!isBareSpecifier(specifier)) {
@@ -60,7 +70,7 @@ export function resolveAssetReference(specifier: string, baseDir: string): strin
     if (!specifier.startsWith('@') && isModuleNotFound(cause)) {
       return safePath.resolve(baseDir, specifier);
     }
-    throw new Error(formatActionableError(specifier, baseDir, cause), { cause: cause as Error });
+    throw new VatError(ASSET_REFERENCE_UNRESOLVED_CODE, formatActionableError(specifier, baseDir, cause), { cause });
   }
 }
 

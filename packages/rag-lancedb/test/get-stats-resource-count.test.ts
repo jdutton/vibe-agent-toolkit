@@ -8,9 +8,12 @@
  * than merely costing time on a large index.
  */
 
+import { DefaultRAGMetadataSchema } from '@vibe-agent-toolkit/rag';
 import { describe, expect, it, vi } from 'vitest';
 
+import { __internal } from '../src/chunk-table-failure.js';
 import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
+import { serializeMetadata } from '../src/schema.js';
 
 import { createStubEmbeddingProvider } from './test-helpers.js';
 
@@ -24,6 +27,13 @@ const rows = vi.hoisted(() => [
 vi.mock('@lancedb/lancedb', () => {
   const table = {
     countRows: async () => rows.length,
+    // The columns this provider writes, so the shape check every read makes first passes.
+    schema: async () => ({
+      fields: [...__internal.CORE_CHUNK_COLUMNS, ...Object.keys(serializeMetadata({}, DefaultRAGMetadataSchema))].map((name) => ({
+        name,
+        type: name === 'vector' ? { listSize: 4 } : {},
+      })),
+    }),
     close: () => undefined,
     query: () => {
       let columns: string[] | undefined;

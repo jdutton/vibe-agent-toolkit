@@ -8,8 +8,9 @@
  * `examined` counts uninstall requests — one per run, a key or `--all`. Nothing
  * to remove is an answer (`plugins` lists `removed: false`, or is empty under
  * `--all`), not a run that looked at nothing. A plugin whose directory was on
- * disk with no registry entry is a `PLUGIN_UNINSTALL_INCOMPLETE` finding
- * located at its key.
+ * disk with no registry entry, or whose directory is another registered
+ * plugin's on disk (kept), is a `PLUGIN_UNINSTALL_INCOMPLETE` finding located
+ * at its key.
  */
 
 import { FindingSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';

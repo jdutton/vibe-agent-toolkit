@@ -822,10 +822,10 @@ Important security information.`
       expect(chunk?.title).toBe('Security Best Practices');
     });
 
-    it('should fail when table exists with wrong schema', async () => {
-      // RED: Test the ACTUAL bug scenario from an adopter project
-      // They had an existing LanceDB table, tried to index with custom metadata,
-      // but got "Found field not in schema" because table schema doesn't have custom columns
+    it('refuses a table an index with another metadata schema wrote, before writing to it', async () => {
+      // An adopter had an existing LanceDB table and indexed with custom metadata into it. The table
+      // has no custom columns, so the batch is refused up front naming them — never one per-resource
+      // "Found field not in schema" error after an update had already deleted the resource's chunks.
 
       const { z } = await import('zod');
       const { DefaultRAGMetadataSchema } = await import('@vibe-agent-toolkit/rag');
@@ -873,16 +873,11 @@ Content.`
 
       const resourceWithMeta = await createTestResource(fileWithMeta, 'doc-2');
 
-      // BUG: This should fail with "Found field not in schema: title"
-      // because table was created with default schema, doesn't have title/category columns
-      const result = await customProvider.indexResources([resourceWithMeta]);
-
-      // This assertion should FAIL (RED phase)
-      expect(result.errors).toBeDefined();
-      if (result.errors) {
-        expect(result.errors.length).toBeGreaterThan(0);
-        expect(result.errors[0]?.error).toContain('not in schema');
-      }
+      await expect(customProvider.indexResources([resourceWithMeta])).rejects.toMatchObject({
+        code: RAG_DATABASE_UNREADABLE_CODE,
+        message: expect.stringContaining('it has no category column'),
+      });
+      await customProvider.close();
     });
 
     it('should handle missing frontmatter on first resource then present on second', async () => {

@@ -45,6 +45,15 @@ function validateWithTextFormat(dir: string, schemaFilename: string) {
   ]);
 }
 
+/** A project holding one document and a package whose exported schema was never built. */
+function bareSpecifierProject(dir: string): void {
+  fs.mkdirSync(`${dir}/docs`, { recursive: true });
+  fs.writeFileSync(`${dir}/docs/a.md`, '---\ntitle: A\n---\n# A\n');
+  const pkg = `${dir}/node_modules/@fake/pkg`;
+  fs.mkdirSync(pkg, { recursive: true });
+  fs.writeFileSync(`${pkg}/package.json`, JSON.stringify({ name: '@fake/pkg', exports: { './schema.json': './dist/schema.json' } }));
+}
+
 describe('vat resources validate --frontmatter-schema (system test)', () => {
   let tempDir: string;
 
@@ -149,5 +158,37 @@ describe('vat resources validate --frontmatter-schema (system test)', () => {
     const textResult = validateWithTextFormat(tempDir, SCHEMA_JSON);
     expect(textResult.stdout).toContain('No frontmatter found');
     expect(textResult.stdout).toContain('title');
+  });
+
+  // A bare specifier that resolves to nothing is the operator's mistake, never INTERNAL_ERROR:
+  // a package not installed, or one whose `exports` target is not on disk.
+  describe('a schema named by a bare specifier that resolves to nothing', () => {
+    const MISSING_PACKAGE = '@nope/missing/schema.json';
+    const MISSING_TARGET = '@fake/pkg/schema.json';
+
+    it.each([MISSING_PACKAGE, MISSING_TARGET])('--frontmatter-schema %s is USAGE_INVALID', (specifier) => {
+      bareSpecifierProject(tempDir);
+      const result = executeCli(binPath, ['resources', 'validate', 'docs', '--format', 'json', '--frontmatter-schema', specifier], { cwd: tempDir });
+
+      expect(result.status).toBe(2);
+      const report = JSON.parse(result.stdout) as { error?: { code?: string; message?: string } };
+      expect(report.error?.code).toBe('USAGE_INVALID');
+      expect(report.error?.message).toContain(specifier);
+    });
+
+    it.each([MISSING_PACKAGE, MISSING_TARGET])('a collection frontmatterSchema %s is a finding against the schema', (specifier) => {
+      bareSpecifierProject(tempDir);
+      fs.writeFileSync(
+        `${tempDir}/vibe-agent-toolkit.config.yaml`,
+        `resources:\n  collections:\n    docs:\n      include: ['docs/*.md']\n      validation:\n        frontmatterSchema: '${specifier}'\n`,
+      );
+      const result = executeCli(binPath, ['resources', 'validate', '--format', 'json'], { cwd: tempDir });
+
+      expect(result.stdout).not.toContain('INTERNAL_ERROR');
+      expect(result.status).toBe(1);
+      const report = JSON.parse(result.stdout) as { findings?: Array<{ code?: string; message?: string }> };
+      const finding = report.findings?.find((entry) => entry.code === 'FRONTMATTER_SCHEMA_ERROR');
+      expect(finding?.message).toContain(specifier);
+    });
   });
 });

@@ -4,7 +4,8 @@
  * published as the `Report<T>` envelope (`uninstall-schema.ts`).
  *
  * One uninstall request per run (a key, or `--all`). Nothing to remove is an
- * answer. A plugin directory the registry never recorded is removed and
+ * answer. A plugin directory the registry never recorded is removed, and one
+ * that is another registered plugin's directory on disk is kept; either is
  * reported as a `PLUGIN_UNINSTALL_INCOMPLETE` finding at its key.
  */
 
@@ -59,7 +60,9 @@ Output (YAML report on stdout):
   - data.dryRun: whether anything was actually removed
   - data.plugins[]: { key, removed } per plugin
   - findings: PLUGIN_UNINSTALL_INCOMPLETE (warning) for a plugin directory no
-    registry recorded — removed, but its installer may have left more
+    registry recorded — removed, but its installer may have left more; or for
+    a directory that is another installed plugin's on disk (Old@mp beside old@mp
+    on a case-insensitive filesystem) — kept, only the registry entry removed
 
 Exit Codes:
   0 - Uninstalled, or nothing to remove (a warning does not fail the run)

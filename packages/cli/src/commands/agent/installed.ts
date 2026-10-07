@@ -6,6 +6,7 @@ import type { Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 
 import { materializeIssue } from '@vibe-agent-toolkit/agent-skills';
+import { isStagedReplaceLeftover } from '@vibe-agent-toolkit/claude-marketplace';
 import { buildReport, toFindings, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
@@ -121,10 +122,13 @@ async function scanForInstalledSkills(
   return { skills, unreadable };
 }
 
-/** The installs in one scope's listing: each directory, or link, directly under it. */
+/**
+ * The installs in one scope's listing: each directory, or link, directly under
+ * it — never the staged copy an interrupted install left beside one.
+ */
 function installedSkillsIn(listing: readonly Dirent[], scope: string, location: string): InstalledSkill[] {
   return listing
-    .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+    .filter((entry) => (entry.isDirectory() || entry.isSymbolicLink()) && !isStagedReplaceLeftover(entry.name))
     .map((entry) => ({
       name: entry.name,
       scope,

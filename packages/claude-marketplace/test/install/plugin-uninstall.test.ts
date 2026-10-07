@@ -5,8 +5,8 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 
-import { isVatError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { refuseSyncFs } from '@vibe-agent-toolkit/utils/testing';
+import { createSymlink, isVatError, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { refuseSyncFs, tmpdirFoldsCase } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { CLAUDE_USER_STATE_UNREADABLE_CODE, CLAUDE_USER_STATE_WRITE_FAILED_CODE, PLUGIN_KEY_INVALID_CODE } from '../../src/install/plugin-registry.js';
@@ -143,6 +143,52 @@ describe('uninstallPlugin', () => {
     expect(result.warning).toContain('would be removed');
     expect(result.warning).not.toContain('cleaning up');
     expect(existsSync(mpPluginDir)).toBe(true);
+  });
+});
+
+/** Add `pluginKey` to the registry, its install path `installPath`. */
+function registerKey(paths: ClaudeUserPaths, pluginKey: string, installPath: string): void {
+  const ip = JSON.parse(readFileSync(paths.installedPluginsPath, 'utf-8'));
+  ip.plugins[pluginKey] = [{ scope: 'user', installPath, version: '1.0.0', installedAt: '', lastUpdated: '' }];
+  writeFileSync(paths.installedPluginsPath, JSON.stringify(ip));
+}
+
+// `vat.replaces` runs after the install: a package that renames `Old` → `old` and replaces
+// `Old` uninstalled `Old@mp` — and on a case-insensitive filesystem `plugins/Old` IS
+// `plugins/old`, so it removed the plugin it had just installed, exit 0, registry dangling.
+describe('uninstallPlugin never removes a directory another registered plugin is installed in', () => {
+  const { getPaths } = setupPluginTestPaths();
+
+  // Only a case-folding filesystem can hold this alias; on a case-sensitive one `plugins/Old`
+  // and `plugins/old` are two directories and removing `Old` is right. The symlink case below
+  // exercises the same identity decision on every filesystem.
+  it.skipIf(!tmpdirFoldsCase())('keeps old@mp\'s directories when uninstalling Old@mp on a case-insensitive filesystem', async () => {
+    const paths = getPaths();
+    setupInstalledPlugin(paths, 'old', 'mp', '@test/pkg', '2.0.0');
+    registerKey(paths, 'Old@mp', safePath.join(paths.pluginsCacheDir, 'mp', 'Old', '1.0.0'));
+
+    const result = await uninstallPlugin({ pluginKey: 'Old@mp', paths });
+
+    expect(existsSync(safePath.join(paths.marketplacesDir, 'mp', 'plugins', 'old', 'SKILL.md'))).toBe(true);
+    expect(existsSync(safePath.join(paths.pluginsCacheDir, 'mp', 'old', '2.0.0', 'SKILL.md'))).toBe(true);
+    expect(Object.keys(JSON.parse(readFileSync(paths.installedPluginsPath, 'utf-8')).plugins)).toEqual(['old@mp']);
+    expect(result.artifacts).toMatchObject({ pluginDir: false, cacheDir: false, installedPlugins: true });
+    expect(result.warning).toContain('old@mp');
+  });
+
+  it('keeps a directory that reaches another registered plugin\'s through a linked marketplace', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const paths = getPaths();
+    setupInstalledPlugin(paths, 'p', 'mp', '@test/pkg');
+    createSymlink(cap, safePath.join(paths.marketplacesDir, 'mp'), safePath.join(paths.marketplacesDir, 'alias'), 'dir');
+    createSymlink(cap, safePath.join(paths.pluginsCacheDir, 'mp'), safePath.join(paths.pluginsCacheDir, 'alias'), 'dir');
+    registerKey(paths, 'p@alias', safePath.join(paths.pluginsCacheDir, 'alias', 'p', '1.0.0'));
+
+    await uninstallPlugin({ pluginKey: 'p@alias', paths });
+
+    expect(existsSync(safePath.join(paths.marketplacesDir, 'mp', 'plugins', 'p', 'SKILL.md'))).toBe(true);
+    expect(existsSync(safePath.join(paths.pluginsCacheDir, 'mp', 'p', '1.0.0', 'SKILL.md'))).toBe(true);
+    expect(Object.keys(JSON.parse(readFileSync(paths.installedPluginsPath, 'utf-8')).plugins)).toEqual(['p@mp']);
   });
 });
 

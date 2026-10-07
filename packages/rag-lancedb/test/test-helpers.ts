@@ -186,16 +186,18 @@ export async function queryAllContent(
  * local all-MiniLM-L6-v2 limit; any positive number would do, since no suite
  * using this asserts chunk boundaries against a real model.
  *
+ * @param dimensions - The vector length it declares and makes (another model's, to a suite that needs one)
  * @returns A deterministic, runtime-free embedding provider
  */
-export function createStubEmbeddingProvider(): EmbeddingProvider {
+export function createStubEmbeddingProvider(dimensions = 4): EmbeddingProvider {
+  const vector = Array.from({ length: dimensions }, (_, index) => (index === dimensions - 1 ? 1 : 0));
   return {
     name: 'stub',
-    model: 'stub-model',
-    dimensions: 4,
+    model: `stub-model-${dimensions}`,
+    dimensions,
     maxInputTokens: 256,
-    embed: () => Promise.resolve([0, 0, 0, 1]),
-    embedBatch: (texts: string[]) => Promise.resolve(texts.map(() => [0, 0, 0, 1])),
+    embed: () => Promise.resolve([...vector]),
+    embedBatch: (texts: string[]) => Promise.resolve(texts.map(() => [...vector])),
   };
 }
 

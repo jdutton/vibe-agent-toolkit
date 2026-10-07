@@ -12,9 +12,11 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import { buildReport, toFindings, type FindingsReport, type Gate, type OkReport, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
+  ASSET_REFERENCE_UNRESOLVED_CODE,
   findConfigFile,
   isFilesystemAccessError,
   isPathAbsentError,
+  isVatError,
   resolveAssetReference,
   safePath,
 } from '@vibe-agent-toolkit/utils';
@@ -353,29 +355,17 @@ function checkSchemaFiles(
           missingSchemas.push(schemaPath);
         }
       } catch (error) {
-        // resolveAssetReference throws for unresolvable bare specifiers
-        // (package not installed, subpath not exported). vat doctor's
-        // contract is "report what's missing" — convert the throw back
-        // to a missingSchemas entry. Only THOSE two: any other throw is not
-        // a missing schema and reaches the caller's own catch, which reports
-        // it under its own message rather than under "Missing:".
-        if (!isUnresolvableSpecifier(error)) throw error;
+        // A bare specifier that names nothing installed is coded
+        // ASSET_REFERENCE_UNRESOLVED; vat doctor's contract is "report what's
+        // missing", so it is a missingSchemas entry. Only that code: any other
+        // throw is not a missing schema and reaches the caller's own catch.
+        if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE)) throw error;
         missingSchemas.push(schemaPath);
       }
     }
   }
 
   return { schemaFiles, missingSchemas };
-}
-
-/**
- * Whether `resolveAssetReference` threw because the specifier names nothing
- * installed. It wraps Node's resolution error and keeps it as `cause`, so the
- * code is one level down.
- */
-function isUnresolvableSpecifier(error: unknown): boolean {
-  const code = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
-  return code === 'MODULE_NOT_FOUND' || code === 'ERR_PACKAGE_PATH_NOT_EXPORTED';
 }
 
 /**

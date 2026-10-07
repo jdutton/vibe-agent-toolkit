@@ -16,11 +16,13 @@ import {
   isAcknowledged,
   isSkillPackagingInputError,
   conventionalSuiteProbe,
+  locateSkillSource,
   packageSkill,
   packagingConfigToPackageOptions,
   runPreStageBuild,
   runSkillTestHarness,
   SecurityAckError,
+  SKILL_SOURCE_SPEC_INVALID_CODE,
   SKILL_TEST_BUILTIN_CAPS,
   SkillBuildError,
   type SkillTestFailureReason,
@@ -31,6 +33,7 @@ import {
 import type { ProjectConfig, SkillSourceDescriptor, TestConfig } from '@vibe-agent-toolkit/resources';
 import { buildReport, ExitCode, toFindings, type Gate, type RefusalCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
+  ASSET_REFERENCE_UNRESOLVED_CODE,
   findProjectRoot,
   forEachInOrder,
   isVatError,
@@ -53,7 +56,7 @@ import {
   type BuildableReference,
   type DeclaredSkillLink,
 } from '../../../skill-resolution/index.js';
-import { CommandRefusalError, refusalCodeOf } from '../../../utils/command-refusal.js';
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { loadConfig, loadConfigCached } from '../../../utils/config-loader.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../../utils/document-writer.js';
 import { pathPresent } from '../../../utils/project-root-policy.js';
@@ -423,9 +426,22 @@ function applyScalarMerges(opts: HarnessOpts, options: SkillTestRunOptions, conf
   // against the skill source, because config travels with the skill. Both then
   // reach the harness as one field, and both accept a path or an npm bare
   // specifier (a suite published as a shared corpus).
-  const evalsRef =
-    options.evals === undefined ? config?.evals : resolveAssetReference(options.evals, process.cwd());
+  const evalsRef = options.evals === undefined ? config?.evals : resolveEvalsFlag(options.evals);
   if (evalsRef !== undefined) opts.evalsSubpath = evalsRef;
+}
+
+/**
+ * Resolve `--evals` against the cwd, refusing a specifier that names nothing as
+ * the invocation's mistake. (`test.evals` from config is resolved — and refused
+ * as the config's — by the harness, which knows the skill source it is relative to.)
+ */
+function resolveEvalsFlag(evals: string): string {
+  try {
+    return resolveAssetReference(evals, process.cwd());
+  } catch (error) {
+    if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE)) throw error;
+    throw new CommandRefusalError('USAGE_INVALID', `--evals names no eval suite: ${error.message}`, { cause: error });
+  }
 }
 
 /**
@@ -568,10 +584,39 @@ function applyEnvMerges(opts: HarnessOpts, options: SkillTestRunOptions, config:
   if (passEnv !== undefined) opts.passEnv = passEnv;
 }
 
-/** Apply flag>config merges for the companion-skill records (with/optional). */
-function applyDepMerges(opts: HarnessOpts, options: SkillTestRunOptions, config: TestConfig | undefined): void {
-  const withSources = parseWithFlags(options.with) ?? descriptorsToRecord(config?.with);
-  if (withSources !== undefined) opts.withSources = withSources;
+/**
+ * Refuse a `{ path }` or `{ npm }` skill source that names nothing — an npm
+ * package that is not installed, a scoped specifier, an unpinned npm spec — as
+ * the mistake of whoever wrote it: `refusal` is `USAGE_INVALID` for a flag or
+ * the positional, `CONFIG_INVALID` for the config. Checked here because staging,
+ * where it would otherwise surface, cannot tell the two apart.
+ */
+function requireSourceLocatable(source: SkillSourceSpec, repoRoot: string, refusal: RefusalCode, origin: string): void {
+  try {
+    locateSkillSource(source, repoRoot);
+  } catch (error) {
+    if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE) && !isVatError(error, SKILL_SOURCE_SPEC_INVALID_CODE)) throw error;
+    throw new CommandRefusalError(refusal, `${origin} names no skill source: ${errorMessageOf(error)}`, { cause: error });
+  }
+}
+
+/**
+ * Apply flag>config merges for the companion-skill records (with/optional).
+ *
+ * Required companions must name something ({@link requireSourceLocatable}).
+ * Optional ones are not checked: one that cannot stage is skipped with a warning.
+ */
+function applyDepMerges(opts: HarnessOpts, options: SkillTestRunOptions, config: TestConfig | undefined, repoRoot: string): void {
+  const withFlags = parseWithFlags(options.with);
+  const withSources = withFlags ?? descriptorsToRecord(config?.with);
+  if (withSources !== undefined) {
+    const [refusal, origin]: [RefusalCode, string] =
+      withFlags === undefined ? ['CONFIG_INVALID', 'test.with in the project config'] : ['USAGE_INVALID', '--with'];
+    for (const [name, spec] of Object.entries(withSources)) {
+      requireSourceLocatable(spec, repoRoot, refusal, `${origin} companion '${name}'`);
+    }
+    opts.withSources = withSources;
+  }
   const withOptional = parseWithFlags(options.withOptional) ?? descriptorsToRecord(config?.optional);
   if (withOptional !== undefined) opts.withOptional = withOptional;
 }
@@ -613,7 +658,7 @@ function buildHarnessOpts(
   applyFlagOnlyOptions(opts, options);
   applyScalarMerges(opts, options, config);
   applyKnobMerges(opts, knobs, config);
-  applyDepMerges(opts, options, config);
+  applyDepMerges(opts, options, config, repoRoot);
   applyEnvMerges(opts, options, config);
   applyGraderMerges(opts, options, knobs, globalTest);
   applyResolvedSubject(opts, resolvedSubject);
@@ -743,6 +788,7 @@ export async function resolveSubjectForTest(
   const resolved = await resolveSkillReference(ref, cwd);
   switch (resolved.kind) {
     case 'source':
+      requireSourceLocatable(resolved.source, resolveRepoRoot(), 'USAGE_INVALID', `the skill reference '${ref}'`);
       return {
         subjectSource: resolved.source,
         rebuilt: false,
@@ -1709,7 +1755,10 @@ Exit Codes:
                     directory (or, on POSIX, not 0700: VAT never changes its
                     mode), a held harness lock, a skill name the config does not
                     declare (or --no-build with no dist), a bad env token or
-                    test.build hook. RUN_INCOMPLETE: the packager refused the
+                    test.build hook, a --with source, --evals or skill reference
+                    that names nothing (an npm package not installed, an
+                    unpinned npm spec, a scoped specifier as a path).
+                    RUN_INCOMPLETE: the packager refused the
                     skill's content (with a SKILL_PACKAGING_FAILED finding), or
                     the OS would not let the run write its output -- the harness
                     root, its lockfile, the staged skill copies and manifest, the
@@ -1718,7 +1767,10 @@ Exit Codes:
                     skill build's git snapshot fails first is still
                     INTERNAL_ERROR). A build that threw keeps
                     its cause's code; an uncoded one is INTERNAL_ERROR.
-                    CONFIG_INVALID: a broken project config. INPUT_UNREADABLE: a
+                    CONFIG_INVALID: a broken project config, or a test.with or
+                    test.evals reference in it that names nothing (an optional
+                    companion that names nothing is skipped with a warning).
+                    INPUT_UNREADABLE: a
                     declared eval input or dependency absent, an evals.json that
                     is not a valid suite, a vendored copy failing its manifest,
                     a --with path: companion holding a file or directory the

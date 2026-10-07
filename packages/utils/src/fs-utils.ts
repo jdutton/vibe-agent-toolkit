@@ -482,6 +482,20 @@ export class CopyLinkEscapesSourceError extends VatError {
   }
 }
 
+/** The `VatError` code of a {@link CopySourceNotRegularError}. */
+export const COPY_SOURCE_NOT_REGULAR_CODE = 'COPY_SOURCE_NOT_REGULAR';
+
+/** Thrown when an entry of the tree being copied is a named pipe, socket or device (or a link to one). */
+class CopySourceNotRegularError extends VatError {
+  constructor(entry: string) {
+    super(
+      COPY_SOURCE_NOT_REGULAR_CODE,
+      `Refusing to copy ${entry}: it is not a regular file (a named pipe, socket or device), ` +
+        'so it has no content to copy and opening it could block forever — remove it from the tree.',
+    );
+  }
+}
+
 /**
  * Recursively copy a directory, following symlinks — contained to `src`.
  *
@@ -493,7 +507,9 @@ export class CopyLinkEscapesSourceError extends VatError {
  * it already entered throws `DirectoryWalkRevisitedError` (`scripts/loop -> .`
  * used to create `dest/loop/loop/…` until `ENAMETOOLONG`, writing every file
  * at every level first). Adopter-authored trees reach this through
- * `vat agent build`, so neither shape is exotic.
+ * `vat agent build`, so neither shape is exotic. A named pipe, socket or device
+ * (or a link to one) throws {@link CopySourceNotRegularError} unopened: copying a
+ * pipe blocks until a writer appears.
  *
  * @param src - Source directory path
  * @param dest - Destination directory path
@@ -520,16 +536,19 @@ async function copyTree(src: string, dest: string, root: string, walk: FollowedW
     const destPath = safePath.join(dest, entry.name);
 
     // (Inline rather than `direntKindFollowing`: that module imports this one.)
-    let isDirectory = entry.isDirectory();
+    let kind: { isDirectory(): boolean; isFile(): boolean } = entry;
     if (entry.isSymbolicLink()) {
-      isDirectory = (await fs.stat(srcPath)).isDirectory();
+      kind = await fs.stat(srcPath);
       // Revisit first, so a link back into the tree is named as the loop it
       // is; then containment, so a link out is named as the escape it is.
-      if (isDirectory) walk.enter(srcPath);
+      if (kind.isDirectory()) walk.enter(srcPath);
       if (isUnderRoot(root, srcPath) !== 'inside') throw new CopyLinkEscapesSourceError(srcPath, root);
-    } else if (isDirectory) {
+    } else if (kind.isDirectory()) {
       walk.enter(srcPath);
     }
+    const isDirectory = kind.isDirectory();
+    // `copyFile` opens a named pipe for reading, which blocks until a writer appears.
+    if (!isDirectory && !kind.isFile()) throw new CopySourceNotRegularError(srcPath);
     await (isDirectory ? copyTree(srcPath, destPath, root, walk) : fs.copyFile(srcPath, destPath));
   });
 }

@@ -77,6 +77,7 @@ export function skillTestFailureReason(err: unknown): SkillTestFailureReason {
  *   declare (or `--no-build` with no dist), an unsafe `--workdir`, a held harness
  *   lock, the missing security ack. A `SkillBuildError` carrying a `cause` is
  *   classified by that cause, not by this row (see {@link SkillBuildError}).
+ * - `CONFIG_INVALID` — a `test.evals` npm specifier that names nothing installed.
  * - `RUN_INCOMPLETE` — a harness root the OS would not let the run create.
  *
  * An absent runtime (`claude` not on PATH, or too old for a flag the spawn
@@ -96,6 +97,7 @@ export const SKILL_TEST_REFUSAL_BY_ERROR_CODE = {
   PROMPT_INVARIANT: 'USAGE_INVALID',
   SKILL_TEST_BUILD_FAILED: 'USAGE_INVALID',
   SKILL_TEST_DUPLICATE_STAGED_SKILL: 'USAGE_INVALID',
+  SKILL_TEST_EVALS_UNRESOLVED: 'CONFIG_INVALID',
   SKILL_TEST_SECURITY_ACK_MISSING: 'USAGE_INVALID',
   UNKNOWN_ENV_TOKEN: 'USAGE_INVALID',
   UNRESOLVABLE_ENV_TOKEN: 'USAGE_INVALID',
@@ -199,6 +201,19 @@ export class DuplicateStagedSkillError extends VatError {
       `Skill name "${skillName}" is staged more than once (subject / --with / --with-optional). ` +
         `Each staged skill must have a unique name.`,
     );
+  }
+}
+
+/**
+ * The eval suite reference from the config (`test.evals`) is an npm specifier
+ * that names nothing installed. Reason `preflight`: the config's to correct.
+ * `--evals` never reaches here — the CLI resolves the flag itself and refuses
+ * it as the invocation's.
+ */
+export class EvalsReferenceUnresolvedError extends VatError {
+  readonly reason = 'preflight' as const;
+  constructor(message: string, options?: ErrorOptions) {
+    super('SKILL_TEST_EVALS_UNRESOLVED', message, options);
   }
 }
 

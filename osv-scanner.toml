@@ -52,6 +52,15 @@
 # safer default for separate transfer hosts that get-uri never asks for), and
 # brace-expansion / markdown-it refreshed in the lockfile inside their ranges.
 # ONE entry was added, braces, because no fixed version exists at all.
+#
+# Reconciled 2026-10-07 (5 new advisories, each with a patched version): all
+# fixed under rule 1 in `overrides`, none listed — smol-toml 1.8.0 -> 1.9.0
+# (GHSA-r4xh-jqrq-34v2), sharp 0.35.4 -> 0.35.5 (GHSA-wq5f-xc86-pv6w, its
+# bundled librsvg), and three new pins: proxy-addr 2.0.8 (GHSA-jqcg-44mw-7w3h),
+# source-map-js 1.2.2 (GHSA-68fv-2mgg-jv7q) and @modelcontextprotocol/sdk
+# 1.31.0 (GHSA-6qxp-vccf-f47h). Each fix is inside the range its dependents
+# declare, except sharp for @huggingface/transformers' `^0.33.5`, which the
+# existing sharp pin already overrode.
 # ---------------------------------------------------------------------------
 
 # --- esbuild (dev-server file read) ------------------------------------------

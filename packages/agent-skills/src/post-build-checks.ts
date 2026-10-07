@@ -11,7 +11,7 @@ import { dirname } from 'node:path';
 
 import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, FollowedWalk, forEachInOrder, mapWithConcurrency, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, FollowedWalk, forEachInOrder, mapConcurrentFailingInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { type PackagingTarget } from './content-type-routing.js';
 import { normalizeRelPath } from './files-config.js';
@@ -435,8 +435,9 @@ export async function checkBrokenPackagedLinks(
   );
   const allFileSet = new Set(allFiles.map(f => toForwardSlash(f)));
 
-  // Independent reads; the issues are folded afterwards, in file order.
-  const hrefsByFile = await mapWithConcurrency(linkableFiles, (sourceFile) => extractLocalHrefs(sourceFile));
+  // Independent reads; a failure is the first by file order, and the issues are
+  // folded afterwards in that order.
+  const hrefsByFile = await mapConcurrentFailingInOrder(linkableFiles, (sourceFile) => extractLocalHrefs(sourceFile));
   return linkableFiles.flatMap((sourceFile, index) =>
     collectBrokenLinkIssues(sourceFile, hrefsByFile[index] ?? [], allFileSet, outputDir, droppedDestSet),
   );

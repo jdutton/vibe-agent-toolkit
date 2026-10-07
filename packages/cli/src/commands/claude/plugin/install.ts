@@ -14,7 +14,7 @@
  */
 
 
-import { existsSync, lstatSync, readdirSync, cpSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, cpSync, statSync, type Dirent } from 'node:fs';
 import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { basename } from 'node:path';
 
@@ -154,17 +154,33 @@ function selectSkills(skills: readonly string[], name: string | undefined, packa
 }
 
 /**
- * List immediate subdirectory names inside a directory, following links.
- * Returns empty array when the directory does not exist.
+ * List immediate subdirectory names inside a directory of the PACKAGE being
+ * installed, following links. Returns an empty array when the directory does
+ * not exist; one the OS will not list (or an entry it will not stat) is the
+ * package's refusal, `INPUT_UNREADABLE` — it used to escape raw, as INTERNAL_ERROR.
  *
  * Followed on purpose: a `--dev` install puts a plugin or marketplace here AS
  * a symlink, and `Dirent.isDirectory()` is false for a link — so every dev
  * install was invisible to the listing that uninstalls, lists and re-installs.
  */
 function listSubdirectories(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir, { withFileTypes: true })
-    .filter(d => direntKindFollowingSync(dir, d) === 'directory')
+  const refusal = (path: string, error: unknown): CommandRefusalError =>
+    new CommandRefusalError('INPUT_UNREADABLE', `Could not read the package to install at ${path} (${(error as NodeJS.ErrnoException).code ?? String(error)}).`, { cause: error });
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch (error) {
+    if (isPathAbsentError(error)) return [];
+    throw refusal(dir, error);
+  }
+  return entries
+    .filter((d) => {
+      try {
+        return direntKindFollowingSync(dir, d) === 'directory';
+      } catch (error) {
+        throw refusal(safePath.join(dir, d.name), error);
+      }
+    })
     .map(d => d.name);
 }
 
@@ -352,17 +368,21 @@ Exit Codes:
   2 - The run could not install: a missing or unknown source, a skill that exists
       without --force, an unknown --target, a plain directory with no SKILL.md
       (USAGE_INVALID); --target claude.ai (NOT_IMPLEMENTED); an unreadable
-      source, a .zip that is not a ZIP archive, holds an entry that does not
-      inflate or cannot be extracted, a package whose vat.replaces is not
+      source (a package directory it cannot list included), a .zip that is
+      not a ZIP archive, holds an entry that does not inflate or cannot be
+      extracted, a package whose vat.replaces is not
       { plugins?: string[], flatSkills?: string[] }, whose plugin or marketplace
       directory, version, vat.replaces.plugins or vat.replaces.flatSkills entry
       is not one path segment (or whose version begins with "."), or a replaced
       flat skill the OS will not let it examine, refused before anything changes
       (INPUT_UNREADABLE); npm pack failing
-      (EXTERNAL_API_FAILED); --build whose vat build failed, or a copy, registry
-      write or removal that failed partway (RUN_INCOMPLETE). A refusal lists the
-      skills already on disk. What vat.replaces names is removed only after the
-      new install is in place, so a failed install leaves it installed.
+      (EXTERNAL_API_FAILED); --build whose vat build failed, a staging copy
+      under $TMPDIR it could not create or write (full, read-only), or a copy,
+      registry write or removal that failed partway (RUN_INCOMPLETE). A refusal
+      lists the skills already on disk. What vat.replaces names is removed only
+      after the new install is in place, so a failed install leaves it
+      installed; a replaced name that is the just-installed plugin on disk
+      (Old -> old on a case-insensitive filesystem) loses only its registry entry.
 
 Example:
   $ vat claude plugin install --dev                        # Symlink all skills from cwd
@@ -497,7 +517,7 @@ async function handleNpmInstall(source: string, run: InstallRun): Promise<void> 
 
   logger.info(`📥 Installing skill from npm: ${packageName}`);
 
-  const tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-install-npm-'));
+  const tempDir = await makeStagingDir('vat-install-npm-');
 
   try {
     logger.info('   Downloading package...');
@@ -565,6 +585,44 @@ async function handleLocalInstall(source: string, run: InstallRun): Promise<void
 }
 
 /**
+ * Errnos that mean the disk VAT writes its staging copy to gave out — full, over
+ * quota, read-only, out of descriptors, or failing — whatever archive it was writing.
+ */
+const STAGING_EXHAUSTED_ERRNOS: ReadonlySet<string> = new Set(['ENOSPC', 'EDQUOT', 'EROFS', 'EMFILE', 'ENFILE', 'EIO']);
+
+/** VAT could not write its own staging copy at `path`: the run did not finish (`RUN_INCOMPLETE`), nothing was changed. */
+function stagingRefusal(path: string, error: unknown): CommandRefusalError {
+  return new CommandRefusalError(
+    'RUN_INCOMPLETE',
+    `Could not write the staging copy at ${path}, nothing was changed: ${error instanceof Error ? error.message : String(error)}. ` +
+      'Free space in, or make writable, the temp directory ($TMPDIR), then re-run.',
+    { cause: error },
+  );
+}
+
+/** A fresh staging directory under the OS temp dir; one the OS will not create is {@link stagingRefusal}. */
+async function makeStagingDir(prefix: string): Promise<string> {
+  const template = safePath.join(normalizedTmpdir(), prefix);
+  try {
+    return await mkdtemp(template);
+  } catch (error) {
+    throw stagingRefusal(template, error);
+  }
+}
+
+/**
+ * Why `zip` could not be extracted into the staging directory `extracted`: the
+ * disk giving out is the run not finishing (`RUN_INCOMPLETE`); anything else —
+ * an entry that does not inflate, a file `a` beside a file `a/b` — is the
+ * archive's (`INPUT_UNREADABLE`). Nothing outside the staging directory changed.
+ */
+export function zipExtractionRefusal(zipPath: string, extracted: string, error: unknown): CommandRefusalError {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code !== undefined && STAGING_EXHAUSTED_ERRNOS.has(code)) return stagingRefusal(extracted, error);
+  return new CommandRefusalError('INPUT_UNREADABLE', `${zipPath} could not be extracted, nothing was changed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+}
+
+/**
  * Handle ZIP file installation
  */
 async function handleZipInstall(source: string, run: InstallRun): Promise<void> {
@@ -595,14 +653,18 @@ async function handleZipInstall(source: string, run: InstallRun): Promise<void> 
     // Extracted to a staging directory first, then swapped in: an archive the
     // pre-read accepts can still fail to EXTRACT (a file `a` and a file `a/b`),
     // and that used to happen in place, after --force had removed the skill.
-    const tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-install-zip-'));
+    const tempDir = await makeStagingDir('vat-install-zip-');
     try {
       const extracted = safePath.join(tempDir, 'skill');
       try {
         await mkdir(extracted);
+      } catch (error) {
+        throw stagingRefusal(extracted, error);
+      }
+      try {
         zip.extractAllTo(extracted, /* overwrite */ true);
       } catch (error) {
-        throw new CommandRefusalError('INPUT_UNREADABLE', `${sourcePath} could not be extracted, nothing was changed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+        throw zipExtractionRefusal(sourcePath, extracted, error);
       }
       await swapInSkill(run, extracted, installPath, skillName);
     } finally {
@@ -625,7 +687,7 @@ async function handleTgzInstall(source: string, run: InstallRun): Promise<void> 
   logger.info(`📥 Installing skill from tarball: ${sourcePath}`);
   assertSourceFile(sourcePath);
 
-  const tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-install-tgz-'));
+  const tempDir = await makeStagingDir('vat-install-tgz-');
 
   try {
     logger.info('   Extracting tarball...');
@@ -1008,7 +1070,10 @@ export async function applyReplaces(
       return;
     }
     logger.info(`   Removing old plugin: ${pluginKey}`);
-    await uninstallPlugin({ pluginKey, paths, dryRun: false });
+    // A renamed plugin can be the one just installed on disk (`Old` → `old` on a
+    // case-insensitive filesystem): the uninstall keeps that directory and says so.
+    const { warning } = await uninstallPlugin({ pluginKey, paths, dryRun: false });
+    if (warning !== undefined) logger.warn(`   ${warning}`);
   });
   // In order: the first removal the OS refuses stops the run, with the log naming each one before it.
   await forEachInOrder(plan.flatSkillPaths, async (skillPath) => {

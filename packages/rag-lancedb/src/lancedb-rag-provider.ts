@@ -43,7 +43,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape } from 'zod';
 
-import { chunkTableReadFailure } from './chunk-table-failure.js';
+import { chunkTableReadFailure, type ChunkTableShape, foreignTableRefusal } from './chunk-table-failure.js';
 import { resolveChunkingConfig } from './chunking-config.js';
 import { DOCUMENTS_TABLE_NAME, removeRagDatabase, TABLE_NAME } from './database-directory.js';
 import { getDirectorySize } from './directory-size.js';
@@ -365,12 +365,22 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     try {
       return await read();
     } catch (error) {
-      throw await chunkTableReadFailure(
-        { dbPath: this.config.dbPath, metadataSchema: this.metadataSchema, dimensions: this.config.embeddingProvider.dimensions },
-        error,
-        table,
-      );
+      throw await chunkTableReadFailure(this.chunkTableShape(), error, table);
     }
+  }
+
+  private chunkTableShape(): ChunkTableShape {
+    return { dbPath: this.config.dbPath, metadataSchema: this.metadataSchema, dimensions: this.config.embeddingProvider.dimensions };
+  }
+
+  /**
+   * Refuse a chunk table this build does not write before reading or writing
+   * it: LanceDB accepts rows of another vector size, truncating them.
+   */
+  private async requireChunkTableShape(table: Table): Promise<void> {
+    const schema = await this.readingChunkTable(() => table.schema(), table);
+    const refusal = foreignTableRefusal(this.chunkTableShape(), schema.fields);
+    if (refusal) throw refusal;
   }
 
   /**
@@ -415,6 +425,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
           'and `resourcesEmpty` for resources that had no prose to index (frontmatter-only or blank).',
       );
     }
+    await this.requireChunkTableShape(this.table);
 
     const startTime = Date.now();
 
@@ -475,6 +486,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     }
 
     const table = this.table;
+    await this.requireChunkTableShape(table);
     const count = await this.readingChunkTable(() => table.countRows(), table);
 
     // Distinct resources, from the one column that names them — never the text and vectors.
@@ -546,8 +558,9 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    *   loaded — a broken install fails the whole batch rather than becoming one
    *   error entry per resource
    * @throws {VatError} `RAG_DATABASE_UNREADABLE` when the chunk table cannot be
-   *   read — files the OS refuses, a foreign schema, or damage, the message says
-   *   which — the store's failure, so the whole batch, for the same reason
+   *   read or is not one this build writes — files the OS refuses, a foreign
+   *   schema or vector size, or damage, the message says which — the store's
+   *   failure, so the whole batch, for the same reason
    */
   async indexResources(
     resources: ResourceMetadata[],
@@ -560,8 +573,9 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // Reopened here if `close()` released it, so change detection sees the
     // chunk table and the insert below has a connection to create it on. Without
     // this the loop ran to completion against nothing and counted every
-    // resource as indexed.
+    // resource as indexed. A foreign chunk table is refused before any write.
     await this.connected();
+    if (this.table) await this.requireChunkTableShape(this.table);
 
     // Which resources already have a document record, read ONCE for the whole
     // batch. `detectResourceChangeStatus` needs it to refuse a `skip` for a

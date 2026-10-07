@@ -42,6 +42,15 @@ function recorder(options: { failOn?: number; count: number }) {
 
 const ITEMS = [0, 1, 2, 3, 4];
 
+/** Yields 1, 2, 3 and calls `onClose` when it is closed or exhausted. */
+function* closingGenerator(onClose: () => void): Generator<number> {
+  try {
+    yield* [1, 2, 3];
+  } finally {
+    onClose();
+  }
+}
+
 describe('forEachInOrder / mapInOrder', () => {
   it('runs one call at a time, in input order, passing the index', async () => {
     const rec = recorder({ count: ITEMS.length });
@@ -74,6 +83,17 @@ describe('forEachInOrder / mapInOrder', () => {
       return item;
     });
     expect(seen).toEqual([1, 2, 3]);
+  });
+
+  it('closes the iterator on a rejection and on an early stop, as for…of does', async () => {
+    const closed: string[] = [];
+    const tracked = (label: string) => closingGenerator(() => closed.push(label));
+    const rejecting = forEachInOrder(tracked('rejected'), (item) => {
+      if (item === 2) throw new Error('stop');
+    });
+    await expect(rejecting).rejects.toThrow('stop');
+    await expect(everyInOrder(tracked('stopped'), (item) => item < 2)).resolves.toBe(false);
+    expect(closed).toEqual(['rejected', 'stopped']);
   });
 
   it('resolves on empty input without calling fn', async () => {
@@ -134,6 +154,33 @@ describe('mapWithConcurrency', () => {
     const failFirst = [MANY.length - 1, ...MANY.slice(0, -1)];
     await expect(mapWithConcurrency(failFirst, rec.fn, 1)).rejects.toThrow(`boom ${MANY.length - 1}`);
     expect(rec.events.filter((e) => e.startsWith('start'))).toHaveLength(1);
+  });
+
+  it('starts no new item once one has rejected, while a sibling worker is still in flight', async () => {
+    // limit 2: item 0 rejects at 1 ms while item 1 is still running. When item 1
+    // finishes its worker must see the failure and start neither item 2 nor item 3.
+    const started: number[] = [];
+    const run = mapWithConcurrency([0, 1, 2, 3], (item) => {
+      started.push(item);
+      return tick(item === 0 ? 1 : 20).then(() => {
+        if (item === 0) throw new Error('first');
+        return item;
+      });
+    }, 2);
+    await expect(run).rejects.toThrow('first');
+    await tick(60);
+    expect(started).toEqual([0, 1]);
+  });
+
+  it('delivers a synchronous throw as a rejection, never a throw', async () => {
+    const boom = new Error('sync');
+    let run: Promise<never[]> | undefined;
+    expect(() => {
+      run = mapWithConcurrency([1], () => {
+        throw boom;
+      });
+    }).not.toThrow();
+    await expect(run).rejects.toBe(boom);
   });
 
   it('resolves [] on empty input', async () => {

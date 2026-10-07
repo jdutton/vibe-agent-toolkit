@@ -8,7 +8,7 @@ import { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE, SKILL_PA
 import { ApiRequestError, ApiTransportError, OrgApiClient, PLUGIN_SOURCE_UNREADABLE_CODE } from '@vibe-agent-toolkit/claude-marketplace';
 import { CONFIG_UNREADABLE_CODE, LinkAuthConfigError, OKF_UNKNOWN_BUNDLE_CODE, okfBundleRuns, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
 import { ExitCode, type ErrorReport } from '@vibe-agent-toolkit/schema';
-import { COPY_LINK_ESCAPES_SOURCE_CODE, CopyLinkEscapesSourceError, DIRECTORY_LISTING_REFUSED_CODE, DIRECTORY_WALK_REVISITED_CODE, DirectoryWalkRevisitedError, RAG_DATABASE_NOT_REMOVABLE_CODE, RAG_DATABASE_REMOVAL_INCOMPLETE_CODE, RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
+import { COPY_LINK_ESCAPES_SOURCE_CODE, COPY_SOURCE_NOT_REGULAR_CODE, CopyLinkEscapesSourceError, DIRECTORY_LISTING_REFUSED_CODE, DIRECTORY_WALK_REVISITED_CODE, DirectoryWalkRevisitedError, RAG_DATABASE_NOT_REMOVABLE_CODE, RAG_DATABASE_REMOVAL_INCOMPLETE_CODE, RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
 import { GIT_SNAPSHOT_UNREADABLE_CODE } from '@vibe-agent-toolkit/utils/git';
 import { updateYamlIn } from '@vibe-agent-toolkit/utils/yaml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -105,6 +105,7 @@ describe('refusalCodeOf', () => {
   it('reads a symlink that escapes a copied tree, or loops a walk, as INPUT_UNREADABLE', () => {
     expect(refusalCodeOf(new CopyLinkEscapesSourceError('/bundle/link', '/bundle'))).toBe('INPUT_UNREADABLE');
     expect(refusalCodeOf(new DirectoryWalkRevisitedError('/bundle/loop', '/bundle'))).toBe('INPUT_UNREADABLE');
+    expect(refusalCodeOf(new VatError(COPY_SOURCE_NOT_REGULAR_CODE, '/bundle/pipe'))).toBe('INPUT_UNREADABLE');
   });
 
   it('reads an agent source file the OS will not read as INPUT_UNREADABLE', () => {

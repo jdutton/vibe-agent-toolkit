@@ -62,9 +62,9 @@ function chainInOrder<T, R>(
       if (next.done === true) return Promise.resolve(true);
       return settle(fn, next.value, index++).then(
         (result) => {
-          if (keepGoing(result)) return step();
-          iterator.return?.();
-          return Promise.resolve(false);
+          const more = keepGoing(result);
+          if (!more) iterator.return?.();
+          return more ? step() : false;
         },
         (error: unknown) => {
           iterator.return?.();

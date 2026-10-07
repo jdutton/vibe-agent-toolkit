@@ -9,7 +9,7 @@ import { chmodSync } from 'node:fs';
 
 
 import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, tmpdirFoldsCase } from '@vibe-agent-toolkit/utils/testing';
 import AdmZip from 'adm-zip';
 import * as tar from 'tar';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -545,6 +545,42 @@ describe('claude plugin install command (system test)', () => {
     expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'r-market', 'plugins', 'new-plugin', 'skills', 'new-skill', 'SKILL.md'))).toBe(true);
   });
 
+  // `vat.replaces` runs after the install. A package renaming `Old` → `old` that replaces `Old`
+  // then uninstalled `Old@mp` — on a case-insensitive filesystem the very directories it had just
+  // installed — exit 0, status ok, registry dangling. Only a folding filesystem has the alias;
+  // the uninstall's identity decision is pinned on every filesystem by a linked-marketplace unit test.
+  it.skipIf(!tmpdirFoldsCase())('keeps the plugin it installed when vat.replaces names it in another letter case', async () => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const v1 = setupPluginTestProject(tempDir, 'v1', 'case-market', [{ name: 'Old', skills: ['s1'] }]);
+    await runPluginInstall(binPath, v1.projectDir, fakeHome);
+    const v2 = setupPluginTestProject(tempDir, 'v2', 'case-market', [{ name: 'old', skills: ['s1'] }]);
+    writeTestFile(safePath.join(v2.projectDir, 'package.json'), JSON.stringify({ name: '@test/my-plugin-pkg', version: '2.0.0', vat: { replaces: { plugins: ['Old'] } } }));
+
+    await runPluginInstall(binPath, v2.projectDir, fakeHome);
+
+    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'case-market', 'plugins', 'old', 'skills', 's1', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(safePath.join(claudeDir, 'plugins', 'cache', 'case-market', 'old', '2.0.0'))).toBe(true);
+    expect(installedKeys(claudeDir)).toEqual(['old@case-market']);
+  });
+
+  // The package's `plugins/` directory was listed raw — twice, before the readable-source check
+  // could run — so one the OS would not list surfaced as INTERNAL_ERROR, not the input's refusal.
+  it.skipIf(CANNOT_DENY_READS).each([
+    ['copy', (projectDir: string) => [projectDir]],
+    ['--dev', (projectDir: string) => ['--dev', '--cwd', projectDir]],
+  ])('refuses a package whose plugins directory cannot be listed as INPUT_UNREADABLE (%s)', async (_lane, argsFor) => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const { projectDir, marketplacesDir } = setupPluginTestProject(tempDir, 'locked-pkg', 'l-market', [{ name: 'l-plugin', skills: ['l-skill'] }]);
+    const pluginsDir = safePath.join(marketplacesDir, 'l-market', 'plugins');
+    chmodSync(pluginsDir, 0o000);
+    try {
+      await expectInputRefusal(binPath, fakeHome, argsFor(projectDir), [pluginsDir]);
+      expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES))).toBe(false);
+    } finally {
+      chmodSync(pluginsDir, 0o755);
+    }
+  });
+
   // The pre-read inflates every entry, but a file `a` beside a file `a/b` fails only at
   // EXTRACTION — which ran in place, after --force had removed the skill being replaced.
   it('refuses a .zip that cannot be extracted as INPUT_UNREADABLE, and keeps the skill --force would replace', async () => {
@@ -560,6 +596,31 @@ describe('claude plugin install command (system test)', () => {
     await expectInputRefusal(binPath, fakeHome, [clash, '--force'], [clash]);
     expect(fs.readdirSync(safePath.join(claudeDir, 'skills', 'clash'))).toEqual(['SKILL.md']);
     expect(fs.readFileSync(existing, 'utf-8')).toBe('# precious\n');
+  });
+
+  // VAT's own staging directory could not be made: `mkdtemp` sat outside the extraction's catch, so
+  // an unwritable or full $TMPDIR was INTERNAL_ERROR — and inside it, it would have blamed the archive.
+  it.skipIf(CANNOT_DENY_READS)('reports a staging directory it cannot create as RUN_INCOMPLETE, and keeps the skill --force would replace', async () => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const zip = new AdmZip();
+    zip.addFile('SKILL.md', Buffer.from('# good\n'));
+    const good = safePath.join(tempDir, 'good.zip');
+    zip.writeZip(good);
+    const existing = safePath.join(claudeDir, 'skills', 'good', 'SKILL.md');
+    plantFile(existing, '# precious\n');
+    const lockedTmp = safePath.join(tempDir, 'locked-tmp');
+    mkdirSyncReal(lockedTmp);
+    chmodSync(lockedTmp, 0o555);
+    try {
+      const { status, report } = await runInstall(binPath, fakeHome, [good, '--force'], { TMPDIR: lockedTmp, TEMP: lockedTmp, TMP: lockedTmp });
+
+      expect(status).toBe(2);
+      expect(report).toMatchObject({ status: 'error', error: { code: 'RUN_INCOMPLETE' } });
+      expect(report.error?.message).toContain(lockedTmp);
+      expect(fs.readFileSync(existing, 'utf-8')).toBe('# precious\n');
+    } finally {
+      chmodSync(lockedTmp, 0o755);
+    }
   });
 
   // The marketplace copy was rm -rf, mkdir, copy: one entry the OS would not let it remove

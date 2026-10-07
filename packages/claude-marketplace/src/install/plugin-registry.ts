@@ -207,9 +207,7 @@ export function isStagedReplaceLeftover(name: string): boolean {
  * @returns Warnings: the previous tree, when it could not be removed once replaced
  */
 export function replaceDirectory(source: string, dest: string): string[] {
-  const parent = dirname(dest);
-  mkdirSyncReal(parent, { recursive: true });
-  const staged = mkdtempSync(safePath.join(parent, `.${basename(dest)}${STAGED_INFIX}`));
+  const staged = stageBeside(dest);
   try {
     cpSync(source, staged, { recursive: true });
     // AFTER the copy: a read-only source mode applied first leaves the copy no
@@ -220,6 +218,31 @@ export function replaceDirectory(source: string, dest: string): string[] {
     // Gone already once swapped in; otherwise the half-copied sibling must not stay.
     removeTree(staged);
   }
+}
+
+/**
+ * {@link replaceDirectory} for a copy the caller makes: `fill` writes the new
+ * tree into an empty, dot-named sibling of `dest` (mode 0700 until `fill` sets
+ * one), which is swapped in only once `fill` resolves. A `fill` that rejects
+ * leaves `dest` exactly as it was and the sibling removed.
+ *
+ * @returns Warnings: the previous tree, when it could not be removed once replaced
+ */
+export async function replaceDirectoryWith(dest: string, fill: (staged: string) => Promise<void>): Promise<string[]> {
+  const staged = stageBeside(dest);
+  try {
+    await fill(staged);
+    return swapIn(staged, dest);
+  } finally {
+    removeTree(staged);
+  }
+}
+
+/** An empty, dot-named sibling of `dest` for {@link swapIn} — its parent made first. */
+function stageBeside(dest: string): string {
+  const parent = dirname(dest);
+  mkdirSyncReal(parent, { recursive: true });
+  return mkdtempSync(safePath.join(parent, `.${basename(dest)}${STAGED_INFIX}`));
 }
 
 /**

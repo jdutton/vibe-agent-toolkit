@@ -13,6 +13,7 @@ import path from 'node:path';
 
 import { CODE_REGISTRY, createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue, type ValidationIssueCode } from '@vibe-agent-toolkit/schema';
 import {
+  ASSET_REFERENCE_UNRESOLVED_CODE,
   CRAWL_REGISTRY_ADMIT_ID,
   CRAWL_REGISTRY_ENUMERATE_ID,
   CRAWL_REGISTRY_RESOLVE_LINKS_ID,
@@ -20,6 +21,7 @@ import {
   forEachInOrder,
   FsLookupCache,
   issueLocation,
+  isVatError,
   recordRegistryPass,
   resolveAssetReference,
   safePath,
@@ -1845,10 +1847,26 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return [];
     }
 
-    const schemaPath = resolveAssetReference(
-      validation.frontmatterSchema,
-      this.baseDir ?? process.cwd(),
-    );
+    const schemaSpecifier = validation.frontmatterSchema;
+    const schemaFailure = (error: unknown): ValidationIssue[] => [
+      createRegistryIssue(
+        'FRONTMATTER_SCHEMA_ERROR',
+        `Failed to load or parse frontmatter schema '${schemaSpecifier}': ${error instanceof Error ? error.message : String(error)}`,
+        { location: issueLocation(resource.filePath, locationRoot(this.baseDir)), line: 1 },
+      ),
+    ];
+
+    // A bare specifier that resolves to nothing (package not installed, or its
+    // `exports` target not on disk) is the config's schema not loading, the
+    // same finding as a schema path naming no file. Only that code: any other
+    // throw is not about the schema reference.
+    let schemaPath: string;
+    try {
+      schemaPath = resolveAssetReference(schemaSpecifier, this.baseDir ?? process.cwd());
+    } catch (error) {
+      if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE)) throw error;
+      return schemaFailure(error);
+    }
 
     // Determine validation mode (default to permissive)
     const mode = validation.mode ?? 'permissive';
@@ -1892,14 +1910,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       compiled = loaded.compiled;
     } catch (error) {
       // Handle missing or invalid schema files gracefully
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      return [
-        createRegistryIssue(
-          'FRONTMATTER_SCHEMA_ERROR',
-          `Failed to load or parse frontmatter schema '${validation.frontmatterSchema}': ${errorMessage}`,
-          { location: issueLocation(resource.filePath, locationRoot(this.baseDir)), line: 1 },
-        ),
-      ];
+      return schemaFailure(error);
     }
 
     // Validate frontmatter against JSON Schema

@@ -58,6 +58,18 @@ async function failureOf(run: () => Promise<unknown>): Promise<{ code: unknown; 
   throw new Error('expected a rejection');
 }
 
+/** A provider over the suite's (4-dimension) database whose embedding model makes 8, kept on the suite. */
+async function openWiderProvider(): Promise<LanceDBRAGProvider> {
+  const provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, embeddingProvider: createStubEmbeddingProvider(8) });
+  suite.provider = provider;
+  return provider;
+}
+
+/** A second document, not yet in the index. */
+async function doc2(): Promise<Awaited<ReturnType<typeof createTestResource>>> {
+  return createTestResource(await createTestMarkdownFile(suite.tempDir, 'doc2.md', '# Doc two\n\nOther prose.\n'), 'doc2');
+}
+
 describe('a chunk table LanceDB cannot read', () => {
   it('another tool\'s table is refused for its columns, never called damaged', async () => {
     const connection = await lancedb.connect(suite.dbPath);
@@ -70,6 +82,39 @@ describe('a chunk table LanceDB cannot read', () => {
     expect(failure.code).toBe(RAG_DATABASE_UNREADABLE_CODE);
     expect(failure.message).toContain('resourceid');
     expect(failure.message).not.toContain('damaged');
+  });
+
+  // A table of another vector size reads without error, so nothing but a check of its schema sees it:
+  // `index` used to write the new model's vectors into it truncated, and `stats` reported it ok.
+  describe('a table another embedding model wrote (its vector size differs)', () => {
+    it.each([
+      ['index', async (provider: LanceDBRAGProvider) => provider.indexResources([await doc2()])],
+      ['query', (provider: LanceDBRAGProvider) => provider.query({ text: 'prose' })],
+      ['stats', (provider: LanceDBRAGProvider) => provider.getStats()],
+    ] as const)('%s refuses it, naming both sizes', async (_verb, run) => {
+      await indexOneDocument();
+
+      const failure = await failureOf(async () => run(await openWiderProvider()));
+
+      expect(failure.code).toBe(RAG_DATABASE_UNREADABLE_CODE);
+      expect(failure.message).toContain('its vectors have 4 dimensions and the embedding model makes 8');
+      expect(failure.message).not.toContain('damaged');
+    });
+
+    it('index writes nothing into it', async () => {
+      await indexOneDocument();
+
+      await failureOf(async () => (await openWiderProvider()).indexResources([await doc2()]));
+
+      const connection = await lancedb.connect(suite.dbPath);
+      const table = await connection.openTable('rag_chunks');
+      const rows = await table.query().select(['resourceid']).toArray();
+      const listSize = ((await table.schema()).fields.find((field) => field.name === 'vector')?.type as { listSize?: number }).listSize;
+      table.close();
+      connection.close();
+      expect(rows.map((row: { resourceid: string }) => row.resourceid)).toEqual(['doc']);
+      expect(listSize).toBe(4);
+    });
   });
 
   it('damaged data files are still called damaged, with clear as the remedy', async () => {

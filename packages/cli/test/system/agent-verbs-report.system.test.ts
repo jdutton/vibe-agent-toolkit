@@ -7,8 +7,8 @@
  * here may read — or install into — the developer's real one.
  */
 
-import { spawnSync } from 'node:child_process';
-import { chmodSync, lstatSync, readFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { chmodSync, closeSync, lstatSync, openSync, readdirSync, readFileSync } from 'node:fs';
 
 import { ExitCode, type RefusalCode } from '@vibe-agent-toolkit/schema';
 import { createSymlink, mkdirSyncReal, normalizePath, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -190,7 +190,8 @@ describe('vat agent build / import / installed / list / install / uninstall (sys
   describe('agent installed', () => {
     it('lists a copied and a symlinked skill with their types, exit 0', async ({ skip }) => {
       const cap = symlinkCapability() ?? skip();
-      const { home, skills } = homeWithSkills('installed-two', { 'copied/SKILL.md': CLEAN_SKILL });
+      // The staged copy an interrupted install leaves beside a skill is not an install.
+      const { home, skills } = homeWithSkills('installed-two', { 'copied/SKILL.md': CLEAN_SKILL, '.copied.vat-staged-x1y2z3/SKILL.md': CLEAN_SKILL });
       const linkTarget = safePath.join(tempDir, 'link-target');
       writeFileTree(linkTarget, { 'SKILL.md': CLEAN_SKILL });
       createSymlink(cap, linkTarget, safePath.join(skills, 'linked'), 'dir');
@@ -321,6 +322,26 @@ describe('vat agent build / import / installed / list / install / uninstall (sys
       createSymlink(cap, safePath.join(cwd, 'package.json'), safePath.join(cwd, 'dist/vat-bundles/skill/widget-reviewer/outside.json'), 'file');
 
       expectRefusal(await vat(AGENT_INSTALL_REPORT_SCHEMA, INSTALL, cwd), 'INPUT_UNREADABLE');
+    });
+
+    // Copying a pipe blocks until a writer appears, and `--force` used to remove the
+    // previous install first: the run hung with the user left holding neither.
+    it.skipIf(process.platform === 'win32')('--force refuses a named pipe in the bundle as INPUT_UNREADABLE without blocking, and keeps the previous install (mkfifo is POSIX-only)', async () => {
+      const { home } = homeWithSkills('install-fifo', { 'widget-reviewer/SKILL.md': 'kept\n' });
+      const cwd = installableProject('install-fifo');
+      const fifo = safePath.join(cwd, 'dist/vat-bundles/skill/widget-reviewer/zpipe');
+      execFileSync('mkfifo', [fifo]);
+      // A run that blocked on the pipe is released after a while (opening read-write never blocks, and is a
+      // writer), so a regression fails on the assertions below instead of hanging the suite.
+      const release = setTimeout(() => closeSync(openSync(fifo, 'r+')), 5000);
+      try {
+        expectRefusal(await vat(AGENT_INSTALL_REPORT_SCHEMA, [...INSTALL, '--force'], cwd, home), 'INPUT_UNREADABLE');
+      } finally {
+        clearTimeout(release);
+      }
+      const skills = safePath.join(home, '.claude', 'skills');
+      expect(readFileSync(safePath.join(skills, 'widget-reviewer', 'SKILL.md'), 'utf-8')).toBe('kept\n');
+      expect(readdirSync(skills)).toEqual(['widget-reviewer']);
     });
 
     it('refuses an agent whose bundle was never built as INPUT_UNREADABLE, exit 2', async () => {

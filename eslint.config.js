@@ -575,6 +575,21 @@ const generalRulesConfig = {
   // when this landed, and a bare directive is a suppression nobody can review.
   // `eslint-enable` is exempt: the matching disable holds the reason.
   'eslint-comments/require-description': ['error', { ignore: ['eslint-enable'] }],
+
+  // Mirror SonarCloud S9382 and S7503, which ARE these two core rules (their
+  // messages are ESLint's byte for byte), so the class fails at the desk rather
+  // than on a PR — in JS as in TS, since Sonar analyses both. Core
+  // `require-await`, deliberately NOT `@typescript-eslint/require-await`: that
+  // one exempts an `async` function returning a promise, and Sonar does not.
+  //
+  // Independent work: `Promise.all`, or `mapWithConcurrency` for a
+  // population-sized list. Work whose ORDER is the contract: `forEachInOrder` /
+  // `mapInOrder` / `everyInOrder` from `@vibe-agent-toolkit/utils` (or, in a JS
+  // file that cannot import workspace TS, a sequential promise chain), with a
+  // one-line reason at the call site — never a disable. `*.test.ts` files are
+  // exempt below because Sonar does not analyse them; `test/` helpers are not.
+  'no-await-in-loop': 'error',
+  'require-await': 'error',
 };
 
 export default [
@@ -674,20 +689,6 @@ export default [
       '@typescript-eslint/no-redundant-type-constituents': 'error',
       '@typescript-eslint/prefer-function-type': 'error',
       '@typescript-eslint/no-require-imports': 'error', // Enforce ESM imports, ban require()
-
-      // Mirror SonarCloud S9382 and S7503, which ARE these two core rules (their
-      // messages are ESLint's byte for byte), so the class fails at the desk rather
-      // than on a PR. Core `require-await`, deliberately NOT
-      // `@typescript-eslint/require-await`: that one exempts an `async` function
-      // returning a promise, and Sonar does not.
-      //
-      // Independent work: `Promise.all`, or `mapWithConcurrency` for a
-      // population-sized list. Work whose ORDER is the contract: `forEachInOrder` /
-      // `mapInOrder` / `everyInOrder` from `@vibe-agent-toolkit/utils`, with a
-      // one-line reason at the call site — never a disable. `*.test.ts` files are
-      // exempt below because Sonar does not analyse them; `test/` helpers are not.
-      'no-await-in-loop': 'error',
-      'require-await': 'error',
 
       // Stricter type safety — catches SonarQube-style issues early
       '@typescript-eslint/no-base-to-string': 'error',

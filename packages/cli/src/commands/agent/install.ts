@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { loadAgentManifest } from '@vibe-agent-toolkit/agent-config';
-import { codedUserStateWrite } from '@vibe-agent-toolkit/claude-marketplace';
+import { codedUserStateWrite, replaceDirectoryWith } from '@vibe-agent-toolkit/claude-marketplace';
 import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
 import { copyDirectory, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -35,9 +35,11 @@ const GATE: Gate = { strict: false };
  * Install agent command.
  *
  * Every refusal publishes NOTHING_FINISHED: the one unit of work is the
- * install, and a run that refused did not install. A `--force` run that
- * removed the previous install before its copy failed says so in the message —
- * the one thing it did finish, which `data` has no field for.
+ * install, and a run that refused did not install. A copy replaces a previous
+ * install only once it is whole, so a refused copy leaves that install as it
+ * was. A `--force --dev` run removes the previous install before linking, and a
+ * failed link says so in the message — the one thing it did finish, which
+ * `data` has no field for.
  */
 export async function installAgent(
   agentName: string,
@@ -84,20 +86,30 @@ async function install(agentName: string, options: InstallOptions, logger: Logge
   // is an entry, and `--force` must clear it or `fs.symlink` rejects with EEXIST.
   // A probe the OS refuses is INPUT_UNREADABLE, never "not installed".
   const replacing = pathPresent(installPath, 'entry');
-  if (replacing) {
-    if (!force) {
-      throw new CommandRefusalError('USAGE_INVALID', `${agentName} already installed at ${installPath}\nUse --force to overwrite`);
-    }
-    await codedUserStateWrite(`remove the existing install at ${installPath}`, () => fs.rm(installPath, { recursive: true, force: true }));
+  if (replacing && !force) {
+    throw new CommandRefusalError('USAGE_INVALID', `${agentName} already installed at ${installPath}\nUse --force to overwrite`);
   }
-  const removed = replacing ? ' (the previous install there was already removed)' : '';
 
   if (dev) {
+    if (replacing) {
+      await codedUserStateWrite(`remove the existing install at ${installPath}`, () => fs.rm(installPath, { recursive: true, force: true }));
+    }
+    const removed = replacing ? ' (the previous install there was already removed)' : '';
     await codedUserStateWrite(`link ${installPath}${removed}`, () => linkForDevelopment(builtSkillPath, installPath));
     logger.info(`✓ Symlinked ${agentName} to ${installPath} (dev mode)`);
     logger.info(`  Rebuild agent to see changes immediately`);
   } else {
-    await codedUserStateWrite(`copy ${builtSkillPath} to ${installPath}${removed}`, () => copyDirectory(builtSkillPath, installPath));
+    // Staged beside the install and swapped in whole: a bundle the copy refuses
+    // (a named pipe, a link out of it) or a write that fails half-way never
+    // costs the previous install. The copy's own refusals are coded, and pass
+    // through as the bundle's.
+    const warnings = await codedUserStateWrite(`install ${builtSkillPath} to ${installPath}`, () =>
+      replaceDirectoryWith(installPath, async (staged) => {
+        await copyDirectory(builtSkillPath, staged);
+        await fs.chmod(staged, (await fs.stat(builtSkillPath)).mode & 0o7777);
+      }),
+    );
+    for (const warning of warnings) logger.warn(warning);
     logger.info(`✓ Installed ${agentName} to ${installPath}`);
   }
 

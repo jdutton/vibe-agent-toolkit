@@ -16,10 +16,9 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { AGENT_SOURCE_UNREADABLE_CODE, buildAgentSkill } from '../src/builder.js';
-import { SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE } from '../src/packaging-errors.js';
-
-import { writeMinimalAgent } from './test-helpers.js';
+import { AGENT_SOURCE_UNREADABLE_CODE, buildAgentSkill } from '../../src/builder.js';
+import { SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE } from '../../src/packaging-errors.js';
+import { writeMinimalAgent } from '../test-helpers.js';
 
 const USER_SKILL = 'USER SKILL.md precious';
 const USER_SCRIPT = 'user script';
