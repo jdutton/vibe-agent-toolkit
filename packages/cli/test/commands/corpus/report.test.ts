@@ -77,7 +77,7 @@ describe('writeRunReport', () => {
       },
     ]);
 
-    const runDir = await writeRunReport(report, outDir);
+    const runDir = writeRunReport(report, outDir);
 
     const summaryPath = safePath.join(runDir, SUMMARY_FILE);
     expect(statSync(summaryPath).isFile()).toBe(true);
@@ -103,7 +103,7 @@ describe('writeRunReport', () => {
     const report = makeReport([reviewedRow]);
     report.flags.with_review = true;
 
-    const runDir = await writeRunReport(report, outDir);
+    const runDir = writeRunReport(report, outDir);
     const totals = readSummary(runDir).totals as Record<string, number>;
     expect(totals.reviewed).toBe(1);
     expect(totals.review_error).toBe(0);
@@ -129,7 +129,7 @@ describe('writeRunReport', () => {
     const report = makeReport([okRow, partialRow]);
     report.flags.with_review = true;
 
-    const runDir = await writeRunReport(report, outDir);
+    const runDir = writeRunReport(report, outDir);
     const totals = readSummary(runDir).totals as Record<string, number>;
     expect(totals.reviewed).toBe(2);
     expect(totals.review_error).toBe(1);
@@ -139,7 +139,7 @@ describe('writeRunReport', () => {
     const outDir = makeTempOutDir();
     const report = makeReport([cleanRow('x', '.', 0)]);
 
-    const runDir = await writeRunReport(report, outDir);
+    const runDir = writeRunReport(report, outDir);
 
     // Run dir name format: <YYYY-MM-DD>-<short-sha>
     // safePath.join always returns forward slashes (cross-platform), so split is safe here.

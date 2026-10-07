@@ -21,6 +21,7 @@ import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
 import { ExitCode, type RefusalCode } from '@vibe-agent-toolkit/schema';
 import {
   direntKind,
+  everyInOrder,
   isPathAbsentError,
   mkdirSyncReal,
   normalizedTmpdir,
@@ -2291,7 +2292,9 @@ async function runEvalsTiered(input: RunEvalsTieredInput): Promise<TieredEvalRun
   const groups = groupEvalsByTier(input.evals);
   const fragments: EvalFragment[] = [];
   const controlFailures: BaselineControlArmFailure[] = [];
-  for (const [index, group] of groups.entries()) {
+  let skipped: ReturnType<typeof buildSkippedSummary> | undefined;
+  // In order: the gate after each tier decides whether the next, costlier tier runs at all.
+  await everyInOrder(groups.entries(), async ([index, group]) => {
     const outcomes = await input.runTier(buildEvalWorkItems(group.evals, input.baseline));
     const tierFragments = outcomes.flatMap((o) => (o.fragment === undefined ? [] : [o.fragment]));
     controlFailures.push(...outcomes.flatMap((o) => (o.controlFailure === undefined ? [] : [o.controlFailure])));
@@ -2301,16 +2304,16 @@ async function runEvalsTiered(input: RunEvalsTieredInput): Promise<TieredEvalRun
     // control arm is not the skill — treating its executor timeout as a gating
     // failure would stop a run whose treatment tier passed everything.
     const withArm = tierFragments.filter((f) => f.arm !== 'without');
-    if (!shouldGateAfterTier(withArm)) continue;
+    if (!shouldGateAfterTier(withArm)) return true;
     const remaining = groups.slice(index + 1);
-    if (remaining.length === 0) break;
-    const skipped = buildSkippedSummary(group.tier, remaining);
+    if (remaining.length === 0) return false;
+    skipped = buildSkippedSummary(group.tier, remaining);
     // Legibility (required): name the skipped tiers on stderr so a fail-fast run is
     // never mistaken for a smaller passing suite. stdout stays machine-readable.
     process.stderr.write(formatSkippedTiersSummary(skipped) + '\n');
-    return { fragments, controlFailures, skipped };
-  }
-  return { fragments, controlFailures };
+    return false;
+  });
+  return skipped === undefined ? { fragments, controlFailures } : { fragments, controlFailures, skipped };
 }
 
 /** The results/ artifacts vat is the SOLE writer of, resolved for one run. */

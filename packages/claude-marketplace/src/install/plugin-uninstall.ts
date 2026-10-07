@@ -94,14 +94,14 @@ async function removePluginDirs(
   return { pluginDir, cacheDir };
 }
 
-async function removeRegistryEntries(
+function removeRegistryEntries(
   paths: ClaudeUserPaths,
   pluginKey: string,
   marketplace: string,
   inRegistry: boolean,
   dryRun: boolean,
   installedPluginsData: InstalledPlugins,
-): Promise<{ installedPlugins: boolean; knownMarketplaces: boolean }> {
+): { installedPlugins: boolean; knownMarketplaces: boolean } {
   let installedPluginsRemoved = false;
 
   if (inRegistry) {
@@ -153,8 +153,8 @@ export async function uninstallPlugin(opts: UninstallPluginOptions): Promise<Uni
 
   const { pluginDir, cacheDir, installedPluginsRemoved, knownMarketplaces, settings } = await codedUserStateWrite(what, async () => {
     const dirs = await removePluginDirs(paths, pluginName, marketplace, mpPluginDir, mpPluginExists, dryRun);
-    const entries = await removeRegistryEntries(paths, pluginKey, marketplace, inRegistry, dryRun, installedPlugins);
-    return { ...dirs, installedPluginsRemoved: entries.installedPlugins, knownMarketplaces: entries.knownMarketplaces, settings: await removeFromSettings(paths, pluginKey, dryRun) };
+    const entries = removeRegistryEntries(paths, pluginKey, marketplace, inRegistry, dryRun, installedPlugins);
+    return { ...dirs, installedPluginsRemoved: entries.installedPlugins, knownMarketplaces: entries.knownMarketplaces, settings: removeFromSettings(paths, pluginKey, dryRun) };
   });
 
   const artifacts = { pluginDir, cacheDir, installedPlugins: installedPluginsRemoved, knownMarketplaces, settings };
@@ -213,7 +213,7 @@ export function findPluginsByPackage(npmPackage: string, paths: ClaudeUserPaths)
   return keys;
 }
 
-async function removeFromSettings(paths: ClaudeUserPaths, pluginKey: string, dryRun: boolean): Promise<boolean> {
+function removeFromSettings(paths: ClaudeUserPaths, pluginKey: string, dryRun: boolean): boolean {
   const settingsData = readUserSettings(paths);
   const enabled = settingsData['enabledPlugins'];
   if (enabled === null || typeof enabled !== 'object' || Array.isArray(enabled)) return false;

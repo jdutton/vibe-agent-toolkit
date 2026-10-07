@@ -41,7 +41,7 @@ import {
   type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
@@ -1319,7 +1319,8 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
   const suiteProbe = conventionalSuiteProbe();
 
   const outcomes = await settlingOnThrow(staging, logger, () => withResourcePopulationSource({ root: cwd }, async (populationSource) => {
-    for (const spec of specs) {
+    // In order: shared population source, suite probe and logger; failures listed in spec order.
+    await forEachInOrder(specs, async (spec) => {
       const { skill, packagingConfig } = spec;
       logger.info(`\nBuilding skill: ${skill.name}`);
       logger.info(`   Source: ${skill.sourcePath}`);
@@ -1339,10 +1340,10 @@ export async function runSkillBuild(input: SkillBuildRunInput): Promise<SkillBui
       });
       if (failure) {
         validationFailures.push(failure);
-        continue;
+        return;
       }
       buildable.push(spec);
-    }
+    });
 
     // Build the skills that qualified, with a shared registry.
     //

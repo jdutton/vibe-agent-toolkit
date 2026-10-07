@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { AGENT_MANIFEST_INVALID_CODE, loadAgentManifest, type LoadedAgentManifest } from '@vibe-agent-toolkit/agent-config';
-import { copyDirectory, findProjectRoot, isFilesystemAccessError, isPathAbsentError, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
+import { copyDirectory, findProjectRoot, forEachInOrder, isFilesystemAccessError, isPathAbsentError, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
 
 import { proveReadable, withFsAttribution } from './fs-attribution.js';
 import { checkPackageOutput, packageSkill } from './skill-packager.js';
@@ -87,14 +87,15 @@ async function readSourceFile(file: string): Promise<Buffer> {
  */
 async function requireReadableTree(dir: string): Promise<void> {
   const entries = await readingSource(dir, () => fs.readdir(dir, { recursive: true, withFileTypes: true }));
-  for (const entry of entries) {
-    if (entry.isDirectory()) continue;
+  // In order: the first unreadable file is the one named, deterministically.
+  await forEachInOrder(entries, async (entry) => {
+    if (entry.isDirectory()) return;
     const file = safePath.join(entry.parentPath, entry.name);
     const target = entry.isSymbolicLink() ? await readingSource(file, () => fs.stat(file)) : entry;
-    if (target.isDirectory()) continue;
+    if (target.isDirectory()) return;
     refuseSpecialFile(file, target);
     await readingSource(file, () => proveReadable(file));
-  }
+  });
 }
 
 /**

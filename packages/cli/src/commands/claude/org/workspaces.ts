@@ -152,7 +152,7 @@ Example:
     .argument(WS_ID_ARG, WS_ID_DESC)
     .option('--debug', 'Enable debug logging')
     .action(async (workspaceId: string, options: { debug?: boolean }) => {
-      await executeOrgCommand('claude org workspaces get', options.debug, async ({ client }) => {
+      await executeOrgCommand('claude org workspaces get', options.debug, ({ client }) => {
         // Encoded, not spliced: same opaque-id-from-argv class as `skillVersionsPath`.
         return client.get<Workspace>(`/v1/organizations/workspaces/${encodeURIComponent(workspaceId)}`);
       });

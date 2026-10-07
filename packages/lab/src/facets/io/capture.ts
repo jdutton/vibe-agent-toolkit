@@ -56,7 +56,7 @@
 
 import { existsSync } from 'node:fs';
 
-import { resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
+import { mapInOrder, resolveFromImportMeta, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { buildArmEnv } from '../../harness/arm-env.js';
@@ -326,23 +326,19 @@ export async function captureIo(options: CaptureIoOptions): Promise<ReportEnvelo
   );
 
   const loadBefore = readLoad();
-  const commands: IoCommandStats[] = [];
-  for (const spec of options.commands) {
-    // Sequential on purpose — see this function's doc. Awaiting inside the loop
-    // is the mechanism, not an oversight.
-    commands.push(
-      await withDumpDirs(options.runs, DUMP_DIR_PREFIX, async (directories) => {
-        // Per repeat, and on `envFor` rather than `env`: only the measured run is
-        // instrumented, so `cold` mode's cache clear cannot contribute its own I/O.
-        const perRepeat = directories.map((directory) => ({
-          [COUNTER_LOG_DIR_ENV]: directory,
-          NODE_OPTIONS: nodeOptions,
-        }));
-        const measurement = measureSpec(options, spec, (index) => perRepeat[index]);
-        return rowFromDumps(measurement, directories, roots);
-      }),
-    );
-  }
+  // In order on purpose — see this function's doc: measured runs must not overlap.
+  const commands: IoCommandStats[] = await mapInOrder(options.commands, (spec) =>
+    withDumpDirs(options.runs, DUMP_DIR_PREFIX, (directories) => {
+      // Per repeat, and on `envFor` rather than `env`: only the measured run is
+      // instrumented, so `cold` mode's cache clear cannot contribute its own I/O.
+      const perRepeat = directories.map((directory) => ({
+        [COUNTER_LOG_DIR_ENV]: directory,
+        NODE_OPTIONS: nodeOptions,
+      }));
+      const measurement = measureSpec(options, spec, (index) => perRepeat[index]);
+      return rowFromDumps(measurement, directories, roots);
+    }),
+  );
   const loadAfter = readLoad();
 
   return buildReportEnvelope(IO_FACET, options, {

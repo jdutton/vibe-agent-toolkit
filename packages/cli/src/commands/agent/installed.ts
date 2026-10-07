@@ -103,12 +103,13 @@ async function scanForInstalledSkills(
   const skills: InstalledSkill[] = [];
   const unreadable: ValidationIssue[] = [];
 
-  for (const currentScope of scopesToScan) {
+  // At most three read-only listings: read together, folded in scope order.
+  const listings = await Promise.all(scopesToScan.map(async (currentScope) => {
     const location = scopeLocations[currentScope];
-    if (!location) continue;
-
-    const listing = await listScopeLocation(location);
-    if (listing === null) continue;
+    return { currentScope, location, listing: location ? await listScopeLocation(location) : null };
+  }));
+  for (const { currentScope, location, listing } of listings) {
+    if (!location || listing === null) continue;
     if (!Array.isArray(listing)) {
       unreadable.push(unlistableScopeFinding(currentScope, location, listing.errno));
       continue;

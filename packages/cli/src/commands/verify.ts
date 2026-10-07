@@ -34,7 +34,7 @@ import {
   type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { marksOperandRefusalByHand } from '../command-tree.js';
@@ -927,7 +927,7 @@ function runConsistencyPhase(
  * `package.json` the OS will not read, coded `INPUT_UNREADABLE` — becomes THAT
  * phase's refusal with its own code, and the phases that finished still publish.
  */
-async function inProcess(name: string, schema: PhaseReportSchema, run: () => PhaseResult): Promise<PhaseResult> {
+function inProcess(name: string, schema: PhaseReportSchema, run: () => PhaseResult): Promise<PhaseResult> {
   return runPhase({ name, schema, run: () => Promise.resolve({ report: run().report }) });
 }
 
@@ -998,13 +998,13 @@ async function verifyTopLevelCommand(
     const inProcessPhases = selectInProcessVerifyPhases(config);
     logger.info(formatVerifyAnnouncement(phases.map((p) => p.name), config));
 
-    for (const phase of phases) {
+    // In order, deliberately: phases are announced in a fixed order and their
+    // stderr streams live, so overlapping them would interleave two running
+    // reports into one unreadable channel.
+    await forEachInOrder(phases, async (phase) => {
       logger.info(`\n▶ Phase: ${phase.name}`);
-      // Awaited in the loop, deliberately: phases are announced in a fixed order
-      // and their stderr streams live, so overlapping them would interleave two
-      // running reports into one unreadable channel.
       results.push(await runPhase(phase));
-    }
+    });
 
     if (inProcessPhases.length > 0 && config?.skills) {
       await runInProcessPhases({ phases: inProcessPhases, config, skills: config.skills, projectRoot, logger, results });

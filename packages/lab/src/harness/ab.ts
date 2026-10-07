@@ -47,7 +47,7 @@
  * precisely so that nothing here has to know what it is.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { InstrumentVersion } from '../envelope/coordinate.js';
 import type { ReportEnvelope } from '../envelope/envelope.js';
@@ -497,12 +497,10 @@ function foldCommands<TBody, TComparison extends ComparisonLike>(
 export async function runAb<TBody, TComparison extends ComparisonLike>(
   spec: AbSpec<TBody, TComparison>,
 ): Promise<AbResult> {
-  const outcomes: PairOutcome[] = [];
-  for (let pair = 1; pair <= spec.pairs; pair++) {
-    // Sequential on purpose: two captures in flight would compete for the very
-    // machine whose spread this design exists to control for.
-    outcomes.push(await runPair(spec, pair));
-  }
+  // Sequential on purpose: two captures in flight would compete for the very
+  // machine whose spread this design exists to control for.
+  const pairNumbers = Array.from({ length: Math.max(0, spec.pairs) }, (_, index) => index + 1);
+  const outcomes: PairOutcome[] = await mapInOrder(pairNumbers, (pair) => runPair(spec, pair));
 
   return {
     control: spec.control,

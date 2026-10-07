@@ -12,7 +12,7 @@
 import { existsSync } from 'node:fs';
 
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
-import { issueLocation, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, issueLocation, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from '../../../utils/command-refusal.js';
 import { copyFileIntoMarketplace } from '../../../utils/marketplace-io.js';
@@ -61,7 +61,8 @@ function validateDest(rawDest: string, pluginOutputDir: string): string {
 export async function applyPluginFiles(args: ApplyPluginFilesArgs): Promise<void> {
   const { projectRoot, pluginOutputDir, entries, info } = args;
 
-  for (const entry of entries) {
+  // In order: a later entry deliberately overwrites an earlier one's dest.
+  await forEachInOrder(entries, async (entry) => {
     const sourceAbs = safePath.resolve(projectRoot, entry.source);
     // Project-relative, never absolute: this refusal is published on
     // machine-readable stdout, where an absolute path publishes the developer's
@@ -82,5 +83,5 @@ export async function applyPluginFiles(args: ApplyPluginFilesArgs): Promise<void
       `plugin files[].source ${issueLocation(sourceAbs, projectRoot) || '.'}`,
       `plugin files[].dest ${toForwardSlashAnyPlatform(entry.dest)}`,
     );
-  }
+  });
 }

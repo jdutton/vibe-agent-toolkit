@@ -180,11 +180,16 @@ async function findBuiltSkill(
 /**
  * Find the agent package root (directory containing package.json)
  */
-async function findAgentPackageRoot(manifestPath: string): Promise<string> {
-  let currentDir = path.dirname(safePath.resolve(manifestPath));
-
+function findAgentPackageRoot(manifestPath: string): Promise<string> {
   // Walk up until we find a package.json or hit the filesystem root
-  while (currentDir !== path.dirname(currentDir)) {
+  const climb = async (currentDir: string): Promise<string> => {
+    if (currentDir === path.dirname(currentDir)) {
+      throw new CommandRefusalError(
+        'USAGE_INVALID',
+        `Could not find package.json for agent at ${manifestPath}. ` +
+          `Agent must be within an npm package to install.`
+      );
+    }
     const packageJsonPath = safePath.join(currentDir, 'package.json');
     try {
       await fs.access(packageJsonPath);
@@ -193,14 +198,9 @@ async function findAgentPackageRoot(manifestPath: string): Promise<string> {
       // No manifest at this level: climb. A refused ancestor is not "no
       // manifest": the input's refusal.
       if (!isPathAbsentError(error)) throw unstatablePathRefusal(packageJsonPath, error);
-      currentDir = path.dirname(currentDir);
     }
-  }
-
-  throw new CommandRefusalError(
-    'USAGE_INVALID',
-    `Could not find package.json for agent at ${manifestPath}. ` +
-      `Agent must be within an npm package to install.`
-  );
+    return climb(path.dirname(currentDir));
+  };
+  return climb(path.dirname(safePath.resolve(manifestPath)));
 }
 

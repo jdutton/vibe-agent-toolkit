@@ -60,19 +60,20 @@ export class ClaudeCodeDriver implements RuntimeDriver {
   readonly target: Target = 'claude-code';
   readonly driverMode: DriverMode = 'scripted';
 
-  async setup(): Promise<void> {
+  setup(): Promise<void> {
     // Availability check only — profile lifecycle moved into `invoke()` so each
     // attempt sees a clean slate (no cached session/conversation state).
     if (!isToolAvailable('claude')) {
-      throw new Error("claude CLI not found on PATH; claude-code driver cannot run.");
+      return Promise.reject(new Error("claude CLI not found on PATH; claude-code driver cannot run."));
     }
+    return Promise.resolve();
   }
 
-  async install(_skill: StagedSkill): Promise<{ ok: boolean; notes: string }> {
+  install(_skill: StagedSkill): Promise<{ ok: boolean; notes: string }> {
     // No-op: installation happens inside `invoke()` against a fresh per-attempt
     // profile. Kept on the interface for symmetry with manual drivers and so
     // the run loop's install-failure short-circuit semantics remain uniform.
-    return { ok: true, notes: 'deferred to invoke()' };
+    return Promise.resolve({ ok: true, notes: 'deferred to invoke()' });
   }
 
   async invoke(opts: InvokeOpts): Promise<RuntimeObservation> {

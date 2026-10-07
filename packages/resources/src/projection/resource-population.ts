@@ -484,7 +484,7 @@ export async function buildResourcePopulation(options: {
  *   exactly why "did the cache work" needs an observation rather than a diff
  * @returns The populated projection
  */
-export async function buildResourceProjection(options: {
+export function buildResourceProjection(options: {
   root: string;
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;

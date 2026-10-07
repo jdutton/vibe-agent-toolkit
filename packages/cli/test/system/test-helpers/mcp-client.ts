@@ -146,7 +146,7 @@ export class MCPTestClient {
   /**
    * Send the MCP initialize handshake and return the server's response.
    */
-  async initialize(options?: { timeout?: number }): Promise<JsonRpcResponse> {
+  initialize(options?: { timeout?: number }): Promise<JsonRpcResponse> {
     return this.request('initialize', {
       protocolVersion: '2024-11-05',
       capabilities: {},
@@ -157,7 +157,7 @@ export class MCPTestClient {
   /**
    * Send a JSON-RPC request and wait for the response with matching ID.
    */
-  async request(
+  request(
     method: string,
     params?: unknown,
     options?: { timeout?: number }

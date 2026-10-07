@@ -84,7 +84,12 @@ async function analyzePhotosInDirectory(dirPath: string, category: 'cat' | 'not-
 
   const results: AnalysisResult[] = [];
 
-  for (const file of imageFiles) {
+  // One photo at a time, so the log reads in file order.
+  const analyzeFrom = async (index: number): Promise<void> => {
+    const file = imageFiles[index];
+    if (file === undefined) {
+      return;
+    }
     const filePath = join(dirPath, file);
 
     try {
@@ -109,8 +114,11 @@ async function analyzePhotosInDirectory(dirPath: string, category: 'cat' | 'not-
 
       log('Error', `Failed to analyze ${file}: ${String(error)}`, colors.red);
     }
-  }
 
+    await analyzeFrom(index + 1);
+  };
+
+  await analyzeFrom(0);
   return results;
 }
 

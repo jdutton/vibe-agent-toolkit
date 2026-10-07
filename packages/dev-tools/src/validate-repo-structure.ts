@@ -35,13 +35,19 @@
 
 // This utility script needs to read dynamic file paths for validation
 
-import { existsSync, type Dirent } from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
+import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
+import { readdir, readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  direntKindFollowingSync,
+  forEachInOrder,
+  isPathAbsentError,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 
 import { isEntrypoint } from './common.js';
@@ -136,18 +142,19 @@ async function forEachTrackedTextFile(
     trim: false,
   }) as string;
 
-  for (const relPath of tracked.split('\0')) {
+  // In order: one file's bytes in memory at a time, and findings follow `ls-files` order.
+  await forEachInOrder(tracked.split('\0'), async (relPath) => {
     if (!relPath || !TEXT_FILE_EXTENSIONS.has(extname(relPath).toLowerCase())) {
-      continue;
+      return;
     }
 
     const contents = await readTrackedFile(safePath.join(REPO_ROOT, relPath), (reason) => {
       recordUnreadable(relPath, reason);
     });
-    if (contents === null) continue;
+    if (contents === null) return;
 
     handler(relPath, contents);
-  }
+  });
 }
 
 /**
@@ -171,9 +178,9 @@ async function forEachTrackedTextFileLine(
  * The entries of `dir`, or none when the directory does not exist. A refusal
  * to list propagates — see {@link walkDirectory}.
  */
-async function listOrEmptyIfAbsent(dir: string): Promise<Dirent[]> {
+function listOrEmptyIfAbsent(dir: string): Dirent[] {
   try {
-    return await readdir(dir, { withFileTypes: true });
+    return readdirSync(dir, { withFileTypes: true });
   } catch (error) {
     if (isPathAbsentError(error)) return [];
     throw error;
@@ -188,16 +195,16 @@ async function listOrEmptyIfAbsent(dir: string): Promise<Dirent[]> {
  * saying so would let every rule below report "nothing found" over a subtree
  * it never saw; that throws, and `validate()` exits 2 naming it.
  */
-export async function walkDirectory(
+export function walkDirectory(
   dir: string,
   relativePath: string,
   options: {
     skipDirs?: Set<string>;
-    onDirectory?: (entry: { name: string; fullPath: string; relPath: string }) => Promise<void>;
-    onFile?: (entry: { name: string; fullPath: string; relPath: string }) => Promise<void>;
+    onDirectory?: (entry: { name: string; fullPath: string; relPath: string }) => void;
+    onFile?: (entry: { name: string; fullPath: string; relPath: string }) => void;
   },
-): Promise<void> {
-  for (const entry of await listOrEmptyIfAbsent(dir)) {
+): void {
+  for (const entry of listOrEmptyIfAbsent(dir)) {
     const fullPath = safePath.join(dir, entry.name);
     const relPath = safePath.join(relativePath, entry.name);
 
@@ -209,15 +216,15 @@ export async function walkDirectory(
 
       // Call directory handler
       if (options.onDirectory) {
-        await options.onDirectory({ name: entry.name, fullPath, relPath });
+        options.onDirectory({ name: entry.name, fullPath, relPath });
       }
 
       // Recurse into subdirectory
-      await walkDirectory(fullPath, relPath, options);
+      walkDirectory(fullPath, relPath, options);
     } else if (entry.isFile()) {
       // Call file handler
       if (options.onFile) {
-        await options.onFile({ name: entry.name, fullPath, relPath });
+        options.onFile({ name: entry.name, fullPath, relPath });
       }
     }
   }
@@ -226,16 +233,16 @@ export async function walkDirectory(
 /**
  * Helper: Apply checker function to all package test/fixtures directories
  */
-async function forEachPackageFixturesDir(
-  checkDirectory: (dir: string, relativePath: string) => Promise<void>,
-): Promise<void> {
+function forEachPackageFixturesDir(
+  checkDirectory: (dir: string, relativePath: string) => void,
+): void {
   const packagesDir = safePath.join(REPO_ROOT, 'packages');
-  const entries = await readdir(packagesDir, { withFileTypes: true });
+  const entries = readdirSync(packagesDir, { withFileTypes: true });
 
   for (const entry of entries) {
     if (direntKindFollowingSync(packagesDir, entry) === 'directory') {
       const fixturesDir = safePath.join(packagesDir, entry.name, 'test', 'fixtures');
-      await checkDirectory(fixturesDir, `packages/${entry.name}/test/fixtures`);
+      checkDirectory(fixturesDir, `packages/${entry.name}/test/fixtures`);
     }
   }
 }
@@ -307,14 +314,14 @@ async function validateScriptsLocation(): Promise<void> {
  * Rule 3: No large test fixtures (>100KB) unless compressed
  * Prevents repo bloat from test data
  */
-async function validateTestFixtureSizes(): Promise<void> {
+function validateTestFixtureSizes(): void {
   const MAX_SIZE_KB = 100;
   const ALLOWED_LARGE_EXTENSIONS = new Set(['.zip', '.tar', '.gz', '.tgz', '.tar.gz']);
 
-  async function checkFixturesDir(dir: string, relativePath: string): Promise<void> {
-    await walkDirectory(dir, relativePath, {
-      onFile: async ({ name, fullPath, relPath }) => {
-        const stats = await stat(fullPath);
+  function checkFixturesDir(dir: string, relativePath: string): void {
+    walkDirectory(dir, relativePath, {
+      onFile: ({ name, fullPath, relPath }) => {
+        const stats = statSync(fullPath);
         const sizeKB = stats.size / 1024;
 
         if (sizeKB > MAX_SIZE_KB) {
@@ -334,20 +341,20 @@ async function validateTestFixtureSizes(): Promise<void> {
     });
   }
 
-  await forEachPackageFixturesDir(checkFixturesDir);
+  forEachPackageFixturesDir(checkFixturesDir);
 }
 
 /**
  * Rule 4: No shell scripts (.sh, .ps1, .bat, .cmd)
  * All automation must be TypeScript for cross-platform compatibility
  */
-async function validateNoShellScripts(): Promise<void> {
+function validateNoShellScripts(): void {
   const FORBIDDEN_EXTENSIONS = new Set(['.sh', '.ps1', '.bat', '.cmd']);
   const skipDirs = SKIP_DIRS_WITH_HUSKY;
 
-  await walkDirectory(REPO_ROOT, '.', {
+  walkDirectory(REPO_ROOT, '.', {
     skipDirs,
-    onFile: async ({ name, relPath }) => {
+    onFile: ({ name, relPath }) => {
       const ext = name.substring(name.lastIndexOf('.')).toLowerCase();
       if (FORBIDDEN_EXTENSIONS.has(ext)) {
         errors.push({
@@ -365,10 +372,10 @@ async function validateNoShellScripts(): Promise<void> {
  * Rule 5: No /staging directories in test/fixtures
  * Staging directories should be temporary and not committed
  */
-async function validateNoStagingDirectories(): Promise<void> {
-  async function checkFixturesDir(dir: string, relativePath: string): Promise<void> {
-    await walkDirectory(dir, relativePath, {
-      onDirectory: async ({ name, relPath }) => {
+function validateNoStagingDirectories(): void {
+  function checkFixturesDir(dir: string, relativePath: string): void {
+    walkDirectory(dir, relativePath, {
+      onDirectory: ({ name, relPath }) => {
         if (name === 'staging') {
           errors.push({
             type: ERROR_TYPES.FORBIDDEN_DIRECTORY,
@@ -381,19 +388,19 @@ async function validateNoStagingDirectories(): Promise<void> {
     });
   }
 
-  await forEachPackageFixturesDir(checkFixturesDir);
+  forEachPackageFixturesDir(checkFixturesDir);
 }
 
 /**
  * Rule 6: No nested package.json files (except in packages/)
  * Prevents AI creating sub-packages or component-level package.json files
  */
-async function validateNoNestedPackageJson(): Promise<void> {
+function validateNoNestedPackageJson(): void {
   const skipDirs = new Set([...COMMON_SKIP_DIRS, WORKTREES_DIR]);
 
-  await walkDirectory(REPO_ROOT, '.', {
+  walkDirectory(REPO_ROOT, '.', {
     skipDirs,
-    onFile: async ({ name, relPath }) => {
+    onFile: ({ name, relPath }) => {
       if (name === PACKAGE_MANIFEST_FILENAME) {
         // Normalize path separators
         const normalizedPath = toForwardSlash(relPath);
@@ -420,7 +427,7 @@ async function validateNoNestedPackageJson(): Promise<void> {
  * Rule 7: Source files must be in src/ or test/ directories
  * Prevents .ts files in wrong locations
  */
-async function validateSourceFileLocations(): Promise<void> {
+function validateSourceFileLocations(): void {
   const skipDirs = SKIP_DIRS_WITH_HUSKY;
 
   // Root config files. `eslint.config.js` is JavaScript and never reaches this
@@ -432,9 +439,9 @@ async function validateSourceFileLocations(): Promise<void> {
     'vitest.shared.ts',
   ]);
 
-  await walkDirectory(REPO_ROOT, '.', {
+  walkDirectory(REPO_ROOT, '.', {
     skipDirs,
-    onFile: async ({ name, relPath }) => {
+    onFile: ({ name, relPath }) => {
       if (!name.endsWith('.ts')) {
         return;
       }
@@ -500,10 +507,10 @@ async function validateSourceFileLocations(): Promise<void> {
  * Rule 8: Test file naming conventions
  * Enforces consistent test patterns across the codebase
  */
-async function validateTestFileNaming(): Promise<void> {
-  await walkDirectory(REPO_ROOT, '.', {
+function validateTestFileNaming(): void {
+  walkDirectory(REPO_ROOT, '.', {
     skipDirs: COMMON_SKIP_DIRS,
-    onFile: async ({ name, relPath }) => {
+    onFile: ({ name, relPath }) => {
       const normalizedPath = toForwardSlash(relPath);
 
       // Check for .spec.ts files (we use .test.ts)
@@ -612,13 +619,14 @@ async function validateNoContrabandTokens(): Promise<void> {
   }
   console.log(`   contraband scan: ${tokens.length} token(s) from ${tokensPath ?? 'an unnamed source'}`);
 
-  for (const relPath of contrabandPopulation(REPO_ROOT)) {
+  // In order: one file's bytes in memory at a time, and findings follow population order.
+  await forEachInOrder(contrabandPopulation(REPO_ROOT), async (relPath) => {
     // Deleted-but-tracked has nothing to leak; a file this gate could not
     // read is a file it did not scan, and it says so at error severity.
     const bytes = await readTrackedFile(safePath.join(REPO_ROOT, relPath), (reason) => {
       recordUnreadable(relPath, reason);
     });
-    if (bytes === null) continue;
+    if (bytes === null) return;
     for (const hit of scanTextForContraband(bytes.toString('utf8'), tokens)) {
       errors.push({
         type: ERROR_TYPES.STRUCTURAL_VIOLATION,
@@ -628,7 +636,7 @@ async function validateNoContrabandTokens(): Promise<void> {
         severity: 'error',
       });
     }
-  }
+  });
 }
 
 /**
@@ -804,7 +812,7 @@ async function validateNoCitationsToNeverCommittedDirs(): Promise<void> {
  * document that needs to be citable gets promoted to {@link PROMOTED_DOC_HOME}
  * instead, which is the same remedy Rule 10 recommends.
  */
-async function validateNothingTrackedUnderNeverCommittedDirs(): Promise<void> {
+function validateNothingTrackedUnderNeverCommittedDirs(): void {
   // `trim: false` — the listing is NUL-delimited, and a path beginning with a
   // space sorts first, so a trim would rename it out of the population.
   const tracked = runGitOrThrow(['ls-files', '-z'], { cwd: REPO_ROOT, trim: false }) as string;
@@ -1711,15 +1719,17 @@ export async function collectEngineFloorFindings(
 
   const summaries: PackageManifestSummary[] = [];
 
-  for (const entry of entries) {
-    if (direntKindFollowingSync(packagesDir, entry) !== 'directory') continue;
+  // Independent reads of ~25 manifests (readManifest never rejects); folded in directory order.
+  const packageDirs = entries.filter((entry) => direntKindFollowingSync(packagesDir, entry) === 'directory');
+  const reads = await Promise.all(
+    packageDirs.map((entry) => readManifest(safePath.join(packagesDir, entry.name, PACKAGE_MANIFEST_FILENAME))),
+  );
 
+  for (const [index, entry] of packageDirs.entries()) {
     const path = `packages/${entry.name}/${PACKAGE_MANIFEST_FILENAME}`;
-    const read = await readManifest(
-      safePath.join(packagesDir, entry.name, PACKAGE_MANIFEST_FILENAME),
-    );
+    const read = reads[index];
 
-    if (read.kind === 'absent') continue;
+    if (read === undefined || read.kind === 'absent') continue;
     if (read.kind === 'unreadable') {
       unreadable.push({ path, reason: read.reason });
       continue;
@@ -1778,25 +1788,44 @@ export function findBinsWithoutLastResort(
     }));
 }
 
+/**
+ * Await every promise, then return the values in input order — or throw the
+ * first rejection in INPUT order, which is the one a sequential loop would have
+ * thrown, rather than whichever settled first.
+ */
+async function allInInputOrder<T>(promises: readonly Promise<T>[]): Promise<T[]> {
+  const settled = await Promise.allSettled(promises);
+  return settled.map((outcome) => {
+    if (outcome.status === 'rejected') throw outcome.reason;
+    return outcome.value;
+  });
+}
+
+/** A bin source's text, `undefined` when it does not exist; any other read failure propagates. */
+async function readBinSource(path: string): Promise<{ path: string; text: string | undefined }> {
+  try {
+    return { path, text: await readFile(safePath.join(REPO_ROOT, path), 'utf8') };
+  } catch (error) {
+    if (!isPathAbsentError(error)) throw error;
+    return { path, text: undefined };
+  }
+}
+
 async function validateBinsInstallLastResortExit(): Promise<void> {
   const packagesDir = safePath.join(REPO_ROOT, 'packages');
-  const bins: { path: string; text: string | undefined }[] = [];
-  for (const entry of await readdir(packagesDir, { withFileTypes: true })) {
-    if (direntKindFollowingSync(packagesDir, entry) !== 'directory') continue;
-    const read = await readManifest(safePath.join(packagesDir, entry.name, PACKAGE_MANIFEST_FILENAME));
-    if (read.kind !== 'ok') continue; // absent is not a package; unreadable is the engine-floor rule's finding
-    for (const target of Object.values(read.manifest.bin ?? {})) {
-      const path = binSourceOf(`packages/${entry.name}`, target);
-      let text: string | undefined;
-      try {
-        text = await readFile(safePath.join(REPO_ROOT, path), 'utf8');
-      } catch (error) {
-        if (!isPathAbsentError(error)) throw error;
-      }
-      bins.push({ path, text });
-    }
-  }
-  errors.push(...findBinsWithoutLastResort(bins));
+  const packageDirs = (await readdir(packagesDir, { withFileTypes: true }))
+    .filter((entry) => direntKindFollowingSync(packagesDir, entry) === 'directory');
+  // Independent reads of ~25 packages; bins keep directory order.
+  const perPackage = await allInInputOrder(
+    packageDirs.map(async (entry) => {
+      const read = await readManifest(safePath.join(packagesDir, entry.name, PACKAGE_MANIFEST_FILENAME));
+      if (read.kind !== 'ok') return []; // absent is not a package; unreadable is the engine-floor rule's finding
+      return allInInputOrder(
+        Object.values(read.manifest.bin ?? {}).map((target) => readBinSource(binSourceOf(`packages/${entry.name}`, target))),
+      );
+    }),
+  );
+  errors.push(...findBinsWithoutLastResort(perPackage.flat()));
 }
 
 /**
@@ -1812,21 +1841,21 @@ async function validate(): Promise<void> {
   await validateNoContrabandTokens();
 
   // High Priority - File Location Sprawl
-  await validateNoNestedPackageJson();
-  await validateSourceFileLocations();
-  await validateTestFileNaming();
+  validateNoNestedPackageJson();
+  validateSourceFileLocations();
+  validateTestFileNaming();
 
   // Original Rules
   await validateNoRuntimeExamples();
   await validateScriptsLocation();
-  await validateNoShellScripts();
-  await validateNoStagingDirectories();
-  await validateTestFixtureSizes();
+  validateNoShellScripts();
+  validateNoStagingDirectories();
+  validateTestFixtureSizes();
   await validateNoNulBytesInTextFiles();
 
   // Durability - claims that rot in silence
   await validateNoCitationsToNeverCommittedDirs();
-  await validateNothingTrackedUnderNeverCommittedDirs();
+  validateNothingTrackedUnderNeverCommittedDirs();
   await validateVendorClaimFreshness();
   await validateSeverityCountsRatchet();
   await validateEngineFloorAgreement();

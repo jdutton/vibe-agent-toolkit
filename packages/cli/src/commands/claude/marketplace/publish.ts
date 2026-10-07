@@ -11,7 +11,7 @@ import { mkdtempSync } from 'node:fs';
 
 import type { ClaudeMarketplaceConfig } from '@vibe-agent-toolkit/resources';
 import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { refusalCodeOf } from '../../../utils/command-refusal.js';
@@ -211,7 +211,7 @@ async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishRes
     logger.info(`[no-push] Creating local branch ${branch}`);
   }
 
-  await publishToGitBranch({
+  publishToGitBranch({
     publishDir: composeOpts.outputDir,
     branch,
     remote,
@@ -247,23 +247,24 @@ async function marketplacePublishCommand(_options: MarketplacePublishOptions, co
   const published: PublishResult[] = [];
 
   try {
-    const { configDir, claudeConfig } = await loadClaudeProjectConfig();
+    const { configDir, claudeConfig } = loadClaudeProjectConfig();
     const marketplaces = claudeConfig?.marketplaces ?? {};
     assertMarketplaceDeclared(options.marketplace, Object.keys(marketplaces));
 
-    for (const [mpName, mpConfig] of Object.entries(marketplaces)) {
+    // In order: each is a git push, and a refusal reports exactly those already published.
+    await forEachInOrder(Object.entries(marketplaces), async ([mpName, mpConfig]) => {
       if (options.marketplace && options.marketplace !== mpName) {
-        continue;
+        return;
       }
       if (!mpConfig.publish) {
         logger.info(`Skipping "${mpName}" (no publish config)`);
-        continue;
+        return;
       }
 
       published.push(await publishOneMarketplace({
         mpName, mpConfig, publishConfig: mpConfig.publish, configDir, options, logger,
       }));
-    }
+    });
   } catch (error) {
     const finished = published.length === 0
       ? NOTHING_FINISHED

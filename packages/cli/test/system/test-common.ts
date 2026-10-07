@@ -215,7 +215,7 @@ function mergeEnvWithOverrides(overrides: Record<string, string>): NodeJS.Proces
   return merged;
 }
 
-async function spawnAndCollect(
+function spawnAndCollect(
   command: string,
   args: string[],
   options: SpawnOptionsWithoutStdio,
@@ -280,7 +280,7 @@ async function spawnAndCollect(
  * Execute CLI command and return result
  * Handles ESLint suppressions for test execution
  */
-export async function executeCli(
+export function executeCli(
   binPath: string,
   args: string[],
   options?: { cwd?: string; env?: Record<string, string> }
@@ -337,7 +337,7 @@ export async function buildSkillsThenPlugin(
  * @param args - Arguments to pass to vat command
  * @param options - Optional execution options
  */
-export async function executeBunVat(
+export function executeBunVat(
   testFileUrl: string,
   args: string[],
   options?: { cwd?: string }

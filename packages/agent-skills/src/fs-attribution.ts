@@ -105,22 +105,41 @@ const BUNDLE_LAYOUT_ERRNOS: ReadonlySet<unknown> = new Set(['EEXIST', 'ENOTDIR',
 export async function withFsAttribution<T>(
   subject: string,
   side: FsSide,
-  work: () => Promise<T>,
+  work: () => T | Promise<T>,
   action = 'copied into the bundle',
 ): Promise<T> {
   try {
     return await work();
   } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
-    const reason = error instanceof Error ? error.message : String(error);
-    if (side === 'source') {
-      throw packagingInputError(`${subject}, but it could not be ${action}: ${reason}. ${readRemedyFor(error)}`, { cause: error });
-    }
-    const message = `${subject}, but it could not be ${action}: ${reason}. ${WRITE_REMEDY}`;
-    throw side === 'bundle' && BUNDLE_LAYOUT_ERRNOS.has((error as { code?: unknown }).code)
-      ? packagingInputError(message, { cause: error })
-      : packagingOutputError(message, { cause: error });
+    throw attributeFsError(subject, side, action, error);
   }
+}
+
+/** {@link withFsAttribution} for synchronous work. */
+export function withFsAttributionSync<T>(
+  subject: string,
+  side: FsSide,
+  work: () => T,
+  action = 'copied into the bundle',
+): T {
+  try {
+    return work();
+  } catch (error) {
+    throw attributeFsError(subject, side, action, error);
+  }
+}
+
+/** What {@link withFsAttribution} throws for `error`: a non-filesystem error untouched, else coded by `side`. */
+function attributeFsError(subject: string, side: FsSide, action: string, error: unknown): unknown {
+  if (!isFilesystemAccessError(error)) return error;
+  const reason = error instanceof Error ? error.message : String(error);
+  if (side === 'source') {
+    return packagingInputError(`${subject}, but it could not be ${action}: ${reason}. ${readRemedyFor(error)}`, { cause: error });
+  }
+  const message = `${subject}, but it could not be ${action}: ${reason}. ${WRITE_REMEDY}`;
+  return side === 'bundle' && BUNDLE_LAYOUT_ERRNOS.has((error as { code?: unknown }).code)
+    ? packagingInputError(message, { cause: error })
+    : packagingOutputError(message, { cause: error });
 }
 
 /**

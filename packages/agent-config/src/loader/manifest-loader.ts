@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 
 import { AgentManifestSchema, type AgentManifest } from '@vibe-agent-toolkit/schema';
-import { isPathAbsentError, isVatError, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { everyInOrder, isPathAbsentError, isVatError, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { parse as parseYaml } from 'yaml';
 
 export interface LoadedAgentManifest extends AgentManifest {
@@ -42,9 +42,14 @@ export async function findManifestPath(pathArg: string): Promise<string> {
     safePath.join(absolutePath, 'agent.yml'),
   ];
 
-  for (const candidate of candidates) {
-    if (!(await isAbsent(candidate))) return candidate;
-  }
+  // In order: agent.yaml wins over agent.yml, and a refusal on the first stops the search.
+  let found: string | undefined;
+  await everyInOrder(candidates, async (candidate) => {
+    if (await isAbsent(candidate)) return true;
+    found = candidate;
+    return false;
+  });
+  if (found !== undefined) return found;
 
   throw new VatError(
     AGENT_MANIFEST_NOT_FOUND_CODE,

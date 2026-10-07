@@ -19,6 +19,7 @@ import { promisify } from 'node:util';
 import { FollowedWalk } from './dirent-kind.js';
 import { isFilesystemAccessError } from './errors/errno.js';
 import { VatError } from './errors/vat-error.js';
+import { everyInOrder, forEachInOrder } from './in-order.js';
 import { isUnderRoot } from './path-containment.js';
 import { toForwardSlash, toNfc } from './path-core.js';
 import { safePath } from './path-utils.js';
@@ -511,7 +512,10 @@ async function copyTree(src: string, dest: string, root: string, walk: FollowedW
   await fs.mkdir(dest, { recursive: true });
   const entries = await fs.readdir(src, { withFileTypes: true });
 
-  for (const entry of entries) {
+  // In order: the walk guard must see each directory entered before it recurses
+  // (revisit first, then containment), and the first refusal names the first
+  // offending entry in listing order.
+  await forEachInOrder(entries, async (entry) => {
     const srcPath = safePath.join(src, entry.name);
     const destPath = safePath.join(dest, entry.name);
 
@@ -526,12 +530,8 @@ async function copyTree(src: string, dest: string, root: string, walk: FollowedW
     } else if (isDirectory) {
       walk.enter(srcPath);
     }
-    if (isDirectory) {
-      await copyTree(srcPath, destPath, root, walk);
-    } else {
-      await fs.copyFile(srcPath, destPath);
-    }
-  }
+    await (isDirectory ? copyTree(srcPath, destPath, root, walk) : fs.copyFile(srcPath, destPath));
+  });
 }
 
 /**
@@ -982,18 +982,19 @@ export class DirectorySpellingIndex {
     const actual: string[] = [];
     let worst: Exclude<FilenameMatch, 'absent'> = 'exact';
     let directory = root;
+    let absent: PathSpelling | undefined;
 
-    for (const segment of segments) {
-      // Sequential by necessity: which directory holds the next component
-      // depends on how this one is really spelled. Every listing is memoized,
-      // so a run pays per DIRECTORY, not per path and not per component.
+    // In order by necessity: which directory holds the next component depends
+    // on how this one is really spelled. Every listing is memoized, so a run
+    // pays per DIRECTORY, not per path and not per component.
+    await everyInOrder(segments, async (segment) => {
       const found = await this.lookup(directory, segment);
       if (found.match === 'absent') {
         // The cause travels with the verdict rather than being re-derived: by
         // the time a caller reports this, the directory that refused is
         // several frames gone and nothing else can tell the two absences
         // apart. So does what was learned ABOVE it — see `verified`.
-        return {
+        absent = {
           match: 'absent',
           askedPath,
           actualPath: '',
@@ -1004,12 +1005,15 @@ export class DirectorySpellingIndex {
             actualPath: actual.join('/'),
           },
         };
+        return false;
       }
 
       if (SPELLING_RANK[found.match] > SPELLING_RANK[worst]) worst = found.match;
       actual.push(found.actualName);
       directory = safePath.join(directory, found.actualName);
-    }
+      return true;
+    });
+    if (absent !== undefined) return absent;
 
     return { match: worst, askedPath, actualPath: actual.join('/') };
   }

@@ -24,9 +24,9 @@ const REGISTRIES_READ = 1;
 /**
  * List available MCP agent collections
  */
-export async function listCollectionsCommand(
+export function listCollectionsCommand(
   options: ListCollectionsOptions
-): Promise<void> {
+): void {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 

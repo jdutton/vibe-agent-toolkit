@@ -161,6 +161,16 @@ export async function routeInventory(
 	options: InventoryCommandOptions,
 	logger: Logger = createLogger(),
 ): Promise<AnyInventory> {
+	// Awaited here so a refusal of the arguments arrives as this call's rejection.
+	const inventory = await routeInventoryNow(pathArg, options, logger);
+	return inventory;
+}
+
+function routeInventoryNow(
+	pathArg: string | undefined,
+	options: InventoryCommandOptions,
+	logger: Logger,
+): Promise<AnyInventory> {
 	if (options.user === true) {
 		// The tracker source is REQUIRED here now, and this is the lane it matters
 		// most on: `--user` walks every cached plugin under ~/.claude/plugins/cache,
@@ -238,7 +248,7 @@ export async function routeInventory(
 	// The store scopes the whole extraction, not the provider call: the extractor
 	// MEMOIZES `sharedPopulation` and reaches it when it is about to walk its
 	// first skill, which is after this frame would otherwise have closed it.
-	return withPopulationCache({ root: projectRoot ?? absolute }, async (cache) => {
+	return withPopulationCache({ root: projectRoot ?? absolute }, (cache) => {
 		const sharedPopulation = populationProviderFor(projectRoot, cache, logger);
 		return extractClaudePluginInventory(absolute, {
 			...(sharedRegistry !== undefined && { sharedRegistry }),

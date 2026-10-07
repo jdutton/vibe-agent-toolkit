@@ -19,7 +19,9 @@ import {
   hasParentTraversalSegment,
   isFilesystemAccessError,
   isGlob,
+  forEachInOrder,
   issueLocation,
+  mapWithConcurrency,
   safePath,
   staticGlobBase,
   toForwardSlash,
@@ -28,7 +30,7 @@ import {
 import { glob } from 'glob';
 import picomatch from 'picomatch';
 
-import { copyIntoBundle, withFsAttribution } from './fs-attribution.js';
+import { copyIntoBundle, withFsAttribution, withFsAttributionSync } from './fs-attribution.js';
 import { packagingInputError } from './packaging-errors.js';
 import { materializeIssue } from './validators/rule-engine/index.js';
 import { isNeverPackagedBasename } from './validators/validation-rules.js';
@@ -98,7 +100,7 @@ async function partitionRegularFiles(
   // caller's sorted order regardless of completion order — `droppedRel` and
   // `nonRegularRel` are rendered into error messages an adopter reads, and a set
   // that reshuffles between runs is a diff for no reason.
-  const copyable = await mapWithConcurrency(matches, STAT_CONCURRENCY, (rel) =>
+  const copyable = await mapWithConcurrency(matches, (rel) =>
     // joinUnderRoot asserts the match stays under absoluteBase, the same guard the
     // copy loop applies before reading it.
     isCopyableFile(safePath.joinUnderRoot(absoluteBase, rel)));
@@ -109,31 +111,6 @@ async function partitionRegularFiles(
     (copyable[i] === true ? regular : nonRegular).push(rel);
   }
   return { regular, nonRegular };
-}
-
-/**
- * Enough parallelism to hide per-call latency, low enough to stay far from the
- * default file-descriptor ceiling even with several skills building at once.
- */
-const STAT_CONCURRENCY = 16;
-
-/** `Promise.all`-shaped, but with at most `limit` calls in flight. Order preserved. */
-async function mapWithConcurrency<T, R>(
-  items: readonly T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results = Array.from({ length: items.length }) as R[];
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < items.length) {
-      const i = next++;
-      // Non-null: `i` is always a valid index, guarded by the loop condition.
-      results[i] = await fn(items[i] as T);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
 }
 
 /**
@@ -183,11 +160,11 @@ async function isCopyableFile(absPath: string): Promise<boolean> {
  * text is kept verbatim inside it, because it is what distinguishes a permission
  * problem from a full disk from a vanished mount.
  */
-async function attributed<T>(
+function attributed<T>(
   entry: SkillFileEntry,
   absPath: string,
   projectRoot: string,
-  work: () => Promise<T>,
+  work: () => T | Promise<T>,
   action?: string,
 ): Promise<T> {
   return withFsAttribution(entrySubject(entry, absPath, projectRoot), 'source', work, action);
@@ -537,13 +514,13 @@ export interface ApplyFilesConfigOptions {
  *
  * @param subject - The `files:` entry, phrased for the refusal's message
  */
-export async function verifyFilesIntegrity(
+export function verifyFilesIntegrity(
   subject: string,
   pairs: { absSource: string; absDest: string }[],
-): Promise<void> {
+): void {
   for (const { absSource, absDest } of pairs) {
-    const srcHash = await withFsAttribution(subject, 'source', async () => fileContentHash(absSource), 'read for verification');
-    const dstHash = await withFsAttribution(subject, 'bundle', async () => destContentHash(absDest), 'verified');
+    const srcHash = withFsAttributionSync(subject, 'source', () => fileContentHash(absSource), 'read for verification');
+    const dstHash = withFsAttributionSync(subject, 'bundle', () => destContentHash(absDest), 'verified');
     if (srcHash !== dstHash) {
       throw new Error(
         `files: integrity check failed — content mismatch at dest: ${toForwardSlash(absDest)}`,
@@ -657,7 +634,7 @@ async function copyNonGlobEntry(
   // errno — and an EXPLICIT entry is the spelling that unambiguously says "ship
   // this file", so the build owes its author an error that names it back. (The two
   // deliberate errors below carry no errno, so `attributed` passes them through.)
-  await attributed(entry, absoluteSource, projectRoot, async () => {
+  await attributed(entry, absoluteSource, projectRoot, () => {
     let sourceStat;
     try {
       sourceStat = statSync(absoluteSource);
@@ -868,7 +845,8 @@ async function copyGlobEntry(
   // verifyDestSet diffs the on-disk subtree against.
   const rels: string[] = [];
 
-  for (const rel of matches) {
+  // In order: bundle writes, where the first failure names the first match.
+  await forEachInOrder(matches, async (rel) => {
     // joinUnderRoot asserts each matched file stays under absoluteBase (read) and
     // that the rebased dest stays under the skill output dir (write) — H1/H2
     // defense-in-depth against a traversal that slipped past earlier guards.
@@ -892,7 +870,7 @@ async function copyGlobEntry(
     copied.push(relDest);
     pairs.push({ absSource, absDest });
     rels.push(toForwardSlash(rel));
-  }
+  });
 
   return { copied, pairs, rels, dropped, skipped: nonRegular };
 }
@@ -1012,8 +990,9 @@ export async function collectPreBuildGlobFindings(
   const allRefused: AllRefusedGlobEntry[] = [];
   const unmatched: UnmatchedGlobEntry[] = [];
   const skipped: DroppedGlobMatch[] = [];
-  for (const entry of filesConfig) {
-    if (!isGlob(entry.source)) continue;
+  // In order: `expandGlobEntry`'s throws must fire in `copyGlobEntry`'s order.
+  await forEachInOrder(filesConfig, async (entry) => {
+    if (!isGlob(entry.source)) return;
     // A '..' segment in the magic remainder is a malformed pattern that
     // `expandGlobEntry` refuses to expand. It is the BUILD's error to raise (and
     // `copyGlobEntry` does); a pre-build gate asking "what would this do?" must not
@@ -1027,7 +1006,7 @@ export async function collectPreBuildGlobFindings(
     // honest fix is a distinct code for a wrong-shaped pattern, or rejecting the
     // pattern in `SkillFileEntrySchema.source` the way `dest` already is — at which
     // point this line becomes defense-in-depth against a config that cannot load.
-    if (hasParentTraversalSegment(globMagicRemainder(entry.source))) continue;
+    if (hasParentTraversalSegment(globMagicRemainder(entry.source))) return;
     const expansion = await expandGlobEntry(entry, projectRoot);
     const absBase = toForwardSlash(expansion.absoluteBase);
     // The two predicates below are `copyGlobEntry`'s two throws, in its order and
@@ -1038,7 +1017,7 @@ export async function collectPreBuildGlobFindings(
     // exactly the misdirection the second error was written to avoid.
     if (expansion.allMatches.length === 0) {
       unmatched.push({ source: entry.source, absBase });
-      continue;
+      return;
     }
     // Reported for EVERY entry that has them, including ones that go on to be
     // `allRefused` below — unlike the per-file drops, which that verdict
@@ -1050,7 +1029,7 @@ export async function collectPreBuildGlobFindings(
       // Matched only non-files. `allRefused` would name the never-package list as
       // the cause, which is not what happened, and its remediation would not work.
       // The `skipped` findings just pushed carry this entry on their own.
-      continue;
+      return;
     }
     if (expansion.kept.length === 0) {
       // Supersedes this entry's per-file drops rather than adding to them: the
@@ -1062,10 +1041,10 @@ export async function collectPreBuildGlobFindings(
         absBase,
         absRefused: expansion.dropped.map((d) => d.absFile),
       });
-      continue;
+      return;
     }
     dropped.push(...expansion.dropped.filter((d) => !shippedDests.has(normalizeRelPath(d.dest))));
-  }
+  });
   return { dropped, allRefused, unmatched, skipped };
 }
 
@@ -1311,14 +1290,15 @@ async function runDeferredIntegrity(
   skillOutputDir: string,
   projectRoot: string,
 ): Promise<void> {
-  for (const { entry, pairs, rels } of pending) {
+  // In order: the first refusal is named in config order.
+  await forEachInOrder(pending, async ({ entry, pairs, rels }) => {
     // Anchored at the ENTRY, not at `pairs[0]`: any of the entry's files can be
     // the one that failed, and naming the first while the errno names another is
     // worse than naming none. The errno itself carries the offending path, and
     // each read is coded by the tree it touched (see `verifyFilesIntegrity`).
     const subject = entrySubject(entry, safePath.resolve(safePath.join(projectRoot, entry.source)), projectRoot);
-    await verifyFilesIntegrity(subject, pairs);
-    if (rels === undefined) continue;
+    verifyFilesIntegrity(subject, pairs);
+    if (rels === undefined) return;
 
     const destRoot = normalizeRelPath(entry.dest);
     const expected = new Set(rels);
@@ -1334,7 +1314,7 @@ async function runDeferredIntegrity(
       () => verifyDestSet(destDir, [...expected], entry.source),
       'verified',
     );
-  }
+  });
 }
 
 export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<AppliedFilesConfig> {
@@ -1344,7 +1324,8 @@ export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<A
   const skipped: DroppedGlobMatch[] = [];
   const pending: PendingIntegrity[] = [];
 
-  for (const fileEntry of opts.filesConfig) {
+  // In order: ordered writes — a later entry may overwrite an earlier dest, and the last one wins.
+  await forEachInOrder(opts.filesConfig, async (fileEntry) => {
     const outcome = isGlob(fileEntry.source)
       ? await applyGlobFileEntry(fileEntry, opts)
       : await applyNonGlobFileEntry(fileEntry, opts, bundledFileSet);
@@ -1352,7 +1333,7 @@ export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<A
     dropped.push(...outcome.dropped);
     skipped.push(...outcome.skipped);
     if (outcome.pending) pending.push(outcome.pending);
-  }
+  });
 
   await runDeferredIntegrity(pending, dests, opts.skillOutputDir, opts.projectRoot);
 

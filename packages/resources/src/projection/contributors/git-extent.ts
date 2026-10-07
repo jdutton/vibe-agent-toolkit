@@ -157,7 +157,7 @@ export class GitExtentContributor implements ExtentContributor {
     const resources = new Map<string, ResourceRow>();
     const memberships = new Map<string, ResourceExtentRow>();
     const realizations: ResourceRealizationRow[] = await Promise.all(
-      absolutePaths.map(async (absolutePath) =>
+      absolutePaths.map((absolutePath) =>
         collectRealization(absolutePath, base.identities.idFor(absolutePath), {
           root: base.root,
           extentId,

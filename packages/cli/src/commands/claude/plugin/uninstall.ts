@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 
 import { findPluginsByPackage, getClaudeUserPaths, parsePluginKey, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { CommandRefusalError, refusalCodeOf } from '../../../utils/command-refusal.js';
@@ -144,11 +144,12 @@ async function pluginUninstallCommand(
 
   try {
     const paths = getClaudeUserPaths();
-    for (const pluginKey of resolvePluginKeys(pluginKeyArg, options, logger)) {
+    // In order: each uninstall is a read-modify-write of the ~/.claude registry files.
+    await forEachInOrder(resolvePluginKeys(pluginKeyArg, options, logger), async (pluginKey) => {
       const result = await uninstallPlugin({ pluginKey, paths, dryRun });
       if (result.warning !== undefined) logger.info(`   ⚠️  ${result.warning}`);
       outcomes.push({ key: pluginKey, removed: result.removed, warning: result.warning });
-    }
+    });
   } catch (error) {
     // Whatever uninstalled before the refusal is still reported.
     endWithRefusal('claude plugin uninstall', refusalCodeOf(error), error, 'yaml', GATE, outcomes.length === 0 ? NOTHING_FINISHED : finishedWork(outcomes, dryRun));

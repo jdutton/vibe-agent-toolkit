@@ -117,7 +117,7 @@ export class MCPGateway {
   /**
    * Start the gateway (to be implemented by transport-specific subclasses)
    */
-  async start(): Promise<void> {
-    throw new Error('start() must be implemented by transport-specific subclass');
+  start(): Promise<void> {
+    return Promise.reject(new Error('start() must be implemented by transport-specific subclass'));
   }
 }

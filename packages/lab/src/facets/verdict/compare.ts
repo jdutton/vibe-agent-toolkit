@@ -42,7 +42,7 @@
 import { readdir } from 'node:fs/promises';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { everyInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
 import { type InstrumentVersion, movedAxes, sameInstrument } from '../../envelope/coordinate.js';
 import type { ReportEnvelope } from '../../envelope/envelope.js';
@@ -729,18 +729,26 @@ export async function readVerdictDirectory(dir: string): Promise<Validated<Repor
     return { ok: false, refusal: `REFUSED: cannot read '${dir}': ${messageOf(error)}` };
   }
   const envelopes: ReportEnvelope<VerdictBody>[] = [];
-  for (const name of names) {
+  let refusal: string | undefined;
+  // In order: the refusal names the first bad file in sorted order.
+  await everyInOrder(names, async (name) => {
     const file = safePath.join(dir, name);
     const read = await readReport(file);
-    if (!read.ok) return read;
+    if (!read.ok) {
+      refusal = read.refusal;
+      return false;
+    }
     if (read.envelope.facet !== VERDICT_FACET) {
-      return { ok: false, refusal: `REFUSED: '${file}' is a '${read.envelope.facet}' report, not a verdict report.` };
+      refusal = `REFUSED: '${file}' is a '${read.envelope.facet}' report, not a verdict report.`;
+      return false;
     }
     const body = VerdictBodySchema.safeParse(read.envelope.body);
     if (!body.success) {
-      return { ok: false, refusal: `REFUSED: '${file}' has a malformed verdict body: ${body.error.issues[0]?.message ?? ''}` };
+      refusal = `REFUSED: '${file}' has a malformed verdict body: ${body.error.issues[0]?.message ?? ''}`;
+      return false;
     }
     envelopes.push({ ...read.envelope, body: body.data });
-  }
-  return { ok: true, value: envelopes };
+    return true;
+  });
+  return refusal === undefined ? { ok: true, value: envelopes } : { ok: false, refusal };
 }

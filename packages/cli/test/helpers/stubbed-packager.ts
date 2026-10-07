@@ -30,7 +30,7 @@ interface PackagerFailureHarness {
  * `errorFor(index)` — or, while `harness.rejectWith` is set, the whole call
  * rejects with it.
  */
-export async function withPackagerFailing(
+export function withPackagerFailing(
   importOriginal: () => Promise<typeof agentSkills>,
   harness: PackagerFailureHarness,
   errorFor: (index: number) => Error,

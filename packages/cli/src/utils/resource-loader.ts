@@ -362,7 +362,7 @@ function populationSourceFor(
  * @param work - Given the source, or `undefined` when the walk stays selected
  * @returns Whatever `work` returned
  */
-export async function withResourcePopulationSource<T>(
+export function withResourcePopulationSource<T>(
   options: {
     root: string;
     gitTracker?: GitTracker | undefined;
@@ -370,25 +370,29 @@ export async function withResourcePopulationSource<T>(
   },
   work: (populationSource: ResourcePopulationSource | undefined) => Promise<T>,
 ): Promise<T> {
-  // Checked before anything is built or opened: an unselected lane must cost
-  // nothing, or every command pays a tracker and a store to decline them.
-  if (!resourcesProjectionCrawlSelected()) {
-    return work(undefined);
-  }
-
-  const gitTracker = options.gitTracker ?? new GitTracker(options.root);
-
-  return withPopulationCache({ root: options.root }, async (cache) => {
-    // Initialized inside the bracket for the reason `loadResourcesWithConfig`
-    // gives at its own call: the store has already taken the snapshot that
-    // answers this tracker's question, so asking git again is a spawn spent
-    // rebuilding a set the process is holding.
-    if (options.gitTracker === undefined) {
-      await gitTracker.initialize();
+  try {
+    // Checked before anything is built or opened: an unselected lane must cost
+    // nothing, or every command pays a tracker and a store to decline them.
+    if (!resourcesProjectionCrawlSelected()) {
+      return work(undefined);
     }
 
-    return work(populationSourceFor(options.root, gitTracker, options.observeExtentSource ?? (() => undefined), cache));
-  });
+    const gitTracker = options.gitTracker ?? new GitTracker(options.root);
+
+    return withPopulationCache({ root: options.root }, async (cache) => {
+      // Initialized inside the bracket for the reason `loadResourcesWithConfig`
+      // gives at its own call: the store has already taken the snapshot that
+      // answers this tracker's question, so asking git again is a spawn spent
+      // rebuilding a set the process is holding.
+      if (options.gitTracker === undefined) {
+        await gitTracker.initialize();
+      }
+
+      return work(populationSourceFor(options.root, gitTracker, options.observeExtentSource ?? (() => undefined), cache));
+    });
+  } catch (error) {
+    return Promise.reject(error as Error);
+  }
 }
 
 /**

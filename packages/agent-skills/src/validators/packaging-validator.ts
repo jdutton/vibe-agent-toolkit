@@ -42,6 +42,7 @@ import {
   findProjectRoot,
   isFilesystemAccessError,
   issueLocation,
+  mapWithConcurrency,
   normalizedTmpdir,
   toForwardSlash,
   toForwardSlashAnyPlatform,
@@ -276,23 +277,25 @@ function validateFilesConfig(
  * through `readTextContent`, which refuses a named pipe unread (`EFTYPE`) — a
  * bare `readFile` blocked on one until a writer appeared, hanging the build.
  */
-async function readBundledMarkdown(
-  file: string,
-  location: string,
-  issues: ValidationIssue[],
-): Promise<string | undefined> {
+async function readBundledMarkdown(file: string, location: string): Promise<BundledMarkdownRead> {
   try {
-    return (await readTextContent(file)).text;
+    return { text: (await readTextContent(file)).text };
   } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
-    issues.push(registryIssueAt(
-      'LINK_TARGET_UNREADABLE',
-      `Linked file ${location} is bundled, but it could not be read: ${(error as Error).message}. ${readRemedyFor(error)}`,
-      location,
-    ));
-    return undefined;
+    // Carried, not thrown: reads run in parallel, and the failure the caller
+    // raises must be the first in bundle order, not the first to finish.
+    if (!isFilesystemAccessError(error)) return { failure: error as Error };
+    return {
+      issue: registryIssueAt(
+        'LINK_TARGET_UNREADABLE',
+        `Linked file ${location} is bundled, but it could not be read: ${(error as Error).message}. ${readRemedyFor(error)}`,
+        location,
+      ),
+    };
   }
 }
+
+/** One bundled markdown read: its text, the finding that replaces it, or a non-filesystem failure. */
+type BundledMarkdownRead = { text: string } | { issue: ValidationIssue } | { failure: Error };
 
 /**
  * Create a validation issue from a code-registry code with a bespoke message,
@@ -615,13 +618,13 @@ export function resetPackagingRegistryCache(): void {
  * @param shared - The batching caller's context, if any
  * @returns A registry whose links are resolved and that covers `skillPath`
  */
-async function registryForSkill(
+function registryForSkill(
   skillPath: string,
   projectRoot: string,
   shared: SkillValidationSharedContext | undefined,
 ): Promise<ResourceRegistry> {
   if (shared?.registry !== undefined && registryCoversSkill(shared.registry, skillPath)) {
-    return shared.registry;
+    return Promise.resolve(shared.registry);
   }
   return crawlAndResolveRegistry(projectRoot, {
     unreadable: shared === undefined ? 'refuse' : shared.unreadable,
@@ -999,24 +1002,31 @@ export async function validateSkillForPackaging(
   // reachable bundled doc for non-portable asset references (the agent reads
   // and copies invocations from reference files too, not just SKILL.md).
   let totalLines = skillLines;
-  for (const bundledFile of bundledFiles) {
-    if (bundledFile.endsWith('.md')) {
-      // Anchor contract: never hand a producer an absolute path as `location`.
-      const bundledLocation = issueLocation(bundledFile, locationRoot);
-      const content = await readBundledMarkdown(bundledFile, bundledLocation, rawIssues);
-      if (content === undefined) continue;
-      totalLines += content.split('\n').length;
-      collectNonPortableAssetReferenceIssues(content, bundledLocation, rawIssues);
-      collectNonPortableCommandIssues(content, bundledLocation, rawIssues);
-      // Whole-file bytes, frontmatter included — safe because the detector
-      // strips leading frontmatter itself. It did not always, and this lane was
-      // the half of the invariant nobody was enforcing: a bundled file carrying
-      // `allowed-tools: [mcp__x__do_thing]` seeded the vocabulary the SKILL.md
-      // lane's comment (below) says must come from prose, then fired on its own
-      // body. Pinned by "does not let a bundled file's allowed-tools frontmatter
-      // supply the vocabulary" in packaging-validator.test.ts.
-      collectUnqualifiedMcpToolIssues(content, bundledLocation, rawIssues);
+  const bundledMarkdown = bundledFiles.filter((file) => file.endsWith('.md'));
+  // Anchor contract: never hand a producer an absolute path as `location`.
+  const bundledLocations = bundledMarkdown.map((file) => issueLocation(file, locationRoot));
+  // Independent reads, folded below in bundle order.
+  const bundledReads = await mapWithConcurrency(bundledMarkdown, (file, index) =>
+    readBundledMarkdown(file, bundledLocations[index] ?? ''));
+  for (const [index, read] of bundledReads.entries()) {
+    const bundledLocation = bundledLocations[index] ?? '';
+    if ('failure' in read) throw read.failure;
+    if ('issue' in read) {
+      rawIssues.push(read.issue);
+      continue;
     }
+    const content = read.text;
+    totalLines += content.split('\n').length;
+    collectNonPortableAssetReferenceIssues(content, bundledLocation, rawIssues);
+    collectNonPortableCommandIssues(content, bundledLocation, rawIssues);
+    // Whole-file bytes, frontmatter included — safe because the detector
+    // strips leading frontmatter itself. It did not always, and this lane was
+    // the half of the invariant nobody was enforcing: a bundled file carrying
+    // `allowed-tools: [mcp__x__do_thing]` seeded the vocabulary the SKILL.md
+    // lane's comment (below) says must come from prose, then fired on its own
+    // body. Pinned by "does not let a bundled file's allowed-tools frontmatter
+    // supply the vocabulary" in packaging-validator.test.ts.
+    collectUnqualifiedMcpToolIssues(content, bundledLocation, rawIssues);
   }
 
   const excludedDetails = deduplicateExcludedReferences(excludedReferences, skillPath);

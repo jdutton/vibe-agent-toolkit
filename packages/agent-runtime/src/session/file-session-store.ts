@@ -8,7 +8,7 @@
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 
-import { direntKindFollowing, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, forEachInOrder, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import { SessionNotFoundError } from './errors.js';
 import {
@@ -141,7 +141,8 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
     const sessionIds = await this.list();
     let cleaned = 0;
 
-    for (const id of sessionIds) {
+    // One session at a time: `load` rewrites the file it reads, and `delete` removes it.
+    await forEachInOrder(sessionIds, async (id) => {
       try {
         const session = await this.load(id);
         if (isSessionExpired(session)) {
@@ -153,7 +154,7 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
           cleaned++;
         }
       }
-    }
+    });
 
     return cleaned;
   }

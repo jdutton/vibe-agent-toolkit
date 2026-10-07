@@ -182,12 +182,12 @@ export async function removeResolvedTempDirs(
   tempDirs: readonly string[],
   logger: { warn: (message: string) => void },
 ): Promise<void> {
-  for (const dir of tempDirs) {
-    try {
-      await rm(dir, { recursive: true, force: true });
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      logger.warn(`Could not remove temp directory ${toForwardSlash(dir)}: ${reason}`);
-    }
+  // Independent removals; what stays is named in the order the dirs were minted.
+  const outcomes = await Promise.allSettled(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+  for (const [index, outcome] of outcomes.entries()) {
+    if (outcome.status === 'fulfilled') continue;
+    const error: unknown = outcome.reason;
+    const reason = error instanceof Error ? error.message : String(error);
+    logger.warn(`Could not remove temp directory ${toForwardSlash(tempDirs[index] ?? '')}: ${reason}`);
   }
 }

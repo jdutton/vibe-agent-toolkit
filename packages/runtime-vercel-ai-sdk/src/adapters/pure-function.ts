@@ -49,9 +49,13 @@ export function convertPureFunctionToTool<TInput, TOutput>(
     description: manifest.description,
     inputSchema: inputSchema,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK boundary: the Vercel AI SDK's execute signature is untyped here; the schema validates at runtime
-    execute: async (args: any, _options: any) => {
+    execute: (args: any, _options: any) => {
       // The schema validates the input at runtime
-      return agent.execute(args as TInput);
+      try {
+        return Promise.resolve(agent.execute(args as TInput));
+      } catch (error) {
+        return Promise.reject(error as Error);
+      }
     },
   } as unknown as Parameters<typeof tool>[0]);
 

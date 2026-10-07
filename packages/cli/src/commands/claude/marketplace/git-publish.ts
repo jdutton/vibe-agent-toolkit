@@ -202,7 +202,7 @@ export function deliverCommit(
  * 4. Create a new commit on top of the branch history
  * 5. Deliver: dry-run (preview), no-push (local branch), or push to remote
  */
-export async function publishToGitBranch(options: PublishGitOptions): Promise<void> {
+export function publishToGitBranch(options: PublishGitOptions): void {
   const { publishDir, branch, commitMessage, force, dryRun, logger } = options;
 
   const cwd = process.cwd();

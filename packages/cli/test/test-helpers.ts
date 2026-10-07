@@ -22,7 +22,7 @@ export const binPath = safePath.resolve(__dirname, '../dist/bin.js');
  * Run `vat audit` validation directly against a target path (no CLI subprocess).
  * options.recursive defaults to true (recursive by default); set to false to disable.
  */
-export async function runAudit(
+export function runAudit(
   targetPath: string,
   options: AuditCommandOptions = {}
 ): ReturnType<typeof getValidationResults> {

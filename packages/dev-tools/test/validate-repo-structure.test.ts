@@ -375,12 +375,12 @@ describe('readTrackedFile — what an unreadable tracked file does to the gate',
 });
 
 describe('walkDirectory — a directory the walk could not list', () => {
-  it('is a no-op over a directory that does not exist', async () => {
+  it('is a no-op over a directory that does not exist', () => {
     const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'walk-dir-'));
     const seen: string[] = [];
 
-    await walkDirectory(safePath.join(root, 'absent'), 'absent', {
-      onFile: async ({ relPath }) => {
+    walkDirectory(safePath.join(root, 'absent'), 'absent', {
+      onFile: ({ relPath }) => {
         seen.push(relPath);
       },
     });
@@ -388,7 +388,7 @@ describe('walkDirectory — a directory the walk could not list', () => {
     expect(seen).toEqual([]);
   });
 
-  it.skipIf(CANNOT_DENY_READS)('throws rather than reporting the directory as empty when the listing is refused', async () => {
+  it.skipIf(CANNOT_DENY_READS)('throws rather than reporting the directory as empty when the listing is refused', () => {
     const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'walk-dir-'));
     const locked = safePath.join(root, 'locked');
     mkdirSyncReal(locked, { recursive: true });
@@ -396,7 +396,7 @@ describe('walkDirectory — a directory the walk could not list', () => {
     chmodSync(locked, 0o000);
 
     try {
-      await expect(walkDirectory(locked, 'locked', {})).rejects.toMatchObject({ code: 'EACCES' });
+      expect(() => walkDirectory(locked, 'locked', {})).toThrow(expect.objectContaining({ code: 'EACCES' }));
     } finally {
       chmodSync(locked, 0o700);
     }

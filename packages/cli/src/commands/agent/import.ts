@@ -24,10 +24,10 @@ const GATE: Gate = { strict: false };
 /** One skill per run. */
 const SKILLS_IMPORTED = 1;
 
-export async function importCommand(
+export function importCommand(
   skillPath: string,
   options: ImportCommandOptions
-): Promise<void> {
+): void {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
@@ -44,7 +44,7 @@ export async function importCommand(
       importOptions.outputPath = safePath.resolve(options.output);
     }
 
-    const result = await importSkillToAgent(importOptions);
+    const result = importSkillToAgent(importOptions);
 
     // The library names the refusal where it was raised; nothing was written.
     if (!result.success) throw new CommandRefusalError(result.refusal, result.error);

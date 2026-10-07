@@ -555,7 +555,7 @@ export class ParseDispatcher {
    * @param keyed - The confirmed read, narrowed to a kind that has a parser
    * @returns The parse, identical either way
    */
-  async parse(keyed: ParsableContent): Promise<ParseResult> {
+  parse(keyed: ParsableContent): Promise<ParseResult> {
     const seen = this.#observed[keyed.parserKind];
     seen.documents += 1;
     seen.bytes += keyed.byteLength;
@@ -981,7 +981,8 @@ export async function driveInOrder<Target, Prepared>(
     }
   }
 
-  while (emitted < targets.length) {
+  /** One round: emit what is ready, claim more, wait for the next settle, repeat. */
+  async function pump(): Promise<void> {
     // Emit as far as the head allows BEFORE claiming anything more. The order of
     // these two is what keeps width 1 strictly sequential: claiming first would
     // let the look-ahead take the next target while the current one was still
@@ -994,11 +995,14 @@ export async function driveInOrder<Target, Prepared>(
       emit(head.prepared);
       window.considerActivation(() => remainingParsable(claimed));
     }
-    if (emitted >= targets.length) break;
+    if (emitted >= targets.length) return;
 
     claim();
     // `claim` has just taken the head if nothing else had — both bounds are
     // slack when nothing is outstanding — so something is always in flight here.
     await Promise.race(inFlight.values());
+    return pump();
   }
+
+  if (emitted < targets.length) await pump();
 }

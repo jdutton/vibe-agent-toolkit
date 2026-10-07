@@ -50,12 +50,14 @@ import {
 import {
   direntKindFollowingSync,
   findProjectRoot,
+  forEachInOrder,
   isFilesystemAccessError,
   isPathAbsentError,
   isGlob,
   isSingleFsSegment,
   issueLocation,
   isUnderRoot,
+  mapInOrder,
   normalizePath,
   resolveAssetReference,
   safePath,
@@ -570,26 +572,25 @@ export async function packageSkills(
   const registry = await createProjectRegistry(projectRoot, runOptions);
 
   // 2. Package each skill against the shared registry
-  const outcomes: SkillPackageOutcome[] = [];
-  for (const { skillPath, options } of skills) {
+  // In order: each build writes against the shared registry, and outcomes and logs follow input order.
+  return mapInOrder(skills, async ({ skillPath, options }): Promise<SkillPackageOutcome> => {
     try {
       const result = await packageSkill(skillPath, {
         ...options,
         registry,
         allowLedger,
       });
-      outcomes.push({ status: 'built', skillPath, result });
+      return { status: 'built', skillPath, result };
     } catch (error) {
       // Not swallowed: the error is carried on the outcome so the caller reports
       // WHICH skill failed and why, and gates the run's exit code on it.
-      outcomes.push({
+      return {
         status: 'failed',
         skillPath,
         error: error instanceof Error ? error : new Error(String(error)),
-      });
+      };
     }
-  }
-  return outcomes;
+  });
 }
 
 /**
@@ -885,7 +886,7 @@ export async function packageSkill(
   // A SKILL.md is a skill definition marker — it must only exist at the root.
   // If another skill's SKILL.md was bundled as a resource, it creates duplicate
   // skill definitions that break marketplace sync and confuse skill consumers.
-  await validateNoNestedSkillMd(outputPath, skillMetadata.name);
+  validateNoNestedSkillMd(outputPath, skillMetadata.name);
 
   // 13b. Post-build integrity checks (unreferenced files, broken packaged links).
   //
@@ -1113,7 +1114,7 @@ function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger
  * it retracts that argument for every lane sharing the memo; this is not a
  * one-lane fix.
  */
-async function runPostBuildValidation(
+function runPostBuildValidation(
   outputPath: string,
   validation: ValidationConfig | undefined,
   allowLedger: AllowUsageLedger,
@@ -1274,24 +1275,30 @@ async function loadCollectionSchemas(
   const issues: ValidationIssue[] = [];
   const collections = config?.resources?.collections;
   if (!collections) return { schemas, issues };
-  for (const [collectionId, collectionConfig] of Object.entries(collections)) {
+  // Independent loads, each catching its own error; folded afterwards in collection order.
+  const loaded = await Promise.all(Object.entries(collections).map(async ([collectionId, collectionConfig]) => {
     const schemaPath = collectionConfig.validation?.frontmatterSchema;
-    if (schemaPath === undefined) continue;
+    if (schemaPath === undefined) return undefined;
     try {
       const resolvedPath = resolveAssetReference(schemaPath, baseDir);
       const content = await readFile(resolvedPath, 'utf-8');
-      schemas.set(collectionId, JSON.parse(content) as object);
+      return { collectionId, schema: JSON.parse(content) as object };
     } catch (error) {
-      issues.push(
-        materializeIssue('FRONTMATTER_SCHEMA_ERROR', {
+      return {
+        issue: materializeIssue('FRONTMATTER_SCHEMA_ERROR', {
           location: schemaPath,
           message:
             `Collection "${collectionId}" declares frontmatterSchema "${schemaPath}", which could not ` +
             `be loaded: ${error instanceof Error ? error.message : String(error)}. Frontmatter ` +
             `URI-references in this collection were NOT rewritten for the packaged output.`,
         }),
-      );
+      };
     }
+  }));
+  for (const entry of loaded) {
+    if (entry === undefined) continue;
+    if ('issue' in entry) issues.push(entry.issue);
+    else schemas.set(entry.collectionId, entry.schema);
   }
   return { schemas, issues };
 }
@@ -1355,7 +1362,8 @@ async function registerBundledAssets(
   if (bundledAssets.length === 0) {
     return { collidedAssets, collisions };
   }
-  for (const assetPath of bundledAssets) {
+  // In order: `addResource` mutates the shared registry, and which asset collides depends on order.
+  await forEachInOrder(bundledAssets, async (assetPath) => {
     try {
       // `addResource` parses the file, so it READS it — which makes this the first
       // place a build touches a linked asset, and the place an unreadable one
@@ -1386,7 +1394,7 @@ async function registerBundledAssets(
         throw error;
       }
     }
-  }
+  });
   registry.resolveLinks();
   return { collidedAssets, collisions };
 }
@@ -2012,15 +2020,15 @@ async function copyAndRewriteFiles(
     await copyAndRewriteFile(skillPath, skillTargetPath, ctx, 'entry file');
   }
 
-  // Copy all linked files
-  for (const linkedFile of bundledFiles) {
+  // Copy all linked files, in order: bundle writes, where the first failure stops the build.
+  await forEachInOrder(bundledFiles, async (linkedFile) => {
     const targetPath = ctx.pathMap.get(toForwardSlash(linkedFile));
     if (targetPath === undefined) {
-      continue;
+      return;
     }
 
     await copyAndRewriteFile(linkedFile, targetPath, ctx, 'linked file');
-  }
+  });
 }
 
 /**
@@ -2364,7 +2372,7 @@ function buildHrefRewriter(
  * This should never happen because the link graph walker excludes SKILL.md targets,
  * but this check acts as a safety net in case files are introduced through other means.
  */
-async function validateNoNestedSkillMd(outputPath: string, skillName: string): Promise<void> {
+function validateNoNestedSkillMd(outputPath: string, skillName: string): void {
   const entries = readdirSync(outputPath, { recursive: true, withFileTypes: true });
   const nestedSkillMds = entries
     // Followed: a symlinked nested SKILL.md is a nested skill marker all the same.

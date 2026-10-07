@@ -285,10 +285,10 @@ export function refuseAsyncFs(
 ): () => void {
   const original = (fs[method] as (...args: unknown[]) => Promise<unknown>).bind(fs);
   const refused = toForwardSlash(targetPath);
-  republish(fs, method, async (target: unknown, ...rest: unknown[]): Promise<unknown> => {
+  republish(fs, method, (target: unknown, ...rest: unknown[]): Promise<unknown> => {
     if (toForwardSlash(String(target)) === refused) {
       beforeRefusing?.();
-      throw errnoError(code, method, String(target));
+      return Promise.reject(errnoError(code, method, String(target)));
     }
     return original(target, ...rest);
   });
@@ -323,7 +323,7 @@ export async function withSyncFsRefused<T>(
  * @param body - Runs while the refusal is in force; may be async
  * @returns Whatever `body` returned
  */
-export async function withReaddirSyncRefused<T>(
+export function withReaddirSyncRefused<T>(
   directory: string,
   code: string,
   body: () => T | Promise<T>,

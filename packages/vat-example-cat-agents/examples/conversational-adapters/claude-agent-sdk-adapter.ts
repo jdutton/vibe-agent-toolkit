@@ -26,7 +26,7 @@ export function createClaudeAgentSDKAdapter(): ConversationalRuntimeAdapter<
 
   return {
     name: 'Claude Agent SDK',
-    convertToFunction: async (userMessage: string, sessionContext: TransportSessionContext<BreedAdvisorState>) => {
+    convertToFunction: (userMessage: string, sessionContext: TransportSessionContext<BreedAdvisorState>) => {
       // Create conversation context using shared helper
       const agentContext = createAdapterContext(sessionContext.conversationHistory, async (messages: Message[]) => {
         // Format messages using shared helper

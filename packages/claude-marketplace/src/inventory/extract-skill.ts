@@ -117,7 +117,7 @@ export type GitTrackerSource = (projectRoot: string) => Promise<GitTracker | und
  * so at the call site, in a form that greps, instead of arriving in that state
  * by leaving an argument off.
  */
-export const NO_GIT_TRACKER: GitTrackerSource = async () => undefined;
+export const NO_GIT_TRACKER: GitTrackerSource = () => Promise.resolve(undefined);
 
 /**
  * What {@link extractClaudeSkillInventory} needs besides the skill path.

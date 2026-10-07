@@ -1420,7 +1420,7 @@ type SupervisedEnding =
  * @param options.budgetSecs - The bound, in seconds
  * @returns What to publish, and with what exit code
  */
-async function superviseCheckRun(options: {
+function superviseCheckRun(options: {
   pathArg: string | undefined;
   options: CheckOptions;
   budgetSecs: number;
@@ -1626,7 +1626,7 @@ async function runChecksHere(
  *   outside this process, or undefined when nothing is watching
  * @returns The findings and the provenance of the population behind them
  */
-async function runOutcome(options: {
+function runOutcome(options: {
   root: string;
   checks: Readonly<Record<string, ResourceCheck>>;
   only: string | undefined;

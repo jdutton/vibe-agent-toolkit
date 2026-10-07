@@ -161,6 +161,20 @@ export { parseWholeNumberAtLeast } from './numeric-args.js';
 // them turned off for `=false`.
 export { parseEnvBoolean } from './env-flag.js';
 
+// Ordered (`forEachInOrder`, `mapInOrder`, `everyInOrder`) and bounded-parallel
+// (`mapWithConcurrency`, `mapConcurrentFailingInOrder`) async iteration — what
+// replaces `await` in a loop, which `no-await-in-loop` refuses repo-wide — and
+// `promised`, a synchronous body behind a Promise-shaped API.
+export {
+  everyInOrder,
+  forEachInOrder,
+  FS_CONCURRENCY,
+  mapConcurrentFailingInOrder,
+  mapInOrder,
+  mapWithConcurrency,
+  promised,
+} from './in-order.js';
+
 // Machine-independent string ordering for hashed/serialized output — never `localeCompare`.
 export { compareCodeUnits } from './compare-code-units.js';
 

@@ -1499,62 +1499,69 @@ function makeIntegrityPair(dstName = 'dst.txt'): { srcFile: string; dstFile: str
 describe('verifyFilesIntegrity', () => {
   const SUBJECT = "files: source 'src.txt'";
 
+  const integrityError = (absSource: string, absDest: string): unknown => {
+    try {
+      verifyFilesIntegrity(SUBJECT, [{ absSource, absDest }]);
+    } catch (error) {
+      return error;
+    }
+    throw new Error('verifyFilesIntegrity did not throw');
+  };
+
   afterEach(() => {
     for (const dir of APPLY_TMP_DIRS.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
-  it('passes when all dest files match their sources byte-for-byte', async () => {
+  it('passes when all dest files match their sources byte-for-byte', () => {
     const { srcFile, dstFile } = makeIntegrityPair();
     writeFileSync(srcFile, 'hello');
     writeFileSync(dstFile, 'hello');
 
-    await expect(verifyFilesIntegrity(SUBJECT, [{ absSource: srcFile, absDest: dstFile }])).resolves.toBeUndefined();
+    expect(() => verifyFilesIntegrity(SUBJECT, [{ absSource: srcFile, absDest: dstFile }])).not.toThrow();
   });
 
-  it('throws when dest content differs from source', async () => {
+  it('throws when dest content differs from source', () => {
     const { srcFile, dstFile } = makeIntegrityPair();
     writeFileSync(srcFile, 'original');
     writeFileSync(dstFile, 'tampered');
 
-    await expect(verifyFilesIntegrity(SUBJECT, [{ absSource: srcFile, absDest: dstFile }])).rejects.toThrow(
+    expect(() => verifyFilesIntegrity(SUBJECT, [{ absSource: srcFile, absDest: dstFile }])).toThrow(
       toForwardSlash(dstFile),
     );
   });
 
-  it('throws when dest file is missing', async () => {
+  it('throws when dest file is missing', () => {
     const { srcFile, dstFile } = makeIntegrityPair('missing.txt');
     writeFileSync(srcFile, 'data');
 
-    await expect(verifyFilesIntegrity(SUBJECT, [{ absSource: srcFile, absDest: dstFile }])).rejects.toThrow(
+    expect(() => verifyFilesIntegrity(SUBJECT, [{ absSource: srcFile, absDest: dstFile }])).toThrow(
       toForwardSlash(dstFile),
     );
   });
 
   // The check reads BOTH trees, so each read is coded by the tree it touched: an
   // unreadable dest is the build's output, never the skill's source.
-  it.skipIf(CANNOT_DENY_READS)('codes a dest it cannot read as the output\'s refusal, not the skill\'s', async () => {
+  it.skipIf(CANNOT_DENY_READS)('codes a dest it cannot read as the output\'s refusal, not the skill\'s', () => {
     const { srcFile, dstFile } = makeIntegrityPair();
     writeFileSync(srcFile, 'same');
     writeFileSync(dstFile, 'same');
     chmodSync(dstFile, 0o000);
 
     try {
-      await expect(verifyFilesIntegrity(SUBJECT, [{ absSource: srcFile, absDest: dstFile }]))
-        .rejects.toMatchObject({ code: SKILL_PACKAGING_OUTPUT_FAILED_CODE });
+      expect(integrityError(srcFile, dstFile)).toMatchObject({ code: SKILL_PACKAGING_OUTPUT_FAILED_CODE });
     } finally {
       chmodSync(dstFile, 0o644);
     }
   });
 
-  it.skipIf(CANNOT_DENY_READS)('codes a source it cannot read as the skill\'s refusal', async () => {
+  it.skipIf(CANNOT_DENY_READS)('codes a source it cannot read as the skill\'s refusal', () => {
     const { srcFile, dstFile } = makeIntegrityPair();
     writeFileSync(srcFile, 'same');
     writeFileSync(dstFile, 'same');
     chmodSync(srcFile, 0o000);
 
     try {
-      await expect(verifyFilesIntegrity(SUBJECT, [{ absSource: srcFile, absDest: dstFile }]))
-        .rejects.toMatchObject({ code: SKILL_PACKAGING_INPUT_INVALID_CODE });
+      expect(integrityError(srcFile, dstFile)).toMatchObject({ code: SKILL_PACKAGING_INPUT_INVALID_CODE });
     } finally {
       chmodSync(srcFile, 0o644);
     }

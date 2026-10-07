@@ -21,7 +21,7 @@ import { basename } from 'node:path';
 import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import { codedUserStateWrite, getClaudeUserPaths, installPlugin, PLUGIN_KEY_INVALID_CODE, replaceDirectory, requirePluginInstallNames, requirePluginSource, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import { buildReport, createRegistryIssue, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, isPathAbsentError, isSingleFsSegment, isVatError, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, forEachInOrder, isPathAbsentError, isSingleFsSegment, isVatError, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
@@ -521,9 +521,9 @@ async function handleNpmInstall(source: string, run: InstallRun): Promise<void> 
 
 /** Copy each declared skill's `dist/skills/<name>` build into the skills directory. */
 async function installDeclaredSkills(run: InstallRun, rootDir: string, skillNames: readonly string[]): Promise<void> {
-  for (const skillName of skillNames) {
-    await installSkillFromPath(run, safePath.join(rootDir, 'dist', 'skills', skillNameToFsPath(skillName)), skillName);
-  }
+  // In order: each install writes under ~/.claude, and the first refusal stops the run.
+  await forEachInOrder(skillNames, (skillName) =>
+    installSkillFromPath(run, safePath.join(rootDir, 'dist', 'skills', skillNameToFsPath(skillName)), skillName));
 }
 
 /**
@@ -754,9 +754,8 @@ async function symlinkPluginSkills(run: InstallRun, ctx: DevPluginContext): Prom
   // Followed: a skill directory that is itself a link is still a skill to link.
   const skillEntries = readdirSync(srcSkillsDir, { withFileTypes: true })
     .filter(d => direntKindFollowingSync(srcSkillsDir, d) === 'directory');
-  for (const skillEntry of skillEntries) {
-    await symlinkDevSkill(run, ctx, skillEntry.name, destSkillsDir);
-  }
+  // In order: each link writes under ~/.claude, and the dry-run log follows the listing.
+  await forEachInOrder(skillEntries, (skillEntry) => symlinkDevSkill(run, ctx, skillEntry.name, destSkillsDir));
 }
 
 /**
@@ -805,8 +804,9 @@ async function devInstallMarketplace(
   run.logger.info(`   Marketplace: ${mpName} → ${destMpDir}`);
 
   const pluginsDir = safePath.join(srcMpDir, 'plugins');
-  for (const pluginName of listSubdirectories(pluginsDir)) {
-    await devInstallPlugin(run, {
+  // In order: each plugin registers by read-modify-write of the ~/.claude registry files.
+  await forEachInOrder(listSubdirectories(pluginsDir), (pluginName) =>
+    devInstallPlugin(run, {
       mpName,
       pluginName,
       srcPluginDir: safePath.join(pluginsDir, pluginName),
@@ -815,8 +815,7 @@ async function devInstallMarketplace(
       version: packageInfo.version,
       cwd: packageInfo.cwd,
       paths,
-    });
-  }
+    }));
 }
 
 /**
@@ -867,9 +866,9 @@ async function handleDevInstall(run: InstallRun): Promise<void> {
   const paths = getClaudeUserPaths();
   const replaced = planReplaces(packageJson.vat?.replaces, marketplacesDir, marketplaceNames, paths);
 
-  for (const mpName of marketplaceNames) {
-    await devInstallMarketplace(run, mpName, safePath.join(marketplacesDir, mpName), packageInfo);
-  }
+  // In order: each marketplace registers by read-modify-write of the ~/.claude registry files.
+  await forEachInOrder(marketplaceNames, (mpName) =>
+    devInstallMarketplace(run, mpName, safePath.join(marketplacesDir, mpName), packageInfo));
 
   // Only once the new tree is in place: a failed install leaves what it replaces.
   await applyReplaces(replaced, paths, run.dryRun, logger);
@@ -1002,25 +1001,27 @@ export async function applyReplaces(
   dryRun: boolean,
   logger: Logger,
 ): Promise<void> {
-  for (const pluginKey of plan.pluginKeys) {
+  // In order: each uninstall is a read-modify-write of the ~/.claude registry files.
+  await forEachInOrder(plan.pluginKeys, async (pluginKey) => {
     if (dryRun) {
       logger.info(`   [dry-run] Would uninstall old plugin: ${pluginKey}`);
-      continue;
+      return;
     }
     logger.info(`   Removing old plugin: ${pluginKey}`);
     await uninstallPlugin({ pluginKey, paths, dryRun: false });
-  }
-  for (const skillPath of plan.flatSkillPaths) {
+  });
+  // In order: the first removal the OS refuses stops the run, with the log naming each one before it.
+  await forEachInOrder(plan.flatSkillPaths, async (skillPath) => {
     if (dryRun) {
       logger.info(`   [dry-run] Would remove legacy flat skill: ${toForwardSlash(skillPath)}`);
-      continue;
+      return;
     }
     logger.info(`   Removing legacy flat skill: ${toForwardSlash(skillPath)}`);
     await codedUserStateWrite(
       `remove the legacy flat skill ${skillPath} this package replaces (the package itself is installed)`,
       () => rm(skillPath, { recursive: true, force: true }),
     );
-  }
+  });
 }
 
 /**
@@ -1053,9 +1054,9 @@ async function copyMarketplace(
     }
   }
   if (dryRun) return;
-  for (const pluginName of pluginNames) {
-    await registerPlugin(run, { ...ctx, pluginName, pluginDir: safePath.join(destMpDir, 'plugins', pluginName) }, ctx.paths);
-  }
+  // In order: each registration is a read-modify-write of the ~/.claude registry files.
+  await forEachInOrder(pluginNames, (pluginName) =>
+    registerPlugin(run, { ...ctx, pluginName, pluginDir: safePath.join(destMpDir, 'plugins', pluginName) }, ctx.paths));
 }
 
 /**
@@ -1083,9 +1084,9 @@ async function copyPluginTree(
   // that failed partway.
   for (const mpName of marketplaceNames) requirePluginSource(safePath.join(marketplacesDir, mpName));
 
-  for (const mpName of marketplaceNames) {
-    await copyMarketplace(run, safePath.join(marketplacesDir, mpName), { mpName, version, packageName: packageJson.name, paths });
-  }
+  // In order: each marketplace registers by read-modify-write of the ~/.claude registry files.
+  await forEachInOrder(marketplaceNames, (mpName) =>
+    copyMarketplace(run, safePath.join(marketplacesDir, mpName), { mpName, version, packageName: packageJson.name, paths }));
 
   // Only once the new tree is in place: a failed copy leaves what it replaces.
   await applyReplaces(replaced, paths, dryRun, logger);

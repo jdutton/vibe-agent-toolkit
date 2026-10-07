@@ -24,7 +24,7 @@ export async function createConnectedClient(port: number): Promise<WebSocket> {
 /**
  * Helper to wait for a single WebSocket response.
  */
-export async function waitForResponse(client: WebSocket): Promise<WebSocketOutgoingMessage> {
+export function waitForResponse(client: WebSocket): Promise<WebSocketOutgoingMessage> {
   return new Promise<WebSocketOutgoingMessage>((resolve) => {
     client.on('message', (data: Buffer) => {
       const response = JSON.parse(data.toString()) as WebSocketOutgoingMessage;
@@ -36,7 +36,7 @@ export async function waitForResponse(client: WebSocket): Promise<WebSocketOutgo
 /**
  * Helper to wait for client close event.
  */
-export async function waitForClose(client: WebSocket): Promise<void> {
+export function waitForClose(client: WebSocket): Promise<void> {
   return new Promise<void>((resolve) => {
     client.on('close', () => {
       resolve();

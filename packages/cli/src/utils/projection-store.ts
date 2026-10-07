@@ -559,35 +559,39 @@ async function runOwnedScope<T>(
  * @param work - Given the cache, or `undefined` when there is none to give
  * @returns Whatever `work` returned
  */
-export async function withPopulationCache<T>(
+export function withPopulationCache<T>(
   options: { root: string },
   work: (cache: PopulationCache | undefined) => Promise<T>,
 ): Promise<T> {
-  const active = populationScope.getStore();
-  if (active !== undefined) {
-    const joinable = joinableCache(active.opened, options.root);
-    // 🪤 No new git bracket on either path: an inner scope stays inside the
-    // outer one's memo, which is where the deduplication lives. A fresh bracket
-    // here would start an empty memo and re-snapshot the same repository — a
-    // dedupe that does nothing while looking exactly like one that works.
-    return joinable === undefined ? runOwnedScope(options, work) : work(joinable.cache);
+  try {
+    const active = populationScope.getStore();
+    if (active !== undefined) {
+      const joinable = joinableCache(active.opened, options.root);
+      // 🪤 No new git bracket on either path: an inner scope stays inside the
+      // outer one's memo, which is where the deduplication lives. A fresh bracket
+      // here would start an empty memo and re-snapshot the same repository — a
+      // dedupe that does nothing while looking exactly like one that works.
+      return joinable === undefined ? runOwnedScope(options, work) : work(joinable.cache);
+    }
+    // ONE git snapshot for the whole scope, and this is the level that gets it:
+    // `openPopulationCache` below takes one to derive the store key, and the crawl
+    // that runs inside `work` takes another to enumerate the extent — same
+    // repository, sequentially, ~195 ms and ~159 ms measured on a large monorepo.
+    //
+    // The correctness half matters more than the saving. Taken separately, a
+    // working-tree edit landing between them makes the two snapshots DIFFERENT
+    // answers, and the extent from the second is then filed under the key from the
+    // first: a cache entry whose key does not describe its contents, written
+    // silently. The bracket closes that race rather than merely deduplicating.
+    //
+    // Opened here rather than around either consumer because it must enclose BOTH
+    // — a bracket opened deeper than one of them dedupes nothing while looking
+    // exactly like a bracket that works. Every CLI entry into the projection lane
+    // (`inventory`, `resource-loader`'s two) reaches the store through this scope,
+    // and `vat validate`'s orchestrator holds one OUTSIDE all of them, which the
+    // nesting above is what makes safe.
+    return withGitSnapshotCache(() => runOwnedScope(options, work));
+  } catch (error) {
+    return Promise.reject(error as Error);
   }
-  // ONE git snapshot for the whole scope, and this is the level that gets it:
-  // `openPopulationCache` below takes one to derive the store key, and the crawl
-  // that runs inside `work` takes another to enumerate the extent — same
-  // repository, sequentially, ~195 ms and ~159 ms measured on a large monorepo.
-  //
-  // The correctness half matters more than the saving. Taken separately, a
-  // working-tree edit landing between them makes the two snapshots DIFFERENT
-  // answers, and the extent from the second is then filed under the key from the
-  // first: a cache entry whose key does not describe its contents, written
-  // silently. The bracket closes that race rather than merely deduplicating.
-  //
-  // Opened here rather than around either consumer because it must enclose BOTH
-  // — a bracket opened deeper than one of them dedupes nothing while looking
-  // exactly like a bracket that works. Every CLI entry into the projection lane
-  // (`inventory`, `resource-loader`'s two) reaches the store through this scope,
-  // and `vat validate`'s orchestrator holds one OUTSIDE all of them, which the
-  // nesting above is what makes safe.
-  return withGitSnapshotCache(() => runOwnedScope(options, work));
 }

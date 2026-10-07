@@ -18,7 +18,7 @@
  */
 
 import { vatCacheNamespace } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import {
@@ -155,7 +155,8 @@ async function captureLanes(request: CaptureRequest, corpusRoot: string): Promis
   const entries: LaneManifestEntry[] = [];
   const enumeratedPaths = new Set<string>();
 
-  for (const lane of orderedLanes(request.lanes ?? ALL_LANE_IDS)) {
+  // In order: a measurement, and lanes must not overlap each other.
+  await forEachInOrder(orderedLanes(request.lanes ?? ALL_LANE_IDS), async (lane) => {
     const snapshot = await captureEnumerationSnapshot(lane, {
       corpusRoot,
       corpus: request.corpusLabel,
@@ -189,7 +190,7 @@ async function captureLanes(request: CaptureRequest, corpusRoot: string): Promis
       restatementDriftCount: snapshot.restatementDrift.length,
       buildError: snapshot.buildError ?? null,
     });
-  }
+  });
 
   return { entries, artifacts, warnings, enumeratedPaths: [...enumeratedPaths] };
 }

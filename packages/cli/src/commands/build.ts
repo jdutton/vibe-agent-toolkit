@@ -18,7 +18,7 @@ import {
   type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowing, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, everyInOrder, mapConcurrentFailingInOrder, mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { marksOperandRefusalByHand } from '../command-tree.js';
@@ -150,43 +150,40 @@ async function collectShippedSkillDirs(marketplacesDir: string): Promise<string[
     return skillDirs;
   }
 
+  // Read-only. Only the leaf level fans out (bounded); nesting the bound would
+  // multiply it, so the outer levels walk in listing order.
   const marketplaceEntries = await readdir(marketplacesDir, { withFileTypes: true });
-  for (const marketplaceEntry of marketplaceEntries) {
-    if ((await direntKindFollowing(marketplacesDir, marketplaceEntry)) !== 'directory') continue;
+  const perMarketplace = await mapInOrder(marketplaceEntries, async (marketplaceEntry) => {
+    if ((await direntKindFollowing(marketplacesDir, marketplaceEntry)) !== 'directory') return [];
     const pluginsDir = safePath.join(marketplacesDir, marketplaceEntry.name, 'plugins');
-    if (!existsSync(pluginsDir)) continue;
-    skillDirs.push(...await collectPluginSkillDirs(pluginsDir));
-  }
+    if (!existsSync(pluginsDir)) return [];
+    return collectPluginSkillDirs(pluginsDir);
+  });
+  skillDirs.push(...perMarketplace.flat());
 
   return skillDirs;
 }
 
 async function collectPluginSkillDirs(pluginsDir: string): Promise<string[]> {
-  const skillDirs: string[] = [];
   const pluginEntries = await readdir(pluginsDir, { withFileTypes: true });
-  for (const pluginEntry of pluginEntries) {
-    if ((await direntKindFollowing(pluginsDir, pluginEntry)) !== 'directory') continue;
+  const perPlugin = await mapInOrder(pluginEntries, async (pluginEntry) => {
+    if ((await direntKindFollowing(pluginsDir, pluginEntry)) !== 'directory') return [];
     const skillsDir = safePath.join(pluginsDir, pluginEntry.name, 'skills');
-    if (!existsSync(skillsDir)) continue;
-    skillDirs.push(...await collectSkillsInDir(skillsDir));
-  }
-
-  return skillDirs;
+    if (!existsSync(skillsDir)) return [];
+    return collectSkillsInDir(skillsDir);
+  });
+  return perPlugin.flat();
 }
 
 async function collectSkillsInDir(skillsDir: string): Promise<string[]> {
-  const skillDirs: string[] = [];
   const skillEntries = await readdir(skillsDir, { withFileTypes: true });
-  for (const skillEntry of skillEntries) {
+  const perSkill = await mapConcurrentFailingInOrder(skillEntries, async (skillEntry) => {
     // Followed: a symlinked skill directory (a dev install) ships like any other.
-    if ((await direntKindFollowing(skillsDir, skillEntry)) !== 'directory') continue;
+    if ((await direntKindFollowing(skillsDir, skillEntry)) !== 'directory') return [];
     const skillDir = safePath.join(skillsDir, skillEntry.name);
-    if (existsSync(safePath.join(skillDir, 'SKILL.md'))) {
-      skillDirs.push(skillDir);
-    }
-  }
-
-  return skillDirs;
+    return existsSync(safePath.join(skillDir, 'SKILL.md')) ? [skillDir] : [];
+  });
+  return perSkill.flat();
 }
 
 /** The phase `vat build` runs after `claude`: the shipped plugin tree's links. */
@@ -212,10 +209,10 @@ export async function checkShippedPluginSkillLinks(cwd: string): Promise<Report<
   const marketplacesDir = safePath.join(cwd, 'dist', '.claude', 'plugins', 'marketplaces');
   const skillDirs = await collectShippedSkillDirs(marketplacesDir);
 
-  const issues: ValidationIssue[] = [];
-  for (const skillDir of skillDirs) {
-    issues.push(...await checkBrokenPackagedLinks(skillDir));
-  }
+  // One skill at a time: each check already reads its files with bounded
+  // concurrency, and an outer fan-out would multiply that bound.
+  const perSkill = await mapInOrder(skillDirs, (skillDir) => checkBrokenPackagedLinks(skillDir));
+  const issues: ValidationIssue[] = perSkill.flat();
   return buildReport({ examined: skillDirs.length, findings: toFindings(issues), data: null, gate: ORCHESTRATOR_GATE });
 }
 
@@ -305,15 +302,15 @@ async function buildTopLevelCommand(
 
     logger.info(`🔨 vat build (phases: ${phases.map((p) => p.name).join(' → ')})`);
 
-    for (const phase of phases) {
+    // In order, deliberately, and here it is a DEPENDENCY rather than a
+    // presentation choice: `claude` packages what `skills` just wrote into dist/,
+    // so overlapping the two would read a half-built tree.
+    const completed = await everyInOrder(phases, async (phase) => {
       logger.info(`\n▶ Phase: ${phase.name}`);
-      // Awaited in the loop, deliberately, and here it is a DEPENDENCY rather
-      // than a presentation choice: `claude` packages what `skills` just wrote
-      // into dist/, so overlapping the two would read a half-built tree.
       const result = await runPhase(phase);
       results.push(result);
       // Only a report that would fail the run stops it: a warning never does.
-      if (stopsTheBuild(result)) return;
+      if (stopsTheBuild(result)) return false;
 
       if (phase.name === 'claude') {
         const shipped = await runPhase(shippedLinksPhase(cwd));
@@ -321,9 +318,11 @@ async function buildTopLevelCommand(
         for (const finding of shipped.report.findings) {
           for (const line of formatIssueLines(finding, '  ')) logger.error(line);
         }
-        if (stopsTheBuild(shipped)) return;
+        if (stopsTheBuild(shipped)) return false;
       }
-    }
+      return true;
+    });
+    if (!completed) return;
     logger.info(`\n✅ Build complete`);
   });
   endWithReport('build', report, ORCHESTRATOR_FORMAT);

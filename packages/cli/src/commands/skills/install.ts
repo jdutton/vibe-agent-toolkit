@@ -27,6 +27,7 @@ import { buildReport, toFindings, withDurationMs, type Finding, type ValidationI
 import {
   direntKindFollowingSync,
   isSingleFsSegment,
+  mapConcurrentFailingInOrder,
   mkdirSyncReal,
   normalizedTmpdir,
   resolveSkillTarget,
@@ -365,8 +366,8 @@ async function installFromDir(
 
   // Pre-verify ALL skills before touching the filesystem. Verification also
   // yields each skill's declared name, which is what it installs as.
-  const verified: VerifiedSkill[] = [];
-  for (const dir of skillDirs) verified.push(await preVerifySkill(dir));
+  // Read-only and independent; a refusal still names the first bad skill in order.
+  const verified: VerifiedSkill[] = await mapConcurrentFailingInOrder(skillDirs, (dir) => preVerifySkill(dir));
   const findings = toFindings(verified.flatMap((skill) => skill.issues));
   progress.examined = verified.length;
   progress.findings = findings;

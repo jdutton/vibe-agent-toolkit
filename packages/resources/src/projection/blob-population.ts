@@ -572,7 +572,7 @@ export async function populateBlobs(
     await driveInOrder(
       pending,
       dispatcher,
-      async (target) => prepareBlob(target, base, dispatcher),
+      (target) => prepareBlob(target, base, dispatcher),
       (prepared) => emitPreparedBlob(builder, prepared, counts),
       // The key's own prefix is the routing record — see `parserKindOf`, which
       // is the single authority so this cannot drift from what `prepareBlob`

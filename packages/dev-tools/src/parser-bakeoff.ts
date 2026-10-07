@@ -201,7 +201,7 @@ interface ScanReport {
  * @param corpus - The project to scan
  * @returns Every markdown document, content already read
  */
-async function readCorpus(corpus: string): Promise<Document[]> {
+function readCorpus(corpus: string): Promise<Document[]> {
   const scan = safeExecResult('node', [
     VAT_BIN,
     'resources',

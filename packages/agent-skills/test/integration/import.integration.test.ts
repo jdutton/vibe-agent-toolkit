@@ -17,14 +17,14 @@ const TEST_SKILL_DESC = 'Test skill';
 const TEST_CONTENT = '\nContent.\n';
 
 // Test helper: Create SKILL.md and attempt import
-async function createSkillAndImport(
+function createSkillAndImport(
   tempDir: string,
   skillContent: string,
   importOptions?: { outputPath?: string; force?: boolean },
-): Promise<{ result: ImportResult; skillPath: string; agentPath: string }> {
+): { result: ImportResult; skillPath: string; agentPath: string } {
   const skillPath = createSkillFile(tempDir, skillContent);
 
-  const result = await importSkillToAgent({
+  const result = importSkillToAgent({
     skillPath,
     ...importOptions,
   });
@@ -46,13 +46,13 @@ function createTestSkill(): string {
 }
 
 // Test helper: Import skill and return parsed agent.yaml
-async function importAndParseAgentYaml(
+function importAndParseAgentYaml(
   tempDir: string,
   skillFields: Record<string, unknown>,
-): Promise<{ success: boolean; agentData: unknown; agentPath: string }> {
+): { success: boolean; agentData: unknown; agentPath: string } {
   const skillContent = createSkillContent(skillFields, TEST_CONTENT);
   const skillPath = createSkillFile(tempDir, skillContent);
-  const result = await importSkillToAgent({ skillPath });
+  const result = importSkillToAgent({ skillPath });
 
   if (!result.success) {
     return { success: false, agentData: null, agentPath: '' };
@@ -68,7 +68,7 @@ describe('importSkillToAgent (integration)', () => {
   const { getTempDir } = setupTempDir('import-test-');
 
   describe('basic SKILL.md import', () => {
-    it('should convert minimal SKILL.md to agent.yaml', async () => {
+    it('should convert minimal SKILL.md to agent.yaml', () => {
       const skillContent = createSkillContent(
         {
           name: TEST_SKILL_NAME,
@@ -78,7 +78,7 @@ describe('importSkillToAgent (integration)', () => {
       );
       const skillPath = createSkillFile(getTempDir(), skillContent);
 
-      const result = await importSkillToAgent({ skillPath });
+      const result = importSkillToAgent({ skillPath });
 
       expect(result.success).toBe(true);
       expect(result.agentPath).toBeDefined();
@@ -100,7 +100,7 @@ describe('importSkillToAgent (integration)', () => {
       });
     });
 
-    it('should convert SKILL.md with optional fields to agent.yaml', async () => {
+    it('should convert SKILL.md with optional fields to agent.yaml', () => {
       const skillContent = createSkillContent(
         {
           name: 'advanced-skill',
@@ -116,7 +116,7 @@ describe('importSkillToAgent (integration)', () => {
       );
       const skillPath = createSkillFile(getTempDir(), skillContent);
 
-      const result = await importSkillToAgent({ skillPath });
+      const result = importSkillToAgent({ skillPath });
 
       expect(result.success).toBe(true);
 
@@ -134,7 +134,7 @@ describe('importSkillToAgent (integration)', () => {
       expect(agentData.spec.compatibility).toBe('Requires Node.js 18+');
     });
 
-    it('should place agent.yaml in same directory as SKILL.md', async () => {
+    it('should place agent.yaml in same directory as SKILL.md', () => {
       const subDir = safePath.join(getTempDir(), 'my-skill');
       mkdirSyncReal(subDir, { recursive: true });
 
@@ -147,7 +147,7 @@ describe('importSkillToAgent (integration)', () => {
       );
       const skillPath = createSkillFile(subDir, skillContent);
 
-      const result = await importSkillToAgent({ skillPath });
+      const result = importSkillToAgent({ skillPath });
 
       expect(result.success).toBe(true);
       const expectedAgentPath = safePath.join(subDir, 'agent.yaml');
@@ -157,17 +157,17 @@ describe('importSkillToAgent (integration)', () => {
   });
 
   describe('validation', () => {
-    it('should fail when SKILL.md does not exist', async () => {
+    it('should fail when SKILL.md does not exist', () => {
       const skillPath = safePath.join(getTempDir(), 'nonexistent.md');
 
-      const result = await importSkillToAgent({ skillPath });
+      const result = importSkillToAgent({ skillPath });
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('does not exist');
     });
 
-    it('should succeed when SKILL.md is missing name field (optional per Claude Code spec)', async () => {
-      const { result } = await createSkillAndImport(
+    it('should succeed when SKILL.md is missing name field (optional per Claude Code spec)', () => {
+      const { result } = createSkillAndImport(
         getTempDir(),
         createSkillContent({ description: 'Missing name field' }, TEST_CONTENT),
       );
@@ -175,8 +175,8 @@ describe('importSkillToAgent (integration)', () => {
       expect(result.success).toBe(true);
     });
 
-    it('should succeed when SKILL.md is missing description field (optional per Claude Code spec)', async () => {
-      const { result } = await createSkillAndImport(
+    it('should succeed when SKILL.md is missing description field (optional per Claude Code spec)', () => {
+      const { result } = createSkillAndImport(
         getTempDir(),
         createSkillContent({ name: TEST_SKILL_NAME }, TEST_CONTENT),
       );
@@ -184,8 +184,8 @@ describe('importSkillToAgent (integration)', () => {
       expect(result.success).toBe(true);
     });
 
-    it('should fail when SKILL.md has invalid name format', async () => {
-      const { result } = await createSkillAndImport(
+    it('should fail when SKILL.md has invalid name format', () => {
+      const { result } = createSkillAndImport(
         getTempDir(),
         createSkillContent(
           {
@@ -202,7 +202,7 @@ describe('importSkillToAgent (integration)', () => {
   });
 
   describe('output customization', () => {
-    it('should allow custom output path via outputPath option', async () => {
+    it('should allow custom output path via outputPath option', () => {
       const skillContent = createSkillContent(
         {
           name: 'custom-output',
@@ -213,7 +213,7 @@ describe('importSkillToAgent (integration)', () => {
       const skillPath = createSkillFile(getTempDir(), skillContent);
       const customOutputPath = safePath.join(getTempDir(), 'custom-agent.yaml');
 
-      const result = await importSkillToAgent({
+      const result = importSkillToAgent({
         skillPath,
         outputPath: customOutputPath,
       });
@@ -223,11 +223,11 @@ describe('importSkillToAgent (integration)', () => {
       expect(fs.existsSync(customOutputPath)).toBe(true);
     });
 
-    it('should not overwrite existing agent.yaml without force flag', async () => {
+    it('should not overwrite existing agent.yaml without force flag', () => {
       const agentPath = safePath.join(getTempDir(), AGENT_YAML_FILENAME);
       fs.writeFileSync(agentPath, EXISTING_AGENT_CONTENT);
 
-      const { result } = await createSkillAndImport(getTempDir(), createTestSkill());
+      const { result } = createSkillAndImport(getTempDir(), createTestSkill());
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('already exists');
@@ -236,11 +236,11 @@ describe('importSkillToAgent (integration)', () => {
       expect(content).toBe(EXISTING_AGENT_CONTENT);
     });
 
-    it('should overwrite existing agent.yaml with force flag', async () => {
+    it('should overwrite existing agent.yaml with force flag', () => {
       const agentPath = safePath.join(getTempDir(), AGENT_YAML_FILENAME);
       fs.writeFileSync(agentPath, EXISTING_AGENT_CONTENT);
 
-      const { result } = await createSkillAndImport(getTempDir(), createTestSkill(), {
+      const { result } = createSkillAndImport(getTempDir(), createTestSkill(), {
         force: true,
       });
 
@@ -252,8 +252,8 @@ describe('importSkillToAgent (integration)', () => {
   });
 
   describe('version metadata', () => {
-    it('should set default version to 0.1.0 when not specified', async () => {
-      const { success, agentData } = await importAndParseAgentYaml(getTempDir(), {
+    it('should set default version to 0.1.0 when not specified', () => {
+      const { success, agentData } = importAndParseAgentYaml(getTempDir(), {
         name: 'version-test',
         description: 'Test version defaulting',
       });
@@ -262,8 +262,8 @@ describe('importSkillToAgent (integration)', () => {
       expect((agentData as { metadata: { version: string } }).metadata.version).toBe('0.1.0');
     });
 
-    it('should preserve version from metadata.version field', async () => {
-      const { success, agentData } = await importAndParseAgentYaml(getTempDir(), {
+    it('should preserve version from metadata.version field', () => {
+      const { success, agentData } = importAndParseAgentYaml(getTempDir(), {
         name: 'version-test',
         description: 'Test version preservation',
         metadata: {

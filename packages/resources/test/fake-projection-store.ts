@@ -21,6 +21,7 @@
  * construction.
  */
 
+import { promised } from '@vibe-agent-toolkit/utils';
 import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { ContributorRegistry } from '../src/projection/contributor.js';
@@ -172,8 +173,13 @@ export class FakeProjectionStore implements ProjectionStore {
    *
    * @param rows - The four blob-scoped tables
    */
-  async writeBlobFacts(rows: BlobScopedRows): Promise<void> {
+  writeBlobFacts(rows: BlobScopedRows): Promise<void> {
     this.writeBlobFactsCalls++;
+    return promised(() => this.#mergeBlobFacts(rows));
+  }
+
+  /** The synchronous body of {@link writeBlobFacts}. */
+  #mergeBlobFacts(rows: BlobScopedRows): void {
     const source = rows as unknown as RowBundle;
     const incoming = new Map<string, RowBundle>();
     for (const table of BLOB_TABLES) {
@@ -206,7 +212,7 @@ export class FakeProjectionStore implements ProjectionStore {
    * @param contentKeys - The keys to look up
    * @returns The rows held for them
    */
-  async readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
+  readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
     this.readBlobFactsCalls++;
     const merged = emptyBlobBundle();
     for (const key of contentKeys) {
@@ -216,7 +222,7 @@ export class FakeProjectionStore implements ProjectionStore {
         merged[table] = [...(merged[table] ?? []), ...(held[table] ?? [])];
       }
     }
-    return merged as unknown as BlobScopedRows;
+    return Promise.resolve(merged as unknown as BlobScopedRows);
   }
 
   /**
@@ -228,9 +234,10 @@ export class FakeProjectionStore implements ProjectionStore {
    * @param key - Which root, which tree
    * @param rows - The eight extent-scoped tables
    */
-  async writeExtent(key: ExtentKey, rows: ExtentScopedRows): Promise<void> {
+  writeExtent(key: ExtentKey, rows: ExtentScopedRows): Promise<void> {
     this.writeExtentCalls++;
     this.#extents.set(extentKeyOf(key), rows);
+    return Promise.resolve();
   }
 
   /**
@@ -239,9 +246,9 @@ export class FakeProjectionStore implements ProjectionStore {
    * @param key - Which root, which tree
    * @returns The eight tables, or `undefined` when this tree was never written
    */
-  async readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
+  readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
     this.readExtentCalls++;
-    return this.#extents.get(extentKeyOf(key));
+    return Promise.resolve(this.#extents.get(extentKeyOf(key)));
   }
 
   /** Release nothing. */

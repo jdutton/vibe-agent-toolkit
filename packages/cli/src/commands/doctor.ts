@@ -625,15 +625,13 @@ function describeLoadFailure(error: unknown): string {
  * @returns A failure listing every command whose module could not be loaded
  */
 export async function checkCommandModules(): Promise<DoctorCheckResult> {
-  const broken: { name: string; reason: string }[] = [];
-
-  for (const [name, load] of Object.entries(COMMAND_LOADERS)) {
-    try {
-      await load();
-    } catch (error) {
-      broken.push({ name, reason: describeLoadFailure(error) });
-    }
-  }
+  // Loaded together; the failures are listed in table order whatever order they land in.
+  const entries = Object.entries(COMMAND_LOADERS);
+  const outcomes = await Promise.allSettled(entries.map(([, load]) => load()));
+  const broken = entries.flatMap(([name], index) => {
+    const outcome = outcomes[index];
+    return outcome?.status === 'rejected' ? [{ name, reason: describeLoadFailure(outcome.reason) }] : [];
+  });
 
   const total = Object.keys(COMMAND_LOADERS).length;
 

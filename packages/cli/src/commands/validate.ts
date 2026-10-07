@@ -25,6 +25,7 @@
  */
 
 import { type ProjectConfig } from '@vibe-agent-toolkit/resources';
+import { forEachInOrder } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { marksOperandRefusalByHand } from '../command-tree.js';
@@ -218,13 +219,13 @@ async function runPhasesUnderOnePopulation(
   results: PhaseResult[],
 ): Promise<void> {
   await withPopulationCache({ root: projectRoot }, async () => {
-    for (const phase of phases) {
+    // In order, deliberately: surfaces are announced in a fixed order and their
+    // stderr streams live, so overlapping them would interleave two running
+    // reports into one unreadable channel.
+    await forEachInOrder(phases, async (phase) => {
       logger.info(`\n▶ Surface: ${phase.name}`);
-      // Awaited in the loop, deliberately: surfaces are announced in a fixed
-      // order and their stderr streams live, so overlapping them would
-      // interleave two running reports into one unreadable channel.
       results.push(await runPhase(phase));
-    }
+    });
   });
 }
 

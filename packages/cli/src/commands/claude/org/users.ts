@@ -61,7 +61,7 @@ Example:
     .argument('<user-id>', 'User ID')
     .option('--debug', 'Enable debug logging')
     .action(async (userId: string, options: { debug?: boolean }) => {
-      await executeOrgCommand('claude org users get', options.debug, async ({ client }) => {
+      await executeOrgCommand('claude org users get', options.debug, ({ client }) => {
         // The id is opaque and comes straight from argv. Encoded, not spliced: one
         // carrying a `/` would otherwise address a different resource entirely.
         return client.get<OrgUser>(`/v1/organizations/users/${encodeURIComponent(userId)}`);

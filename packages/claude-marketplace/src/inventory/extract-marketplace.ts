@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 import type { PluginInventory, PluginRef } from '@vibe-agent-toolkit/agent-skills';
 import { MarketplaceManifestSchema } from '@vibe-agent-toolkit/agent-skills';
-import { hasParentTraversalSegment, isPathAbsentError, isVatError, normalizePath, PathEscapesRootError, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, hasParentTraversalSegment, isPathAbsentError, isVatError, normalizePath, PathEscapesRootError, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import { extractClaudePluginInventory } from './extract-plugin.js';
 import type { GitTrackerSource } from './extract-skill.js';
@@ -104,7 +104,8 @@ export async function extractClaudeMarketplaceInventory(
 		parseErrors,
 	};
 
-	for (const entry of pluginsRaw) {
+	// In order: `declared` order, and the shared git-tracker cache's first users must not race.
+	await forEachInOrder(pluginsRaw, async (entry) => {
 		const ref = pluginEntryToRef(root, entry);
 		declared.push(ref);
 		if (ref.source === 'path' && ref.exists) {
@@ -140,7 +141,7 @@ export async function extractClaudeMarketplaceInventory(
 				}),
 			);
 		}
-	}
+	});
 
 	return new ClaudeMarketplaceInventory({
 		path: absolute,

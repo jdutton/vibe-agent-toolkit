@@ -1,6 +1,6 @@
 import { writeFileSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { promised, safePath } from '@vibe-agent-toolkit/utils';
 import {
   type SpawnHeadlessOptions,
   type spawnHeadlessClaude,
@@ -44,7 +44,7 @@ export interface SpawnStub {
  */
 export function makeSpawnStub(behavior: SpawnStubBehavior = {}): SpawnStub {
   const calls: SpawnHeadlessOptions[] = [];
-  const spawn = vi.fn(async (opts: SpawnHeadlessOptions): Promise<SpawnResult> => {
+  const spawn = vi.fn((opts: SpawnHeadlessOptions): Promise<SpawnResult> => promised((): SpawnResult => {
     calls.push(opts);
     if (behavior.reject !== undefined) throw behavior.reject;
     for (const line of behavior.stdoutLines ?? []) {
@@ -52,7 +52,7 @@ export function makeSpawnStub(behavior: SpawnStubBehavior = {}): SpawnStub {
     }
     behavior.beforeReturn?.(opts);
     return behavior.result ?? SPAWN_OK;
-  });
+  }));
   return { spawn, calls };
 }
 
@@ -217,7 +217,7 @@ export interface HarnessFakeSpawn {
 export function makeHarnessFakeSpawn(cfg: HarnessFakeSpawnConfig = {}): HarnessFakeSpawn {
   const graderSandboxDirs: string[] = [];
   const graderNonces: string[] = [];
-  const spawn = vi.fn(async (opts: SpawnHeadlessOptions): Promise<SpawnResult> => {
+  const spawn = vi.fn((opts: SpawnHeadlessOptions): Promise<SpawnResult> => promised((): SpawnResult => {
     const isGrader = opts.prompt.includes('fragment path');
     if (isGrader) {
       graderSandboxDirs.push(opts.sandboxDir);
@@ -275,7 +275,7 @@ export function makeHarnessFakeSpawn(cfg: HarnessFakeSpawnConfig = {}): HarnessF
     // fires after the executor has already produced output, and a stub that
     // returned silently would let a fix that reads a partial transcript look fine.
     return cfg.executorResultFor?.(opts) ?? { status: cfg.executorStatus ?? 0, timedOut: false, stalled: false };
-  });
+  }));
   return { spawn: spawn as unknown as typeof spawnHeadlessClaude, graderSandboxDirs, graderNonces };
 }
 

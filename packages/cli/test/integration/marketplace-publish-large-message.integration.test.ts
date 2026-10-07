@@ -70,7 +70,7 @@ describe('marketplace publish with an oversized commit message', () => {
 
     expect(Buffer.byteLength(commitMessage, 'utf8')).toBeGreaterThan(MAX_ARG_STRLEN);
 
-    await publishToGitBranch({
+    publishToGitBranch({
       publishDir,
       branch: 'claude-marketplace',
       remote: bareRemote,

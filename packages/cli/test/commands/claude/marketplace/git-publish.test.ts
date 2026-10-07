@@ -20,11 +20,6 @@ function gitExits(status: number, stderr = ''): void {
   vi.mocked(runGit).mockReturnValue({ stdout: '', stderr, status } as ReturnType<typeof runGit>);
 }
 
-/** What `promise` rejected with. */
-async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
-  return promise.then(() => { throw new Error('expected a rejection'); }, (error: unknown) => error);
-}
-
 const logger = createLogger({});
 const DELIVERY = { branch: 'claude-marketplace', remote: 'origin', force: false, dryRun: false, noPush: false, logger };
 
@@ -64,22 +59,22 @@ describe('git-publish', () => {
   describe('refusal codes', () => {
     afterEach(() => { vi.mocked(runGit).mockReset(); });
 
-    const publish = (remote: string, remoteFromConfig: boolean): Promise<void> => publishToGitBranch({
+    const publish = (remote: string, remoteFromConfig: boolean): void => publishToGitBranch({
       publishDir: '/never-read', branch: 'b', remote, remoteFromConfig, commitMessage: 'm', force: false, dryRun: true, noPush: false, logger,
     });
 
-    it('refuses the default remote it cannot find as CONFIG_INVALID, saying it was the default', async () => {
+    it('refuses the default remote it cannot find as CONFIG_INVALID, saying it was the default', () => {
       gitExits(2);
-      const error = await rejectionOf(publish('origin', false));
+      const error = thrownBy(() => publish('origin', false));
       expect(refusalCodeOf(error)).toBe('CONFIG_INVALID');
       expect((error as Error).message).toBe(
         'Git remote "origin" (the default — publish.remote is not set) not found. Add it with git remote add, or set publish.remote to a remote name or a full URL.',
       );
     });
 
-    it('refuses a config-named remote it cannot find as CONFIG_INVALID, naming publish.remote', async () => {
+    it('refuses a config-named remote it cannot find as CONFIG_INVALID, naming publish.remote', () => {
       gitExits(2);
-      const error = await rejectionOf(publish('upstream', true));
+      const error = thrownBy(() => publish('upstream', true));
       expect(refusalCodeOf(error)).toBe('CONFIG_INVALID');
       expect((error as Error).message).toBe(
         'Git remote "upstream" (from publish.remote) not found. Add it with git remote add, or set publish.remote to a remote name or a full URL.',

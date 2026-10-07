@@ -3,7 +3,7 @@ import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeF
 import { basename } from 'node:path';
 
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, openEachFileForReading, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, mkdirSyncReal, openEachFileForReading, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { ZodError } from 'zod';
 
 import type {
@@ -318,7 +318,8 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
     }
     return preserved;
   };
-  for (const item of opts.items) {
+  // In order: every resolver stages into one root, and a required item fails closed in order.
+  await forEachInOrder(opts.items, async (item) => {
     // A `--with-optional` companion degrades to skip-with-warning on ANY failure
     // resolving or staging it (unresolvable source, build failure, etc.) — it must
     // never take down a run whose subject and required `--with` companions are
@@ -340,7 +341,7 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
       } catch (error) {
         skippedOptional.push({ name: item.name, reason: error instanceof Error ? error.message : String(error) });
       }
-      continue;
+      return;
     }
 
     const resolved = await opts.resolve(item.source, opts.ctx);
@@ -356,7 +357,7 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
       subjectStagedDir = skillDir;
       subjectPluginRoot = pluginRoot;
     }
-  }
+  });
 
   const fingerprint = createHash('sha256')
     .update(entries.map(e => `${e.name}:${e.identity}:${e.contentHash}`).join('|'))

@@ -147,7 +147,7 @@ export function buildProjectionQueryReport(input: ProjectionQueryPayloadInput): 
  * @param options.logger - Where blob-stage refusals are reported
  * @returns The rows and the provenance of the population behind them
  */
-async function runProjectionQuery(options: {
+function runProjectionQuery(options: {
   root: string;
   sql: string;
   parameters: readonly string[];

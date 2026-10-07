@@ -69,6 +69,7 @@
 import { existsSync, lstatSync, statSync } from 'node:fs';
 
 import {
+  forEachInOrder,
   isFilesystemAccessError,
   readTextContentSync,
   safePath,
@@ -696,12 +697,15 @@ export class GitCrawlSource implements CrawlSource {
     // A submodule's own files belong to its own repository, so the outer
     // snapshot cannot see them while the outer WALK reads them like any other
     // directory. Descending is what keeps the two sources equal.
-    for (const submodule of submodules) {
+    //
+    // In order, here and below: the refusal collectors and symlink set are shared,
+    // candidate order must be deterministic, and one listing at a time bounds fds.
+    await forEachInOrder(submodules, async (submodule) => {
       candidates.push(
         walkedCandidate(submodule),
         ...(await expandDirectory(submodule, admits, this.#refusals.inPopulation, this.#symlinks.add)).map(walkedCandidate),
       );
-    }
+    });
 
     // Ignored territory: descend, because the extent this feeds must still
     // report `gitignored: true` rows. `NEVER_CRAWL_GLOBS` is applied to the
@@ -711,8 +715,8 @@ export class GitCrawlSource implements CrawlSource {
     // ⚠️ This is the ONLY lane that can offer a symlink `git add --all` never
     // staged: an ignored path is in no tree snapshot, so nothing upstream has
     // seen its mode. `collapsed.shape` is where that gap is closed.
-    for (const collapsed of this.#prune({ ignored: true })) {
-      if (!admits(collapsed.absolutePath)) continue;
+    await forEachInOrder(this.#prune({ ignored: true }), async (collapsed) => {
+      if (!admits(collapsed.absolutePath)) return;
       candidates.push({
         absolutePath: collapsed.absolutePath,
         contentHint: null,
@@ -731,7 +735,7 @@ export class GitCrawlSource implements CrawlSource {
           ...(await expandDirectory(collapsed.absolutePath, admits, this.#refusals.inIgnoredTerritory, this.#symlinks.add)).map(walkedCandidate),
         );
       }
-    }
+    });
 
     // Untracked-but-not-ignored territory: the entries themselves only, never a
     // descent. Every FILE beneath such a directory is already in the snapshot

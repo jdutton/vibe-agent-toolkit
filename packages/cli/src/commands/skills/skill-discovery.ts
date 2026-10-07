@@ -11,9 +11,10 @@ import { basename } from 'node:path';
 import type { PluginLocalSkillIndex } from '@vibe-agent-toolkit/agent-skills';
 import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import type { SkillsConfig } from '@vibe-agent-toolkit/resources';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, mapConcurrentFailingInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, type UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
 import picomatch from 'picomatch';
+
 
 import type { DiscoveredSkill } from './command-helpers.js';
 
@@ -107,12 +108,15 @@ export async function readPluginLocalSkillName(skillSourceDir: string, skillDirP
 
 /** {@link PluginLocalSkillNames} for every location in `pluginLocal`. */
 export async function readPluginLocalSkillNames(pluginLocal: PluginLocalSkillIndex): Promise<PluginLocalSkillNames> {
-  const names = new Map<string, string>();
+  // The first location per resolved directory, as before; their reads are independent.
+  const firstByKey = new Map<string, (typeof pluginLocal.locations)[number]>();
   for (const loc of pluginLocal.locations) {
     const key = safePath.resolve(loc.skillSourceDir);
-    if (!names.has(key)) names.set(key, await readPluginLocalSkillName(loc.skillSourceDir, loc.skillDirPath));
+    if (!firstByKey.has(key)) firstByKey.set(key, loc);
   }
-  return names;
+  const entries = [...firstByKey];
+  const read = await mapConcurrentFailingInOrder(entries, ([, loc]) => readPluginLocalSkillName(loc.skillSourceDir, loc.skillDirPath));
+  return new Map(entries.map(([key], index) => [key, read[index] as string]));
 }
 
 /**
@@ -160,14 +164,14 @@ function groupIncludePatternsByBase(
  * the root does not exist (mirrors audit's filesystem-first tolerance for
  * patterns pointing at nothing).
  */
-async function crawlOneBase(
+function crawlOneBase(
   base: string,
   globs: string[],
   projectRoot: string,
   unreadable: DiscoveryUnreadablePolicy,
 ): Promise<string[]> {
   if (!existsSync(base)) {
-    return [];
+    return Promise.resolve([]);
   }
   return crawlDirectory({
     baseDir: base,
@@ -238,7 +242,9 @@ export async function discoverSkillsFromConfig(
     : null;
 
   const foundAbsPaths = new Set<string>();
-  for (const [base, globs] of patternsByBase) {
+  // One base at a time: under `'refuse'` the first unlistable directory in
+  // pattern order is the one named, and a degrade handler hears them in order.
+  await forEachInOrder(patternsByBase, async ([base, globs]) => {
     const crawled = await crawlOneBase(base, globs, projectRoot, unreadable);
     for (const absPath of crawled) {
       if (userExcludeMatcher) {
@@ -247,12 +253,13 @@ export async function discoverSkillsFromConfig(
       }
       foundAbsPaths.add(safePath.resolve(absPath));
     }
-  }
+  });
 
-  const discovered: DiscoveredSkill[] = [];
-  for (const skillPath of foundAbsPaths) {
-    const name = await readSkillName(skillPath);
-    if (name) discovered.push({ name, sourcePath: skillPath });
-  }
-  return discovered;
+  // Independent reads, kept in discovery order.
+  const skillPaths = [...foundAbsPaths];
+  const names = await mapConcurrentFailingInOrder(skillPaths, (skillPath) => readSkillName(skillPath));
+  return skillPaths.flatMap((skillPath, index) => {
+    const name = names[index];
+    return name ? [{ name, sourcePath: skillPath }] : [];
+  });
 }

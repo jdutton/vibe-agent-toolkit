@@ -65,22 +65,35 @@ interface PageResult {
 }
 
 /**
+ * Fetch pages until `nextCursor` says there are none, collecting every page's
+ * `data` in page order. Each page's cursor comes from the page before it, so the
+ * fetches are sequential by construction.
+ */
+async function collectPages<P extends { data: unknown[] }>(
+  firstCursor: string | undefined,
+  fetchPage: (cursor: string | undefined) => Promise<P>,
+  nextCursor: (page: P) => string | undefined,
+): Promise<{ count: number; data: Array<P['data'][number]> }> {
+  const allData: Array<P['data'][number]> = [];
+  const fetchFrom = async (cursor: string | undefined): Promise<void> => {
+    const page = await fetchPage(cursor);
+    allData.push(...page.data);
+    const next = nextCursor(page);
+    if (next !== undefined) await fetchFrom(next);
+  };
+  await fetchFrom(firstCursor);
+  return { count: allData.length, data: allData };
+}
+
+/**
  * Generic autopagination: collects all pages by calling `fetchPage` with a cursor.
  * Works for admin endpoints, skills endpoints, and custom URL patterns.
  */
-async function collectAllPages(
+function collectAllPages(
   fetchPage: (cursor: string | undefined) => Promise<PageResult>,
 ): Promise<{ count: number; data: unknown[] }> {
-  const allData: unknown[] = [];
-  let nextPage: string | undefined;
-
-  do {
-    const resp = await fetchPage(nextPage);
-    allData.push(...resp.data);
-    nextPage = resp.has_more && resp.next_page ? resp.next_page : undefined;
-  } while (nextPage !== undefined);
-
-  return { count: allData.length, data: allData };
+  return collectPages(undefined, fetchPage, (page) =>
+    page.has_more && page.next_page ? page.next_page : undefined);
 }
 
 interface ReportBucket {
@@ -101,42 +114,27 @@ interface ReportPageResult {
  * Report endpoints do NOT accept `next_page` as a query parameter — the API rejects it.
  * Pagination works by advancing `starting_at` to the last bucket's `ending_at`.
  */
-export async function autopaginateReport(
+export function autopaginateReport(
   client: OrgApiClient,
   path: string,
   baseParams: QueryParams,
 ): Promise<{ count: number; data: unknown[] }> {
-  const allData: ReportBucket[] = [];
-  let startingAt = baseParams['starting_at'] as string | undefined;
-
-  let hasMore = true;
-  while (hasMore) {
+  const fetchPage = (startingAt: string | undefined): Promise<ReportPageResult> => {
     const params: QueryParams = { ...baseParams };
     if (startingAt) params['starting_at'] = startingAt;
-
-    const resp = await client.get<ReportPageResult>(path, params);
-    allData.push(...resp.data);
-
-    if (!resp.has_more || resp.data.length === 0) {
-      hasMore = false;
-    } else {
-      // Advance starting_at to the last bucket's ending_at for next page
-      const lastBucket = resp.data.at(-1);
-      if (lastBucket) {
-        startingAt = lastBucket.ending_at;
-      } else {
-        hasMore = false;
-      }
-    }
-  }
-
-  return { count: allData.length, data: allData };
+    return client.get<ReportPageResult>(path, params);
+  };
+  return collectPages(baseParams['starting_at'] as string | undefined, fetchPage, (page) => {
+    if (!page.has_more) return undefined;
+    // Advance starting_at to the last bucket's ending_at for next page
+    return page.data.at(-1)?.ending_at;
+  });
 }
 
 /**
  * Autopaginate a Skills API endpoint (regular API key + beta header).
  */
-export async function autopaginateSkills(
+export function autopaginateSkills(
   client: OrgApiClient,
   path: string,
 ): Promise<{ count: number; data: unknown[] }> {
@@ -148,7 +146,7 @@ export async function autopaginateSkills(
 /**
  * Autopaginate with a custom URL builder (e.g. cost endpoint with URLSearchParams).
  */
-export async function autopaginateCustom(
+export function autopaginateCustom(
   fetchPage: (cursor: string | undefined) => Promise<PageResult>,
 ): Promise<{ count: number; data: unknown[] }> {
   return collectAllPages(fetchPage);

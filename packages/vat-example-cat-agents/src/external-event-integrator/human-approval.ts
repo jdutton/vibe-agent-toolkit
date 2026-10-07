@@ -274,7 +274,7 @@ export async function requestCustomApproval<T>(
  * @param config - Configuration options
  * @returns Selected option (or undefined if rejected/timed out)
  */
-export async function requestChoice<T extends string>(
+export function requestChoice<T extends string>(
   prompt: string,
   options: T[],
   config: Omit<HumanApprovalOptions, 'autoResponse'> & { autoResponse?: T } = {},
@@ -285,28 +285,28 @@ export async function requestChoice<T extends string>(
   if (autoResponse) {
     // Check for exact match first (case-sensitive)
     if (options.includes(autoResponse)) {
-      return {
+      return Promise.resolve({
         approved: true,
         choice: autoResponse,
         reason: AUTO_SELECTED_MESSAGE,
-      };
+      });
     }
 
     // Try case-insensitive match
     const match = options.find((opt) => opt.toLowerCase() === autoResponse.toLowerCase());
     if (match) {
-      return {
+      return Promise.resolve({
         approved: true,
         choice: match,
         reason: AUTO_SELECTED_MESSAGE,
-      };
+      });
     }
 
     // No match found
-    return {
+    return Promise.resolve({
       approved: false,
       reason: `Invalid auto-response: ${autoResponse}`,
-    };
+    });
   }
 
   // Display options
@@ -364,14 +364,14 @@ export const requestApprovalAgent: Agent<
       timeoutMs: 60000,
     },
   },
-  execute: async (input: ApprovalRequestInput) => {
+  execute: (input: ApprovalRequestInput) => {
     const validatedOrError = validateAgentInput<ApprovalRequestInput, ApprovalResult, ExternalEventError>(
       input,
       ApprovalRequestInputSchema,
       EVENT_INVALID_RESPONSE
     );
     if ('result' in validatedOrError) {
-      return validatedOrError;
+      return Promise.resolve(validatedOrError);
     }
 
     const { prompt, context, autoResponse, timeoutMs = 60000 } = validatedOrError;
@@ -386,7 +386,7 @@ export const requestApprovalAgent: Agent<
 
     return executeExternalEvent<ApprovalResult>({
       ...(autoResponse && { autoResponse: autoResponseData }),
-      handler: async () => requestApproval(prompt, context, autoResponse ? { autoResponse } : { timeoutMs }),
+      handler: () => requestApproval(prompt, context, autoResponse ? { autoResponse } : { timeoutMs }),
       timeoutMs,
       errorContext: APPROVAL_REQUEST_CONTEXT,
     });
@@ -414,14 +414,14 @@ export const requestChoiceAgent: Agent<
       timeoutMs: 60000,
     },
   },
-  execute: async (input: ChoiceRequestInput) => {
+  execute: (input: ChoiceRequestInput) => {
     const validatedOrError = validateAgentInput<ChoiceRequestInput, ChoiceResult, ExternalEventError>(
       input,
       ChoiceRequestInputSchema,
       EVENT_INVALID_RESPONSE
     );
     if ('result' in validatedOrError) {
-      return validatedOrError;
+      return Promise.resolve(validatedOrError);
     }
 
     const { prompt, options, autoResponse, timeoutMs = 60000 } = validatedOrError;
@@ -439,7 +439,7 @@ export const requestChoiceAgent: Agent<
 
     return executeExternalEvent<ChoiceResult>({
       ...(autoResponse && { autoResponse: autoResponseData }),
-      handler: async () => requestChoice(prompt, options, autoResponse ? { autoResponse } : { timeoutMs }),
+      handler: () => requestChoice(prompt, options, autoResponse ? { autoResponse } : { timeoutMs }),
       timeoutMs,
       errorContext: CHOICE_REQUEST_CONTEXT,
     });
@@ -469,14 +469,14 @@ export const requestCustomApprovalAgent: Agent<
       timeoutMs: 60000,
     },
   },
-  execute: async (input: CustomApprovalRequestInput) => {
+  execute: (input: CustomApprovalRequestInput) => {
     const validatedOrError = validateAgentInput<CustomApprovalRequestInput, CustomApprovalResult, ExternalEventError>(
       input,
       CustomApprovalRequestInputSchema,
       EVENT_INVALID_RESPONSE
     );
     if ('result' in validatedOrError) {
-      return validatedOrError;
+      return Promise.resolve(validatedOrError);
     }
 
     const { prompt, autoResponse, timeoutMs = 60000 } = validatedOrError;

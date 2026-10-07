@@ -501,7 +501,7 @@ export class ParseCache {
    * @param result - The parse result to file under that key
    * @returns True when the entry was persisted; see {@link setByKey}
    */
-  async set(keyed: KeyedContent, result: ParseResult): Promise<boolean> {
+  set(keyed: KeyedContent, result: ParseResult): Promise<boolean> {
     return this.setByKey(keyed.key, result);
   }
 
@@ -623,7 +623,7 @@ export class ParseCache {
    * @param shardDir - The directory {@link write} is about to write into
    * @returns True when it is safe and present
    */
-  private async prepareShard(shardDir: string): Promise<boolean> {
+  private prepareShard(shardDir: string): Promise<boolean> {
     const prepared = this.preparedShards.get(shardDir);
     if (prepared !== undefined) return prepared;
 
@@ -916,7 +916,7 @@ function describeLoaderError(error: unknown): string {
  *   loader's own error is carried on `loaderError`, never re-thrown bare — see
  *   {@link PARSER_UNAVAILABLE_CODE}.
  */
-export async function loadParser(kind: DocumentParserKind): Promise<LoadedParser> {
+export function loadParser(kind: DocumentParserKind): Promise<LoadedParser> {
   const pending = parserLoads.get(kind);
   if (pending !== undefined) return pending;
 
@@ -953,7 +953,7 @@ export async function loadParser(kind: DocumentParserKind): Promise<LoadedParser
  * @returns The parser for that kind
  * @throws {ParserUnavailableError} If the module cannot be imported
  */
-async function importParser(kind: DocumentParserKind): Promise<LoadedParser> {
+function importParser(kind: DocumentParserKind): Promise<LoadedParser> {
   if (kind === 'html') {
     return importParserModule(kind, async () => ({
       parseContent: (await import('./html-link-parser.js')).parseHtmlContent,

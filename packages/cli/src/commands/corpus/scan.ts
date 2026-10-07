@@ -18,7 +18,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { buildReport, toFindings, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
@@ -165,7 +165,8 @@ async function scanSeed(
   writeRunOutput(runDir, () => mkdirSync(runDir, { recursive: true }));
   progress.run = { outDir, runDirName };
 
-  for (const entry of seed.plugins) {
+  // One plugin at a time: each spawns a heavy audit and appends to the progress file.
+  await forEachInOrder(seed.plugins, async (entry) => {
     logger.info(`[${entry.name}] auditing ${entry.source}`);
     const row = await auditOnePlugin(entry, {
       runDir,
@@ -174,7 +175,7 @@ async function scanSeed(
     });
     progress.rows.push(row);
     logger.info(`[${entry.name}] audit=${row.audit.status} review=${row.review.status}`);
-  }
+  });
 
   const report: RunReport = {
     generated_at: generatedAt,
@@ -188,7 +189,7 @@ async function scanSeed(
     plugins: progress.rows,
   };
 
-  await writeRunReport(report, outDir);
+  writeRunReport(report, outDir);
 
   logger.info(`Wrote run report to ${runDir}/summary.yaml`);
   logger.info(`  ${progress.rows.length} plugins; durations recorded in summary.yaml`);

@@ -8,7 +8,7 @@ import {
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, isPathAbsentError, issueLocation, relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, forEachInOrder, isPathAbsentError, issueLocation, relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
 
 
 import type { EvidenceRecord } from '../evidence/index.js';
@@ -343,12 +343,9 @@ async function traverseLinks(
   const linkedFiles: LinkedFileWalkRecord[] = [];
   const queue: string[] = [resolvedSkillPath];
 
-  while (queue.length > 0) {
-    const currentPath = queue.shift();
-    if (!currentPath) {
-      break;
-    }
-
+  // In order: a breadth-first worklist growing from its own results, guarded by
+  // `visited`, whose parses share one cache.
+  await forEachInOrder(queue, async (currentPath) => {
     let parseResult;
     try {
       parseResult = await parseFileCached(currentPath, 'markdown');
@@ -373,7 +370,7 @@ async function traverseLinks(
         message: `File exists but could not be parsed: ${issueLocation(currentPath, locationRoot)}`,
         location: issueLocation(currentPath, locationRoot),
       });
-      continue;
+      return;
     }
 
     const processed = processFileLinks(parseResult, currentPath, skillDir, locationRoot, issues, visited);
@@ -414,7 +411,7 @@ async function traverseLinks(
         linksValidated: processed.linksValidated,
       });
     }
-  }
+  });
 
   return linkedFiles;
 }

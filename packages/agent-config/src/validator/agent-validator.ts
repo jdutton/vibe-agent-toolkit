@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { AgentManifestSchema, summarizeIssues, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { isPathAbsentError, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, isPathAbsentError, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { AGENT_MANIFEST_INVALID_CODE, readAgentManifestDocument, type LoadedAgentManifest } from '../loader/manifest-loader.js';
 
@@ -135,14 +135,15 @@ async function validateResources(
 ): Promise<void> {
   if (!manifest.spec.resources) return;
 
-  for (const [resourceId, resource] of Object.entries(manifest.spec.resources)) {
+  // In order: each check pushes into the shared sink, whose order is the report order.
+  await forEachInOrder(Object.entries(manifest.spec.resources), async ([resourceId, resource]) => {
     // Resource can be either a Resource object or a nested record of Resource objects
     if ('path' in resource && typeof resource.path === 'string') {
       await validateSingleResource(agentDir, resourceId, resource.path, sink);
     } else {
       await validateNestedResources(agentDir, resourceId, resource, sink);
     }
-  }
+  });
 }
 
 /**
@@ -167,14 +168,14 @@ async function validateNestedResources(
   resourceRecord: Record<string, unknown>,
   sink: IssueSink,
 ): Promise<void> {
-  for (const [nestedId, nestedResource] of Object.entries(resourceRecord)) {
+  await forEachInOrder(Object.entries(resourceRecord), async ([nestedId, nestedResource]) => {
     if (typeof nestedResource !== 'object' || !nestedResource || !('path' in nestedResource)) {
-      continue;
+      return;
     }
 
     const shown = nestedResource.path as string;
     await requireReachable(safePath.resolve(agentDir, shown), `Resource '${resourceId}.${nestedId}'`, shown, sink);
-  }
+  });
 }
 
 /**

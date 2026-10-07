@@ -32,6 +32,7 @@ import { createAllowUsageLedger, runValidationFramework } from '@vibe-agent-tool
 import type { RefusalCode, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   direntKindFollowingSync,
+  forEachInOrder,
   isAbsoluteAnyPlatform,
   isFilesystemAccessError,
   normalizedTmpdir,
@@ -1530,7 +1531,8 @@ async function installFromNpm(
 		const results: SkillUploadResult[] = [];
 		const errors: SkillUploadFailure[] = [];
 
-		for (const skillName of toUpload) {
+		// In order: one rate-limited API, and the result and failure lists follow `toUpload`.
+		await forEachInOrder(toUpload, async (skillName) => {
 			const skillDir = safePath.join(skillsDir, skillName);
 			try {
 				const result = await uploadSkillDir(client, skillDir, undefined, logger);
@@ -1540,7 +1542,7 @@ async function installFromNpm(
 				logger.info(`   ⚠ ${skillName}: ${failure.error.message}`);
 				errors.push(failure);
 			}
-		}
+		});
 
 		return summarizeNpmInstall(npmPackage, results, errors);
 	} finally {
@@ -1565,7 +1567,7 @@ export async function installFromLocal(
 	// or .zip file" — a file Windows and macOS both consider a zip archive, and one
 	// an operator has no way to read that refusal as being about capitalisation.
 	if (!stat.isDirectory() && sourcePath.toLowerCase().endsWith('.zip')) {
-		return installZipArchive(sourcePath, titleOverride, client, logger);
+		return await installZipArchive(sourcePath, titleOverride, client, logger);
 	}
 
 	if (!stat.isDirectory()) {
@@ -1581,7 +1583,7 @@ export async function installFromLocal(
 	// all — `--from-npm` packages several skills in a loop, and a packaging error
 	// with no path above it names nothing.
 	logger.info(`Packaging skill directory: ${sourcePath}`);
-	return uploadSkillDir(client, sourcePath, titleOverride, logger);
+	return await uploadSkillDir(client, sourcePath, titleOverride, logger);
 }
 
 /**
@@ -1782,18 +1784,19 @@ export async function deleteEveryVersion(
 ): Promise<VersionSweep> {
 	const deleted: string[] = [];
 	const failures: VersionDeleteFailure[] = [];
-	for (const version of versions) {
+	// In order: one rate-limited API, and both lists follow the order versions were handed in.
+	await forEachInOrder(versions, async (version) => {
 		try {
 			await client.deleteSkillVersion(skillId, version);
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
 			failures.push({ version, reason });
 			logger.info(`   ⚠ version ${version} was not deleted: ${reason}`);
-			continue;
+			return;
 		}
 		deleted.push(version);
 		logger.info(`   Deleted version ${version}`);
-	}
+	});
 	return { deleted, failures };
 }
 
@@ -1865,7 +1868,7 @@ export function createOrgSkillsCommand(): Command {
 		.description('List organization skills')
 		.option('--debug', DEBUG_OPT_DESC)
 		.action(async (options: { debug?: boolean }) => {
-			await executeOrgCommand('claude org skills list', options.debug, async ({ client }) => {
+			await executeOrgCommand('claude org skills list', options.debug, ({ client }) => {
 				return autopaginateSkills(client, '/v1/skills');
 			});
 		})
@@ -1889,7 +1892,7 @@ Example:
 		.option('--title <title>', 'Display title override (single skill only)')
 		.option('--debug', DEBUG_OPT_DESC)
 		.action(async (source: string | undefined, options: { fromNpm?: string; skill?: string; title?: string; debug?: boolean }) => {
-			await executeOrgCommand('claude org skills install', options.debug, async ({ client, logger }) => {
+			await executeOrgCommand('claude org skills install', options.debug, ({ client, logger }) => {
 				// INSIDE the action, like `versions add`'s own guards. Thrown from the
 				// Commander handler instead, these were a floating rejection that
 				// reached no catch: Node printed a raw stack trace with absolute $HOME
@@ -2124,7 +2127,7 @@ Example:
 		.argument(SKILL_ID_ARG, SKILL_ID_DESC)
 		.option('--debug', DEBUG_OPT_DESC)
 		.action(async (skillId: string, options: { debug?: boolean }) => {
-			await executeOrgCommand('claude org skills versions list', options.debug, async ({ client }) => {
+			await executeOrgCommand('claude org skills versions list', options.debug, ({ client }) => {
 				return autopaginateSkills(client, skillVersionsPath(skillId));
 			});
 		})
@@ -2186,7 +2189,7 @@ Example:
 		.argument('<source>', 'Path to a built skill directory')
 		.option('--debug', DEBUG_OPT_DESC)
 		.action(async (skillId: string, source: string, options: { debug?: boolean }) => {
-			await executeOrgCommand('claude org skills versions add', options.debug, async ({ client, logger }) => {
+			await executeOrgCommand('claude org skills versions add', options.debug, ({ client, logger }) => {
 				const resolved = resolveSourceArgument(source);
 				if (!statNamedPath(resolved, `Source not found: ${resolved}`).isDirectory()) {
 					// Name the asymmetry IN the refusal, not only in --help. `install`

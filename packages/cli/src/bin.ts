@@ -159,11 +159,10 @@ const VERBOSE_HELP_GROUPS: readonly { readonly group: string; readonly show: () 
   },
 ];
 
-for (const { group, show } of VERBOSE_HELP_GROUPS) {
-  if (rootArgv.wantsGroupVerboseHelp(argv, group)) {
-    await show();
-    process.exit(ExitCode.OK);
-  }
+const verboseHelpGroup = VERBOSE_HELP_GROUPS.find(({ group }) => rootArgv.wantsGroupVerboseHelp(argv, group));
+if (verboseHelpGroup) {
+  await verboseHelpGroup.show();
+  process.exit(ExitCode.OK);
 }
 
 /** Registers `doctor`, which attaches itself to the program rather than being added. */
@@ -198,7 +197,13 @@ if (requestedCommand === 'doctor') {
 } else if (!versionOnly) {
   // Help, a bare `vat`, or an unknown command: the whole tree has to exist so
   // `--help` lists it and `command:*` can report what was not recognised.
-  for (const load of Object.values(COMMAND_LOADERS)) program.addCommand(await load());
+  // Loaded together, added in table order — `--help` order is the table's. A broken
+  // module still fails as the FIRST broken one in table order, as a serial load did.
+  const loaded = await Promise.allSettled(Object.values(COMMAND_LOADERS).map(load => load()));
+  for (const outcome of loaded) {
+    if (outcome.status === 'rejected') throw outcome.reason;
+    program.addCommand(outcome.value);
+  }
   await loadDoctor();
 }
 

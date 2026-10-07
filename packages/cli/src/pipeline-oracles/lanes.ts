@@ -124,7 +124,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       filesOnly: true,
     }),
     // An oracle arm is a complete population or nothing: refuse, like the verbs it mirrors.
-    build: async (projectRoot) => crawlAndResolveRegistry(projectRoot, { unreadable: 'refuse' }),
+    build: (projectRoot) => crawlAndResolveRegistry(projectRoot, { unreadable: 'refuse' }),
   },
   {
     id: 'skills-build',
@@ -136,7 +136,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       absolute: true,
       filesOnly: true,
     }),
-    build: async (projectRoot) => createProjectRegistry(projectRoot),
+    build: (projectRoot) => createProjectRegistry(projectRoot),
   },
   {
     id: 'inventory',
@@ -148,7 +148,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       filesOnly: true,
       includeUntracked: true,
     }),
-    build: async (projectRoot) => crawlSkillLinkRegistry(projectRoot),
+    build: (projectRoot) => crawlSkillLinkRegistry(projectRoot),
   },
   {
     id: 'skills-validate',
@@ -167,7 +167,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
     // learned to route parsing through the project's declared collection
     // `mimeType`s and this copy did not, so the oracle described a lane nobody
     // runs. Naming the builder is what makes that class of drift impossible.
-    build: async (projectRoot) => buildSkillsValidateRegistry(projectRoot, {
+    build: (projectRoot) => buildSkillsValidateRegistry(projectRoot, {
       config: loadConfig(projectRoot),
     }),
   },

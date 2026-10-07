@@ -17,6 +17,7 @@ import {
   CRAWL_REGISTRY_ENUMERATE_ID,
   CRAWL_REGISTRY_RESOLVE_LINKS_ID,
   crawlTimingStart,
+  forEachInOrder,
   FsLookupCache,
   issueLocation,
   recordRegistryPass,
@@ -1257,7 +1258,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       await driveInOrder(
         filePaths,
         dispatcher,
-        async (filePath) => this.prepareAdmission(filePath, dispatcher),
+        (filePath) => this.prepareAdmission(filePath, dispatcher),
         (prepared) => {
           try {
             const admitted = this.emitPreparedResource(prepared);
@@ -1762,10 +1763,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return issues;
     }
 
-    for (const resource of this.resourcesByPath.values()) {
+    // In order: issues follow resource order.
+    await forEachInOrder(this.resourcesByPath.values(), async (resource) => {
       // Skip if resource has no collections
       if (!resource.collections || resource.collections.length === 0) {
-        continue;
+        return;
       }
 
       // Validate against each collection's schema
@@ -1776,7 +1778,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         skipGitIgnoreCheck,
       );
       issues.push(...collectionIssues);
-    }
+    });
 
     return issues;
   }
@@ -1797,12 +1799,14 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return issues;
     }
 
-    for (const collectionId of resource.collections) {
-      const collection = this.config.resources.collections[collectionId];
+    const collections = this.config.resources.collections;
+    // In order: issues follow the resource's collection order.
+    await forEachInOrder(resource.collections, async (collectionId) => {
+      const collection = collections[collectionId];
 
       // Skip if collection has no validation or no schema
       if (!collection?.validation?.frontmatterSchema) {
-        continue;
+        return;
       }
 
       const collectionIssues = await this.validateAgainstCollectionSchema(
@@ -1813,7 +1817,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         skipGitIgnoreCheck,
       );
       issues.push(...collectionIssues);
-    }
+    });
 
     return issues;
   }
@@ -1949,7 +1953,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    *
    * @private
    */
-  private async loadCollectionSchema(
+  private loadCollectionSchema(
     schemaPath: string,
     mode: ValidationMode,
     fsModule: typeof fs,

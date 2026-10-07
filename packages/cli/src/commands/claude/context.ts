@@ -963,7 +963,7 @@ function groupDigits(value: number): string {
  *   middle of it breaks every consumer
  * @returns The populated projection
  */
-async function populateContext(root: string, logger: Logger): Promise<Projection> {
+function populateContext(root: string, logger: Logger): Promise<Projection> {
   return withPopulationCache({ root }, async (cache) => {
     const gitTracker = await gitTrackerForProjectRoot(root);
     return buildClaudeContextPopulation({ root, ...populationWiring(logger, gitTracker, cache, root) });

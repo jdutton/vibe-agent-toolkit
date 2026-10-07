@@ -31,7 +31,7 @@ import {
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, findProjectRoot, isFilesystemAccessError, isPathAbsentError, issueLocation, isVatError, normalizePath, PathEscapesRootError, relativeEscapesRoot, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, findProjectRoot, forEachInOrder, isFilesystemAccessError, isPathAbsentError, issueLocation, isVatError, mapInOrder, normalizePath, PathEscapesRootError, relativeEscapesRoot, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { refusalCodeOf } from '../../../utils/command-refusal.js';
@@ -167,11 +167,10 @@ async function validatePluginSkills(
     return resolveIssueSeverity([boundary.unreadable(skillsDir, error)], validation);
   }
 
-  const issues: ValidationIssue[] = [];
-  for (const skillEntry of skillEntries) {
-    issues.push(...await validateOneSkill(safePath.join(skillsDir, skillEntry.name), marketplacePath, boundary, validation));
-  }
-  return issues;
+  // In order: `boundary` records refused and unread paths in the order the run names them.
+  const perSkill = await mapInOrder(skillEntries, (skillEntry) =>
+    validateOneSkill(safePath.join(skillsDir, skillEntry.name), marketplacePath, boundary, validation));
+  return perSkill.flat();
 }
 
 /**
@@ -350,12 +349,14 @@ async function validateDeclaredPlugins(
   const realRoot = toForwardSlash(normalizePath(marketplacePath));
   const boundary = new WalkBoundary(marketplacePath, realRoot);
 
-  for (const entry of declared) {
+  // In order: `validatedByDir` dedupes a directory two entries name, which a
+  // concurrent first visit would validate twice.
+  await forEachInOrder(declared, async (entry) => {
     // A source that names nothing inside the root — nothing at all, a file,
     // an absolute path, a `..` climb, a symlink out — is simply absent from the
     // results, and the builder refuses the run by name from that absence.
     const dir = containedPluginDir(marketplacePath, realRoot, entry.source);
-    if (dir === undefined) continue;
+    if (dir === undefined) return;
 
     // Two entries, one directory: the directory's findings were collected
     // twice and COUNTED twice (`PLUGIN_MISSING_AUTHOR: 2` for one file). Each
@@ -364,7 +365,7 @@ async function validateDeclaredPlugins(
     const seen = validatedByDir.get(dir.real);
     if (seen !== undefined) {
       pluginResults.push({ ...entry, ...seen });
-      continue;
+      return;
     }
 
     const contained = await validateContainedPlugin(dir.lexical, marketplacePath, boundary, validation);
@@ -373,7 +374,7 @@ async function validateDeclaredPlugins(
     issues.push(...contained.result.issues);
 
     issues.push(...await validatePluginSkills(dir.lexical, marketplacePath, boundary, validation));
-  }
+  });
 
   return {
     pluginResults,

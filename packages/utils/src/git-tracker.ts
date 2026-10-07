@@ -15,6 +15,7 @@ import {
 } from './crawl-timing.js';
 import { peekGitTreeSnapshot } from './git-snapshot.js';
 import { gitLsFiles, isGitIgnored } from './git-utils.js';
+import { promised } from './in-order.js';
 import { safePath, toForwardSlash } from './path-utils.js';
 
 /**
@@ -137,7 +138,14 @@ export class GitTracker {
    * work, and charging it would inflate `calls` with questions rather than
    * spawns.
    */
-  async initialize(options?: GitTrackerInitOptions): Promise<void> {
+  initialize(options?: GitTrackerInitOptions): Promise<void> {
+    // Promise-shaped for its callers, synchronous underneath (`gitLsFiles` is a
+    // sync spawn); a failure is a rejection, never a synchronous throw.
+    return promised(() => this.initializeNow(options));
+  }
+
+  /** The synchronous body of {@link initialize}. */
+  private initializeNow(options?: GitTrackerInitOptions): void {
     if (this.initialized) {
       return;
     }

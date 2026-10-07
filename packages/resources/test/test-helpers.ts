@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
+  forEachInOrder,
   isPathAbsentError,
   mkdirSyncReal,
   normalizedTmpdir,
@@ -750,9 +751,10 @@ export async function writeCorpusFiles(
   directories: readonly string[],
   corpus: readonly CorpusFile[],
 ): Promise<void> {
-  for (const directory of directories) {
+  // In order: a directory may be the parent of a later one.
+  await forEachInOrder(directories, async (directory) => {
     await mkdir(safePath.join(root, directory), { recursive: true });
-  }
+  });
   await Promise.all(
     corpus.map((file) =>
       writeFile(safePath.join(root, file.path), file.content, 'utf-8'),

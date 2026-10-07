@@ -59,14 +59,7 @@ export async function compileMarkdownResources(
     console.log(`Found ${files.length} markdown files`);
   }
 
-  const results: CompileResult[] = [];
-
-  for (const file of files) {
-    const result = await compileSingleFile(file, inputDir, outputDir, verbose);
-    results.push(result);
-  }
-
-  return results;
+  return files.map((file) => compileSingleFile(file, inputDir, outputDir, verbose));
 }
 
 /**
@@ -78,12 +71,12 @@ export async function compileMarkdownResources(
  * @param verbose - Enable verbose logging
  * @returns Compilation result
  */
-async function compileSingleFile(
+function compileSingleFile(
   relativeFilePath: string,
   inputDir: string,
   outputDir: string,
   verbose: boolean,
-): Promise<CompileResult> {
+): CompileResult {
   const sourcePath = safePath.join(inputDir, relativeFilePath);
 
   try {

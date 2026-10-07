@@ -71,7 +71,7 @@ describe('vat inventory (system test)', () => {
 
 	beforeAll(async () => {
 		tempDir = createTestTempDir('vat-inventory-test-');
-		fixtureDir = await getTestFixturesPath();
+		fixtureDir = getTestFixturesPath();
 	}, 30_000);
 
 	afterAll(() => {

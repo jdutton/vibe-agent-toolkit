@@ -112,7 +112,7 @@ import { existsSync } from 'node:fs';
 
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { mapWithConcurrency, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import {
   CLAUDE_WEB_REFERENCES_SUBDIR,
@@ -366,8 +366,10 @@ export async function detectMissingReferencedPaths(
   const registryEntry = CODE_REGISTRY.PACKAGED_REFERENCED_PATH_MISSING;
   const issues: ValidationIssue[] = [];
 
-  for (const docFile of docFiles) {
-    const candidates = await bundledPathCandidates(docFile);
+  // Independent reads; the issues are folded in document order.
+  const candidatesByDoc = await mapWithConcurrency(docFiles, (docFile) => bundledPathCandidates(docFile));
+  for (const [index, docFile] of docFiles.entries()) {
+    const candidates = candidatesByDoc[index] ?? [];
     const missing = candidates.filter(
       rel => !bundleHas(skillDir, rel) && !bundleHas(skillDir, routedSpelling(rel, target)),
     );

@@ -12,7 +12,7 @@ import {
 	type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { isFilesystemAccessError, isPathAbsentError, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, isPathAbsentError, issueLocation, promised, safePath } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
@@ -80,10 +80,20 @@ function applyPostSchemaChecks(args: {
  *   {@link AnchorRootOptions}).
  * @returns Validation result with issues
  */
-export async function validatePlugin(
+export function validatePlugin(
 	pluginPath: string,
 	options?: { strict?: boolean } & AnchorRootOptions
 ): Promise<ValidationResult> {
+	// Promise-shaped for the injectable validator type over synchronous work; a
+	// throw still arrives as a rejection.
+	return promised(() => validatePluginNow(pluginPath, options));
+}
+
+/** The synchronous body of {@link validatePlugin}. */
+function validatePluginNow(
+	pluginPath: string,
+	options?: { strict?: boolean } & AnchorRootOptions
+): ValidationResult {
 	const issues: ValidationIssue[] = [];
 	const pluginJsonPath = safePath.join(pluginPath, '.claude-plugin', 'plugin.json');
 	// Anchor contract: relative to the run's ONE stated root, never absolute.

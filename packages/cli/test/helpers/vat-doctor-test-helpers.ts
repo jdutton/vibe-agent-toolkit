@@ -188,18 +188,18 @@ export function restoreProcessVersion(): void {
  * @example
  * ```typescript
  * // Healthy file system
- * await mockDoctorFileSystem();
+ * mockDoctorFileSystem();
  *
  * // Missing config
- * await mockDoctorFileSystem({ configExists: false });
+ * mockDoctorFileSystem({ configExists: false });
  *
  * // In VAT source tree
- * await mockDoctorFileSystem({ isVatSourceTree: true });
+ * mockDoctorFileSystem({ isVatSourceTree: true });
  * ```
  */
-export async function mockDoctorFileSystem(
+export function mockDoctorFileSystem(
   config?: DoctorFileSystemConfig,
-): Promise<() => void> {
+): () => void {
   const opts = {
     packageVersion: '0.1.0',
     configExists: true,

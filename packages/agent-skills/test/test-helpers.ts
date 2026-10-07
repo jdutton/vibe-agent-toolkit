@@ -111,7 +111,7 @@ export function setupStubbedHarnessSubject<T>(
 /**
  * Create a SKILL.md file with given content and validate it
  */
-export async function createSkillAndValidate(
+export function createSkillAndValidate(
   tempDir: string,
   content: string,
 ): Promise<ValidationResult> {
@@ -162,7 +162,7 @@ export function createTransitiveSkillStructure(
  * @param rootDir - Root directory for resolving links
  * @returns Validation result
  */
-export async function validateSkillWithTransitiveChecking(
+export function validateSkillWithTransitiveChecking(
   skillPath: string,
   rootDir?: string,
 ): Promise<ValidationResult> {
@@ -180,7 +180,7 @@ export async function validateSkillWithTransitiveChecking(
  * @param rootDir - Root directory for scanning files
  * @returns Validation result
  */
-export async function validateSkillWithUnreferencedFileCheck(
+export function validateSkillWithUnreferencedFileCheck(
   skillPath: string,
   rootDir: string,
 ): Promise<ValidationResult> {

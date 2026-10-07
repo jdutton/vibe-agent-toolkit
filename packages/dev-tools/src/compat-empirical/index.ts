@@ -19,7 +19,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, mapInOrder, mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { PROJECT_ROOT, colors, getDirname, log } from '../common.js';
@@ -123,20 +123,18 @@ function loadCorpus(opts: CommonOpts): {
 async function commandPredict(opts: CommonOpts): Promise<void> {
   const { entries, outDir } = loadCorpus(opts);
   const vatVersion = readVatVersion();
-  const predictions: StaticPrediction[] = [];
-
-  for (const entry of entries) {
+  // In order: fetchSource stages into one shared checkout root, and the log reads per entry.
+  const predictions: StaticPrediction[] = await mapInOrder(entries, (entry) => {
     log(`[predict] ${entry.id}`, 'cyan');
     const staged = fetchSource(entry, PROJECT_ROOT);
     const declared = entry.declaredTargets;
-    const prediction = await predictForSkill({
+    return predictForSkill({
       skillId: entry.id,
       skillPath: staged.skillPath,
       ...(declared === undefined ? {} : { declaredTargets: declared }),
       vatVersion,
     });
-    predictions.push(prediction);
-  }
+  });
 
   const outPath = safePath.join(outDir, 'predictions.json');
   writeFileSync(outPath, JSON.stringify(predictions, null, 2), 'utf8');
@@ -159,14 +157,14 @@ function safeWriteObservations(path: string, observations: RuntimeObservation[])
 async function teardownAllDrivers(drivers: Map<Target, RuntimeDriver>): Promise<void> {
   // Per-driver try/catch so one failing teardown doesn't strand other drivers'
   // resources, and so the catch can't replace a primary error from the loop.
-  for (const d of drivers.values()) {
+  await forEachInOrder(drivers.values(), async (d) => {
     try {
       await d.teardown();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log(`[run] teardown failed for ${d.target}: ${msg}`, 'red');
     }
-  }
+  });
 }
 
 async function commandRun(opts: RunOptions): Promise<void> {
@@ -189,7 +187,7 @@ async function commandRun(opts: RunOptions): Promise<void> {
   try {
     // Setup inside the try block: if a later driver's setup throws, the
     // finally still tears down the earlier drivers that did set up.
-    for (const d of drivers.values()) await d.setup();
+    await forEachInOrder(drivers.values(), (d) => d.setup());
 
     observations = await runMatrix({
       entries,
@@ -241,18 +239,19 @@ async function commandJudge(opts: CommonOpts): Promise<void> {
   const callsDir = safePath.join(outDir, 'judge-calls');
   const judgePromptSha = judgePromptShaFor();
 
-  for (const obs of observations) {
+  // In order: one judge API, and judgments.json / the log follow observation order.
+  await forEachInOrder(observations, async (obs) => {
     const entry = entries.find((e) => e.id === obs.skillId);
-    if (!entry) continue;
+    if (!entry) return;
     // Route by the observation's own promptId — the run loop stamps every
     // observation with the trigger it was produced under, so the judge sees
     // the exact prompt the runtime saw (no guessing from entry.triggerPromptRefs).
     const trigger = promptById.get(obs.promptId);
     if (!trigger) {
       log(`[judge]   skip ${obs.skillId}/${obs.target}: missing prompt ${obs.promptId}`, 'yellow');
-      continue;
+      return;
     }
-    if (!shouldJudge(obs)) continue;
+    if (!shouldJudge(obs)) return;
     log(`[judge] ${obs.skillId} / ${obs.target}`, 'cyan');
     try {
       const judgment = await judgeCompletion({
@@ -266,13 +265,13 @@ async function commandJudge(opts: CommonOpts): Promise<void> {
     } catch (err) {
       log(`[judge]   error: ${err instanceof Error ? err.message : String(err)}`, 'red');
     }
-  }
+  });
 
   writeFileSync(safePath.join(outDir, 'judgments.json'), JSON.stringify(judgments, null, 2), 'utf8');
   log(`[judge] wrote ${judgments.length} judgments (calls persisted to ${callsDir})`, 'green');
 }
 
-async function commandReport(opts: CommonOpts): Promise<void> {
+function commandReport(opts: CommonOpts): void {
   const { entries, promptById, outDir } = loadCorpus(opts);
   const predictions = JSON.parse(readFileSync(safePath.join(outDir, 'predictions.json'), 'utf8')) as StaticPrediction[];
   const observations = JSON.parse(readFileSync(safePath.join(outDir, OBSERVATIONS_JSON_FILE), 'utf8')) as RuntimeObservation[];
@@ -327,7 +326,7 @@ async function commandAll(opts: RunOptions): Promise<void> {
   await commandPredict(opts);
   await commandRun(opts);
   await commandJudge(opts);
-  await commandReport(opts);
+  commandReport(opts);
 }
 
 interface ReJudgeOpts {
@@ -366,7 +365,7 @@ async function commandReJudge(opts: ReJudgeOpts): Promise<void> {
 
   // Stable iteration order so a re-judge log line stays diffable across runs.
   const sortedFiles = [...callFiles].sort((a, b) => a.localeCompare(b));
-  for (const file of sortedFiles) {
+  await forEachInOrder(sortedFiles, async (file) => {
     const path = safePath.join(callsDir, file);
     const artifact = JudgeCallArtifactSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
     log(`[re-judge] ${artifact.skillId} / ${artifact.target} (${file})`, 'cyan');
@@ -380,7 +379,7 @@ async function commandReJudge(opts: ReJudgeOpts): Promise<void> {
     } catch (err) {
       log(`[re-judge]   error: ${err instanceof Error ? err.message : String(err)}`, 'red');
     }
-  }
+  });
 
   const rerunPath = safePath.join(outDir, 'judgments-rerun.json');
   writeFileSync(rerunPath, JSON.stringify(rerun, null, 2), 'utf8');
@@ -424,8 +423,8 @@ function main(): void {
 
   commonOptions(program.command('report'))
     .description('Render the matrix and markdown report')
-    .action(async (opts: CommonOpts) => {
-      await commandReport(opts);
+    .action((opts: CommonOpts) => {
+      commandReport(opts);
     });
 
   commonOptions(program.command('all'))

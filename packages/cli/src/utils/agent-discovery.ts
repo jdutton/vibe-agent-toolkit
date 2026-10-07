@@ -5,7 +5,7 @@
 import type { Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 
-import { direntKindFollowing, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, everyInOrder, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
 import { CommandRefusalError } from './command-refusal.js';
@@ -123,21 +123,26 @@ async function discoverAgentInDirectory(agentDir: string, refused: RefusedPath):
 
 async function findManifest(dir: string, refused: RefusedPath): Promise<string | null> {
   const candidates = ['agent.yaml', 'agent.yml'];
+  let found: string | null = null;
 
-  for (const candidate of candidates) {
+  // In order: the first candidate present wins, and a refusal stops the probe.
+  await everyInOrder(candidates, async (candidate) => {
     const manifestPath = safePath.join(dir, candidate);
     try {
       await fs.access(manifestPath);
-      return manifestPath;
+      found = manifestPath;
+      return false;
     } catch (error) {
       // Not this candidate. Anything but an absence is the directory refusing
       // the probe — recorded against the directory, which is what a listing of
       // it refused too, so one locked directory is one gap.
-      if (!isPathAbsentError(error)) return refused(dir, error);
+      if (isPathAbsentError(error)) return true;
+      found = refused(dir, error);
+      return false;
     }
-  }
+  });
 
-  return null;
+  return found;
 }
 
 async function parseAgentManifest(

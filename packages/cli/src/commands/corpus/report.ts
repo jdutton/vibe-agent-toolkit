@@ -163,7 +163,7 @@ export function writeRunOutput(what: string, write: () => void): void {
  *
  * @throws {CommandRefusalError} `RUN_INCOMPLETE` when the OS refuses the directory or the file
  */
-export async function writeRunReport(report: RunReport, outDir: string): Promise<string> {
+export function writeRunReport(report: RunReport, outDir: string): string {
   const runDir = safePath.join(outDir, runDirectoryName(report));
   // eslint-disable-next-line local/no-fs-mkdirSync -- the corpus output dir is caller-supplied; mkdir-recursive is the right call here
   writeRunOutput(runDir, () => mkdirSync(runDir, { recursive: true }));

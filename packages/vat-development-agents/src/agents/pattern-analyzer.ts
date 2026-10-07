@@ -75,17 +75,17 @@ Output JSON matching this schema:
     /**
      * Analyze a design request and recommend pattern
      */
-    async analyze(_request: DesignRequest): Promise<PatternAnalysis> {
+    analyze(_request: DesignRequest): Promise<PatternAnalysis> {
       // This would integrate with an actual LLM in a real implementation
       // For now, demonstrate the structure
 
-      return {
+      return Promise.resolve({
         recommendedArchetype: 'conversational-assistant',
         confidence: 'high',
         reasoning: 'Multi-turn dialogue with context accumulation',
         recommendedLLM: 'claude-sonnet-5',
         alternativePatterns: ['llm-analyzer'],
-      };
+      });
     },
   };
 }

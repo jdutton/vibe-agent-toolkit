@@ -83,7 +83,7 @@ export async function onRagDatabase<T>(
  * @param operation - The operation to execute with the RAG provider (given the resolved database path)
  * @returns Result of the operation
  */
-export async function executeRagOperation<T>(
+export function executeRagOperation<T>(
   verb: ReportVerb,
   options: { db?: string; debug?: boolean; readonly?: boolean },
   operation: (provider: RAGQueryProvider, logger: Logger, dbPath: string) => Promise<T>,

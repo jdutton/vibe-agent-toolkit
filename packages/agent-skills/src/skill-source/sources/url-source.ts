@@ -22,7 +22,7 @@ const FETCH_TIMEOUT_MS = 30_000;
  *   cache entry keyed on the sha256; identity is url + sha256. This is the one
  *   genuinely new fetch capability (spec §11a).
  */
-export async function resolveUrlSource(
+export function resolveUrlSource(
   url: string,
   sha256: string | undefined,
   ctx: ResolveSkillSourceContext,

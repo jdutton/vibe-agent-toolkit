@@ -12,7 +12,7 @@
 import path from 'node:path';
 
 import { createRegistryIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 
 import { validateFrontmatter } from './frontmatter-validator.js';
@@ -56,16 +56,15 @@ async function loadSchema(schemaPath: string, projectRoot?: string): Promise<obj
  * @param projectRoot - Optional project root for resolving relative schema paths
  * @returns Updated schema references with validation results
  */
-export async function validateFrontmatterMultiSchema(
+export function validateFrontmatterMultiSchema(
   frontmatter: Record<string, unknown> | undefined,
   schemas: SchemaReference[],
   resourcePath: string,
   mode: ValidationMode,
   projectRoot?: string,
 ): Promise<SchemaReference[]> {
-  const results: SchemaReference[] = [];
-
-  for (const schemaRef of schemas) {
+  // In order: one result per schema, in declaration order.
+  return mapInOrder(schemas, async (schemaRef): Promise<SchemaReference> => {
     try {
       // Load schema
       const schema = await loadSchema(schemaRef.schema, projectRoot);
@@ -85,11 +84,11 @@ export async function validateFrontmatterMultiSchema(
         result.errors = issues;
       }
 
-      results.push(result);
+      return result;
     } catch (error) {
       // Schema loading or validation failed
       const message = error instanceof Error ? error.message : String(error);
-      results.push({
+      return {
         ...schemaRef,
         applied: true,
         valid: false,
@@ -100,11 +99,9 @@ export async function validateFrontmatterMultiSchema(
             { location: issueLocation(resourcePath, locationRoot(projectRoot)), line: 1 },
           ),
         ],
-      });
+      };
     }
-  }
-
-  return results;
+  });
 }
 
 /**

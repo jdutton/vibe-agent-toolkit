@@ -34,7 +34,13 @@ import {
   type ContentTransformOptions,
   type ResourceMetadata,
 } from '@vibe-agent-toolkit/resources';
-import { isVatError, RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
+import {
+  forEachInOrder,
+  isVatError,
+  RAG_DATABASE_UNREADABLE_CODE,
+  RAG_INDEX_EMPTY_CODE,
+  VatError,
+} from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape } from 'zod';
 
 import { chunkTableReadFailure } from './chunk-table-failure.js';
@@ -340,7 +346,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * @returns The opened table
    * @throws {VatError} `RAG_DATABASE_UNREADABLE` when LanceDB cannot open it
    */
-  private async openChunkTable(connection: Connection): Promise<Table> {
+  private openChunkTable(connection: Connection): Promise<Table> {
     return this.readingChunkTable(() => connection.openTable(TABLE_NAME));
   }
 
@@ -382,8 +388,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    *
    * @returns A connection every write path can rely on
    */
-  private async connected(): Promise<Connection> {
-    return this.connection ?? this.reconnectAndOpenTable();
+  private connected(): Promise<Connection> {
+    return this.connection ? Promise.resolve(this.connection) : this.reconnectAndOpenTable();
   }
 
   /**
@@ -594,7 +600,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     };
 
     let processedCount = 0;
-    for (const resource of resources) {
+    // In order: each resource writes the same LanceDB tables, and progress counts them one at a time.
+    await forEachInOrder(resources, async (resource) => {
       processedCount++;
 
       try {
@@ -640,7 +647,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
           resourceId: resource.id,
         }),
       );
-    }
+    });
 
     result.durationMs = Date.now() - startTime;
     return result;
@@ -1001,8 +1008,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   /**
    * Update a specific resource
    */
-  async updateResource(_resourceId: string): Promise<void> {
-    throw new Error('Not implemented - use indexResources() instead');
+  updateResource(_resourceId: string): Promise<void> {
+    return Promise.reject(new Error('Not implemented - use indexResources() instead'));
   }
 
   /**

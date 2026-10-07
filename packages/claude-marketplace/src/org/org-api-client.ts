@@ -634,6 +634,14 @@ function readResponse<T>(
   });
 }
 
+/**
+ * Start a request, turning a synchronous throw while building it (a missing key,
+ * a malformed URL) into a rejection, exactly as the `async` method it replaced did.
+ */
+async function startRequest<T>(start: () => Promise<T>): Promise<T> {
+  return await start();
+}
+
 export class OrgApiClient {
   private readonly adminApiKey: string | undefined;
   private readonly apiKey: string | undefined;
@@ -699,41 +707,41 @@ export class OrgApiClient {
   }
 
   /** GET to an org Admin API endpoint. */
-  async get<T>(path: string, params: Record<string, string | number | undefined> = {}): Promise<T> {
-    const extraQs = this.buildQueryString(params);
-    let url = this.buildUrl(path);
-    if (extraQs) {
-      // Join with '&' if path already has query params, otherwise use '?'
-      url += path.includes('?') ? extraQs.replace('?', '&') : extraQs;
-    }
-    const headers = this.buildAdminHeaders();
-    return this.send<T>('GET', url, headers);
+  get<T>(path: string, params: Record<string, string | number | undefined> = {}): Promise<T> {
+    return startRequest(() => {
+      const extraQs = this.buildQueryString(params);
+      let url = this.buildUrl(path);
+      if (extraQs) {
+        // Join with '&' if path already has query params, otherwise use '?'
+        url += path.includes('?') ? extraQs.replace('?', '&') : extraQs;
+      }
+      const headers = this.buildAdminHeaders();
+      return this.send<T>('GET', url, headers);
+    });
   }
 
   /** GET to a skills API endpoint (regular API key + beta header). */
-  async getSkills<T>(path: string, params: Record<string, string | undefined> = {}): Promise<T> {
-    const url = this.buildUrl(path) + this.buildQueryString(params);
-    const headers = this.buildSkillsHeaders();
-    return this.send<T>('GET', url, headers);
+  getSkills<T>(path: string, params: Record<string, string | undefined> = {}): Promise<T> {
+    return startRequest(() => this.send<T>('GET', this.buildUrl(path) + this.buildQueryString(params), this.buildSkillsHeaders()));
   }
 
   /** DELETE a skill by ID. All versions must be deleted first. */
-  async deleteSkill<T>(skillId: string): Promise<T> {
-    const url = this.buildUrl(`/v1/skills/${encodeURIComponent(skillId)}`);
-    const headers = this.buildSkillsHeaders();
-    return this.send<T>('DELETE', url, headers);
+  deleteSkill<T>(skillId: string): Promise<T> {
+    return startRequest(() =>
+      this.send<T>('DELETE', this.buildUrl(`/v1/skills/${encodeURIComponent(skillId)}`), this.buildSkillsHeaders()),
+    );
   }
 
   /** DELETE a specific version of a skill. */
-  async deleteSkillVersion<T>(skillId: string, version: string): Promise<T> {
-    const url = this.buildUrl(skillVersionsPath(skillId, version));
-    const headers = this.buildSkillsHeaders();
-    return this.send<T>('DELETE', url, headers);
+  deleteSkillVersion<T>(skillId: string, version: string): Promise<T> {
+    return startRequest(() =>
+      this.send<T>('DELETE', this.buildUrl(skillVersionsPath(skillId, version)), this.buildSkillsHeaders()),
+    );
   }
 
   /** Upload a skill via multipart/form-data POST to /v1/skills. */
-  async uploadSkill<T>(multipart: MultipartResult): Promise<T> {
-    return this.postMultipart<T>(this.buildUrl('/v1/skills'), multipart);
+  uploadSkill<T>(multipart: MultipartResult): Promise<T> {
+    return startRequest(() => this.postMultipart<T>(this.buildUrl('/v1/skills'), multipart));
   }
 
   /**
@@ -750,8 +758,8 @@ export class OrgApiClient {
    * The server assigns the version identifier and promotes it to
    * `latest_version` — nothing client-side numbers a version.
    */
-  async uploadSkillVersion<T>(skillId: string, multipart: MultipartResult): Promise<T> {
-    return this.postMultipart<T>(this.buildUrl(skillVersionsPath(skillId)), multipart);
+  uploadSkillVersion<T>(skillId: string, multipart: MultipartResult): Promise<T> {
+    return startRequest(() => this.postMultipart<T>(this.buildUrl(skillVersionsPath(skillId)), multipart));
   }
 
   private postMultipart<T>(url: string, multipart: MultipartResult): Promise<T> {
@@ -782,16 +790,16 @@ export class OrgApiClient {
    * of the loop — see {@link isReplayedDeleteOfAbsentResource}. A 404 after a
    * replay owed only to a rate limit stays an error: that attempt did not act.
    */
-  private async send<T>(
+  private send<T>(
     method: string,
     url: string,
     headers: Record<string, string>,
     body?: Buffer,
   ): Promise<T> {
-    // Whether any attempt so far may have reached the origin and acted. Once
+    // Each attempt depends on the one before it, so attempts recurse. The flag
+    // is whether any attempt so far may have reached the origin and acted. Once
     // true it stays true: the fact does not expire on a later rate limit.
-    let priorAttemptMayHaveActed = false;
-    for (let attempt = 0; ; attempt += 1) {
+    const attemptFrom = async (attempt: number, priorAttemptMayHaveActed: boolean): Promise<T> => {
       try {
         return await this.request<T>(method, url, headers, body);
       } catch (error) {
@@ -801,10 +809,12 @@ export class OrgApiClient {
         // removed it. Same body a 204 resolves — the API sends none either way,
         // and the caller's report is built from the request, not from an echo.
         if ('alreadyGone' in decision) return undefined as T;
-        priorAttemptMayHaveActed ||= attemptMayHaveActed(error);
+        const mayHaveActed = priorAttemptMayHaveActed || attemptMayHaveActed(error);
         await sleep(decision.delayMs);
+        return attemptFrom(attempt + 1, mayHaveActed);
       }
-    }
+    };
+    return attemptFrom(0, false);
   }
 
   /**

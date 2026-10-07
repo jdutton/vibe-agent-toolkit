@@ -114,6 +114,7 @@ import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync } from '
 import { basename, isAbsolute } from 'node:path';
 
 import {
+  forEachInOrder,
   isAbsoluteAnyPlatform,
   isFilesystemAccessError,
   isPathAbsentError,
@@ -363,7 +364,7 @@ export class FilesystemExtentContributor implements ExtentContributor {
     const realizations: ResourceRealizationRow[] = [];
     const declined = declinedPathFilter(base.gitTracker, parameters);
 
-    for (const { absolutePath, contentHint, shape } of enumerated) {
+    await forEachInOrder(enumerated, async ({ absolutePath, contentHint, shape }) => {
       // BEFORE `idFor` and before `collectRealization`, which is the whole
       // saving and the reason this is not a filter over the finished rows:
       // `idFor` costs a `realpathSync.native` for any path git's index cannot
@@ -371,7 +372,7 @@ export class FilesystemExtentContributor implements ExtentContributor {
       // opens with an unconditional `lstat`. Declining afterwards would pay both
       // and then throw the answer away, which is what the consuming lane was
       // already doing.
-      if (declined(absolutePath)) continue;
+      if (declined(absolutePath)) return;
       const resourceId = base.identities.idFor(absolutePath);
       // Sequential on purpose: under a keying demand `collectRealization` reads
       // and keys every file's bytes, and fanning the whole crawl out at once
@@ -412,7 +413,7 @@ export class FilesystemExtentContributor implements ExtentContributor {
           vatId: null,
         });
       }
-    }
+    });
 
     const memberships: ResourceExtentRow[] = [...resources.keys()].map((resourceId) => ({
       resourceId,

@@ -49,7 +49,7 @@ if (result.summary.errors > 0) {
 ```typescript
 import { importSkillToAgent } from '@vibe-agent-toolkit/agent-skills';
 
-const result = await importSkillToAgent({
+const result = importSkillToAgent({
   skillPath: './my-skill/SKILL.md',
   outputPath: './my-agent/agent.yaml', // Optional
   force: false, // Optional
@@ -179,7 +179,7 @@ The validator checks for:
 
 See [Best Practices Guide](../../docs/guides/agent-skills-best-practices.md) for detailed guidance.
 
-### importSkillToAgent(options): Promise<ImportResult>
+### importSkillToAgent(options): ImportResult
 
 Convert an Agent Skill (SKILL.md) to VAT agent format (agent.yaml).
 
@@ -196,24 +196,24 @@ interface ImportOptions {
 ```typescript
 type ImportResult =
   | { success: true; agentPath: string }
-  | { success: false; error: string };
+  | { success: false; error: string; refusal: RefusalCode };
 ```
 
 **Example:**
 ```typescript
 // Basic import
-const result = await importSkillToAgent({
+const result = importSkillToAgent({
   skillPath: './my-skill/SKILL.md',
 });
 
 // Custom output path
-const result = await importSkillToAgent({
+const result = importSkillToAgent({
   skillPath: './my-skill/SKILL.md',
   outputPath: './agents/my-agent/agent.yaml',
 });
 
 // Force overwrite
-const result = await importSkillToAgent({
+const result = importSkillToAgent({
   skillPath: './my-skill/SKILL.md',
   force: true,
 });
@@ -376,7 +376,7 @@ if (validation.summary.errors > 0) {
 }
 
 // Import if validation passes
-const importResult = await importSkillToAgent({
+const importResult = importSkillToAgent({
   skillPath: './my-skill/SKILL.md',
 });
 

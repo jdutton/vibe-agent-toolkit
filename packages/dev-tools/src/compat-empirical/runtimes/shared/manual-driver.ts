@@ -11,6 +11,7 @@ import { cpSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import {
   mkdirSyncReal,
   normalizedTmpdir,
+  promised,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
@@ -66,7 +67,11 @@ export class ManualDriverBase implements RuntimeDriver {
     mkdirSyncReal(this.bundleRoot, { recursive: true });
   }
 
-  async install(skill: StagedSkill): Promise<{ ok: boolean; notes: string }> {
+  install(skill: StagedSkill): Promise<{ ok: boolean; notes: string }> {
+    return promised(() => this.installNow(skill));
+  }
+
+  private installNow(skill: StagedSkill): { ok: boolean; notes: string } {
     if (!this.bundleRoot) throw new Error(`${this.constructor.name}.install called before setup`);
     const dir = safePath.join(this.bundleRoot, skill.entryId);
     if (existsSync(dir)) {
@@ -163,7 +168,11 @@ export class ManualDriverBase implements RuntimeDriver {
     };
   }
 
-  async teardown(): Promise<void> {
+  teardown(): Promise<void> {
+    return promised(() => this.teardownNow());
+  }
+
+  private teardownNow(): void {
     // Symmetric with ClaudeCodeDriver.teardown — without rmSync the tmpdir
     // accumulates one tree per run, and stale dirs from prior runs with the
     // same PID could short-circuit a future install() via the existsSync

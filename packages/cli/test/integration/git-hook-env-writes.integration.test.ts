@@ -125,7 +125,7 @@ describe('git writes under a worktree hook environment', () => {
     mkdirSyncReal(publishDir, { recursive: true });
     writeFileSync(safePath.join(publishDir, 'marketplace.json'), '{"plugins":[]}\n');
 
-    await publishToGitBranch({
+    publishToGitBranch({
       publishDir,
       branch: 'test-branch',
       // Looks like a URL, so it is used verbatim and no remote lookup happens.

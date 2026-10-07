@@ -20,7 +20,7 @@ const DATABASES_OPENED = 1;
 export async function statsCommand(options: StatsOptions): Promise<void> {
   const startTime = Date.now();
 
-  const stats = await executeRagOperation('rag stats', options, async (ragProvider) => ragProvider.getStats());
+  const stats = await executeRagOperation('rag stats', options, (ragProvider) => ragProvider.getStats());
 
   const report: RagStatsReport = buildReport({
     examined: DATABASES_OPENED,

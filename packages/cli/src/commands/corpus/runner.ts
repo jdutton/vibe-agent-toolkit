@@ -117,19 +117,20 @@ export function buildAuditOutcome(
 /**
  * Run audit + optional review against one plugin entry.
  */
-export async function auditOnePlugin(
+export function auditOnePlugin(
   entry: PluginEntry,
   opts: RunnerOptions
 ): Promise<PluginRow> {
-  if (isGitUrl(entry.source)) {
-    return runUrlEntry(entry, opts);
+  try {
+    return isGitUrl(entry.source) ? runUrlEntry(entry, opts) : runLocalEntry(entry, opts);
+  } catch (error) {
+    return Promise.reject(error as Error);
   }
-  return runLocalEntry(entry, opts);
 }
 
-async function runLocalEntry(entry: PluginEntry, opts: RunnerOptions): Promise<PluginRow> {
+function runLocalEntry(entry: PluginEntry, opts: RunnerOptions): Promise<PluginRow> {
   const unusable = localSourceUnusable(entry.source);
-  if (unusable !== undefined) return unloadableRow(entry, unusable, 0);
+  if (unusable !== undefined) return Promise.resolve(unloadableRow(entry, unusable, 0));
   return auditAndRecord(entry, entry.source, opts);
 }
 
@@ -169,7 +170,7 @@ async function runUrlEntry(entry: PluginEntry, opts: RunnerOptions): Promise<Plu
     return await withClonedRepo(
       parseGitUrl(entry.source),
       { keepTempForDebug: opts.debug },
-      async ({ targetDir, tempdir, provenance }) => auditAndRecord(entry, targetDir, opts, { provenance, tempRoot: tempdir })
+      ({ targetDir, tempdir, provenance }) => auditAndRecord(entry, targetDir, opts, { provenance, tempRoot: tempdir })
     );
   } catch (err) {
     if (!isEntryRefusal(err)) throw err;

@@ -25,7 +25,7 @@ import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
  * const tempDir = await createTempDir();
  * const dbPath = safePath.join(tempDir, 'db');
  */
-export async function createTempDir(): Promise<string> {
+export function createTempDir(): Promise<string> {
   return createTempDirAsync('rag-lancedb-test-');
 }
 
@@ -194,8 +194,8 @@ export function createStubEmbeddingProvider(): EmbeddingProvider {
     model: 'stub-model',
     dimensions: 4,
     maxInputTokens: 256,
-    embed: async () => [0, 0, 0, 1],
-    embedBatch: async (texts: string[]) => texts.map(() => [0, 0, 0, 1]),
+    embed: () => Promise.resolve([0, 0, 0, 1]),
+    embedBatch: (texts: string[]) => Promise.resolve(texts.map(() => [0, 0, 0, 1])),
   };
 }
 

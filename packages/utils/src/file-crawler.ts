@@ -8,6 +8,7 @@ import {
   listingFailure,
 } from './fs-utils.js';
 import { gitFindRoot, gitLsFiles } from './git-utils.js';
+import { promised } from './in-order.js';
 import { requireUnreadablePolicy, settleRefusal, type UnreadablePolicy } from './listing-refusal.js';
 import { toForwardSlash, safePath } from './path-utils.js';
 
@@ -220,8 +221,10 @@ export function crawlPathFilter(
  *   exclude: ['**\/node_modules/**'],
  * });
  */
-export async function crawlDirectory(options: CrawlOptions): Promise<string[]> {
-  return crawlDirectorySync(options);
+export function crawlDirectory(options: CrawlOptions): Promise<string[]> {
+  // Not `async`: there is nothing to await. A refusal still arrives as a
+  // rejection, never as a synchronous throw.
+  return promised(() => crawlDirectorySync(options));
 }
 
 /**

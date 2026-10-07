@@ -32,7 +32,7 @@ let extractedFixturesPath: string | null = null;
  *
  * @returns Path to extracted fixtures directory
  */
-export async function getTestFixturesPath(): Promise<string> {
+export function getTestFixturesPath(): string {
   if (extractedFixturesPath && existsSync(extractedFixturesPath)) {
     return extractedFixturesPath;
   }

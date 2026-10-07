@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { isFilesystemAccessError, isPathAbsentError, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { isFilesystemAccessError, isPathAbsentError, issueLocation, promised, safePath } from '@vibe-agent-toolkit/utils';
 
 import { MarketplaceManifestSchema } from '../schemas/marketplace-manifest.js';
 
@@ -21,10 +21,15 @@ const UNREADABLE_CODE = 'SCAN_PATH_UNREADABLE' as const;
  * @param options - Anchor base for emitted locations (see {@link AnchorRootOptions})
  * @returns Validation result with issues
  */
-export async function validateMarketplace(
+export function validateMarketplace(
 	marketplacePath: string,
 	options?: AnchorRootOptions,
 ): Promise<ValidationResult> {
+	return promised(() => validateMarketplaceNow(marketplacePath, options));
+}
+
+/** The synchronous body of {@link validateMarketplace}. */
+function validateMarketplaceNow(marketplacePath: string, options?: AnchorRootOptions): ValidationResult {
 	const issues: ValidationIssue[] = [];
 	const marketplaceJsonPath = safePath.join(marketplacePath, '.claude-plugin', 'marketplace.json');
 	// Anchor contract: relative to the run's ONE stated root, never absolute.

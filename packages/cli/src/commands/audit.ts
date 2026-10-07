@@ -68,8 +68,10 @@ import {
 import {
   findProjectRoot,
   isFilesystemAccessError,
+  forEachInOrder,
   isPathAbsentError,
   issueLocation,
+  mapInOrder,
   relativeEscapesRoot,
   resetProjectRootCaches,
   safePath,
@@ -1019,10 +1021,11 @@ async function auditUserDirectories(
     ...(skillsDirExists ? [skillsDir] : []),
     ...(marketplacesDirExists ? [marketplacesDir] : []),
   ];
-  for (const target of userScanTargets(present, recursive)) {
+  // In order: the targets share the population cache and the logger.
+  await forEachInOrder(userScanTargets(present, recursive), async (target) => {
     logger.debug(`Auditing user-level resources at: ${target}`);
     scanned.push(...await getValidationResults(target, recursive, options, logger, scanRoot));
-  }
+  });
 
   // The `--user` report is assembled here rather than by `buildAuditReport`, so
   // it needs its own append or the config findings would reach stderr and not the
@@ -1545,7 +1548,7 @@ async function unusableRootRefusal(scanPath: string): Promise<CommandRefusalErro
  * branch of {@link getValidationResults} focused so cognitive complexity stays
  * within the ESLint budget.
  */
-async function validateSurface(
+function validateSurface(
   surface: Surface,
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
@@ -1568,7 +1571,7 @@ async function validateSurface(
  * Validate every surface enumerated at a directory root (used when
  * `enumerateSurfaces` returns more than one — e.g., skill-claude-plugin).
  */
-async function validateMultipleSurfaces(
+function validateMultipleSurfaces(
   surfaces: readonly Surface[],
   scanPath: string,
   options: AuditCommandOptions,
@@ -1578,11 +1581,8 @@ async function validateMultipleSurfaces(
   logger.debug(
     `Detected ${surfaces.length.toString()} surfaces at ${scanPath}: ${surfaces.map((s) => s.type).join(', ')}`,
   );
-  const results: ValidationResult[] = [];
-  for (const surface of surfaces) {
-    results.push(await validateSurface(surface, options, logger, locationRoot));
-  }
-  return results;
+  // In order: the surfaces share the population cache and the logger.
+  return mapInOrder(surfaces, (surface) => validateSurface(surface, options, logger, locationRoot));
 }
 
 /**
@@ -1639,18 +1639,19 @@ async function recurseIntoMarketplacePlugins(
   const marketplaceRoot = safePath.resolve(marketplaceInv.path);
   const seen = new Set<string>([marketplaceRoot]);
   const results: ValidationResult[] = [];
-  for (const plugin of marketplaceInv.discovered.plugins) {
+  // In order: the `seen` dedupe must see each plugin before the next one starts.
+  await forEachInOrder(marketplaceInv.discovered.plugins, async (plugin) => {
     const pluginPath = safePath.resolve(plugin.path);
     if (seen.has(pluginPath)) {
       logger.debug(`  Skipping marketplace-recurse into already-visited path: ${pluginPath}`);
-      continue;
+      return;
     }
     seen.add(pluginPath);
     logger.debug(`  Recursing into marketplace path-source plugin: ${pluginPath}`);
     // Same run root — recursing into a co-located plugin must NOT re-anchor.
     const pluginResults = await getValidationResults(pluginPath, recursive, options, logger, locationRoot);
     results.push(...pluginResults);
-  }
+  });
   return results;
 }
 
@@ -1997,11 +1998,12 @@ async function validatePluginSkillsViaInventory(
 ): Promise<ValidationResult[]> {
 	const inv = await pluginInventoryAt(scanPath);
 	const results: ValidationResult[] = [];
-	for (const skill of inv.discovered.skills) {
+	// In order: the skills share the population cache and the logger.
+	await forEachInOrder(inv.discovered.skills, async (skill) => {
 		const resolvedPath = safePath.resolve(skill.files.skillMd);
 		if (excludeSkillPaths.has(resolvedPath)) {
 			logger.debug(`  Skipping already-validated skill (inventory): ${skill.files.skillMd}`);
-			continue;
+			return;
 		}
 		logger.debug(`  Validating plugin-bundled skill (inventory): ${skill.files.skillMd}`);
 		// Guarded PER SKILL, not left to the boundary. The boundary guard answers at
@@ -2022,7 +2024,7 @@ async function validatePluginSkillsViaInventory(
 			logger.debug(`  Unreadable plugin-bundled skill: ${skill.files.skillMd}`);
 			results.push(unreadablePathResult(skill.files.skillMd, error, locationRoot));
 		}
-	}
+	});
 	return results;
 }
 
@@ -2141,8 +2143,9 @@ export async function runCompatAnalysis(
 ): Promise<Map<string, PluginCompatEntry>> {
   const compatMap = new Map<string, PluginCompatEntry>();
 
-  for (const result of results) {
-    if (result.type !== RESOURCE_TYPE_CLAUDE_PLUGIN) continue;
+  // In order: each plugin's explanations go to the logger as it is analyzed.
+  await forEachInOrder(results, async (result) => {
+    if (result.type !== RESOURCE_TYPE_CLAUDE_PLUGIN) return;
 
     const entry: PluginCompatEntry = {
       compat: await analyzeOrExplain(result.path, locationRoot, vatContext, logger),
@@ -2151,7 +2154,7 @@ export async function runCompatAnalysis(
       entry.settings = await settingsVerdict(result.path, effectiveSettings, locationRoot, logger);
     }
     compatMap.set(result.path, entry);
-  }
+  });
 
   return compatMap;
 }
@@ -2909,7 +2912,7 @@ interface ScanContext {
 const inventoryRegistryCache: Map<string, Promise<Awaited<ReturnType<typeof crawlSkillLinkRegistry>>>> = new Map();
 
 /** Build (once per run, per root) the registry the plugin inventory link walk needs. */
-async function getOrCreateInventoryRegistry(
+function getOrCreateInventoryRegistry(
   projectRoot: string,
 ): Promise<Awaited<ReturnType<typeof crawlSkillLinkRegistry>>> {
   const cached = inventoryRegistryCache.get(projectRoot);
@@ -2948,7 +2951,7 @@ async function getOrCreateInventoryRegistry(
  * case to encode here. This is the call site that carried all 786 measured
  * `git check-ignore` spawns.
  */
-async function pluginInventoryAt(dir: string): Promise<Awaited<ReturnType<typeof extractClaudePluginInventory>>> {
+function pluginInventoryAt(dir: string): Promise<Awaited<ReturnType<typeof extractClaudePluginInventory>>> {
   const projectRoot = findProjectRoot(dir);
   return extractClaudePluginInventory(dir, {
     ...(projectRoot === null
@@ -3170,9 +3173,10 @@ async function scanDirectory(
   });
 
   const claims = new SubtreeClaims();
-  for (const subject of population.subjects) {
+  // In order: `claims` resolves each subtree against the subjects before it.
+  await forEachInOrder(population.subjects, async (subject) => {
     results.push(...await validateScanSubject(subject, options, logger, scanCtx, claims));
-  }
+  });
   return results;
 }
 

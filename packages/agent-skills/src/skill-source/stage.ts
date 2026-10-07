@@ -1,7 +1,7 @@
 import { chmodSync, lstatSync, readdirSync, statSync } from 'node:fs';
 import { copyFile, mkdir } from 'node:fs/promises';
 
-import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { proveReadable, withFsAttribution } from '../fs-attribution.js';
 
@@ -34,7 +34,7 @@ export async function stageDirInto(
   opts: StageOptions = {},
 ): Promise<string> {
   const currentUid = opts.uidOverride ?? (process.getuid?.() ?? -1);
-  await withFsAttribution(`Staging ${srcDir}`, 'output', async () => ensureOwned0700Dir(ctx.stagingRoot, currentUid), 'staged');
+  await withFsAttribution(`Staging ${srcDir}`, 'output', () => ensureOwned0700Dir(ctx.stagingRoot, currentUid), 'staged');
 
   const dest = safePath.join(ctx.stagingRoot, key);
   assertOwnedIfExists(dest, currentUid);
@@ -79,7 +79,8 @@ function assertOwnedIfExists(dir: string, currentUid: number): void {
  */
 async function copyTreeNoSymlinks(src: string, dest: string): Promise<void> {
   const entries = await readingSkillSource(src, () => readdirSync(src, { withFileTypes: true }));
-  for (const entry of entries) {
+  // In order: mkdir before recursing, a symlink refused before anything after it is copied.
+  await forEachInOrder(entries, async (entry) => {
     const srcPath = safePath.join(src, entry.name);
     const destPath = safePath.join(dest, entry.name);
     // lstat (not stat) so a symlink is detected, never followed.
@@ -99,5 +100,5 @@ async function copyTreeNoSymlinks(src: string, dest: string): Promise<void> {
       await readingSkillSource(srcPath, () => proveReadable(srcPath));
       await withFsAttribution(`Staging ${srcPath}`, 'output', () => copyFile(srcPath, destPath), 'staged');
     }
-  }
+  });
 }

@@ -337,12 +337,17 @@ export function writeInstalledPlugins(paths: ClaudeUserPaths, data: InstalledPlu
  *
  * @returns `warnings`: cleanup that did not happen — the install itself is complete
  */
-export async function installPlugin(opts: InstallPluginOptions): Promise<{ warnings: string[] }> {
+export function installPlugin(opts: InstallPluginOptions): Promise<{ warnings: string[] }> {
   const { marketplaceName, pluginName, pluginDir, version, source, paths } = opts;
 
   const pluginKey = `${pluginName}@${marketplaceName}`;
-  requirePluginInstallNames(opts);
-  requirePluginSource(pluginDir);
+  // Both refusals throw synchronously; a caller still receives them as a rejection.
+  try {
+    requirePluginInstallNames(opts);
+    requirePluginSource(pluginDir);
+  } catch (error) {
+    return Promise.reject(error as Error);
+  }
   return codedUserStateWrite(`register plugin ${pluginKey}`, () => {
     const now = new Date().toISOString();
     // The directory itself, not a link to it: a copied link would collide with the directory it lands on.

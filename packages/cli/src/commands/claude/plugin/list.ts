@@ -83,7 +83,7 @@ export function buildPluginListReport(result: PluginListResult, paths: ClaudeUse
   });
 }
 
-async function pluginListCommand(options: PluginListCommandOptions): Promise<void> {
+function pluginListCommand(options: PluginListCommandOptions): void {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 

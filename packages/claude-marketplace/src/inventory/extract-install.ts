@@ -2,7 +2,7 @@ import { readdir } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import type { MarketplaceInventory, PluginInventory } from '@vibe-agent-toolkit/agent-skills';
-import { direntKindFollowing, direntKindFollowingSync, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, direntKindFollowingSync, forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
 import { isStagedReplaceLeftover } from '../install/plugin-registry.js';
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
@@ -90,14 +90,15 @@ async function collectMarketplaces(
 	if (!(await presentOrRecord(marketplacesDir, parseErrors))) return;
 	try {
 		const entries = await readdir(marketplacesDir, { withFileTypes: true });
-		for (const entry of entries) {
+		// In order: the git-tracker cache is shared, so its first users must not race.
+		await forEachInOrder(entries, async (entry) => {
 			// `vat claude plugin install` stages and parks a marketplace it replaces beside it.
-			if (isStagedReplaceLeftover(entry.name)) continue;
+			if (isStagedReplaceLeftover(entry.name)) return;
 			// A symlinked marketplace (a dev install) is a marketplace: follow it.
-			if ((await direntKindFollowing(marketplacesDir, entry)) !== 'directory') continue;
+			if ((await direntKindFollowing(marketplacesDir, entry)) !== 'directory') return;
 			const mpPath = safePath.join(marketplacesDir, entry.name);
 			marketplaces.push(await extractClaudeMarketplaceInventory(mpPath, { gitTrackerSource }));
-		}
+		});
 	} catch (e) {
 		parseErrors.push(recordedFailure(marketplacesDir, (e as Error).message, e));
 	}
@@ -128,9 +129,10 @@ async function collectCachedPlugins(
 ): Promise<void> {
 	if (!(await presentOrRecord(cacheDir, parseErrors))) return;
 
-	for (const mpDir of await subdirectoriesOrRecord(cacheDir, parseErrors)) {
-		await collectPluginsInMarketplaceCache(mpDir, plugins, parseErrors, gitTrackerSource);
-	}
+	// In order, like every walk here: the shared git-tracker cache, and `parseErrors` order.
+	await forEachInOrder(await subdirectoriesOrRecord(cacheDir, parseErrors), (mpDir) =>
+		collectPluginsInMarketplaceCache(mpDir, plugins, parseErrors, gitTrackerSource),
+	);
 }
 
 async function collectPluginsInMarketplaceCache(
@@ -143,11 +145,11 @@ async function collectPluginsInMarketplaceCache(
 	// the cache root above is: an unlisted marketplace used to read as "no plugins".
 	const pluginNameDirs = await subdirectoriesOrRecord(mpDir, parseErrors);
 
-	for (const nameDir of pluginNameDirs) {
+	await forEachInOrder(pluginNameDirs, async (nameDir) => {
 		// A dot-named directory is never a version: it is `installPlugin`'s staged copy or
 		// parked previous tree, left by a crash or by a removal the OS refused.
 		const versionDirs = (await subdirectoriesOrRecord(nameDir, parseErrors)).filter(dir => !basename(dir).startsWith('.'));
-		for (const versionDir of versionDirs) {
+		await forEachInOrder(versionDirs, async (versionDir) => {
 			try {
 				// N+1 WHOLE-CORPUS CRAWL — known, not fixed here. No `SharedRegistrySource` is
 				// passed, so every skill in every cached plugin re-crawls and re-parses the whole
@@ -171,6 +173,6 @@ async function collectPluginsInMarketplaceCache(
 			} catch (e) {
 				parseErrors.push(recordedFailure(versionDir, (e as Error).message, e));
 			}
-		}
-	}
+		});
+	});
 }

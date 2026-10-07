@@ -404,7 +404,7 @@ export class RunContentCache {
  *   and outside a run there is no other read to reuse
  * @returns The content, its key, and the parser it routes to
  */
-export async function readKeyedContent(
+export function readKeyedContent(
   absolutePath: string,
   parserKind: ParserKind,
   cache?: RunContentCache | undefined,

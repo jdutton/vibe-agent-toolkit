@@ -55,7 +55,7 @@ export type ImportResult = ImportSuccess | ImportError;
  * @param options - Import options
  * @returns Result with agent.yaml path or error
  */
-export async function importSkillToAgent(options: ImportOptions): Promise<ImportResult> {
+export function importSkillToAgent(options: ImportOptions): ImportResult {
   const { skillPath, outputPath, force = false } = options;
 
   // Read SKILL.md — only an ABSENCE is "does not exist"; anything else the OS

@@ -9,7 +9,7 @@ import type {
 	McpRef,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
@@ -41,9 +41,14 @@ const SHAPE_SKILL_CLAUDE_PLUGIN = 'skill-claude-plugin' as const;
 function memoizeSharedRegistry(
 	source: SharedRegistrySource | undefined,
 ): () => Promise<ResourceRegistry | undefined> {
-	if (typeof source !== 'function') return async () => source;
+	if (typeof source !== 'function') return () => Promise.resolve(source);
 	let pending: Promise<ResourceRegistry | undefined> | undefined;
-	return async () => (pending ??= source());
+	// A synchronous throw from `source` stays a rejection, and stays uncached.
+	return () =>
+		new Promise((resolve) => {
+			pending ??= source();
+			resolve(pending);
+		});
 }
 
 /**
@@ -368,7 +373,8 @@ async function discoverSkills(
 		}
 	}
 
-	for (const skillMd of skillMdPaths) {
+	// In order: the memoized registry and the tracker cache are shared, and inventory order is report order.
+	await forEachInOrder(skillMdPaths, async (skillMd) => {
 		const inv = await extractClaudeSkillInventory(skillMd, {
 			sharedRegistry: resolveSharedRegistry,
 			gitTrackerSource,
@@ -376,7 +382,7 @@ async function discoverSkills(
 		});
 		for (const err of inv.parseErrors) parseErrors.push(err);
 		skillInventories.push(inv);
-	}
+	});
 
 	return skillInventories;
 }
@@ -502,7 +508,8 @@ async function walkComponentDir(
 	refs: ComponentRef[],
 	parseErrors: ParseErrors,
 ): Promise<void> {
-	for (const entry of await listOrRecord(currentDir, parseErrors)) {
+	// In order: `refs` order is listing order, depth-first.
+	await forEachInOrder(await listOrRecord(currentDir, parseErrors), async (entry) => {
 		const fullPath = safePath.join(currentDir, entry.name);
 		const relPath = './' + safePath.relative(pluginRoot, fullPath);
 		if (entry.isFile() && entry.name.endsWith('.md')) {
@@ -510,7 +517,7 @@ async function walkComponentDir(
 		} else if (entry.isDirectory()) {
 			await walkComponentDir(fullPath, pluginRoot, refs, parseErrors);
 		}
-	}
+	});
 }
 
 async function buildUnexpected(
@@ -552,21 +559,22 @@ async function collectAssetParseErrors(absolute: string, parseErrors: ParseError
 		{ path: safePath.join(absolute, '.mcp.json'), label: '.mcp.json' },
 	];
 
-	for (const { path, label } of checks) {
-		if (!existsSync(path)) continue;
+	// In order: `parseErrors` order.
+	await forEachInOrder(checks, async ({ path, label }) => {
+		if (!existsSync(path)) return;
 		let raw: string;
 		try {
 			raw = await readFile(path, 'utf-8');
 		} catch (e) {
 			parseErrors.push(recordedFailure(path, `${label} could not be read: ${(e as Error).message}`, e));
-			continue;
+			return;
 		}
 		try {
 			JSON.parse(raw);
 		} catch (e) {
 			parseErrors.push({ path, message: `${label} is not valid JSON: ${(e as Error).message}` });
 		}
-	}
+	});
 }
 
 /**
@@ -594,13 +602,14 @@ async function crawlForFilenamesInner(
 	results: Map<string, string[]>,
 	parseErrors: ParseErrors,
 ): Promise<void> {
-	for (const entry of await listOrRecord(currentDir, parseErrors)) {
+	// In order: each filename's match list is in walk order.
+	await forEachInOrder(await listOrRecord(currentDir, parseErrors), async (entry) => {
 		const fullPath = safePath.join(currentDir, entry.name);
 		if (entry.isDirectory()) {
-			if (entry.name === 'node_modules' || entry.name === '.git') continue;
+			if (entry.name === 'node_modules' || entry.name === '.git') return;
 			await crawlForFilenamesInner(fullPath, results, parseErrors);
 		} else if (entry.isFile()) {
 			results.get(entry.name)?.push(fullPath);
 		}
-	}
+	});
 }

@@ -32,6 +32,7 @@ import type { ProjectConfig, SkillSourceDescriptor, TestConfig } from '@vibe-age
 import { buildReport, ExitCode, toFindings, type Gate, type RefusalCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   findProjectRoot,
+  forEachInOrder,
   isVatError,
   issueLocation,
   prefixMessageOnce,
@@ -1222,9 +1223,10 @@ export async function resolveCompanionSources(
 ): Promise<Record<string, SkillSourceSpec> | undefined> {
   if (sources === undefined) return undefined;
   const resolved: Record<string, SkillSourceSpec> = {};
-  for (const [name, spec] of Object.entries(sources)) {
+  // In order: the shared `memo` may stage or clone, and its first user must not race.
+  await forEachInOrder(Object.entries(sources), async ([name, spec]) => {
     resolved[name] = await resolveCompanionSpec(name, spec, repoRoot, flags, optional, memo);
-  }
+  });
   return resolved;
 }
 

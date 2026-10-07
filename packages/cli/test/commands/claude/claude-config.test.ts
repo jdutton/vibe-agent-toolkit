@@ -24,21 +24,21 @@ beforeEach(() => {
 });
 
 describe('loadClaudeProjectConfig', () => {
-  it('refuses CONFIG_INVALID when no config file is found', async () => {
+  it('refuses CONFIG_INVALID when no config file is found', () => {
     doubles.findConfigFile.mockReturnValue(undefined);
 
-    const error = await loadClaudeProjectConfig().then(() => undefined, (thrown: unknown) => thrown);
+    const error = thrownBy(() => loadClaudeProjectConfig());
 
     expect(refusalCodeOf(error)).toBe('CONFIG_INVALID');
     expect(doubles.loadConfig).not.toHaveBeenCalled();
   });
 
-  it('loads the config from the directory holding the file, and returns its claude section', async () => {
+  it('loads the config from the directory holding the file, and returns its claude section', () => {
     const claude = { marketplaces: {} };
     doubles.findConfigFile.mockReturnValue('/proj/vibe-agent-toolkit.config.yaml');
     doubles.loadConfig.mockReturnValue({ claude });
 
-    const loaded = await loadClaudeProjectConfig();
+    const loaded = loadClaudeProjectConfig();
 
     expect(doubles.loadConfig).toHaveBeenCalledWith('/proj');
     expect(loaded).toMatchObject({ configPath: '/proj/vibe-agent-toolkit.config.yaml', configDir: '/proj', claudeConfig: claude });

@@ -675,6 +675,20 @@ export default [
       '@typescript-eslint/prefer-function-type': 'error',
       '@typescript-eslint/no-require-imports': 'error', // Enforce ESM imports, ban require()
 
+      // Mirror SonarCloud S9382 and S7503, which ARE these two core rules (their
+      // messages are ESLint's byte for byte), so the class fails at the desk rather
+      // than on a PR. Core `require-await`, deliberately NOT
+      // `@typescript-eslint/require-await`: that one exempts an `async` function
+      // returning a promise, and Sonar does not.
+      //
+      // Independent work: `Promise.all`, or `mapWithConcurrency` for a
+      // population-sized list. Work whose ORDER is the contract: `forEachInOrder` /
+      // `mapInOrder` / `everyInOrder` from `@vibe-agent-toolkit/utils`, with a
+      // one-line reason at the call site — never a disable. `*.test.ts` files are
+      // exempt below because Sonar does not analyse them; `test/` helpers are not.
+      'no-await-in-loop': 'error',
+      'require-await': 'error',
+
       // Stricter type safety — catches SonarQube-style issues early
       '@typescript-eslint/no-base-to-string': 'error',
       '@typescript-eslint/restrict-template-expressions': ['error', {
@@ -854,6 +868,17 @@ export default [
       'sonarjs/no-duplicate-string': 'off',
       'sonarjs/publicly-writable-directories': 'off',
       'sonarjs/file-permissions': 'off',
+    },
+  },
+
+  // Test FILES only — Sonar's main scope is every file except `*.test.ts`, so a
+  // test body may await in a loop (a scenario that must run step by step) and
+  // `test/**` helpers stay held to both rules. See the main block.
+  {
+    files: ['**/*.test.ts'],
+    rules: {
+      'no-await-in-loop': 'off',
+      'require-await': 'off',
     },
   },
 

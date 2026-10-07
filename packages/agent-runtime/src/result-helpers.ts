@@ -175,84 +175,59 @@ function sleep(ms: number): Promise<void> {
  * const output = await withRetries;
  * // output.result.execution.retryCount shows how many retries were needed
  */
-export async function withRetry<TData, TError extends string>(
+export function withRetry<TData, TError extends string>(
   agentFn: () => Promise<OneShotAgentOutput<TData, TError>>,
   maxAttempts: number = 5
 ): Promise<OneShotAgentOutput<TData, TError>> {
-  let lastOutput: OneShotAgentOutput<TData, TError> | undefined;
+  // A NaN bound makes no attempt, as the loop this replaced did.
+  if (Number.isNaN(maxAttempts) || maxAttempts < 1) {
+    return Promise.reject(new Error('withRetry: lastOutput is undefined (should never happen)'));
+  }
+
   let totalDurationMs = 0;
   let totalTokensUsed = 0;
   let totalCost = 0;
 
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    lastOutput = await agentFn();
-
-    // Accumulate metrics across attempts
-    if (lastOutput.result.execution) {
-      totalDurationMs += lastOutput.result.execution.durationMs ?? 0;
-      totalTokensUsed += lastOutput.result.execution.tokensUsed ?? 0;
-      totalCost += lastOutput.result.execution.cost ?? 0;
-    }
-
-    // Success: inject retry count and accumulated metrics
-    if (lastOutput.result.status === RESULT_SUCCESS) {
-      return {
-        ...lastOutput,
-        result: {
-          ...lastOutput.result,
-          execution: {
-            ...lastOutput.result.execution,
-            retryCount: attempt,
-            durationMs: totalDurationMs,
-            tokensUsed: totalTokensUsed,
-            cost: totalCost,
-          },
-        },
-      };
-    }
-
-    // Non-retryable error: inject retry count and return
-    if (!isRetryable(lastOutput.result.error)) {
-      return {
-        ...lastOutput,
-        result: {
-          ...lastOutput.result,
-          execution: {
-            ...lastOutput.result.execution,
-            retryCount: attempt,
-            durationMs: totalDurationMs,
-            tokensUsed: totalTokensUsed,
-            cost: totalCost,
-          },
-        },
-      };
-    }
-
-    // Wait before next retry (except on last attempt)
-    if (attempt < maxAttempts - 1) {
-      await sleep(getBackoffDelay(lastOutput.result.error, attempt));
-    }
-  }
-
-  // Max retries exceeded: return last error with retry count
-  // lastOutput is guaranteed to be defined here because loop runs at least once
-  if (!lastOutput) {
-    throw new Error('withRetry: lastOutput is undefined (should never happen)');
-  }
-
-  return {
-    ...lastOutput,
+  const report = (
+    output: OneShotAgentOutput<TData, TError>,
+    retryCount: number,
+  ): OneShotAgentOutput<TData, TError> => ({
+    ...output,
     result: {
-      ...lastOutput.result,
+      ...output.result,
       execution: {
-        ...lastOutput.result.execution,
-        retryCount: maxAttempts - 1,
+        ...output.result.execution,
+        retryCount,
         durationMs: totalDurationMs,
         tokensUsed: totalTokensUsed,
         cost: totalCost,
       },
     },
+  });
+
+  const attempt = async (n: number): Promise<OneShotAgentOutput<TData, TError>> => {
+    const output = await agentFn();
+
+    if (output.result.execution) {
+      totalDurationMs += output.result.execution.durationMs ?? 0;
+      totalTokensUsed += output.result.execution.tokensUsed ?? 0;
+      totalCost += output.result.execution.cost ?? 0;
+    }
+
+    // Success, or a non-retryable error: inject retry count and return
+    if (output.result.status === RESULT_SUCCESS || !isRetryable(output.result.error)) {
+      return report(output, n);
+    }
+
+    if (n >= maxAttempts - 1) {
+      return report(output, maxAttempts - 1);
+    }
+
+    await sleep(getBackoffDelay(output.result.error, n));
+    return attempt(n + 1);
   };
+
+  return attempt(0);
 }
 
 /**

@@ -37,7 +37,7 @@ import {
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { DocumentFormat } from '../../report-schemas.js';
@@ -584,7 +584,7 @@ export async function buildSharedValidationContext(
       // on both lanes.
       const registry = await withResourcePopulationSource(
         { root: sharedRoot, gitTracker: context.gitTracker },
-        async (populationSource) => {
+        (populationSource) => {
           logger.debug(
             populationSource
               ? `Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`
@@ -660,8 +660,8 @@ async function validateConfiguredSkills(
   const projectSkills = collectDeclaredEvalSuites(skillsConfig, discovered);
   const sharedContext = await buildSharedValidationContext(skillsToValidate, projectSkills, config, logger);
 
-  const results: PackagingValidationResult[] = [];
-  for (const skill of skillsToValidate) {
+  // In order: `sharedContext`'s caches and the per-skill progress lines.
+  const results: PackagingValidationResult[] = await mapInOrder(skillsToValidate, async (skill) => {
     logger.info(`   Validating: ${skill.name}`);
     logger.debug(`   Source: ${skill.sourcePath}`);
 
@@ -671,8 +671,8 @@ async function validateConfiguredSkills(
     // relative to it.
     applyConfigVerdicts(result, skill.packagingConfig.targets as readonly Target[] | undefined, skill.sourcePath, cwd);
     logSkillProgress(skill.name, result, logger);
-    results.push(result);
-  }
+    return result;
+  });
 
   // Drain the run's allow ledger AFTER the last skill — an entry matched by
   // any skill in the batch is used, so this is the first point at which

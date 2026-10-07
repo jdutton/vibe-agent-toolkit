@@ -18,7 +18,7 @@ import {
   type OkfFinding,
 } from '@vibe-agent-toolkit/resources';
 import { buildReport, withDurationMs, type Finding } from '@vibe-agent-toolkit/schema';
-import { findConfigFile, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { findConfigFile, issueLocation, mapConcurrentFailingInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
@@ -221,10 +221,11 @@ export async function okfValidateReport(
     ...(options.specVersion !== undefined && { specVersion: options.specVersion }),
   });
 
-  const checked: CheckedOkfBundle[] = [];
-  for (const run of runs) {
-    checked.push({ report: await validateOkfBundle(run), root: run.root });
-  }
+  // Independent read-only bundles: validated together, summarized in declaration order.
+  const checked: CheckedOkfBundle[] = await mapConcurrentFailingInOrder(
+    runs,
+    async (run) => ({ report: await validateOkfBundle(run), root: run.root }),
+  );
 
   return summarizeOkfBundles(checked, projectRoot);
 }

@@ -78,7 +78,7 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { everyInOrder, isPathAbsentError, promised, safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 import { z } from 'zod';
 
@@ -306,19 +306,17 @@ async function readManifestVersion(manifestPath: string, kind: string): Promise<
  * @throws {Error} when no manifest exists anywhere above `startDir`
  */
 async function findNearestManifest(startDir: string, subject: string): Promise<string> {
-  let current = safePath.resolve(startDir);
-  for (;;) {
-    const candidate = safePath.join(current, 'package.json');
-    if (await isRegularFile(candidate)) return candidate;
-    const parent = safePath.resolve(dirname(current));
-    if (parent === current) {
-      throw new Error(
-        `resolveInstrument({ kind: 'dist' }): no package.json above ${subject}, ` +
-          `so the vat version cannot be determined. ${NO_FALLBACK_NOTE}`,
-      );
-    }
-    current = parent;
+  const current = safePath.resolve(startDir);
+  const candidate = safePath.join(current, 'package.json');
+  if (await isRegularFile(candidate)) return candidate;
+  const parent = safePath.resolve(dirname(current));
+  if (parent === current) {
+    throw new Error(
+      `resolveInstrument({ kind: 'dist' }): no package.json above ${subject}, ` +
+        `so the vat version cannot be determined. ${NO_FALLBACK_NOTE}`,
+    );
   }
+  return findNearestManifest(parent, subject);
 }
 
 /**
@@ -433,9 +431,14 @@ async function locateDistBin(target: string): Promise<string> {
   }
 
   const candidates = DIST_BIN_CANDIDATES.map((relative) => safePath.join(target, relative));
-  for (const candidate of candidates) {
-    if (await isRegularFile(candidate)) return candidate;
-  }
+  let found: string | undefined;
+  // In order: the first candidate present wins.
+  await everyInOrder(candidates, async (candidate) => {
+    if (!(await isRegularFile(candidate))) return true;
+    found = candidate;
+    return false;
+  });
+  if (found !== undefined) return found;
 
   // A dist with the wrapper but no `bin.js` is a specific, diagnosable state —
   // half a build, or a `bin/` directory mistaken for the entry point. Saying
@@ -542,13 +545,14 @@ function resolveNpx(spec: string): ResolvedInstrument {
  *   cannot be found or cannot supply its coordinate. Resolution failures are
  *   errors, never fallbacks — see the module header.
  */
-export async function resolveInstrument(source: InstrumentSource): Promise<ResolvedInstrument> {
+export function resolveInstrument(source: InstrumentSource): Promise<ResolvedInstrument> {
   switch (source.kind) {
     case 'tree':
       return resolveTree(source.path);
     case 'dist':
       return resolveDist(source.path);
     case 'npx':
-      return resolveNpx(source.spec);
+      // `resolveNpx` is synchronous; its throw must still arrive as a rejection.
+      return promised(() => resolveNpx(source.spec));
   }
 }

@@ -13,7 +13,7 @@ import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { conventionalSuiteProbe, createProjectRegistry, getPluginOutputDir, getPluginSourceDir, isSkillPackagingInputError, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ProjectConfig, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Finding, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowing, isSingleFsSegment, issueLocation, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, everyInOrder, forEachInOrder, isSingleFsSegment, issueLocation, mapInOrder, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { readPluginLocalSkillName } from '../../../commands/skills/skill-discovery.js';
@@ -303,7 +303,7 @@ async function buildClaudePluginMarketplaces(
   // this is a change of COST, not of what the build sees.
   const sharedRegistry = await withResourcePopulationSource(
     { root: configDir },
-    async (populationSource) =>
+    (populationSource) =>
       createProjectRegistry(configDir, {
         ...(populationSource !== undefined && { populationSource }),
       }),
@@ -340,10 +340,12 @@ async function buildClaudePluginMarketplaces(
   }
   verifyNoCaseCollidingPluginNames(allPluginNames);
 
-  for (const name of Object.keys(marketplaces)) {
+  // In order, stopping at the first gated marketplace: each writes its own tree
+  // and the log reads marketplace by marketplace.
+  await everyInOrder(Object.keys(marketplaces), async (name) => {
     // Skip if --marketplace filter specified and doesn't match
     if (options.marketplace && options.marketplace !== name) {
-      continue;
+      return true;
     }
 
     const mpConfig = marketplaces[name] as ClaudeMarketplaceConfig;
@@ -363,8 +365,8 @@ async function buildClaudePluginMarketplaces(
       verbose,
     });
     built.push(result);
-    if (result.gate !== undefined) return;
-  }
+    return result.gate === undefined;
+  });
 }
 
 /**
@@ -493,7 +495,7 @@ export async function runClaudePluginBuildPhase(options: PluginBuildCommandOptio
   let configDir: string | undefined;
 
   try {
-    const loaded = await loadClaudeProjectConfig();
+    const loaded = loadClaudeProjectConfig();
     configDir = loaded.configDir;
     // The config this lane already parsed is handed down, so the build reads it
     // once (and warns about an unknown key once).
@@ -531,7 +533,8 @@ async function copyDistributionFiles(
     'CHANGELOG.md': config.publish?.changelog,
   };
 
-  for (const file of ['LICENSE', 'README.md', 'CHANGELOG.md']) {
+  // In order: the log names the files in this order, and the first failed copy is the one reported.
+  await forEachInOrder(['LICENSE', 'README.md', 'CHANGELOG.md'], async (file) => {
     const override = overrides[file];
     const srcPath = override ? safePath.join(configDir, override) : safePath.join(configDir, file);
     if (existsSync(srcPath)) {
@@ -543,7 +546,7 @@ async function copyDistributionFiles(
         logger.info(`   ${file} (copied from project root)`);
       }
     }
-  }
+  });
 }
 
 /**
@@ -592,7 +595,9 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
   // Marketplace-level skills filter restricts pool available to plugins that use "*"
   const marketplaceAvailable = resolveMarketplaceAvailableSkills(config, availableSkills);
 
-  for (const pluginDef of config.plugins) {
+  let gate: PluginGateFailure | undefined;
+  // In order, stopping at the first gated plugin: each writes into this marketplace's tree.
+  await everyInOrder(config.plugins, async (pluginDef) => {
     // externalSource plugins are never built or copied — they route straight
     // to a marketplace.json entry referencing the other repo. Every phase
     // buildPlugin runs (empty-plugin guard, tree-copy, skills packaging,
@@ -608,7 +613,7 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
         pluginVersion: pluginDef.version,
         source: pluginDef.externalSource,
       });
-      continue;
+      return true;
     }
 
     const outcome = await buildPlugin({
@@ -626,10 +631,15 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
       verbose,
     });
     if (outcome.kind === 'gated') {
-      // No marketplace.json over a plugin that was never assembled.
-      return { name, plugins, externalPlugins, gate: outcome.failure };
+      gate = outcome.failure;
+      return false;
     }
     plugins.push(outcome.result);
+    return true;
+  });
+  if (gate !== undefined) {
+    // No marketplace.json over a plugin that was never assembled.
+    return { name, plugins, externalPlugins, gate };
   }
 
   // Generate .claude-plugin/marketplace.json
@@ -788,7 +798,8 @@ async function copyPoolSkills(
   const selected = resolvePluginSkills(pluginDef, marketplaceAvailable);
   const copied: string[] = [];
 
-  for (const skillName of selected) {
+  // In order: each copy writes into the plugin dir, `destOverrides` may collide, and the first failure wins.
+  await forEachInOrder(selected, async (skillName) => {
     const skillDistPath = safePath.join(configDir, 'dist', 'skills', skillName);
     requireInputPath(skillDistPath, {
       code: 'INPUT_UNREADABLE',
@@ -808,7 +819,7 @@ async function copyPoolSkills(
     );
     copied.push(fsPath);
     logger.info(`         ${skillName} -> skills/${fsPath}`);
-  }
+  });
 
   return copied;
 }
@@ -838,7 +849,7 @@ interface PluginLocalSkill {
  * gitignored/untracked skill dir must not be published by one producer when the
  * other would never have shipped it).
  */
-async function discoverPluginLocalSkills(
+function discoverPluginLocalSkills(
   pluginSourceDir: string,
   logger: ReturnType<typeof createLogger>,
 ): Promise<PluginLocalSkill[]> {
@@ -853,15 +864,14 @@ async function discoverPluginLocalSkills(
         `add it to .gitignore to silence this.`,
     );
   }
-  const skills: PluginLocalSkill[] = [];
-  for (const skillDirPath of listPluginSourceSkillDirs(pluginSourceDir)) {
+  // In order: a SKILL.md that will not read must be the first one named, deterministically.
+  return mapInOrder(listPluginSourceSkillDirs(pluginSourceDir), async (skillDirPath) => {
     const skillSourceDir = safePath.join(pluginSourceDir, 'skills', skillDirPath);
     // Resolved through the SAME reader `vat skills build` and `vat verify` use — per-skill
     // config is keyed by name, so two answers would mean two effective configs.
     const skillName = await readPluginLocalSkillName(skillSourceDir, skillDirPath);
-    skills.push({ skillDirPath, skillPath: safePath.join(skillSourceDir, 'SKILL.md'), skillName });
-  }
-  return skills;
+    return { skillDirPath, skillPath: safePath.join(skillSourceDir, 'SKILL.md'), skillName };
+  });
 }
 
 /**
@@ -949,7 +959,8 @@ export async function packagePluginLocalSkills(input: {
   // collision no longer throws — it is a returned finding. The remaining throw paths
   // are an absent or unreadable `files:` source; do not use a collision as the fixture
   // when adding that guard, or the test will pass without the guard existing.
-  for (const { skillDirPath, skillPath, skillName } of input.skills) {
+  // In order: every skill packages against the one shared registry, and the log follows `input.skills`.
+  await forEachInOrder(input.skills, async ({ skillDirPath, skillPath, skillName }) => {
     // Per-skill config goes through `pluginLocalSkillConfigEntry` — the one lookup
     // `vat verify` also uses to check what this packaged — so verify never checks
     // `files:` dests or severity overrides this build did not apply.
@@ -1004,7 +1015,7 @@ export async function packagePluginLocalSkills(input: {
       `         ${skillName} -> skills/${skillDirPath} (${formatPackagedFileCount(result)})`,
     );
     packaged.push({ skillDirPath, result });
-  }
+  });
   return packaged;
 }
 

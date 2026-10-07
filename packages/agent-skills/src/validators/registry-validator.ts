@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation } from '@vibe-agent-toolkit/utils';
+import { issueLocation, promised } from '@vibe-agent-toolkit/utils';
 import type { z } from 'zod';
 
 import {
@@ -127,16 +127,16 @@ function validateRegistryFile(
  * @param options - Anchor base for emitted locations (see {@link AnchorRootOptions})
  * @returns Validation result with issues
  */
-export async function validateInstalledPluginsRegistry(
+export function validateInstalledPluginsRegistry(
 	filePath: string,
 	options?: AnchorRootOptions,
 ): Promise<ValidationResult> {
-	return validateRegistryFile(
+	return promised(() => validateRegistryFile(
 		filePath,
 		InstalledPluginsRegistrySchema,
 		options?.locationRoot,
 		detectInstalledPluginsRegistryDrift,
-	);
+	));
 }
 
 /**
@@ -146,14 +146,14 @@ export async function validateInstalledPluginsRegistry(
  * @param options - Anchor base for emitted locations (see {@link AnchorRootOptions})
  * @returns Validation result with issues
  */
-export async function validateKnownMarketplacesRegistry(
+export function validateKnownMarketplacesRegistry(
 	filePath: string,
 	options?: AnchorRootOptions,
 ): Promise<ValidationResult> {
-	return validateRegistryFile(
+	return promised(() => validateRegistryFile(
 		filePath,
 		KnownMarketplacesRegistrySchema,
 		options?.locationRoot,
 		detectKnownMarketplacesRegistryDrift,
-	);
+	));
 }

@@ -10,7 +10,7 @@
 
 import * as fs from 'node:fs/promises';
 
-import { VatError } from '@vibe-agent-toolkit/utils';
+import { everyInOrder, VatError } from '@vibe-agent-toolkit/utils';
 
 import { CLAUDE_USER_STATE_UNREADABLE_CODE } from '../install/plugin-registry.js';
 import { getClaudeProjectPaths, getClaudeUserPaths } from '../paths/claude-paths.js';
@@ -104,12 +104,13 @@ async function readManagedLayer(options: ReadSettingsOptions): Promise<SettingsL
   if (options.settingsFile) {
     return tryReadLayer(options.settingsFile, 'managed');
   }
-  const candidates = getManagedSettingsCandidatePaths();
-  for (const candidate of candidates) {
-    const layer = await tryReadLayer(candidate, 'managed');
-    if (layer !== null) return layer;
-  }
-  return null;
+  let found: SettingsLayer | null = null;
+  // In order: the first candidate present wins, and an unreadable one refuses before any later one is read.
+  await everyInOrder(getManagedSettingsCandidatePaths(), async (candidate) => {
+    found = await tryReadLayer(candidate, 'managed');
+    return found === null;
+  });
+  return found;
 }
 
 /**

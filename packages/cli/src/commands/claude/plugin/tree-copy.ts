@@ -23,7 +23,7 @@ import { existsSync } from 'node:fs';
 import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 
 import { AGENT_INSTRUCTION_FILE_PATTERNS, toAnyDepthGlobs } from '@vibe-agent-toolkit/agent-skills';
-import { isGlob, isPathAbsentError, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, isGlob, isPathAbsentError, mapWithConcurrency, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, crawlPathFilter } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 import picomatch from 'picomatch';
@@ -291,6 +291,22 @@ interface SourceEntry {
 }
 
 /**
+ * Read-only `fn` over `items`, bounded-parallel, results in input order. A failure
+ * surfaces as the FIRST failing item in input order — what a sequential loop
+ * reported — not whichever failed first in time.
+ */
+async function mapReadOnly<T, R>(items: readonly T[], fn: (item: T) => Promise<R>): Promise<R[]> {
+  const settled = await mapWithConcurrency(items, (item) => fn(item).then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  ));
+  return settled.map((outcome) => {
+    if (!outcome.ok) throw outcome.error;
+    return outcome.value;
+  });
+}
+
+/**
  * Split the crawl's paths into regular files and symlinks by `lstat`, on BOTH
  * routes — this is the one predicate the two crawl lanes share. The walker
  * never yields a symlink (see {@link sweepSymlinks}), so there it finds none;
@@ -303,10 +319,10 @@ async function partitionByLstat(
 ): Promise<{ regular: SourceEntry[]; links: SourceEntry[] }> {
   const regular: SourceEntry[] = [];
   const links: SourceEntry[] = [];
-  for (const abs of files) {
+  const isLink = await mapReadOnly(files, async (abs) => (await lstat(abs)).isSymbolicLink());
+  for (const [index, abs] of files.entries()) {
     const entry = { abs, rel: toForwardSlash(safePath.relative(sourceDir, abs)) };
-    const info = await lstat(abs);
-    (info.isSymbolicLink() ? links : regular).push(entry);
+    (isLink[index] === true ? links : regular).push(entry);
   }
   return { regular, links };
 }
@@ -340,16 +356,17 @@ async function sweepSymlinks(
   const found: SourceEntry[] = [];
   const walk = async (dir: string): Promise<void> => {
     const entries = await readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
+    // In order: `found` is depth-first listing order.
+    await forEachInOrder(entries, async (entry) => {
       const abs = safePath.join(dir, entry.name);
       const rel = toForwardSlash(safePath.relative(sourceDir, abs));
-      if (!isMember(rel)) continue;
+      if (!isMember(rel)) return;
       if (entry.isSymbolicLink()) {
         found.push({ abs, rel });
       } else if (entry.isDirectory()) {
         await walk(abs);
       }
-    }
+    });
   };
   await walk(sourceDir);
   return found;
@@ -416,11 +433,13 @@ async function judgeSymlinks(
   const refused: RefusedSymlink[] = [];
   if (links.length === 0) return { copyable, refused };
   const realSource = toForwardSlash(await realpath(sourceDir));
-  for (const link of [...links].toSorted((a, b) => a.rel.localeCompare(b.rel))) {
-    const verdict = await classifySymlink(link, realSource, shipped);
+  const sorted = [...links].toSorted((a, b) => a.rel.localeCompare(b.rel));
+  const verdicts = await mapReadOnly(sorted, (link) => classifySymlink(link, realSource, shipped));
+  for (const [index, link] of sorted.entries()) {
+    const verdict = verdicts[index];
     if (verdict === 'file') {
       copyable.push(link);
-    } else {
+    } else if (verdict !== undefined) {
       refused.push(verdict);
     }
   }
@@ -514,7 +533,8 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
     throw new PluginSymlinkRefusedError(refused);
   }
 
-  for (const entry of [...shippedRegular, ...copyable]) {
+  // In order: bundle writes, where the first failed copy is the one reported.
+  await forEachInOrder([...shippedRegular, ...copyable], async (entry) => {
     const target = safePath.join(destDir, entry.rel);
     // `copyFile` follows a symlink, which is the point for the in-tree file
     // links that reach here: the bundle carries the target's bytes. The plugin
@@ -526,7 +546,7 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
     if (bucket) {
       result[bucket] += 1;
     }
-  }
+  });
   result.symlinksCopied = copyable.map((entry) => entry.rel);
 
   // A typo'd or wrong-shaped exclude pattern used to be perfectly silent: the

@@ -24,7 +24,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 
-import { canonicalPath, isUnderRoot, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { canonicalPath, everyInOrder, isUnderRoot, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { type ArmEnvironment, mergeArmEnvironments } from '../../harness/arm-env.js';
@@ -82,13 +82,19 @@ export async function captureVerdict(request: VerdictCaptureRequest): Promise<Ve
 
   const envelopes: ReportEnvelope<VerdictBody>[] = [];
   const written: string[] = [];
-  for (const subject of request.subjects) {
+  let failed: VerdictCaptureResult | undefined;
+  // In order: the first subject that fails stops the run, and reports are written in subject order.
+  await everyInOrder(request.subjects, async (subject) => {
     const captured = await captureSubject(request, subject);
-    if (!captured.ok) return captured;
+    if (!captured.ok) {
+      failed = captured;
+      return false;
+    }
     envelopes.push(captured.envelope);
     written.push(await writeReport(request.outDir, captured.envelope));
-  }
-  return { ok: true, envelopes, written };
+    return true;
+  });
+  return failed ?? { ok: true, envelopes, written };
 }
 
 /**

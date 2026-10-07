@@ -40,7 +40,7 @@
  * same claim — it reads only materialised tables — so it gets the same root.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { decodeTextContent } from '@vibe-agent-toolkit/utils/text';
 
 import { computeContentKey } from '../../src/content-key.js';
@@ -486,7 +486,7 @@ async function contributeClosureStratum(builder: ProjectionBuilder, base: Projec
   const rulesScope = await new ClaudeRulesScopeContributor().contribute(base, {});
   applyContribution(builder, rulesScope);
   const digests = [extentDigest(rulesScope)];
-  for (const rootRelativePath of claudeImportRootsFrom(base.resourceRealizations)) {
+  await forEachInOrder(claudeImportRootsFrom(base.resourceRealizations), async (rootRelativePath) => {
     const declaration = claudeImportExtentDeclaration(rootRelativePath);
     const contributor = new ClaudeImportExtentContributor(rootRelativePath);
     const contribution = await contributor.contribute(base, declaration as unknown as JsonValue);
@@ -498,7 +498,7 @@ async function contributeClosureStratum(builder: ProjectionBuilder, base: Projec
       parameterSet: declaration as unknown as JsonValue,
       extentDigest: 'fixture',
     });
-  }
+  });
   return digests;
 }
 
@@ -572,17 +572,17 @@ export async function claudeContextFixture(
   // in the next; and a contributor still changing its answer is unsettled
   // whatever the pass did.
   await runHarnessPass(builder, [CLAUDE_CODE], readContent);
-  let digests: readonly string[] = [];
-  for (let round = 1; ; round += 1) {
+  const settle = async (round: number, digests: readonly string[]): Promise<void> => {
     if (round > MAX_FIXTURE_ROUNDS) {
       throw new Error(`claudeContextFixture: the closure stratum was still moving after ${MAX_FIXTURE_ROUNDS} rounds.`);
     }
     const next = await contributeClosureStratum(builder, base);
     const { derived } = await runHarnessPass(builder, [CLAUDE_CODE], readContent);
     const contributorsMoved = next.join('\0') !== digests.join('\0');
-    digests = next;
-    if (derived === 0 && !contributorsMoved) break;
-  }
+    if (derived === 0 && !contributorsMoved) return;
+    return settle(round + 1, next);
+  };
+  await settle(1, []);
   // The producer's own post-populate guard: every blob the harness reaches has
   // its facts. Nothing the fixture's reader is handed can be unreadable.
   assertHarnessSettled(builder.base(), [CLAUDE_CODE], new Set());

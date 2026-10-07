@@ -97,7 +97,7 @@ describe('doctor command - unit tests', () => {
      * declares no floor, which is a different failure from the one under test.
      */
     beforeEach(async () => {
-      await mockDoctorFileSystem();
+      mockDoctorFileSystem();
     });
 
     it('passes on the declared floor itself', async () => {
@@ -175,7 +175,7 @@ describe('doctor command - unit tests', () => {
       // This module's own doctrine: a file that cannot be read means nothing was verified.
       // Collapsing it into `fail` told the user their manifest was incomplete and to
       // reinstall — the wrong diagnosis and the wrong remedy.
-      await mockDoctorFileSystem();
+      mockDoctorFileSystem();
       await mockDoctorEnvironment({ nodeVersion: 'v24.13.1' });
       vi.mocked(readFileSync).mockImplementation(refusedRead);
 
@@ -186,7 +186,7 @@ describe('doctor command - unit tests', () => {
     });
 
     it('reports a manifest that is not JSON as undetermined, not as one declaring no floor', async () => {
-      await mockDoctorFileSystem();
+      mockDoctorFileSystem();
       await mockDoctorEnvironment({ nodeVersion: 'v24.13.1' });
       vi.mocked(readFileSync).mockReturnValue('{ not json');
 
@@ -199,7 +199,7 @@ describe('doctor command - unit tests', () => {
     it('does not file a defect in the read as an unreadable manifest', async () => {
       // "Unreadable" is the filesystem's answer. A throw with no errno is ours,
       // and dressing it as a permissions problem sends the user to chmod.
-      await mockDoctorFileSystem();
+      mockDoctorFileSystem();
       await mockDoctorEnvironment({ nodeVersion: 'v24.13.1' });
       vi.mocked(readFileSync).mockImplementation(() => {
         throw new TypeError(DEFECT);
@@ -213,7 +213,7 @@ describe('doctor command - unit tests', () => {
     });
 
     it('reports a manifest that declares no floor, rather than guessing one', async () => {
-      await mockDoctorFileSystem({ nodeEngines: null });
+      mockDoctorFileSystem({ nodeEngines: null });
       await mockDoctorEnvironment({ nodeVersion: 'v24.13.1' });
 
       const result = checkNodeVersion();
@@ -284,7 +284,7 @@ describe('doctor command - unit tests', () => {
 
   describe('checkConfigFile', () => {
     it('passes when config exists', async () => {
-      await mockDoctorFileSystem({ configExists: true });
+      mockDoctorFileSystem({ configExists: true });
 
       const result = checkConfigFile();
 
@@ -292,7 +292,7 @@ describe('doctor command - unit tests', () => {
     });
 
     it('fails when config not found', async () => {
-      await mockDoctorFileSystem({ configExists: false });
+      mockDoctorFileSystem({ configExists: false });
 
       const result = checkConfigFile();
 
@@ -307,7 +307,7 @@ describe('doctor command - unit tests', () => {
 
   describe('checkConfigValid', () => {
     it('passes when config is valid', async () => {
-      await mockDoctorFileSystem({ configExists: true });
+      mockDoctorFileSystem({ configExists: true });
       const cleanup = await mockDoctorConfig({ valid: true });
 
       const result = checkConfigValid();
@@ -317,7 +317,7 @@ describe('doctor command - unit tests', () => {
     });
 
     it('fails when config has errors', async () => {
-      await mockDoctorFileSystem({ configExists: true });
+      mockDoctorFileSystem({ configExists: true });
       const cleanup = await mockDoctorConfig({
         valid: false,
         errors: ['YAML syntax error'],
@@ -335,7 +335,7 @@ describe('doctor command - unit tests', () => {
     });
 
     it('fails when config not found', async () => {
-      await mockDoctorFileSystem({ configExists: false });
+      mockDoctorFileSystem({ configExists: false });
 
       const result = checkConfigValid();
 
@@ -348,7 +348,7 @@ describe('doctor command - unit tests', () => {
     });
 
     it('reports a schema behind an uninstalled package as missing', async () => {
-      await mockDoctorFileSystem({ configExists: true });
+      mockDoctorFileSystem({ configExists: true });
       const cleanup = await mockDoctorConfig({
         config: { resources: { collections: { docs: { validation: { frontmatterSchema: UNINSTALLED_SCHEMA } } } } },
       });
@@ -362,7 +362,7 @@ describe('doctor command - unit tests', () => {
     it('does not file a defect in schema resolution as a missing schema', async () => {
       // "Missing" is what resolution says when the package or subpath is not
       // there. Anything else the resolver throws is reported as what it is.
-      await mockDoctorFileSystem({ configExists: true });
+      mockDoctorFileSystem({ configExists: true });
       const cleanup = await mockDoctorConfig({
         config: { resources: { collections: { docs: { validation: { frontmatterSchema: UNINSTALLED_SCHEMA } } } } },
       });
@@ -380,7 +380,7 @@ describe('doctor command - unit tests', () => {
 
   describe('checkVatVersion', () => {
     it('shows up to date when current equals latest', async () => {
-      await mockDoctorFileSystem({ packageVersion: '0.1.0' });
+      mockDoctorFileSystem({ packageVersion: '0.1.0' });
       const versionChecker = {
         fetchLatestVersion: vi.fn().mockResolvedValue('0.1.0'),
       };
@@ -392,7 +392,7 @@ describe('doctor command - unit tests', () => {
     });
 
     it('shows advisory when update available', async () => {
-      await mockDoctorFileSystem({ packageVersion: '0.1.0' });
+      mockDoctorFileSystem({ packageVersion: '0.1.0' });
       const versionChecker = {
         fetchLatestVersion: vi.fn().mockResolvedValue('0.2.0'),
       };
@@ -407,7 +407,7 @@ describe('doctor command - unit tests', () => {
     });
 
     it('shows ahead when current is newer', async () => {
-      await mockDoctorFileSystem({ packageVersion: '0.3.0' });
+      mockDoctorFileSystem({ packageVersion: '0.3.0' });
       const versionChecker = {
         fetchLatestVersion: vi.fn().mockResolvedValue('0.2.0'),
       };
@@ -421,7 +421,7 @@ describe('doctor command - unit tests', () => {
     });
 
     it('reports UNDETERMINED (not pass) when npm is unreachable', async () => {
-      await mockDoctorFileSystem({ packageVersion: '0.1.0' });
+      mockDoctorFileSystem({ packageVersion: '0.1.0' });
       const versionChecker = {
         fetchLatestVersion: vi.fn().mockRejectedValue(new Error('Network error')),
       };
@@ -449,7 +449,7 @@ describe('doctor command - unit tests', () => {
     const FAKE_PROJECT_ROOT = '/fake/project/root';
 
     it('passes when CLI version matches source', async () => {
-      await mockDoctorFileSystem({
+      mockDoctorFileSystem({
         isVatSourceTree: true,
         packageVersion: '0.1.0',
       });
@@ -497,7 +497,7 @@ describe('doctor command - unit tests', () => {
     });
 
     it('skips when not in VAT source tree', async () => {
-      await mockDoctorFileSystem({ isVatSourceTree: false });
+      mockDoctorFileSystem({ isVatSourceTree: false });
 
       const result = checkCliBuildSync(FAKE_PROJECT_ROOT);
 

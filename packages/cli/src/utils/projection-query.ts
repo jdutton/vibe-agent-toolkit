@@ -55,7 +55,7 @@ import {
   splitProjectionByScope,
   type Projection,
 } from '@vibe-agent-toolkit/resources';
-import { isVatError, VatError } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
 import { gitTrackerForProjectRoot } from '../commands/audit/distributed-tree.js';
 
@@ -475,12 +475,12 @@ export async function withQueriedProjection<T>(
       // and this becomes a silent wrong answer: an empty table selecting zero rows.
       const lenses = lensesNamedBy(options.statements);
       const lensStart = performance.now();
-      for (const lens of lenses) {
-        // Sequential, not `Promise.all`: a lens may populate, and two
-        // populations racing for one projection store is the concurrency this
-        // lane has no reason to invite.
+      // Sequential, not `Promise.all`: a lens may populate, and two
+      // populations racing for one projection store is the concurrency this
+      // lane has no reason to invite.
+      await forEachInOrder(lenses, async (lens) => {
         await store.writeDerived(await evaluateLens(lens, { projection, root, logger, cache }));
-      }
+      });
       const lensMs = performance.now() - lensStart;
       // The shared setup is done. Everything after this line is the caller's.
 

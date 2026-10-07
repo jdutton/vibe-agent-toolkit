@@ -117,7 +117,7 @@ import {
   quoteIdentifier,
   vatCacheNamespaceRoot,
 } from '@vibe-agent-toolkit/resources';
-import { safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { promised, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 
 import {
@@ -1359,13 +1359,15 @@ class SqliteCompileProbe implements ProjectionCompileProbe {
   }
 
   /** @inheritdoc */
-  async close(): Promise<void> {
-    // Nothing reads this database after the preflight, so there is no
-    // transaction or statement cache to settle first.
-    if (!this.#closed) {
-      this.#closed = true;
-      this.#database.close();
-    }
+  close(): Promise<void> {
+    return promised(() => {
+      // Nothing reads this database after the preflight, so there is no
+      // transaction or statement cache to settle first.
+      if (!this.#closed) {
+        this.#closed = true;
+        this.#database.close();
+      }
+    });
   }
 }
 
@@ -1504,27 +1506,29 @@ class SqliteProjectionStore implements SqlQueryableStore {
    * over another root that holds the same bytes without reaching them must not
    * delete the facts this one derived.
    */
-  async writeBlobFacts(rows: BlobScopedRows): Promise<void> {
-    this.#assertOpen();
-    const bundle = rows as unknown as Record<string, readonly Record<string, unknown>[]>;
-    const contentKeys = uniqueContentKeys(bundle);
-    if (contentKeys.length === 0) return;
+  writeBlobFacts(rows: BlobScopedRows): Promise<void> {
+    return promised(() => {
+      this.#assertOpen();
+      const bundle = rows as unknown as Record<string, readonly Record<string, unknown>[]>;
+      const contentKeys = uniqueContentKeys(bundle);
+      if (contentKeys.length === 0) return;
 
-    let evicted = 0;
-    this.#transaction(() => {
-      this.#clearSpaceForBlobs(bundle, contentKeys);
-      this.#insertBundle(bundle, 'blob', []);
-      // AFTER the rows, and BEFORE the eviction, for the reason `writeExtent`
-      // records its manifest row before evicting: a key not yet in the ordering
-      // is a key the window cannot see, so a small retention would drop the very
-      // keys this write just inserted.
-      const writtenAt = new Date().toISOString();
-      for (const key of contentKeys) this.#recordBlobKey.run(key, writtenAt);
-      evicted = this.#evictBlobKeysPastRetention(contentKeys.length);
+      let evicted = 0;
+      this.#transaction(() => {
+        this.#clearSpaceForBlobs(bundle, contentKeys);
+        this.#insertBundle(bundle, 'blob', []);
+        // AFTER the rows, and BEFORE the eviction, for the reason `writeExtent`
+        // records its manifest row before evicting: a key not yet in the ordering
+        // is a key the window cannot see, so a small retention would drop the very
+        // keys this write just inserted.
+        const writtenAt = new Date().toISOString();
+        for (const key of contentKeys) this.#recordBlobKey.run(key, writtenAt);
+        evicted = this.#evictBlobKeysPastRetention(contentKeys.length);
+      });
+      // Outside the transaction, because SQLite refuses `incremental_vacuum`
+      // inside one — the same arrangement, and the same reason, as `writeExtent`.
+      if (evicted > 0) this.#database.exec('PRAGMA incremental_vacuum');
     });
-    // Outside the transaction, because SQLite refuses `incremental_vacuum`
-    // inside one — the same arrangement, and the same reason, as `writeExtent`.
-    if (evicted > 0) this.#database.exec('PRAGMA incremental_vacuum');
   }
 
   /**
@@ -1595,48 +1599,52 @@ class SqliteProjectionStore implements SqlQueryableStore {
   }
 
   /** @inheritdoc */
-  async readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
-    this.#assertOpen();
-    return this.#readTransaction(() => {
-      const result: Record<string, unknown[]> = {};
-      for (const { spec } of this.#plansOfScope('blob')) {
-        result[spec.key] = [];
-      }
-      for (const batch of batched([...new Set(contentKeys)])) {
-        for (const plan of this.#plansOfScope('blob')) {
-          const raw = this.#blobStatement('select', plan.spec, batch.length).all(...batch);
-          result[plan.spec.key]?.push(...decodeRows(plan, raw));
+  readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
+    return promised(() => {
+      this.#assertOpen();
+      return this.#readTransaction(() => {
+        const result: Record<string, unknown[]> = {};
+        for (const { spec } of this.#plansOfScope('blob')) {
+          result[spec.key] = [];
         }
-      }
-      return result as unknown as BlobScopedRows;
+        for (const batch of batched([...new Set(contentKeys)])) {
+          for (const plan of this.#plansOfScope('blob')) {
+            const raw = this.#blobStatement('select', plan.spec, batch.length).all(...batch);
+            result[plan.spec.key]?.push(...decodeRows(plan, raw));
+          }
+        }
+        return result as unknown as BlobScopedRows;
+      });
     });
   }
 
   /** @inheritdoc */
-  async writeExtent(key: ExtentKey, rows: ExtentScopedRows): Promise<void> {
-    this.#assertOpen();
-    const bundle = rows as unknown as Record<string, readonly Record<string, unknown>[]>;
-    const keyValues = [key.rootId, key.treeHash];
-    const contexts = contextsNamedBy(bundle, this.#plansOfScope('extent'));
-    let evicted = 0;
-    this.#transaction(() => {
-      for (const plan of this.#plansOfScope('extent')) {
-        this.#clearSpaceFor(plan, bundle, keyValues, contexts);
-      }
-      this.#insertBundle(bundle, 'extent', keyValues);
-      // Recorded on every write, including one that names no context at all:
-      // the manifest row is the only thing separating "written and empty" from
-      // "never written", and an additive write is still a write.
-      this.#recordExtent.run(key.rootId, key.treeHash, new Date().toISOString());
-      // AFTER the manifest row, inside the same transaction. Before it, this
-      // write's own tree would not yet be in the ordering and a retention of one
-      // would evict the newest tree the store had — the one it is replacing.
-      evicted = this.#evictPastRetention(key.rootId) + this.#evictRootsPastRetention();
+  writeExtent(key: ExtentKey, rows: ExtentScopedRows): Promise<void> {
+    return promised(() => {
+      this.#assertOpen();
+      const bundle = rows as unknown as Record<string, readonly Record<string, unknown>[]>;
+      const keyValues = [key.rootId, key.treeHash];
+      const contexts = contextsNamedBy(bundle, this.#plansOfScope('extent'));
+      let evicted = 0;
+      this.#transaction(() => {
+        for (const plan of this.#plansOfScope('extent')) {
+          this.#clearSpaceFor(plan, bundle, keyValues, contexts);
+        }
+        this.#insertBundle(bundle, 'extent', keyValues);
+        // Recorded on every write, including one that names no context at all:
+        // the manifest row is the only thing separating "written and empty" from
+        // "never written", and an additive write is still a write.
+        this.#recordExtent.run(key.rootId, key.treeHash, new Date().toISOString());
+        // AFTER the manifest row, inside the same transaction. Before it, this
+        // write's own tree would not yet be in the ordering and a retention of one
+        // would evict the newest tree the store had — the one it is replacing.
+        evicted = this.#evictPastRetention(key.rootId) + this.#evictRootsPastRetention();
+      });
+      // Outside the transaction, because SQLite refuses `incremental_vacuum`
+      // inside one, and only when something was actually freed — an ordinary
+      // steady-state write evicts nothing and must pay nothing.
+      if (evicted > 0) this.#database.exec('PRAGMA incremental_vacuum');
     });
-    // Outside the transaction, because SQLite refuses `incremental_vacuum`
-    // inside one, and only when something was actually freed — an ordinary
-    // steady-state write evicts nothing and must pay nothing.
-    if (evicted > 0) this.#database.exec('PRAGMA incremental_vacuum');
   }
 
   /**
@@ -1655,31 +1663,33 @@ class SqliteProjectionStore implements SqlQueryableStore {
    * instance fix the review keeps finding. See {@link SqliteProjectionStore.
    * #mayWriteDerived}.
    */
-  async writeDerived(rows: DerivedRows): Promise<void> {
-    this.#assertOpen();
-    if (!this.#mayWriteDerived) {
-      throw new Error(
-        'This store has no derived relations, so a lens evaluation cannot be written to it.'
-        + ' They exist only on the per-run in-memory store from `openEphemeralProjectionStore()`.'
-        + ' The file-backed store is ONE database per VAT release, shared by every root on the'
-        + " machine — a lens's rows are a function of the lens as well as the bytes, and a question"
-        + " asked once, so persisting them there would answer one lens's question with another"
-        + " lens's rows, across repositories. Populate from the file-backed store, then query the"
-        + ' in-memory one.',
-      );
-    }
-    const bundle = rows as Record<string, readonly Record<string, unknown>[] | undefined>;
-    const knownBefore = new Set(this.#derivedPlans.keys());
-    try {
-      this.#writeDerivedRows(bundle);
-    } catch (error) {
-      // The rollback removed every table this write created; forget their plans
-      // too, or the next write would skip the `CREATE` and fail `no such table`.
-      for (const key of this.#derivedPlans.keys()) {
-        if (!knownBefore.has(key)) this.#derivedPlans.delete(key);
+  writeDerived(rows: DerivedRows): Promise<void> {
+    return promised(() => {
+      this.#assertOpen();
+      if (!this.#mayWriteDerived) {
+        throw new Error(
+          'This store has no derived relations, so a lens evaluation cannot be written to it.'
+          + ' They exist only on the per-run in-memory store from `openEphemeralProjectionStore()`.'
+          + ' The file-backed store is ONE database per VAT release, shared by every root on the'
+          + " machine — a lens's rows are a function of the lens as well as the bytes, and a question"
+          + " asked once, so persisting them there would answer one lens's question with another"
+          + " lens's rows, across repositories. Populate from the file-backed store, then query the"
+          + ' in-memory one.',
+        );
       }
-      throw error;
-    }
+      const bundle = rows as Record<string, readonly Record<string, unknown>[] | undefined>;
+      const knownBefore = new Set(this.#derivedPlans.keys());
+      try {
+        this.#writeDerivedRows(bundle);
+      } catch (error) {
+        // The rollback removed every table this write created; forget their plans
+        // too, or the next write would skip the `CREATE` and fail `no such table`.
+        for (const key of this.#derivedPlans.keys()) {
+          if (!knownBefore.has(key)) this.#derivedPlans.delete(key);
+        }
+        throw error;
+      }
+    });
   }
 
   /**
@@ -1732,22 +1742,24 @@ class SqliteProjectionStore implements SqlQueryableStore {
   }
 
   /** @inheritdoc */
-  async readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
-    this.#assertOpen();
-    return this.#readTransaction(() => {
-      // An extent that was written but holds nothing is a hit with empty tables;
-      // one that was never written is a miss. The manifest row is what tells
-      // them apart, since both produce zero rows from every table — and it is
-      // read inside the same snapshot as the tables, so a hit cannot be
-      // followed by rows from a different write.
-      if (this.#extentPresent.get(key.rootId, key.treeHash) === undefined) return undefined;
+  readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
+    return promised(() => {
+      this.#assertOpen();
+      return this.#readTransaction(() => {
+        // An extent that was written but holds nothing is a hit with empty tables;
+        // one that was never written is a miss. The manifest row is what tells
+        // them apart, since both produce zero rows from every table — and it is
+        // read inside the same snapshot as the tables, so a hit cannot be
+        // followed by rows from a different write.
+        if (this.#extentPresent.get(key.rootId, key.treeHash) === undefined) return undefined;
 
-      const result: Record<string, unknown[]> = {};
-      for (const plan of this.#plansOfScope('extent')) {
-        const raw = plan.selectExtent?.all(key.rootId, key.treeHash) ?? [];
-        result[plan.spec.key] = [...decodeRows(plan, raw)];
-      }
-      return result as unknown as ExtentScopedRows;
+        const result: Record<string, unknown[]> = {};
+        for (const plan of this.#plansOfScope('extent')) {
+          const raw = plan.selectExtent?.all(key.rootId, key.treeHash) ?? [];
+          result[plan.spec.key] = [...decodeRows(plan, raw)];
+        }
+        return result as unknown as ExtentScopedRows;
+      });
     });
   }
 
@@ -1813,10 +1825,12 @@ class SqliteProjectionStore implements SqlQueryableStore {
   }
 
   /** @inheritdoc */
-  async close(): Promise<void> {
-    if (this.#closed) return;
-    this.#closed = true;
-    this.#database.close();
+  close(): Promise<void> {
+    return promised(() => {
+      if (this.#closed) return;
+      this.#closed = true;
+      this.#database.close();
+    });
   }
 
   /**

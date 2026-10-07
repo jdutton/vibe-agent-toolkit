@@ -226,6 +226,16 @@ These are CLI-boundary functions: inner libraries should take a root as a parame
 
 They are nonetheless on their own [`./project`](#import-narrowly) entry rather than the barrel alone. The entry was briefly withdrawn on the grounds that the functions fit few repos — which is true, and is what the paragraph above says — but that answered the wrong question. What decides whether an *entry* exists is how heavy the only remaining door is, and barrel-only these four once cost five third-party packages to reach while their own code imports nothing but `node:fs` and `node:path`. Publishing the entry is not a claim that the ladder fits you — only that finding out shouldn't cost a dependency graph. The barrel is dependency-free now, which is that same rule applied everywhere rather than a reason to fold `./project` back in.
 
+### Ordered and bounded async iteration — `@vibe-agent-toolkit/utils` (barrel only)
+
+- `forEachInOrder(items, fn)` / `mapInOrder(items, fn)` - run `fn` one item at a time, each call starting after the previous settles; the first rejection stops the run and later items never start. For when order is the contract: ordered writes, first-refusal-wins errors, a shared memo or sink, a report whose order is its meaning.
+- `everyInOrder(items, fn)` - `Array#every`, in order and awaited: stops at the first `false`. The idiom for a loop that used to `break`.
+- `mapWithConcurrency(items, fn, limit = FS_CONCURRENCY)` - `Promise.all`-shaped with at most `limit` calls in flight, results in input order. For independent work over a population-sized list, where a bare `Promise.all` would open a descriptor per item.
+- `mapConcurrentFailingInOrder(items, fn)` - `mapWithConcurrency`, but every call settles and the rejection of the EARLIEST item by position is rethrown — the error a sequential loop would have raised, for independent read-only work.
+- `promised(work)` - `work()` as a promise: its value resolves, a synchronous throw rejects. `Promise.try` for a Promise-shaped API over a synchronous body, until the Node floor has it.
+
+These replace `await` inside a loop, which the repo's ESLint config refuses (`no-await-in-loop`, mirroring Sonar S9382). None is written with `async` or a loop.
+
 ### Errors — `@vibe-agent-toolkit/utils` (barrel only)
 
 - `VatError` - the base of every error VAT throws on purpose: `new VatError(code, message, { cause })`. `code` is a stable `SCREAMING_SNAKE` identity a catch block dispatches on; `name` is taken from the subclass.

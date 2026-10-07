@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 
-import { direntKindFollowing, FollowedWalk, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, FollowedWalk, forEachInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { readingSkillSource } from './source-unreadable.js';
 
@@ -28,12 +28,13 @@ export async function hashDirectory(dir: string): Promise<string> {
   });
 
   const hash = createHash('sha256');
-  for (const { rel, abs } of files) {
+  // In order: `hash.update` order is the digest, and one file's bytes are held at a time.
+  await forEachInOrder(files, async ({ rel, abs }) => {
     hash.update(rel, 'utf-8');
     hash.update('\0');
     hash.update(await readingSkillSource(abs, () => readFile(abs)));
     hash.update('\0');
-  }
+  });
   return hash.digest('hex');
 }
 
@@ -44,7 +45,8 @@ async function collectFiles(
 ): Promise<Array<{ rel: string; abs: string }>> {
   const entries = await readingSkillSource(current, () => readdir(current, { withFileTypes: true }));
   const out: Array<{ rel: string; abs: string }> = [];
-  for (const entry of entries) {
+  // In order: the walk guard's cycle detection depends on it.
+  await forEachInOrder(entries, async (entry) => {
     const abs = safePath.join(current, entry.name);
     // The hash covers what ships, so a link is followed to its bytes. A
     // dangling link or a special file has no bytes to hash and contributes
@@ -63,6 +65,6 @@ async function collectFiles(
       case 'other':
         break;
     }
-  }
+  });
   return out;
 }

@@ -27,13 +27,12 @@ export interface LoadedClaudeConfig {
  * through `parseConfigFile` as well, and printed the same warning twice.
  * `claudeConfig` is undefined when the `claude:` section is absent.
  */
-export async function loadClaudeProjectConfig(): Promise<{
+export function loadClaudeProjectConfig(): {
   configPath: string;
   configDir: string;
   projectConfig: ProjectConfig | undefined;
   claudeConfig: ClaudeConfig | undefined;
-}> {
-  // findConfigFile from utils is synchronous; await of a non-promise is a no-op.
+} {
   const configPath = findConfigFile(process.cwd());
   if (!configPath) {
     throw new CommandRefusalError('CONFIG_INVALID', 'No vibe-agent-toolkit.config.yaml found. Run from a project directory.');
