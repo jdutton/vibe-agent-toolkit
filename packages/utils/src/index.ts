@@ -93,6 +93,7 @@ export { isFilesystemAccessError, isPathAbsentError } from './errors/errno.js';
 export {
   COPY_LINK_ESCAPES_SOURCE_CODE,
   COPY_SOURCE_NOT_REGULAR_CODE,
+  COPY_SOURCE_UNREADABLE_CODE,
   copyDirectory,
   CopyLinkEscapesSourceError,
   FsLookupCache,

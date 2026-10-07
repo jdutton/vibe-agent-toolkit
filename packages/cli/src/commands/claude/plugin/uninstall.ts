@@ -62,7 +62,9 @@ Output (YAML report on stdout):
   - findings: PLUGIN_UNINSTALL_INCOMPLETE (warning) for a plugin directory no
     registry recorded — removed, but its installer may have left more; or for
     a directory that is another installed plugin's on disk (Old@mp beside old@mp
-    on a case-insensitive filesystem) — kept, only the registry entry removed
+    on a case-insensitive filesystem, or a link to it) — or that could not be
+    told apart from one whose directory the OS would not examine — kept, only
+    the registry entry removed
 
 Exit Codes:
   0 - Uninstalled, or nothing to remove (a warning does not fail the run)

@@ -12,6 +12,7 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import { buildReport, toFindings, type FindingsReport, type Gate, type OkReport, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
+  ASSET_REFERENCE_UNREADABLE_CODE,
   ASSET_REFERENCE_UNRESOLVED_CODE,
   findConfigFile,
   isFilesystemAccessError,
@@ -341,9 +342,10 @@ export function checkConfigFile(): DoctorCheckResult {
 function checkSchemaFiles(
   collections: Record<string, { validation?: { frontmatterSchema?: string | undefined } | undefined }>,
   configDir: string
-): { schemaFiles: string[]; missingSchemas: string[] } {
+): { schemaFiles: string[]; missingSchemas: string[]; unreadableSchemas: string[] } {
   const schemaFiles: string[] = [];
   const missingSchemas: string[] = [];
+  const unreadableSchemas: string[] = [];
 
   for (const collectionConfig of Object.values(collections)) {
     const schemaPath = collectionConfig.validation?.frontmatterSchema;
@@ -356,16 +358,46 @@ function checkSchemaFiles(
         }
       } catch (error) {
         // A bare specifier that names nothing installed is coded
-        // ASSET_REFERENCE_UNRESOLVED; vat doctor's contract is "report what's
-        // missing", so it is a missingSchemas entry. Only that code: any other
-        // throw is not a missing schema and reaches the caller's own catch.
-        if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE)) throw error;
-        missingSchemas.push(schemaPath);
+        // ASSET_REFERENCE_UNRESOLVED: a missingSchemas entry. One whose package
+        // is installed but unreadable (a malformed package.json) is not missing,
+        // and is listed apart. Any other throw reaches the caller's own catch.
+        if (isVatError(error, ASSET_REFERENCE_UNREADABLE_CODE)) unreadableSchemas.push(schemaPath);
+        else if (isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE)) missingSchemas.push(schemaPath);
+        else throw error;
       }
     }
   }
 
-  return { schemaFiles, missingSchemas };
+  return { schemaFiles, missingSchemas, unreadableSchemas };
+}
+
+/** The failed config check for schema references that are missing, or whose package cannot be read. */
+function schemaProblemResult(
+  collectionCount: number,
+  referenced: number,
+  missingSchemas: string[],
+  unreadableSchemas: string[],
+): DoctorCheckResult {
+  const counts = [
+    missingSchemas.length > 0 ? `${missingSchemas.length} missing` : undefined,
+    unreadableSchemas.length > 0 ? `${unreadableSchemas.length} unreadable` : undefined,
+  ].filter((part) => part !== undefined).join(', ');
+  const details = [
+    `Collections: ${collectionCount} defined`,
+    `Schema files: ${referenced} referenced, ${counts}`,
+    ...(missingSchemas.length > 0 ? [`Missing: ${missingSchemas.join(', ')}`] : []),
+    ...(unreadableSchemas.length > 0 ? [`Unreadable: ${unreadableSchemas.join(', ')} (the package is installed but its package.json cannot be read)`] : []),
+  ].join('\n   ');
+  const suggestions = [
+    ...(missingSchemas.length > 0 ? ['Create missing schema files or update collection config'] : []),
+    ...(unreadableSchemas.length > 0 ? ['fix or reinstall the package whose package.json cannot be read'] : []),
+  ];
+  return {
+    name: CHECK_NAME_CONFIG_VALID,
+    outcome: 'fail',
+    message: `Configuration valid but schema files ${counts}:\n   ${details}`,
+    suggestion: suggestions.join('; '),
+  };
 }
 
 /**
@@ -401,22 +433,11 @@ export function checkConfigValid(): DoctorCheckResult {
 
       // Check if schema files exist
       const collectionCount = Object.keys(collections).length;
-      const { schemaFiles, missingSchemas } = checkSchemaFiles(collections, configDir);
+      const { schemaFiles, missingSchemas, unreadableSchemas } = checkSchemaFiles(collections, configDir);
 
       // Build message with details
-      if (missingSchemas.length > 0) {
-        const details = [
-          `Collections: ${collectionCount} defined`,
-          `Schema files: ${schemaFiles.length} referenced, ${missingSchemas.length} missing`,
-          `Missing: ${missingSchemas.join(', ')}`,
-        ].join('\n   ');
-
-        return {
-          name: CHECK_NAME_CONFIG_VALID,
-          outcome: 'fail',
-          message: `Configuration valid but schema files missing:\n   ${details}`,
-          suggestion: 'Create missing schema files or update collection config',
-        };
+      if (missingSchemas.length > 0 || unreadableSchemas.length > 0) {
+        return schemaProblemResult(collectionCount, schemaFiles.length, missingSchemas, unreadableSchemas);
       }
 
       // All good - build success message with details

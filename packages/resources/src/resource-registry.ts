@@ -13,6 +13,7 @@ import path from 'node:path';
 
 import { CODE_REGISTRY, createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue, type ValidationIssueCode } from '@vibe-agent-toolkit/schema';
 import {
+  ASSET_REFERENCE_UNREADABLE_CODE,
   ASSET_REFERENCE_UNRESOLVED_CODE,
   CRAWL_REGISTRY_ADMIT_ID,
   CRAWL_REGISTRY_ENUMERATE_ID,
@@ -1857,14 +1858,15 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     ];
 
     // A bare specifier that resolves to nothing (package not installed, or its
-    // `exports` target not on disk) is the config's schema not loading, the
-    // same finding as a schema path naming no file. Only that code: any other
+    // `exports` target not on disk) — or to a package Node cannot read (a
+    // malformed package.json) — is the config's schema not loading, the same
+    // finding as a schema path naming no file. Only those codes: any other
     // throw is not about the schema reference.
     let schemaPath: string;
     try {
       schemaPath = resolveAssetReference(schemaSpecifier, this.baseDir ?? process.cwd());
     } catch (error) {
-      if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE)) throw error;
+      if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE) && !isVatError(error, ASSET_REFERENCE_UNREADABLE_CODE)) throw error;
       return schemaFailure(error);
     }
 

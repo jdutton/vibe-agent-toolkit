@@ -1,7 +1,9 @@
 import { existsSync, statSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-import { ASSET_REFERENCE_UNRESOLVED_CODE, resolveAssetReference, VatError } from '@vibe-agent-toolkit/utils';
+import { ASSET_REFERENCE_UNRESOLVED_CODE, isUnderRoot, resolveAssetReference, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
 import { hashDirectory } from '../content-hash.js';
 import { stageDirInto } from '../stage.js';
@@ -37,27 +39,54 @@ export function splitNpmSpecVersion(spec: string): { name: string; version: stri
  * Where an installed npm skill source sits on disk: the file or directory its
  * subpath names, or the package's own directory when it names none.
  *
- * A package with no subpath is found through its manifest, because Node
- * resolves a package only to a file. A target that is not on disk (the package
- * is not installed, or `resolveAssetReference` fell back to a path for an
- * unscoped name) throws `ASSET_REFERENCE_UNRESOLVED`, like a specifier Node
- * could not resolve at all.
+ * The package is found on disk along Node's own lookup paths, never through a
+ * resolution — Node resolves a package only to a file, and its `exports` map
+ * may hide `./package.json`. A subpath is a path inside the package (a file or a
+ * directory); one that is not on disk there is tried as an `exports` subpath, so
+ * an alias the publisher declares still works. A package that is not installed,
+ * or a subpath that names nothing either way, throws `ASSET_REFERENCE_UNRESOLVED`.
  *
  * @param spec Bare specifier WITH a version pin: `@scope/pkg@1.2.3[/subpath]`.
  * @param repoRoot Directory the package is installed under.
+ * @throws {VatError} `SKILL_SOURCE_SPEC_INVALID` for an unpinned spec or a subpath
+ *   that climbs out of the package
  */
 export function locateNpmSource(spec: string, repoRoot: string): string {
   const { name, version } = splitNpmSpecVersion(spec);
-  // Node module resolution does not understand the `@version` pin; re-attach the subpath.
   const subpath = spec.slice(`${name}@${version}`.length); // '' or '/dir/...'
-  const resolved = resolveAssetReference(subpath === '' ? `${name}/package.json` : `${name}${subpath}`, repoRoot);
-  if (!existsSync(resolved)) {
+  const packageDir = installedPackageDir(spec, name, repoRoot);
+  if (subpath === '') return packageDir;
+
+  const onDisk = safePath.join(packageDir, subpath);
+  if (isUnderRoot(packageDir, onDisk) === 'outside') {
+    throw new VatError(SKILL_SOURCE_SPEC_INVALID_CODE, `npm skill source '${spec}' names a subpath outside the package ${packageDir}.`);
+  }
+  if (existsSync(onDisk)) return onDisk;
+
+  // Not a path in the package: an `exports` subpath, held to the package it names.
+  const exported = resolveAssetReference(`${name}${subpath}`, repoRoot);
+  if (!existsSync(exported) || isUnderRoot(packageDir, exported) !== 'inside') {
     throw new VatError(
       ASSET_REFERENCE_UNRESOLVED_CODE,
-      `npm skill source '${spec}' is not installed: nothing at ${resolved}. Install '${name}' in ${repoRoot}.`,
+      `npm skill source '${spec}' names nothing in the installed package: no ${onDisk}, and no "exports" subpath '.${subpath}' on disk.`,
     );
   }
-  return subpath === '' ? dirname(resolved) : resolved;
+  return exported;
+}
+
+/** The installed package's directory: the first `<node_modules>/<name>` holding a package.json along Node's lookup paths. */
+function installedPackageDir(spec: string, name: string, repoRoot: string): string {
+  const lookupPaths = createRequire(pathToFileURL(safePath.join(repoRoot, 'package.json')).href).resolve.paths(name) ?? [];
+  const found = lookupPaths
+    .map((nodeModules) => safePath.join(nodeModules, name))
+    .find((dir) => existsSync(safePath.join(dir, 'package.json')));
+  if (found === undefined) {
+    throw new VatError(
+      ASSET_REFERENCE_UNRESOLVED_CODE,
+      `npm skill source '${spec}' is not installed: no ${name}/package.json in any node_modules above ${repoRoot}. Install '${name}' in ${repoRoot}.`,
+    );
+  }
+  return found;
 }
 
 /**
@@ -76,7 +105,7 @@ export async function resolveNpmSource(
 ): Promise<ResolvedSkillSource> {
   const { name, version } = splitNpmSpecVersion(spec);
   const located = locateNpmSource(spec, ctx.repoRoot);
-  // The located target may be a file (exports subpath) or a directory; stage its directory.
+  // The located target may be a file or a directory; stage the directory.
   const resolvedDir = statSync(located).isDirectory() ? located : dirname(located);
   const hash = await hashDirectory(resolvedDir);
   const stagedDir = await stageDirInto(resolvedDir, ctx, `npm-${hash}`);

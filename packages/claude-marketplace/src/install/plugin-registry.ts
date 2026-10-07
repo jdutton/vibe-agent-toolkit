@@ -202,7 +202,9 @@ export function isStagedReplaceLeftover(name: string): boolean {
  *
  * The sibling is DOT-named: `vat inventory` reads every other directory beside
  * the versions as one, so a sibling a crash leaves behind must not look like a
- * version. It takes the source's mode — `mkdtemp` makes it 0700.
+ * version. It takes the source's mode — `mkdtemp` makes it 0700 — with the
+ * owner's rwx added, as every directory of the copy gets: a read-only source
+ * would otherwise install a tree no uninstall (VAT's, Claude Code's, `rm -rf`) can empty.
  *
  * @returns Warnings: the previous tree, when it could not be removed once replaced
  */
@@ -212,12 +214,23 @@ export function replaceDirectory(source: string, dest: string): string[] {
     cpSync(source, staged, { recursive: true });
     // AFTER the copy: a read-only source mode applied first leaves the copy no
     // directory it may write into (Node's native copy then aborts the process).
-    chmodSync(staged, statSync(source).mode & 0o7777);
+    chmodSync(staged, ownerWritable(statSync(source).mode));
+    for (const entry of readdirSync(staged, { recursive: true, withFileTypes: true })) {
+      // A link is skipped before the type test: chmod follows it, and what it leads to is not the copy's.
+      if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
+      const dir = safePath.join(entry.parentPath, entry.name);
+      chmodSync(dir, ownerWritable(lstatSync(dir).mode));
+    }
     return swapIn(staged, dest);
   } finally {
     // Gone already once swapped in; otherwise the half-copied sibling must not stay.
     removeTree(staged);
   }
+}
+
+/** `mode`'s permission bits with the owner's read, write and search added. */
+function ownerWritable(mode: number): number {
+  return (mode & 0o7777) | 0o700;
 }
 
 /**

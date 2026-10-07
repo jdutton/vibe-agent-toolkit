@@ -13,14 +13,14 @@
  * without `--force`) is `USAGE_INVALID`; a source the OS or the archive reader
  * will not read — or an install target whose existence the OS will not let
  * VAT check — is `INPUT_UNREADABLE`; a registry that will not hand over an
- * npm: package is `EXTERNAL_API_FAILED`; a copy that fails partway is
- * `RUN_INCOMPLETE`, publishing the skills already installed. A skill that fails
+ * npm: package is `EXTERNAL_API_FAILED`; a staging copy under `$TMPDIR` the
+ * disk will not hold, or a copy that fails partway, is `RUN_INCOMPLETE`,
+ * publishing the skills already installed. A skill that fails
  * its validation is not a refusal: it is the skill's own error findings, and
  * the whole batch installs nothing.
  */
 
 import { cpSync, rmSync, statSync } from 'node:fs';
-import { mkdtemp } from 'node:fs/promises';
 
 import { validateSkill } from '@vibe-agent-toolkit/agent-skills';
 import { buildReport, toFindings, withDurationMs, type Finding, type ValidationIssue } from '@vibe-agent-toolkit/schema';
@@ -29,7 +29,6 @@ import {
   isSingleFsSegment,
   mapConcurrentFailingInOrder,
   mkdirSyncReal,
-  normalizedTmpdir,
   resolveSkillTarget,
   safePath,
   SKILL_SCOPE_NAMES,
@@ -38,9 +37,9 @@ import {
   type SkillTarget,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
-import AdmZip from 'adm-zip';
 import { Command } from 'commander';
 
+import { makeStagingDir, openZip, type StagedZip } from '../../utils/archive-staging.js';
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
@@ -234,13 +233,15 @@ function executeInstallPlan(plan: InstallPlan): void {
  * Caller is responsible for cleanup; a ZIP the reader refuses leaves nothing behind.
  */
 async function extractZipToTemp(zipPath: string): Promise<string> {
-  const tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-skills-install-zip-'));
+  const tempDir = await makeStagingDir('vat-skills-install-zip-');
   await discardingOnFailure(tempDir, () => {
+    let zip: StagedZip;
     try {
-      new AdmZip(zipPath).extractAllTo(tempDir, /* overwrite */ true);
+      zip = openZip(zipPath);
     } catch (error) {
       throw new CommandRefusalError('INPUT_UNREADABLE', `ZIP cannot be read: ${zipPath} (${errorMessageOf(error)})`, { cause: error });
     }
+    zip.extractTo(zipPath, tempDir);
   });
   return tempDir;
 }
@@ -498,8 +499,10 @@ Exit Codes:
   1 - A skill failed validation: nothing installed
   2 - Could not install: a bad --target/--scope/--name or source, a skill already
       installed without --force, an unreadable source (or an install path the OS
-      will not let VAT check), an npm registry failure, or a copy that failed
-      partway (the skills already installed are listed)
+      will not let VAT check), a .zip/.tgz holding an entry that cannot be
+      extracted, an npm registry failure, a staging copy under $TMPDIR it could
+      not create or write (full, read-only), or a copy that failed partway
+      (the skills already installed are listed)
 
 Example:
   $ vat skills install ./dist/skills/my-skill --target claude --scope user

@@ -15,18 +15,17 @@
 
 
 import { existsSync, lstatSync, readdirSync, cpSync, statSync, type Dirent } from 'node:fs';
-import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { mkdir, rm, symlink } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import { codedUserStateWrite, getClaudeUserPaths, installPlugin, PLUGIN_KEY_INVALID_CODE, replaceDirectory, requirePluginInstallNames, requirePluginSource, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import { buildReport, createRegistryIssue, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, forEachInOrder, isPathAbsentError, isSingleFsSegment, isVatError, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, forEachInOrder, isPathAbsentError, isSingleFsSegment, isVatError, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
-import AdmZip from 'adm-zip';
 import { Command } from 'commander';
-import * as tar from 'tar';
 
+import { extractTarball, makeStagingDir, openZip, stagingRefusal, type StagedZip } from '../../../utils/archive-staging.js';
 import { CommandRefusalError, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED, type FinishedWork } from '../../../utils/document-writer.js';
 import { createLogger } from '../../../utils/logger.js';
@@ -370,14 +369,16 @@ Exit Codes:
       (USAGE_INVALID); --target claude.ai (NOT_IMPLEMENTED); an unreadable
       source (a package directory it cannot list included), a .zip that is
       not a ZIP archive, holds an entry that does not inflate or cannot be
-      extracted, a package whose vat.replaces is not
+      extracted, a .tgz (or npm tarball) that is not a tarball or holds an
+      entry that cannot be extracted, a package whose vat.replaces is not
       { plugins?: string[], flatSkills?: string[] }, whose plugin or marketplace
       directory, version, vat.replaces.plugins or vat.replaces.flatSkills entry
       is not one path segment (or whose version begins with "."), or a replaced
       flat skill the OS will not let it examine, refused before anything changes
-      (INPUT_UNREADABLE); npm pack failing
-      (EXTERNAL_API_FAILED); --build whose vat build failed, a staging copy
-      under $TMPDIR it could not create or write (full, read-only), or a copy,
+      (INPUT_UNREADABLE); npm pack failing, a full $TMPDIR during its download
+      included (EXTERNAL_API_FAILED); --build whose vat build failed, a staging
+      copy under $TMPDIR it could not create or extract into (full, read-only,
+      out of descriptors), or a copy,
       registry write or removal that failed partway (RUN_INCOMPLETE). A refusal
       lists the skills already on disk. What vat.replaces names is removed only
       after the new install is in place, so a failed install leaves it
@@ -585,44 +586,6 @@ async function handleLocalInstall(source: string, run: InstallRun): Promise<void
 }
 
 /**
- * Errnos that mean the disk VAT writes its staging copy to gave out — full, over
- * quota, read-only, out of descriptors, or failing — whatever archive it was writing.
- */
-const STAGING_EXHAUSTED_ERRNOS: ReadonlySet<string> = new Set(['ENOSPC', 'EDQUOT', 'EROFS', 'EMFILE', 'ENFILE', 'EIO']);
-
-/** VAT could not write its own staging copy at `path`: the run did not finish (`RUN_INCOMPLETE`), nothing was changed. */
-function stagingRefusal(path: string, error: unknown): CommandRefusalError {
-  return new CommandRefusalError(
-    'RUN_INCOMPLETE',
-    `Could not write the staging copy at ${path}, nothing was changed: ${error instanceof Error ? error.message : String(error)}. ` +
-      'Free space in, or make writable, the temp directory ($TMPDIR), then re-run.',
-    { cause: error },
-  );
-}
-
-/** A fresh staging directory under the OS temp dir; one the OS will not create is {@link stagingRefusal}. */
-async function makeStagingDir(prefix: string): Promise<string> {
-  const template = safePath.join(normalizedTmpdir(), prefix);
-  try {
-    return await mkdtemp(template);
-  } catch (error) {
-    throw stagingRefusal(template, error);
-  }
-}
-
-/**
- * Why `zip` could not be extracted into the staging directory `extracted`: the
- * disk giving out is the run not finishing (`RUN_INCOMPLETE`); anything else —
- * an entry that does not inflate, a file `a` beside a file `a/b` — is the
- * archive's (`INPUT_UNREADABLE`). Nothing outside the staging directory changed.
- */
-export function zipExtractionRefusal(zipPath: string, extracted: string, error: unknown): CommandRefusalError {
-  const code = (error as NodeJS.ErrnoException | undefined)?.code;
-  if (code !== undefined && STAGING_EXHAUSTED_ERRNOS.has(code)) return stagingRefusal(extracted, error);
-  return new CommandRefusalError('INPUT_UNREADABLE', `${zipPath} could not be extracted, nothing was changed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
-}
-
-/**
  * Handle ZIP file installation
  */
 async function handleZipInstall(source: string, run: InstallRun): Promise<void> {
@@ -637,10 +600,10 @@ async function handleZipInstall(source: string, run: InstallRun): Promise<void> 
   // replaced there. Opening parses only the central directory — entry data is
   // inflated (and its CRC checked) lazily, so a corrupt entry used to throw from
   // `extractAllTo`, uncoded, after the previous skill was already gone.
-  let zip: AdmZip;
+  let zip: StagedZip;
   try {
-    zip = new AdmZip(sourcePath);
-    for (const entry of zip.getEntries()) entry.getData();
+    zip = openZip(sourcePath);
+    for (const entry of zip.zip.getEntries()) entry.getData();
   } catch (error) {
     throw new CommandRefusalError('INPUT_UNREADABLE', `${sourcePath} could not be read as a ZIP archive: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
@@ -661,11 +624,7 @@ async function handleZipInstall(source: string, run: InstallRun): Promise<void> 
       } catch (error) {
         throw stagingRefusal(extracted, error);
       }
-      try {
-        zip.extractAllTo(extracted, /* overwrite */ true);
-      } catch (error) {
-        throw zipExtractionRefusal(sourcePath, extracted, error);
-      }
+      zip.extractTo(sourcePath, extracted);
       await swapInSkill(run, extracted, installPath, skillName);
     } finally {
       await rm(tempDir, { recursive: true, force: true });
@@ -691,7 +650,7 @@ async function handleTgzInstall(source: string, run: InstallRun): Promise<void> 
 
   try {
     logger.info('   Extracting tarball...');
-    await tar.extract({ file: sourcePath, cwd: tempDir });
+    await extractTarball(sourcePath, tempDir);
 
     // npm pack tarballs extract under package/ subdirectory
     const packageDir = safePath.join(tempDir, 'package');

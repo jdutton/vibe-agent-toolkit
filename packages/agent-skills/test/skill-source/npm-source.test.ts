@@ -1,9 +1,10 @@
 import { statSync, writeFileSync } from 'node:fs';
 
-import { ASSET_REFERENCE_UNRESOLVED_CODE, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { ASSET_REFERENCE_UNRESOLVED_CODE, mkdirSyncReal, normalizePath, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  locateNpmSource,
   resolveNpmSource,
   SKILL_SOURCE_SPEC_INVALID_CODE,
   splitNpmSpecVersion,
@@ -26,6 +27,14 @@ describe('splitNpmSpecVersion', () => {
 });
 
 const suite = setupSkillSourceTestSuite('vat-npm-');
+
+/** Install `@scope/<name>` (version 2.0.0) under the suite root with `manifest` merged into its package.json; its directory. */
+function plantPackage(name: string, manifest: Record<string, unknown>): string {
+  const pkgDir = safePath.join(suite.root, 'node_modules', '@scope', name);
+  mkdirSyncReal(pkgDir, { recursive: true });
+  writeFileSync(safePath.join(pkgDir, 'package.json'), JSON.stringify({ name: `@scope/${name}`, version: '2.0.0', ...manifest }));
+  return pkgDir;
+}
 
 describe('resolveNpmSource', () => {
   beforeEach(suite.beforeEach);
@@ -50,15 +59,48 @@ describe('resolveNpmSource', () => {
     expect(result.identity).toMatch(/^npm:@scope\/some-skill@1\.2\.3:[0-9a-f]{64}$/);
   });
 
-  // Found through its manifest, so a package whose `exports` map hides the manifest
-  // (as `@scope/some-skill` above does) is unlocatable this way; this one has no map.
   it('stages the package directory itself when the spec names no subpath', async () => {
-    const plainDir = safePath.join(suite.root, 'node_modules', '@scope', 'plain-skill');
-    mkdirSyncReal(plainDir, { recursive: true });
-    writeFileSync(safePath.join(plainDir, 'package.json'), JSON.stringify({ name: '@scope/plain-skill', version: '2.0.0' }));
+    const plainDir = plantPackage('plain-skill', {});
     writeFileSync(safePath.join(plainDir, 'SKILL.md'), '# plain npm skill');
     const result = await resolveNpmSource('@scope/plain-skill@2.0.0', suite.ctx);
     expect(statSync(safePath.join(result.stagedDir, 'SKILL.md')).isFile()).toBe(true);
+  });
+
+  // `@scope/some-skill`'s `exports` map does not expose `./package.json`: the
+  // package is found on disk, never through a resolution the map can refuse.
+  it('stages a package whose exports map hides its package.json', async () => {
+    const result = await resolveNpmSource('@scope/some-skill@1.2.3', suite.ctx);
+    expect(statSync(safePath.join(result.stagedDir, 'dir', 'SKILL.md')).isFile()).toBe(true);
+  });
+
+  it.each([
+    ['with no exports map', {}],
+    ['whose exports pattern names the directory', { exports: { './skills/*': './skills/*' } }],
+  ])('stages a subpath naming a directory, in a package %s', async (_label, manifest) => {
+    const pkgDir = plantPackage('dir-skill', manifest);
+    mkdirSyncReal(safePath.join(pkgDir, 'skills', 'x'), { recursive: true });
+    writeFileSync(safePath.join(pkgDir, 'skills', 'x', 'SKILL.md'), '# x');
+    expect(toForwardSlash(locateNpmSource('@scope/dir-skill@2.0.0/skills/x', suite.root))).toBe(
+      toForwardSlash(safePath.join(pkgDir, 'skills', 'x')),
+    );
+    const result = await resolveNpmSource('@scope/dir-skill@2.0.0/skills/x', suite.ctx);
+    expect(statSync(safePath.join(result.stagedDir, 'SKILL.md')).isFile()).toBe(true);
+  });
+
+  it('still follows an exports alias to a file kept elsewhere in the package', () => {
+    const pkgDir = plantPackage('alias-skill', { exports: { './skill': './dist/real/SKILL.md' } });
+    mkdirSyncReal(safePath.join(pkgDir, 'dist', 'real'), { recursive: true });
+    writeFileSync(safePath.join(pkgDir, 'dist', 'real', 'SKILL.md'), '# real');
+    expect(toForwardSlash(locateNpmSource('@scope/alias-skill@2.0.0/skill', suite.root))).toBe(
+      toForwardSlash(normalizePath(safePath.join(pkgDir, 'dist', 'real', 'SKILL.md'))),
+    );
+  });
+
+  it('refuses a subpath that climbs out of the package as SKILL_SOURCE_SPEC_INVALID', () => {
+    plantPackage('climb-skill', {});
+    expect(() => locateNpmSource('@scope/climb-skill@2.0.0/../some-skill', suite.root)).toThrow(
+      expect.objectContaining({ code: SKILL_SOURCE_SPEC_INVALID_CODE }),
+    );
   });
 
   it.each([

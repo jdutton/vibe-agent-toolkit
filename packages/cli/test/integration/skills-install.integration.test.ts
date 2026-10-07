@@ -10,6 +10,7 @@ import yaml from 'yaml';
 import { SKILLS_INSTALL_REPORT_SCHEMA, type SkillsInstallReport } from '../../src/commands/skills/install-schema.js';
 import { installCommand, type InstallCommandOptions } from '../../src/commands/skills/install.js';
 import { captureCommand } from '../helpers/stdout-capture.js';
+import { tarballOf } from '../helpers/tarball.js';
 
 /** Run the install lane: the report it published (validated against its registry schema) and the code it ended on. */
 async function runInstall(
@@ -367,7 +368,22 @@ describe('vat skills install — refusals coded at their cause', () => {
     const tarballPath = safePath.join(tempDir, 'corrupt.tgz');
     writeFileSync(tarballPath, 'not a gzip stream', 'utf-8');
 
-    await expectRefusal(tarballPath, at(), 'INPUT_UNREADABLE', /Tarball cannot be read/);
+    await expectRefusal(tarballPath, at(), 'INPUT_UNREADABLE', /could not be extracted/);
+  });
+
+  // node-tar reports an entry it cannot write as a WARNING and resolves: the package
+  // installed without that entry. A file `a` beside a file `a/b` is the archive's.
+  it('refuses a tarball holding an entry that cannot be extracted as INPUT_UNREADABLE', async () => {
+    const tarballPath = safePath.join(tempDir, 'clash.tgz');
+    writeFileSync(tarballPath, tarballOf([
+      ['package/package.json', JSON.stringify({ name: '@test/clash', version: '1.0.0' })],
+      ['package/dist/skills/clash/SKILL.md', '---\nname: clash\ndescription: Says hello to the user.\n---\n\n# clash\n'],
+      ['package/a', 'A'],
+      ['package/a/b', 'B'],
+    ]));
+
+    await expectRefusal(tarballPath, at(), 'INPUT_UNREADABLE', /could not be extracted/);
+    expect(existsSync(safePath.join(projectDir, '.claude', 'skills', 'clash'))).toBe(false);
   });
 
   it('refuses a tarball with no package/ directory as USAGE_INVALID', async () => {

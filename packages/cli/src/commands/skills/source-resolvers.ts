@@ -12,12 +12,12 @@
  */
 
 import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 
-import { isPathAbsentError, mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import * as tar from 'tar';
+import { isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
-import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
+import { extractTarball, makeStagingDir } from '../../utils/archive-staging.js';
+import { CommandRefusalError } from '../../utils/command-refusal.js';
 import { unstatablePathRefusal } from '../../utils/project-root-policy.js';
 import { downloadNpmPackage } from '../claude/plugin/helpers.js';
 
@@ -80,16 +80,9 @@ export async function extractTarballToTemp(
   } catch (error) {
     throw unstatablePathRefusal(tarballPath, error);
   }
-  const tempDir = await mkdtemp(
-    safePath.join(normalizedTmpdir(), 'vat-skills-tgz-'),
-  );
-  mkdirSyncReal(tempDir, { recursive: true });
+  const tempDir = await makeStagingDir('vat-skills-tgz-');
   const packageDir = await discardingOnFailure(tempDir, async () => {
-    try {
-      await tar.extract({ file: tarballPath, cwd: tempDir });
-    } catch (error) {
-      throw new CommandRefusalError('INPUT_UNREADABLE', `Tarball cannot be read: ${tarballPath} (${errorMessageOf(error)})`, { cause: error });
-    }
+    await extractTarball(tarballPath, tempDir);
     // A probe of the temp tree this process just extracted — VAT's own directory, not the user's path.
     const extracted = safePath.join(tempDir, 'package');
     if (!existsSync(extracted)) {
@@ -152,10 +145,7 @@ export async function resolveNpmOrTarballSource(
   source: string,
 ): Promise<ResolvedNpmSource> {
   if (source.startsWith('npm:')) {
-    const tempDir = await mkdtemp(
-      safePath.join(normalizedTmpdir(), 'vat-skills-npm-'),
-    );
-    mkdirSyncReal(tempDir, { recursive: true });
+    const tempDir = await makeStagingDir('vat-skills-npm-');
     const skillsDir = await discardingOnFailure(tempDir, () => findSkillsDirInNpmPackage(downloadNpmPackage(source, tempDir)));
     return { skillsDir, tempDirs: [tempDir] };
   }

@@ -8,11 +8,11 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { chmodSync, closeSync, lstatSync, openSync, readdirSync, readFileSync } from 'node:fs';
+import { chmodSync, closeSync, lstatSync, openSync, readdirSync, readFileSync, statSync } from 'node:fs';
 
 import { ExitCode, type RefusalCode } from '@vibe-agent-toolkit/schema';
 import { createSymlink, mkdirSyncReal, normalizePath, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS, gitExecutable } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, gitExecutable, resolveExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 import type { z } from 'zod';
@@ -30,6 +30,8 @@ const binPath = getBinPath(import.meta.url);
 
 const UNREADABLE = 0o000;
 const RESTORED = 0o755;
+/** The owner's read, write and search bits — what an install root must keep for anything to remove it. */
+const OWNER_RWX = 0o700;
 
 const MANIFEST = 'metadata:\n  name: widget-reviewer\n  version: 0.1.0\n  description: Reviews widgets\n'
   + 'spec:\n  llm:\n    provider: anthropic\n    model: claude-sonnet-5\n';
@@ -330,7 +332,7 @@ describe('vat agent build / import / installed / list / install / uninstall (sys
       const { home } = homeWithSkills('install-fifo', { 'widget-reviewer/SKILL.md': 'kept\n' });
       const cwd = installableProject('install-fifo');
       const fifo = safePath.join(cwd, 'dist/vat-bundles/skill/widget-reviewer/zpipe');
-      execFileSync('mkfifo', [fifo]);
+      execFileSync(resolveExecutable('mkfifo'), [fifo]);
       // A run that blocked on the pipe is released after a while (opening read-write never blocks, and is a
       // writer), so a regression fails on the assertions below instead of hanging the suite.
       const release = setTimeout(() => closeSync(openSync(fifo, 'r+')), 5000);
@@ -342,6 +344,50 @@ describe('vat agent build / import / installed / list / install / uninstall (sys
       const skills = safePath.join(home, '.claude', 'skills');
       expect(readFileSync(safePath.join(skills, 'widget-reviewer', 'SKILL.md'), 'utf-8')).toBe('kept\n');
       expect(readdirSync(skills)).toEqual(['widget-reviewer']);
+    });
+
+    // A bundle built in a read-only checkout (or chmod'd by a packaging step) used to
+    // install as a 0555 root that `vat agent uninstall` could not empty.
+    it.skipIf(process.platform === 'win32')('installs a read-only bundle owner-writable, so uninstall removes it (POSIX modes)', async () => {
+      const home = freshHome('install-readonly-bundle');
+      const cwd = installableProject('install-readonly-bundle');
+      const bundle = safePath.join(cwd, 'dist/vat-bundles/skill/widget-reviewer');
+      chmodSync(bundle, 0o555);
+      locked.push(bundle);
+
+      const installed = await vat(AGENT_INSTALL_REPORT_SCHEMA, INSTALL, cwd, home);
+      expect(installed.status, installed.stderr).toBe(ExitCode.OK);
+      const installPath = safePath.join(home, '.claude', 'skills', 'widget-reviewer');
+      expect(statSync(installPath).mode & OWNER_RWX).toBe(OWNER_RWX);
+
+      const removed = await vat(AGENT_UNINSTALL_REPORT_SCHEMA, UNINSTALL, cwd, home);
+      expect(removed.status, removed.stderr).toBe(ExitCode.OK);
+      expect(() => lstatSync(installPath)).toThrow(expect.objectContaining({ code: 'ENOENT' }));
+    });
+
+    // The bundle is the input: a file in it the OS will not read is INPUT_UNREADABLE (as
+    // the help says), never RUN_INCOMPLETE — and the previous install is kept.
+    it.skipIf(CANNOT_DENY_READS)('--force refuses a bundle file the OS will not read as INPUT_UNREADABLE naming it, and keeps the previous install', async () => {
+      const { home, skills } = homeWithSkills('install-unreadable-file', { 'widget-reviewer/SKILL.md': 'kept\n' });
+      const cwd = installableProject('install-unreadable-file');
+      const secret = safePath.join(cwd, 'dist/vat-bundles/skill/widget-reviewer/secret.md');
+      writeFileTree(cwd, { 'dist/vat-bundles/skill/widget-reviewer/secret.md': 'secret\n' });
+      chmodSync(secret, UNREADABLE);
+
+      const run = await vat(AGENT_INSTALL_REPORT_SCHEMA, [...INSTALL, '--force'], cwd, home);
+      expectRefusal(run, 'INPUT_UNREADABLE');
+      expect(JSON.stringify(run.report)).toContain('secret.md');
+      expect(readFileSync(safePath.join(skills, 'widget-reviewer', 'SKILL.md'), 'utf-8')).toBe('kept\n');
+    });
+
+    it('refuses a bundle holding a dangling link as INPUT_UNREADABLE naming it', async ({ skip }) => {
+      const cap = symlinkCapability() ?? skip();
+      const cwd = installableProject('install-dangling-link');
+      createSymlink(cap, safePath.join(cwd, 'nowhere.md'), safePath.join(cwd, 'dist/vat-bundles/skill/widget-reviewer/dangling.md'), 'file');
+
+      const run = await vat(AGENT_INSTALL_REPORT_SCHEMA, INSTALL, cwd);
+      expectRefusal(run, 'INPUT_UNREADABLE');
+      expect(JSON.stringify(run.report)).toContain('dangling.md');
     });
 
     it('refuses an agent whose bundle was never built as INPUT_UNREADABLE, exit 2', async () => {

@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { gitExecutable, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
+import { gitExecutable, resolveExecutable, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
@@ -48,7 +48,7 @@ describe.skipIf(process.platform === 'win32')('skill validation - a link to a na
       `---\nname: sk\ndescription: A skill whose linked file is a named pipe, for this test only.\n---\n# Sk\n\nSee [it](${href}).\n`,
     );
     fifo = safePath.join(safePath.resolve(skillPath, '..'), href);
-    execFileSync('mkfifo', [fifo]);
+    execFileSync(resolveExecutable('mkfifo'), [fifo]);
   }
 
   /** Run `validate`, or report that it hung. */

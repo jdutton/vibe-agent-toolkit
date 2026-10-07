@@ -425,7 +425,7 @@ any other target lands correctly but is invisible to them.
 **Exit Codes:**
 - `0` - Installed, or `--dry-run` complete
 - `1` - A skill failed its pre-install validation: its error findings are published and nothing in the batch is installed
-- `2` - Could not install. `error.code` says why: `USAGE_INVALID` for a bad `--target`/`--scope`/`--name`, a source holding no `SKILL.md`, two skills claiming one name, or a skill already installed without `--force`; `INPUT_UNREADABLE` for a source the OS (or the ZIP/tarball reader) will not read, or an install path whose existence the OS will not let VAT check; `EXTERNAL_API_FAILED` when the npm registry will not hand over an `npm:` package; `RUN_INCOMPLETE` for a copy that failed partway — `data.skills` then lists the skills already installed
+- `2` - Could not install. `error.code` says why: `USAGE_INVALID` for a bad `--target`/`--scope`/`--name`, a source holding no `SKILL.md`, two skills claiming one name, or a skill already installed without `--force`; `INPUT_UNREADABLE` for a source the OS (or the ZIP/tarball reader) will not read — an archive holding an entry that cannot be extracted (a file `a` beside a file `a/b`) included — or an install path whose existence the OS will not let VAT check; `EXTERNAL_API_FAILED` when the npm registry will not hand over an `npm:` package; `RUN_INCOMPLETE` for a staging copy under `$TMPDIR` it could not create or write (full, read-only), or a copy that failed partway — `data.skills` then lists the skills already installed
 
 **Output** — the `Report` envelope (schema: `schemas/skills-install.json`); `examined` counts the skills in the install plan and `durationMs` is on the envelope:
 ```yaml

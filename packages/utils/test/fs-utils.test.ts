@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 
 import {
+  COPY_SOURCE_UNREADABLE_CODE,
   copyDirectory,
   DirectorySpellingIndex,
   fillPathSpellings,
@@ -325,6 +326,60 @@ describe('fs-utils', () => {
 
       // Execute & Verify
       await expect(copyDirectory(srcFile, destDir)).rejects.toThrow();
+    });
+
+    // A source the OS will not let the copy read is the SOURCE's refusal, coded at
+    // its cause — so a caller wrapping the copy as a destination write
+    // (`vat agent install`) cannot misfile it as the run not finishing.
+    describe('source-side failures are coded COPY_SOURCE_UNREADABLE, naming the entry', () => {
+      const expectSourceRefusal = async (src: string, named: string): Promise<void> => {
+        await expect(copyDirectory(src, safePath.join(tempDir, 'dest'))).rejects.toMatchObject({
+          code: COPY_SOURCE_UNREADABLE_CODE,
+          message: expect.stringContaining(named) as unknown,
+        });
+      };
+
+      it('a source directory that is not there', async () => {
+        const src = safePath.join(tempDir, NO_SUCH_DIR);
+        await expectSourceRefusal(src, src);
+      });
+
+      it.skipIf(!PERMISSIONS_ENFORCED)('a file the OS will not read', async () => {
+        const src = safePath.join(tempDir, 'src');
+        const locked = safePath.join(src, 'locked.md');
+        await fs.mkdir(src);
+        await fs.writeFile(locked, 'secret');
+        await fs.chmod(locked, 0o000);
+        await expectSourceRefusal(src, locked);
+      });
+
+      it('a dangling link', async ({ skip }) => {
+        const cap = symlinkCapability() ?? skip();
+        const src = safePath.join(tempDir, 'src');
+        const dangling = safePath.join(src, 'dangling');
+        await fs.mkdir(src);
+        await createSymlinkAsync(cap, safePath.join(src, 'nowhere'), dangling);
+        await expectSourceRefusal(src, dangling);
+      });
+
+      it('but a destination the OS refuses keeps its own errno', async () => {
+        const src = safePath.join(tempDir, 'src');
+        await fs.mkdir(src);
+        await fs.writeFile(safePath.join(src, 'a.md'), 'a');
+        const blocked = safePath.join(tempDir, 'blocked');
+        await fs.writeFile(blocked, 'a file where the destination directory should go');
+        const failure: unknown = await copyDirectory(src, safePath.join(blocked, 'dest')).catch((error: unknown) => error);
+        expect(failure).toMatchObject({ code: expect.stringMatching(/^E[A-Z]+$/) as unknown });
+      });
+    });
+
+    it.skipIf(process.platform === 'win32')('keeps a file\'s mode, so a script stays executable', async () => {
+      const src = safePath.join(tempDir, 'src');
+      await fs.mkdir(src);
+      await fs.writeFile(safePath.join(src, 'run.sh'), '#!/bin/sh\n');
+      await fs.chmod(safePath.join(src, 'run.sh'), 0o755);
+      await copyDirectory(src, safePath.join(tempDir, 'dest'));
+      expect((await fs.stat(safePath.join(tempDir, 'dest', 'run.sh'))).mode & 0o777).toBe(0o755);
     });
   });
 

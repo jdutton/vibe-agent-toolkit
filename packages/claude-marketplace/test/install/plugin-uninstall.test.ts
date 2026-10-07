@@ -2,11 +2,11 @@
 
 // Test helper — file paths are controlled by test code, not user input
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-
+import nodeFs, { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 
 import { createSymlink, isVatError, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
-import { refuseSyncFs, tmpdirFoldsCase } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, refuseSyncFs, tmpdirFoldsCase } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { CLAUDE_USER_STATE_UNREADABLE_CODE, CLAUDE_USER_STATE_WRITE_FAILED_CODE, PLUGIN_KEY_INVALID_CODE } from '../../src/install/plugin-registry.js';
@@ -161,13 +161,18 @@ describe('uninstallPlugin never removes a directory another registered plugin is
 
   // Only a case-folding filesystem can hold this alias; on a case-sensitive one `plugins/Old`
   // and `plugins/old` are two directories and removing `Old` is right. The symlink case below
-  // exercises the same identity decision on every filesystem.
-  it.skipIf(!tmpdirFoldsCase())('keeps old@mp\'s directories when uninstalling Old@mp on a case-insensitive filesystem', async () => {
+  // exercises the same identity decision on every filesystem. An inode of 0 used to read as
+  // "nothing there", deleting the alias wherever the filesystem reports none: unknowable
+  // identity must keep, never remove.
+  it.skipIf(!tmpdirFoldsCase()).for([
+    ['', false],
+    [', when the filesystem reports no inode', true],
+  ] as const)('keeps old@mp\'s directories when uninstalling Old@mp on a case-insensitive filesystem%s', async ([, noInodes]) => {
     const paths = getPaths();
     setupInstalledPlugin(paths, 'old', 'mp', '@test/pkg', '2.0.0');
     registerKey(paths, 'Old@mp', safePath.join(paths.pluginsCacheDir, 'mp', 'Old', '1.0.0'));
 
-    const result = await uninstallPlugin({ pluginKey: 'Old@mp', paths });
+    const result = await withStatsReporting(noInodes, () => uninstallPlugin({ pluginKey: 'Old@mp', paths }));
 
     expect(existsSync(safePath.join(paths.marketplacesDir, 'mp', 'plugins', 'old', 'SKILL.md'))).toBe(true);
     expect(existsSync(safePath.join(paths.pluginsCacheDir, 'mp', 'old', '2.0.0', 'SKILL.md'))).toBe(true);
@@ -190,7 +195,92 @@ describe('uninstallPlugin never removes a directory another registered plugin is
     expect(existsSync(safePath.join(paths.pluginsCacheDir, 'mp', 'p', '1.0.0', 'SKILL.md'))).toBe(true);
     expect(Object.keys(JSON.parse(readFileSync(paths.installedPluginsPath, 'utf-8')).plugins)).toEqual(['p@mp']);
   });
+
+  // The guard compared the other plugin's entry WITHOUT following it: `mp2/plugins/p` is a link
+  // to `mp/plugins/p`, so its lstat is the link's own inode, and uninstalling p@mp emptied p@mp2.
+  it.for([
+    ['its own device and inode', false],
+    ['no inode (0), where only the real path can tell', true],
+  ] as const)('keeps a directory another registered plugin\'s directory LINKS to, judged by %s', async ([, noInodes], { skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const paths = getPaths();
+    setupInstalledPlugin(paths, 'p', 'mp', '@test/pkg');
+    mkdirSyncReal(safePath.join(paths.marketplacesDir, 'mp2', 'plugins'), { recursive: true });
+    createSymlink(cap, safePath.join(paths.marketplacesDir, 'mp', 'plugins', 'p'), safePath.join(paths.marketplacesDir, 'mp2', 'plugins', 'p'), 'dir');
+    registerKey(paths, 'p@mp2', safePath.join(paths.pluginsCacheDir, 'mp2', 'p', '1.0.0'));
+
+    const result = await withStatsReporting(noInodes, () => uninstallPlugin({ pluginKey: 'p@mp', paths }));
+
+    expect(existsSync(safePath.join(paths.marketplacesDir, 'mp', 'plugins', 'p', 'SKILL.md'))).toBe(true);
+    expect(result.artifacts.pluginDir).toBe(false);
+    expect(result.warning).toContain('p@mp2');
+  });
+
+  // One unrelated plugin's directory the OS would not examine blocked every uninstall — and it
+  // failed AFTER the target's marketplace directory was gone, the registry still listing it.
+  it.skipIf(CANNOT_DENY_READS)('keeps, and warns, where another plugin\'s directory cannot be examined — never blocks, never half-removes', async () => {
+    const paths = getPaths();
+    setupInstalledPlugin(paths, 'other', 'mp2', '@test/pkg');
+    const lockedCache = safePath.join(paths.pluginsCacheDir, 'mp');
+    mkdirSyncReal(safePath.join(lockedCache, 'old', '1.0.0'), { recursive: true });
+    registerKey(paths, 'old@mp', safePath.join(lockedCache, 'old', '1.0.0'));
+    chmodSync(lockedCache, 0o000);
+    let result: Awaited<ReturnType<typeof uninstallPlugin>>;
+    try {
+      result = await uninstallPlugin({ pluginKey: 'other@mp2', paths });
+    } finally {
+      chmodSync(lockedCache, 0o755);
+    }
+
+    expect(Object.keys(JSON.parse(readFileSync(paths.installedPluginsPath, 'utf-8')).plugins)).toEqual(['old@mp']);
+    expect(existsSync(safePath.join(paths.marketplacesDir, 'mp2', 'plugins', 'other'))).toBe(false);
+    expect(existsSync(safePath.join(paths.pluginsCacheDir, 'mp2', 'other', '1.0.0', 'SKILL.md'))).toBe(true);
+    expect(result.artifacts).toMatchObject({ pluginDir: true, cacheDir: false, installedPlugins: true });
+    expect(result.warning).toContain('old@mp');
+    expect(result.warning).toContain('EACCES');
+  });
+
+  // Every keep-or-remove verdict is reached before the first removal: a refusal on the
+  // target's own cache directory used to surface after its marketplace directory was deleted.
+  it('refuses the target\'s own unexaminable directory before removing anything', async () => {
+    const paths = getPaths();
+    setupInstalledPlugin(paths, 'p', 'mp', '@test/pkg');
+    const restore = refuseSyncFs('lstatSync', safePath.join(paths.pluginsCacheDir, 'mp', 'p'), 'EACCES');
+    let thrown: unknown;
+    try {
+      await uninstallPlugin({ pluginKey: 'p@mp', paths });
+    } catch (error) {
+      thrown = error;
+    } finally {
+      restore();
+    }
+
+    expect(isVatError(thrown, CLAUDE_USER_STATE_WRITE_FAILED_CODE), String(thrown)).toBe(true);
+    expect(existsSync(safePath.join(paths.marketplacesDir, 'mp', 'plugins', 'p', 'SKILL.md'))).toBe(true);
+  });
 });
+
+/**
+ * Run `body` with `lstatSync` / `statSync` reporting no inode (0) when `noInodes` —
+ * a filesystem that cannot say which directory an entry is; otherwise as they are.
+ */
+async function withStatsReporting<T>(noInodes: boolean, body: () => Promise<T>): Promise<T> {
+  if (!noInodes) return body();
+  const originals = { lstatSync: nodeFs.lstatSync, statSync: nodeFs.statSync };
+  const zeroed = (original: typeof nodeFs.statSync) => ((...args: Parameters<typeof nodeFs.statSync>) => {
+    const stats = original(...args);
+    if (stats !== undefined) Object.assign(stats, { ino: typeof stats.ino === 'bigint' ? 0n : 0 });
+    return stats;
+  }) as typeof nodeFs.statSync;
+  Object.assign(nodeFs, { lstatSync: zeroed(originals.lstatSync), statSync: zeroed(originals.statSync) });
+  syncBuiltinESMExports();
+  try {
+    return await body();
+  } finally {
+    Object.assign(nodeFs, originals);
+    syncBuiltinESMExports();
+  }
+}
 
 describe('uninstallPlugin with a key that is not two path segments', () => {
   const { getPaths } = setupPluginTestPaths();

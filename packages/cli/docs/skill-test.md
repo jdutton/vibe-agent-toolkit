@@ -91,10 +91,14 @@ command line the same sources are written as `name=workspace:<pkg>`,
 `name=npm:<spec>`, `name=url:<u>`, `name=path:<dir>`, or `name=vendored` — the CLI
 form requires an explicit companion `name=`, the config form derives it from the
 resolved skill. An npm spec must be version-pinned (`@scope/pkg@1.2.3`, with an
-optional `/subpath`; with none, the package's own directory is staged) and installed
-under the project root. A required source that names nothing is refused before
-anything is staged — `USAGE_INVALID` from the command line, `CONFIG_INVALID` from
-the config.
+optional `/subpath` — a file or directory inside the installed package, or a subpath
+its `exports` map declares; with none, the package's own directory is staged) and
+installed under the project root. A required npm source that names nothing (a package
+that is not installed, an unpinned spec, a subpath naming nothing in the package or
+climbing out of it) and a scoped specifier given as a `path:` are refused before
+anything is staged — `USAGE_INVALID` from the command line, `CONFIG_INVALID` from the
+config. A `path:` source naming a directory that does not exist is refused when it is
+staged, as `INPUT_UNREADABLE`, like any source the OS will not read.
 
 ### Companion staging and builds
 
@@ -213,9 +217,9 @@ that could not run.
 | `error.code` | `Reason:` | When |
 |---|---|---|
 | `BACKEND_UNAVAILABLE` | `preflight` | No `claude` binary on `PATH`, or one too old for a flag the spawn needs |
-| `USAGE_INVALID` | `preflight` | An invalid flag value, an auth guard the credentials do not meet, the missing security ack, an unsafe `--workdir`, an `--out` that exists and is not a directory, or (POSIX only — Windows has no mode check) is not `0700` (VAT never changes its mode — `chmod 700` it, or name one that does not exist yet), a held harness lock, a skill name the config does not declare (or `--no-build` with no dist), a bad `env` token, a failing `test.build` hook, a repeated staged name, a `--with` source, `--evals` or skill reference that names nothing (an npm package that is not installed, an npm spec with no version pin, a scoped specifier given as a path) |
+| `USAGE_INVALID` | `preflight` | An invalid flag value, an auth guard the credentials do not meet, the missing security ack, an unsafe `--workdir`, an `--out` that exists and is not a directory, or (POSIX only — Windows has no mode check) is not `0700` (VAT never changes its mode — `chmod 700` it, or name one that does not exist yet), a held harness lock, a skill name the config does not declare (or `--no-build` with no dist), a bad `env` token, a failing `test.build` hook, a repeated staged name, a `--with` source, `--evals` or skill reference that names nothing (an npm package that is not installed, an npm spec with no version pin or a subpath naming nothing in the package, a scoped specifier given as a path) |
 | `CONFIG_INVALID` | `preflight` | The governing `vibe-agent-toolkit.config.yaml` does not parse or fails its schema (subject's or a companion's), or its `test.with` or `test.evals` names nothing (the same cases as the flags). An optional companion (`--with-optional`, `test.optional`) that names nothing is skipped with a warning instead |
-| `INPUT_UNREADABLE` | `preflight` | A declared eval input or dependency is absent, the `evals.json` is not a valid suite, the vendored copy fails its manifest, a config or directory the OS will not read, a `--with name=path:<dir>` companion that does not exist, or holding a file or directory the OS will not read or a symlink (named) |
+| `INPUT_UNREADABLE` | `preflight` | A declared eval input or dependency is absent, the `evals.json` is not a valid suite, the vendored copy fails its manifest, a config or directory the OS will not read, a `--with name=path:<dir>` companion that does not exist, an npm package that is installed but whose `package.json` Node cannot read, or a source holding a file or directory the OS will not read or a symlink (named) |
 | `INPUT_UNREADABLE` | `bootstrap` | `evals.json` was absent, so VAT wrote a starter template next to the skill source; fill it in and re-run |
 | `RUN_INCOMPLETE` | `preflight` | The packager refused the subject's (or a required companion's) own content — a `files:` source absent, a `SKILL.md` bundled as a resource. A `SKILL_PACKAGING_FAILED` finding at the skill's `SKILL.md` says what to change. Also, with no finding: an output the OS will not let the run write — the harness root (`--out` under a read-only directory), its lockfile, the staged skill copies and manifest, the `results/` files, a dist bundle — a full disk or a read-only directory. Known gap: a disk so full that a skill build's git snapshot of the project fails first is still `INTERNAL_ERROR` |
 | `INTERNAL_ERROR` | `internal` | The harness broke (executor/grader crash, stall, timeout, grader nonce or skew failure); the stack is on stderr |

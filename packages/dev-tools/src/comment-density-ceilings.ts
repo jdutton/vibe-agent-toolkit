@@ -39,7 +39,7 @@ export const COMMENT_DENSITY_CEILINGS: Readonly<Record<string, number>> = {
   'schema': 42,
   'test-agents': 34.9,
   'transports': 34.9,
-  'utils': 62.8,
+  'utils': 61.8,
   'vat-development-agents': 14.8,
   'vat-example-cat-agents': 20.2,
 };

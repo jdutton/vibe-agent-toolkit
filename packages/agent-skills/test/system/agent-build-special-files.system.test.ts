@@ -11,7 +11,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 
 import { createSymlinkAsync, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
-import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
+import { resolveExecutable, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AGENT_SOURCE_UNREADABLE_CODE, buildAgentSkill } from '../../src/builder.js';
@@ -56,7 +56,7 @@ describe.skipIf(process.platform === 'win32')('buildAgentSkill - a named pipe as
     await fs.mkdir(safePath.join(agentDir, 'scripts'));
     // The linked pipe sits beside scripts/, so only the link is under it.
     const fifo = safePath.join(agentDir, linked ? 'pipe' : relative);
-    execFileSync('mkfifo', [fifo]);
+    execFileSync(resolveExecutable('mkfifo'), [fifo]);
     if (cap !== undefined) await createSymlinkAsync(cap, '../pipe', safePath.join(agentDir, relative));
 
     const outcome = await buildRacingThePipe(fifo, { agentPath: manifestPath });
@@ -70,7 +70,7 @@ describe.skipIf(process.platform === 'win32')('buildAgentSkill - a named pipe as
     const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, name);
     const fifo = safePath.join(agentDir, relative);
     await fs.rm(fifo, { force: true });
-    execFileSync('mkfifo', [fifo]);
+    execFileSync(resolveExecutable('mkfifo'), [fifo]);
     const out = safePath.join(tempDir, 'out');
 
     const outcome = await buildRacingThePipe(fifo, { agentPath: manifestPath, outputPath: out });

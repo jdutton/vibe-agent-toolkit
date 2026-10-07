@@ -29,7 +29,9 @@ export interface ResolveSkillSourceOptions {
  * as that input's mistake rather than surfacing from staging uncoded.
  *
  * @throws {VatError} `ASSET_REFERENCE_UNRESOLVED` for a specifier that names
- *   nothing installed; `SKILL_SOURCE_SPEC_INVALID` for an npm spec with no version pin
+ *   nothing installed; `ASSET_REFERENCE_UNREADABLE` for one whose package Node
+ *   cannot read; `SKILL_SOURCE_SPEC_INVALID` for an npm spec with no version pin
+ *   or a subpath that climbs out of the package
  */
 export function locateSkillSource(source: SkillSource, repoRoot: string): string | undefined {
   if ('path' in source) return resolveAssetReference(source.path, repoRoot);

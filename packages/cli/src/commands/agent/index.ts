@@ -309,9 +309,10 @@ Exit Codes (derived from the document):
       the agent is already installed and --force was not given, or no
       package.json encloses the agent), NOT_IMPLEMENTED (--dev on Windows),
       CONFIG_INVALID (the manifest does not validate), INPUT_UNREADABLE (the
-      bundle was never built, holds a named pipe, socket or device, or a
-      search path, the manifest, the bundle or the install path cannot be
-      read), RUN_INCOMPLETE (a write under the scope directory failed).
+      bundle was never built, holds a named pipe, socket or device or a
+      symlink that leads out of it or nowhere, or a search path, the
+      manifest, any file in the bundle or the install path cannot be read),
+      RUN_INCOMPLETE (a write under the scope directory failed).
       A copy replaces a previous install only once it is whole, so a refused
       --force copy keeps it; --force --dev removes it before linking, and a
       failed link says so in the message

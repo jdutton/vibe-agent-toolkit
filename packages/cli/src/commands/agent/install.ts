@@ -28,6 +28,9 @@ export interface InstallOptions {
   debug?: boolean;
 }
 
+/** The owner's read, write and search bits, kept on every install root so its owner can always remove it. */
+const OWNER_RWX = 0o700;
+
 /** `vat agent install` has no `--strict`, and an install carries no finding: the gate is fixed. */
 const GATE: Gate = { strict: false };
 
@@ -100,13 +103,16 @@ async function install(agentName: string, options: InstallOptions, logger: Logge
     logger.info(`  Rebuild agent to see changes immediately`);
   } else {
     // Staged beside the install and swapped in whole: a bundle the copy refuses
-    // (a named pipe, a link out of it) or a write that fails half-way never
-    // costs the previous install. The copy's own refusals are coded, and pass
-    // through as the bundle's.
+    // (a named pipe, a link out of it, a file or listing the OS will not read) or
+    // a write that fails half-way never costs the previous install. The copy
+    // codes every refusal of the bundle at its cause, so they pass through as
+    // the input's; only a failure writing ~/.claude is the run not finishing.
+    // The root takes the bundle's mode with the owner's rwx kept: a read-only
+    // bundle must not become an install nothing can remove.
     const warnings = await codedUserStateWrite(`install ${builtSkillPath} to ${installPath}`, () =>
       replaceDirectoryWith(installPath, async (staged) => {
         await copyDirectory(builtSkillPath, staged);
-        await fs.chmod(staged, (await fs.stat(builtSkillPath)).mode & 0o7777);
+        await fs.chmod(staged, ((await bundleRootMode(builtSkillPath)) & 0o7777) | OWNER_RWX);
       }),
     );
     for (const warning of warnings) logger.warn(warning);
@@ -114,6 +120,15 @@ async function install(agentName: string, options: InstallOptions, logger: Logge
   }
 
   return { agent: agentName, installPath, symlink: dev };
+}
+
+/** The bundle root's mode — the input's to answer, so a refusal is INPUT_UNREADABLE. */
+async function bundleRootMode(builtSkillPath: string): Promise<number> {
+  try {
+    return (await fs.stat(builtSkillPath)).mode;
+  } catch (error) {
+    throw new CommandRefusalError('INPUT_UNREADABLE', `Could not read the built bundle at ${builtSkillPath}: ${String(error)}`, { cause: error });
+  }
 }
 
 /**

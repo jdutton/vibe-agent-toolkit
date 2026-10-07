@@ -4,7 +4,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 
-import { resolveAssetReference } from '@vibe-agent-toolkit/utils';
+import { ASSET_REFERENCE_UNREADABLE_CODE, resolveAssetReference, VatError } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -77,6 +77,22 @@ const DEFECT = 'TypeError: not the filesystem';
 const ADVISORY_CHECK = 'p3-advisory';
 const UNINSTALLED_SCHEMA = '@no-such-scope/no-such-package/schema.json';
 const CANNOT_READ_MANIFEST = 'Cannot read the CLI manifest';
+
+/** `checkConfigValid` over one collection schema whose resolution throws `error`, cleaned up after. */
+async function checkWithSchemaResolutionThrowing(error: Error): Promise<DoctorCheckResult> {
+  mockDoctorFileSystem({ configExists: true });
+  const cleanup = await mockDoctorConfig({
+    config: { resources: { collections: { docs: { validation: { frontmatterSchema: UNINSTALLED_SCHEMA } } } } },
+  });
+  vi.mocked(resolveAssetReference).mockImplementationOnce(() => {
+    throw error;
+  });
+  try {
+    return checkConfigValid();
+  } finally {
+    cleanup();
+  }
+}
 
 describe('doctor command - unit tests', () => {
   beforeEach(() => {
@@ -362,19 +378,19 @@ describe('doctor command - unit tests', () => {
     it('does not file a defect in schema resolution as a missing schema', async () => {
       // "Missing" is what resolution says when the package or subpath is not
       // there. Anything else the resolver throws is reported as what it is.
-      mockDoctorFileSystem({ configExists: true });
-      const cleanup = await mockDoctorConfig({
-        config: { resources: { collections: { docs: { validation: { frontmatterSchema: UNINSTALLED_SCHEMA } } } } },
-      });
-      vi.mocked(resolveAssetReference).mockImplementationOnce(() => {
-        throw new TypeError(DEFECT);
-      });
-
-      const result = checkConfigValid();
+      const result = await checkWithSchemaResolutionThrowing(new TypeError(DEFECT));
 
       assertCheckFailed(result, CHECK_CONFIG_VALID, DEFECT, 'Fix YAML syntax');
       expect(result.message).not.toContain('Missing:');
-      cleanup();
+    });
+
+    it('reports a schema behind a package Node cannot read as unreadable, not missing', async () => {
+      const result = await checkWithSchemaResolutionThrowing(
+        new VatError(ASSET_REFERENCE_UNREADABLE_CODE, 'its package is installed but Node cannot read it'),
+      );
+
+      assertCheckFailed(result, CHECK_CONFIG_VALID, `Unreadable: ${UNINSTALLED_SCHEMA}`, 'reinstall');
+      expect(result.message).not.toContain('Missing:');
     });
   });
 

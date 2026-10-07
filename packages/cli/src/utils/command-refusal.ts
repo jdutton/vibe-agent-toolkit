@@ -45,8 +45,10 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 import {
+  ASSET_REFERENCE_UNREADABLE_CODE,
   COPY_LINK_ESCAPES_SOURCE_CODE,
   COPY_SOURCE_NOT_REGULAR_CODE,
+  COPY_SOURCE_UNREADABLE_CODE,
   DIRECTORY_LISTING_REFUSED_CODE,
   DIRECTORY_WALK_REVISITED_CODE,
   isVatError,
@@ -88,6 +90,10 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   [COPY_LINK_ESCAPES_SOURCE_CODE]: 'INPUT_UNREADABLE',
   // A named pipe, socket or device inside a tree being copied: the input's entry, refused unopened.
   [COPY_SOURCE_NOT_REGULAR_CODE]: 'INPUT_UNREADABLE',
+  // An entry of a tree being copied that the OS would not list, stat or read (or a dangling link): the input's.
+  [COPY_SOURCE_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
+  // A bare specifier whose package is installed but unreadable (a malformed package.json): the input, not "missing".
+  [ASSET_REFERENCE_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
   // A symlink that leads a following walk back into a directory it already entered: the input's loop.
   [DIRECTORY_WALK_REVISITED_CODE]: 'INPUT_UNREADABLE',
   // A git URL's `#ref:subpath` naming a path the clone does not hold, or one escaping it.

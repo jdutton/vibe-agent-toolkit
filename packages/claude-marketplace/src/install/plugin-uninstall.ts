@@ -4,11 +4,12 @@
  * Idempotent: exits cleanly if plugin is not found.
  */
 
-import { existsSync, lstatSync, writeFileSync } from 'node:fs';
+import type { BigIntStats } from 'node:fs';
+import { existsSync, lstatSync, statSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 
-import { isPathAbsentError, isVatError, mkdirSyncReal, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, isVatError, mkdirSyncReal, normalizePath, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
@@ -74,42 +75,78 @@ interface RemoveDirsResult {
 }
 
 /**
- * The on-disk identity of the entry at `path` itself (a link is not followed), or
- * `undefined` when nothing is there. One the OS refuses to examine is rethrown:
- * guessing "not the same" would let the removal go ahead.
+ * Which directory an entry is: its device + inode, or — where the filesystem
+ * reports none (0) — its real path, case-folded so that the fallback can only
+ * err towards "the same directory", which keeps.
  */
-function entryIdentity(path: string): string | undefined {
-  try {
-    const stats = lstatSync(path, { bigint: true });
-    return stats.ino === 0n ? undefined : `${stats.dev}:${stats.ino}`;
-  } catch (error) {
-    if (isPathAbsentError(error)) return undefined;
-    throw error;
-  }
+interface DirIdentity {
+  readonly id: string | undefined;
+  readonly path: () => string;
+}
+
+function identityOf(stats: BigIntStats, realPath: () => string): DirIdentity {
+  const known = stats.ino !== 0n && stats.dev !== 0n;
+  return { id: known ? `${stats.dev}:${stats.ino}` : undefined, path: () => realPath().toLowerCase() };
+}
+
+function sameDirectory(a: DirIdentity, b: DirIdentity): boolean {
+  return a.id !== undefined && b.id !== undefined ? a.id === b.id : a.path() === b.path();
 }
 
 /**
- * The registered plugin, other than `pluginKey`, whose own directory `dir` IS on disk —
- * `<plugin>@<marketplace>` — or `undefined`. A case-insensitive filesystem makes
- * `plugins/Old` and `plugins/old` one directory, and so does a linked marketplace:
- * the name differs, the directory does not, and removing it removes that plugin.
- * Decided by identity (device + inode), never by comparing the names.
+ * Every identity the entry at `path` answers to — the entry itself (a link not
+ * followed: removing a link removes only the link) and, for a link, where it
+ * leads — or none when nothing is there. A refusal is thrown, never read as "none".
  */
-function registeredOwnerOf(
+function identitiesAt(path: string): DirIdentity[] {
+  let own: BigIntStats;
+  try {
+    own = lstatSync(path, { bigint: true });
+  } catch (error) {
+    if (isPathAbsentError(error)) return [];
+    throw error;
+  }
+  const identities = [identityOf(own, () => safePath.join(normalizePath(dirname(path)), basename(path)))];
+  if (!own.isSymbolicLink()) return identities;
+  try {
+    identities.push(identityOf(statSync(path, { bigint: true }), () => normalizePath(path)));
+  } catch (error) {
+    if (!isPathAbsentError(error)) throw error;
+  }
+  return identities;
+}
+
+/**
+ * Why `dir` must be kept: another registered plugin's directory IS it on disk —
+ * a case-insensitive filesystem makes `plugins/Old` and `plugins/old` one
+ * directory, and a linked marketplace or plugin directory does the same — or
+ * another plugin's directory could not be examined, so that cannot be ruled out.
+ * `undefined` when `dir` may go. Decided by identity, never by comparing names.
+ *
+ * Only `dir`'s OWN refusal is thrown (the uninstall cannot proceed). A sibling's
+ * keeps `dir` and never blocks: an unrelated plugin's unreadable directory must
+ * not stop this uninstall, and uncertainty must not delete.
+ */
+function keepReason(
   dir: string,
   pluginKey: string,
   installed: InstalledPlugins,
   dirOf: (pluginName: string, marketplace: string) => string,
 ): string | undefined {
-  const identity = entryIdentity(dir);
-  if (identity === undefined) return undefined;
-  return Object.keys(installed.plugins).find((key) => {
-    if (key === pluginKey) return false;
+  const [target] = identitiesAt(dir);
+  if (target === undefined) return undefined;
+  for (const key of Object.keys(installed.plugins)) {
     const atIdx = key.lastIndexOf('@');
-    if (atIdx <= 0) return false;
-    // Read-only: an ill-formed key only names a path to lstat, never one to remove.
-    return entryIdentity(dirOf(key.slice(0, atIdx), key.slice(atIdx + 1))) === identity;
-  });
+    if (key === pluginKey || atIdx <= 0) continue;
+    // Read-only: an ill-formed key only names a path to examine, never one to remove.
+    const other = dirOf(key.slice(0, atIdx), key.slice(atIdx + 1));
+    try {
+      if (identitiesAt(other).some((identity) => sameDirectory(target, identity))) return `${dir} (it is where ${key} is installed)`;
+    } catch (error) {
+      return `${dir} (${other}, where ${key} is installed, could not be examined to rule out that it is the same directory: ${String(error)})`;
+    }
+  }
+  return undefined;
 }
 
 async function removePluginDirs(
@@ -122,23 +159,20 @@ async function removePluginDirs(
   const { pluginKey, pluginName, marketplace, installed } = target;
   const mpDirOf = (name: string, mp: string): string => safePath.join(paths.marketplacesDir, mp, 'plugins', name);
   const cacheDirOf = (name: string, mp: string): string => safePath.join(paths.pluginsCacheDir, mp, name);
-  const kept: string[] = [];
-  const removable = (dir: string, dirOf: (name: string, mp: string) => string): boolean => {
-    const owner = registeredOwnerOf(dir, pluginKey, installed, dirOf);
-    if (owner !== undefined) kept.push(`${dir} (it is where ${owner} is installed)`);
-    return owner === undefined;
-  };
-
-  let pluginDir = false;
-  if (mpPluginExists && removable(mpPluginDir, mpDirOf)) {
-    if (!dryRun) await rm(mpPluginDir, { recursive: true, force: true });
-    pluginDir = true;
-  }
-
   const cachePluginDir = cacheDirOf(pluginName, marketplace);
-  const cacheDir = existsSync(cachePluginDir) && removable(cachePluginDir, cacheDirOf);
-  if (cacheDir && !dryRun) await rm(cachePluginDir, { recursive: true, force: true });
 
+  // Every verdict before the first removal: a refusal must stop the run with nothing removed.
+  const verdicts = [
+    { dir: mpPluginDir, present: mpPluginExists, dirOf: mpDirOf },
+    { dir: cachePluginDir, present: existsSync(cachePluginDir), dirOf: cacheDirOf },
+  ].map(({ dir, present, dirOf }) => ({ dir, present, keep: present ? keepReason(dir, pluginKey, installed, dirOf) : undefined }));
+
+  const kept = verdicts.flatMap(({ keep }) => (keep === undefined ? [] : [keep]));
+  const [pluginDir = false, cacheDir = false] = verdicts.map(({ present, keep }) => present && keep === undefined);
+  if (!dryRun) {
+    if (pluginDir) await rm(mpPluginDir, { recursive: true, force: true });
+    if (cacheDir) await rm(cachePluginDir, { recursive: true, force: true });
+  }
   return { pluginDir, cacheDir, kept };
 }
 

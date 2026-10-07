@@ -11,6 +11,7 @@ import { afterEach, beforeEach } from 'vitest';
 
 import { normalizedTmpdir } from '../../src/path-utils.js';
 import { safePath } from '../../src/path.js';
+import { resolveExecutable } from '../../src/testing/executables.js';
 
 /** How long a run may take before the test calls it hung on the pipe. */
 const HANG_MS = 3000;
@@ -37,7 +38,7 @@ export function setupFifoSuite(prefix: string, pipeRel: string): { dir: () => st
   beforeEach(async () => {
     dir = await mkdtemp(safePath.join(normalizedTmpdir(), prefix));
     await mkdir(safePath.join(fifo(), '..'), { recursive: true });
-    execFileSync('mkfifo', [fifo()]);
+    execFileSync(resolveExecutable('mkfifo'), [fifo()]);
   });
   afterEach(async () => {
     await (await open(fifo(), 'r+')).close();

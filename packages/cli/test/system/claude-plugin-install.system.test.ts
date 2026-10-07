@@ -15,6 +15,7 @@ import * as tar from 'tar';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { PLUGIN_INSTALL_REPORT_SCHEMA } from '../../src/commands/claude/plugin/install-schema.js';
+import { tarballOf } from '../helpers/tarball.js';
 
 import {
   createTempDirTracker,
@@ -595,6 +596,27 @@ describe('claude plugin install command (system test)', () => {
 
     await expectInputRefusal(binPath, fakeHome, [clash, '--force'], [clash]);
     expect(fs.readdirSync(safePath.join(claudeDir, 'skills', 'clash'))).toEqual(['SKILL.md']);
+    expect(fs.readFileSync(existing, 'utf-8')).toBe('# precious\n');
+  });
+
+  // node-tar turns an entry it cannot write into a WARNING and resolves: a `.tgz` holding a file
+  // `a` beside a file `a/b` installed without `a/b`, exit 0. A tarball it cannot read at all
+  // escaped uncoded. Both are the archive's, refused before --force removes anything.
+  it.each([
+    ['holds a file `a` beside a file `a/b`', [['package/a', 'A'], ['package/a/b', 'B']]],
+    ['is not a tarball', undefined],
+  ] as const)('refuses a .tgz that %s as INPUT_UNREADABLE, naming it, and keeps the skill --force would replace', async (_label, clash) => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const archive = safePath.join(tempDir, 't-pkg-1.0.0.tgz');
+    fs.writeFileSync(archive, clash === undefined ? 'not a tarball, only text\n' : tarballOf([
+      ['package/package.json', JSON.stringify({ name: '@test/t-pkg', version: '1.0.0', vat: { skills: ['t-skill'] } })],
+      ['package/dist/skills/t-skill/SKILL.md', '# replacement\n'],
+      ...clash,
+    ]));
+    const existing = safePath.join(claudeDir, 'skills', 't-skill', 'SKILL.md');
+    plantFile(existing, '# precious\n');
+
+    await expectInputRefusal(binPath, fakeHome, [archive, '--force'], [archive]);
     expect(fs.readFileSync(existing, 'utf-8')).toBe('# precious\n');
   });
 

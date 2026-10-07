@@ -194,11 +194,14 @@ installed, with `error.code`: `USAGE_INVALID` (an unknown `--scope` or
 installed without `--force`, or no `package.json` encloses the agent),
 `NOT_IMPLEMENTED` (`--dev` on Windows), `CONFIG_INVALID` (the manifest does not
 validate), `INPUT_UNREADABLE` (the bundle was never built, holds a named pipe,
-socket or device, or a search path, the manifest, the bundle or the install path
+socket or device or a symlink that leads out of it or nowhere, or a search path,
+the manifest, the bundle — any file or directory in it — or the install path
 cannot be read), `RUN_INCOMPLETE` (a write under the scope directory failed). A
 copy replaces a previous install only once it is whole, so a refused `--force`
 copy keeps it; `--force --dev` removes it before linking, and a failed link says
-so in the message.
+so in the message. A copied install keeps the bundle's mode with the owner's
+read, write and search bits added, so a read-only bundle still installs as
+something `vat agent uninstall` can remove.
 
 ### `vat agent uninstall <agentName>`
 

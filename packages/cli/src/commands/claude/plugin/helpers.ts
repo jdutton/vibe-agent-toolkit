@@ -13,9 +13,9 @@ import { readFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
-import * as tar from 'tar';
 import { z } from 'zod';
 
+import { extractTarballSync } from '../../../utils/archive-staging.js';
 import { CommandRefusalError } from '../../../utils/command-refusal.js';
 import { unstatablePathRefusal } from '../../../utils/project-root-policy.js';
 
@@ -202,13 +202,8 @@ export function downloadNpmPackage(packageName: string, tempDir: string): string
     throw new CommandRefusalError('EXTERNAL_API_FAILED', `npm pack succeeded but tarball not found: ${tarballPath}`);
   }
 
-  // Extract tarball using tar npm package (cross-platform)
-  // Creates package/ subdirectory
-  tar.extract({
-    file: tarballPath,
-    cwd: tempDir,
-    sync: true,
-  });
+  // Creates package/ subdirectory; an entry that cannot be extracted refuses, never installs without it
+  extractTarballSync(tarballPath, tempDir);
 
   const packageDir = safePath.join(tempDir, 'package');
 

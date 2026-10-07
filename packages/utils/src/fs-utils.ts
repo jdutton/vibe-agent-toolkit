@@ -12,17 +12,19 @@
 // back to named imports would silently disarm the guard. The async half below
 // already uses the default object for the same reason.
 import nodeFs from 'node:fs';
-import fs from 'node:fs/promises';
+import fs, { type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 
 import { FollowedWalk } from './dirent-kind.js';
 import { isFilesystemAccessError } from './errors/errno.js';
-import { VatError } from './errors/vat-error.js';
+import { isVatError, VatError } from './errors/vat-error.js';
 import { everyInOrder, forEachInOrder } from './in-order.js';
 import { isUnderRoot } from './path-containment.js';
 import { toForwardSlash, toNfc } from './path-core.js';
 import { safePath } from './path-utils.js';
+import { openForReading } from './text-file.js';
 
 /**
  * What one path looked like the first time this run asked.
@@ -496,20 +498,55 @@ class CopySourceNotRegularError extends VatError {
   }
 }
 
+/** The errno {@link openForReading} refuses a named pipe, socket or device with (BSD's own means the same). */
+const NOT_A_REGULAR_FILE_ERRNO = 'EFTYPE';
+
+/** The `VatError` code of a source-side refusal of {@link copyDirectory}. */
+export const COPY_SOURCE_UNREADABLE_CODE = 'COPY_SOURCE_UNREADABLE';
+
+/**
+ * What a refusal by the OS to read `entry` of the tree being copied becomes: the
+ * source's ({@link COPY_SOURCE_UNREADABLE_CODE}, naming `entry`), or for a
+ * special file {@link CopySourceNotRegularError}. Only a filesystem refusal is
+ * coded: a defect stays raw, and an already-coded refusal passes.
+ */
+function sourceRefusal(entry: string, error: unknown): unknown {
+  if (!isFilesystemAccessError(error) || isVatError(error)) return error;
+  if ((error as NodeJS.ErrnoException).code === NOT_A_REGULAR_FILE_ERRNO) return new CopySourceNotRegularError(entry);
+  return new VatError(
+    COPY_SOURCE_UNREADABLE_CODE,
+    `Could not read ${entry} to copy it: ${error instanceof Error ? error.message : String(error)}`,
+    { cause: error },
+  );
+}
+
+/** Run one read of the tree being copied, a refusal coded by {@link sourceRefusal}. */
+async function readingSource<T>(entry: string, read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    throw sourceRefusal(entry, error);
+  }
+}
+
 /**
  * Recursively copy a directory, following symlinks — contained to `src`.
  *
  * A link is copied as what it points at (a linked directory as its tree, a
- * linked file as its bytes; a dangling link fails loudly in `stat`). Two
- * refusals bound that: a link whose target is not under `src` throws
- * {@link CopyLinkEscapesSourceError} — `scripts/etc -> /etc` used to copy
- * `/etc` into `dist` — and a link that leads the walk back into a directory
- * it already entered throws `DirectoryWalkRevisitedError` (`scripts/loop -> .`
- * used to create `dest/loop/loop/…` until `ENAMETOOLONG`, writing every file
- * at every level first). Adopter-authored trees reach this through
- * `vat agent build`, so neither shape is exotic. A named pipe, socket or device
- * (or a link to one) throws {@link CopySourceNotRegularError} unopened: copying a
- * pipe blocks until a writer appears.
+ * linked file as its bytes). Two refusals bound that: a link whose target is not
+ * under `src` throws {@link CopyLinkEscapesSourceError} — `scripts/etc -> /etc`
+ * used to copy `/etc` into `dist` — and a link that leads the walk back into a
+ * directory it already entered throws `DirectoryWalkRevisitedError`
+ * (`scripts/loop -> .` used to create `dest/loop/loop/…` until `ENAMETOOLONG`,
+ * writing every file at every level first). Adopter-authored trees reach this
+ * through `vat agent build`, so neither shape is exotic.
+ *
+ * Every file is opened without blocking and judged by `fstat` on that handle,
+ * then copied from it: a named pipe, socket or device (or a link to one) throws
+ * {@link CopySourceNotRegularError} without a byte read — even one swapped in
+ * after the listing, which a check by path could not see. Anything the OS will
+ * not let the copy list, stat or read in `src` (a dangling link included) throws
+ * {@link COPY_SOURCE_UNREADABLE_CODE}; a failure writing `dest` keeps its own errno.
  *
  * @param src - Source directory path
  * @param dest - Destination directory path
@@ -525,8 +562,8 @@ export async function copyDirectory(src: string, dest: string): Promise<void> {
 
 /** One level of {@link copyDirectory}; every directory it recurses into has been `enter`ed. */
 async function copyTree(src: string, dest: string, root: string, walk: FollowedWalk): Promise<void> {
+  const entries = await readingSource(src, () => fs.readdir(src, { withFileTypes: true }));
   await fs.mkdir(dest, { recursive: true });
-  const entries = await fs.readdir(src, { withFileTypes: true });
 
   // In order: the walk guard must see each directory entered before it recurses
   // (revisit first, then containment), and the first refusal names the first
@@ -538,7 +575,7 @@ async function copyTree(src: string, dest: string, root: string, walk: FollowedW
     // (Inline rather than `direntKindFollowing`: that module imports this one.)
     let kind: { isDirectory(): boolean; isFile(): boolean } = entry;
     if (entry.isSymbolicLink()) {
-      kind = await fs.stat(srcPath);
+      kind = await readingSource(srcPath, () => fs.stat(srcPath));
       // Revisit first, so a link back into the tree is named as the loop it
       // is; then containment, so a link out is named as the escape it is.
       if (kind.isDirectory()) walk.enter(srcPath);
@@ -547,10 +584,41 @@ async function copyTree(src: string, dest: string, root: string, walk: FollowedW
       walk.enter(srcPath);
     }
     const isDirectory = kind.isDirectory();
-    // `copyFile` opens a named pipe for reading, which blocks until a writer appears.
+    // Refused unopened when the listing already says so; the open below catches the rest.
     if (!isDirectory && !kind.isFile()) throw new CopySourceNotRegularError(srcPath);
-    await (isDirectory ? copyTree(srcPath, destPath, root, walk) : fs.copyFile(srcPath, destPath));
+    await (isDirectory ? copyTree(srcPath, destPath, root, walk) : copyFileFromHandle(srcPath, destPath));
   });
+}
+
+/**
+ * Copy one file through a handle opened without blocking, so what is copied is
+ * what `fstat` judged a regular file — never a pipe swapped in after the
+ * listing. The mode is carried over, as `copyFile` does, so a script stays
+ * executable.
+ */
+async function copyFileFromHandle(srcPath: string, destPath: string): Promise<void> {
+  const source = await readingSource(srcPath, () => openForReading(srcPath));
+  try {
+    const stats = await readingSource(srcPath, () => source.stat());
+    if (!stats.isFile()) throw new CopySourceNotRegularError(srcPath);
+    await pipeline(sourceBytes(source, srcPath), nodeFs.createWriteStream(destPath));
+    await fs.chmod(destPath, stats.mode & 0o7777);
+  } finally {
+    await source.close();
+  }
+}
+
+/**
+ * The bytes of an open source file, a read failure coded as the source's. A
+ * write failure never reaches this catch: the pipeline ends the generator with
+ * `return()`, not `throw()`.
+ */
+async function* sourceBytes(source: FileHandle, srcPath: string): AsyncGenerator<Buffer> {
+  try {
+    yield* source.createReadStream({ autoClose: false, start: 0 }) as AsyncIterable<Buffer>;
+  } catch (error) {
+    throw sourceRefusal(srcPath, error);
+  }
 }
 
 /**
