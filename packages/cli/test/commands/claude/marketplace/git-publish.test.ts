@@ -59,22 +59,22 @@ describe('git-publish', () => {
   describe('refusal codes', () => {
     afterEach(() => { vi.mocked(runGit).mockReset(); });
 
-    const publish = (remote: string, remoteFromConfig: boolean): void => publishToGitBranch({
+    const publish = (remote: string, remoteFromConfig: boolean): Promise<unknown> => publishToGitBranch({
       publishDir: '/never-read', branch: 'b', remote, remoteFromConfig, commitMessage: 'm', force: false, dryRun: true, noPush: false, logger,
     });
 
-    it('refuses the default remote it cannot find as CONFIG_INVALID, saying it was the default', () => {
+    it('refuses the default remote it cannot find as CONFIG_INVALID, saying it was the default', async () => {
       gitExits(2);
-      const error = thrownBy(() => publish('origin', false));
+      const error = await publish('origin', false).then(() => undefined, (rejected: unknown) => rejected);
       expect(refusalCodeOf(error)).toBe('CONFIG_INVALID');
       expect((error as Error).message).toBe(
         'Git remote "origin" (the default — publish.remote is not set) not found. Add it with git remote add, or set publish.remote to a remote name or a full URL.',
       );
     });
 
-    it('refuses a config-named remote it cannot find as CONFIG_INVALID, naming publish.remote', () => {
+    it('refuses a config-named remote it cannot find as CONFIG_INVALID, naming publish.remote', async () => {
       gitExits(2);
-      const error = thrownBy(() => publish('upstream', true));
+      const error = await publish('upstream', true).then(() => undefined, (rejected: unknown) => rejected);
       expect(refusalCodeOf(error)).toBe('CONFIG_INVALID');
       expect((error as Error).message).toBe(
         'Git remote "upstream" (from publish.remote) not found. Add it with git remote add, or set publish.remote to a remote name or a full URL.',

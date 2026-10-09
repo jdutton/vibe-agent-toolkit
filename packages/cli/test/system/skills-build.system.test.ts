@@ -390,7 +390,7 @@ describe('skills build command (system test)', () => {
       expect(report.findings.filter((finding) => finding.severity === 'error').map(({ code, location }) => ({ code, location }))).toEqual([
         { code: 'SKILL_PACKAGING_FAILED', location: 'resources/skills/skill-a.md' },
       ]);
-      expect(report.findings.find((finding) => finding.code === 'SKILL_PACKAGING_FAILED')?.message).toContain('could not be copied into the bundle');
+      expect(report.findings.find((finding) => finding.code === 'SKILL_PACKAGING_FAILED')?.message).toContain("Could not read files: source 'assets/locked.bin'");
       expect(suite.dataOf(report)).toMatchObject({ skillsBuilt: 1, skillsFailed: 1, outputCommitted: false });
       // Both rows are published; only the refused skill's is in error.
       expect(suite.dataOf(report).skills.map((row) => row.name)).toEqual([SKILL_A_NAME, SKILL_B_NAME]);

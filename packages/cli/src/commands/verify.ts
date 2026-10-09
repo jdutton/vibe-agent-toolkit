@@ -509,6 +509,8 @@ export function checkPackagedAgentInstructionFiles(
       check.outputDir,
       cwd,
       explicitFilesConfigDests(filesOf(check)),
+      // `vat verify` examines what an earlier build wrote; it writes nothing.
+      [],
     );
     issues.push(...resolveIssueSeverity(raw, check.packaging.validation));
   }

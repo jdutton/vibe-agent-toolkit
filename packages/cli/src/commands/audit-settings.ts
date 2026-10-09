@@ -28,12 +28,13 @@ import {
   type Gate,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { isAbsoluteAnyPlatform, isFilesystemAccessError, isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isAbsoluteAnyPlatform, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
-import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../utils/command-refusal.js';
+import { CommandRefusalError, refusalCodeOf } from '../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../utils/document-writer.js';
 import { createLogger } from '../utils/logger.js';
+import { classifyInputFault } from '../utils/project-root-policy.js';
 import { relativizePath } from '../utils/relativize-paths.js';
 
 import type { AuditSettingsData, AuditSettingsReport } from './audit-settings-schema.js';
@@ -184,18 +185,14 @@ function declaredType(type: string | undefined): SettingsType | undefined {
 /**
  * A read of the `--file` settings file, or the refusal that says why nothing
  * was read: `USAGE_INVALID` for a path that names nothing (the same ending
- * `vat audit <missing>` gives), `INPUT_UNREADABLE` for one the OS refuses.
- * Neither is a finding about the file — a finding needs a file that was read.
+ * `vat audit <missing>` gives), a classified fault on the argument for one the OS
+ * refuses. Neither is a finding about the file — a finding needs a file that was read.
  */
 async function readSettingsFile<T>(filePath: string, read: () => Promise<T>): Promise<T> {
   try {
     return await read();
   } catch (error) {
-    if (isPathAbsentError(error)) {
-      throw new CommandRefusalError('USAGE_INVALID', `Settings file does not exist: ${filePath}`, { cause: error });
-    }
-    if (!isFilesystemAccessError(error)) throw error;
-    throw new CommandRefusalError('INPUT_UNREADABLE', `Cannot read ${filePath}: ${errorMessageOf(error)}`, { cause: error });
+    throw classifyInputFault(filePath, error, { origin: 'argument', message: `Settings file does not exist: ${filePath}` });
   }
 }
 

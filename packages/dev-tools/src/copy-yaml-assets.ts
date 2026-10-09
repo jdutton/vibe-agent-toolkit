@@ -13,27 +13,28 @@
  * is the package root by definition when invoked from its npm script.
  */
 
-import { copyFileSync, readdirSync, statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { copyRegularFile, forEachInOrder, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 
 const pkgRoot = process.cwd();
 const srcDir = safePath.join(pkgRoot, 'src');
 const distDir = safePath.join(pkgRoot, 'dist');
 
-function walk(dir: string): void {
-  for (const entry of readdirSync(dir)) {
+async function walk(dir: string): Promise<void> {
+  await forEachInOrder(readdirSync(dir), async (entry) => {
     const full = safePath.join(dir, entry);
     if (statSync(full).isDirectory()) {
-      walk(full);
+      await walk(full);
     } else if (entry.endsWith('.yaml') || entry.endsWith('.yml')) {
       const rel = safePath.relative(srcDir, full);
       const dest = safePath.join(distDir, rel);
       mkdirSyncReal(dirname(dest), { recursive: true });
-      copyFileSync(full, dest);
+      // One regular file, its mode kept; a named pipe is refused rather than waited on.
+      await copyRegularFile(full, dest, { side: 'source', reading: `the YAML asset ${rel}` });
     }
-  }
+  });
 }
 
-walk(srcDir);
+await walk(srcDir);

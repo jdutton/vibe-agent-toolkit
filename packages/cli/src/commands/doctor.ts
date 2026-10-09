@@ -15,7 +15,7 @@ import {
   ASSET_REFERENCE_UNREADABLE_CODE,
   ASSET_REFERENCE_UNRESOLVED_CODE,
   findConfigFile,
-  isFilesystemAccessError,
+  fsFaultOf,
   isPathAbsentError,
   isVatError,
   resolveAssetReference,
@@ -134,7 +134,7 @@ function requiredNodeRange(): { range: string } | { problem: 'unreadable' | 'und
     // "Cannot be read" is the FILESYSTEM's answer, and the caller reports it as
     // one ("check permissions"). A throw with no errno is a defect, and is left
     // to the caller's own catch, which names it as what it is.
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return { problem: 'unreadable' };
   }
 

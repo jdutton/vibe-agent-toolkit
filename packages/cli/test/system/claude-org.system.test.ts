@@ -18,8 +18,13 @@ import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { reportShapeFor } from '../../src/report-schemas.js';
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 import { cleanupTestTempDir, createTestTempDir, executeCli, executeCliAndParseYaml, getBinPath } from './test-common.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-12-');
 
 const binPath = getBinPath(import.meta.url);
 const ADMIN_KEY_ENV = { ANTHROPIC_ADMIN_API_KEY: '', ANTHROPIC_API_KEY: '' };
@@ -153,8 +158,8 @@ describe('vat claude org', () => {
      * A source under a parent the process may not traverse cannot be stat'ed:
      * whether it exists is unknown, so it is the INPUT's refusal — never
      * "Source not found" (USAGE_INVALID), and never an uncoded INTERNAL_ERROR
-     * from the stat that follows. One predicate decides it
-     * (`unstatablePathRefusal`).
+     * from the stat that follows. One classifier decides it
+     * (`classifyFsFault`, through `requireInputPath`).
      */
     it.skipIf(CANNOT_DENY_READS).each([
       { cmd: 'skills install', args: (source: string) => ['skills', 'install', source] },

@@ -11,6 +11,7 @@ import AdmZip from 'adm-zip';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openZip } from '../../src/utils/archive-staging.js';
+import { refusalCodeOf } from '../../src/utils/command-refusal.js';
 
 let root: string;
 
@@ -33,10 +34,13 @@ function fsRefusingOpen(refused: string, code: string): typeof nodeFs {
 }
 
 describe('openZip(...).extractTo', () => {
+  // Every one of these is the open of an entry being WRITTEN into VAT's staging directory:
+  // a machine that ran out, a read-only filesystem and a refused permission are all the
+  // staging side's (only a layout fault the archive decided would be the archive's).
   it.each([
     ['EMFILE', 'RUN_INCOMPLETE'],
     ['EROFS', 'RUN_INCOMPLETE'],
-    ['EACCES', 'INPUT_UNREADABLE'],
+    ['EACCES', 'RUN_INCOMPLETE'],
   ])('classifies an entry it could not open (%s) by the open\'s own errno: %s', (code, refusal) => {
     const archive = safePath.join(root, 'skill.zip');
     const zip = new AdmZip();
@@ -52,7 +56,8 @@ describe('openZip(...).extractTo', () => {
       thrown = error;
     }
 
-    expect(thrown).toMatchObject({ refusal });
+    expect(thrown).toMatchObject({ side: 'environment', errno: code });
+    expect(refusalCodeOf(thrown)).toBe(refusal);
     expect(String((thrown as Error).message)).toContain(code);
   });
 });

@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 
 import { AgentManifestSchema, type AgentManifest } from '@vibe-agent-toolkit/schema';
-import { everyInOrder, isPathAbsentError, isVatError, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, everyInOrder, isFsFaultError, isPathAbsentError, isVatError, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { parse as parseYaml } from 'yaml';
 
 export interface LoadedAgentManifest extends AgentManifest {
@@ -15,7 +15,7 @@ export interface LoadedAgentManifest extends AgentManifest {
 /** A loader error for a path naming no manifest — the caller's mistake. */
 export const AGENT_MANIFEST_NOT_FOUND_CODE = 'AGENT_MANIFEST_NOT_FOUND';
 
-/** A loader error for a manifest that is there but the OS refuses, or that is not YAML. */
+/** A loader error for a manifest whose content is not YAML. A manifest the OS refuses is a classified filesystem fault (`FS_FAULT`). */
 export const AGENT_MANIFEST_UNREADABLE_CODE = 'AGENT_MANIFEST_UNREADABLE';
 
 /** A loader error for a manifest that parsed but the schema rejects. */
@@ -57,12 +57,7 @@ export async function findManifestPath(pathArg: string): Promise<string> {
   );
 }
 
-/**
- * Whether nothing is at `path`. Only an absence answers `true`: a path the OS
- * refuses (`EACCES`, `ELOOP`) is not "not found", and reporting it as such
- * sends the reader to create a manifest that is already there — so the
- * refusal propagates.
- */
+/** Whether nothing is at `path`. A path the OS refuses (`EACCES`, `ELOOP`) is not "not found": the refusal propagates. */
 async function isAbsent(path: string): Promise<boolean> {
   try {
     await fs.access(path);
@@ -73,9 +68,9 @@ async function isAbsent(path: string): Promise<boolean> {
   }
 }
 
-function unreadable(path: string, error: unknown): VatError {
-  const reason = error instanceof Error ? error.message : String(error);
-  return new VatError(AGENT_MANIFEST_UNREADABLE_CODE, `Cannot read agent manifest ${path}: ${reason}`, { cause: error });
+/** A manifest the OS refuses: a `source` fault on the path the command line named. */
+function unreadable(path: string, error: unknown): unknown {
+  return classifyFsFault(error, { side: 'source', origin: 'argument', action: 'read the agent manifest', path });
 }
 
 /**
@@ -103,6 +98,12 @@ export async function readAgentManifestDocument(pathArg: string): Promise<{ mani
   }
 }
 
+/** A coded loader error, said about the argument it was loading; a classified filesystem fault is thrown as itself, since its message already names the manifest path. */
+function withManifestContext(error: VatError, pathArg: string): VatError {
+  if (isFsFaultError(error)) return error;
+  return new VatError(error.code, `Failed to load agent manifest from ${pathArg}: ${error.message}`, { cause: error });
+}
+
 /**
  * Load and validate agent manifest from file
  * Returns manifest with additional __manifestPath property
@@ -112,10 +113,7 @@ export async function loadAgentManifest(pathArg: string): Promise<LoadedAgentMan
   try {
     document = await readAgentManifestDocument(pathArg);
   } catch (error) {
-    if (isVatError(error)) {
-      throw new VatError(error.code, `Failed to load agent manifest from ${pathArg}: ${error.message}`, { cause: error });
-    }
-    throw error;
+    throw isVatError(error) ? withManifestContext(error, pathArg) : error;
   }
 
   const result = AgentManifestSchema.safeParse(document.data);

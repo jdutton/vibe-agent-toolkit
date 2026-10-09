@@ -26,10 +26,10 @@ const TERMINAL_PAINT = `${ESC}[2K${CR}${ESC}[32m`;
  * a directory), and these messages reach `process.stdout` through the `Summary:`
  * line, the one channel deliberately kept machine-readable.
  */
-function expectNoControlBytes(run: () => unknown): void {
+async function expectNoControlBytes(run: () => unknown): Promise<void> {
   let message = '';
   try {
-    run();
+    await run();
   } catch (err) {
     message = (err as Error).message;
   }
@@ -63,10 +63,10 @@ describe('parseEvalSuite', () => {
     expect(() => parseEvalSuite('{not json')).toThrow(EvalInputError);
   });
 
-  it('sanitizes the V8 parse message, which quotes the offending bytes verbatim', () => {
+  it('sanitizes the V8 parse message, which quotes the offending bytes verbatim', async () => {
     // The message V8 builds embeds a raw slice of the input, so a suite file of
     // nothing but control bytes reaches the operator's terminal unescaped.
-    expectNoControlBytes(() => parseEvalSuite(`${TERMINAL_PAINT}vat: suite ok.`));
+    await expectNoControlBytes(() => parseEvalSuite(`${TERMINAL_PAINT}vat: suite ok.`));
   });
 
   it('tolerates adopter-owned extra fields (passthrough): per-eval category and top-level _category_note', () => {
@@ -145,11 +145,11 @@ describe('parseEvalSuite', () => {
     expect(() => parseEvalSuite(shared)).not.toThrow();
   });
 
-  it('sanitizes the duplicated expectation quoted into the message (suite text is untrusted)', () => {
+  it('sanitizes the duplicated expectation quoted into the message (suite text is untrusted)', async () => {
     const painted = JSON.stringify({ skill_name: 'demo', evals: [
       { id: 1, prompt: 'p', expectations: [`${TERMINAL_PAINT}ok`, `${TERMINAL_PAINT}ok`] },
     ] });
-    expectNoControlBytes(() => parseEvalSuite(painted));
+    await expectNoControlBytes(() => parseEvalSuite(painted));
   });
 
   it('treats numeric 1 and string "1" as colliding ids (both name the same workspace dir)', () => {
@@ -321,24 +321,24 @@ function setupEvalWorkspaces(): { evalsDir: string; workspacesRoot: string } {
 const WITH_ONLY = { with: 'a1b2c3d4e5f60718' } as const;
 
 /** Stage a one-eval suite declaring `rel`, asserting it throws with no control bytes in the message. */
-function expectStagingRejects(rel: string, id: number): void {
+async function expectStagingRejects(rel: string, id: number): Promise<void> {
   const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
   const suite = { skill_name: 'demo', evals: [
     { id, prompt: 'p', expected_output: 'o', files: [rel], expectations: ['e'] },
   ] };
-  expectNoControlBytes(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY }));
+  await expectNoControlBytes(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY }));
 }
 
 describe('stageEvalWorkspaces', () => {
   // The segment must not spell the arm. A regression here is silent and total:
   // every control-arm prompt would carry `/without/` in its cwd.
-  it('never puts an arm NAME in the path', () => {
+  it('never puts an arm NAME in the path', async () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
     const armDirs = { with: 'aaaa1111bbbb2222', without: 'cccc3333dddd4444' };
     const suite = { skill_name: 'demo', evals: [
       { id: 9, prompt: 'p', expected_output: 'o', expectations: ['e'] },
     ] };
-    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs });
+    await stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs });
 
     const byName = (a: string, b: string): number => a.localeCompare(b);
     expect([...readdirSync(workspacesRoot)].sort(byName)).toEqual(
@@ -348,22 +348,22 @@ describe('stageEvalWorkspaces', () => {
     expect(readdirSync(workspacesRoot)).not.toContain('without');
   });
 
-  it('copies declared files into <workspacesRoot>/<id>/ preserving structure', () => {
+  it('copies declared files into <workspacesRoot>/<id>/ preserving structure', async () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
     const suite = { skill_name: 'demo', evals: [
       { id: 7, prompt: 'fix', expected_output: 'fixed', files: [FIXTURES_DOC], expectations: ['ok'] },
     ] };
-    const returned = stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY });
+    const returned = await stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY });
     expect(returned).toBe(workspacesRoot);
     expect(existsSync(safePath.join(workspacesRoot, WITH_ONLY.with, '7', FIXTURES_DOC))).toBe(true);
   });
 
-  it('stages files under a string id directory (filesystem-safe via joinUnderRoot)', () => {
+  it('stages files under a string id directory (filesystem-safe via joinUnderRoot)', async () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
     const suite = { skill_name: 'demo', evals: [
       { id: 'dollar-quote-recovery', prompt: 'fix', expected_output: 'fixed', files: [FIXTURES_DOC], expectations: ['ok'] },
     ] };
-    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY });
+    await stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY });
     expect(existsSync(safePath.join(workspacesRoot, WITH_ONLY.with, 'dollar-quote-recovery', FIXTURES_DOC))).toBe(true);
   });
 
@@ -371,42 +371,42 @@ describe('stageEvalWorkspaces', () => {
   // and the executor fell back to running inside the staged subject dir — which
   // for a --baseline run put the skill-absent arm's cwd inside the skill it was
   // supposed to be denied. The directory existing is the fix.
-  it('creates an empty workspace for an eval with no files (never falls back to the subject dir)', () => {
+  it('creates an empty workspace for an eval with no files (never falls back to the subject dir)', async () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
     const suite = { skill_name: 'demo', evals: [
       { id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'] },
     ] };
-    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY });
+    await stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY });
     const dir = safePath.join(workspacesRoot, WITH_ONLY.with, '1');
     expect(existsSync(dir)).toBe(true);
     expect(readdirSync(dir)).toEqual([]);
   });
 
-  it('creates an empty workspace for an eval with an empty files array', () => {
+  it('creates an empty workspace for an eval with an empty files array', async () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
     const suite = { skill_name: 'demo', evals: [
       { id: 2, prompt: 'p', expected_output: 'o', files: [], expectations: ['e'] },
     ] };
-    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY });
+    await stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY });
     const dir = safePath.join(workspacesRoot, WITH_ONLY.with, '2');
     expect(existsSync(dir)).toBe(true);
     expect(readdirSync(dir)).toEqual([]);
   });
 
-  it('throws EvalInputError when a declared file is absent', () => {
+  it('throws EvalInputError when a declared file is absent', async () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
     const suite = { skill_name: 'demo', evals: [
       { id: 3, prompt: 'p', expected_output: 'o', files: ['fixtures/nope.md'], expectations: ['e'] },
     ] };
-    expect(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY })).toThrow(EvalInputError);
+    await expect(stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY })).rejects.toThrow(EvalInputError);
   });
 
-  it('throws EvalInputError (not raw Error) when a declared file contains a path traversal escape', () => {
+  it('throws EvalInputError (not raw Error) when a declared file contains a path traversal escape', async () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
     const suite = { skill_name: 'demo', evals: [
       { id: 4, prompt: 'p', expected_output: 'o', files: ['../escape.md'], expectations: ['e'] },
     ] };
-    expect(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY })).toThrow(EvalInputError);
+    await expect(stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY })).rejects.toThrow(EvalInputError);
   });
 
   // All three staging failures interpolate the suite-authored `files[]` entry (and
@@ -414,12 +414,12 @@ describe('stageEvalWorkspaces', () => {
   // stdout via the `Summary:` line. Each site is asserted separately because each
   // builds its message independently.
   describe('suite-authored file paths reach the operator sanitized', () => {
-    it('on a containment escape', () => {
-      expectStagingRejects(`../${TERMINAL_PAINT}escape.md`, 5);
+    it('on a containment escape', async () => {
+      await expectStagingRejects(`../${TERMINAL_PAINT}escape.md`, 5);
     });
 
-    it('on an absent declared file', () => {
-      expectStagingRejects(`fixtures/${TERMINAL_PAINT}nope.md`, 6);
+    it('on an absent declared file', async () => {
+      await expectStagingRejects(`fixtures/${TERMINAL_PAINT}nope.md`, 6);
     });
 
     // Skipped on Windows, where the scenario cannot be built: this case needs a
@@ -427,18 +427,18 @@ describe('stageEvalWorkspaces', () => {
     // character below 0x20 in a filename, so `writeFileSync` fails ENOENT before
     // staging is ever reached. The sanitizer itself is covered on every platform
     // by the two sibling cases above, which reject before touching the disk.
-    it.skipIf(process.platform === 'win32')('on a copy failure (the OS error text carries the path too)', () => {
+    it.skipIf(process.platform === 'win32')('on a copy failure (the OS error text carries the path too)', async () => {
       const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
       const rel = `fixtures/${TERMINAL_PAINT}doc.md`;
       writeFileSync(safePath.join(evalsDir, rel), 'content\n', 'utf-8');
-      // A directory already sitting where the file must land: cpSync refuses to
-      // overwrite it, and names both paths in the error it throws.
+      // A directory already sitting where the file must land: the copy refuses to
+      // write over it, and its error names the path.
       mkdirSyncReal(safePath.join(workspacesRoot, WITH_ONLY.with, '7', rel), { recursive: true });
       const suite = { skill_name: 'demo', evals: [
         { id: 7, prompt: 'p', expected_output: 'o', files: [rel], expectations: ['e'] },
       ] };
 
-      expectNoControlBytes(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY }));
+      await expectNoControlBytes(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY }));
     });
   });
 });

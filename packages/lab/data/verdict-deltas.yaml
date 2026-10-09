@@ -28,77 +28,77 @@ deltas:
     verb: resources-check
     document: reshaped
     reason: the report envelope now carries the required gate object
-    changelog: .changes/v020-report-contract.md#report-union-and-gate
+    changelog: .changes/v020-stable-foundation.md#report-union-and-gate
   - subject: crucible-2
     verb: resources-check
     document: reshaped
     reason: the report envelope now carries the required gate object
-    changelog: .changes/v020-report-contract.md#report-union-and-gate
+    changelog: .changes/v020-stable-foundation.md#report-union-and-gate
   - subject: crucible-3
     verb: resources-check
     document: reshaped
     reason: the report envelope now carries the required gate object
-    changelog: .changes/v020-report-contract.md#report-union-and-gate
+    changelog: .changes/v020-stable-foundation.md#report-union-and-gate
   - subject: crucible-4
     verb: resources-check
     document: reshaped
     reason: the report envelope now carries the required gate object
-    changelog: .changes/v020-report-contract.md#report-union-and-gate
+    changelog: .changes/v020-stable-foundation.md#report-union-and-gate
   - subject: crucible-1
     verb: audit
     document: reshaped
     reason: vat audit publishes the report contract (status ok|findings|error, files[].issues[] -> findings[], issueCounts -> summary)
-    changelog: .changes/v020-report-contract.md#audit-report-contract
+    changelog: .changes/v020-stable-foundation.md#audit-report-contract
   - subject: crucible-1
     verb: resources-validate
     document: reshaped
     reason: vat resources validate publishes the report contract (findings[] with location, summary, data)
-    changelog: .changes/v020-report-contract.md#resources-validate-report-contract
+    changelog: .changes/v020-stable-foundation.md#resources-validate-report-contract
   - subject: crucible-2
     verb: audit
     document: reshaped
     reason: vat audit publishes the report contract (status ok|findings|error, files[].issues[] -> findings[], issueCounts -> summary)
-    changelog: .changes/v020-report-contract.md#audit-report-contract
+    changelog: .changes/v020-stable-foundation.md#audit-report-contract
   - subject: crucible-2
     verb: resources-validate
     document: reshaped
     reason: vat resources validate publishes the report contract (findings[] with location, summary, data)
-    changelog: .changes/v020-report-contract.md#resources-validate-report-contract
+    changelog: .changes/v020-stable-foundation.md#resources-validate-report-contract
   - subject: crucible-3
     verb: audit
     document: reshaped
     reason: vat audit publishes the report contract (status ok|findings|error, files[].issues[] -> findings[], issueCounts -> summary)
-    changelog: .changes/v020-report-contract.md#audit-report-contract
+    changelog: .changes/v020-stable-foundation.md#audit-report-contract
   - subject: crucible-3
     verb: resources-validate
     document: reshaped
     reason: vat resources validate publishes the report contract (findings[] with location, summary, data)
-    changelog: .changes/v020-report-contract.md#resources-validate-report-contract
+    changelog: .changes/v020-stable-foundation.md#resources-validate-report-contract
   - subject: crucible-4
     verb: audit
     document: reshaped
     reason: vat audit publishes the report contract (status ok|findings|error, files[].issues[] -> findings[], issueCounts -> summary)
-    changelog: .changes/v020-report-contract.md#audit-report-contract
+    changelog: .changes/v020-stable-foundation.md#audit-report-contract
   - subject: crucible-4
     verb: resources-validate
     document: reshaped
     reason: vat resources validate publishes the report contract (findings[] with location, summary, data)
-    changelog: .changes/v020-report-contract.md#resources-validate-report-contract
+    changelog: .changes/v020-stable-foundation.md#resources-validate-report-contract
   - subject: crucible-1
     verb: skills-validate
     document: reshaped
     reason: vat skills validate publishes the report contract (results[] -> data.skills[], issues -> findings[])
-    changelog: .changes/v020-report-contract.md#skills-validate-report-contract
+    changelog: .changes/v020-stable-foundation.md#skills-validate-report-contract
   - subject: crucible-2
     verb: skills-validate
     document: reshaped
     reason: vat skills validate publishes the report contract (results[] -> data.skills[], issues -> findings[])
-    changelog: .changes/v020-report-contract.md#skills-validate-report-contract
+    changelog: .changes/v020-stable-foundation.md#skills-validate-report-contract
   - subject: crucible-1
     verb: resources-query:sql/crucible-1-facts.sql
     document: reshaped
     reason: vat resources query publishes the report contract (rows -> data.rows)
-    changelog: .changes/v020-report-contract.md#resources-query-report-contract
+    changelog: .changes/v020-stable-foundation.md#resources-query-report-contract
   - subject: crucible-1
     verb: verify
     document: reshaped
@@ -143,7 +143,7 @@ deltas:
         locationDigest: f6ed75a2d45e7f3ad2348e1e939dfd80124544e586df09e718a530912bc7fece
         scope: null
     reason: vat verify publishes the report contract — every phase's findings flat in findings[], where the baseline published most of them only as per-skill and per-file tallies (same count per code, per severity and per phase; exit code unchanged) — and files-config-dests publishes one FILES_CONFIG_DEST_MISSING error finding per missing dest where the baseline published a per-skill error count and no finding
-    changelog: .changes/v020-report-contract.md#orchestrators-report-contract
+    changelog: .changes/v020-stable-foundation.md#orchestrators-report-contract
   - subject: crucible-1
     verb: build
     refusal:
@@ -152,11 +152,11 @@ deltas:
       from: ["(uncoded)", "claude:(uncoded)", "(uncoded)"]
       to: [RUN_INCOMPLETE, "claude:RUN_INCOMPLETE"]
     reason: both arms exit 2 on a plugin-local skill whose files source the checkout does not hold (the subjects file excludes the row as unmeasurable); the baseline's document carries a sentence and no refusal code, the tree's carries RUN_INCOMPLETE for the run and for the claude phase that stopped
-    changelog: .changes/v020-report-contract.md#plugin-build-packaging-refusal
+    changelog: .changes/v020-stable-foundation.md#plugin-build-packaging-refusal
   - subject: crucible-1
     verb: marketplace-publish-dry-run
     refusal:
       from: ["(uncoded)"]
       to: [INPUT_UNREADABLE]
     reason: both arms exit 2 on build output the unfinished build left without a marketplace manifest (the subjects file excludes the row as unmeasurable); the baseline's document carries a raw errno sentence and no refusal code, the tree's carries INPUT_UNREADABLE
-    changelog: .changes/v020-report-contract.md#publish-unbuilt-marketplace
+    changelog: .changes/v020-stable-foundation.md#publish-unbuilt-marketplace

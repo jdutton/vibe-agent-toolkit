@@ -4,20 +4,18 @@
  * VAT never deletes or overwrites what it did not produce: an explicit
  * `outputPath` whose `<output>/<agent>/` already holds anything is refused, and
  * left exactly as it was, unless `replaceExistingOutput` (`--force`) says it is
- * a previous build — the same rule, and the same check, as `vat skills package
- * -o`. And every source is proven readable before the output is touched, so a
- * refused source never leaves a half-written bundle (or a previous build's
- * SKILL.md overwritten beside its stale scripts/).
+ * a previous build — the same rule as `vat skills package -o` (`packageOwnership`).
+ * The build is ONE tree-change plan: it lands whole, or changes nothing — a previous
+ * build is never removed first, and a failure partway leaves it byte-equal.
  */
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
-import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
+import { FS_FAULT_CODE, safePath, TREE_DEST_HOLDS_SOURCE_CODE, TREE_DEST_NOT_OWNED_CODE } from '@vibe-agent-toolkit/utils';
+import { diffSnapshots, installFaultFs, setupAsyncTempDirSuite, snapshotTree } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { AGENT_SOURCE_UNREADABLE_CODE, buildAgentSkill } from '../../src/builder.js';
-import { SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE } from '../../src/packaging-errors.js';
+import { buildAgentSkill } from '../../src/builder.js';
 import { writeMinimalAgent } from '../test-helpers.js';
 
 const USER_SKILL = 'USER SKILL.md precious';
@@ -47,15 +45,40 @@ describe('buildAgentSkill - output ownership', () => {
     tempDir = suite.getTempDir();
   });
 
-  it('refuses an explicit output already holding files it did not make, naming the path, and leaves them', async () => {
+  // The direct test of a refusal no fault-matrix case can be (its GOLDEN must be clean): a
+  // user-named --output holding what VAT did not make, no --force — refused, the tree byte-unchanged.
+  it('refuses an explicit output already holding files it did not make, naming the path and --force, and the tree is byte-unchanged', async () => {
     const { manifestPath, out, userDir } = await agentOverUserFiles(tempDir, 'occupied');
+    const before = snapshotTree(tempDir);
 
-    await expect(buildAgentSkill({ agentPath: manifestPath, outputPath: out })).rejects.toMatchObject({
-      code: SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE,
-      message: expect.stringContaining('userout/occupied') as unknown,
+    await expect(buildAgentSkill({ agentPath: manifestPath, outputPath: out, formats: ['directory', 'zip', 'marketplace'] })).rejects.toMatchObject({
+      code: TREE_DEST_NOT_OWNED_CODE,
+      message: expect.stringMatching(/userout\/occupied.*--force/s) as unknown,
     });
+    expect(diffSnapshots(before, snapshotTree(tempDir))).toEqual([]);
     expect(await fs.readFile(safePath.join(userDir, 'SKILL.md'), 'utf-8')).toBe(USER_SKILL);
-    expect(await fs.readFile(safePath.join(userDir, 'scripts', 'run.js'), 'utf-8')).toBe(USER_SCRIPT);
+  });
+
+  it('leaves a previous build byte-equal, and nothing beside it, when a --force rebuild fails partway', async () => {
+    const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'partway');
+    await fs.writeFile(safePath.join(agentDir, 'LICENSE.txt'), 'MIT');
+    const out = safePath.join(tempDir, 'out');
+    await buildAgentSkill({ agentPath: manifestPath, outputPath: out });
+    await fs.writeFile(safePath.join(agentDir, 'prompts', 'system.md'), 'A CHANGED prompt');
+    const before = snapshotTree(tempDir);
+
+    // The new build's LICENSE.txt write is refused, after its SKILL.md is written.
+    const session = installFaultFs({
+      within: tempDir,
+      faults: [{ family: 'write', path: (path) => path.includes('/.partway.vat-staged-') && path.endsWith('/LICENSE.txt'), errno: 'ENOSPC' }],
+    });
+    try {
+      await expect(buildAgentSkill({ agentPath: manifestPath, outputPath: out, replaceExistingOutput: true }))
+        .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'destination' });
+    } finally {
+      session.restore();
+    }
+    expect(diffSnapshots(before, snapshotTree(tempDir))).toEqual([]);
   });
 
   it('replaces the output with replaceExistingOutput (--force), leaving nothing of the old one', async () => {
@@ -83,16 +106,19 @@ describe('buildAgentSkill - output ownership', () => {
     const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'self-output');
 
     await expect(buildAgentSkill({ agentPath: manifestPath, outputPath: tempDir, replaceExistingOutput: true }))
-      .rejects.toMatchObject({ code: SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE });
+      .rejects.toMatchObject({ code: TREE_DEST_HOLDS_SOURCE_CODE });
     expect(existsSync(manifestPath)).toBe(true);
     expect(existsSync(safePath.join(agentDir, 'prompts', 'system.md'))).toBe(true);
   });
 
-  it('rebuilds its own default output without --force', async () => {
+  it('replaces its own default output without --force: VAT\'s location, nothing of the previous build kept', async () => {
     const { manifestPath } = await writeMinimalAgent(tempDir, 'rebuild-default');
     const first = await buildAgentSkill({ agentPath: manifestPath });
+    await fs.writeFile(safePath.join(first.outputPath, 'stale.txt'), 'left from before');
     const second = await buildAgentSkill({ agentPath: manifestPath });
     expect(second.outputPath).toBe(first.outputPath);
+    expect(existsSync(safePath.join(second.outputPath, 'stale.txt'))).toBe(false);
+    expect(second.residue).toEqual([]);
   });
 
   it('refuses an unreadable scripts/ before writing anything to the output', async () => {
@@ -101,7 +127,7 @@ describe('buildAgentSkill - output ownership', () => {
     const out = safePath.join(tempDir, 'untouched');
 
     await expect(buildAgentSkill({ agentPath: manifestPath, outputPath: out }))
-      .rejects.toMatchObject({ code: AGENT_SOURCE_UNREADABLE_CODE });
+      .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'source' });
     expect(existsSync(out)).toBe(false);
   });
 
@@ -115,7 +141,7 @@ describe('buildAgentSkill - output ownership', () => {
     await fs.mkdir(safePath.join(agentDir, 'LICENSE.txt'));
 
     await expect(buildAgentSkill({ agentPath: manifestPath, outputPath: out, replaceExistingOutput: true }))
-      .rejects.toMatchObject({ code: AGENT_SOURCE_UNREADABLE_CODE });
+      .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'source' });
     expect(await fs.readFile(skillMd, 'utf-8')).toBe(before);
   });
 });

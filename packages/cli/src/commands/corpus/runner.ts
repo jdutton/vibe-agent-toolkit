@@ -18,7 +18,7 @@ import { dirname } from 'node:path';
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { scan } from '@vibe-agent-toolkit/discovery';
 import { ExitCode, exitCodeOfChild } from '@vibe-agent-toolkit/schema';
-import { isFilesystemAccessError, safePath, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
+import { fsFaultOf, pathPresent, safePath, suppressedFaultsOf, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 import { isGitUrl, parseGitUrl } from '@vibe-agent-toolkit/utils/git';
 import * as yaml from 'yaml';
@@ -26,7 +26,6 @@ import * as yaml from 'yaml';
 import { errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
 import { writeArtifactFile } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
-import { pathPresent } from '../../utils/project-root-policy.js';
 import { withRunIntegrity } from '../../utils/run-integrity.js';
 import { resolveVatBinPath } from '../../utils/vat-bin-path.js';
 import { withClonedRepo } from '../audit/git-url-clone.js';
@@ -48,6 +47,12 @@ export interface RunnerOptions {
   runDir: string;
   withReview: boolean;
   debug: boolean;
+  /**
+   * Where a URL entry's clone the OS would not remove, once its row was done, is put — the
+   * classified fault naming it — for the scan to report as a warning. Required: a scan cannot
+   * run an entry without saying where its leftover goes.
+   */
+  leftovers: unknown[];
 }
 
 const SKIPPED_REVIEW: ReviewOutcome = { status: 'skipped', duration_ms: 0 };
@@ -144,7 +149,7 @@ function runLocalEntry(entry: PluginEntry, opts: RunnerOptions): Promise<PluginR
  */
 function localSourceUnusable(source: string): string | undefined {
   try {
-    return pathPresent(source, 'follow') ? undefined : `Source path not found: ${source}`;
+    return pathPresent(source, 'follow', 'source', 'probe') ? undefined : `Source path not found: ${source}`;
   } catch (error) {
     if (!isEntryRefusal(error)) throw error;
     return errorMessageOf(error);
@@ -167,13 +172,18 @@ function isEntryRefusal(error: unknown): boolean {
 
 async function runUrlEntry(entry: PluginEntry, opts: RunnerOptions): Promise<PluginRow> {
   try {
-    return await withClonedRepo(
+    const { value: row, leftover } = await withClonedRepo(
       parseGitUrl(entry.source),
       { keepTempForDebug: opts.debug },
       ({ targetDir, tempdir, provenance }) => auditAndRecord(entry, targetDir, opts, { provenance, tempRoot: tempdir })
     );
+    // The row is done: a clone left behind is the scan's warning, never this entry's failure.
+    if (leftover !== undefined) opts.leftovers.push(leftover);
+    return row;
   } catch (err) {
     if (!isEntryRefusal(err)) throw err;
+    // The refusal becomes a row, so a clone recorded beside it would vanish with it: the scan reports it.
+    opts.leftovers.push(...suppressedFaultsOf(err));
     return unloadableRow(entry, errorMessageOf(err), 0);
   }
 }
@@ -432,7 +442,7 @@ function applyValidationOverlay(entry: PluginEntry, scanPath: string): OverlayOu
   try {
     writeFileSync(overlayPath, yaml.stringify(overlay, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
   } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return { applied: false, refused: `Could not write the validation overlay ${overlayPath}: ${errorMessageOf(error)}` };
   }
   return { applied: true };

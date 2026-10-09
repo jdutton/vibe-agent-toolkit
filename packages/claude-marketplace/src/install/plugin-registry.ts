@@ -1,5 +1,6 @@
 /**
- * Plugin registry — read/write Claude's plugin registry files and install plugins.
+ * Plugin registry — read Claude's plugin registry files, and record an install in them (the
+ * registry edit `planPackageInstall` applies beside its tree changes).
  *
  * Manages:
  * - known_marketplaces.json: Registry of known marketplace sources
@@ -8,12 +9,23 @@
  * Follows Postel's Law: reads with fallbacks (liberal), writes with structured data.
  */
 
-import { chmodSync, closeSync, cpSync, type Dirent, lstatSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname } from 'node:path';
+import { lstatSync, readFileSync } from 'node:fs';
 
-import { isPathAbsentError, isSingleFsSegment, isUnderRoot, isVatError, mkdirSyncReal, normalizePath, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
+import {
+  classifyFsFault,
+  type FsSide,
+  isPathAbsentError,
+  isSingleFsSegment,
+  type OwnershipVerdict,
+  requireConfirmedAbsent,
+  safePath,
+  VatError,
+  withFsFault,
+} from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
+
+import { type RegistryEdit, registryEdit, type RegistryFileChange } from './registry-edit.js';
 
 export interface MarketplaceSource {
   source: 'npm' | 'github' | 'url' | 'hostPattern';
@@ -46,28 +58,24 @@ export type InstallPluginSource =
   | { source: 'github'; repo: string }
   | { source: 'url'; url: string };
 
+/** One plugin of an install, as the registry records it: its two names, its version, and where it came from. */
 export interface InstallPluginOptions {
   marketplaceName: string;
   pluginName: string;
-  /** Absolute path to dist/plugins/<name>/ */
-  pluginDir: string;
   version: string;
   source: InstallPluginSource;
-  paths: ClaudeUserPaths;
 }
 
-/** A Claude Code registry, settings file or skills dir that is present and unreadable, or not JSON. */
+/**
+ * A Claude Code registry or settings file whose CONTENT VAT cannot use: not JSON, the
+ * wrong shape, or an entry that is not a plugin key. A file the OS refuses is not this:
+ * it is a classified filesystem fault (`FS_FAULT`), decided by the refusal table.
+ */
 export const CLAUDE_USER_STATE_UNREADABLE_CODE = 'CLAUDE_USER_STATE_UNREADABLE';
-
-/** A copy, write or removal in Claude user state failed partway (install or uninstall). */
-export const CLAUDE_USER_STATE_WRITE_FAILED_CODE = 'CLAUDE_USER_STATE_WRITE_FAILED';
-
-/** The plugin directory to install is absent, not a directory, or one the OS will not list: the input, not Claude's state. */
-export const PLUGIN_SOURCE_UNREADABLE_CODE = 'PLUGIN_SOURCE_UNREADABLE';
 
 /**
  * The code for a plugin key — or a plugin name, marketplace name or version
- * given to `installPlugin` — that cannot name one entry under ~/.claude.
+ * given to an install — that cannot name one entry under ~/.claude.
  */
 export const PLUGIN_KEY_INVALID_CODE = 'PLUGIN_KEY_INVALID';
 
@@ -92,7 +100,7 @@ export function requirePluginPathSegment(value: string, what: string, context: s
 }
 
 /**
- * Refuse names and a version {@link installPlugin} cannot install under: each
+ * Refuse names and a version a plugin cannot be installed under: each
  * must be one path segment, and the version must not begin with `.` — the
  * cache's version directory would then be dot-named, which `vat inventory`
  * skips as a staging leftover, so the plugin would install and never be seen.
@@ -115,344 +123,193 @@ export function requirePluginInstallNames(names: Pick<InstallPluginOptions, 'mar
   }
 }
 
-/** The refusal for a plugin source path the OS will not list or read. */
-function pluginSourceUnreadable(path: string, error: unknown): VatError {
-  return new VatError(PLUGIN_SOURCE_UNREADABLE_CODE, `Could not read the plugin to install at ${path}: ${String(error)}`, { cause: error });
-}
-
 /**
- * Refuse a plugin source any part of which cannot be read, before anything is
- * written for it. The whole tree, not its top level: a file the copy cannot
- * read deeper down otherwise fails inside ~/.claude and reads as Claude's
- * state, naming the destination. Each file is opened, not `access`ed — on
- * Windows `access` does not consult ACLs. Links are copied as links, so they
- * are not followed here.
+ * Run a mutation of Claude user state: a filesystem fault is the user state the run
+ * writes (`destination`); anything that is not a filesystem errno propagates as it was.
  *
- * @throws VatError {@link PLUGIN_SOURCE_UNREADABLE_CODE} naming the path that failed
- */
-export function requirePluginSource(pluginDir: string): void {
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(pluginDir, { recursive: true, withFileTypes: true });
-  } catch (error) {
-    throw pluginSourceUnreadable((error as NodeJS.ErrnoException).path ?? pluginDir, error);
-  }
-  for (const entry of entries) {
-    // A link is copied as a link, never read through: what it points at is not the copy's to read.
-    if (entry.isSymbolicLink() || !entry.isFile()) continue;
-    const file = safePath.join(entry.parentPath, entry.name);
-    try {
-      closeSync(openSync(file, 'r'));
-    } catch (error) {
-      throw pluginSourceUnreadable(file, error);
-    }
-  }
-}
-
-/**
- * Run a mutation of Claude user state; a failure that is not already coded is
- * rethrown as {@link CLAUDE_USER_STATE_WRITE_FAILED_CODE}, naming `what`.
- */
-export async function codedUserStateWrite<T>(what: string, mutate: () => T | Promise<T>): Promise<T> {
-  try {
-    return await mutate();
-  } catch (error) {
-    if (isVatError(error)) throw error;
-    throw new VatError(CLAUDE_USER_STATE_WRITE_FAILED_CODE, `Could not ${what}: ${String(error)}`, { cause: error });
-  }
-}
-
-/** Whether `source` IS `dest` on disk, or lies inside it — copying there would copy a tree onto itself. */
-function resolvesInto(source: string, dest: string): boolean {
-  const real = (p: string): string => toForwardSlash(normalizePath(safePath.resolve(p)));
-  return real(source) === real(dest) || isUnderRoot(dest, source) === 'inside';
-}
-
-/** Whether anything — a dangling link included — sits at `path`. */
-function entryExists(path: string): boolean {
-  try {
-    lstatSync(path);
-    return true;
-  } catch (error) {
-    if (isPathAbsentError(error)) return false;
-    throw error;
-  }
-}
-
-/** What {@link replaceDirectory} puts in the name of its staged copy and of the tree it parks. */
-const STAGED_INFIX = '.vat-staged-';
-
-/**
- * Whether a directory entry is {@link replaceDirectory}'s staged copy or parked
- * previous tree (`.<dest>.vat-staged-XXXXXX[.previous]`) — left beside `dest` by
- * a crash or by a removal the OS refused, and never one of the entries it sits among.
- */
-export function isStagedReplaceLeftover(name: string): boolean {
-  return name.startsWith('.') && name.includes(STAGED_INFIX);
-}
-
-/**
- * Make `dest` a copy of `source`, replacing whatever tree is there.
+ * The side is the mutation's, not decided by the path the OS named: node names the
+ * SOURCE path of a copy whose WRITE failed, so a path-decided side would put a full or
+ * read-only `~/.claude` on the input.
  *
- * Replaced, never copied into: a re-install's links would copy onto their own
- * targets. And never deleted first: the registry already points at `dest`, so a
- * copy that fails must leave the previous tree in place. The copy goes to a
- * sibling directory and is swapped in only once it is whole; a failure removes
- * the sibling and, if the swap itself failed, puts the previous tree back.
- *
- * The sibling is DOT-named: `vat inventory` reads every other directory beside
- * the versions as one, so a sibling a crash leaves behind must not look like a
- * version. It takes the source's mode — `mkdtemp` makes it 0700 — with the
- * owner's rwx added, as every directory of the copy gets: a read-only source
- * would otherwise install a tree no uninstall (VAT's, Claude Code's, `rm -rf`) can empty.
- *
- * @returns Warnings: the previous tree, when it could not be removed once replaced
+ * @param action - A verb phrase for the message: `register plugin <key>`
+ * @param mutate - The mutation
  */
-export function replaceDirectory(source: string, dest: string): string[] {
-  const staged = stageBeside(dest);
-  try {
-    cpSync(source, staged, { recursive: true });
-    // AFTER the copy: a read-only source mode applied first leaves the copy no
-    // directory it may write into (Node's native copy then aborts the process).
-    chmodSync(staged, ownerWritable(statSync(source).mode));
-    for (const entry of readdirSync(staged, { recursive: true, withFileTypes: true })) {
-      // A link is skipped before the type test: chmod follows it, and what it leads to is not the copy's.
-      if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
-      const dir = safePath.join(entry.parentPath, entry.name);
-      chmodSync(dir, ownerWritable(lstatSync(dir).mode));
-    }
-    return swapIn(staged, dest);
-  } finally {
-    // Gone already once swapped in; otherwise the half-copied sibling must not stay.
-    removeTree(staged);
-  }
+export function writeUserState<T>(action: string, mutate: () => T | Promise<T>): Promise<T> {
+  return withFsFault({ side: 'destination', action }, async () => await mutate());
 }
 
-/** `mode`'s permission bits with the owner's read, write and search added. */
-function ownerWritable(mode: number): number {
-  return (mode & 0o7777) | 0o700;
+/** A registry file as read: its bytes (`undefined`: no file there) and their parse. */
+export interface RegistryRead {
+  readonly prior: Buffer | undefined;
+  readonly parsed: unknown;
 }
+
+const READ_REGISTRY = 'read a Claude Code registry file';
 
 /**
- * {@link replaceDirectory} for a copy the caller makes: `fill` writes the new
- * tree into an empty, dot-named sibling of `dest` (mode 0700 until `fill` sets
- * one), which is swapped in only once `fill` resolves. A `fill` that rejects
- * leaves `dest` exactly as it was and the sibling removed.
+ * Read and parse a registry file that Claude Code owns.
  *
- * @returns Warnings: the previous tree, when it could not be removed once replaced
- */
-export async function replaceDirectoryWith(dest: string, fill: (staged: string) => Promise<void>): Promise<string[]> {
-  const staged = stageBeside(dest);
-  try {
-    await fill(staged);
-    return swapIn(staged, dest);
-  } finally {
-    removeTree(staged);
-  }
-}
-
-/** An empty, dot-named sibling of `dest` for {@link swapIn} — its parent made first. */
-function stageBeside(dest: string): string {
-  const parent = dirname(dest);
-  mkdirSyncReal(parent, { recursive: true });
-  return mkdtempSync(safePath.join(parent, `.${basename(dest)}${STAGED_INFIX}`));
-}
-
-/**
- * Remove a tree VAT made under ~/.claude, its root's own mode notwithstanding:
- * a root that took a read-only source's mode refuses the removal of its entries.
- */
-function removeTree(path: string): void {
-  if (!entryExists(path)) return;
-  if (!lstatSync(path).isSymbolicLink()) chmodSync(path, 0o700);
-  rmSync(path, { recursive: true, force: true });
-}
-
-/**
- * Move the whole tree `staged` to `dest`; the tree `dest` held is removed only
- * after `staged` is in its place. That removal is best-effort: the new tree is
- * live by then, so a removal the OS refuses must not fail the install.
- *
- * @returns Warnings: the previous tree, when it could not be removed
- */
-function swapIn(staged: string, dest: string): string[] {
-  // `lstat`, not `existsSync`: a dangling link at `dest` is moved aside like a tree.
-  if (!entryExists(dest)) {
-    renameSync(staged, dest);
-    return [];
-  }
-  const previous = `${staged}.previous`;
-  renameSync(dest, previous);
-  try {
-    renameSync(staged, dest);
-  } catch (error) {
-    renameSync(previous, dest);
-    throw error;
-  }
-  try {
-    removeTree(previous);
-    return [];
-  } catch (error) {
-    return [`The previous ${basename(dest)} tree could not be removed and is left at ${previous}: ${String(error)}`];
-  }
-}
-
-/**
- * Parse a registry file that Claude Code owns, or `undefined` when it is not there.
+ * `side` is the calling verb's: the registry is the user state an install or
+ * uninstall WRITES (`destination`), and the input a listing only reads (`source`).
  *
  * ⚠️ ONLY an absent file is "empty". Every reader here is followed by a WRITE of
  * the same file, so a file that is present but cannot be read — refused by the
  * OS, or not JSON after a half-written save — must not read as empty: the next
  * write would then replace the user's registry (or their whole `settings.json`)
- * with a document holding nothing but the plugin being installed. That refusal
- * is thrown coded {@link CLAUDE_USER_STATE_UNREADABLE_CODE}, naming the file.
+ * with a document holding nothing but the plugin being installed. A file the OS
+ * refuses is a classified fault on `side`; one that is not JSON is coded
+ * {@link CLAUDE_USER_STATE_UNREADABLE_CODE}, naming the file.
  */
-function readRegistryFile(filePath: string): unknown {
-  let raw: string;
+function readRegistry(filePath: string, side: FsSide): RegistryRead {
+  let prior: Buffer;
   try {
-    raw = readFileSync(filePath, 'utf-8');
+    prior = readFileSync(filePath);
   } catch (error) {
-    if (isPathAbsentError(error)) return undefined;
-    throw new VatError(CLAUDE_USER_STATE_UNREADABLE_CODE, `Could not read ${filePath}: ${String(error)}`, { cause: error });
+    const ctx = { side, origin: 'content', action: READ_REGISTRY, path: filePath } as const;
+    if (!isPathAbsentError(error)) throw classifyFsFault(error, ctx);
+    // Absent only when the directory's listing agrees: a refused read of a file that IS there
+    // would read as an empty registry, and the write after it would drop every entry it held.
+    requireConfirmedAbsent(filePath, error, ctx, { follows: true });
+    return { prior: undefined, parsed: undefined };
   }
   try {
-    return JSON.parse(raw) as unknown;
+    return { prior, parsed: JSON.parse(prior.toString('utf-8')) as unknown };
   } catch (error) {
     throw new VatError(CLAUDE_USER_STATE_UNREADABLE_CODE, `${filePath} is not valid JSON: ${String(error)}`, { cause: error });
   }
+}
+
+/** `value` as an object, or `{}` when it is absent or JSON that is not one. */
+function objectOf(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function installedPluginsOf(read: RegistryRead): InstalledPlugins {
+  return (read.parsed as InstalledPlugins | undefined) ?? { version: 2, plugins: {} };
 }
 
 /**
  * Read known_marketplaces.json from the Claude plugins directory.
  * Returns an empty object if the file does not exist; throws if it is there but unreadable.
  */
-export function readKnownMarketplaces(paths: ClaudeUserPaths): KnownMarketplaces {
-  return (readRegistryFile(paths.knownMarketplacesPath) as KnownMarketplaces | undefined) ?? {};
-}
-
-/**
- * Write known_marketplaces.json to the Claude plugins directory.
- * Creates parent directories if needed.
- */
-export function writeKnownMarketplaces(paths: ClaudeUserPaths, data: KnownMarketplaces): void {
-  mkdirSyncReal(dirname(paths.knownMarketplacesPath), { recursive: true });
-  writeFileSync(paths.knownMarketplacesPath, JSON.stringify(data, null, 2));
+export function readKnownMarketplaces(paths: ClaudeUserPaths, side: FsSide): KnownMarketplaces {
+  return objectOf(readRegistry(paths.knownMarketplacesPath, side).parsed) as KnownMarketplaces;
 }
 
 /**
  * Read installed_plugins.json from the Claude plugins directory.
  * Returns empty registry if the file does not exist; throws if it is there but unreadable.
  */
-export function readInstalledPlugins(paths: ClaudeUserPaths): InstalledPlugins {
-  return (readRegistryFile(paths.installedPluginsPath) as InstalledPlugins | undefined)
-    ?? { version: 2, plugins: {} };
-}
-
-/**
- * Write installed_plugins.json to the Claude plugins directory.
- * Creates parent directories if needed.
- */
-export function writeInstalledPlugins(paths: ClaudeUserPaths, data: InstalledPlugins): void {
-  mkdirSyncReal(dirname(paths.installedPluginsPath), { recursive: true });
-  writeFileSync(paths.installedPluginsPath, JSON.stringify(data, null, 2));
-}
-
-/**
- * Install a plugin into the Claude user plugin registry.
- *
- * The names and version are checked first: each becomes one directory under
- * ~/.claude, so one that is not a single path segment is refused
- * ({@link PLUGIN_KEY_INVALID_CODE}). Then the source is read: one that is not
- * there is refused ({@link PLUGIN_SOURCE_UNREADABLE_CODE}) with nothing created. Then 5 steps in
- * order; a failure throws, coded (see the two user-state codes above).
- * 1. Replace the plugin's tree in marketplacesDir
- * 2. Update known_marketplaces.json
- * 3. Replace the plugin's tree in pluginsCacheDir
- * 4. Update installed_plugins.json
- * 5. Enable plugin in user settings.json
- *
- * @returns `warnings`: cleanup that did not happen — the install itself is complete
- */
-export function installPlugin(opts: InstallPluginOptions): Promise<{ warnings: string[] }> {
-  const { marketplaceName, pluginName, pluginDir, version, source, paths } = opts;
-
-  const pluginKey = `${pluginName}@${marketplaceName}`;
-  // Both refusals throw synchronously; a caller still receives them as a rejection.
-  try {
-    requirePluginInstallNames(opts);
-    requirePluginSource(pluginDir);
-  } catch (error) {
-    return Promise.reject(error as Error);
-  }
-  return codedUserStateWrite(`register plugin ${pluginKey}`, () => {
-    const now = new Date().toISOString();
-    // The directory itself, not a link to it: a copied link would collide with the directory it lands on.
-    const realPluginDir = normalizePath(safePath.resolve(pluginDir));
-
-    // Step 1: Replace marketplacesDir/<marketplaceName>/plugins/<pluginName>/ with the plugin.
-    // Replaced, not copied into, so a file the plugin dropped does not survive a re-install.
-    // Skip if pluginDir is already at the destination (e.g. copyPluginTree already did the copy)
-    const marketplacePluginDest = safePath.join(paths.marketplacesDir, marketplaceName, 'plugins', pluginName);
-    const marketplaceWarnings = resolvesInto(pluginDir, marketplacePluginDest) ? [] : replaceDirectory(realPluginDir, marketplacePluginDest);
-
-    // Step 2: Update known_marketplaces.json
-    const knownMarketplaces = readKnownMarketplaces(paths);
-    knownMarketplaces[marketplaceName] = {
-      source: source as MarketplaceSource,
-      installLocation: safePath.join(paths.marketplacesDir, marketplaceName),
-      lastUpdated: now,
-    };
-    writeKnownMarketplaces(paths, knownMarketplaces);
-
-    // Step 3: Copy plugin to pluginsCacheDir/<marketplaceName>/<pluginName>/<version>/
-    // Skip when the source IS the destination on disk (or inside it) — replacing it would delete the source
-    const cacheDest = safePath.join(paths.pluginsCacheDir, marketplaceName, pluginName, version);
-    const cacheWarnings = resolvesInto(pluginDir, cacheDest) ? [] : replaceDirectory(realPluginDir, cacheDest);
-
-    // Step 4: Update installed_plugins.json
-    const installedPlugins = readInstalledPlugins(paths);
-    installedPlugins.plugins[pluginKey] = [
-      {
-        scope: 'user',
-        installPath: safePath.join(paths.pluginsCacheDir, marketplaceName, pluginName, version),
-        version,
-        installedAt: now,
-        lastUpdated: now,
-      },
-    ];
-    writeInstalledPlugins(paths, installedPlugins);
-
-    // Step 5: Enable plugin in user settings.json
-    updateUserSettings(paths, pluginKey);
-    return { warnings: [...marketplaceWarnings, ...cacheWarnings] };
-  });
+export function readInstalledPlugins(paths: ClaudeUserPaths, side: FsSide): InstalledPlugins {
+  return installedPluginsOf(readRegistry(paths.installedPluginsPath, side));
 }
 
 /**
  * Read user settings.json as a plain object.
  * Returns an empty object if the file does not exist or holds JSON that is not an
- * object; throws if it is there but cannot be read or parsed (see `readRegistryFile`).
+ * object; throws if it is there but cannot be read or parsed.
  */
-export function readUserSettings(paths: ClaudeUserPaths): Record<string, unknown> {
-  const parsed = readRegistryFile(paths.userSettingsPath);
-  if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-    return parsed as Record<string, unknown>;
-  }
-  return {};
+export function readUserSettings(paths: ClaudeUserPaths, side: FsSide): Record<string, unknown> {
+  return objectOf(readRegistry(paths.userSettingsPath, side).parsed);
 }
 
-function updateUserSettings(paths: ClaudeUserPaths, pluginKey: string): void {
-  const settingsData = readUserSettings(paths);
+/**
+ * The three registry files as an install or uninstall finds them — side
+ * `destination`, since it writes them next — each with its prior bytes and its
+ * content as objects the edit may change. Read before any tree changes, so a file
+ * that is not JSON refuses the run with nothing changed.
+ */
+export interface RegistryFiles {
+  readonly reads: { readonly known: RegistryRead; readonly installed: RegistryRead; readonly settings: RegistryRead };
+  readonly known: KnownMarketplaces;
+  readonly installed: InstalledPlugins;
+  readonly settings: Record<string, unknown>;
+}
 
-  const existingEnabled =
-    settingsData['enabledPlugins'] !== null &&
-    typeof settingsData['enabledPlugins'] === 'object' &&
-    !Array.isArray(settingsData['enabledPlugins'])
-      ? (settingsData['enabledPlugins'] as Record<string, boolean>)
-      : {};
+/** Read all three registry files for an edit; see {@link RegistryFiles}. */
+export function readRegistryFiles(paths: ClaudeUserPaths): RegistryFiles {
+  const reads = {
+    known: readRegistry(paths.knownMarketplacesPath, 'destination'),
+    installed: readRegistry(paths.installedPluginsPath, 'destination'),
+    settings: readRegistry(paths.userSettingsPath, 'destination'),
+  };
+  return { reads, known: objectOf(reads.known.parsed) as KnownMarketplaces, installed: installedPluginsOf(reads.installed), settings: objectOf(reads.settings.parsed) };
+}
 
-  settingsData['enabledPlugins'] = { ...existingEnabled, [pluginKey]: true };
+/** One file of an edit: its prior bytes, and `data` serialised as its new content. */
+export function registryFileChange(path: string, read: RegistryRead, data: unknown): RegistryFileChange {
+  return { path, prior: read.prior, next: JSON.stringify(data, null, 2) };
+}
 
-  mkdirSyncReal(dirname(paths.userSettingsPath), { recursive: true });
-  writeFileSync(paths.userSettingsPath, JSON.stringify(settingsData, null, 2));
+/** `settings.enabledPlugins` as an object, or `{}` when it is absent or not one. */
+export function enabledPluginsOf(settings: Record<string, unknown>): Record<string, unknown> {
+  return objectOf(settings['enabledPlugins']);
+}
+
+/** What VAT may replace or remove under ~/.claude: the marketplace copies and the plugin cache are its own. */
+export const VAT_STATE = { kind: 'vat-state' } as const;
+
+/**
+ * The file VAT writes into the root of a marketplace directory its install made — in the
+ * marketplace's own staged tree (`planPackageInstall`), so it lands exactly with the copy. Claude Code registers marketplaces of every source — npm included — so neither a
+ * known_marketplaces.json entry nor its source can tell VAT's from the user's; an uninstall removes a
+ * marketplace directory only when this marker is in it. It carries no version: it is there or it is not.
+ */
+export const VAT_MARKETPLACE_MARKER = '.vat-marketplace';
+
+/** What {@link VAT_MARKETPLACE_MARKER} holds: fixed text, no version — it is there or it is not. */
+export const MARKER_CONTENTS = 'This marketplace was installed by vibe-agent-toolkit (vat claude plugin install).\n'
+  + 'vat claude plugin uninstall removes it, with this file, when the last plugin it installed here goes.\n';
+
+/**
+ * Whether VAT made the marketplace directory `dir`: its {@link VAT_MARKETPLACE_MARKER} is a regular file
+ * in it. No marker — or no directory — is not VAT's. The marker is the marketplace's own, so a probe of
+ * it the OS refuses proves nothing either way and is thrown: "absent" is believed only when the
+ * directory's listing agrees.
+ *
+ * @throws a `destination` fault naming the marker when it cannot be examined
+ */
+export function vatMarketplaceVerdict(dir: string): OwnershipVerdict {
+  const marker = safePath.join(dir, VAT_MARKETPLACE_MARKER);
+  const notOurs = { owned: false, reason: `it holds no ${VAT_MARKETPLACE_MARKER} marker: VAT did not install it (or an older VAT did, before the marker), so it is left for its owner` } as const;
+  const ctx = { side: 'destination', action: "examine VAT's marketplace marker", path: marker } as const;
+  try {
+    return lstatSync(marker).isFile() ? { owned: true } : notOurs;
+  } catch (error) {
+    if (!isPathAbsentError(error)) throw classifyFsFault(error, ctx);
+    requireConfirmedAbsent(marker, error, ctx, { follows: false });
+    return notOurs;
+  }
+}
+
+/** Where a plugin's version lives in the cache: `cache/<marketplace>/<plugin>/<version>`. */
+export function pluginCacheDir(paths: ClaudeUserPaths, names: Pick<InstallPluginOptions, 'marketplaceName' | 'pluginName' | 'version'>): string {
+  return safePath.join(paths.pluginsCacheDir, names.marketplaceName, names.pluginName, names.version);
+}
+
+/**
+ * Record one plugin's install in `files`, as Claude Code reads it: its marketplace in
+ * known_marketplaces.json, the plugin (installed at its cache directory) in installed_plugins.json,
+ * and enabled in settings.json. Mutates `files`; nothing is written.
+ */
+export function recordPluginInstall(
+  files: RegistryFiles,
+  paths: ClaudeUserPaths,
+  install: Pick<InstallPluginOptions, 'marketplaceName' | 'pluginName' | 'version' | 'source'>,
+  now: string,
+): void {
+  const { marketplaceName, pluginName, version, source } = install;
+  const pluginKey = `${pluginName}@${marketplaceName}`;
+  files.known[marketplaceName] = { source: source as MarketplaceSource, installLocation: safePath.join(paths.marketplacesDir, marketplaceName), lastUpdated: now };
+  files.installed.plugins[pluginKey] = [{ scope: 'user', installPath: pluginCacheDir(paths, install), version, installedAt: now, lastUpdated: now }];
+  files.settings['enabledPlugins'] = { ...enabledPluginsOf(files.settings), [pluginKey]: true };
+}
+
+/** The edit that writes all three registry files as `files` now holds them, each with its prior bytes. */
+export function registrationEdit(action: string, paths: ClaudeUserPaths, files: RegistryFiles): RegistryEdit {
+  return registryEdit(action, [
+    registryFileChange(paths.knownMarketplacesPath, files.reads.known, files.known),
+    registryFileChange(paths.installedPluginsPath, files.reads.installed, files.installed),
+    registryFileChange(paths.userSettingsPath, files.reads.settings, files.settings),
+  ]);
 }

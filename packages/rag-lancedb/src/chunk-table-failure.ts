@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 
 import type { Table } from '@lancedb/lancedb';
-import { RAG_DATABASE_UNREADABLE_CODE, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { fsFaultOf, RAG_DATABASE_UNREADABLE_CODE, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape } from 'zod';
 
 import { TABLE_NAME } from './database-directory.js';
@@ -45,8 +45,8 @@ interface RefusedPath {
 }
 
 function permissionRefusal(path: string, error: unknown): RefusedPath | undefined {
-  const errno = (error as NodeJS.ErrnoException).code;
-  return errno === 'EACCES' || errno === 'EPERM' ? { path, errno } : undefined;
+  const fault = fsFaultOf(error);
+  return fault?.faultClass === 'refused' ? { path, errno: fault.errno } : undefined;
 }
 
 function refusedFile(path: string): RefusedPath | undefined {

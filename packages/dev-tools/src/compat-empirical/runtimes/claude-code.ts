@@ -87,7 +87,7 @@ export class ClaudeCodeDriver implements RuntimeDriver {
     // Fresh profile per attempt → no cache contamination across attempts.
     const profile = createTempProfile();
     try {
-      installSkillIntoProfile(profile, opts.skill, opts.skill.entryId);
+      await installSkillIntoProfile(profile, opts.skill, opts.skill.entryId);
 
       const spawnResult = await runClaudeSubscription(
         ['-p', opts.triggerPrompt, '--output-format', 'stream-json', '--verbose'],
@@ -128,7 +128,7 @@ export class ClaudeCodeDriver implements RuntimeDriver {
         attemptIdx: opts.attemptIdx,
       };
     } finally {
-      teardownTempProfile(profile);
+      await teardownTempProfile(profile);
     }
   }
 

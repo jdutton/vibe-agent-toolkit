@@ -12,11 +12,16 @@ import AdmZip from 'adm-zip';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { PLUGIN_INSTALL_REPORT_SCHEMA, type PluginInstallData } from '../../src/commands/claude/plugin/install-schema.js';
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 import {
   executeCommandAndParse,
   setupInstallTestSuite,
 } from './test-helpers/index.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-13-');
 
 const suite = setupInstallTestSuite('vat-skills-install-test-', import.meta.url);
 
@@ -62,8 +67,8 @@ function executeInstallAndExpectSuccess(
   return { result, parsed };
 }
 
-/** A `--dry-run` install of `source` detects `sourceType` and publishes an ok report saying it wrote nothing. */
-function expectDryRunDetects(source: string, sourceType: string): void {
+/** A `--dry-run` install of `source` detects `sourceType`, prints the plan's line for the skill, and publishes an ok report saying it wrote nothing. */
+function expectDryRunDetects(source: string, sourceType: string, skillName: string): void {
   const { result, parsed } = executeCommandAndParse(
     suite.binPath,
     ['claude', 'plugin', 'install', source, '-s', suite.skillsDir, '--dry-run'],
@@ -73,6 +78,9 @@ function expectDryRunDetects(source: string, sourceType: string): void {
   expect(result.status).toBe(0);
   expect(parsed.status).toBe('ok');
   expect(dataOf(parsed)).toMatchObject({ sourceType, dryRun: true });
+  // The plan's own line (`plan.describe()`): what the real run would do, and nothing written.
+  expect(result.stderr).toContain(`[dry-run] create skill ${skillName} ${safePath.join(suite.skillsDir, skillName)}`);
+  expect(existsSync(safePath.join(suite.skillsDir, skillName))).toBe(false);
 }
 
 describe('claude plugin install command (system test)', () => {
@@ -88,14 +96,14 @@ describe('claude plugin install command (system test)', () => {
       const zipPath = safePath.join(suite.tempDir, 'test-skill.zip');
       zip.writeZip(zipPath);
 
-      expectDryRunDetects(zipPath, 'zip');
+      expectDryRunDetects(zipPath, 'zip', 'test-skill');
     });
 
     it('should detect local directory source', async () => {
       // A directory with a root SKILL.md: a bare directory is refused.
       const dirPath = await createSimpleSkill(suite.tempDir, 'test-skill-dir');
 
-      expectDryRunDetects(dirPath, 'local');
+      expectDryRunDetects(dirPath, 'local', 'test-skill-dir');
     });
 
     it('should refuse a source path that names nothing', () => {

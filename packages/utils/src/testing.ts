@@ -40,9 +40,12 @@ export {
 // The three fixture modules the sinks' suites share: the ONE temp-dir family,
 // the host gates, and the hostile tree every sink is tested against.
 export * from './testing/executables.js';
+export * from './testing/fault-fs.js';
+export * from './testing/fault-spec.js';
 export * from './testing/hostile-tree.js';
 export * from './testing/platform-gates.js';
 export * from './testing/temp-dir.js';
+export * from './testing/tree-snapshot.js';
 
 /** A planted fixture tree and the means to remove it. */
 export interface TempCorpus {
@@ -156,5 +159,5 @@ export function replantableCorpus(
  * @returns A `refuse` policy for `crawlDirectory` and the git listings
  */
 export function refuseUnreadableFixture(root: string): UnreadablePolicy {
-  return { refuse: { root, remedy: 'A test fixture must be listable in full; fix the fixture, not the walk.' } };
+  return { refuse: { root, remedy: 'A test fixture must be listable in full; fix the fixture, not the walk.', side: 'source' } };
 }

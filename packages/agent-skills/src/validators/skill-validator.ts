@@ -143,6 +143,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
     skillDir,
     linkedFiles.map((lf) => lf.path),
     locationRoot,
+    options.side,
   );
   issues.push(...bundledResourceIssues);
 

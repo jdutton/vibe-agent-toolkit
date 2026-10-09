@@ -32,7 +32,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { ExitCode, exitCodeForReport } from '@vibe-agent-toolkit/schema';
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { findConfigFile, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
 import { selectBuildPhases } from '../../src/commands/build.js';
@@ -79,9 +79,11 @@ vi.mock('../../src/commands/claude/marketplace/validate.js', () => ({
 }));
 vi.mock('../../src/commands/skills/build.js', () => ({
   runSkillsBuildPhase: vi.fn(() => Promise.resolve({ report: STUB_REPORT })),
+  distSkillsDir: (cwd: string) => `${cwd}/dist/skills`,
 }));
 vi.mock('../../src/commands/claude/plugin/build.js', () => ({
   runClaudePluginBuildPhase: vi.fn(() => Promise.resolve({ report: STUB_REPORT })),
+  pluginBuildOutput: (cwd: string) => `${cwd}/dist/.claude/plugins/marketplaces`,
 }));
 
 const { runResourcesValidatePhase } = await import('../../src/commands/resources/validate.js');
@@ -366,13 +368,29 @@ describe('selectBuildPhases', () => {
   it('forwards verbose to every phase, or to none', async () => {
     // A request not relayed to a phase cannot reach it, so `vat build
     // --verbose` would silently produce the collapsed report.
+    // The claude phase is also told what the skills phase wrote before it: `dist/skills` is then the run's own output.
+    // And the skills phase what the claude phase writes after it: the marketplaces are the run's output too.
+    const runOutputs = [`${process.cwd()}/dist/skills`];
+    const configPath = findConfigFile(process.cwd());
+    const configDir = configPath === null ? process.cwd() : safePath.resolve(configPath, '..');
+    const skillsRunOutputs = [`${configDir}/dist/.claude/plugins/marketplaces`];
     await invokeAll(selectBuildPhases(undefined, true, true));
-    expect(runSkillsBuildPhase).toHaveBeenCalledWith(undefined, { verbose: true });
-    expect(runClaudePluginBuildPhase).toHaveBeenCalledWith({ verbose: true });
+    expect(runSkillsBuildPhase).toHaveBeenCalledWith(undefined, { verbose: true }, skillsRunOutputs);
+    expect(runClaudePluginBuildPhase).toHaveBeenCalledWith({ verbose: true }, runOutputs);
 
     await invokeAll(selectBuildPhases(undefined, true, false));
-    expect(runSkillsBuildPhase).toHaveBeenCalledWith(undefined, { verbose: false });
-    expect(runClaudePluginBuildPhase).toHaveBeenCalledWith({ verbose: false });
+    expect(runSkillsBuildPhase).toHaveBeenCalledWith(undefined, { verbose: false }, skillsRunOutputs);
+    expect(runClaudePluginBuildPhase).toHaveBeenCalledWith({ verbose: false }, runOutputs);
+  });
+
+  it('tells a skills-only build that the run writes no marketplace', async () => {
+    await invokeAll(selectBuildPhases('skills', true));
+    expect(runSkillsBuildPhase).toHaveBeenCalledWith(undefined, { verbose: false }, []);
+  });
+
+  it('tells a claude-only build that the run wrote no dist/skills: it is an input there', async () => {
+    await invokeAll(selectBuildPhases('claude', true));
+    expect(runClaudePluginBuildPhase).toHaveBeenCalledWith({ verbose: false }, []);
   });
 
   it('builds skills, and claude only when marketplaces are configured', () => {

@@ -89,10 +89,9 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
+import { isPathAbsentError, safePath, type TempDirOutcome, withTempDir } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
 import { readForwardedDocument, type ForwardedDocument } from '../../utils/document-writer.js';
@@ -716,15 +715,11 @@ function readLog(path: string): string {
  * of one build, so the reader's own `.strict()` schema is the entire contract.
  *
  * @param work - Given the log's path
- * @returns Whatever `work` returned
+ * @returns What `work` returned, with the log's directory as a `leftover` when the OS
+ *   would not remove it (see `withTempDir`) — for the caller to report as a warning
  */
-export async function withProgressLog<T>(work: (logPath: string) => Promise<T>): Promise<T> {
-  const dir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-check-'));
-  try {
-    return await work(safePath.join(dir, 'progress.jsonl'));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+export function withProgressLog<T>(work: (logPath: string) => Promise<T>): Promise<TempDirOutcome<T>> {
+  return withTempDir('vat-check-', (dir) => work(safePath.join(dir, 'progress.jsonl')));
 }
 
 /**
@@ -747,3 +742,6 @@ export function readCompletedDocument(
     return { death: { kind: 'unparseable-output', code, detail: errorMessageOf(error) } };
   }
 }
+
+/** Test-facing seam: the pure decisions of this module, reached by its unit tests. */
+export const __internal = { pollIntervalMs };

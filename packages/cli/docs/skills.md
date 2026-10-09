@@ -155,12 +155,12 @@ discovery rule that this command participates in.
   skill (`SKILL_BUILD_TARGET_NOT_BUILDABLE`); or nothing was examined — no `skills:` block, or
   globs matching no SKILL.md (`RESOURCE_CHECK_BROKEN`)
 - `2` - The build could not run (`error.code`): `USAGE_INVALID` (a bad `[path]`, an unknown
-  `--skill`), `INPUT_UNREADABLE` (including a previous `dist/skills` the OS will not stat, or a file
-  in the git repository the OS will not let git read — the message names it), `CONFIG_INVALID`, or
-  `RUN_INCOMPLETE` (an output the OS will not let the build write: the staging area under `dist/`
-  could not be opened, a bundle could not be written, or promoting `dist/skills` failed —
-  `data.promotionError` names what is on disk and how to recover it; a refusal after discovery
-  still reports the skills it `examined`).
+  `--skill`), `INPUT_UNREADABLE` (a file in the git repository the OS will not let git read — the
+  message names it), `CONFIG_INVALID`, or `RUN_INCOMPLETE` (an output the OS will not let the build
+  examine or write: a previous `dist/skills` it will not examine, the staging tree beside it
+  could not be made or written, or the swap of `dist/skills` failed — `data.promotionError`
+  names what is on disk and how to recover it; a refusal after discovery still reports the
+  skills it `examined`).
   Any other throw from the packager stops the run under its own code (`INPUT_UNREADABLE` for a
   directory the OS will not list); one that carries no code is a defect in VAT
   (`INTERNAL_ERROR`). Either way `dist/skills` is left untouched
@@ -425,7 +425,7 @@ any other target lands correctly but is invisible to them.
 **Exit Codes:**
 - `0` - Installed, or `--dry-run` complete
 - `1` - A skill failed its pre-install validation: its error findings are published and nothing in the batch is installed
-- `2` - Could not install. `error.code` says why: `USAGE_INVALID` for a bad `--target`/`--scope`/`--name`, a source holding no `SKILL.md`, two skills claiming one name, or a skill already installed without `--force`; `INPUT_UNREADABLE` for a source the OS (or the ZIP/tarball reader) will not read — an archive holding an entry that cannot be extracted (a file `a` beside a file `a/b`) included — or an install path whose existence the OS will not let VAT check; `EXTERNAL_API_FAILED` when the npm registry will not hand over an `npm:` package; `RUN_INCOMPLETE` for a staging copy under `$TMPDIR` it could not create or write (full, read-only), or a copy that failed partway — `data.skills` then lists the skills already installed
+- `2` - Could not install, and nothing was installed (`data` is null). `error.code` says why: `USAGE_INVALID` for a bad `--target`/`--scope`/`--name`, a source holding no `SKILL.md`, two skills claiming one name, or something already at an install path without `--force`; `INPUT_UNREADABLE` for a source the OS (or the ZIP/tarball reader) will not read — an archive holding an entry that cannot be extracted (a file `a` beside a file `a/b`) included; `EXTERNAL_API_FAILED` when the npm registry will not hand over an `npm:` package; `RUN_INCOMPLETE` for an install path the OS will not let VAT examine or write (it is what the install writes), or a staging copy under `$TMPDIR` or beside the install path it could not create or write (full, read-only)
 
 **Output** — the `Report` envelope (schema: `schemas/skills-install.json`); `examined` counts the skills in the install plan and `durationMs` is on the envelope:
 ```yaml
@@ -433,7 +433,7 @@ status: ok               # ok | findings | error
 gate: { strict: false }
 summary: { errors: 0, warnings: 0, info: 0 }
 examined: 2
-findings: []             # each skill's validation findings
+findings: []             # each skill's validation findings; TREE_CLEANUP_INCOMPLETE warnings for what it could not remove
 data:
   source: /abs/path/to/source   # npm:<pkg> as typed
   target: claude
@@ -444,13 +444,13 @@ data:
       installPath: /Users/you/.claude/skills/my-skill
     - name: other-skill
       installPath: /Users/you/.claude/skills/other-skill
-      # alreadyInstalled: true   — --dry-run only: a real run would need --force
+      # alreadyInstalled: true   — --dry-run only: the plan replaces what is there (needs --force)
 ```
 
 A run that could not install publishes the same envelope with `status: error` and
 `error: { code, message }`; the message also goes to stderr.
 
-**All-or-nothing semantics:** Skills are pre-verified before any filesystem writes. If any skill fails validation, or if a conflict is detected (without `--force`), the entire install is aborted and no files are written.
+**All-or-nothing semantics:** Skills are pre-verified before any filesystem writes, and the whole batch is one transaction: every skill is staged beside its install path and swapped in together, or nothing changes. A skill that fails validation, a conflict (without `--force`), a source file the OS will not read, or a copy that fails partway installs none of the batch. `--dry-run` prints the plan — one `[dry-run] create|replace skill <name> <path>` line per skill — and refuses exactly what the real run would.
 
 **Examples:**
 ```bash

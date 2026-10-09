@@ -210,7 +210,7 @@ export async function okfValidateReport(
     throw new CommandRefusalError('CONFIG_INVALID', 'No vibe-agent-toolkit.config.yaml found. Run from a project directory.');
   }
 
-  // A config the OS will not read throws `CONFIG_UNREADABLE`, one that does not
+  // A config the OS will not read throws a classified `source` fault, one that does not
   // parse or validate `CONFIG_LOAD`, and an undeclared bundle argument
   // `OKF_UNKNOWN_BUNDLE` — each a coded refusal the
   // catch reads. Anything else thrown here is VAT's defect and surfaces as one.

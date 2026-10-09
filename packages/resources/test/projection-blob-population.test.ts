@@ -14,9 +14,9 @@ import {
 } from '../src/projection/blob-population.js';
 import { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
-import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { rootIdFor } from '../src/projection/identity.js';
 import { afterClosurePromotion, populate } from '../src/projection/merge.js';
 import {
@@ -32,7 +32,7 @@ import {
   baseBuilderForRoot,
   type RealizationOrder,
 } from './blob-fixture-population.js';
-import { setupSubdirTestSuite } from './test-helpers.js';
+import { registryWithClosure, setupSubdirTestSuite } from './test-helpers.js';
 
 const SKILL_KIND = 'skill';
 const EXTENT_NAME = 'foo-bundle';
@@ -290,19 +290,12 @@ function closureDeclaration(): Record<string, JsonValue> {
   };
 }
 
-function registryWithClosure(): ContributorRegistry {
-  const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
-  registry.register(new ClosureExtentContributor(EXTENT_NAME, SKILL_KIND));
-  return registry;
-}
-
 /** Run the whole driver over the skill corpus, capturing the stage's counters. */
 async function populateSkillCorpus(): Promise<{ projection: Projection; counts: BlobPopulationResult }> {
   let counts: BlobPopulationResult | undefined;
   const projection = await populate({
     root: suite.tempDir,
-    registry: registryWithClosure(),
+    registry: registryWithClosure(EXTENT_NAME, SKILL_KIND),
     parameters: { [`closure:${EXTENT_NAME}`]: closureDeclaration() },
     onBlobPopulation: (result) => {
       counts = result;
@@ -415,7 +408,7 @@ describe('populateBlobs', () => {
       { path: 'src/b.ts', content: '/** @param gadgets - never imported */\nexport const b = 1;\n' },
     ], ['src']);
     const registry = new ContributorRegistry();
-    registry.register(new FilesystemExtentContributor());
+    registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
 
     const projection = await populate({ root: suite.tempDir, registry, onBlobPopulation: () => undefined });
 

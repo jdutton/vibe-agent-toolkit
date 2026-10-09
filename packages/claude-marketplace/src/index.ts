@@ -79,28 +79,27 @@ export type {
 } from './install/plugin-registry.js';
 export {
   CLAUDE_USER_STATE_UNREADABLE_CODE,
-  CLAUDE_USER_STATE_WRITE_FAILED_CODE,
   PLUGIN_KEY_INVALID_CODE,
-  PLUGIN_SOURCE_UNREADABLE_CODE,
-  codedUserStateWrite,
-  installPlugin,
-  isStagedReplaceLeftover,
   readInstalledPlugins,
   readKnownMarketplaces,
-  replaceDirectory,
-  replaceDirectoryWith,
   requirePluginInstallNames,
-  requirePluginSource,
-  writeInstalledPlugins,
-  writeKnownMarketplaces,
+  VAT_MARKETPLACE_MARKER,
+  writeUserState,
 } from './install/plugin-registry.js';
+export type { RegistryEdit } from './install/registry-edit.js';
+export type { PackageInstallOptions, PackageInstallPlan, PackageMarketplaceInstall, PackagePluginInstall } from './install/package-install.js';
+export { planPackageInstall } from './install/package-install.js';
+export type { DevSkillLink } from './install/dev-skill-links.js';
+export { linkDevSkills } from './install/dev-skill-links.js';
 
 // Plugin uninstall
 export type {
+  PluginUninstallPlan,
+  UninstallPluginsOutcome,
   UninstallPluginOptions,
   UninstallPluginResult,
 } from './install/plugin-uninstall.js';
-export { findPluginsByPackage, parsePluginKey, uninstallPlugin } from './install/plugin-uninstall.js';
+export { findPluginsByPackage, parsePluginKey, planPluginUninstall, uninstallPlugins } from './install/plugin-uninstall.js';
 
 // Plugin list
 export type {

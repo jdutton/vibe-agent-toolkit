@@ -574,6 +574,6 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit of a plugin with a skill directory
     expect(result.status, result.stderr).toBe(2);
     expect(report.status).toBe('error');
     expect(report.error?.code).toBe('INPUT_UNREADABLE');
-    expect(report.error?.message).toContain('Path cannot be read');
+    expect(report.error?.message).toContain('(EACCES)');
   });
 });

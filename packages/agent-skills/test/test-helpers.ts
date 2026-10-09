@@ -2,10 +2,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, type SymlinkCapability } from '@vibe-agent-toolkit/utils';
-import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
+import { registerScratchTmpdir, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, expect } from 'vitest';
 import type { z } from 'zod';
 
+import { packageSkillInto, type PackageSkillOptions, type PackageSkillResult } from '../src/skill-packager.js';
 import { validateSkill } from '../src/validators/skill-validator.js';
 import type { LinkedFileValidationResult, ValidationResult } from '../src/validators/types.js';
 
@@ -13,6 +14,21 @@ import type { LinkedFileValidationResult, ValidationResult } from '../src/valida
  * Setup temporary directory for tests
  * Automatically creates and cleans up temp dir before/after each test
  */
+/**
+ * Package `skillPath` IN PLACE into `options.outputPath`: written whether or not its post-build
+ * checks pass, for a test that inspects what the packager wrote. `packageSkill` lands only a
+ * package that passed its own checks, so a test of what a failing package holds asks this.
+ *
+ * @param skillPath - The SKILL.md
+ * @param options - Packaging options; `outputPath` is where the bundle is written
+ */
+export async function packageInPlace(
+  skillPath: string,
+  options: Omit<PackageSkillOptions, 'replaceExistingOutput' | 'dryRun'> & { outputPath: string },
+): Promise<PackageSkillResult> {
+  return (await packageSkillInto(skillPath, options.outputPath, options, [])).result;
+}
+
 export function setupTempDir(prefix: string): { getTempDir: () => string } {
   const suite = setupSyncTempDirSuite(prefix);
   beforeAll(suite.beforeAll);
@@ -76,6 +92,7 @@ export function stubStageResult(subjectStagedDir: string): unknown {
     subjectPluginRoot: null,
     skippedOptional: [],
     subjectEvalSuiteHeld: false,
+    leftovers: [],
   };
 }
 
@@ -117,7 +134,7 @@ export function createSkillAndValidate(
 ): Promise<ValidationResult> {
   const skillPath = safePath.join(tempDir, 'SKILL.md');
   fs.writeFileSync(skillPath, content);
-  return validateSkill({ skillPath, validation: {} });
+  return validateSkill({ side: 'source', skillPath, validation: {} });
 }
 
 /**
@@ -167,6 +184,7 @@ export function validateSkillWithTransitiveChecking(
   rootDir?: string,
 ): Promise<ValidationResult> {
   return validateSkill({
+    side: 'source',
     skillPath,
     rootDir: rootDir ?? path.dirname(skillPath),
     validation: {},
@@ -185,6 +203,7 @@ export function validateSkillWithUnreferencedFileCheck(
   rootDir: string,
 ): Promise<ValidationResult> {
   return validateSkill({
+    side: 'source',
     skillPath,
     rootDir,
     checkUnreferencedFiles: true,
@@ -618,4 +637,18 @@ export async function writeMinimalAgent(tempDir: string, name: string): Promise<
       `    model: claude-sonnet-5\n  prompts:\n    system:\n      $ref: ./prompts/system.md\n`,
   );
   return { agentDir, manifestPath };
+}
+
+/**
+ * ⛔ DESTRUCTIVE CODE: make a fresh scratch THE temp directory (`TMPDIR` / `TEMP` / `TMP`) for
+ * each test (`scratchTmpdirEnv`). Everything the harness derives under the temp directory — and
+ * every child it spawns — lands there, so no test, and no mutation of the disposal code under
+ * test, can reach the real temp directory. Register it at the top of a suite.
+ *
+ * @param prefix - The scratch directory's prefix; neutral words only — the executor's working
+ *   directory lives under it, and its prompt must not name a test
+ * @returns The current test's scratch directory
+ */
+export function useScratchTmpdir(prefix: string): () => string {
+  return registerScratchTmpdir(prefix, { beforeEach, afterEach });
 }

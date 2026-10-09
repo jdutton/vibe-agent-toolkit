@@ -3,28 +3,20 @@
  * Cross-platform utility for copying generated resources to dist directory
  */
 
-import { cpSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { copyTree, mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 export interface CopyResourcesOptions {
-  /**
-   * Source directory containing generated resources
-   * Example: 'generated' or 'generated/resources'
-   */
+  /** Source directory containing generated resources, e.g. 'generated' or 'generated/resources'. */
   sourceDir: string;
 
-  /**
-   * Target directory in dist
-   * Example: 'dist/generated' or 'dist'
-   */
+  /** Target directory in dist, e.g. 'dist/generated'. The copy goes IN: what the source does not hold is left alone. */
   targetDir: string;
 
-  /**
-   * Enable verbose logging
-   */
+  /** Enable verbose logging */
   verbose?: boolean;
 
   /**
@@ -35,48 +27,51 @@ export interface CopyResourcesOptions {
   exclude?: string[];
 }
 
+/** `relativePath` is forward-slash, relative to the source root (the copy's own filter argument). */
 function isExcludedPath(relativePath: string, exclude: readonly string[]): boolean {
   const normalized = toForwardSlash(relativePath);
   return normalized !== '' && exclude.some((entry) => normalized === entry || normalized.startsWith(`${entry}/`));
 }
 
 /**
- * Copy generated resources to dist directory (cross-platform)
+ * Copy generated resources to dist directory (cross-platform).
+ *
+ * The copy goes INTO `targetDir` and never removes anything: a file the source holds is
+ * written over, anything else already there stays. VAT does not delete what it cannot prove
+ * it made, and the target is the adopter's. A link in the source is copied as what it points
+ * at, inside the source only; a named pipe or device is refused, never waited on.
  *
  * @example
  * ```typescript
  * import { copyResources } from '@vibe-agent-toolkit/resource-compiler/utils';
  *
- * copyResources({
+ * await copyResources({
  *   sourceDir: 'generated',
  *   targetDir: 'dist/generated',
  * });
  * ```
  */
-export function copyResources(options: CopyResourcesOptions): void {
+export async function copyResources(options: CopyResourcesOptions): Promise<void> {
   const { sourceDir, targetDir, verbose = false, exclude = [] } = options;
 
   if (verbose) {
     console.log(`Copying resources: ${sourceDir} → ${targetDir}`);
   }
 
-  // Validate source exists
   if (!existsSync(sourceDir)) {
     throw new Error(`Source directory does not exist: ${sourceDir}`);
   }
 
-  // Ensure target parent directory exists
   const targetParent = dirname(targetDir);
   if (!existsSync(targetParent)) {
     mkdirSyncReal(targetParent, { recursive: true });
   }
 
   try {
-    // Copy recursively using Node's built-in cpSync (cross-platform)
-    cpSync(sourceDir, targetDir, {
-      recursive: true,
-      filter:
-        exclude.length === 0 ? undefined : (src) => !isExcludedPath(safePath.relative(sourceDir, src), exclude),
+    await copyTree(safePath.resolve(sourceDir), safePath.resolve(targetDir), {
+      side: 'source',
+      links: 'follow-contained',
+      ...(exclude.length === 0 ? {} : { filter: (relative: string) => !isExcludedPath(relative, exclude) }),
     });
 
     if (verbose) {
@@ -96,22 +91,22 @@ export function copyResources(options: CopyResourcesOptions): void {
  * // scripts/post-build.ts
  * import { createPostBuildScript } from '@vibe-agent-toolkit/resource-compiler/utils';
  *
- * createPostBuildScript({
+ * await createPostBuildScript({
  *   generatedDir: 'generated',
  *   distDir: 'dist',
  * });
  * ```
  */
-export function createPostBuildScript(options: {
+export async function createPostBuildScript(options: {
   generatedDir: string;
   distDir: string;
   verbose?: boolean;
   exclude?: string[];
-}): void {
+}): Promise<void> {
   const { generatedDir, distDir, verbose = false, exclude } = options;
 
   try {
-    copyResources({
+    await copyResources({
       sourceDir: generatedDir,
       targetDir: safePath.join(distDir, generatedDir),
       verbose,

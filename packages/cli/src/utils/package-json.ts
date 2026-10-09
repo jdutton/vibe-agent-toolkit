@@ -15,10 +15,9 @@
 
 import { readFileSync } from 'node:fs';
 
-import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, isPathAbsentError } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from './command-refusal.js';
-import { unstatablePathRefusal } from './project-root-policy.js';
 
 /**
  * The parsed manifest, or `undefined` when there is none at `pkgPath`.
@@ -33,7 +32,7 @@ export function readPackageJsonOrAbsent(pkgPath: string): Record<string, unknown
     raw = readFileSync(pkgPath, 'utf-8');
   } catch (error) {
     if (isPathAbsentError(error)) return undefined;
-    throw unstatablePathRefusal(pkgPath, error);
+    throw classifyFsFault(error, { side: 'source', origin: 'content', action: 'read package.json', path: pkgPath });
   }
 
   let parsed: unknown;

@@ -22,7 +22,7 @@
 
 import { promises as fs } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { FS_FAULT_CODE, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { ParserKind } from '../../src/content-key.js';
@@ -153,16 +153,16 @@ async function coldThenWarm(
   cacheDir: string,
 ): Promise<ColdWarm> {
   const coldCache = new ParseCache({ cacheDir });
-  const cold = await parseFileCached(filePath, parserKind, coldCache);
+  const cold = await parseFileCached(filePath, parserKind, { cache: coldCache });
   const warmCache = new ParseCache({ cacheDir });
-  const warm = await parseFileCached(filePath, parserKind, warmCache);
+  const warm = await parseFileCached(filePath, parserKind, { cache: warmCache });
   return { cold, warm, coldStats: coldCache.stats, warmStats: warmCache.stats };
 }
 
 /** Parse one file as BOTH kinds against one cache, markdown first. */
 async function bothKinds(filePath: string, cache: ParseCache): Promise<[ParseResult, ParseResult]> {
-  const asMarkdown = await parseFileCached(filePath, 'markdown', cache);
-  const asHtml = await parseFileCached(filePath, 'html', cache);
+  const asMarkdown = await parseFileCached(filePath, 'markdown', { cache });
+  const asHtml = await parseFileCached(filePath, 'html', { cache });
   return [asMarkdown, asHtml];
 }
 
@@ -327,10 +327,10 @@ describe('parseFileCached — fail-soft and failure propagation', () => {
     const page = suite.file('page.html');
 
     const disabled = new ParseCache({ cacheDir, enabled: false });
-    expect(await parseFileCached(guide, 'markdown', disabled)).toStrictEqual(
+    expect(await parseFileCached(guide, 'markdown', { cache: disabled })).toStrictEqual(
       await parseMarkdown(guide),
     );
-    expect(await parseFileCached(page, 'html', disabled)).toStrictEqual(await parseHtml(page));
+    expect(await parseFileCached(page, 'html', { cache: disabled })).toStrictEqual(await parseHtml(page));
 
     // Every lookup is a miss, including the ones that short-circuit…
     expect(disabled.stats).toStrictEqual({ hits: 0, misses: 2, writeFailures: 0 });
@@ -343,11 +343,18 @@ describe('parseFileCached — fail-soft and failure propagation', () => {
     expect(await entryCount(cacheDir)).toBe(2);
   });
 
-  it('rejects when the file cannot be read', async () => {
+  it('rejects a file it cannot read with a classified source fault, naming the file', async () => {
     const cache = new ParseCache({ cacheDir: await suite.freshCacheDir() });
     const missing = suite.file('no-such-file.md');
 
-    await expect(parseFileCached(missing, 'markdown', cache)).rejects.toThrow(/ENOENT/);
+    await expect(parseFileCached(missing, 'markdown', { cache })).rejects.toMatchObject({
+      code: FS_FAULT_CODE,
+      side: 'source',
+      origin: 'content',
+      faultClass: 'absent',
+      errno: 'ENOENT',
+      message: expect.stringContaining(missing) as unknown,
+    });
 
     // A read failure is the caller's, exactly as it was with `parseMarkdown`:
     // the cache is never consulted, so it cannot silently answer for a file it
@@ -356,7 +363,17 @@ describe('parseFileCached — fail-soft and failure propagation', () => {
 
     // The positive twin: the same cache on a real path resolves, so the
     // rejection above is about the missing file and not about the setup.
-    await expect(parseFileCached(suite.file('guide.md'), 'markdown', cache)).resolves.toBeDefined();
+    await expect(parseFileCached(suite.file('guide.md'), 'markdown', { cache })).resolves.toBeDefined();
+  });
+
+  it('classifies the read on the side the caller names: re-reading VAT\'s own output is a destination fault', async () => {
+    const missing = suite.file('built-output.md');
+
+    await expect(parseFileCached(missing, 'markdown', { side: 'destination' })).rejects.toMatchObject({
+      code: FS_FAULT_CODE,
+      side: 'destination',
+      faultClass: 'absent',
+    });
   });
 });
 
@@ -371,11 +388,11 @@ describe('parseFileCached — no aliasing across hits', () => {
 
     // Populate, then take two independent hits over the same entry.
     const cold = new ParseCache({ cacheDir });
-    await parseFileCached(filePath, 'markdown', cold);
+    await parseFileCached(filePath, 'markdown', { cache: cold });
     expect(cold.stats).toStrictEqual({ hits: 0, misses: 1, writeFailures: 0 });
 
     const warm = new ParseCache({ cacheDir });
-    const first = await parseFileCached(filePath, 'markdown', warm);
+    const first = await parseFileCached(filePath, 'markdown', { cache: warm });
     const firstHitStats = warm.stats;
 
     // `skill-packager.ts` assigns `link.resolvedId` in place while bundling. If
@@ -383,7 +400,7 @@ describe('parseFileCached — no aliasing across hits', () => {
     // change which branch another skill's link walker takes.
     firstLink(first).resolvedId = 'first-only';
 
-    const second = await parseFileCached(filePath, 'markdown', warm);
+    const second = await parseFileCached(filePath, 'markdown', { cache: warm });
 
     // Both reads were hits — a miss would re-parse and produce a fresh graph for
     // reasons that have nothing to do with the cache's aliasing behaviour, which

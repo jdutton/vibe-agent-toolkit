@@ -128,6 +128,7 @@ function packageResult(
     hasErrors: [...(postBuildIssues ?? []), ...(postBuildValidationIssues ?? [])].some(
       (i) => i.severity === 'error',
     ),
+    residue: [],
   };
   if (postBuildIssues) result.postBuildIssues = postBuildIssues;
   if (postBuildValidationIssues) {
@@ -791,6 +792,7 @@ function reportOf(run: Partial<SkillBuildRun>, names: readonly string[]) {
       skillsWithErrors: [],
       validationFailures: [],
       outputCommitted: true,
+      residue: [],
       ...run,
     },
     setAsideIssues: [],
@@ -919,7 +921,7 @@ describe('vat skills package — buildSkillsPackageReport', () => {
   it('publishes the validation it ran as findings, not a hardcoded success', () => {
     // The defect this lane shipped: `status: success` was a LITERAL beside counts
     // drawn from the validation whose verdict it contradicted.
-    const report = buildSkillsPackageReport({ validation: validationResult([issue('warning', 'W1')]), data: PACKAGED });
+    const report = buildSkillsPackageReport({ validation: validationResult([issue('warning', 'W1')]), data: PACKAGED, runFindings: [] });
 
     expect(report.status).toBe('findings');
     expect(report.summary).toEqual({ errors: 0, warnings: 1, info: 0 });
@@ -927,7 +929,7 @@ describe('vat skills package — buildSkillsPackageReport', () => {
   });
 
   it('publishes ok for a genuinely clean run over the one skill', () => {
-    const report = buildSkillsPackageReport({ validation: validationResult([]), data: PACKAGED });
+    const report = buildSkillsPackageReport({ validation: validationResult([]), data: PACKAGED, runFindings: [] });
 
     expect(report).toMatchObject({ status: 'ok', examined: 1, data: PACKAGED });
   });
@@ -936,7 +938,8 @@ describe('vat skills package — buildSkillsPackageReport', () => {
     const report = buildSkillsPackageReport({
       validation: validationResult([]),
       data: { ...PACKAGED, version: null },
-      refused: { code: 'SKILL_PACKAGE_TOO_LARGE', message: 'ZIP size 9.1MB exceeds 8MB limit for Claude.ai upload.', location: 'skills/a/SKILL.md' },
+      refused: { code: 'SKILL_PACKAGE_TOO_LARGE', message: 'ZIP size 9.1MB exceeds 8MB limit for Claude.ai upload.', location: 'skills/a/SKILL.md', thrown: undefined },
+      runFindings: [],
     });
 
     expect(report.findings).toEqual([expect.objectContaining({
@@ -953,7 +956,8 @@ describe('vat skills package — buildSkillsPackageReport', () => {
     const report = buildSkillsPackageReport({
       validation: validationResult([]),
       data: { ...PACKAGED, outputPath: null },
-      refused: { code: 'SKILL_PACKAGING_FAILED', message: 'SKILL.md found inside skill "a"', location: 'skills/a/SKILL.md' },
+      refused: { code: 'SKILL_PACKAGING_FAILED', message: 'SKILL.md found inside skill "a"', location: 'skills/a/SKILL.md', thrown: undefined },
+      runFindings: [],
     });
 
     expect(report.findings).toEqual([expect.objectContaining({ code: 'SKILL_PACKAGING_FAILED', severity: 'error', location: 'skills/a/SKILL.md' })]);

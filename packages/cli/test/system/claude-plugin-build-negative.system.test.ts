@@ -214,7 +214,7 @@ claude:
   });
 
   // The source is THERE and the OS will not read it: it passes the packager's
-  // existence check and the copy is what fails, through `withFsAttribution`.
+  // existence check, and the copy's read is what fails — a classified source fault.
   it.skipIf(CANNOT_DENY_READS).each(PLUGIN_BUILD_LANES)('vat %s: a plugin-local skill whose files: source cannot be read stops the run, coded at the skill', async (_verb, args) => {
     const tempDir = createTempDir();
     seedPluginLocalSkillWithFilesSource(tempDir);
@@ -225,7 +225,8 @@ claude:
     try {
       const result = await executeCli(binPath, args, { cwd: tempDir });
 
-      expect(expectStoppedAtSkillA(result)).toContain('could not be copied into the bundle');
+      // The fault names what was read; the refusal table supplies the remedy.
+      expect(expectStoppedAtSkillA(result)).toMatch(/Could not read files: source '[\s\S]*Grant read permission on the named input/);
     } finally {
       chmodSync(locked, 0o644);
     }

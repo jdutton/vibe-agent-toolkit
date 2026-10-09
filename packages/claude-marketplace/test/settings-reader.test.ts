@@ -8,6 +8,7 @@
 
 import type * as FsPromises from 'node:fs/promises';
 
+import { FS_FAULT_CODE } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CLAUDE_USER_STATE_UNREADABLE_CODE } from '../src/install/plugin-registry.js';
@@ -78,14 +79,13 @@ describe('readSettingsLayers', () => {
   it.each(['EACCES', 'EPERM'])('refuses a file the OS will not let it read (%s), naming the file and the errno — never skipped as absent', async (code) => {
     files.set('/p/.claude/settings.json', refused(code));
     const failure = readSettingsLayers({ projectDir: '/p' });
-    await expect(failure).rejects.toMatchObject({ code: CLAUDE_USER_STATE_UNREADABLE_CODE });
-    await expect(failure).rejects.toThrow(`Cannot read settings file /p/.claude/settings.json (${code})`);
+    await expect(failure).rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'source', origin: 'config', faultClass: 'refused', errno: code, path: '/p/.claude/settings.json' });
   });
 
   it('refuses an unreadable managed candidate rather than falling through to the next one', async () => {
     files.set('/sys/a.json', refused('EACCES'));
     files.set('/sys/b.json', JSON.stringify({ model: 'managed-b' }));
-    await expect(readSettingsLayers()).rejects.toThrow('Cannot read settings file /sys/a.json (EACCES)');
+    await expect(readSettingsLayers()).rejects.toMatchObject({ code: FS_FAULT_CODE, errno: 'EACCES', path: '/sys/a.json' });
   });
 
   it('refuses a file that exists and does not parse, naming it', async () => {
@@ -93,9 +93,9 @@ describe('readSettingsLayers', () => {
     await expect(readSettingsLayers()).rejects.toMatchObject({ code: CLAUDE_USER_STATE_UNREADABLE_CODE, message: expect.stringContaining(`Failed to parse settings file ${USER}`) });
   });
 
-  it('refuses any other read failure, naming the file', async () => {
+  it('classifies any other read failure as a fault on the settings file, never a parse failure', async () => {
     files.set(USER, refused('EISDIR'));
-    await expect(readSettingsLayers()).rejects.toThrow(`Failed to parse settings file ${USER}`);
+    await expect(readSettingsLayers()).rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'source', faultClass: 'wrong-type', errno: 'EISDIR', path: USER });
   });
 
   it('refuses a file that parses and fails its level\'s schema, naming it', async () => {

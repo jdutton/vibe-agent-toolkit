@@ -1,4 +1,5 @@
 import type { SeverityCounts, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
+import type { FsSide } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord } from '../evidence/index.js';
 
@@ -105,6 +106,13 @@ export interface ValidateOptions {
    * no config governs the skill or the caller resolves severity itself.
    */
   validation: ValidationConfig;
+
+  /**
+   * The side of the caller's verb the skill tree is on: `source` for an author's skill, `environment`
+   * for one VAT extracted into its own staging (a ZIP under $TMPDIR). REQUIRED: a fault the validator's
+   * own walk raises is classified there, and only the caller knows which tree it handed over.
+   */
+  side: FsSide;
 }
 
 /**

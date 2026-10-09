@@ -734,7 +734,6 @@ data:
   existed: true
   removed:
     - x.y.z
-  remaining: []
   entriesRemoved: 3
   bytesRemoved: 262998
 ```

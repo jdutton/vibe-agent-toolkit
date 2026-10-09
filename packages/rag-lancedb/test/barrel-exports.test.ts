@@ -20,6 +20,7 @@ const BARREL_EXPORTS = [
   'chunkToLanceRow',
   'foreignDatabaseEntries',
   'lanceRowToChunk',
+  'linkedDatabasePath',
   'removeRagDatabase',
   'resolveChunkingConfig',
 ];

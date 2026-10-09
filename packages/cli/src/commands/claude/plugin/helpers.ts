@@ -8,7 +8,7 @@
  * - npm postinstall hook
  */
 
-import { existsSync, statSync, type Stats } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -17,7 +17,7 @@ import { z } from 'zod';
 
 import { extractTarballSync } from '../../../utils/archive-staging.js';
 import { CommandRefusalError } from '../../../utils/command-refusal.js';
-import { unstatablePathRefusal } from '../../../utils/project-root-policy.js';
+import { requireInputPath } from '../../../utils/project-root-policy.js';
 
 
 export type SkillSource = 'npm' | 'local' | 'zip' | 'tgz' | 'npm-postinstall' | 'dev';
@@ -35,7 +35,7 @@ const PackageJsonVatReplacesSchema = z.object({
   flatSkills: z.array(z.string()).optional(),
 }).strict();
 
-export type PackageJsonVatReplaces = z.infer<typeof PackageJsonVatReplacesSchema>;
+type PackageJsonVatReplaces = z.infer<typeof PackageJsonVatReplacesSchema>;
 
 export interface PackageJsonVat {
   version?: string;
@@ -80,14 +80,8 @@ export function detectSource(input: string): SkillSource {
 
   // Check filesystem: a path naming nothing is the invocation's mistake, one the OS refuses the input's.
   const absolutePath = safePath.resolve(input);
-  let stat: Stats;
-  try {
-    stat = statSync(absolutePath);
-  } catch (error) {
-    const refusal = unstatablePathRefusal(absolutePath, error);
-    // A bare word that names nothing is most often a source typed wrong: say what a source looks like.
-    throw new CommandRefusalError(refusal.refusal, `${refusal.message}\n${SOURCE_FORMS_HINT}`, { cause: error });
-  }
+  // A bare word that names nothing is most often a source typed wrong: say what a source looks like.
+  const stat = requireInputPath(absolutePath, { origin: 'argument', message: `Path does not exist: ${absolutePath}\n${SOURCE_FORMS_HINT}` });
 
   if (stat.isDirectory()) {
     return 'local';
@@ -101,17 +95,14 @@ export function detectSource(input: string): SkillSource {
 }
 
 /**
- * Read `dir/package.json`: absent is the invocation's mistake, unreadable or
- * not JSON the input's.
+ * Read `dir/package.json`: not JSON (or a malformed `vat.replaces`) is the input's
+ * refusal; a read the OS refuses propagates for the caller to classify by path.
  */
 export async function readPackageJson(dir: string): Promise<PackageJson> {
   const packageJsonPath = safePath.join(dir, 'package.json');
-  let content: string;
-  try {
-    content = await readFile(packageJsonPath, 'utf-8');
-  } catch (error) {
-    throw unstatablePathRefusal(packageJsonPath, error);
-  }
+  // A read the OS refuses propagates as the errno: the install classifies it by the path it
+  // names (the package the operator named, or VAT's staging of an archive or a download).
+  const content = await readFile(packageJsonPath, 'utf-8');
   let packageJson: PackageJson;
   try {
     packageJson = JSON.parse(content) as PackageJson;

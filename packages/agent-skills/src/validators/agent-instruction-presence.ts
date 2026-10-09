@@ -53,11 +53,15 @@ const INCLUDE_GLOBS = toAnyDepthGlobs(AGENT_INSTRUCTION_FILE_PATTERNS);
  *   silently inherits `[]` re-opens the contradiction for the population it
  *   governs. Matching is EXACT membership, never a prefix test — a directory-ish
  *   dest must not launder its whole subtree (see {@link explicitFilesConfigDests}).
+ * @param outputs What the calling verb writes, the crawl's one declaration of which side a
+ *   fault is on: `[rootDir]` when the caller scans the output it just wrote (the packager),
+ *   `[]` for a tree it only examines. Required: only the caller knows.
  */
 export function detectPackagedAgentInstructionFiles(
   rootDir: string,
   locationRoot: string,
   declaredDests: readonly string[],
+  outputs: readonly string[],
 ): ValidationIssue[] {
   if (!existsSync(rootDir)) return [];
 
@@ -84,6 +88,7 @@ export function detectPackagedAgentInstructionFiles(
     filesOnly: true,
     respectGitignore: false,
     unreadable: { degrade: (refusal) => refusals.push(refusal) },
+    outputs,
   });
 
   const issues: ValidationIssue[] = [];

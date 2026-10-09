@@ -23,6 +23,7 @@ import {
   SeveritySchema,
   strongerSeverity,
   toFindings,
+  withAddedFindings,
   withDurationMs,
   type Finding,
   type ValidationIssue,
@@ -183,6 +184,27 @@ describe('withDurationMs', () => {
       data: null,
     });
     expect(withDurationMs(refused, 5)).toBe(refused);
+  });
+});
+
+describe('withAddedFindings', () => {
+  const LEFTOVER: Finding = { code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', message: 'left /tmp/x' } as Finding;
+
+  it('appends to a completed report and derives its status and summary again, keeping its duration and data', () => {
+    const done = withDurationMs(buildReport({ examined: 2, findings: [], data: { root: '.' }, gate: LENIENT }), 9);
+    const added = withAddedFindings(done, [LEFTOVER]);
+    expect(added).toMatchObject({ status: 'findings', examined: 2, durationMs: 9, data: { root: '.' }, summary: { errors: 0, warnings: 1, info: 0 } });
+    expect(added.findings).toEqual([LEFTOVER]);
+  });
+
+  it('keeps a refusal a refusal, with its error and finished data', () => {
+    const refused = buildErrorReport({ error: { code: 'RUN_INCOMPLETE', message: 'stopped' }, gate: LENIENT, examined: 1, findings: [], data: null });
+    expect(withAddedFindings(refused, [LEFTOVER])).toMatchObject({ status: 'error', error: { code: 'RUN_INCOMPLETE' }, summary: { warnings: 1 } });
+  });
+
+  it('returns the report itself when nothing is added', () => {
+    const done = buildReport({ examined: 0, findings: [], data: null, gate: LENIENT });
+    expect(withAddedFindings(done, [])).toBe(done);
   });
 });
 

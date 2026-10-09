@@ -25,6 +25,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { packageSkill, packagingConfigToPackageOptions } from '../../src/skill-packager.js';
 import { conventionalSuiteProbe, type DeclaredEvalSuite } from '../../src/test-input.js';
 import { activeErrorsOf, activeWarningsOf, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
+import { packageInPlace } from '../test-helpers.js';
 
 const ANSWER_KEY = 'the model must output exactly forty-two';
 /** Basename of the declared eval suite, used as both a source leaf and a dest. */
@@ -245,7 +246,8 @@ describe('declared test input never ships (integration)', () => {
     const files = [{ source: 'skills/demo/evals/evals.json', dest: DROPPED_DEST }];
 
     // Lane 1 — the packager: what actually ships.
-    const built = await packageSkill(skillPath, {
+    // In place: the broken-link finding is the subject; `packageSkill` lands only a package that passed.
+    const built = await packageInPlace(skillPath, {
       outputPath,
       formats: ['directory'],
       testInputDirs: [evalsDir],
@@ -362,7 +364,7 @@ describe('a skill\'s bundle never carries another skill\'s eval suite (integrati
       skillPath,
       { test: { evals: SUBJECT_EVALS } },
       'source',
-      { unreadable: 'refuse', projectSkills: projectSkills() },
+      { unreadable: 'refuse', outputs: [], projectSkills: projectSkills() },
     );
 
     expect(activeWarningsOf(validated).map((i) => String(i.code))).toContain('PACKAGED_TEST_INPUT');

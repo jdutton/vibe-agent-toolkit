@@ -19,7 +19,7 @@ import { existsSync } from 'node:fs';
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-import { CommandRefusalError } from '../../utils/command-refusal.js';
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
 import { readableDirectoryRefusal } from '../../utils/project-root-policy.js';
 
 /** The name `loadConfig` looks for in the directory these commands are pointed at. */
@@ -73,7 +73,7 @@ export function unscopableSkillsPath(pathArg: string | undefined): ScopeRefusal 
   const resolved = safePath.resolve(pathArg);
   // The one directory judgement every path-taking verb shares.
   const refusal = readableDirectoryRefusal(resolved);
-  if (refusal !== undefined) return { refusal: refusal.refusal, reason: refusal.message };
+  if (refusal !== undefined) return { refusal: refusalCodeOf(refusal), reason: errorMessageOf(refusal) };
 
   if (process.env['VAT_TEST_CONFIG'] !== undefined) return undefined;
   if (!existsSync(safePath.join(resolved, CONFIG_FILENAME))) {

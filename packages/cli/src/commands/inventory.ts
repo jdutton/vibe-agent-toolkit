@@ -18,14 +18,14 @@ import {
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { type PopulationCache } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, pathPresent, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { CommandRefusalError, refusalCodeOf } from '../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../utils/document-writer.js';
 import { createLogger, type Logger } from '../utils/logger.js';
 import { populationWiring } from '../utils/population-wiring.js';
-import { pathPresent, readableDirectoryRefusal, readInputFile } from '../utils/project-root-policy.js';
+import { readableDirectoryRefusal, readInputFile } from '../utils/project-root-policy.js';
 import { withPopulationCache } from '../utils/projection-store.js';
 
 import { gitTrackerForProjectRoot } from './audit/distributed-tree.js';
@@ -141,8 +141,8 @@ function unreadablePathFindings(inv: AnyInventory): ValidationIssue[] {
 }
 
 /** The refusal for a SKILL.md argument that names nothing. */
-function absentSkillMd(absolute: string): { code: 'USAGE_INVALID'; message: string } {
-	return { code: 'USAGE_INVALID', message: `Path does not exist: ${absolute}` };
+function absentSkillMd(absolute: string): { origin: 'argument'; message: string } {
+	return { origin: 'argument', message: `Path does not exist: ${absolute}` };
 }
 
 /**
@@ -210,8 +210,8 @@ function routeInventoryNow(
 	const refusal = readableDirectoryRefusal(absolute);
 	if (refusal !== undefined) throw refusal;
 	const claudePluginDir = safePath.join(absolute, '.claude-plugin');
-	const hasMarketplace = pathPresent(safePath.join(claudePluginDir, 'marketplace.json'), 'follow');
-	const hasPlugin = pathPresent(safePath.join(claudePluginDir, 'plugin.json'), 'follow');
+	const hasMarketplace = pathPresent(safePath.join(claudePluginDir, 'marketplace.json'), 'follow', 'source', 'probe');
+	const hasPlugin = pathPresent(safePath.join(claudePluginDir, 'plugin.json'), 'follow', 'source', 'probe');
 	// A directory with marketplace.json but no plugin.json is a marketplace root.
 	// When both are present, the plugin extractor takes precedence (plugin is installed,
 	// marketplace.json is a cached metadata artifact alongside it).

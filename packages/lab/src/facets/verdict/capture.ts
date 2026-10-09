@@ -21,10 +21,10 @@
  * lies inside a subject.
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
-import { canonicalPath, everyInOrder, isUnderRoot, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { canonicalPath, everyInOrder, isUnderRoot, safePath, withTempDir } from '@vibe-agent-toolkit/utils';
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { type ArmEnvironment, mergeArmEnvironments } from '../../harness/arm-env.js';
@@ -194,7 +194,7 @@ async function captureSubject(
   // `planBuildVerbs`): the compare checks the claim against both arms.
   const { excluded } = planBuildVerbs(subject, verbSubject, request.instrument.version);
   if (subject.buildVerbs) {
-    const built = inClone(request, subject, resolved.path, (clonePath) =>
+    const built = await inClone(request, subject, resolved.path, (clonePath) =>
       run(planBuildVerbs(subject, { ...verbSubject, path: clonePath }, request.instrument.version).invocations, clonePath),
     );
     if (!built.ok) return built;
@@ -231,6 +231,9 @@ function readQueries(subject: VerdictSubject, dir: string): Validated<VerbQuery[
   return { ok: true, value: queries };
 }
 
+/** The rows a build verb produced inside its clone, or why there is no clone. */
+type CloneOutcome = { readonly ok: true; readonly rows: VerdictRow[] } | { readonly ok: false; readonly refusal: string };
+
 /**
  * Run `work` inside a fresh APFS clone of the subject, then delete the clone.
  *
@@ -240,29 +243,29 @@ function readQueries(subject: VerdictSubject, dir: string): Validated<VerbQuery[
  * @param work - What to run, given the clone's root
  * @returns The rows `work` produced, or a refusal
  */
-function inClone(
+async function inClone(
   request: VerdictCaptureRequest,
   subject: VerdictSubject,
   path: string,
   work: (clonePath: string) => VerdictRow[],
-): { readonly ok: true; readonly rows: VerdictRow[] } | { readonly ok: false; readonly refusal: string } {
-  const parent = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-lab-verdict-clone-'));
-  try {
+): Promise<CloneOutcome> {
+  const { value, leftover } = await withTempDir<CloneOutcome>('vat-lab-verdict-clone-', (parent) => {
     const clonePath = safePath.join(parent, subject.alias);
     const host = subjectContaining(request.subjects, clonePath);
     if (host !== undefined) {
-      return { ok: false, refusal: `REFUSED: the build-verb clone '${clonePath}' would lie inside subject '${host}'.` };
+      return Promise.resolve({ ok: false, refusal: `REFUSED: the build-verb clone '${clonePath}' would lie inside subject '${host}'.` });
     }
     const listed = readCloneSource(path, subject.alias);
-    if (!listed.ok) return listed;
+    if (!listed.ok) return Promise.resolve(listed);
     const plan = planApfsClone(listed.source, clonePath, process.platform);
-    if (!plan.ok) return plan;
+    if (!plan.ok) return Promise.resolve(plan);
     const failed = executeClonePlan(plan);
-    if (failed !== null) return { ok: false, refusal: failed };
-    return { ok: true, rows: work(clonePath) };
-  } finally {
-    rmSync(parent, { recursive: true, force: true });
-  }
+    if (failed !== null) return Promise.resolve({ ok: false, refusal: failed });
+    return Promise.resolve({ ok: true, rows: work(clonePath) });
+  });
+  // A clone the OS will not remove is no measurement to stand on: the capture stops on it.
+  if (leftover !== undefined) throw leftover;
+  return value;
 }
 
 /**

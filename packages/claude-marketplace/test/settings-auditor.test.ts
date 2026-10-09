@@ -254,6 +254,14 @@ describe('settings auditor answer shapes', () => {
       expect(access).toEqual({ exists: true, readable: true });
     });
 
+    it('reports a name too long for this host as UNDETERMINED, never as absent', async () => {
+      // ENAMETOOLONG is the classifier's `wrong-type`, not `absent`: no file could ever be at
+      // that path, and skipping it as "not there" would hide a settings path nothing can load.
+      const access = await probePathAccess(`${dir}/${'n'.repeat(300)}.json`);
+
+      expect(access).toEqual({ exists: 'undetermined', readable: 'undetermined', accessError: 'ENAMETOOLONG' });
+    });
+
     it('answers UNDETERMINED when the probe itself fails', async () => {
       // A non-ENOENT failure means we could not look. Reporting `exists: false`
       // would claim we looked and it was not there.

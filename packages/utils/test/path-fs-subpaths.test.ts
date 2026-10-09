@@ -29,7 +29,6 @@ describe('./fs subpath entry', () => {
     expect(typeof mod.mkdirSyncReal).toBe('function');
     expect(typeof mod.resolveFromImportMeta).toBe('function');
     expect(typeof mod.dynamicImportPath).toBe('function');
-    expect(typeof mod.copyDirectory).toBe('function');
     expect(typeof mod.fillRealpaths).toBe('function');
     expect(typeof mod.realpathFrom).toBe('function');
     expect(typeof mod.fillPathSpellings).toBe('function');
@@ -38,7 +37,7 @@ describe('./fs subpath entry', () => {
     // The CHANGELOG advertises this on `./fs` specifically, not only on the `.`
     // barrel, so the subpath is what has to be pinned — the barrel guard would
     // stay green if the `./fs` re-export were dropped.
-    expect(typeof mod.isFilesystemAccessError).toBe('function');
+    expect(typeof mod.fsFaultOf).toBe('function');
   });
 
   it('does NOT re-export the pure path helpers', async () => {

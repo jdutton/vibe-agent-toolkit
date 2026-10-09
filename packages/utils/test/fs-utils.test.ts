@@ -7,13 +7,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 
 import {
-  COPY_SOURCE_UNREADABLE_CODE,
-  copyDirectory,
   DirectorySpellingIndex,
   fillPathSpellings,
   fillRealpaths,
   FsLookupCache,
-  openEachFileForReading,
   pathSpellingFrom,
   realpathFrom,
   spellingWalkRoot,
@@ -21,11 +18,10 @@ import {
 import type { DirectoryListing, RealpathTable } from '../src/fs-utils.js';
 import { toForwardSlash } from '../src/path-core.js';
 import type { SymlinkCapability } from '../src/test-helpers.js';
-import { createSymlinkAsync, refuseSyncFs, symlinkCapability } from '../src/test-helpers.js';
+import { createSymlinkAsync, symlinkCapability } from '../src/test-helpers.js';
 import { PERMISSIONS_ENFORCED } from '../src/testing/platform-gates.js';
 import { setupAsyncTempDirSuite } from '../src/testing/temp-dir.js';
 
-import { setupNestedDirectory } from './test-helpers.js';
 
 /** A directory name no fixture plants, so listing it always fails. */
 const NO_SUCH_DIR = 'no-such-dir';
@@ -95,8 +91,10 @@ async function plantDeep(dir: string): Promise<string> {
  * memo that keeps one turns a blip into a run-long verdict about every path
  * under that directory, at exit 0, that a re-run does not reproduce.
  */
-const STABLE_REFUSALS = ['EACCES', 'ELOOP'] as const;
-const TRANSIENT_REFUSALS = ['EMFILE', 'ENFILE'] as const;
+const STABLE_REFUSALS = ['EACCES', 'ELOOP', 'ESTALE', 'ENOSPC'] as const;
+// Transient = what `isRetryableShortageError` says a re-ask can get past: busy, or out of descriptors.
+// A full disk (`ENOSPC`) is not: re-asking frees no space.
+const TRANSIENT_REFUSALS = ['EMFILE', 'ENFILE', 'EBUSY'] as const;
 const ALL_REFUSALS = [...STABLE_REFUSALS, ...TRANSIENT_REFUSALS];
 
 /** A rejection shaped like the one `fs.readdir` throws for `code`. */
@@ -144,10 +142,6 @@ const NFD_NAME = 'cafe\u0301.txt';
 const NFC_NAME = 'caf\u00E9.txt';
 
 describe('fs-utils', () => {
-  const SUBDIR = 'subdir';
-  const NESTED_TXT = 'nested.txt';
-  const NESTED_CONTENT = 'nested content';
-
   const suite = setupAsyncTempDirSuite('fs-utils');
   let tempDir: string;
 
@@ -157,230 +151,6 @@ describe('fs-utils', () => {
   beforeEach(async () => {
     await suite.beforeEach();
     tempDir = suite.getTempDir();
-  });
-
-  describe('copyDirectory', () => {
-    it('should copy empty directory', async () => {
-      // Setup
-      const srcDir = safePath.join(tempDir, 'src');
-      const destDir = safePath.join(tempDir, 'dest');
-      await fs.mkdir(srcDir);
-
-      // Execute
-      await copyDirectory(srcDir, destDir);
-
-      // Verify
-      const destStat = await fs.stat(destDir);
-      expect(destStat.isDirectory()).toBe(true);
-
-      const destEntries = await fs.readdir(destDir);
-      expect(destEntries).toHaveLength(0);
-    });
-
-    it('should copy directory with files', async () => {
-      // Setup
-      const srcDir = safePath.join(tempDir, 'src');
-      const destDir = safePath.join(tempDir, 'dest');
-      await fs.mkdir(srcDir);
-      await fs.writeFile(safePath.join(srcDir, 'file1.txt'), 'content1');
-      await fs.writeFile(safePath.join(srcDir, 'file2.txt'), 'content2');
-
-      // Execute
-      await copyDirectory(srcDir, destDir);
-
-      // Verify
-      const file1Content = await fs.readFile(safePath.join(destDir, 'file1.txt'), 'utf-8');
-      const file2Content = await fs.readFile(safePath.join(destDir, 'file2.txt'), 'utf-8');
-      expect(file1Content).toBe('content1');
-      expect(file2Content).toBe('content2');
-    });
-
-    it('should copy nested directories', async () => {
-      // Setup
-      const { srcDir, destDir } = await setupNestedDirectory(
-        tempDir,
-        SUBDIR,
-        NESTED_TXT,
-        NESTED_CONTENT
-      );
-
-      // Execute
-      await copyDirectory(srcDir, destDir);
-
-      // Verify
-      const nestedContent = await fs.readFile(
-        safePath.join(destDir, SUBDIR, NESTED_TXT),
-        'utf-8'
-      );
-      expect(nestedContent).toBe(NESTED_CONTENT);
-    });
-
-    it('should copy deeply nested directories', async () => {
-      // Setup
-      const srcDir = safePath.join(tempDir, 'src');
-      const destDir = safePath.join(tempDir, 'dest');
-      await fs.mkdir(safePath.join(srcDir, 'a', 'b', 'c'), { recursive: true });
-      await fs.writeFile(safePath.join(srcDir, 'a', 'b', 'c', 'deep.txt'), 'deep content');
-
-      // Execute
-      await copyDirectory(srcDir, destDir);
-
-      // Verify
-      const deepContent = await fs.readFile(
-        safePath.join(destDir, 'a', 'b', 'c', 'deep.txt'),
-        'utf-8'
-      );
-      expect(deepContent).toBe('deep content');
-    });
-
-    it('should copy mixed files and directories', async () => {
-      // Setup
-      const { srcDir, destDir } = await setupNestedDirectory(
-        tempDir,
-        SUBDIR,
-        NESTED_TXT,
-        NESTED_CONTENT
-      );
-      await fs.writeFile(safePath.join(srcDir, 'root.txt'), 'root content');
-
-      // Execute
-      await copyDirectory(srcDir, destDir);
-
-      // Verify
-      const rootContent = await fs.readFile(safePath.join(destDir, 'root.txt'), 'utf-8');
-      const nestedContent = await fs.readFile(
-        safePath.join(destDir, SUBDIR, NESTED_TXT),
-        'utf-8'
-      );
-      expect(rootContent).toBe('root content');
-      expect(nestedContent).toBe(NESTED_CONTENT);
-    });
-
-    it('should create destination directory if it does not exist', async () => {
-      // Setup
-      const srcDir = safePath.join(tempDir, 'src');
-      const destDir = safePath.join(tempDir, 'non', 'existent', 'dest');
-      await fs.mkdir(srcDir);
-      await fs.writeFile(safePath.join(srcDir, 'file.txt'), 'content');
-
-      // Execute
-      await copyDirectory(srcDir, destDir);
-
-      // Verify
-      const fileContent = await fs.readFile(safePath.join(destDir, 'file.txt'), 'utf-8');
-      expect(fileContent).toBe('content');
-    });
-
-    it('should preserve file contents', async () => {
-      // Setup
-      const srcDir = safePath.join(tempDir, 'src');
-      const destDir = safePath.join(tempDir, 'dest');
-      await fs.mkdir(srcDir);
-      const binaryContent = Buffer.from([0x00, 0x01, 0x02, 0xff]);
-      await fs.writeFile(safePath.join(srcDir, 'binary.dat'), binaryContent);
-
-      // Execute
-      await copyDirectory(srcDir, destDir);
-
-      // Verify
-      const copiedContent = await fs.readFile(safePath.join(destDir, 'binary.dat'));
-      expect(Buffer.compare(copiedContent, binaryContent)).toBe(0);
-    });
-
-    it('should handle multiple files in nested directories', async () => {
-      // Setup
-      const srcDir = safePath.join(tempDir, 'src');
-      const destDir = safePath.join(tempDir, 'dest');
-      await fs.mkdir(safePath.join(srcDir, 'dir1'), { recursive: true });
-      await fs.mkdir(safePath.join(srcDir, 'dir2'), { recursive: true });
-      await fs.writeFile(safePath.join(srcDir, 'dir1', 'file1.txt'), 'content1');
-      await fs.writeFile(safePath.join(srcDir, 'dir1', 'file2.txt'), 'content2');
-      await fs.writeFile(safePath.join(srcDir, 'dir2', 'file3.txt'), 'content3');
-
-      // Execute
-      await copyDirectory(srcDir, destDir);
-
-      // Verify
-      const file1 = await fs.readFile(safePath.join(destDir, 'dir1', 'file1.txt'), 'utf-8');
-      const file2 = await fs.readFile(safePath.join(destDir, 'dir1', 'file2.txt'), 'utf-8');
-      const file3 = await fs.readFile(safePath.join(destDir, 'dir2', 'file3.txt'), 'utf-8');
-      expect(file1).toBe('content1');
-      expect(file2).toBe('content2');
-      expect(file3).toBe('content3');
-    });
-
-    it('should throw error when source directory does not exist', async () => {
-      // Setup
-      const srcDir = safePath.join(tempDir, 'nonexistent');
-      const destDir = safePath.join(tempDir, 'dest');
-
-      // Execute & Verify
-      await expect(copyDirectory(srcDir, destDir)).rejects.toThrow();
-    });
-
-    it('should throw error when source is not a directory', async () => {
-      // Setup
-      const srcFile = safePath.join(tempDir, 'file.txt');
-      const destDir = safePath.join(tempDir, 'dest');
-      await fs.writeFile(srcFile, 'content');
-
-      // Execute & Verify
-      await expect(copyDirectory(srcFile, destDir)).rejects.toThrow();
-    });
-
-    // A source the OS will not let the copy read is the SOURCE's refusal, coded at
-    // its cause — so a caller wrapping the copy as a destination write
-    // (`vat agent install`) cannot misfile it as the run not finishing.
-    describe('source-side failures are coded COPY_SOURCE_UNREADABLE, naming the entry', () => {
-      const expectSourceRefusal = async (src: string, named: string): Promise<void> => {
-        await expect(copyDirectory(src, safePath.join(tempDir, 'dest'))).rejects.toMatchObject({
-          code: COPY_SOURCE_UNREADABLE_CODE,
-          message: expect.stringContaining(named) as unknown,
-        });
-      };
-
-      it('a source directory that is not there', async () => {
-        const src = safePath.join(tempDir, NO_SUCH_DIR);
-        await expectSourceRefusal(src, src);
-      });
-
-      it.skipIf(!PERMISSIONS_ENFORCED)('a file the OS will not read', async () => {
-        const src = safePath.join(tempDir, 'src');
-        const locked = safePath.join(src, 'locked.md');
-        await fs.mkdir(src);
-        await fs.writeFile(locked, 'secret');
-        await fs.chmod(locked, 0o000);
-        await expectSourceRefusal(src, locked);
-      });
-
-      it('a dangling link', async ({ skip }) => {
-        const cap = symlinkCapability() ?? skip();
-        const src = safePath.join(tempDir, 'src');
-        const dangling = safePath.join(src, 'dangling');
-        await fs.mkdir(src);
-        await createSymlinkAsync(cap, safePath.join(src, 'nowhere'), dangling);
-        await expectSourceRefusal(src, dangling);
-      });
-
-      it('but a destination the OS refuses keeps its own errno', async () => {
-        const src = safePath.join(tempDir, 'src');
-        await fs.mkdir(src);
-        await fs.writeFile(safePath.join(src, 'a.md'), 'a');
-        const blocked = safePath.join(tempDir, 'blocked');
-        await fs.writeFile(blocked, 'a file where the destination directory should go');
-        const failure: unknown = await copyDirectory(src, safePath.join(blocked, 'dest')).catch((error: unknown) => error);
-        expect(failure).toMatchObject({ code: expect.stringMatching(/^E[A-Z]+$/) as unknown });
-      });
-    });
-
-    it.skipIf(process.platform === 'win32')('keeps a file\'s mode, so a script stays executable', async () => {
-      const src = safePath.join(tempDir, 'src');
-      await fs.mkdir(src);
-      await fs.writeFile(safePath.join(src, 'run.sh'), '#!/bin/sh\n');
-      await fs.chmod(safePath.join(src, 'run.sh'), 0o755);
-      await copyDirectory(src, safePath.join(tempDir, 'dest'));
-      expect((await fs.stat(safePath.join(tempDir, 'dest', 'run.sh'))).mode & 0o777).toBe(0o755);
-    });
   });
 
   describe('FsLookupCache', () => {
@@ -1563,33 +1333,5 @@ describe('fs-utils', () => {
         expect(spelling.verified).toEqual({ match: 'exact', askedPath: '', actualPath: '' });
       });
     });
-  });
-});
-
-describe('openEachFileForReading', () => {
-  const suite = setupAsyncTempDirSuite('open-each');
-  let dir: string;
-  beforeAll(suite.beforeAll);
-  afterAll(suite.afterAll);
-  beforeEach(async () => {
-    await suite.beforeEach();
-    dir = suite.getTempDir();
-    await fs.mkdir(safePath.join(dir, 'sub'));
-    await fs.writeFile(safePath.join(dir, 'a.md'), 'a');
-    await fs.writeFile(safePath.join(dir, 'sub', 'b.md'), 'b');
-  });
-
-  it('passes a tree whose every file opens', () => {
-    expect(() => openEachFileForReading(dir)).not.toThrow();
-  });
-
-  it('throws the first refusal as the OS raised it, its path naming the nested file', () => {
-    const nested = safePath.join(dir, 'sub', 'b.md');
-    const restore = refuseSyncFs('openSync', nested, 'EACCES');
-    try {
-      expect(() => openEachFileForReading(dir)).toThrow(expect.objectContaining({ code: 'EACCES', path: nested }));
-    } finally {
-      restore();
-    }
   });
 });

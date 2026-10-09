@@ -128,7 +128,7 @@ describe('unscopableSkillsPath', () => {
     chmodSync(parent, 0o000);
     try {
       expect(unscopableSkillsPath(child)?.refusal).toBe('INPUT_UNREADABLE');
-      expect(() => assertDirectoryArgument(child)).toThrow(expect.objectContaining({ refusal: 'INPUT_UNREADABLE' }));
+      expect(() => assertDirectoryArgument(child)).toThrow(expect.objectContaining({ code: 'FS_FAULT', side: 'source', origin: 'argument', faultClass: 'refused' }));
     } finally {
       chmodSync(parent, 0o755);
     }

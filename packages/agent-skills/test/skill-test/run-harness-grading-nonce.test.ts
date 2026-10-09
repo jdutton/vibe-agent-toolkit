@@ -38,9 +38,13 @@ import type { BaselineIntegrity } from '../../src/skill-test/baseline-integrity.
 import { GradingNonceError } from '../../src/skill-test/grading-adapter.js';
 import { runSkillTestHarness } from '../../src/skill-test/run-harness.js';
 import { stageHarness } from '../../src/skill-test/staging.js';
-import { setupStubbedHarnessSubject } from '../test-helpers.js';
+import { setupStubbedHarnessSubject, useScratchTmpdir } from '../test-helpers.js';
 
 import { makeHarnessFakeSpawn, SPAWN_TIMED_OUT } from './spawn-stub.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test (and every child
+// a test spawns), so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-7-');
 
 vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('./preflight-stub.js')).passingPreflight(io));
 

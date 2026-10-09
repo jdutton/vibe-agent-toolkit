@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
 import { MARKETPLACE_PUBLISH_REPORT_SCHEMA, type MarketplacePublishReport } from '../../src/commands/claude/marketplace/publish-schema.js';
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 import {
   createTempDirTracker,
@@ -15,6 +16,10 @@ import {
   getBinPath,
   writeTestFile,
 } from './test-common.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-6-');
 
 const binPath = getBinPath(import.meta.url);
 const TEMP_DIR_PREFIX = 'vat-marketplace-publish-test-';

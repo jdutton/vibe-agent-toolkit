@@ -95,7 +95,8 @@ Exit Codes:
       cannot be read — files the OS refuses (the message names the path and
       errno: fix the permissions), a table another tool or build wrote, or
       damaged files (vat rag clear removes either); RUN_INCOMPLETE when the
-      database directory cannot be created or written; CONFIG_INVALID;
+      database directory cannot be examined, listed, created or written;
+      CONFIG_INVALID;
       BACKEND_UNAVAILABLE when the RAG backend is not installed; INTERNAL_ERROR
       for a database error such as a rag_documents table whose columns an
       earlier build typed differently — the message names the columns, and
@@ -238,7 +239,9 @@ Warning:
   removed without being opened, so a database whose files are damaged can
   still be cleared. Any other directory is refused and left untouched, and so
   is a --db that is a symbolic link: removing the link would leave the
-  database in place, so the refusal names the real path to clear instead.
+  database in place, so the refusal names the path it links to. The
+  database is moved off its path whole before it is removed, so a removal
+  the OS stops never leaves part of it at the path you named.
 
 Output:
   A YAML report on stdout (status ok, or error); examined is 1, the database
@@ -249,10 +252,12 @@ Exit Codes:
   2 - Could not run (error.code: USAGE_INVALID with no --db and no project or
       a --db that is not a RAG database — nothing there, a file, a symbolic
       link, or a directory holding anything but the tables vat rag index
-      writes — INPUT_UNREADABLE when the project has no database yet, its
-      .rag-db is a link or holds anything else, or it cannot be listed;
-      RUN_INCOMPLETE when the OS stopped the removal partway (part of the
-      database may be gone; make it writable and clear again);
+      writes — INPUT_UNREADABLE when the project has no database yet, or its
+      .rag-db is a link or holds anything else; RUN_INCOMPLETE when it cannot
+      be examined, listed or moved off its path (it is what clear removes), or
+      the OS stopped deleting it once it was off its path — then the clear is
+      done (data present) and a TREE_CLEANUP_INCOMPLETE warning names where
+      the rest is, for you to remove);
       BACKEND_UNAVAILABLE; INTERNAL_ERROR for a defect in VAT)
 
 Requirements:

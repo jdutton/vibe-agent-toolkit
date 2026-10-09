@@ -51,8 +51,8 @@ export const WALK_ARM = 'walk, followSymlinks: false';
 export const GIT_ARM = 'git snapshot + prune list';
 
 export const SYMLINK_ARMS: readonly (readonly [string, (root: string) => CrawlSource])[] = [
-  [WALK_ARM, (root: string): CrawlSource => new FilesystemCrawlSource(root)],
-  [GIT_ARM, (root: string): CrawlSource => new GitCrawlSource(root)],
+  [WALK_ARM, (root: string): CrawlSource => new FilesystemCrawlSource(root, [])],
+  [GIT_ARM, (root: string): CrawlSource => new GitCrawlSource(root, [])],
 ];
 
 /** Live access to one planted fixture and the contribution each arm produced. */

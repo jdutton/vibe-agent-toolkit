@@ -209,7 +209,12 @@ second shape is a 0-byte emit of a file that still exists.
 but turbo's task graph only sees `package.json` dependency edges, so `utils#build` is not guaranteed
 to finish first.
 **Tell:** an intermittent `does not provide an export named …` for a symbol that exists, in one
-workflow and not another on the same commit.
+workflow and not another on the same commit — naming a different package and a different symbol
+each run, which is the signature of a schedule, not of a broken export. The same message comes from
+a reader that imports a `dist/` file while `tsc` is rewriting it in place: `tsc` truncates, then
+writes, so the file is zero bytes for an instant (a sampler caught a zero-byte `dist/index.js` in 9
+of 24 rebuilds of a 12-module fixture). That is why `clean-build.ts` emits into a staging directory
+and renames each file into place.
 **Remedy:** the dependency the script needs must be a manifest edge; treat a build race between two
 workflows on one commit as scheduling, not language.
 
@@ -373,6 +378,19 @@ out but report them, and raise `Error.stackTraceLimit` (the default misfiles mos
 loader).
 **Tell:** a precise attribution that does not move when the suspected code is removed.
 **Remedy:** `--cpu-prof` for attribution; the lab's `io` facet for fs counting.
+
+### Node's promise `rm` captures its `fs` functions on its first call in a process
+
+The recursive `fs.promises.rm` walks the tree with `fs` functions it binds the FIRST time it runs
+in a process. The fault harness (`installFaultFs`) patches those functions, so a per-entry `unlink`
+or `rmdir` inside a removal is injectable only when no `rm` ran before the harness was installed.
+After one earlier `rm` — another test in the file, a `beforeEach` that cleans up — the walk keeps
+the unpatched functions: the injection never fires, the removal succeeds, and a test of a
+partly-refused removal passes or fails for a reason that has nothing to do with the code under it.
+**Tell:** `session.fired` is empty although `session.calls` shows the removal's own `rm`; the test
+changes verdict when it is run alone or moved within its file.
+**Remedy:** give a direct partial-removal test its own file, make it that file's only test, and
+assert `session.fired` so a silent miss is red. Clean the scratch tree with a sync `rmSync`.
 
 ### A `toContain` prefix assertion narrows when a column is appended
 

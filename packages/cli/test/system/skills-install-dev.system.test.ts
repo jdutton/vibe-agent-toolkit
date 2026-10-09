@@ -189,9 +189,13 @@ describe('claude plugin install --dev command (system test)', () => {
       { name: 'dry-skill', built: true },
     ]);
 
-    const { status, report } = await executeDevInstall(projectDir, fakeHome, ['--dry-run']);
+    const { status, stderr, report } = await executeDevInstall(projectDir, fakeHome, ['--dry-run']);
 
     expect(status).toBe(0);
+    // The plan's own lines (`plan.describe()`): the marketplace replaced whole, and the plugin's cache.
+    const plugins = safePath.join(fakeHome, '.claude', 'plugins');
+    expect(stderr).toContain(`[dry-run] create marketplace ${MARKETPLACE_NAME} ${safePath.join(plugins, 'marketplaces', MARKETPLACE_NAME)}`);
+    expect(stderr).toContain(`[dry-run] create cache of ${PLUGIN_NAME}@${MARKETPLACE_NAME} ${safePath.join(plugins, 'cache', MARKETPLACE_NAME, PLUGIN_NAME, '1.0.0')}`);
     expect(report.status).toBe('ok');
     expect(report.data?.dryRun).toBe(true);
     expect(report.data?.skills).toHaveLength(1);

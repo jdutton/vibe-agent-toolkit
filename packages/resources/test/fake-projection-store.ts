@@ -26,6 +26,7 @@ import { GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type {
@@ -286,7 +287,7 @@ export async function populateExtentThrough(
   const tracker = new GitTracker(root);
   await tracker.initialize();
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
   let contributorRan = false;
   const projection = await populate({
     root,

@@ -12,9 +12,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
 import { SKILLS_LIST_REPORT_SCHEMA } from '../../src/commands/skills/list-schema.js';
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 import { cleanupTestTempDir, createTestTempDir, getBinPath, getFixturePath } from './test-common.js';
 import { executeCli } from './test-helpers/index.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-15-');
 
 describe('skills list command - fixture tests (system test)', () => {
   const binPath = getBinPath(import.meta.url);

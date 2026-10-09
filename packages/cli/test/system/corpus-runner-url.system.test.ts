@@ -17,6 +17,11 @@ import { AUDIT_REPORT_SCHEMA } from '../../src/commands/audit-schema.js';
 import type * as Audit from '../../src/commands/audit.js';
 import { auditOnePlugin } from '../../src/commands/corpus/runner.js';
 import type { PluginEntry } from '../../src/commands/corpus/seed.js';
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-4-');
 
 /** The in-process audit, made to throw by one case; every other call runs the real one. */
 const { auditSpy } = vi.hoisted(() => ({ auditSpy: vi.fn() }));
@@ -27,7 +32,7 @@ vi.mock('../../src/commands/audit.js', async (importOriginal) => {
 });
 
 const URL_META = { bucket: 'official', confidence: 'first-party', maturity: 'production' } as const;
-const NOT_DEBUG = { withReview: false, debug: false } as const;
+const NOT_DEBUG = { withReview: false, debug: false, leftovers: [] };
 
 function freshRunDir(): string {
   return mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-corpus-url-rundir-'));

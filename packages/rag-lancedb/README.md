@@ -186,7 +186,7 @@ import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 
 // 1. Scan resources
 const registry = new ResourceRegistry();
-await registry.crawl({ baseDir: './docs' });
+await registry.crawl({ outputs: [], baseDir: './docs' });
 
 // 2. Create admin provider
 const admin = await LanceDBRAGProvider.create({

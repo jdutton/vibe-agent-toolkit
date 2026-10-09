@@ -8,7 +8,7 @@
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 
-import { direntKindFollowing, forEachInOrder, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, forEachInOrder, isNoSuchEntryError, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import { SessionNotFoundError } from './errors.js';
 import {
@@ -82,7 +82,7 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
 
       return session;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (isPathAbsentError(error)) {
         throw new SessionNotFoundError(sessionId);
       }
       throw error;
@@ -105,7 +105,7 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
     try {
       await unlink(sessionPath);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      if (!isPathAbsentError(error)) {
         throw error;
       }
     }
@@ -115,9 +115,7 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
     try {
       return (await stat(this.getSessionPath(sessionId))).isFile();
     } catch (error) {
-      // Only a path that is not there is "no session". A refusal (EACCES) or
-      // any other failure stays loud: `false` tells the caller to start a new
-      // session, and that must never be the answer to "you may not look".
+      // Only absence is "no session"; a refusal stays loud (the `SessionStore.exists` contract).
       if (isPathAbsentError(error)) return false;
       throw error;
     }
@@ -130,7 +128,9 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
       const kinds = await Promise.all(entries.map(e => direntKindFollowing(this.baseDir, e)));
       return entries.filter((_, i) => kinds[i] === 'directory').map(e => e.name);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      // ENOENT only: a store never written has no sessions. A base directory that is a FILE
+      // (ENOTDIR) is a misconfigured store, which `[]` would hide.
+      if (isNoSuchEntryError(error)) {
         return [];
       }
       throw error;

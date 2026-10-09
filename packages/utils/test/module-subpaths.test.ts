@@ -177,6 +177,14 @@ describe('whole-module subpath entries', () => {
     // whichever half is unasserted is the one a later edit deletes.
     expect(typeof mod.createTempCorpus).toBe('function');
     expect(typeof mod.replantableCorpus).toBe('function');
+    // The fs fault injector other packages' fault matrices import across the boundary.
+    expect(typeof mod.installFaultFs).toBe('function');
+    expect(typeof mod.injectedErrnoError).toBe('function');
+    expect(typeof mod.faultRuleOf).toBe('function');
+    expect(typeof mod.faultFsSpecOf).toBe('function');
+    expect(typeof mod.snapshotTree).toBe('function');
+    expect(typeof mod.diffSnapshots).toBe('function');
+    expect(typeof mod.subtree).toBe('function');
   });
 
   it('./asset exposes asset reference resolution', async () => {

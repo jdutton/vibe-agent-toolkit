@@ -30,11 +30,11 @@ interface CapturedCommand extends CapturedExit {
  * Run a command lane with stdout, stderr and `process.exit` captured: the
  * document it published, the human half on stderr, and the code it ended on.
  */
-export async function captureCommand(fn: () => void | Promise<void>): Promise<CapturedCommand> {
+export async function captureCommand(fn: () => void | Promise<void>, onFirstExit?: () => void): Promise<CapturedCommand> {
   const written: string[] = [];
   const restore = captureStdout(written);
   try {
-    const captured = await captureProcessExit(fn);
+    const captured = await captureProcessExit(fn, onFirstExit);
     return { ...captured, stdout: written.join('') };
   } finally {
     restore();

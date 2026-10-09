@@ -365,3 +365,31 @@ export function buildErrorReport<T>(input: ErrorReportInput<T>): ErrorReport<T> 
 export function withDurationMs<T>(report: Report<T>, durationMs: number): Report<T> {
   return report.status === 'error' ? report : { ...report, durationMs };
 }
+
+/**
+ * The same report with `added` findings appended — its status and summary DERIVED again, as
+ * {@link buildReport} derives them, so the result never contradicts its list. For a finding a
+ * run learns of only after its document was built (a temp directory left behind once the work
+ * was done). Every other field — the branch, `error`, the gate, `examined`, `data`, the
+ * duration of a completed run — is kept.
+ *
+ * @param report - Any branch of the envelope
+ * @param added - The findings to append; none returns `report` itself
+ * @returns The report with them
+ */
+export const withAddedFindings: WithAddedFindings = (<T>(report: Report<T>, added: readonly Finding[]): Report<T> => {
+  if (added.length === 0) return report;
+  const findings = [...report.findings, ...added];
+  if (report.status === 'error') {
+    return buildErrorReport({ error: report.error, gate: report.gate, examined: report.examined, findings, data: report.data });
+  }
+  return buildReport({ examined: report.examined, findings, data: report.data, gate: report.gate, durationMs: report.durationMs });
+  // The branch is kept — a completed report stays completed, a refusal a refusal — which the
+  // overloads below state and the one body cannot.
+}) as WithAddedFindings;
+
+/** {@link withAddedFindings}'s call shapes: a completed report stays completed; any report stays a report. */
+export interface WithAddedFindings {
+  <T>(report: OkReport<T> | FindingsReport<T>, added: readonly Finding[]): OkReport<T> | FindingsReport<T>;
+  <T>(report: Report<T>, added: readonly Finding[]): Report<T>;
+}

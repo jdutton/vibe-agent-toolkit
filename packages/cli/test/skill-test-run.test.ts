@@ -9,12 +9,12 @@
  *   - exit 1  when an internal/parse-failure error is thrown (InternalHarnessError)
  */
 
-import { chmodSync, existsSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import * as harness from '@vibe-agent-toolkit/agent-skills';
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, mkdirSyncReal, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, findProjectRoot, mkdirSyncReal, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -275,8 +275,9 @@ const SUITE_IN_PROJECT = safePath.join(findProjectRoot(process.cwd()) ?? process
  * exactly when the harness said OK.
  */
 function completedDefaults<T extends { exitCode: number }>(result: T): T & Record<string, unknown> {
-  if (result.exitCode === ExitCode.ERROR) return { reason: 'preflight', refusal: 'USAGE_INVALID', ...result };
+  if (result.exitCode === ExitCode.ERROR) return { reason: 'preflight', refusal: 'USAGE_INVALID', leftovers: [], ...result };
   return {
+    leftovers: [],
     examined: 1,
     evals: [{ id: 'e1', passed: result.exitCode === ExitCode.OK }],
     frictionReportPath: null,
@@ -299,6 +300,7 @@ async function runAndCaptureStreams(result: {
   evals?: ReadonlyArray<{ id: string; passed: boolean }>;
   frictionReportPath?: string | null;
   evalsPath?: string;
+  leftovers?: readonly unknown[];
 }): Promise<{ stdoutCalls: string[]; stderrCalls: string[] }> {
   vi.spyOn(harness, 'runSkillTestHarness').mockResolvedValue(completedDefaults(result) as never);
   if (!vi.isMockFunction(process.exit)) vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
@@ -350,6 +352,24 @@ describe('vat skill test run (the published report)', () => {
     expect(exit).toHaveBeenLastCalledWith(ExitCode.FINDINGS);
   });
 
+  // The run is DONE when a temp directory it made refuses to go: the leftover is a warning beside
+  // the verdict — never a refusal hiding it, never only a stderr line.
+  it('publishes a temp directory the harness could not remove as a TREE_CLEANUP_INCOMPLETE warning beside the run', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const leftover = classifyFsFault(
+      Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY', path: '/tmp/vat-skill-test-ws-abc' }),
+      { side: 'environment', action: 'remove the temporary directory /tmp/vat-skill-test-ws-abc' },
+    );
+    const { stdoutCalls } = await runAndCaptureStreams({ harnessPath: '/h', exitCode: ExitCode.OK, description: 'PASS 1/1', leftovers: [leftover] });
+    const document = publishedDocument(stdoutCalls);
+
+    expect(document['findings']).toEqual([
+      expect.objectContaining({ code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', link: '/tmp/vat-skill-test-ws-abc' }),
+    ]);
+    expect(document['data']).toMatchObject({ evals: [{ id: 'e1', passed: true }] });
+    expect(exit).toHaveBeenLastCalledWith(ExitCode.OK);
+  });
+
   it('omits the location of a failed eval whose suite lies outside the project, keeping its field', async () => {
     vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     const { stdoutCalls } = await runAndCaptureStreams({
@@ -369,7 +389,7 @@ describe('vat skill test run (the published report)', () => {
   // uncoded defect is VAT's, never the operator's; a packager refusal of the skill's
   // own content is the T19/T20 finding, on a run that stopped before any eval.
   it.each([
-    ['a coded cause (a directory the OS will not list)', () => new VatError('DIRECTORY_LISTING_REFUSED', 'cannot list skills/'), 'INPUT_UNREADABLE', []],
+    ['a coded cause (a link out of the tree being copied)', () => new VatError('COPY_LINK_ESCAPES_SOURCE', 'skills/x links outside'), 'INPUT_UNREADABLE', []],
     ['an uncoded defect (a TypeError)', () => new TypeError("Cannot read properties of undefined (reading 'x')"), 'INTERNAL_ERROR', []],
     [
       'a packager refusal of the skill content',
@@ -396,6 +416,7 @@ describe('vat skill test run (the published report)', () => {
   it('--allow-eval-failure publishes the failed eval at warning, exit 0', async () => {
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     vi.spyOn(harness, 'runSkillTestHarness').mockResolvedValue({
+      leftovers: [],
       harnessPath: '/h', exitCode: ExitCode.OK, description: 'FAIL 0/1', examined: 1,
       evals: [{ id: 'fails', passed: false }], frictionReportPath: null, evalsPath: SUITE_IN_PROJECT,
     } as never);
@@ -443,6 +464,25 @@ describe('vat skill test run (the published report)', () => {
 
     expect(publishedDocument(stdout.mock.calls.map((c) => String(c[0])))['error']).toMatchObject({ code });
     expect(stderr.mock.calls.map((c) => String(c[0]))).toContain(`Reason: ${reason}\n`);
+  });
+
+  // A `workspace:` companion is packaged INSIDE the harness, so its packager refusal reaches the
+  // command unwrapped (no SkillBuildError). It is still the author's broken skill, never a defect.
+  it.each([
+    ['a files: source that does not exist', harness.SKILL_PACKAGING_INPUT_INVALID_CODE],
+    ['a package its post-build checks failed', harness.SKILL_PACKAGE_CHECKS_FAILED_CODE],
+  ] as const)('a packager refusal thrown out of the harness (%s) is the packaging finding, never INTERNAL_ERROR', async (_label, code) => {
+    vi.spyOn(harness, 'runSkillTestHarness').mockRejectedValue(new VatError(code, "skill 'dep': guide.md links to missing.md, which does not exist"));
+    vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+
+    await runSkillTestRun(PATH_SUBJECT, {});
+    const document = publishedDocument(stdout.mock.calls.map((c) => String(c[0])));
+
+    expect(document['error']).toMatchObject({ code: 'RUN_INCOMPLETE' });
+    expect(document['findings']).toEqual([expect.objectContaining({ code: 'SKILL_PACKAGING_FAILED', message: expect.stringContaining('missing.md') })]);
+    expect(stderr.mock.calls.map((c) => String(c[0]))).toContain('Reason: preflight\n');
   });
 });
 
@@ -1664,6 +1704,27 @@ describe('buildDeclaredSkill memoization + dist verification', () => {
       a: { path: fx.pluginDistDir(first) },
       b: { path: fx.pluginDistDir(second) },
     });
+  });
+
+  // The real packager, a previous dist on disk, and a skill whose package now fails its own
+  // post-build checks: the build must FAIL naming the findings — never test the previous bytes
+  // while reporting them rebuilt, and never "produced no output" over the real reason.
+  it('a package that fails its own checks fails the build naming the findings, the previous dist untouched and never reported rebuilt', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+    const previous = safePath.join(fx.poolDistDir(DECLARED_POOL), 'SKILL.md');
+    mkdirSyncReal(fx.poolDistDir(DECLARED_POOL), { recursive: true });
+    writeFileSync(previous, 'PREVIOUS BUILD\n');
+    writeFileSync(fx.poolSkillMd(DECLARED_POOL), `${readFileSync(fx.poolSkillMd(DECLARED_POOL), 'utf-8')}\nSee [the guide](./missing-guide.md).\n`);
+    const { SkillBuildError, SkillPackageChecksFailedError } = await import('@vibe-agent-toolkit/agent-skills');
+
+    const error = await companionBuildError(dirname(fx.poolSkillMd(DECLARED_POOL)), fx.root, false);
+
+    expect(error).toBeInstanceOf(SkillBuildError);
+    expect((error as Error).cause).toBeInstanceOf(SkillPackageChecksFailedError);
+    expect(errorMessage(error)).toContain('missing-guide.md');
+    expect(errorMessage(error)).not.toContain('reported success');
+    expect(readFileSync(previous, 'utf-8')).toBe('PREVIOUS BUILD\n');
   });
 
   it('a build that reports success but writes nothing → SkillBuildError naming the skill and the missing dist', async () => {

@@ -31,7 +31,7 @@ import {
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, findProjectRoot, forEachInOrder, isFilesystemAccessError, isPathAbsentError, issueLocation, isVatError, mapInOrder, normalizePath, PathEscapesRootError, relativeEscapesRoot, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, findProjectRoot, forEachInOrder, fsFaultOf, isPathAbsentError, issueLocation, isVatError, mapInOrder, normalizePath, PathEscapesRootError, pathPresent, relativeEscapesRoot, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { refusalCodeOf } from '../../../utils/command-refusal.js';
@@ -133,11 +133,11 @@ class WalkBoundary {
    * Anything that is not a filesystem refusal is a defect and is rethrown.
    */
   unreadable(abs: string, error: unknown): ValidationIssue {
-    if (!isFilesystemAccessError(error)) throw error;
+    const fault = fsFaultOf(error);
+    if (fault === undefined) throw error;
     const location = issueLocation(abs, this.marketplacePath);
     this.unread.push(location);
-    const errnoCode = String((error as NodeJS.ErrnoException).code);
-    return materializeIssue('SCAN_PATH_UNREADABLE', { location, detail: `${location}: read refused with ${errnoCode}` });
+    return materializeIssue('SCAN_PATH_UNREADABLE', { location, detail: `${location}: read refused with ${fault.errno}` });
   }
 }
 
@@ -194,10 +194,10 @@ async function validateOneSkill(
   }
   const skillMdPath = safePath.join(skillDir, 'SKILL.md');
   try {
-    if (!isPresent(skillMdPath) || !boundary.contains(skillMdPath)) return [];
+    if (!pathPresent(skillMdPath, 'follow', 'source', 'probe') || !boundary.contains(skillMdPath)) return [];
     // Severity only (no `allow`), resolved here so a default-`ignore` code can still be raised.
     const severity = validation?.severity === undefined ? {} : { severity: validation.severity };
-    const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir, locationRoot: marketplacePath, validation: severity });
+    const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir, locationRoot: marketplacePath, validation: severity, side: 'source' });
     return skillResult.issues;
   } catch (error) {
     return refusedAt(skillMdPath, error);
@@ -232,17 +232,6 @@ export interface LocalPluginResult extends LocalPluginSource {
 function isDirectory(dir: string): boolean {
   try {
     return statSync(dir).isDirectory();
-  } catch (error) {
-    if (isPathAbsentError(error)) return false;
-    throw error;
-  }
-}
-
-/** Whether anything is at `path`; absent is `false`, a refused stat propagates (`existsSync` says `false` to both). */
-function isPresent(path: string): boolean {
-  try {
-    statSync(path);
-    return true;
   } catch (error) {
     if (isPathAbsentError(error)) return false;
     throw error;

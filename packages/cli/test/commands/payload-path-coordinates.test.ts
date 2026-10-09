@@ -137,7 +137,7 @@ describe('resources scan payload', () => {
 describe('skills list payload', () => {
   const skills = [{ name: 'alpha', path: SKILL, valid: true }];
   const listing = (unreadable: Parameters<typeof buildSkillsListReport>[0]['unreadable']) =>
-    buildSkillsListReport({ skills, context: 'project', root: ROOT, unreadable, examined: 1 }, 7);
+    buildSkillsListReport({ skills, context: 'project', root: ROOT, unreadable, leftovers: [], examined: 1 }, 7);
 
   it('publishes each skill path relative to the stated root', () => {
     const report = SKILLS_LIST_REPORT_SCHEMA.parse(listing([]));

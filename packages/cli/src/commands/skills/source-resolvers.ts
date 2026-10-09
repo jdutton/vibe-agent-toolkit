@@ -11,14 +11,15 @@
  * (`downloadNpmPackage`).
  */
 
-import { existsSync, readdirSync, statSync, type Dirent } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { existsSync, readdirSync, type Dirent } from 'node:fs';
 
-import { isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { disposeTempDir, disposeTempDirAfterFailure, forEachInOrder, pathPresent, safePath, toForwardSlash, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 
 import { extractTarball, makeStagingDir } from '../../utils/archive-staging.js';
-import { CommandRefusalError } from '../../utils/command-refusal.js';
-import { unstatablePathRefusal } from '../../utils/project-root-policy.js';
+import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
+import { leftoverIssue, leftoverIssueOf } from '../../utils/document-writer.js';
+import { requireInputPath } from '../../utils/project-root-policy.js';
 import { downloadNpmPackage } from '../claude/plugin/helpers.js';
 
 /**
@@ -29,14 +30,7 @@ import { downloadNpmPackage } from '../claude/plugin/helpers.js';
  * @param dir - A source directory, or one of its immediate subdirectories
  */
 export function holdsSkillMd(dir: string): boolean {
-  const skillMd = safePath.join(dir, 'SKILL.md');
-  try {
-    statSync(skillMd);
-    return true;
-  } catch (error) {
-    if (isPathAbsentError(error)) return false;
-    throw unstatablePathRefusal(skillMd, error);
-  }
+  return pathPresent(safePath.join(dir, 'SKILL.md'), 'follow', 'source', 'probe');
 }
 
 /**
@@ -46,11 +40,7 @@ export function holdsSkillMd(dir: string): boolean {
  * @param dir - The source directory to list
  */
 export function readSourceDir(dir: string): Dirent[] {
-  try {
-    return readdirSync(dir, { withFileTypes: true });
-  } catch (error) {
-    throw unstatablePathRefusal(dir, error);
-  }
+  return withFsFaultSync({ side: 'source', origin: 'argument', action: 'list the source directory', path: dir }, () => readdirSync(dir, { withFileTypes: true }));
 }
 
 /**
@@ -75,11 +65,7 @@ export async function extractTarballToTemp(
   tarballPath: string,
 ): Promise<{ tempDir: string; packageDir: string }> {
   // The argument first: absent is the invocation's mistake, unreadable the input's.
-  try {
-    statSync(tarballPath);
-  } catch (error) {
-    throw unstatablePathRefusal(tarballPath, error);
-  }
+  requireInputPath(tarballPath, { origin: 'argument', message: `Path does not exist: ${tarballPath}` });
   const tempDir = await makeStagingDir('vat-skills-tgz-');
   const packageDir = await discardingOnFailure(tempDir, async () => {
     await extractTarball(tarballPath, tempDir);
@@ -97,18 +83,20 @@ export async function extractTarballToTemp(
 }
 
 /**
- * Run `work` over a temp directory this process minted, removing the
+ * Run `work` over a temp directory this process minted, disposing of the
  * directory when `work` throws: the caller only learns about a temp directory
  * it is handed back, so one minted on a failing path is otherwise left behind.
+ * The work's error is rethrown unchanged; a directory that will not go is
+ * recorded beside it (`suppressedFaultsOf`), never thrown in its place.
  *
- * @param tempDir - The directory to remove on failure
+ * @param tempDir - The directory to dispose of on failure
  * @param work - What to do with it
  */
 export async function discardingOnFailure<T>(tempDir: string, work: () => T | Promise<T>): Promise<T> {
   try {
     return await work();
   } catch (error) {
-    await rm(tempDir, { recursive: true, force: true });
+    await disposeTempDirAfterFailure(tempDir, error);
     throw error;
   }
 }
@@ -157,27 +145,47 @@ export async function resolveNpmOrTarballSource(
 }
 
 /**
- * Remove the temp directories a resolved source left behind.
+ * Dispose of the temp directories a resolved source left behind, once the work on it is done.
  *
- * Best-effort by design — the command's answer is already out, and a temp
+ * Best-effort by design — the command's answer is already decided, and a temp
  * directory that will not go (an `EBUSY` on Windows, a handle a scanner still
  * holds) must not turn a finished install into a failed one. But best-effort
- * is not silent: a directory left behind is named, so the operator can remove
- * what this run could not. `force: true` already tolerates one that is gone.
+ * is not silent: each directory left behind is returned as the one
+ * `TREE_CLEANUP_INCOMPLETE` warning naming it, for the report. One already gone
+ * is not a failure; one outside the temp directory is never removed, only named.
  *
  * @param tempDirs - What {@link resolveNpmOrTarballSource} minted
- * @param logger - Where a directory that stays is reported
+ * @returns A warning per directory that stays, in the order the dirs were minted
  */
-export async function removeResolvedTempDirs(
-  tempDirs: readonly string[],
-  logger: { warn: (message: string) => void },
-): Promise<void> {
+export async function removeResolvedTempDirs(tempDirs: readonly string[]): Promise<ValidationIssue[]> {
   // Independent removals; what stays is named in the order the dirs were minted.
-  const outcomes = await Promise.allSettled(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
-  for (const [index, outcome] of outcomes.entries()) {
-    if (outcome.status === 'fulfilled') continue;
-    const error: unknown = outcome.reason;
-    const reason = error instanceof Error ? error.message : String(error);
-    logger.warn(`Could not remove temp directory ${toForwardSlash(tempDirs[index] ?? '')}: ${reason}`);
+  const outcomes = await Promise.allSettled(tempDirs.map((dir) => disposeTempDir(dir)));
+  return outcomes.flatMap((outcome, index) => {
+    if (outcome.status === 'fulfilled') return outcome.value === undefined ? [] : [leftoverIssueOf(outcome.value)];
+    const dir = toForwardSlash(tempDirs[index] ?? '');
+    return [leftoverIssue(`Could not remove temp directory ${dir}: ${errorMessageOf(outcome.reason)}`, dir)];
+  });
+}
+
+/**
+ * Run `work` over a resolved source's temp directories, then dispose of them. A failure of
+ * `work` is rethrown unchanged, a directory that will not go recorded beside it
+ * (`suppressedFaultsOf`); once `work` succeeded, what stays comes back as `leftovers` — the
+ * warnings for the report beside its value.
+ *
+ * @param tempDirs - What {@link resolveNpmOrTarballSource} minted
+ * @param work - What to do while they exist
+ */
+export async function withResolvedTempDirs<T>(
+  tempDirs: readonly string[],
+  work: () => T | Promise<T>,
+): Promise<{ readonly value: T; readonly leftovers: ValidationIssue[] }> {
+  let value: T;
+  try {
+    value = await work();
+  } catch (error) {
+    await forEachInOrder(tempDirs, (dir) => disposeTempDirAfterFailure(dir, error));
+    throw error;
   }
+  return { value, leftovers: await removeResolvedTempDirs(tempDirs) };
 }

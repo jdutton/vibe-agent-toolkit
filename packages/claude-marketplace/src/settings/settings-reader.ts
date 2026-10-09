@@ -10,7 +10,7 @@
 
 import * as fs from 'node:fs/promises';
 
-import { everyInOrder, VatError } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, everyInOrder, isPathAbsentError, VatError } from '@vibe-agent-toolkit/utils';
 
 import { CLAUDE_USER_STATE_UNREADABLE_CODE } from '../install/plugin-registry.js';
 import { getClaudeProjectPaths, getClaudeUserPaths } from '../paths/claude-paths.js';
@@ -36,29 +36,26 @@ export interface ReadSettingsOptions {
 
 /**
  * Only an ABSENT file is no layer. One the OS refuses is present and unread, so
- * skipping it would let the run answer as if that layer said nothing.
+ * skipping it would let the run answer as if that layer said nothing: it is a
+ * classified fault on the settings file, an input this audit reads (`source`,
+ * origin `config`).
  *
- * @throws VatError {@link CLAUDE_USER_STATE_UNREADABLE_CODE} naming the file
+ * @throws FsFaultError for a file the OS refuses; VatError {@link CLAUDE_USER_STATE_UNREADABLE_CODE}
+ *   for one that is not JSON, naming the file
  */
 async function tryReadJson(filePath: string): Promise<unknown> {
+  let content: string;
   try {
-    const content = await fs.readFile(filePath, 'utf-8');
+    content = await fs.readFile(filePath, 'utf-8');
+  } catch (err) {
+    if (isPathAbsentError(err)) return null;
+    throw classifyFsFault(err, { side: 'source', origin: 'config', action: 'read a settings file', path: filePath });
+  }
+  try {
     return JSON.parse(content) as unknown;
   } catch (err) {
-    if (isNodeError(err) && err.code === 'ENOENT') return null;
-    if (isNodeError(err) && (err.code === 'EACCES' || err.code === 'EPERM')) {
-      throw new VatError(
-        CLAUDE_USER_STATE_UNREADABLE_CODE,
-        `Cannot read settings file ${filePath} (${err.code}): check its permissions and ownership.`,
-        { cause: err },
-      );
-    }
     throw new VatError(CLAUDE_USER_STATE_UNREADABLE_CODE, `Failed to parse settings file ${filePath}: ${String(err)}`, { cause: err });
   }
-}
-
-function isNodeError(err: unknown): err is NodeJS.ErrnoException {
-  return err instanceof Error && 'code' in err;
 }
 
 function selectSettingsSchema(level: SettingsLevel) {
@@ -115,8 +112,9 @@ async function readManagedLayer(options: ReadSettingsOptions): Promise<SettingsL
 
 /**
  * Read all available settings layers in precedence order (highest first).
- * Skips files that don't exist. Throws {@link CLAUDE_USER_STATE_UNREADABLE_CODE}
- * for a file that exists and the OS refuses, does not parse, or fails its schema.
+ * Skips files that don't exist. Throws a classified filesystem fault for a file the
+ * OS refuses, and {@link CLAUDE_USER_STATE_UNREADABLE_CODE} for one that does not
+ * parse or fails its schema.
  */
 export async function readSettingsLayers(
   options: ReadSettingsOptions = {}

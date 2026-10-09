@@ -124,9 +124,9 @@ async function commandPredict(opts: CommonOpts): Promise<void> {
   const { entries, outDir } = loadCorpus(opts);
   const vatVersion = readVatVersion();
   // In order: fetchSource stages into one shared checkout root, and the log reads per entry.
-  const predictions: StaticPrediction[] = await mapInOrder(entries, (entry) => {
+  const predictions: StaticPrediction[] = await mapInOrder(entries, async (entry) => {
     log(`[predict] ${entry.id}`, 'cyan');
-    const staged = fetchSource(entry, PROJECT_ROOT);
+    const staged = await fetchSource(entry, PROJECT_ROOT);
     const declared = entry.declaredTargets;
     return predictForSkill({
       skillId: entry.id,

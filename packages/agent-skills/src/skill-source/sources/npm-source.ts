@@ -109,5 +109,5 @@ export async function resolveNpmSource(
   const resolvedDir = statSync(located).isDirectory() ? located : dirname(located);
   const hash = await hashDirectory(resolvedDir);
   const stagedDir = await stageDirInto(resolvedDir, ctx, `npm-${hash}`);
-  return { stagedDir, identity: `npm:${name}@${version}:${hash}` };
+  return { stagedDir, identity: `npm:${name}@${version}:${hash}`, leftovers: [] };
 }

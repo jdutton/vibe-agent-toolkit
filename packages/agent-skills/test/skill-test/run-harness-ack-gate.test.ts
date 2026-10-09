@@ -20,7 +20,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runSkillTestHarness } from '../../src/skill-test/run-harness.js';
 import { stageHarness } from '../../src/skill-test/staging.js';
-import { setupStubbedHarnessSubject } from '../test-helpers.js';
+import { setupStubbedHarnessSubject, useScratchTmpdir } from '../test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test (and every child
+// a test spawns), so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-4-');
 
 // resolvedAuth is null: the ack gate (Step 6) returns before any auth-dependent
 // step, so this run must not depend on one being resolved.

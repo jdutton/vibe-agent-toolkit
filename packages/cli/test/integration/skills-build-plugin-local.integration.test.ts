@@ -34,7 +34,7 @@ async function inProject(
   const root = tempDirs.createTempDir();
   writeProjectConfig(root, pluginProjectConfig(false));
   writeSkillProject(root, [KEPT, SHIPPED], git);
-  const { exitCode, document } = publishedPhase<ReturnType<typeof SKILLS_BUILD_REPORT_SCHEMA.parse>>('skills build', await runSkillsBuildPhase(root, options));
+  const { exitCode, document } = publishedPhase<ReturnType<typeof SKILLS_BUILD_REPORT_SCHEMA.parse>>('skills build', await runSkillsBuildPhase(root, options, []));
   return { exitCode, report: document };
 }
 

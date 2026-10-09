@@ -28,7 +28,7 @@ describe('validateSkill', () => {
   });
 
   it('should return error when file does not exist', async () => {
-    const result = await validateSkill({ skillPath: '/nonexistent/path/SKILL.md', validation: {} });
+    const result = await validateSkill({ side: 'source', skillPath: '/nonexistent/path/SKILL.md', validation: {} });
 
     expect(result.summary.errors).toBeGreaterThan(0);
     expect(result.type).toBe('agent-skill');
@@ -228,7 +228,7 @@ describe('compat detectors in validateSkill', () => {
         '',
       ].join('\n'),
     );
-    const result = await validateSkill({ skillPath, validation: {} });
+    const result = await validateSkill({ side: 'source', skillPath, validation: {} });
     expect(result.issues.some(i => i.code === 'CAPABILITY_BROWSER_AUTH')).toBe(true);
   });
 
@@ -258,7 +258,7 @@ describe('compat detectors in validateSkill', () => {
         '',
       ].join('\n'),
     );
-    const result = await validateSkill({ skillPath, validation: {} });
+    const result = await validateSkill({ side: 'source', skillPath, validation: {} });
     const linked = result.linkedFiles?.find(lf => lf.path.endsWith('cli.md'));
     expect(linked).toBeDefined();
     expect(linked?.issues.some(i => i.code === 'CAPABILITY_EXTERNAL_CLI')).toBe(true);

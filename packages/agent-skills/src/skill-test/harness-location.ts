@@ -1,46 +1,13 @@
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, statSync } from 'node:fs';
 
-import { isFilesystemAccessError, isVatError, mkdirSyncReal, normalizedTmpdir, relativeEscapesRoot, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, relativeEscapesRoot, safePath, VatError, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 
 /** Harness-location failure — maps to exit code 2. */
 export class HarnessLocationError extends VatError {
   readonly reason = 'preflight' as const;
   constructor(message: string) {
     super('HARNESS_LOCATION', message);
-  }
-}
-
-/**
- * The run could not write its own output — the harness root, its lock, the staged
- * copies of the skills, the staged manifest: the OS refused the write (an
- * unwritable or read-only parent, a full disk). The run did not finish —
- * `RUN_INCOMPLETE` — and nothing about the skill is wrong.
- */
-export class HarnessOutputError extends VatError {
-  readonly reason = 'preflight' as const;
-  constructor(message: string, options?: ErrorOptions) {
-    super('HARNESS_OUTPUT_UNWRITABLE', message, options);
-  }
-}
-
-/**
- * Run a write into the run's own output and code a refusal from the OS as
- * {@link HarnessOutputError}, naming `what` was being written. A `VatError` (an
- * already-coded refusal) and a non-filesystem throw pass through untouched, so a
- * defect is never relabelled as the disk's fault. The work must not READ the
- * author's tree: an unreadable source is not the output's failure.
- */
-export function writingHarnessOutput<T>(what: string, work: () => T): T {
-  try {
-    return work();
-  } catch (error) {
-    if (isVatError(error) || !isFilesystemAccessError(error)) throw error;
-    throw new HarnessOutputError(
-      `Could not write ${what}: ${(error as Error).message}. `
-        + 'Check that the directory is writable and that there is space on the device.',
-      { cause: error },
-    );
   }
 }
 
@@ -140,11 +107,11 @@ export function prepareHarnessRoot(dir: string, owner: 'vat' | 'operator'): void
 
 /**
  * Create the harness root (and any missing parent) at 0700. A refusal is the
- * run not finishing — {@link HarnessOutputError}, `RUN_INCOMPLETE` — never a
- * defect in VAT.
+ * run not finishing — a `destination` fault, `RUN_INCOMPLETE` — never a defect
+ * in VAT.
  */
 export function createHarnessRoot(dir: string): void {
-  writingHarnessOutput(`the harness root ${dir}`, () => mkdirSyncReal(dir, { recursive: true, mode: 0o700 }));
+  withFsFaultSync({ side: 'destination', action: `create the harness root ${dir}` }, () => mkdirSyncReal(dir, { recursive: true, mode: 0o700 }));
 }
 
 /** True when `child` is a strict descendant of `root` (neither equal nor escaping). */

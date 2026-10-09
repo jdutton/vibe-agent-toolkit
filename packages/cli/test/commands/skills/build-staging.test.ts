@@ -1,21 +1,13 @@
-import type * as fs from 'node:fs';
 import { existsSync, statSync } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import fsPromises, { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
-import type {
-  PackageSkillResult,
-  PackagingValidationResult,
-  SkillPackagingConfig,
-} from '@vibe-agent-toolkit/agent-skills';
-import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
+import type { SkillPackagingConfig } from '@vibe-agent-toolkit/agent-skills';
 import { safePath } from '@vibe-agent-toolkit/utils';
+import { installFaultFs, type FaultRule } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  beginStagedBuild,
-  reanchorStagedResult,
   runSkillBuild,
-  settleStaging,
   skillsBuildWork,
   type BuildSkillSpec,
   type SkillBuildRun,
@@ -24,21 +16,8 @@ import {
 import { refusalCodeOf } from '../../../src/utils/command-refusal.js';
 import { collectPostBuildIssues } from '../../../src/utils/issue-rendering.js';
 import type { Logger } from '../../../src/utils/logger.js';
-import { errno, realBehind, refusingOnly } from '../../helpers/refusal-doubles.js';
 import { createTempDirTracker } from '../../system/test-common.js';
 import { recordingLogger, silentLogger as SILENT_LOGGER } from '../../test-doubles.js';
-
-// `rm` is a named import in the build, so the one refused-cleanup case injects
-// at the module seam. Every other call removes for real.
-vi.mock('node:fs/promises', async (importOriginal) =>
-  (await import('../../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['rm', 'rename']));
-// `statSync` answers "is there a previous output to park?" — a refusal there is injected too.
-// Inline, not through `spiedModule`: that helper's module graph imports `node:fs`
-// itself, so importing it from THIS factory waits on the factory — a deadlock.
-vi.mock('node:fs', async (importOriginal) => {
-  const actual = await importOriginal<typeof fs>();
-  return { ...actual, statSync: vi.fn(actual.statSync) };
-});
 
 /**
  * A body whose relative link resolves to nothing: `LINK_MISSING_TARGET`, an
@@ -66,15 +45,15 @@ const CLEAN_DESCRIPTION = 'A skill used to exercise vat skills build in tests.';
 const WRONG_PERSON_DESCRIPTION =
   'You should use this skill whenever a test needs a post-build finding to exist.';
 
-/** The `mkdtemp` prefix `beginStagedBuild` writes under `dist/`. */
-const STAGING_PREFIX = '.vat-skills-';
-
-/** The location every anchor assertion expects once the staging path is mapped away. */
-const DEMO_SKILL_LOCATION = 'dist/skills/demo/SKILL.md';
-
 /** A bundle written into `dist/skills` by a DIFFERENT run, mid-flight. */
 const OTHER_RUN_BUNDLE = 'from-the-other-run';
 const OTHER_RUN_BYTES = 'other run\n';
+
+/** What names every staged (and parked) tree the swap writes beside `dist/skills`. */
+const STAGING_INFIX = '.vat-staged-';
+
+/** The location every anchor assertion expects once the staging path is mapped away. */
+const DEMO_SKILL_LOCATION = 'dist/skills/demo/SKILL.md';
 
 /** One skill fixture: its name, its body, and (optionally) a noisy description. */
 type SkillFixture = readonly [name: string, body: string, description?: string];
@@ -133,6 +112,7 @@ async function build(
     projectSkills: [],
     onlySkill: options.onlySkill,
     verbose: options.verbose ?? false,
+    runOutputs: [],
   };
   return runSkillBuild(input);
 }
@@ -226,8 +206,8 @@ describe('runSkillBuild - dist/skills is replaced only by a build that succeeded
     await expect(distEntries(cwd)).resolves.toEqual(['skills']);
   });
 
-  // A staging root from `mkdtemp` is 0700, and a full build promotes the root
-  // itself: `dist/skills` must get the mode any directory the build makes gets.
+  // A full build's staged tree BECOMES `dist/skills`: it must get the mode any
+  // directory the build makes gets, never a temp directory's 0700.
   it.skipIf(process.platform === 'win32')('promotes dist/skills with the ordinary directory mode, not a temp dir\'s 0700', async () => {
     const cwd = createTempDir();
     const probe = safePath.join(cwd, 'mode-probe');
@@ -297,7 +277,7 @@ describe('runSkillBuild - findings point at the tree the swap lands on', () => {
 
     const locations = publishedLocations(run);
     expect(locations).toContain(DEMO_SKILL_LOCATION);
-    expect(locations.join('\n')).not.toContain(STAGING_PREFIX);
+    expect(locations.join('\n')).not.toContain(STAGING_INFIX);
   });
 
   it('re-anchors on a run that never promoted its output either', async () => {
@@ -312,7 +292,7 @@ describe('runSkillBuild - findings point at the tree the swap lands on', () => {
 
     expect(run.outputCommitted).toBe(false);
     expect(publishedLocations(run)).toContain(DEMO_SKILL_LOCATION);
-    expect(publishedLocations(run).join('\n')).not.toContain(STAGING_PREFIX);
+    expect(publishedLocations(run).join('\n')).not.toContain(STAGING_INFIX);
   });
 
   it('never shows the operator a staging path on stderr', async () => {
@@ -325,7 +305,7 @@ describe('runSkillBuild - findings point at the tree the swap lands on', () => {
     await build(cwd, [['demo', CLEAN_BODY, WRONG_PERSON_DESCRIPTION]], { logger, verbose: true });
 
     expect(lines.join('\n')).toContain(`Location: ${DEMO_SKILL_LOCATION}`);
-    expect(lines.join('\n')).not.toContain(STAGING_PREFIX);
+    expect(lines.join('\n')).not.toContain(STAGING_INFIX);
   });
 });
 
@@ -458,185 +438,151 @@ describe('runSkillBuild - the failure message names what THIS run promotes', () 
   });
 });
 
-/** Write one file into `dir`, creating it — a stand-in for a staged bundle. */
-async function seedTree(dir: string, contents: string): Promise<void> {
-  await mkdir(dir, { recursive: true });
-  await writeFile(safePath.join(dir, 'SKILL.md'), contents);
+/** Whether `path` is a staged tree beside a destination (never its parked `.previous` twin). */
+const isStaged = (path: string): boolean => path.includes(STAGING_INFIX) && !path.endsWith('.previous');
+
+/** Run `work` with the fault rules installed under `cwd`, restoring the filesystem after. */
+async function withFaults<T>(cwd: string, faults: FaultRule[], work: () => Promise<T>): Promise<T> {
+  const session = installFaultFs({ within: cwd, faults });
+  try {
+    return await work();
+  } finally {
+    session.restore();
+  }
 }
 
-describe('beginStagedBuild - a failed promotion still leaves an answer', () => {
+describe('runSkillBuild - a failed swap still leaves an answer', () => {
   const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-staging-promote-');
 
   afterEach(() => cleanupTempDirs());
 
-  it('restores the parked previous output when the promotion target is free', async () => {
-    // The primitive the whole repair rests on: after `commit()` throws, the
-    // previous tree is one rename away and nothing else knows where it is.
+  it('a swap the OS refuses after a clean build: the previous output intact, the promotion failure RUN_INCOMPLETE, nothing staged left', async () => {
     const cwd = createTempDir();
     await seedPreviousOutput(cwd, ['kept']);
-    const staging = await beginStagedBuild(cwd, undefined);
 
-    expect(staging.hadPreviousOutput).toBe(true);
-    expect(existsSync(safePath.join(cwd, 'dist', 'skills'))).toBe(false);
+    const run = await withFaults(cwd, [{ family: 'rename', path: isStaged, errno: 'EACCES' }], () => build(cwd, [['good', CLEAN_BODY]]));
 
-    const recovery = await staging.recover();
-
-    expect(recovery.restoredPrevious).toBe(true);
-    expect(recovery.residue).toEqual([]);
+    expect(run.outputCommitted).toBe(false);
+    expect(refusalCodeOf(run.promotionFailure?.error)).toBe('RUN_INCOMPLETE');
+    expect(run.promotionFailure?.description).toContain('Build output promotion failed');
+    expect(run.promotionFailure?.description).toContain('The previous dist/skills is intact');
     await expect(readBundle(cwd, 'kept')).resolves.toBe(PREVIOUS_BUNDLE);
-    // Its own staging root is always safe to drop, and dropping it is what stops
-    // a full copy of the build output accumulating in dist/ per failed promotion.
     await expect(distEntries(cwd)).resolves.toEqual(['skills']);
   });
 
-  it('never restores over a tree that already occupies the promotion target', async () => {
-    // The concurrent-build case, which needs no injection: the other run promoted
-    // its own output while this one was building. Restoring here would replace
-    // fresh output with a stale copy, so the parked tree is REPORTED instead.
+  it('a swap refused and its restore refused too: the parked previous output is named, with the mv that restores it', async () => {
     const cwd = createTempDir();
     await seedPreviousOutput(cwd, ['kept']);
-    const staging = await beginStagedBuild(cwd, undefined);
-    await seedTree(safePath.join(cwd, 'dist', 'skills', OTHER_RUN_BUNDLE), OTHER_RUN_BYTES);
+    // The park is the first rename naming a `.previous`; the restore is the second.
+    const faults: FaultRule[] = [
+      { family: 'rename', path: isStaged, errno: 'EACCES' },
+      { family: 'rename', path: (path) => path.endsWith('.previous'), nth: 2, errno: 'EACCES' },
+    ];
 
-    const recovery = await staging.recover();
+    const run = await withFaults(cwd, faults, () => build(cwd, [['good', CLEAN_BODY]]));
 
-    expect(recovery.restoredPrevious).toBe(false);
-    expect(recovery.residue).toEqual([{ path: staging.parkedPath, reason: expect.stringContaining('occupied') }]);
-    await expect(readdir(safePath.join(cwd, 'dist', 'skills'))).resolves.toEqual([OTHER_RUN_BUNDLE]);
+    expect(run.outputCommitted).toBe(false);
+    expect(refusalCodeOf(run.promotionFailure?.error)).toBe('RUN_INCOMPLETE');
+    const parked = (await distEntries(cwd)).find((name) => name.endsWith('.previous'));
+    expect(parked).toBeDefined();
+    expect(run.promotionFailure?.description).toContain(`mv ${safePath.join(cwd, 'dist', parked ?? '')} ${safePath.join(cwd, 'dist', 'skills')}`);
+    await expect(readFile(safePath.join(cwd, 'dist', parked ?? '', 'kept', 'SKILL.md'), 'utf8')).resolves.toBe(PREVIOUS_BUNDLE);
   });
 
-  it('names WHY each path stayed on disk, so a second refusal is not lost behind the first', async () => {
-    // The repair runs because the filesystem already refused something; when
-    // it refuses again, the parked path used to be listed with no reason and
-    // the second errno went nowhere.
+  // The concurrent-build case, which needs no injected errno: another run promotes its own output
+  // between this run's park and its swap. The swap cannot land on the occupied path, and the
+  // restore must NOT replace the other run's fresh output with this run's stale previous one —
+  // the previous tree stays parked, named with the `mv` that restores it, the other run's output kept.
+  it('a dist/skills reoccupied between the park and the swap: the other run\'s output is kept, the previous tree parked and named', async () => {
     const cwd = createTempDir();
     await seedPreviousOutput(cwd, ['kept']);
-    const staging = await beginStagedBuild(cwd, undefined);
-    await seedTree(safePath.join(staging.root, 'fresh'), 'this run\n');
-    await seedTree(safePath.join(cwd, 'dist', 'skills', OTHER_RUN_BUNDLE), OTHER_RUN_BYTES);
-    // `commit()` fails on the occupied target; `recover()` then cannot restore
-    // (occupied) AND, here, cannot drop its own staging root either.
-    vi.mocked(rm).mockRejectedValueOnce(errno('EBUSY', 'EBUSY: resource busy'));
+    const distSkills = safePath.join(cwd, 'dist', 'skills');
+    const realRename = fsPromises.rename.bind(fsPromises);
+    const spy = vi.spyOn(fsPromises, 'rename').mockImplementation(async (from, to) => {
+      // The swap: a staged tree renamed onto dist/skills. The other run got there first.
+      if (String(to) === distSkills && isStaged(String(from)) && !existsSync(distSkills)) {
+        await mkdir(safePath.join(distSkills, OTHER_RUN_BUNDLE), { recursive: true });
+        await writeFile(safePath.join(distSkills, OTHER_RUN_BUNDLE, 'SKILL.md'), OTHER_RUN_BYTES);
+      }
+      return realRename(from, to);
+    });
+    let run: SkillBuildRun;
+    try {
+      run = await build(cwd, [['good', CLEAN_BODY]]);
+    } finally {
+      spy.mockRestore();
+    }
 
-    const settled = await settleStaging(staging, false, SILENT_LOGGER);
-
-    expect(settled.promotionError).toContain(`${staging.parkedPath} — the promotion target is already occupied`);
-    expect(settled.promotionError).toContain(`${staging.root} — removal failed: EBUSY`);
+    expect(run.outputCommitted).toBe(false);
+    expect(run.promotionFailure?.error).toMatchObject({ code: 'TREE_ROLLBACK_INCOMPLETE' });
+    const parked = (await distEntries(cwd)).find((name) => name.endsWith('.previous'));
+    expect(parked).toBeDefined();
+    expect(run.promotionFailure?.description).toContain(`mv ${safePath.join(cwd, 'dist', parked ?? '')} ${distSkills}`);
+    await expect(readFile(safePath.join(distSkills, OTHER_RUN_BUNDLE, 'SKILL.md'), 'utf8')).resolves.toBe(OTHER_RUN_BYTES);
+    await expect(readFile(safePath.join(cwd, 'dist', parked ?? '', 'kept', 'SKILL.md'), 'utf8')).resolves.toBe(PREVIOUS_BUNDLE);
   });
 
-  it('reports the promotion failure, names the parked path, and publishes the document', async () => {
-    // End to end through `settleStaging`: a real ENOTEMPTY/EPERM from renaming
-    // the staging root onto a non-empty directory, with no mocks.
+  it('a previous output the OS will not remove once replaced: the run committed, and a warning names the parked tree', async () => {
     const cwd = createTempDir();
     await seedPreviousOutput(cwd, ['kept']);
-    const staging = await beginStagedBuild(cwd, undefined);
-    await seedTree(safePath.join(staging.root, 'fresh'), 'this run\n');
-    // A concurrent build promoted first. `rename(root, dist/skills)` now fails.
-    await seedTree(safePath.join(cwd, 'dist', 'skills', OTHER_RUN_BUNDLE), OTHER_RUN_BYTES);
 
-    const settled = await settleStaging(staging, false, SILENT_LOGGER);
+    // A rule fires once, on its first match that no earlier rule took: one for the removal's first
+    // try, one for its retry after the walk.
+    const parkedRemoval = (): FaultRule => ({ family: 'remove', op: 'rm', path: (path) => path.endsWith('.previous'), errno: 'EACCES' });
 
-    expect(settled.outputCommitted).toBe(false);
-    expect(settled.promotionError).toContain('Build output promotion failed');
-    expect(settled.promotionError).toContain(staging.parkedPath);
-    expect(settled.promotionError).toContain('mv ');
+    const run = await withFaults(cwd, [parkedRemoval(), parkedRemoval()], () => build(cwd, [['good', CLEAN_BODY]]));
+
+    expect(run.outputCommitted).toBe(true);
+    expect(run.promotionFailure).toBeUndefined();
+    await expect(readBundle(cwd, 'good')).resolves.toContain('name: good');
+    const parked = (await distEntries(cwd)).find((name) => name.endsWith('.previous'));
+    expect(run.residue).toEqual([expect.objectContaining({ code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', link: safePath.join(cwd, 'dist', parked ?? '') })]);
   });
 });
 
-/** A staging root with the `mkdtemp` suffix spelled out, so the mapper is real. */
-const STAGED = 'dist/.vat-skills-abc123';
-
-/** The one rewrite `createStagingPathMapper` performs, in its relative spelling. */
-const mapPath = (value: string): string =>
-  value.startsWith(`${STAGED}/`) ? `dist/skills${value.slice(STAGED.length)}` : value;
-
-function resultWith(overrides: Partial<PackageSkillResult>): PackageSkillResult {
-  return {
-    outputPath: `${STAGED}/demo`,
-    files: { skill: 'SKILL.md', dependencies: [] },
-    hasErrors: false,
-    ...overrides,
-  } as PackageSkillResult;
-}
-
-const stagedIssue = (location: string): ValidationIssue => ({
-  code: 'PACKAGED_BROKEN_LINK',
-  severity: 'error',
-  message: 'A packaged link resolves to nothing.',
-  location,
-});
-
-describe('reanchorStagedResult - BOTH post-build channels are re-anchored', () => {
-  // A live invariant with no live producer: every current `postBuildIssues`
-  // location is bundle-relative or source-project-relative, so removing the
-  // branch below breaks no build fixture in the repo. Asserted directly, because
-  // "the suite stayed green" is not evidence about a branch nothing exercises.
-
-  it('re-anchors a location on the postBuildIssues channel', () => {
-    const result = reanchorStagedResult(
-      resultWith({ postBuildIssues: [stagedIssue(`${STAGED}/demo/pack/b.md`)] }),
-      mapPath,
-    );
-
-    expect(result.postBuildIssues?.[0]?.location).toBe('dist/skills/demo/pack/b.md');
-  });
-
-  it('re-anchors a location on the postBuildValidation channel', () => {
-    const result = reanchorStagedResult(
-      resultWith({
-        postBuildValidation: {
-          allErrors: [stagedIssue(`${STAGED}/demo/SKILL.md`)],
-        } as PackagingValidationResult,
-      }),
-      mapPath,
-    );
-
-    expect(result.postBuildValidation?.allErrors[0]?.location).toBe(DEMO_SKILL_LOCATION);
-  });
-
-  it('leaves a location that names no staged path alone', () => {
-    const result = reanchorStagedResult(
-      resultWith({ postBuildIssues: [stagedIssue('resources/skills/demo/extra/CLAUDE.md')] }),
-      mapPath,
-    );
-
-    expect(result.postBuildIssues?.[0]?.location).toBe('resources/skills/demo/extra/CLAUDE.md');
-  });
-});
-
-describe('beginStagedBuild - a filesystem refusal is coded at its cause, never INTERNAL_ERROR', () => {
+describe('runSkillBuild - a filesystem refusal is coded at its cause, never INTERNAL_ERROR', () => {
   const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-staging-refusal-');
 
-  afterEach(() => {
-    vi.mocked(statSync).mockImplementation(realBehind(statSync));
-    return cleanupTempDirs();
-  });
+  afterEach(() => cleanupTempDirs());
 
-  it('refuses a previous output the OS will not stat as INPUT_UNREADABLE, before anything moves', async () => {
+  it('refuses a previous output the OS will not examine as a destination fault (RUN_INCOMPLETE), before anything moves', async () => {
     // `existsSync` read EACCES as "no previous output", so the run went on to
     // promote over a tree it could not see.
     const cwd = createTempDir();
     await seedPreviousOutput(cwd, ['kept']);
     const target = safePath.join(cwd, 'dist', 'skills');
-    vi.mocked(statSync).mockImplementation(refusingOnly(target, errno('EACCES'), realBehind(statSync)));
 
-    const refused = await beginStagedBuild(cwd, undefined).catch((error: unknown) => error);
+    const refused = await withFaults(cwd, [{ family: 'meta', path: (path) => path === target, errno: 'EACCES' }], () => build(cwd, [['good', CLEAN_BODY]]).catch((error: unknown) => error));
 
-    expect(refusalCodeOf(refused)).toBe('INPUT_UNREADABLE');
+    expect(refused).toMatchObject({ code: 'FS_FAULT', side: 'destination', faultClass: 'refused' });
+    expect(refusalCodeOf(refused)).toBe('RUN_INCOMPLETE');
     expect(String((refused as Error).message)).toContain(target);
-    vi.mocked(statSync).mockImplementation(realBehind(statSync));
     await expect(readBundle(cwd, 'kept')).resolves.toBe(PREVIOUS_BUNDLE);
   });
 
   it('refuses a previous output that cannot be parked as RUN_INCOMPLETE, naming the path', async () => {
     const cwd = createTempDir();
     await seedPreviousOutput(cwd, ['kept']);
-    vi.mocked(rename).mockRejectedValueOnce(errno('EACCES', 'EACCES: permission denied'));
+    const target = safePath.join(cwd, 'dist', 'skills');
 
-    const refused = await beginStagedBuild(cwd, undefined).catch((error: unknown) => error);
+    const run = await withFaults(cwd, [{ family: 'rename', path: (path) => path === target, nth: 1, errno: 'EACCES' }], () => build(cwd, [['good', CLEAN_BODY]]));
+
+    expect(refusalCodeOf(run.promotionFailure?.error)).toBe('RUN_INCOMPLETE');
+    expect(run.promotionFailure?.description).toContain(target);
+    await expect(readBundle(cwd, 'kept')).resolves.toBe(PREVIOUS_BUNDLE);
+  });
+
+  // The post-build checks re-read the staged bundle: a raw errno there escaped as
+  // INTERNAL_ERROR. The staged tree is the destination's, so the refusal is RUN_INCOMPLETE.
+  it('refuses a staged bundle the OS will not list as RUN_INCOMPLETE, the previous output intact and nothing staged left', async () => {
+    const cwd = createTempDir();
+    await seedPreviousOutput(cwd, ['kept']);
+    const stagedBundle = (path: string): boolean => /\/dist\/\.[^/]+\/good$/.test(path);
+
+    const refused = await withFaults(cwd, [{ family: 'list', path: stagedBundle, errno: 'EACCES' }], () => build(cwd, [['good', CLEAN_BODY]]).catch((error: unknown) => error));
 
     expect(refusalCodeOf(refused)).toBe('RUN_INCOMPLETE');
-    expect(String((refused as Error).message)).toContain(safePath.join(cwd, 'dist', 'skills'));
     await expect(readBundle(cwd, 'kept')).resolves.toBe(PREVIOUS_BUNDLE);
+    await expect(distEntries(cwd)).resolves.toEqual(['skills']);
   });
 });

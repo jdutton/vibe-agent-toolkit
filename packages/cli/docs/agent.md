@@ -215,8 +215,8 @@ a dangling one included — has only its link removed, never its target.
 **Exit codes** (derived from the document): `0` removed; `2` nothing removed,
 with `error.code`: `USAGE_INVALID` (an unknown `--scope` or `--runtime`, a name
 that is not one path segment, or the agent is not installed in that scope),
-`INPUT_UNREADABLE` (the install path cannot be read), `RUN_INCOMPLETE` (the
-removal failed).
+`RUN_INCOMPLETE` (the install path cannot be examined, or the removal failed: the
+install is what the verb removes, so a refusal there is the run not finishing).
 
 ---
 

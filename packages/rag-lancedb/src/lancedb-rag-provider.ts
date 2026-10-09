@@ -1064,7 +1064,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * Deletes all data and removes the database directory.
    * This is a destructive operation that cannot be undone.
    *
-   * @throws {Error} When the directory holds anything a RAG database does not
+   * @throws {VatError} `TREE_DEST_NOT_OWNED` when the path is a link or holds anything a RAG database does not
    *   (see `removeRagDatabase`); nothing is removed then
    */
   async clear(): Promise<void> {
@@ -1075,8 +1075,10 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // Close connection first
     await this.close();
 
-    // Delete the database directory — refused if it holds anything a database does not.
-    removeRagDatabase(this.config.dbPath);
+    // Delete the database directory — refused if it holds anything a database does not. Once it is off
+    // its path the clear is done; a deletion the OS then stops is still this call's failure, naming where it is.
+    const { leftover } = await removeRagDatabase(this.config.dbPath);
+    if (leftover !== undefined) throw leftover;
   }
 
   /**

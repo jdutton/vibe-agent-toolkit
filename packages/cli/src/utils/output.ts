@@ -5,6 +5,7 @@
 
 import { writeSync } from 'node:fs';
 
+import { isWouldBlockError } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
 /**
@@ -127,7 +128,7 @@ export function writeAllSync(
       // A non-blocking pipe whose buffer is momentarily full raises EAGAIN; a
       // reader that is draining will free space, so retry. Anything else is a
       // genuine write failure.
-      if ((error as NodeJS.ErrnoException).code !== 'EAGAIN') throw error;
+      if (!isWouldBlockError(error)) throw error;
       consecutiveRetries++;
       if (consecutiveRetries > maxRetries) {
         throw new Error(

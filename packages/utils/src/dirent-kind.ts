@@ -28,10 +28,8 @@ import type { Dirent } from 'node:fs';
 import { statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 
-import { isPathAbsentError } from './errors/errno.js';
-import { VatError } from './errors/vat-error.js';
-import { toForwardSlash } from './path-core.js';
-import { normalizePath, safePath } from './path-utils.js';
+import { isPathAbsentError } from './errors/errno-table.js';
+import { safePath } from './path-utils.js';
 
 /** What the entry itself is. A link is a link. */
 export type DirentKind = 'file' | 'directory' | 'symlink' | 'other';
@@ -88,51 +86,5 @@ export async function direntKindFollowing(dir: string, entry: Dirent): Promise<F
   } catch (error) {
     if (isPathAbsentError(error)) return 'dangling';
     throw error;
-  }
-}
-
-/** The `VatError` code of a {@link DirectoryWalkRevisitedError}. */
-export const DIRECTORY_WALK_REVISITED_CODE = 'DIRECTORY_WALK_REVISITED';
-
-/** Thrown when a following walk is led back into a directory it has already entered. */
-export class DirectoryWalkRevisitedError extends VatError {
-  constructor(dir: string, enteredAs: string) {
-    super(
-      DIRECTORY_WALK_REVISITED_CODE,
-      `Refusing to enter ${dir}: it is the directory already walked as ${enteredAs} — a symlink leads the walk back into itself.`,
-    );
-  }
-}
-
-/**
- * The directories a FOLLOWING walk has entered, by realpath, so a link that
- * leads back into the walk is refused instead of recursed until
- * `ENAMETOOLONG`.
- *
- * A walk that follows links (`direntKindFollowing`) has no cycle guard by
- * construction: `scripts/loop -> .` makes a copy create `dest/loop/loop/…`,
- * writing every file at every level first, and a hashing walk do the same in
- * memory. Every following walk holds one of these and calls {@link enter}
- * on every directory it recurses into — the root included. A REVISIT is
- * refused, not just a cycle: two links to one directory make the walk's
- * output ambiguous (which spelling is the file's path?), and a refusal that
- * names both spellings is the answer the author can act on.
- */
-export class FollowedWalk {
-  readonly #entered = new Map<string, string>();
-
-  /**
-   * Record that the walk is entering `dir`. Synchronous on purpose — one
-   * realpath per directory entered is nothing beside the listing itself, and
-   * the sync and async walkers then share one guard.
-   *
-   * @param dir - A directory the walk is about to list, in any spelling
-   * @throws {DirectoryWalkRevisitedError} When its realpath was entered before
-   */
-  enter(dir: string): void {
-    const real = toForwardSlash(normalizePath(dir));
-    const before = this.#entered.get(real);
-    if (before !== undefined) throw new DirectoryWalkRevisitedError(dir, before);
-    this.#entered.set(real, dir);
   }
 }

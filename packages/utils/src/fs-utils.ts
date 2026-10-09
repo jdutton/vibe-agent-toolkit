@@ -12,19 +12,14 @@
 // back to named imports would silently disarm the guard. The async half below
 // already uses the default object for the same reason.
 import nodeFs from 'node:fs';
-import fs, { type FileHandle } from 'node:fs/promises';
+import fs from 'node:fs/promises';
 import path from 'node:path';
-import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 
-import { FollowedWalk } from './dirent-kind.js';
-import { isFilesystemAccessError } from './errors/errno.js';
-import { isVatError, VatError } from './errors/vat-error.js';
-import { everyInOrder, forEachInOrder } from './in-order.js';
-import { isUnderRoot } from './path-containment.js';
+import { fsFaultOf, isRetryableShortageError } from './errors/errno-table.js';
+import { everyInOrder } from './in-order.js';
 import { toForwardSlash, toNfc } from './path-core.js';
 import { safePath } from './path-utils.js';
-import { openForReading } from './text-file.js';
 
 /**
  * What one path looked like the first time this run asked.
@@ -80,7 +75,7 @@ export type DirectoryListing =
 /**
  * Turn a `readdir` rejection into the failure it actually is.
  *
- * ⚠️ **`isFilesystemAccessError` is deliberately NOT used here, and that is not
+ * ⚠️ **`fsFaultOf` is deliberately NOT used here, and that is not
  * an oversight.** It answers a different question — *"is this the environment's
  * fault or a bug in our code?"* — and to answer it, it deliberately groups
  * `ENOENT` together with `EACCES`. That grouping IS the conflation this function
@@ -96,42 +91,44 @@ export type DirectoryListing =
  * @returns The listing outcome that error stands for
  */
 export function listingFailure(error: unknown): DirectoryListing {
-  const code =
-    typeof error === 'object' && error !== null && 'code' in error
-      ? (error as { code: unknown }).code
-      : undefined;
-
-  // `ENOTDIR` is absence too: a path component that is a file is a directory
-  // that does not exist, which is exactly what the caller has to report.
-  if (code === 'ENOENT' || code === 'ENOTDIR') return { outcome: 'absent' };
+  const facts = fsFaultOf(error);
+  // The `absent` class holds `ENOTDIR` too: a path component that is a file is a
+  // directory that does not exist, which is exactly what the caller has to report.
+  if (facts?.faultClass === 'absent') return { outcome: 'absent' };
+  if (facts !== undefined) return { outcome: 'unreadable', code: facts.errno };
+  // An errno outside the classifier's table is still a refusal, reported as itself.
+  const code = typeof error === 'object' && error !== null && 'code' in error ? (error as { code: unknown }).code : undefined;
   return { outcome: 'unreadable', code: typeof code === 'string' ? code : 'UNKNOWN' };
 }
 
 /**
- * Refusal errnos that a *re-ask* can legitimately answer differently.
+ * Whether a listing refused with `code` could be answered differently by a later
+ * ask — {@link isRetryableShortageError}: busy, or out of descriptors.
  *
- * ⚠️ **This set decides what may be MEMOIZED, which makes it a correctness
- * boundary rather than a taxonomy.** `EACCES` (a mode bit) and `ELOOP` (a
- * committed symlink cycle) are facts about the tree: they hold for the whole
- * run, re-asking buys the same refusal, and caching them is exactly what
- * {@link FsLookupCache} is for. Descriptor exhaustion is not a fact about the
- * tree at all — it is a fact about this process at one instant — and a memo
- * that keeps one un-verifies every path under that directory for the rest of
- * the run, producing a burst of findings that a re-run does not reproduce.
+ * ⚠️ **This decides what may be MEMOIZED, which makes it a correctness boundary
+ * rather than a taxonomy.** `EACCES` (a mode bit) and `ELOOP` (a committed
+ * symlink cycle) are facts about the tree: they hold for the whole run, re-asking
+ * buys the same refusal, and caching them is exactly what {@link FsLookupCache}
+ * is for. A descriptor shortage or a busy handle is not a fact about the tree at
+ * all — it is a fact about this process at one instant — and a memo that keeps
+ * one un-verifies every path under that directory for the rest of the run,
+ * producing a burst of findings that a re-run does not reproduce.
  *
- * **Deliberately short, and everything unlisted is treated as stable.** The two
- * mistakes are not symmetric: memoizing a transient refusal costs a burst of
- * wrong answers *within one run*, while re-asking a stable one costs an
- * unbounded number of syscalls on a `--x` directory that will refuse every one
- * of them — and on a dead network mount, each of those blocks. `EAGAIN` is
- * included because it is literally "try again"; `ETIMEDOUT`/`ESTALE`/`EBUSY`
- * are not, because a re-ask against failing hardware or a hung mount is the
- * storm this set exists to avoid.
+ * **Everything else is treated as stable.** The two mistakes are not symmetric:
+ * memoizing a transient refusal costs a burst of wrong answers *within one run*,
+ * while re-asking a stable one costs an unbounded number of syscalls on a `--x`
+ * directory that will refuse every one of them. The `device` class (`ETIMEDOUT`,
+ * `ESTALE`, `EIO`) stays stable — a re-ask against failing hardware or a hung
+ * mount is the storm this boundary exists to avoid — and so does a full disk
+ * (`ENOSPC`, `EDQUOT`): re-asking frees no space, and the clause below would
+ * tell the reader to re-run.
  */
-const TRANSIENT_LISTING_ERRNOS: ReadonlySet<string> = new Set(['EMFILE', 'ENFILE', 'EAGAIN']);
+function isTransientListingCode(code: string): boolean {
+  return isRetryableShortageError({ code });
+}
 
 /**
- * The clause a finding prints about a refusal {@link TRANSIENT_LISTING_ERRNOS}
+ * The clause a finding prints about a refusal {@link isTransientListingCode}
  * calls transient — owned here, beside the list, so it describes every member.
  *
  * 🪤 Both consumers of `AbsenceCause.transient` used to write their own: "`X`
@@ -146,12 +143,12 @@ const TRANSIENT_LISTING_ERRNOS: ReadonlySet<string> = new Set(['EMFILE', 'ENFILE
  *   trailing punctuation so a caller can continue the sentence
  */
 export function transientRefusalClause(code: string): string {
-  return `${code} is a transient shortage (a descriptor or other resource this process ran out of for a moment), not a permission`;
+  return `${code} is a transient shortage (a descriptor this process ran out of, or something busy, for a moment), not a permission`;
 }
 
 /** Whether this listing failed in a way a later ask could get past. */
 function isTransientRefusal(listing: DirectoryListing): boolean {
-  return listing.outcome === 'unreadable' && TRANSIENT_LISTING_ERRNOS.has(listing.code);
+  return listing.outcome === 'unreadable' && isTransientListingCode(listing.code);
 }
 
 /** How many probes a {@link FsLookupCache} answered, and how many cost syscalls. */
@@ -273,10 +270,10 @@ export class FsLookupCache {
         // than guessing `false`, which would read as "it is a file", and the
         // link walker reports it as an unreadable target — so the refusal is
         // SEEN, not swallowed. A bug from under the stat is not a refusal and
-        // stays loud; `isFilesystemAccessError` is the right predicate here
+        // stays loud; `fsFaultOf` is the right predicate here
         // precisely because it groups every environmental errno together and
         // excludes a `TypeError`.
-        if (!isFilesystemAccessError(error)) throw error;
+        if (fsFaultOf(error) === undefined) throw error;
         isDirectory = null;
       }
     }
@@ -410,7 +407,7 @@ export class FsLookupCache {
    *
    * A *stable* failure is cached like a success: re-asking a directory whose
    * mode bits refuse us, or whose path is a symlink cycle, is the same failed
-   * syscall. A **transient** one is not — see {@link TRANSIENT_LISTING_ERRNOS}.
+   * syscall. A **transient** one is not — see {@link isTransientListingCode}.
    *
    * ⚠️ **The transient entry is dropped only once the promise has SETTLED, and
    * that timing is the whole design.** Deleting the row up front, or refusing to
@@ -466,158 +463,6 @@ export class FsLookupCache {
       this.#listings.delete(dirPath);
     }
     return listing;
-  }
-}
-
-/** The `VatError` code of a {@link CopyLinkEscapesSourceError}. */
-export const COPY_LINK_ESCAPES_SOURCE_CODE = 'COPY_LINK_ESCAPES_SOURCE';
-
-/** Thrown when a link inside the tree being copied points outside it. */
-export class CopyLinkEscapesSourceError extends VatError {
-  constructor(link: string, src: string) {
-    super(
-      COPY_LINK_ESCAPES_SOURCE_CODE,
-      `Refusing to copy ${link}: it is a symlink to a path outside ${src}. ` +
-        'A copy follows links, so this would ship content the source tree does not own — ' +
-        'replace the link with the files, or point it inside the tree.',
-    );
-  }
-}
-
-/** The `VatError` code of a {@link CopySourceNotRegularError}. */
-export const COPY_SOURCE_NOT_REGULAR_CODE = 'COPY_SOURCE_NOT_REGULAR';
-
-/** Thrown when an entry of the tree being copied is a named pipe, socket or device (or a link to one). */
-class CopySourceNotRegularError extends VatError {
-  constructor(entry: string) {
-    super(
-      COPY_SOURCE_NOT_REGULAR_CODE,
-      `Refusing to copy ${entry}: it is not a regular file (a named pipe, socket or device), ` +
-        'so it has no content to copy and opening it could block forever — remove it from the tree.',
-    );
-  }
-}
-
-/** The errno {@link openForReading} refuses a named pipe, socket or device with (BSD's own means the same). */
-const NOT_A_REGULAR_FILE_ERRNO = 'EFTYPE';
-
-/** The `VatError` code of a source-side refusal of {@link copyDirectory}. */
-export const COPY_SOURCE_UNREADABLE_CODE = 'COPY_SOURCE_UNREADABLE';
-
-/**
- * What a refusal by the OS to read `entry` of the tree being copied becomes: the
- * source's ({@link COPY_SOURCE_UNREADABLE_CODE}, naming `entry`), or for a
- * special file {@link CopySourceNotRegularError}. Only a filesystem refusal is
- * coded: a defect stays raw, and an already-coded refusal passes.
- */
-function sourceRefusal(entry: string, error: unknown): unknown {
-  if (!isFilesystemAccessError(error) || isVatError(error)) return error;
-  if ((error as NodeJS.ErrnoException).code === NOT_A_REGULAR_FILE_ERRNO) return new CopySourceNotRegularError(entry);
-  return new VatError(
-    COPY_SOURCE_UNREADABLE_CODE,
-    `Could not read ${entry} to copy it: ${error instanceof Error ? error.message : String(error)}`,
-    { cause: error },
-  );
-}
-
-/** Run one read of the tree being copied, a refusal coded by {@link sourceRefusal}. */
-async function readingSource<T>(entry: string, read: () => Promise<T>): Promise<T> {
-  try {
-    return await read();
-  } catch (error) {
-    throw sourceRefusal(entry, error);
-  }
-}
-
-/**
- * Recursively copy a directory, following symlinks — contained to `src`.
- *
- * A link is copied as what it points at (a linked directory as its tree, a
- * linked file as its bytes). Two refusals bound that: a link whose target is not
- * under `src` throws {@link CopyLinkEscapesSourceError} — `scripts/etc -> /etc`
- * used to copy `/etc` into `dist` — and a link that leads the walk back into a
- * directory it already entered throws `DirectoryWalkRevisitedError`
- * (`scripts/loop -> .` used to create `dest/loop/loop/…` until `ENAMETOOLONG`,
- * writing every file at every level first). Adopter-authored trees reach this
- * through `vat agent build`, so neither shape is exotic.
- *
- * Every file is opened without blocking and judged by `fstat` on that handle,
- * then copied from it: a named pipe, socket or device (or a link to one) throws
- * {@link CopySourceNotRegularError} without a byte read — even one swapped in
- * after the listing, which a check by path could not see. Anything the OS will
- * not let the copy list, stat or read in `src` (a dangling link included) throws
- * {@link COPY_SOURCE_UNREADABLE_CODE}; a failure writing `dest` keeps its own errno.
- *
- * @param src - Source directory path
- * @param dest - Destination directory path
- *
- * @example
- * await copyDirectory('/source/dir', '/dest/dir');
- */
-export async function copyDirectory(src: string, dest: string): Promise<void> {
-  const walk = new FollowedWalk();
-  walk.enter(src);
-  await copyTree(src, dest, src, walk);
-}
-
-/** One level of {@link copyDirectory}; every directory it recurses into has been `enter`ed. */
-async function copyTree(src: string, dest: string, root: string, walk: FollowedWalk): Promise<void> {
-  const entries = await readingSource(src, () => fs.readdir(src, { withFileTypes: true }));
-  await fs.mkdir(dest, { recursive: true });
-
-  // In order: the walk guard must see each directory entered before it recurses
-  // (revisit first, then containment), and the first refusal names the first
-  // offending entry in listing order.
-  await forEachInOrder(entries, async (entry) => {
-    const srcPath = safePath.join(src, entry.name);
-    const destPath = safePath.join(dest, entry.name);
-
-    // (Inline rather than `direntKindFollowing`: that module imports this one.)
-    let kind: { isDirectory(): boolean; isFile(): boolean } = entry;
-    if (entry.isSymbolicLink()) {
-      kind = await readingSource(srcPath, () => fs.stat(srcPath));
-      // Revisit first, so a link back into the tree is named as the loop it
-      // is; then containment, so a link out is named as the escape it is.
-      if (kind.isDirectory()) walk.enter(srcPath);
-      if (isUnderRoot(root, srcPath) !== 'inside') throw new CopyLinkEscapesSourceError(srcPath, root);
-    } else if (kind.isDirectory()) {
-      walk.enter(srcPath);
-    }
-    const isDirectory = kind.isDirectory();
-    // Refused unopened when the listing already says so; the open below catches the rest.
-    if (!isDirectory && !kind.isFile()) throw new CopySourceNotRegularError(srcPath);
-    await (isDirectory ? copyTree(srcPath, destPath, root, walk) : copyFileFromHandle(srcPath, destPath));
-  });
-}
-
-/**
- * Copy one file through a handle opened without blocking, so what is copied is
- * what `fstat` judged a regular file — never a pipe swapped in after the
- * listing. The mode is carried over, as `copyFile` does, so a script stays
- * executable.
- */
-async function copyFileFromHandle(srcPath: string, destPath: string): Promise<void> {
-  const source = await readingSource(srcPath, () => openForReading(srcPath));
-  try {
-    const stats = await readingSource(srcPath, () => source.stat());
-    if (!stats.isFile()) throw new CopySourceNotRegularError(srcPath);
-    await pipeline(sourceBytes(source, srcPath), nodeFs.createWriteStream(destPath));
-    await fs.chmod(destPath, stats.mode & 0o7777);
-  } finally {
-    await source.close();
-  }
-}
-
-/**
- * The bytes of an open source file, a read failure coded as the source's. A
- * write failure never reaches this catch: the pipeline ends the generator with
- * `return()`, not `throw()`.
- */
-async function* sourceBytes(source: FileHandle, srcPath: string): AsyncGenerator<Buffer> {
-  try {
-    yield* source.createReadStream({ autoClose: false, start: 0 }) as AsyncIterable<Buffer>;
-  } catch (error) {
-    throw sourceRefusal(srcPath, error);
   }
 }
 
@@ -753,7 +598,7 @@ export type AbsenceCause =
       readonly directory: string;
       /**
        * Whether re-running could get a different answer — see
-       * {@link TRANSIENT_LISTING_ERRNOS}.
+       * {@link isTransientListingCode}.
        *
        * Derived once, here, rather than by each consumer: two lanes write a
        * "re-run before investigating" remedy off this fact, and a second errno
@@ -785,7 +630,7 @@ export function directoryRefusalFor(
     kind: 'directory_unreadable',
     code: listing.code,
     directory: toForwardSlash(directory),
-    transient: TRANSIENT_LISTING_ERRNOS.has(listing.code),
+    transient: isTransientListingCode(listing.code),
   };
 }
 
@@ -1373,22 +1218,4 @@ export function realpathFrom(table: RealpathTable, filePath: string): string {
   }
 
   return realPath;
-}
-
-/**
- * Open every regular file under `dir` for reading, and close it again — the
- * probe a copier runs BEFORE it writes anything, so an unreadable source is
- * named as the input it is rather than surfacing mid-copy as an output failure.
- * Links are not followed (a copy takes a link as a link), and on Windows a file
- * is opened rather than `access`ed because `access` does not consult ACLs.
- *
- * @param dir - The directory whose files the caller is about to copy
- * @throws The first refusal exactly as the OS raised it; its `path` names the
- *   directory it could not list or the file it could not open
- */
-export function openEachFileForReading(dir: string): void {
-  for (const entry of nodeFs.readdirSync(dir, { recursive: true, withFileTypes: true })) {
-    if (entry.isSymbolicLink() || !entry.isFile()) continue;
-    nodeFs.closeSync(nodeFs.openSync(safePath.join(entry.parentPath, entry.name), 'r'));
-  }
 }

@@ -85,8 +85,7 @@ Derived from the document:
 - **2** - `error`; `error.code` says why:
   - `USAGE_INVALID` — no SKILL.md at the path, or agent.yaml already exists and `--force` was not given
   - `INPUT_UNREADABLE` — the SKILL.md cannot be read (a directory, permissions), its frontmatter is not YAML, or no Agent Skills schema accepts it
-  - `USAGE_INVALID` — also: an `--output` whose directory does not exist
-  - `RUN_INCOMPLETE` — writing agent.yaml failed for any other reason
+  - `RUN_INCOMPLETE` — writing agent.yaml failed, an `--output` whose directory does not exist included
 
 ## What Gets Converted
 

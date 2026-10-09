@@ -115,7 +115,7 @@
  *   force the provenance comparison to tolerate a null, which is the tolerance
  *   the paragraph above says never to add.
  *
- * `packages/agent-skills/test/projection-skill-extent.test.ts` already compares
+ * `packages/agent-skills/test/integration/projection-skill-extent.integration.test.ts` already compares
  * `SkillExtentContributor` with `walkLinkGraph` at *fixture* scale, on a corpus
  * built to reach the walker's discriminators. This file asks the other half of
  * the question: over the skills VAT actually ships, under the configs VAT
@@ -155,7 +155,7 @@
  *
  * ## Both arms are driven the way production drives them
  *
- * - **Walker arm.** One `createProjectRegistry(root)` per corpus — the registry
+ * - **Walker arm.** One `createProjectRegistry(root, { outputs: [] })` per corpus — the registry
  *   `packageSkills` builds once and reuses — then one `walkLinkGraph` per skill
  *   with the options `skill-packager.ts:600` assembles.
  * - **Closure arm.** One `populate()` per corpus, with the filesystem extent and
@@ -191,7 +191,7 @@
  * match the packager — both production lanes build theirs from
  * `partitionTestInputFileEntries(...).kept` — so the "equal inputs" this section
  * promises would become a different inequality wearing a costume. The
- * fixture-scale comparison in `projection-skill-extent.test.ts` DOES plumb it,
+ * fixture-scale comparison in `projection-skill-extent.integration.test.ts` DOES plumb it,
  * per skill, exactly as `skill-packager.ts:599` does, and that is where the
  * hatch is exercised as a genuine two-arm agreement.
  *
@@ -203,7 +203,7 @@
  * That produces a `walkerOnly` difference — the one direction this corpus never
  * shows — and it is unreachable here because **no declared skill links directly
  * to a non-markdown file**. It stays pinned at fixture scale, in
- * `projection-skill-extent.test.ts`'s `linkFollowDepth 0` and cascade cases.
+ * `projection-skill-extent.integration.test.ts`'s `linkFollowDepth 0` and cascade cases.
  * `expect(walkerOnly).toEqual([])` below is therefore a measurement of this
  * corpus, not a claim that the walker has no such branch.
  */
@@ -232,6 +232,7 @@ import {
   CLOSURE_ROOT_ABSENT,
   ContributorRegistry,
   DISCARD_BLOB_POPULATION,
+  crawlSourceFor,
   FilesystemExtentContributor,
   ProjectionBuilder,
   populate,
@@ -824,7 +825,7 @@ async function populateCorpus(
   gitTracker: GitTracker,
 ): Promise<{ projection: Projection; extentIdByName: Map<string, string> }> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
 
   const parameters: Record<string, JsonValue> = {};
   for (const skill of skills) {
@@ -921,7 +922,7 @@ async function corpusOf(spec: CorpusSpec): Promise<Corpus> {
   // already did it — before either arm runs, so both see one tree.
   await gitTracker.initialize();
   const registryStartedAt = performance.now();
-  const registry = await createProjectRegistry(root);
+  const registry = await createProjectRegistry(root, { outputs: [] });
   const registryMs = performance.now() - registryStartedAt;
 
   const populateStartedAt = performance.now();

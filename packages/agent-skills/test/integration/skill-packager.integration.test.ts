@@ -6,7 +6,7 @@ import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { packageSkill, type PackageSkillOptions } from '../../src/skill-packager.js';
-import { createFrontmatter, setupTempDir } from '../test-helpers.js';
+import { createFrontmatter, packageInPlace, setupTempDir } from '../test-helpers.js';
 
 const { getTempDir } = setupTempDir('skill-packager-');
 
@@ -376,7 +376,9 @@ describe('skill-packager: collectLinkedResources', () => {
         `See ![image](./image.png).`
     );
 
-    const result = await packageSkillForTest(skillPath, { formats: [] });
+    // In place: the image link is no markdown to bundle, and the unbundled target fails the package's
+    // own checks — `packageSkill` would land nothing; what the packager decided is the subject.
+    const result = await packageInPlace(skillPath, { outputPath: safePath.join(tempDir, 'output'), formats: [] });
 
     expect(result.files.dependencies).toHaveLength(0);
   });
@@ -405,7 +407,10 @@ describe('skill-packager: link rewriting', () => {
       '# Guide'
     );
 
-    const result = await packageSkillForTest(skillPath, {
+    // In place: an unrewritten link to an unbundled file fails the package's own checks, and
+    // `packageSkill` lands only a package that passed them.
+    const result = await packageInPlace(skillPath, {
+      outputPath: safePath.join(tempDir, 'output'),
       formats: ['directory'],
       rewriteLinks: false,
     });
@@ -1021,20 +1026,22 @@ async function setupUnreferencedFixture(
   };
 }
 
-/** Package the orphan fixture with the link rewriter switched off. */
+/**
+ * Package the orphan fixture with the link rewriter switched off — in place, because the orphan
+ * fails the package's own checks and `packageSkill` lands only a package that passed them.
+ */
 async function packageOrphanFixture(
   skillPath: string,
   outputPath: string,
-  validation?: Parameters<typeof packageSkill>[1]['validation'],
+  validation?: PackageSkillOptions['validation'],
 ) {
-  const options: Parameters<typeof packageSkill>[1] = {
+  return packageInPlace(skillPath, {
     outputPath,
     formats: ['directory'],
     rewriteLinks: false,
     resourceNaming: 'resource-id',
-  };
-  if (validation !== undefined) options.validation = validation;
-  return packageSkill(skillPath, options);
+    ...(validation !== undefined && { validation }),
+  });
 }
 
 describe('skill-packager: post-build integrity', () => {
@@ -1153,8 +1160,9 @@ describe('skill-packager: post-build integrity', () => {
     )).toBe(true);
     expect(warn.hasErrors).toBe(false);
 
-    // Upgraded to error: hasErrors = true, issue surfaces as error
-    const strict = await packageSkill(skillPath, {
+    // Upgraded to error: hasErrors = true, issue surfaces as error (in place: `packageSkill` lands
+    // only a package that passed its checks, and throws for this one)
+    const strict = await packageInPlace(skillPath, {
       outputPath: outputPathStrict,
       linkFollowDepth: 0,
       formats: ['directory'],

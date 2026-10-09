@@ -43,7 +43,11 @@ import {
   writeSuiteFixture,
 } from '../skill-test/eval-fixture.js';
 import { makeHarnessFakeSpawn } from '../skill-test/spawn-stub.js';
-import { soleArmWorkspace } from '../test-helpers.js';
+import { soleArmWorkspace, useScratchTmpdir } from '../test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test (and every child
+// a test spawns), so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-13-');
 
 // Preflight shells out to a real `claude` and probes its flags, so without this
 // the whole file would be gated on the developer's PATH rather than the code.

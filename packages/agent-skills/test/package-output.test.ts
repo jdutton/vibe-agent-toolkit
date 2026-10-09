@@ -1,20 +1,20 @@
 /**
  * What `packageSkill` writes BESIDE and INTO its output — the ZIP, the npm
- * `package.json`, the marketplace manifest — and the output check a dry run
+ * `package.json`, the marketplace manifest — and the output plan a dry run
  * shares with the real run. A write the OS refuses is the run not finishing
- * (`SKILL_PACKAGING_OUTPUT_FAILED`), never an uncoded errno, and what VAT wrote
- * of it is removed; an occupied output is refused naming `--force`.
+ * (a classified `destination` fault, `RUN_INCOMPLETE`), never an uncoded errno, and
+ * nothing of the package lands: the output and every archive are one plan; an
+ * occupied output is refused naming `--force`.
  */
 
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS, refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
+import { FS_FAULT_CODE, safePath, TREE_DEST_HOLDS_SOURCE_CODE, TREE_DEST_NOT_OWNED_CODE } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS, installFaultFs, withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
-import { SKILL_PACKAGING_OUTPUT_FAILED_CODE, SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE } from '../src/packaging-errors.js';
-import { checkPackageOutput, packageSkill } from '../src/skill-packager.js';
+import { packageSkill } from '../src/skill-packager.js';
 
 import { createFrontmatter, setupTempDir } from './test-helpers.js';
 
@@ -22,6 +22,8 @@ const { getTempDir } = setupTempDir('package-output-unit-');
 
 const SKILL_NAME = 'output-skill';
 const DIRECTORY = 'directory' as const;
+/** A write of the package's output the OS refused: the run did not finish (`RUN_INCOMPLETE`). */
+const OUTPUT_FAULT = { code: FS_FAULT_CODE, side: 'destination' };
 
 async function writeSkill(dir: string): Promise<string> {
   const skillPath = safePath.join(dir, 'SKILL.md');
@@ -39,102 +41,140 @@ async function occupiedOutput(file: string, content: string): Promise<{ tmp: str
   return { tmp, sp, out };
 }
 
-/** Run `body` while `fs/promises.writeFile` of exactly `path` rejects with `code`, writing nothing. */
-async function withWriteRefused<T>(path: string, code: string, body: () => Promise<T>): Promise<T> {
-  const restore = refuseAsyncFs('writeFile', path, code);
+/** Run `body` while a write of the staged entry the plan makes for `dest` (`.<base>.vat-staged-…` beside it) rejects with `errno`. */
+async function withStagedWriteRefused<T>(dir: string, dest: string, errno: 'ENOSPC' | 'EACCES', body: () => Promise<T>): Promise<T> {
+  const base = dest.slice(dest.lastIndexOf('/') + 1);
+  const session = installFaultFs({ within: dir, faults: [{ family: 'write', path: (path) => path.includes(`/.${base}.vat-staged-`), errno }] });
   try {
     return await body();
   } finally {
-    restore();
+    session.restore();
   }
 }
 
+/** Nothing of a refused package is left in `tmp`: no output, no archive, no staged entry. */
+function expectNothingLanded(tmp: string, skillFile: string): void {
+  expect(readdirSync(tmp).filter((name) => name !== skillFile)).toEqual([]);
+}
+
 describe('packageSkill - artifacts the OS will not let it write', () => {
-  it('codes a refused marketplace manifest as an unfinished run, never INTERNAL_ERROR', async () => {
+  it('codes a refused marketplace manifest as an unfinished run, and lands nothing', async () => {
     const tmp = getTempDir();
     const sp = await writeSkill(tmp);
     const manifest = safePath.join(tmp, `${SKILL_NAME}.marketplace.json`);
 
-    await withWriteRefused(manifest, 'ENOSPC', async () => {
+    await withStagedWriteRefused(tmp, manifest, 'ENOSPC', async () => {
       await expect(packageSkill(sp, { outputPath: safePath.join(tmp, 'pkg'), formats: [DIRECTORY, 'marketplace'] }))
-        .rejects.toMatchObject({ code: SKILL_PACKAGING_OUTPUT_FAILED_CODE });
+        .rejects.toMatchObject(OUTPUT_FAULT);
     });
+    expectNothingLanded(tmp, 'SKILL.md');
   });
 
-  it('codes a refused npm package.json as an unfinished run, never INTERNAL_ERROR', async () => {
+  it('codes a refused npm package.json as an unfinished run, and lands nothing', async () => {
     const tmp = getTempDir();
     const sp = await writeSkill(tmp);
-    const out = safePath.join(tmp, 'pkg');
-
-    await withWriteRefused(safePath.join(out, 'package.json'), 'EACCES', async () => {
-      await expect(packageSkill(sp, { outputPath: out, formats: [DIRECTORY, 'npm'] }))
-        .rejects.toMatchObject({ code: SKILL_PACKAGING_OUTPUT_FAILED_CODE });
-    });
+    const session = installFaultFs({ within: tmp, faults: [{ family: 'write', path: (path) => path.endsWith('/package.json'), errno: 'EACCES' }] });
+    try {
+      await expect(packageSkill(sp, { outputPath: safePath.join(tmp, 'pkg'), formats: [DIRECTORY, 'npm'] }))
+        .rejects.toMatchObject(OUTPUT_FAULT);
+    } finally {
+      session.restore();
+    }
+    expectNothingLanded(tmp, 'SKILL.md');
   });
 
-  it('names the ZIP forward-slashed and project-relative, and removes the partial archive it wrote', async () => {
+  it('codes a ZIP the disk refuses as an unfinished run naming it, and lands neither the ZIP nor the bundle', async () => {
     const tmp = getTempDir();
     const sp = await writeSkill(tmp);
     const out = safePath.join(tmp, 'z');
-    const zip = `${out}.zip`;
-    // A full disk: the write creates the archive, truncated, then fails.
-    const restore = refuseAsyncFs('writeFile', zip, 'ENOSPC', () => writeFileSync(zip, 'partial'));
-    try {
+
+    await withStagedWriteRefused(tmp, `${out}.zip`, 'ENOSPC', async () => {
       await expect(packageSkill(sp, { outputPath: out, formats: [DIRECTORY, 'zip'] }))
-        .rejects.toMatchObject({
-          code: SKILL_PACKAGING_OUTPUT_FAILED_CODE,
-          message: expect.stringMatching(/^ZIP archive z\.zip,/) as unknown,
-        });
-    } finally {
-      restore();
-    }
-    // Left behind, the next run would refuse it as "a previous package".
-    expect(existsSync(zip)).toBe(false);
+        .rejects.toMatchObject({ ...OUTPUT_FAULT, message: expect.stringContaining('z.zip') as unknown });
+    });
+    // Left behind, the next run would refuse it as "something VAT did not make".
+    expectNothingLanded(tmp, 'SKILL.md');
   });
 
-  it('never removes a directory standing where the archive goes', async () => {
+  it('never removes a directory standing where the archive goes, --force or not', async () => {
     const tmp = getTempDir();
     const sp = await writeSkill(tmp);
     const out = safePath.join(tmp, 'z');
     await mkdir(safePath.join(`${out}.zip`, 'inside'), { recursive: true });
 
     await expect(packageSkill(sp, { outputPath: out, formats: [DIRECTORY, 'zip'], replaceExistingOutput: true }))
-      .rejects.toMatchObject({ code: SKILL_PACKAGING_OUTPUT_FAILED_CODE });
+      .rejects.toMatchObject({ code: TREE_DEST_NOT_OWNED_CODE });
     expect(existsSync(safePath.join(`${out}.zip`, 'inside'))).toBe(true);
+    expect(existsSync(out)).toBe(false);
   });
 });
 
-describe('checkPackageOutput - the check a dry run shares with the real run', () => {
-  it('refuses an occupied output, naming --force as the way to replace a previous package', async () => {
-    const { tmp, sp, out } = await occupiedOutput('mine.txt', 'precious');
+/** The output's plan, decided by a dry run: the check the real run makes, before anything is written. */
+const dryRun = (sp: string, out: string, extra: { formats?: Array<'directory' | 'zip'>; replaceExistingOutput?: boolean } = {}) =>
+  packageSkill(sp, { outputPath: out, formats: extra.formats ?? [DIRECTORY], dryRun: true, ...(extra.replaceExistingOutput === true && { replaceExistingOutput: true }) });
 
-    expect(() => checkPackageOutput({ outputPath: out, skillName: SKILL_NAME, formats: [DIRECTORY], sources: [sp], projectRoot: tmp }))
-      .toThrow(expect.objectContaining({
-        code: SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE,
-        message: expect.stringContaining('--force') as unknown,
-      }));
+/**
+ * A listing of the output the OS refused: the project crawl meets it first (the output lies in
+ * the project), and the crawl's declared outputs make it the destination's — the run stopping
+ * (RUN_INCOMPLETE), never relabelled a usage error.
+ */
+const outputListingFault = (cause: Record<string, string>) => ({ code: FS_FAULT_CODE, cause: { side: 'destination', ...cause } });
+
+describe('the output plan - the check a dry run shares with the real run', () => {
+  // Only an absence proves the output free. One the OS will not stat or list is neither occupied
+  // nor free: a destination fault, the run stopping (RUN_INCOMPLETE), never relabelled a usage error.
+  it.skipIf(CANNOT_DENY_READS)('refuses an output directory the OS will not list as a destination fault, never as occupied', async () => {
+    const { sp, out } = await occupiedOutput('mine.txt', 'kept');
+    chmodSync(out, 0o000);
+    try {
+      await expect(dryRun(sp, out)).rejects.toMatchObject(outputListingFault({ faultClass: 'refused' }));
+    } finally {
+      chmodSync(out, 0o755);
+    }
+  });
+
+  it('refuses an output directory whose listing runs out of descriptors (EMFILE) as a destination fault', async () => {
+    const { sp, out } = await occupiedOutput('mine.txt', 'kept');
+    await withSyncFsRefused('readdirSync', out, 'EMFILE', async () => {
+      await expect(dryRun(sp, out)).rejects.toMatchObject(outputListingFault({ faultClass: 'exhausted' }));
+    });
+  });
+
+  it('refuses an archive beside the output it cannot examine (EMFILE) as a destination fault, never as occupied', async () => {
+    const { sp, out } = await occupiedOutput('mine.txt', 'kept');
+    await withSyncFsRefused('lstatSync', `${out}.zip`, 'EMFILE', async () => {
+      await expect(dryRun(sp, out, { formats: [DIRECTORY, 'zip'], replaceExistingOutput: true }))
+        .rejects.toMatchObject({ ...OUTPUT_FAULT, faultClass: 'exhausted' });
+    });
+  });
+
+  it('refuses an occupied output, naming --force as the way to replace a previous package', async () => {
+    const { sp, out } = await occupiedOutput('mine.txt', 'precious');
+
+    await expect(dryRun(sp, out)).rejects.toMatchObject({
+      code: TREE_DEST_NOT_OWNED_CODE,
+      message: expect.stringContaining('--force') as unknown,
+    });
     expect(readFileSync(safePath.join(out, 'mine.txt'), 'utf-8')).toBe('precious');
   });
 
   it('passes an occupied output it is told to replace, and an absent one', async () => {
     const { tmp, sp, out } = await occupiedOutput('old.txt', 'old');
 
-    expect(() => checkPackageOutput({ outputPath: out, skillName: SKILL_NAME, formats: [DIRECTORY], sources: [sp], projectRoot: tmp, replaceExistingOutput: true }))
-      .not.toThrow();
-    expect(() => checkPackageOutput({ outputPath: safePath.join(tmp, 'new'), skillName: SKILL_NAME, formats: [DIRECTORY], sources: [sp], projectRoot: tmp }))
-      .not.toThrow();
+    expect((await dryRun(sp, out, { replaceExistingOutput: true })).plannedChanges).toEqual([`replace skill '${SKILL_NAME}' output ${out}`]);
+    const fresh = safePath.join(tmp, 'new');
+    expect((await dryRun(sp, fresh)).plannedChanges).toEqual([`create skill '${SKILL_NAME}' output ${fresh}`]);
   });
 
   it('refuses an output holding the source even when told to replace it', async () => {
     const tmp = getTempDir();
     const sp = await writeSkill(tmp);
 
-    expect(() => checkPackageOutput({ outputPath: tmp, skillName: SKILL_NAME, formats: [DIRECTORY], sources: [sp], projectRoot: tmp, replaceExistingOutput: true }))
-      .toThrow(expect.objectContaining({ code: SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE }));
+    await expect(dryRun(sp, tmp, { replaceExistingOutput: true })).rejects.toMatchObject({ code: TREE_DEST_HOLDS_SOURCE_CODE });
   });
 
-  // The OS will not let VAT examine the output, so it cannot tell whether the output holds the
-  // source: refused, coded, naming the errno — once a raw EACCES from realpath, INTERNAL_ERROR.
+  // The OS will not let VAT examine the directory the output goes in: the destination's fault, naming
+  // the errno — once a raw EACCES from realpath, INTERNAL_ERROR.
   it.skipIf(CANNOT_DENY_READS)('refuses an output under a directory the OS will not examine, coded, --force or not', async () => {
     const tmp = getTempDir();
     const sp = await writeSkill(tmp);
@@ -143,8 +183,8 @@ describe('checkPackageOutput - the check a dry run shares with the real run', ()
     chmodSync(lockout, 0o000);
     try {
       for (const replaceExistingOutput of [false, true]) {
-        expect(() => checkPackageOutput({ outputPath: safePath.join(lockout, 'out'), skillName: SKILL_NAME, formats: [DIRECTORY], sources: [sp], projectRoot: tmp, replaceExistingOutput }))
-          .toThrow(expect.objectContaining({ code: SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE, message: expect.stringContaining('EACCES') as unknown }));
+        await expect(dryRun(sp, safePath.join(lockout, 'out'), { replaceExistingOutput }))
+          .rejects.toMatchObject(outputListingFault({ errno: 'EACCES' }));
       }
     } finally {
       chmodSync(lockout, 0o755);

@@ -39,6 +39,7 @@ import { classifyPath, pluginRootsFrom } from '../../src/projection/agentic-tags
 import { ContributorRegistry } from '../../src/projection/contributor.js';
 import { AgenticConventionContributor } from '../../src/projection/contributors/agentic-convention.js';
 import { FilesystemExtentContributor } from '../../src/projection/contributors/filesystem-extent.js';
+import { crawlSourceFor } from '../../src/projection/crawl-source.js';
 import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate } from '../../src/projection/merge.js';
 import type { Projection } from '../../src/projection/projection.js';
 import { ProjectionBuilder } from '../../src/projection/projection.js';
@@ -125,7 +126,7 @@ beforeAll(async () => {
   }
 
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor(undefined, 'deferred'));
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, []), 'deferred'));
   registry.register(new AgenticConventionContributor());
 
   projection = await populate({

@@ -14,11 +14,13 @@ import { lstat, stat } from 'node:fs/promises';
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
+  classifyFsFault,
   fileContentHash,
+  fsFaultOf,
   globMagicRemainder,
   hasParentTraversalSegment,
-  isFilesystemAccessError,
   isGlob,
+  isPathAbsentError,
   forEachInOrder,
   issueLocation,
   mapWithConcurrency,
@@ -26,11 +28,13 @@ import {
   staticGlobBase,
   toForwardSlash,
   toForwardSlashAnyPlatform,
+  withFsFault,
+  withFsFaultSync,
 } from '@vibe-agent-toolkit/utils';
 import { glob } from 'glob';
 import picomatch from 'picomatch';
 
-import { copyIntoBundle, withFsAttribution, withFsAttributionSync } from './fs-attribution.js';
+import { copyIntoBundle } from './bundle-copy.js';
 import { packagingInputError } from './packaging-errors.js';
 import { materializeIssue } from './validators/rule-engine/index.js';
 import { isNeverPackagedBasename } from './validators/validation-rules.js';
@@ -137,8 +141,13 @@ async function isCopyableFile(absPath: string): Promise<boolean> {
     // Narrowed to filesystem errors on purpose: a bare `catch {}` here would
     // answer "not a regular file" to a bug in our own code, silently converting a
     // defect into a routine skip. Same predicate the audit walk uses, from one
-    // shared source so the two cannot drift.
-    if (!isFilesystemAccessError(error)) throw error;
+    // shared source so the two cannot drift. A machine that ran out (`exhausted`,
+    // `busy`) says nothing about the match: thrown, classified, never a skip.
+    const faultClass = fsFaultOf(error)?.faultClass;
+    if (faultClass === undefined) throw error;
+    if (faultClass === 'exhausted' || faultClass === 'busy') {
+      throw classifyFsFault(error, { side: 'source', origin: 'content', action: `examine ${absPath}` });
+    }
     return false;
   }
 }
@@ -165,9 +174,8 @@ function attributed<T>(
   absPath: string,
   projectRoot: string,
   work: () => T | Promise<T>,
-  action?: string,
 ): Promise<T> {
-  return withFsAttribution(entrySubject(entry, absPath, projectRoot), 'source', work, action);
+  return withFsFault({ side: 'source', origin: 'content', action: `read ${entrySubject(entry, absPath, projectRoot)}` }, () => Promise.resolve(work()));
 }
 
 /** How a failure names a `files:` entry: the `source:` the author wrote, and where it resolved. */
@@ -519,8 +527,8 @@ export function verifyFilesIntegrity(
   pairs: { absSource: string; absDest: string }[],
 ): void {
   for (const { absSource, absDest } of pairs) {
-    const srcHash = withFsAttributionSync(subject, 'source', () => fileContentHash(absSource), 'read for verification');
-    const dstHash = withFsAttributionSync(subject, 'bundle', () => destContentHash(absDest), 'verified');
+    const srcHash = withFsFaultSync({ side: 'source', origin: 'content', action: `read ${subject} for verification` }, () => fileContentHash(absSource));
+    const dstHash = withFsFaultSync({ side: 'destination', shapeFromSource: true, action: `verify ${subject} in the bundle` }, () => destContentHash(absDest));
     if (srcHash !== dstHash) {
       throw new Error(
         `files: integrity check failed — content mismatch at dest: ${toForwardSlash(absDest)}`,
@@ -541,7 +549,7 @@ function destContentHash(absDest: string): string {
   try {
     statSync(absDest);
   } catch (error) {
-    if ((error as { code?: string }).code !== 'ENOENT') throw error;
+    if (!isPathAbsentError(error)) throw error;
     throw new Error(
       `files: integrity check failed — dest file missing: ${toForwardSlash(absDest)}`,
     );
@@ -639,7 +647,7 @@ async function copyNonGlobEntry(
     try {
       sourceStat = statSync(absoluteSource);
     } catch (error) {
-      if ((error as { code?: string }).code !== 'ENOENT') throw error;
+      if (!isPathAbsentError(error)) throw error;
       throw packagingInputError(
         `files: source '${entry.source}' does not exist (resolved to ${anchoredPath(absoluteSource, projectRoot)}).${buildArtifactHint(entry.source)}`,
       );
@@ -1308,11 +1316,9 @@ async function runDeferredIntegrity(
     }
     const destDir = safePath.joinUnderRoot(skillOutputDir, entry.dest);
     // Lists the bundle the build just wrote: a refusal is the output's.
-    await withFsAttribution(
-      subject,
-      'bundle',
+    await withFsFault(
+      { side: 'destination', shapeFromSource: true, action: `verify ${subject} in the bundle` },
       () => verifyDestSet(destDir, [...expected], entry.source),
-      'verified',
     );
   });
 }

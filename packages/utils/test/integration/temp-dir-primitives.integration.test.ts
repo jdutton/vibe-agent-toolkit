@@ -7,11 +7,11 @@
  */
 import { existsSync, writeFileSync } from 'node:fs';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { isUnderRoot } from '../../src/path-containment.js';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '../../src/path-utils.js';
-import { createTempDir, createTempDirAsync, removeTempDir, tempDirTracker } from '../../src/testing/temp-dir.js';
+import { createTempDir, createTempDirAsync, registerScratchTmpdir, removeTempDir, scratchTmpdirEnv, tempDirTracker } from '../../src/testing/temp-dir.js';
 
 describe('temp-dir primitives', () => {
   it('createTempDir mints a fresh directory strictly under the host tmpdir', () => {
@@ -63,5 +63,37 @@ describe('temp-dir primitives', () => {
     } finally {
       removeTempDir(bystander);
     }
+  });
+});
+
+describe('scratchTmpdirEnv', () => {
+  it('makes a fresh scratch THE temp directory, then restores the environment and removes it', () => {
+    const before = ['TMPDIR', 'TEMP', 'TMP'].map((name) => process.env[name]);
+    const realTmp = normalizedTmpdir();
+    const scratch = scratchTmpdirEnv('t20-scratch-');
+
+    const dir = scratch.enter();
+    try {
+      expect(isUnderRoot(realTmp, dir)).toBe('inside');
+      expect(safePath.resolve(normalizedTmpdir())).toBe(safePath.resolve(dir));
+      expect(scratch.current()).toBe(dir);
+    } finally {
+      scratch.leave();
+    }
+
+    expect(['TMPDIR', 'TEMP', 'TMP'].map((name) => process.env[name])).toEqual(before);
+    expect(normalizedTmpdir()).toBe(realTmp);
+    expect(existsSync(dir)).toBe(false);
+    expect(() => scratch.current()).toThrow(/no scratch/);
+  });
+});
+
+describe('registerScratchTmpdir', () => {
+  const realTmp = normalizedTmpdir();
+  const current = registerScratchTmpdir('t20-registered-', { beforeEach, afterEach });
+
+  it('points the temp directory at a scratch for each test', () => {
+    expect(safePath.resolve(normalizedTmpdir())).toBe(safePath.resolve(current()));
+    expect(isUnderRoot(realTmp, current())).toBe('inside');
   });
 });

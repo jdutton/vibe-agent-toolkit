@@ -8,10 +8,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { stat, mkdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { stat, mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { isPathAbsentError, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, renameFileAtomic, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 
 // ---------------------------------------------------------------------------
@@ -707,7 +707,7 @@ async function downloadFile(url: string, destination: string): Promise<void> {
   await writeFile(temporary, Buffer.from(arrayBuffer));
 
   try {
-    await rename(temporary, destination);
+    await renameFileAtomic(temporary, destination);
   } catch (cause) {
     // A concurrent downloader may already hold the destination open, which on
     // Windows makes the replace fail. Its copy is just as complete as ours, so

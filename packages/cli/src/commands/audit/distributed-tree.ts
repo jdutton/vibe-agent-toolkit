@@ -418,7 +418,7 @@ export async function distributedTreeFindings(
   if (provenance === REPO_SOURCE) return [];
 
   const treeRoot = safePath.resolve(skillPath, '..');
-  const present = detectPackagedAgentInstructionFiles(treeRoot, locationRoot, []);
+  const present = detectPackagedAgentInstructionFiles(treeRoot, locationRoot, [], []);
   if (provenance === 'distributed') return present;
 
   // Provenance is unknown. Report the unknown, not the files: calling them

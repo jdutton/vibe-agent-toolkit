@@ -10,7 +10,7 @@ import {
   type IssueSeverity,
   type SeverityCounts,
 } from '@vibe-agent-toolkit/schema';
-import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
+import { fsFaultOf, isPathAbsentError } from '@vibe-agent-toolkit/utils';
 
 import { getClaudeProjectPaths, getClaudeUserPaths } from '../paths/claude-paths.js';
 import {
@@ -114,9 +114,7 @@ export interface SettingsValidateResult {
   typeConfidence: SettingsTypeConfidence;
 }
 
-/** Errno values that genuinely answer "it is not there". Anything else means we could not look. */
-const ABSENT_CODES = new Set(['ENOENT', 'ENOTDIR', 'ENAMETOOLONG']);
-
+/** The errno a probe failed with, for the report; a failure that is not a filesystem errno reports its own code. */
 function errorCode(err: unknown): string {
   const code = (err as { code?: unknown } | null)?.code;
   return typeof code === 'string' ? code : 'UNKNOWN';
@@ -127,7 +125,10 @@ function errorCode(err: unknown): string {
  *
  * Returns `'undetermined'` for both when the probe failed for a reason that is
  * not "absent" (e.g. a permission error on a parent directory): claiming
- * `exists: false` there would report a determination we never made.
+ * `exists: false` there would report a determination we never made. Only the
+ * classifier's `absent` class is "not there": a name too long for this host
+ * (`ENAMETOOLONG`, `wrong-type`) names a path nothing could ever be at, which is
+ * reported, never skipped.
  */
 export async function probePathAccess(
   filePath: string
@@ -139,22 +140,20 @@ export async function probePathAccess(
   try {
     await fs.access(filePath, fs.constants.F_OK);
   } catch (err) {
-    const code = errorCode(err);
-    if (ABSENT_CODES.has(code)) {
+    if (fsFaultOf(err)?.faultClass === 'absent') {
       return { exists: false, readable: false };
     }
-    return { exists: 'undetermined', readable: 'undetermined', accessError: code };
+    return { exists: 'undetermined', readable: 'undetermined', accessError: errorCode(err) };
   }
 
   try {
     await fs.access(filePath, fs.constants.R_OK);
     return { exists: true, readable: true };
   } catch (err) {
-    const code = errorCode(err);
-    if (code === 'EACCES' || code === 'EPERM') {
+    if (fsFaultOf(err)?.faultClass === 'refused') {
       return { exists: true, readable: false };
     }
-    return { exists: true, readable: 'undetermined', accessError: code };
+    return { exists: true, readable: 'undetermined', accessError: errorCode(err) };
   }
 }
 

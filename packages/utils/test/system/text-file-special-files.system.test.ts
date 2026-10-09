@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { isFilesystemAccessError } from '../../src/errors/errno.js';
+import { fsFaultOf } from '../../src/errors/errno-table.js';
 import { readDecodableBytes, readTextContent, readTextContentSync } from '../../src/text-file.js';
 
 import { outcomeOrHang, setupFifoSuite } from './fifo-race.js';
@@ -22,7 +22,7 @@ describe.skipIf(process.platform === 'win32')('text-file readers — a named pip
   ] as const)('%s refuses it unopened-for-content, as an environmental EFTYPE', async ([, read]) => {
     const outcome = await outcomeOrHang(read(suite.fifo()));
     expect(outcome).toMatchObject({ code: 'EFTYPE', path: suite.fifo() });
-    expect(isFilesystemAccessError(outcome)).toBe(true);
+    expect(fsFaultOf(outcome)).toBeDefined();
   });
 
   it('readTextContentSync refuses it the same way', () => {

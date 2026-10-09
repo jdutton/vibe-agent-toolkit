@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { isFilesystemAccessError, isPathAbsentError, issueLocation, promised, safePath } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, isFsFaultError, issueLocation, promised, safePath } from '@vibe-agent-toolkit/utils';
 
 import { MarketplaceManifestSchema } from '../schemas/marketplace-manifest.js';
 
@@ -118,39 +118,50 @@ function validateMarketplaceNow(marketplacePath: string, options?: AnchorRootOpt
 }
 
 /** The finding a manifest validator files when its manifest is absent. */
-interface MissingManifestFinding {
+export interface MissingManifestFinding {
 	code: ValidationIssue['code'];
 	message: string;
 	fix: string;
 }
 
 /**
- * Classify a failed manifest read: absence (`ENOENT`, `ENOTDIR`) is the
- * validator's own "missing" finding; any other refusal the OS gave is
- * `SCAN_PATH_UNREADABLE` naming the errno — never the absolute path, which the
- * OS message carries and a published finding must not. Anything that is not a
- * filesystem refusal is a defect and is rethrown.
+ * The finding for a failed manifest read, decided by the one classifier: an
+ * `absent` fault is the validator's own "missing" finding; any other filesystem
+ * fault is `SCAN_PATH_UNREADABLE` naming the errno — never the absolute path,
+ * which the OS message carries and a published finding must not — except a
+ * capacity fault (`exhausted`, `busy`), which is thrown classified: the machine,
+ * not the manifest. Anything that is not a filesystem fault is a defect and is
+ * rethrown.
  *
- * Shared by every JSON manifest/registry validator in this package so the three
- * cannot drift on what counts as "missing" versus "unreadable".
+ * The ONE decision for every JSON manifest/registry validator — the marketplace
+ * and registry validators here and the plugin validator in claude-marketplace —
+ * so they cannot drift on what counts as "missing" versus "unreadable".
+ *
+ * @param error - What the manifest read threw
+ * @param location - The manifest, anchored to the run's root
+ * @param missing - The validator's own finding for an absent manifest
  */
 export function manifestReadFailure(
 	error: unknown,
 	location: string,
 	missing: MissingManifestFinding,
 ): ValidationIssue {
-	if (isPathAbsentError(error)) {
+	const fault = classifyFsFault(error, { side: 'source', origin: 'content', action: `read ${location}` });
+	if (!isFsFaultError(fault)) {
+		throw fault;
+	}
+	if (fault.faultClass === 'absent') {
 		return { severity: 'error', code: missing.code, message: missing.message, location, fix: missing.fix };
 	}
-	if (!isFilesystemAccessError(error)) {
-		throw error;
+	// The machine ran out or was busy: nothing about the manifest is known, so it is the run's refusal, never a finding.
+	if (fault.faultClass === 'exhausted' || fault.faultClass === 'busy') {
+		throw fault;
 	}
 	const entry = CODE_REGISTRY.SCAN_PATH_UNREADABLE;
-	const errno = (error as { code?: unknown }).code;
 	return {
 		severity: entry.defaultSeverity,
 		code: UNREADABLE_CODE,
-		message: `${entry.description} (${location}: read refused with ${String(errno)})`,
+		message: `${entry.description} (${location}: read refused with ${fault.errno})`,
 		location,
 		fix: entry.fix,
 		reference: entry.reference,

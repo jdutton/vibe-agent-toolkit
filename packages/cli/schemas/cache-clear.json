@@ -123,12 +123,6 @@
                     "type": "string"
                   }
                 },
-                "remaining": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
                 "entriesRemoved": {
                   "type": "integer",
                   "minimum": 0
@@ -142,7 +136,6 @@
                 "cacheDir",
                 "existed",
                 "removed",
-                "remaining",
                 "entriesRemoved",
                 "bytesRemoved"
               ],

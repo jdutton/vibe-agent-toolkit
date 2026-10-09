@@ -26,9 +26,8 @@
 // The base of every error VAT throws on purpose; `code` is what a catch
 // block dispatches on, never `message`.
 export * from './errors/vat-error.js';
-export { RAG_DATABASE_NOT_REMOVABLE_CODE, RAG_DATABASE_REMOVAL_INCOMPLETE_CODE, RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE } from './errors/rag-index-empty.js';
+export { RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE } from './errors/rag-index-empty.js';
 // The code alone: its error class is on `./crawl`, and the CLI's refusal map needs only the code.
-export { DIRECTORY_LISTING_REFUSED_CODE } from './listing-refusal.js';
 
 // Cross-platform path utilities
 export * from './path-utils.js';
@@ -89,17 +88,42 @@ export * from './asset-reference.js';
 // symptom is a type that cannot be imported, which surfaces the first time
 // someone tries — not a silent break in existing code.
 // The lookups themselves, plus the memo every fill shares.
-export { isFilesystemAccessError, isPathAbsentError } from './errors/errno.js';
 export {
-  COPY_LINK_ESCAPES_SOURCE_CODE,
-  COPY_SOURCE_NOT_REGULAR_CODE,
-  COPY_SOURCE_UNREADABLE_CODE,
-  copyDirectory,
-  CopyLinkEscapesSourceError,
-  FsLookupCache,
-  openEachFileForReading,
-  transientRefusalClause,
-} from './fs-utils.js';
+  fsFaultOf,
+  isAlreadyExistsError,
+  isFileInTheWayError,
+  isInvalidArgumentError,
+  isLinkLoopError,
+  isNoSuchEntryError,
+  isNotARegularFileError,
+  isPathAbsentError,
+  isProcessGoneError,
+  isRenameContentionError,
+  isSymlinkUnsupportedError,
+  isTimedOutError,
+  isWouldBlockError,
+} from './errors/errno-table.js';
+export type { FsFaultClass, FsFaultFacts } from './errors/errno-table.js';
+export {
+  classifyFsFault,
+  FS_FAULT_CODE,
+  FS_SIDES,
+  FsFaultError,
+  isCapacityFault,
+  isFsFaultError,
+  isLayoutFault,
+  SOURCE_ORIGINS,
+  withFsFault,
+  withFsFaultSync,
+} from './errors/fs-fault.js';
+export type { FsFaultContext, FsSide, SourceOrigin } from './errors/fs-fault.js';
+export { fsBoundary } from './errors/fs-boundary.js';
+export { requireConfirmedAbsent } from './errors/confirmed-absent.js';
+export { pathPresent } from './errors/path-present.js';
+// Faults raised while a failure was being handled, recorded beside it (never on its cause chain).
+export { recordSuppressedFault, suppressedFaultsOf } from './errors/suppressed-faults.js';
+export type { FsBoundary, FsRoots } from './errors/fs-boundary.js';
+export { FsLookupCache, transientRefusalClause } from './fs-utils.js';
 // The two fill+judge pairs, in the order the note above lists them, plus the
 // lazy index a caller that cannot enumerate its targets up front reaches for.
 export {
@@ -155,6 +179,67 @@ export * from './glob/glob-pattern.js';
 
 // Filesystem hashing (sha256 of raw file bytes)
 export * from './fs/file-hash.js';
+
+// Tree-change primitive: entry identity (`sameEntry`) for the planner and uninstall; the
+// readable-tree proof and the copy, with the two refusals a following walk raises.
+// The planner and applier every destructive verb goes through, and the file helpers beside them.
+export {
+  applyTreePlan,
+  applyTreePlanOrLeftover,
+  COPY_LINK_ESCAPES_SOURCE_CODE,
+  copyRegularFile,
+  copyTree,
+  CopyLinkEscapesSourceError,
+  DIRECTORY_WALK_REVISITED_CODE,
+  DirectoryWalkRevisitedError,
+  disposeTempDir,
+  disposeTempDirAfterFailure,
+  entryIdentities,
+  FollowedWalk,
+  isInsideByIdentity,
+  isParkedTreeEntry,
+  isTreeChangeResidue,
+  planTreeChanges,
+  proveTreeReadable,
+  readRegularFile,
+  renameFileAtomic,
+  replaceFile,
+  sameEntry,
+  TEMP_DIR_OUTSIDE_TMPDIR_CODE,
+  TREE_CLEANUP_INCOMPLETE_CODE,
+  TREE_DEST_HOLDS_SOURCE_CODE,
+  TREE_DEST_NOT_OWNED_CODE,
+  TREE_DEST_OCCUPIED_CODE,
+  TREE_DESTS_OVERLAP_CODE,
+  TREE_ROLLBACK_INCOMPLETE_CODE,
+  TREE_SOURCE_HOLDS_DEST_CODE,
+  TreeRollbackIncompleteError,
+  withTempDir,
+} from './tree-change/index.js';
+export type {
+  ApplyOptions,
+  ApplyOutcome,
+  ApplyResult,
+  CopyRegularFileOptions,
+  EntryContainment,
+  EntryKind,
+  EntrySameness,
+  FileContents,
+  Identity,
+  LinkPolicy,
+  Ownership,
+  OwnershipVerdict,
+  PlannedAction,
+  PlannedChange,
+  ProveTreeReadableOptions,
+  TempDirOutcome,
+  TreeChange,
+  TreeChangeWarning,
+  TreeFill,
+  TreePlan,
+  TreeRollbackStranded,
+  TreeWalkOptions,
+} from './tree-change/index.js';
 
 export { parseWholeNumberAtLeast } from './numeric-args.js';
 

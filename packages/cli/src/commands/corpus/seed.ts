@@ -77,7 +77,7 @@ function parseSeed(path: string, raw: string): Seed {
  *   `source` or `name`
  */
 export function loadSeedFile(path: string): Seed {
-  const raw = readInputFile(path, { code: 'USAGE_INVALID', message: `Seed file not found: ${path}` });
+  const raw = readInputFile(path, { origin: 'argument', message: `Seed file not found: ${path}` });
   const seed = parseSeed(path, raw);
 
   const sources = new Set<string>();

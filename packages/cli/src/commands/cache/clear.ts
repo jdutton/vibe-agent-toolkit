@@ -25,24 +25,23 @@
  * store is gone".
  */
 
-import { type Dirent, promises as fs } from 'node:fs';
+import { type Dirent, promises as fs, lstatSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import { parseCacheDirectory } from '@vibe-agent-toolkit/resources';
-import { buildReport, type Gate, type RefusalCode } from '@vibe-agent-toolkit/schema';
-import { direntKind, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { buildReport, toFindings, type Gate } from '@vibe-agent-toolkit/schema';
+import { applyTreePlanOrLeftover, classifyFsFault, isFsFaultError, direntKind, type EntryKind, type FsFaultContext, isPathAbsentError, planTreeChanges, requireConfirmedAbsent, safePath } from '@vibe-agent-toolkit/utils';
 
-import { errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
+import { refusalCodeOf } from '../../utils/command-refusal.js';
+import { endWithRefusal, endWithReport, type FinishedWork, leftoverIssueOf, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
-import { unstatablePathRefusal } from '../../utils/project-root-policy.js';
 
 import type { CacheClearData } from './clear-schema.js';
 
 /** The one name the shared cache root is allowed to have. See {@link vatCacheRoot}. */
 const VAT_CACHE_DIR_NAME = '.vat-cache';
 
-/** `vat cache clear` has no `--strict` and publishes no finding: the gate is fixed. */
+/** `vat cache clear` has no `--strict`, and its only finding is a leftover warning: the gate is fixed. */
 const CACHE_CLEAR_GATE: Gate = { strict: false };
 
 /** One location is considered on every run: the shared cache root. */
@@ -52,22 +51,6 @@ export interface CacheClearOptions {
   debug?: boolean;
 }
 
-/**
- * What a clear did.
- *
- * A delete that stops short is not a failure mode bolted on — it is the
- * *common* outcome when something else on the machine is writing to the shared
- * tree, and it has to be reportable. A recursive delete that gives up part-way
- * has already removed most of the cache; surfacing that as a bare thrown error
- * told the operator only that the command failed, while leaving them to guess
- * how much of their cache still existed. So an incomplete clear carries the
- * same `data` as a complete one — what went, what stayed, the counts actually
- * removed — plus why it stopped.
- */
-type CacheClearOutcome =
-  | { readonly complete: true; readonly data: CacheClearData }
-  | { readonly complete: false; readonly data: CacheClearData | null; readonly reason: string };
-
 interface TreeUsage {
   entries: number;
   bytes: number;
@@ -75,24 +58,12 @@ interface TreeUsage {
 
 const EMPTY_USAGE: TreeUsage = { entries: 0, bytes: 0 };
 
-/**
- * Retry budget for the recursive delete.
- *
- * Not defensive padding — observed. `<tmpdir>/.vat-cache` is shared by every VAT
- * on the machine: other worktrees, other sessions, and any adopter running an
- * *installed* vat all write into it under their own namespace. A `vat cache
- * clear` issued while one of them is mid-run walks a tree that is growing
- * underneath it and `rmdir` fails `ENOTEMPTY` on a shard that gained a file
- * between the listing and the removal. Reproduced twice against a concurrent
- * `vat verify`; the same command succeeded immediately once that run finished.
- *
- * Node retries exactly this error class (`EBUSY`, `EMFILE`, `ENFILE`,
- * `ENOTEMPTY`, `EPERM`) with a linear backoff, which clears a short overlap.
- * It cannot win against a writer that keeps going for the whole window — that
- * case still surfaces as an error, which is correct: "some of your cache is
- * gone and something is still writing" must not be reported as success.
- */
-const RM_RETRY: { maxRetries: number; retryDelay: number } = { maxRetries: 5, retryDelay: 100 };
+/** What a clear finished: what it removed, and — when the OS would not then delete the tree it moved aside — that failure. */
+interface CacheClearOutcome {
+  readonly data: CacheClearData;
+  /** The moved-aside cache the OS would not delete: a `destination` fault naming where it is. */
+  readonly leftover?: unknown;
+}
 
 /**
  * The shared cache root, `<tmpdir>/.vat-cache`.
@@ -141,101 +112,74 @@ export function vatCacheRoot(): string {
 }
 
 /**
- * Measure, then delete, an entire cache tree.
+ * Measure, then delete, an entire cache tree, as ONE tree-change plan: a `remove`
+ * of state VAT owns outright (`vat-state`).
  *
  * Measured BEFORE the delete, because afterwards there is nothing left to count
  * and a report of "removed: unknown" would make the command unverifiable.
+ *
+ * The tree is moved off its path whole, then removed — so a delete the OS stops
+ * (another VAT writing into the shared tree, a file it will not unlink) leaves no
+ * part of a cache where the next run looks: the clear is done, and the failure is
+ * returned as `leftover`, naming where the moved-aside tree is — never a "partial"
+ * clear. A read-only directory the owner made is made writable on the way down,
+ * so it does not stop the delete.
  *
  * Deliberately reads no environment: `vat cache clear` runs whether or not
  * caching is enabled for this process. A `VAT_CACHE=0` that also disarmed the
  * cleanup would leave an operator with a cache they can neither use nor remove.
  *
  * @param cacheDir - Directory to remove, in full
- * @returns What was removed, and whether the delete finished
- * @throws {CommandRefusalError} `INPUT_UNREADABLE` when the OS refuses to list or
- *   stat an entry during the measurement — before anything is deleted
+ * @returns What was removed, and the `leftover` of a moved-aside tree the OS would not delete
+ * @throws {FsFaultError} an `environment` fault (`RUN_INCOMPLETE`) when the OS refuses to
+ *   list or stat an entry during the measurement; a `destination` fault (`RUN_INCOMPLETE`)
+ *   when it refuses to examine the cache path or to move the tree off it — nothing is
+ *   removed then
  */
 export async function clearCacheDirectory(cacheDir: string): Promise<CacheClearOutcome> {
-  const entries = await readdirOrNull(cacheDir);
+  const absent = { data: { cacheDir, existed: false, removed: [], entriesRemoved: 0, bytesRemoved: 0 } };
+  const plan = await planTreeChanges([{ op: 'remove', dest: cacheDir, ownership: { kind: 'vat-state' }, label: 'the VAT cache' }]);
+  const existing = plan.changes[0]?.existing ?? 'absent';
+  if (existing === 'absent') return absent;
 
-  if (entries === null) {
-    return { complete: true, data: { cacheDir, existed: false, removed: [], remaining: [], entriesRemoved: 0, bytesRemoved: 0 } };
-  }
-
-  const usage = await measureEntries(cacheDir, entries);
-  const names = entries.map((entry) => entry.name);
-
+  // Another clear (any VAT on the machine) may take the cache between the plan and the move: gone
+  // is the goal state, so that is a clear of nothing — never a refusal.
+  const measured = await measureRoot(cacheDir, existing);
+  if (measured === undefined) return absent;
+  let leftover: unknown;
   try {
-    await fs.rm(cacheDir, { recursive: true, force: true, ...RM_RETRY });
-  } catch (error) {
-    return partialOutcome(cacheDir, names, usage, error);
+    ({ leftover } = await applyTreePlanOrLeftover(plan));
+  } catch (error: unknown) {
+    if (isFsFaultError(error) && error.faultClass === 'absent' && goneNow(cacheDir)) return absent;
+    throw error;
   }
 
-  return {
-    complete: true,
-    data: {
-      cacheDir,
-      existed: true,
-      removed: sorted(names),
-      remaining: [],
-      entriesRemoved: usage.entries,
-      bytesRemoved: usage.bytes,
-    },
-  };
+  const { names, usage } = measured;
+  const data = { cacheDir, existed: true, removed: sorted(names), entriesRemoved: usage.entries, bytesRemoved: usage.bytes };
+  return leftover === undefined ? { data } : { data, leftover };
 }
 
 /**
- * Describe a delete that stopped part-way, by re-reading the tree.
- *
- * The survivors are read back off disk rather than inferred from the error,
- * because the error names one path and says nothing about the other ninety-nine
- * percent. Re-measuring what remains and subtracting is the only way the counts
- * describe what actually happened rather than what was attempted.
- *
- * A concurrent writer can make the remainder *larger* than the original
- * measurement, so the subtraction is floored at zero: reporting a negative
- * number of removed bytes would be worse than reporting none.
- *
- * @param cacheDir - The tree that was being removed
- * @param names - Top-level entry names as they were before the delete
- * @param before - Usage measured before the delete
- * When the OS refuses that re-read too, what went is unknowable: the outcome
- * is still incomplete — the delete stopped part-way, and its own error is the
- * cause — with no `data` and a reason naming both errors. Letting the re-read's
- * refusal escape would publish "could not read the cache" for a clear that ran.
- *
- * @param error - Whatever `fs.rm` threw
- * @returns An incomplete outcome naming what went, what stayed, and why
+ * What the delete will take: the root's top-level names and the whole tree's usage — or `undefined`
+ * when the root has really vanished since the plan saw it. A root that is not a directory (a link,
+ * a file someone put there) is one entry, never followed: the delete removes the entry itself, and
+ * counting a link's target would report a tree it never touches.
  */
-async function partialOutcome(
-  cacheDir: string,
-  names: string[],
-  before: TreeUsage,
-  error: unknown,
-): Promise<CacheClearOutcome> {
-  const reason = `Cleared only part of ${cacheDir}: ${errorMessageOf(error)}`;
-  let survivors: Dirent[];
-  let after: TreeUsage;
-  try {
-    survivors = (await readdirOrNull(cacheDir)) ?? [];
-    after = await measureEntries(cacheDir, survivors);
-  } catch (rereadError) {
-    return { complete: false, data: null, reason: `${reason}; what survived cannot be read back: ${errorMessageOf(rereadError)}` };
-  }
-  const remaining = new Set(survivors.map((entry) => entry.name));
+async function measureRoot(cacheDir: string, existing: EntryKind): Promise<{ names: string[]; usage: TreeUsage } | undefined> {
+  if (existing !== 'directory') return { names: [], usage: { entries: 1, bytes: await sizeOf(cacheDir) } };
+  const entries = await listedOrVanished(cacheDir);
+  if (entries === null) return undefined;
+  return { names: entries.map((entry) => entry.name), usage: await measureEntries(cacheDir, entries) };
+}
 
-  return {
-    complete: false,
-    reason,
-    data: {
-      cacheDir,
-      existed: true,
-      removed: sorted(names.filter((name) => !remaining.has(name))),
-      remaining: sorted([...remaining]),
-      entriesRemoved: Math.max(0, before.entries - after.entries),
-      bytesRemoved: Math.max(0, before.bytes - after.bytes),
-    },
-  };
+/** Whether nothing is at `cacheDir` now, believed only when its parent's listing agrees ({@link vanished}). */
+function goneNow(cacheDir: string): boolean {
+  try {
+    lstatSync(cacheDir);
+    return false;
+  } catch (error) {
+    return vanished(error, cacheDir, { side: 'destination', action: 'examine the cache', path: cacheDir });
+  }
 }
 
 /** Stable ordering for the reported entry lists. */
@@ -246,10 +190,11 @@ function sorted(names: readonly string[]): string[] {
 /**
  * Command entry point: clear the real cache root and publish the report.
  *
- * A complete clear is `ok` — nothing there to remove included. A clear that
- * stopped part-way is the envelope's error branch, `RUN_INCOMPLETE`, carrying
- * what it removed and what survived: the operator most needs that account
- * precisely when the command did not finish.
+ * A complete clear is `ok` — nothing there to remove included. A refusal before
+ * the tree left its path is the envelope's error branch with `data: null`. Once
+ * it is off its path the clear is done: a delete the OS then stops is still
+ * `RUN_INCOMPLETE`, published with the clear's `data` and a
+ * TREE_CLEANUP_INCOMPLETE warning naming where the moved-aside tree is.
  *
  * @param options - Command options (only `--debug`, inherited from the root)
  */
@@ -260,37 +205,42 @@ export async function cacheClearCommand(options: CacheClearOptions = {}): Promis
   try {
     outcome = await clearCacheDirectory(vatCacheRoot());
   } catch (error) {
-    refuse(refusalCodeOf(error), error, NOTHING_FINISHED);
+    return refuse(error, NOTHING_FINISHED);
   }
-
-  if (!outcome.complete) {
-    // No `data` means what went is unknowable — nothing can be claimed as finished.
-    const finished = outcome.data === null ? NOTHING_FINISHED : { examined: CACHE_LOCATIONS_CONSIDERED, findings: [], data: outcome.data };
-    refuse('RUN_INCOMPLETE', outcome.reason, finished);
-  }
-  logger.debug(`Cleared ${String(outcome.data.entriesRemoved)} cache entries from ${outcome.data.cacheDir}`);
-  endWithReport('cache clear', buildReport({ examined: CACHE_LOCATIONS_CONSIDERED, findings: [], data: outcome.data, gate: CACHE_CLEAR_GATE }), 'yaml');
+  const { data, leftover } = outcome;
+  if (leftover !== undefined) return refuse(leftover, { examined: CACHE_LOCATIONS_CONSIDERED, findings: toFindings([leftoverIssueOf(leftover)]), data });
+  logger.debug(`Cleared ${String(data.entriesRemoved)} cache entries from ${data.cacheDir}`);
+  endWithReport('cache clear', buildReport({ examined: CACHE_LOCATIONS_CONSIDERED, findings: [], data, gate: CACHE_CLEAR_GATE }), 'yaml');
 }
 
-/** End on the envelope's error branch, carrying whatever finished. */
-function refuse(code: RefusalCode, error: unknown, finished: FinishedWork): never {
-  endWithRefusal('cache clear', code, error, 'yaml', CACHE_CLEAR_GATE, finished);
+/** End on the envelope's error branch: `error` refused, `finished` the work done before it. */
+function refuse(error: unknown, finished: FinishedWork): never {
+  return endWithRefusal('cache clear', refusalCodeOf(error), error, 'yaml', CACHE_CLEAR_GATE, finished);
 }
 
 /**
- * `readdir` that reports a missing directory as `null` rather than throwing.
- *
- * Only an absence is absorbed. EACCES on a directory that exists is a genuine
- * failure — reporting it as "nothing to clear" would tell the operator their
- * cache is gone when it is still on disk — so it is the input's refusal,
- * classified by the shared absent-vs-unreadable predicate.
+ * Whether `error`, from a probe of `target`, says it is gone — believed only when the parent's
+ * listing agrees (a concurrent run pruning its own entry). An `ENOENT` for an entry the parent
+ * still names is a refusal, thrown classified: reading it as "gone" would report a cache that is
+ * on disk as cleared, or as never there. Any other error is thrown classified on `ctx`.
  */
-async function readdirOrNull(dir: string): Promise<Dirent[] | null> {
+function vanished(error: unknown, target: string, ctx: FsFaultContext): true {
+  if (!isPathAbsentError(error)) throw classifyFsFault(error, { ...ctx, path: target });
+  requireConfirmedAbsent(target, error, ctx, { follows: false });
+  return true;
+}
+
+/**
+ * List `dir`, or `null` when it has really vanished (see {@link vanished}). The cache is VAT's own
+ * scratch, so a listing the OS refuses is an `environment` fault.
+ */
+async function listedOrVanished(dir: string): Promise<Dirent[] | null> {
+  const ctx = { side: 'environment', action: 'list the cache', path: dir } as const;
   try {
     return await fs.readdir(dir, { withFileTypes: true });
   } catch (error) {
-    if (isPathAbsentError(error)) return null;
-    throw unstatablePathRefusal(dir, error);
+    vanished(error, dir, ctx);
+    return null;
   }
 }
 
@@ -305,7 +255,7 @@ async function measureEntries(
       // Not `isFile()`, and NOT followed: a symlink or socket is still an entry
       // that is about to be removed, and counting only regular files would
       // under-report it — while walking INTO a linked directory would count a
-      // tree `rm -rf` leaves untouched.
+      // tree the delete leaves untouched.
       return direntKind(entry) === 'directory' ? measureTree(child) : { entries: 1, bytes: await sizeOf(child) };
     })
   );
@@ -316,29 +266,28 @@ async function measureEntries(
   );
 }
 
-/** Recursive measure. A directory that vanished mid-walk contributes nothing. */
+/** Recursive measure. A directory that really vanished mid-walk contributes nothing. */
 async function measureTree(dir: string): Promise<TreeUsage> {
-  const entries = await readdirOrNull(dir);
+  const entries = await listedOrVanished(dir);
   return entries === null ? EMPTY_USAGE : measureEntries(dir, entries);
 }
 
 /**
  * Size of one entry, without following symlinks.
  *
- * A file that disappears between the listing and the stat contributes 0 rather
- * than failing the clear — the whole tree is about to be deleted anyway, and a
- * concurrent vat run pruning its own temp file must not turn cleanup into an
+ * A file that really disappeared between the listing and the stat contributes 0
+ * rather than failing the clear — the whole tree is about to be deleted anyway,
+ * and a concurrent vat run pruning its own temp file must not turn cleanup into an
  * error. Only a DISAPPEARANCE is 0: an entry the OS refuses to stat is still
- * there, still about to be counted as reclaimed, and the `rm` that follows is
- * about to meet the same refusal — so it is raised here, where it names the
- * entry, rather than read as an empty file.
+ * there, still about to be counted as reclaimed — so it is raised here, where it
+ * names the entry, rather than read as an empty file.
  */
 async function sizeOf(target: string): Promise<number> {
   try {
     const stats = await fs.lstat(target);
     return stats.size;
   } catch (error) {
-    if (isPathAbsentError(error)) return 0;
-    throw unstatablePathRefusal(target, error);
+    vanished(error, target, { side: 'environment', action: 'measure the cache', path: target });
+    return 0;
   }
 }

@@ -29,7 +29,7 @@ import type { DiscoveredSkill } from './command-helpers.js';
  * would then confidently work from. The right answer for `vat skills validate`,
  * `vat skills build`, `vat verify` and the rest, which must not act on a
  * population they could not see. Discovery owns the sentence, which is why the
- * arm is a literal here rather than the crawler's `{ refuse: { root, remedy } }`.
+ * arm is a literal here rather than the crawler's `{ refuse: { root, remedy, side } }`.
  *
  * `{ degrade }` — for a caller whose honest answer is to keep going: `vat
  * audit`, which reports an unreadable path as `SCAN_PATH_UNREADABLE` and
@@ -174,6 +174,7 @@ function crawlOneBase(
     return Promise.resolve([]);
   }
   return crawlDirectory({
+    outputs: [],
     baseDir: base,
     include: globs,
     exclude: DISCOVERY_EXCLUDE,
@@ -201,7 +202,7 @@ function crawlOneBase(
     // (see {@link DiscoveryUnreadablePolicy}); the refusal is then reported by
     // that caller, and the crawl continues past the directory.
     unreadable: unreadable === 'refuse'
-      ? { refuse: { root: projectRoot, remedy: SKILLS_INCLUDE_REMEDY } }
+      ? { refuse: { root: projectRoot, remedy: SKILLS_INCLUDE_REMEDY, side: 'source' } }
       : unreadable,
   });
 }

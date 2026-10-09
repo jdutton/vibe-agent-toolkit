@@ -1,10 +1,9 @@
 import { chmodSync, statSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { FS_FAULT_CODE, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { SKILL_SOURCE_UNREADABLE_CODE } from '../../src/skill-source/source-unreadable.js';
 import { resolvePathSource } from '../../src/skill-source/sources/path-source.js';
 
 import { setupSkillSourceTestSuite } from './test-helpers.js';
@@ -38,14 +37,13 @@ describe('resolvePathSource', () => {
     expect(before.identity).not.toBe(after.identity);
   });
 
-  // An absent source is the same refusal, but its remedy is the path, not permissions.
-  it('refuses a source path that does not exist, saying so rather than blaming permissions', async () => {
+  // An absent source is classified as absent, so the refusal table's remedy is the path, not permissions.
+  it('refuses a source path that does not exist as an absent source, naming it', async () => {
     await expect(resolvePathSource('./no-such-companion', suite.ctx)).rejects.toMatchObject({
-      code: SKILL_SOURCE_UNREADABLE_CODE,
-      message: expect.stringMatching(/no-such-companion.*does not exist/) as unknown,
-    });
-    await expect(resolvePathSource('./no-such-companion', suite.ctx)).rejects.not.toMatchObject({
-      message: expect.stringContaining('permissions') as unknown,
+      code: FS_FAULT_CODE,
+      side: 'source',
+      faultClass: 'absent',
+      message: expect.stringContaining('no-such-companion') as unknown,
     });
   });
 
@@ -60,8 +58,9 @@ describe('resolvePathSource', () => {
       chmodSync(locked, 0o000);
       try {
         await expect(resolvePathSource(localPluginPath, suite.ctx)).rejects.toMatchObject({
-          code: SKILL_SOURCE_UNREADABLE_CODE,
-          reason: 'preflight',
+          code: FS_FAULT_CODE,
+          side: 'source',
+          faultClass: 'refused',
           message: expect.stringContaining(name) as unknown,
         });
       } finally {

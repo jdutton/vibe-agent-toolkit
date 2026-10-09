@@ -6,15 +6,14 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { loadAgentManifest } from '@vibe-agent-toolkit/agent-config';
-import { codedUserStateWrite, replaceDirectoryWith } from '@vibe-agent-toolkit/claude-marketplace';
-import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
-import { copyDirectory, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { buildReport, toFindings, type Gate } from '@vibe-agent-toolkit/schema';
+import { applyTreePlan, classifyFsFault, isPathAbsentError, pathPresent, planTreeChanges, safePath } from '@vibe-agent-toolkit/utils';
 
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
+import { endWithRefusal, endWithReport, leftoverIssue, NOTHING_FINISHED } from '../../utils/document-writer.js';
+import { occupiedRefusal, skillOwnership } from '../../utils/install-plan.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { pathPresent, unstatablePathRefusal } from '../../utils/project-root-policy.js';
 import { validateAndGetScopeLocation } from '../../utils/scope-locations.js';
 
 import { agentInstallPath } from './install-path.js';
@@ -28,21 +27,23 @@ export interface InstallOptions {
   debug?: boolean;
 }
 
-/** The owner's read, write and search bits, kept on every install root so its owner can always remove it. */
-const OWNER_RWX = 0o700;
-
-/** `vat agent install` has no `--strict`, and an install carries no finding: the gate is fixed. */
+/** `vat agent install` has no `--strict`, and its only findings are leftovers (warnings): the gate is fixed. */
 const GATE: Gate = { strict: false };
+
+/** What an install finished: the install, and what it left beside it that VAT could not remove. */
+interface Installed {
+  readonly data: AgentInstallData;
+  readonly leftovers: ReadonlyArray<ReturnType<typeof leftoverIssue>>;
+}
 
 /**
  * Install agent command.
  *
- * Every refusal publishes NOTHING_FINISHED: the one unit of work is the
- * install, and a run that refused did not install. A copy replaces a previous
- * install only once it is whole, so a refused copy leaves that install as it
- * was. A `--force --dev` run removes the previous install before linking, and a
- * failed link says so in the message — the one thing it did finish, which
- * `data` has no field for.
+ * The install is ONE tree-change plan: the copy, or the `--dev` link, is staged
+ * beside the install and swapped in whole, so a refused run leaves any previous
+ * install exactly as it was — every refusal publishes NOTHING_FINISHED, and
+ * that is the truth. A previous install the swap parked and the OS would not
+ * let VAT remove is a warning naming it, on a run that finished.
  */
 export async function installAgent(
   agentName: string,
@@ -51,20 +52,25 @@ export async function installAgent(
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
-  let data: AgentInstallData;
+  let installed: Installed;
   try {
-    data = await install(agentName, options, logger);
+    installed = await install(agentName, options, logger);
   } catch (error) {
     return endWithRefusal('agent install', refusalCodeOf(error), error, 'yaml', GATE, NOTHING_FINISHED);
   }
   logger.debug(`Install completed in ${Date.now() - startTime}ms`);
-  endWithReport('agent install', buildReport({ examined: 1, findings: [], data, gate: GATE, durationMs: Date.now() - startTime }), 'yaml');
+  const { data, leftovers } = installed;
+  endWithReport('agent install', buildReport({ examined: 1, findings: toFindings([...leftovers]), data, gate: GATE, durationMs: Date.now() - startTime }), 'yaml');
 }
 
 /** The install itself; every throw carries the refusal code of its cause. */
-async function install(agentName: string, options: InstallOptions, logger: Logger): Promise<AgentInstallData> {
+async function install(agentName: string, options: InstallOptions, logger: Logger): Promise<Installed> {
   const { runtime = 'agent-skill', scope = 'user', dev = false, force = false } = options;
 
+  // `--dev` stages a symlink, and Windows gives one only with a privilege. Refused here, before
+  // anything is examined, naming WSL and copy mode; should `--dev` ever work on Windows, a junction
+  // (no privilege, as `dev-tools/src/link-workspace-packages.ts` makes) is the way. Never a silent
+  // copy instead: `--dev` exists so a rebuild is picked up live.
   if (dev && process.platform === 'win32') {
     throw new CommandRefusalError(
       'NOT_IMPLEMENTED',
@@ -76,96 +82,39 @@ async function install(agentName: string, options: InstallOptions, logger: Logge
   const targetLocation = validateAndGetScopeLocation(runtime, scope);
 
   // Refused by name before anything is examined — before the agent is even
-  // looked up: with `--force` this path is `rm -rf`'d, and the positional is
-  // the one thing on it the user typed.
+  // looked up: with `--force` whatever is at this path is replaced, and the
+  // positional is the one thing on it the user typed.
   const installPath = agentInstallPath(targetLocation, agentName);
 
   const builtSkillPath = await findBuiltSkill(agentName, runtime, logger);
 
-  await codedUserStateWrite(`create ${targetLocation}`, () => fs.mkdir(targetLocation, { recursive: true }));
-
-  // `'entry'` (lstat), not a following probe: a dangling dev-mode link — what
-  // `build:clean` orphans by deleting `dist/` under a previous `--dev` install —
-  // is an entry, and `--force` must clear it or `fs.symlink` rejects with EEXIST.
-  // A probe the OS refuses is INPUT_UNREADABLE, never "not installed".
-  const replacing = pathPresent(installPath, 'entry');
-  if (replacing && !force) {
-    throw new CommandRefusalError('USAGE_INVALID', `${agentName} already installed at ${installPath}\nUse --force to overwrite`);
-  }
+  // Without `--force` the install path must be free (absent, or an empty directory): a previous
+  // install, or a dangling `--dev` link `build:clean` orphaned, is refused before anything is
+  // written. The plan makes ~/.claude/skills when absent and removes it again on a refusal. A copy
+  // follows only links inside the bundle and gives each directory the bundle's mode with the
+  // owner's rwx kept (the primitive's copy policy): a read-only bundle never becomes an install
+  // nothing can remove.
+  const plan = await planTreeChanges([{
+    op: 'replace',
+    dest: installPath,
+    ownership: skillOwnership(force),
+    fill: dev ? { from: 'link', target: builtSkillPath } : { from: 'copy', source: builtSkillPath, side: 'source', links: 'follow-contained' },
+    label: `agent ${agentName}`,
+  }]).catch((error: unknown) => {
+    throw occupiedRefusal(error);
+  });
+  const { warnings } = await applyTreePlan(plan);
 
   if (dev) {
-    if (replacing) {
-      await codedUserStateWrite(`remove the existing install at ${installPath}`, () => fs.rm(installPath, { recursive: true, force: true }));
-    }
-    const removed = replacing ? ' (the previous install there was already removed)' : '';
-    await codedUserStateWrite(`link ${installPath}${removed}`, () => linkForDevelopment(builtSkillPath, installPath));
     logger.info(`✓ Symlinked ${agentName} to ${installPath} (dev mode)`);
     logger.info(`  Rebuild agent to see changes immediately`);
   } else {
-    // Staged beside the install and swapped in whole: a bundle the copy refuses
-    // (a named pipe, a link out of it, a file or listing the OS will not read) or
-    // a write that fails half-way never costs the previous install. The copy
-    // codes every refusal of the bundle at its cause, so they pass through as
-    // the input's; only a failure writing ~/.claude is the run not finishing.
-    // The root takes the bundle's mode with the owner's rwx kept: a read-only
-    // bundle must not become an install nothing can remove.
-    const warnings = await codedUserStateWrite(`install ${builtSkillPath} to ${installPath}`, () =>
-      replaceDirectoryWith(installPath, async (staged) => {
-        await copyDirectory(builtSkillPath, staged);
-        await fs.chmod(staged, ((await bundleRootMode(builtSkillPath)) & 0o7777) | OWNER_RWX);
-      }),
-    );
-    for (const warning of warnings) logger.warn(warning);
     logger.info(`✓ Installed ${agentName} to ${installPath}`);
   }
-
-  return { agent: agentName, installPath, symlink: dev };
-}
-
-/** The bundle root's mode — the input's to answer, so a refusal is INPUT_UNREADABLE. */
-async function bundleRootMode(builtSkillPath: string): Promise<number> {
-  try {
-    return (await fs.stat(builtSkillPath)).mode;
-  } catch (error) {
-    throw new CommandRefusalError('INPUT_UNREADABLE', `Could not read the built bundle at ${builtSkillPath}: ${String(error)}`, { cause: error });
-  }
-}
-
-/**
- * Symlink a built bundle into place for `--dev`, failing legibly where the OS
- * refuses.
- *
- * ⚠️ **This is POSIX-only in practice, and not by anything written here.**
- * `installAgent` refuses `dev` on win32 before this is reachable, naming WSL
- * and copy mode. So Windows never gets this far, and any Windows-specific
- * handling added here would be dead code — an earlier revision added exactly
- * that, relabelling a `SeCreateSymbolicLinkPrivilege` EPERM that cannot occur.
- * If `--dev` is ever to work on Windows, the change belongs at that guard (a
- * junction takes no elevation, as `dev-tools/src/link-workspace-packages.ts`
- * already does), not in this catch.
- *
- * Deliberately does NOT fall back to copying. `--dev` exists so a rebuild is
- * picked up live; a copy that reported success would leave someone editing
- * sources and wondering why nothing changes — a silent wrong answer in place of
- * a loud, correct refusal.
- *
- * @param builtSkillPath - Absolute path to the built bundle
- * @param installPath - Where the link should be created
- * @throws When the link cannot be created, naming the remedy (the caller
- *   codes it as a failed user-state write)
- */
-async function linkForDevelopment(builtSkillPath: string, installPath: string): Promise<void> {
-  try {
-    // eslint-disable-next-line local/no-bare-symlink-in-tests -- eyes open: win32 is refused by the guard in `installAgent` before this runs, so the Windows privilege hazard the rule names cannot be reached here.
-    await fs.symlink(builtSkillPath, installPath, 'dir');
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Could not create the dev-mode symlink at ${installPath}: ${detail}\n` +
-        `Re-run with --force to replace whatever is already at ${installPath}, ` +
-        'or install without --dev to copy the bundle instead of linking it.',
-    );
-  }
+  return {
+    data: { agent: agentName, installPath, symlink: dev },
+    leftovers: warnings.map(({ message, path }) => leftoverIssue(message, path)),
+  };
 }
 
 /**
@@ -194,7 +143,7 @@ async function findBuiltSkill(
   );
 
   // Only an absence is "not built"; a probe the OS refuses is its own INPUT_UNREADABLE.
-  if (!pathPresent(builtPath, 'follow')) {
+  if (!pathPresent(builtPath, 'follow', 'source', 'probe')) {
     throw new CommandRefusalError(
       'INPUT_UNREADABLE',
       `Built skill not found at ${builtPath}\n` +
@@ -224,7 +173,7 @@ function findAgentPackageRoot(manifestPath: string): Promise<string> {
     } catch (error) {
       // No manifest at this level: climb. A refused ancestor is not "no
       // manifest": the input's refusal.
-      if (!isPathAbsentError(error)) throw unstatablePathRefusal(packageJsonPath, error);
+      if (!isPathAbsentError(error)) throw classifyFsFault(error, { side: 'source', origin: 'content', action: 'look for the package around the agent', path: packageJsonPath });
     }
     return climb(path.dirname(currentDir));
   };

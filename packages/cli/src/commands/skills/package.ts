@@ -7,24 +7,25 @@
 import { existsSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-
 import {
   isSkillPackagingInputError,
   packageSkill,
+  SKILL_PACKAGE_CHECKS_FAILED_CODE,
   validateSkill,
   ZipSizeLimitError,
   type PackageSkillOptions,
   type PackagingTarget,
+  type SkillPackageChecksFailedError,
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import { parseFileCached, type ParseResult } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Gate, type Report, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, issueLocation, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, issueLocation, isVatError, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
-import { formatIssueLines, formatIssueSetHeading } from '../../utils/issue-rendering.js';
+import { endWithRefusal, endWithReport, leftoverFindingsOf, leftoverIssue, NOTHING_FINISHED } from '../../utils/document-writer.js';
+import { collectPostBuildIssues, formatIssueLines, formatIssueSetHeading } from '../../utils/issue-rendering.js';
 import { createLogger } from '../../utils/logger.js';
 import { readInputFile, requireProjectRoot } from '../../utils/project-root-policy.js';
 import { resolveSkillPath } from '../skill/review.js';
@@ -101,7 +102,7 @@ export function createPackageCommand(): Command {
     .option('--no-rewrite-links', 'Skip rewriting relative links in copied files')
     .option('-b, --base-path <path>', 'Base path for resolving relative links (default: dirname of SKILL.md)')
     .option('--dry-run', 'Preview packaging without creating files: the real run stopped before its first write, so what it would refuse before writing is refused here too')
-    .option('--force', 'Replace a previous package: remove and rebuild --output, overwrite a <output>.zip / <name>.marketplace.json file beside it (a directory there is not removed); without it, an --output that holds anything is refused')
+    .option('--force', 'Replace a previous package: --output and a <output>.zip / <name>.marketplace.json file beside it are replaced as one (a directory standing where an archive goes is refused, never removed); without it, an --output that holds anything is refused')
     .option('--debug', 'Enable debug logging')
     .option(
       '--target <target>',
@@ -122,16 +123,21 @@ Description:
 
   REQUIRED: --output flag must specify where to create the package
 
+  The package is written whole beside --output and swapped in: the directory
+  and the archives the formats write beside it land together, or nothing
+  changes — a failure partway, or a package its own post-build checks fail,
+  leaves a previous package exactly as it was.
+
   VAT never deletes what it did not produce. An --output that already holds
   anything — a non-empty directory, a file, or (with the zip / marketplace
   formats) the <output>.zip or <name>.marketplace.json beside it — is refused
   (USAGE_INVALID) and left exactly as it was, unless --force says it is a
-  previous package to replace: --force removes the --output and overwrites
-  a <output>.zip / <name>.marketplace.json FILE beside it, but never removes
-  a directory standing in an archive's place (that write ends RUN_INCOMPLETE).
-  --dry-run runs the same check. An empty directory is used as-is. An --output
-  that is, or contains, the SKILL.md or a file it bundles is refused
-  (USAGE_INVALID) even with --force: VAT never writes over what it reads.
+  previous package to replace; --force never replaces a directory standing in
+  an archive's place (USAGE_INVALID). --dry-run decides by the same plan and
+  prints it ([dry-run] create|replace <what> <path>). An empty directory is
+  replaced as-is. An --output that is, or contains, the SKILL.md or a file it
+  bundles is refused (USAGE_INVALID) even with --force: VAT never writes over
+  what it reads.
 
 Output:
   YAML report on stdout (schema: packages/cli/schemas/skills-package.json):
@@ -143,22 +149,26 @@ Output:
 
 Exit Codes:
   0 - Packaged (or previewed with --dry-run); warnings and info do not block
-  1 - An error-severity finding: the skill failed validation (nothing is
-      packaged), packaging refused the skill's content (SKILL_PACKAGING_FAILED),
-      or its claude-web ZIP exceeds 8 MB (SKILL_PACKAGE_TOO_LARGE)
+  1 - An error-severity finding (nothing is packaged): the skill failed
+      validation, the package failed its own post-build checks (their
+      findings), packaging refused the skill's content
+      (SKILL_PACKAGING_FAILED), or its claude-web ZIP exceeds 8 MB
+      (SKILL_PACKAGE_TOO_LARGE)
   2 - The run could not start or finish; error.code says why: USAGE_INVALID
       (a <skill-path> naming nothing, an invalid --target, an unknown or
       empty --formats value, no project root,
-      an --output already holding something and no --force, an --output
-      holding the skill's own source, or one under a directory the OS will
-      not let VAT examine, so it cannot tell), INPUT_UNREADABLE
+      an --output already holding something and no --force, or an --output
+      holding the skill's own source), INPUT_UNREADABLE
       (a <skill-path> the OS will not stat or read, or a directory in the
       project the OS will not list -- the crawl names it, dry run or real;
       this verb takes no git snapshot), RUN_INCOMPLETE (an output the OS will not let the build
-      write: a full disk, a read-only or unwritable output directory, a file
-      in the way, a ZIP, npm package.json or marketplace manifest that could
-      not be written -- its partial file removed), or INTERNAL_ERROR (an
-      unexpected failure)
+      write or examine: a full disk, a read-only or unwritable output
+      directory, an --output under a directory the OS will not let VAT
+      examine, a file in the way, a ZIP, npm package.json or marketplace
+      manifest that could not be written -- nothing of the package lands),
+      or INTERNAL_ERROR (an
+      unexpected failure). A previous package the swap replaced that the OS
+      will not remove is a TREE_CLEANUP_INCOMPLETE warning naming it (exit 0)
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -194,13 +204,18 @@ async function validateForPackage(
   logger: ReturnType<typeof createLogger>
 ): Promise<ValidationResult> {
   logger.info(`\n🔍 Validating skill...`);
-  // `{}`: this verb reads no project config (nor does `packageSkill` below).
-  const validationResult = await validateSkill({
-    skillPath,
-    rootDir: basePath,
-    locationRoot,
-    validation: {},
-  });
+  // `{}`: this verb reads no project config (nor does `packageSkill` below). The gate
+  // reads only the skill: a read the OS refuses is the input's, of its content.
+  const validationResult = await withFsFault(
+    { side: 'source', origin: 'content', action: `validate the skill at ${skillPath}` },
+    () => validateSkill({
+      skillPath,
+      rootDir: basePath,
+      locationRoot,
+      validation: {},
+      side: 'source',
+    }),
+  );
 
   for (const line of formatSkillValidationLines(validationResult)) {
     logger.info(line);
@@ -233,14 +248,21 @@ interface SkillsPackageReportInput {
    * (`SKILL_PACKAGE_TOO_LARGE`) or the skill's own content
    * (`SKILL_PACKAGING_FAILED`) — its message, and the skill's `SKILL.md` location.
    */
-  refused?: { code: 'SKILL_PACKAGE_TOO_LARGE' | 'SKILL_PACKAGING_FAILED'; message: string; location: string } | undefined;
+  refused?: { code: 'SKILL_PACKAGE_TOO_LARGE' | 'SKILL_PACKAGING_FAILED'; message: string; location: string; thrown: unknown } | undefined;
+  /**
+   * What the package run itself found: the post-build checks a package failed (it then did not
+   * land), and what its plan made and could not remove — a previous package parked by the swap,
+   * a staged tree a refused run discarded — each the warning naming it. Required: a lane that
+   * forgot them would publish a clean report over a failure or a leftover.
+   */
+  runFindings: readonly ValidationIssue[];
 }
 
 /** The finding a packaging refusal publishes. */
 function refusedIssue(refused: NonNullable<SkillsPackageReportInput['refused']>): ValidationIssue {
   return refused.code === 'SKILL_PACKAGE_TOO_LARGE'
     ? packageTooLargeIssue(refused.message, refused.location)
-    : packagingFailedIssue(refused.message, refused.location, 're-run vat skills package');
+    : packagingFailedIssue(refused.message, refused.location, 're-run vat skills package', refused.thrown);
 }
 
 /**
@@ -253,6 +275,7 @@ export function buildSkillsPackageReport(input: SkillsPackageReportInput): Repor
   const issues = [
     ...input.validation.issues,
     ...(input.refused === undefined ? [] : [refusedIssue(input.refused)]),
+    ...input.runFindings,
   ];
   return buildReport({ examined: 1, findings: toFindings(issues), data: input.data, gate: PACKAGE_GATE });
 }
@@ -354,7 +377,7 @@ function resolvePackageFormats(rawFormats: string | undefined): PackageFormat[] 
 }
 
 /** Test seam: the report's pure field derivations, and the `--formats` resolver. */
-export const __internal = { extractSkillName, frontmatterVersion, reportPath, resolvePackageFormats };
+export const __internal = { extractSkillName, failedChecksReport, frontmatterVersion, reportPath, resolvePackageFormats, resolveTarget };
 
 /**
  * Preview the package: the packager's own dry run (`dryRun: true`), so the
@@ -374,6 +397,10 @@ async function previewPackage(
 
   const plan = await packageSkill(skillPath, { ...packageOptions, dryRun: true });
   logger.info(`   Skill: ${plan.skill.name}`);
+  // The output's plan, as the real run would carry it out: one line per change.
+  for (const line of plan.plannedChanges ?? []) {
+    logger.info(`   [dry-run] ${line}`);
+  }
 
   logger.info(`\n📁 Files to be packaged:`);
   logger.info(`   - SKILL.md (root)`);
@@ -450,9 +477,10 @@ async function packageAndReport(
 
   try {
     if (options.dryRun === true) {
-      return buildSkillsPackageReport({ validation, data: await previewPackage(skillPath, options, packageOptions, logger) });
+      return buildSkillsPackageReport({ validation, data: await previewPackage(skillPath, options, packageOptions, logger), runFindings: [] });
     }
     const result = await packageSkill(skillPath, packageOptions);
+    const leftovers = result.residue.map(({ message, path }) => leftoverIssue(message, path));
     logger.info(`✅ Packaged skill: ${result.skill.name}`);
     logger.info(`   Output: ${result.outputPath}`);
     if (result.artifacts?.['zip']) {
@@ -461,21 +489,46 @@ async function packageAndReport(
     return buildSkillsPackageReport({
       validation,
       data: { skill: result.skill.name, version: result.skill.version ?? null, outputPath: reportPath(result.outputPath), dryRun: false },
+      runFindings: leftovers,
     });
   } catch (error) {
+    if (isVatError(error, SKILL_PACKAGE_CHECKS_FAILED_CODE)) return failedChecksReport(error as SkillPackageChecksFailedError, validation, logger);
     const code = packagingRefusalCode(error);
     if (code === undefined) throw error;
-    const tooLarge = code === 'SKILL_PACKAGE_TOO_LARGE';
     const message = errorMessageOf(error);
     logger.error(`Package failed: ${message}`);
     const parseResult = await parseFileCached(skillPath, 'markdown');
     return buildSkillsPackageReport({
       validation,
-      // A too-large ZIP is on disk beside its directory; a refused skill left no bundle.
-      data: { skill: extractSkillName(parseResult), version: frontmatterVersion(parseResult), outputPath: tooLarge ? reportPath(options.output) : null, dryRun: options.dryRun === true },
-      refused: { code, message, location: issueLocation(skillPath, locationRoot) },
+      // The package is one plan: a refused one — a too-large ZIP included — landed nothing.
+      data: { skill: extractSkillName(parseResult), version: frontmatterVersion(parseResult), outputPath: null, dryRun: options.dryRun === true },
+      refused: { code, message, location: issueLocation(skillPath, locationRoot), thrown: error },
+      runFindings: leftoverFindingsOf(error),
     });
   }
+}
+
+/**
+ * A package its own post-build checks failed: it did not land (the previous output is as it was),
+ * and this lane publishes the checks' own findings — exit 1, `outputPath: null` — with what the
+ * discard could not remove.
+ */
+function failedChecksReport(
+  error: SkillPackageChecksFailedError,
+  validation: ValidationResult,
+  logger: ReturnType<typeof createLogger>,
+): Report<SkillsPackageData> {
+  const { result } = error;
+  const postBuild = collectPostBuildIssues(result);
+  logger.error(`Package failed its post-build checks: nothing was written to ${result.outputPath}`);
+  for (const issue of postBuild) {
+    for (const line of formatIssueLines(issue, '  ')) logger.error(line);
+  }
+  return buildSkillsPackageReport({
+    validation,
+    data: { skill: result.skill.name, version: result.skill.version ?? null, outputPath: null, dryRun: false },
+    runFindings: [...postBuild, ...leftoverFindingsOf(error)],
+  });
 }
 
 /**
@@ -487,7 +540,7 @@ async function packageAndReport(
  */
 function resolvePackageSource(skillPath: string): string {
   const skillFile = resolveSkillPath(skillPath);
-  readInputFile(skillFile, { code: 'USAGE_INVALID', message: `Path does not exist: ${skillFile}` });
+  readInputFile(skillFile, { origin: 'argument', message: `Path does not exist: ${skillFile}` });
   return skillFile;
 }
 
@@ -515,7 +568,7 @@ async function runPackage(
   if (validation.summary.errors > 0) {
     // The gate stopped it: nothing was packaged, and the document says so.
     const skill = validation.metadata?.name ?? basename(skillDir);
-    return buildSkillsPackageReport({ validation, data: { skill, version: null, outputPath: null, dryRun: options.dryRun === true } });
+    return buildSkillsPackageReport({ validation, data: { skill, version: null, outputPath: null, dryRun: options.dryRun === true }, runFindings: [] });
   }
   return packageAndReport(skillPath, options, target, formats, validation, locationRoot, logger);
 }

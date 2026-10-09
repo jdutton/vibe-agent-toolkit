@@ -87,6 +87,7 @@ async function allowUnusedAcrossBuildRun(cwd: string): Promise<{
     projectSkills: [],
     onlySkill: undefined,
     verbose: false,
+    runOutputs: [],
   });
   const unused = [
     ...run.results.flatMap(({ result }) => [
@@ -192,7 +193,7 @@ async function buildRunWithOneThrowingSkill(
       await writeFile(safePath.join(extras, basename), `content of ${basename}\n`);
     }
   }
-  return runSkillBuild({ specs, cwd, logger, projectSkills: [], onlySkill: undefined, verbose: false });
+  return runSkillBuild({ specs, cwd, logger, projectSkills: [], onlySkill: undefined, verbose: false, runOutputs: [] });
 }
 
 describe('runSkillBuild - a skill that throws does not discard the batch', () => {

@@ -207,7 +207,7 @@ describe('inPlaceSkillRefusal — --skill on an in-place skill', () => {
 });
 
 describe('the published build report carries the set-aside names', () => {
-  const run = { results: [], failures: [], runIssues: [], skillsWithErrors: [], validationFailures: [], outputCommitted: true };
+  const run = { results: [], failures: [], runIssues: [], skillsWithErrors: [], validationFailures: [], outputCommitted: true, residue: [] };
 
   it('formats the success line with each set-aside tail only when there is one', () => {
     expect(formatBuiltSuccessLine(3, { inPlace: 0, pluginOnly: 0 })).toBe('\nBuilt 3 skill(s) successfully');
@@ -259,13 +259,13 @@ describe('the published build report carries the set-aside names', () => {
 type SkillsBuildReport = ReturnType<typeof SKILLS_BUILD_REPORT_SCHEMA.parse>;
 
 async function dryRunDocument(): Promise<{ exitCode: number; document: SkillsBuildReport }> {
-  const { exitCode, document } = publishedPhase<SkillsBuildReport>('skills build', await runSkillsBuildPhase(undefined, { dryRun: true }));
+  const { exitCode, document } = publishedPhase<SkillsBuildReport>('skills build', await runSkillsBuildPhase(undefined, { dryRun: true }, []));
   return { exitCode, document };
 }
 
 /** `--skill <name>` against the stubbed project; return the exit code and the one finding it published. */
 async function refusalFor(name: string): Promise<{ exitCode: number; code: string; error: string }> {
-  const { exitCode, document: report } = publishedPhase<SkillsBuildReport>('skills build', await runSkillsBuildPhase(undefined, { skill: name }));
+  const { exitCode, document: report } = publishedPhase<SkillsBuildReport>('skills build', await runSkillsBuildPhase(undefined, { skill: name }, []));
   expect(report.findings).toHaveLength(1);
   return { exitCode, code: String(report.findings[0]?.code), error: String(report.findings[0]?.message) };
 }
@@ -302,7 +302,7 @@ describe('runSkillsBuildPhase — in-place wiring', () => {
   it('building an in-place skill by name is a findings report, exit 1', async () => {
     givenProject();
 
-    const { exitCode, document: report } = publishedPhase<SkillsBuildReport>('skills build', await runSkillsBuildPhase(undefined, { skill: KEPT }));
+    const { exitCode, document: report } = publishedPhase<SkillsBuildReport>('skills build', await runSkillsBuildPhase(undefined, { skill: KEPT }, []));
 
     expect(exitCode).toBe(1);
     expect(report.status).toBe('findings');

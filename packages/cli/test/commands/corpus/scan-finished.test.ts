@@ -29,6 +29,7 @@ describe('finishedScan', () => {
         row('half', { review: { status: 'error', duration_ms: 1 } }),
       ],
       { outDir: '/out', runDirName: 'run-1' },
+      [],
     );
 
     expect(work.examined).toBe(3);

@@ -153,6 +153,7 @@ export function fingerprintFiles(
   // tracked-but-deleted paths (`ENOENT`). A locked FILE refuses exactly as a
   // locked directory does — the same hole, one level down.
   const relativePaths = crawlDirectorySync({
+    outputs: [],
     baseDir: root,
     include: ['**/*'],
     exclude: [...scope.exclude],
@@ -165,6 +166,7 @@ export function fingerprintFiles(
       refuse: {
         root,
         remedy: 'Fix the permissions on that directory: a tree the lab cannot list in full cannot be fingerprinted.',
+        side: 'source',
       },
     },
   }).map((relativePath) => toForwardSlash(relativePath));

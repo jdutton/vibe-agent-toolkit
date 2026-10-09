@@ -4,12 +4,13 @@
  * System tests for `vat claude plugin install` command.
  */
 
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import { chmodSync } from 'node:fs';
 
 
 import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS, tmpdirFoldsCase } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, resolveExecutable, tmpdirFoldsCase } from '@vibe-agent-toolkit/utils/testing';
 import AdmZip from 'adm-zip';
 import * as tar from 'tar';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -249,7 +250,9 @@ describe('claude plugin install command (system test)', () => {
     expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
   });
 
-  it('reports the skills already installed when a later one refuses', async () => {
+  // One transaction: a later skill that refuses means none is installed — the report used to list
+  // skill 1 as on disk while the run refused on skill 2.
+  it('installs no skill when a later one refuses, and says to pass --force', async () => {
     const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
     const packageDir = safePath.join(tempDir, 'two-skills');
     plantFile(safePath.join(packageDir, 'package.json'), JSON.stringify({ name: '@test/two', version: '1.0.0', vat: { skills: [SKILL_ALPHA, SKILL_BETA] } }));
@@ -260,13 +263,12 @@ describe('claude plugin install command (system test)', () => {
     const { status, report } = await runInstall(binPath, fakeHome, [packageDir]);
 
     expect(status).toBe(2);
-    expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' }, examined: 1 });
-    // Skill 1 is on disk, so the report says so — not "nothing finished".
-    expect(report.data?.skills.map((skill) => skill.name)).toStrictEqual([SKILL_ALPHA]);
-    expect(fs.existsSync(safePath.join(claudeDir, 'skills', SKILL_ALPHA, 'SKILL.md'))).toBe(true);
+    expect(report).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' }, data: null });
+    expect(report.error?.message).toContain('--force');
+    expect(fs.existsSync(safePath.join(claudeDir, 'skills', SKILL_ALPHA))).toBe(false);
   });
 
-  it('refuses a plugin it could not register as INPUT_UNREADABLE — never ok', async () => {
+  it('refuses a plugin it could not register as INPUT_UNREADABLE — never ok — before anything is copied', async () => {
     const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
     const { projectDir } = setupPluginTestProject(tempDir, 'unregistrable', 'reg-market', [{ name: 'reg-plugin', skills: ['reg-skill'] }]);
     // settings.json is present and not JSON: registration cannot enable the plugin.
@@ -277,12 +279,14 @@ describe('claude plugin install command (system test)', () => {
     expect(status).toBe(2);
     expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
     expect(fs.readFileSync(safePath.join(claudeDir, 'settings.json'), 'utf-8')).toBe('{ "enabledPlugins": ');
-    // The marketplace was copied before registration refused: the report says what is on disk.
-    expect(report.data?.skills.map((skill) => skill.name)).toStrictEqual(['reg-skill']);
-    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'reg-market', 'plugins', 'reg-plugin', 'skills', 'reg-skill'))).toBe(true);
+    // The registry is read when the install is planned: nothing was copied, and the report says so.
+    expect(report.data).toBeNull();
+    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES))).toBe(false);
   });
 
-  it.skipIf(CANNOT_DENY_READS)('refuses a skills directory it cannot examine as INPUT_UNREADABLE, never INTERNAL_ERROR', async () => {
+  // The skills directory is where the install WRITES (its destination, `-s`), not an input: a refused
+  // examination of it is the run not finishing (the refusal table's destination row), never the input's.
+  it.skipIf(CANNOT_DENY_READS)('refuses a skills directory it cannot examine as RUN_INCOMPLETE, never INTERNAL_ERROR', async () => {
     const { tempDir, fakeHome } = createInstallTestContext(createTempDir);
     const skillDir = safePath.join(tempDir, 'locked-target-skill');
     plantFile(safePath.join(skillDir, 'SKILL.md'), '---\nname: locked-target\ndescription: A skill.\n---\n\n# locked-target\n');
@@ -293,10 +297,31 @@ describe('claude plugin install command (system test)', () => {
       const { status, report } = await runInstall(binPath, fakeHome, [skillDir, '-s', lockedSkillsDir]);
 
       expect(status).toBe(2);
-      expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
+      expect(report).toMatchObject({ status: 'error', error: { code: 'RUN_INCOMPLETE' }, data: null });
+      expect(report.error?.message).toContain(lockedSkillsDir);
     } finally {
       chmodSync(lockedSkillsDir, 0o755);
     }
+  });
+
+  // The one special-file policy at the verb: a pipe in the package is the package's entry, refused
+  // unopened before anything under ~/.claude changes. A copy of it would block until a writer appears.
+  it.skipIf(process.platform === 'win32')('refuses a named pipe in the plugin tree as INPUT_UNREADABLE without blocking, changing nothing (mkfifo is POSIX-only)', async () => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+    const { projectDir, marketplacesDir } = setupPluginTestProject(tempDir, 'piped', 'fifo-market', [{ name: 'fifo-plugin', skills: ['fifo-skill'] }]);
+    const fifo = safePath.join(marketplacesDir, 'fifo-market', 'plugins', 'fifo-plugin', 'skills', 'fifo-skill', 'zpipe');
+    execFileSync(resolveExecutable('mkfifo'), [fifo]);
+    // A run that blocked on the pipe is released after a while (opening read-write never blocks, and is a
+    // writer), so a regression fails on the assertions below instead of hanging the suite.
+    const release = setTimeout(() => fs.closeSync(fs.openSync(fifo, 'r+')), 5000);
+    try {
+      const { status, report } = await runInstall(binPath, fakeHome, [projectDir]);
+      expect(status).toBe(2);
+      expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
+    } finally {
+      clearTimeout(release);
+    }
+    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES))).toBe(false);
   });
 
   it('refuses a marketplace copy that failed as RUN_INCOMPLETE, never INTERNAL_ERROR', async () => {
@@ -529,8 +554,9 @@ describe('claude plugin install command (system test)', () => {
   });
 
   // A legacy flat skill the OS would not let it remove was INTERNAL_ERROR, after the replaced
-  // plugin was already uninstalled and before anything new was installed.
-  it.skipIf(CANNOT_DENY_READS)('installs first, then reports a legacy flat skill it could not remove as RUN_INCOMPLETE', async () => {
+  // plugin was already uninstalled and before anything new was installed. Its removal is now part
+  // of the install's one transaction: moved aside, then removed whatever its modes.
+  it.skipIf(CANNOT_DENY_READS)('removes a legacy flat skill holding a read-only directory in the install\'s own transaction, exit 0', async () => {
     const { fakeHome, claudeDir, projectDir } = await setupReplacesCase(
       binPath, createTempDir, { plugins: ['old-plugin'], flatSkills: ['legacy'] },
     );
@@ -539,9 +565,8 @@ describe('claude plugin install command (system test)', () => {
       parentDir: safePath.join(claudeDir, 'skills'), entry: 'legacy', lockedRel: ['ro'],
     });
 
-    expect(status).toBe(2);
-    expect(report).toMatchObject({ status: 'error', error: { code: 'RUN_INCOMPLETE' } });
-    expect(report.error?.message).toContain('legacy');
+    expect(status, JSON.stringify(report)).toBe(0);
+    expect(fs.readdirSync(safePath.join(claudeDir, 'skills'))).toEqual([]);
     expect(installedKeys(claudeDir)).toEqual(['new-plugin@r-market']);
     expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'r-market', 'plugins', 'new-plugin', 'skills', 'new-skill', 'SKILL.md'))).toBe(true);
   });
@@ -646,8 +671,10 @@ describe('claude plugin install command (system test)', () => {
   });
 
   // The marketplace copy was rm -rf, mkdir, copy: one entry the OS would not let it remove
-  // failed the run with the user's marketplace already half-deleted (its manifest gone).
-  it.skipIf(CANNOT_DENY_READS)('replaces an installed marketplace by staging and swapping, so an entry it cannot remove never half-deletes it', async () => {
+  // failed the run with the user's marketplace already half-deleted (its manifest gone). A
+  // read-only directory in the previous tree (an older build's copy of a read-only plugin) is now
+  // made writable and removed with it: the replace is whole, and nothing is left beside it.
+  it.skipIf(CANNOT_DENY_READS)('replaces an installed marketplace holding a read-only directory whole, by staging and swapping, leaving nothing beside it', async () => {
     const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
     const { projectDir } = setupPluginTestProject(tempDir, 'swap-pkg', 's-market', [{ name: 's-plugin', skills: ['s-skill'] }]);
     plantFile(safePath.join(projectDir, 'dist', '.claude', 'plugins', 'marketplaces', 's-market', '.claude-plugin', 'marketplace.json'), '{}');
@@ -661,8 +688,8 @@ describe('claude plugin install command (system test)', () => {
     expect(status, JSON.stringify(report)).toBe(0);
     expect(fs.existsSync(safePath.join(marketplacesDir, 's-market', '.claude-plugin', 'marketplace.json'))).toBe(true);
     expect(fs.existsSync(safePath.join(marketplacesDir, 's-market', 'plugins', 's-plugin', 'ro'))).toBe(false);
-    expect(report.findings).toMatchObject([{ code: 'PLUGIN_INSTALL_CLEANUP_INCOMPLETE', severity: 'warning', location: 's-market' }]);
-    expect(report.findings[0]?.message).toMatch(/\.s-market\.vat-staged-\w+\.previous/);
+    expect(report.findings).toEqual([]);
+    expect(fs.readdirSync(marketplacesDir)).toEqual(['s-market']);
   });
 
   // The version (and plugin/marketplace names) come from the PACKAGE: one that cannot name a
@@ -689,9 +716,10 @@ describe('claude plugin install command (system test)', () => {
     expect(fs.existsSync(safePath.join(tempDir, 'victim'))).toBe(false);
   });
 
-  // A re-install whose previous cache cannot be removed is complete — and the leftover is
-  // reported as a finding, not only printed on stderr.
-  it.skipIf(CANNOT_DENY_READS)('reports a previous cache it could not remove as PLUGIN_INSTALL_CLEANUP_INCOMPLETE, exit 0', async () => {
+  // An older build copied a read-only plugin's modes into the cache: a previous version its owner
+  // could not empty used to be left beside the new one. It is now made writable and removed. (A leftover
+  // the OS truly refuses is a TREE_CLEANUP_INCOMPLETE warning: the tree-change applier's tests inject one.)
+  it.skipIf(CANNOT_DENY_READS)('replaces a previous cache holding a read-only directory whole, exit 0, with nothing left beside it', async () => {
     const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
     const { projectDir } = setupPluginTestProject(tempDir, 'cleanup-pkg', 'c-market', [{ name: 'c-plugin', skills: ['c-skill'] }]);
     await runPluginInstall(binPath, projectDir, fakeHome);
@@ -702,7 +730,8 @@ describe('claude plugin install command (system test)', () => {
     });
 
     expect(status, JSON.stringify(report)).toBe(0);
-    expect(report.findings).toMatchObject([{ code: 'PLUGIN_INSTALL_CLEANUP_INCOMPLETE', severity: 'warning', location: 'c-plugin@c-market' }]);
+    expect(report.findings).toEqual([]);
+    expect(fs.readdirSync(versionsDir)).toEqual(['1.2.3']);
   });
 
   // A plugin directory the package ships read-only (here through a link, so the cache copy reads

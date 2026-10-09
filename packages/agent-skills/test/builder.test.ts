@@ -1,12 +1,11 @@
 import fs from 'node:fs/promises';
 
 import { AGENT_MANIFEST_INVALID_CODE } from '@vibe-agent-toolkit/agent-config';
-import { createSymlink, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { createSymlink, FS_FAULT_CODE, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE, buildAgentSkill } from '../src/builder.js';
-import { SKILL_PACKAGING_OUTPUT_FAILED_CODE } from '../src/packaging-errors.js';
+import { AGENT_PACKAGE_ROOT_MISSING_CODE, buildAgentSkill } from '../src/builder.js';
 
 import { writeMinimalAgent } from './test-helpers.js';
 
@@ -21,6 +20,10 @@ const TEST_AGENT_LICENSE_NAME = 'test-agent-license';
 const TEST_AGENT_NO_PROMPT_NAME = 'test-agent-no-prompt';
 const LICENSE_FILE = 'LICENSE.txt';
 const MINIMAL_SYSTEM_PROMPT = 'Test agent';
+/** The agent's own source refused by the OS: a classified fault on the source side (`INPUT_UNREADABLE`). */
+const SOURCE_FAULT = { code: FS_FAULT_CODE, side: 'source' };
+/** The output refused by the OS: a classified fault on the destination side (`RUN_INCOMPLETE`). */
+const OUTPUT_FAULT = { code: FS_FAULT_CODE, side: 'destination' };
 
 describe('buildAgentSkill', () => {
   const suite = setupAsyncTempDirSuite('agent-skill');
@@ -253,13 +256,13 @@ spec:
   it('refuses a LICENSE.txt that is a directory as an unreadable source', async () => {
     const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'license-is-a-dir');
     await fs.mkdir(safePath.join(agentDir, LICENSE_FILE));
-    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject({ code: AGENT_SOURCE_UNREADABLE_CODE });
+    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject(SOURCE_FAULT);
   });
 
   it('refuses a scripts/ that is a plain file as an unreadable source', async () => {
     const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'scripts-is-a-file');
     await fs.writeFile(safePath.join(agentDir, 'scripts'), 'not a directory');
-    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject({ code: AGENT_SOURCE_UNREADABLE_CODE });
+    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject(SOURCE_FAULT);
   });
 
   // Needs a file whose mode denies reading it; Windows and root cannot deny a read by mode.
@@ -275,7 +278,7 @@ spec:
 
     try {
       await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject({
-        code: AGENT_SOURCE_UNREADABLE_CODE,
+        ...SOURCE_FAULT,
         message: expect.stringContaining(relative) as unknown,
       });
     } finally {
@@ -331,7 +334,7 @@ spec:
 
     await expect(buildAgentSkill({ agentPath: manifestPath }))
       .rejects
-      .toMatchObject({ code: AGENT_MANIFEST_INVALID_CODE, message: expect.stringContaining('./prompts/system.md') });
+      .toMatchObject({ ...SOURCE_FAULT, faultClass: 'absent', origin: 'config', message: expect.stringContaining('./prompts/system.md') });
   });
 
   // Only an ABSENCE is "not there". Anything else the OS says about an agent's
@@ -342,7 +345,7 @@ spec:
     await fs.rm(safePath.join(agentDir, PROMPTS_DIR, SYSTEM_MD));
     await fs.mkdir(safePath.join(agentDir, PROMPTS_DIR, SYSTEM_MD));
 
-    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject({ code: AGENT_SOURCE_UNREADABLE_CODE });
+    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject(SOURCE_FAULT);
   });
 
   it('refuses a scripts/ it cannot stat instead of building without it', async ({ skip }) => {
@@ -350,7 +353,7 @@ spec:
     const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'scripts-loop');
     createSymlink(cap, 'scripts', safePath.join(agentDir, 'scripts'), 'dir');
 
-    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject({ code: AGENT_SOURCE_UNREADABLE_CODE });
+    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject(SOURCE_FAULT);
   });
 
   it('refuses a package.json it cannot stat instead of walking past it', async ({ skip }) => {
@@ -359,7 +362,7 @@ spec:
     await fs.rm(safePath.join(agentDir, PACKAGE_JSON_NAME));
     createSymlink(cap, PACKAGE_JSON_NAME, safePath.join(agentDir, PACKAGE_JSON_NAME), 'file');
 
-    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject({ code: AGENT_SOURCE_UNREADABLE_CODE });
+    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject(SOURCE_FAULT);
   });
 
   // The output the operator chose refusing a write says nothing about the agent:
@@ -370,7 +373,7 @@ spec:
     await fs.writeFile(blocker, 'x');
 
     await expect(buildAgentSkill({ agentPath: manifestPath, outputPath: safePath.join(blocker, 'out') }))
-      .rejects.toMatchObject({ code: SKILL_PACKAGING_OUTPUT_FAILED_CODE });
+      .rejects.toMatchObject(OUTPUT_FAULT);
   });
 
   it.skipIf(CANNOT_DENY_READS)('codes an unwritable output directory as an unfinished run', async () => {
@@ -381,7 +384,7 @@ spec:
 
     try {
       await expect(buildAgentSkill({ agentPath: manifestPath, outputPath: safePath.join(readOnly, 'out') }))
-        .rejects.toMatchObject({ code: SKILL_PACKAGING_OUTPUT_FAILED_CODE, message: expect.stringContaining('ro/out') as unknown });
+        .rejects.toMatchObject({ ...OUTPUT_FAULT, message: expect.stringContaining('ro/out') as unknown });
     } finally {
       await fs.chmod(readOnly, 0o755);
     }

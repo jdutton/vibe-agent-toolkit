@@ -27,7 +27,7 @@
 import { spawnSync } from 'node:child_process';
 import { lstatSync, readdirSync } from 'node:fs';
 
-import { isFilesystemAccessError, isPathAbsentError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { fsFaultOf, isPathAbsentError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
 
 import { runGit } from '../../harness/git-state.js';
@@ -158,7 +158,7 @@ export function readCloneSource(
   try {
     return { ok: true, source: { path, alias, root: readCloneDir(path, '').dir, git: kindOf(safePath.join(path, '.git')) } };
   } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     const detail = error instanceof Error ? error.message : String(error);
     return { ok: false, refusal: `REFUSED: cannot plan the build-verb clone of subject '${alias}': ${detail}` };
   }

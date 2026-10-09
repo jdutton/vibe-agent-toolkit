@@ -66,6 +66,14 @@ function writeConfig(dir: string, content: string | Buffer): string {
   return configPath;
 }
 
+/** What `updateSkillTestConfig` rejects with for `configPath`, on the config's side for this run. */
+function refusalFrom(configPath: string, configSide: 'source' | 'destination'): Promise<unknown> {
+  return updateSkillTestConfig(configPath, 'my-skill', { maxTurns: 20 }, () => {}, configSide).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+}
+
 describe('updateSkillTestConfig (the third config reader)', () => {
   const suite = setupSyncTempDirSuite('vat-skill-test-configure');
   let tempDir: string;
@@ -93,6 +101,7 @@ describe('updateSkillTestConfig (the third config reader)', () => {
       'my-skill',
       { maxTurns: 20 },
       (m) => warnings.push(m),
+      'destination',
     );
 
     // It did not refuse: the knob the operator typed is in the output.
@@ -112,7 +121,7 @@ describe('updateSkillTestConfig (the third config reader)', () => {
     const warnings: string[] = [];
 
     await expect(
-      updateSkillTestConfig(configPath, 'my-skill', { maxTurns: 20 }, (m) => warnings.push(m)),
+      updateSkillTestConfig(configPath, 'my-skill', { maxTurns: 20 }, (m) => warnings.push(m), 'destination'),
     ).rejects.toThrow(/Expected array/);
     expect(warnings).toEqual([]);
 
@@ -121,7 +130,7 @@ describe('updateSkillTestConfig (the third config reader)', () => {
     // which is how the defect survived.
     let failure = '';
     try {
-      await updateSkillTestConfig(configPath, 'my-skill', { maxTurns: 20 }, () => {});
+      await updateSkillTestConfig(configPath, 'my-skill', { maxTurns: 20 }, () => {}, 'destination');
     } catch (err) {
       failure = err instanceof Error ? err.message : String(err);
     }
@@ -138,7 +147,7 @@ describe('updateSkillTestConfig (the third config reader)', () => {
     writeSkill(tempDir, 'my-skill');
     const configPath = writeConfig(tempDir, Buffer.from(`${BOM}${source}`, 'utf16le'));
 
-    const updated = await updateSkillTestConfig(configPath, 'my-skill', { maxTurns: 20 }, () => {});
+    const updated = await updateSkillTestConfig(configPath, 'my-skill', { maxTurns: 20 }, () => {}, 'destination');
 
     // The original content survived the round trip...
     expect(updated).toContain('publish: true');
@@ -153,7 +162,7 @@ describe('updateSkillTestConfig (the third config reader)', () => {
     writeSkill(tempDir, 'my-skill');
     const configPath = writeConfig(tempDir, SKILLS_BLOCK);
 
-    const failure = await updateSkillTestConfig(configPath, 'my-skil', { maxTurns: 5 }, () => {}).then(
+    const failure = await updateSkillTestConfig(configPath, 'my-skil', { maxTurns: 5 }, () => {}, 'destination').then(
       () => undefined,
       (error: unknown) => error,
     );
@@ -164,17 +173,41 @@ describe('updateSkillTestConfig (the third config reader)', () => {
     expect(fs.readFileSync(configPath, 'utf8')).toBe(SKILLS_BLOCK);
   });
 
-  it('refuses a config the OS will not read INPUT_UNREADABLE, through the shared config read', async () => {
+  it('refuses a config the OS will not read RUN_INCOMPLETE, through the shared config read: it is the file this verb writes', async () => {
     // A directory where the file should be: EISDIR on every platform, so no
-    // CANNOT_DENY_READS skip. One broken file, one refusal code, whichever verb.
+    // CANNOT_DENY_READS skip. The config is this verb's destination (it edits
+    // it in place), so a read the OS refuses is the run not finishing.
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
     fs.mkdirSync(configPath);
 
-    const failure = await updateSkillTestConfig(configPath, 'my-skill', { maxTurns: 20 }, () => {}).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(failure).toMatchObject({ code: 'CONFIG_UNREADABLE' });
+    const failure = await refusalFrom(configPath, 'destination');
+    expect(failure).toMatchObject({ code: 'FS_FAULT', side: 'destination', origin: 'config', faultClass: 'wrong-type' });
+    expect(refusalCodeOf(failure)).toBe('RUN_INCOMPLETE');
+  });
+
+  it('refuses a project with no config CONFIG_INVALID, carrying the classified absence of the config it edits', async () => {
+    const configPath = safePath.join(tempDir, CONFIG_FILENAME);
+
+    const failure = await refusalFrom(configPath, 'destination');
+    expect(refusalCodeOf(failure)).toBe('CONFIG_INVALID');
+    expect((failure as { cause?: unknown }).cause).toMatchObject({ code: 'FS_FAULT', side: 'destination', faultClass: 'absent', path: configPath });
+  });
+
+  it('classifies a presence check the OS refuses on the config\'s side for this run, never as "no config"', async () => {
+    // A name too long for the host: ENAMETOOLONG (wrong-type) on every platform, no permissions needed.
+    const configPath = safePath.join(tempDir, `${'n'.repeat(300)}.yaml`);
+
+    const failure = await refusalFrom(configPath, 'destination');
+    expect(failure).toMatchObject({ code: 'FS_FAULT', side: 'destination', faultClass: 'wrong-type' });
+    expect(refusalCodeOf(failure)).toBe('RUN_INCOMPLETE');
+  });
+
+  it('refuses it INPUT_UNREADABLE under --print, which writes nothing: the config is then only read', async () => {
+    const configPath = safePath.join(tempDir, CONFIG_FILENAME);
+    fs.mkdirSync(configPath);
+
+    const failure = await refusalFrom(configPath, 'source');
+    expect(failure).toMatchObject({ code: 'FS_FAULT', side: 'source', origin: 'config', faultClass: 'wrong-type' });
     expect(refusalCodeOf(failure)).toBe('INPUT_UNREADABLE');
   });
 });

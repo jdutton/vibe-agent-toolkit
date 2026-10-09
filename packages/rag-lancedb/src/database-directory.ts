@@ -11,7 +11,7 @@
 
 import fs from 'node:fs';
 
-import { isFilesystemAccessError, RAG_DATABASE_NOT_REMOVABLE_CODE, RAG_DATABASE_REMOVAL_INCOMPLETE_CODE, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { applyTreePlanOrLeftover, fsFaultOf, isPathAbsentError, type OwnershipVerdict, planTreeChanges, safePath, toForwardSlash, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 
 /** The chunk table: every indexed chunk and its embedding. */
 export const TABLE_NAME = 'rag_chunks';
@@ -68,7 +68,7 @@ function startsWithSignature(filePath: string, signature: Buffer): boolean {
     const head = Buffer.alloc(signature.length);
     return fs.readSync(fd, head, 0, signature.length, 0) === signature.length && head.equals(signature);
   } catch (error) {
-    if (isFilesystemAccessError(error)) return false;
+    if (fsFaultOf(error) !== undefined) return false;
     throw error;
   } finally {
     if (fd !== undefined) fs.closeSync(fd);
@@ -101,35 +101,72 @@ export function foreignDatabaseEntries(dbPath: string, entries: readonly Databas
 }
 
 /**
- * Remove a RAG database directory, without opening it — so a database whose
- * files are damaged can still be removed.
+ * Where a database path that is a symbolic link really leads (absolute; a dangling link resolves
+ * as far as its own target): what a caller names to clear the database itself.
  *
- * @param dbPath - The database directory
- * @throws {VatError} `RAG_DATABASE_NOT_REMOVABLE` when the path is a symbolic
- *   link (removing it would leave the index it names in place) or the directory
- *   holds anything a RAG database does not — nothing is removed then;
- *   `RAG_DATABASE_REMOVAL_INCOMPLETE` when the OS stopped the removal partway
+ * @returns The real path, or `undefined` when `dbPath` is not a link (or not there)
+ * @throws {FsFaultError} (side `destination`) when the OS refuses to examine the link or its target
  */
-export function removeRagDatabase(dbPath: string): void {
-  if (!fs.existsSync(dbPath)) return;
-  if (fs.lstatSync(dbPath).isSymbolicLink()) {
-    throw new VatError(
-      RAG_DATABASE_NOT_REMOVABLE_CODE,
-      `Refusing to remove ${dbPath}: it is a symbolic link to ${fs.realpathSync(dbPath)}, and removing the link would leave that database in place. Name the database directory itself.`,
-    );
+export function linkedDatabasePath(dbPath: string): string | undefined {
+  const fault = { side: 'destination', path: dbPath, action: 'examine the link at the RAG database path' } as const;
+  return withFsFaultSync(fault, () => {
+    let stats;
+    try {
+      stats = fs.lstatSync(dbPath);
+    } catch (error: unknown) {
+      if (isPathAbsentError(error)) return undefined;
+      throw error;
+    }
+    if (!stats.isSymbolicLink()) return undefined;
+    try {
+      return toForwardSlash(fs.realpathSync.native(dbPath));
+    } catch (error: unknown) {
+      // Dangling: name where it points, absolute.
+      if (isPathAbsentError(error)) return safePath.resolve(safePath.join(dbPath, '..'), fs.readlinkSync(dbPath));
+      throw error;
+    }
+  });
+}
+
+/**
+ * Whether `dbPath`, which is there, is a database this provider made: the
+ * ownership `removeRagDatabase`'s plan judges it by. Never a link — removing
+ * the link would leave the database it names in place — never anything but a
+ * directory, and never a directory holding anything a database does not.
+ *
+ * @throws {FsFaultError} (side `destination`) when the OS refuses to examine or list it
+ */
+function recogniseRagDatabase(dbPath: string): OwnershipVerdict {
+  // The database is the user state the removal writes: a refusal examining it is a destination fault.
+  const fault = { side: 'destination', path: dbPath } as const;
+  const real = linkedDatabasePath(dbPath);
+  if (real !== undefined) {
+    return { owned: false, reason: `it is a symbolic link to ${real}, and removing the link would leave that database in place; name the database directory itself` };
   }
-  const foreign = foreignDatabaseEntries(dbPath, fs.readdirSync(dbPath, { withFileTypes: true }));
-  if (foreign.length > 0) {
-    throw new VatError(RAG_DATABASE_NOT_REMOVABLE_CODE, `Refusing to remove ${dbPath}: it is not a RAG database (it holds ${foreign.join(', ')}).`);
-  }
-  try {
-    fs.rmSync(dbPath, { recursive: true, force: true });
-  } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
-    throw new VatError(
-      RAG_DATABASE_REMOVAL_INCOMPLETE_CODE,
-      `Could not finish removing the RAG database at ${dbPath}; part of it may already be gone. Make it writable and clear it again: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    );
-  }
+  const stats = withFsFaultSync({ ...fault, action: 'examine the RAG database to remove' }, () => fs.lstatSync(dbPath));
+  if (!stats.isDirectory()) return { owned: false, reason: 'it is not a directory, so it is not a RAG database' };
+  const foreign = foreignDatabaseEntries(dbPath, withFsFaultSync({ ...fault, action: 'list the RAG database to remove' }, () => fs.readdirSync(dbPath, { withFileTypes: true })));
+  return foreign.length === 0 ? { owned: true } : { owned: false, reason: `it is not a RAG database (it holds ${foreign.join(', ')})` };
+}
+
+/** What a removal finished with. */
+export interface RagDatabaseRemoval {
+  /** Absent when the database is gone; else the clear is done but the OS would not delete the moved-aside database: an `FsFaultError` (side `destination`) naming where it now is. */
+  readonly leftover?: unknown;
+}
+
+/**
+ * Remove a RAG database directory, without opening it — so a database whose
+ * files are damaged can still be removed. One tree-change plan: the database
+ * is moved off its path whole, then removed, so a removal the OS stops never
+ * leaves part of a database at `dbPath`. Nothing there is nothing to do.
+ *
+ * @returns The removal: a `leftover` when the moved-aside database could not then be deleted
+ * @throws {VatError} `TREE_DEST_NOT_OWNED`, nothing removed, when the path is a link, not a directory, or holds anything a RAG database does not
+ * @throws {FsFaultError} (side `destination`), nothing removed, when the OS refuses to examine the database or to move it off its path
+ */
+export async function removeRagDatabase(dbPath: string): Promise<RagDatabaseRemoval> {
+  const plan = await planTreeChanges([{ op: 'remove', dest: dbPath, ownership: { kind: 'vat-made', recognise: recogniseRagDatabase }, label: 'RAG database' }]);
+  const { leftover } = await applyTreePlanOrLeftover(plan);
+  return leftover === undefined ? {} : { leftover };
 }

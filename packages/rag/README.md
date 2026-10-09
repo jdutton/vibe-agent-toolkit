@@ -376,7 +376,7 @@ import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 
 // 1. Get resource from ResourceRegistry
 const registry = new ResourceRegistry();
-await registry.crawl({ baseDir: './docs' });
+await registry.crawl({ outputs: [], baseDir: './docs' });
 const metadata = registry.getResourceById('resource-id');
 
 // 2. Read file content and parse frontmatter (not included in ResourceMetadata)

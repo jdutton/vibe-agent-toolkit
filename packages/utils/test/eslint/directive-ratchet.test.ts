@@ -48,7 +48,7 @@ const CEILINGS: Readonly<Record<string, number>> = {
   '@typescript-eslint/prefer-nullish-coalescing': 2,
   'import/order': 1,
   'local/no-bare-dynamic-import-path': 1,
-  'local/no-bare-symlink-in-tests': 3,
+  'local/no-bare-symlink-in-tests': 1,
   // `failure-reason.ts`: a property read that throws IS "declared nothing";
   // reason inline at the directive.
   'local/no-blind-catch': 2,

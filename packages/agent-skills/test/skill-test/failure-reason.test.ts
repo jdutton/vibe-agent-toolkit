@@ -10,11 +10,12 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { isVatError, safePath } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, isVatError, safePath } from '@vibe-agent-toolkit/utils';
 import { AuthPreflightError } from '@vibe-agent-toolkit/utils/skill-test';
 import { describe, expect, it } from 'vitest';
 
-import { SkillSourceUnreadableError } from '../../src/skill-source/source-unreadable.js';
+import { FETCH_CACHE_NOT_OWNED_CODE } from '../../src/skill-source/fetch-cache.js';
+import { SkillSourceUnreadableError } from '../../src/skill-source/stage.js';
 import { BuildHookError } from '../../src/skill-test/build-hook.js';
 import { UnknownEnvTokenError, UnresolvableEnvTokenError } from '../../src/skill-test/declared-env.js';
 import { EvalFragmentError } from '../../src/skill-test/eval-fragment.js';
@@ -30,7 +31,7 @@ import {
   skillTestFailureReason,
 } from '../../src/skill-test/failure-reason.js';
 import { GradingNonceError, GradingSkewError } from '../../src/skill-test/grading-adapter.js';
-import { HarnessLocationError, HarnessOutputError } from '../../src/skill-test/harness-location.js';
+import { HarnessLocationError } from '../../src/skill-test/harness-location.js';
 import { HarnessLockBusyError } from '../../src/skill-test/lock.js';
 import { PromptInvariantError } from '../../src/skill-test/prompt-invariants.js';
 
@@ -43,7 +44,9 @@ describe('skillTestFailureReason', () => {
     ['BootstrapNeededError', new BootstrapNeededError('/p/evals/evals.json'), 'bootstrap'],
     ['AuthPreflightError', new AuthPreflightError('x'), 'preflight'],
     ['HarnessLocationError', new HarnessLocationError('x'), 'preflight'],
-    ['HarnessOutputError', new HarnessOutputError('x'), 'preflight'],
+    // A filesystem refusal is the operator's environment, whichever side refused: classified, not a class of its own.
+    ['FsFaultError (a harness root the OS will not let the run write)', classifyFsFault(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }), { side: 'destination', action: 'create the harness root' }), 'preflight'],
+    ['FsFaultError (a --with source the OS will not read)', classifyFsFault(Object.assign(new Error('EACCES'), { code: 'EACCES' }), { side: 'source', action: 'read the skill source' }), 'preflight'],
     ['PromptInvariantError (a VAT-built prompt lost a safety directive)', new PromptInvariantError('x'), 'preflight'],
     ['SkillBuildError', new SkillBuildError('build blew up'), 'preflight'],
     ['SecurityAckError (missing ack before a build)', new SecurityAckError(), 'preflight'],
@@ -142,10 +145,9 @@ describe('SKILL_TEST_REFUSAL_BY_ERROR_CODE', () => {
   const ROWS = [
     ['BootstrapNeededError (no evals.json: the input is absent)', new BootstrapNeededError('/p/evals/evals.json'), 'INPUT_UNREADABLE'],
     ['EvalInputError (a suite or declared input that is not usable)', new EvalInputError('bad suite'), 'INPUT_UNREADABLE'],
-    ['SkillSourceUnreadableError (a --with companion the OS will not read)', new SkillSourceUnreadableError('x'), 'INPUT_UNREADABLE'],
+    ['SkillSourceUnreadableError (a --with companion holding a symlink staging refuses)', new SkillSourceUnreadableError('x'), 'INPUT_UNREADABLE'],
     ['AuthPreflightError', new AuthPreflightError('x'), 'USAGE_INVALID'],
     ['HarnessLocationError', new HarnessLocationError('x'), 'USAGE_INVALID'],
-    ['HarnessOutputError (a harness root the OS will not let the run create)', new HarnessOutputError('x'), 'RUN_INCOMPLETE'],
     ['PromptInvariantError', new PromptInvariantError('x'), 'USAGE_INVALID'],
     ['SkillBuildError', new SkillBuildError('x'), 'USAGE_INVALID'],
     ['SecurityAckError', new SecurityAckError(), 'USAGE_INVALID'],
@@ -177,6 +179,11 @@ describe('SKILL_TEST_REFUSAL_BY_ERROR_CODE', () => {
     expect(err.cause).toBe(cause);
     expect(err.sourcePath).toBe('/p/skills/x/SKILL.md');
     expect(new SkillBuildError('no dist').sourcePath).toBeUndefined();
+  });
+
+  // A url source's fetch cache another user owns is VAT's own scratch it will not use: the run did not finish.
+  it('maps FETCH_CACHE_NOT_OWNED to RUN_INCOMPLETE', () => {
+    expect(SKILL_TEST_REFUSAL_BY_ERROR_CODE[FETCH_CACHE_NOT_OWNED_CODE]).toBe('RUN_INCOMPLETE');
   });
 
   it('maps no internal-reason error: an unmapped code is INTERNAL_ERROR, which is what those are', () => {

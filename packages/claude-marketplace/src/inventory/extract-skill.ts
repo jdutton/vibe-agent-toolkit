@@ -278,6 +278,7 @@ export async function crawlSkillLinkRegistry(projectRoot: string): Promise<Resou
 	// `respectGitignore: false`); inside a repository `git ls-files` answers and
 	// never lists a directory, so there is no knob to name beyond the mode bits.
 	const files = await crawlDirectory({
+		outputs: [],
 		baseDir: projectRoot,
 		include: [...LINK_GRAPH_MEMBER_GLOBS],
 		absolute: true,
@@ -287,6 +288,7 @@ export async function crawlSkillLinkRegistry(projectRoot: string): Promise<Resou
 			refuse: {
 				root: projectRoot,
 				remedy: 'Fix the permissions on that directory so the inventory can list every markdown file under the project root.',
+				side: 'source',
 			},
 		},
 	});

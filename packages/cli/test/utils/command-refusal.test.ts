@@ -4,11 +4,12 @@
  */
 
 import { AGENT_MANIFEST_INVALID_CODE, AGENT_MANIFEST_NOT_FOUND_CODE, AGENT_MANIFEST_UNREADABLE_CODE } from '@vibe-agent-toolkit/agent-config';
-import { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE, SKILL_PACKAGING_OUTPUT_FAILED_CODE, SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE } from '@vibe-agent-toolkit/agent-skills';
-import { ApiRequestError, ApiTransportError, OrgApiClient, PLUGIN_SOURCE_UNREADABLE_CODE } from '@vibe-agent-toolkit/claude-marketplace';
-import { CONFIG_UNREADABLE_CODE, LinkAuthConfigError, OKF_UNKNOWN_BUNDLE_CODE, okfBundleRuns, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
+import { AGENT_PACKAGE_ROOT_MISSING_CODE } from '@vibe-agent-toolkit/agent-skills';
+import { ApiRequestError, ApiTransportError, OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
+import { LinkAuthConfigError, OKF_UNKNOWN_BUNDLE_CODE, okfBundleRuns, PROJECTION_STATEMENT_REFUSED_CODE } from '@vibe-agent-toolkit/resources';
 import { ExitCode, type ErrorReport } from '@vibe-agent-toolkit/schema';
-import { COPY_LINK_ESCAPES_SOURCE_CODE, COPY_SOURCE_NOT_REGULAR_CODE, CopyLinkEscapesSourceError, DIRECTORY_LISTING_REFUSED_CODE, DIRECTORY_WALK_REVISITED_CODE, DirectoryWalkRevisitedError, RAG_DATABASE_NOT_REMOVABLE_CODE, RAG_DATABASE_REMOVAL_INCOMPLETE_CODE, RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE, VatError } from '@vibe-agent-toolkit/utils';
+import { COPY_LINK_ESCAPES_SOURCE_CODE, CopyLinkEscapesSourceError, DIRECTORY_WALK_REVISITED_CODE, DirectoryWalkRevisitedError, RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE, classifyFsFault, FS_FAULT_CODE, TEMP_DIR_OUTSIDE_TMPDIR_CODE, TREE_DEST_HOLDS_SOURCE_CODE, TREE_DEST_NOT_OWNED_CODE, TREE_DEST_OCCUPIED_CODE, TREE_DESTS_OVERLAP_CODE, TREE_ROLLBACK_INCOMPLETE_CODE, TREE_SOURCE_HOLDS_DEST_CODE, VatError } from '@vibe-agent-toolkit/utils';
+import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
 import { GIT_SNAPSHOT_UNREADABLE_CODE } from '@vibe-agent-toolkit/utils/git';
 import { updateYamlIn } from '@vibe-agent-toolkit/utils/yaml';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -42,7 +43,19 @@ describe('refusalCodeOf', () => {
     expect(refusalCodeOf(new CommandRefusalError('USAGE_INVALID', 'no such bundle'))).toBe('USAGE_INVALID');
     expect(refusalCodeOf(new VatError('CONFIG_LOAD', 'bad yaml'))).toBe('CONFIG_INVALID');
     expect(refusalCodeOf(new VatError(OKF_UNKNOWN_BUNDLE_CODE, 'nope'))).toBe('USAGE_INVALID');
-    expect(refusalCodeOf(new VatError(DIRECTORY_LISTING_REFUSED_CODE, 'EACCES'))).toBe('INPUT_UNREADABLE');
+  });
+
+  // A refused listing carries its classified fault: the table decides, on the side the lister declared.
+  it.each([
+    ['source', 'EACCES', 'INPUT_UNREADABLE'],
+    ['destination', 'EACCES', 'RUN_INCOMPLETE'],
+    ['source', 'EMFILE', 'RUN_INCOMPLETE'],
+  ] as const)('reads a %s listing refused with %s as the table\'s %s', (side, code, refusal) => {
+    const refused = new DirectoryListingRefusedError(
+      { kind: 'directory_unreadable', code, directory: '/p/docs', transient: false },
+      { root: '/p', remedy: 'Fix it.', side },
+    );
+    expect(refusalCodeOf(refused)).toBe(refusal);
   });
 
   // The constant the map is keyed with is the one its thrower throws: a renamed code cannot leave one side behind.
@@ -51,15 +64,6 @@ describe('refusalCodeOf', () => {
     expect(new DirectoryWalkRevisitedError('/bundle/loop', '/bundle').code).toBe(DIRECTORY_WALK_REVISITED_CODE);
   });
 
-  // A full disk or an unwritable output directory: the build did not finish, and nothing about the skill is wrong.
-  it('reads a skill build stopped by its own output as RUN_INCOMPLETE, never as a defect in VAT', () => {
-    expect(refusalCodeOf(new VatError(SKILL_PACKAGING_OUTPUT_FAILED_CODE, 'ENOSPC'))).toBe('RUN_INCOMPLETE');
-  });
-
-  // An explicit `-o` already holding something VAT did not produce: refused before anything is written.
-  it('reads an occupied package output path as the invocation\'s USAGE_INVALID', () => {
-    expect(refusalCodeOf(new VatError(SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE, 'keep/ already exists'))).toBe('USAGE_INVALID');
-  });
 
   // One unreadable file in a git repository refuses the whole snapshot: the input, never a VAT defect.
   it('reads a git snapshot refused by an unreadable file as INPUT_UNREADABLE', () => {
@@ -68,10 +72,6 @@ describe('refusalCodeOf', () => {
 
   it('reads a plugin symlink no bundle can ship as the input\'s refusal', () => {
     expect(refusalCodeOf(new PluginSymlinkRefusedError([{ path: 'hooks/out.json', reason: 'escapes-source' }]))).toBe('INPUT_UNREADABLE');
-  });
-
-  it('reads a plugin source that is not there to install as the input\'s refusal, not a failed write', () => {
-    expect(refusalCodeOf(new VatError(PLUGIN_SOURCE_UNREADABLE_CODE, 'ENOENT'))).toBe('INPUT_UNREADABLE');
   });
 
   it('reads a statement the projection store refused as the operator\'s USAGE_INVALID', () => {
@@ -105,11 +105,12 @@ describe('refusalCodeOf', () => {
   it('reads a symlink that escapes a copied tree, or loops a walk, as INPUT_UNREADABLE', () => {
     expect(refusalCodeOf(new CopyLinkEscapesSourceError('/bundle/link', '/bundle'))).toBe('INPUT_UNREADABLE');
     expect(refusalCodeOf(new DirectoryWalkRevisitedError('/bundle/loop', '/bundle'))).toBe('INPUT_UNREADABLE');
-    expect(refusalCodeOf(new VatError(COPY_SOURCE_NOT_REGULAR_CODE, '/bundle/pipe'))).toBe('INPUT_UNREADABLE');
   });
 
-  it('reads an agent source file the OS will not read as INPUT_UNREADABLE', () => {
-    expect(refusalCodeOf(new VatError(AGENT_SOURCE_UNREADABLE_CODE, 'EISDIR'))).toBe('INPUT_UNREADABLE');
+  // The one special-file policy: a named pipe, socket or device is an EFTYPE source fault, whatever reads it.
+  it('reads a source entry that is a named pipe, socket or device as INPUT_UNREADABLE', () => {
+    const special = Object.assign(new Error('EFTYPE: not a regular file'), { code: 'EFTYPE', path: '/bundle/pipe' });
+    expect(refusalCodeOf(classifyFsFault(special, { side: 'source', origin: 'content', action: 'read /bundle/pipe' }))).toBe('INPUT_UNREADABLE');
   });
 
   it('reads an org command run without its key as USAGE_INVALID, and a refused or unanswered API call as EXTERNAL_API_FAILED', () => {
@@ -128,13 +129,34 @@ describe('refusalCodeOf', () => {
     expect(refusalCodeOf(new VatError(RAG_DATABASE_UNREADABLE_CODE, 'cannot be read'))).toBe('INPUT_UNREADABLE');
   });
 
-  it('reads a RAG database path that will not be removed as USAGE_INVALID, and one removed partway as RUN_INCOMPLETE', () => {
-    expect(refusalCodeOf(new VatError(RAG_DATABASE_NOT_REMOVABLE_CODE, 'a symbolic link'))).toBe('USAGE_INVALID');
-    expect(refusalCodeOf(new VatError(RAG_DATABASE_REMOVAL_INCOMPLETE_CODE, 'ENOTEMPTY'))).toBe('RUN_INCOMPLETE');
+  // The tree-change planner's preflight: something in the way of a destination the user named, or a copy
+  // whose source and destination hold one another — the invocation's to fix (`--force`, another path).
+  it.each([TREE_DEST_OCCUPIED_CODE, TREE_DEST_NOT_OWNED_CODE, TREE_SOURCE_HOLDS_DEST_CODE, TREE_DEST_HOLDS_SOURCE_CODE])(
+    'reads the tree-change refusal %s as USAGE_INVALID',
+    (code) => {
+      expect(refusalCodeOf(new VatError(code, 'out/ already holds something'))).toBe('USAGE_INVALID');
+    },
+  );
+
+  // A plan overlapping its own destinations, or a temp-dir disposal handed a path outside the temp directory:
+  // the calling verb's defect, never the user's input. No row maps them: unmapped is INTERNAL_ERROR, and this
+  // pins that nobody maps either to a refusal the user is told to act on.
+  it.each([TREE_DESTS_OVERLAP_CODE, TEMP_DIR_OUTSIDE_TMPDIR_CODE])('reads the tree-change defect %s as INTERNAL_ERROR', (code) => {
+    expect(refusalCodeOf(new VatError(code, 'mp and mp/sub change one tree'))).toBe('INTERNAL_ERROR');
   });
 
-  it('reads the coded config read failure as INPUT_UNREADABLE', () => {
-    expect(refusalCodeOf(new VatError(CONFIG_UNREADABLE_CODE, 'EACCES: permission denied'))).toBe('INPUT_UNREADABLE');
+  // A change that failed and could not be fully undone: the run stopped with the user's tree under a parked name.
+  it('reads a rollback that could not put a parked tree back as RUN_INCOMPLETE, whatever started it', () => {
+    expect(refusalCodeOf(new VatError(TREE_ROLLBACK_INCOMPLETE_CODE, 'previous content is at .mp.vat-staged-x.previous', { cause: new TypeError('registry') }))).toBe('RUN_INCOMPLETE');
+  });
+
+  it('reads a wrapper coded FS_FAULT by the classified fault it carries, as the table says', () => {
+    const configFault = (code: string): unknown =>
+      classifyFsFault(Object.assign(new Error(code), { code }), { side: 'source', origin: 'config', action: 'read config file' });
+    expect(refusalCodeOf(new VatError(FS_FAULT_CODE, 'Failed to load config', { cause: configFault('EACCES') }))).toBe('INPUT_UNREADABLE');
+    expect(refusalCodeOf(new VatError(FS_FAULT_CODE, 'Failed to load config', { cause: configFault('ENOENT') }))).toBe('CONFIG_INVALID');
+    // Coded FS_FAULT but carrying no classified fault: nothing says which row, so it is a defect.
+    expect(refusalCodeOf(new VatError(FS_FAULT_CODE, 'no fault underneath'))).toBe('INTERNAL_ERROR');
   });
 
   it('does NOT read an uncoded errno as the user\'s input — an output write the OS refused is INTERNAL_ERROR', () => {

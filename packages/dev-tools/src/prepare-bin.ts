@@ -3,13 +3,13 @@
  * Copies dist/bin/vat.js → dist/bin/vat and makes executable
  */
 
-import { copyFileSync, chmodSync, existsSync } from 'node:fs';
+import { chmodSync, existsSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { copyRegularFile, safePath } from '@vibe-agent-toolkit/utils';
 
 import { isEntrypoint } from './common.js';
 
-export function prepareBinaries(packageRoot: string): void {
+export async function prepareBinaries(packageRoot: string): Promise<void> {
   const distBinDir = safePath.join(packageRoot, 'dist', 'bin');
   const sourcePath = safePath.join(distBinDir, 'vat.js');
   const targetPath = safePath.join(distBinDir, 'vat');
@@ -23,7 +23,7 @@ export function prepareBinaries(packageRoot: string): void {
   }
 
   // Copy file
-  copyFileSync(sourcePath, targetPath);
+  await copyRegularFile(sourcePath, targetPath, { side: 'source', reading: 'the built CLI entry vat.js' });
 
   // Make executable (cross-platform)
   // On Windows, this is a no-op but doesn't error
@@ -44,5 +44,5 @@ export function prepareBinaries(packageRoot: string): void {
 // string compare is false there.
 if (isEntrypoint(import.meta.url)) {
   const packageRoot = process.cwd();
-  prepareBinaries(packageRoot);
+  await prepareBinaries(packageRoot);
 }

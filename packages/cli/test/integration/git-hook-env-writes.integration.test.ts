@@ -27,6 +27,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { publishToGitBranch } from '../../src/commands/claude/marketplace/git-publish.js';
 import { materializeTrapCorpus } from '../../src/pipeline-oracles/trap-corpus.js';
 import { createLogger } from '../../src/utils/logger.js';
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-2-');
 
 /** Config pinned inline so a developer's global git config cannot alter the fixture. */
 const GIT_CONFIG = [
@@ -125,7 +130,7 @@ describe('git writes under a worktree hook environment', () => {
     mkdirSyncReal(publishDir, { recursive: true });
     writeFileSync(safePath.join(publishDir, 'marketplace.json'), '{"plugins":[]}\n');
 
-    publishToGitBranch({
+    await publishToGitBranch({
       publishDir,
       branch: 'test-branch',
       // Looks like a URL, so it is used verbatim and no remote lookup happens.

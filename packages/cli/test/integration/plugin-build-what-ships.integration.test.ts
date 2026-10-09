@@ -160,7 +160,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     tempDir = createTestTempDir('vat-plugin-skills-dirs-');
     const outDir = writeFixture(tempDir);
 
-    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
+    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] });
 
     // Two skills packaged: the flat one and the NESTED one. The nested skill used to
     // be invisible to the packager and fell through to the verbatim tree-copy.
@@ -186,7 +186,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     tempDir = createTestTempDir('vat-plugin-skills-gitignored-');
     const outDir = writeFixture(tempDir);
 
-    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
+    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] });
 
     // Only the two tracked skills are packaged; the gitignored one is not a skill
     // this project publishes (`vat skills build` cannot discover it either).
@@ -204,7 +204,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     mkdirSyncReal(poolDist, { recursive: true });
     writeTestFile(safePath.join(poolDist, SKILL_FILE), skillMd(NESTED_SKILL));
 
-    await runClaudePluginBuild(tempDir, { logger: silentLogger });
+    await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] });
 
     // The pool copy is the sole source; the plugin-local nested copy is neither
     // packaged nor tree-copied. Two definitions of one skill, at two depths in one
@@ -241,7 +241,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     mkdirSyncReal(poolDist, { recursive: true });
     writeTestFile(safePath.join(poolDist, SKILL_FILE), skillMd(POOL_ONLY_SKILL));
 
-    await expect(runClaudePluginBuild(tempDir, { logger: silentLogger })).rejects.toThrow(
+    await expect(runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] })).rejects.toThrow(
       /two DIFFERENT skills claim the same output directory/,
     );
   });
@@ -260,6 +260,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
 
     const warnings: string[] = [];
     await runClaudePluginBuild(tempDir, {
+      runOutputs: [],
       logger: { ...silentLogger, info: (m: string) => { warnings.push(m); } },
     });
 
@@ -356,7 +357,7 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
     tempDir = createTestTempDir('vat-plugin-never-package-');
     const outDir = writeGuidedFixture(tempDir);
 
-    await runClaudePluginBuild(tempDir, { logger: silentLogger });
+    await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] });
 
     // Tier 1 — no agent-instruction file at any depth. A `CLAUDE.md` beside
     // `plugin.json` used to ship verbatim to every consumer.
@@ -388,6 +389,7 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
 
     const lines: string[] = [];
     const results = await runClaudePluginBuild(tempDir, {
+      runOutputs: [],
       logger: { ...silentLogger, info: (m: string) => lines.push(m) },
     });
 
@@ -436,6 +438,7 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
 
     const lines: string[] = [];
     const results = await runClaudePluginBuild(tempDir, {
+      runOutputs: [],
       logger: { ...silentLogger, info: (m: string) => lines.push(m) },
     });
 
@@ -452,7 +455,7 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
     tempDir = createTestTempDir('vat-plugin-live-exclude-');
     writeGuidedFixture(tempDir);
 
-    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
+    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] });
 
     expect(countBySeverity(results[0]?.plugins[0]?.issues ?? [])).toEqual({ errors: 0, warnings: 0, info: 0 });
     // No symlink in the fixture, so the tell is empty — and PRESENT, never undefined.
@@ -474,7 +477,7 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
     createSymlink(cap, 'hooks.json', safePath.join(plugin, 'hooks', 'alias.json'));
     commitTestFixture(tempDir);
 
-    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
+    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] });
 
     const row = results[0]?.plugins[0];
     expect(row?.symlinksCopied).toEqual(['hooks/alias.json']);

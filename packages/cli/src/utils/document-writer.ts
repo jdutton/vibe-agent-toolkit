@@ -26,7 +26,9 @@ import {
   type Gate,
   type RefusalCode,
   type Report,
+  type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
+import { isFsFaultError, suppressedFaultsOf, TREE_CLEANUP_INCOMPLETE_CODE } from '@vibe-agent-toolkit/utils';
 import { parse as parseYaml } from 'yaml';
 
 import {
@@ -40,7 +42,7 @@ import {
   type ReportVerb,
 } from '../report-schemas.js';
 
-import { errorMessageOf, refusalCodeOf } from './command-refusal.js';
+import { errorMessageOf, refusalCodeOf, withFsFaultRemedy } from './command-refusal.js';
 import { debugDiagnosticsEnabled } from './debug-diagnostics.js';
 import { renderYamlDocument, writeStdoutSync } from './output.js';
 import { withRunIntegrity } from './run-integrity.js';
@@ -182,7 +184,7 @@ export function endWithRefusal(
  */
 function announceRefusal(code: RefusalCode, error: unknown): string {
   const raw = errorMessageOf(error);
-  const message = raw === '' ? CODE_REGISTRY[code].description : raw;
+  const message = raw === '' ? CODE_REGISTRY[code].description : withFsFaultRemedy(raw, error);
   process.stderr.write(`${message}\n`);
   if (code === 'INTERNAL_ERROR' || debugDiagnosticsEnabled()) process.stderr.write(`${errorDiagnostics(error)}\n`);
   return message;
@@ -206,9 +208,51 @@ export function refusalReport(code: RefusalCode, error: unknown, gate: Gate, fin
     error: { code, message },
     gate,
     examined: finished.examined,
-    findings: finished.findings,
+    findings: [...finished.findings, ...leftoverFindingsOf(error)],
     data: finished.data,
   });
+}
+
+/**
+ * What the failure path could not clean up — a temporary directory, a staged tree —
+ * recorded beside the thrown error (`suppressedFaultsOf`), as warnings naming each.
+ * Recorded beside, never on its cause chain: a leftover is never the run's refusal.
+ */
+export function leftoverFindingsOf(error: unknown): Array<ValidationIssue & Finding> {
+  return suppressedFaultsOf(error).map((fault) => {
+    process.stderr.write(`warning: ${errorMessageOf(fault)}\n`);
+    return leftoverIssueOf(fault);
+  });
+}
+
+/**
+ * The {@link leftoverIssue} a failure to remove something stands for: its message, and — for a
+ * classified fault — the path it names (the entry left).
+ *
+ * @param fault - What the removal threw: a parked entry an uninstall or a clear could not delete
+ *   (`applyTreePlanOrLeftover`'s `leftover`), or a suppressed fault beside a refusal
+ */
+export function leftoverIssueOf(fault: unknown): ValidationIssue & Finding {
+  return leftoverIssue(errorMessageOf(fault), isFsFaultError(fault) ? fault.path : undefined);
+}
+
+/**
+ * Something a run made and could not remove — a temporary directory, a staged or parked tree —
+ * as the ONE warning every lane names it with ({@link TREE_CLEANUP_INCOMPLETE_CODE}), whether the
+ * run then refused or finished.
+ *
+ * @param message - What was left, and why it stayed
+ * @param path - The entry left, when known: its `link`
+ */
+export function leftoverIssue(message: string, path: string | undefined): ValidationIssue & Finding {
+  return {
+    code: TREE_CLEANUP_INCOMPLETE_CODE,
+    severity: 'warning',
+    message,
+    // `link`, never `location`: a report's location is project-relative, and this is an absolute path (a temp dir, a staged tree).
+    ...(path === undefined ? {} : { link: path }),
+    fix: 'Remove what the message names yourself, making it writable first if the OS refused; nothing VAT made uses it.',
+  };
 }
 
 /** A document another `vat` process wrote, checked to be its verb's, with the report it parses to. */

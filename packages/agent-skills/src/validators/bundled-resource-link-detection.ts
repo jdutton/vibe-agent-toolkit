@@ -32,7 +32,7 @@
 import { readdirSync } from 'node:fs';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, FollowedWalk, isPathAbsentError, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, FollowedWalk, type FsSide, isPathAbsentError, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { CLAUDE_WEB_REFERENCES_SUBDIR, TARGET_SUBDIR_CATEGORIES } from '../content-type-routing.js';
 
@@ -58,7 +58,7 @@ const MAX_LISTED_FILES = 5;
  * this check's "nothing bundled, nothing to say", and a listing the OS would
  * not hand over has not established that.
  */
-function listFilesRelative(dir: string, baseDir: string, walk?: FollowedWalk): string[] {
+function listFilesRelative(dir: string, baseDir: string, side: FsSide, walk?: FollowedWalk): string[] {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
@@ -66,7 +66,8 @@ function listFilesRelative(dir: string, baseDir: string, walk?: FollowedWalk): s
     if (isPathAbsentError(error)) return [];
     throw error;
   }
-  const guard = walk ?? new FollowedWalk();
+  // A directory the walk cannot resolve is a fault on the side the caller says the skill tree is on.
+  const guard = walk ?? new FollowedWalk(side);
   if (walk === undefined) guard.enter(dir);
   const found: string[] = [];
   for (const entry of entries) {
@@ -78,7 +79,7 @@ function listFilesRelative(dir: string, baseDir: string, walk?: FollowedWalk): s
       found.push(safePath.relative(baseDir, child));
     } else if (kind === 'directory') {
       guard.enter(child);
-      found.push(...listFilesRelative(child, baseDir, guard));
+      found.push(...listFilesRelative(child, baseDir, side, guard));
     }
   }
   return found;
@@ -115,19 +116,22 @@ function summariseFiles(relPaths: readonly string[]): string {
  * @param skillDir Absolute path to the skill directory
  * @param linkedFiles Absolute paths of files reached during BFS link traversal
  * @param locationRoot Root the emitted `location` is expressed relative to
+ * @param side The side of the caller's verb the skill tree is on (an author's skill is `source`, a ZIP
+ *   extracted into $TMPDIR is `environment`): a directory the walk cannot resolve is a fault there
  */
 export function detectBundledResourceWithoutLinks(
   body: string,
   skillDir: string,
   linkedFiles: readonly string[],
   locationRoot: string,
+  side: FsSide,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const linked = new Set(linkedFiles.map((f) => safePath.resolve(f)));
 
   for (const sub of BUNDLED_SUBDIRS) {
     const subPath = safePath.join(skillDir, sub);
-    const bundled = listFilesRelative(subPath, skillDir);
+    const bundled = listFilesRelative(subPath, skillDir, side);
     if (bundled.length === 0) continue;
 
     const unreferenced = bundled.filter(

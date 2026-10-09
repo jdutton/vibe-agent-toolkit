@@ -18,10 +18,15 @@ import { describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
 import { CORPUS_SCAN_REPORT_SCHEMA } from '../../src/commands/corpus/scan-schema.js';
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 import { binPath } from '../test-helpers.js';
 
 import { writeFileTree } from './test-common.js';
 import { executeCli } from './test-helpers/cli-runner.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-5-');
 
 const NET = process.env.NET_AVAILABLE === '1';
 

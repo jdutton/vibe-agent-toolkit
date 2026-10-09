@@ -16,7 +16,7 @@
  *
  * // Add resources
  * await registry.addResource('./README.md');
- * await registry.crawl({ baseDir: './docs', unreadable: 'refuse' });
+ * await registry.crawl({ outputs: [], baseDir: './docs', unreadable: 'refuse' });
  *
  * // Validate all links
  * const result = await registry.validate();
@@ -603,7 +603,6 @@ export {
 
 export {
   CONFIG_LOAD_CODE,
-  CONFIG_UNREADABLE_CODE,
   formatConfigValidationError,
   parseConfigAllowingUnknownKeys,
 } from './config-issues.js';

@@ -29,7 +29,6 @@ const VOLUME_SECTORS = '6144';
 
 /** A small HFS+ RAM disk mounted at `mountPoint`, or `undefined` where macOS will not make one (a sandbox). */
 function mountSmallVolume(mountPoint: string): (() => void) | undefined {
-  if (process.platform !== 'darwin') return undefined;
   const attach = safeExecResult('hdiutil', ['attach', '-nomount', `ram://${VOLUME_SECTORS}`]);
   const device = attach.success ? attach.stdout.toString().trim().split(/\s+/)[0] : undefined;
   if (device === undefined) return undefined;
@@ -80,7 +79,12 @@ async function bigTarball(fixtures: string): Promise<string> {
   return archive;
 }
 
-describe('archive installs with $TMPDIR on a full filesystem (system test)', () => {
+// Skipped at COLLECTION where the platform rules it out, not by `ctx.skip()` inside each case: a
+// file whose every case skips at run time is counted as PASSED and prints no heap line, so the
+// heap-budget guard (check-test-heap-budget.ts) reads it as a file that never reported. The
+// `skip()` below is left for the one thing collection cannot know — a darwin sandbox that will
+// not make the RAM disk.
+describe.skipIf(process.platform !== 'darwin')('archive installs with $TMPDIR on a full filesystem (system test)', () => {
   const binPath = getBinPath(import.meta.url);
   const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-plugin-install-full-');
   let fixtures: string;

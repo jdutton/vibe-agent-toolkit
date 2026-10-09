@@ -16,7 +16,7 @@
  */
 
 import { existsSync, lstatSync, readdirSync, statSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import {
@@ -48,28 +48,35 @@ import {
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import {
+  applyTreePlan,
+  classifyFsFault,
   direntKindFollowingSync,
   findProjectRoot,
   forEachInOrder,
-  isFilesystemAccessError,
   isPathAbsentError,
   isGlob,
   isSingleFsSegment,
   issueLocation,
-  isUnderRoot,
   mapInOrder,
-  normalizePath,
+  planTreeChanges,
   resolveAssetReference,
   safePath,
   toForwardSlash,
   toForwardSlashAnyPlatform,
   VatError,
+  withFsFault,
+  withFsFaultSync,
+  type Ownership,
+  type OwnershipVerdict,
+  type TreeChange,
+  type TreeChangeWarning,
 } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import {
   type GitTracker,
 } from '@vibe-agent-toolkit/utils/git';
 
+import { copyIntoBundle } from './bundle-copy.js';
 import { getResourceSubdirForFile, type PackagingTarget } from './content-type-routing.js';
 import {
   applyFilesConfig,
@@ -80,9 +87,8 @@ import {
   skippedGlobMatchesToIssues,
   type SkillFileEntry,
 } from './files-config.js';
-import { copyIntoBundle, withFsAttribution } from './fs-attribution.js';
 import { LINK_GRAPH_MEMBER_GLOBS } from './link-graph-members.js';
-import { packagingInputError, SKILL_NAME_NOT_A_SEGMENT_CODE, SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE } from './packaging-errors.js';
+import { packagingInputError, SKILL_NAME_NOT_A_SEGMENT_CODE, SkillPackageChecksFailedError } from './packaging-errors.js';
 import { checkBrokenPackagedLinks, checkMissingReferencedPaths, checkUnreferencedFiles } from './post-build-checks.js';
 import {
   checkPackagedTestInput,
@@ -102,9 +108,6 @@ import { deferredAssetsToIssues, outsideSkillDirLinksToIssues, walkerExclusionsT
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
 const PACKAGE_JSON_FILENAME = 'package.json';
-
-/** `withFsAttribution` action for a write in `copyAndRewriteFile` — never a copy, since the bytes are rewritten first. */
-const WRITE_ACTION = 'written into the bundle';
 
 /**
  * Default template for excluded links when no explicit template is configured —
@@ -188,33 +191,21 @@ export interface PackageSkillOptions {
   outputPath?: string;
 
   /**
-   * Whether the caller owns `outputPath` — a build directory VAT manages, such
-   * as `dist/skills/<name>` — so whatever is there is a previous build, and is
-   * replaced. Default `false`: an explicit `outputPath` that already holds
-   * anything (a non-empty directory, a file, the archive a requested format
-   * writes beside it) is refused with {@link SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE}
-   * and left exactly as it was. The default location (no `outputPath`) is VAT's,
-   * and is always replaced.
+   * Whether what is at `outputPath` is a previous package to replace (`--force`). Default
+   * `false`: an explicit `outputPath` that already holds anything but an empty directory —
+   * or a file where an archive a requested format writes beside it goes — is refused
+   * (`TREE_DEST_NOT_OWNED`) and left exactly as it was. The default location (no
+   * `outputPath`) is VAT's, and is always replaced. See {@link packageOwnership}.
    */
   replaceExistingOutput?: boolean;
 
   /**
-   * The caller generated the SKILL.md INTO `outputPath` itself (the agent
-   * builder), so the output holding the source is expected and is packaged in
-   * place, never cleared. Without it, an output that holds the SKILL.md or any
-   * file it bundles is refused with {@link SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE},
-   * `replaceExistingOutput` or not: the package would be written over the tree
-   * it reads.
-   */
-  sourceGeneratedInOutput?: boolean;
-
-  /**
    * Plan the package without writing it: run everything that can refuse the run
-   * before a byte is written — the project crawl, the link walk, the output check
-   * — exactly as the real run does, then return without removing or writing
-   * anything. The result names the files the package would hold (and
-   * `plannedSources`); it has no `artifacts`, and the checks on the written bundle
-   * (`postBuildIssues`) do not run.
+   * before a byte is written — the project crawl, the link walk, the output's plan
+   * (its ownership and holding checks) — exactly as the real run does, then return
+   * without writing anything. The result names the files the package would hold
+   * (`plannedSources`) and the plan's lines (`plannedChanges`); it has no
+   * `artifacts`, and the checks on the written bundle (`postBuildIssues`) do not run.
    */
   dryRun?: boolean;
 
@@ -380,7 +371,7 @@ export function packagingConfigToPackageOptions(
   anchors: { skillPath: string; outputPath: string },
   projectSkills: readonly DeclaredEvalSuite[],
   hasConventionalSuite: ConventionalSuiteProbe,
-): PackageSkillOptions {
+): PackageSkillOptions & { outputPath: string } {
   return {
     outputPath: anchors.outputPath,
     // Every lane converting through here builds into a directory VAT manages —
@@ -464,6 +455,16 @@ export interface PackageSkillResult {
   /** A dry run's plan: the absolute path of every file the package would copy, SKILL.md first. */
   plannedSources?: string[] | undefined;
 
+  /** A dry run's plan: one line per change to the output (`TreePlan.describe()`), the real run's exactly. */
+  plannedChanges?: readonly string[] | undefined;
+
+  /**
+   * What the package's plan left beside its output: a previous package, parked by the swap,
+   * that the OS would not let VAT remove. The package itself is complete; each is a warning
+   * naming the leftover. Empty for a dry run and for a package written into a staged tree.
+   */
+  residue: readonly TreeChangeWarning[];
+
   /**
    * Post-build integrity issues — issues that the override config did NOT suppress.
    * Empty (or omitted) means all post-build checks passed.
@@ -473,7 +474,11 @@ export interface PackageSkillResult {
   /** Full validation result against the built output. */
   postBuildValidation?: PackagingValidationResult | undefined;
 
-  /** True when any emitted issue has resolved severity 'error'. */
+  /**
+   * True when any emitted issue has resolved severity 'error'. Only ever true from an IN-PLACE
+   * packager (`packageSkillInto`, `packageSkills`), whose caller owns the landing decision:
+   * `packageSkill` throws `SkillPackageChecksFailedError` instead, and lands nothing.
+   */
   hasErrors: boolean;
 }
 
@@ -483,8 +488,12 @@ export interface PackageSkillResult {
 export interface SkillBuildSpec {
   /** Absolute path to the SKILL.md file */
   skillPath: string;
-  /** Packaging options for this skill */
-  options: PackageSkillOptions;
+  /**
+   * Packaging options for this skill. `outputPath` is required: it is the directory the
+   * bundle is written into, in place — a directory inside the caller's own plan's staged
+   * tree (see {@link packageSkills}).
+   */
+  options: PackageSkillOptions & { outputPath: string };
 }
 
 /**
@@ -502,6 +511,10 @@ export type SkillPackageOutcome =
 
 /**
  * Package multiple skills with a shared ResourceRegistry.
+ *
+ * Each bundle is written IN PLACE into its spec's `outputPath` ({@link packageSkillInto}):
+ * the batch's caller owns the tree-change plan those directories sit in (`vat skills build`
+ * writes every bundle into its one staged `dist/skills`), so no bundle is staged twice.
  *
  * Creates one registry for the entire project (crawling all .md files once),
  * then packages each skill against the shared registry. This eliminates
@@ -550,7 +563,7 @@ export type SkillPackageOutcome =
  *   { skillPath: '/project/skills/SKILL2.md', options: { outputPath: '/out/skill-b' } },
  * ];
  * const ledger = createAllowUsageLedger();
- * const outcomes = await packageSkills(specs, '/project', ledger);
+ * const outcomes = await packageSkills(specs, '/project', ledger, { outputs: ['/out'] });
  * const runIssues = allowUnusedIssues(ledger);
  * ```
  */
@@ -558,7 +571,7 @@ export async function packageSkills(
   skills: SkillBuildSpec[],
   projectRoot: string,
   allowLedger: AllowUsageLedger,
-  runOptions: ProjectRegistryOptions = {},
+  runOptions: ProjectRegistryOptions,
 ): Promise<SkillPackageOutcome[]> {
   // 1. Create one registry for the entire project. Through the shared builder:
   // this used to call `fromCrawl` directly and omit the config, so skills built
@@ -569,17 +582,23 @@ export async function packageSkills(
   // run builds, so a caller that wants the run on the projection lane has no
   // other seam to reach. Dropping it here would leave `vat skills build`
   // reaching a store it opened and never used.
+  // `runOptions.outputs` is the run's one declaration of what it writes (every skill's
+  // output, and the staging around them): a crawl fault on it is the destination's.
   const registry = await createProjectRegistry(projectRoot, runOptions);
 
   // 2. Package each skill against the shared registry
   // In order: each build writes against the shared registry, and outcomes and logs follow input order.
   return mapInOrder(skills, async ({ skillPath, options }): Promise<SkillPackageOutcome> => {
     try {
-      const result = await packageSkill(skillPath, {
+      const { result, siblings } = await packageSkillInto(skillPath, options.outputPath, {
         ...options,
         registry,
         allowLedger,
-      });
+      }, runOptions.outputs);
+      // Nothing beside a bundle is written here: an archive a format asks for is a plan's to place.
+      if (siblings.zip !== undefined || siblings.marketplace !== undefined) {
+        throw new Error(`packageSkills writes each bundle in place; the ZIP or marketplace manifest ${skillPath} asked for belongs to a plan, so use packageSkill`);
+      }
       return { status: 'built', skillPath, result };
     } catch (error) {
       // Not swallowed: the error is carried on the outcome so the caller reports
@@ -599,6 +618,14 @@ export async function packageSkills(
  * This is the unified packaging logic used by all flows.
  * Works with any SKILL.md file, whether generated or handwritten.
  *
+ * The package is ONE tree-change plan: the output directory is a `replace` whose staged
+ * tree the whole package is written into, and the ZIP and marketplace manifest a
+ * requested format writes beside it are `replace-file` changes of the same plan — so a
+ * run either lands every artifact or changes nothing ({@link packageOutputChanges}).
+ * Who may lose what is at the output: {@link packageOwnership}. An output that is, or
+ * holds, a file the package reads is refused whatever the ownership
+ * (`TREE_DEST_HOLDS_SOURCE`).
+ *
  * @param skillPath - Absolute path to SKILL.md file
  * @param options - Packaging options
  * @returns Package result with metadata and artifact paths
@@ -615,6 +642,121 @@ export async function packageSkill(
   skillPath: string,
   options: PackageSkillOptions = {}
 ): Promise<PackageSkillResult> {
+  // The package's own output is the only thing this call writes.
+  const prepared = await preparePackage(skillPath, options, 'source', []);
+  const { outputPath, skillMetadata, formats, projectRoot } = prepared;
+  const holder: { built?: PackagedInto } = {};
+  const plan = await planTreeChanges(packageOutputChanges({
+    outputPath,
+    skillName: skillMetadata.name,
+    formats,
+    ownership: packageOwnership(options),
+    reads: prepared.allFiles,
+    write: async (staged) => {
+      holder.built = await prepared.writeInto(staged);
+      // A package its own checks failed does not replace the previous output: thrown from the fill,
+      // the plan discards it (what it could not remove recorded beside the throw).
+      refuseFailedChecks(holder.built.result, stagedPathMapper(projectRoot, staged, outputPath));
+      return holder.built.siblings;
+    },
+  }));
+
+  // A dry run stops here: every refusal that can come before a write has had its chance.
+  if (options.dryRun === true) {
+    return {
+      outputPath,
+      skill: skillMetadata,
+      files: { root: 'SKILL.md', dependencies: prepared.relativeLinkedFiles },
+      plannedSources: [...prepared.allFiles],
+      plannedChanges: plan.describe(),
+      hasErrors: false,
+      residue: [],
+    };
+  }
+
+  const { warnings: residue } = await applyTreePlan(plan);
+  // The plan resolves only once its fill has run, so the package is there.
+  if (holder.built === undefined) throw new Error('packageSkill: the plan resolved without writing the package');
+  return landedPackageResult(holder.built, { outputPath, projectRoot, formats, residue });
+}
+
+/**
+ * Refuse a package whose own post-build checks emitted an error: `packageSkill` never replaces a
+ * previous output with one. The agent builder does not apply this (`docs/contributing/known-defects.md`).
+ * Thrown from the plan's fill, so the plan discards what it staged.
+ *
+ * @param result - The package as written into the staged tree
+ * @param landedPath - {@link stagedPathMapper} onto where it would have landed
+ * @throws SkillPackageChecksFailedError carrying the re-anchored result
+ */
+function refuseFailedChecks(result: PackageSkillResult, landedPath: (value: string) => string): void {
+  if (result.hasErrors) throw new SkillPackageChecksFailedError(reanchorStagedResult(result, landedPath));
+}
+
+/**
+ * Package an author's skill IN PLACE into `dir`, a directory inside the caller's own plan's
+ * staged tree (`vat skills build`'s `dist/skills`, `vat claude plugin build`'s marketplace):
+ * the caller's plan already lands it whole or not at all, so a second plan per bundle would
+ * only stage it twice. Nothing beside `dir` is written: the archives a format asks for come
+ * back as {@link PackagedInto.siblings}. The result is anchored on `dir`.
+ *
+ * @param skillPath - The author's SKILL.md
+ * @param dir - The directory the bundle is written into
+ * @param options - Packaging options; the output is `dir`, and nothing is replaced
+ * @param outputs - What the caller's run writes besides `dir` (its destination, its staged tree):
+ *   the one declaration a crawl's side is derived from — a refusal on, in or above one is the
+ *   destination's. Required: only the caller knows.
+ */
+export async function packageSkillInto(
+  skillPath: string,
+  dir: string,
+  options: Omit<PackageSkillOptions, 'outputPath' | 'replaceExistingOutput' | 'dryRun'>,
+  outputs: readonly string[],
+): Promise<PackagedInto> {
+  const prepared = await preparePackage(skillPath, { ...options, outputPath: dir }, 'source', outputs);
+  return prepared.writeInto(dir);
+}
+
+/**
+ * Package a SKILL.md that was GENERATED into `dir` — the staged tree of the caller's own
+ * plan (the agent builder) — in place: `dir` is both the output and where the skill's
+ * source lives, so a read of it is the destination's. Nothing beside `dir` is written:
+ * the archives a format asks for come back as {@link PackagedInto.siblings}, for the
+ * caller's plan to place ({@link packageOutputChanges}). The result is anchored on `dir`.
+ *
+ * @param skillPath - The generated SKILL.md, inside `dir`
+ * @param dir - The staged output directory
+ * @param options - Packaging options; the output is `dir`, and nothing is replaced
+ * @param outputs - What the caller's run writes besides `dir` (the destination `dir` lands on), as
+ *   for {@link packageSkillInto}
+ */
+export async function packageGeneratedSkillInto(
+  skillPath: string,
+  dir: string,
+  options: Omit<PackageSkillOptions, 'outputPath' | 'replaceExistingOutput' | 'dryRun'>,
+  outputs: readonly string[],
+): Promise<PackagedInto> {
+  const prepared = await preparePackage(skillPath, { ...options, outputPath: dir }, 'destination', outputs);
+  return prepared.writeInto(dir);
+}
+
+/**
+ * Everything a package is decided by, read before anything is written — steps 1–6: the
+ * skill's metadata, the project registry, the link walk and the output path — and
+ * {@link PreparedPackage.writeInto}, which writes the package (steps 8–14) into the
+ * directory it is given: the staged tree of a plan, never the output itself.
+ *
+ * @param skillSide - The side of the run the SKILL.md is on: the author's input
+ *   (`source`), or VAT's own output re-read (`destination`: a SKILL.md generated into it)
+ * @param outputs - What the run writes besides this package's output (which is always
+ *   declared): with the output, the one declaration every crawl here derives a side from
+ */
+async function preparePackage(
+  skillPath: string,
+  options: PackageSkillOptions,
+  skillSide: 'source' | 'destination',
+  outputs: readonly string[],
+): Promise<PreparedPackage> {
   const {
     formats = ['directory'],
     rewriteLinks = true,
@@ -624,7 +766,7 @@ export async function packageSkill(
   } = options;
 
   // 1. Parse SKILL.md frontmatter and links
-  const parseResult = await parseFileCached(skillPath, 'markdown');
+  const parseResult = await parseFileCached(skillPath, 'markdown', { side: skillSide });
   const skillMetadata = extractSkillMetadata(parseResult, skillPath);
 
   // 2. Find project boundary (config root -> git root -> skill dir).
@@ -649,12 +791,22 @@ export async function packageSkill(
   const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
   const skillRoot = dirname(skillPath);
 
+  // 2b. Determine output path (decided before any crawl: it is what the run writes).
+  const outputPath = options.outputPath ??
+    getDefaultSkillOutputPath(skillPath, skillMetadata.name);
+  // What this run writes: the package's output, and whatever the caller's run writes besides —
+  // the previous output beside a staged tree included. A crawl fault on, in or above one is the
+  // destination's.
+  const runOutputs = [outputPath, ...outputs];
+
   // 3. Get or create the resource registry.
   // The fallback crawls and parses EVERY markdown file in the project, so any
   // caller packaging more than one skill must build the registry once itself
   // (see createProjectRegistry) and pass it — otherwise the whole-project scan
   // is paid once PER SKILL.
-  const registry = options.registry ?? await createProjectRegistry(projectRoot);
+  const registry = options.registry ?? await createProjectRegistry(projectRoot, { outputs: runOutputs });
+  // The skill itself unread by the crawl is no skill to package: never a bundle of its SKILL.md alone.
+  refuseUnreadableSkill(registry, skillPath, skillSide);
 
   // 3b. Load per-collection frontmatter schemas (Gap 3: packager rewrites frontmatter URI-refs
   // against the same schemas the validator uses, with body parity).
@@ -726,311 +878,540 @@ export async function packageSkill(
   const allFiles = [skillPath, ...bundledFiles];
   const effectiveBasePath = findCommonAncestor(allFiles);
 
-  // 6. Determine output path
-  const outputPath = options.outputPath ??
-    getDefaultSkillOutputPath(skillPath, skillMetadata.name);
-
-  // 7. Clear the way for the output. Only a location the caller owns is emptied; an
-  // explicit path holding anything else is refused, never deleted — and an output
-  // holding the source is refused outright unless the caller generated it there.
-  if (options.sourceGeneratedInOutput !== true) {
-    const owned = options.outputPath === undefined || options.replaceExistingOutput === true;
-    checkPackageOutput({ outputPath, skillName: skillMetadata.name, formats, sources: allFiles, projectRoot, replaceExistingOutput: owned });
-    if (owned && options.dryRun !== true) {
-      const subject = packageOutputSubject(outputPath, skillMetadata.name, projectRoot);
-      await withFsAttribution(subject, 'output', () => rm(safePath.resolve(outputPath), { recursive: true, force: true }), 'removed');
-    }
-  }
-
-  // A dry run stops here: every refusal that can come before a write has had its chance.
-  if (options.dryRun === true) {
-    return {
-      outputPath,
-      skill: skillMetadata,
-      files: { root: 'SKILL.md', dependencies: bundledFiles.map((file) => safePath.relative(effectiveBasePath, file)) },
-      plannedSources: allFiles,
-      hasErrors: false,
-    };
-  }
-
-  // 8. Build path map for file copying and link rewriting
-  const namingBasePath = projectRoot;
-  const pathMapSkill = { path: skillPath, name: skillMetadata.name };
-  const pathMap = buildPathMap(
-    pathMapSkill,
-    bundledFiles, outputPath, resourceNaming, namingBasePath, stripPrefix, target,
-  );
-
-  // 8b. Apply files config to the path map: single-file entries by name, and glob
-  // entries by re-pointing the link-bundled files they claim at the declared dest.
-  applyFilesEntriesToPathMap(
-    filesConfig, projectRoot, outputPath, pathMap, skillMetadata.name, bundledFiles,
-  );
-
-  // 8c. Collisions are judged on the FINAL destination map, so a `files:` remap is
-  // a real remedy and a `files:`-created collision is still caught. See
-  // detectDestinationCollisions for why this cannot run inside buildPathMap.
-  const collisionIssues = detectDestinationCollisions(
-    pathMapSkill, pathMap, outputPath, resourceNaming, namingBasePath,
-  );
-
-  // 9. Build "to" registry for link rewriting (maps same resource IDs to output paths)
-  const outputResources = bundledResources.map(resource => ({
-    ...resource,
-    filePath: pathMap.get(toForwardSlash(resource.filePath)) ?? resource.filePath,
-  }));
-  // Include the skill resource itself in the "to" registry
-  if (skillResource) {
-    outputResources.push({
-      ...skillResource,
-      filePath: safePath.join(outputPath, 'SKILL.md'),
-    });
-  }
-  // Add non-markdown bundled files (assets) to output registry so link rewriting resolves them
-  addBundledAssetsToOutputRegistry(outputResources, bundledAssets, pathMap, registry, collidedAssets);
-  // Register files: deferred-dest links so the build preserves/rewrites them (mirrors
-  // the collided-asset handling). Stamps resolvedId on dest links and adds a synthetic
-  // output resource so the rewriter renders [text](dest) instead of stripping to ().
-  outputResources.push(
-    ...registerDeferredDestLinks(
-      filesConfig,
-      collectResourcesWithLinks(bundledResources, skillResource),
-      skillPath,
-      outputPath,
-      outputResources,
-    ),
-  );
-  // Include excluded resources (with source paths) for pattern-based rule matching
-  for (const excl of excludedReferences) {
-    if (excl.excludeReason === 'directory-target' || excl.excludeReason === 'outside-project') {
-      continue;
-    }
-    const exclResource = (registry as WalkableRegistry).getResource(safePath.resolve(excl.path));
-    if (exclResource && !outputResources.some(r => r.id === exclResource.id)) {
-      outputResources.push(exclResource);
-    }
-  }
-  const outputRegistry = ResourceRegistry.fromResources(outputPath, outputResources);
-
-  // 10. Build excluded resource IDs for rule matching.
-  // Excluded IDs should NOT include resources that are already bundled.
-  // A resource can appear in both bundledResources (via short path) and
-  // excludedReferences (via long path that exceeds depth). The bundled
-  // status wins — links to it should be rewritten, not stripped.
-  const bundledResourceIds = new Set(bundledResources.map(r => r.id));
-  const excludedIds = [...new Set(
-    excludedReferences
-      .filter(r => r.excludeReason !== 'directory-target' && r.excludeReason !== 'outside-project')
-      .map(r => {
-        const res = (registry as WalkableRegistry).getResource(safePath.resolve(r.path));
-        return res?.id;
-      })
-      .filter((id): id is string => id !== undefined && !bundledResourceIds.has(id)),
-  )];
-
-  // 11. Build unified rewrite rules (bundled + excluded, all via transformContent)
-  const rewriteRules = buildRewriteRules(
-    excludedIds,
-    excludeConfig?.rules ?? [],
-    excludeConfig?.defaultTemplate,
-  );
-
-  // 12. Copy and rewrite files
-  // The build's own output directory. An unwritable `dist/` or a full disk failed
-  // here with a bare errno naming an output path the author never typed — the
-  // same shape as the copiers, at the step before any of them run.
-  await withFsAttribution(
-    `skill '${skillMetadata.name}' output directory ${issueLocation(outputPath, projectRoot) || '.'}`,
-    'output',
-    () => mkdir(outputPath, { recursive: true }),
-    'created',
-  );
-
-  await copyAndRewriteFiles(skillPath, bundledFiles, {
-    pathMap,
-    rewriteLinks,
-    fromRegistry: registry as WalkableRegistry,
-    // Both sources, because they record disjoint populations: the registry's
-    // own log holds crawl-time drops made by `addResources`, while
-    // `registerBundledAssets` holds the per-asset drops `addResource` only ever
-    // signalled by throwing. An HTML file that collides with a same-named
-    // markdown file appears ONLY in the second.
-    duplicateIdDrops: new Map(
-      [...registry.getDuplicateIdCollisions(), ...assetCollisions]
-        .map(c => [toForwardSlash(c.conflictingPath), c.existingPath]),
-    ),
-    toRegistry: outputRegistry,
-    rewriteRules,
-    templateContext: { skill: { name: skillMetadata.name } },
-    collectionSchemas,
-    projectRoot,
-    warn: (message) => process.stderr.write(`warning: ${message}\n`),
-  });
-
-  // 12b. Copy files config entries that were not auto-discovered via link traversal.
-  // Keep the dests it reports: they are what makes the orphan check below able to
-  // tell "the author forgot to document this" from "VAT put this here because the
-  // config said to." Discarding them makes the build fail on its own payload.
-  const appliedFiles = await applyFilesConfig({
-    filesConfig, projectRoot, skillOutputDir: outputPath, bundledFiles,
-  });
-  const filesConfigDests = appliedFiles.dests;
-  // Dests a glob matched and the never-package list refused. Two consumers, and
-  // both are load-bearing: the broken-link check below needs them to tell a link
-  // broken by policy from a link broken by the rewriter, and the finding channel
-  // needs them or the structured report says `warnings: 0` about a build that
-  // silently shipped less than the config asked for.
-  const droppedGlobDests = appliedFiles.dropped.map((drop) => drop.dest);
-
-  // 13. Post-build integrity check: no SKILL.md in subdirectories
-  // A SKILL.md is a skill definition marker — it must only exist at the root.
-  // If another skill's SKILL.md was bundled as a resource, it creates duplicate
-  // skill definitions that break marketplace sync and confuse skill consumers.
-  validateNoNestedSkillMd(outputPath, skillMetadata.name);
-
-  // 13b. Post-build integrity checks (unreferenced files, broken packaged links).
-  //
-  // Runs BEFORE generatePackageArtifacts so the synthetic package.json from
-  // createNpmPackage isn't flagged as unreferenced.
-  //
-  // Walker-exclusion issues (depth drops, missing targets, outside-project, etc.)
-  // are combined with post-build checks and run through the validation framework.
-  const rawPostBuildIssues = [
-    // Found back at step 8, reported here: the path map is decided before any
-    // file is written, but a collision is a packaging FINDING and rides the same
-    // channel as every other one rather than aborting the run from inside a
-    // helper.
-    ...collisionIssues,
-    ...await checkUnreferencedFiles(outputPath, filesConfigDests),
-    ...await checkBrokenPackagedLinks(outputPath, droppedGlobDests),
-    // The inverse of checkUnreferencedFiles: paths the docs NAME that the bundle
-    // does not contain. Built phase only — a `files:` dest exists here and not in
-    // the source tree, so the same check at source phase flags every injected
-    // script.
-    //
-    // SKILL-LOCAL, and this is the ONLY caller. The packager knows its own output
-    // directory, not the plugin the skill will be installed into, so there is no
-    // wider root to give it — the sibling-search parameter that measured 1.9%
-    // instead of 3.8% was deleted for having no caller. The shipped rate is 3.8%.
-    ...await checkMissingReferencedPaths(outputPath, target),
-    // The only byte measurement in the pipeline. Built phase for the same reason
-    // as its neighbour above: a `files:` entry materializes files here that the
-    // source tree does not have, so the bytes that ship are only knowable now.
-    //
-    // ⚠️ Runs before step 14, so it does not weigh what `generatePackageArtifacts`
-    // adds. Measured, so the residue is not a guess: the `zip` and `npm` formats
-    // write to `<outputPath>.zip` / `.tgz`, OUTSIDE the bundle and outside the
-    // upload; only the `npm` format's synthetic package.json and the `marketplace`
-    // format's manifest land inside, and both are a few hundred bytes. The order
-    // is not free to change — checkUnreferencedFiles two lines up would flag that
-    // same synthetic package.json — so the under-count is stated rather than
-    // fixed. If an artifact step ever writes something LARGE into outputPath, this
-    // call has to move after it and the framework run with it.
-    ...checkPackagedSizeLimit(outputPath),
-    // A receipt for every file a glob matched and the never-package list refused.
-    // Reported as an issue, not written to stderr: a file vanishing from a bundle
-    // has to be visible in the counts (`summary`), or CI reads a clean report for a build
-    // that quietly shipped less than the config declared.
-    // Anchored at the PROJECT root, not `outputPath` like its neighbours here: a
-    // dropped file is a source file that never reached the output, so the only
-    // path a reader can open is its source path.
-    ...droppedGlobMatchesToIssues(appliedFiles.dropped, projectRoot),
-    // The same receipt, for matches that are not copyable files at all. Anchored
-    // identically and for the identical reason. Without a channel of its own this
-    // population is invisible: the build used to die on the first one it met.
-    ...skippedGlobMatchesToIssues(appliedFiles.skipped, projectRoot),
-    // Presence-side backstop for agent-instruction files. The walker excludes
-    // them from link-following, but a `files:` glob can still copy one in, and
-    // a file that arrives without a link is invisible to the link lane.
-    //
-    // Explicitly-declared dests are exempt (§8.2 precedence): the build KNOWS the
-    // config here, and an explicit `files:` entry is an instruction to ship that
-    // exact file. Reporting it fired this warning on the very config the guide
-    // prescribes as the escape hatch, with a remedy ("remove the file") that says
-    // to undo what the author was told to write.
-    ...detectPackagedAgentInstructionFiles(
-      outputPath,
-      outputPath,
-      explicitFilesConfigDests(filesConfig),
-    ),
-    // A receipt for each `files:` entry that was dropped for pointing into declared
-    // test input — the build already produced the right artifact; this just says so.
-    ...testInputFileEntryIssues(droppedTestInputFiles),
-    // A collection schema that could not be loaded, so its frontmatter was not
-    // rewritten (see loadCollectionSchemas).
-    ...collectionSchemaIssues,
-    // Backstop: if declared test input reached the output despite both exclusions,
-    // say so rather than shipping an answer key silently.
-    ...checkPackagedTestInput({ pathMap, outputPath, testInputDirs }),
-  ];
-  const rawLinkIssues = [
-    ...walkerExclusionsToIssues(excludedReferences, projectRoot),
-    // The link half of the same receipt: a link INTO declared test input is dropped
-    // and rewritten away, which the generic exclusion channel reports as nothing
-    // (a pattern match is author-declared intent; this exclusion is VAT's).
-    ...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot),
-    ...deferredAssetsToIssues(deferredAssets, projectRoot),
-    ...outsideSkillDirLinksToIssues(outsideSkillDirLinks, projectRoot),
-  ];
-
-  // ONE ledger for BOTH lanes below. `options.validation.allow` governs the
-  // build-receipt lane AND the built-SKILL.md lane, but the two see disjoint
-  // issue populations — so a lane that drains its own ledger calls "unused" an
-  // entry the OTHER lane matched. (Measured before the fix: an entry that
-  // suppressed a real LINK_MISSING_TARGET error still emitted ALLOW_UNUSED from
-  // the built-output lane, and a genuinely dead entry was reported twice.) Same
-  // defect, same fix as the validate lane — see
-  // `SkillValidationSharedContext.allowLedger`.
-  //
-  // Whose run it is comes from the caller. Given a ledger, this call is one unit
-  // of a larger run (a batch, and/or a source-tree validation pass that matches
-  // entries this build's two lanes structurally cannot) and must NOT drain —
-  // draining here is what reported a package-scoped entry matched while building
-  // skill A as unused while building skill B. Given none, the caller has claimed
-  // this call IS the run, so the drain below is honest.
-  const ownsRun = options.allowLedger === undefined;
-  const buildRunLedger = options.allowLedger ?? createAllowUsageLedger();
-
-  const framework = runValidationFramework(
-    [...rawLinkIssues, ...rawPostBuildIssues],
-    options.validation ?? {},
-    buildRunLedger,
-  );
-
-  // 13c. Run full validation suite on built output
-  const postBuildValidation = await runPostBuildValidation(
-    outputPath,
-    options.validation,
-    buildRunLedger,
-  );
-
-  // 14. Generate distribution artifacts
-  const artifacts = await generatePackageArtifacts(
-    outputPath,
-    skillMetadata,
-    formats,
-    projectRoot,
-    target
-  );
-
   // Get relative paths for result
   const relativeLinkedFiles = bundledFiles.map(f =>
     safePath.relative(effectiveBasePath, f)
   );
 
-  // Build result
-  return assemblePackageResult({
-    outputPath,
-    skillMetadata,
-    relativeLinkedFiles,
-    artifacts,
-    postBuildValidation,
-    // Drain point — but only when this call owns the run. Both lanes have now
-    // contributed; whether anything ELSE still will is the caller's claim.
-    framework: ownsRun ? withRunAllowUnused(framework, buildRunLedger) : framework,
-    excludedReferences,
-    skillRoot,
+  // 7. The output belongs to a tree-change plan (see `packageSkill`): steps 8–14 write into
+  // the directory they are given, that plan's staged tree.
+  const writeInto = async (outputPath: string): Promise<PackagedInto> => {
+    // What this write lands in, and what the run writes besides: a crawl fault on any is the destination's.
+    const writing = [outputPath, ...runOutputs];
+    // 8. Build path map for file copying and link rewriting
+    const namingBasePath = projectRoot;
+    const pathMapSkill = { path: skillPath, name: skillMetadata.name };
+    const pathMap = buildPathMap(
+      pathMapSkill,
+      bundledFiles, outputPath, resourceNaming, namingBasePath, stripPrefix, target,
+    );
+
+    // 8b. Apply files config to the path map: single-file entries by name, and glob
+    // entries by re-pointing the link-bundled files they claim at the declared dest.
+    applyFilesEntriesToPathMap(
+      filesConfig, projectRoot, outputPath, pathMap, skillMetadata.name, bundledFiles,
+    );
+
+    // 8c. Collisions are judged on the FINAL destination map, so a `files:` remap is
+    // a real remedy and a `files:`-created collision is still caught. See
+    // detectDestinationCollisions for why this cannot run inside buildPathMap.
+    const collisionIssues = detectDestinationCollisions(
+      pathMapSkill, pathMap, outputPath, resourceNaming, namingBasePath,
+    );
+
+    // 9. Build "to" registry for link rewriting (maps same resource IDs to output paths)
+    const outputResources = bundledResources.map(resource => ({
+      ...resource,
+      filePath: pathMap.get(toForwardSlash(resource.filePath)) ?? resource.filePath,
+    }));
+    // Include the skill resource itself in the "to" registry
+    if (skillResource) {
+      outputResources.push({
+        ...skillResource,
+        filePath: safePath.join(outputPath, 'SKILL.md'),
+      });
+    }
+    // Add non-markdown bundled files (assets) to output registry so link rewriting resolves them
+    addBundledAssetsToOutputRegistry(outputResources, bundledAssets, pathMap, registry, collidedAssets);
+    // Register files: deferred-dest links so the build preserves/rewrites them (mirrors
+    // the collided-asset handling). Stamps resolvedId on dest links and adds a synthetic
+    // output resource so the rewriter renders [text](dest) instead of stripping to ().
+    outputResources.push(
+      ...registerDeferredDestLinks(
+        filesConfig,
+        collectResourcesWithLinks(bundledResources, skillResource),
+        skillPath,
+        outputPath,
+        outputResources,
+      ),
+    );
+    // Include excluded resources (with source paths) for pattern-based rule matching
+    for (const excl of excludedReferences) {
+      if (excl.excludeReason === 'directory-target' || excl.excludeReason === 'outside-project') {
+        continue;
+      }
+      const exclResource = (registry as WalkableRegistry).getResource(safePath.resolve(excl.path));
+      if (exclResource && !outputResources.some(r => r.id === exclResource.id)) {
+        outputResources.push(exclResource);
+      }
+    }
+    const outputRegistry = ResourceRegistry.fromResources(outputPath, outputResources);
+
+    // 10. Build excluded resource IDs for rule matching.
+    // Excluded IDs should NOT include resources that are already bundled.
+    // A resource can appear in both bundledResources (via short path) and
+    // excludedReferences (via long path that exceeds depth). The bundled
+    // status wins — links to it should be rewritten, not stripped.
+    const bundledResourceIds = new Set(bundledResources.map(r => r.id));
+    const excludedIds = [...new Set(
+      excludedReferences
+        .filter(r => r.excludeReason !== 'directory-target' && r.excludeReason !== 'outside-project')
+        .map(r => {
+          const res = (registry as WalkableRegistry).getResource(safePath.resolve(r.path));
+          return res?.id;
+        })
+        .filter((id): id is string => id !== undefined && !bundledResourceIds.has(id)),
+    )];
+
+    // 11. Build unified rewrite rules (bundled + excluded, all via transformContent)
+    const rewriteRules = buildRewriteRules(
+      excludedIds,
+      excludeConfig?.rules ?? [],
+      excludeConfig?.defaultTemplate,
+    );
+
+    // 12. Copy and rewrite files
+    // The build's own output directory. An unwritable `dist/` or a full disk failed
+    // here with a bare errno naming an output path the author never typed — the
+    // same shape as the copiers, at the step before any of them run.
+    await withFsFault(
+      { side: 'destination', action: `create skill '${skillMetadata.name}' output directory ${issueLocation(outputPath, projectRoot) || '.'}` },
+      () => mkdir(outputPath, { recursive: true }),
+    );
+
+    await copyAndRewriteFiles(skillPath, bundledFiles, {
+      pathMap,
+      rewriteLinks,
+      fromRegistry: registry as WalkableRegistry,
+      // Both sources, because they record disjoint populations: the registry's
+      // own log holds crawl-time drops made by `addResources`, while
+      // `registerBundledAssets` holds the per-asset drops `addResource` only ever
+      // signalled by throwing. An HTML file that collides with a same-named
+      // markdown file appears ONLY in the second.
+      duplicateIdDrops: new Map(
+        [...registry.getDuplicateIdCollisions(), ...assetCollisions]
+          .map(c => [toForwardSlash(c.conflictingPath), c.existingPath]),
+      ),
+      toRegistry: outputRegistry,
+      rewriteRules,
+      templateContext: { skill: { name: skillMetadata.name } },
+      collectionSchemas,
+      projectRoot,
+      warn: (message) => process.stderr.write(`warning: ${message}\n`),
+    });
+
+    // 12b. Copy files config entries that were not auto-discovered via link traversal.
+    // Keep the dests it reports: they are what makes the orphan check below able to
+    // tell "the author forgot to document this" from "VAT put this here because the
+    // config said to." Discarding them makes the build fail on its own payload.
+    const appliedFiles = await applyFilesConfig({
+      filesConfig, projectRoot, skillOutputDir: outputPath, bundledFiles,
+    });
+    const filesConfigDests = appliedFiles.dests;
+    // Dests a glob matched and the never-package list refused. Two consumers, and
+    // both are load-bearing: the broken-link check below needs them to tell a link
+    // broken by policy from a link broken by the rewriter, and the finding channel
+    // needs them or the structured report says `warnings: 0` about a build that
+    // silently shipped less than the config asked for.
+    const droppedGlobDests = appliedFiles.dropped.map((drop) => drop.dest);
+
+    // 13. Post-build integrity check: no SKILL.md in subdirectories
+    // A SKILL.md is a skill definition marker — it must only exist at the root.
+    // If another skill's SKILL.md was bundled as a resource, it creates duplicate
+    // skill definitions that break marketplace sync and confuse skill consumers.
+    validateNoNestedSkillMd(outputPath, skillMetadata.name);
+
+    // 13b. Post-build integrity checks (unreferenced files, broken packaged links).
+    //
+    // Runs BEFORE generatePackageArtifacts so the synthetic package.json from
+    // createNpmPackage isn't flagged as unreferenced.
+    //
+    // Walker-exclusion issues (depth drops, missing targets, outside-project, etc.)
+    // are combined with post-build checks and run through the validation framework.
+    const rawPostBuildIssues = [
+      // Found back at step 8, reported here: the path map is decided before any
+      // file is written, but a collision is a packaging FINDING and rides the same
+      // channel as every other one rather than aborting the run from inside a
+      // helper.
+      ...collisionIssues,
+      ...await checkUnreferencedFiles(outputPath, filesConfigDests),
+      ...await checkBrokenPackagedLinks(outputPath, droppedGlobDests),
+      // The inverse of checkUnreferencedFiles: paths the docs NAME that the bundle
+      // does not contain. Built phase only — a `files:` dest exists here and not in
+      // the source tree, so the same check at source phase flags every injected
+      // script.
+      //
+      // SKILL-LOCAL, and this is the ONLY caller. The packager knows its own output
+      // directory, not the plugin the skill will be installed into, so there is no
+      // wider root to give it — the sibling-search parameter that measured 1.9%
+      // instead of 3.8% was deleted for having no caller. The shipped rate is 3.8%.
+      ...await checkMissingReferencedPaths(outputPath, target),
+      // The only byte measurement in the pipeline. Built phase for the same reason
+      // as its neighbour above: a `files:` entry materializes files here that the
+      // source tree does not have, so the bytes that ship are only knowable now.
+      //
+      // ⚠️ Runs before step 14, so it does not weigh what `generatePackageArtifacts`
+      // adds. Measured, so the residue is not a guess: the `zip` and `npm` formats
+      // write to `<outputPath>.zip` / `.tgz`, OUTSIDE the bundle and outside the
+      // upload; only the `npm` format's synthetic package.json and the `marketplace`
+      // format's manifest land inside, and both are a few hundred bytes. The order
+      // is not free to change — checkUnreferencedFiles two lines up would flag that
+      // same synthetic package.json — so the under-count is stated rather than
+      // fixed. If an artifact step ever writes something LARGE into outputPath, this
+      // call has to move after it and the framework run with it.
+      ...checkPackagedSizeLimit(outputPath),
+      // A receipt for every file a glob matched and the never-package list refused.
+      // Reported as an issue, not written to stderr: a file vanishing from a bundle
+      // has to be visible in the counts (`summary`), or CI reads a clean report for a build
+      // that quietly shipped less than the config declared.
+      // Anchored at the PROJECT root, not `outputPath` like its neighbours here: a
+      // dropped file is a source file that never reached the output, so the only
+      // path a reader can open is its source path.
+      ...droppedGlobMatchesToIssues(appliedFiles.dropped, projectRoot),
+      // The same receipt, for matches that are not copyable files at all. Anchored
+      // identically and for the identical reason. Without a channel of its own this
+      // population is invisible: the build used to die on the first one it met.
+      ...skippedGlobMatchesToIssues(appliedFiles.skipped, projectRoot),
+      // Presence-side backstop for agent-instruction files. The walker excludes
+      // them from link-following, but a `files:` glob can still copy one in, and
+      // a file that arrives without a link is invisible to the link lane.
+      //
+      // Explicitly-declared dests are exempt (§8.2 precedence): the build KNOWS the
+      // config here, and an explicit `files:` entry is an instruction to ship that
+      // exact file. Reporting it fired this warning on the very config the guide
+      // prescribes as the escape hatch, with a remedy ("remove the file") that says
+      // to undo what the author was told to write.
+      ...detectPackagedAgentInstructionFiles(
+        outputPath,
+        outputPath,
+        explicitFilesConfigDests(filesConfig),
+        // The output this run just wrote: a fault on it is the destination's.
+        writing,
+      ),
+      // A receipt for each `files:` entry that was dropped for pointing into declared
+      // test input — the build already produced the right artifact; this just says so.
+      ...testInputFileEntryIssues(droppedTestInputFiles),
+      // A collection schema that could not be loaded, so its frontmatter was not
+      // rewritten (see loadCollectionSchemas).
+      ...collectionSchemaIssues,
+      // Backstop: if declared test input reached the output despite both exclusions,
+      // say so rather than shipping an answer key silently.
+      ...checkPackagedTestInput({ pathMap, outputPath, testInputDirs }),
+    ];
+    const rawLinkIssues = [
+      ...walkerExclusionsToIssues(excludedReferences, projectRoot),
+      // The link half of the same receipt: a link INTO declared test input is dropped
+      // and rewritten away, which the generic exclusion channel reports as nothing
+      // (a pattern match is author-declared intent; this exclusion is VAT's).
+      ...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot),
+      ...deferredAssetsToIssues(deferredAssets, projectRoot),
+      ...outsideSkillDirLinksToIssues(outsideSkillDirLinks, projectRoot),
+    ];
+
+    // ONE ledger for BOTH lanes below. `options.validation.allow` governs the
+    // build-receipt lane AND the built-SKILL.md lane, but the two see disjoint
+    // issue populations — so a lane that drains its own ledger calls "unused" an
+    // entry the OTHER lane matched. (Measured before the fix: an entry that
+    // suppressed a real LINK_MISSING_TARGET error still emitted ALLOW_UNUSED from
+    // the built-output lane, and a genuinely dead entry was reported twice.) Same
+    // defect, same fix as the validate lane — see
+    // `SkillValidationSharedContext.allowLedger`.
+    //
+    // Whose run it is comes from the caller. Given a ledger, this call is one unit
+    // of a larger run (a batch, and/or a source-tree validation pass that matches
+    // entries this build's two lanes structurally cannot) and must NOT drain —
+    // draining here is what reported a package-scoped entry matched while building
+    // skill A as unused while building skill B. Given none, the caller has claimed
+    // this call IS the run, so the drain below is honest.
+    const ownsRun = options.allowLedger === undefined;
+    const buildRunLedger = options.allowLedger ?? createAllowUsageLedger();
+
+    const framework = runValidationFramework(
+      [...rawLinkIssues, ...rawPostBuildIssues],
+      options.validation ?? {},
+      buildRunLedger,
+    );
+
+    // 13c. Run full validation suite on built output
+    const postBuildValidation = await runPostBuildValidation(
+      outputPath,
+      options.validation,
+      buildRunLedger,
+      writing,
+    );
+
+    // 14. Generate the distribution artifacts: the npm manifest into the bundle, and the
+    // bytes of what lands BESIDE it, for the caller's plan to place.
+    const siblings = await generatePackageArtifacts(outputPath, skillMetadata, formats, projectRoot, target);
+
+    return {
+      siblings,
+      result: assemblePackageResult({
+        outputPath,
+        skillMetadata,
+        relativeLinkedFiles,
+        postBuildValidation,
+        // Drain point — but only when this call owns the run. Both lanes have now
+        // contributed; whether anything ELSE still will is the caller's claim.
+        framework: ownsRun ? withRunAllowUnused(framework, buildRunLedger) : framework,
+        excludedReferences,
+        skillRoot,
+      }),
+    };
+  };
+
+  return { outputPath, skillMetadata, formats, projectRoot, allFiles, relativeLinkedFiles, writeInto };
+}
+
+/** What a package writes BESIDE its output directory, for the formats asked for: bytes for the caller's plan to place. */
+export interface PackageSiblings {
+  /** The ZIP of the bundle (`zip` format), for `<output>.zip`. */
+  readonly zip?: Buffer;
+  /** The marketplace manifest (`marketplace` format), for `<output dir>/<name>.marketplace.json`. */
+  readonly marketplace?: string;
+}
+
+/** A package written into a directory: its result, anchored on that directory, and what goes beside it. */
+export interface PackagedInto {
+  readonly result: PackageSkillResult;
+  readonly siblings: PackageSiblings;
+}
+
+/** {@link preparePackage}'s answer: what the package is, and how to write it. */
+interface PreparedPackage {
+  /** Where the package lands (the plan's destination). */
+  readonly outputPath: string;
+  readonly skillMetadata: SkillMetadata;
+  readonly formats: readonly string[];
+  /** The project root every reported path is relative to. */
+  readonly projectRoot: string;
+  /** Every file the package reads, SKILL.md first: the plan's holding check refuses an output that is or holds one. */
+  readonly allFiles: readonly string[];
+  readonly relativeLinkedFiles: string[];
+  /** Write the package into `dir` (steps 8–14). */
+  readonly writeInto: (dir: string) => Promise<PackagedInto>;
+}
+
+/** The output of one package, as a plan's changes see it. */
+interface PackageOutput {
+  /** The output directory. */
+  readonly outputPath: string;
+  /** The skill's name: it names the marketplace manifest beside the output. */
+  readonly skillName: string;
+  /** The formats asked for: which files land beside the output. */
+  readonly formats: readonly string[];
+  /** Who may lose what is at the output ({@link packageOwnership}). */
+  readonly ownership: Ownership;
+  /** Every input the package reads: an output that is, or holds, one is refused. */
+  readonly reads: readonly string[];
+  /** Fill the staged output directory; answers the bytes of what lands beside it. */
+  readonly write: (staged: string) => Promise<PackageSiblings>;
+}
+
+/** Where a package's ZIP lands. */
+const zipPathOf = (outputPath: string): string => `${outputPath}.zip`;
+
+/** Where a package's marketplace manifest lands. */
+const marketplaceManifestPathOf = (outputPath: string, skillName: string): string =>
+  safePath.join(dirname(outputPath), `${skillName}.marketplace.json`);
+
+/**
+ * The ownership of a package's output — the ONE rule for `vat skills package` and
+ * `vat agent build`. The default location is VAT's (`vat-state`): whatever is there is a
+ * previous build. `--force` (`replaceExistingOutput`) says what is there is a previous
+ * package, and it goes. An explicit output otherwise is `vat-made` by
+ * {@link recognisePackageOutput}: only an empty directory is taken, never anything VAT
+ * cannot prove it made, so it is refused, named, and left as it was.
+ *
+ * @param options - Whether an output was named, and whether `--force` was given
+ */
+export function packageOwnership(options: { readonly outputPath?: string | undefined; readonly replaceExistingOutput?: boolean | undefined }): Ownership {
+  if (options.outputPath === undefined) return { kind: 'vat-state' };
+  if (options.replaceExistingOutput === true) return { kind: 'force' };
+  return { kind: 'vat-made', recognise: recognisePackageOutput };
+}
+
+const PACKAGE_OUTPUT_NOT_OURS = 'it already exists, and VAT never deletes or overwrites what it did not produce. If it is a previous '
+  + 'package, pass --force to replace it (`replaceExistingOutput: true` in the library); otherwise remove it yourself, '
+  + 'or choose an output path that does not exist yet (or is an empty directory).';
+
+/**
+ * Whether what is at an explicit package output is VAT's to replace without `--force`:
+ * only an empty directory (the package lands where nothing is lost). A directory the OS
+ * will not list is the destination's fault, never assumed occupied or free.
+ */
+function recognisePackageOutput(dest: string): OwnershipVerdict {
+  const empty = withFsFaultSync({ side: 'destination', action: `list the package output ${dest}`, path: dest }, () => {
+    if (!lstatSync(dest).isDirectory()) return false;
+    return readdirSync(dest).length === 0;
   });
+  return empty ? { owned: true } : { owned: false, reason: PACKAGE_OUTPUT_NOT_OURS };
+}
+
+/**
+ * Whether what stands where a package's archive goes may be replaced under `--force`:
+ * a previous archive (a file) is; a directory or anything else standing there is not a
+ * previous package's, so it is refused and kept.
+ */
+function recognisePreviousArchive(dest: string): OwnershipVerdict {
+  const isFile = withFsFaultSync({ side: 'destination', action: `examine ${dest}`, path: dest }, () => lstatSync(dest).isFile());
+  return isFile ? { owned: true } : { owned: false, reason: 'it is not a file a previous package wrote, so --force does not replace it' };
+}
+
+/** The ownership of a file a package writes beside its output: `--force` replaces a previous archive, never a directory standing there. */
+function siblingOwnership(ownership: Ownership): Ownership {
+  return ownership.kind === 'force' ? { kind: 'vat-made', recognise: recognisePreviousArchive } : ownership;
+}
+
+/**
+ * The changes ONE package makes, as one plan: the output directory (`replace`, its staged
+ * tree filled by `output.write`) and the ZIP and marketplace manifest the formats ask for
+ * (`replace-file`, after the directory in the plan, so their bytes are made from the
+ * staged bundle). The holding check covers `output.reads`.
+ *
+ * @param output - The output, its ownership, and how to fill it
+ */
+export function packageOutputChanges(output: PackageOutput): TreeChange[] {
+  const { outputPath, skillName, formats, ownership } = output;
+  let siblings: PackageSiblings | undefined;
+  const sibling = (format: 'zip' | 'marketplace') => (): string | Uint8Array => {
+    const bytes = siblings?.[format];
+    if (bytes === undefined) throw new Error(`packageOutputChanges: the package wrote no ${format} for ${outputPath}`);
+    return bytes;
+  };
+  const changes: TreeChange[] = [{
+    op: 'replace',
+    dest: outputPath,
+    ownership,
+    label: `skill '${skillName}' output`,
+    fill: {
+      from: 'write',
+      reads: output.reads,
+      write: async (staged) => {
+        siblings = await output.write(staged);
+      },
+    },
+  }];
+  if (formats.includes('zip')) {
+    changes.push({ op: 'replace-file', dest: zipPathOf(outputPath), ownership: siblingOwnership(ownership), label: `skill '${skillName}' ZIP archive`, contents: sibling('zip') });
+  }
+  if (formats.includes('marketplace')) {
+    changes.push({ op: 'replace-file', dest: marketplaceManifestPathOf(outputPath, skillName), ownership: siblingOwnership(ownership), label: `skill '${skillName}' marketplace manifest`, contents: sibling('marketplace') });
+  }
+  return changes;
+}
+
+/**
+ * The paths a package's result names, for a package written into a staged tree that has
+ * since landed at `outputPath`: every path on the staged tree re-anchored onto the output
+ * ({@link stagedPathMapper}), the artifacts named where they landed, and the plan's
+ * leftovers ({@link PackageSkillResult.residue}).
+ */
+export function landedPackageResult(
+  built: PackagedInto,
+  landed: { outputPath: string; projectRoot: string; formats: readonly string[]; residue: readonly TreeChangeWarning[] },
+): PackageSkillResult {
+  const { outputPath, projectRoot, formats } = landed;
+  const reanchored = reanchorStagedResult(built.result, stagedPathMapper(projectRoot, built.result.outputPath, outputPath));
+  return { ...reanchored, artifacts: artifactPaths(outputPath, built.result.skill.name, formats), residue: landed.residue };
+}
+
+/** Where each artifact a format asked for landed. */
+function artifactPaths(outputPath: string, skillName: string, formats: readonly string[]): Record<string, string> {
+  const artifacts: Record<string, string> = {};
+  if (formats.includes('directory')) artifacts['directory'] = outputPath;
+  if (formats.includes('zip')) artifacts['zip'] = zipPathOf(outputPath);
+  // A placeholder: no tarball is written (a full npm pack would run `npm pack`).
+  if (formats.includes('npm')) artifacts['npm'] = `${outputPath}.tgz`;
+  if (formats.includes('marketplace')) artifacts['marketplace'] = marketplaceManifestPathOf(outputPath, skillName);
+  return artifacts;
+}
+
+/**
+ * Rewrite `value` when it names `from` or something inside it; otherwise
+ * `undefined`, so a caller can fall through to the next candidate base.
+ *
+ * The separator in the prefix test is load-bearing: the swap parks the previous
+ * output at `<staged>.previous`, a SIBLING whose string starts with the staged
+ * tree's. A bare `startsWith` would rewrite it into the final tree and report a
+ * finding against a path that never held the file.
+ */
+function replacePathPrefix(value: string, from: string, to: string): string | undefined {
+  if (value === from) return to;
+  return value.startsWith(`${from}/`) ? `${to}${value.slice(from.length)}` : undefined;
+}
+
+/**
+ * Map any path anchored on a staged tree onto the tree the swap lands it on — the ONE
+ * re-anchoring, applied to every path a result publishes.
+ *
+ * Staging is transient in BOTH outcomes: `.<name>.vat-staged-<rand>` is renamed into place
+ * on success and deleted on failure, and the random suffix means a reader cannot even
+ * reconstruct it. Any path that escapes this mapping is therefore unopenable by the time
+ * anyone reads it (`Location: dist/.vat-skills-uxxJfu/demo/SKILL.md`, observed on a real
+ * adopter before the mapping existed).
+ *
+ * Both spellings are handled because the two carriers use different coordinate systems:
+ * a result's `outputPath` is absolute, while a finding's `location` is relative to the
+ * root the validator anchored on (`base`). The mapping preserves whichever it was given.
+ *
+ * @param base - The root relative locations are expressed against
+ * @param staged - The staged tree
+ * @param dest - Where it landed
+ */
+export function stagedPathMapper(base: string, staged: string, dest: string): (value: string) => string {
+  const absoluteFrom = toForwardSlash(staged);
+  const absoluteTo = toForwardSlash(dest);
+  const relativeFrom = toForwardSlash(safePath.relative(base, staged));
+  const relativeTo = toForwardSlash(safePath.relative(base, dest));
+
+  return (value: string): string => {
+    const forward = toForwardSlash(value);
+    return (
+      replacePathPrefix(forward, absoluteFrom, absoluteTo)
+      ?? replacePathPrefix(forward, relativeFrom, relativeTo)
+      ?? value
+    );
+  };
+}
+
+/** Re-anchor the `location` of every issue that names a staged path. */
+function reanchorIssueLocations(
+  issues: readonly ValidationIssue[],
+  mapPath: (value: string) => string,
+): ValidationIssue[] {
+  return issues.map((issue) => {
+    if (issue.location === undefined) return issue;
+    const location = mapPath(issue.location);
+    return location === issue.location ? issue : { ...issue, location };
+  });
+}
+
+/**
+ * Re-anchor everything ONE skill's result says about where things are.
+ *
+ * Both post-build channels are rewritten, not just the one a summary reads: either can
+ * carry a staged location (the built-output validation runs against the staged
+ * `SKILL.md` itself), so a mapper applied to one of them leaves the report half-anchored.
+ *
+ * @param result - A result anchored on a staged tree
+ * @param mapPath - {@link stagedPathMapper} for that tree
+ */
+export function reanchorStagedResult(
+  result: PackageSkillResult,
+  mapPath: (value: string) => string,
+): PackageSkillResult {
+  const reanchored: PackageSkillResult = { ...result, outputPath: mapPath(result.outputPath) };
+  if (result.postBuildIssues) {
+    reanchored.postBuildIssues = reanchorIssueLocations(result.postBuildIssues, mapPath);
+  }
+  if (result.postBuildValidation) {
+    reanchored.postBuildValidation = {
+      ...result.postBuildValidation,
+      allErrors: reanchorIssueLocations(result.postBuildValidation.allErrors, mapPath),
+    };
+  }
+  return reanchored;
 }
 
 /**
@@ -1118,14 +1499,30 @@ function runPostBuildValidation(
   outputPath: string,
   validation: ValidationConfig | undefined,
   allowLedger: AllowUsageLedger,
+  outputs: readonly string[],
 ): Promise<PackagingValidationResult> {
   const builtSkillPath = safePath.join(outputPath, 'SKILL.md');
   return validateSkillForPackaging(
     builtSkillPath,
     validation ? { validation } : undefined,
     'built',
-    { allowLedger, unreadable: 'refuse' },
+    // The built skill IS this run's output, inside the project the check crawls — and so is
+    // everything else the run writes (`outputs`, the previous output beside a staged one).
+    { allowLedger, unreadable: 'refuse', outputs },
   );
+}
+
+/**
+ * Refuse a skill whose own SKILL.md the registry's crawl could not read: the crawl records an
+ * unreadable file and moves on, and a skill missing from the registry would be packaged as its
+ * SKILL.md alone — every link of it silently gone. The read's own fault, on the SKILL.md's side.
+ */
+function refuseUnreadableSkill(registry: ResourceRegistry, skillPath: string, side: 'source' | 'destination'): void {
+  const wanted = toForwardSlash(safePath.resolve(skillPath));
+  const unread = registry.getUnreadableResources().find((entry) => toForwardSlash(safePath.resolve(entry.filePath)) === wanted);
+  if (unread === undefined) return;
+  const failure = Object.assign(new Error(unread.reason), { code: unread.code ?? 'UNKNOWN' });
+  throw classifyFsFault(failure, { side, origin: 'content', action: `read the skill's SKILL.md ${skillPath}`, path: skillPath });
 }
 
 /** Input for assemblePackageResult — avoids a long parameter list. */
@@ -1133,7 +1530,6 @@ interface AssembleResultInput {
   outputPath: string;
   skillMetadata: SkillMetadata;
   relativeLinkedFiles: string[];
-  artifacts: Record<string, string>;
   postBuildValidation: PackagingValidationResult;
   framework: FrameworkResult;
   excludedReferences: Array<{ path: string }>;
@@ -1152,9 +1548,9 @@ function assemblePackageResult(input: AssembleResultInput): PackageSkillResult {
       root: 'SKILL.md',
       dependencies: input.relativeLinkedFiles,
     },
-    artifacts: input.artifacts,
     postBuildValidation: input.postBuildValidation,
     hasErrors: input.framework.hasErrors || input.postBuildValidation.summary.errors > 0,
+    residue: [],
   };
 
   if (input.framework.emitted.length > 0) {
@@ -1187,6 +1583,13 @@ export interface ProjectRegistryOptions {
    * enumeration only, and this builder's markdown-only scoping survives it.
    */
   populationSource?: ResourcePopulationSource | undefined;
+  /**
+   * What the run writes — every output, and the staging it builds them in — or `[]` for a
+   * run that writes nothing under the project: the crawl's one declaration of which side a
+   * fault is on (on, in or holding an output: the destination's; anything else the
+   * project's content). Required: only the caller knows.
+   */
+  outputs: readonly string[];
 }
 
 /**
@@ -1234,7 +1637,7 @@ export interface ProjectRegistryOptions {
  */
 export async function createProjectRegistry(
   projectRoot: string,
-  options: ProjectRegistryOptions = {},
+  options: ProjectRegistryOptions,
 ): Promise<ResourceRegistry> {
   const config = await loadConfig(projectRoot);
   const registry = await ResourceRegistry.fromCrawl(
@@ -1245,6 +1648,7 @@ export async function createProjectRegistry(
       // list refuses the run by name — see `RegistryUnreadablePolicy`.
       unreadable: 'refuse',
       ...(options.populationSource !== undefined && { populationSource: options.populationSource }),
+      outputs: options.outputs,
     },
     config === undefined ? undefined : { config },
   );
@@ -1370,13 +1774,15 @@ async function registerBundledAssets(
       // actually fails. It reported a bare `EACCES … open '/abs/path'` with no
       // skill named and no remedy: the same shape as the copiers, one step
       // earlier, and the step that fires first.
-      await withFsAttribution(
-        `linked file ${issueLocation(assetPath, projectRoot) || '.'}`,
-        'source',
+      await withFsFault(
+        {
+          side: 'source',
+          origin: 'content',
+          // The file is read to discover its links before anything is copied, so
+          // naming the copy would point past the step that actually failed.
+          action: `read linked file ${issueLocation(assetPath, projectRoot) || '.'} while collecting the files this skill links to`,
+        },
         () => registry.addResource(assetPath),
-        // The file is read to discover its links before anything is copied, so
-        // naming the copy would point past the step that actually failed.
-        'read while collecting the files this skill links to',
       );
     } catch (error) {
       // `addResource` (singular) THROWS on a collision and — unlike
@@ -1572,12 +1978,8 @@ function applyFilesEntriesToPathMap(
     try {
       statSync(absoluteSource);
     } catch (error) {
-      if ((error as { code?: string }).code !== 'ENOENT') {
-        const reason = error instanceof Error ? error.message : String(error);
-        throw packagingInputError(
-          `files entry for skill '${skillName}': source '${fileEntry.source}' could not be read: ${reason}. ` +
-          `Check the file's permissions and ownership, and that every directory above it is traversable.`,
-        );
+      if (!isPathAbsentError(error)) {
+        throw classifyFsFault(error, { side: 'source', origin: 'content', action: `read files entry for skill '${skillName}': source '${fileEntry.source}'` });
       }
       throw packagingInputError(
         `files entry for skill '${skillName}': source '${fileEntry.source}' does not exist.${buildArtifactHint(fileEntry.source)}`,
@@ -2204,22 +2606,20 @@ async function copyAndRewriteFile(
   //
   // It also stops a UTF-16 source being written back as mojibake, which the
   // `utf-8` read did on the copy as well as the rewrite.
-  const { text: content } = await withFsAttribution(
-    subject,
-    'source',
+  // Not "copy": the read is the step that failed, and this lane reads before
+  // it rewrites, so naming the copy would point past the actual failure.
+  const { text: content } = await withFsFault(
+    { side: 'source', origin: 'content', action: `read ${subject} for link rewriting` },
     () => readTextContent(sourcePath),
-    // Not "copied": the read is the step that failed, and this lane reads before
-    // it rewrites, so naming the copy would point past the actual failure.
-    'read for link rewriting',
   );
-  const writeIntoBundle = (text: string): Promise<void> => withFsAttribution(
-    subject,
-    'bundle',
+  // Never "copy": the bytes are rewritten first. The bundle's layout is the skill's own,
+  // so a shape fault on the write is the skill's (`shapeFromSource`); a full disk is not.
+  const writeIntoBundle = (text: string): Promise<void> => withFsFault(
+    { side: 'destination', shapeFromSource: true, action: `write ${subject} into the bundle` },
     async () => {
       await mkdir(dirname(targetPath), { recursive: true });
       await writeFile(targetPath, text, 'utf-8');
     },
-    WRITE_ACTION,
   );
 
   // Look up the resource in the "from" registry
@@ -2603,15 +3003,12 @@ export class ZipSizeLimitError extends VatError {
 }
 
 /**
- * Validate ZIP file size and warn/error as appropriate.
+ * Validate ZIP size and warn/error as appropriate.
  * Warns to stderr at 4MB, throws ZipSizeLimitError at 8MB.
  *
- * @param zipPath - Path to the ZIP file
+ * @param bytes - The archive's size
  */
-function validateZipSize(zipPath: string): void {
-  const stats = statSync(zipPath);
-  const bytes = stats.size;
-
+function validateZipSize(bytes: number): void {
   if (bytes >= ZIP_SIZE_ERROR_BYTES) {
     throw new ZipSizeLimitError(bytes, ZIP_SIZE_ERROR_BYTES);
   }
@@ -2625,237 +3022,61 @@ function validateZipSize(zipPath: string): void {
 }
 
 /**
- * Generate package artifacts in requested formats
+ * Generate the package artifacts in the requested formats: the npm manifest is written
+ * INTO the bundle; what lands BESIDE it — the ZIP, the marketplace manifest — is
+ * returned as bytes, for the plan that owns the output to place
+ * ({@link packageOutputChanges}).
  *
- * @param outputPath - Directory containing packaged skill
+ * @param outputPath - The directory the package was written into (a staged tree)
  * @param metadata - Skill metadata
  * @param formats - Formats to generate
  * @param projectRoot - The project root, so a refused write names its path relative to it
  * @param target - Packaging target (for ZIP size validation on claude-web)
- * @returns Paths to generated artifacts
  */
 async function generatePackageArtifacts(
   outputPath: string,
   metadata: SkillMetadata,
-  formats: string[],
+  formats: readonly string[],
   projectRoot: string,
   target: PackagingTarget = DEFAULT_PACKAGING_TARGET
-): Promise<Record<string, string>> {
-  const artifacts: Record<string, string> = {};
-
-  if (formats.includes('directory')) {
-    artifacts['directory'] = outputPath;
+): Promise<PackageSiblings> {
+  // The ZIP first: it archives the bundle without the npm manifest written below.
+  const zip = formats.includes('zip') ? await createZipArchive(outputPath, projectRoot) : undefined;
+  // Validate ZIP size for claude-web target (Anthropic upload limit)
+  if (zip !== undefined && target === 'claude-web') {
+    validateZipSize(zip.length);
   }
-
-  if (formats.includes('zip')) {
-    const zipPath = `${outputPath}.zip`;
-    await createZipArchive(outputPath, zipPath, projectRoot);
-    // Validate ZIP size for claude-web target (Anthropic upload limit)
-    if (target === 'claude-web') {
-      validateZipSize(zipPath);
-    }
-    artifacts['zip'] = zipPath;
-  }
-
   if (formats.includes('npm')) {
-    const tgzPath = await createNpmPackage(outputPath, metadata, projectRoot);
-    artifacts['npm'] = tgzPath;
+    await createNpmPackage(outputPath, metadata, projectRoot);
   }
-
-  if (formats.includes('marketplace')) {
-    const manifestPath = await createMarketplaceManifest(outputPath, metadata, projectRoot);
-    artifacts['marketplace'] = manifestPath;
-  }
-
-  return artifacts;
+  return {
+    ...(zip !== undefined && { zip }),
+    ...(formats.includes('marketplace') && { marketplace: marketplaceManifest(metadata) }),
+  };
 }
 
 /**
- * Create ZIP archive of packaged skill
+ * The ZIP archive of a packaged skill, in memory.
  *
  * Uses adm-zip for fast, cross-platform ZIP creation.
  * ZIP format preferred over TAR for Windows compatibility.
  *
- * The archive is built in memory and written with our own `writeFile`: adm-zip's
- * `writeZip` swallows the write's errno (without a callback it reports nothing at
- * all), so a ZIP the OS refused was announced as written.
- *
  * @param sourceDir - Directory to archive
- * @param zipPath - Output ZIP file path
- * @param projectRoot - The project root, so a refused write names the ZIP relative to it
+ * @param projectRoot - The project root, so a refused read names the package relative to it
  */
-async function createZipArchive(sourceDir: string, zipPath: string, projectRoot: string): Promise<void> {
-  // Import adm-zip dynamically (will be added as dependency)
+async function createZipArchive(sourceDir: string, projectRoot: string): Promise<Buffer> {
   const AdmZip = (await import('adm-zip')).default;
 
   const zip = new AdmZip();
 
-  // Add directory contents to ZIP
-  zip.addLocalFolder(sourceDir);
-
-  await writeArtifactFile('ZIP archive', zipPath, zip.toBuffer(), projectRoot);
-}
-
-/**
- * Write one file of the package's output. A write the OS refuses (a full disk, an
- * unwritable directory, a directory in the way) is the run not finishing
- * (`SKILL_PACKAGING_OUTPUT_FAILED`), naming the file relative to the project; and
- * a file the failed write itself created — truncated — is removed, so the next run
- * does not refuse it as "a previous package". Nothing that was there before the
- * write is removed.
- */
-async function writeArtifactFile(what: string, path: string, data: string | Buffer, projectRoot: string): Promise<void> {
-  const existedBefore = entryExists(path);
-  try {
-    await withFsAttribution(`${what} ${issueLocation(path, projectRoot)}`, 'output', () => writeFile(path, data), 'written');
-  } catch (error) {
-    if (!existedBefore) await removeOwnPartialFile(path);
-    throw error;
-  }
-}
-
-/** Whether anything — a dangling link included — is at `path`. */
-function entryExists(path: string): boolean {
-  try {
-    lstatSync(path);
-    return true;
-  } catch (error) {
-    if (isPathAbsentError(error)) return false;
-    throw error;
-  }
-}
-
-/**
- * Remove a regular file a failed write created. Best effort: the write's own
- * refusal is what the run reports, so a removal the OS refuses too must not
- * replace it.
- */
-async function removeOwnPartialFile(path: string): Promise<void> {
-  try {
-    if (lstatSync(path).isFile()) await rm(path, { force: true });
-  } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
-  }
-}
-
-/**
- * The files a package writes BESIDE its output directory, for the formats asked
- * for: the ZIP (`<output>.zip`) and the marketplace manifest. They are output
- * too, and the same ownership rule covers them.
- */
-function artifactSiblingPaths(outputPath: string, skillName: string, formats: readonly string[]): string[] {
-  const siblings: string[] = [];
-  if (formats.includes('zip')) siblings.push(`${outputPath}.zip`);
-  if (formats.includes('marketplace')) siblings.push(safePath.join(dirname(outputPath), `${skillName}.marketplace.json`));
-  return siblings;
-}
-
-/** What a package output is called in a refusal: the skill, and its output relative to the project. */
-function packageOutputSubject(outputPath: string, skillName: string, projectRoot: string): string {
-  return `skill '${skillName}' output ${issueLocation(outputPath, projectRoot) || '.'}`;
-}
-
-/** The output `checkPackageOutput` judges, and what it may be told about it. */
-export interface PackageOutputCheck {
-  /** The package's output directory. */
-  outputPath: string;
-  /** The skill's name — it names the marketplace manifest beside the output. */
-  skillName: string;
-  /** The formats asked for: which archives land beside the output. */
-  formats: readonly string[];
-  /** Every file the package reads (the SKILL.md and what it bundles). */
-  sources: readonly string[];
-  /** The project root, so a refusal names the output relative to it. */
-  projectRoot: string;
-  /** The output holds a previous package to replace (`--force`); only the source check applies. */
-  replaceExistingOutput?: boolean;
-}
-
-/**
- * Whether a package may be written at `outputPath` — the same answer for a dry
- * run as for the real one, decided before anything is written.
- *
- * An output that is, or contains, a file the package reads is refused,
- * `replaceExistingOutput` or not: the bundle would overwrite the author's
- * source. Unless told the output holds a previous package to replace, anything
- * at it — a non-empty directory, a file, or a `<output>.zip` /
- * `<name>.marketplace.json` a requested format writes beside it — is refused,
- * never deleted, naming the path and the fix. An empty directory is free.
- *
- * @throws VatError {@link SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE}
- */
-export function checkPackageOutput(check: PackageOutputCheck): void {
-  const resolvedOutput = safePath.resolve(check.outputPath);
-  const subject = packageOutputSubject(check.outputPath, check.skillName, check.projectRoot);
-  refuseOutputHoldingSource(resolvedOutput, check.sources, subject);
-  if (check.replaceExistingOutput === true) return;
-  const occupied = [
-    ...(isOccupied(resolvedOutput, true) ? [resolvedOutput] : []),
-    ...artifactSiblingPaths(resolvedOutput, check.skillName, check.formats).filter((sibling) => isOccupied(sibling, false)),
-  ];
-  if (occupied.length > 0) {
-    throw new VatError(
-      SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE,
-      `${subject}: ${occupied.map((path) => toForwardSlash(path)).join(', ')} already exists, and VAT never deletes `
-        + 'or overwrites what it did not produce. If it is a previous package, pass --force to replace it '
-        + '(`replaceExistingOutput: true` in the library); otherwise remove it yourself, or choose an output path '
-        + 'that does not exist yet (or is an empty directory).',
-    );
-  }
-}
-
-/**
- * Refuse an output that is, or contains, a file the package reads — writing the
- * bundle there would overwrite the author's source. `--force` does not lift it.
- */
-function refuseOutputHoldingSource(resolvedOutput: string, sources: readonly string[], subject: string): void {
-  // Canonical on both sides: an output reached through a symlink is the tree it names.
-  const real = (path: string): string => toForwardSlash(normalizePath(safePath.resolve(path)));
-  let held: string | undefined;
-  try {
-    const outputReal = real(resolvedOutput);
-    held = sources.find((source) => isUnderRoot(resolvedOutput, source) !== 'outside' || real(source) === outputReal);
-  } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
-    // Not examinable is not "holds nothing": refused like an output that will not stat (`isOccupied`).
-    throw new VatError(
-      SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE,
-      `${subject}: the OS will not let VAT examine it (${(error as NodeJS.ErrnoException).code ?? 'unknown error'}), so VAT cannot tell `
-        + 'whether it holds the source being packaged. Make the output path and its parents readable, or choose another output path.',
-      { cause: error },
-    );
-  }
-  if (held === undefined) return;
-  throw new VatError(
-    SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE,
-    `${subject}: it holds the source being packaged (${toForwardSlash(held)}), and VAT never writes a package over `
-      + 'the tree it reads, --force or not. Choose an output path outside the skill and the files it links to.',
+  // Add directory contents to ZIP. adm-zip reads the output back from disk: what it
+  // lists and reads is the package this run just wrote, so a refusal is the output's.
+  withFsFaultSync(
+    { side: 'destination', action: `read back the package ${issueLocation(sourceDir, projectRoot) || '.'} to archive it` },
+    () => zip.addLocalFolder(sourceDir),
   );
-}
 
-/**
- * Whether something is at `path` that a package write would destroy. An empty
- * directory at the output itself is not: the package lands inside it unharmed.
- * A path the OS will not stat counts as occupied — nothing is assumed absent.
- */
-function isOccupied(path: string, emptyDirectoryIsFree: boolean): boolean {
-  let stats: ReturnType<typeof lstatSync>;
-  try {
-    stats = lstatSync(path);
-  } catch (error) {
-    // Absent — or a FILE above it (`ENOTDIR`), which the write itself then refuses
-    // as the output it is. Anything else the OS says is not proof of absence.
-    const code = (error as NodeJS.ErrnoException).code;
-    return code !== 'ENOENT' && code !== 'ENOTDIR';
-  }
-  if (!emptyDirectoryIsFree || !stats.isDirectory()) return true;
-  try {
-    return readdirSync(path).length > 0;
-  } catch (error) {
-    // A directory it cannot list is not proof of emptiness: refuse, never assume.
-    if (isFilesystemAccessError(error)) return true;
-    throw error;
-  }
+  return zip.toBuffer();
 }
 
 /**
@@ -2863,13 +3084,13 @@ function isOccupied(path: string, emptyDirectoryIsFree: boolean): boolean {
  *
  * @param outputPath - Directory containing packaged skill
  * @param metadata - Skill metadata
- * @returns Path to generated .tgz file
+ * @param projectRoot - The project root, so a refused write names its path relative to it
  */
 async function createNpmPackage(
   outputPath: string,
   metadata: SkillMetadata,
   projectRoot: string
-): Promise<string> {
+): Promise<void> {
   // Generate package.json
   const packageJson = {
     name: `@vat-skills/${metadata.name}`,
@@ -2882,25 +3103,19 @@ async function createNpmPackage(
   };
 
   const packageJsonPath = safePath.join(outputPath, PACKAGE_JSON_FILENAME);
-  await writeArtifactFile('npm package manifest', packageJsonPath, JSON.stringify(packageJson, null, 2), projectRoot);
-
-  // For now, just return a placeholder path
-  // Full npm pack implementation would require running `npm pack`
-  return `${outputPath}.tgz`;
+  // A write the OS refuses (a full disk, an unwritable directory) is the run not finishing.
+  await withFsFault(
+    { side: 'destination', action: `write npm package manifest ${issueLocation(packageJsonPath, projectRoot)}` },
+    () => writeFile(packageJsonPath, JSON.stringify(packageJson, null, 2)),
+  );
 }
 
 /**
- * Create marketplace manifest (JSON descriptor)
+ * The marketplace manifest (JSON descriptor) of a packaged skill.
  *
- * @param outputPath - Directory containing packaged skill
  * @param metadata - Skill metadata
- * @returns Path to generated manifest file
  */
-async function createMarketplaceManifest(
-  outputPath: string,
-  metadata: SkillMetadata,
-  projectRoot: string
-): Promise<string> {
+function marketplaceManifest(metadata: SkillMetadata): string {
   const manifest = {
     name: metadata.name,
     version: metadata.version ?? '1.0.0',
@@ -2911,11 +3126,7 @@ async function createMarketplaceManifest(
     entrypoint: 'SKILL.md',
     created: new Date().toISOString(),
   };
-
-  const manifestPath = safePath.join(dirname(outputPath), `${metadata.name}.marketplace.json`);
-  await writeArtifactFile('marketplace manifest', manifestPath, JSON.stringify(manifest, null, 2), projectRoot);
-
-  return manifestPath;
+  return JSON.stringify(manifest, null, 2);
 }
 
 /**

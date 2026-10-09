@@ -10,7 +10,11 @@ import {
   HarnessLocationError,
   resolveHarnessRoot,
 } from '../../src/skill-test/harness-location.js';
-import { createSymlinkedDir } from '../test-helpers.js';
+import { createSymlinkedDir, useScratchTmpdir } from '../test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test (and every child
+// a test spawns), so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-3-');
 
 describe('deriveHarnessKey', () => {
   it('is deterministic for the same sorted skill set', () => {

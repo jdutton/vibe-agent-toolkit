@@ -3,17 +3,18 @@
  * Build, validate, and package agent skills in the Agent Skills format
  */
 
-export { AGENT_PACKAGE_ROOT_MISSING_CODE, AGENT_SOURCE_UNREADABLE_CODE, buildAgentSkill, type BuildOptions, type BuildResult } from './builder.js';
+export { AGENT_PACKAGE_ROOT_MISSING_CODE, buildAgentSkill, type BuildOptions, type BuildResult } from './builder.js';
 
 export {
-  checkPackageOutput,
   createProjectRegistry,
   extractH1Title,
   packageSkill,
+  packageSkillInto,
   packageSkills,
   packagingConfigToPackageOptions,
+  reanchorStagedResult,
+  stagedPathMapper,
   ZipSizeLimitError,
-  type PackageOutputCheck,
   type PackageSkillOptions,
   type PackageSkillResult,
   type ProjectRegistryOptions,
@@ -125,7 +126,7 @@ export {
   type DetectorOutput,
 } from './validators/compat-detectors.js';
 export { describeIssues } from './validators/describe-issues.js';
-export { validateMarketplace } from './validators/marketplace-validator.js';
+export { manifestReadFailure, type MissingManifestFinding, validateMarketplace } from './validators/marketplace-validator.js';
 export { validateSkill } from './validators/skill-validator.js';
 export { validate, type UnifiedValidateOptions } from './validators/unified-validator.js';
 export { detectResourceFormat, enumerateSurfaces } from './validators/format-detection.js';
@@ -174,7 +175,7 @@ export {
 } from './import.js';
 
 // Packaging refusals of a skill's own content, told apart from defects by code
-export { isSkillPackagingInputError, SKILL_PACKAGING_INPUT_INVALID_CODE, SKILL_PACKAGING_OUTPUT_FAILED_CODE, SKILL_PACKAGING_OUTPUT_OCCUPIED_CODE } from './packaging-errors.js';
+export { asPackagerRefusal, isSkillPackagingInputError, SKILL_PACKAGE_CHECKS_FAILED_CODE, SKILL_PACKAGING_INPUT_INVALID_CODE, SkillPackageChecksFailedError } from './packaging-errors.js';
 
 // Skill source primitives
 export { cloneGitSource, GIT_SUBPATH_INVALID_CODE, type GitCloneResult } from './skill-source/git-clone.js';
@@ -183,8 +184,8 @@ export { cloneGitSource, GIT_SUBPATH_INVALID_CODE, type GitCloneResult } from '.
 export { locateSkillSource, resolveSkillSource, type ResolveSkillSourceOptions } from './skill-source/resolve-skill-source.js';
 // What `locateSkillSource` throws for an npm source spec with no version pin.
 export { SKILL_SOURCE_SPEC_INVALID_CODE } from './skill-source/sources/npm-source.js';
-// What `resolveSkillSource` throws for a source tree the OS will not read, that is absent, or that holds a symlink.
-export { SKILL_SOURCE_UNREADABLE_CODE, SkillSourceUnreadableError } from './skill-source/source-unreadable.js';
+// What `resolveSkillSource` throws for a source tree that holds a symlink (one the OS will not read is an `FsFaultError`).
+export { SKILL_SOURCE_UNREADABLE_CODE, SkillSourceUnreadableError } from './skill-source/stage.js';
 export type {
   SkillSource,
   ResolvedSkillSource,
@@ -260,7 +261,9 @@ export {
 
 export {
   computeTreeCopiedSkillLocations,
+  getMarketplaceOutputDir,
   getPluginOutputDir,
+  pluginDirInMarketplace,
   getPluginSourceDir,
   indexPluginLocalSkills,
   listPluginSourceSkillDirs,

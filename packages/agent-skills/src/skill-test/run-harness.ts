@@ -12,7 +12,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync, type Stats } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, rmSync, writeFileSync, type Stats } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,17 +20,25 @@ import { fileURLToPath } from 'node:url';
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
 import { ExitCode, type RefusalCode } from '@vibe-agent-toolkit/schema';
 import {
+  applyTreePlan,
   ASSET_REFERENCE_UNRESOLVED_CODE,
+  classifyFsFault,
   direntKind,
+  disposeTempDir,
   everyInOrder,
   isPathAbsentError,
   isVatError,
+  mapInOrder,
   mkdirSyncReal,
   normalizedTmpdir,
+  planTreeChanges,
   prefixMessageOnce,
+  recordSuppressedFault,
+  renameFileAtomic,
   resolveAssetReference,
   safePath,
   toForwardSlashAnyPlatform,
+  withFsFaultSync,
 } from '@vibe-agent-toolkit/utils';
 import {
   getToolVersion,
@@ -106,7 +114,6 @@ import {
   HarnessLocationError,
   prepareHarnessRoot,
   resolveHarnessRoot,
-  writingHarnessOutput,
 } from './harness-location.js';
 import { acquireHarnessLock, installSignalCleanup } from './lock.js';
 import { RateLimitSignal, runPipeline } from './pipeline.js';
@@ -396,7 +403,16 @@ interface CompletedHarnessRun extends RunHarnessResultBase {
   frictionReportPath: string | null;
 }
 
-export type RunHarnessResult = RefusedHarnessRun | CompletedHarnessRun;
+/** A run as the harness body reached it, before its leftovers are attached. */
+type HarnessRunBody = RefusedHarnessRun | CompletedHarnessRun;
+
+/**
+ * What the harness returns: the run, and `leftovers` — every temporary directory its cleanup
+ * or its source resolution could not remove once the run was done, each the classified fault
+ * naming it. Never the run's refusal; a caller reports each as a `TREE_CLEANUP_INCOMPLETE`
+ * warning beside the run. Empty when everything went.
+ */
+export type RunHarnessResult = HarnessRunBody & { readonly leftovers: readonly unknown[] };
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -970,12 +986,18 @@ function mintArmWorkspaceDirs(baseline: boolean): ArmWorkspaceDirs {
   return baseline ? { with: token(), without: token() } : { with: token() };
 }
 
-function stageWorkspacesForRun(
+async function stageWorkspacesForRun(
   evalsPath: string,
   workspacesRoot: string,
   armDirs: ArmWorkspaceDirs,
-): { workspacesRoot: string; declaredEvalCount: number; suite: EvalSuite } {
-  rmSync(workspacesRoot, { recursive: true, force: true });
+): Promise<{ workspacesRoot: string; declaredEvalCount: number; suite: EvalSuite }> {
+  // VAT's own scratch: whatever a reused root holds goes, whole, before anything is staged.
+  await applyTreePlan(await planTreeChanges([{
+    op: 'remove',
+    dest: workspacesRoot,
+    ownership: { kind: 'vat-state' },
+    label: 'eval workspaces of a previous run',
+  }]));
   // 0700, matching the harness root. These dirs hold each eval's declared input
   // files, which with an out-of-tree suite may be data that was never in the repo
   // at all. Inheriting the umask (0755) left them readable by any local user the
@@ -989,7 +1011,7 @@ function stageWorkspacesForRun(
   assertSafeHarnessRoot(workspacesRoot, process.getuid?.() ?? -1);
   const suite = parseEvalSuite(readFileSync(evalsPath, 'utf-8'));
   return {
-    workspacesRoot: stageEvalWorkspaces({
+    workspacesRoot: await stageEvalWorkspaces({
       suite,
       evalsDir: dirname(evalsPath),
       workspacesRoot,
@@ -1007,20 +1029,20 @@ function buildModelFlag(model: string | undefined): string {
 
 /**
  * Wrap {@link stageWorkspacesForRun} for the orchestrator: returns the
- * `workspacesRoot` string on success, or a {@link RunHarnessResult} early-return
+ * `workspacesRoot` string on success, or a {@link HarnessRunBody} early-return
  * value when the suite is invalid or a declared input file is missing. Any other
  * error is re-thrown so it propagates as an InternalHarnessError upstream.
  * Keeping the try/catch in a private helper avoids inflating the orchestrator's
  * cognitive complexity.
  */
-function attemptStageWorkspaces(
+async function attemptStageWorkspaces(
   evalsPath: string,
   harnessRoot: string,
   workspacesRoot: string,
   armDirs: ArmWorkspaceDirs,
-): { workspacesRoot: string; declaredEvalCount: number; suite: EvalSuite } | RunHarnessResult {
+): Promise<{ workspacesRoot: string; declaredEvalCount: number; suite: EvalSuite } | HarnessRunBody> {
   try {
-    return stageWorkspacesForRun(evalsPath, workspacesRoot, armDirs);
+    return await stageWorkspacesForRun(evalsPath, workspacesRoot, armDirs);
   } catch (e) {
     if (e instanceof EvalInputError) {
       return {
@@ -1355,30 +1377,31 @@ const RETAINED_RESULTS_DIRNAME = 'results';
  * the run and cleanup is left in place rather than followed — `rmSync(recursive)`
  * could otherwise delete the symlink's target outside tmp.
  */
-function cleanupHarness(harnessRoot: string, opts: CleanupHarnessOptions): void {
-  if (opts.keep || !opts.created) return;
+async function cleanupHarness(harnessRoot: string, opts: CleanupHarnessOptions): Promise<unknown[]> {
+  if (opts.keep || !opts.created) return [];
   // Best-effort: cleanup runs from a `finally`, so a TOCTOU race (the dir is
   // reaped between checks) or a permission error must never throw out and mask
   // the run's real outcome. Worst case is a leftover 0700 tmp dir, not a failure —
   // but a leftover the operator was never told about is staged untrusted bytes
-  // sitting in tmp with nothing to connect them to this run, so the failure is
-  // REPORTED on stderr ({@link swallowCleanupFailure}), not swallowed silently.
-  swallowCleanupFailure(() => {
-    if (!existsSync(harnessRoot)) return;
-    if (lstatSync(harnessRoot).isSymbolicLink()) return;
-    const entries = readdirSync(harnessRoot);
-    // Nothing to retain — a run that ended before Step 7 (preflight refusal, lock
-    // failure, a throw during staging) has no results/, so leaving an empty 0700
-    // dir behind in tmp would be pure litter. Remove the root outright.
-    if (!entries.includes(RETAINED_RESULTS_DIRNAME)) {
-      rmSync(harnessRoot, { recursive: true, force: true });
-      return;
-    }
-    for (const entry of entries) {
-      if (entry === RETAINED_RESULTS_DIRNAME) continue;
-      rmSync(safePath.joinUnderRoot(harnessRoot, entry), { recursive: true, force: true });
-    }
-  });
+  // sitting in tmp with nothing to connect them to this run, so each is RETURNED,
+  // for the run's result to carry as a warning naming it.
+  let entries: string[];
+  try {
+    if (!existsSync(harnessRoot)) return [];
+    if (lstatSync(harnessRoot).isSymbolicLink()) return [];
+    entries = readdirSync(harnessRoot);
+  } catch (err) {
+    return [unexaminedLeftover(err, harnessRoot)];
+  }
+  // Nothing to retain — a run that ended before Step 7 (preflight refusal, lock
+  // failure, a throw during staging) has no results/, so leaving an empty 0700
+  // dir behind in tmp would be pure litter. Remove the root outright.
+  if (!entries.includes(RETAINED_RESULTS_DIRNAME)) {
+    return leftoversOf([await disposedLeftover(harnessRoot)]);
+  }
+  const discarded = entries.filter((entry) => entry !== RETAINED_RESULTS_DIRNAME);
+  // In order: the leftovers are named in listing order.
+  return leftoversOf(await mapInOrder(discarded, (entry) => disposedLeftover(safePath.joinUnderRoot(harnessRoot, entry))));
 }
 
 // ---------------------------------------------------------------------------
@@ -1529,23 +1552,55 @@ function swallowCleanupFailure(step: () => void): void {
   try {
     step();
   } catch (err) {
-    process.stderr.write(
-      `warning: harness cleanup step failed (the run's result stands): ${err instanceof Error ? err.message : String(err)}\n`,
-    );
+    reportCleanupFailure(err);
   }
+}
+
+/** The stderr line a cleanup step that is no temp-dir removal (a child to reap, the lock) gets when it fails: the run's result stands. */
+function reportCleanupFailure(err: unknown): void {
+  process.stderr.write(
+    `warning: harness cleanup step failed (the run's result stands): ${err instanceof Error ? err.message : String(err)}\n`,
+  );
+}
+
+/**
+ * Dispose of `dir`, an entry under the OS tmp dir this run made, returning rather than
+ * throwing what keeps it there: `undefined` once it is gone, else the leftover — the
+ * classified fault naming it. `disposeTempDir` removes a link as the link, never its
+ * target, and refuses anything not strictly under the tmp dir — a refusal returned here
+ * like any other leftover, so it never masks the run's outcome.
+ */
+async function disposedLeftover(dir: string): Promise<unknown> {
+  try {
+    return await disposeTempDir(dir);
+  } catch (err) {
+    return err;
+  }
+}
+
+/** A directory the cleanup could not even examine: it stays, named by the classified fault. */
+function unexaminedLeftover(err: unknown, dir: string): unknown {
+  return classifyFsFault(err, { side: 'environment', action: `examine the temporary directory ${dir} before removing it`, path: dir });
+}
+
+/** The leftovers among `outcomes` (each `undefined` when its directory went). */
+function leftoversOf(outcomes: readonly unknown[]): unknown[] {
+  return outcomes.filter((outcome) => outcome !== undefined);
 }
 
 /**
  * Remove one vat-only temp dir. Same discipline as {@link cleanupHarness}: a failed
- * removal is not a run failure, and it is reported rather than swallowed.
+ * removal is not a run failure, and its leftover is returned rather than swallowed.
  */
-function removeVatOnlyDir(dir: string | undefined): void {
-  if (dir === undefined) return;
-  swallowCleanupFailure(() => {
-    if (!existsSync(dir)) return;
-    if (lstatSync(dir).isSymbolicLink()) return;
-    rmSync(dir, { recursive: true, force: true });
-  });
+async function removeVatOnlyDir(dir: string | undefined): Promise<unknown[]> {
+  if (dir === undefined) return [];
+  try {
+    if (!existsSync(dir)) return [];
+    if (lstatSync(dir).isSymbolicLink()) return [];
+  } catch (err) {
+    return [unexaminedLeftover(err, dir)];
+  }
+  return leftoversOf([await disposedLeftover(dir)]);
 }
 
 /** Everything one executor→grader pipeline worker needs, built once per run. */
@@ -2397,7 +2452,7 @@ function openResultsDir(input: {
   // verbatim in each expectation's evidence, so whatever the skill read out of its
   // input files ends up here as text — and unlike the workspaces, results/ SURVIVES
   // `--keep` by design.
-  writingHarnessOutput(`the results directory ${input.resultsDir}`, () => {
+  withFsFaultSync({ side: 'destination', action: `create the results directory ${input.resultsDir}` }, () => {
     mkdirSyncReal(input.resultsDir, { recursive: true, mode: 0o700 });
   });
   writeResultJson(input.provenancePath, input.provenance);
@@ -2405,10 +2460,10 @@ function openResultsDir(input: {
 
 /**
  * Write one results artifact as JSON. A write the OS refuses (a full disk) is the
- * run not finishing ({@link HarnessOutputError}, `RUN_INCOMPLETE`).
+ * run not finishing (a `destination` fault, `RUN_INCOMPLETE`).
  */
 function writeResultJson(path: string, value: unknown): void {
-  writingHarnessOutput(`the results file ${path}`, () => {
+  withFsFaultSync({ side: 'destination', action: `write the results file ${path}` }, () => {
     writeFileSync(path, JSON.stringify(value, null, 2) + '\n', 'utf-8');
   });
 }
@@ -2795,7 +2850,7 @@ function buildRunSummaryWithSkips(
  * HARNESS bug ({@link InternalHarnessError} → exit 1), never a skill fault. This is
  * safe precisely because vat always writes these after the merge succeeds.
  */
-function assertVatWroteArtifact(path: string, validate: (raw: unknown) => void, label: string): void {
+async function assertVatWroteArtifact(path: string, validate: (raw: unknown) => void, label: string): Promise<void> {
   if (!existsSync(path)) {
     throw new InternalHarnessError(`vat did not write ${label} at ${path} after the merge — harness bug.`);
   }
@@ -2804,7 +2859,7 @@ function assertVatWroteArtifact(path: string, validate: (raw: unknown) => void, 
     raw = JSON.parse(readFileSync(path, 'utf-8'));
   } catch (err) {
     throw new InternalHarnessError(
-      `vat-written ${label} at ${path} is not valid JSON (harness bug)${quarantineArtifact(path)}: ` +
+      `vat-written ${label} at ${path} is not valid JSON (harness bug)${await quarantineArtifact(path)}: ` +
         `${err instanceof Error ? err.message : String(err)}`,
     );
   }
@@ -2812,7 +2867,7 @@ function assertVatWroteArtifact(path: string, validate: (raw: unknown) => void, 
     validate(raw);
   } catch (err) {
     throw new InternalHarnessError(
-      `vat-written ${label} at ${path} failed its schema (harness bug)${quarantineArtifact(path)}: ` +
+      `vat-written ${label} at ${path} failed its schema (harness bug)${await quarantineArtifact(path)}: ` +
         `${err instanceof Error ? err.message : String(err)}`,
     );
   }
@@ -2830,11 +2885,11 @@ function assertVatWroteArtifact(path: string, validate: (raw: unknown) => void, 
  * under its authoritative name, and the returned clause says so with both errors:
  * the operator is about to read a CI archive, and a bare '' told them nothing.
  */
-function quarantineArtifact(path: string): string {
+async function quarantineArtifact(path: string): Promise<string> {
   const rejected = rejectedArtifactPath(path);
   let renameFailure: string;
   try {
-    renameSync(path, rejected);
+    await renameFileAtomic(path, rejected);
     return `; moved aside to ${rejected} so it is not read as authoritative`;
   } catch (err) {
     renameFailure = err instanceof Error ? err.message : String(err);
@@ -2871,12 +2926,12 @@ function quarantineArtifact(path: string): string {
  * baseline and wrote nothing), which is exactly what a fail-CLOSED gate must not do.
  * A non-baseline run writes no baseline.json at all and is not asked about one.
  */
-function assertVatWroteArtifacts(paths: ArtifactPaths, baselineRun: boolean): void {
-  assertVatWroteArtifact(paths.gradingOut, (raw) => { GradingReportSchema.parse(raw); }, 'grading.json');
-  assertVatWroteArtifact(paths.frictionOut, (raw) => { FrictionReportSchema.parse(raw); }, 'friction.json');
-  assertVatWroteArtifact(paths.toolEvalOut, (raw) => { ToolEvalReportSchema.parse(raw); }, 'tool-eval.json');
+async function assertVatWroteArtifacts(paths: ArtifactPaths, baselineRun: boolean): Promise<void> {
+  await assertVatWroteArtifact(paths.gradingOut, (raw) => { GradingReportSchema.parse(raw); }, 'grading.json');
+  await assertVatWroteArtifact(paths.frictionOut, (raw) => { FrictionReportSchema.parse(raw); }, 'friction.json');
+  await assertVatWroteArtifact(paths.toolEvalOut, (raw) => { ToolEvalReportSchema.parse(raw); }, 'tool-eval.json');
   if (!baselineRun) return;
-  assertVatWroteArtifact(
+  await assertVatWroteArtifact(
     paths.baselineOut,
     (raw) => {
       // Both halves: the grading report it IS, and the two blocks vat stamps onto it.
@@ -2952,7 +3007,24 @@ function resolveHarnessLocation(
   };
 }
 
+/**
+ * Run the harness (see this module's header). What its cleanup and its source resolution
+ * left behind — temporary directories the OS would not remove once the run was done — rides
+ * the result as `leftovers`, for the caller to report as warnings beside it; a run that throws
+ * carries them recorded beside its error (`suppressedFaultsOf`).
+ */
 export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunHarnessResult> {
+  const leftovers: unknown[] = [];
+  try {
+    return { ...(await runHarnessCollecting(opts, leftovers)), leftovers };
+  } catch (error: unknown) {
+    for (const leftover of leftovers) recordSuppressedFault(error, leftover);
+    throw error;
+  }
+}
+
+/** {@link runSkillTestHarness}, pushing every leftover onto `leftovers` as it is found. */
+async function runHarnessCollecting(opts: RunHarnessOptions, leftovers: unknown[]): Promise<HarnessRunBody> {
   const { harnessRoot, harnessCreated, rootOwner } = resolveHarnessLocation(opts);
   const repoRoot = opts.repoRoot ?? harnessRoot;
   // Two distinct questions, deliberately not one value. `evalsRef` is what the
@@ -3031,7 +3103,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   // job is to be unguessable and to carry no meaning.
   const armDirs = mintArmWorkspaceDirs(opts.baseline === true);
 
-  const cleanup = (): void => {
+  const cleanup = async (): Promise<void> => {
     // Reap any still-in-flight executor/grader children FIRST. On the concurrent
     // error path `Promise.all` rejects without cancelling its siblings, and a
     // `process.exit` tears down their in-process watchdog timers — so without
@@ -3048,17 +3120,23 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // for why a call-site guard is the weaker of the two forms.
     swallowCleanupFailure(killAllActiveClaudeChildren);
     lock.release();
-    cleanupHarness(harnessRoot, { keep: opts.keep === true, created: harnessCreated });
-    removeVatOnlyDir(graderOutDir);
+    leftovers.push(...await cleanupHarness(harnessRoot, { keep: opts.keep === true, created: harnessCreated }));
+    leftovers.push(...await removeVatOnlyDir(graderOutDir));
     // The held eval suite is the answer key: reap it on EVERY exit path (including
     // --keep, which retains the harness dir for inspection but has no business
     // retaining the key), and never conditionally.
-    removeVatOnlyDir(evalSuiteHoldDir);
+    leftovers.push(...await removeVatOnlyDir(evalSuiteHoldDir));
     // Per-eval workspaces are the executor's cwd; `retainWorkspaces` (minted with
     // the root above) is the single author of whether they survive.
-    if (!retainWorkspaces) removeVatOnlyDir(workspacesRoot);
+    if (!retainWorkspaces) leftovers.push(...await removeVatOnlyDir(workspacesRoot));
   };
-  const removeSignalCleanup = installSignalCleanup({ onSignal: cleanup });
+  // An interrupted run publishes no document, so what its cleanup left is named on stderr as it exits.
+  const removeSignalCleanup = installSignalCleanup({
+    onSignal: async () => {
+      await cleanup();
+      for (const leftover of leftovers) reportCleanupFailure(leftover);
+    },
+  });
 
   // Hoisted so the finally can surface packaging friction even when a throw
   // (a grader/executor failure, the per-fragment nonce guard, a spawn timeout)
@@ -3117,6 +3195,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     });
 
     const { pluginDirs, subjectStagedDir, subjectPluginRoot, skippedOptional } = stageResult;
+    leftovers.push(...stageResult.leftovers);
     emitSkippedOptionalWarning(skippedOptional);
 
     if (subjectStagedDir === null) {
@@ -3159,7 +3238,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // Step 5.5: Parse the eval suite and stage per-eval input workspaces. The
     // parsed suite is threaded on so the eval loop has the entries without
     // re-reading; declaredEvalCount is derived from it (suite.evals.length).
-    const workspaceStageResult = attemptStageWorkspaces(
+    const workspaceStageResult = await attemptStageWorkspaces(
       evalsPath,
       harnessRoot,
       workspacesRoot,
@@ -3382,7 +3461,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // invalid grading.json, friction.json, tool-eval.json — or, on a baseline run,
     // baseline.json — after the merge is a HARNESS bug (exit 1), never a skill fault.
     // A SEPARATE explicit check, not a prompt invariant.
-    assertVatWroteArtifacts(artifacts, opts.baseline === true);
+    await assertVatWroteArtifacts(artifacts, opts.baseline === true);
 
     // Friction FIRST, then the baseline report — the ORDER is the point. Friction is
     // capped at 50 lines of 2000 characters, so emitting it after the ⚠️ contaminated
@@ -3435,7 +3514,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // the same cleanup: release the lock, remove the harness dir, and remove the
     // vat-only grader dir (which lives outside harnessRoot).
     removeSignalCleanup();
-    cleanup();
+    await cleanup();
   }
 }
 

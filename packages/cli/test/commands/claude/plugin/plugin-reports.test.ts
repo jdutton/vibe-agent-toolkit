@@ -97,7 +97,7 @@ describe('claude plugin install refusal — what finished', () => {
 
 describe('claude plugin uninstall report', () => {
   it('is ok when nothing was installed — one request, removed: false', () => {
-    const report = PLUGIN_UNINSTALL_REPORT_SCHEMA.parse(buildPluginUninstallReport([{ key: PLUGIN_KEY, removed: false }], false, 1));
+    const report = PLUGIN_UNINSTALL_REPORT_SCHEMA.parse(buildPluginUninstallReport([{ key: PLUGIN_KEY, removed: false, keptForSibling: [] }], false, 1));
 
     expect(report).toMatchObject({ status: 'ok', examined: 1, data: { dryRun: false, plugins: [{ key: PLUGIN_KEY, removed: false }] } });
   });
@@ -107,10 +107,17 @@ describe('claude plugin uninstall report', () => {
   });
 
   it('turns a half-removed plugin warning into PLUGIN_UNINSTALL_INCOMPLETE at the key, off the data', () => {
-    const report = PLUGIN_UNINSTALL_REPORT_SCHEMA.parse(buildPluginUninstallReport([{ key: PLUGIN_KEY, removed: true, warning: 'not VAT\'s' }], false, 1));
+    const report = PLUGIN_UNINSTALL_REPORT_SCHEMA.parse(buildPluginUninstallReport([{ key: PLUGIN_KEY, removed: true, warning: 'not VAT\'s', keptForSibling: [] }], false, 1));
 
     expect(report.status).toBe('findings');
     expect(report.findings).toMatchObject([{ code: 'PLUGIN_UNINSTALL_INCOMPLETE', severity: 'warning', location: PLUGIN_KEY, message: 'not VAT\'s' }]);
     expect(report.data?.plugins).toStrictEqual([{ key: PLUGIN_KEY, removed: true }]);
+  });
+
+  it('reports each directory kept for an unexaminable sibling as PLUGIN_KEPT_SIBLING_UNEXAMINED at that directory', () => {
+    const kept = { path: '/c/home/.claude/plugins/cache/mp/p', sibling: '/c/home/.claude/plugins/cache/mp/q' };
+    const report = PLUGIN_UNINSTALL_REPORT_SCHEMA.parse(buildPluginUninstallReport([{ key: PLUGIN_KEY, removed: true, keptForSibling: [kept] }], false, 1));
+
+    expect(report.findings).toMatchObject([{ code: 'PLUGIN_KEPT_SIBLING_UNEXAMINED', severity: 'warning', link: kept.path }]);
   });
 });

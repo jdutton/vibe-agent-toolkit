@@ -1,6 +1,6 @@
-import { cpSync, existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { copyRegularFile, copyTree, forEachInOrder, mkdirSyncReal, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { sanitizeGraderText, sanitizeTextPreservingLines } from './grader-text.js';
@@ -357,53 +357,69 @@ export interface StageEvalWorkspacesInput {
  * the sibling: `../with/<id>/` was a guessable path to the treatment arm's live
  * output. Independent random tokens fix both, and cost nothing.
  */
-export function stageEvalWorkspaces(input: StageEvalWorkspacesInput): string {
-  for (const arm of armsOf(input.armDirs)) {
-    stageEvalWorkspacesForArm(input, arm);
-  }
+export async function stageEvalWorkspaces(input: StageEvalWorkspacesInput): Promise<string> {
+  // In order: an input error names the first offending arm and eval, as it always has.
+  await forEachInOrder(armsOf(input.armDirs), (arm) => stageEvalWorkspacesForArm(input, arm));
   return input.workspacesRoot;
 }
 
-function stageEvalWorkspacesForArm(input: StageEvalWorkspacesInput, arm: EvalArm): void {
+/**
+ * Copy one declared input — a file, or a directory with everything under it — to `dest`. A
+ * link is followed (the workspace gets what it points at), and inside a directory only to
+ * what lies under that directory.
+ */
+async function copyEvalInput(src: string, dest: string): Promise<void> {
+  if (statSync(src).isDirectory()) {
+    await copyTree(src, dest, { links: 'follow-contained', side: 'source' });
+    return;
+  }
+  await copyRegularFile(src, dest, { side: 'source', reading: `eval input ${src}` });
+}
+
+async function stageEvalWorkspacesForArm(input: StageEvalWorkspacesInput, arm: EvalArm): Promise<void> {
   const armRoot = safePath.joinUnderRoot(input.workspacesRoot, armDirSegment(input.armDirs, arm));
   mkdirSyncReal(armRoot, { recursive: true, mode: 0o700 });
-  for (const entry of input.suite.evals) {
+  // In order: the first input error names the first offending eval, as it always has.
+  await forEachInOrder(input.suite.evals, async (entry) => {
     const evalWorkspace = safePath.joinUnderRoot(armRoot, String(entry.id));
     // 0700 like the root above it — created for every eval, populated only by
     // those declaring `files`.
     mkdirSyncReal(evalWorkspace, { recursive: true, mode: 0o700 });
-    for (const rel of entry.files ?? []) {
-      // Containment first: a `rel` that escapes evalsDir or the workspace is a
-      // genuine "escapes the eval directory" problem and is reported as such.
-      let src: string;
-      let dest: string;
-      try {
-        src = safePath.joinUnderRoot(input.evalsDir, rel);
-        dest = safePath.joinUnderRoot(evalWorkspace, rel);
-      } catch (err) {
-        throw new EvalInputError(
-          `eval ${entry.id} declares input file "${quoteSuiteText(rel)}" that escapes the eval directory: ` +
-            quoteSuiteText((err as Error).message),
-        );
-      }
-      if (!existsSync(src)) {
-        throw new EvalInputError(
-          `eval ${entry.id} declares input file "${quoteSuiteText(rel)}" but it is absent at ${quoteSuiteText(src)}`,
-        );
-      }
-      // Copy failures (permissions, illegal filename on the host, disk) are
-      // reported accurately rather than mislabeled as a containment escape.
-      try {
-        // 0700 like the workspaces root above it: with an out-of-tree suite these
-        // hold data that may never have been in the repo.
-        mkdirSyncReal(safePath.join(dest, '..'), { recursive: true, mode: 0o700 });
-        cpSync(src, dest, { recursive: true });
-      } catch (err) {
-        throw new EvalInputError(
-          `eval ${entry.id} failed to stage input file "${quoteSuiteText(rel)}" into the workspace: ` +
-            quoteSuiteText((err as Error).message),
-        );
-      }
-    }
+    await forEachInOrder(entry.files ?? [], (rel) => stageEvalInput(input.evalsDir, evalWorkspace, String(entry.id), rel));
+  });
+}
+
+/** Copy one eval's declared input `rel` from the evals dir into its workspace. */
+async function stageEvalInput(evalsDir: string, evalWorkspace: string, id: string, rel: string): Promise<void> {
+  // Containment first: a `rel` that escapes evalsDir or the workspace is a
+  // genuine "escapes the eval directory" problem and is reported as such.
+  let src: string;
+  let dest: string;
+  try {
+    src = safePath.joinUnderRoot(evalsDir, rel);
+    dest = safePath.joinUnderRoot(evalWorkspace, rel);
+  } catch (err) {
+    throw new EvalInputError(
+      `eval ${id} declares input file "${quoteSuiteText(rel)}" that escapes the eval directory: ` +
+        quoteSuiteText((err as Error).message),
+    );
+  }
+  if (!existsSync(src)) {
+    throw new EvalInputError(
+      `eval ${id} declares input file "${quoteSuiteText(rel)}" but it is absent at ${quoteSuiteText(src)}`,
+    );
+  }
+  // Copy failures (permissions, illegal filename on the host, disk) are
+  // reported accurately rather than mislabeled as a containment escape.
+  try {
+    // 0700 like the workspaces root above it: with an out-of-tree suite these
+    // hold data that may never have been in the repo.
+    mkdirSyncReal(safePath.join(dest, '..'), { recursive: true, mode: 0o700 });
+    await copyEvalInput(src, dest);
+  } catch (err) {
+    throw new EvalInputError(
+      `eval ${id} failed to stage input file "${quoteSuiteText(rel)}" into the workspace: ` +
+        quoteSuiteText((err as Error).message),
+    );
   }
 }

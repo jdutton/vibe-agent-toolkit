@@ -3,7 +3,7 @@ import nodeFs, { rmSync, symlinkSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 
-import { isFilesystemAccessError } from './errors/errno.js';
+import { fsFaultOf, isSymlinkUnsupportedError } from './errors/errno-table.js';
 import { normalizedTmpdir, safePath, toForwardSlash } from './path-utils.js';
 
 declare const symlinkCapabilityBrand: unique symbol;
@@ -23,17 +23,6 @@ export type SymlinkCapability = { readonly [symlinkCapabilityBrand]: true };
 let cachedCapability: SymlinkCapability | null | undefined;
 
 /**
- * The errnos that mean "this host cannot create symlinks": Windows without
- * Developer Mode or `SeCreateSymbolicLinkPrivilege` (`EPERM`), and a
- * filesystem that has no symlinks to offer (`ENOTSUP` / `EOPNOTSUPP`).
- */
-const SYMLINK_UNSUPPORTED_ERRNOS: ReadonlySet<string> = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP']);
-
-function isSymlinkUnsupported(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && typeof error.code === 'string' && SYMLINK_UNSUPPORTED_ERRNOS.has(error.code);
-}
-
-/**
  * Whether this PROCESS can create symlinks — probed once and memoized.
  *
  * On Windows, `symlink()` needs either Developer Mode or
@@ -47,7 +36,7 @@ function isSymlinkUnsupported(error: unknown): boolean {
  *
  * Because the answer is memoized for the whole process, what reads as "no"
  * matters more than usual: a `null` here silently `skip()`s every symlink test
- * for the rest of the run. So ONLY {@link SYMLINK_UNSUPPORTED_ERRNOS} is a
+ * for the rest of the run. So ONLY {@link isSymlinkUnsupportedError} is a
  * no. A tmpdir that is unwritable or missing, or a bug, is not an answer about
  * symlinks at all and stays loud rather than becoming a process-wide skip for
  * a reason nothing reported.
@@ -67,7 +56,7 @@ export function symlinkCapability(): SymlinkCapability | null {
       symlinkSync('.', probe);
       cachedCapability = {} as SymlinkCapability;
     } catch (error) {
-      if (!isSymlinkUnsupported(error)) throw error;
+      if (!isSymlinkUnsupportedError(error)) throw error;
       cachedCapability = null;
     }
     if (cachedCapability !== null) {
@@ -79,7 +68,7 @@ export function symlinkCapability(): SymlinkCapability | null {
       try {
         rmSync(probe, { force: true });
       } catch (error) {
-        if (!isFilesystemAccessError(error)) throw error;
+        if (fsFaultOf(error) === undefined) throw error;
       }
     }
   }

@@ -1,14 +1,7 @@
 import { lstatSync, readdirSync, readlinkSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import {
-  canonicalPath,
-  COPY_LINK_ESCAPES_SOURCE_CODE,
-  isPathAbsentError,
-  isUnderRoot,
-  safePath,
-  VatError,
-} from '@vibe-agent-toolkit/utils';
+import { canonicalPath, COPY_LINK_ESCAPES_SOURCE_CODE, isPathAbsentError, isTimedOutError, isUnderRoot, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import {
   nonInteractiveGitOverrides,
   runGit as runGitSafely,
@@ -56,8 +49,7 @@ function runGit(
     timeout: GIT_TIMEOUT_MS,
     maxBuffer: GIT_MAX_BUFFER,
   });
-  const err = result.error as NodeJS.ErrnoException | undefined;
-  if (err?.code === 'ETIMEDOUT') {
+  if (result.error !== undefined && isTimedOutError(result.error)) {
     throw new Error(
       `git ${args[0] ?? ''} timed out after ${(GIT_TIMEOUT_MS / 1000).toString()}s ` +
         `(possible unreachable remote or hang).`,

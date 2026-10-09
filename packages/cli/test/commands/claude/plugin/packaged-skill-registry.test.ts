@@ -20,11 +20,12 @@ import { describe, expect, it, vi } from 'vitest';
  * the project gets read.
  */
 const stubResult = { files: { dependencies: [] } } as unknown as PackageSkillResult;
-const packageSkillSpy = vi.fn(async () => stubResult);
+// The lane packages each skill in place, into the marketplace's staged tree (`packageSkillInto`).
+const packageSkillSpy = vi.fn(async () => ({ result: stubResult, siblings: {} }));
 
 vi.mock('@vibe-agent-toolkit/agent-skills', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, packageSkill: packageSkillSpy };
+  return { ...actual, packageSkillInto: packageSkillSpy };
 });
 
 const { packagePluginLocalSkills } = await import('../../../../src/commands/claude/plugin/build.js');
@@ -61,6 +62,7 @@ function twoSkills(registry: never): Parameters<typeof packagePluginLocalSkills>
       // would resolve to the mock. Answering `false` is right for the fixture —
       // neither skill path exists on disk, so a real probe would say the same.
       suiteProbe: () => false,
+      outputs: [],
       logger: silentLogger,
   };
 }
@@ -77,7 +79,7 @@ describe('packagePluginLocalSkills — shared registry', () => {
 
     expect(packageSkillSpy).toHaveBeenCalledTimes(2);
     for (const call of packageSkillSpy.mock.calls) {
-      expect((call as any)[1]?.registry).toBe(registry);
+      expect((call as any)[2]?.registry).toBe(registry);
     }
   });
 });

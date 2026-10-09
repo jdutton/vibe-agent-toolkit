@@ -1,12 +1,35 @@
 import { chmodSync, lstatSync, readdirSync, statSync } from 'node:fs';
-import { copyFile, mkdir } from 'node:fs/promises';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
 
-import { forEachInOrder, mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  forEachInOrder,
+  type FsBoundary,
+  fsBoundary,
+  isPathAbsentError,
+  mkdirSyncReal,
+  readRegularFile,
+  safePath,
+  toForwardSlash,
+  VatError,
+  withFsFault,
+} from '@vibe-agent-toolkit/utils';
 
-import { proveReadable, withFsAttribution } from '../fs-attribution.js';
-
-import { readingSkillSource, SkillSourceUnreadableError } from './source-unreadable.js';
 import type { ResolveSkillSourceContext } from './types.js';
+
+/** The `VatError` code of a skill source staging refuses on purpose: a symlinked entry (§7). */
+export const SKILL_SOURCE_UNREADABLE_CODE = 'SKILL_SOURCE_UNREADABLE';
+
+/**
+ * A skill source staging refuses on purpose — a symlinked entry, which staging never
+ * traverses. Reason `preflight`: the operator replaces the link. A source the OS will
+ * not read is a classified `source` fault (`FsFaultError`), not this.
+ */
+export class SkillSourceUnreadableError extends VatError {
+  readonly reason = 'preflight' as const;
+  constructor(message: string, options?: ErrorOptions) {
+    super(SKILL_SOURCE_UNREADABLE_CODE, message, options);
+  }
+}
 
 /** Test seam: lets unit tests simulate a foreign-owned dir without a second OS user. */
 export interface StageOptions {
@@ -34,13 +57,15 @@ export async function stageDirInto(
   opts: StageOptions = {},
 ): Promise<string> {
   const currentUid = opts.uidOverride ?? (process.getuid?.() ?? -1);
-  await withFsAttribution(`Staging ${srcDir}`, 'output', () => ensureOwned0700Dir(ctx.stagingRoot, currentUid), 'staged');
+  // Role by PATH: the source tree is the operator's input; the staging root is VAT's scratch.
+  const boundary = fsBoundary({ source: [srcDir], environment: [ctx.stagingRoot] }, { origin: 'content' });
+  boundary.runSync(`create the staging root for ${srcDir}`, 'environment', () => ensureOwned0700Dir(ctx.stagingRoot, currentUid));
 
   const dest = safePath.join(ctx.stagingRoot, key);
-  assertOwnedIfExists(dest, currentUid);
+  boundary.runSync(`examine the staged copy ${dest}`, 'environment', () => assertOwnedIfExists(dest, currentUid));
 
-  await withFsAttribution(`Staging ${srcDir}`, 'output', () => mkdir(dest, { recursive: true }), 'staged');
-  await copyTreeNoSymlinks(srcDir, dest);
+  await boundary.run(`stage ${srcDir}`, 'environment', () => mkdir(dest, { recursive: true }));
+  await copyTreeNoSymlinks(srcDir, dest, boundary);
   return toForwardSlash(dest);
 }
 
@@ -60,7 +85,7 @@ function assertOwnedIfExists(dir: string, currentUid: number): void {
   } catch (err) {
     // Only an absent path is safe to ignore. A different error (e.g. EACCES on
     // an unreadable path) must NOT be silently treated as "absent/safe".
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if (isPathAbsentError(err)) return;
     throw err;
   }
   if (currentUid >= 0 && st.uid !== currentUid) {
@@ -72,19 +97,20 @@ function assertOwnedIfExists(dir: string, currentUid: number): void {
 }
 
 /**
- * Recursively copy `src` into `dest`, refusing any symlinked entry. A write the OS
- * refuses (a full disk, an unwritable staging root) is coded as the run's output
- * (`SKILL_PACKAGING_OUTPUT_FAILED`, `RUN_INCOMPLETE`); a source entry it will not
- * read or list, and a symlink, are the input's (`SKILL_SOURCE_UNREADABLE`, `INPUT_UNREADABLE`).
+ * Recursively copy `src` into `dest`, refusing any symlinked entry. Every fault is
+ * classified by the path the OS named: a write the OS refuses under the staging root
+ * (a full disk, an unwritable staging root) is the environment's (`RUN_INCOMPLETE`);
+ * a source entry it will not read or list is the input's. A symlink is refused on
+ * purpose ({@link SkillSourceUnreadableError}, `INPUT_UNREADABLE`).
  */
-async function copyTreeNoSymlinks(src: string, dest: string): Promise<void> {
-  const entries = await readingSkillSource(src, () => readdirSync(src, { withFileTypes: true }));
+async function copyTreeNoSymlinks(src: string, dest: string, boundary: FsBoundary): Promise<void> {
+  const entries = boundary.runSync(`list ${src}`, 'source', () => readdirSync(src, { withFileTypes: true }));
   // In order: mkdir before recursing, a symlink refused before anything after it is copied.
   await forEachInOrder(entries, async (entry) => {
     const srcPath = safePath.join(src, entry.name);
     const destPath = safePath.join(dest, entry.name);
     // lstat (not stat) so a symlink is detected, never followed.
-    const st = await readingSkillSource(srcPath, () => lstatSync(srcPath));
+    const st = boundary.runSync(`examine ${srcPath}`, 'source', () => lstatSync(srcPath));
     if (st.isSymbolicLink()) {
       // The operator's input refused on purpose — coded, so it is never published as a VAT defect.
       throw new SkillSourceUnreadableError(
@@ -93,12 +119,18 @@ async function copyTreeNoSymlinks(src: string, dest: string): Promise<void> {
       );
     }
     if (st.isDirectory()) {
-      await withFsAttribution(`Staging ${srcPath}`, 'output', () => mkdir(destPath, { recursive: true }), 'staged');
-      await copyTreeNoSymlinks(srcPath, destPath);
+      await boundary.run(`stage ${srcPath}`, 'environment', () => mkdir(destPath, { recursive: true }));
+      await copyTreeNoSymlinks(srcPath, destPath, boundary);
     } else if (st.isFile()) {
-      // Read side first, coded as the input: an unreadable source is never the staging output's failure.
-      await readingSkillSource(srcPath, () => proveReadable(srcPath));
-      await withFsAttribution(`Staging ${srcPath}`, 'output', () => copyFile(srcPath, destPath), 'staged');
+      // Read side first, whole, through a handle judged by `fstat` (a named pipe is refused,
+      // never waited on): an unreadable source is never the staging copy's failure. The
+      // write is then the environment's by declaration, its mode the source's, as a copy keeps it.
+      // Buffered whole, not streamed: memory follows the largest file, which for a skill is small.
+      const bytes = await boundary.run(`read ${srcPath}`, 'source', () => readRegularFile(srcPath));
+      await withFsFault({ side: 'environment', action: `stage ${srcPath}` }, async () => {
+        await writeFile(destPath, bytes);
+        await chmod(destPath, st.mode & 0o7777);
+      });
     }
   });
 }

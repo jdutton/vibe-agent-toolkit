@@ -17,7 +17,6 @@ packages/agent-runtime/src/execute-wrapper.ts ExecuteWrapperConfig dead
 packages/agent-runtime/src/shared-validation.ts createValidatedExecute dead
 packages/agent-skills/src/evidence/index.ts detectInterpreter dead
 packages/agent-skills/src/evidence/index.ts extractMcpCommandFromMatchText dead
-packages/agent-skills/src/fs-attribution.ts WRITE_REMEDY dead
 packages/agent-skills/src/schemas/installed-plugins-registry.ts InstalledPluginsRegistry dead
 packages/agent-skills/src/schemas/installed-plugins-registry.ts InstalledPluginsRegistryJsonSchema dead
 packages/agent-skills/src/schemas/installed-plugins-registry.ts KNOWN_INSTALLATION_SCOPES dead
@@ -197,10 +196,7 @@ packages/cli/src/commands/skill/test/configure.ts SkillTestConfigureOptions dead
 packages/cli/src/commands/skill/test/run.ts BuildDeclaredSkillResult dead
 packages/cli/src/commands/skill/test/run.ts ResolvedSubject dead
 packages/cli/src/commands/skill/test/run.ts SkillTestRunOptions dead
-packages/cli/src/commands/skills/build.ts BuildStaging dead
 packages/cli/src/commands/skills/build.ts SkillsBuildCommandOptions dead
-packages/cli/src/commands/skills/build.ts StagingRecovery dead
-packages/cli/src/commands/skills/build.ts StagingResidue dead
 packages/cli/src/commands/skills/command-helpers.ts CommandContext dead
 packages/cli/src/commands/skills/package.ts SkillsPackageCommandOptions dead
 packages/cli/src/commands/skills/source-resolvers.ts ResolvedNpmSource dead

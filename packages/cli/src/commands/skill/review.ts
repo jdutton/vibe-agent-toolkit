@@ -10,7 +10,6 @@
  * the automated portion is the same code path used by `vat skills validate`.
  */
 
-import { statSync, type Stats } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
@@ -28,15 +27,15 @@ import {
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { isFilesystemAccessError, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { resolveProjectDeclaredEvalSuites, resolveSkillPackagingConfig } from '../../skill-resolution/packaging-config.js';
-import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
+import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { formatIssueAnchor } from '../../utils/issue-anchor.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { projectRootOrNull, unstatablePathRefusal } from '../../utils/project-root-policy.js';
+import { projectRootOrNull, requireInputPath } from '../../utils/project-root-policy.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 
@@ -72,13 +71,8 @@ export interface SkillReviewCommandOptions {
 export function resolveSkillPath(pathArg: string): string {
   const absolute = safePath.resolve(pathArg);
 
-  let stat: Stats;
-  try {
-    stat = statSync(absolute);
-  } catch (error) {
-    // Absent is the invocation's mistake; an `EACCES` parent is the input's refusal.
-    throw unstatablePathRefusal(absolute, error);
-  }
+  // Absent is the invocation's mistake; an `EACCES` parent is the input's refusal.
+  const stat = requireInputPath(absolute, { origin: 'argument', message: `Path does not exist: ${absolute}` });
 
   if (stat.isFile()) {
     if (!absolute.endsWith('.md')) {
@@ -92,19 +86,10 @@ export function resolveSkillPath(pathArg: string): string {
     // `stat`, not `existsSync`: a directory the OS will not read answers
     // `existsSync` false too, and that is not "no SKILL.md" — the user's own
     // directory refused the read, so it is INPUT_UNREADABLE.
-    try {
-      statSync(candidate);
-    } catch (error) {
-      if (isFilesystemAccessError(error) && !isPathAbsentError(error)) {
-        throw new CommandRefusalError('INPUT_UNREADABLE', `Cannot read ${pathArg}: ${errorMessageOf(error)}`, { cause: error });
-      }
-      if (!isPathAbsentError(error)) throw error;
-      throw new CommandRefusalError(
-        'USAGE_INVALID',
-        `No SKILL.md found in directory: ${pathArg}. Point at the skill directory (containing SKILL.md) or the SKILL.md file directly.`,
-        { cause: error },
-      );
-    }
+    requireInputPath(candidate, {
+      origin: 'argument',
+      message: `No SKILL.md found in directory: ${pathArg}. Point at the skill directory (containing SKILL.md) or the SKILL.md file directly.`,
+    });
     return candidate;
   }
 
@@ -295,6 +280,8 @@ export async function reviewCommand(
       // Same ruling as the discovery above: a review is acted on whole, so a
       // directory the registry crawl cannot list refuses it by name.
       unreadable: 'refuse',
+      // A review only reads the project.
+      outputs: [],
     });
     // The anchor root for a single-skill review is the skill's own project
     // boundary — the same base the packaging validator anchored its issues

@@ -6,12 +6,13 @@
  */
 
 
-import { cpSync, existsSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 
 import {
+  copyTree,
+  disposeTempDir,
   mkdirSyncReal,
   normalizedTmpdir,
-  promised,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
@@ -67,19 +68,14 @@ export class ManualDriverBase implements RuntimeDriver {
     mkdirSyncReal(this.bundleRoot, { recursive: true });
   }
 
-  install(skill: StagedSkill): Promise<{ ok: boolean; notes: string }> {
-    return promised(() => this.installNow(skill));
-  }
-
-  private installNow(skill: StagedSkill): { ok: boolean; notes: string } {
+  async install(skill: StagedSkill): Promise<{ ok: boolean; notes: string }> {
     if (!this.bundleRoot) throw new Error(`${this.constructor.name}.install called before setup`);
     const dir = safePath.join(this.bundleRoot, skill.entryId);
     if (existsSync(dir)) {
       this.currentBundleDir = dir;
       return { ok: true, notes: `bundle reused at ${dir}` };
     }
-    mkdirSyncReal(dir, { recursive: true });
-    cpSync(skill.rootDir, dir, { recursive: true });
+    await copyTree(skill.rootDir, dir, { links: 'preserve', side: 'source' });
     this.currentBundleDir = dir;
     return { ok: true, notes: `bundle prepared at ${dir}` };
   }
@@ -168,17 +164,15 @@ export class ManualDriverBase implements RuntimeDriver {
     };
   }
 
-  teardown(): Promise<void> {
-    return promised(() => this.teardownNow());
-  }
-
-  private teardownNow(): void {
+  async teardown(): Promise<void> {
     // Symmetric with ClaudeCodeDriver.teardown — without rmSync the tmpdir
     // accumulates one tree per run, and stale dirs from prior runs with the
     // same PID could short-circuit a future install() via the existsSync
     // reuse branch.
-    if (this.bundleRoot && existsSync(this.bundleRoot)) {
-      rmSync(this.bundleRoot, { recursive: true, force: true });
+    if (this.bundleRoot !== undefined) {
+      // A bundle left behind would be reused by the next setup(): the run stops on it.
+      const leftover = await disposeTempDir(this.bundleRoot);
+      if (leftover !== undefined) throw leftover;
     }
     this.bundleRoot = undefined;
     this.currentBundleDir = undefined;

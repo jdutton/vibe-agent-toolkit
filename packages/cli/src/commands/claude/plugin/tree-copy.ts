@@ -23,7 +23,7 @@ import { existsSync } from 'node:fs';
 import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 
 import { AGENT_INSTRUCTION_FILE_PATTERNS, toAnyDepthGlobs } from '@vibe-agent-toolkit/agent-skills';
-import { forEachInOrder, isGlob, isPathAbsentError, mapConcurrentFailingInOrder, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, isGlob, isLinkLoopError, isPathAbsentError, mapConcurrentFailingInOrder, safePath, toForwardSlash, VatError, withFsFault } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, crawlPathFilter } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 import picomatch from 'picomatch';
@@ -303,7 +303,9 @@ async function partitionByLstat(
 ): Promise<{ regular: SourceEntry[]; links: SourceEntry[] }> {
   const regular: SourceEntry[] = [];
   const links: SourceEntry[] = [];
-  const isLink = await mapConcurrentFailingInOrder(files, async (abs) => (await lstat(abs)).isSymbolicLink());
+  // The plugin's source is this build's INPUT: an entry the OS will not examine is the source's fault.
+  const isLink = await mapConcurrentFailingInOrder(files, (abs) =>
+    withFsFault({ side: 'source', origin: 'content', action: 'examine the plugin file', path: abs }, async () => (await lstat(abs)).isSymbolicLink()));
   for (const [index, abs] of files.entries()) {
     const entry = { abs, rel: toForwardSlash(safePath.relative(sourceDir, abs)) };
     (isLink[index] === true ? links : regular).push(entry);
@@ -339,7 +341,8 @@ async function sweepSymlinks(
 ): Promise<SourceEntry[]> {
   const found: SourceEntry[] = [];
   const walk = async (dir: string): Promise<void> => {
-    const entries = await readdir(dir, { withFileTypes: true });
+    // The plugin's source is this build's INPUT: a listing the OS refuses is the source's fault.
+    const entries = await withFsFault({ side: 'source', origin: 'content', action: 'list the plugin source', path: dir }, () => readdir(dir, { withFileTypes: true }));
     // In order: `found` is depth-first listing order.
     await forEachInOrder(entries, async (entry) => {
       const abs = safePath.join(dir, entry.name);
@@ -389,18 +392,13 @@ async function classifySymlink(
     // link whose target the OS REFUSES to resolve is neither — it resolves to
     // something this process may not see — and reporting it as dangling sends
     // the operator to fix a link that is fine.
-    if (!isPathAbsentError(error) && !isSymlinkLoop(error)) throw error;
+    if (!isPathAbsentError(error) && !isLinkLoopError(error)) throw error;
     return { path: link.rel, reason: 'unresolvable' };
   }
   if (!isUnderSource(real, realSource)) return { path: link.rel, reason: 'escapes-source' };
   if ((await stat(real)).isDirectory()) return { path: link.rel, reason: 'directory' };
   const target = toForwardSlash(safePath.relative(realSource, real));
   return shipped.has(target) ? 'file' : { path: link.rel, reason: 'target-excluded', target };
-}
-
-/** `realpath` on a link that chases its own tail. */
-function isSymlinkLoop(error: unknown): boolean {
-  return (error as { code?: unknown } | null)?.code === 'ELOOP';
 }
 
 /**
@@ -468,6 +466,7 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
   // Only the walk route lists directories; inside a repository `git ls-files`
   // answers and a refusal surfaces on the file copy instead.
   const files = await crawlDirectory({
+    outputs: [],
     baseDir: sourceDir,
     include: ['**/*'],
     exclude,
@@ -479,6 +478,7 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
         root: sourceDir,
         remedy:
           'Fix the permissions on that directory, or name it in the plugin\'s `exclude:` list to leave it out of the bundle deliberately.',
+        side: 'source',
       },
     },
   });

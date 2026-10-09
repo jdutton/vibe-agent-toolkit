@@ -472,6 +472,8 @@ export async function buildSkillsValidateRegistry(
       // `vat skills validate` acts on this registry as the whole population: a
       // directory it cannot list refuses the run by name, exit 2.
       unreadable: 'refuse',
+      // It only reads the project.
+      outputs: [],
       ...(populationSource !== undefined && { populationSource }),
     },
     config === undefined ? undefined : { config },
@@ -528,7 +530,7 @@ export async function buildSharedValidationContext(
   // lane must model a bundle that excludes EVERY declared suite, not just the
   // subject's. Present even for an empty batch, so no early return can drop it.
   if (skills.length === 0) {
-    return { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse' };
+    return { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse', outputs: [] };
   }
 
   const projectRoots = new Set<string>();
@@ -548,7 +550,8 @@ export async function buildSharedValidationContext(
     }
   }
 
-  const context: SkillValidationSharedContext = { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse' };
+  // Validation only reads the project.
+  const context: SkillValidationSharedContext = { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse', outputs: [] };
 
   // One tracker per repo; when the batch spans repos, skip rather than spawn
   // multiple `git ls-files`.

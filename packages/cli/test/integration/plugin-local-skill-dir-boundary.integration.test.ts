@@ -67,7 +67,7 @@ function perSkillSeverity(severity: string): string {
 async function build(tempDir: string): Promise<{ lines: string[]; run: ReturnType<typeof runClaudePluginBuild> }> {
   const lines: string[] = [];
   const logger = { ...silentLogger, info: (m: string) => { lines.push(m); } };
-  return { lines, run: runClaudePluginBuild(tempDir, { logger, verbose: true }) };
+  return { lines, run: runClaudePluginBuild(tempDir, { logger, verbose: true, runOutputs: [] }) };
 }
 
 describe('plugin build — LINK_OUTSIDE_SKILL_DIR on plugin-local skills (integration)', () => {

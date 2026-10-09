@@ -20,14 +20,14 @@ describe('prepareBinaries', () => {
     tempDir = suite.getTempDir();
   });
 
-  it('should copy and chmod binary files', () => {
+  it('should copy and chmod binary files', async () => {
     // Create source file
     const distDir = safePath.join(tempDir, 'dist', 'bin');
     fs.mkdirSync(distDir, { recursive: true });
     fs.writeFileSync(safePath.join(distDir, 'vat.js'), '#!/usr/bin/env node\nconsole.log("test")');
 
     // Run prepare
-    prepareBinaries(tempDir);
+    await prepareBinaries(tempDir);
 
     // Verify copy
     const binPath = safePath.join(distDir, 'vat');
@@ -40,14 +40,14 @@ describe('prepareBinaries', () => {
     }
   });
 
-  it('should handle missing dist directory gracefully', () => {
-    expect(() => prepareBinaries(tempDir)).toThrow(/dist\/bin directory not found/);
+  it('should handle missing dist directory gracefully', async () => {
+    await expect(prepareBinaries(tempDir)).rejects.toThrow(/dist\/bin directory not found/);
   });
 
-  it('should handle missing source file gracefully', () => {
+  it('should handle missing source file gracefully', async () => {
     const distDir = safePath.join(tempDir, 'dist', 'bin');
     fs.mkdirSync(distDir, { recursive: true });
 
-    expect(() => prepareBinaries(tempDir)).toThrow(/vat.js not found/);
+    await expect(prepareBinaries(tempDir)).rejects.toThrow(/vat.js not found/);
   });
 });

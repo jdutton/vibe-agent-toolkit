@@ -566,7 +566,7 @@ declaring one.
 **Symptoms**: `vat rag index`, `vat rag stats` or `vat rag query` refuses with `INPUT_UNREADABLE`, saying the `rag_chunks` table cannot be read (its files are damaged)
 
 **Solutions**:
-1. Clear and rebuild: `vat rag clear && vat rag index` — `clear` removes the database without opening it, so it works on a damaged one
+1. Clear and rebuild: `vat rag clear && vat rag index` — `clear` removes the database without opening it, so it works on a damaged one. It moves the database off its path whole before deleting it, so a deletion the OS stops leaves nothing at the database path: the refusal names where the rest is
 2. Check disk space (>100MB free)
 3. Verify no concurrent writes
 4. Update LanceDB: `bun update @lancedb/lancedb`

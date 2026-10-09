@@ -74,6 +74,7 @@ function crawlGit(
   options: { unreadable?: UnreadablePolicy; exclude?: string[]; includeUntracked?: boolean } = {},
 ): string[] {
   return crawlDirectorySync({
+    outputs: [],
     baseDir: root,
     include: ['**/*.md'],
     absolute: false,
@@ -81,7 +82,7 @@ function crawlGit(
     includeUntracked: options.includeUntracked ?? true,
     ...(options.exclude === undefined ? {} : { exclude: options.exclude }),
     // Refuse against the fixture root unless the case is about the degrade arm.
-    unreadable: options.unreadable ?? { refuse: { root, remedy: REMEDY } },
+    unreadable: options.unreadable ?? { refuse: { root, remedy: REMEDY, side: 'source' } },
   }).map((relativePath) => toForwardSlash(relativePath));
 }
 

@@ -14,7 +14,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
+import { diffSnapshots, installFaultFs, setupSyncTempDirSuite, snapshotTree } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { readSnapshot, snapshotPaths, writeSnapshot } from '../../src/qa-snapshot/store.js';
@@ -108,8 +108,8 @@ function makeManifest(overrides: Partial<SnapshotManifest> = {}): SnapshotManife
  * @param dir - Snapshot directory to write
  * @returns Nothing
  */
-function writeOneLaneSnapshot(dir: string): void {
-  writeSnapshot(
+async function writeOneLaneSnapshot(dir: string): Promise<void> {
+  await writeSnapshot(
     dir,
     makeManifest({ lanes: [laneEntry('resources', RESOURCES_ARTIFACT)] }),
     new Map([[RESOURCES_ARTIFACT, RESOURCES_TEXT]]),
@@ -131,7 +131,7 @@ describe('qa-snapshot store', () => {
     });
   });
 
-  it('round-trips a manifest and every artifact it names', () => {
+  it('round-trips a manifest and every artifact it names', async () => {
     const dir = snapshotDir();
     const manifest = makeManifest({
       lanes: [laneEntry('resources', RESOURCES_ARTIFACT)],
@@ -144,7 +144,7 @@ describe('qa-snapshot store', () => {
       [PARSE_FACT_ARTIFACT, PARSE_FACT_TEXT],
     ]);
 
-    writeSnapshot(dir, manifest, artifacts);
+    await writeSnapshot(dir, manifest, artifacts);
     const loaded = readSnapshot(dir);
 
     expect(loaded.dir).toBe(safePath.resolve(dir));
@@ -152,32 +152,30 @@ describe('qa-snapshot store', () => {
     expect(Object.fromEntries(loaded.artifacts)).toEqual(Object.fromEntries(artifacts));
   });
 
-  it('normalizes CRLF artifacts to LF on read', () => {
+  it('normalizes CRLF artifacts to LF on read', async () => {
     const dir = snapshotDir();
-    writeOneLaneSnapshot(dir);
+    await writeOneLaneSnapshot(dir);
 
     writeFileSync(artifactPath(dir, RESOURCES_ARTIFACT), 'a\r\nb\r\n', 'utf8');
 
     expect(readSnapshot(dir).artifacts.get(RESOURCES_ARTIFACT)).toBe('a\nb\n');
   });
 
-  it('refuses to write into a non-empty directory that is not a snapshot, and leaves it untouched', () => {
+  it('refuses to write into a non-empty directory that is not a snapshot, and leaves it untouched', async () => {
     const dir = snapshotDir();
     mkdirSyncReal(dir, { recursive: true });
     const stray = safePath.join(safePath.resolve(dir), 'notes.txt');
     writeFileSync(stray, STRAY_TEXT, 'utf8');
 
-    expect(() => {
-      writeSnapshot(dir, makeManifest(), new Map());
-    }).toThrow(/not a snapshot directory/i);
+    await expect(writeSnapshot(dir, makeManifest(), new Map())).rejects.toThrow(/not a snapshot directory/i);
 
     expect(readdirSync(safePath.resolve(dir))).toEqual(['notes.txt']);
     expect(readFileSync(stray, 'utf8')).toBe(STRAY_TEXT);
   });
 
-  it('drops an artifact the new manifest does not name when re-writing a snapshot', () => {
+  it('drops an artifact the new manifest does not name when re-writing a snapshot', async () => {
     const dir = snapshotDir();
-    writeSnapshot(
+    await writeSnapshot(
       dir,
       makeManifest({
         lanes: [laneEntry('resources', RESOURCES_ARTIFACT), laneEntry('audit', AUDIT_ARTIFACT)],
@@ -189,16 +187,42 @@ describe('qa-snapshot store', () => {
     );
     expect(existsSync(artifactPath(dir, AUDIT_ARTIFACT))).toBe(true);
 
-    writeOneLaneSnapshot(dir);
+    await writeOneLaneSnapshot(dir);
 
     // A survivor would read to a later comparison as "unchanged".
     expect(existsSync(artifactPath(dir, AUDIT_ARTIFACT))).toBe(false);
     expect([...readSnapshot(dir).artifacts.keys()]).toEqual([RESOURCES_ARTIFACT]);
   });
 
-  it('refuses to load a snapshot whose manifest names a missing artifact, naming the file', () => {
+  it('leaves the previous snapshot byte-equal when a re-capture cannot be written', async () => {
     const dir = snapshotDir();
-    writeSnapshot(
+    await writeOneLaneSnapshot(dir);
+    const before = snapshotTree(safePath.resolve(dir));
+    // The new artifacts are written into the oracle's staged tree beside it: refuse one there.
+    const session = installFaultFs({
+      within: safePath.resolve(dir),
+      faults: [{ family: 'write', path: (path) => path.includes('/.oracle.vat-staged-'), errno: 'ENOSPC' }],
+    });
+    try {
+      await expect(writeSnapshot(dir, makeManifest({ lanes: [laneEntry('audit', AUDIT_ARTIFACT)] }), new Map([[AUDIT_ARTIFACT, AUDIT_TEXT]])))
+        .rejects.toMatchObject({ code: 'FS_FAULT' });
+    } finally {
+      session.restore();
+    }
+
+    expect(diffSnapshots(before, snapshotTree(safePath.resolve(dir)))).toEqual([]);
+    expect([...readSnapshot(dir).artifacts.keys()]).toEqual([RESOURCES_ARTIFACT]);
+  });
+
+  it('refuses an artifact outside the oracle directory, writing nothing', async () => {
+    const dir = snapshotDir();
+    await expect(writeSnapshot(dir, makeManifest(), new Map([['loose.txt', 'x']]))).rejects.toThrow(/not under oracle\//);
+    expect(existsSync(safePath.resolve(dir))).toBe(false);
+  });
+
+  it('refuses to load a snapshot whose manifest names a missing artifact, naming the file', async () => {
+    const dir = snapshotDir();
+    await writeSnapshot(
       dir,
       makeManifest({ lanes: [laneEntry('resources', RESOURCES_ARTIFACT)] }),
       new Map(),
@@ -207,13 +231,13 @@ describe('qa-snapshot store', () => {
     expect(() => readSnapshot(dir)).toThrow(RESOURCES_ARTIFACT);
   });
 
-  it('refuses a manifest from the build that still stamped a formatVersion', () => {
+  it('refuses a manifest from the build that still stamped a formatVersion', async () => {
     // The strict schema does this now, and does it without an integer anybody
     // had to move. Before, `formatVersion` sat in front of a blind
     // `parsed as SnapshotManifest` cast — so a manifest whose SHAPE was wrong
     // sailed through as long as the number matched.
     const dir = snapshotDir();
-    writeOneLaneSnapshot(dir);
+    await writeOneLaneSnapshot(dir);
     writeFileSync(
       snapshotPaths(dir).manifest,
       JSON.stringify({ ...makeManifest(), formatVersion: 2 }),
@@ -224,9 +248,9 @@ describe('qa-snapshot store', () => {
     expect(() => readSnapshot(dir)).toThrow(/Not a manifest this build can read/);
   });
 
-  it('refuses a manifest missing a field this build requires — the case the integer never caught', () => {
+  it('refuses a manifest missing a field this build requires — the case the integer never caught', async () => {
     const dir = snapshotDir();
-    writeOneLaneSnapshot(dir);
+    await writeOneLaneSnapshot(dir);
     const withoutPlatform = Object.fromEntries(
       Object.entries(makeManifest()).filter(([key]) => key !== 'platform'),
     );
@@ -235,9 +259,9 @@ describe('qa-snapshot store', () => {
     expect(() => readSnapshot(dir)).toThrow(/platform/);
   });
 
-  it('refuses a lane naming an enumeration route this build does not model', () => {
+  it('refuses a lane naming an enumeration route this build does not model', async () => {
     const dir = snapshotDir();
-    writeOneLaneSnapshot(dir);
+    await writeOneLaneSnapshot(dir);
     const manifest = makeManifest({ lanes: [laneEntry('resources', RESOURCES_ARTIFACT)] });
     writeFileSync(
       snapshotPaths(dir).manifest,

@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, TREE_DEST_OCCUPIED_CODE } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { importSkillToAgent } from '../src/import.js';
@@ -10,13 +10,13 @@ import { setupTempDir } from './test-helpers.js';
 const { getTempDir } = setupTempDir('import-unit-');
 
 describe('importSkillToAgent', () => {
-  it('should return error for invalid YAML frontmatter', () => {
+  it('should return error for invalid YAML frontmatter', async () => {
     const tmp = getTempDir();
     const skillPath = safePath.join(tmp, 'SKILL.md');
     // Write content with syntactically invalid YAML (unclosed bracket)
     fs.writeFileSync(skillPath, '---\nname: [invalid yaml\n---\n# Skill');
 
-    const result = importSkillToAgent({ skillPath });
+    const result = await importSkillToAgent({ skillPath });
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -25,8 +25,8 @@ describe('importSkillToAgent', () => {
     }
   });
 
-  it('should return error when file does not exist', () => {
-    const result = importSkillToAgent({ skillPath: '/nonexistent/SKILL.md' });
+  it('should return error when file does not exist', async () => {
+    const result = await importSkillToAgent({ skillPath: '/nonexistent/SKILL.md' });
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -35,32 +35,33 @@ describe('importSkillToAgent', () => {
     }
   });
 
-  it('refuses a directory where the SKILL.md should be as the input\'s refusal, never an uncoded throw', () => {
-    const result = importSkillToAgent({ skillPath: getTempDir() });
+  it('refuses a directory where the SKILL.md should be as the input\'s refusal, never an uncoded throw', async () => {
+    const result = await importSkillToAgent({ skillPath: getTempDir() });
 
     expect(result).toMatchObject({ success: false, refusal: 'INPUT_UNREADABLE' });
   });
 
-  it('refuses an existing agent.yaml without force as the invocation\'s mistake, and leaves it alone', () => {
+  // The plan's preflight refuses it before anything is written: the CLI publishes it USAGE_INVALID.
+  it('refuses an existing agent.yaml without force by the plan\'s preflight, and leaves it alone', async () => {
     const tmp = getTempDir();
     const skillPath = safePath.join(tmp, 'SKILL.md');
     const agentPath = safePath.join(tmp, 'agent.yaml');
     fs.writeFileSync(skillPath, '---\nname: kept\ndescription: Keeps things. Use when keeping.\n---\n# kept\n');
     fs.writeFileSync(agentPath, 'kept: true\n');
 
-    const result = importSkillToAgent({ skillPath });
-
-    expect(result).toMatchObject({ success: false, refusal: 'USAGE_INVALID' });
+    await expect(importSkillToAgent({ skillPath })).rejects.toMatchObject({ code: TREE_DEST_OCCUPIED_CODE });
     expect(fs.readFileSync(agentPath, 'utf-8')).toBe('kept: true\n');
+    expect(fs.readdirSync(tmp).toSorted((a, b) => a.localeCompare(b))).toEqual(['agent.yaml', 'SKILL.md']);
   });
 
-  it('refuses an --output whose directory does not exist as the invocation\'s mistake', () => {
+  // The plan makes the directory an --output goes in, as every verb with an output does.
+  it('writes into an --output whose directory does not exist yet, making it', async () => {
     const tmp = getTempDir();
     const skillPath = safePath.join(tmp, 'SKILL.md');
     fs.writeFileSync(skillPath, '---\nname: kept\ndescription: Keeps things. Use when keeping.\n---\n# kept\n');
+    const agentPath = safePath.join(tmp, 'never-created', 'agent.yaml');
 
-    const result = importSkillToAgent({ skillPath, outputPath: safePath.join(tmp, 'never-created', 'agent.yaml') });
-
-    expect(result).toMatchObject({ success: false, refusal: 'USAGE_INVALID' });
+    expect(await importSkillToAgent({ skillPath, outputPath: agentPath })).toEqual({ success: true, agentPath });
+    expect(fs.readFileSync(agentPath, 'utf-8')).toContain('name: kept');
   });
 });

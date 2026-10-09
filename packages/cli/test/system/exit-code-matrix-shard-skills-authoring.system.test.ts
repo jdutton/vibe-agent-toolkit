@@ -9,12 +9,18 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
+
 import {
   exitCodeTheContractGives,
   expectScenarioEndsOnItsDerivedCode,
   MATRIX_SCENARIO_TIMEOUT_MS,
   useExitCodeMatrixShard,
 } from './test-helpers/exit-code-matrix.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-17-');
 
 // `expectScenarioEndsOnItsDerivedCode` asserts status, refusal code, gate and derived exit code; the call
 // site checks the exit code against the contract's literal rules over the findings list, independent of the derivation.

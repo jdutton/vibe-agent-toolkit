@@ -4,9 +4,18 @@
  */
 
 
-import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  applyTreePlan,
+  copyTree,
+  disposeTempDir,
+  mkdirSyncReal,
+  normalizedTmpdir,
+  planTreeChanges,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
 
 import type { StagedSkill } from '../../corpus/fetch-sources.js';
 
@@ -36,23 +45,21 @@ export function createTempProfile(): TempProfile {
  * description fire for an unrelated prompt, contaminating per-skill rows in
  * the matrix.
  */
-export function resetSkillsDir(profile: TempProfile): void {
-  if (existsSync(profile.skillsDir)) {
-    rmSync(profile.skillsDir, { recursive: true, force: true });
-  }
+export async function resetSkillsDir(profile: TempProfile): Promise<void> {
+  // The profile is this harness's own: whatever the skills dir holds goes, whole.
+  await applyTreePlan(await planTreeChanges([{ op: 'remove', dest: profile.skillsDir, ownership: { kind: 'vat-state' }, label: 'profile skills' }]));
   mkdirSyncReal(profile.skillsDir, { recursive: true });
 }
 
-export function installSkillIntoProfile(profile: TempProfile, skill: StagedSkill, skillId: string): string {
-  resetSkillsDir(profile);
+export async function installSkillIntoProfile(profile: TempProfile, skill: StagedSkill, skillId: string): Promise<string> {
+  await resetSkillsDir(profile);
   const dest = safePath.join(profile.skillsDir, skillId);
-  mkdirSyncReal(dest, { recursive: true });
-  cpSync(skill.rootDir, dest, { recursive: true });
+  await copyTree(skill.rootDir, dest, { links: 'preserve', side: 'source' });
   return dest;
 }
 
-export function teardownTempProfile(profile: TempProfile): void {
-  if (existsSync(profile.homeDir)) {
-    rmSync(profile.homeDir, { recursive: true, force: true });
-  }
+export async function teardownTempProfile(profile: TempProfile): Promise<void> {
+  // A profile left in the temp dir would leak into the next attempt's matrix: the run stops on it.
+  const leftover = await disposeTempDir(profile.homeDir);
+  if (leftover !== undefined) throw leftover;
 }

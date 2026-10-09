@@ -4,40 +4,39 @@
  * Discovers and parses project configuration files with directory tree walk-up.
  */
 
-import { findConfigFile, isFilesystemAccessError, VatError } from '@vibe-agent-toolkit/utils';
+import { findConfigFile, type FsFaultContext, type FsSide, VatError, withFsFault, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 import { readTextContent, readTextContentSync } from '@vibe-agent-toolkit/utils/fs';
 import { parse as parseYaml } from 'yaml';
 
-import { CONFIG_LOAD_CODE, CONFIG_UNREADABLE_CODE, parseConfigAllowingUnknownKeys } from './config-issues.js';
+import { CONFIG_LOAD_CODE, parseConfigAllowingUnknownKeys } from './config-issues.js';
 import { ProjectConfigSchema, type ProjectConfig } from './schemas/project-config.js';
 
 /**
- * Code a failed config read: an errno is about the adopter's own file, so it
- * becomes {@link CONFIG_UNREADABLE_CODE}; anything else is a defect and
+ * How a failed config read is classified: an errno is about the adopter's own
+ * file — a `source` fault named by config for a verb that reads it, a
+ * `destination` fault for the verb that edits it; anything else is a defect and
  * propagates as thrown.
  */
-function configReadFailure(configPath: string, error: unknown): unknown {
-  if (!isFilesystemAccessError(error)) return error;
-  const detail = error instanceof Error ? error.message : String(error);
-  return new VatError(CONFIG_UNREADABLE_CODE, `Cannot read config file ${configPath}: ${detail}`, { cause: error });
+function configRead(configPath: string, side: FsSide): FsFaultContext {
+  return { side, origin: 'config', action: `read config file ${configPath}`, path: configPath };
 }
 
 /**
  * Read a `vibe-agent-toolkit.config.yaml` through the one decoder — an adopter's
  * config may be UTF-16LE (PowerShell 5.1's default) or BOM-prefixed — coding a
  * read the OS refused. The ONE config read every reader shares, so one broken
- * file gets one refusal code whichever verb met it.
+ * file is classified the same way by every verb that reads it — `INPUT_UNREADABLE`
+ * as a source; the one verb that edits it (`vat skill test configure`, unless
+ * `--print`) reads it as its destination, `RUN_INCOMPLETE`.
  *
  * @param configPath - Path to the config file
+ * @param side - `destination` when the verb reads the config to edit it (`vat skill test
+ *   configure`): a refusal is then the run not finishing, not the input's fault
  * @returns The decoded text
- * @throws `VatError` `CONFIG_UNREADABLE` when the OS refuses the read
+ * @throws `FsFaultError` (origin `config`, on `side`) when the OS refuses the read
  */
-export async function readConfigText(configPath: string): Promise<string> {
-  try {
-    return (await readTextContent(configPath)).text;
-  } catch (error) {
-    throw configReadFailure(configPath, error);
-  }
+export function readConfigText(configPath: string, side: FsSide = 'source'): Promise<string> {
+  return withFsFault(configRead(configPath, side), async () => (await readTextContent(configPath)).text);
 }
 
 /**
@@ -45,14 +44,10 @@ export async function readConfigText(configPath: string): Promise<string> {
  *
  * @param configPath - Path to the config file
  * @returns The decoded text
- * @throws `VatError` `CONFIG_UNREADABLE` when the OS refuses the read
+ * @throws `FsFaultError` (side `source`, origin `config`) when the OS refuses the read
  */
 export function readConfigTextSync(configPath: string): string {
-  try {
-    return readTextContentSync(configPath).text;
-  } catch (error) {
-    throw configReadFailure(configPath, error);
-  }
+  return withFsFaultSync(configRead(configPath, 'source'), () => readTextContentSync(configPath).text);
 }
 
 /**
@@ -70,7 +65,7 @@ export function readConfigTextSync(configPath: string): string {
  * @param configPath - Absolute path to config file
  * @param onUnknownKeys - Receives a warning when unknown keys were dropped
  * @returns Parsed and validated configuration
- * @throws `VatError` `CONFIG_UNREADABLE` if the OS refuses the read; `VatError` `CONFIG_LOAD` if YAML is
+ * @throws `FsFaultError` (side `source`, origin `config`) if the OS refuses the read; `VatError` `CONFIG_LOAD` if YAML is
  *   invalid, or validation fails for any reason other than an unknown key
  *
  * @example

@@ -4,7 +4,7 @@
 
 import { importSkillToAgent } from '@vibe-agent-toolkit/agent-skills';
 import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isVatError, safePath, TREE_DEST_OCCUPIED_CODE } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
@@ -24,10 +24,16 @@ const GATE: Gate = { strict: false };
 /** One skill per run. */
 const SKILLS_IMPORTED = 1;
 
-export function importCommand(
+/** An agent.yaml already at the output without `--force`: the invocation's to fix, saying how. */
+function occupiedOutputRefusal(error: unknown): unknown {
+  if (!isVatError(error, TREE_DEST_OCCUPIED_CODE)) return error;
+  return new CommandRefusalError('USAGE_INVALID', `${error.message}. Use --force to overwrite.`, { cause: error });
+}
+
+export async function importCommand(
   skillPath: string,
   options: ImportCommandOptions
-): void {
+): Promise<void> {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
@@ -44,7 +50,9 @@ export function importCommand(
       importOptions.outputPath = safePath.resolve(options.output);
     }
 
-    const result = importSkillToAgent(importOptions);
+    const result = await importSkillToAgent(importOptions).catch((error: unknown) => {
+      throw occupiedOutputRefusal(error);
+    });
 
     // The library names the refusal where it was raised; nothing was written.
     if (!result.success) throw new CommandRefusalError(result.refusal, result.error);

@@ -7,6 +7,7 @@
 import { chmodSync, existsSync, readFileSync } from 'node:fs';
 
 
+import { VAT_MARKETPLACE_MARKER } from '@vibe-agent-toolkit/claude-marketplace';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -61,6 +62,8 @@ function setupInstalledPlugin(
   writeTestFile(safePath.join(claudeDir, 'settings.json'), JSON.stringify({
     enabledPlugins: { [pluginKey]: true },
   }));
+  // VAT's witness that it made the marketplace, as a plugin install writes it.
+  writeTestFile(safePath.join(pluginsDir, 'marketplaces', marketplace, VAT_MARKETPLACE_MARKER), 'vat\n');
 }
 
 /** A fresh fake HOME holding an empty `.claude/`. */
@@ -75,9 +78,9 @@ async function runUninstall(
   binPath: string,
   fakeHome: string,
   args: string[],
-): Promise<{ status: number | null; report: ReturnType<typeof PLUGIN_UNINSTALL_REPORT_SCHEMA.parse> }> {
+): Promise<{ status: number | null; output: string; report: ReturnType<typeof PLUGIN_UNINSTALL_REPORT_SCHEMA.parse> }> {
   const { result, parsed } = await executeCliAndParseYaml(binPath, ['claude', 'plugin', 'uninstall', ...args], { env: fakeHomeEnv(fakeHome) });
-  return { status: result.status, report: PLUGIN_UNINSTALL_REPORT_SCHEMA.parse(parsed) };
+  return { status: result.status, output: `${result.stdout}${result.stderr}`, report: PLUGIN_UNINSTALL_REPORT_SCHEMA.parse(parsed) };
 }
 
 describe('claude plugin uninstall command (system test)', () => {
@@ -117,10 +120,15 @@ describe('claude plugin uninstall command (system test)', () => {
     const fakeHome = createUninstallTestHome(createTempDir);
     setupInstalledPlugin(fakeHome, 'dry-skill', 'dry-market');
 
-    const { status, report } = await runUninstall(binPath, fakeHome, ['dry-skill@dry-market', '--dry-run']);
+    const { status, output, report } = await runUninstall(binPath, fakeHome, ['dry-skill@dry-market', '--dry-run']);
 
     expect(status).toBe(0);
     expect(report.data).toStrictEqual({ dryRun: true, plugins: [{ key: 'dry-skill@dry-market', removed: true }] });
+    // The dry run prints the plan the real run would apply: one describe() line per directory.
+    const plugins = safePath.join(fakeHome, '.claude', 'plugins');
+    expect(output).toContain(`[dry-run] subsumed marketplace copy of dry-skill@dry-market ${plugins}/marketplaces/dry-market/plugins/dry-skill (parked by remove marketplace dry-market)`);
+    expect(output).toContain(`[dry-run] remove cache of dry-skill@dry-market ${plugins}/cache/dry-market/dry-skill`);
+    expect(output).toContain(`[dry-run] remove marketplace dry-market ${plugins}/marketplaces/dry-market`);
     // Files must still exist — dry-run must not remove anything
     expect(
       existsSync(safePath.join(fakeHome, '.claude', 'plugins', 'marketplaces', 'dry-market', 'plugins', 'dry-skill'))

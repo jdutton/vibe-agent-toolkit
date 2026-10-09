@@ -16,8 +16,8 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { installFaultFs, withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EvalFragment } from '../../src/skill-test/eval-fragment.js';
 import { EvalInputError, type EvalEntry } from '../../src/skill-test/eval-inputs.js';
@@ -36,7 +36,11 @@ import {
 } from '../../src/skill-test/run-harness.js';
 import type { SkippedEvalsSummary } from '../../src/skill-test/tier-plan.js';
 import type { ToolEvalReport } from '../../src/skill-test/tool-eval-schema.js';
-import { createTestPlugin, setupTempDir } from '../test-helpers.js';
+import { createTestPlugin, setupTempDir, useScratchTmpdir } from '../test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test (and every child
+// a test spawns), so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-5-');
 
 /** The test-facing seam — see `__internal` in run-harness.ts. */
 const {
@@ -584,24 +588,24 @@ const NOT_JSON = '{ not json';
 describe('assertVatWroteArtifacts', () => {
   const { getTempDir } = setupTempDir('vat-artifact-gate-');
 
-  it('does not ask about baseline.json on a run that never requested one', () => {
-    expect(() => assertVatWroteArtifacts(writeArtifacts(getTempDir()), false)).not.toThrow();
+  it('does not ask about baseline.json on a run that never requested one', async () => {
+    await expect(assertVatWroteArtifacts(writeArtifacts(getTempDir()), false)).resolves.toBeUndefined();
   });
 
   // Fail-CLOSED means the absence is the failure. An "if it exists, check it" gate
   // would pass on exactly the case that matters: vat asked for a baseline and wrote
   // nothing.
-  it('fails a baseline run whose baseline.json is missing', () => {
-    expect(() => assertVatWroteArtifacts(writeArtifacts(getTempDir()), true)).toThrow(/baseline\.json/);
+  it('fails a baseline run whose baseline.json is missing', async () => {
+    await expect(assertVatWroteArtifacts(writeArtifacts(getTempDir()), true)).rejects.toThrow(/baseline\.json/);
   });
 
-  it('accepts a well-formed baseline.json', () => {
+  it('accepts a well-formed baseline.json', async () => {
     const paths = writeArtifacts(getTempDir(), {
       ...EMPTY_GRADING,
       baselineIntegrity: CLEAN_INTEGRITY,
       baselineDelta: EMPTY_DELTA,
     });
-    expect(() => assertVatWroteArtifacts(paths, true)).not.toThrow();
+    await expect(assertVatWroteArtifacts(paths, true)).resolves.toBeUndefined();
   });
 
   // The gate is only worth adding because it validates the two blocks, which is
@@ -613,20 +617,20 @@ describe('assertVatWroteArtifacts', () => {
     // arithmetic refine instead and this row would prove nothing about the other.
     ['an arm total above its own denominator', { ...EMPTY_DELTA, with: { passed: 9, total: 3 }, delta: 9 }],
     ['a delta that is not the difference between the arms', { ...EMPTY_DELTA, delta: 7 }],
-  ])('fails a baseline.json carrying %s', (_label, baselineDelta) => {
+  ])('fails a baseline.json carrying %s', async (_label, baselineDelta) => {
     const paths = writeArtifacts(getTempDir(), {
       ...EMPTY_GRADING,
       baselineIntegrity: CLEAN_INTEGRITY,
       baselineDelta,
     });
-    expect(() => assertVatWroteArtifacts(paths, true)).toThrow(/baseline\.json.*schema/s);
+    await expect(assertVatWroteArtifacts(paths, true)).rejects.toThrow(/baseline\.json.*schema/s);
   });
 
   // An absent `baselineIntegrity` is precisely the "written before the check
   // existed" state the block was made unconditional to rule out.
-  it('fails a baseline.json with no integrity block at all', () => {
+  it('fails a baseline.json with no integrity block at all', async () => {
     const paths = writeArtifacts(getTempDir(), { ...EMPTY_GRADING, baselineDelta: EMPTY_DELTA });
-    expect(() => assertVatWroteArtifacts(paths, true)).toThrow(/baseline\.json/);
+    await expect(assertVatWroteArtifacts(paths, true)).rejects.toThrow(/baseline\.json/);
   });
 
   /**
@@ -635,11 +639,11 @@ describe('assertVatWroteArtifacts', () => {
    * artifact whose schema violation is BY DEFINITION a harness bug, indistinguishable
    * in a CI archive from a good one until the next run's wipe overwrote it.
    */
-  it('moves a schema-failing baseline.json aside instead of leaving it looking authoritative', () => {
+  it('moves a schema-failing baseline.json aside instead of leaving it looking authoritative', async () => {
     const bad = { ...EMPTY_GRADING, baselineIntegrity: CLEAN_INTEGRITY, baselineDelta: { ...EMPTY_DELTA, delta: 7 } };
     const paths = writeArtifacts(getTempDir(), bad);
 
-    expect(() => assertVatWroteArtifacts(paths, true)).toThrow(/baseline\.json/);
+    await expect(assertVatWroteArtifacts(paths, true)).rejects.toThrow(/baseline\.json/);
 
     expect(existsSync(paths.baselineOut), 'the rejected artifact kept its authoritative name').toBe(false);
     const quarantined = rejectedArtifactPath(paths.baselineOut);
@@ -650,13 +654,13 @@ describe('assertVatWroteArtifacts', () => {
   });
 
   // ...and the operator is TOLD where it went, since the throw is all they see.
-  it('names the quarantine path in the error it throws', () => {
+  it('names the quarantine path in the error it throws', async () => {
     const paths = writeArtifacts(getTempDir(), {
       ...EMPTY_GRADING,
       baselineIntegrity: CLEAN_INTEGRITY,
       baselineDelta: { ...EMPTY_DELTA, delta: 7 },
     });
-    expect(() => assertVatWroteArtifacts(paths, true)).toThrow(/\.rejected/);
+    await expect(assertVatWroteArtifacts(paths, true)).rejects.toThrow(/\.rejected/);
   });
 
   // Quarantine is best-effort on the way OUT of a failing run, so a refused rename
@@ -668,20 +672,29 @@ describe('assertVatWroteArtifacts', () => {
     const paths = writeArtifacts(getTempDir());
     writeFileSync(paths.gradingOut, NOT_JSON, 'utf-8');
 
-    await withSyncFsRefused('renameSync', paths.gradingOut, 'EPERM', () =>
-      withSyncFsRefused('rmSync', paths.gradingOut, 'EBUSY', () => {
-        expect(() => assertVatWroteArtifacts(paths, false)).toThrow(/could not be moved aside \(.*EPERM.*\) or removed \(.*EBUSY.*\)/);
-      }),
-    );
+    // The rename is `renameFileAtomic` (promise fs, where only the fault fs reaches it);
+    // the fallback removal of the one file is a plain `rmSync`.
+    const faults = installFaultFs({
+      within: getTempDir(),
+      // One rule per try (a fired rule is spent): win32 retries a refused rename up to 6 times.
+      faults: Array.from({ length: 6 }, () => ({ op: 'rename', path: (p: string) => p === paths.gradingOut, errno: 'EPERM' as const })),
+    });
+    try {
+      await withSyncFsRefused('rmSync', paths.gradingOut, 'EBUSY', async () => {
+        await expect(assertVatWroteArtifacts(paths, false)).rejects.toThrow(/could not be moved aside \(.*EPERM.*\) or removed \(.*EBUSY.*\)/);
+      });
+    } finally {
+      faults.restore();
+    }
     expect(existsSync(paths.gradingOut), 'the refusals were real: the file is still there').toBe(true);
   });
 
-  it('quarantines an unparseable artifact too, not only a schema-invalid one', () => {
+  it('quarantines an unparseable artifact too, not only a schema-invalid one', async () => {
     const resultsDir = getTempDir();
     const paths = writeArtifacts(resultsDir);
     writeFileSync(paths.gradingOut, NOT_JSON, 'utf-8');
 
-    expect(() => assertVatWroteArtifacts(paths, false)).toThrow(/grading\.json/);
+    await expect(assertVatWroteArtifacts(paths, false)).rejects.toThrow(/grading\.json/);
     expect(existsSync(paths.gradingOut)).toBe(false);
     expect(readFileSync(rejectedArtifactPath(paths.gradingOut), 'utf-8')).toBe(NOT_JSON);
   });
@@ -1602,24 +1615,61 @@ describe('buildPreflightInput', () => {
 // Harness cleanup
 // ---------------------------------------------------------------------------
 
+/**
+ * Run `cleanup` with every removal of `dir` refused with `errno` — the first try and the retry
+ * after the owner's modes are granted — and return the leftovers it handed back. It must
+ * resolve, and write nothing: cleanup RETURNS what stays, for the run's result to report.
+ */
+async function refusingRemoval(dir: string, errno: 'EPERM' | 'EACCES', cleanup: () => Promise<unknown[]>): Promise<unknown[]> {
+  // One rule per try: a rule that has fired is spent, so the retry meets the second.
+  const refused = { op: 'rm', path: (p: string) => p === dir, errno };
+  const faults = installFaultFs({ within: dir, faults: [refused, { ...refused }] });
+  let leftovers: unknown[] = [];
+  try {
+    const written = await captureStderr(async () => {
+      leftovers = await cleanup();
+    });
+    expect(written).toBe('');
+  } finally {
+    faults.restore();
+  }
+  return leftovers;
+}
+
+/** Each leftover is the classified fault naming `dir`, with the errno the OS refused with. */
+function expectLeftoverNaming(leftovers: unknown[], dir: string, errno: string): void {
+  expect(leftovers).toHaveLength(1);
+  expect(leftovers[0]).toMatchObject({ code: 'FS_FAULT', side: 'environment', errno });
+  expect((leftovers[0] as Error).message).toContain(dir);
+}
+
 describe('cleanupHarness', () => {
   const { getTempDir } = setupTempDir('vat-cleanup-test-');
 
-  it('removes the harness dir by default (created, not kept)', () => {
+  // ⛔ Disposal paths: the temp directory is this suite's scratch, so nothing here — and no
+  // mutation of the code under test — can reach the real one.
+  beforeEach(() => {
+    for (const name of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(name, getTempDir());
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('removes the harness dir by default (created, not kept)', async () => {
     const root = makeHarnessDir(getTempDir(), 'default');
-    cleanupHarness(root, { keep: false, created: true });
+    await cleanupHarness(root, { keep: false, created: true });
     expect(existsSync(root)).toBe(false);
   });
 
   // The artifacts are the run's PRODUCT — `baseline.json` is the number three
   // rounds of isolation work exist to make honest, and this function used to
   // delete it on the documented invocation before the caller ever saw it.
-  it('retains results/ while still evicting the staged bytes around it', () => {
+  it('retains results/ while still evicting the staged bytes around it', async () => {
     const root = makeHarnessDir(getTempDir(), 'with-results');
     const results = makePlainDir(root, RETAINED_RESULTS_DIRNAME);
     writeFileSync(safePath.join(results, 'baseline.json'), '{}', 'utf-8');
 
-    cleanupHarness(root, { keep: false, created: true });
+    await cleanupHarness(root, { keep: false, created: true });
 
     expect(existsSync(safePath.join(results, 'baseline.json'))).toBe(true);
     expect(existsSync(safePath.join(root, STAGED_FILE))).toBe(false);
@@ -1627,51 +1677,46 @@ describe('cleanupHarness', () => {
 
   // A run that ended before Step 7 (preflight refusal, a throw during staging) has
   // no results/, so retaining the root would leave an empty 0700 dir in tmp forever.
-  it('removes the root outright when there is no results/ to retain', () => {
+  it('removes the root outright when there is no results/ to retain', async () => {
     const root = makeHarnessDir(getTempDir(), 'no-results');
-    cleanupHarness(root, { keep: false, created: true });
+    await cleanupHarness(root, { keep: false, created: true });
     expect(existsSync(root)).toBe(false);
   });
 
-  it('retains the dir when keep is set', () => {
+  it('retains the dir when keep is set', async () => {
     const root = makeHarnessDir(getTempDir(), 'kept');
-    cleanupHarness(root, { keep: true, created: true });
+    await cleanupHarness(root, { keep: true, created: true });
     expect(existsSync(root)).toBe(true);
   });
 
-  it('retains a user-supplied dir (created=false, e.g. --out/--workdir)', () => {
+  it('retains a user-supplied dir (created=false, e.g. --out/--workdir)', async () => {
     const root = makeHarnessDir(getTempDir(), 'user-owned');
-    cleanupHarness(root, { keep: false, created: false });
+    await cleanupHarness(root, { keep: false, created: false });
     expect(existsSync(root)).toBe(true);
   });
 
-  it('is a no-op (no throw) on an already-removed dir', () => {
+  it('is a no-op (no throw) on an already-removed dir', async () => {
     const root = safePath.join(getTempDir(), 'missing');
-    expect(() => cleanupHarness(root, { keep: false, created: true })).not.toThrow();
+    await expect(cleanupHarness(root, { keep: false, created: true })).resolves.toEqual([]);
   });
 
   // Best-effort from a `finally` is right; SILENT was not. A harness dir the OS
   // refused to remove is staged untrusted bytes left in tmp, and the operator who
   // saw nothing cannot connect the leftover to this run.
-  it('reports a refused removal on stderr (the run\'s result stands) instead of swallowing it', async () => {
+  it('returns a refused removal as a leftover naming it (the run\'s result stands), never swallowing it', async () => {
     const root = makeHarnessDir(getTempDir(), 'refused');
-    const written = await captureStderr(() =>
-      withSyncFsRefused('rmSync', root, 'EPERM', () => {
-        expect(() => cleanupHarness(root, { keep: false, created: true })).not.toThrow();
-      }),
-    );
-    expect(written).toMatch(/harness cleanup step failed.*EPERM/);
-    expect(written).toContain("the run's result stands");
+    const leftovers = await refusingRemoval(root, 'EPERM', () => cleanupHarness(root, { keep: false, created: true }));
+    expectLeftoverNaming(leftovers, root, 'EPERM');
   });
 
   it(
     'does not follow a symlinked root — leaves the link target intact',
-    ({ skip }) => {
+    async ({ skip }) => {
       const cap = symlinkCapability() ?? skip();
       const target = makeHarnessDir(getTempDir(), 'symlink-target');
       const link = safePath.join(getTempDir(), 'symlink-root');
       createSymlink(cap, target, link);
-      cleanupHarness(link, { keep: false, created: true });
+      await cleanupHarness(link, { keep: false, created: true });
       // The symlink target (and its contents) must survive — cleanup must not
       // follow a swapped symlink out of tmp.
       expect(existsSync(safePath.join(target, STAGED_FILE))).toBe(true);
@@ -1682,22 +1727,27 @@ describe('cleanupHarness', () => {
 describe('removeVatOnlyDir', () => {
   const { getTempDir } = setupTempDir('vat-remove-vat-only-');
 
-  it('removes the dir, and is a no-op on an absent one or undefined', () => {
-    const dir = makeHarnessDir(getTempDir(), 'gone');
-    removeVatOnlyDir(dir);
-    expect(existsSync(dir)).toBe(false);
-    expect(() => removeVatOnlyDir(safePath.join(getTempDir(), 'missing'))).not.toThrow();
-    expect(() => removeVatOnlyDir(undefined)).not.toThrow();
+  // ⛔ Disposal paths: the temp directory is this suite's scratch, so nothing here — and no
+  // mutation of the code under test — can reach the real one.
+  beforeEach(() => {
+    for (const name of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(name, getTempDir());
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
-  it('reports a refused removal on stderr instead of swallowing it', async () => {
+  it('removes the dir, and is a no-op on an absent one or undefined', async () => {
+    const dir = makeHarnessDir(getTempDir(), 'gone');
+    await removeVatOnlyDir(dir);
+    expect(existsSync(dir)).toBe(false);
+    await expect(removeVatOnlyDir(safePath.join(getTempDir(), 'missing'))).resolves.toEqual([]);
+    await expect(removeVatOnlyDir(undefined)).resolves.toEqual([]);
+  });
+
+  it('returns a refused removal as a leftover naming it, never swallowing it', async () => {
     const dir = makeHarnessDir(getTempDir(), 'refused');
-    const written = await captureStderr(() =>
-      withSyncFsRefused('rmSync', dir, 'EACCES', () => {
-        expect(() => removeVatOnlyDir(dir)).not.toThrow();
-      }),
-    );
-    expect(written).toMatch(/harness cleanup step failed.*EACCES/);
+    const leftovers = await refusingRemoval(dir, 'EACCES', () => removeVatOnlyDir(dir));
+    expectLeftoverNaming(leftovers, dir, 'EACCES');
   });
 });
 
@@ -1835,7 +1885,16 @@ describe('formatRunCostSuffix', () => {
 describe('stageWorkspacesForRun', () => {
   const { getTempDir } = setupTempDir('vat-wsrun-');
 
-  it('materializes declared eval files under the harness workspaces dir', () => {
+  // ⛔ Disposal paths: the temp directory is this suite's scratch, so nothing here — and no
+  // mutation of the code under test — can reach the real one.
+  beforeEach(() => {
+    for (const name of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(name, getTempDir());
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('materializes declared eval files under the harness workspaces dir', async () => {
     const root = getTempDir();
     const evalsDir = safePath.join(root, 'evals');
     mkdirSyncReal(safePath.join(evalsDir, 'fixtures'), { recursive: true });
@@ -1846,7 +1905,7 @@ describe('stageWorkspacesForRun', () => {
     }), 'utf-8');
     const harnessRoot = safePath.join(root, 'harness');
     mkdirSyncReal(harnessRoot, { recursive: true });
-    const { workspacesRoot, declaredEvalCount } = stageWorkspacesForRun(
+    const { workspacesRoot, declaredEvalCount } = await stageWorkspacesForRun(
       safePath.join(evalsDir, EVALS_JSON),
       harnessRoot,
       { with: ARM_DIRS.with },
@@ -1857,7 +1916,7 @@ describe('stageWorkspacesForRun', () => {
 
   // Under --baseline the control arm needs its own copy of the same inputs: the
   // arms must start byte-identical and stay unable to observe each other.
-  it('stages an identical, separate workspace for each arm when baseline is on', () => {
+  it('stages an identical, separate workspace for each arm when baseline is on', async () => {
     const root = getTempDir();
     const evalsDir = safePath.join(root, 'evals-baseline');
     mkdirSyncReal(safePath.join(evalsDir, 'fixtures'), { recursive: true });
@@ -1869,7 +1928,7 @@ describe('stageWorkspacesForRun', () => {
     const harnessRoot = safePath.join(root, 'harness-baseline');
     mkdirSyncReal(harnessRoot, { recursive: true });
 
-    const { workspacesRoot } = stageWorkspacesForRun(safePath.join(evalsDir, EVALS_JSON), harnessRoot, ARM_DIRS);
+    const { workspacesRoot } = await stageWorkspacesForRun(safePath.join(evalsDir, EVALS_JSON), harnessRoot, ARM_DIRS);
 
     for (const [arm, dir] of Object.entries(ARM_DIRS)) {
       expect(
@@ -1879,7 +1938,7 @@ describe('stageWorkspacesForRun', () => {
     }
   });
 
-  it('throws EvalInputError when a declared eval file is absent', () => {
+  it('throws EvalInputError when a declared eval file is absent', async () => {
     const root = getTempDir();
     const evalsDir = safePath.join(root, 'evals');
     mkdirSyncReal(evalsDir, { recursive: true });
@@ -1890,6 +1949,6 @@ describe('stageWorkspacesForRun', () => {
     }), 'utf-8');
     const harnessRoot = safePath.join(root, 'harness');
     mkdirSyncReal(harnessRoot, { recursive: true });
-    expect(() => stageWorkspacesForRun(evalsPath, harnessRoot, { with: ARM_DIRS.with })).toThrow(EvalInputError);
+    await expect(stageWorkspacesForRun(evalsPath, harnessRoot, { with: ARM_DIRS.with })).rejects.toThrow(EvalInputError);
   });
 });

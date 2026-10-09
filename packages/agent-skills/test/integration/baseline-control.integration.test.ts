@@ -34,7 +34,11 @@ import { BaselineDeltaSchema, type BaselineDelta } from '../../src/skill-test/ba
 import { runPreflight } from '../../src/skill-test/preflight.js';
 import { __internal, runSkillTestHarness, type RunHarnessOptions } from '../../src/skill-test/run-harness.js';
 import { makeHarnessFakeSpawn, SPAWN_TIMED_OUT, type HarnessFakeSpawnConfig } from '../skill-test/spawn-stub.js';
-import { setupTempDir } from '../test-helpers.js';
+import { setupTempDir, useScratchTmpdir } from '../test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test (and every child
+// a test spawns), so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-14-');
 
 const { RETAINED_RESULTS_DIRNAME } = __internal;
 

@@ -23,7 +23,7 @@
  */
 
 import tsparser from '@typescript-eslint/parser';
-import { resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
 import localRules from '@vibe-agent-toolkit/utils/eslint';
 import { ESLint } from 'eslint';
 import { describe, expect, it } from 'vitest';
@@ -31,6 +31,9 @@ import { describe, expect, it } from 'vitest';
 import { filesWithoutFinding } from './eslint-clean-files.js';
 
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..');
+
+/** A repo-relative path that names one source file: no trailing `/`, a script extension. */
+const SOURCE_FILE = /^[^*]+\.[cm]?[jt]s$/u;
 
 interface Ratchet {
   /** The rule whose option carries the list. */
@@ -49,6 +52,12 @@ const RATCHETS: readonly Ratchet[] = [
     option: 'allowFiles',
     probeFile: 'packages/cli/src/commands/doctor.ts',
     constant: 'COMMANDS_IMPORT_BOUNDARY_RATCHET',
+  },
+  {
+    rule: 'local/no-existssync',
+    option: 'allowFiles',
+    probeFile: 'packages/cli/src/commands/doctor.ts',
+    constant: 'NO_EXISTSSYNC_RATCHET',
   },
   {
     rule: 'local/no-io-in-unit-tier',
@@ -92,7 +101,8 @@ async function cleanWithoutExemption(ratchet: Ratchet, files: readonly string[])
     cwd: REPO_ROOT,
     overrideConfigFile: true,
     overrideConfig: [{
-      files: ['**/*.ts'],
+      // `.cts` too: a CommonJS-TypeScript source file can sit on a list (`no-existssync`).
+      files: ['**/*.ts', '**/*.cts'],
       languageOptions: { parser: tsparser, parserOptions: { ecmaVersion: 2024, sourceType: 'module' } },
       plugins: { local: localRules },
       // The repo's own options with ONLY the list lifted: a rule whose other
@@ -108,6 +118,14 @@ describe.each(RATCHETS)('$rule — its allowlist only names files that still nee
     // A seeded ratchet that resolves to nothing means the option was dropped
     // or renamed, and every entry would then be vacuously "clean".
     expect((await configuredList(ratchet)).length).toBeGreaterThan(0);
+  });
+
+  it('names source files, never a directory, in sorted order', async () => {
+    const list = await configuredList(ratchet);
+    // A directory entry would exempt every file under it, and none of them could ever be delisted.
+    expect(list.filter((entry) => !SOURCE_FILE.test(entry)), 'entries that do not name one source file').toEqual([]);
+    // Sorted (code-unit order), so an entry has one place and a duplicate or a near-duplicate sits beside its twin.
+    expect(list, `${ratchet.constant} is not sorted`).toEqual(list.toSorted(compareCodeUnits));
   });
 
   it('every listed file still trips the rule — remove the entry when it does not', async () => {

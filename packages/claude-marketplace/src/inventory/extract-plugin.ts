@@ -1,4 +1,4 @@
-import { existsSync, type Dirent } from 'node:fs';
+import type { Dirent } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 
 import type {
@@ -20,7 +20,7 @@ import {
 	type SharedRegistrySource,
 } from './extract-skill.js';
 import { type InventoryPopulation, type SharedPopulationSource } from './inventory-population.js';
-import { recordedFailure } from './recorded-failure.js';
+import { presenceOrRecord, recordedFailure, recordOnce } from './recorded-failure.js';
 import { ClaudePluginInventory, type ClaudeSkillInventory } from './types.js';
 
 type ParseErrors = ClaudePluginInventory['parseErrors'];
@@ -90,8 +90,12 @@ export async function extractClaudePluginInventory(
 ): Promise<ClaudePluginInventory> {
 	const { sharedRegistry, sharedPopulation, gitTrackerSource } = options;
 	const absolute = safePath.resolve(pluginPath);
+	const parseErrors: ParseErrors = [];
 
-	if (!existsSync(absolute)) {
+	const rootPresence = presenceOrRecord(absolute, parseErrors);
+	if (rootPresence !== 'present') {
+		// A refused probe has recorded its own row; only an absence "does not exist".
+		if (rootPresence === 'absent') parseErrors.push({ path: absolute, message: `plugin path does not exist: ${absolute}` });
 		return new ClaudePluginInventory({
 			path: absolute,
 			shape: 'claude-plugin',
@@ -100,20 +104,19 @@ export async function extractClaudePluginInventory(
 			discovered: { skills: [], commands: [], agents: [] },
 			references: [],
 			unexpected: { skillManifests: [], pluginManifests: [] },
-			parseErrors: [{ path: absolute, message: `plugin path does not exist: ${absolute}` }],
+			parseErrors,
 		});
 	}
 
-	const parseErrors: ParseErrors = [];
 	const manifestFilePath = safePath.join(absolute, '.claude-plugin', PLUGIN_JSON);
 	const { rawManifest, manifest } = await readManifest(manifestFilePath, parseErrors);
 
 	const rootSkillMd = safePath.join(absolute, SKILL_MD);
-	const hasRootSkill = existsSync(rootSkillMd);
+	const hasRootSkill = presenceOrRecord(rootSkillMd, parseErrors) === 'present';
 	const shape: ClaudePluginInventory['shape'] =
 		rawManifest !== undefined && hasRootSkill ? SHAPE_SKILL_CLAUDE_PLUGIN : 'claude-plugin';
 
-	const declared = buildDeclared(absolute, rawManifest);
+	const declared = buildDeclared({ base: absolute, parseErrors }, rawManifest);
 	const discovered = await buildDiscovered(
 		absolute,
 		shape,
@@ -145,7 +148,7 @@ type ManifestResult = {
 };
 
 async function readManifest(manifestFilePath: string, parseErrors: ParseErrors): Promise<ManifestResult> {
-	if (!existsSync(manifestFilePath)) {
+	if (presenceOrRecord(manifestFilePath, parseErrors) !== 'present') {
 		return { rawManifest: undefined, manifest: {} };
 	}
 
@@ -202,13 +205,19 @@ function emptyDeclared(): ClaudePluginInventory['declared'] {
 	};
 }
 
-function makeRef(base: string, manifestPath: string): ComponentRef {
+/** Where a manifest's declared paths resolve from, and where a refused probe of one is recorded. */
+interface RefBase {
+	base: string;
+	parseErrors: ParseErrors;
+}
+
+function makeRef({ base, parseErrors }: RefBase, manifestPath: string): ComponentRef {
 	const resolved = safePath.resolve(base, manifestPath);
-	return { manifestPath, resolvedPath: resolved, exists: existsSync(resolved) };
+	return { manifestPath, resolvedPath: resolved, exists: presenceOrRecord(resolved, parseErrors) === 'present' };
 }
 
 function normalizeComponentList(
-	base: string,
+	base: RefBase,
 	raw: unknown,
 	keyPresent: boolean,
 ): DeclaredList<ComponentRef> {
@@ -223,7 +232,7 @@ function normalizeComponentList(
 }
 
 function normalizeHookList<T extends HookRef>(
-	base: string,
+	base: RefBase,
 	raw: unknown,
 	keyPresent: boolean,
 	makeTyped: (ref: ComponentRef) => T,
@@ -244,7 +253,7 @@ function normalizeHookList<T extends HookRef>(
 }
 
 function buildDeclared(
-	base: string,
+	base: RefBase,
 	raw: Record<string, unknown> | undefined,
 ): ClaudePluginInventory['declared'] {
 	if (raw === undefined) return emptyDeclared();
@@ -449,7 +458,7 @@ function describePopulationFailure(absolute: string, error: unknown): string {
  * four used to `catch { return }` on its own — and a `skills/` the OS refused
  * to list then read as a plugin with no skills, which `vat audit` reported as
  * exactly that. The concurrent-deletion race lands here too, deliberately: a
- * directory `existsSync` saw a moment ago and `readdir` cannot find is worth a
+ * directory `stat` saw a moment ago and `readdir` cannot find is worth a
  * row, not silence.
  */
 async function listOrRecord(dir: string, parseErrors: ParseErrors): Promise<Dirent<string>[]> {
@@ -458,10 +467,7 @@ async function listOrRecord(dir: string, parseErrors: ParseErrors): Promise<Dire
 	} catch (e) {
 		// `skills/` and `commands/` are each listed twice — once by discovery and
 		// once by the whole-tree crawl behind `unexpected` — so one refusal is one row.
-		const message = (e as Error).message;
-		if (!parseErrors.some(row => row.path === dir && row.message === message)) {
-			parseErrors.push(recordedFailure(dir, message, e));
-		}
+		recordOnce(parseErrors, dir, e);
 		return [];
 	}
 }
@@ -480,11 +486,11 @@ async function collectSkillMdPaths(
 	if (shape === SHAPE_SKILL_CLAUDE_PLUGIN) paths.push(rootSkillMd);
 
 	const skillsDir = safePath.join(absolute, 'skills');
-	if (!existsSync(skillsDir)) return paths;
+	if (presenceOrRecord(skillsDir, parseErrors) !== 'present') return paths;
 
 	for (const { name: entry } of await listOrRecord(skillsDir, parseErrors)) {
 		const skillMd = safePath.join(skillsDir, entry, SKILL_MD);
-		if (existsSync(skillMd)) paths.push(skillMd);
+		if (presenceOrRecord(skillMd, parseErrors) === 'present') paths.push(skillMd);
 	}
 
 	return paths;
@@ -495,7 +501,7 @@ async function collectSkillMdPaths(
  * recursing into subdirectories. Every .md file in the tree is treated as a component ref.
  */
 async function discoverComponents(dir: string, parseErrors: ParseErrors): Promise<ComponentRef[]> {
-	if (!existsSync(dir)) return [];
+	if (presenceOrRecord(dir, parseErrors) !== 'present') return [];
 	const refs: ComponentRef[] = [];
 	const pluginRoot = safePath.resolve(safePath.join(dir, '..'));
 	await walkComponentDir(dir, pluginRoot, refs, parseErrors);
@@ -561,7 +567,7 @@ async function collectAssetParseErrors(absolute: string, parseErrors: ParseError
 
 	// In order: `parseErrors` order.
 	await forEachInOrder(checks, async ({ path, label }) => {
-		if (!existsSync(path)) return;
+		if (presenceOrRecord(path, parseErrors) !== 'present') return;
 		let raw: string;
 		try {
 			raw = await readFile(path, 'utf-8');

@@ -1,8 +1,8 @@
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import type { SymlinkCapability } from '@vibe-agent-toolkit/utils';
-import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
+import { createSymlink, FS_FAULT_CODE, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS, refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -17,7 +17,7 @@ import {
   verifyDestSet,
   type SkillFileEntry,
 } from '../src/files-config.js';
-import { SKILL_PACKAGING_INPUT_INVALID_CODE, SKILL_PACKAGING_OUTPUT_FAILED_CODE } from '../src/packaging-errors.js';
+import { SKILL_PACKAGING_INPUT_INVALID_CODE } from '../src/packaging-errors.js';
 
 const CLI_SOURCE = 'dist/bin/cli.mjs';
 const CLI_DEST = 'scripts/cli.mjs';
@@ -50,6 +50,26 @@ function makeApplySandbox(): { projectRoot: string; skillOutputDir: string } {
   return { projectRoot, skillOutputDir };
 }
 
+
+// A glob match the machine could not examine (out of descriptors) says nothing about the match:
+// the run stops, classified — it is never counted as "not copyable" and silently skipped.
+describe('applyFilesConfig - a glob match the machine could not examine', () => {
+  afterEach(() => {
+    for (const dir of APPLY_TMP_DIRS.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.each(['EMFILE', 'EBUSY'])('throws a %s on the match\'s lstat as a capacity fault, never a skip', async (code) => {
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    const match = safePath.join(projectRoot, 'dist', 'gen', DATA_FILE);
+    const restore = refuseAsyncFs('lstat', match, code);
+    try {
+      await expect(applyFilesConfig({ filesConfig: [{ source: 'dist/gen/*', dest: 'data' }], projectRoot, skillOutputDir }))
+        .rejects.toMatchObject({ code: FS_FAULT_CODE, errno: code });
+    } finally {
+      restore();
+    }
+  });
+});
 /**
  * Shared shape for the "glob entry whose matched source is also link-bundled" cases.
  *
@@ -1018,9 +1038,9 @@ describe('applyFilesConfig', () => {
         await expect(
           applyFilesConfig({ filesConfig: [nonRegularGlob], projectRoot, skillOutputDir }),
         ).rejects.toThrow(
-          // All three, in one message: which entry caught it, which path failed,
-          // and what to do. The bare errno gave none of them.
-          /files: source 'gen\/assets\/\*'[\s\S]*locked\.mjs[\s\S]*permissions and ownership/,
+          // Both, in one message: which entry caught it and which path failed. The
+          // bare errno gave neither; the remedy is the refusal table's to append.
+          /files: source 'gen\/assets\/\*'[\s\S]*locked\.mjs/,
         );
       } finally {
         // Restore before cleanup — `rm -rf` copes with a 000 FILE, but leaving it
@@ -1051,9 +1071,10 @@ describe('applyFilesConfig', () => {
           // Literal, not a RegExp built from the constant: escaping the path's
           // separators back into a pattern is noise, and the point of the case is
           // that the ENTRY's own `source:` string appears verbatim in the message.
-          // Coded as the skill's content: the unreadable file is the author's own.
+          // A source-side fault: the unreadable file is the author's own.
         ).rejects.toMatchObject({
-          code: SKILL_PACKAGING_INPUT_INVALID_CODE,
+          code: FS_FAULT_CODE,
+          side: 'source',
           message: expect.stringContaining(`files: source '${DATA_SOURCE}'`) as unknown,
         });
       } finally {
@@ -1078,11 +1099,13 @@ describe('applyFilesConfig', () => {
             projectRoot,
             skillOutputDir,
           }),
-          // Coded as the OUTPUT's refusal: nothing about the skill is wrong, so no
-          // lane may publish it as a finding against the skill.
+          // A refused write says nothing about the layout the skill's `files:` decided:
+          // `shapeFromSource` moves only layout classes, so this stays the output's.
         ).rejects.toMatchObject({
-          code: SKILL_PACKAGING_OUTPUT_FAILED_CODE,
-          message: expect.stringMatching(/could not be copied into the bundle[\s\S]*output directory is writable/) as unknown,
+          code: FS_FAULT_CODE,
+          side: 'destination',
+          faultClass: 'refused',
+          message: expect.stringMatching(/copy files: source '[^']*' resolved to [\s\S]* into the bundle/) as unknown,
         });
       } finally {
         chmodSync(skillOutputDir, 0o755);
@@ -1539,16 +1562,21 @@ describe('verifyFilesIntegrity', () => {
     );
   });
 
-  // The check reads BOTH trees, so each read is coded by the tree it touched: an
+  // The check reads BOTH trees, so each read is classified by the tree it touched: an
   // unreadable dest is the build's output, never the skill's source.
-  it.skipIf(CANNOT_DENY_READS)('codes a dest it cannot read as the output\'s refusal, not the skill\'s', () => {
+  it.skipIf(CANNOT_DENY_READS)('codes a dest it cannot read as the output\'s fault, naming the verification', () => {
     const { srcFile, dstFile } = makeIntegrityPair();
     writeFileSync(srcFile, 'same');
     writeFileSync(dstFile, 'same');
     chmodSync(dstFile, 0o000);
 
     try {
-      expect(integrityError(srcFile, dstFile)).toMatchObject({ code: SKILL_PACKAGING_OUTPUT_FAILED_CODE });
+      expect(integrityError(srcFile, dstFile)).toMatchObject({
+        code: FS_FAULT_CODE,
+        side: 'destination',
+        faultClass: 'refused',
+        action: expect.stringMatching(/^verify .* in the bundle$/) as unknown,
+      });
     } finally {
       chmodSync(dstFile, 0o644);
     }
@@ -1561,7 +1589,7 @@ describe('verifyFilesIntegrity', () => {
     chmodSync(srcFile, 0o000);
 
     try {
-      expect(integrityError(srcFile, dstFile)).toMatchObject({ code: SKILL_PACKAGING_INPUT_INVALID_CODE });
+      expect(integrityError(srcFile, dstFile)).toMatchObject({ code: FS_FAULT_CODE, side: 'source', faultClass: 'refused' });
     } finally {
       chmodSync(srcFile, 0o644);
     }

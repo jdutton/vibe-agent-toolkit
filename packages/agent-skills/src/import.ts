@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { applyTreePlan, isPathAbsentError, planTreeChanges, safePath } from '@vibe-agent-toolkit/utils';
 import { stringify as stringifyYaml } from 'yaml';
 
 import { parseFrontmatter } from './parsers/frontmatter-parser.js';
@@ -21,8 +21,9 @@ export interface ImportOptions {
   outputPath?: string;
 
   /**
-   * Force overwrite if agent.yaml already exists
-   * Default: false
+   * Replace whatever is at the output (`--force`). Default `false`: anything there but an
+   * empty directory is refused (`TREE_DEST_OCCUPIED`, thrown by the plan before anything
+   * is written) and left as it was.
    */
   force?: boolean;
 }
@@ -37,12 +38,12 @@ export interface ImportError {
   error: string;
   /**
    * Which refusal this is, decided where it was raised: a SKILL.md that is not
-   * there, or an agent.yaml already there without `force`, is the invocation's
-   * mistake (`USAGE_INVALID`); a SKILL.md the OS will not read, or whose
-   * frontmatter no Agent Skills schema accepts, is the input's
-   * (`INPUT_UNREADABLE`); an agent.yaml whose directory is not there is the
-   * invocation's (`USAGE_INVALID`), and any other failed write is a run that did
-   * not finish (`RUN_INCOMPLETE`).
+   * there is the invocation's mistake (`USAGE_INVALID`); a SKILL.md the OS will
+   * not read, or whose frontmatter no Agent Skills schema accepts, is the
+   * input's (`INPUT_UNREADABLE`). What the write's plan refuses is not an
+   * `ImportError`: it is thrown — an agent.yaml already there without `force`
+   * as `TREE_DEST_OCCUPIED`, a destination the OS will not examine or write as
+   * a classified `destination` fault (`FsFaultError`, `RUN_INCOMPLETE`).
    */
   refusal: RefusalCode;
 }
@@ -52,10 +53,16 @@ export type ImportResult = ImportSuccess | ImportError;
 /**
  * Import an Agent Skill (SKILL.md) and convert to VAT agent format (agent.yaml)
  *
+ * The agent.yaml is written by ONE tree-change plan (`replace-file`): a new file beside
+ * it, renamed into place, so a refused write never leaves a truncated agent.yaml, and
+ * the directory it goes in is made when absent.
+ *
  * @param options - Import options
  * @returns Result with agent.yaml path or error
+ * @throws VatError `TREE_DEST_OCCUPIED` when something is at the output and `force` is not set
+ * @throws {FsFaultError} A `destination` fault, when the OS refuses to examine or write the output
  */
-export function importSkillToAgent(options: ImportOptions): ImportResult {
+export async function importSkillToAgent(options: ImportOptions): Promise<ImportResult> {
   const { skillPath, outputPath, force = false } = options;
 
   // Read SKILL.md — only an ABSENCE is "does not exist"; anything else the OS
@@ -105,53 +112,23 @@ export function importSkillToAgent(options: ImportOptions): ImportResult {
   // Determine output path
   const agentPath = outputPath ?? safePath.join(path.dirname(skillPath), 'agent.yaml');
 
-  // An entry already there — a dangling link included — is not overwritten
-  // without `force`; one the OS will not let VAT probe is not assumed absent.
-  if (!force) {
-    const existing = existingOutputRefusal(agentPath);
-    if (existing !== undefined) return existing;
-  }
-
   // Build agent.yaml structure
   const agentManifest = buildAgentManifest(frontmatter);
 
-  // Serialized outside the write's catch: a throw here is a defect in VAT, not a refused write.
+  // Serialized before the plan: a throw here is a defect in VAT, not a refused write.
   const yamlContent = stringifyYaml(agentManifest, { indent: 2, lineWidth: 100 });
 
-  try {
-    fs.writeFileSync(agentPath, yamlContent, 'utf-8');
-  } catch (error) {
-    return writeRefusal(agentPath, error);
-  }
+  // An entry already there — a dangling link included — is not replaced without `force`; one
+  // the OS will not let VAT examine is the destination's fault, never assumed absent.
+  const plan = await planTreeChanges([{
+    op: 'replace-file',
+    dest: agentPath,
+    ownership: force ? { kind: 'force' } : { kind: 'must-be-free' },
+    contents: yamlContent,
+    label: 'agent.yaml',
+  }]);
+  await applyTreePlan(plan);
   return { success: true, agentPath };
-}
-
-/**
- * A refused agent.yaml write, classified by errno: an output directory that is
- * not there is the invocation's mistake (`--output` names it); anything else
- * the OS says is a write that did not finish.
- */
-function writeRefusal(agentPath: string, error: unknown): ImportError {
-  const reason = error instanceof Error ? error.message : String(error);
-  if (isPathAbsentError(error)) {
-    return { success: false, error: `Cannot write agent.yaml: the directory of ${agentPath} does not exist (${reason})`, refusal: 'USAGE_INVALID' };
-  }
-  return { success: false, error: `Failed to write agent.yaml: ${reason}`, refusal: 'RUN_INCOMPLETE' };
-}
-
-/**
- * Why `agentPath` must not be written without `force`, or `undefined` when
- * nothing is there. `lstat`, so a dangling link counts as there.
- */
-function existingOutputRefusal(agentPath: string): ImportError | undefined {
-  try {
-    fs.lstatSync(agentPath);
-  } catch (error) {
-    if (isPathAbsentError(error)) return undefined;
-    const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
-    return { success: false, error: `Cannot tell whether agent.yaml exists (${code}): ${agentPath}`, refusal: 'INPUT_UNREADABLE' };
-  }
-  return { success: false, error: `agent.yaml already exists at ${agentPath}. Use --force to overwrite.`, refusal: 'USAGE_INVALID' };
 }
 
 /**

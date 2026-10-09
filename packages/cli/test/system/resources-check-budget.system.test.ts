@@ -52,8 +52,14 @@ import { BUILTIN_CHECK_NAMES } from '@vibe-agent-toolkit/resources';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
+
 import { cleanupTestTempDir, fs, getBinPath, safePath } from './test-common.js';
 import { createMarkdownGitFixture, executeCli } from './test-helpers/index.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-8-');
 
 const binPath = getBinPath(import.meta.url);
 

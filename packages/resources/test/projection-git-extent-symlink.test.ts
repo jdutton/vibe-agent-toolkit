@@ -69,6 +69,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ExtentContribution } from '../src/projection/contributor.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { GitExtentContributor } from '../src/projection/contributors/git-extent.js';
+import { crawlSourceFor } from '../src/projection/crawl-source.js';
 
 import {
   plantSymlinkFixture,
@@ -167,7 +168,7 @@ describe.skipIf(!symlinkCapability())('git extent — a committed symlink', () =
   it('is contradicted by the filesystem extent, which skips the links entirely', async () => {
     const { contribution: fsContribution } = await buildExtentContribution(
       root,
-      new FilesystemExtentContributor()
+      new FilesystemExtentContributor((at) => crawlSourceFor(at, []))
     );
     const fsPaths = fsContribution.realizations.map((row) => row.path);
 

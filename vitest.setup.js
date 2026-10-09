@@ -16,7 +16,9 @@
 // deleted the var here (setup runs first), that block could NEVER run, which is
 // exactly how the real `claude` spawn path shipped untested. CI does not set it,
 // so token spend stays opt-in only.
-const PRESERVE_ENV = new Set(['VAT_SKILL_TEST_E2E']);
+// VAT_FAULT_MATRIX=full selects the fault matrix's whole injection product for a
+// local run (packages/cli/test/fault-matrix/matrix.ts); scrubbed, it could never be chosen.
+const PRESERVE_ENV = new Set(['VAT_SKILL_TEST_E2E', 'VAT_FAULT_MATRIX']);
 for (const key of Object.keys(process.env)) {
 	if ((key.startsWith('VAT_') || key.startsWith('VV_')) && !PRESERVE_ENV.has(key)) {
 		delete process.env[key];

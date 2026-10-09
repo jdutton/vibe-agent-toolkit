@@ -2,9 +2,9 @@
  * The exit-code matrix, one OUTCOME across every document verb that takes a
  * path: a path under a parent the process may not traverse. The path cannot be
  * stat'ed, so whether it exists is unknown — it is the INPUT's refusal, never
- * "does not exist", and never a scan that starts anyway. One
- * absent-vs-unreadable predicate (`unstatablePathRefusal` in
- * project-root-policy.ts) decides it, and it ends on 2 in every verb.
+ * "does not exist", and never a scan that starts anyway. One classifier
+ * (`classifyFsFault`, a `source` fault named by the argument) decides it, and it
+ * ends on 2 in every verb.
  *
  * The matrix's other files and what holds them together:
  * `exit-code-matrix.system.test.ts`.

@@ -23,6 +23,7 @@ import {
   EXTENT_DIRECTORY_UNLISTABLE,
   FilesystemExtentContributor,
 } from '../../src/projection/contributors/filesystem-extent.js';
+import { crawlSourceFor } from '../../src/projection/crawl-source.js';
 import { DISCARD_BLOB_POPULATION, populate } from '../../src/projection/merge.js';
 import type { ExtentKey, ExtentScopedRows } from '../../src/projection/store.js';
 import { CONDITION_WITHOUT_REFERENCE } from '../../src/schemas/projection-resources.js';
@@ -75,7 +76,7 @@ class UnlistableRowStore extends FakeProjectionStore {
  */
 async function contributorRanThrough(store: FakeProjectionStore): Promise<boolean> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
   let ran = false;
   await populate({
     root: suite.tempDir,

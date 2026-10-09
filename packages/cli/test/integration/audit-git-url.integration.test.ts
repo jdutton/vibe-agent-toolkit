@@ -13,7 +13,12 @@ import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 import { runAuditCli } from '../test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-1-');
 
 let bareRepo: string;
 let bareRepoUrl: string;

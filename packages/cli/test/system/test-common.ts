@@ -279,13 +279,15 @@ function spawnAndCollect(
 /**
  * Execute CLI command and return result
  * Handles ESLint suppressions for test execution
+ *
+ * `nodeArgs` go to node itself, before the binary: `['--import', preload]` runs a module first.
  */
 export function executeCli(
   binPath: string,
   args: string[],
-  options?: { cwd?: string; env?: Record<string, string> }
+  options?: { cwd?: string; env?: Record<string, string>; nodeArgs?: readonly string[] }
 ): Promise<SpawnSyncReturns<string>> {
-  return spawnAndCollect('node', [binPath, ...args], {
+  return spawnAndCollect('node', [...(options?.nodeArgs ?? []), binPath, ...args], {
     cwd: options?.cwd,
     env: options?.env ? mergeEnvWithOverrides(options.env) : undefined,
   });

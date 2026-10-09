@@ -8,11 +8,12 @@ import {
 	detectMissingRecommendedFields,
 	detectPackagedAgentInstructionFiles,
 	generateFixSuggestion,
+	manifestReadFailure,
 	resolveAnchorRoot,
 	type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
-import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { isFilesystemAccessError, isPathAbsentError, issueLocation, promised, safePath } from '@vibe-agent-toolkit/utils';
+import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { issueLocation, promised, safePath } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
@@ -117,7 +118,7 @@ function validatePluginNow(
 	// `files:` block of its own — the per-skill `files:` config that could sanction
 	// a dest lives in the project config the SKILL lanes read. `[]` is the honest
 	// answer here, not a defaulted one.
-	issues.push(...detectPackagedAgentInstructionFiles(pluginPath, anchorRoot, []));
+	issues.push(...detectPackagedAgentInstructionFiles(pluginPath, anchorRoot, [], []));
 
 	// One read decides missing / unreadable / unparseable: `existsSync` would read
 	// a refused parent as absent, and one `try` around read + parse would report a
@@ -126,7 +127,11 @@ function validatePluginNow(
 	try {
 		content = readFileSync(pluginJsonPath, 'utf-8');
 	} catch (error) {
-		const halted = pluginManifestReadIssue(error, location);
+		const halted = manifestReadFailure(error, location, {
+			code: 'PLUGIN_MISSING_MANIFEST',
+			message: 'Plugin manifest not found',
+			fix: 'Create .claude-plugin/plugin.json with required fields (name, description, version)',
+		});
 		issues.push(halted);
 		const headline = halted.code === 'PLUGIN_MISSING_MANIFEST' ? 'missing' : 'unreadable';
 		return {
@@ -209,26 +214,4 @@ function validatePluginNow(
 	}
 
 	return validationResult;
-}
-
-/**
- * The finding for a `plugin.json` read that threw: absence is
- * `PLUGIN_MISSING_MANIFEST`; any other OS refusal is `SCAN_PATH_UNREADABLE`
- * naming only the errno (the OS message carries the absolute path); anything
- * else is a defect and propagates.
- */
-function pluginManifestReadIssue(error: unknown, location: string): ValidationIssue {
-	if (isPathAbsentError(error)) {
-		return {
-			severity: 'error',
-			code: 'PLUGIN_MISSING_MANIFEST',
-			message: 'Plugin manifest not found',
-			location,
-			fix: 'Create .claude-plugin/plugin.json with required fields (name, description, version)',
-		};
-	}
-	if (!isFilesystemAccessError(error)) throw error;
-	const { defaultSeverity, description, fix, reference } = CODE_REGISTRY.SCAN_PATH_UNREADABLE;
-	const errno = String((error as { code?: unknown }).code);
-	return { severity: defaultSeverity, code: 'SCAN_PATH_UNREADABLE', message: `${description} (${location}: read refused with ${errno})`, location, fix, reference };
 }

@@ -2,6 +2,9 @@ import fs from 'node:fs';
 
 import picomatch from 'picomatch';
 
+import { requireConfirmedAbsent } from './errors/confirmed-absent.js';
+import { fsFaultOf } from './errors/errno-table.js';
+import { classifyFsFault, type FsFaultContext } from './errors/fs-fault.js';
 import {
   type DirectoryRefusal,
   directoryRefusalFor,
@@ -9,7 +12,7 @@ import {
 } from './fs-utils.js';
 import { gitFindRoot, gitLsFiles } from './git-utils.js';
 import { promised } from './in-order.js';
-import { requireUnreadablePolicy, settleRefusal, type UnreadablePolicy } from './listing-refusal.js';
+import { crawlSideOf, requireUnreadablePolicy, settleCrawlRefusal, type UnreadablePolicy } from './listing-refusal.js';
 import { toForwardSlash, safePath } from './path-utils.js';
 
 export { rootListingRefusal, type DirectoryRefusal } from './fs-utils.js';
@@ -18,8 +21,10 @@ export { rootListingRefusal, type DirectoryRefusal } from './fs-utils.js';
 // here because `./crawl` is where every caller of the walk already looks.
 export {
   DirectoryListingRefusedError,
+  onCrawlOutput,
   type RefuseListingContext,
   refusedListingMessage,
+  settleCrawlRefusal,
   settleRefusal,
   type UnreadablePolicy,
 } from './listing-refusal.js';
@@ -52,6 +57,15 @@ export interface CrawlOptions {
    * DIVERGENCE block below), so it would have none to report.
    */
   onSymlinkNotFollowed?: (path: string) => void;
+  /**
+   * The trees the calling verb WRITES — its output and the staging it builds it in — or `[]`
+   * for a verb that only reads: the one declaration of which side a fault is on. A fault at
+   * (or a refused listing of) a directory that is, lies in, or holds one of them — the base of
+   * a project a build writes into included — is the destination's; anything else is on the
+   * `unreadable` policy's side (`source` when the policy degrades). Required: only the caller
+   * knows.
+   */
+  outputs: readonly string[];
   /** Return absolute paths in results (default: true) */
   absolute?: boolean;
   /** Only return files (not directories) - default: true */
@@ -219,6 +233,8 @@ export function crawlPathFilter(
  *   baseDir: '/project',
  *   include: ['**\/*.md'],
  *   exclude: ['**\/node_modules/**'],
+ *   unreadable: { refuse: { root: '/project', remedy: 'Fix the permissions.', side: 'source' } },
+ *   outputs: [],
  * });
  */
 export function crawlDirectory(options: CrawlOptions): Promise<string[]> {
@@ -257,8 +273,30 @@ function requireWalkForSymlinkObserver(observer: unknown, respectGitignore: bool
  *   baseDir: '/project',
  *   include: ['**\/*.md'],
  *   exclude: ['**\/node_modules/**'],
+ *   unreadable: { refuse: { root: '/project', remedy: 'Fix the permissions.', side: 'source' } },
+ *   outputs: [],
  * });
  */
+/**
+ * Refuse omitted `outputs` by name: the runtime half of a required field, for the callers the
+ * type cannot reach (test files are not typechecked; a JavaScript adopter has no compiler).
+ * Without it a fault on what the verb writes would be classified as its input.
+ */
+function requireOutputs(outputs: readonly string[] | undefined): asserts outputs is readonly string[] {
+  if (outputs === undefined) {
+    throw new TypeError('crawlDirectory: `outputs` is required — the trees the calling verb writes, [] for none.');
+  }
+}
+
+/** `stat` the crawl's base; a fault is classified on the context decided only then (see `crawlDirectorySync`). */
+function statCrawlBase(base: string, context: () => FsFaultContext): fs.Stats {
+  try {
+    return fs.statSync(base);
+  } catch (error: unknown) {
+    throw classifyFsFault(error, context());
+  }
+}
+
 export function crawlDirectorySync(options: CrawlOptions): string[] {
   const {
     baseDir,
@@ -271,8 +309,10 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     includeUntracked = false,
     unreadable,
     onSymlinkNotFollowed,
+    outputs,
   } = options;
   requireUnreadablePolicy(unreadable, 'crawlDirectory');
+  requireOutputs(outputs);
   requireWalkForSymlinkObserver(onSymlinkNotFollowed, respectGitignore);
 
   const picoOptions = PICOMATCH_OPTIONS;
@@ -299,7 +339,7 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
    * over. Never a silent skip, on either route.
    */
   function raiseRefusal(refusal: DirectoryRefusal): void {
-    settleRefusal(unreadable, refusal);
+    settleCrawlRefusal(unreadable, refusal, outputs);
   }
 
   // Ensure base directory exists
@@ -307,8 +347,13 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     throw new Error(`Base directory does not exist: ${resolvedBaseDir}`);
   }
 
+  // A refusal at the base is the destination's when the base is on what the verb writes, else
+  // the input's — the tree this crawl reads, whose content decides what is in it.
+  // Decided only once a fault needs it: deciding resolves paths, which a crawl that meets no fault never pays for.
+  const crawlBase = (): FsFaultContext => ({ side: crawlSideOf(resolvedBaseDir, outputs, unreadable), origin: 'content', action: `crawl ${resolvedBaseDir}`, path: resolvedBaseDir });
+
   // Ensure base directory is actually a directory
-  const baseStat = fs.statSync(resolvedBaseDir);
+  const baseStat = statCrawlBase(resolvedBaseDir, crawlBase);
   if (!baseStat.isDirectory()) {
     throw new Error(`Base path is not a directory: ${resolvedBaseDir}`);
   }
@@ -413,11 +458,15 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   /**
    * What a failed `readdirSync` / `statSync` means for the walk.
    *
-   * Absence (`ENOENT` / `ENOTDIR`) is an entry that vanished between being
-   * enumerated by its parent and being asked about itself — not in the
-   * population, nothing to report. Anything else is a refusal, and a refusal
-   * is a GAP: handed to the caller if it asked, thrown otherwise. Never a
-   * silent `return` — that is the shorter list this walk used to hand back.
+   * Absence (`ENOENT` / `ENOTDIR`) is believed only when the parent's listing
+   * agrees ({@link vanished}): an entry that vanished between being enumerated by
+   * its parent and being asked about itself is not in the population, nothing to
+   * report; one the parent still names was refused, and is a GAP like any other.
+   * The BASE has no parent listing: it was just found to exist, so its absence is
+   * a classified source fault, never an empty population. Anything else is a
+   * refusal, and a refusal is a GAP: handed to the caller if it asked, thrown
+   * otherwise. Never a silent `return` — that is the shorter list this walk used
+   * to hand back.
    *
    * @param error - What the filesystem threw
    * @param target - The directory (or link) it was asked about
@@ -425,9 +474,29 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
    */
   function reportOrSkip(error: unknown, target: string): boolean {
     const listing = listingFailure(error);
-    if (listing.outcome === 'absent') return true;
+    if (listing.outcome === 'absent' && target === resolvedBaseDir) throw classifyFsFault(error, crawlBase());
+    if (listing.outcome === 'absent') return vanished(error, target);
     if (listing.outcome === 'unreadable') raiseRefusal(directoryRefusalFor(listing, target));
     return false;
+  }
+
+  /**
+   * Whether `target`, whose probe answered absent, really is gone: the parent's
+   * listing is the second witness (`requireConfirmedAbsent`). A link the parent
+   * names is gone when its target is (the probe followed it). An entry the parent
+   * still names — or a parent that will not list — is a refused listing,
+   * raised under the caller's policy like any other gap.
+   */
+  function vanished(error: unknown, target: string): boolean {
+    try {
+      requireConfirmedAbsent(target, error, { side: crawlSideOf(target, outputs, unreadable), origin: 'content', action: `crawl ${target}` }, { follows: true });
+      return true;
+    } catch (refused: unknown) {
+      const facts = fsFaultOf(refused);
+      if (facts === undefined) throw refused;
+      raiseRefusal(directoryRefusalFor({ outcome: 'unreadable', code: facts.errno }, facts.path ?? target));
+      return false;
+    }
   }
 
   /**

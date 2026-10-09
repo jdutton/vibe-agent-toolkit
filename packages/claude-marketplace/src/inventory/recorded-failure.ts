@@ -1,7 +1,5 @@
-import { stat } from 'node:fs/promises';
-
 import type { InventoryParseError } from '@vibe-agent-toolkit/agent-skills';
-import { isFilesystemAccessError, isPathAbsentError } from '@vibe-agent-toolkit/utils';
+import { fsFaultOf, pathPresent } from '@vibe-agent-toolkit/utils';
 
 /**
  * One `parseErrors[]` row, marked `unreadable` when the OS refused the path so
@@ -9,19 +7,34 @@ import { isFilesystemAccessError, isPathAbsentError } from '@vibe-agent-toolkit/
  * used to reach `vat audit` as `PLUGIN_INVALID_JSON` at error severity.
  */
 export function recordedFailure(path: string, message: string, cause: unknown): InventoryParseError {
-	return isFilesystemAccessError(cause) ? { path, message, unreadable: true } : { path, message };
+	return fsFaultOf(cause) === undefined ? { path, message } : { path, message, unreadable: true };
 }
 
 /**
- * Whether anything is at `path`. Absent is `false` with no row; a `stat` the
- * OS refuses is `false` WITH its row — `existsSync` answered "absent" for both.
+ * Record `cause` against `path` unless that row is already there: one path is
+ * probed or listed by more than one lane (a declared `skills` ref and discovery,
+ * discovery and the whole-tree crawl), and one refusal is one row.
  */
-export async function presentOrRecord(path: string, parseErrors: InventoryParseError[]): Promise<boolean> {
+export function recordOnce(parseErrors: InventoryParseError[], path: string, cause: unknown): void {
+	const message = (cause as Error).message;
+	if (!parseErrors.some((row) => row.path === path && row.message === message)) {
+		parseErrors.push(recordedFailure(path, message, cause));
+	}
+}
+
+/** What a probe of a path found: something, nothing, or a refusal already recorded. */
+type Presence = 'present' | 'absent' | 'refused';
+
+/**
+ * What is at `path` (followed: a dangling link is absent). `refused` — a `stat`
+ * the OS would not answer — has its row recorded, because the extractors never
+ * throw; `absent` has none, and what an absence means is the caller's to say.
+ */
+export function presenceOrRecord(path: string, parseErrors: InventoryParseError[]): Presence {
 	try {
-		await stat(path);
-		return true;
+		return pathPresent(path, 'follow', 'source', 'probe') ? 'present' : 'absent';
 	} catch (e) {
-		if (!isPathAbsentError(e)) parseErrors.push(recordedFailure(path, (e as Error).message, e));
-		return false;
+		recordOnce(parseErrors, path, e);
+		return 'refused';
 	}
 }

@@ -5,6 +5,7 @@
 import type { RAGQueryProvider } from '@vibe-agent-toolkit/rag';
 import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
 import type { Gate } from '@vibe-agent-toolkit/schema';
+import type { FsSide } from '@vibe-agent-toolkit/utils';
 
 import type { ReportVerb } from '../../report-schemas.js';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
@@ -51,12 +52,15 @@ export function resolveDbPath(
  * never by where it was thrown.
  *
  * @param verb - The report verb running the action, for the refusal document
+ * @param side - The verb's side of the database: `source` for one that reads it,
+ *   `destination` for `clear`, which removes it
  * @param options - Command options (db path, debug flag)
  * @param action - What to do with the recognised database path
  * @returns Result of the action
  */
 export async function onRagDatabase<T>(
   verb: ReportVerb,
+  side: FsSide,
   options: { db?: string; debug?: boolean },
   action: (dbPath: string, logger: Logger) => T | Promise<T>,
 ): Promise<T> {
@@ -67,7 +71,7 @@ export async function onRagDatabase<T>(
     const projectRoot = projectRootOrNull(process.cwd());
     const dbPath = resolveDbPath(options.db, projectRoot ?? undefined);
     logger.debug(`Database path: ${dbPath}`);
-    requireExistingDatabase(dbPath, options.db !== undefined && options.db !== '');
+    requireExistingDatabase(dbPath, options.db !== undefined && options.db !== '', side);
     return await action(dbPath, logger);
   } catch (error) {
     return endWithRefusal(verb, refusalCodeOf(error), error, 'yaml', RAG_GATE, NOTHING_FINISHED);
@@ -88,7 +92,8 @@ export function executeRagOperation<T>(
   options: { db?: string; debug?: boolean; readonly?: boolean },
   operation: (provider: RAGQueryProvider, logger: Logger, dbPath: string) => Promise<T>,
 ): Promise<T> {
-  return onRagDatabase(verb, options, async (dbPath, logger) => {
+  // Every operation here reads the database (`stats`, `query`).
+  return onRagDatabase(verb, 'source', options, async (dbPath, logger) => {
     // Create RAG provider (readonly mode by default, can be overridden)
     const ragProvider = await LanceDBRAGProvider.create({
       dbPath,

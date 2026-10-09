@@ -207,11 +207,11 @@ describe('qa snapshot — git-route corpus', () => {
     expect(first.manifest.warnings.filter((line) => line.includes(WALK_ROUTE_WARNING))).toEqual([]);
   });
 
-  it('round-trips through a real directory without introducing drift', () => {
+  it('round-trips through a real directory without introducing drift', async () => {
     // The on-disk layout must be transparent. If writing and reading changed so
     // much as a line ending, every comparison across two stored snapshots would
     // carry a difference that no pipeline change produced.
-    writeSnapshot(snapshotDir, first.manifest, first.artifacts);
+    await writeSnapshot(snapshotDir, first.manifest, first.artifacts);
     const loaded = readSnapshot(snapshotDir);
 
     expect(toForwardSlash(loaded.dir)).toBe(toForwardSlash(snapshotDir));

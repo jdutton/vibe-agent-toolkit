@@ -51,7 +51,7 @@ import { closeSync, lstatSync, openSync } from 'node:fs';
 
 import { getGitTreeSnapshot, GIT_MODE_GITLINK, GIT_MODE_SYMLINK } from '@vibe-validate/git';
 
-import { isFilesystemAccessError, isPathAbsentError } from './errors/errno.js';
+import { fsFaultOf, isPathAbsentError } from './errors/errno-table.js';
 import { VatError } from './errors/vat-error.js';
 import { gitFindRoot, gitLsFiles } from './git-utils.js';
 import { toForwardSlash } from './path-core.js';
@@ -356,7 +356,7 @@ function gitCanRead(path: string): boolean {
     return true;
   } catch (error) {
     if (isPathAbsentError(error)) return true;
-    if (isFilesystemAccessError(error)) return false;
+    if (fsFaultOf(error) !== undefined) return false;
     throw error;
   }
 }

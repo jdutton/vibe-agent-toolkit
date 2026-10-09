@@ -9,11 +9,11 @@
 
 import { existsSync, lstatSync, readdirSync } from 'node:fs';
 
-import { isPathAbsentError, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
-import { CLAUDE_USER_STATE_UNREADABLE_CODE, readInstalledPlugins, readKnownMarketplaces } from './plugin-registry.js';
+import { readInstalledPlugins, readKnownMarketplaces } from './plugin-registry.js';
 
 export interface ListedPlugin {
   name: string;
@@ -58,8 +58,9 @@ export function listLocalPlugins(paths: ClaudeUserPaths): PluginListResult {
 
 function collectPlugins(paths: ClaudeUserPaths): ListedPlugin[] {
   const plugins: ListedPlugin[] = [];
-  const installedPlugins = readInstalledPlugins(paths);
-  const knownMarketplaces = readKnownMarketplaces(paths);
+  // A listing only reads Claude's state: it is this verb's input.
+  const installedPlugins = readInstalledPlugins(paths, 'source');
+  const knownMarketplaces = readKnownMarketplaces(paths, 'source');
 
   for (const [pluginKey, entries] of Object.entries(installedPlugins.plugins)) {
     const atIdx = pluginKey.lastIndexOf('@');
@@ -103,7 +104,7 @@ function collectLegacySkills(paths: ClaudeUserPaths): ListedLegacySkill[] {
     // answer. A listing the OS REFUSES is not — reporting it as "no legacy skills"
     // is the quiet answer that is wrong, so the refusal reaches `vat plugins list`.
     if (!isPathAbsentError(error)) {
-      throw new VatError(CLAUDE_USER_STATE_UNREADABLE_CODE, `Could not list ${paths.skillsDir}: ${String(error)}`, { cause: error });
+      throw classifyFsFault(error, { side: 'source', origin: 'content', action: 'list the legacy skills directory', path: paths.skillsDir });
     }
   }
 

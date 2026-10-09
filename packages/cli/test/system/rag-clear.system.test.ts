@@ -8,19 +8,31 @@
 import { basename } from 'node:path';
 
 import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, type FaultFsSpec } from '@vibe-agent-toolkit/utils/testing';
+import YAML from 'yaml';
 
 import { RAG_CLEAR_REPORT_SCHEMA } from '../../src/commands/rag/admin-schema.js';
 
 import { describe, executeCliAndParseYaml, expect, FINDER_DS_STORE, fs, getBinPath, getTestOutputDir, it, setupRagTestSuite } from './rag-test-setup.js';
+import { executeCli, getMonorepoRoot } from './test-common.js';
 import { setupTestProject } from './test-helpers/index.js';
 
 const binPath = getBinPath(import.meta.url);
+/** The in-process fault injector, loaded into the spawned binary before it runs (`VAT_FAULT_FS` says what to fail). */
+const faultPreload = safePath.join(getMonorepoRoot(import.meta.url), 'packages', 'utils', 'dist', 'testing', 'fault-fs-preload.js');
 const suite = setupRagTestSuite('clear', binPath, getTestOutputDir);
+
+/**
+ * The child's temp root: the suite's own scratch tree. `clear` removes recursively, so no spawned run
+ * here may reach the real `$TMPDIR` (DESTRUCTIVE-CODE rule).
+ */
+function scratchTmp(): Record<string, string> {
+  return { TMPDIR: suite.tempDir, TEMP: suite.tempDir, TMP: suite.tempDir };
+}
 
 /** Run `vat rag <args>` from `cwd` and return the exit code, the published refusal code and its message. */
 async function runRag(args: string[], cwd: string): Promise<{ exit: number | null; code: unknown; message: unknown }> {
-  const { result, parsed } = await executeCliAndParseYaml(binPath, ['rag', ...args], { cwd });
+  const { result, parsed } = await executeCliAndParseYaml(binPath, ['rag', ...args], { cwd, env: scratchTmp() });
   const error = parsed['error'] as { code?: unknown; message?: unknown } | undefined;
   return { exit: result.status, code: error?.code, message: error?.message };
 }
@@ -73,7 +85,7 @@ describe('RAG clear command (system test)', () => {
 
     expect(await runRag(['stats', '--db', corrupted], suite.projectDir)).toMatchObject({ exit: 2, code: 'INPUT_UNREADABLE' });
 
-    const { result, parsed } = await executeCliAndParseYaml(binPath, ['rag', 'clear', '--db', corrupted], { cwd: suite.projectDir });
+    const { result, parsed } = await executeCliAndParseYaml(binPath, ['rag', 'clear', '--db', corrupted], { cwd: suite.projectDir, env: scratchTmp() });
     expect(result.status).toBe(0);
     expect(RAG_CLEAR_REPORT_SCHEMA.parse(parsed)).toMatchObject({ status: 'ok', data: { cleared: true } });
     expect(fs.existsSync(corrupted)).toBe(false);
@@ -135,6 +147,8 @@ describe('RAG clear command (system test)', () => {
 
     expect(outcome).toMatchObject({ exit: 2, code: 'USAGE_INVALID' });
     expect(String(outcome.message)).toContain('linked-real-db');
+    expect(String(outcome.message)).toMatch(/Run vat rag clear --db \S*linked-real-db to clear the database itself\./);
+    expect(String(outcome.message)).not.toContain('refusing to replace');
     expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
     expect(fs.readdirSync(real)).toContain('rag_chunks.lance');
   });
@@ -149,16 +163,33 @@ describe('RAG clear command (system test)', () => {
     expect(fs.existsSync(safePath.join(project, '.rag-db', 'notes.md'))).toBe(true);
   });
 
-  // A removal the OS stops partway leaves part of the database gone: the run did not finish.
-  it.skipIf(CANNOT_DENY_READS)('a clear the OS stops partway is RUN_INCOMPLETE, never INTERNAL_ERROR', async () => {
+  // A read-only directory the user owns does not stop the removal: it is made writable on the way down.
+  it.skipIf(CANNOT_DENY_READS)('a database holding a read-only directory is cleared whole', async () => {
+    const readOnly = copyOfDatabase('read-only-db');
+    fs.chmodSync(safePath.join(readOnly, 'rag_chunks.lance', 'data'), 0o555);
+
+    expect(await runRag(['clear', '--db', readOnly], suite.projectDir)).toMatchObject({ exit: 0 });
+    expect(fs.existsSync(readOnly)).toBe(false);
+  });
+
+  // A removal the OS stops (one data file it will not unlink, injected into the spawned binary) is
+  // RUN_INCOMPLETE, never INTERNAL_ERROR — and since the database was moved off its path whole
+  // first, nothing is left at --db: the clear is done, and a warning names where the rest is.
+  it('a clear the OS stops partway is RUN_INCOMPLETE, leaves nothing at --db, and names where the rest is', async () => {
     const partial = copyOfDatabase('partial-db');
-    const locked = safePath.join(partial, 'rag_chunks.lance', 'data');
-    fs.chmodSync(locked, 0o555);
-    try {
-      expect(await runRag(['clear', '--db', partial], suite.projectDir)).toMatchObject({ exit: 2, code: 'RUN_INCOMPLETE' });
-    } finally {
-      fs.chmodSync(locked, 0o755);
-    }
+    const spec: FaultFsSpec = { within: suite.tempDir, faults: [{ family: 'remove', op: 'unlink', pathIncludes: '/rag_chunks.lance/data/', errno: 'EBUSY' }] };
+    const result = await executeCli(binPath, ['rag', 'clear', '--db', partial], { cwd: suite.projectDir, nodeArgs: ['--import', faultPreload], env: { ...scratchTmp(), VAT_FAULT_FS: JSON.stringify(spec) } });
+    const [first] = YAML.parseAllDocuments(result.stdout);
+    const document = first?.toJS() as { error?: { code?: string; message?: string }; data?: unknown; findings?: Array<{ code?: string; link?: string }> } | undefined;
+    const error = document?.error;
+
+    expect({ exit: result.status, code: error?.code }, result.stderr).toEqual({ exit: 2, code: 'RUN_INCOMPLETE' });
+    expect(fs.existsSync(partial)).toBe(false);
+    const parked = fs.readdirSync(suite.tempDir).find((name) => name.startsWith('.partial-db.') && name.endsWith('.previous'));
+    expect(parked).toBeDefined();
+    expect(error?.message).toContain(parked);
+    expect(document?.data).toEqual({ cleared: true });
+    expect(document?.findings).toMatchObject([{ code: 'TREE_CLEANUP_INCOMPLETE', link: expect.stringContaining(parked ?? '-') }]);
   });
 
   // The project's default `.rag-db` is a FILE: that is not "nothing indexed yet".
@@ -191,7 +222,7 @@ describe('RAG clear command (system test)', () => {
     const { result, parsed } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'clear', '--db', suite.dbPath],
-      { cwd: suite.projectDir }
+      { cwd: suite.projectDir, env: scratchTmp() }
     );
 
     expect(result.status).toBe(0);

@@ -35,7 +35,7 @@ import type { DocumentFormat } from '../../report-schemas.js';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithReport, NOTHING_FINISHED, publishedReport, refusalReport } from '../../utils/document-writer.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
+import { classifyInputFault, projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { assertDeclaredCollection, loadResourcesWithConfig } from '../../utils/resource-loader.js';
 import { warnRunIntegrity } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
@@ -50,12 +50,9 @@ const VERB = 'resources validate';
 /** `vat resources validate` offers no `--strict`: warnings never fail it. */
 const GATE = { strict: false } as const;
 
-/** The refusal for a `--frontmatter-schema` read the OS refused. */
-function unreadableSchema(resolvedPath: string, error: unknown): CommandRefusalError {
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === 'ENOENT'
-    ? new CommandRefusalError('USAGE_INVALID', `--frontmatter-schema names no file: ${resolvedPath}`, { cause: error })
-    : new CommandRefusalError('INPUT_UNREADABLE', `Cannot read --frontmatter-schema ${resolvedPath}: ${code ?? String(error)}`, { cause: error });
+/** The refusal for a `--frontmatter-schema` read the OS refused: a fault on the argument, absent said in its own words. */
+function unreadableSchema(resolvedPath: string, error: unknown): unknown {
+  return classifyInputFault(resolvedPath, error, { origin: 'argument', message: `--frontmatter-schema names no file: ${resolvedPath}` });
 }
 
 /**

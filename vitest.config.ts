@@ -76,6 +76,27 @@ export default defineConfig({
         'packages/cli/src/pipeline-oracles/lanes.ts', // Spawns the CLI per lane
         'packages/cli/src/pipeline-oracles/path-facts.ts', // stat/realpath over a real tree
         'packages/cli/src/qa-snapshot/capture.ts', // Spawns commands, writes artifacts
+        // The real-filesystem test infrastructure under `utils/src/testing`: it ships in `src/`
+        // because every package's integration tests import it, and it can only be exercised
+        // against a real tree. FILE BY FILE, as above: `temp-dir.ts`, `executables.ts`,
+        // `platform-gates.ts` and `fault-spec.ts` (the harness's vocabulary and its `VAT_FAULT_FS`
+        // spec parser, unit-tested) beside them stay measured.
+        'packages/utils/src/testing/fault-fs.ts', // The half that patches node:fs; it holds no parser and is exercised only by the integration tier's reach tests
+        'packages/utils/src/testing/tree-snapshot.ts', // Walks and hashes a real tree
+        'packages/utils/src/testing/hostile-tree.ts', // Builds FIFOs, sockets and links on disk
+        // The tree-change primitive's syscall modules: every function in them is a filesystem
+        // call path, and their tests are the fault matrix and the `tree-change-*` files of the
+        // uninstrumented integration tier. FILE BY FILE: the primitive's decisions stay measured
+        // and unit-tested — `plan.ts`, `staging-names.ts` (the names), `identity-compare.ts`
+        // (sameness, containment and the once-per-entry memo over identities already read),
+        // `rollback-error.ts`.
+        'packages/utils/src/tree-change/apply.ts', // stage / park / swap / rollback: mkdir, rename, rm
+        'packages/utils/src/tree-change/files.ts', // rename with retry, removal, whole-file replace, temp-dir disposal
+        'packages/utils/src/tree-change/identity.ts', // lstat / stat / realpath of an entry; what it decides from them is in identity-compare.ts
+        'packages/utils/src/tree-change/tree-walk.ts', // opendir / open / fstat over a tree
+        'packages/utils/src/tree-change/copy-tree.ts', // Reads and writes every file of a tree
+        'packages/utils/src/tree-change/readable-tree.ts', // Opens every file of a tree
+        'packages/utils/src/errors/path-present.ts', // One stat / lstat wrapper; its tests need a real path and a refused one
         'packages/lab/src/bin/**', // CLI entry point — same category as packages/cli/src/bin/**
         'packages/resource-compiler/src/cli/**', // CLI commands (integration test only)
         'packages/resource-compiler/src/language-service/**', // VSCode integration (not unit testable)

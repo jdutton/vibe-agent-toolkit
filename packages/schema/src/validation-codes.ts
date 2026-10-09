@@ -165,8 +165,8 @@ export const CODE_REGISTRY = {
   LINK_TARGET_UNREADABLE: entry(
     'finding',
     'error',
-    'Markdown link target could not be checked: a read failure along its path left its existence, spelling, and anchor all unverified, and — when packaging — the target was not bundled either. Usually permissions; sometimes a transient errno (EMFILE/ENFILE/EAGAIN — re-run before investigating), a change racing the walk, or a target that is not a regular file (a named pipe, socket or device), refused unread.',
-    'Re-run first if the errno looks transient (EMFILE/ENFILE/EAGAIN) — the target may check out clean on a second pass. Otherwise fix the permissions on the path, link a regular file in place of a named pipe, socket or device, or investigate what changed mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read.',
+    'Markdown link target could not be checked: a read failure along its path left its existence, spelling, and anchor all unverified, and — when packaging — the target was not bundled either. Usually permissions; sometimes a transient errno (EMFILE/ENFILE/EAGAIN/EBUSY/ETXTBSY — re-run before investigating), a change racing the walk, or a target that is not a regular file (a named pipe, socket or device), refused unread.',
+    'Re-run first if the errno looks transient (EMFILE/ENFILE/EAGAIN/EBUSY/ETXTBSY) — the target may check out clean on a second pass. Otherwise fix the permissions on the path, link a regular file in place of a named pipe, socket or device, or investigate what changed mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read.',
     'link_target_unreadable',
   ),
   LINK_DEFERRED_ARTIFACT: entry(
@@ -1290,10 +1290,12 @@ export type NonOverridableCode =
   | 'RAG_DOCUMENT_INDEX_FAILED'
   // `vat corpus scan`
   | 'CORPUS_ENTRY_INCOMPLETE'
-  // `vat claude plugin install`
-  | 'PLUGIN_INSTALL_CLEANUP_INCOMPLETE'
   // `vat claude plugin uninstall`
   | 'PLUGIN_UNINSTALL_INCOMPLETE'
+  // `vat claude plugin uninstall`, and `vat claude plugin install`'s vat.replaces uninstall
+  | 'PLUGIN_KEPT_SIBLING_UNEXAMINED'
+  // Any verb's refusal whose failure path left a temporary or staged entry behind
+  | 'TREE_CLEANUP_INCOMPLETE'
   // `vat audit settings`
   | 'SETTINGS_FILE_INVALID'
   | 'SETTINGS_TYPE_AMBIGUOUS'

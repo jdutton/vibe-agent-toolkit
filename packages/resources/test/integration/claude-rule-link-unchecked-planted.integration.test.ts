@@ -54,7 +54,7 @@ describe.skipIf(!symlinkCapability())('the linked-rules arms, from a planted tre
     createSymlink(capability, `${away}/a.md`, safePath.join(root, 'hop.md'));
     const { contribution } = await buildExtentContribution(
       root,
-      new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at)),
+      new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, [])),
     );
     issues = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run({
       claudeRulePatterns: [],

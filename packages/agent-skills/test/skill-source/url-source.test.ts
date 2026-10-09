@@ -8,6 +8,11 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 
 import { resolveUrlSource, sha256Of } from '../../src/skill-source/sources/url-source.js';
 import type { ResolveSkillSourceContext } from '../../src/skill-source/types.js';
+import { useScratchTmpdir } from '../test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test (and every child
+// a test spawns), so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-1-');
 
 // The git-url arm spawns real git (bare repo + clone) and lives in the
 // integration tier: test/integration/url-source-git.integration.test.ts.

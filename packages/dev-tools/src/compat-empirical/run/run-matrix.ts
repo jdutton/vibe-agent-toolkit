@@ -34,7 +34,7 @@ import {
 
 import { evaluateExtensionDecision } from './extension.js';
 
-type StageFn = (entry: CorpusEntry) => StagedSkill;
+type StageFn = (entry: CorpusEntry) => Promise<StagedSkill>;
 type LogFn = (msg: string, color?: Color) => void;
 
 export interface RunMatrixOptions {
@@ -219,7 +219,7 @@ export async function runMatrix(opts: RunMatrixOptions): Promise<RuntimeObservat
 
   // In order: cells drive real runtimes one at a time, and the log and observations follow the matrix.
   await forEachInOrder(opts.entries, async (entry) => {
-    const staged = opts.stageFn(entry);
+    const staged = await opts.stageFn(entry);
     await forEachInOrder(entry.triggerPromptRefs, async (promptRef) => {
       const trigger = opts.promptById.get(promptRef);
       if (!trigger) {

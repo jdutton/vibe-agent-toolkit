@@ -36,7 +36,15 @@ import { vi } from 'vitest';
  * the representative sample of a much larger space, chosen for what each one
  * means to an adopter rather than for coverage of a branch.
  */
-export const REFUSAL_ERRNOS = ['EACCES', 'EMFILE', 'ENFILE', 'ELOOP'] as const;
+const REFUSAL_MEANINGS = {
+  EACCES: 'a mode bit refuses the listing',
+  EMFILE: 'this process ran out of descriptors (transient)',
+  ENFILE: 'the system ran out of descriptors (transient)',
+  ELOOP: 'a committed symlink cycle',
+} as const;
+
+/** The errnos of {@link REFUSAL_MEANINGS}, each injected as a refused listing. */
+export const REFUSAL_ERRNOS = Object.keys(REFUSAL_MEANINGS) as Array<keyof typeof REFUSAL_MEANINGS>;
 
 /**
  * Run `body` with `readdir` of exactly `directory` rejecting with `code`.

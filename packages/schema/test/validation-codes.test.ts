@@ -293,8 +293,8 @@ describe('findings of verbs that read no validation config', () => {
   // project `validation:` block, so a registry entry for one of their codes would
   // let the config accept a key nothing applies.
   const LANE_OWNED = [
-    'PLUGIN_INSTALL_CLEANUP_INCOMPLETE',
     'PLUGIN_UNINSTALL_INCOMPLETE',
+    'PLUGIN_KEPT_SIBLING_UNEXAMINED',
     'SETTINGS_FILE_INVALID',
     'SETTINGS_TYPE_AMBIGUOUS',
     'SETTINGS_PATH_DEPRECATED',

@@ -128,11 +128,12 @@ describe('vat agent build / import / installed / list / install / uninstall (sys
       expectRefusal(await vat(AGENT_BUILD_REPORT_SCHEMA, ['agent', 'build', './agent'], cwd), 'INPUT_UNREADABLE');
     });
 
-    // A stale SKILL.md left nested in the output: the packager refuses the bundle's
-    // content — the SKILL_PACKAGING_FAILED finding at the agent, on a run that stopped.
+    // A SKILL.md the agent's scripts/ carries lands nested in the bundle: the packager refuses the
+    // bundle's content — the SKILL_PACKAGING_FAILED finding at the agent, on a run that stopped.
+    // (A stale one in a previous build no longer reaches it: the build replaces the output whole.)
     it('publishes a packager refusal as RUN_INCOMPLETE with a SKILL_PACKAGING_FAILED finding, exit 2', async () => {
       const cwd = agentProject('build-packaging');
-      writeFileTree(cwd, { 'dist/vat-bundles/skill/widget-reviewer/stale/SKILL.md': CLEAN_SKILL });
+      writeFileTree(cwd, { 'agent/scripts/stale/SKILL.md': CLEAN_SKILL });
 
       const run = await vat(AGENT_BUILD_REPORT_SCHEMA, ['agent', 'build', './agent'], cwd);
 

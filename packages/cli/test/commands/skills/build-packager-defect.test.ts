@@ -60,14 +60,14 @@ async function seedProject(cwd: string, thrown: Error[]): Promise<DiscoveredSkil
 
 async function buildWithPackagerThrowing(cwd: string, thrown: Error[]): Promise<SkillBuildRun> {
   const specs = (await seedProject(cwd, thrown)).map((skill): BuildSkillSpec => ({ skill, packagingConfig: {} as BuildSkillSpec['packagingConfig'] }));
-  return runSkillBuild({ specs, cwd, logger: silentLogger, projectSkills: [], onlySkill: undefined, verbose: false });
+  return runSkillBuild({ specs, cwd, logger: silentLogger, projectSkills: [], onlySkill: undefined, verbose: false, runOutputs: [] });
 }
 
 /** What `vat skills build` would publish for the project, and the exit code that document derives. */
 async function publishedBuild(cwd: string, thrown: Error[]): Promise<ReturnType<typeof publishedPhase>> {
   await seedProject(cwd, thrown);
   await writeFile(safePath.join(cwd, 'vibe-agent-toolkit.config.yaml'), 'skills:\n  include: ["skills/**/SKILL.md"]\n');
-  return publishedPhase('skills build', await runSkillsBuildPhase(cwd, {}));
+  return publishedPhase('skills build', await runSkillsBuildPhase(cwd, {}, []));
 }
 
 function codedRefusal(code = 'SKILL_PACKAGING_INPUT_INVALID'): VatError {
@@ -84,7 +84,7 @@ describe('runSkillBuild - a packager throw is the skill\'s finding only when the
   it.each(['SKILL_PACKAGING_INPUT_INVALID', 'SKILL_NAME_NOT_A_SEGMENT'])('collects a %s refusal as that skill\'s failure', async (code) => {
     const run = await buildWithPackagerThrowing(createTempDir(), [codedRefusal(code)]);
 
-    expect(run.failures).toStrictEqual([{ name: 'skill-0', message: REFUSAL_MESSAGE }]);
+    expect(run.failures).toStrictEqual([{ name: 'skill-0', message: REFUSAL_MESSAGE, error: expect.objectContaining({ code }) as unknown }]);
     expect(run.outputCommitted).toBe(false);
   });
 
@@ -147,7 +147,7 @@ describe('vat skills build - the document a packager throw publishes', () => {
   });
 
   it('publishes a throw carrying a mapped library code under that code, not as a defect', async () => {
-    const refused = new VatError('DIRECTORY_LISTING_REFUSED', 'the directory could not be listed');
+    const refused = new VatError('COPY_LINK_ESCAPES_SOURCE', 'a link in the tree points outside it');
 
     const { exitCode, document } = await publishedBuild(createTempDir(), [refused]);
 

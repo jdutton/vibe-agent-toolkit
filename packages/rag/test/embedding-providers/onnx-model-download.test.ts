@@ -19,6 +19,7 @@ import type * as FsPromises from 'node:fs/promises';
 import { mkdtemp, readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
+import type * as Utils from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -40,16 +41,24 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       fsCalls.writeFilePaths.push(String(path));
       return (actual.writeFile as (...a: unknown[]) => Promise<void>)(path, ...rest);
     },
-    rename: async (from: unknown, to: unknown) => {
-      fsCalls.renamePairs.push({ from: String(from), to: String(to) });
-      return (actual.rename as (...a: unknown[]) => Promise<void>)(from, to);
-    },
     stat: async (path: unknown, ...rest: unknown[]) => {
       const refusal = fsCalls.refuseStat;
       if (refusal !== null && String(path).endsWith(refusal.suffix)) {
         throw Object.assign(new Error(`${refusal.code}: refused, stat '${String(path)}'`), { code: refusal.code });
       }
       return (actual.stat as (...a: unknown[]) => Promise<unknown>)(path, ...rest);
+    },
+  };
+});
+
+// The publish is `renameFileAtomic` (the one file rename, with its Windows retry): recorded at that seam.
+vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof Utils>();
+  return {
+    ...actual,
+    renameFileAtomic: async (from: string, to: string) => {
+      fsCalls.renamePairs.push({ from, to });
+      return actual.renameFileAtomic(from, to);
     },
   };
 });

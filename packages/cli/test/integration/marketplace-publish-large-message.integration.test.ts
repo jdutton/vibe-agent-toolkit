@@ -23,7 +23,12 @@ import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { publishToGitBranch } from '../../src/commands/claude/marketplace/git-publish.js';
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 import { createTempDirTracker, fs } from '../system/test-common.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-3-');
 
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-mp-big-msg-');
 
@@ -70,7 +75,7 @@ describe('marketplace publish with an oversized commit message', () => {
 
     expect(Buffer.byteLength(commitMessage, 'utf8')).toBeGreaterThan(MAX_ARG_STRLEN);
 
-    publishToGitBranch({
+    await publishToGitBranch({
       publishDir,
       branch: 'claude-marketplace',
       remote: bareRemote,

@@ -22,7 +22,7 @@ import { forEachInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/ut
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
+import { endWithRefusal, endWithReport, leftoverIssueOf, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { projectRootOrNull } from '../../utils/project-root-policy.js';
 
@@ -94,6 +94,8 @@ interface RunLocation {
 /** What a scan has done so far — read by the refusal path, so a failure part-way keeps the finished entries. */
 interface ScanProgress {
   readonly rows: PluginRow[];
+  /** Clones the OS would not remove once their entry was done: one warning each. */
+  readonly leftovers: unknown[];
   run: RunLocation | undefined;
 }
 
@@ -104,11 +106,15 @@ interface ScanProgress {
  *
  * @param rows - The rows finished so far
  * @param run - Where the run's files went
+ * @param leftovers - Temp directories the OS would not remove once their entry was done
  */
-function finishedScan(rows: readonly PluginRow[], run: RunLocation): FinishedWork & { data: CorpusScanData } {
+function finishedScan(rows: readonly PluginRow[], run: RunLocation, leftovers: readonly unknown[]): FinishedWork & { data: CorpusScanData } {
   return {
     examined: rows.length,
-    findings: toFindings(rows.flatMap((row, index) => incompleteEntryIssue(row, index) ?? [])),
+    findings: toFindings([
+      ...rows.flatMap((row, index) => incompleteEntryIssue(row, index) ?? []),
+      ...leftovers.map((leftover) => leftoverIssueOf(leftover)),
+    ]),
     data: {
       outDir: run.outDir,
       entries: rows.map((row) => ({
@@ -172,6 +178,7 @@ async function scanSeed(
       runDir,
       withReview: options.withReview === true,
       debug: options.debug === true,
+      leftovers: progress.leftovers,
     });
     progress.rows.push(row);
     logger.info(`[${entry.name}] audit=${row.audit.status} review=${row.review.status}`);
@@ -202,16 +209,16 @@ export async function corpusScanCommand(
 ): Promise<void> {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
-  const progress: ScanProgress = { rows: [], run: undefined };
+  const progress: ScanProgress = { rows: [], leftovers: [], run: undefined };
 
   let run: RunLocation;
   try {
     run = await scanSeed(seedFileArg, options, logger, progress);
   } catch (err) {
     // A refusal after the run directory existed publishes the entries that finished.
-    const finished = progress.run === undefined ? NOTHING_FINISHED : finishedScan(progress.rows, progress.run);
+    const finished = progress.run === undefined ? NOTHING_FINISHED : finishedScan(progress.rows, progress.run, progress.leftovers);
     endWithRefusal('corpus scan', refusalCodeOf(err), err, 'yaml', GATE, finished);
   }
-  const { examined, findings, data } = finishedScan(progress.rows, run);
+  const { examined, findings, data } = finishedScan(progress.rows, run, progress.leftovers);
   endWithReport('corpus scan', buildReport({ examined, findings, data, gate: GATE, durationMs: Date.now() - startTime }), 'yaml');
 }

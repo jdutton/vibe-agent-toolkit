@@ -77,7 +77,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/agent-skills/test/files-config.test.ts',
   'packages/agent-skills/test/skill-identity.test.ts',
   'packages/agent-skills/test/skill-source/content-hash.test.ts',
-  'packages/agent-skills/test/skill-source/fetch-cache.test.ts',
   'packages/agent-skills/test/skill-source/git-clone-env.test.ts',
   'packages/agent-skills/test/skill-source/git-clone.test.ts',
   'packages/agent-skills/test/skill-source/stage.test.ts',
@@ -107,7 +106,6 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
   'packages/cli/test/ard-emit.test.ts',
   'packages/cli/test/commands/audit/nothing-audited.test.ts',
   'packages/cli/test/commands/audit/resources-severity.test.ts',
-  'packages/cli/test/commands/cache-control.test.ts',
   'packages/cli/test/commands/claude/marketplace/publish-tree.test.ts',
   'packages/cli/test/commands/claude/marketplace/validate-declared-sources.test.ts',
   'packages/cli/test/commands/consistency-check.test.ts',
@@ -207,6 +205,10 @@ const UNIT_TIER_IO_RATCHET = { allowFiles: [
  */
 /** Named once: two ratchets list this file. */
 const DOCTOR_COMMAND_FILE = 'packages/cli/src/commands/doctor.ts';
+/** Named once: the bootstrap that builds utils, so it can import none of the primitives three rules point at. */
+const CLEAN_BUILD_FILE = 'packages/dev-tools/src/clean-build.ts';
+/** Every package's TypeScript product source — the scope of the `src`-only blocks below. */
+const PRODUCT_SOURCE_TS = 'packages/*/src/**/*.ts';
 
 /**
  * The one command file that writes stdout outside the document writer
@@ -217,44 +219,131 @@ const DOCTOR_COMMAND_FILE = 'packages/cli/src/commands/doctor.ts';
 const STDOUT_OUTSIDE_WRITER_ALLOW = ['packages/cli/src/commands/agent/run.ts'];
 
 const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
-  'packages/cli/src/commands/agent/install.ts',                       // access/mkdir/lstat/rm/symlink — install-dir mutation
+  'packages/cli/src/commands/agent/install.ts',                       // access — the package.json probe around the agent
   'packages/cli/src/commands/agent/installed.ts',                     // ENUM: readdir of the install dir
-  'packages/cli/src/commands/agent/uninstall.ts',                     // access/lstat/rm — install-dir mutation
   'packages/cli/src/commands/audit.ts',                               // existsSync/stat probes only — the walker is gone (audit/scan-population.ts)
-  'packages/cli/src/commands/audit/git-url-clone.ts',                 // mkdtemp/rm — clone scratch dir
+  'packages/cli/src/commands/audit/git-url-clone.ts',                 // mkdtempSync — clone scratch dir (disposed of via disposeTempDir)
   'packages/cli/src/commands/build.ts',                               // ENUM: readdir for phase output; existsSync probes
-  'packages/cli/src/commands/cache/clear.ts',                         // ENUM: readdir of the cache dir; rm
-  'packages/cli/src/commands/claude/marketplace/git-publish.ts',      // ENUM: readdirSync of the publish tree; mkdtemp/cp/rm
+  'packages/cli/src/commands/cache/clear.ts',                         // ENUM: readdir/lstat measuring the cache before its remove plan
+  'packages/cli/src/commands/claude/marketplace/git-publish.ts',      // ENUM: readdirSync of the publish tree; mkdtempSync — staging repo
   'packages/cli/src/commands/claude/marketplace/publish-tree.ts',     // writeFile/cp/readFileSync — publish tree assembly
-  'packages/cli/src/commands/claude/marketplace/publish.ts',          // mkdtempSync
   'packages/cli/src/commands/claude/marketplace/validate.ts',         // ENUM: readdirSync over plugins/ and skills/ (lane table: raw-readdir)
   'packages/cli/src/commands/claude/org/skills.ts',                   // ENUM: readdirSync collectFiles + node_modules listing (lane table: raw-readdir)
   'packages/cli/src/commands/claude/plugin/build.ts',                 // ENUM: readdir; mkdir/cp/writeFile — marketplace build
   'packages/cli/src/commands/claude/plugin/helpers.ts',               // existsSync/stat probes, readFile
-  'packages/cli/src/commands/claude/plugin/install.ts',               // ENUM: readdirSync ×4; rm/mkdir/cp/symlink — registry + tree copy (audit-A §1.2)
+  'packages/cli/src/commands/claude/plugin/install.ts',               // ENUM: readdirSync ×1 (package listing); statSync; mkdir — the zip lane's staging dir
   'packages/cli/src/commands/claude/plugin/plugin-changelog.ts',      // existsSync probes
   'packages/cli/src/commands/claude/plugin/plugin-files.ts',          // existsSync/mkdir/copyFile
   'packages/cli/src/commands/claude/plugin/plugin-validators.ts',     // ENUM: readdir; readFile
   'packages/cli/src/commands/claude/plugin/tree-copy.ts',             // ENUM: readdir; realpath/lstat/copyFile — tree copy
-  'packages/cli/src/commands/claude/plugin/uninstall.ts',             // readFileSync
   'packages/cli/src/commands/consistency-check.ts',                   // existsSync probes
   'packages/cli/src/commands/corpus/report.ts',                       // mkdirSync — the run directory
   'packages/cli/src/commands/corpus/runner.ts',                       // writeFileSync — review.md and the validation overlay
   'packages/cli/src/commands/corpus/scan.ts',                         // mkdirSync/readFileSync
   DOCTOR_COMMAND_FILE,                                                // readFileSync/existsSync probes
   'packages/cli/src/commands/resources/check-progress.ts',            // appendFileSync — cost log
-  'packages/cli/src/commands/resources/check-supervisor.ts',          // stat/readFileSync/mkdtemp/rm — child supervision (audit-A §1.2)
+  'packages/cli/src/commands/resources/check-supervisor.ts',          // stat/readFileSync — child supervision (audit-A §1.2)
   'packages/cli/src/commands/resources/validate.ts',                  // readFile
-  'packages/cli/src/commands/skill/review.ts',                        // existsSync/stat probes
   'packages/cli/src/commands/skill/test/configure.ts',                // readFileSync/writeFileSync — config edit
   'packages/cli/src/commands/skill/test/run.ts',                      // existsSync probe of VAT's own harness dir (the stderr Harness: line)
-  'packages/cli/src/commands/skills/build.ts',                        // mkdir/rename/rm/mkdtemp — staging
-  'packages/cli/src/commands/skills/install.ts',                      // rm/cp/mkdtemp/stat — install-dir mutation, source probes
   'packages/cli/src/commands/skills/package.ts',                      // existsSync/stat probes
   'packages/cli/src/commands/skills/scope-guard.ts',                  // existsSync/stat probes
   'packages/cli/src/commands/skills/skill-discovery.ts',              // existsSync probe
-  'packages/cli/src/commands/skills/source-resolvers.ts',             // ENUM: readdirSync of an install/list source dir; mkdtemp/stat/rm — source staging
+  'packages/cli/src/commands/skills/source-resolvers.ts',             // ENUM: readdirSync of an install/list source dir; existsSync — source staging
   'packages/cli/src/commands/verify.ts',                              // stat/existsSync probes
+] };
+
+/**
+ * Ratchet for `local/no-existssync`: the product-source FILES that still ask
+ * `existsSync`, which answers `false` for a path it could not look at (`EACCES`,
+ * `ELOOP`) exactly as for one that is not there — the one reason for every entry. The
+ * list may only SHRINK — an entry leaves when its file asks `pathPresent(path, mode, side,
+ * absence)` from `@vibe-agent-toolkit/utils` instead; a new call is a lint error, not a
+ * new line here. Both directions are asserted: `dev-tools/test/eslint-allowlist-ratchets.test.ts`
+ * lints every listed file with the exemption lifted and fails on one the rule no
+ * longer fires on. `packages/dev-tools/src/clean-build.ts` builds utils, so it can
+ * only leave by not asking.
+ */
+const NO_EXISTSSYNC_RATCHET = { allowFiles: [
+  'packages/agent-skills/src/plugin-distribution-layout.ts',
+  'packages/agent-skills/src/post-build-checks.ts',
+  'packages/agent-skills/src/skill-packager.ts',
+  'packages/agent-skills/src/skill-source/sources/npm-source.ts',
+  'packages/agent-skills/src/skill-test/eval-grader.ts',
+  'packages/agent-skills/src/skill-test/eval-inputs.ts',
+  'packages/agent-skills/src/skill-test/eval-suite-isolation.ts',
+  'packages/agent-skills/src/skill-test/evals-template.ts',
+  'packages/agent-skills/src/skill-test/harness-location.ts',
+  'packages/agent-skills/src/skill-test/preflight.ts',
+  'packages/agent-skills/src/skill-test/run-harness.ts',
+  'packages/agent-skills/src/skill-test/staging.ts',
+  'packages/agent-skills/src/skill-test/vendor-manifest.ts',
+  'packages/agent-skills/src/test-input.ts',
+  'packages/agent-skills/src/validators/agent-instruction-presence.ts',
+  'packages/agent-skills/src/validators/format-detection.ts',
+  'packages/agent-skills/src/validators/packaging-validator.ts',
+  'packages/agent-skills/src/validators/plugin-hosted-shape.ts',
+  'packages/agent-skills/src/validators/referenced-path-missing.ts',
+  'packages/agent-skills/src/validators/skill-validator.ts',
+  'packages/claude-marketplace/src/install/plugin-list.ts',
+  'packages/cli/src/bin/vat.ts',
+  'packages/cli/src/commands/audit.ts',
+  'packages/cli/src/commands/build.ts',
+  'packages/cli/src/commands/claude/marketplace/validate.ts',
+  'packages/cli/src/commands/claude/org/skills.ts',
+  'packages/cli/src/commands/claude/plugin/helpers.ts',
+  'packages/cli/src/commands/claude/plugin/plugin-changelog.ts',
+  'packages/cli/src/commands/claude/plugin/plugin-files.ts',
+  'packages/cli/src/commands/claude/plugin/tree-copy.ts',
+  'packages/cli/src/commands/consistency-check.ts',
+  DOCTOR_COMMAND_FILE,
+  'packages/cli/src/commands/skill/test/run.ts',
+  'packages/cli/src/commands/skills/package.ts',
+  'packages/cli/src/commands/skills/scope-guard.ts',
+  'packages/cli/src/commands/skills/skill-discovery.ts',
+  'packages/cli/src/commands/skills/source-resolvers.ts',
+  'packages/cli/src/commands/verify.ts',
+  'packages/cli/src/qa-snapshot/store.ts',
+  'packages/cli/src/skill-resolution/resolve-skill-reference.ts',
+  'packages/cli/src/utils/config-loader.ts',
+  'packages/cli/src/utils/validate-help-files.ts',
+  'packages/cli/src/utils/vat-bin-path.ts',
+  'packages/dev-tools/src/bump-version.ts',
+  CLEAN_BUILD_FILE,
+  'packages/dev-tools/src/common.ts',
+  'packages/dev-tools/src/compat-empirical/corpus/fetch-sources.ts',
+  'packages/dev-tools/src/compat-empirical/index.ts',
+  'packages/dev-tools/src/compat-empirical/runtimes/shared/manual-driver.ts',
+  'packages/dev-tools/src/derived-artifact-rules.ts',
+  'packages/dev-tools/src/extract-changelog.ts',
+  'packages/dev-tools/src/import-marketplace.ts',
+  'packages/dev-tools/src/jscpd-check-new.ts',
+  'packages/dev-tools/src/link-workspace-packages.ts',
+  'packages/dev-tools/src/pre-publish-check.ts',
+  'packages/dev-tools/src/prepare-bin.ts',
+  'packages/dev-tools/src/publish-with-rollback.ts',
+  'packages/dev-tools/src/test-tier-budget-seed.ts',
+  'packages/dev-tools/src/validate-repo-structure.ts',
+  'packages/dev-tools/src/validate-version.ts',
+  'packages/dev-tools/src/workspace-graph.ts',
+  'packages/lab/src/facets/io/capture.ts',
+  'packages/lab/src/facets/io/counter.cts',
+  'packages/lab/src/facets/verdict/capture.ts',
+  'packages/resource-compiler/src/language-service/diagnostics.ts',
+  'packages/resource-compiler/src/transformer/path-resolver.ts',
+  'packages/resource-compiler/src/utils/copy-resources.ts',
+  'packages/resources/src/parse-pool.ts',
+  'packages/resources/src/projection/contributors/filesystem-extent.ts',
+  'packages/resources/src/projection/contributors/package-extent.ts',
+  'packages/resources/src/projection/crawl-source.ts',
+  'packages/utils/src/asset-reference.ts',
+  'packages/utils/src/file-crawler.ts',
+  'packages/utils/src/fs-utils.ts',
+  'packages/utils/src/git-tracker.ts',
+  'packages/utils/src/git-utils.ts',
+  'packages/utils/src/gitignore-checker.ts',
+  'packages/utils/src/project-utils.ts',
+  'packages/utils/src/testing/platform-gates.ts',
 ] };
 
 /**
@@ -289,24 +378,10 @@ export const NO_UNSAFE_BACKLOG = [
 ];
 
 /**
- * One `local/no-self-package-import` block per workspace package, each naming
- * that package and scoped to the sources it compiles.
- *
- * The rule does not read `package.json` itself on purpose. Every RULE module on
- * the `./eslint` subpath requires nothing at all — not `eslint`, not a
- * third-party package, not even a Node builtin — which is what keeps `eslint` an
- * optional peer dependency and the pack shippable as a subpath of a runtime
- * package (`packages/utils/test/eslint/subpath-purity.test.ts` asserts the empty
- * set for the rules, and exactly `node:fs` + `node:path` for the entry point
- * that lists them).
- * This file is not on that subpath: it already runs in full Node, so reading the
- * manifests here costs the invariant nothing.
- *
- * `src/**` is exactly what every package's tsconfig `include`s. Test and example
- * trees are excluded from every package build and import their own package by
- * name deliberately, to exercise the public entry point the way a consumer does.
+ * Every workspace package: its directory under `packages/` and its manifest name. Read
+ * here rather than by a rule module — see {@link selfImportConfigs} for why.
  */
-function selfImportConfigs() {
+function workspacePackages() {
   // 🪤 Resolved against THIS FILE, never against the cwd. `readdirSync('packages')`
   // is relative to wherever eslint was started, so any invocation from inside a
   // package — `turbo run lint`, which sets cwd to the package it is linting —
@@ -327,12 +402,34 @@ function selfImportConfigs() {
       if (!existsSync(manifest)) return [];
       const { name } = JSON.parse(readFileSync(manifest, 'utf8'));
       if (typeof name !== 'string' || name.length === 0) return [];
-      return [{
-        files: [`packages/${entry.name}/src/**/*.ts`, `packages/${entry.name}/src/**/*.cts`],
-        plugins: { local: localRules },
-        rules: { 'local/no-self-package-import': ['error', { packageName: name }] },
-      }];
+      return [{ dir: entry.name, name }];
     });
+}
+
+/**
+ * One `local/no-self-package-import` block per workspace package, each naming
+ * that package and scoped to the sources it compiles.
+ *
+ * The rule does not read `package.json` itself on purpose. Every RULE module on
+ * the `./eslint` subpath requires nothing at all — not `eslint`, not a
+ * third-party package, not even a Node builtin — which is what keeps `eslint` an
+ * optional peer dependency and the pack shippable as a subpath of a runtime
+ * package (`packages/utils/test/eslint/subpath-purity.test.ts` asserts the empty
+ * set for the rules, and exactly `node:fs` + `node:path` for the entry point
+ * that lists them).
+ * This file is not on that subpath: it already runs in full Node, so reading the
+ * manifests here costs the invariant nothing.
+ *
+ * `src/**` is exactly what every package's tsconfig `include`s. Test and example
+ * trees are excluded from every package build and import their own package by
+ * name deliberately, to exercise the public entry point the way a consumer does.
+ */
+function selfImportConfigs() {
+  return workspacePackages().map(({ dir, name }) => ({
+    files: [`packages/${dir}/src/**/*.ts`, `packages/${dir}/src/**/*.cts`],
+    plugins: { local: localRules },
+    rules: { 'local/no-self-package-import': ['error', { packageName: name }] },
+  }));
 }
 
 // Local rules — agentic code safety. Apply to both TS and JS source.
@@ -357,7 +454,6 @@ const localRulesConfig = {
   // `recommended`: this tree has no backlog left to burn down.
   'local/no-raw-node-path': ['error', PATH_IMPL_EXEMPT],
   'local/no-test-scoped-functions': 'error',
-  'local/no-fs-promises-cp': 'error',
   'local/no-url-pathname-for-fs': 'error',
   'local/no-bare-dynamic-import-path': 'error',
   'local/no-file-url-string-concat': 'error',
@@ -380,7 +476,56 @@ const localRulesConfig = {
   // test lane's ability to skip), so the implementation file needs a real
   // exemption or the rule fires on the very helper it points everyone at.
   'local/no-bare-symlink-in-tests': ['error', {
-    exemptFiles: ['packages/utils/src/test-helpers.ts'],
+    exemptFiles: [
+      'packages/utils/src/test-helpers.ts',
+      // The tree-change primitive: `copyTree` under `links: 'preserve'` recreates the source's own links. A host
+      // that cannot make one raises the raw errno, classified at the caller's boundary like every other write.
+      'packages/utils/src/tree-change/copy-tree.ts',
+      // The tree-change applier: a `link` fill stages the link a `--dev` lane installs. A host that cannot make
+      // one raises the raw errno, classified `destination` with every other staging write.
+      'packages/utils/src/tree-change/apply.ts',
+      // `linkDevSkills`, the one link `vat claude plugin install --dev` makes (each built skill, into the plugin tree it
+      // stages). `--dev` is refused on win32 before anything is planned, so the privilege hazard is unreachable; a
+      // refused link is a raw errno the applier classifies `destination` with every other staging write.
+      'packages/claude-marketplace/src/install/dev-skill-links.ts',
+    ],
+  }],
+  // One classifier decides what an errno means (`fsFaultOf` / `classifyFsFault` and the
+  // single-errno predicates). Every entry below is STRUCTURAL — a file that must spell
+  // errnos to do its job — never an allowlist of offenders: there is no ratchet to grow.
+  'local/no-adhoc-errno': ['error', {
+    exemptFiles: [
+      // The errno -> class table and the single-errno predicates: the one place an errno gets a meaning.
+      'packages/utils/src/errors/errno-table.ts',
+      // The classifier itself, built on the table.
+      'packages/utils/src/errors/fs-fault.ts',
+      // Parses git's stderr TEXT into errnos, so the classifier can read them.
+      'packages/utils/src/errors/git-errno.ts',
+      // The fault harness's vocabulary: the errnos it raises, which it does not classify.
+      'packages/utils/src/testing/fault-spec.ts',
+      // The rule's own errno vocabulary.
+      'packages/utils/eslint/rules/no-adhoc-errno.cjs',
+      // Bootstrap: it builds utils, so it cannot import the classifier it would ask.
+      CLEAN_BUILD_FILE,
+    ],
+  }],
+  // One protocol owns every recursive remove, rename and copy: the tree-change primitive.
+  // No allowlist of offenders: each entry below is STRUCTURAL, a place that must touch the
+  // raw functions to do its job, and every other site migrated.
+  'local/no-destructive-fs': ['error', {
+    exemptFiles: [
+      // The tree-change primitive itself: the plan/apply, the copy, the file helpers.
+      'packages/utils/src/tree-change/',
+      // Test infrastructure that ships in `src` (scratch trees, hostile trees) and its barrel.
+      'packages/utils/src/testing/',
+      'packages/utils/src/testing.ts',
+      // Test-support files beside the specs (fixtures, helpers): test code that is not a
+      // `*.test.ts`, so the rule's own test-file category does not reach it. Every package's.
+      ...workspacePackages().map(({ dir }) => `packages/${dir}/test/`),
+      // Bootstrap: it builds utils, so it cannot import the primitive it would ask. It keeps
+      // per-FILE promotion (its documented invariant), never a tree swap.
+      CLEAN_BUILD_FILE,
+    ],
   }],
   // ⛔ The mechanism behind `isEntrypoint()`. Enabled here rather than inherited
   // from `configs.recommended` because it is excluded there: `import.meta.main`
@@ -597,6 +742,9 @@ export default [
   {
     ignores: [
       'dist/',
+      // Every package's build output too, wherever eslint is pointed: `eslint packages` must
+      // judge sources, never their compiled copies (an exempt source's `dist` twin is not exempt).
+      '**/dist/**',
       'build/',
       'coverage/',
       'node_modules/',
@@ -719,7 +867,7 @@ export default [
   // one that is clean. Adding a file here is the thing this block exists to
   // make visible.
   {
-    files: ['packages/*/src/**/*.ts'],
+    files: [PRODUCT_SOURCE_TS],
     ignores: NO_UNSAFE_BACKLOG,
     rules: {
       '@typescript-eslint/no-unsafe-member-access': 'error',
@@ -751,7 +899,7 @@ export default [
   // them and is caught by review, not by lint — one such site exists
   // legitimately (vendor prose in `claude/org/skills.ts`).
   {
-    files: ['packages/*/src/**/*.ts'],
+    files: [PRODUCT_SOURCE_TS],
     rules: {
       'local/explicit-zod-strictness': ['error', { allowDefaultStripIn: [] }],
       'no-restricted-syntax': ['error',
@@ -771,6 +919,15 @@ export default [
           message: 'Extend `VatError` from @vibe-agent-toolkit/utils (with a SCREAMING_SNAKE code), not the bare `Error` — every VAT error carries a code a catch block can dispatch on.',
         },
       ],
+    },
+  },
+  // `existsSync` folds "could not look" into "absent", over product `src/` (the rule
+  // itself skips anything else, tests and test-support included). A ratchet: see the
+  // list's own comment.
+  {
+    files: [PRODUCT_SOURCE_TS, 'packages/*/src/**/*.cts'],
+    rules: {
+      'local/no-existssync': ['error', NO_EXISTSSYNC_RATCHET],
     },
   },
   // The base class itself is the one legitimate `extends Error` in `src`.

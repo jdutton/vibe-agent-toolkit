@@ -166,7 +166,7 @@ function crawlOptionsForPath(
       `${resolved} is outside projectRoot ${projectRoot}; ` +
         `resources include/exclude patterns from the config do not apply to it`,
     );
-    return { baseDir: resolved, unreadable: RESOURCES_UNREADABLE };
+    return { baseDir: resolved, unreadable: RESOURCES_UNREADABLE, outputs: [] };
   }
 
   // The crawler used to perform this check itself, because it received the path
@@ -178,6 +178,8 @@ function crawlOptionsForPath(
   return {
     baseDir: projectRoot,
     unreadable: RESOURCES_UNREADABLE,
+    // Every resources verb only reads the tree it crawls.
+    outputs: [],
     include: scopeIncludeToSubtree(DEFAULT_RESOURCE_INCLUDE, normalizedRelDir),
     ...(config?.resources?.exclude ? { exclude: config.resources.exclude } : {}),
   };
@@ -298,16 +300,18 @@ function populationSourceFor(
   root: string,
   gitTracker: GitTracker,
   observeExtentSource: (kind: CrawlSourceKind) => void,
-  cache: PopulationCache | undefined
+  cache: PopulationCache | undefined,
 ): ResourcePopulationSource | undefined {
   if (!resourcesProjectionCrawlSelected()) {
     return undefined;
   }
   return {
     root: safePath.resolve(root),
-    enumerate: async (enumeratedRoot: string) => {
+    // `outputs` come from the crawl that asks (the registry's one declaration of what its verb writes).
+    enumerate: async (enumeratedRoot: string, outputs: readonly string[]) => {
       const population = await buildResourcePopulation({
         root: enumeratedRoot,
+        outputs,
         gitTracker,
         ...(cache !== undefined && { cache }),
         // `enumeratedRoot` and this source's own `root` are the SAME directory,
@@ -475,6 +479,7 @@ export async function loadResourcesWithConfig(
     crawlOptions = {
       baseDir: projectRoot,
       unreadable: RESOURCES_UNREADABLE,
+      outputs: [],
       // Apply include patterns from config (if specified)
       ...(config?.resources?.include ? { include: config.resources.include } : {}),
       // Apply exclude patterns from config (if specified)

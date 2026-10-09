@@ -14,7 +14,7 @@
  * Attribution alone was not the whole defect, though — even once no document was
  * blamed, it still exited 0. Node's ESM loader reads the module through `fs`, so a `chmod 000` on
  * the built `link-parser.js` throws a raw `EACCES` — and `vat audit`'s outer scan
- * boundary degrades ANY error satisfying `isFilesystemAccessError` into a
+ * boundary degrades ANY error satisfying `fsFaultOf` into a
  * `SCAN_PATH_UNREADABLE` finding at severity `warning`. Reproduced: `chmod 000
  * packages/resources/dist/link-parser.js` with `VAT_CACHE=0`, `vat audit` exits 0.
  *
@@ -26,7 +26,7 @@
  * ## What these tests are evidence OF
  *
  * The load-bearing assertion is the one about the predicate, not the one about
- * the class. `isFilesystemAccessError` returning `false` for the wrapper is only
+ * the class. `fsFaultOf` returning `false` for the wrapper is only
  * evidence when the SAME test shows it returning `true` for a plain `EACCES` —
  * otherwise a predicate broken into always returning `false` would satisfy it
  * just as well.
@@ -50,7 +50,7 @@
  * every read, so both the error identity and the attempt count are exact.
  */
 
-import { isFilesystemAccessError } from '@vibe-agent-toolkit/utils';
+import { fsFaultOf } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type * as BarrelModule from '../src/index.js';
@@ -118,7 +118,7 @@ vi.mock('../src/html-link-parser.js', () => ({
  * being refused.
  *
  * `EACCES` is deliberate rather than a loader-specific code — it is a member of
- * both `FILESYSTEM_ACCESS_ERRNOS` and `resource-registry`'s `READ_FAILURE_CODES`,
+ * both `FILESYSTEM_ACCESS_ERRNOS` and `resource-registry`'s `READ_FAILURE_CLASSES`,
  * so it is precisely the error an inspection-based guard cannot tell apart from
  * an unreadable document.
  *
@@ -230,7 +230,7 @@ describe('a parser module that cannot be loaded', () => {
 
     const thrown = (await loadFailure(mod)) as ParseCacheModule.ParserUnavailableError;
 
-    // Pinned deliberately, and NOT a stylistic preference: `isFilesystemAccessError`
+    // Pinned deliberately, and NOT a stylistic preference: `fsFaultOf`
     // follows `cause`, so an original `EACCES` placed there is found by that walk
     // and the error is degraded to a warning again. The test below would go red
     // the moment someone "restores" it, but this one names the reason.
@@ -276,11 +276,11 @@ describe('a parser module that cannot be loaded', () => {
     // THE assertion. `vat audit`'s scan catch degrades anything this predicate
     // accepts into a `warning` and exits 0 — which is how a broken install kept
     // reporting success.
-    expect(isFilesystemAccessError(thrown)).toBe(false);
+    expect(fsFaultOf(thrown)).toBeUndefined();
     // The positive control, in the same test: without it the assertion above is
     // satisfied by a predicate that accepts nothing at all, and proves nothing
     // about THIS error.
-    expect(isFilesystemAccessError(original)).toBe(true);
+    expect(fsFaultOf(original)).toBeDefined();
   });
 
   it('evicts the rejected load so a transient failure stays retryable', async () => {

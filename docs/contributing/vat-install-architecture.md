@@ -69,8 +69,11 @@ vat skills install ./my-skills.zip
 ### Uninstall (current state)
 
 `vat claude plugin uninstall <plugin@marketplace>` (or `--all` for every plugin the current npm
-package installed) reverses `installPlugin()`: the marketplace plugin directory, its cache dir, the
-`installed_plugins` / `known_marketplaces` registry entries and the settings entry. It does NOT
+package installed) reverses `vat claude plugin install`: the marketplace plugin directory, its cache dir, the
+`installed_plugins` registry entry and the settings entry — and, with the last installed plugin of a
+marketplace, that marketplace's directory and its `known_marketplaces` entry together. Every key is
+one transaction (`uninstallPlugins`, a tree-change plan plus a registry edit): a failure puts every
+directory and registry file back. It does NOT
 remove skills installed flat into `~/.claude/skills/` — `vat claude plugin install <dir|zip>`,
 `--dev`, and `vat skills install` produce those, and they are not registered as plugins; delete
 the directory. There is no `vat skills uninstall`.

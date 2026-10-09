@@ -68,7 +68,7 @@ export async function applyPluginFiles(args: ApplyPluginFilesArgs): Promise<void
     // machine-readable stdout, where an absolute path publishes the developer's
     // home directory into whatever issue or CI log it lands in.
     requireInputPath(sourceAbs, {
-      code: 'INPUT_UNREADABLE',
+      origin: 'content',
       message: `plugin files[].source not found: ${entry.source} (resolved to ${issueLocation(sourceAbs, projectRoot) || '.'})`,
     });
     const destAbs = validateDest(entry.dest, pluginOutputDir);

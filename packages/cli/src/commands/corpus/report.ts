@@ -11,9 +11,8 @@
 import { mkdirSync } from 'node:fs';
 
 import type { SeverityCounts } from '@vibe-agent-toolkit/schema';
-import { isFilesystemAccessError, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 
-import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
 import { writeArtifactFile } from '../../utils/document-writer.js';
 
 /** A row's audit: the `vat audit` report's own status, or `unloadable` when the audit could not run. */
@@ -143,15 +142,10 @@ export function runDirectoryName(report: RunReport): string {
  *
  * @param what - The file or directory being written, for the message
  * @param write - The write
- * @throws {CommandRefusalError} `RUN_INCOMPLETE` when the OS refused the write
+ * @throws {FsFaultError} a `destination` fault (`RUN_INCOMPLETE`) when the OS refused the write
  */
 export function writeRunOutput(what: string, write: () => void): void {
-  try {
-    write();
-  } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
-    throw new CommandRefusalError('RUN_INCOMPLETE', `Could not write ${what}: ${errorMessageOf(error)}`, { cause: error });
-  }
+  withFsFaultSync({ side: 'destination', action: `write ${what}` }, write);
 }
 
 /**
@@ -161,7 +155,7 @@ export function writeRunOutput(what: string, write: () => void): void {
  * runner — this function only writes the summary index, through the
  * writer's `corpus-summary` artifact.
  *
- * @throws {CommandRefusalError} `RUN_INCOMPLETE` when the OS refuses the directory or the file
+ * @throws {FsFaultError} a `destination` fault (`RUN_INCOMPLETE`) when the OS refuses the directory or the file
  */
 export function writeRunReport(report: RunReport, outDir: string): string {
   const runDir = safePath.join(outDir, runDirectoryName(report));

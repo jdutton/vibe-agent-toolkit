@@ -1,31 +1,25 @@
 /**
- * `vat skills build` — what a FAILED repair of `dist/skills` tells the operator.
+ * `vat skills build` — what a refused run that could not clean up after itself tells the operator.
  *
- * Two lanes reach `BuildStaging.recover()` after the filesystem refused a move,
- * and both used to lose the second refusal: the residue line named the wrong
- * reason when this run's own output had already been promoted, and the packager
- * defect lane printed its recovery to stderr only, so the published document
- * never named the parked tree an operator needs to move back.
+ * A run that leaves before its output lands (a packager defect, a refusal inside the build
+ * bracket) discards what it staged beside `dist/skills`. When the OS refuses that discard, the
+ * refusal stays the run's own — its code, its message — and the staged tree left behind is named
+ * in the published document as a `TREE_CLEANUP_INCOMPLETE` warning, never lost behind it.
  *
- * `rm` and `rename` are named imports in the build, so a refusal is injected at
- * the module seam for exactly one path; every other call runs for real. The
- * packager is stubbed because a defect cannot be staged from a fixture.
+ * The packager is stubbed because a defect cannot be staged from a fixture; the refused removal
+ * is injected with `installFaultFs` under the test's own temp project.
  */
 
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { installFaultFs, type FaultRule } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { beginStagedBuild, runSkillsBuildPhase, settleStaging } from '../../../src/commands/skills/build.js';
+import { runSkillsBuildPhase } from '../../../src/commands/skills/build.js';
 import { publishedPhase } from '../../helpers/published-phase.js';
-import { errno, realBehind, refusingOnly } from '../../helpers/refusal-doubles.js';
 import { createTempDirTracker } from '../../system/test-common.js';
-import { silentLogger } from '../../test-doubles.js';
-
-vi.mock('node:fs/promises', async (importOriginal) =>
-  (await import('../../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['rm', 'rename']));
 
 const DEFECT = new TypeError("Cannot read properties of undefined (reading 'size')");
 
@@ -34,80 +28,80 @@ const harness = vi.hoisted(() => ({ rejectWith: undefined as Error | undefined }
 vi.mock('@vibe-agent-toolkit/agent-skills', async (importOriginal) =>
   (await import('../../helpers/stubbed-packager.js')).withPackagerFailing(importOriginal, harness, () => DEFECT));
 
-/** Seed `dist/skills/kept/SKILL.md`, as a previous good build would have. */
-async function seedPrevious(cwd: string): Promise<void> {
-  await mkdir(safePath.join(cwd, 'dist', 'skills', 'kept'), { recursive: true });
-  await writeFile(safePath.join(cwd, 'dist', 'skills', 'kept', 'SKILL.md'), 'previous\n');
+const PREVIOUS = 'previous\n';
+
+/** Whether `path` is the tree staged beside `dist/skills` (never a parked `.previous`). */
+const isStaged = (path: string): boolean => path.includes('.vat-staged-') && !path.endsWith('.previous');
+
+/** The staged tree's removal refused: its first try, and its retry after the walk (each rule fires once). */
+const stagedRemoval = (): FaultRule => ({ family: 'remove', op: 'rm', path: isStaged, errno: 'EACCES' });
+
+interface PublishedRefusal {
+  status: string;
+  error: { code: string; message: string };
+  findings: Array<{ code: string; severity: string; link?: string }>;
 }
 
-describe('vat skills build - a failed staging repair names its real reason, in the document', () => {
-  const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-staging-recovery-');
-
-  afterEach(() => {
-    vi.mocked(rm).mockImplementation(realBehind(rm));
-    vi.mocked(rename).mockImplementation(realBehind(rename));
-    return cleanupTempDirs();
-  });
-
-  it('reports the removal that failed, not "occupied", when this run\'s own output was promoted', async () => {
-    const cwd = createTempDir();
-    await seedPrevious(cwd);
-    const staging = await beginStagedBuild(cwd, undefined);
-    await mkdir(safePath.join(staging.root, 'fresh'), { recursive: true });
-    vi.mocked(rm).mockImplementation(refusingOnly(staging.parkedPath, errno('EACCES', 'EACCES: permission denied'), realBehind(rm)));
-
-    const settled = await settleStaging(staging, false, silentLogger);
-
-    expect(settled.outputCommitted).toBe(true);
-    expect(settled.promotionError).toContain(`${staging.parkedPath} — removal failed: EACCES`);
-    expect(settled.promotionError).not.toContain('occupied');
-  });
-
-  it('carries the recovery of a failed abort on the defect path into the published refusal', async () => {
-    const message = await refusalWithRestoreRefused(createTempDir(), 'INTERNAL_ERROR');
-
-    expect(message).toContain(DEFECT.message);
-  });
-
-  // The build bracket itself throwing (a git snapshot refusing an unreadable file) took the same
-  // settle, but its recovery went to stderr only: the document never named the parked tree.
-  it('carries the recovery of a failed abort into the refusal when the build bracket itself throws', async () => {
-    const refusal = new VatError('GIT_SNAPSHOT_UNREADABLE', 'private.txt is unreadable');
-    harness.rejectWith = refusal;
-    try {
-      const message = await refusalWithRestoreRefused(createTempDir(), 'INPUT_UNREADABLE');
-
-      expect(message).toContain(refusal.message);
-    } finally {
-      harness.rejectWith = undefined;
-    }
-  });
-});
-
 /**
- * Build one skill over a previous `dist/skills` while every restore of the parked previous
- * output is refused, and return the published refusal's message — after checking its code
- * and that it names the parked tree and how to recover it.
+ * Build one skill over a previous `dist/skills` while the discard of the staged tree is refused,
+ * and return the published refusal — after checking its exit code, its refusal code and that the
+ * previous output is untouched.
  */
-async function refusalWithRestoreRefused(cwd: string, code: string): Promise<string> {
-  await seedPrevious(cwd);
+async function refusalWithDiscardRefused(cwd: string, code: string): Promise<PublishedRefusal> {
+  await mkdir(safePath.join(cwd, 'dist', 'skills', 'kept'), { recursive: true });
+  await writeFile(safePath.join(cwd, 'dist', 'skills', 'kept', 'SKILL.md'), PREVIOUS);
   await mkdir(safePath.join(cwd, 'skills', 'demo'), { recursive: true });
   await writeFile(
     safePath.join(cwd, 'skills', 'demo', 'SKILL.md'),
     '---\nname: demo\ndescription: A skill whose packaging is made to throw in a test.\n---\n\n# demo\n\nNothing to see.\n',
   );
   await writeFile(safePath.join(cwd, 'vibe-agent-toolkit.config.yaml'), 'skills:\n  include: ["skills/**/SKILL.md"]\n');
-  // Restoring the parked previous output is refused, both in `abort()` and in the repair after it.
-  const real = realBehind(rename);
-  vi.mocked(rename).mockImplementation((from, to) =>
-    String(from).endsWith('.previous') ? Promise.reject(errno('EACCES', 'EACCES: permission denied')) : real(from, to));
 
-  const { exitCode, document } = publishedPhase('skills build', await runSkillsBuildPhase(cwd, {}));
+  const session = installFaultFs({ within: cwd, faults: [stagedRemoval(), stagedRemoval()] });
+  let published: ReturnType<typeof publishedPhase<PublishedRefusal>>;
+  try {
+    published = publishedPhase<PublishedRefusal>('skills build', await runSkillsBuildPhase(cwd, {}, []));
+  } finally {
+    session.restore();
+  }
 
-  expect(exitCode).toBe(ExitCode.ERROR);
-  expect(document).toMatchObject({ status: 'error', error: { code } });
-  const message = (document as unknown as { error: { message: string } }).error.message;
-  expect(message).toMatch(/is parked at \S+\.previous/);
-  expect(message).toContain('Recover it with: mv ');
-  return message;
+  expect(published.exitCode).toBe(ExitCode.ERROR);
+  expect(published.document).toMatchObject({ status: 'error', error: { code } });
+  await expect(readFile(safePath.join(cwd, 'dist', 'skills', 'kept', 'SKILL.md'), 'utf8')).resolves.toBe(PREVIOUS);
+  return published.document;
 }
+
+/** The one warning naming the staged tree the run could not discard. */
+function stagedLeftover(document: PublishedRefusal): string | undefined {
+  const leftovers = document.findings.filter((finding) => finding.code === 'TREE_CLEANUP_INCOMPLETE');
+  expect(leftovers).toHaveLength(1);
+  expect(leftovers[0]?.severity).toBe('warning');
+  return leftovers[0]?.link;
+}
+
+describe('vat skills build - a staged tree the refused run could not discard is named in the document', () => {
+  const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-staging-recovery-');
+
+  afterEach(() => cleanupTempDirs());
+
+  it('a packager defect: the refusal is the defect\'s, and the staged tree left is a warning naming it', async () => {
+    const document = await refusalWithDiscardRefused(createTempDir(), 'INTERNAL_ERROR');
+
+    expect(document.error.message).toContain(DEFECT.message);
+    expect(stagedLeftover(document)).toMatch(/\/dist\/\.skills\.vat-staged-[^/]+$/);
+  });
+
+  // The build bracket itself throwing (a git snapshot refusing an unreadable file) leaves the same way.
+  it('a refusal inside the build bracket: the refusal keeps its own code, and the staged tree left is a warning naming it', async () => {
+    const refusal = new VatError('GIT_SNAPSHOT_UNREADABLE', 'private.txt is unreadable');
+    harness.rejectWith = refusal;
+    try {
+      const document = await refusalWithDiscardRefused(createTempDir(), 'INPUT_UNREADABLE');
+
+      expect(document.error.message).toContain(refusal.message);
+      expect(stagedLeftover(document)).toMatch(/\/dist\/\.skills\.vat-staged-[^/]+$/);
+    } finally {
+      harness.rejectWith = undefined;
+    }
+  });
+});

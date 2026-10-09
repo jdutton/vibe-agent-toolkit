@@ -33,7 +33,7 @@ import {
   type RefusalCode,
   type ReportStatus,
 } from '@vibe-agent-toolkit/schema';
-import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { createSymlink, isPathAbsentError, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { buildWindowsShellLine, shouldUseShell } from '@vibe-agent-toolkit/utils/process';
 import { CANNOT_DENY_READS, findExecutable, gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, expect, type TestContext } from 'vitest';
@@ -50,8 +50,6 @@ export const MATRIX_BIN_PATH = getBinPath(new URL('../exit-code-matrix.system.te
 /** A directory's mode bits when nothing may read or enter it, and when everything may. */
 export const UNREADABLE = 0o000;
 export const READABLE = 0o755;
-/** A directory whose entries cannot be removed: listable, enterable, not writable. */
-const UNWRITABLE = 0o555;
 
 /**
  * The temp dir of the spec file that imported this module. Vitest evaluates this
@@ -75,9 +73,18 @@ export function useMatrixTempDir(): void {
   });
 
   afterAll(() => {
-    for (const locked of lockedByScenarios.splice(0)) chmodSync(locked, READABLE);
+    for (const locked of lockedByScenarios.splice(0)) unlock(locked);
     cleanupTestTempDir(tempDir);
   });
+}
+
+/** Make a path a scenario locked removable again; one the verb under test legitimately removed is already gone. */
+function unlock(locked: string): void {
+  try {
+    chmodSync(locked, READABLE);
+  } catch (error) {
+    if (!isPathAbsentError(error)) throw error;
+  }
 }
 
 /** Alphabetical, spelled out so the sort does not depend on the default comparator. */
@@ -839,15 +846,16 @@ export const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> =
         return { args: ['cache', 'clear'], cwd: tempDir };
       },
     },
-    // An entry the delete cannot unlink: the clear stops part-way, with what went in `data`.
+    // An entry the measurement cannot list: the clear refuses before anything is moved (`data: null`).
+    // A merely read-only entry is no longer an error — the removal makes it owner-writable and takes it.
     {
       status: 'error',
       code: 'RUN_INCOMPLETE',
-      skipReason: () => (CANNOT_DENY_READS ? 'this platform or user cannot deny a directory its writes' : undefined),
+      skipReason: () => (CANNOT_DENY_READS ? 'this platform or user cannot deny a directory its reads' : undefined),
       run: (): ScenarioRun => {
         writeFileTree(scenarioCacheDir(), { 'stuck/inner.json': '{}' });
         const stuck = safePath.join(scenarioCacheDir(), 'stuck');
-        chmodSync(stuck, UNWRITABLE);
+        chmodSync(stuck, UNREADABLE);
         lockedByScenarios.push(stuck);
         return { args: ['cache', 'clear'], cwd: tempDir };
       },

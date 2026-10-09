@@ -40,7 +40,7 @@ const SkillsInstallDataSchema = z.object({
   skills: z.array(z.object({
     name: z.string(),
     installPath: z.string(),
-    /** `--dry-run` only: a skill of that name is already at `installPath` (a real run needs `--force`). */
+    /** `--dry-run` only: something is already at `installPath`, which the run replaces (only under `--force`: without it the plan is refused). */
     alreadyInstalled: z.boolean().optional(),
   }).strict()),
 }).strict();

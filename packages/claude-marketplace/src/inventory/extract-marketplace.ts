@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 import type { PluginInventory, PluginRef } from '@vibe-agent-toolkit/agent-skills';
@@ -7,7 +7,7 @@ import { forEachInOrder, hasParentTraversalSegment, isPathAbsentError, isVatErro
 
 import { extractClaudePluginInventory } from './extract-plugin.js';
 import type { GitTrackerSource } from './extract-skill.js';
-import { recordedFailure } from './recorded-failure.js';
+import { presenceOrRecord, recordedFailure } from './recorded-failure.js';
 import { ClaudeMarketplaceInventory } from './types.js';
 
 type ParseErrors = ClaudeMarketplaceInventory['parseErrors'];
@@ -54,8 +54,10 @@ export async function extractClaudeMarketplaceInventory(
 	const parseErrors: ParseErrors = [];
 	const manifestFilePath = safePath.join(absolute, '.claude-plugin', MARKETPLACE_JSON);
 
-	if (!existsSync(manifestFilePath)) {
-		parseErrors.push({ path: manifestFilePath, message: 'marketplace.json not found' });
+	const manifestPresence = presenceOrRecord(manifestFilePath, parseErrors);
+	if (manifestPresence !== 'present') {
+		// A refused probe has recorded its own row; only an absence is "not found".
+		if (manifestPresence === 'absent') parseErrors.push({ path: manifestFilePath, message: 'marketplace.json not found' });
 		return new ClaudeMarketplaceInventory({
 			path: absolute,
 			manifest: {},
@@ -203,7 +205,7 @@ interface MarketplaceRoot {
  *   (`plugins/good/..`) — refused lexically, by the rule the message already
  *   states ("no `..` segment"); `joinUnderRoot` only asks where the path ENDS
  *   UP, so it let these through;
- * - a source naming a regular FILE — `existsSync` is true for it, and the
+ * - a source naming a regular FILE — a presence probe is true for it, and the
  *   plugin extractor then found no manifest and no components.
  *
  * @returns the directory, or the refusal's reason — what the parse error says

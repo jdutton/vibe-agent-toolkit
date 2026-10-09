@@ -48,7 +48,8 @@ code, never the message:
 | Code | When |
 |---|---|
 | `AGENT_MANIFEST_NOT_FOUND` (`AGENT_MANIFEST_NOT_FOUND_CODE`) | The path names no manifest: no file at a `.yaml`/`.yml` path, or a directory with neither `agent.yaml` nor `agent.yml` |
-| `AGENT_MANIFEST_UNREADABLE` (`AGENT_MANIFEST_UNREADABLE_CODE`) | A manifest is there but the OS refuses it (`EACCES`, `ELOOP`), or its content is not YAML |
+| `AGENT_MANIFEST_UNREADABLE` (`AGENT_MANIFEST_UNREADABLE_CODE`) | A manifest's content is not YAML |
+| `FS_FAULT` (`FsFaultError` from `@vibe-agent-toolkit/utils`) | A manifest is there but the OS refuses it (`EACCES`, `ELOOP`): a `source` fault on the path argument, refused as the utils/schema refusal table says |
 | `AGENT_MANIFEST_INVALID` | `loadAgentManifest` only: the YAML parsed but the manifest schema rejects it |
 
 ### `loadAgentManifest(path: string): Promise<LoadedAgentManifest>`
@@ -60,7 +61,7 @@ Load and parse agent manifest from file.
 
 **Returns**: Validated agent manifest with `__manifestPath` property
 
-**Throws**: `VatError` coded `AGENT_MANIFEST_NOT_FOUND`, `AGENT_MANIFEST_UNREADABLE` or `AGENT_MANIFEST_INVALID` (table above)
+**Throws**: `VatError` coded `AGENT_MANIFEST_NOT_FOUND`, `AGENT_MANIFEST_UNREADABLE`, `AGENT_MANIFEST_INVALID` or `FS_FAULT` (table above)
 
 ---
 
@@ -79,7 +80,7 @@ Validate agent manifest and check prerequisites: the schema, the RAG database a
 - `issues` - every finding, each located at the manifest. Codes: `AGENT_MANIFEST_INVALID` (one per schema violation, `field` is the key path), `AGENT_REFERENCE_MISSING`, `AGENT_REFERENCE_UNREADABLE`, `AGENT_RAG_NO_SOURCES` (warning)
 - `manifest` - `{ name, version, path }`: `name`/`version` are `null` when the manifest does not validate (or declares no version); `path` is absolute
 
-**Throws**: `VatError` coded `AGENT_MANIFEST_NOT_FOUND` or `AGENT_MANIFEST_UNREADABLE` — no manifest was read, so there is nothing to report findings about. A schema violation is a finding, never a throw.
+**Throws**: `VatError` coded `AGENT_MANIFEST_NOT_FOUND`, `AGENT_MANIFEST_UNREADABLE` or `FS_FAULT` — no manifest was read, so there is nothing to report findings about. A schema violation is a finding, never a throw.
 
 ---
 

@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -167,6 +167,14 @@ describe('FileSessionStore', () => {
       });
 
       expect(await store.list()).toEqual([]);
+    });
+
+    it('throws when the base directory is a FILE: a misconfigured store is not an empty one', async () => {
+      const notADirectory = safePath.join(tempDir, 'sessions-is-a-file');
+      await writeFile(notADirectory, 'x');
+      const store = new FileSessionStore<{ count: number }>({ baseDir: notADirectory });
+
+      await expect(store.list()).rejects.toMatchObject({ code: 'ENOTDIR' });
     });
 
     it('should return all session IDs', async () => {

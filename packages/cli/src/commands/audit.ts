@@ -64,11 +64,12 @@ import {
   type SeverityConfig,
   type SeverityCounts,
   type ValidationIssue,
+  withAddedFindings,
 } from '@vibe-agent-toolkit/schema';
 import {
   findProjectRoot,
-  isFilesystemAccessError,
   forEachInOrder,
+  fsFaultOf,
   isPathAbsentError,
   issueLocation,
   mapInOrder,
@@ -98,7 +99,7 @@ import {
   loadConfig,
   resetLoadedConfigCache,
 } from '../utils/config-loader.js';
-import { endWithRefusal, NOTHING_FINISHED, writeDocument } from '../utils/document-writer.js';
+import { endWithRefusal, leftoverIssueOf, NOTHING_FINISHED, writeDocument } from '../utils/document-writer.js';
 import {
   countCollapsedFindings,
   formatCollapsedFindingsHint,
@@ -108,7 +109,7 @@ import {
 } from '../utils/issue-rendering.js';
 import { resolveIssueSeverity } from '../utils/issue-severity.js';
 import { createLogger } from '../utils/logger.js';
-import { unlistableDirectoryRefusal, unstatablePathRefusal } from '../utils/project-root-policy.js';
+import { classifyInputFault, readInputFile, unlistableDirectoryRefusal } from '../utils/project-root-policy.js';
 import { relativizePath } from '../utils/relativize-paths.js';
 import { RUN_INTEGRITY_CODE } from '../utils/run-integrity.js';
 import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
@@ -360,7 +361,7 @@ function packagingResultToValidationResult(
  *
  * ⚠️ The filesystem question IS asked, and the answer changes what the operator
  * is told. `config-loader.ts` preserves `cause` specifically so callers can ask
- * `isFilesystemAccessError` and "decide whether to degrade or abort"; catching
+ * `fsFaultOf` and "decide whether to degrade or abort"; catching
  * `ConfigLoadError` unconditionally never asked at all, so a `chmod 000` config
  * and a typo produced the same sentence — and a permissions problem is not a
  * broken config.
@@ -490,7 +491,7 @@ function recordUnloadableConfig(
   // different actions from the operator: `chmod`/ownership on one side, an edit
   // to the file on the other. Collapsing them into one sentence was the whole
   // cost of never asking.
-  const why = isFilesystemAccessError(err) ? 'unreadable' : 'unloadable';
+  const why = fsFaultOf(err) === undefined ? 'unloadable' : 'unreadable';
   logger.warn(
     `Ignoring ${why} config at ${configPath}; skills it governs are validated`
     + ` config-free: ${err.message}`,
@@ -521,7 +522,7 @@ function degradingDiscovery(
   return {
     degrade: (refusal) => {
       recordRefusedDiscovery(
-        new DirectoryListingRefusedError(refusal, { root: configRoot, remedy: SKILLS_INCLUDE_REMEDY }),
+        new DirectoryListingRefusedError(refusal, { root: configRoot, remedy: SKILLS_INCLUDE_REMEDY, side: 'source' }),
         configRoot,
         logger,
         locationRoot,
@@ -562,7 +563,7 @@ function degradingRegistry(
 ): RegistryUnreadablePolicy {
   return {
     degrade: (refusal) => {
-      const err = new DirectoryListingRefusedError(refusal, { root: projectRoot, remedy: listingRefusalRemedy(projectRoot) });
+      const err = new DirectoryListingRefusedError(refusal, { root: projectRoot, remedy: listingRefusalRemedy(projectRoot), side: 'source' });
       recordRefusedListing(err, logger, locationRoot, () =>
         `The link graph under ${projectRoot} skipped an unreadable directory; every document beneath it`
         + ` is missing from this audit's link and reference checks: ${err.message}`);
@@ -682,8 +683,10 @@ async function validateSingleSkill(
     // makes when this registry does not cover the skill: one ruling, both crawls.
     const unreadable = degradingRegistry(projectRoot, logger, locationRoot);
     const sharedCtx: SkillValidationSharedContext = {
-      registry: await crawlAndResolveRegistry(projectRoot, { unreadable }),
+      registry: await crawlAndResolveRegistry(projectRoot, { outputs: [], unreadable }),
       unreadable,
+      // An audit only reads the trees it scans.
+      outputs: [],
       locationRoot,
       projectSkills: await resolveProjectDeclaredEvalSuites(skillPath, degradingDiscovery(projectRoot, logger, locationRoot)),
       // The RUN's probe, not this call's — see {@link runSuiteProbe}. This lane
@@ -705,7 +708,8 @@ async function validateSingleSkill(
   }
 
   // Fallback: basic validation. Severity is applied by `applySeverityFilter`.
-  const validateOptions: ValidateOptions = { skillPath, locationRoot, validation: {} };
+  // The audited skill is the verb's input.
+  const validateOptions: ValidateOptions = { skillPath, locationRoot, validation: {}, side: 'source' };
   if (options.warnUnreferencedFiles) {
     validateOptions.checkUnreferencedFiles = true;
   }
@@ -1278,11 +1282,7 @@ function refuseUnusableSettingsFlag(options: AuditCommandOptions): void {
     throw new CommandRefusalError('USAGE_INVALID', '--settings is not supported with --user. Audit the plugin directory with --compat --settings instead, or drop --settings.');
   }
   if (typeof options.settings !== 'string') return;
-  try {
-    fs.readFileSync(options.settings);
-  } catch (error) {
-    throw unstatablePathRefusal(safePath.resolve(options.settings), error);
-  }
+  readInputFile(safePath.resolve(options.settings), { origin: 'argument', message: `Path does not exist: ${safePath.resolve(options.settings)}` });
 }
 
 /**
@@ -1408,11 +1408,25 @@ export function urlAuditReport(report: CompletedAuditReport, provenance: Provena
   return { ...rewritten, data: { ...rewritten.data, root: null, provenance } };
 }
 
-async function runAuditAtPath(
+/** An audit that ran: its report as it will be published, and what the stderr half reads beside it. */
+interface BuiltAudit {
+  readonly results: ValidationResult[];
+  readonly report: CompletedAuditReport;
+  readonly scanRoot: string;
+  readonly logger: ReturnType<typeof createLogger>;
+  readonly verbose: boolean;
+  readonly startTime: number;
+}
+
+/**
+ * Audit `scanPath` and build the report, without publishing it: a URL audit publishes it only
+ * once its clone is disposed of, so a clone left behind is a warning IN the document.
+ */
+async function buildAuditAtPath(
   scanPath: string,
   options: AuditCommandOptions,
   overrides: AuditAtPathOverrides = {}
-): Promise<void> {
+): Promise<BuiltAudit> {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
   const verbose = options.verbose ?? false;
@@ -1427,13 +1441,24 @@ async function runAuditAtPath(
   const published = overrides.provenance === undefined || overrides.tempRoot === undefined
     ? report
     : urlAuditReport(report, overrides.provenance, overrides.tempRoot);
-  const written = writeDocument('audit', published, 'yaml');
+  return { results, report: published, scanRoot, logger, verbose, startTime };
+}
+
+/**
+ * Publish a built audit, with `added` findings the run learned of after building it.
+ *
+ * @returns What was published. The caller exits with the code it calls for.
+ */
+function publishAudit(built: BuiltAudit, added: readonly Finding[]): ReturnType<typeof writeDocument> {
+  const { results, scanRoot, logger, verbose } = built;
+  const report = withAddedFindings(built.report, added);
+  const written = writeDocument('audit', report, 'yaml');
   if (verbose) {
     renderVerboseEvidence(results, scanRoot, logger);
   }
-  handleAuditResults({ results, written, data: published.data, root: scanRoot, verbose }, logger);
-  logger.debug(`Audit complete in ${Date.now() - startTime}ms`);
-  process.exit(exitCodeForReport(written));
+  handleAuditResults({ results, written, data: report.data, root: scanRoot, verbose }, logger);
+  logger.debug(`Audit complete in ${Date.now() - built.startTime}ms`);
+  return written;
 }
 
 async function runUrlAudit(rawInput: string, options: AuditCommandOptions): Promise<void> {
@@ -1444,19 +1469,22 @@ async function runUrlAudit(rawInput: string, options: AuditCommandOptions): Prom
     // The argument is the operator's, and it does not name a source.
     throw new CommandRefusalError('USAGE_INVALID', errorMessageOf(error), { cause: error });
   }
-  await withClonedRepo(
+  const { value: built, leftover } = await withClonedRepo(
     parsed,
     { keepTempForDebug: options.debug === true },
-    async ({ targetDir, tempdir, provenance }) => {
+    ({ targetDir, tempdir, provenance }) => {
       // Re-enter the audit pipeline against the cloned target. Strip --user
       // (it doesn't apply to URL audits).
       const innerOptions: AuditCommandOptions = { ...options, user: false };
-      await runAuditAtPath(targetDir, innerOptions, {
+      return buildAuditAtPath(targetDir, innerOptions, {
         provenance,
         tempRoot: tempdir,
       });
     }
   );
+  // Only now, the clone disposed of: one it left behind is a warning in the document.
+  const written = publishAudit(built, leftover === undefined ? [] : toFindings([leftoverIssueOf(leftover)]));
+  process.exit(exitCodeForReport(written));
 }
 
 export async function auditCommand(
@@ -1494,7 +1522,7 @@ export async function auditCommand(
     const scanPath = targetPath ? safePath.resolve(targetPath) : process.cwd();
     const unusable = await unusableRootRefusal(scanPath);
     if (unusable !== undefined) throw unusable;
-    await runAuditAtPath(scanPath, options);
+    process.exit(exitCodeForReport(publishAudit(await buildAuditAtPath(scanPath, options), [])));
   } catch (error) {
     logger.debug(`Audit did not finish after ${Date.now() - startTime}ms`);
     endWithRefusal('audit', refusalCodeOf(error), error, 'yaml', AUDIT_GATE, NOTHING_FINISHED);
@@ -1525,14 +1553,14 @@ export async function auditCommand(
  * `exit-codes.system.test.ts` and the `audit` row of
  * `exit-code-matrix-path-unlistable.system.test.ts`.
  */
-async function unusableRootRefusal(scanPath: string): Promise<CommandRefusalError | undefined> {
+async function unusableRootRefusal(scanPath: string): Promise<unknown> {
   let isDirectory: boolean;
   try {
     isDirectory = fs.lstatSync(scanPath).isDirectory();
   } catch (error) {
-    // The shared predicate: absent is the invocation's mistake; any other error
-    // (an `EACCES` parent) is the input's refusal — never a scan that starts anyway.
-    return unstatablePathRefusal(scanPath, error);
+    // Absent is the invocation's mistake; any other error (an `EACCES` parent) is
+    // the input's refusal — never a scan that starts anyway.
+    return classifyInputFault(scanPath, error, { origin: 'argument', message: `Path does not exist: ${scanPath}` });
   }
   if (isDirectory) return unlistableDirectoryRefusal(scanPath);
   if (detectFormat(scanPath) === RESOURCE_TYPE_AGENT_SKILL) return undefined;
@@ -1777,7 +1805,7 @@ export async function getValidationResults(
 	} catch (error) {
 		// Only the filesystem refusing the subject degrades; a defect in a validator
 		// must still fail loudly rather than be reported as a permissions problem.
-		if (!isFilesystemAccessError(error)) throw error;
+		if (fsFaultOf(error) === undefined) throw error;
 		logger.debug(`Unreadable audit subject: ${scanPath}`);
 		return [unreadablePathResult(scanPath, error, locationRoot)];
 	}
@@ -2020,7 +2048,7 @@ async function validatePluginSkillsViaInventory(
 			// skill directories included, so this lane would duplicate its findings.
 			results.push(await validateSingleSkill(skill.files.skillMd, options, logger, locationRoot, false));
 		} catch (error) {
-			if (!isFilesystemAccessError(error)) throw error;
+			if (fsFaultOf(error) === undefined) throw error;
 			logger.debug(`  Unreadable plugin-bundled skill: ${skill.files.skillMd}`);
 			results.push(unreadablePathResult(skill.files.skillMd, error, locationRoot));
 		}
@@ -2658,7 +2686,7 @@ function renderAuditFooter(
  * cannot answer the question.
  *
  * Pure: takes results, returns lines. It reads `issues` and never rewrites it,
- * because `runAuditAtPath` builds the YAML document from the very same array.
+ * because `buildAuditAtPath` builds the YAML document from the very same array.
  *
  * @internal Exported for unit testing only — not part of the public CLI API.
  */
@@ -2807,8 +2835,8 @@ async function handleFileEntry(
       const skillDir = safePath.resolve(fullPath, '..');
       const unreadable = degradingRegistry(findProjectRoot(skillDir) ?? skillDir, logger, locationRoot);
       const sharedCtx: SkillValidationSharedContext = scanCtx.gitTracker === null
-        ? { locationRoot, projectSkills, suiteProbe, unreadable }
-        : { gitTracker: scanCtx.gitTracker, locationRoot, projectSkills, suiteProbe, unreadable };
+        ? { locationRoot, projectSkills, suiteProbe, unreadable, outputs: [] }
+        : { gitTracker: scanCtx.gitTracker, locationRoot, projectSkills, suiteProbe, unreadable, outputs: [] };
       const packagingResult = await validateSkillForPackaging(fullPath, skillConfig, 'source', sharedCtx);
       const configAware = packagingResultToValidationResult(
         fullPath,
@@ -2821,7 +2849,8 @@ async function handleFileEntry(
     }
 
     // Wild mode: basic validation. Severity is applied by `applySeverityFilter`.
-    const validateOptions: ValidateOptions = { skillPath: fullPath, locationRoot, validation: {} };
+    // The audited skill is the verb's input.
+    const validateOptions: ValidateOptions = { skillPath: fullPath, locationRoot, validation: {}, side: 'source' };
     if (options.warnUnreferencedFiles) {
       validateOptions.checkUnreferencedFiles = true;
     }
@@ -3105,7 +3134,7 @@ async function validateScanSubject(
     // turning a genuine VAT bug into a `warning` about the file it happened on is
     // the same "detector silently disables itself" shape this guard exists to
     // prevent — it would make the tool quietest exactly when it is most wrong.
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     const path = subject.kind === 'plugin' ? subject.dir : subject.path;
     logger.debug(`Unreadable entry: ${path}`);
     return [unreadablePathResult(path, error, locationRoot)];
@@ -3168,7 +3197,7 @@ async function scanDirectory(
 
   const results: ValidationResult[] = population.refusals.map((refusal) => {
     logger.debug(`Unreadable directory: ${refusal.directory}`);
-    const err = new DirectoryListingRefusedError(refusal, { root: dirPath, remedy: scanRefusalRemedy() });
+    const err = new DirectoryListingRefusedError(refusal, { root: dirPath, remedy: scanRefusalRemedy(), side: 'source' });
     return unreadablePathResult(refusal.directory, err, scanCtx.locationRoot);
   });
 

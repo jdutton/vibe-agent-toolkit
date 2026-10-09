@@ -28,6 +28,7 @@ const BARREL_EXPORTS = [
   'EVENT_TIMEOUT',
   'EVENT_UNAVAILABLE',
   'ExitCode',
+  'FS_FAULT_REFUSALS',
   'FindingCodeSchema',
   'FindingSchema',
   'GateSchema',
@@ -89,6 +90,7 @@ const BARREL_EXPORTS = [
   'errorDiagnostics',
   'exitCodeForReport',
   'exitCodeOfChild',
+  'fsFaultRefusal',
   'installLastResortExit',
   'isCustomCheckCode',
   'isExitCode',
@@ -101,6 +103,7 @@ const BARREL_EXPORTS = [
   'summarizeIssues',
   'toFindings',
   'toJsonSchema',
+  'withAddedFindings',
   'withDurationMs',
 ];
 

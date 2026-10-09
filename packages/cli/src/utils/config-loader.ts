@@ -10,13 +10,12 @@ import { dirname } from 'node:path';
 
 import {
   CONFIG_LOAD_CODE,
-  CONFIG_UNREADABLE_CODE,
   parseConfigAllowingUnknownKeys,
   ProjectConfigSchema,
   readConfigTextSync,
   type ProjectConfig,
 } from '@vibe-agent-toolkit/resources';
-import { isVatError, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { isFsFaultError, isVatError, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
 import { errorMessageOf } from './command-refusal.js';
@@ -30,8 +29,14 @@ const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
  */
 const warnedConfigPaths = new Set<string>();
 
-/** The two coded config failures {@link ConfigLoadError} stands for. */
-const CONFIG_FAILURE_CODES: ReadonlySet<string> = new Set([CONFIG_LOAD_CODE, CONFIG_UNREADABLE_CODE]);
+/**
+ * Whether `error` is one of the two config failures {@link ConfigLoadError} stands
+ * for: `CONFIG_LOAD` (does not parse or validate), or the OS refusing the read — a
+ * classified `source` fault whose origin is the config.
+ */
+function isConfigFailure(error: unknown): error is VatError {
+  return isVatError(error, CONFIG_LOAD_CODE) || (isFsFaultError(error) && error.origin === 'config');
+}
 
 /**
  * A `vibe-agent-toolkit.config.yaml` exists but could not be read, parsed or validated.
@@ -41,8 +46,8 @@ const CONFIG_FAILURE_CODES: ReadonlySet<string> = new Set([CONFIG_LOAD_CODE, CON
  * absent. Commands that resolve a skill through a config (`vat skill review`,
  * `vat skill test`) should surface this; a bulk linter (`vat audit`) may catch
  * it and fall back to config-free validation. It carries its cause's code —
- * `CONFIG_LOAD` or `CONFIG_UNREADABLE` — so the refusal it becomes is decided by
- * what failed, not by where it was caught.
+ * `CONFIG_LOAD`, or `FS_FAULT` with the classified fault as its `cause` — so the
+ * refusal it becomes is decided by what failed, not by where it was caught.
  */
 export class ConfigLoadError extends VatError {
   readonly projectRoot: string;
@@ -111,14 +116,14 @@ export function loadConfig(projectRoot: string): ProjectConfig | undefined {
     );
   } catch (error) {
     // `cause` is load-bearing, not decoration: callers decide whether to
-    // degrade or abort by asking `isFilesystemAccessError`, which reads the
-    // errno off the cause chain. A coded failure (`CONFIG_LOAD`: does not parse
-    // or validate; `CONFIG_UNREADABLE`: the OS refused the read) keeps its code;
-    // anything else — a VAT defect — stays uncoded and surfaces as one.
+    // degrade or abort by asking `fsFaultOf`, which reads the
+    // errno off the cause chain. `CONFIG_LOAD` (does not parse or validate)
+    // keeps its code; a read the OS refused is already a classified fault and
+    // propagates as itself, never re-coded; anything else — a VAT defect —
+    // stays uncoded and surfaces as one.
+    if (isFsFaultError(error)) throw error;
     const message = `Failed to load config: ${errorMessageOf(error)}`;
-    if (isVatError(error) && CONFIG_FAILURE_CODES.has(error.code)) {
-      throw new VatError(error.code, message, { cause: error });
-    }
+    if (isVatError(error, CONFIG_LOAD_CODE)) throw new VatError(CONFIG_LOAD_CODE, message, { cause: error });
     if (error instanceof yaml.YAMLError) throw new VatError(CONFIG_LOAD_CODE, message, { cause: error });
     throw error;
   }
@@ -193,7 +198,7 @@ export function loadConfigCached(projectRoot: string): ProjectConfig | undefined
     // caller like `vat audit` may tolerate. Anything else (a `TypeError`, an
     // invariant) is cached and rethrown UNCHANGED, so it surfaces as the defect
     // it is instead of being relabelled a broken config by its throw site.
-    const thrown = isVatError(err) && CONFIG_FAILURE_CODES.has(err.code) ? new ConfigLoadError(projectRoot, err) : err;
+    const thrown = isConfigFailure(err) ? new ConfigLoadError(projectRoot, err) : err;
     loadErrorCache.set(projectRoot, thrown);
     throw thrown;
   }

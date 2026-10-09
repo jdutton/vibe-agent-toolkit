@@ -11,7 +11,7 @@ import { dirname } from 'node:path';
 
 import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, FollowedWalk, forEachInOrder, mapConcurrentFailingInOrder, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, FollowedWalk, forEachInOrder, mapConcurrentFailingInOrder, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
 
 import { type PackagingTarget } from './content-type-routing.js';
 import { normalizeRelPath } from './files-config.js';
@@ -60,7 +60,8 @@ function stripCodeBlocks(content: string): string {
  * Recursively collect all file paths in a directory.
  */
 function walkDir(dir: string, walk?: FollowedWalk): string[] {
-  const guard = walk ?? new FollowedWalk();
+  // The tree walked is the package just written: a directory it cannot resolve is the output's fault.
+  const guard = walk ?? new FollowedWalk('destination');
   if (walk === undefined) guard.enter(dir);
   const files: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -113,7 +114,8 @@ function extractLocalLinks(content: string): string[] {
  */
 async function extractLocalHrefs(filePath: string): Promise<string[]> {
   if (filePath.endsWith('.html') || filePath.endsWith('.htm')) {
-    const result = await parseFileCached(filePath, 'html');
+    // The packaged output this build just wrote: a refused read is the destination's, not the user's input.
+    const result = await parseFileCached(filePath, 'html', { side: 'destination' });
     return result.links
       .filter(link => link.type === 'local_file')
       .map(link => {
@@ -122,8 +124,8 @@ async function extractLocalHrefs(filePath: string): Promise<string[]> {
       })
       .filter(href => href.length > 0);
   }
-  // Markdown: read content and regex-match
-  const content = await readFile(filePath, 'utf-8');
+  // Markdown: read content and regex-match. The packaged output, as above.
+  const content = await withFsFault({ side: 'destination', action: `read back the packaged ${filePath} to check its links` }, () => readFile(filePath, 'utf-8'));
   return extractLocalLinks(content);
 }
 
@@ -286,8 +288,9 @@ async function addMentionReferences(
     return;
   }
 
+  // The packaged output this build just wrote: a refused read is the destination's.
   const contents = await Promise.all(
-    contentFiles.map(f => readFile(f, 'utf-8')),
+    contentFiles.map(f => withFsFault({ side: 'destination', action: `read back the packaged ${f} to find what it mentions` }, () => readFile(f, 'utf-8'))),
   );
   const haystack = contents.join('\n');
 

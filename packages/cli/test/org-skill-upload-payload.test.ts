@@ -26,6 +26,7 @@ import { ApiRequestError, ApiTransportError, buildMultipartFormData } from '@vib
 import type { MultipartFile, OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
 import type { SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import {
+  classifyFsFault,
   createSymlink,
   mkdirSyncReal,
   normalizedTmpdir,
@@ -1486,7 +1487,7 @@ describe('skillUploadFailure', () => {
 
 describe('summarizeNpmInstall', () => {
   it('exits 0 on an ok outcome when every skill uploaded', () => {
-    const result = ending(summarizeNpmInstall('pkg@1.0.0', [uploaded('a')], []));
+    const result = ending(summarizeNpmInstall('pkg@1.0.0', [uploaded('a')], [], undefined));
 
     expect(result.exitCode).toBe(0);
     expect(result.outcome).toStrictEqual({ kind: 'ok' });
@@ -1499,7 +1500,7 @@ describe('summarizeNpmInstall', () => {
       { skill: 'b', error: { code: 'USAGE_INVALID', message: 'over the upload ceiling' } },
       { skill: 'c', error: { code: 'USAGE_INVALID', message: 'SKILL.md has no usable frontmatter "name" field' } },
     ];
-    const result = ending(summarizeNpmInstall('pkg@1.0.0', [], errors));
+    const result = ending(summarizeNpmInstall('pkg@1.0.0', [], errors, undefined));
 
     expect(result.exitCode).toBe(2);
     expect(result.outcome.kind).toBe('failed');
@@ -1513,6 +1514,7 @@ describe('summarizeNpmInstall', () => {
       'pkg@1.0.0',
       [uploaded('a')],
       [{ skill: 'b', error: { code: 'EXTERNAL_API_FAILED', message: '413 payload too large' } }],
+      undefined,
     ));
 
     expect(result.exitCode).toBe(2);
@@ -1520,5 +1522,22 @@ describe('summarizeNpmInstall', () => {
     // What DID land still has to be readable — the workspace is now mixed.
     expect(result.document['skillsUploaded']).toBe(1);
     expect(result.document['skills']).toHaveLength(1);
+  });
+
+  // The uploads LANDED — a remote, irreversible effect — before the downloaded package's temp
+  // directory refused to go. That leftover is a warning beside them, never a refusal that hides them.
+  it('reports the uploads that landed, ok, with a temp dir left behind as one TREE_CLEANUP_INCOMPLETE warning', () => {
+    const leftover = classifyFsFault(
+      Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY', path: '/tmp/vat-org-skills-abc' }),
+      { side: 'environment', action: 'remove the temporary directory /tmp/vat-org-skills-abc' },
+    );
+    const result = ending(summarizeNpmInstall('pkg@1.0.0', [uploaded('a')], [], leftover));
+
+    expect(result.exitCode).toBe(0);
+    expect(result.outcome).toStrictEqual({ kind: 'ok' });
+    expect(result.document['skillsUploaded']).toBe(1);
+    expect(result.document['warnings']).toEqual([
+      expect.objectContaining({ code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', link: '/tmp/vat-org-skills-abc' }),
+    ]);
   });
 });

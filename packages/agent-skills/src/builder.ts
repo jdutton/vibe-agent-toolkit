@@ -2,15 +2,35 @@
  * Agent Skill builder - converts VAT agents to Agent Skills
  */
 
-import { statSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { AGENT_MANIFEST_INVALID_CODE, loadAgentManifest, type LoadedAgentManifest } from '@vibe-agent-toolkit/agent-config';
-import { copyDirectory, findProjectRoot, forEachInOrder, isFilesystemAccessError, isPathAbsentError, safePath, toForwardSlash, VatError } from '@vibe-agent-toolkit/utils';
+import {
+  applyTreePlan,
+  copyTree,
+  findProjectRoot,
+  type FsBoundary,
+  fsBoundary,
+  pathPresent,
+  planTreeChanges,
+  proveTreeReadable,
+  readRegularFile,
+  safePath,
+  type TreeChangeWarning,
+  VatError,
+  withFsFault,
+} from '@vibe-agent-toolkit/utils';
 
-import { proveReadable, withFsAttribution } from './fs-attribution.js';
-import { checkPackageOutput, packageSkill } from './skill-packager.js';
+import { asPackagerRefusal } from './packaging-errors.js';
+import {
+  landedPackageResult,
+  packageGeneratedSkillInto,
+  type PackagedInto,
+  packageOutputChanges,
+  packageOwnership,
+  stagedPathMapper,
+} from './skill-packager.js';
 
 /**
  * The `VatError` code of a build with no output location: no `outputPath` was
@@ -19,98 +39,11 @@ import { checkPackageOutput, packageSkill } from './skill-packager.js';
  */
 export const AGENT_PACKAGE_ROOT_MISSING_CODE = 'AGENT_PACKAGE_ROOT_MISSING';
 
-/**
- * The `VatError` code of a file of the agent's own source — its system prompt,
- * `scripts/`, `LICENSE.txt`, the `package.json` above it — that is there and
- * the OS will not read or stat (EACCES, EISDIR, ELOOP). Only an absence is
- * "not there"; this is the input's refusal, never a VAT defect and never a skip.
- */
-export const AGENT_SOURCE_UNREADABLE_CODE = 'AGENT_SOURCE_UNREADABLE';
+/** How `scripts/` is walked, by the proof and the copy alike: a link is shipped as what it points at, inside `scripts/` only, and every read is the input's. */
+const SCRIPTS_LINKS = { links: 'follow-contained', side: 'source' } as const;
 
-/** The refusal for an agent source path the OS would not read. */
-function sourceUnreadable(target: string, error: unknown): VatError {
-  const code = (error as NodeJS.ErrnoException).code ?? 'unknown error';
-  return new VatError(AGENT_SOURCE_UNREADABLE_CODE, `Agent source cannot be read (${code}): ${target}`, { cause: error });
-}
-
-/**
- * Do `read`, which touches only the agent's own source at `target`; a
- * filesystem refusal is {@link sourceUnreadable}, naming the path the OS named
- * when it names one. A copy is never passed here whole — its errno does not say
- * which side refused — so each copy reads its source through this first.
- */
-async function readingSource<T>(target: string, read: () => Promise<T>): Promise<T> {
-  try {
-    return await read();
-  } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
-    throw sourceUnreadable((error as NodeJS.ErrnoException).path ?? target, error);
-  }
-}
-
-/**
- * Do `write`, which touches only the build's OUTPUT at `target`. A filesystem
- * refusal — an unwritable or read-only output directory, a full disk, a file in
- * the way of `--output` — is the run not finishing (`packagingOutputError`), the
- * same code the packager gives its own output: never a defect in VAT, and never
- * a finding against the agent.
- */
-function writingOutput<T>(target: string, write: () => Promise<T>, action = 'written'): Promise<T> {
-  return withFsAttribution(`agent build output ${toForwardSlash(target)}`, 'output', write, action);
-}
-
-/**
- * Refuse `file` when it is neither a regular file nor a directory. A named pipe,
- * socket or device (or a link to one) has no bytes to ship, and opening a pipe
- * blocks until a writer appears, so it is refused as the source's without being
- * opened. A directory is left to the read, which raises the OS's own `EISDIR`.
- */
-function refuseSpecialFile(file: string, kind: { isFile(): boolean; isDirectory(): boolean }): void {
-  if (!kind.isFile() && !kind.isDirectory()) {
-    throw new VatError(AGENT_SOURCE_UNREADABLE_CODE, `Agent source cannot be read (not a regular file: a named pipe, socket or device): ${file}`);
-  }
-}
-
-/**
- * Read one source file the build ships, refusing a special file unopened
- * ({@link refuseSpecialFile}). The OS's own refusals propagate raw, for the
- * caller to code: an absent system prompt is the manifest's mistake, not this.
- */
-async function readSourceFile(file: string): Promise<Buffer> {
-  refuseSpecialFile(file, await fs.stat(file));
-  return fs.readFile(file);
-}
-
-/**
- * Refuse a source tree the OS will not let the build list or read, before any
- * of it is copied — each file held to {@link refuseSpecialFile}.
- */
-async function requireReadableTree(dir: string): Promise<void> {
-  const entries = await readingSource(dir, () => fs.readdir(dir, { recursive: true, withFileTypes: true }));
-  // In order: the first unreadable file is the one named, deterministically.
-  await forEachInOrder(entries, async (entry) => {
-    if (entry.isDirectory()) return;
-    const file = safePath.join(entry.parentPath, entry.name);
-    const target = entry.isSymbolicLink() ? await readingSource(file, () => fs.stat(file)) : entry;
-    if (target.isDirectory()) return;
-    refuseSpecialFile(file, target);
-    await readingSource(file, () => proveReadable(file));
-  });
-}
-
-/**
- * Whether `target` resolves to something (`stat`, so a dangling link is
- * absent). Anything the OS says other than absence is {@link sourceUnreadable}.
- */
-function sourcePresent(target: string): boolean {
-  try {
-    statSync(target);
-    return true;
-  } catch (error) {
-    if (isPathAbsentError(error)) return false;
-    throw sourceUnreadable(target, error);
-  }
-}
+/** Runs one write of the build's output under the build's boundary, naming what it was doing. */
+type OutputWriter = <T>(action: string, write: () => Promise<T>) => Promise<T>;
 
 export interface BuildOptions {
   /**
@@ -145,12 +78,12 @@ export interface BuildOptions {
   /**
    * Whether `<outputPath>/<agent-name>/` holds a previous build to replace
    * (`--force`). Default `false`: an explicit `outputPath` whose agent directory
-   * already holds anything (or the archive a requested format writes beside it)
-   * is refused with `SKILL_PACKAGING_OUTPUT_OCCUPIED` and left exactly as it was —
-   * the rule, and the check (`checkPackageOutput`), of `packageSkill`. With it,
-   * the agent directory is removed and rebuilt. The default location (no
-   * `outputPath`) is VAT's, and is built into in place. An output that is, or
-   * holds, the agent's own source is refused either way.
+   * already holds anything but an empty directory (or a file where an archive a
+   * requested format writes beside it goes) is refused (`TREE_DEST_NOT_OWNED`) and
+   * left exactly as it was — the one rule of `packageSkill` ({@link packageOwnership}).
+   * The default location (no `outputPath`) is VAT's, and is replaced. Either way the
+   * build is one tree-change plan: it lands whole or changes nothing. An output that
+   * is, or holds, the agent's own source is refused (`TREE_DEST_HOLDS_SOURCE`).
    */
   replaceExistingOutput?: boolean;
 }
@@ -178,6 +111,13 @@ export interface BuildResult {
    * Package artifacts (when package=true)
    */
   packageArtifacts?: Record<string, string>;
+
+  /**
+   * What the build's plan left beside its output: a previous build, parked by the swap,
+   * that the OS would not let VAT remove. The build is complete; each is a warning naming
+   * the leftover.
+   */
+  residue: readonly TreeChangeWarning[];
 }
 
 /**
@@ -206,87 +146,117 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
   const formats = options.formats ?? ['directory'];
 
   // Every source is read, or proven readable, BEFORE the output is touched: a
-  // refused source must never leave a half-written bundle, nor a previous
-  // build's SKILL.md overwritten beside its stale scripts/.
-  const sources = await readAgentSources(manifest, agentDir);
+  // refused source must never leave a half-written bundle. Role by PATH: the output
+  // is the more specific root when it sits inside the agent.
+  const sources = await readAgentSources(manifest, agentDir, fsBoundary({ source: [agentDir], destination: [outputPath] }, { origin: 'content' }));
+  const projectRoot = findProjectRoot(agentDir) ?? agentDir;
+  const packagedFormats = shouldPackage ? formats : [];
 
-  // An explicit output holding anything is refused, never deleted, unless --force
-  // says it is a previous build — which is then removed, not written over. The
-  // default location is VAT's and is built into in place. One holding the source
-  // is refused outright.
-  const replace = options.replaceExistingOutput === true;
-  checkPackageOutput({
+  // ONE plan: the agent directory (written whole into a staged tree beside it) and the
+  // archives a format writes beside it. It lands whole, or changes nothing — a previous
+  // build is never removed first. Who may lose what is there: `packageOwnership`.
+  const holder: { built?: AgentBuilt } = {};
+  const plan = await planTreeChanges(packageOutputChanges({
     outputPath,
     skillName: manifest.metadata.name,
-    formats,
-    sources: sources.paths,
-    projectRoot: findProjectRoot(agentDir) ?? agentDir,
-    replaceExistingOutput: replace || options.outputPath === undefined,
-  });
-  if (replace) await writingOutput(outputPath, () => fs.rm(outputPath, { recursive: true, force: true }), 'removed');
-  await writingOutput(outputPath, () => fs.mkdir(outputPath, { recursive: true }), 'created');
-
-  const files: string[] = [];
-
-  // STEP 1: Generate SKILL.md from agent.yml
-  const skillPath = await generateSkillFile(manifest, sources.systemPrompt, outputPath);
-  files.push(skillPath);
-
-  // Generate agent-manifest-guide.md
-  const guidePath = await generateManifestGuide(outputPath);
-  files.push(guidePath);
-
-  // Copy scripts/ (supports .js and .py). Its tree was read above, so a refusal here is the output's.
-  if (sources.scriptsPath !== undefined) {
-    const scriptsPath = sources.scriptsPath;
-    const outputScriptsPath = safePath.join(outputPath, 'scripts');
-    await writingOutput(outputScriptsPath, () => copyDirectory(scriptsPath, outputScriptsPath));
-    files.push(outputScriptsPath);
-  }
-
-  if (sources.license !== undefined) {
-    const license = sources.license;
-    const outputLicensePath = safePath.join(outputPath, 'LICENSE.txt');
-    await writingOutput(outputLicensePath, () => fs.writeFile(outputLicensePath, license));
-    files.push(outputLicensePath);
-  }
-
-  // STEP 2: Optionally package the generated SKILL.md
-  if (shouldPackage) {
-    const packageResult = await packageSkill(skillPath, {
-      outputPath,
-      // The SKILL.md was generated into outputPath above: package it in place.
-      sourceGeneratedInOutput: true,
-      formats,
-      basePath: agentDir,
-    });
-
-    const result: BuildResult = {
-      outputPath: packageResult.outputPath,
-      agent: {
-        name: manifest.metadata.name,
-        version: manifest.metadata.version,
-      },
-      files: [...files, ...packageResult.files.dependencies.map(f => safePath.join(agentDir, f))],
-    };
-
-    // Conditionally add packageArtifacts (exactOptionalPropertyTypes)
-    if (packageResult.artifacts !== undefined) {
-      result.packageArtifacts = packageResult.artifacts;
-    }
-
-    return result;
-  }
-
-  // Just generate SKILL.md without packaging
-  return {
+    formats: packagedFormats,
+    ownership: packageOwnership({ outputPath: options.outputPath, replaceExistingOutput: options.replaceExistingOutput }),
+    reads: sources.paths,
+    write: async (staged) => {
+      holder.built = await writeAgentBuild({ manifest, agentDir, sources, staged, outputPath, formats, shouldPackage });
+      return holder.built.packaged?.siblings ?? {};
+    },
+  }));
+  const { warnings } = await applyTreePlan(plan);
+  // The plan resolves only once its fill has run, so the build is there.
+  if (holder.built === undefined) throw new Error('buildAgentSkill: the plan resolved without writing the build');
+  const { staged, files, packaged } = holder.built;
+  const landedPath = stagedPathMapper(projectRoot, staged, outputPath);
+  const result: BuildResult = {
     outputPath,
     agent: {
       name: manifest.metadata.name,
       version: manifest.metadata.version,
     },
-    files,
+    files: files.map(landedPath),
+    residue: warnings,
   };
+  if (packaged !== undefined) {
+    const landed = landedPackageResult(packaged, { outputPath, projectRoot, formats: packagedFormats, residue: warnings });
+    result.files.push(...landed.files.dependencies.map(f => safePath.join(agentDir, f)));
+    if (landed.artifacts !== undefined) result.packageArtifacts = landed.artifacts;
+  }
+  return result;
+}
+
+/** What one agent build wrote into its staged tree. */
+interface AgentBuilt {
+  /** The staged tree it was written into. */
+  readonly staged: string;
+  /** Every file it generated or copied, on the staged tree. */
+  readonly files: string[];
+  /** The package of the generated SKILL.md, when packaged. */
+  readonly packaged: PackagedInto | undefined;
+}
+
+/**
+ * Write the agent build into `staged`, a plan's staged tree: the generated SKILL.md and
+ * manifest guide, `scripts/`, `LICENSE.txt`, then the package of that SKILL.md, in place.
+ * A write is the destination's by path (`staged`); a read of the agent's tree the source's.
+ */
+async function writeAgentBuild(input: {
+  manifest: LoadedAgentManifest;
+  agentDir: string;
+  sources: AgentSources;
+  staged: string;
+  /** Where `staged` lands: the run writes it too, so a crawl fault on it is the destination's. */
+  outputPath: string;
+  formats: NonNullable<BuildOptions['formats']>;
+  shouldPackage: boolean;
+}): Promise<AgentBuilt> {
+  const { manifest, agentDir, sources, staged } = input;
+  const boundary = fsBoundary({ source: [agentDir], destination: [staged] }, { origin: 'content' });
+  const writingOutput: OutputWriter = (action, write) => boundary.run(action, 'destination', write);
+
+  const files: string[] = [];
+
+  // STEP 1: Generate SKILL.md from agent.yml
+  const skillPath = await generateSkillFile(manifest, sources.systemPrompt, staged, writingOutput);
+  files.push(skillPath);
+
+  // Generate agent-manifest-guide.md
+  const guidePath = await generateManifestGuide(staged, writingOutput);
+  files.push(guidePath);
+
+  // Copy scripts/ (supports .js and .py). Its tree was proven above; a file that turns
+  // unreadable before the copy reaches it is still the source's — copyTree classifies its
+  // own reads — while a write it fails is decided by the boundary, by path.
+  if (sources.scriptsPath !== undefined) {
+    const scriptsPath = sources.scriptsPath;
+    const outputScriptsPath = safePath.join(staged, 'scripts');
+    await writingOutput(`copy ${scriptsPath} to ${outputScriptsPath}`, () => copyTree(scriptsPath, outputScriptsPath, SCRIPTS_LINKS));
+    files.push(outputScriptsPath);
+  }
+
+  if (sources.license !== undefined) {
+    const license = sources.license;
+    const outputLicensePath = safePath.join(staged, 'LICENSE.txt');
+    await writingOutput(`write ${outputLicensePath}`, () => fs.writeFile(outputLicensePath, license));
+    files.push(outputLicensePath);
+  }
+
+  // STEP 2: Optionally package the generated SKILL.md, in place.
+  if (!input.shouldPackage) return { staged, files, packaged: undefined };
+  // A source fault inside the packager is the SKILL_PACKAGING_FAILED finding; the agent's own
+  // source reads above stay their table refusal. Told apart here, at the packager call.
+  const packaged = await packageGeneratedSkillInto(skillPath, staged, { formats: input.formats, basePath: agentDir }, [input.outputPath])
+    .catch((error: unknown) => {
+      throw asPackagerRefusal(error);
+    });
+  // NOT `refuseFailedChecks`: the build adds scripts/ and LICENSE.txt that the generated SKILL.md
+  // never links, so the packager's PACKAGED_UNREFERENCED_FILE (an error) fires on every agent that
+  // has them — refusing on it would refuse those builds outright. Registered in known-defects.md.
+  return { staged, files, packaged };
 }
 
 /** What the build reads from the agent's own source, all of it before writing anything. */
@@ -306,30 +276,32 @@ interface AgentSources {
  * one that is there but cannot be read fails the build, coded as the source's,
  * rather than shipping a bundle that silently lacks it.
  */
-async function readAgentSources(manifest: LoadedAgentManifest, agentDir: string): Promise<AgentSources> {
+async function readAgentSources(manifest: LoadedAgentManifest, agentDir: string, boundary: FsBoundary): Promise<AgentSources> {
   const { path: systemPromptPath, text: systemPrompt } = await readSystemPrompt(manifest, agentDir);
   const paths = [manifest.__manifestPath ?? agentDir, systemPromptPath];
 
   const scriptsCandidate = safePath.join(agentDir, 'scripts');
-  const scriptsPath = sourcePresent(scriptsCandidate) ? scriptsCandidate : undefined;
+  const scriptsPath = pathPresent(scriptsCandidate, 'follow', 'source', 'probe') ? scriptsCandidate : undefined;
   if (scriptsPath !== undefined) {
-    await requireReadableTree(scriptsPath);
+    // Proven by the walk the copy below follows, before anything is written.
+    await proveTreeReadable(scriptsPath, SCRIPTS_LINKS);
     paths.push(scriptsPath);
   }
 
   const licensePath = safePath.join(agentDir, 'LICENSE.txt');
   let license: Buffer | undefined;
-  if (sourcePresent(licensePath)) {
-    license = await readingSource(licensePath, () => readSourceFile(licensePath));
+  if (pathPresent(licensePath, 'follow', 'source', 'probe')) {
+    license = await boundary.run(`read ${licensePath}`, 'source', () => readRegularFile(licensePath));
     paths.push(licensePath);
   }
   return { systemPrompt, scriptsPath, license, paths };
 }
 
 /**
- * The system prompt the manifest names. Both refusals of the reference itself
- * are the manifest's to fix — coded so a caller never reports them as a defect
- * in VAT; one the OS will not read is the source's.
+ * The system prompt the manifest names. A missing `$ref` is the manifest's to
+ * fix. The file it names is read as a `source` of origin `config` — the manifest
+ * chose the path — so an absent one is the config's mistake and one the OS will
+ * not read is the input's, as the refusal table decides.
  */
 async function readSystemPrompt(manifest: LoadedAgentManifest, agentDir: string): Promise<{ path: string; text: string }> {
   const systemPromptRef = manifest.spec.prompts?.system?.$ref;
@@ -338,13 +310,11 @@ async function readSystemPrompt(manifest: LoadedAgentManifest, agentDir: string)
   }
 
   const fullSystemPromptPath = safePath.resolve(agentDir, systemPromptRef);
-  try {
-    return { path: fullSystemPromptPath, text: (await readSourceFile(fullSystemPromptPath)).toString('utf-8') };
-  } catch (error) {
-    if (error instanceof VatError) throw error;
-    if (!isPathAbsentError(error)) throw sourceUnreadable(fullSystemPromptPath, error);
-    throw new VatError(AGENT_MANIFEST_INVALID_CODE, `spec.prompts.system.$ref names ${systemPromptRef}, which does not exist.`, { cause: error });
-  }
+  const text = await withFsFault(
+    { side: 'source', origin: 'config', action: `read the system prompt ${systemPromptRef} (spec.prompts.system.$ref)`, path: fullSystemPromptPath },
+    () => readRegularFile(fullSystemPromptPath),
+  );
+  return { path: fullSystemPromptPath, text: text.toString('utf-8') };
 }
 
 /**
@@ -354,7 +324,8 @@ async function readSystemPrompt(manifest: LoadedAgentManifest, agentDir: string)
 async function generateSkillFile(
   manifest: LoadedAgentManifest,
   systemPrompt: string,
-  outputPath: string
+  outputPath: string,
+  writingOutput: OutputWriter,
 ): Promise<string> {
   // Build SKILL.md with frontmatter
   const frontmatter = `---
@@ -406,7 +377,7 @@ spec:
 
   // Write SKILL.md
   const skillPath = safePath.join(outputPath, 'SKILL.md');
-  await writingOutput(skillPath, () => fs.writeFile(skillPath, skillContent, 'utf-8'));
+  await writingOutput(`write ${skillPath}`, () => fs.writeFile(skillPath, skillContent, 'utf-8'));
 
   return skillPath;
 }
@@ -414,7 +385,7 @@ spec:
 /**
  * Generate agent-manifest-guide.md with comprehensive documentation
  */
-async function generateManifestGuide(outputPath: string): Promise<string> {
+async function generateManifestGuide(outputPath: string, writingOutput: OutputWriter): Promise<string> {
   const guide = `# VAT Agent Manifest Guide
 
 ## Overview
@@ -780,7 +751,7 @@ spec:
 `;
 
   const guidePath = safePath.join(outputPath, 'agent-manifest-guide.md');
-  await writingOutput(guidePath, () => fs.writeFile(guidePath, guide, 'utf-8'));
+  await writingOutput(`write ${guidePath}`, () => fs.writeFile(guidePath, guide, 'utf-8'));
 
   return guidePath;
 }
@@ -805,7 +776,7 @@ function findAgentPackageRoot(manifestPath: string): string {
   // Walk up until we find a package.json or hit the filesystem root
   while (currentDir !== path.dirname(currentDir)) {
     const packageJsonPath = safePath.join(currentDir, 'package.json');
-    if (sourcePresent(packageJsonPath)) {
+    if (pathPresent(packageJsonPath, 'follow', 'source', 'probe')) {
       return currentDir;
     }
     currentDir = path.dirname(currentDir);

@@ -7,9 +7,11 @@
  *
  * `examined` counts the cache locations considered — always one, the shared
  * `<tmpdir>/.vat-cache` root. A root that does not exist is considered and
- * empty (`existed: false`, `ok`). A delete that stops part-way is the envelope's
- * error branch (`RUN_INCOMPLETE`, exit 2) carrying this same `data`: what went,
- * what stayed, and the counts actually removed.
+ * empty (`existed: false`, `ok`). The tree is moved off its path whole before it
+ * is removed, so there is no partial clear: a refusal before that is the error
+ * branch with `data: null`; a delete the OS stops after it is the error branch
+ * (`RUN_INCOMPLETE`) with this `data` — the clear is done — and a
+ * TREE_CLEANUP_INCOMPLETE warning naming where the moved-aside tree is.
  */
 
 import { FindingSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
@@ -30,8 +32,6 @@ const CacheClearDataSchema = z.object({
   existed: z.boolean(),
   /** Top-level entries that are gone, sorted. */
   removed: z.array(z.string()),
-  /** Top-level entries still on disk, sorted — empty unless the delete stopped part-way. */
-  remaining: z.array(z.string()),
   /** Files (and other non-directory entries) actually removed. */
   entriesRemoved: z.number().int().nonnegative(),
   /** Bytes actually removed. */

@@ -16,7 +16,13 @@
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
+
 import { createSkillMarkdown, createSuiteContext, executeCliAndParseYaml, writeTestFile } from './test-common.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-10-');
 
 /** A scoped package no test machine has installed. */
 const ABSENT_PACKAGE = '@vat-absent-fixture/nothing-here';

@@ -6,9 +6,8 @@ import type { Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 
 import { materializeIssue } from '@vibe-agent-toolkit/agent-skills';
-import { isStagedReplaceLeftover } from '@vibe-agent-toolkit/claude-marketplace';
 import { buildReport, toFindings, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, isTreeChangeResidue, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
@@ -128,7 +127,7 @@ async function scanForInstalledSkills(
  */
 function installedSkillsIn(listing: readonly Dirent[], scope: string, location: string): InstalledSkill[] {
   return listing
-    .filter((entry) => (entry.isDirectory() || entry.isSymbolicLink()) && !isStagedReplaceLeftover(entry.name))
+    .filter((entry) => (entry.isDirectory() || entry.isSymbolicLink()) && !isTreeChangeResidue(entry.name))
     .map((entry) => ({
       name: entry.name,
       scope,

@@ -64,7 +64,7 @@ Taken to its limit, a **bare filename with no `/` exempts that filename everywhe
 
 The option **replaces** any default rather than merging with it, and unknown option keys are a config error — a typo'd `exemptFile` must fail loudly rather than quietly exempt nothing.
 
-The rules taking `exemptFiles` are `no-raw-node-path`, `no-os-tmpdir`, `no-fs-mkdirSync`, `no-fs-realpathSync`, `no-child-process-execSync`, `no-fs-promises-cp`, `no-raw-text-decode` and `no-bare-symlink-in-tests`.
+The rules taking `exemptFiles` are `no-raw-node-path`, `no-os-tmpdir`, `no-fs-mkdirSync`, `no-fs-realpathSync`, `no-child-process-execSync`, `no-raw-text-decode`, `no-bare-symlink-in-tests`, `no-adhoc-errno` and `no-destructive-fs` (the last takes directory entries too: a trailing `/` makes an entry a directory).
 
 ## Rules
 
@@ -73,7 +73,7 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 **The auto-fix writes the import to the subpath in that column**, not to the barrel — `--fix` on a raw `path.join()` inserts `import { safePath } from '@vibe-agent-toolkit/utils/path'`. A file that already reaches the helper through the barrel keeps its existing import and only has the call rewritten: adding a second binding of the same name is a `SyntaxError`, not a redundant import.
 
 <!-- gen:eslint-rules -->
-36 rules; 7 auto-fix. `configs.recommended` enables 18 of them (16 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
+38 rules; 6 auto-fix. `configs.recommended` enables 17 of them (15 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
 
 #### Path handling
 
@@ -91,11 +91,13 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 
 | Rule | Bans | Use instead | Subpath | Fix | `recommended` |
 |---|---|---|---|---|---|
+| `no-adhoc-errno` | an errno name (`ENOENT`, `EACCES`, …) as a string in a classifying position, and a catch that reads `e.code` then builds a refusal with `cause: e` | `fsFaultOf(e)` / `classifyFsFault(e, …)`, or a single-errno predicate such as `isPathAbsentError(e)` | — |  | — |
 | `no-bare-executable-spawn` | Disallow spawning 'git' or 'node' by bare name — resolve the executable once (process.execPath; NODE_EXECUTABLE / gitExecutable() in tests) and spawn the absolute path | — | — |  | `error` |
 | `no-bare-symlink-in-tests` | unguarded `fs.symlinkSync()` / `fs.promises.symlink()` | in tests: `createSymlink(cap, …)` / `createSymlinkAsync(cap, …)`; in shipped code: a win32 junction, or a `catch` naming the privilege | `/testing` |  | — |
 | `no-child-process-execSync` | `child_process.execSync()` | `safeExecSync()` | `/process` | ✓ | `error` |
+| `no-destructive-fs` | recursive `rm`/`rmSync`, `rmdir`, `rename`, `cp` and `copyFile` from `node:fs` / `node:fs/promises` (and their `Sync` forms), called or passed as values | `planTreeChanges()` / `applyTreePlan()`, `renameFileAtomic()`, `replaceFile()`, `copyTree()`, `withTempDir()` / `disposeTempDir()` | — |  | — |
+| `no-existssync` | `existsSync()` from `node:fs` — called, handed on, destructured or re-exported — under `packages/*/src/` | `pathPresent(path, mode, side, absence)` (absent only on an absence; every other errno a classified `FS_FAULT`) | — |  | — |
 | `no-fs-mkdirSync` | `fs.mkdirSync()` | `mkdirSyncReal()` | `/fs` | ✓ | `error` |
-| `no-fs-promises-cp` | `cp()` from `node:fs/promises` (drops nested files on Node 22) | `cpSync()` from `node:fs` | — | ✓ | `error` |
 | `no-fs-realpathSync` | `fs.realpathSync()` | `normalizePath()` | `/fs` | ✓ | `error` |
 | `no-os-tmpdir` | `os.tmpdir()` (8.3 short names on Windows) | `normalizedTmpdir()` | `/fs` | ✓ | `error` |
 | `no-unix-shell-commands` | `tar`, `grep`, `rm`, `echo`, … spawned directly | Node APIs, or a portable script fixture | — |  | `error` |
@@ -217,7 +219,7 @@ Not in `recommended` because the first half depends on **your** Node floor — a
 
 `try { return statSync(p); } catch { return null; }` answers three different questions with one word. *Not there* is what the author meant. *Refused* — `EACCES`, `EPERM`, `ELOOP` — is a file that exists and could not be read, now reported as absent. *Bug* — a `TypeError` two frames down — is a defect, now reported as a file that is not there. All three exit 0, and the tool is quietest exactly where it is most wrong.
 
-The rule is a floor, deliberately syntactic: a catch is fine if it **references its error binding anywhere** in the body (`isFilesystemAccessError(e)`, `e instanceof X`, `e.code === 'ENOENT'`, `errors.push(String(e))`, `log.warn(e)`) or **throws at its own level** (a rethrow, or a translation into a louder error; a `throw` inside a nested function is a promise to fail later, not a rethrow). It cannot tell `narrow(e)` from `log(e)` and does not try. What it guarantees is the weaker, enforceable property — *the error was looked at before it was discarded* — which every one of the shipped defects lacked.
+The rule is a floor, deliberately syntactic: a catch is fine if it **references its error binding anywhere** in the body (`fsFaultOf(e)`, `e instanceof X`, `e.code === 'ENOENT'`, `errors.push(String(e))`, `log.warn(e)`) or **throws at its own level** (a rethrow, or a translation into a louder error; a `throw` inside a nested function is a promise to fail later, not a rethrow). It cannot tell `narrow(e)` from `log(e)` and does not try. What it guarantees is the weaker, enforceable property — *the error was looked at before it was discarded* — which every one of the shipped defects lacked.
 
 This is the one seam `tsc` cannot see. When a callee learns to throw where it used to return — a crawler that starts refusing an unreadable directory instead of skipping it — every caller whose contract changed by TYPE fails to compile and gets fixed; the caller with a blind `catch` compiles unchanged and absorbs the new refusal. That is how a refuse-by-default crawler shipped under a `catch { return null }` that turned `vat audit` into a scan of nothing.
 

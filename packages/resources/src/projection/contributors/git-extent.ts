@@ -140,6 +140,7 @@ export class GitExtentContributor implements ExtentContributor {
     // `dist/`, and a tracked file under `dist/` IS in git's extent whatever any
     // authored-content lane thinks of it.
     const absolutePaths = await crawlDirectory({
+      outputs: [],
       baseDir: base.root,
       respectGitignore: true,
       includeUntracked: true,
@@ -151,7 +152,7 @@ export class GitExtentContributor implements ExtentContributor {
       // not ignored), so the answer is the projection's stop-not-degrade one,
       // for the caching reason `crawl-source.ts` gives. A locked directory
       // that IS ignored never reaches here: git prunes it by name.
-      unreadable: { refuse: { root: base.root, remedy: listingRefusalRemedy(base.root) } },
+      unreadable: { refuse: { root: base.root, remedy: listingRefusalRemedy(base.root), side: 'source' } },
     });
 
     const resources = new Map<string, ResourceRow>();

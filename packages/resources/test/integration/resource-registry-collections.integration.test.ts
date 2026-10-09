@@ -173,6 +173,7 @@ describe('ResourceRegistry with collections', () => {
     const registry = new ResourceRegistry({ config });
     await registry.crawl({
       unreadable: 'refuse',
+      outputs: [],
       baseDir: suite.tempDir,
       include: ['**/*.md'],
     });

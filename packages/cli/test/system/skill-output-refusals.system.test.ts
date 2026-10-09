@@ -13,6 +13,8 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
+
 import { executeCli } from './test-helpers/cli-runner.js';
 import {
   BUILDABLE_AGENT_FILES,
@@ -26,6 +28,10 @@ import {
   SKILLS_CONFIG,
   useMatrixTempDir,
 } from './test-helpers/exit-code-matrix.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-11-');
 
 const SKILL_MD = 'skills/clean/SKILL.md';
 const UNWRITABLE = 0o555;
@@ -120,8 +126,11 @@ describe('an output a skill-packaging lane cannot write ends RUN_INCOMPLETE (sys
 
     const { status, document, output } = run(cwd, ['skills', 'package', SKILL_MD, '-o', 'z', '--force']);
 
-    expect(refusalOf(document), output).toStrictEqual({ status: 'error', code: 'RUN_INCOMPLETE' });
+    // A directory where the archive goes is no previous package: the plan refuses it before anything
+    // is written (USAGE_INVALID), --force or not, and neither the bundle nor the archive lands.
+    expect(refusalOf(document), output).toStrictEqual({ status: 'error', code: 'USAGE_INVALID' });
     expect(status).toBe(2);
+    expect(existsSync(safePath.join(cwd, 'z'))).toBe(false);
   });
 
   it.skipIf(CANNOT_DENY_READS)('vat agent build: an unwritable --output parent', { timeout: PER_TEST_TIMEOUT_MS }, () => {

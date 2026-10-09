@@ -45,6 +45,7 @@ import {
   isCustomCheckCode,
   toFindings,
   type ValidationIssue,
+  withAddedFindings,
 } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -54,6 +55,7 @@ import {
   endWithForwardedDocument,
   endWithRefusal,
   endWithReport,
+  leftoverIssueOf,
   NOTHING_FINISHED,
   type ForwardedDocument,
 } from '../../utils/document-writer.js';
@@ -1420,7 +1422,7 @@ type SupervisedEnding =
  * @param options.budgetSecs - The bound, in seconds
  * @returns What to publish, and with what exit code
  */
-function superviseCheckRun(options: {
+async function superviseCheckRun(options: {
   pathArg: string | undefined;
   options: CheckOptions;
   budgetSecs: number;
@@ -1432,7 +1434,7 @@ function superviseCheckRun(options: {
   // run. The parent needs a root only to label a KILLED run's document.
   const root = projectRootOrNull(startDir) ?? safePath.resolve(startDir);
 
-  return withProgressLog(async (logPath) => {
+  const { value: ending, leftover } = await withProgressLog(async (logPath): Promise<SupervisedEnding> => {
     const run = await superviseCheck({
       args: childArgs(options.pathArg, options.options, logPath),
       logPath,
@@ -1457,6 +1459,20 @@ function superviseCheckRun(options: {
       })),
     };
   });
+  return withLeftover(ending, leftover);
+}
+
+/**
+ * `ending` with the progress log's directory, when the OS would not remove it, as one
+ * `TREE_CLEANUP_INCOMPLETE` warning beside the checks that ran. A forwarded document is then
+ * published re-built rather than byte for byte: it gained a finding the child never knew of.
+ */
+function withLeftover(ending: SupervisedEnding, leftover: unknown): SupervisedEnding {
+  if (leftover === undefined) return ending;
+  const added = toFindings([leftoverIssueOf(leftover)]);
+  // The child's document was validated against this verb's schema when it was read.
+  const report = 'forward' in ending ? (ending.forward.report as CheckReport) : ending.payload;
+  return { payload: withAddedFindings(report, added) };
 }
 
 /**
@@ -1518,8 +1534,8 @@ export async function checkCommand(
       ? { payload: await runChecksHere(pathArg, options, logger, startTime) }
       : await superviseCheckRun({ pathArg, options, budgetSecs });
     if ('forward' in ending) {
-      // Verbatim — the supervisor already checked it is this verb's document —
-      // and on the code that document derives. The child already built what the operator's `--format` asked for, and
+      // Verbatim (unless `withLeftover` had to add a finding to it) — the supervisor already checked it is
+      // this verb's document — and on the code that document derives. The child already built what the operator's `--format` asked for, and
       // re-serializing it here would be a second place for that shape to live.
       //
       // ⚠️ `durationSecs` in it is therefore the CHILD's wall time and does

@@ -6,16 +6,13 @@
  * then creates a squashed commit on the target branch.
  */
 
-import { mkdtempSync } from 'node:fs';
-
-
 import type { ClaudeMarketplaceConfig } from '@vibe-agent-toolkit/resources';
-import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
-import { forEachInOrder, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { buildReport, toFindings, type Finding, type Gate } from '@vibe-agent-toolkit/schema';
+import { forEachInOrder, withTempDir } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { refusalCodeOf } from '../../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../../utils/document-writer.js';
+import { endWithRefusal, endWithReport, leftoverIssueOf, NOTHING_FINISHED } from '../../../utils/document-writer.js';
 import { createLogger, type Logger } from '../../../utils/logger.js';
 import { redactUrlCredentials } from '../../../utils/url-redact.js';
 import { assertMarketplaceDeclared, loadClaudeProjectConfig } from '../claude-config.js';
@@ -96,6 +93,9 @@ Output:
   (marketplaces with a publish: block), and data.published[] of
   { marketplace, version (null for a multi-plugin marketplace), branch,
   files, dryRun }. A refusal after a marketplace was published still lists it.
+  A temporary directory the OS would not remove after a publish is a
+  TREE_CLEANUP_INCOMPLETE warning naming it; the publish stands and the
+  remaining marketplaces still publish.
   Progress -> stderr
 
 Exit Codes:
@@ -133,21 +133,22 @@ function resolveLicenseOptions(
 }
 
 /** Test seam: a config `license` value as the composer's options. */
-export const __internal = { resolveLicenseOptions };
+export const __internal = { leftoverFindings, publishReport, resolveLicenseOptions };
 
 /**
- * Build ComposeOptions for a single marketplace entry.
+ * Build ComposeOptions for a single marketplace entry, composing into `outputDir`.
  */
 function buildComposeOptions(
   mpName: string,
   configDir: string,
   publishConfig: NonNullable<ClaudeMarketplaceConfig['publish']>,
   licenseOpts: LicenseOptions | undefined,
+  outputDir: string,
 ): ComposeOptions {
   const opts: ComposeOptions = {
     marketplaceName: mpName,
     configDir,
-    outputDir: mkdtempSync(safePath.join(normalizedTmpdir(), `vat-publish-tree-${mpName}-`)),
+    outputDir,
   };
   if (publishConfig.changelog) {
     opts.changelog = { sourcePath: publishConfig.changelog };
@@ -170,10 +171,25 @@ interface PublishOneOptions {
   logger: Logger;
 }
 
+/** One marketplace published, and the temp directories it left behind once it was. */
+interface PublishedMarketplace {
+  readonly result: PublishResult;
+  /** Each the classified fault naming a temp directory the OS would not remove: a warning, never the refusal. */
+  readonly leftovers: readonly unknown[];
+}
+
 /**
- * Publish a single marketplace and return the result.
+ * Publish a single marketplace. The publish tree is composed in VAT's own staging under the
+ * temp directory, disposed of however the publish ends; it and the git staging repo, when the
+ * OS will not remove them after the publish, come back as `leftovers` beside the result.
  */
-async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishResult> {
+async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishedMarketplace> {
+  const { value, leftover } = await withTempDir(`vat-publish-tree-${ctx.mpName}-`, (staging) => publishFromStaging(ctx, staging));
+  return { result: value.result, leftovers: [...value.leftovers, ...(leftover === undefined ? [] : [leftover])] };
+}
+
+/** {@link publishOneMarketplace}, composing the publish tree into `staging`. */
+async function publishFromStaging(ctx: PublishOneOptions, staging: string): Promise<PublishedMarketplace> {
   const { mpName, mpConfig, publishConfig, configDir, options, logger } = ctx;
   const branch = options.branch ?? publishConfig.branch ?? 'claude-marketplace';
   const remote = publishConfig.remote ?? DEFAULT_REMOTE;
@@ -182,7 +198,7 @@ async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishRes
     ? resolveLicenseOptions(publishConfig.license, mpConfig.owner.name)
     : undefined;
 
-  const composeOpts = buildComposeOptions(mpName, configDir, publishConfig, licenseOpts);
+  const composeOpts = buildComposeOptions(mpName, configDir, publishConfig, licenseOpts, staging);
   const composeResult = await composePublishTree(composeOpts);
 
   const labelVersion = composeResult.version;
@@ -211,7 +227,7 @@ async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishRes
     logger.info(`[no-push] Creating local branch ${branch}`);
   }
 
-  publishToGitBranch({
+  const repoLeftover = await publishToGitBranch({
     publishDir: composeOpts.outputDir,
     branch,
     remote,
@@ -224,17 +240,20 @@ async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishRes
   });
 
   return {
-    marketplace: mpName,
-    version: labelVersion ?? null,
-    branch,
-    files: composeResult.files,
-    dryRun: options.dryRun ?? false,
+    result: {
+      marketplace: mpName,
+      version: labelVersion ?? null,
+      branch,
+      files: composeResult.files,
+      dryRun: options.dryRun ?? false,
+    },
+    leftovers: repoLeftover === undefined ? [] : [repoLeftover],
   };
 }
 
 /** The report over the marketplaces published — a refusal's finished work reads the same list. */
-function publishReport(published: readonly PublishResult[], durationMs: number): MarketplacePublishReport {
-  return buildReport({ examined: published.length, findings: [], data: { published: [...published] }, gate: GATE, durationMs });
+function publishReport(published: readonly PublishResult[], findings: readonly Finding[], durationMs: number): MarketplacePublishReport {
+  return buildReport({ examined: published.length, findings, data: { published: [...published] }, gate: GATE, durationMs });
 }
 
 async function marketplacePublishCommand(_options: MarketplacePublishOptions, command: Command): Promise<void> {
@@ -245,6 +264,9 @@ async function marketplacePublishCommand(_options: MarketplacePublishOptions, co
   // Pushed as each marketplace publishes, so a refusal on the next one still
   // reports what already reached its branch.
   const published: PublishResult[] = [];
+  // Temp directories the OS would not remove once their marketplace was published: one warning
+  // each, beside the work — on the report, or on a later marketplace's refusal.
+  const leftovers: unknown[] = [];
 
   try {
     const { configDir, claudeConfig } = loadClaudeProjectConfig();
@@ -261,18 +283,23 @@ async function marketplacePublishCommand(_options: MarketplacePublishOptions, co
         return;
       }
 
-      published.push(await publishOneMarketplace({
-        mpName, mpConfig, publishConfig: mpConfig.publish, configDir, options, logger,
-      }));
+      const done = await publishOneMarketplace({ mpName, mpConfig, publishConfig: mpConfig.publish, configDir, options, logger });
+      published.push(done.result);
+      leftovers.push(...done.leftovers);
     });
   } catch (error) {
     const finished = published.length === 0
       ? NOTHING_FINISHED
-      : { examined: published.length, findings: [], data: { published } };
+      : { examined: published.length, findings: leftoverFindings(leftovers), data: { published } };
     endWithRefusal('claude marketplace publish', refusalCodeOf(error), error, 'yaml', GATE, finished);
   }
 
   // Nothing published because nothing declares `publish:` is examined-zero:
   // the writer refuses that green.
-  endWithReport('claude marketplace publish', publishReport(published, Date.now() - startTime), 'yaml');
+  endWithReport('claude marketplace publish', publishReport(published, leftoverFindings(leftovers), Date.now() - startTime), 'yaml');
+}
+
+/** Each temp directory left behind as the one `TREE_CLEANUP_INCOMPLETE` warning naming it. */
+function leftoverFindings(leftovers: readonly unknown[]): Finding[] {
+  return toFindings(leftovers.map((leftover) => leftoverIssueOf(leftover)));
 }

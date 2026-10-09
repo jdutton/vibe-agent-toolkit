@@ -208,7 +208,7 @@ describe.skipIf(CANNOT_DENY_READS)('vat audit with a config the FILESYSTEM refus
 
   it('files the finding on the CONFIG and still validates the skill', () => {
     // `config-loader.ts` preserves `cause` specifically so callers can ask
-    // `isFilesystemAccessError` and "decide whether to degrade or abort".
+    // `fsFaultOf` and "decide whether to degrade or abort".
     // `resolveGoverningConfig` caught `ConfigLoadError` unconditionally and never
     // asked — so an EACCES config produced no finding at all, and the run said
     // only that a config was "unloadable". A permissions problem and a typo need

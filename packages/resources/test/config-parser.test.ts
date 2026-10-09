@@ -1,12 +1,11 @@
 // Test file - all file operations are in temp directories, duplicated strings acceptable
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { FS_FAULT_CODE, safePath } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { CONFIG_UNREADABLE_CODE } from '../src/config-issues.js';
-import { loadConfig, parseConfigFile, readConfigTextSync } from '../src/config-parser.js';
+import { loadConfig, parseConfigFile, readConfigText, readConfigTextSync } from '../src/config-parser.js';
 import { ClaudeMarketplaceSchema, ProjectConfigSchema } from '../src/schemas/project-config.js';
 
 import { setupTempDirTestSuite } from './test-helpers.js';
@@ -152,21 +151,31 @@ describe('a config the OS will not read', () => {
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 
+  /** The classified fault a config read the OS refused becomes: the user's config, a source. */
+  const configFault = (faultClass: string): Record<string, unknown> => ({ code: FS_FAULT_CODE, side: 'source', origin: 'config', faultClass });
+
   // A directory where the file should be: EISDIR on every platform.
-  it('codes a directory at the config path CONFIG_UNREADABLE, async and sync', async () => {
+  it('classifies a directory at the config path as a wrong-type config source fault, async and sync', async () => {
     const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     await mkdir(configPath);
 
-    await expect(parseConfigFile(configPath)).rejects.toMatchObject({ code: CONFIG_UNREADABLE_CODE });
-    expect(() => readConfigTextSync(configPath)).toThrow(expect.objectContaining({ code: CONFIG_UNREADABLE_CODE }));
+    await expect(parseConfigFile(configPath)).rejects.toMatchObject(configFault('wrong-type'));
+    expect(() => readConfigTextSync(configPath)).toThrow(expect.objectContaining(configFault('wrong-type')));
   });
 
-  it.skipIf(CANNOT_DENY_READS)('codes a mode-000 config CONFIG_UNREADABLE', async () => {
+  it('classifies the read on the side the verb names: the config a verb edits is its destination', async () => {
+    const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
+    await mkdir(configPath);
+
+    await expect(readConfigText(configPath, 'destination')).rejects.toMatchObject({ ...configFault('wrong-type'), side: 'destination' });
+  });
+
+  it.skipIf(CANNOT_DENY_READS)('classifies a mode-000 config as a refused config source fault', async () => {
     const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     await writeFile(configPath, '{}\n');
     await chmod(configPath, 0o000);
     try {
-      await expect(parseConfigFile(configPath)).rejects.toMatchObject({ code: CONFIG_UNREADABLE_CODE });
+      await expect(parseConfigFile(configPath)).rejects.toMatchObject(configFault('refused'));
     } finally {
       await chmod(configPath, 0o600);
     }

@@ -5,12 +5,11 @@
 import { writeFileSync } from 'node:fs';
 
 
-import { isVatError, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { FS_FAULT_CODE, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { refuseSyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { listLocalPlugins } from '../../src/install/plugin-list.js';
-import { CLAUDE_USER_STATE_UNREADABLE_CODE } from '../../src/install/plugin-registry.js';
 import { setupPluginTestPaths } from '../test-helpers.js';
 
 describe('listLocalPlugins', () => {
@@ -104,14 +103,15 @@ describe('listLocalPlugins', () => {
     const restore = refuseSyncFs('readdirSync', paths.skillsDir, 'EACCES');
     try {
       expect(() => listLocalPlugins(paths)).toThrow(/EACCES/);
-      // Coded, so a caller can tell the user's unreadable state from a VAT defect.
+      // Classified, so a caller can tell the user's unreadable state from a VAT defect:
+      // a listing only reads Claude's state, so it is this verb's input.
       let thrown: unknown;
       try {
         listLocalPlugins(paths);
       } catch (error) {
         thrown = error;
       }
-      expect(isVatError(thrown, CLAUDE_USER_STATE_UNREADABLE_CODE)).toBe(true);
+      expect(thrown).toMatchObject({ code: FS_FAULT_CODE, side: 'source', faultClass: 'refused', path: paths.skillsDir });
     } finally {
       restore();
     }

@@ -1,7 +1,7 @@
 /**
  * `vat claude org skills` — manage organization skills via Skills API.
  */
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import type { Dirent, Stats } from 'node:fs';
 import {   basename } from 'node:path';
 
@@ -30,15 +30,7 @@ import type {
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { createAllowUsageLedger, runValidationFramework } from '@vibe-agent-toolkit/schema';
 import type { RefusalCode, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
-import {
-  direntKindFollowingSync,
-  forEachInOrder,
-  isAbsoluteAnyPlatform,
-  isFilesystemAccessError,
-  normalizedTmpdir,
-  safePath,
-  toForwardSlashAnyPlatform,
-} from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, direntKindFollowingSync, forEachInOrder, fsFaultOf, isAbsoluteAnyPlatform, safePath, toForwardSlashAnyPlatform, withTempDir } from '@vibe-agent-toolkit/utils';
 // Type-only: the runtime import stays lazy inside `inspectZipArchive`, so the
 // archive reader is loaded on the one path that parses an archive.
 import type AdmZipArchive from 'adm-zip';
@@ -46,7 +38,8 @@ import { Command } from 'commander';
 
 import { resolveSkillPackagingConfig } from '../../../skill-resolution/packaging-config.js';
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
-import { unstatablePathRefusal } from '../../../utils/project-root-policy.js';
+import { leftoverIssueOf } from '../../../utils/document-writer.js';
+import { requireInputPath } from '../../../utils/project-root-policy.js';
 import { downloadNpmPackage } from '../plugin/helpers.js';
 
 import type { OrgCommandFailure, OrgFailureOutcome } from './helpers.js';
@@ -759,8 +752,8 @@ export async function inspectZipArchive(zipPath: string): Promise<ZipInspection 
 		// An archive the FILESYSTEM refuses is a different thing: the path was
 		// readable a moment ago (the caller holds its bytes), so a refusal here
 		// is not a parse disagreement and stays loud.
-		if (isFilesystemAccessError(error)) {
-			throw new CommandRefusalError('INPUT_UNREADABLE', `Cannot read ${zipPath}: ${errorMessageOf(error)}`, { cause: error });
+		if (fsFaultOf(error) !== undefined) {
+			throw classifyFsFault(error, { side: 'source', origin: 'argument', action: `read ${zipPath}`, path: zipPath });
 		}
 		return { archiveUnreadable: describeZipFailure(error) };
 	}
@@ -1170,12 +1163,7 @@ interface PreparedUpload {
  * Never `existsSync`: it answers `false` for both.
  */
 function statNamedPath(path: string, absentMessage: string): Stats {
-	try {
-		return statSync(path);
-	} catch (error) {
-		const refusal = unstatablePathRefusal(path, error);
-		throw refusal.refusal === 'USAGE_INVALID' ? new CommandRefusalError('USAGE_INVALID', absentMessage, { cause: error }) : refusal;
-	}
+	return requireInputPath(path, { origin: 'argument', message: absentMessage });
 }
 
 /**
@@ -1453,6 +1441,11 @@ export interface NpmInstallSummary {
 	skillsFailed?: number;
 	errors?: readonly SkillUploadFailure[];
 	skills: readonly SkillUploadResult[];
+	/**
+	 * The downloaded package's temp directory, when the OS would not remove it once the
+	 * uploads were done: one `TREE_CLEANUP_INCOMPLETE` warning naming it. The uploads stand.
+	 */
+	warnings?: readonly ValidationIssue[];
 }
 
 /**
@@ -1475,12 +1468,14 @@ export function summarizeNpmInstall(
 	source: string,
 	results: readonly SkillUploadResult[],
 	errors: readonly SkillUploadFailure[],
+	leftover: unknown,
 ): NpmInstallSummary | OrgCommandFailure {
 	const summary: NpmInstallSummary = {
 		source,
 		skillsUploaded: results.length,
 		...(errors.length > 0 ? { skillsFailed: errors.length, errors } : {}),
 		skills: results,
+		...(leftover === undefined ? {} : { warnings: [leftoverIssueOf(leftover)] }),
 	};
 	if (errors.length === 0) return summary;
 	// Some landed: the workspace is in a mixed state (`partial`). None did: `failed`.
@@ -1498,8 +1493,9 @@ async function installFromNpm(
 	client: OrgApiClient,
 	logger: UploadLogger,
 ): Promise<object> {
-	const tempDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-org-skills-'));
-	try {
+	// The download lives in a temp dir disposed of however the upload ends. One the OS will not
+	// remove after the uploads is reported beside them, never in their place: they landed.
+	const { value, leftover } = await withTempDir('vat-org-skills-', async (tempDir) => {
 		logger.info(`Downloading: ${npmPackage}`);
 		const packageDir = downloadNpmPackage(npmPackage, tempDir);
 
@@ -1544,10 +1540,9 @@ async function installFromNpm(
 			}
 		});
 
-		return summarizeNpmInstall(npmPackage, results, errors);
-	} finally {
-		rmSync(tempDir, { recursive: true, force: true });
-	}
+		return { results, errors };
+	});
+	return summarizeNpmInstall(npmPackage, value.results, value.errors, leftover);
 }
 
 /**

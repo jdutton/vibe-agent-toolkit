@@ -11,6 +11,7 @@ import { existsSync } from 'node:fs';
 import { basename, dirname, extname } from 'node:path';
 
 import {
+  asPackagerRefusal,
   buildStaleDistWarningLines,
   DuplicateStagedSkillError,
   isAcknowledged,
@@ -38,6 +39,7 @@ import {
   forEachInOrder,
   isVatError,
   issueLocation,
+  pathPresent,
   prefixMessageOnce,
   relativeEscapesRoot,
   resolveAssetReference,
@@ -58,8 +60,7 @@ import {
 } from '../../../skill-resolution/index.js';
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { loadConfig, loadConfigCached } from '../../../utils/config-loader.js';
-import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../../utils/document-writer.js';
-import { pathPresent } from '../../../utils/project-root-policy.js';
+import { endWithRefusal, endWithReport, leftoverIssueOf, NOTHING_FINISHED } from '../../../utils/document-writer.js';
 import { collectRepeated } from '../../../utils/repeatable-option.js';
 import { isSkillPublished } from '../../../utils/skill-packaging-config.js';
 import { runClaudePluginBuild } from '../../claude/plugin/build.js';
@@ -848,7 +849,7 @@ function resolveExistingDistOrThrow(
   ref: BuildableReference,
   flags: { noBuild: boolean; dryRun: boolean },
 ): BuildDeclaredSkillResult {
-  if (pathPresent(ref.expectedDistDir, 'follow')) {
+  if (pathPresent(ref.expectedDistDir, 'follow', 'source', 'probe')) {
     if (flags.noBuild) {
       process.stderr.write(`Using existing dist (NOT rebuilt): ${ref.expectedDistDir}\n`);
     }
@@ -920,14 +921,14 @@ export function buildMemoKey(ref: BuildableReference): string {
  * and is always checked.
  */
 function verifyBuiltDist(ref: BuildableReference): BuildDeclaredSkillResult {
-  if (!pathPresent(ref.expectedDistDir, 'follow')) {
+  if (!pathPresent(ref.expectedDistDir, 'follow', 'source', 'probe')) {
     throw new SkillBuildError(
       `Skill build for '${ref.name}' reported success but produced no output at ${ref.expectedDistDir}. ` +
         `Check the skill's packaging config (\`vat build\` should create this directory).`,
     );
   }
   const skillMdPath = safePath.join(ref.expectedDistDir, 'SKILL.md');
-  if (!pathPresent(skillMdPath, 'follow')) {
+  if (!pathPresent(skillMdPath, 'follow', 'source', 'probe')) {
     throw new SkillBuildError(
       `Skill build for '${ref.name}' reported success but produced no SKILL.md at ${ref.expectedDistDir}. ` +
         `Check the skill's packaging config (\`vat build\` should create this file).`,
@@ -984,6 +985,7 @@ async function runDeclaredSkillBuild(ref: BuildableReference): Promise<void> {
     // excludes every skill's test input. Getting this wrong would hand the executor
     // under test another skill's answer key — the exact signal the harness exists to
     // protect. Memoized per config root, so a multi-skill run discovers once.
+    // A source fault inside the packager is the SKILL_PACKAGING_FAILED finding (buildFailureOf).
     await packageSkill(
       ref.sourcePath,
       packagingConfigToPackageOptions(
@@ -1003,10 +1005,13 @@ async function runDeclaredSkillBuild(ref: BuildableReference): Promise<void> {
         // 103 paths) hoists its probe; see the comment there.
         conventionalSuiteProbe(),
       ),
-    );
+    ).catch((error: unknown) => {
+      throw asPackagerRefusal(error);
+    });
     return;
   }
-  await runClaudePluginBuild(ref.configRoot, { marketplace: ref.distribution.marketplaceName });
+  // This run built no `dist/skills` of its own: the pool the marketplace copies in is an input.
+  await runClaudePluginBuild(ref.configRoot, { marketplace: ref.distribution.marketplaceName, runOutputs: [] });
 }
 
 /**
@@ -1365,20 +1370,23 @@ function projectLocation(path: string): string | undefined {
 }
 
 /**
- * The refusal of a declared skill's build that THREW, decided by what it wrapped
- * ({@link SkillBuildError}): a coded cause keeps its own refusal — an unlistable
- * directory `INPUT_UNREADABLE`, a broken config `CONFIG_INVALID`, the same codes
- * those causes carry on every other path; the packager refusing the skill's own
- * content is the `SKILL_PACKAGING_FAILED` finding at the skill's source (as
+ * The refusal of a build that THREW, decided by what it threw: a coded value keeps
+ * its own refusal — an unlistable directory `INPUT_UNREADABLE`, a broken config
+ * `CONFIG_INVALID`, the same codes those carry on every other path; the packager
+ * refusing the skill's own content is the `SKILL_PACKAGING_FAILED` finding (as
  * `vat skills build` / `package` publish it) on a run that stopped before any eval,
  * `RUN_INCOMPLETE`; and anything uncoded is a defect, `INTERNAL_ERROR`.
+ *
+ * @param thrown - What the build threw
+ * @param message - The refusal's message, as the lane words it
+ * @param sourcePath - The skill's `SKILL.md`, when the lane knows which skill it was building
  */
-function buildFailureOf(err: SkillBuildError, cause: unknown): Pick<RunFailure, 'code' | 'findings'> {
-  const causeCode = refusalCodeOf(cause);
-  if (causeCode !== 'INTERNAL_ERROR') return { code: causeCode, findings: [] };
-  if (!isSkillPackagingInputError(cause)) return { code: 'INTERNAL_ERROR', findings: [] };
-  const location = err.sourcePath === undefined ? undefined : projectLocation(err.sourcePath);
-  return { code: 'RUN_INCOMPLETE', findings: [packagingFailedIssue(err.message, location, 're-run vat skill test run')] };
+function buildFailureOf(thrown: unknown, message: string, sourcePath: string | undefined): Pick<RunFailure, 'code' | 'findings'> {
+  const code = refusalCodeOf(thrown);
+  if (code !== 'INTERNAL_ERROR') return { code, findings: [] };
+  if (!isSkillPackagingInputError(thrown)) return { code: 'INTERNAL_ERROR', findings: [] };
+  const location = sourcePath === undefined ? undefined : projectLocation(sourcePath);
+  return { code: 'RUN_INCOMPLETE', findings: [packagingFailedIssue(message, location, 're-run vat skill test run', thrown)] };
 }
 
 /**
@@ -1387,16 +1395,19 @@ function buildFailureOf(err: SkillBuildError, cause: unknown): Pick<RunFailure, 
  *
  * The code is the thrown value's own ({@link refusalCodeOf}): each skill-test error
  * names its refusal by its code, and anything uncoded is `INTERNAL_ERROR`. A build
- * that threw is classified by its cause ({@link buildFailureOf}), so a broken config
- * or an unlistable directory publishes the same code whether subject resolution,
- * companion resolution or a build surfaced it. `Reason:` then follows the code, so the
- * two can never disagree: `internal` exactly for `INTERNAL_ERROR`, `bootstrap` for the
- * scaffolded `evals.json`, and `preflight` for every other refusal.
+ * that threw ({@link SkillBuildError}) is classified by its cause, and a packager
+ * refusal that arrives unwrapped — a `workspace:` companion is packaged inside the
+ * harness — by itself, both through {@link buildFailureOf}: a broken config, an
+ * unlistable directory or a skill the packager refused publishes the same thing
+ * whichever of subject resolution, companion resolution or staging surfaced it.
+ * `Reason:` then follows the code, so the two can never disagree: `internal` exactly
+ * for `INTERNAL_ERROR`, `bootstrap` for the scaffolded `evals.json`, and `preflight`
+ * for every other refusal.
  */
 function runFailureOf(err: unknown): RunFailure {
   const built = isVatError(err, 'SKILL_TEST_BUILD_FAILED') && err.cause !== undefined
-    ? buildFailureOf(err as SkillBuildError, err.cause)
-    : { code: refusalCodeOf(err), findings: [] };
+    ? buildFailureOf(err.cause, err.message, (err as SkillBuildError).sourcePath)
+    : buildFailureOf(err, errorMessageOf(err), undefined);
   if (skillTestFailureReason(err) === 'bootstrap') return { ...built, reason: 'bootstrap' };
   return { ...built, reason: built.code === 'INTERNAL_ERROR' ? 'internal' : 'preflight' };
 }
@@ -1464,8 +1475,10 @@ function evalFailedIssue(id: string, suiteLocation: string | undefined, tolerate
  * stderr as `Summary:`; stdout carries the document and nothing else.
  */
 function endWithHarnessResult(subject: string, result: RunHarnessResult, allowEvalFailure: boolean): void {
+  // Temp directories the harness could not remove once the run was done: one warning each, on either branch.
+  const leftovers = result.leftovers.map((leftover) => leftoverIssueOf(leftover));
   if (result.exitCode === ExitCode.ERROR) {
-    refuse({ code: result.refusal, reason: result.reason, findings: [] }, result.description);
+    refuse({ code: result.refusal, reason: result.reason, findings: leftovers }, result.description);
     return;
   }
   process.stderr.write(`Summary: ${result.description}\n`);
@@ -1473,7 +1486,7 @@ function endWithHarnessResult(subject: string, result: RunHarnessResult, allowEv
   const suiteLocation = projectLocation(result.evalsPath);
   endWithReport('skill test run', buildReport({
     examined: result.examined,
-    findings: toFindings(failed.map((outcome) => evalFailedIssue(outcome.id, suiteLocation, allowEvalFailure))),
+    findings: toFindings([...failed.map((outcome) => evalFailedIssue(outcome.id, suiteLocation, allowEvalFailure)), ...leftovers]),
     data: {
       skill: subject,
       description: result.description,

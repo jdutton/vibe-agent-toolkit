@@ -24,6 +24,8 @@ import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
+
 import {
   cleanupTestTempDir,
   createTestTempDir,
@@ -34,6 +36,10 @@ import {
 // The SYNCHRONOUS `executeCli` — `test-common.ts` exports an async one of the
 // same name whose result has no `stdout` until awaited.
 import { createMarkdownGitFixture, executeCli } from './test-helpers/index.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-7-');
 
 const binPath = getBinPath(import.meta.url);
 

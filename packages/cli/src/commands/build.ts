@@ -18,7 +18,7 @@ import {
   type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowing, everyInOrder, mapConcurrentFailingInOrder, mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, everyInOrder, findConfigFile, mapConcurrentFailingInOrder, mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { marksOperandRefusalByHand } from '../command-tree.js';
@@ -28,7 +28,7 @@ import { formatIssueLines } from '../utils/issue-rendering.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 
 import { PLUGIN_BUILD_REPORT_SCHEMA } from './claude/plugin/build-schema.js';
-import { runClaudePluginBuildPhase } from './claude/plugin/build.js';
+import { pluginBuildOutput, runClaudePluginBuildPhase } from './claude/plugin/build.js';
 import {
   applyPhaseSelection,
   createPhaseContext,
@@ -45,7 +45,7 @@ import {
 } from './phase-utils.js';
 import { rejectPositionalArguments } from './positional-args.js';
 import { SKILLS_BUILD_REPORT_SCHEMA } from './skills/build-schema.js';
-import { runSkillsBuildPhase } from './skills/build.js';
+import { distSkillsDir, runSkillsBuildPhase } from './skills/build.js';
 
 export interface BuildCommandOptions {
   only?: string;
@@ -259,12 +259,21 @@ export function selectBuildPhases(
   // A flag not forwarded here is a flag the composite command silently cannot
   // express: `vat build` would always get the collapsed report with no way to
   // ask for the full one.
-  if (!only || only === 'skills') {
-    phases.push({ name: 'skills', schema: SKILLS_BUILD_REPORT_SCHEMA, run: () => runSkillsBuildPhase(undefined, { verbose }) });
+  const buildsSkills = !only || only === 'skills';
+  const buildsClaude = (!only || only === 'claude') && hasClaudeMarketplaces;
+  if (buildsSkills) {
+    // What the run writes after this phase: the marketplaces the claude phase replaces — under the
+    // directory holding the config the claude phase loads (it finds it the same way), not the cwd.
+    const configPath = findConfigFile(process.cwd());
+    const runOutputs = buildsClaude ? [pluginBuildOutput(configPath === null ? process.cwd() : safePath.resolve(configPath, '..'))] : [];
+    phases.push({ name: 'skills', schema: SKILLS_BUILD_REPORT_SCHEMA, run: () => runSkillsBuildPhase(undefined, { verbose }, runOutputs) });
   }
 
-  if ((!only || only === 'claude') && hasClaudeMarketplaces) {
-    phases.push({ name: 'claude', schema: PLUGIN_BUILD_REPORT_SCHEMA, run: () => runClaudePluginBuildPhase({ verbose }) });
+  if (buildsClaude) {
+    // What this run wrote before the claude phase reads it: the skills phase's `dist/skills`, so a
+    // fault there is the run's own output (`destination`), not an input another build wrote.
+    const runOutputs = buildsSkills ? [distSkillsDir(process.cwd())] : [];
+    phases.push({ name: 'claude', schema: PLUGIN_BUILD_REPORT_SCHEMA, run: () => runClaudePluginBuildPhase({ verbose }, runOutputs) });
   }
 
   return decidePhaseSelection(only, phases, BUILD_VOCABULARY);

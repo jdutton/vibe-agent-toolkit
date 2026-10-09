@@ -95,6 +95,73 @@ export function tempDirTracker(prefix: string): { create: () => string; cleanupA
   };
 }
 
+/** The environment variables the host temp directory is read from: TMPDIR (POSIX), TEMP and TMP (win32). */
+const TMPDIR_ENV_NAMES = ['TMPDIR', 'TEMP', 'TMP'] as const;
+
+/**
+ * ⛔ DESTRUCTIVE CODE: make a fresh scratch directory THE temp directory for one test.
+ *
+ * `enter()` mints the scratch under the real temp directory and points `TMPDIR` / `TEMP` /
+ * `TMP` at it; `leave()` restores them and removes the scratch. Everything a verb makes and
+ * disposes of under the temp directory — and every child a test spawns, which inherits the
+ * environment — then lands in the scratch, so neither the run nor a mutation of its disposal
+ * code can reach the real temp directory. Framework-free: the caller registers the two with its
+ * runner (`beforeEach(enter)`, `afterEach(leave)`).
+ *
+ * @param prefix - The scratch directory's prefix, so a leaked one names its suite
+ */
+export function scratchTmpdirEnv(prefix: string): { enter: () => string; leave: () => void; current: () => string } {
+  let scratch: string | undefined;
+  let saved: ReadonlyArray<readonly [string, string | undefined]> = [];
+  return {
+    enter: () => {
+      // Made under the REAL temp directory, then made the temp directory.
+      scratch = createTempDir(prefix);
+      saved = TMPDIR_ENV_NAMES.map((name) => [name, process.env[name]] as const);
+      for (const name of TMPDIR_ENV_NAMES) process.env[name] = scratch;
+      return scratch;
+    },
+    leave: () => {
+      for (const [name, value] of saved) {
+        if (value === undefined) Reflect.deleteProperty(process.env, name);
+        else process.env[name] = value;
+      }
+      saved = [];
+      if (scratch !== undefined) removeTempDir(scratch);
+      scratch = undefined;
+    },
+    current: () => {
+      if (scratch === undefined) throw new Error('scratchTmpdirEnv: no scratch outside enter()/leave()');
+      return scratch;
+    },
+  };
+}
+
+/** The two hook registrars of a test runner (vitest's, jest's): `testing/` stays framework-free. */
+export interface EachTestHooks {
+  readonly beforeEach: (hook: () => void) => void;
+  readonly afterEach: (hook: () => void) => void;
+}
+
+/**
+ * {@link scratchTmpdirEnv}, registered with the runner for every test of a suite: register it at
+ * the top of the suite, before anything that runs a verb.
+ *
+ * @param prefix - The scratch directory's prefix, so a leaked one names its suite
+ * @param hooks - The runner's `beforeEach` / `afterEach`
+ * @returns The current test's scratch directory
+ */
+export function registerScratchTmpdir(prefix: string, hooks: EachTestHooks): () => string {
+  const scratch = scratchTmpdirEnv(prefix);
+  hooks.beforeEach(() => {
+    scratch.enter();
+  });
+  hooks.afterEach(() => {
+    scratch.leave();
+  });
+  return scratch.current;
+}
+
 /**
  * How long a scratch-dir teardown may run before it gives up and warns.
  *

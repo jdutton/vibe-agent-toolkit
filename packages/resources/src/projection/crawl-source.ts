@@ -70,7 +70,7 @@ import { existsSync, lstatSync, statSync } from 'node:fs';
 
 import {
   forEachInOrder,
-  isFilesystemAccessError,
+  fsFaultOf,
   readTextContentSync,
   safePath,
   toForwardSlash,
@@ -80,7 +80,7 @@ import {
   crawlPathFilter,
   type DirectoryRefusal,
   NEVER_CRAWL_GLOBS,
-  settleRefusal,
+  settleCrawlRefusal,
   type UnreadablePolicy,
 } from '@vibe-agent-toolkit/utils/crawl';
 import {
@@ -177,11 +177,21 @@ class ListingRefusals {
   readonly #root: string;
   readonly #recorded: DirectoryRefusal[] = [];
   readonly #seen = new Set<string>();
-  readonly #inPopulation: UnreadablePolicy;
+  readonly #remedy: string;
+  /** The trees the calling verb writes: the crawl's one declaration of which side a refusal is on. */
+  readonly outputs: readonly string[];
 
-  constructor(root: string) {
+  /**
+   * @param root - The corpus root a refused directory is expressed against
+   * @param outputs - The trees the calling verb WRITES (its output, its staging), `[]` for none:
+   *   a refused directory that is one of them, lies inside one or holds one — the root of a
+   *   project a build writes into included — is the verb's destination; any other is the
+   *   corpus's content, which the verb reads (`source`)
+   */
+  constructor(root: string, outputs: readonly string[]) {
     this.#root = root;
-    this.#inPopulation = { refuse: { root, remedy: listingRefusalRemedy(root) } };
+    this.#remedy = listingRefusalRemedy(root);
+    this.outputs = outputs;
   }
 
   /** Every refusal met inside ignored territory, in the order met, once each. */
@@ -189,9 +199,9 @@ class ListingRefusals {
     return this.#recorded;
   }
 
-  /** The policy for a walk whose every directory is known to be in the population: refuse. */
+  /** The policy for a walk whose every directory is known to be in the population: refuse, on the side of the directory refused. */
   get inPopulation(): UnreadablePolicy {
-    return this.#inPopulation;
+    return { degrade: (refusal) => this.settleInPopulation(refusal) };
   }
 
   /** The policy for a walk known to be inside gitignored territory: record, continue. */
@@ -213,9 +223,14 @@ class ListingRefusals {
           this.#record(refusal);
           return;
         }
-        settleRefusal(this.#inPopulation, refusal);
+        this.settleInPopulation(refusal);
       },
     };
+  }
+
+  /** Refuse a directory in the population: on what the verb writes, the destination's; anything else, the corpus's content. */
+  settleInPopulation(refusal: DirectoryRefusal): void {
+    settleCrawlRefusal({ refuse: { root: this.#root, remedy: this.#remedy, side: 'source' } }, refusal, this.outputs);
   }
 
   /** Forget every refusal — called as an enumeration starts, so the list is ITS list. */
@@ -361,10 +376,11 @@ export class FilesystemCrawlSource implements CrawlSource {
 
   /**
    * @param root - Absolute corpus root to enumerate
+   * @param outputs - The trees the verb writes (see {@link crawlSourceFor})
    */
-  constructor(root: string) {
+  constructor(root: string, outputs: readonly string[]) {
     this.#root = root;
-    this.#refusals = new ListingRefusals(root);
+    this.#refusals = new ListingRefusals(root, outputs);
   }
 
   get unlistable(): readonly DirectoryRefusal[] {
@@ -385,6 +401,7 @@ export class FilesystemCrawlSource implements CrawlSource {
     this.#symlinks.clear();
     const absolutePaths = await crawlDirectory({
       baseDir: this.#root,
+      outputs: this.#refusals.outputs,
       exclude: [...NEVER_CRAWL_GLOBS],
       // `followSymlinks` is three decisions — re-entry, membership and reach —
       // and all three come out the same way: following links would enumerate one
@@ -502,7 +519,7 @@ function symlinkShape(absolutePath: string): 'symlink' | null {
   } catch (error) {
     // The filesystem would not answer: the entry stays a member and
     // `statObservation` reports what it can (see above). A bug is not that.
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return null;
   }
 }
@@ -519,10 +536,11 @@ export class GitCrawlSource implements CrawlSource {
 
   /**
    * @param root - Absolute corpus root, inside a git working tree
+   * @param outputs - The trees the verb writes (see {@link crawlSourceFor})
    */
-  constructor(root: string) {
+  constructor(root: string, outputs: readonly string[]) {
     this.#root = root;
-    this.#refusals = new ListingRefusals(root);
+    this.#refusals = new ListingRefusals(root, outputs);
   }
 
   get unlistable(): readonly DirectoryRefusal[] {
@@ -703,7 +721,7 @@ export class GitCrawlSource implements CrawlSource {
     await forEachInOrder(submodules, async (submodule) => {
       candidates.push(
         walkedCandidate(submodule),
-        ...(await expandDirectory(submodule, admits, this.#refusals.inPopulation, this.#symlinks.add)).map(walkedCandidate),
+        ...(await expandDirectory(submodule, admits, this.#refusals, 'inPopulation', this.#symlinks.add)).map(walkedCandidate),
       );
     });
 
@@ -732,7 +750,7 @@ export class GitCrawlSource implements CrawlSource {
       // recorded, never fatal. See {@link ListingRefusals}.
       if (collapsed.isDirectory && collapsed.shape !== 'symlink') {
         candidates.push(
-          ...(await expandDirectory(collapsed.absolutePath, admits, this.#refusals.inIgnoredTerritory, this.#symlinks.add)).map(walkedCandidate),
+          ...(await expandDirectory(collapsed.absolutePath, admits, this.#refusals, 'inIgnoredTerritory', this.#symlinks.add)).map(walkedCandidate),
         );
       }
     });
@@ -791,7 +809,7 @@ export class GitCrawlSource implements CrawlSource {
       unreadable: {
         degrade: (refusal) => {
           if (isPathUnderRoot(refusal.directory, this.#root) && admitsUnderRoot(refusal.directory, this.#root)) {
-            settleRefusal(this.#refusals.inPopulation, refusal);
+            this.#refusals.settleInPopulation(refusal);
           }
         },
       },
@@ -831,10 +849,13 @@ export class GitCrawlSource implements CrawlSource {
 async function expandDirectory(
   directory: string,
   admits: (absolutePath: string) => boolean,
-  unreadable: UnreadablePolicy,
+  refusals: ListingRefusals,
+  territory: 'inPopulation' | 'inIgnoredTerritory',
   onSymlink: (absolutePath: string) => void,
 ): Promise<string[]> {
+  const unreadable: UnreadablePolicy = refusals[territory];
   const found = await crawlDirectory({
+    outputs: refusals.outputs,
     baseDir: directory,
     // Passed so the walk PRUNES rather than enumerating and discarding. Safe to
     // re-base only because every glob in this list is `**/`-prefixed and so is
@@ -1019,17 +1040,23 @@ export function crawlSourceSelector(): string | undefined {
  * sets it.
  *
  * @param root - Absolute corpus root
+ * @param outputs - The trees the verb WRITES — its output and the staging it builds that output
+ *   in — or `[]` for a verb that only reads: the one declaration of which side a fault is on.
+ *   Required: only the caller knows. A directory the walk could not list that is one of them,
+ *   lies inside one or holds one (the root of a project a build writes into included) is the
+ *   verb's destination; any other is the corpus's content, a source. The git arm's base is
+ *   answered by git's own snapshot, classified there
  * @returns The selected source — {@link GitCrawlSource} inside a repository,
  *   {@link FilesystemCrawlSource} outside one or when
  *   {@link EXTENT_SOURCE_FILESYSTEM} is asked for. The fallback is not a
  *   preference: a root outside git has no git answer, and failing there would
  *   make the default unusable across a mixed corpus
  */
-export function crawlSourceFor(root: string): CrawlSource {
+export function crawlSourceFor(root: string, outputs: readonly string[]): CrawlSource {
   if (gitExtentSelected(root)) {
-    return new GitCrawlSource(root);
+    return new GitCrawlSource(root, outputs);
   }
-  return new FilesystemCrawlSource(root);
+  return new FilesystemCrawlSource(root, outputs);
 }
 
 /**
@@ -1097,7 +1124,7 @@ function gitMarkerIsReadable(gitRoot: string): boolean {
     // The filesystem refusing the marker is the same answer as absent: do not
     // select an enumerator that will throw on it. The command then reports
     // `extentSource: filesystem`, which is where the refusal becomes visible.
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return false;
   }
 }

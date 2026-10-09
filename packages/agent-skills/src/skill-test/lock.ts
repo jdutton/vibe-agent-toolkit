@@ -1,8 +1,6 @@
 import { closeSync, openSync, rmSync } from 'node:fs';
 
-import { safePath, VatError } from '@vibe-agent-toolkit/utils';
-
-import { writingHarnessOutput } from './harness-location.js';
+import { isAlreadyExistsError, safePath, VatError, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 
 /**
  * The harness root for a subject set is already locked.
@@ -85,13 +83,13 @@ export function acquireHarnessLock(harnessRoot: string, opts: { wait?: boolean }
   const lockPath = safePath.joinUnderRoot(harnessRoot, '.vat-skill-test.lock');
   // eslint-disable-next-line no-void, sonarjs/void-use -- v1: fail-fast only; reserved for future polling
   void opts.wait;
-  // Any refusal but EEXIST (a full disk, a read-only root) is the run's output, not a held lock.
-  const fd = writingHarnessOutput(`the harness lockfile ${lockPath}`, () => {
+  // Any refusal but "already exists" (a full disk, a read-only root) is the run's output, not a held lock.
+  const fd = withFsFaultSync({ side: 'destination', action: `create the harness lockfile ${lockPath}` }, () => {
     try {
       // 'wx' = O_CREAT | O_EXCL — fails with EEXIST if the lockfile already exists.
       return openSync(lockPath, 'wx');
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EEXIST') throw new HarnessLockBusyError(lockPath);
+      if (isAlreadyExistsError(err)) throw new HarnessLockBusyError(lockPath);
       throw err;
     }
   });
@@ -139,7 +137,7 @@ export interface InstallSignalCleanupOptions {
    * release the harness lock and remove the harness dir so a Ctrl-C mid-run does
    * not leave `.vat-skill-test.lock` (or staged untrusted bytes) behind.
    */
-  onSignal: () => void;
+  onSignal: () => Promise<void>;
   /**
    * Exit hook, injectable for tests. Defaults to `process.exit`. Called with the
    * conventional 128+signal code so the signal is honored, not swallowed.
@@ -165,8 +163,10 @@ export function installSignalCleanup(opts: InstallSignalCleanupOptions): () => v
   for (const [sig, num] of SIGNAL_NUMBERS) {
     const handler = (): void => {
       remove();
-      opts.onSignal();
-      exit(SIGNAL_EXIT_BASE + num);
+      // The exit waits for cleanup to settle — an exit mid-removal would leave half of it —
+      // and happens whichever way it settles: `onSignal` reports its own failures.
+      const leave = (): void => exit(SIGNAL_EXIT_BASE + num);
+      opts.onSignal().then(leave, leave);
     };
     process.on(sig, handler);
     registered.push([sig, handler]);

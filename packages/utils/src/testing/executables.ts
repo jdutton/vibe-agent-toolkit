@@ -19,7 +19,7 @@
 import { accessSync, constants, statSync } from 'node:fs';
 import { delimiter } from 'node:path';
 
-import { isFilesystemAccessError } from '../errors/errno.js';
+import { fsFaultOf } from '../errors/errno-table.js';
 import { safePath } from '../path-core.js';
 
 /** The `node` running this test, absolute. */
@@ -39,7 +39,7 @@ function isExecutableFile(full: string): boolean {
     return statSync(full).isFile();
   } catch (error) {
     // Absent or not executable here: the next directory on PATH may have it.
-    if (isFilesystemAccessError(error)) return false;
+    if (fsFaultOf(error) !== undefined) return false;
     throw error;
   }
 }

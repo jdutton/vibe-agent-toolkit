@@ -8,7 +8,7 @@ import { issueLocation, relativeEscapesRoot, safePath } from '@vibe-agent-toolki
 
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
+import { endWithRefusal, endWithReport, leftoverIssue, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { packagingFailedIssue } from '../skills/build.js';
@@ -73,7 +73,8 @@ export async function buildCommand(
 
     report = buildReport({
       examined: AGENTS_BUILT,
-      findings: [],
+      // A previous build the swap parked and the OS would not let VAT remove: the build is done, the leftover named.
+      findings: toFindings(result.residue.map(({ message, path }) => leftoverIssue(message, path))),
       data: { agent: result.agent.name, target, output: result.outputPath, files: result.files },
       gate: GATE,
       durationMs,
@@ -99,7 +100,7 @@ function buildRefusalOf(
 ): { code: ReturnType<typeof refusalCodeOf>; finished: FinishedWork } {
   const code = refusalCodeOf(error);
   if (code !== 'INTERNAL_ERROR' || !isSkillPackagingInputError(error)) return { code, finished: NOTHING_FINISHED };
-  const issue = packagingFailedIssue(error instanceof Error ? error.message : String(error), agentLocation(agentPath, projectRoot), 'rebuild');
+  const issue = packagingFailedIssue(error instanceof Error ? error.message : String(error), agentLocation(agentPath, projectRoot), 'rebuild', error);
   return { code: 'RUN_INCOMPLETE', finished: { examined: 0, findings: toFindings([issue]), data: null } };
 }
 

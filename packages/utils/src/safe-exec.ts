@@ -2,7 +2,7 @@ import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
 
 import which from 'which';
 
-import { isPathAbsentError } from './errors/errno.js';
+import { isPathAbsentError } from './errors/errno-table.js';
 import { VatError } from './errors/vat-error.js';
 import { runGit } from './git-run.js';
 import {

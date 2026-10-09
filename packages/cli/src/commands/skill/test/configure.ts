@@ -7,20 +7,20 @@
  * `--print` stdout is the `skill-test-config` artifact — the config text alone.
  */
 
-import { writeFileSync } from 'node:fs';
+import { statSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { upsertTestConfig } from '@vibe-agent-toolkit/agent-skills';
 import { parseConfigAllowingUnknownKeys, type ProjectConfig, ProjectConfigSchema, readConfigText } from '@vibe-agent-toolkit/resources';
 import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, isFsFaultError, safePath, toForwardSlash, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
 
-import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
+import { CommandRefusalError, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, NOTHING_FINISHED, writeArtifact } from '../../../utils/document-writer.js';
 import { createLogger } from '../../../utils/logger.js';
-import { requireInputPath, requireProjectRoot } from '../../../utils/project-root-policy.js';
+import { requireProjectRoot } from '../../../utils/project-root-policy.js';
 import { discoverSkillsFromConfig } from '../../skills/skill-discovery.js';
 
 import { assertValidAuth, type AuthValue } from './auth-flags.js';
@@ -110,6 +110,24 @@ export function buildKnobs(
 }
 
 /**
+ * The presence preflight: the project must HAVE a config to edit. A `.git/` ancestor is a
+ * project root with no config file in it. Nothing there is the project's mistake
+ * (`CONFIG_INVALID`), carrying the classified fault; a `stat` the OS refuses is a fault on the
+ * side the config is on for this run, exactly as its read is.
+ */
+function requireConfigPresent(configPath: string, configSide: 'source' | 'destination'): void {
+  try {
+    statSync(configPath);
+  } catch (error) {
+    const fault = classifyFsFault(error, { side: configSide, origin: 'config', action: 'find the project config', path: configPath });
+    if (isFsFaultError(fault) && fault.faultClass === 'absent') {
+      throw new CommandRefusalError('CONFIG_INVALID', `No ${CONFIG_FILENAME} at the project root: ${configPath}. Create one (a skills: block) first.`, { cause: fault });
+    }
+    throw fault;
+  }
+}
+
+/**
  * Read the config at `configPath`, apply `knobs` to `skillName`'s test block, and
  * hand back the YAML to write — refusing only what VAT would otherwise MISREAD.
  *
@@ -141,24 +159,25 @@ export function buildKnobs(
  * @param skillName - The key under `skills.config` to upsert
  * @param knobs - The knobs the operator typed; only these are changed
  * @param onWarn - Receives the unknown-key warning, if any
+ * @param configSide - Which side of this run the config is on: `destination` when the
+ *   update is written back over it (a refused read is the run not finishing), `source`
+ *   under `--print`, which only reads it (a refused read is the input's)
  * @returns The updated YAML, comments and key ordering preserved
  * @throws {CommandRefusalError} `CONFIG_INVALID` when the project has no config
  *   file, or the UPDATED config would fail validation for any reason other than
  *   an unknown key; `USAGE_INVALID` when `skills.include` discovers no skill named
- *   `skillName`; `VatError` `CONFIG_UNREADABLE` (→ `INPUT_UNREADABLE`) when the OS refuses the read
+ *   `skillName`; `FsFaultError` (origin `config`, on `configSide`: `RUN_INCOMPLETE` as a
+ *   destination, `INPUT_UNREADABLE` as a source) when the OS refuses the read
  */
 export async function updateSkillTestConfig(
   configPath: string,
   skillName: string,
   knobs: Parameters<typeof upsertTestConfig>[2],
   onWarn: (message: string) => void,
+  configSide: 'source' | 'destination',
 ): Promise<string> {
-  // A `.git/` ancestor is a project root with no config file in it.
-  requireInputPath(configPath, {
-    code: 'CONFIG_INVALID',
-    message: `No ${CONFIG_FILENAME} at the project root: ${configPath}. Create one (a skills: block) first.`,
-  });
-  const yamlText = await readConfigText(configPath);
+  requireConfigPresent(configPath, configSide);
+  const yamlText = await readConfigText(configPath, configSide);
   const updatedYaml = upsertTestConfig(yamlText, skillName, knobs);
 
   // Validate the FULL updated config before it can be written.
@@ -199,11 +218,7 @@ async function requireDeclaredSkill(
 
 /** Write the updated config over the file — a failed write stopped the run, it is not VAT's defect. */
 function writeConfig(configPath: string, updatedYaml: string): void {
-  try {
-    writeFileSync(configPath, updatedYaml, 'utf-8');
-  } catch (error) {
-    throw new CommandRefusalError('RUN_INCOMPLETE', `Could not write ${configPath}: ${errorMessageOf(error)}`, { cause: error });
-  }
+  withFsFaultSync({ side: 'destination', action: 'write the project config', path: configPath }, () => writeFileSync(configPath, updatedYaml, 'utf-8'));
 }
 
 async function configureCommand(
@@ -220,6 +235,8 @@ async function configureCommand(
       skillName,
       buildKnobs(options),
       (message) => { logger.warn(message); },
+      // `--print` writes nothing, so the config is only read: an input, not this run's output.
+      options.print === true ? 'source' : 'destination',
     );
 
     if (options.print) {
@@ -294,8 +311,8 @@ Exit Codes:
   2 - Refused; error.code says why: USAGE_INVALID (an invalid option value, a
       skill the config's skills.include does not discover, or no project
       root), CONFIG_INVALID (no config file, or the updated config
-      fails its schema), INPUT_UNREADABLE (the config cannot be read),
-      RUN_INCOMPLETE (the config could not be written)
+      fails its schema), RUN_INCOMPLETE (the config could not be read or
+      written; with --print, a config that cannot be read is INPUT_UNREADABLE)
 
 Example:
   $ vat skill test configure my-skill --auth subscription --max-turns 20

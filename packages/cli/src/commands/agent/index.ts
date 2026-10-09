@@ -91,7 +91,7 @@ Example:
     .description('Build agent for deployment target')
     .option('--target <type>', 'Build target (skill, langchain, etc.)', 'skill')
     .option('--output <path>', 'Output directory (default: dist/vat-bundles/<target>/<agent>)')
-    .option('--force', 'Replace a previous build: remove and rebuild <output>/<agent>; without it, one that holds anything is refused')
+    .option('--force', 'Replace a previous build at <output>/<agent> (swapped in whole once built); without it, one that holds anything is refused')
     .option('--debug', DEBUG_OPTION_DESC)
     .action(buildCommand)
     .addHelpText(
@@ -106,10 +106,11 @@ Description:
   VAT never deletes or overwrites what it did not produce. With --output, an
   <output>/<agent-name>/ that already holds anything is refused (USAGE_INVALID)
   and left exactly as it was, unless --force says it is a previous build to
-  replace (removed and rebuilt). An empty directory is used as-is; an output
-  holding the agent's own source is refused even with --force. The default
-  location is VAT's and is built into in place. Every source is read before
-  anything is written.
+  replace. An empty directory is replaced as-is; an output holding the agent's
+  own source is refused even with --force. The default location is VAT's and
+  is replaced. Every source is read before anything is written, and the build
+  is written whole beside its output and swapped in: a failure partway leaves
+  a previous build exactly as it was.
 
 Targets:
   - skill: Agent Skills (for Claude Desktop/Code)
@@ -118,7 +119,9 @@ Targets:
 Output (YAML on stdout):
   status: ok | error;  examined: 1 (the agent built)
   data: { agent, target, output, files }
-  findings[]: only SKILL_PACKAGING_FAILED, on the error branch
+  findings[]: SKILL_PACKAGING_FAILED on the error branch; on success, a
+    TREE_CLEANUP_INCOMPLETE warning naming a previous build the swap replaced
+    that the OS would not let VAT remove
   Default build location: dist/vat-bundles/<target>/<agent-name>/
 
 Exit Codes (derived from the document):
@@ -265,10 +268,11 @@ Output (YAML on stdout):
 Exit Codes (derived from the document):
   0 - ok: agent.yaml was written
   2 - error: nothing was written — USAGE_INVALID (no SKILL.md at the path,
-      or agent.yaml exists and --force was not given), INPUT_UNREADABLE (the
-      SKILL.md cannot be read, or no Agent Skills schema accepts its
-      frontmatter), RUN_INCOMPLETE (the agent.yaml write failed); a
-      --output whose directory does not exist is USAGE_INVALID
+      or something is already at the output and --force was not given),
+      INPUT_UNREADABLE (the SKILL.md cannot be read, or no Agent Skills schema
+      accepts its frontmatter), RUN_INCOMPLETE (the OS would not let VAT
+      examine or write the output). A --output whose directory does not exist
+      yet is made.
 
 Examples:
   $ vat agent import ./my-skill/SKILL.md              # Import to same directory
@@ -301,21 +305,24 @@ Scopes:
 Output (YAML on stdout):
   status: ok | error;  examined: 1 (the agent named)
   data: { agent, installPath, symlink } — symlink is true under --dev
+  findings: a TREE_CLEANUP_INCOMPLETE warning naming a replaced install
+    VAT could not remove (the new one is in place)
 
 Exit Codes (derived from the document):
   0 - ok: the agent was installed
   2 - error: nothing was installed — USAGE_INVALID (an unknown --scope or
       --runtime, a name that is not one path segment or names no agent,
-      the agent is already installed and --force was not given, or no
-      package.json encloses the agent), NOT_IMPLEMENTED (--dev on Windows),
-      CONFIG_INVALID (the manifest does not validate), INPUT_UNREADABLE (the
-      bundle was never built, holds a named pipe, socket or device or a
-      symlink that leads out of it or nowhere, or a search path, the
-      manifest, any file in the bundle or the install path cannot be read),
-      RUN_INCOMPLETE (a write under the scope directory failed).
-      A copy replaces a previous install only once it is whole, so a refused
-      --force copy keeps it; --force --dev removes it before linking, and a
-      failed link says so in the message
+      anything but an empty directory is at the install path and --force
+      was not given, or no package.json encloses the agent),
+      NOT_IMPLEMENTED (--dev on Windows), CONFIG_INVALID (the manifest does
+      not validate), INPUT_UNREADABLE (the bundle was never built, holds a
+      named pipe, socket or device or a symlink that leads out of it or
+      nowhere, or a search path, the manifest or any file in the bundle
+      cannot be read), RUN_INCOMPLETE (the install path cannot be examined,
+      or a write under the scope directory failed).
+      The copy or link is staged beside the install and swapped in whole,
+      so a refused run, --force --dev included, leaves a previous install
+      as it was
 
 Examples:
   $ vat agent install agent-generator                  # Install to user scope
@@ -352,10 +359,13 @@ Output (YAML on stdout):
 
 Exit Codes (derived from the document):
   0 - ok: the install was removed
-  2 - error: nothing was removed — USAGE_INVALID (an unknown --scope or
-      --runtime, a name that is not one path segment, or the agent is not
-      installed in that scope), INPUT_UNREADABLE (the install path cannot be
-      read), RUN_INCOMPLETE (the removal failed)
+  2 - error: USAGE_INVALID (an unknown --scope or --runtime, a name that is
+      not one path segment, or the agent is not installed in that scope:
+      nothing was removed), RUN_INCOMPLETE (the install path cannot be
+      examined or moved off its path: nothing was removed). The install is
+      first moved off its path whole, then deleted: a deletion the OS stops
+      after that is still RUN_INCOMPLETE, but the uninstall is done — data is
+      present, and a TREE_CLEANUP_INCOMPLETE warning names where the rest is
 
 Examples:
   $ vat agent uninstall agent-generator                  # Remove from user scope

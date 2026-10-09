@@ -120,7 +120,18 @@
 import { promises as fs, type Stats } from 'node:fs';
 import { threadId } from 'node:worker_threads';
 
-import { isFilesystemAccessError, isPathAbsentError, parseEnvBoolean, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import {
+  applyTreePlan,
+  fsFaultOf,
+  type FsSide,
+  isPathAbsentError,
+  parseEnvBoolean,
+  planTreeChanges,
+  renameFileAtomic,
+  safePath,
+  VatError,
+  withFsFault,
+} from '@vibe-agent-toolkit/utils';
 
 import { parseCacheDirectory } from './cache-namespace.js';
 import { CONTENT_KEY_PATTERN, type KeyedContent, type ParsableContent, readContentWithKey } from './content-key.js';
@@ -462,7 +473,7 @@ export class ParseCache {
     } catch (error) {
       // ENOENT (never written), EACCES (perms), EISDIR — all a miss. A bug in
       // this class is not a miss and stays loud.
-      if (!isFilesystemAccessError(error)) throw error;
+      if (fsFaultOf(error) === undefined) throw error;
       return null;
     } finally {
       // Charged on the miss path too: a failed open is what a COLD document
@@ -562,7 +573,7 @@ export class ParseCache {
 
     try {
       await fs.writeFile(tempPath, JSON.stringify(entry), 'utf-8');
-      await fs.rename(tempPath, this.entryPath(key));
+      await renameFileAtomic(tempPath, this.entryPath(key));
     } catch (error) {
       // Fail-soft: EACCES on the directory, ENOSPC on the disk, EROFS on a
       // read-only mount — counted in `writeFailures` so it stays visible. A
@@ -570,7 +581,7 @@ export class ParseCache {
       // current run already holds the fresh result; only the persistence is
       // lost. Best-effort sweep of a temp file that was written but never
       // renamed, so a failing write cannot accumulate litter.
-      if (!isFilesystemAccessError(error)) throw error;
+      if (fsFaultOf(error) === undefined) throw error;
       this.writeFailureCount += 1;
       await removeTempQuietly(tempPath);
       return false;
@@ -646,13 +657,15 @@ export class ParseCache {
    * explicit operator request to reclaim the space. And it THROWS when the
    * tree cannot be removed: an operator who asked for the space back is told
    * why they did not get it, rather than told nothing. A tree that is already
-   * gone is not a failure (`force`).
+   * gone is not a failure. The cache is VAT's own state: the tree is moved off
+   * its name whole, then deleted, so a concurrent writer that re-prepares its
+   * shard starts a fresh tree rather than writing into one being removed.
    */
   async clear(): Promise<void> {
-    // FIRST, so a concurrent writer that re-prepares mid-`rm` loses its
+    // FIRST, so a concurrent writer that re-prepares mid-removal loses its
     // directory rather than keeping a memo of one that is being removed.
     this.preparedShards.clear();
-    await fs.rm(this.directory, { force: true, recursive: true });
+    await applyTreePlan(await planTreeChanges([{ op: 'remove', dest: this.directory, ownership: { kind: 'vat-state' }, label: 'parse cache' }]));
   }
 
   /** Count a miss and return the value every miss path returns. */
@@ -730,10 +743,9 @@ const PARSER_MODULE_SPECIFIERS: Record<DocumentParserKind, string> = {
  *
  * ⚠️ It must NEVER be an errno, and the original errno must NEVER be passed
  * through onto `.code`. Every outer error boundary in the toolkit classifies by
- * allow-listing errno strings — `isFilesystemAccessError` in
- * `packages/utils/src/fs-utils.ts` (whose `FILESYSTEM_ACCESS_ERRNOS` holds
- * `EACCES`, `EPERM`, `EMFILE`, `ENOENT` and ~20 more) and `READ_FAILURE_CODES`
- * in `resource-registry.ts`. An errno here means `vat audit` degrades a broken
+ * classifying errno strings — `fsFaultOf` in `packages/utils/src/errors/errno-table.ts`
+ * (whose class table holds `EACCES`, `EPERM`, `EMFILE`, `ENOENT` and ~25 more), and every
+ * site that classifies through it. An errno here means `vat audit` degrades a broken
  * INSTALL into a `SCAN_PATH_UNREADABLE` warning and exits 0, which is the exact
  * defect this type exists to close. Restoring the original code "so the errno
  * isn't lost" reopens it; the errno is kept in the MESSAGE and on
@@ -762,7 +774,7 @@ const PARSER_UNAVAILABLE_CODE = 'VAT_PARSER_UNAVAILABLE';
  *
  * ## Why the original hangs off `loaderError` and NOT off `cause`
  *
- * `isFilesystemAccessError` walks the `cause` chain — deliberately, because the
+ * `fsFaultOf` walks the `cause` chain — deliberately, because the
  * CLI config loader re-wraps read failures and a `code`-only check answered "not
  * a filesystem error" for a plain `EACCES`. So an original `EACCES` reachable via
  * `cause` is found by that walk and the wrapper is degraded anyway: setting
@@ -1115,18 +1127,27 @@ export function defaultParseCache(): ParseCache {
  *
  * @param filePath - Absolute path to the document
  * @param parserKind - The parser to hand the content to
- * @param cache - Store to use; defaults to the process-wide instance
+ * @param options - `cache`: store to use, defaulting to the process-wide instance.
+ *   `side`: which side of the calling verb the document is on — `source` (the
+ *   default: an input the verb reads) or `destination` / `environment` when the
+ *   caller re-reads VAT's own output or staging. Only the caller knows; this
+ *   function never infers it from the path.
  * @returns The parse result, from an entry or from the parser
- * @throws Whatever `readFile` throws — a read failure is the caller's to handle,
- *   exactly as it was with `parseMarkdown` — and `TextTooLargeError` for a file
- *   too large to decode, as `readContentWithKey` does
+ * @throws `FsFaultError` on `side` (origin `content` for a source) when the OS
+ *   refuses the read — the caller still decides what it means (`isPathAbsentError`
+ *   and `fsFaultOf` read the errno down the `cause` chain) — and
+ *   `TextTooLargeError` for a file too large to decode, as `readContentWithKey` does
  */
 export async function parseFileCached(
   filePath: string,
   parserKind: DocumentParserKind,
-  cache: ParseCache = defaultParseCache(),
+  options: { cache?: ParseCache; side?: FsSide } = {},
 ): Promise<ParseResult> {
-  return parseKeyed(await readContentWithKey(filePath, parserKind), cache);
+  const side = options.side ?? 'source';
+  const keyed = await withFsFault({ side, origin: 'content', action: `read ${filePath}`, path: filePath }, () =>
+    readContentWithKey(filePath, parserKind),
+  );
+  return parseKeyed(keyed, options.cache ?? defaultParseCache());
 }
 
 /**
@@ -1203,7 +1224,7 @@ async function prepareShardDir(shardDir: string): Promise<ShardPreparation> {
     // Fail-soft on exactly the errors the write itself is fail-soft on —
     // EACCES, EROFS, ENOSPC. Anything else is a bug in this module and stays
     // loud, which is the same split `write` keeps.
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return 'refused';
   }
   return 'ready';
@@ -1244,7 +1265,7 @@ async function shardDirSafety(dir: string): Promise<ShardPreparation> {
     // directory whose owner and mode cannot be checked is not one to write
     // into NOW. The caller counts this as a write failure, which it is, and
     // does not memoize it — an errno is not a verdict about the directory.
-    if (isFilesystemAccessError(error)) return 'refused';
+    if (fsFaultOf(error) !== undefined) return 'refused';
     throw error;
   }
 
@@ -1264,6 +1285,6 @@ async function removeTempQuietly(target: string): Promise<void> {
   try {
     await fs.rm(target, { force: true });
   } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
   }
 }

@@ -56,6 +56,7 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { exitCodeForExternal, PUBLISHED_SHAPES, type ExternalOutcome } from '../../src/report-schemas.js';
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 import { fakeHomeEnv } from './test-common.js';
 import {
@@ -72,6 +73,10 @@ import {
 } from './test-helpers/exit-code-matrix.js';
 import { MATRIX_PATH_FILE, MATRIX_PATH_OUTCOMES } from './test-helpers/exit-code-path-verbs.js';
 import { executeCli } from './test-helpers/index.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-16-');
 
 /** The registered external verbs — the passed-through Admin API payloads, whose code an adapter decides. */
 const REGISTERED_EXTERNAL_VERBS = PUBLISHED_SHAPES.flatMap((entry) => (entry.kind === 'external' ? entry.verbs : []));

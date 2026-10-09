@@ -32,7 +32,7 @@ describe('claude plugin build config warning', () => {
       return true;
     });
 
-    const { report } = await runClaudePluginBuildPhase({});
+    const { report } = await runClaudePluginBuildPhase({}, []);
 
     expect(report.status).toBe('ok');
     const warnings = stderr.join('').split(`unrecognized key "${UNKNOWN_KEY}"`).length - 1;

@@ -25,7 +25,7 @@ import { discoverSkills, validateSkillFilename } from '../../utils/skill-discove
 import { scanUserContext } from '../../utils/user-context-scanner.js';
 
 import type { SkillsListReport } from './list-schema.js';
-import { holdsSkillMd, isNpmOrTarballSource, readSourceDir, removeResolvedTempDirs, resolveNpmOrTarballSource } from './source-resolvers.js';
+import { holdsSkillMd, isNpmOrTarballSource, readSourceDir, resolveNpmOrTarballSource, withResolvedTempDirs } from './source-resolvers.js';
 
 interface SkillsListCommandOptions {
   user?: boolean;
@@ -83,6 +83,8 @@ interface Listing {
   /** The ONE base every published path is relative to. */
   root: string;
   unreadable: readonly DirectoryRefusal[];
+  /** Temp directories the listing could not remove once it was done: one `TREE_CLEANUP_INCOMPLETE` warning each. */
+  leftovers: readonly ValidationIssue[];
   /** Search roots scanned — see `SKILLS_LIST_EXAMINED`. */
   examined: number;
 }
@@ -115,7 +117,10 @@ function unlistableDirectoryFinding(refusal: DirectoryRefusal, root: string): Va
 export function buildSkillsListReport(listing: Listing, durationMs: number): SkillsListReport {
   return buildReport({
     examined: listing.examined,
-    findings: toFindings(listing.unreadable.map((refusal) => unlistableDirectoryFinding(refusal, listing.root))),
+    findings: [
+      ...toFindings(listing.unreadable.map((refusal) => unlistableDirectoryFinding(refusal, listing.root))),
+      ...toFindings(listing.leftovers),
+    ],
     data: {
       root: listing.root,
       context: listing.context,
@@ -198,15 +203,12 @@ async function listFromNpmSource(source: string, logger: ReturnType<typeof creat
   logger.info(`📋 Inspecting npm/tgz source: ${source}`);
 
   const resolved = await resolveNpmOrTarballSource(source);
-  try {
-    // The extracted package's own skills dir is the base — the enclosing temp
-    // directory is an implementation detail nobody can act on. `[]` is a
-    // statement, not a default: this is one listing of a tree this process just
-    // extracted, and a listing it cannot read refuses the run instead.
-    return { skills: scanSkillsDir(resolved.skillsDir), context: 'npm', root: resolved.skillsDir, unreadable: [], examined: 1 };
-  } finally {
-    await removeResolvedTempDirs(resolved.tempDirs, logger);
-  }
+  // The extracted package's own skills dir is the base — the enclosing temp
+  // directory is an implementation detail nobody can act on. `[]` is a
+  // statement, not a default: this is one listing of a tree this process just
+  // extracted, and a listing it cannot read refuses the run instead.
+  const { value: skills, leftovers } = await withResolvedTempDirs(resolved.tempDirs, () => scanSkillsDir(resolved.skillsDir));
+  return { skills, context: 'npm', root: resolved.skillsDir, unreadable: [], leftovers, examined: 1 };
 }
 
 /** `--user`: Claude's `plugins/` and `skills/` directories — both scanned, an absent one empty. */
@@ -221,6 +223,7 @@ async function listUserSkills(logger: ReturnType<typeof createLogger>): Promise<
     // their common parent is the base that spans both.
     root: getClaudeUserPaths().claudeDir,
     unreadable,
+    leftovers: [],
     examined: USER_SEARCH_ROOTS,
   };
 }
@@ -246,6 +249,7 @@ async function listProjectSkills(pathArg: string | undefined, logger: ReturnType
     context: 'project',
     root: safePath.resolve(rootDir),
     unreadable: scanResult.unreadable,
+    leftovers: [],
     examined: 1,
   };
 }
@@ -275,3 +279,6 @@ export async function listCommand(
   outputSkillsHuman(listing.skills, listing.unreadable, logger, options);
   endWithReport('skills list', buildSkillsListReport(listing, Date.now() - startTime), 'yaml');
 }
+
+/** Test-facing seam: the pure decisions of this module, reached by its unit tests. */
+export const __internal = { outputSkillsHuman };

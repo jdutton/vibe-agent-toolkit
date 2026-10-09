@@ -1,7 +1,8 @@
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { countBySeverity, resultStatus } from '@vibe-agent-toolkit/schema';
-import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, recordSuppressedFault, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import type * as Utils from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 import * as yaml from 'yaml';
 
@@ -16,7 +17,6 @@ import {
 } from '../../../src/commands/corpus/runner.js';
 import type { PluginEntry } from '../../../src/commands/corpus/seed.js';
 import { CommandRefusalError } from '../../../src/utils/command-refusal.js';
-import type * as ProjectRootPolicy from '../../../src/utils/project-root-policy.js';
 
 /** The in-process audit, replaced only where a test makes it throw; every other call runs the real one. */
 const { getValidationResults } = vi.hoisted(() => ({ getValidationResults: vi.fn() }));
@@ -28,11 +28,15 @@ vi.mock('../../../src/commands/audit.js', async (importOriginal) => {
 
 /** The local-source probe, replaced only where a test makes it throw; every other call runs the real one. */
 const { pathPresent } = vi.hoisted(() => ({ pathPresent: vi.fn() }));
-vi.mock('../../../src/utils/project-root-policy.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof ProjectRootPolicy>();
+vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof Utils>();
   pathPresent.mockImplementation(actual.pathPresent);
   return { ...actual, pathPresent };
 });
+
+/** The clone step, replaced whole: no unit test reaches the network. */
+const { withClonedRepo } = vi.hoisted(() => ({ withClonedRepo: vi.fn() }));
+vi.mock('../../../src/commands/audit/git-url-clone.js', () => ({ withClonedRepo }));
 
 const META = {
   bucket: 'official',
@@ -89,7 +93,7 @@ describe('auditOnePlugin — local source', () => {
 
     const entry: PluginEntry = { source: pluginDir, name: 'foo', ...META };
 
-    const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false });
+    const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false, leftovers: [] });
 
     expect(row.source).toBe(pluginDir);
     expect(row.name).toBe('foo');
@@ -107,7 +111,7 @@ describe('auditOnePlugin — local source', () => {
     const runDir = makeRunDir();
     const entry: PluginEntry = { source: '/absolutely/does/not/exist', name: 'ghost', ...META };
 
-    const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false });
+    const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false, leftovers: [] });
 
     expect(row.audit.status).toBe('unloadable');
     expect(row.audit.error).toMatch(/not found|does not exist/i);
@@ -124,7 +128,7 @@ describe('auditOnePlugin — a local source the probe cannot answer for', () => 
       throw new CommandRefusalError('INPUT_UNREADABLE', 'Path cannot be read (EACCES): /probe/target');
     });
 
-    const row = await auditOnePlugin(entry(), { runDir: runDir(), withReview: false, debug: false });
+    const row = await auditOnePlugin(entry(), { runDir: runDir(), withReview: false, debug: false, leftovers: [] });
 
     expect(row.audit).toMatchObject({ status: 'unloadable', error: 'Path cannot be read (EACCES): /probe/target' });
   });
@@ -135,7 +139,24 @@ describe('auditOnePlugin — a local source the probe cannot answer for', () => 
       throw defect;
     });
 
-    await expect(auditOnePlugin(entry(), { runDir: runDir(), withReview: false, debug: false })).rejects.toBe(defect);
+    await expect(auditOnePlugin(entry(), { runDir: runDir(), withReview: false, debug: false, leftovers: [] })).rejects.toBe(defect);
+  });
+});
+
+describe('auditOnePlugin — a URL source whose clone is refused', () => {
+  // The refusal is the entry's row; a clone directory the OS would not then remove is still on
+  // disk, so it must reach the scan's leftovers rather than vanish with the caught error.
+  it('keeps a clone left behind for the scan to report, beside the unloadable row', async () => {
+    const refusal = new CommandRefusalError('INPUT_UNREADABLE', 'git clone failed: repository not found');
+    const leftover = new Error('could not remove the temporary directory vat-audit-x');
+    recordSuppressedFault(refusal, leftover);
+    withClonedRepo.mockRejectedValueOnce(refusal);
+    const leftovers: unknown[] = [];
+
+    const row = await auditOnePlugin({ source: 'https://github.com/example/plugin.git', name: 'url-refused', ...META }, { runDir: makeRunDir(), withReview: false, debug: false, leftovers });
+
+    expect(row.audit).toMatchObject({ status: 'unloadable', error: 'git clone failed: repository not found' });
+    expect(leftovers).toEqual([leftover]);
   });
 });
 
@@ -149,14 +170,14 @@ describe('auditOnePlugin — a defect inside the audit', () => {
     getValidationResults.mockRejectedValueOnce(thrown);
     const entry: PluginEntry = { source: makePluginDir('A test skill whose audit is made to throw a defect in the runner unit test.'), name: 'local-defect', ...META };
 
-    await expect(auditOnePlugin(entry, { runDir: makeRunDir(), withReview: false, debug: false })).rejects.toBe(thrown);
+    await expect(auditOnePlugin(entry, { runDir: makeRunDir(), withReview: false, debug: false, leftovers: [] })).rejects.toBe(thrown);
   });
 
   it('still records a coded audit refusal as the entry\'s unloadable row', async () => {
     getValidationResults.mockRejectedValueOnce(new CommandRefusalError('INPUT_UNREADABLE', 'Path cannot be read (EACCES): x'));
     const entry: PluginEntry = { source: makePluginDir('A test skill whose audit is made to refuse in the runner unit test.'), name: 'local-refused', ...META };
 
-    const row = await auditOnePlugin(entry, { runDir: makeRunDir(), withReview: false, debug: false });
+    const row = await auditOnePlugin(entry, { runDir: makeRunDir(), withReview: false, debug: false, leftovers: [] });
 
     expect(row.audit).toMatchObject({ status: 'unloadable', error: 'Path cannot be read (EACCES): x' });
   });
@@ -181,7 +202,7 @@ describe('auditOnePlugin — validation overlay', () => {
       },
     };
 
-    const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false });
+    const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false, leftovers: [] });
 
     expect(row.validation_applied).toBe(true);
 
@@ -200,7 +221,7 @@ describe('auditOnePlugin — validation overlay', () => {
 
     const entry: PluginEntry = { source: pluginDir, name: 'no-overlay', ...META };
 
-    const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false });
+    const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false, leftovers: [] });
 
     expect(row.validation_applied).toBe(false);
     const overlayPath = safePath.join(pluginDir, 'vibe-agent-toolkit.config.yaml');

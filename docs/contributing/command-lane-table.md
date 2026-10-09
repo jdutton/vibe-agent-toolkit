@@ -164,7 +164,8 @@ Three of these are on the list on a technicality worth stating — "does not enu
 "reaches no lane named above", which is narrower than "builds no population":
 
 - `vat cache clear` builds a raw `fs.readdir` population of `<tmpdir>/.vat-cache` at
-  `packages/cli/src/commands/cache/clear.ts › readdirOrNull()`, driven from `› clearCacheDirectory()`.
+  `packages/cli/src/commands/cache/clear.ts › listedOrVanished()`, driven from `› clearCacheDirectory()`
+  (it measures the tree its remove plan then takes).
 - `vat claude plugin install` `readdirSync`s the source tree it copies (four sites in
   `claude/plugin/install.ts`) and `vat agent installed` `readdir`s the install directory.
 - `vat ard emit` reads `vibe-agent-toolkit.config.yaml` plus the skill manifests that config already

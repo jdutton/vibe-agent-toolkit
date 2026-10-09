@@ -84,6 +84,7 @@ export function oracleRefuses(corpusRoot: string): UnreadablePolicy {
     refuse: {
       root: corpusRoot,
       remedy: 'Fix the permissions on that directory, or exclude it from the corpus: an oracle cannot measure a population it could not enumerate.',
+      side: 'source',
     },
   };
 }
@@ -101,6 +102,8 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
       const config = loadConfig(projectRoot);
       return {
         baseDir: projectRoot,
+        // Every oracle lane only reads the corpus.
+        outputs: [],
         include: config?.resources?.include ?? [...DEFAULT_RESOURCE_INCLUDE],
         // ResourceRegistry.crawl's own default when config supplies none.
         exclude: config?.resources?.exclude ?? [...REGISTRY_DEFAULT_EXCLUDE],
@@ -118,31 +121,34 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
     description: '`vat audit` and post-build validation — config-aware per root, memoized per root',
     crawlOptions: (projectRoot) => ({
       baseDir: projectRoot,
+      outputs: [],
       include: [...MARKDOWN_AND_HTML],
       exclude: [...REGISTRY_DEFAULT_EXCLUDE],
       absolute: true,
       filesOnly: true,
     }),
     // An oracle arm is a complete population or nothing: refuse, like the verbs it mirrors.
-    build: (projectRoot) => crawlAndResolveRegistry(projectRoot, { unreadable: 'refuse' }),
+    build: (projectRoot) => crawlAndResolveRegistry(projectRoot, { outputs: [], unreadable: 'refuse' }),
   },
   {
     id: 'skills-build',
     description: '`vat skills build` via createProjectRegistry — config-aware but markdown-only',
     crawlOptions: (projectRoot) => ({
       baseDir: projectRoot,
+      outputs: [],
       include: [...MARKDOWN_ONLY],
       exclude: [...REGISTRY_DEFAULT_EXCLUDE],
       absolute: true,
       filesOnly: true,
     }),
-    build: (projectRoot) => createProjectRegistry(projectRoot),
+    build: (projectRoot) => createProjectRegistry(projectRoot, { outputs: [] }),
   },
   {
     id: 'inventory',
     description: '`vat inventory` — markdown-only, the only lane that includes untracked files',
     crawlOptions: (projectRoot) => ({
       baseDir: projectRoot,
+      outputs: [],
       include: [...MARKDOWN_ONLY],
       absolute: true,
       filesOnly: true,
@@ -155,6 +161,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
     description: '`vat skills validate` — batch-scoped shared registry, markdown-only, config-aware',
     crawlOptions: (projectRoot) => ({
       baseDir: projectRoot,
+      outputs: [],
       include: [...MARKDOWN_ONLY],
       exclude: [...REGISTRY_DEFAULT_EXCLUDE],
       absolute: true,

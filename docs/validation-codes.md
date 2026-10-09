@@ -108,7 +108,7 @@ once in each code's section below (linked from the `Code` cell).
 | [`LINK_TO_AGENT_INSTRUCTION_FILE`](#link_to_agent_instruction_file) | error | Markdown link targets a repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) that no explicit files: entry declares; it is not bundled and the link is stripped from the packaged content. | Link the specific content the file describes; point the link at the file's canonical home as an absolute URL; or extract the shared part into a document intended for distribution. To ship the file deliberately, name it in an explicit (non-glob) skills.config.<name>.files entry — the file is then bundled and this link is rewritten to the declared dest. |
 | [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file) | error | Markdown link targets a gitignored file; risks leaking ignored data into the bundle. | Link to a non-ignored file or adjust .gitignore. Allow the specific path via validation.allow if the risk has been reviewed. If the target is a build artifact, declare it under skills.config.<name>.files instead. |
 | [`LINK_MISSING_TARGET`](#link_missing_target) | error | Markdown link target does not exist on disk and is not a declared build artifact. | Fix the link path, create the file, or declare it under skills.config.<name>.files as a build artifact. |
-| [`LINK_TARGET_UNREADABLE`](#link_target_unreadable) | error | Markdown link target could not be checked: a read failure along its path left its existence, spelling, and anchor all unverified, and — when packaging — the target was not bundled either. Usually permissions; sometimes a transient errno (EMFILE/ENFILE/EAGAIN — re-run before investigating), a change racing the walk, or a target that is not a regular file (a named pipe, socket or device), refused unread. | Re-run first if the errno looks transient (EMFILE/ENFILE/EAGAIN) — the target may check out clean on a second pass. Otherwise fix the permissions on the path, link a regular file in place of a named pipe, socket or device, or investigate what changed mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read. |
+| [`LINK_TARGET_UNREADABLE`](#link_target_unreadable) | error | Markdown link target could not be checked: a read failure along its path left its existence, spelling, and anchor all unverified, and — when packaging — the target was not bundled either. Usually permissions; sometimes a transient errno (EMFILE/ENFILE/EAGAIN/EBUSY/ETXTBSY — re-run before investigating), a change racing the walk, or a target that is not a regular file (a named pipe, socket or device), refused unread. | Re-run first if the errno looks transient (EMFILE/ENFILE/EAGAIN/EBUSY/ETXTBSY) — the target may check out clean on a second pass. Otherwise fix the permissions on the path, link a regular file in place of a named pipe, socket or device, or investigate what changed mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read. |
 | [`LINK_DEFERRED_ARTIFACT`](#link_deferred_artifact) | info | Link targets a deferred build artifact declared in the skill files: config; it will exist after the build materializes it. | No action needed if the files: entry is correct. To silence, set validation.severity.LINK_DEFERRED_ARTIFACT: ignore. |
 | [`LINK_TO_SKILL_DEFINITION`](#link_to_skill_definition) | error | Markdown link targets another skill's SKILL.md; bundling it creates duplicate skill definitions. | Link to a specific resource inside the other skill, or reference the other skill by name. |
 | [`LINK_FROM_NON_ROUTABLE_FILE`](#link_from_non_routable_file) | warning | A bundled non-routable file (HTML) links to a file the walker did not follow, so the target is not in the bundle and the packaged link points at nothing. | Link the target from a markdown file in the bundle, declare it under skills.config.<name>.files, or set severity.LINK_FROM_NON_ROUTABLE_FILE to ignore if the packaged link is meant to resolve outside the bundle. |
@@ -237,10 +237,10 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 ### `LINK_TARGET_UNREADABLE`
 
 - **Default:** `error`
-- **What:** Markdown link target could not be checked: a read failure along its path left its existence, spelling, and anchor all unverified, and — when packaging — the target was not bundled either. Usually permissions; sometimes a transient errno (`EMFILE`/`ENFILE`/`EAGAIN` — re-run before investigating), a change racing the walk, or a target that is not a regular file (a named pipe, socket or device), refused unread.
+- **What:** Markdown link target could not be checked: a read failure along its path left its existence, spelling, and anchor all unverified, and — when packaging — the target was not bundled either. Usually permissions; sometimes a transient errno (`EMFILE`/`ENFILE`/`EAGAIN`/`EBUSY`/`ETXTBSY` — re-run before investigating), a change racing the walk, or a target that is not a regular file (a named pipe, socket or device), refused unread.
 - **Not a missing target:** the distinction is the whole point of this code. [`LINK_MISSING_TARGET`](#link_missing_target) says *the path is not there*, and sends the author to fix a typo or create the file. This one says *the tooling could not find out whether the path is there*, which is an environment or permissions problem — following the missing-target remedy would have the author "create" a file that may already exist.
 - **Why it matters:** Before this code existed on the packaging lane, an unreadable target simply **vanished**: it was skipped silently, producing no exclusion, no bundle entry and no finding, so the report described a corpus with one fewer edge in it than the one on disk. This code is now shared by two emitters rather than owned by one: the skill-packaging walker (`walk-link-graph.ts`) and the resources link-validator (`link-validator.ts`, `unreadableTargetIssue`) both deliberately reuse it for the identical class of read-along-the-path refusal, so the same unreadable file reads as the same finding regardless of which lane hit it first — this is a genuinely different failure from [`RESOURCE_UNREADABLE`](#resource_unreadable), which reports a resource the registry itself failed to read, not a link target.
-- **Fix:** Re-run first if the errno looks transient (`EMFILE`/`ENFILE`/`EAGAIN`) — the target may check out clean on a second pass. Otherwise fix the permissions on the path, link a regular file in place of a named pipe, socket or device, or investigate what changed mid-walk, then re-run. Set `severity.LINK_TARGET_UNREADABLE` to `warning` if a corpus is expected to contain entries the walk cannot read.
+- **Fix:** Re-run first if the errno looks transient (`EMFILE`/`ENFILE`/`EAGAIN`/`EBUSY`/`ETXTBSY`) — the target may check out clean on a second pass. Otherwise fix the permissions on the path, link a regular file in place of a named pipe, socket or device, or investigate what changed mid-walk, then re-run. Set `severity.LINK_TARGET_UNREADABLE` to `warning` if a corpus is expected to contain entries the walk cannot read.
 
 ### `LINK_DEFERRED_ARTIFACT`
 
@@ -1217,6 +1217,7 @@ section are registry entries of kind **refusal**: a statement that the *run* cou
 - **Default:** `error`
 - **What:** An input the command must read to answer at all could not be read — absent, refused by permissions, or not the kind of thing the verb expected.
 - **Fix:** Make the named input readable, or point the command at the right one.
+- **Which filesystem faults:** see [Filesystem faults](#filesystem-faults-which-refusal) — a full disk or too many open files while *reading* an input is `RUN_INCOMPLETE`, not this code.
 
 ### `BACKEND_UNAVAILABLE`
 
@@ -1241,6 +1242,77 @@ section are registry entries of kind **refusal**: a statement that the *run* cou
 - **Default:** `error`
 - **What:** The run started and stopped before it finished — a phase failed, a population was interrupted, or a unit of work threw. The report carries whatever did finish: a real `examined`, the findings of the finished work, and partial `data`.
 - **Fix:** Fix the unit the message names as having stopped the run. The findings already in the report are real and stand on their own.
+
+#### Filesystem faults: which refusal
+
+A refusal the operating system raised is decided by one table, by **side** — an input the verb
+reads (`source`), an output or user state it writes (`destination`), or VAT's own scratch space:
+staging, the temporary directory, caches and locks (`environment`) — and by **class** of errno.
+For a source, an absent path also depends on who named it: a command-line argument, a config
+value, or content found inside another input. The side is decided by the path the OS named, not by
+the code that made the call. The published message names the path and the errno, followed by the
+row's remedy.
+
+| class | errnos |
+|---|---|
+| absent | `ENOENT`, `ENOTDIR` |
+| refused | `EACCES`, `EPERM` |
+| exhausted | `ENOSPC`, `EDQUOT`, `EMFILE`, `ENFILE` |
+| wrong-type | `EISDIR`, `EFTYPE`, `ELOOP`, `ENAMETOOLONG` |
+| occupied | `EEXIST`, `ENOTEMPTY` |
+| busy | `EBUSY`, `ETXTBSY`, `EAGAIN` |
+| unsupported | `ENOTSUP`, `EOPNOTSUPP`, `EXDEV`, `EINVAL`, `EROFS` |
+| device | `EIO`, `ESTALE`, `ETIMEDOUT`, `EHOSTDOWN`, `ENETDOWN`, `UNKNOWN` |
+
+<!-- fs-fault-refusals -->
+| side | absent | refused | wrong-type | occupied | unsupported | device | exhausted | busy |
+|---|---|---|---|---|---|---|---|---|
+| source, origin `argument` | `USAGE_INVALID` | `INPUT_UNREADABLE` | `INPUT_UNREADABLE` | `INPUT_UNREADABLE` | `INPUT_UNREADABLE` | `INPUT_UNREADABLE` | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` |
+| source, origin `config` | `CONFIG_INVALID` | `INPUT_UNREADABLE` | `INPUT_UNREADABLE` | `INPUT_UNREADABLE` | `INPUT_UNREADABLE` | `INPUT_UNREADABLE` | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` |
+| source, origin `content` | `INPUT_UNREADABLE` | `INPUT_UNREADABLE` | `INPUT_UNREADABLE` | `INPUT_UNREADABLE` | `INPUT_UNREADABLE` | `INPUT_UNREADABLE` | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` |
+| destination | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` |
+| environment | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` | `RUN_INCOMPLETE` |
+
+- A full disk, an exhausted quota or too many open files (`exhausted`), and a busy path (`busy`), are
+  the machine's fault, never the input's — `RUN_INCOMPLETE` on every side, including while reading.
+- Something in the way of a destination at the moment of the write (`occupied`: `EEXIST`,
+  `ENOTEMPTY`) is `RUN_INCOMPLETE` like every other destination fault: the table never infers what
+  the user meant, and at that point it is a race or VAT's own sequencing. A destination **the user
+  named** that already holds something is refused before anything is written, by the verb's
+  preflight, as [`USAGE_INVALID`](#usage_invalid) — and `--force`, where a verb offers it, replaces
+  what is there. That refusal is not a filesystem fault and is not decided by this table.
+- A directory a listing could not open (a crawl, a discovery, a plugin's `skills/` tree) is decided by
+  this table too, on the side of the tree being listed: the lister declares it, and the published
+  message keeps the listing's own sentence (the directory, root-relative, and its remedy).
+- An errno that reaches a verb's catch without being classified is still `INTERNAL_ERROR`: it is not
+  known to be the input's, the output's or the machine's until the site that made the call says so.
+
+#### Tree changes: which refusal
+
+A verb that replaces, removes or copies a tree decides everything before it writes anything (its
+`--dry-run` prints those decisions, one line per change), then stages the new tree beside the old,
+moves the old one aside, swaps, and removes the old one last; a failure before that puts every
+destination back exactly as it was. Its own refusals are not filesystem faults, and carry these codes
+(what a failure could not clean up is a [`TREE_CLEANUP_INCOMPLETE`](#leftover-findings-never-overridable) warning beside the refusal):
+
+| code | refusal | when |
+|---|---|---|
+| `TREE_DEST_OCCUPIED` | `USAGE_INVALID` | A destination that must be free (absent, or an empty directory) already holds something. Nothing was written. Choose another path, or empty it. |
+| `TREE_DEST_NOT_OWNED` | `USAGE_INVALID` | A destination VAT replaces only when it made it — an explicit `--output`, a RAG database — holds something VAT did not produce; the message says what. Nothing was written. Pass `--force` where the verb offers it, or choose another path. |
+| `TREE_DEST_HOLDS_SOURCE` | `USAGE_INVALID` | The tree to copy is the destination or lies inside it, so replacing the destination would delete it. Nothing was written. |
+| `TREE_SOURCE_HOLDS_DEST` | `USAGE_INVALID` | The destination lies inside the tree being copied into it. Nothing was written. |
+| `TREE_ROLLBACK_INCOMPLETE` | `RUN_INCOMPLETE` | The change failed and could not be fully undone: a previous tree could not be renamed back, or a newly created one could not be moved off its path. A previous tree is never deleted — the message names where it is (a dot-named `*.vat-staged-*.previous` entry beside its destination), and the failure that started the rollback. Rename it back yourself. |
+| `TREE_DESTS_OVERLAP` | `INTERNAL_ERROR` | A verb planned two changes over one tree (one destination inside another). Nothing was written. A defect in VAT — report it. |
+| `TEMP_DIR_OUTSIDE_TMPDIR` | `INTERNAL_ERROR` | VAT was about to dispose of a "temporary" directory that is not inside the temporary directory. Nothing was removed. A defect in VAT — report it. |
+
+`USAGE_INVALID` here comes only from that preflight: an `EEXIST` or `ENOTEMPTY` raised at the
+moment of a write is a destination fault, `RUN_INCOMPLETE`, per the table above. Once a replace is
+complete, an old tree the OS would not let VAT remove is a warning, `TREE_CLEANUP_INCOMPLETE`, naming
+it; for a remove, removal is the job, so the same refusal is a destination fault (`RUN_INCOMPLETE`)
+naming the moved-aside entry — what was removed is already off its path. A remove verb
+(`vat agent uninstall`, `vat rag clear`, `vat cache clear`, `vat claude plugin uninstall`) publishes
+that refusal beside the work it finished: its `data`, and a `TREE_CLEANUP_INCOMPLETE` warning naming
+the moved-aside entry. There is no partial remove: an entry is on its path, whole, or off it.
 
 ### `INTERNAL_ERROR`
 
@@ -1328,7 +1400,7 @@ skill's `SKILL.md`.
 | Code | Severity | What | Fix |
 |---|---|---|---|
 | `SKILL_BUILD_TARGET_NOT_BUILDABLE` | error | `--skill <name>` named a skill whose merged config says `publish: false`: an in-place skill (validated at source by `vat validate`, never bundled) or a plugin-local one (shipped with its plugin by the claude phase). `data.skillsInPlace` / `data.skillsPluginOnly` name it. Building nothing and exiting 0 would tell a release step the skill it asked for was built | Drop `--skill`, set `publish: true` to distribute it through `dist/skills`, or — for a plugin-local skill — run `vat build --only claude` |
-| `SKILL_PACKAGING_FAILED` | error | Packaging stopped before it produced a bundle — an absent or unreadable `files:` source, a source file the OS would not let the build read, two `files:` dests where one lands on or under the other's file, a `SKILL.md` bundled as a resource, a name that is not a single path segment; the message is the packager's own. Only the packager's CODED refusals (`SKILL_PACKAGING_INPUT_INVALID`, `SKILL_NAME_NOT_A_SEGMENT`) are this finding, in every lane that emits it; any other packager throw stops the run under its own refusal code (`INPUT_UNREADABLE` for a directory the OS will not list; `RUN_INCOMPLETE` for an output the OS would not let the build write — a full disk, a read-only or unwritable output directory, a file in the way of the output path, a ZIP, npm `package.json` or marketplace manifest that could not be written (its partial file removed), coded `SKILL_PACKAGING_OUTPUT_FAILED` — which says nothing about the skill and is never this finding, in every lane: `vat skills build`, `vat skills package`, `vat build`, `vat claude plugin build`, `vat agent build`, `vat skill test run` — known gap: a disk so full that a crawling verb's git snapshot of the project fails before any output is written still ends `INTERNAL_ERROR`, "git did not answer …"; `USAGE_INVALID` for an explicit `vat skills package --output` that already holds something, without `--force`, or that is or contains the skill's own source (`--force` or not), coded `SKILL_PACKAGING_OUTPUT_OCCUPIED` — never deleted or overwritten), or `INTERNAL_ERROR` when it carries none. A bundled markdown file the pre-build validation cannot read is reported before packaging, as `LINK_TARGET_UNREADABLE` at that file, in `vat skills build` and `vat skills validate` (and so their `vat build` / `vat validate` phases); `vat skills package` runs no such validation and reports it as this finding instead. Counted in `data.skillsFailed` (`vat skills build`) | Fix what the message names in the skill or its `skills.config` entry, then rebuild — or, from `vat skills package` or `vat skill test run`, re-run that verb |
+| `SKILL_PACKAGING_FAILED` | error | Packaging stopped before it produced a bundle — an absent `files:` source, a source file the OS would not let the build read, a write into the bundle whose layout the skill's `files:` config made impossible (two `files:` dests where one lands on or under the other's file), a `SKILL.md` bundled as a resource, a name that is not a single path segment, a package its own post-build checks failed (nothing is written; `vat skills package` publishes those checks' own findings instead of this one); the message is the packager's own. This finding is exactly what `isSkillPackagingInputError` accepts, in every lane that emits it: the packager's coded content refusals (`SKILL_PACKAGING_INPUT_INVALID`, `SKILL_NAME_NOT_A_SEGMENT`, `SKILL_PACKAGE_CHECKS_FAILED`), and a classified filesystem fault on the `source` side — a write into the bundle is classified with `shapeFromSource`, which moves only the layout classes (`wrong-type`, `occupied`) there — that is not a capacity fault. Any other packager throw stops the run under its own refusal code (`RUN_INCOMPLETE` for a capacity fault — a full disk, an exhausted descriptor table, a busy file — even while reading the source, and for a fault on the output: a read-only or unwritable output directory or bundle subdirectory, an output removed while the run wrote it, an output the run cannot read back, a file in the way of the output path, a ZIP, npm `package.json` or marketplace manifest that could not be written (nothing of the package lands: the package is one plan), a crawl of a project the run writes its output into that finds the project gone — which says nothing about the skill and is never this finding, in every lane: `vat skills build`, `vat skills package`, `vat build`, `vat claude plugin build`, `vat agent build`, `vat skill test run` — known gap: a disk so full that a crawling verb's git snapshot of the project fails before any output is written still ends `INTERNAL_ERROR`, "git did not answer …"; a directory the OS will not list as the [table](#filesystem-faults-which-refusal) says for the tree being listed — `INPUT_UNREADABLE` for the project a verb only reads, `RUN_INCOMPLETE` for the project a verb writes its output into, and for a descriptor shortage on either; `USAGE_INVALID` for an explicit `vat skills package --output` that already holds something, without `--force` (`TREE_DEST_NOT_OWNED`), or that is or contains the skill's own source (`TREE_DEST_HOLDS_SOURCE` with `--force`) — never deleted or overwritten), or `INTERNAL_ERROR` when it carries none. `vat agent build` and `vat skill test run` publish a source fault raised inside the packager as this finding too; the agent's own source reads outside the packager (its system prompt, `scripts/`, `LICENSE.txt`) stay `INPUT_UNREADABLE`. A bundled markdown file the pre-build validation cannot read is reported before packaging, as `LINK_TARGET_UNREADABLE` at that file, in `vat skills build` and `vat skills validate` (and so their `vat build` / `vat validate` phases); `vat skills package` runs no such validation and reports it as this finding instead. Counted in `data.skillsFailed` (`vat skills build`) | Fix what the message names in the skill or its `skills.config` entry, then rebuild — or, from `vat skills package` or `vat skill test run`, re-run that verb |
 
 ### `vat skills package` findings (never overridable)
 
@@ -1411,17 +1483,6 @@ refuses ends it as `RUN_INCOMPLETE`.
 |---|---|---|---|
 | `CORPUS_ENTRY_INCOMPLETE` | warning | A seed entry whose audit could not run (`audit: unloadable` — a source path that is not there, a clone that failed, a source that refused the validation overlay), or whose review, asked for with `--with-review`, did not finish (`review: error`) | Fix what the message names — the entry's `source`, network access for a clone, or the failing skill review in `<name>-review.md` — and re-run the scan |
 
-### `vat claude plugin install` findings (never overridable)
-
-Emitted only by `vat claude plugin install`, always at `warning`, and declared as
-`NonOverridableCode` in `packages/schema/src/validation-codes.ts` — the verb acts on Claude user
-state and reads no project config, so a `validation.severity` or `validation.allow` key for it
-would parse and do nothing, and both refuse it. `location` is the plugin key.
-
-| Code | Severity | What | Fix |
-|---|---|---|---|
-| `PLUGIN_INSTALL_CLEANUP_INCOMPLETE` | warning | A re-install put a new tree in place, but the OS would not let it remove the previous one (a read-only directory inside it, a file another process holds). The install is complete and the plugin is registered; the previous tree is left under a dot-named `*.vat-staged-*.previous` directory beside the one it replaced, which `vat inventory --user` does not read as a version or a marketplace. Three trees are replaced this way: the plugin **cache** (`.<version>.vat-staged-*.previous` beside the version, location: the plugin key), the **marketplace copy** (`.<marketplace>.vat-staged-*.previous` in `~/.claude/plugins/marketplaces/`, location: the marketplace name), and — when the library's `installPlugin` copies a plugin itself — the plugin's marketplace directory (`.<plugin>.vat-staged-*.previous` in `marketplaces/<marketplace>/plugins/`, location: the plugin key) | Remove the directory the message names yourself, making it writable first if the OS refused |
-
 ### `vat claude plugin uninstall` findings (never overridable)
 
 Emitted only by `vat claude plugin uninstall`, always at `warning`, and declared as
@@ -1432,6 +1493,18 @@ would parse and do nothing, and both refuse it. `location` is the plugin key.
 | Code | Severity | What | Fix |
 |---|---|---|---|
 | `PLUGIN_UNINSTALL_INCOMPLETE` | warning | The plugin's directory was under the Claude marketplaces tree with no entry in `installed_plugins.json` — a half-removed install, or one VAT never made. The directory, cache and settings entry were removed (under `--dry-run`, would be removed), and `data.plugins[]` still reports `removed: true`; but VAT reverses only the artifacts its own install writes, so an install it did not record may have written others it cannot see. Also raised when the plugin's directory (or cache) IS another registered plugin's on disk — `Old@mp` beside `old@mp` on a case-insensitive filesystem, a linked marketplace, or another plugin's directory that is a link to it (judged by device and inode, or by the case-folded real path where the filesystem reports no inode): that directory is kept and only the registry and settings entries go, and the message names the plugin it belongs to. Likewise when another registered plugin's directory could not be examined (the OS refused it), so that it cannot be ruled out as the same directory: kept, never removed on uncertainty, the message naming that directory and the errno — and the uninstall is not blocked | Check Claude Code for leftovers of the plugin (`/plugin`) and remove them there |
+| `PLUGIN_KEPT_SIBLING_UNEXAMINED` | warning | A plugin directory was kept, not removed, because the OS refused to examine another plugin's directory it may be the same entry as (a link, or a case alias): VAT never deletes what may BE a kept sibling. The registry entry is removed. The finding's `link` is the kept directory's absolute path (it has no `location`); also emitted when `vat claude plugin install` uninstalls what `vat.replaces` names. | Make the directory the message names readable, then remove the kept directory if nothing uses it. |
+
+### Leftover findings (never overridable)
+
+Emitted beside any verb's refusal, always at `warning`, and declared as `NonOverridableCode` in
+`packages/schema/src/validation-codes.ts` — it reports what a failure path could not clean up, not a
+check a config could tune. `link` is the entry left behind (an absolute path; it has no `location`). The run's refusal is the failure's
+own: what was left is recorded beside the failure, never as its cause, so it never decides the code.
+
+| Code | Severity | What | Fix |
+|---|---|---|---|
+| `TREE_CLEANUP_INCOMPLETE` | warning | The OS would not let VAT remove something it had made. Either the run failed and, undoing its work, could not remove a temporary directory or a staged copy (a dot-named `*.vat-staged-*` entry beside a destination) — nothing at the destination itself changed; or the run succeeded and the previous tree it replaced, parked as `*.vat-staged-*.previous` beside the new one, would not go (`vat claude plugin install` and `vat skills install`: a plugin's cache, a marketplace copy or a skill; `vat skills build`: the previous `dist/skills`, or one bundle under `--skill`; `vat skills package` and `vat agent build`: the previous package or build at the output; `vat claude plugin build`: the previous marketplace; `vat agent install`: the previous install — with `link` the parked path), or its `$TMPDIR` staging directory would not go once the install was complete; or a remove (`vat agent uninstall`, `vat rag clear`, `vat cache clear`) moved what it removes off its path and the OS would not then delete it — beside that run's `RUN_INCOMPLETE`, which still carries the work it finished. Either way the entry named is VAT's leftover, and `vat inventory --user` does not read a `*.vat-staged-*` entry as a version or a marketplace. | Remove what the message names yourself, making it writable first if the OS refused; nothing VAT made uses it. |
 
 ### Claude Settings Codes
 

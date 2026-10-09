@@ -1,7 +1,8 @@
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
-import { isVatError, VatError } from '@vibe-agent-toolkit/utils';
+import { isFsFaultError, isVatError, VatError } from '@vibe-agent-toolkit/utils';
 
-import { SKILL_SOURCE_UNREADABLE_CODE } from '../skill-source/source-unreadable.js';
+import { FETCH_CACHE_NOT_OWNED_CODE } from '../skill-source/fetch-cache.js';
+import { SKILL_SOURCE_UNREADABLE_CODE } from '../skill-source/stage.js';
 
 /**
  * WHY a `vat skill test run` ended on `ExitCode.ERROR`.
@@ -50,6 +51,9 @@ const FAILURE_REASONS: ReadonlySet<string> = new Set<SkillTestFailureReason>([
  */
 export function skillTestFailureReason(err: unknown): SkillTestFailureReason {
   if (!isVatError(err)) return 'internal';
+  // A classified filesystem refusal is the operator's environment — a full disk, an
+  // unreadable `--with` source, an unwritable harness root — never the harness breaking.
+  if (isFsFaultError(err)) return 'preflight';
   let declared: unknown;
   try {
     declared = (err as { reason?: unknown }).reason;
@@ -78,7 +82,13 @@ export function skillTestFailureReason(err: unknown): SkillTestFailureReason {
  *   lock, the missing security ack. A `SkillBuildError` carrying a `cause` is
  *   classified by that cause, not by this row (see {@link SkillBuildError}).
  * - `CONFIG_INVALID` — a `test.evals` npm specifier that names nothing installed.
- * - `RUN_INCOMPLETE` — a harness root the OS would not let the run create.
+ * - `RUN_INCOMPLETE` — the fetch cache a `url` skill source is cached in is another
+ *   user's (`FETCH_CACHE_NOT_OWNED`): VAT's own scratch, which it will not use.
+ *
+ * A filesystem refusal is none of these: it is a classified `FsFaultError`, whose
+ * refusal the schema table decides by side and class — an unreadable source
+ * `INPUT_UNREADABLE`, a harness root or results file the OS would not let the run
+ * write `RUN_INCOMPLETE`.
  *
  * An absent runtime (`claude` not on PATH, or too old for a flag the spawn
  * needs) is `BACKEND_UNAVAILABLE`, and is decided by the preflight check that
@@ -89,10 +99,10 @@ export const SKILL_TEST_REFUSAL_BY_ERROR_CODE = {
   SKILL_TEST_BOOTSTRAP_NEEDED: 'INPUT_UNREADABLE',
   EVAL_INPUT: 'INPUT_UNREADABLE',
   [SKILL_SOURCE_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
+  [FETCH_CACHE_NOT_OWNED_CODE]: 'RUN_INCOMPLETE',
   AUTH_PREFLIGHT: 'USAGE_INVALID',
   BUILD_HOOK: 'USAGE_INVALID',
   HARNESS_LOCATION: 'USAGE_INVALID',
-  HARNESS_OUTPUT_UNWRITABLE: 'RUN_INCOMPLETE',
   HARNESS_LOCK_BUSY: 'USAGE_INVALID',
   PROMPT_INVARIANT: 'USAGE_INVALID',
   SKILL_TEST_BUILD_FAILED: 'USAGE_INVALID',

@@ -1648,7 +1648,10 @@ async function readManifest(path: string): Promise<ManifestRead> {
   try {
     text = await readFile(path, 'utf8');
   } catch (error) {
-    if (isNotFound(error)) return { kind: 'absent' };
+    // ENOTDIR counts as absent too: a component of `<dir>/package.json` that is a
+    // FILE means there is no package directory there, so — like a directory with
+    // no `package.json` — there is no manifest to judge.
+    if (isPathAbsentError(error)) return { kind: 'absent' };
     return { kind: 'unreadable', reason: describeFailure(error) };
   }
 
@@ -1657,11 +1660,6 @@ async function readManifest(path: string): Promise<ManifestRead> {
   } catch (error) {
     return { kind: 'unreadable', reason: describeFailure(error) };
   }
-}
-
-/** Is this the filesystem saying "nothing here", as opposed to "I could not"? */
-function isNotFound(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT';
 }
 
 /** The failure text carried into the finding, so the reader sees the real cause. */

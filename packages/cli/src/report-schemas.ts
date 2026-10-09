@@ -699,6 +699,7 @@ const EXPORTS: readonly ExportedTypeShape[] = [
   ...exported('runtime-claude-agent-sdk', ['AgentConversionResult', 'BatchConversionResult'], LIBRARY_RESULT),
   ...exported('runtime-langchain', ['ConversationalResult'], LIBRARY_RESULT),
   ...exported('runtime-vercel-ai-sdk', ['ConversionResult'], LIBRARY_RESULT),
+  ...exported('utils', ['ApplyResult'], 'What `applyTreePlan` returns: the warnings of a tree change that is done.'),
   ...exported(SCHEMA_PACKAGE, ['Report', 'OkReport', 'FindingsReport', 'ErrorReport'], 'The union report envelope every report verb publishes; its JSON Schemas are the `report` entries above.'),
   ...exported(SCHEMA_PACKAGE, ['ExitDeterminingDocument'], 'The envelope fields an exit code derives from.'),
   ...exported(SCHEMA_PACKAGE, ['AgentResult', 'StatefulAgentResult', 'FrameworkResult'], 'The agent result envelope every runtime adapter returns.'),

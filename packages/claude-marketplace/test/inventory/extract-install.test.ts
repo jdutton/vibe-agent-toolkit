@@ -164,7 +164,7 @@ describe('extractClaudeInstallInventory', () => {
 			expect(await refusedCacheLevel(tempDir, 'refused-plugin', ['mp', 'plugin'])).toEqual([expect.stringContaining('EACCES')]);
 		});
 
-		// installPlugin stages and parks under dot-names beside the version it replaces; one a
+		// A plugin install stages and parks under dot-names beside the version it replaces; one a
 		// crash or a failed cleanup leaves behind must not read as a second installed version.
 		it('reads no dot-named directory beside the versions as an installed version', async () => {
 			const claudeDir = safePath.join(tempDir, 'dot-named-leftover', '.claude');

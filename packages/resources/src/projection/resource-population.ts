@@ -159,10 +159,13 @@ export interface ResourcePopulationSource {
    *
    * @param root - Absolute root to enumerate, which the guard has already
    *   established names the same directory as {@link ResourcePopulationSource.root}
+   * @param outputs - The trees the calling verb writes (the registry's `CrawlOptions.outputs`),
+   *   `[]` for none: a fault on one of them, inside one or on a directory holding one is the
+   *   destination's, any other the input's
    * @returns Every file the population admits, and the population-time
    *   conditions the enumeration recorded — see {@link ResourceEnumeration}
    */
-  enumerate(root: string): Promise<ResourceEnumeration>;
+  enumerate(root: string, outputs: readonly string[]): Promise<ResourceEnumeration>;
 }
 
 /**
@@ -350,6 +353,8 @@ function resourceContributors(
  */
 export async function buildResourcePopulation(options: {
   root: string;
+  /** The trees the calling verb writes, `[]` for none: the one declaration of which side a fault is on (see `crawlSourceFor`). */
+  outputs: readonly string[];
   gitTracker?: GitTracker | undefined;
   cache?: PopulationCache | undefined;
   collections?: Readonly<Record<string, CollectionConfig>> | undefined;
@@ -368,7 +373,7 @@ export async function buildResourcePopulation(options: {
   // only `VAT_EXTENT_SOURCE` would then run one enumerator twice and produce two
   // identical populations, which reads as "the two agree" and actually means
   // "the switch did nothing". Those must not look alike.
-  const source = crawlSourceFor(root);
+  const source = crawlSourceFor(root, options.outputs);
 
   // `'deferred'`, and it is the same argument as `contentParsing: CONTENT_PARSING_SKIP` one layer
   // down — see the header. This lane reads four realization columns and
@@ -495,8 +500,9 @@ export function buildResourceProjection(options: {
   const root = safePath.resolve(options.root);
   // Same one-call-early selection as the population lane, for the same reason:
   // `crawlSourceFor` falls back silently, so the instance that ran must stay
-  // nameable rather than re-derivable from the environment.
-  const source = crawlSourceFor(root);
+  // nameable rather than re-derivable from the environment. A projection is built
+  // to be read: the root is the tree the verb examines.
+  const source = crawlSourceFor(root, []);
   // The DEFAULT demand, stated rather than defaulted, because it is the half of
   // this lane that differs from its sibling and a reader comparing the two
   // should find the difference at the call rather than in an argument list.

@@ -49,7 +49,7 @@ if (result.summary.errors > 0) {
 ```typescript
 import { importSkillToAgent } from '@vibe-agent-toolkit/agent-skills';
 
-const result = importSkillToAgent({
+const result = await importSkillToAgent({
   skillPath: './my-skill/SKILL.md',
   outputPath: './my-agent/agent.yaml', // Optional
   force: false, // Optional
@@ -179,7 +179,7 @@ The validator checks for:
 
 See [Best Practices Guide](../../docs/guides/agent-skills-best-practices.md) for detailed guidance.
 
-### importSkillToAgent(options): ImportResult
+### importSkillToAgent(options): Promise<ImportResult>
 
 Convert an Agent Skill (SKILL.md) to VAT agent format (agent.yaml).
 
@@ -188,9 +188,13 @@ Convert an Agent Skill (SKILL.md) to VAT agent format (agent.yaml).
 interface ImportOptions {
   skillPath: string;      // Path to SKILL.md
   outputPath?: string;    // Custom output path (default: same dir as SKILL.md)
-  force?: boolean;        // Overwrite existing agent.yaml (default: false)
+  force?: boolean;        // Replace what is at the output (default: false)
 }
 ```
+
+The agent.yaml is written by one tree-change plan: something already at the output
+without `force` is refused before anything is written (a thrown `TREE_DEST_OCCUPIED`
+`VatError`), and the directory it goes in is made when absent.
 
 **Returns:**
 ```typescript
@@ -202,18 +206,18 @@ type ImportResult =
 **Example:**
 ```typescript
 // Basic import
-const result = importSkillToAgent({
+const result = await importSkillToAgent({
   skillPath: './my-skill/SKILL.md',
 });
 
 // Custom output path
-const result = importSkillToAgent({
+const result = await importSkillToAgent({
   skillPath: './my-skill/SKILL.md',
   outputPath: './agents/my-agent/agent.yaml',
 });
 
 // Force overwrite
-const result = importSkillToAgent({
+const result = await importSkillToAgent({
   skillPath: './my-skill/SKILL.md',
   force: true,
 });
@@ -376,7 +380,7 @@ if (validation.summary.errors > 0) {
 }
 
 // Import if validation passes
-const importResult = importSkillToAgent({
+const importResult = await importSkillToAgent({
   skillPath: './my-skill/SKILL.md',
 });
 

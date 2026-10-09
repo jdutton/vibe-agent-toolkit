@@ -1,6 +1,6 @@
 // packages/cli/src/commands/claude/plugin/uninstall.ts
 /**
- * `vat claude plugin uninstall` — reverse what `installPlugin()` wrote,
+ * `vat claude plugin uninstall` — reverse what `vat claude plugin install` wrote,
  * published as the `Report<T>` envelope (`uninstall-schema.ts`).
  *
  * One uninstall request per run (a key, or `--all`). Nothing to remove is an
@@ -9,18 +9,18 @@
  * reported as a `PLUGIN_UNINSTALL_INCOMPLETE` finding at its key.
  */
 
-import { readFileSync } from 'node:fs';
 
-import { findPluginsByPackage, getClaudeUserPaths, parsePluginKey, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
+import { findPluginsByPackage, getClaudeUserPaths, parsePluginKey, uninstallPlugins } from '@vibe-agent-toolkit/claude-marketplace';
 import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { CommandRefusalError, refusalCodeOf } from '../../../utils/command-refusal.js';
-import { endWithRefusal, endWithReport, NOTHING_FINISHED, type FinishedWork } from '../../../utils/document-writer.js';
+import { endWithRefusal, endWithReport, leftoverIssueOf, NOTHING_FINISHED, type FinishedWork } from '../../../utils/document-writer.js';
 import { createLogger } from '../../../utils/logger.js';
-import { unstatablePathRefusal } from '../../../utils/project-root-policy.js';
+import { readInputFile } from '../../../utils/project-root-policy.js';
 
+import { keptForSiblingFindings } from './kept-findings.js';
 import type { PluginUninstallData, PluginUninstallReport } from './uninstall-schema.js';
 
 interface PluginUninstallCommandOptions {
@@ -42,10 +42,13 @@ export function createPluginUninstallCommand(): Command {
     .addHelpText('after', `
 Description:
   Removes an installed PLUGIN from Claude Code, reversing the artifacts
-  installPlugin() writes: the marketplace plugin directory, its cache dir, the
-  installed_plugins and known_marketplaces registry entries, and the settings
-  entry. With --all, finds all plugins installed from the npm package in the
-  current directory.
+  vat claude plugin install writes: the marketplace plugin directory, its cache dir, the
+  installed_plugins registry entry and the settings entry — and, with the last
+  installed plugin of a marketplace, the marketplace's directory and its
+  known_marketplaces entry together. With --all, finds all plugins installed
+  from the npm package in the current directory. Every key is uninstalled in one
+  transaction. A marketplace Claude Code added (not VAT) is never removed.
+  --dry-run prints the plan: one line per directory, what would happen to it.
 
   Does NOT remove skills installed flat into ~/.claude/skills/ — that is what
   "vat claude plugin install <dir|zip>", "--dev", and "vat skills install"
@@ -62,9 +65,10 @@ Output (YAML report on stdout):
   - findings: PLUGIN_UNINSTALL_INCOMPLETE (warning) for a plugin directory no
     registry recorded — removed, but its installer may have left more; or for
     a directory that is another installed plugin's on disk (Old@mp beside old@mp
-    on a case-insensitive filesystem, or a link to it) — or that could not be
-    told apart from one whose directory the OS would not examine — kept, only
-    the registry entry removed
+    on a case-insensitive filesystem, or a link to it) — kept, only the
+    registry entry removed; PLUGIN_KEPT_SIBLING_UNEXAMINED (warning), its link
+    the kept directory, for one kept because another plugin's directory it may
+    be could not be examined
 
 Exit Codes:
   0 - Uninstalled, or nothing to remove (a warning does not fail the run)
@@ -75,8 +79,11 @@ Exit Codes:
       --all over a package.json that is unreadable or not JSON, or a Claude
       registry that is, or that holds a key of the package that is not
       <plugin>@<marketplace> — refused before anything is removed
-      (INPUT_UNREADABLE); a removal or registry rewrite that
-      failed partway (RUN_INCOMPLETE — plugins already uninstalled are still listed)
+      (INPUT_UNREADABLE); a removal or registry rewrite the OS refused
+      (RUN_INCOMPLETE). Refused before the registry was rewritten, everything it
+      touched is put back and nothing is uninstalled; a directory the OS will not
+      delete after it leaves the plugins uninstalled — listed as finished — and
+      names the leftover in a TREE_CLEANUP_INCOMPLETE warning
 
 Example:
   $ vat claude plugin uninstall my-skill@my-marketplace
@@ -90,6 +97,12 @@ Example:
 /** `vat claude plugin uninstall` has no `--strict`: a warning never fails it. */
 const GATE = { strict: false } as const;
 
+/** End on the envelope's error branch: `error` refused, `finished` the work done before it. */
+function refuse(error: unknown, finished: FinishedWork): never {
+  // A literal verb: the published-shapes registry scan reads it here.
+  return endWithRefusal('claude plugin uninstall', refusalCodeOf(error), error, 'yaml', GATE, finished);
+}
+
 /** One uninstall request per run — a key, or `--all`. */
 const UNINSTALL_REQUESTS = 1;
 
@@ -99,6 +112,8 @@ interface PluginUninstallOutcome {
   readonly removed: boolean;
   /** Set when the plugin directory existed with no registry entry. */
   readonly warning?: string | undefined;
+  /** Directories kept because a sibling could not be examined; each is a finding of its own, at its path. */
+  readonly keptForSibling: ReadonlyArray<{ readonly path: string; readonly sibling: string }>;
 }
 
 /** The finding for a plugin uninstalled from a directory no registry recorded. */
@@ -118,7 +133,7 @@ function incompleteFinding(outcome: PluginUninstallOutcome): ValidationIssue[] {
 function finishedWork(outcomes: readonly PluginUninstallOutcome[], dryRun: boolean): FinishedWork & { data: PluginUninstallData } {
   return {
     examined: UNINSTALL_REQUESTS,
-    findings: toFindings(outcomes.flatMap(incompleteFinding)),
+    findings: toFindings(outcomes.flatMap((outcome) => [...incompleteFinding(outcome), ...keptForSiblingFindings(outcome.keptForSibling)])),
     data: { dryRun, plugins: outcomes.map(({ key, removed }) => ({ key, removed })) },
   };
 }
@@ -149,15 +164,23 @@ async function pluginUninstallCommand(
 
   try {
     const paths = getClaudeUserPaths();
-    // In order: each uninstall is a read-modify-write of the ~/.claude registry files.
-    await forEachInOrder(resolvePluginKeys(pluginKeyArg, options, logger), async (pluginKey) => {
-      const result = await uninstallPlugin({ pluginKey, paths, dryRun });
+    const pluginKeys = [...new Set(resolvePluginKeys(pluginKeyArg, options, logger))];
+    // One transaction for every key: `--all` uninstalls them all, or (refused before the registry
+    // was rewritten) none.
+    const { results, changes, leftover } = await uninstallPlugins({ pluginKeys, paths, dryRun });
+    if (dryRun) for (const line of changes) logger.info(`   [dry-run] ${line}`);
+    for (const [index, result] of results.entries()) {
       if (result.warning !== undefined) logger.info(`   ⚠️  ${result.warning}`);
-      outcomes.push({ key: pluginKey, removed: result.removed, warning: result.warning });
-    });
+      outcomes.push({ key: pluginKeys[index] as string, removed: result.removed, warning: result.warning, keptForSibling: result.keptForSibling });
+    }
+    // Every key is uninstalled, registry rewritten; what the OS would not then delete is the refusal, naming it.
+    if (leftover !== undefined) {
+      const finished = finishedWork(outcomes, dryRun);
+      refuse(leftover, { ...finished, findings: [...finished.findings, ...toFindings([leftoverIssueOf(leftover)])] });
+    }
   } catch (error) {
-    // Whatever uninstalled before the refusal is still reported.
-    endWithRefusal('claude plugin uninstall', refusalCodeOf(error), error, 'yaml', GATE, outcomes.length === 0 ? NOTHING_FINISHED : finishedWork(outcomes, dryRun));
+    // Refused before the registry was rewritten: every key was put back, nothing finished.
+    refuse(error, NOTHING_FINISHED);
   }
 
   endWithReport('claude plugin uninstall', buildPluginUninstallReport(outcomes, dryRun, Date.now() - startTime), 'yaml');
@@ -166,12 +189,7 @@ async function pluginUninstallCommand(
 /** The `name` of the npm package in `dir`, refusing when there is none to read. */
 function packageNameIn(dir: string): string {
   const packageJsonPath = safePath.join(dir, 'package.json');
-  let raw: string;
-  try {
-    raw = readFileSync(packageJsonPath, 'utf-8');
-  } catch (error) {
-    throw unstatablePathRefusal(packageJsonPath, error);
-  }
+  const raw = readInputFile(packageJsonPath, { origin: 'argument', message: `Path does not exist: ${packageJsonPath}` });
   let name: unknown;
   try {
     name = (JSON.parse(raw) as { name?: unknown }).name;
@@ -214,3 +232,6 @@ function resolvePluginKeys(
   parsePluginKey(pluginKeyArg);
   return [pluginKeyArg];
 }
+
+/** Test-facing seam: the pure decisions of this module, reached by its unit tests. */
+export const __internal = { resolvePluginKeys };

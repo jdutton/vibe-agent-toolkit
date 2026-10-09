@@ -15,10 +15,9 @@
 import { readFileSync, type Dirent } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 
-import { direntKindFollowing, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, direntKindFollowing, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from '../../../utils/command-refusal.js';
-import { unstatablePathRefusal } from '../../../utils/project-root-policy.js';
 
 /**
  * The value `read` returns, or `undefined` when there is nothing at `path`.
@@ -30,7 +29,7 @@ function unlessAbsentSync<T>(path: string, read: () => T): T | undefined {
     return read();
   } catch (error) {
     if (isPathAbsentError(error)) return undefined;
-    throw unstatablePathRefusal(path, error);
+    throw classifyFsFault(error, { side: 'source', origin: 'content', action: 'read the plugin', path });
   }
 }
 
@@ -40,7 +39,7 @@ async function unlessAbsent<T>(path: string, read: () => Promise<T>): Promise<T 
     return await read();
   } catch (error) {
     if (isPathAbsentError(error)) return undefined;
-    throw unstatablePathRefusal(path, error);
+    throw classifyFsFault(error, { side: 'source', origin: 'content', action: 'read the plugin', path });
   }
 }
 

@@ -410,7 +410,7 @@ describe('skills package — the claude.ai ZIP ceiling (system test)', () => {
     cleanupTempDirs();
   });
 
-  it('publishes SKILL_PACKAGE_TOO_LARGE at the skill, exit 1, with the bundle on disk', async () => {
+  it('publishes SKILL_PACKAGE_TOO_LARGE at the skill, exit 1, and lands nothing: the package is one plan', async () => {
     const { result, parsed } = await executeCliAndParseYaml(
       binPath,
       ['skills', 'package', skillMdPath, '-o', outputDir, '--target', TARGET_CLAUDE_WEB, '-f', 'zip'],
@@ -424,7 +424,8 @@ describe('skills package — the claude.ai ZIP ceiling (system test)', () => {
       severity: 'error',
       location: expect.stringMatching(/SKILL\.md$/),
     })]);
-    expect(report.data.outputPath).not.toBeNull();
-    expect(existsSync(`${outputDir}.zip`)).toBe(true);
+    expect(report.data.outputPath).toBeNull();
+    expect(existsSync(`${outputDir}.zip`)).toBe(false);
+    expect(existsSync(outputDir)).toBe(false);
   });
 });

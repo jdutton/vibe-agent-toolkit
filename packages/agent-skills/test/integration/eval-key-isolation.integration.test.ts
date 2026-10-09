@@ -30,7 +30,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runSkillTestHarness, type RunHarnessOptions } from '../../src/skill-test/run-harness.js';
 import { makeHarnessFakeSpawn } from '../skill-test/spawn-stub.js';
-import { soleArmWorkspace } from '../test-helpers.js';
+import { soleArmWorkspace, useScratchTmpdir } from '../test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test (and every child
+// a test spawns), so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-8-');
 
 vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('../skill-test/preflight-stub.js')).passingPreflight(io));
 
