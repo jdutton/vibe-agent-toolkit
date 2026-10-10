@@ -2,7 +2,7 @@
  * Shallow-clone-and-cleanup helper for `vat audit <git-url>`.
  *
  * Pipeline:
- *  1. mkdtempSync('vat-audit-')
+ *  1. makeStagingDir('vat-audit-')
  *  2. install SIGINT handler that disposes of the tempdir
  *  3. git clone --depth 1 --single-branch [--branch <ref>]
  *  4. git rev-parse HEAD → resolved commit SHA
@@ -10,12 +10,13 @@
  *  6. cleanup in finally — always dispose of the tempdir unless `keepTempForDebug`
  */
 
-import { mkdtempSync } from 'node:fs';
+
 
 import { cloneGitSource } from '@vibe-agent-toolkit/agent-skills';
-import { disposeTempDir, disposeTempDirAfterFailure, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { disposeTempDir, disposeTempDirAfterFailure } from '@vibe-agent-toolkit/utils';
 import { type ParsedGitUrl } from '@vibe-agent-toolkit/utils/git';
 
+import { makeStagingDir } from '../../utils/archive-staging.js';
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
 
 import type { Provenance } from './provenance.js';
@@ -80,7 +81,8 @@ export async function withClonedRepo<T>(
   options: CloneOptions,
   body: (ctx: CloneAndAuditContext) => Promise<T>
 ): Promise<{ readonly value: T; readonly leftover: unknown }> {
-  const tempdir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-'));
+  // Through the one classified creation: a temp directory the OS will not make is the environment's fault.
+  const tempdir = await makeStagingDir('vat-audit-');
   // Interrupted: dispose of the clone first, then let the signal end the process as it would have.
   // No report follows a signal, so a clone that will not go is named on stderr.
   const sigintListener = (): void => {

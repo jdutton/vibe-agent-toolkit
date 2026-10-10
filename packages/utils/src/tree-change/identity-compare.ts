@@ -41,11 +41,16 @@ export function sameBy(examine: Examiner, a: string, b: string): EntrySameness {
   return left === undefined || right === undefined ? 'unknown' : compare(left, right);
 }
 
-export function insideBy(examine: Examiner, child: string, ancestor: string): EntryContainment {
-  const wanted = examine(ancestor);
-  if (wanted === undefined) return 'unknown';
+/**
+ * Where an entry physically is: every spelling of it with no link left in its directories (its own
+ * place, and — for a link — its target's), or `undefined` when the OS refuses to resolve it.
+ */
+export type PhysicalSpellings = (entry: string) => readonly string[] | undefined;
+
+/** Whether some directory above `start`, spelled as given, is the wanted entry. */
+function ancestorAbove(examine: Examiner, start: string, wanted: readonly Identity[]): EntryContainment {
   let undecided = false;
-  let current = child;
+  let current = start;
   for (let parent = path.dirname(current); parent !== current; parent = path.dirname(current)) {
     const found = examine(parent);
     const verdict = found === undefined ? 'unknown' : compare(found, wanted);
@@ -54,6 +59,21 @@ export function insideBy(examine: Examiner, child: string, ancestor: string): En
     current = parent;
   }
   return undecided ? 'unknown' : 'outside';
+}
+
+/**
+ * Whether `child` lies strictly under `ancestor`: some directory above it IS the ancestor. Walked
+ * along the spelling given AND along every physical spelling of the child — a directory of the given
+ * spelling that is a link to somewhere BELOW the ancestor is neither the ancestor nor a link to it,
+ * and the directories between its target and the ancestor are only on the physical way up.
+ */
+export function insideBy(examine: Examiner, child: string, ancestor: string, physical: PhysicalSpellings): EntryContainment {
+  const wanted = examine(ancestor);
+  if (wanted === undefined) return 'unknown';
+  const resolved = physical(child);
+  const verdicts = new Set([...new Set([child, ...(resolved ?? [])])].map((start) => ancestorAbove(examine, start, wanted)));
+  if (verdicts.has('inside')) return 'inside';
+  return resolved === undefined || verdicts.has('unknown') ? 'unknown' : 'outside';
 }
 
 /**
@@ -85,8 +105,9 @@ export interface IdentityOracle {
  *
  * @param read - The examination: an entry's identities, or a thrown classified fault when the OS
  *   refuses. Anything else it throws is a defect and is never remembered as a refusal.
+ * @param physical - Where an entry physically is, for containment (see {@link insideBy})
  */
-export function identityOracleOver(read: (entry: string) => readonly Identity[]): IdentityOracle {
+export function identityOracleOver(read: (entry: string) => readonly Identity[], physical: PhysicalSpellings): IdentityOracle {
   const memo = new Map<string, { readonly ok: readonly Identity[] } | { readonly refused: unknown }>();
   const identities = (entry: string): readonly Identity[] => {
     let seen = memo.get(entry);
@@ -114,6 +135,6 @@ export function identityOracleOver(read: (entry: string) => readonly Identity[])
     identities,
     refuses: (entry) => undecided(entry) === undefined,
     sameEntry: (a, b) => sameBy(undecided, a, b),
-    isInside: (child, ancestor) => insideBy(undecided, child, ancestor),
+    isInside: (child, ancestor) => insideBy(undecided, child, ancestor, physical),
   };
 }

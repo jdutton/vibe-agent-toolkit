@@ -17,7 +17,7 @@ import { safePath, toForwardSlash } from '../../src/path-core.js';
 import { normalizedTmpdir } from '../../src/path-utils.js';
 import { createSymlink, symlinkCapability } from '../../src/test-helpers.js';
 import { PERMISSIONS_ENFORCED } from '../../src/testing/platform-gates.js';
-import { disposeTempDir, disposeTempDirAfterFailure, replaceFile, TEMP_DIR_OUTSIDE_TMPDIR_CODE, withTempDir } from '../../src/tree-change/files.js';
+import { disposeTempDir, disposeTempDirAfterFailure, makeDirectoryUnder, replaceFile, TEMP_DIR_OUTSIDE_TMPDIR_CODE, withTempDir, writeFileUnder } from '../../src/tree-change/files.js';
 
 import { plant, present, readText, rejectionOf, residueIn, treeChangeSuite } from './tree-change-test-kit.js';
 
@@ -97,12 +97,12 @@ describe('replaceFile', () => {
 });
 
 describe('replaceFile — a refused rename', () => {
-  it.skipIf(process.platform === 'win32')('leaves the old file byte-equal and the written temp removed', async () => {
-    // Skipped on win32: there EACCES on a rename is contention, retried — pinned in the win32 retry suite.
+  it('leaves the old file byte-equal and the written temp removed', async () => {
     const root = suite.root();
     const file = safePath.join(root, 'registry.json');
     writeFileSync(file, 'the user\'s registry');
-    suite.faults(root, [{ op: 'rename', path: (p) => p.includes('.vat-staged-'), errno: 'EACCES' }]);
+    // Every try: under win32 EACCES on a rename is contention, retried (pinned in the win32 retry suite).
+    suite.faults(root, [{ op: 'rename', path: (p) => p.includes('.vat-staged-'), errno: 'EACCES', everyTry: true }]);
 
     expect(await rejectionOf(() => replaceFile(file, 'new'))).toMatchObject({ code: 'EACCES' });
 
@@ -288,5 +288,94 @@ describe('disposeTempDirAfterFailure', () => {
     const error = await rejectionOf(() => disposeTempDirAfterFailure(outside, new Error('work failed')));
     expect(isVatError(error, TEMP_DIR_OUTSIDE_TMPDIR_CODE)).toBe(true);
     expect(readText(safePath.join(outside, 'data.md'))).toBe('d');
+  });
+});
+
+// A tree VAT is building holds whatever its source shipped, links included. A file VAT adds to it is
+// never written over or through what is there: a marker written through a shipped link overwrote the
+// user's settings.json.
+describe('writeFileUnder', () => {
+  const MARKER = { existing: 'refuse', writing: 'the marker' } as const;
+  const MANIFEST = { existing: 'replace', writing: 'the manifest' } as const;
+  const IN_THE_WAY = { side: 'source', origin: 'content', faultClass: 'occupied' } as const;
+
+  it('creates the file, making the real directories on its way', async () => {
+    const root = suite.root();
+    await writeFileUnder(root, 'a/b/file.json', '{}', MARKER);
+    expect(readText(safePath.join(root, 'a', 'b', 'file.json'))).toBe('{}');
+  });
+
+  it.for([MARKER, MANIFEST])('never writes through a LINK at the file name (existing: $existing): the target outside keeps its bytes', async (options, { skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const root = suite.root();
+    plant(root, { 'outside/victim.json': 'precious', 'tree/.keep': '' });
+    createSymlink(cap, safePath.join(root, 'outside', 'victim.json'), safePath.join(root, 'tree', 'marker'), 'file');
+
+    const error = await rejectionOf(() => writeFileUnder(safePath.join(root, 'tree'), 'marker', 'vat', options));
+
+    expect(error, String(error)).toMatchObject({ ...IN_THE_WAY, path: safePath.join(root, 'tree', 'marker') });
+    expect(readText(safePath.join(root, 'outside', 'victim.json'))).toBe('precious');
+  });
+
+  it('never writes through a LINK standing where one of its directories goes', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const root = suite.root();
+    plant(root, { 'outside/.keep': '', 'tree/.keep': '' });
+    createSymlink(cap, safePath.join(root, 'outside'), safePath.join(root, 'tree', '.claude-plugin'), 'dir');
+
+    const error = await rejectionOf(() => writeFileUnder(safePath.join(root, 'tree'), '.claude-plugin/plugin.json', '{}', MANIFEST));
+
+    expect(error, String(error)).toMatchObject({ ...IN_THE_WAY, path: safePath.join(root, 'tree', '.claude-plugin') });
+    expect(present(safePath.join(root, 'outside', 'plugin.json'))).toBe(false);
+  });
+
+  it('refuse leaves a regular file there as it was; replace takes its place', async () => {
+    const root = suite.root();
+    plant(root, { 'file.json': 'shipped' });
+
+    expect(await rejectionOf(() => writeFileUnder(root, 'file.json', 'vat', MARKER))).toMatchObject(IN_THE_WAY);
+    expect(readText(safePath.join(root, 'file.json'))).toBe('shipped');
+
+    await writeFileUnder(root, 'file.json', 'vat', MANIFEST);
+    expect(readText(safePath.join(root, 'file.json'))).toBe('vat');
+  });
+
+  it('makeDirectoryUnder adopts real directories, makes the missing ones, and answers the path', async () => {
+    const root = suite.root();
+    plant(root, { 'a/.keep': '' });
+
+    expect(await makeDirectoryUnder(root, 'a/b/c', 'the slot')).toBe(safePath.join(root, 'a', 'b', 'c'));
+    expect(present(safePath.join(root, 'a', 'b', 'c'))).toBe(true);
+    expect(readText(safePath.join(root, 'a', '.keep'))).toBe('');
+  });
+
+  it.for(['real/link', 'real/link/deeper'])('makeDirectoryUnder never goes through a LINK where a directory goes (%s)', async (relative, { skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const root = suite.root();
+    plant(root, { 'outside/.keep': '', 'tree/real/.keep': '' });
+    createSymlink(cap, safePath.join(root, 'outside'), safePath.join(root, 'tree', 'real', 'link'), 'dir');
+
+    const error = await rejectionOf(() => makeDirectoryUnder(safePath.join(root, 'tree'), relative, 'the slot'));
+
+    expect(error, String(error)).toMatchObject({ ...IN_THE_WAY, path: safePath.join(root, 'tree', 'real', 'link') });
+    expect(present(safePath.join(root, 'outside', 'deeper'))).toBe(false);
+  });
+
+  it.each(['../escape.json', 'a/../../escape.json'])('refuses %s, a path that leaves the tree, as the caller\'s defect — before anything is made', async (relative) => {
+    const root = suite.root();
+    plant(root, { 'tree/.keep': '' });
+
+    await expect(writeFileUnder(safePath.join(root, 'tree'), relative, 'vat', MANIFEST)).rejects.toBeInstanceOf(TypeError);
+    await expect(makeDirectoryUnder(safePath.join(root, 'tree'), relative, 'the slot')).rejects.toBeInstanceOf(TypeError);
+    expect(present(safePath.join(root, 'escape.json'))).toBe(false);
+    expect(present(safePath.join(root, 'tree', 'a'))).toBe(false);
+  });
+
+  it('replace never removes a directory standing at the file name', async () => {
+    const root = suite.root();
+    plant(root, { 'file.json/inside.txt': 'kept' });
+
+    expect(await rejectionOf(() => writeFileUnder(root, 'file.json', 'vat', MANIFEST))).toMatchObject(IN_THE_WAY);
+    expect(readText(safePath.join(root, 'file.json', 'inside.txt'))).toBe('kept');
   });
 });

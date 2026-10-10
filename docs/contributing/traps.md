@@ -632,6 +632,43 @@ autofix that made a JSON round-trip test unable to fail.
 **Tell:** every implementer reporting the same gate failure.
 **Remedy:** put known plan defects in every subsequent brief verbatim; lint before claiming.
 
+### A test that stubs `HOME` still writes the real Claude config
+
+`vat` resolves the Claude directory from `CLAUDE_CONFIG_DIR` first and from `$HOME/.claude` only when
+that is blank. A developer's shell that exports `CLAUDE_CONFIG_DIR` therefore aims every install,
+uninstall and clear at their live configuration, whatever `HOME` a reproduction or a test stubbed —
+and unsetting the variable is no escape, because the fallback is the real home. A second way in: the
+fault-matrix driver's `runVerb` undoes the case root's env stubs when it returns, so a second verb in
+the same test runs against the ambient environment. Each has installed a fixture plugin into a live
+Claude config, exit 0, with nothing in the test output to say so.
+**Tell:** a directory or registry key named after a test fixture under the real
+`~/.claude/plugins/`; an install test that passes without ever creating its fake home.
+**Remedy:** three guards now stand, and each fails closed. The shared `vitest.setup.js` replaces
+`CLAUDE_CONFIG_DIR` with a scratch path under the temp directory for every worker and sets
+`VAT_TEST_USER_STATE_UNDER`; every resolver of user state under the home directory passes its root
+through `requireTestScratch` (utils) and throws when that variable is set and the root is outside
+the temp tree — `getClaudeUserPaths`, the user scope of `resolveSkillTarget` for every target, and
+`FileSessionStore`'s default directory (a path-only suite lifts it explicitly, and says why); and
+`runVerb` throws when the case root's stubs are gone — call `makeCaseRoot(root)` again before a
+second verb. For a hand reproduction none of these apply: export `CLAUDE_CONFIG_DIR`, `HOME`,
+`TMPDIR`, `TEMP` and `TMP` to scratch, and `--dry-run` once to read the printed destinations.
+`packages/claude-marketplace/test/test-env-guarantee.ts` asks the guarantee in the unit, integration
+and system lanes. A new resolver of a `homedir()`-derived root that VAT WRITES under goes through
+`requireTestScratch` too; a download cache nothing destructive touches (the ONNX model cache) does not.
+
+### `vi.stubEnv('HOME', …)` does not move `os.homedir()` in a unit test
+
+On POSIX the unit tier runs in the threads pool, and a worker thread's `process.env` is a copy:
+assigning `HOME` there changes what JavaScript reads from `process.env` and nothing `os.homedir()`
+reads, which is the process's own environment. A unit test that "points HOME at a temp directory"
+and then calls code using `homedir()` is still on the developer's real home. (The integration and
+system tiers fork, where the assignment reaches the process; Windows forks every tier.)
+**Tell:** a path assertion built from `homedir()` on both sides passes with or without the stub; a
+`requireTestScratch` refusal naming the real home from a test that stubbed `HOME`.
+**Remedy:** mock the module — `vi.mock('node:os', …)` returning a stubbed `homedir`, as
+`packages/utils/test/skill-targets.test.ts` does — or pass the directory in (`baseDir`, `cwd`).
+
+
 ## Git and worktrees
 
 ### A git child inside a hook inherits the outer commit's repository

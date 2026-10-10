@@ -194,7 +194,22 @@ function findingOf(finding: { readonly code?: string; readonly link?: string; re
   return { code, path: relativeEscapesRoot(relative) || relative.length === 0 ? about : relative };
 }
 
+/**
+ * Refuse to run a verb whose case root is not what the environment points at. `runVerb` undoes the
+ * stubs `makeCaseRoot` made when it returns, so a SECOND `runVerb` on the same root would run the verb
+ * against the ambient environment — a developer's real `~/.claude` — and exit 0. That happened. A test
+ * that runs two verbs calls `makeCaseRoot(r.root)` again in between.
+ */
+function requireCaseRootStubs(c: VerbCase, r: CaseRoot): void {
+  if (process.env['HOME'] === r.home && process.env['TMPDIR'] === r.tmp && (process.env['CLAUDE_CONFIG_DIR'] ?? '') === '') return;
+  throw new Error(
+    `fault matrix: ${c.id} would run outside its case root — HOME, TMPDIR and CLAUDE_CONFIG_DIR are not the stubs makeCaseRoot(${r.root}) made `
+      + '(a previous runVerb undid them). Call makeCaseRoot(root) again before running another verb.',
+  );
+}
+
 export async function runVerb(c: VerbCase, r: CaseRoot, onFirstExit?: () => void): Promise<VerbOutcome> {
+  requireCaseRootStubs(c, r);
   const cwd = process.cwd();
   refusalTrail.length = 0;
   let seenAtExit: number | undefined;

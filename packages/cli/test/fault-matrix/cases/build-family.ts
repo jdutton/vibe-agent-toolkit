@@ -30,7 +30,7 @@ import { createSkillsCommand } from '../../../src/commands/skills/index.js';
 import type { CaseRoot, VerbCase } from '../drive.js';
 import type { MatrixShard } from '../matrix.js';
 
-import { prefixed, skillMd, writeTree, type TreeFile } from './tree-files.js';
+import { prefixed, PUBLISHED_TREE_CAPTURE, skillMd, writeTree, type TreeFile } from './tree-files.js';
 import { zipWithoutEntryTimes } from './zip-times.js';
 
 const MP = 'fx-mp';
@@ -294,8 +294,11 @@ function skillTestConfigureCase(): VerbCase {
 
 /**
  * `vat claude marketplace publish` over a built marketplace: the publish tree composed under
- * $TMPDIR. The git lane (`publishToGitBranch`) spawns git, so `publish-tree-git-mock.ts` makes it
- * a no-op; every fs call left is the composer's.
+ * $TMPDIR. The git lane (`publishToGitBranch`) spawns git, so `publish-tree-git-mock.ts` stands in
+ * for it; every traced fs call left is the composer's. The stand-in keeps the tree it was handed
+ * (untraced) at {@link PUBLISHED_TREE_CAPTURE}, which is this case's unit: a run that exits 0 must
+ * have published exactly what the uninjected run publishes — a composer that dropped a file under a
+ * fault and still listed the marketplace as published is I3's to catch.
  */
 function marketplacePublishTreeCase(): VerbCase {
   return projectCase({
@@ -307,7 +310,7 @@ function marketplacePublishTreeCase(): VerbCase {
       writePriorMarketplace(r);
       writeTree(r.project, [['CHANGELOG.md', `# Changelog\n\n## [Unreleased]\n\n- a change\n`], ['README.md', '# fx\n']]);
     },
-    units: [],
+    units: [PUBLISHED_TREE_CAPTURE],
     sources: (r) => [...projectSources(r), ...['dist', 'CHANGELOG.md', 'README.md'].map((path) => safePath.join(r.project, path))],
   });
 }
@@ -366,16 +369,16 @@ function cacheClearCase(): VerbCase {
 export const BUILD_FAMILY_SHARDS = {
   'skills/build': { make: skillsBuildCase, files: 17 },
   'skills/package/o-fresh': { make: () => skillsPackageCase('o-fresh'), files: 10 },
-  'skills/package/o-force': { make: () => skillsPackageCase('o-force'), files: 10 },
+  'skills/package/o-force': { make: () => skillsPackageCase('o-force'), files: 14 },
   'skills/package/o-occupied': { make: () => skillsPackageCase('o-occupied'), files: 12 },
-  'agent/build/output': { make: () => agentBuildCase('output'), files: 7 },
+  'agent/build/output': { make: () => agentBuildCase('output'), files: 10 },
   'agent/build/force': { make: () => agentBuildCase('force'), files: 9 },
-  'plugin/build': { make: pluginBuildCase, files: 9 },
+  'plugin/build': { make: pluginBuildCase, files: 11 },
   'top-level-build': { make: topLevelBuildCase, files: 30 },
   'rag/clear/default': { make: () => ragClearCase('default'), files: 3 },
   'rag/clear/db': { make: () => ragClearCase('db'), files: 3 },
-  'cache/clear': { make: cacheClearCase, files: 2 },
+  'cache/clear': { make: cacheClearCase, files: 3 },
   'marketplace/publish-tree': { make: marketplacePublishTreeCase, files: 6 },
   'skill/test/configure': { make: skillTestConfigureCase, files: 2 },
-  'agent/import': { make: agentImportCase, files: 1 },
+  'agent/import': { make: agentImportCase, files: 2 },
 } as const satisfies Readonly<Record<string, MatrixShard>>;

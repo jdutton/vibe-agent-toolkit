@@ -7,12 +7,12 @@
  * imports pool skills (from dist/skills/) via the `skills:` selector.
  */
 
-import { mkdir, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir } from 'node:fs/promises';
 
 import { conventionalSuiteProbe, createProjectRegistry, getMarketplaceOutputDir, getPluginSourceDir, isSkillPackagingInputError, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkillInto, packagingConfigToPackageOptions, pluginDirInMarketplace, skillNameToFsPath, stagedPathMapper, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ProjectConfig, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Finding, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { applyTreePlan, direntKindFollowing, everyInOrder, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, relativeEscapesRoot, safePath, toForwardSlash, VatError, withFsFault } from '@vibe-agent-toolkit/utils';
+import { applyTreePlan, writeFileUnder, direntKindFollowing, everyInOrder, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, relativeEscapesRoot, safePath, toForwardSlash, VatError, withFsFault } from '@vibe-agent-toolkit/utils';
 import { onCrawlOutput } from '@vibe-agent-toolkit/utils/crawl';
 import { Command } from 'commander';
 
@@ -779,7 +779,8 @@ async function buildMarketplaceInto(input: BuildMarketplaceInput, marketplaceDir
   });
 
   const marketplaceJsonPath = safePath.join(claudePluginDir, 'marketplace.json');
-  await writingMarketplace(`write ${marketplaceJsonPath}`, () => writeFile(marketplaceJsonPath, JSON.stringify(marketplaceJson, null, 2)));
+  await writingMarketplace(`write ${marketplaceJsonPath}`, () =>
+    writeFileUnder(marketplaceDir, `${CLAUDE_PLUGIN_DIRNAME}/marketplace.json`, JSON.stringify(marketplaceJson, null, 2), { existing: 'replace', writing: 'the marketplace manifest' }));
   logger.info(`   .claude-plugin/marketplace.json`);
 
   await copyDistributionFiles(marketplaceDir, configDir, config, logger);
@@ -843,13 +844,22 @@ function resolvePluginSkills(
  * Supports exact match and simple glob patterns (prefix*, suffix*, *contains*).
  */
 function matchesSelector(skillName: string, selector: string): boolean {
-  if (selector === '*') {
-    return true;
+  // `*` is the selector's ONE wildcard (any run of characters, none included); every other character
+  // is itself. Matched by its literal pieces, in order — never compiled to a regular expression, where
+  // a `.` or a `(` in a skill name's selector would mean something else.
+  const pieces = selector.split('*');
+  const first = pieces[0] ?? '';
+  const last = pieces.at(-1) ?? '';
+  if (pieces.length === 1) return skillName === selector;
+  if (skillName.length < first.length + last.length || !skillName.startsWith(first) || !skillName.endsWith(last)) return false;
+  const end = skillName.length - last.length;
+  let from = first.length;
+  for (const piece of pieces.slice(1, -1)) {
+    const at = skillName.indexOf(piece, from);
+    if (at === -1 || at + piece.length > end) return false;
+    from = at + piece.length;
   }
-
-  // eslint-disable-next-line security/detect-non-literal-regexp -- selector is from project config, bounded by name format
-  const regex = new RegExp(`^${selector.replaceAll('*', '.*')}$`);
-  return regex.test(skillName);
+  return true;
 }
 
 async function writeMergedPluginJson(
@@ -874,7 +884,8 @@ async function writeMergedPluginJson(
   });
   for (const w of warnings) logger.info(`warning: ${w}`);
   const pluginJsonPath = safePath.join(pluginJsonDir, 'plugin.json');
-  await writingMarketplace(`write ${pluginJsonPath}`, () => writeFile(pluginJsonPath, JSON.stringify(merged, null, 2)));
+  await writingMarketplace(`write ${pluginJsonPath}`, () =>
+    writeFileUnder(pluginDir, `${CLAUDE_PLUGIN_DIRNAME}/plugin.json`, JSON.stringify(merged, null, 2), { existing: 'replace', writing: 'the merged plugin.json' }));
   logger.info(`         .claude-plugin/plugin.json`);
   return author;
 }

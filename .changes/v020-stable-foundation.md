@@ -245,9 +245,9 @@
   a populated tree is `ok`. A refused statement is `USAGE_INVALID` (exit 2); an engine fault such
   as a corrupt or busy store is `INTERNAL_ERROR`.
   <!-- verdict-delta:resources-query-report-contract -->
-- **The Node floor is now `>=22.16.0` (was `>=22.13.0`) in every package's `engines.node`.**
-  `vat resources query` failed on 22.13–22.15 (`statement.columns is not a function`). Upgrade
-  Node to 22.16.0 or newer; `vat doctor` reports the range.
+- **The Node floor is now `>=22.16.0` (was `>=22.0.0` in 0.1.42) in every package's `engines.node`.**
+  `vat resources query` needs `node:sqlite`'s `statement.columns`, which Node gained in 22.16.
+  Upgrade Node to 22.16.0 or newer; `vat doctor` reports the range.
 - **`vat validate` and `vat verify` phase output follows the report contract for the `resources`
   and `skills` phases.** A phase's `report` is the exact document the verb writes, refusals
   included. A warnings-only phase is now rated `warning` (the `resources` phase had read
@@ -278,9 +278,7 @@
   claude-marketplace.
 - **Library observations, verdicts and compatibility counts rename `summary`** (library-only).
   agent-skills `Observation.summary` and claude-marketplace `Verdict.summary` (sentences) ->
-  `description`; `CompatibilityResult.summary` (counts) -> `fileCounts`. The dev-tools
-  compat-empirical static-prediction JSON follows (`ObservationCodeSchema` and
-  `VerdictCodeEntrySchema`: `summary` -> `description`).
+  `description`; `CompatibilityResult.summary` (counts) -> `fileCounts`.
 - **`@vibe-agent-toolkit/agent-config` `validateAgent` and its loader change** (library-only).
   `ValidationResult` `{ valid, errors, warnings, manifest }` -> `{ status, summary, issues,
   manifest }`; `validateAgent(path)` -> `validateAgent(path, { locationRoot })` (required option);
@@ -547,14 +545,6 @@
   `DOCTOR_CHECK_FAILED` finding (error, exit 1 as before) and each `undetermined` a
   `DOCTOR_CHECK_WARNED` finding (warning, exit 0 as before). A doctor that could not run publishes
   `status: error` (`INTERNAL_ERROR`, exit 2) instead of a stderr line.
-- **`vat cache clear` publishes the report contract** (schema
-  `packages/cli/schemas/cache-clear.json`). `status: success` -> `ok`. `data: { cacheDir, existed,
-  removed, entriesRemoved, bytesRemoved }`. `examined` is 1, the one cache root considered; an
-  absent root is `ok` with `existed: false`. There is no partial clear: the cache is moved off its
-  path whole, then deleted. A cache root or entry the OS will not list or stat is `RUN_INCOMPLETE`
-  (exit 2; was an uncoded errno) with `data: null`, before anything is moved; a delete the OS stops
-  after the move is `RUN_INCOMPLETE` carrying `data` and a `TREE_CLEANUP_INCOMPLETE` warning naming
-  the moved-aside tree.
 - **`vat rag index` publishes the report contract** (schema `packages/cli/schemas/rag-index.json`).
   `status: success` -> `ok`; `status: partial` -> `findings` (exit 1 as before); `duration` ->
   `durationMs`; the six counters move under `data`; `errors[]` (`{ resourceId, error }`) is removed —
@@ -787,8 +777,8 @@
 
 - **A filesystem refusal thrown by a VAT library is one classified `FsFaultError`, code `FS_FAULT`.**
   Test `isFsFaultError(e)` and read `e.side` (`source`, `destination`, `environment`) and
-  `e.faultClass`; `fsFaultOf(e)` reads the errno facts off any thrown value. No library code names
-  an errno any more: a named pipe, socket or device in a tree being read, copied or built is an
+  `e.faultClass`; `fsFaultOf(e)` reads the errno facts off any thrown value. No library code classifies
+  an errno by hand any more (the one table and the special-file refusal still spell them): a named pipe, socket or device in a tree being read, copied or built is an
   `FsFaultError` of side `source`, class `wrong-type`, errno `EFTYPE`, naming the entry (`vat` still
   refuses it `INPUT_UNREADABLE`); a full disk or an exhausted descriptor table is `RUN_INCOMPLETE`
   on every side, a read included — the machine's fault, never the input's; something already at a
@@ -868,10 +858,6 @@
   `--skill`: `dist/skills/.<name>.vat-staged-*`), not `dist/.vat-skills-*`, and leaves the previous
   `dist/skills` in place until the build has earned the swap: a run killed mid-build no longer leaves
   `dist/skills` absent.
-- **Removed from the CLI's `skills/build` module:** `beginStagedBuild`, `settleStaging` and the
-  `BuildStaging` and `StagingRecovery` types. `SkillBuildRun` gains a required
-  `residue` (the `TREE_CLEANUP_INCOMPLETE` warnings) and carries `promotionFailure`
-  (`{ error, description }`) in place of `promotionError`.
 
 - **A crawl takes `outputs`, the one declaration of what the calling verb writes** (`[]` for a verb
   that only reads), as a required option. Every side a crawl fault is classified on is derived from it: a
@@ -958,10 +944,6 @@
   the file is staged (after every earlier change of the plan has staged); new `copyRegularFile`
   (one file, judged by `fstat` on the handle it is read from); `onCrawlOutput` on the `./crawl`
   subpath.
-- **CLI internals:** `runSkillsBuildPhase` and `runClaudePluginBuildPhase` take the run's other
-  outputs (`runOutputs`); `runClaudePluginBuild` requires `runOutputs`; `writeSnapshot` (QA snapshot)
-  is async, writes the oracle directory and manifest as one plan, and refuses an artifact outside
-  `oracle/`; the marketplace publish tree is copied by `copyTree` (links kept as links, each file judged by `fstat`), not `cpSync`.
 
 - **`vat agent install` changes the install as one transaction, `--dev` included.** The copy, or the
   `--dev` link, is staged beside `~/.claude/skills/<agent>` and swapped in whole: `--force --dev` no
@@ -1032,7 +1014,61 @@
   deletion the OS stops throws a classified `FS_FAULT` naming the moved-aside tree, not the raw
   errno.
 
+- **`vat claude plugin install` refuses a marketplace directory VAT did not install from the same
+  package** (`USAGE_INVALID`, exit 2, nothing changed). What stands at
+  `~/.claude/plugins/marketplaces/<name>` used to be replaced whole, whoever made it: a marketplace
+  Claude Code added (a git clone, with whatever the user kept in it) was deleted and re-registered
+  as VAT's, and a second package shipping the same marketplace name deleted the first package's
+  plugins. Now the directory is replaced only when its `.vat-marketplace` marker names this package
+  — or, for an install made before the marker recorded one (0.1.42 wrote no marker), when
+  `known_marketplaces.json` records the marketplace as installed from this package. An empty
+  directory is taken as before. `--force` replaces it regardless. Two packages can no longer share
+  one marketplace name: rename one of them.
+  **If you publish a package and RENAME it** (a new name, a scope move), the renamed package is a
+  different package to this check: on every machine where the old name installed the marketplace,
+  the new name's install — its `postinstall` included — is refused (exit 2) until the old one is
+  uninstalled (`vat claude plugin uninstall <plugin>@<marketplace>`, which the marker authorises
+  whichever package wrote it) or the install is run once with `--force`. Nothing migrates a
+  marketplace from one package name to another; say so in the renamed package's release notes.
+- **`vat claude plugin uninstall` removes only what it can show VAT installed.** A plugin whose
+  marketplace directory holds no `.vat-marketplace` marker (with `--all`: no marker naming this
+  package, nor a `known_marketplaces.json` entry naming it) is left exactly as it is — directory,
+  cache, registry records and settings entry — and reported `removed: false` with a
+  `PLUGIN_NOT_INSTALLED_BY_VAT` warning (exit 0). It used to delete the plugin's directory out of a
+  marketplace it then reported "left for its owner", drop the plugin's cache and unregister it at
+  every scope. Pass the new `--force` to remove it anyway; a plugin 0.1.42 installed needs
+  `--force` when named by key (`--all` recognises it).
+- **`vat claude plugin install` and `uninstall` change only the user-scope record of a plugin key.**
+  `installed_plugins.json` holds one record per scope; VAT replaced or deleted the whole list, so a
+  project-scope install Claude Code had made of the same key was dropped. It is now kept, and an
+  uninstall of a key that still has another scope's record keeps the plugin's directories (a
+  `PLUGIN_UNINSTALL_INCOMPLETE` warning says so).
+- **`vat claude plugin install <file.zip>` refuses an archive with no `SKILL.md` at its top level**
+  (`INPUT_UNREADABLE`, exit 2), and installs under the name the `SKILL.md` declares, as a directory
+  is. It used to install any ZIP — a lone `readme.txt`, or a zipped folder whose `SKILL.md` is one
+  level down — as a "skill" named after the file, which Claude Code never loads. Zip the folder's
+  contents, not the folder.
+- **`vat agent import --output <directory>` is refused with or without `--force`** (`USAGE_INVALID`):
+  `--output` names the `agent.yaml` file. Under `--force` a directory there used to be deleted with
+  everything in it and replaced by the file, exit 0.
+- **A registry file of the wrong shape refuses `vat claude plugin install`, `uninstall` and `list`**
+  as `INPUT_UNREADABLE` naming the file (an `installed_plugins.json` with no `plugins` object, a
+  `known_marketplaces.json` entry with no `source`, a `settings.json` that is not an object). The
+  first two used to crash (`INTERNAL_ERROR`); a `settings.json` or `known_marketplaces.json` holding
+  a JSON array was read as empty and then replaced.
+
 ### Added
+
+- **`vat cache clear`** (new verb) removes VAT's cache directory and publishes the report contract
+  (schema `packages/cli/schemas/cache-clear.json`): `data: { cacheDir, existed, removed,
+  entriesRemoved, bytesRemoved }`; `examined` is 1, the one cache root considered; an absent root is
+  `ok` with `existed: false`. There is no partial clear: the cache is moved off its path whole, then
+  deleted. A cache root or entry the OS will not list or stat is `RUN_INCOMPLETE` (exit 2) with
+  `data: null`, before anything is moved; a delete the OS stops after the move is `RUN_INCOMPLETE`
+  carrying `data` and a `TREE_CLEANUP_INCOMPLETE` warning naming the moved-aside tree.
+- **`vat claude plugin uninstall --force`** removes a plugin even where nothing shows VAT installed it.
+- **New finding code `PLUGIN_NOT_INSTALLED_BY_VAT`** (warning, `vat claude plugin uninstall`),
+  documented in `docs/validation-codes.md`.
 
 - **`@vibe-agent-toolkit/utils`: `pathPresent(path, mode, side, absence)`**, the one presence
   predicate: only an absence answers `false` (and, with `absence: 'confirmed'`, only once the parent's
@@ -1047,8 +1083,8 @@
 - **Refusal codes: every `status: error` document and every refusal-as-finding carries one of eleven
   registered codes.** Eight are new (`USAGE_INVALID`, `CONFIG_INVALID`, `INPUT_UNREADABLE`,
   `BACKEND_UNAVAILABLE`, `EXTERNAL_API_FAILED`, `NOT_IMPLEMENTED`, `RUN_INCOMPLETE`, `INTERNAL_ERROR`);
-  `RESOURCE_CHECK_BROKEN`, `ARD_NOT_CONFIGURED` and `ARD_DERIVATION_FAILED` existed and are now
-  registered as refusals. A refusal is never a `validation.severity` / `validation.allow` key (a config
+  `RESOURCE_CHECK_BROKEN`, `ARD_NOT_CONFIGURED` and `ARD_DERIVATION_FAILED` are new too, published as
+  error-severity findings. A refusal is never a `validation.severity` / `validation.allow` key (a config
   naming one was and is rejected; the message now says it is a refusal).
 
   `exitCodeForReport` returns 2 for any `status: error` document, so the eight refusals that end a run
@@ -1068,11 +1104,6 @@
   | `RESOURCE_CHECK_BROKEN` | A declared check could not run, or a gate examined nothing. Published as an error-severity finding, not a `status: error` document. | 1 |
   | `ARD_NOT_CONFIGURED` | The project declares no `ard:` block, so no manifest was built. Published as an error-severity finding. | 1 |
   | `ARD_DERIVATION_FAILED` | A declared `ard:` surface could not be derived into a conformant entry. Published as an error-severity finding. | 1 |
-- **`no-stdout-outside-writer` ESLint rule** makes `packages/cli/src/utils/document-writer.ts`
-  the one place under `commands/` that writes stdout for a document.
-- **`PUBLISHED_SHAPES` registry** (`packages/cli/src/report-schemas.ts`) lists every shape VAT
-  publishes — stdout reports, file artifacts, exported library types, and committed JSON Schemas —
-  asserted against the tree both ways.
 - **New finding codes**, each documented in `docs/validation-codes.md`:
   `SETTINGS_FILE_INVALID`, `SETTINGS_TYPE_AMBIGUOUS`, `SETTINGS_PATH_DEPRECATED`,
   `SETTINGS_RULE_SHADOWED`, `SETTINGS_MARKETPLACE_TOKEN_MISSING`, `AGENT_MANIFEST_INVALID`,
@@ -1130,8 +1161,17 @@
 
 - `@vibe-agent-toolkit/utils`: `isCapacityFault({ faultClass })`, `isTimedOutError(error)`, and
   `FsBoundary.classify(error, action, fallback)` for a catch that already holds the error.
-- The `local/no-adhoc-errno` ESLint rule is enabled repo-wide, with zero offenders: a hand-written
-  errno classifier no longer passes the gate.
+
+- `@vibe-agent-toolkit/utils`: `writeFileUnder(root, relative, contents, { existing, writing })` and
+  `makeDirectoryUnder(root, relative, writing)` — the one way to write a file, or make a directory,
+  VAT composes into a tree it copied with links kept: every directory component must be a real
+  directory, the file is created exclusively, and a link (or, for `existing: 'refuse'`, anything)
+  in the way is a `source` fault naming it.
+- `@vibe-agent-toolkit/utils`: `requireTestScratch(root, what)` and `TEST_USER_STATE_UNDER`. A test
+  process that sets `VAT_TEST_USER_STATE_UNDER` to its temp tree gets an error, instead of a path,
+  from every VAT resolver of user state that lands outside it: the Claude directory, a user-scope
+  skills directory of any target, `FileSessionStore`'s default `~/.vat-sessions`. Unset — as it is
+  for every user — nothing changes.
 
 - `@vibe-agent-toolkit/utils`: `proveTreeReadable`, `copyTree` and `readRegularFile`, one walk with
   one link policy (`follow-contained` or `preserve`) and one special-file policy, so the proof a
@@ -1158,6 +1198,25 @@
 
 - **For adopters on a `0.2.0-rc` build: library API that changed between release candidates.** None
   of it was in 0.1.42, so none of it breaks an upgrade from a stable release.
+  - `@vibe-agent-toolkit/utils` `copyTree` requires `onto`: `'fresh'` for a new destination —
+    anything already at a name it creates is `EEXIST`, never adopted or written through — or
+    `'merge'` for an output directory written again (a file or link there is replaced, a real
+    directory adopted). Two source entries that are one name at the destination (letter case,
+    Unicode form) are refused as a `source` fault naming both.
+  - `@vibe-agent-toolkit/claude-marketplace`: `planPackageInstall` requires `force`;
+    `uninstallPlugins` / `planPluginUninstall` require `authority` (`{ kind: 'marker' }`,
+    `{ kind: 'package', name }` or `{ kind: 'force' }`); `UninstallPluginResult` gains `notVats`.
+  - `@vibe-agent-toolkit/utils/testing` no longer exports the fault harness's op table (`OPS`,
+    `OpSpec`, `PathShape`); the rest of its vocabulary is exported by name. `untracedFs` is new, and
+    a `FaultRule` takes `everyTry` (fail every immediate repeat of the call it failed — what a retry
+    is), so a test refusing a rename asks the same thing under win32, where a rename is retried.
+  - An rc's `vat claude plugin install` wrote its `.vat-marketplace` marker into the staged copy of
+    the package's marketplace with a plain write. A package shipping a link of that name aimed the
+    write at any file the user could write (`../../../settings.json`). The marker, and every file
+    VAT composes into a tree copied with its links kept (`marketplace.json`, `plugin.json`, a
+    publish tree's `README.md` / `LICENSE` / `CHANGELOG.md`), is now created exclusively and never
+    through a link (`writeFileUnder`); such a package is refused `INPUT_UNREADABLE` naming the
+    entry, nothing installed. 0.1.42 wrote no marker.
   - Errno-only codes are gone, each replaced by the one classified fault (`FS_FAULT`):
     `SKILL_PACKAGING_OUTPUT_FAILED_CODE`, `HarnessOutputError` (`HARNESS_OUTPUT_UNWRITABLE`),
     `AGENT_SOURCE_UNREADABLE_CODE`, `COPY_SOURCE_NOT_REGULAR_CODE`, `CLAUDE_USER_STATE_WRITE_FAILED_CODE`,
@@ -1193,9 +1252,6 @@
   - `@vibe-agent-toolkit/rag-lancedb`: `foreignDatabaseEntries(dbPath, entries)` takes the directory
     first and a typed listing (`readdirSync(dir, { withFileTypes: true })`, the `DatabaseDirectoryEntry`
     shape); `removeRagDatabase` is async and returns `RagDatabaseRemoval` (`{ leftover? }`).
-  - `vat cache clear` (a verb 0.1.42 did not have): `data.remaining` and the "partial clear" outcome
-    (`status: partial`) are gone; `data` is `{ cacheDir, existed, removed, entriesRemoved, bytesRemoved }`.
-  - The CLI's `planReplaces` / `applyReplaces` and the `StagingResidue` type are gone.
 - **Help `Exit Codes:` blocks now state what the code does.** `vat claude context` no longer
   promises exit 1 for an unknown option or unsupported `--format` (Commander rejects those at 2,
   with no document); `vat agent run` documents 0 or 2 (it never exits 1); `vat corpus scan` no
@@ -1333,13 +1389,6 @@
   settings path whose name is too long for the host (`ENAMETOOLONG`) is reported `undetermined`,
   never skipped as absent.
 
-- **Fault matrix (test harness): injection points are one per call site — op × path × nth — so adding a
-  call never moves an injection, and neither does the completion order of a concurrent walk.** The first/last
-  call per kind let a verb's new last call evict every site it outranked (twice: T12's realpath, T15's marker
-  mkdir), and collapsing siblings into their directory let Node's `rm` order pick a different one each run.
-  `installFaultFs` sessions gain `settled()`, and a matrix run restores only once the fs work it started has
-  stopped: `rm` rejects on its first failed child and leaves the siblings running, which then ran under the
-  next injection's session at the same root.
 
 - **The fix text of a `TREE_CLEANUP_INCOMPLETE` warning from `vat claude plugin install` now reads "…;
   nothing VAT made uses it."** (was "…; the installed plugin does not use it."): every verb names a
@@ -1360,6 +1409,42 @@
   `@modelcontextprotocol/sdk` 1.31.0. No action needed.
 
 ### Fixed
+
+- **A copied tree can no longer write outside its destination.** Installing a skill, an agent or a
+  plugin whose source holds two entries that are one name on the destination filesystem (`NOTES`
+  and `notes` from a case-sensitive volume onto macOS or Windows), the first a link, wrote the
+  second THROUGH the link — overwriting a file outside the install, exit 0. Such a source is now
+  refused (`INPUT_UNREADABLE`, naming both entries) with nothing installed.
+- **A source reached through a link is recognised as inside (or holding) its destination.** With
+  `~/.claude/skills` a link into the skill's own source, `vat skills install` copied into itself
+  until the path was too long; it is now `USAGE_INVALID` before anything is written.
+- **`--force` over a `--dev` link works.** `vat skills install … --force` and `vat agent install
+  <name> --force` refused when the installed entry was a link to the very build being installed
+  ("replacing it would delete it" — it would only replace the link).
+- **A destination that changes while VAT stages is left alone.** A file that appeared where an output
+  was to be created, or in the empty directory an output was to replace, used to be overwritten or
+  deleted; the run now stops (`RUN_INCOMPLETE`) with that entry as found.
+- **`vat claude plugin install` and `uninstall` no longer overwrite a registry file another program
+  wrote meanwhile.** `installed_plugins.json`, `known_marketplaces.json` and `settings.json` were
+  rewritten from what was read before the copy; an install running beside it, or Claude Code saving
+  settings, lost its change. The run now stops (`RUN_INCOMPLETE`, "changed by another program …
+  re-run") with nothing installed or removed.
+- **`vat claude plugin install` no longer installs a build leftover as a marketplace**, and
+  `vat skills list` and `vat claude plugin list` no longer list one as a skill
+  (`.<name>.vat-staged-*`, what an interrupted build leaves beside its output).
+- **`vat claude plugin install` reports a malformed `package.json` as `INPUT_UNREADABLE`** naming the
+  field — `vat.skills` naming a skill twice or not a list, a `version` or `name` that is not a string
+  — and a `.tgz` with no `package.json` as the archive's (it was blamed on VAT's scratch space).
+  The first two were `INTERNAL_ERROR`.
+- **`vat skill test run` keeps stdout for its report.** A `test.build` hook's output went to stdout
+  ahead of the YAML document; it now goes to stderr.
+- **`vat skill test configure` cannot truncate the project config.** It rewrote
+  `vibe-agent-toolkit.config.yaml` in place; a full disk or an interruption left it empty. The file
+  is now replaced whole or not at all.
+- **A full or read-only temp directory is reported as that** (`RUN_INCOMPLETE`) by `vat audit
+  <git-url>` and `vat claude marketplace publish` (was `INTERNAL_ERROR`), and by `vat skill test run`
+  while it stages eval inputs (was "Eval input error", `INPUT_UNREADABLE`).
+
 
 - **`vat skill test run` reports a `workspace:` companion the packager refuses as the
   `SKILL_PACKAGING_FAILED` finding, `RUN_INCOMPLETE`** — a broken link in that skill, a `files:`

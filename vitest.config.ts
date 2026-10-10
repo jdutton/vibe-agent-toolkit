@@ -89,9 +89,13 @@ export default defineConfig({
         // uninstrumented integration tier. FILE BY FILE: the primitive's decisions stay measured
         // and unit-tested — `plan.ts`, `staging-names.ts` (the names), `identity-compare.ts`
         // (sameness, containment and the once-per-entry memo over identities already read),
-        // `rollback-error.ts`.
-        'packages/utils/src/tree-change/apply.ts', // stage / park / swap / rollback: mkdir, rename, rm
-        'packages/utils/src/tree-change/files.ts', // rename with retry, removal, whole-file replace, temp-dir disposal
+        // `rollback-error.ts`, and the two modules that hold what the excluded ones decide:
+        // `apply-decisions.ts` (whose fault a failed fill is, whether a destination changed since
+        // the plan, thrown-versus-warning at finalize, the made-parents bound, the rename retry
+        // policy, the temp-directory guard) and `copy-decisions.ts` (fresh / merge, the two-names
+        // refusal). A decision added to an excluded file belongs in one of those two instead.
+        'packages/utils/src/tree-change/apply.ts', // stage / park / swap / rollback: mkdir, rename, rm — its decisions are apply-decisions.ts's
+        'packages/utils/src/tree-change/files.ts', // rename with retry, removal, whole-file replace, temp-dir disposal — its decisions are apply-decisions.ts's
         'packages/utils/src/tree-change/identity.ts', // lstat / stat / realpath of an entry; what it decides from them is in identity-compare.ts
         'packages/utils/src/tree-change/tree-walk.ts', // opendir / open / fstat over a tree
         'packages/utils/src/tree-change/copy-tree.ts', // Reads and writes every file of a tree

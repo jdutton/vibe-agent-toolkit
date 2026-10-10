@@ -294,6 +294,7 @@ describe('findings of verbs that read no validation config', () => {
   // let the config accept a key nothing applies.
   const LANE_OWNED = [
     'PLUGIN_UNINSTALL_INCOMPLETE',
+    'PLUGIN_NOT_INSTALLED_BY_VAT',
     'PLUGIN_KEPT_SIBLING_UNEXAMINED',
     'SETTINGS_FILE_INVALID',
     'SETTINGS_TYPE_AMBIGUOUS',

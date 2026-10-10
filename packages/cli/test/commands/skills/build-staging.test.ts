@@ -441,6 +441,14 @@ describe('runSkillBuild - the failure message names what THIS run promotes', () 
 /** Whether `path` is a staged tree beside a destination (never its parked `.previous` twin). */
 const isStaged = (path: string): boolean => path.includes(STAGING_INFIX) && !path.endsWith('.previous');
 
+/**
+ * The errno a single refused rename is injected with. ⛔ Not `EACCES`, `EPERM` or `EBUSY`: those are
+ * CONTENTION on win32 (a scanner, an indexer), where `renameFileAtomic` retries the rename — one
+ * injected refusal is then a rename that succeeds, and the test would ask for a failure the product
+ * is right not to have. `EXDEV` is final on every host.
+ */
+const UNRETRIED: FaultRule['errno'] = 'EXDEV';
+
 /** Run `work` with the fault rules installed under `cwd`, restoring the filesystem after. */
 async function withFaults<T>(cwd: string, faults: FaultRule[], work: () => Promise<T>): Promise<T> {
   const session = installFaultFs({ within: cwd, faults });
@@ -460,7 +468,7 @@ describe('runSkillBuild - a failed swap still leaves an answer', () => {
     const cwd = createTempDir();
     await seedPreviousOutput(cwd, ['kept']);
 
-    const run = await withFaults(cwd, [{ family: 'rename', path: isStaged, errno: 'EACCES' }], () => build(cwd, [['good', CLEAN_BODY]]));
+    const run = await withFaults(cwd, [{ family: 'rename', path: isStaged, errno: UNRETRIED }], () => build(cwd, [['good', CLEAN_BODY]]));
 
     expect(run.outputCommitted).toBe(false);
     expect(refusalCodeOf(run.promotionFailure?.error)).toBe('RUN_INCOMPLETE');
@@ -475,8 +483,8 @@ describe('runSkillBuild - a failed swap still leaves an answer', () => {
     await seedPreviousOutput(cwd, ['kept']);
     // The park is the first rename naming a `.previous`; the restore is the second.
     const faults: FaultRule[] = [
-      { family: 'rename', path: isStaged, errno: 'EACCES' },
-      { family: 'rename', path: (path) => path.endsWith('.previous'), nth: 2, errno: 'EACCES' },
+      { family: 'rename', path: isStaged, errno: UNRETRIED },
+      { family: 'rename', path: (path) => path.endsWith('.previous'), nth: 2, errno: UNRETRIED },
     ];
 
     const run = await withFaults(cwd, faults, () => build(cwd, [['good', CLEAN_BODY]]));
@@ -565,7 +573,7 @@ describe('runSkillBuild - a filesystem refusal is coded at its cause, never INTE
     await seedPreviousOutput(cwd, ['kept']);
     const target = safePath.join(cwd, 'dist', 'skills');
 
-    const run = await withFaults(cwd, [{ family: 'rename', path: (path) => path === target, nth: 1, errno: 'EACCES' }], () => build(cwd, [['good', CLEAN_BODY]]));
+    const run = await withFaults(cwd, [{ family: 'rename', path: (path) => path === target, nth: 1, errno: UNRETRIED }], () => build(cwd, [['good', CLEAN_BODY]]));
 
     expect(refusalCodeOf(run.promotionFailure?.error)).toBe('RUN_INCOMPLETE');
     expect(run.promotionFailure?.description).toContain(target);

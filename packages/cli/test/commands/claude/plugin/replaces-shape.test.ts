@@ -21,6 +21,13 @@ vi.mock('node:fs/promises', async (importOriginal) => ({
   readFile: vi.fn(),
 }));
 
+// `readPackageJson` asks whether the package.json is there before it reads it; the read is this
+// test's (mocked above), so the probe answers for it.
+vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  pathPresent: vi.fn(() => true),
+}));
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -51,7 +58,7 @@ describe('readPackageJson — vat.replaces shape', () => {
   ])('refuses %s as INPUT_UNREADABLE naming the package and the field', async (_label, replaces, field) => {
     packageWith(replaces);
 
-    const read = readPackageJson('/pkg');
+    const read = readPackageJson('/pkg', { side: 'source', label: 'The package directory /pkg' });
 
     await expect(read).rejects.toMatchObject({ refusal: 'INPUT_UNREADABLE' });
     await expect(read).rejects.toThrow('@test/pkg');
@@ -60,9 +67,9 @@ describe('readPackageJson — vat.replaces shape', () => {
 
   it('accepts the documented shape, and a package with no vat.replaces', async () => {
     packageWith({ plugins: ['p'], flatSkills: ['s'] });
-    await expect(readPackageJson('/pkg')).resolves.toMatchObject({ vat: { replaces: { plugins: ['p'], flatSkills: ['s'] } } });
+    await expect(readPackageJson('/pkg', { side: 'source', label: 'The package directory /pkg' })).resolves.toMatchObject({ vat: { replaces: { plugins: ['p'], flatSkills: ['s'] } } });
 
     vi.mocked(readFile).mockResolvedValue(JSON.stringify({ name: '@test/pkg', version: '1.0.0' }) as never);
-    await expect(readPackageJson('/pkg')).resolves.toMatchObject({ name: '@test/pkg' });
+    await expect(readPackageJson('/pkg', { side: 'source', label: 'The package directory /pkg' })).resolves.toMatchObject({ name: '@test/pkg' });
   });
 });

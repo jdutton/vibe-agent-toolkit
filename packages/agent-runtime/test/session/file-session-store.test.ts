@@ -188,6 +188,18 @@ describe('FileSessionStore', () => {
     });
   });
 
+  // The default is user state under the home directory, and a test process's home is a developer's
+  // real one (an env stub does not move `os.homedir()` in a worker thread): `requireTestScratch`.
+  describe('the default base directory (~/.vat-sessions) in a test process', () => {
+    it('is refused — that store is somebody\'s', () => {
+      expect(() => new FileSessionStore()).toThrow(/The session store resolves to .* refusing to resolve it in a test process/);
+    });
+
+    it('is never consulted when the caller names a base directory', () => {
+      expect(() => new FileSessionStore({ baseDir: tempDir })).not.toThrow();
+    });
+  });
+
   describe('getCheckpointDir', () => {
     it('should return checkpoint directory path', () => {
       const sessionId = 'test-session';

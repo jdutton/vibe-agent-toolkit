@@ -24,7 +24,8 @@ import path from 'node:path';
 import { requireConfirmedAbsent } from '../errors/confirmed-absent.js';
 import { isPathAbsentError } from '../errors/errno-table.js';
 import { classifyFsFault, isFsFaultError, type FsSide } from '../errors/fs-fault.js';
-import { toForwardSlash, toNfc } from '../path-core.js';
+import { canonicalPath } from '../path-containment.js';
+import { safePath, toForwardSlash, toNfc } from '../path-core.js';
 import { normalizePath } from '../path-utils.js';
 
 import { type EntryContainment, type EntrySameness, type Identity, identityOf, type IdentityOracle, identityOracleOver, insideBy, sameBy } from './identity-compare.js';
@@ -95,6 +96,21 @@ function identitiesOrUndecided(entry: string): readonly Identity[] | undefined {
 }
 
 /**
+ * Where `entry` physically is — its own place (its real parent directory, then its name) and, for a
+ * link, its target's — or `undefined` when the OS refuses to resolve it. `entry` need not exist: it
+ * is resolved from its deepest existing ancestor.
+ */
+function physicalSpellings(entry: string): readonly string[] | undefined {
+  try {
+    return [safePath.join(canonicalPath(path.dirname(entry)), path.basename(entry)), canonicalPath(entry)];
+  } catch (error: unknown) {
+    // A refusal is `unknown` to the caller, exactly as an entry it cannot examine is; a defect stays loud.
+    if (isFsFaultError(classifyFsFault(error, { side: 'destination', action: 'resolve the entry', path: entry }))) return undefined;
+    throw error;
+  }
+}
+
+/**
  * Whether `a` and `b` are one entry. Any shared identity is `same`; identities on
  * both sides with a filesystem id each and none shared is `different`; a folded path
  * on either side that does not match is `unknown`; an entry the OS refuses to
@@ -109,8 +125,10 @@ export function sameEntry(a: string, b: string): EntrySameness {
 
 /**
  * Whether `child` lies strictly under `ancestor`, judged by identity: some directory
- * on the way up from `child` is the same entry as `ancestor`, so a linked or
- * case-aliased spelling of the ancestor is still found. `child` need not exist.
+ * on the way up from `child` — along its spelling as given, and along where it
+ * physically is — is the same entry as `ancestor`. So a linked or case-aliased
+ * spelling of the ancestor is found, and so is a directory of `child`'s spelling that
+ * is a link to somewhere BELOW the ancestor. `child` need not exist.
  * `unknown` when no ancestor proved `same` and one could not be examined.
  *
  * ⚠️ On a filesystem that reports `ino` 0 the answer for an existing `ancestor` is
@@ -121,7 +139,7 @@ export function sameEntry(a: string, b: string): EntrySameness {
  * @param ancestor - Absolute path
  */
 export function isInsideByIdentity(child: string, ancestor: string): EntryContainment {
-  return insideBy(identitiesOrUndecided, child, ancestor);
+  return insideBy(identitiesOrUndecided, child, ancestor, physicalSpellings);
 }
 
 /**
@@ -129,5 +147,5 @@ export function isInsideByIdentity(child: string, ancestor: string): EntryContai
  * (`entryIdentities(entry, 'destination')`), so every answer of a plan is built from one observation.
  */
 export function identityOracle(): IdentityOracle {
-  return identityOracleOver((entry) => entryIdentities(entry, 'destination'));
+  return identityOracleOver((entry) => entryIdentities(entry, 'destination'), physicalSpellings);
 }

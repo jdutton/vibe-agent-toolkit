@@ -11,31 +11,27 @@ import fs from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { requireConfirmedAbsent } from '../errors/confirmed-absent.js';
-import { isAccessRefusedError, isPathAbsentError, isRenameContentionError } from '../errors/errno-table.js';
+import { isAccessRefusedError, isAlreadyExistsError, isPathAbsentError, isRenameContentionError } from '../errors/errno-table.js';
 import { classifyFsFault, isFsFaultError, withFsFault } from '../errors/fs-fault.js';
 import { recordSuppressedFault } from '../errors/suppressed-faults.js';
-import { VatError } from '../errors/vat-error.js';
 import { mapWithConcurrency } from '../in-order.js';
 import { isUnderRoot } from '../path-containment.js';
 import { safePath, toForwardSlash } from '../path-core.js';
 import { normalizedTmpdir } from '../path-utils.js';
 
+import { entryInTheWayFault, renameRetryDelay, tempDirRefusal } from './apply-decisions.js';
 import { stagingName } from './staging-names.js';
 
 /** The owner's read, write and search bits: what a directory needs for its entries to be removed. */
 const OWNER_RWX = 0o700;
 
-/** A rename is tried this many times under win32 when the OS reports contention; the waits between are 50, 100, 200, 400, 800 ms. */
-const RENAME_TRIES = 6;
-const FIRST_BACKOFF_MS = 50;
-
-/** {@link disposeTempDir} was handed a directory not strictly under the temp directory: a defect in its caller. */
-export const TEMP_DIR_OUTSIDE_TMPDIR_CODE = 'TEMP_DIR_OUTSIDE_TMPDIR';
+export { TEMP_DIR_OUTSIDE_TMPDIR_CODE } from './apply-decisions.js';
 
 function renameTrying(from: string, to: string, attempt: number): Promise<void> {
   return fs.rename(from, to).catch(async (error: unknown) => {
-    if (process.platform !== 'win32' || attempt + 1 >= RENAME_TRIES || !isRenameContentionError(error)) throw error;
-    await delay(FIRST_BACKOFF_MS * 2 ** attempt);
+    const wait = renameRetryDelay(process.platform, attempt, isRenameContentionError(error));
+    if (wait === undefined) throw error;
+    await delay(wait);
     return renameTrying(from, to, attempt + 1);
   });
 }
@@ -195,6 +191,95 @@ export async function replaceFile(dest: string, contents: string | Uint8Array): 
   }
 }
 
+/** What is at `path`, never following a link; `undefined` when nothing is. A refusal is thrown raw. */
+async function entryAt(path: string): Promise<Stats | undefined> {
+  try {
+    return await fs.lstat(path);
+  } catch (error: unknown) {
+    if (isPathAbsentError(error)) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * The directory `segments` name under `dir`, each component a REAL directory: made (a plain `mkdir`)
+ * when absent, refused when a link or a file stands there. One component at a time — each must be a
+ * directory before the next is looked at.
+ */
+async function plainDirectoryUnder(dir: string, segments: readonly string[], writing: string): Promise<string> {
+  const [segment, ...rest] = segments;
+  if (segment === undefined) return dir;
+  const next = safePath.join(dir, segment);
+  const there = await entryAt(next);
+  if (there === undefined) await fs.mkdir(next);
+  else if (!there.isDirectory()) throw entryInTheWayFault(next, writing, undefined);
+  return plainDirectoryUnder(next, rest, writing);
+}
+
+/** The components of `relative`, a path under a tree's root. A `..` would leave the tree: a defect in the caller. */
+function segmentsUnderRoot(relative: string): string[] {
+  const segments = toForwardSlash(relative).split('/').filter((segment) => segment.length > 0 && segment !== '.');
+  if (segments.includes('..')) throw new TypeError(`"${relative}" is not a path under the tree's root`);
+  return segments;
+}
+
+/**
+ * Make the directory `relative` under `root` — a tree VAT is building, which may hold whatever its
+ * source shipped, links included — without ever going through a link: every component must be a real
+ * directory (adopted when there, made by a plain `mkdir` when absent). What a recursive `mkdir`
+ * would do instead is follow a link standing where a component goes, out of the tree.
+ *
+ * @param root - The tree's root, which the caller made
+ * @param relative - The directory, relative to `root`, forward slashes
+ * @param writing - What the directory is for, for a refusal's message
+ * @returns The directory's path
+ * @throws FsFaultError side `source`, origin `content`, class `occupied`, naming the link or file
+ *   standing where a directory goes; any other failure is the raw errno
+ */
+export async function makeDirectoryUnder(root: string, relative: string, writing: string): Promise<string> {
+  return await plainDirectoryUnder(root, segmentsUnderRoot(relative), writing);
+}
+
+/**
+ * Write a file VAT makes into a tree it is building — a staged tree that may hold whatever its source
+ * shipped, links included — without ever writing over or through what is already there.
+ *
+ * Every directory of `relative` under `root` must be a real directory (a link standing where one goes
+ * would carry the write outside the tree); a missing one is made by a plain `mkdir`. The file itself
+ * is created exclusively (`wx`, which no link satisfies). What `existing` decides is only the entry
+ * AT the file's name:
+ * - `refuse`: anything there refuses the write.
+ * - `replace`: a regular file there is removed first (VAT's own earlier output, or a file the source
+ *   shipped that VAT's supersedes); a link or a directory still refuses.
+ *
+ * @param root - The tree's root, which the caller made
+ * @param relative - The file, relative to `root`, forward slashes
+ * @param contents - Its bytes
+ * @param options - `existing`, and `writing`: what the file is, for a refusal's message
+ * @throws FsFaultError side `source`, origin `content`, class `occupied`, naming the entry in the
+ *   way; any other failure is the raw errno, for the caller's boundary to classify
+ */
+export async function writeFileUnder(
+  root: string,
+  relative: string,
+  contents: string | Uint8Array,
+  options: { readonly existing: 'refuse' | 'replace'; readonly writing: string },
+): Promise<void> {
+  const segments = segmentsUnderRoot(relative);
+  const name = segments.at(-1);
+  if (name === undefined) throw new TypeError(`writeFileUnder: "${relative}" names no file`);
+  const target = safePath.join(await plainDirectoryUnder(root, segments.slice(0, -1), options.writing), name);
+  if (options.existing === 'replace') {
+    const there = await entryAt(target);
+    if (there?.isFile() === true) await fs.unlink(target);
+  }
+  try {
+    await fs.writeFile(target, contents, { flag: 'wx' });
+  } catch (error: unknown) {
+    throw isAlreadyExistsError(error) ? entryInTheWayFault(target, options.writing, error) : error;
+  }
+}
+
 /** The classified fault disposing of `dir` raised, or `undefined` once it is gone. A non-filesystem error is a defect and propagates. */
 async function disposalFault(dir: string): Promise<unknown> {
   try {
@@ -230,9 +315,8 @@ export async function disposeTempDir(dir: string): Promise<unknown> {
 /** Refuse (a defect in the caller) a directory to dispose of that is not strictly under the temp directory. */
 function refuseOutsideTmpdir(dir: string): void {
   const tmp = normalizedTmpdir();
-  if (isUnderRoot(tmp, dir) === 'outside') {
-    throw new VatError(TEMP_DIR_OUTSIDE_TMPDIR_CODE, `Refusing to dispose of ${dir}: it is not inside the temporary directory ${toForwardSlash(tmp)}`);
-  }
+  const refusal = tempDirRefusal(dir, toForwardSlash(tmp), isUnderRoot(tmp, dir));
+  if (refusal !== undefined) throw refusal;
 }
 
 /**

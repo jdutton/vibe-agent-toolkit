@@ -174,6 +174,9 @@ export * from './zod-introspection.js';
 // Skill target resolution (cross-platform flat skill install paths)
 export * from './skill-targets.js';
 
+// The fail-closed guard for user state in a test process
+export { requireTestScratch, TEST_USER_STATE_UNDER } from './test-scratch-guard.js';
+
 // Glob pattern helpers (isGlob, staticGlobBase, globMagicRemainder)
 export * from './glob/glob-pattern.js';
 
@@ -202,8 +205,10 @@ export {
   planTreeChanges,
   proveTreeReadable,
   readRegularFile,
+  makeDirectoryUnder,
   renameFileAtomic,
   replaceFile,
+  writeFileUnder,
   sameEntry,
   TEMP_DIR_OUTSIDE_TMPDIR_CODE,
   TREE_CLEANUP_INCOMPLETE_CODE,
@@ -220,7 +225,9 @@ export type {
   ApplyOptions,
   ApplyOutcome,
   ApplyResult,
+  CopyOnto,
   CopyRegularFileOptions,
+  CopyTreeOptions,
   EntryContainment,
   EntryKind,
   EntrySameness,

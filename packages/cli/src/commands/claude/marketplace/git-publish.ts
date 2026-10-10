@@ -5,12 +5,13 @@
  * Uses child_process.spawnSync for git commands (no external dependencies).
  */
 
-import { mkdtempSync, readdirSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
-import { copyTree, disposeTempDir, disposeTempDirAfterFailure, normalizedTmpdir, safePath, withFsFault } from '@vibe-agent-toolkit/utils';
+import { copyTree, disposeTempDir, disposeTempDirAfterFailure, safePath, withFsFault } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
+import { makeStagingDir } from '../../../utils/archive-staging.js';
 import { CommandRefusalError } from '../../../utils/command-refusal.js';
 import type { Logger } from '../../../utils/logger.js';
 import { redactUrlCredentials } from '../../../utils/url-redact.js';
@@ -218,7 +219,8 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<un
   logger.info(`   Remote: ${redactUrlCredentials(remoteUrl)}`);
   logger.info(`   Branch: ${branch}`);
 
-  const tmpRepo = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-marketplace-publish-'));
+  // Through the one classified creation: a temp directory the OS will not make is the environment's fault.
+  const tmpRepo = await makeStagingDir('vat-marketplace-publish-');
   logger.debug(`   Staging repo: ${tmpRepo}`);
 
   try {
@@ -253,7 +255,7 @@ async function commitAndDeliver(tmpRepo: string, cwd: string, remoteUrl: string,
   // Copy publish tree content into temp repo. Both trees are VAT's own staging: a fault
   // reading or writing either is the environment's. Links are copied as links.
   await withFsFault({ side: 'environment', action: 'copy the publish tree into the staging repo', path: tmpRepo }, () =>
-    copyTree(publishDir, tmpRepo, { links: 'preserve', side: 'environment' }));
+    copyTree(publishDir, tmpRepo, { links: 'preserve', side: 'environment', onto: 'fresh' }));
 
   // Log what the copy placed in the temp repo (filesystem truth before git touches it)
   // A link is an entry the copy placed and git will add, so it is listed as

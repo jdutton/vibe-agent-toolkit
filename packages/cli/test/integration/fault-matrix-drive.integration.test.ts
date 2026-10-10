@@ -220,6 +220,24 @@ describe('runVerb', () => {
   });
 });
 
+// `runVerb` undoes the case root's env stubs when it returns. A second run on the same root used to
+// go ahead against the ambient environment — and a real `vat claude plugin install` did exactly that,
+// into a live Claude config. It now refuses before the verb runs.
+describe('runVerb never runs a verb outside its case root', () => {
+  it('throws on a second run whose stubs the first run undid, and runs again once the root is re-stubbed', async () => {
+    let runs = 0;
+    const c = toyCase(() => { runs += 1; });
+    const r = makeCaseRoot(scratch.create());
+    await runVerb(c, r);
+
+    await expect(runVerb(c, r)).rejects.toThrow(/would run outside its case root/);
+    expect(runs).toBe(1);
+
+    await runVerb(c, makeCaseRoot(r.root));
+    expect(runs).toBe(2);
+  });
+});
+
 describe('snapshotCase', () => {
   it('keys watched trees relative to the case root, and the temp dir relative to itself', () => {
     const c = toyCase(() => {});

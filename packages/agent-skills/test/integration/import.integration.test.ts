@@ -2,7 +2,7 @@
 import * as fs from 'node:fs';
 
 import { mkdirSyncReal, safePath, TREE_DEST_OCCUPIED_CODE } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 
 import type { ImportResult } from '../../src/import.js';
@@ -66,6 +66,9 @@ async function importAndParseAgentYaml(
 
 describe('importSkillToAgent (integration)', () => {
   const { getTempDir } = setupTempDir('import-test-');
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
   describe('basic SKILL.md import', () => {
     it('should convert minimal SKILL.md to agent.yaml', async () => {
@@ -234,6 +237,26 @@ describe('importSkillToAgent (integration)', () => {
 
       const content = fs.readFileSync(agentPath, 'utf-8');
       expect(content).toBe(EXISTING_AGENT_CONTENT);
+    });
+
+    // Ruling R2: `--force` means "overwrite the file". An `--output` naming the agent's DIRECTORY used
+    // to park the whole tree, write a file on its name and delete the tree, exit 0.
+    it.each([
+      ['with force', true],
+      ['without force', false],
+    ])('never writes agent.yaml over a directory (%s): refused as the invocation\'s, the tree untouched, no --force advice', async (_label, force) => {
+      // The lane under test removes trees: its temp directory is this test's scratch, never the real one.
+      for (const name of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(name, getTempDir());
+      const outputDir = safePath.join(getTempDir(), 'myagent');
+      mkdirSyncReal(safePath.join(outputDir, 'keep'), { recursive: true });
+      fs.writeFileSync(safePath.join(outputDir, 'keep', 'data.txt'), 'precious');
+
+      const { result } = await createSkillAndImport(getTempDir(), createTestSkill(), { outputPath: outputDir, force });
+
+      expect(result).toMatchObject({ success: false, refusal: 'USAGE_INVALID' });
+      expect(result.success ? '' : result.error).toContain('is a directory');
+      expect(result.success ? '' : result.error).not.toContain('--force');
+      expect(fs.readFileSync(safePath.join(outputDir, 'keep', 'data.txt'), 'utf-8')).toBe('precious');
     });
 
     it('should overwrite existing agent.yaml with force flag', async () => {

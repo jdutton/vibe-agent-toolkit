@@ -12,7 +12,7 @@ import { materializeIssue, readDeclaredSkillName } from '@vibe-agent-toolkit/age
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { scan, type ScanSummary } from '@vibe-agent-toolkit/discovery';
 import { buildReport, toFindings, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, isTreeChangeResidue, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
@@ -186,7 +186,8 @@ function scanSkillsDir(skillsDir: string): DiscoveredSkill[] {
 
   for (const entry of readSourceDir(skillsDir)) {
     // Followed: a `--dev` install is a symlinked skill directory and is listed.
-    if (direntKindFollowingSync(skillsDir, entry) !== 'directory') continue;
+    // A tree-change leftover (`.<name>.vat-staged-*`: an interrupted build's staged or parked bundle) is not a skill.
+    if (isTreeChangeResidue(entry.name) || direntKindFollowingSync(skillsDir, entry) !== 'directory') continue;
     const candidate = safePath.join(skillsDir, entry.name);
     if (holdsSkillMd(candidate)) {
       skills.push(...processDiscoveredSkills([{ path: safePath.join(candidate, 'SKILL.md') }]));

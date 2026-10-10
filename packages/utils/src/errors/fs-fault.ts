@@ -120,9 +120,11 @@ const CAPACITY_CLASSES: ReadonlySet<FsFaultClass> = new Set(['exhausted', 'busy'
 /**
  * Whether a fault is a CAPACITY fault: the machine ran out (`exhausted`), something
  * held the path (`busy`), or the filesystem cannot do this or failed (`unsupported`,
- * `device`). The refusal table stops the run (`RUN_INCOMPLETE`) for every one of them on
- * every side but the read of an input, and among several failures of one operation it
- * is the one to report first: a full disk explains the entries that failed after it.
+ * `device`). The refusal table stops the run (`RUN_INCOMPLETE`) for every one of them on a
+ * destination or an environment side; reading an input it does so for `exhausted` and `busy`
+ * only (the machine's own state), while an `unsupported` or `device` fault there is the
+ * input's (`INPUT_UNREADABLE`). Among several failures of one operation it is the one to
+ * report first: a full disk explains the entries that failed after it.
  *
  * @param fault - The fault's class, as {@link fsFaultOf} or an `FsFaultError` carries it
  */

@@ -24,10 +24,13 @@ const GATE: Gate = { strict: false };
 /** One skill per run. */
 const SKILLS_IMPORTED = 1;
 
-/** An agent.yaml already at the output without `--force`: the invocation's to fix, saying how. */
-function occupiedOutputRefusal(error: unknown): unknown {
+/**
+ * An occupied output: the invocation's to fix. `--force` is advised only where it would serve — a
+ * file there, and the flag not given; under `--force` the one thing still refused is a directory.
+ */
+function occupiedOutputRefusal(error: unknown, forced: boolean): unknown {
   if (!isVatError(error, TREE_DEST_OCCUPIED_CODE)) return error;
-  return new CommandRefusalError('USAGE_INVALID', `${error.message}. Use --force to overwrite.`, { cause: error });
+  return new CommandRefusalError('USAGE_INVALID', forced ? error.message : `${error.message}. Use --force to overwrite.`, { cause: error });
 }
 
 export async function importCommand(
@@ -51,7 +54,7 @@ export async function importCommand(
     }
 
     const result = await importSkillToAgent(importOptions).catch((error: unknown) => {
-      throw occupiedOutputRefusal(error);
+      throw occupiedOutputRefusal(error, importOptions.force === true);
     });
 
     // The library names the refusal where it was raised; nothing was written.

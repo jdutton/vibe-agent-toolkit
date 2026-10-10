@@ -10,7 +10,11 @@
  *    has changed.
  * 2. **Park** every entry being replaced or removed: `rename(dest, <staged>.previous)`.
  *    Every park happens before any swap, so a name is free before anything lands
- *    on it — on a case-folding filesystem `Old` and `old` are one name.
+ *    on it — on a case-folding filesystem `Old` and `old` are one name. Each
+ *    destination is examined again first: one that is no longer what the plan decided
+ *    on (another writer filled a directory the plan took as empty, or put an entry
+ *    where it found none) is a `destination` fault, class `occupied`, and is left as
+ *    found — the plan is rolled back.
  * 3. **Swap** every staged entry in: `rename(staged, dest)`.
  * 4. **`afterSwap()`** — the caller's own writes that must agree with the tree
  *    (a registry). A throw rolls back every swap.
@@ -46,17 +50,17 @@ import { classifyFsFault, isFsFaultError, withFsFault } from '../errors/fs-fault
 import { recordSuppressedFault } from '../errors/suppressed-faults.js';
 import { isVatError } from '../errors/vat-error.js';
 import { forEachInOrder, mapInOrder } from '../in-order.js';
-import { relativeEscapesRoot, safePath, toForwardSlash } from '../path-core.js';
+import { safePath, toForwardSlash } from '../path-core.js';
 
+import { changedDestinationFault, changedSincePlan, fillFaultIsDestinations, finalizeThrows, madeDirectoryPath, madeParentStep, TREE_CLEANUP_INCOMPLETE_CODE } from './apply-decisions.js';
 import { copyTree } from './copy-tree.js';
 import { removeEntry, renameFileAtomic } from './files.js';
 import { sameEntry } from './identity.js';
-import { isActive, type PlannedChange, type TreePlan } from './plan.js';
+import { destinationNow, isActive, type PlannedChange, type TreePlan } from './plan.js';
 import { TreeRollbackIncompleteError, type TreeRollbackStranded } from './rollback-error.js';
 import { PARKED_SUFFIX, stagingName, stagingPrefix } from './staging-names.js';
 
-/** A replaced entry, parked once the new one was live, that could not be removed. */
-export const TREE_CLEANUP_INCOMPLETE_CODE = 'TREE_CLEANUP_INCOMPLETE';
+export { TREE_CLEANUP_INCOMPLETE_CODE } from './apply-decisions.js';
 
 /** Suffix of a swapped-in entry moved back off its destination by a rollback. */
 const DISCARD_SUFFIX = '.discard';
@@ -117,15 +121,14 @@ function writeFillFault(error: unknown, slot: Slot, staged: string): unknown {
   const facts = fsFaultOf(error);
   if (isVatError(error) || facts === undefined) return error;
   const ours = fsBoundary({ destination: [staged] });
-  const named = [facts.path, facts.dest].filter((p): p is string => p !== undefined);
-  if (!named.some((p) => ours.sideOf(p) === 'destination')) return error;
+  if (!fillFaultIsDestinations(facts, (named) => ours.sideOf(named))) return error;
   return classifyFsFault(error, { side: 'destination', action: `stage the new ${labelOf(slot)}`, path: destOf(slot) });
 }
 
 /** The parent of the destination, made when absent; the first directory made is remembered. */
 async function makeParent(slot: Slot): Promise<void> {
   const made = await onDestination(slot, 'make the parent directory of', () => fs.mkdir(path.dirname(destOf(slot)), { recursive: true }));
-  slot.createdParent = made === undefined ? undefined : toForwardSlash(made);
+  slot.createdParent = made === undefined ? undefined : toForwardSlash(madeDirectoryPath(made));
 }
 
 /** How many fresh names a `write` fill tries before an `EEXIST` is the answer (as `mkdtemp` retries its own). */
@@ -156,7 +159,7 @@ async function stageTree(slot: Slot, fill: Exclude<Extract<PlannedChange['change
   const staged = toForwardSlash(await onDestination(slot, 'stage the new', () => makeStagedDirectory(destOf(slot), fill.from)));
   slot.staged = staged;
   if (fill.from === 'copy') {
-    await onDestination(slot, 'copy the new', () => copyTree(fill.source, staged, { links: fill.links, side: fill.side, ...(fill.filter === undefined ? {} : { filter: fill.filter }) }));
+    await onDestination(slot, 'copy the new', () => copyTree(fill.source, staged, { links: fill.links, side: fill.side, onto: 'fresh', ...(fill.filter === undefined ? {} : { filter: fill.filter }) }));
   } else if (fill.from === 'write') {
     // `try`/`await`, not `.catch`: a callback that throws synchronously is judged the same way.
     try {
@@ -207,7 +210,19 @@ async function spelledOnDisk(dest: string): Promise<string> {
   return alias === undefined ? dest : safePath.join(parent, alias);
 }
 
+/**
+ * Refuse a destination that is no longer what the plan decided on (`changedSincePlan`): staging runs
+ * between the plan and the first rename, and a `must-be-free` destination another writer filled
+ * meanwhile must not be parked and deleted, nor a file that appeared at a `create` renamed over.
+ * Asked immediately before the rename it guards; the entry is left exactly as found.
+ */
+function requireAsPlanned(slot: Slot): void {
+  const changed = changedSincePlan(slot.planned, destinationNow(destOf(slot), slot.planned));
+  if (changed !== undefined) throw changedDestinationFault(slot.planned, changed);
+}
+
 async function park(slot: Slot): Promise<void> {
+  requireAsPlanned(slot);
   const parked = `${slot.staged ?? stagingName(destOf(slot))}${PARKED_SUFFIX}`;
   await onDestination(slot, 'move aside the previous', async () => {
     slot.spelled = await spelledOnDisk(destOf(slot));
@@ -217,6 +232,8 @@ async function park(slot: Slot): Promise<void> {
 }
 
 async function swap(slot: Slot): Promise<void> {
+  // A destination the plan found absent was never parked: nothing has vouched for it since the plan.
+  if (slot.planned.existing === 'absent') requireAsPlanned(slot);
   const staged = slot.staged as string;
   await onDestination(slot, 'put in place the new', () => renameFileAtomic(staged, destOf(slot)));
   slot.swapped = true;
@@ -243,10 +260,10 @@ function removeMadeParents(slot: Slot, error: unknown): Promise<void> {
   if (slot.createdParent === undefined) return Promise.resolve();
   const top = safePath.resolve(slot.createdParent);
   const removeFrom = (dir: string): Promise<void> => {
-    const below = safePath.relative(top, dir);
-    if (relativeEscapesRoot(below)) return Promise.resolve();
+    const step = madeParentStep(top, dir);
+    if (step === 'stop') return Promise.resolve();
     return fs.rmdir(dir).then(
-      () => (below === '' ? undefined : removeFrom(safePath.resolve(path.dirname(dir)))),
+      () => (step === 'last' ? undefined : removeFrom(safePath.resolve(path.dirname(dir)))),
       (refused: unknown) => {
         if (isOccupiedError(refused)) return;
         recordSuppressedFault(error, classifyFsFault(refused, { side: 'destination', action: 'remove the directory made for', path: dir }));
@@ -315,7 +332,8 @@ async function removeParked(slot: Slot): Promise<unknown> {
 async function finalize(slots: readonly Slot[]): Promise<ApplyResult> {
   const parked = slots.filter((slot) => slot.parked !== undefined);
   const outcomes = (await mapInOrder(parked, async (slot) => ({ slot, fault: await removeParked(slot) }))).filter((o) => o.fault !== undefined);
-  const thrown = outcomes.find((o) => o.slot.planned.change.op === 'remove');
+  const thrownAt = finalizeThrows(outcomes.map((o) => ({ op: o.slot.planned.change.op })));
+  const thrown = thrownAt === undefined ? undefined : outcomes[thrownAt];
   if (thrown !== undefined) {
     for (const other of outcomes) if (other !== thrown) recordSuppressedFault(thrown.fault, other.fault);
     throw thrown.fault;

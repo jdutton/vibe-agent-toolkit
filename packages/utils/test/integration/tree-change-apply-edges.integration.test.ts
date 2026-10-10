@@ -5,7 +5,7 @@
  * failure path cannot remove — each recorded beside the thrown error, never on it.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
@@ -13,9 +13,10 @@ import { isFsFaultError } from '../../src/errors/fs-fault.js';
 import { suppressedFaultsOf } from '../../src/errors/suppressed-faults.js';
 import { isVatError } from '../../src/errors/vat-error.js';
 import { safePath } from '../../src/path-core.js';
+import { mkdirSyncReal } from '../../src/path-utils.js';
 import { snapshotTree } from '../../src/testing/tree-snapshot.js';
 import { applyTreePlan } from '../../src/tree-change/apply.js';
-import { planTreeChanges, TREE_DESTS_OVERLAP_CODE, type TreeChange } from '../../src/tree-change/plan.js';
+import { planTreeChanges, TREE_DESTS_OVERLAP_CODE, type TreeChange, type TreePlan } from '../../src/tree-change/plan.js';
 import { TREE_ROLLBACK_INCOMPLETE_CODE } from '../../src/tree-change/rollback-error.js';
 
 import { expectUnchanged, isStaged, plant, present, readText, rejectionOf, replaceWith, residueIn, treeChangeSuite } from './tree-change-test-kit.js';
@@ -107,7 +108,7 @@ describe('applyTreePlan — what a failure leaves', () => {
     const root = suite.root();
     const fresh = safePath.join(root, 'fresh');
     const plan = await planTreeChanges([replaceWith(fresh, { 'x.md': 'x' }, 'fresh')]);
-    const error = await suite.failApply(root, plan, [{ op: 'rename', path: (p) => p.endsWith('.discard'), errno: 'EACCES' }], { afterSwap: () => Promise.reject(new Error('registry')) });
+    const error = await suite.failApply(root, plan, [{ op: 'rename', path: (p) => p.endsWith('.discard'), errno: 'EACCES', everyTry: true }], { afterSwap: () => Promise.reject(new Error('registry')) });
 
     expect(isVatError(error, TREE_ROLLBACK_INCOMPLETE_CODE)).toBe(true);
     expect((error as Error).message).toContain(fresh);
@@ -156,5 +157,50 @@ describe('applyTreePlan — what a failure leaves', () => {
     suite.restoreFaults();
     expect(present(legacy)).toBe(false);
     expect(residueIn(safePath.join(root, 'skills'))).toEqual([]);
+  });
+});
+
+/**
+ * Apply `plan` once another writer has changed `out` under it: refused as the destination's
+ * `occupied` fault naming `out`, with `root` exactly as that writer left it. Returns what it threw.
+ */
+async function refusedAsChanged(root: string, plan: TreePlan, out: string): Promise<unknown> {
+  const before = snapshotTree(root);
+  const error = await rejectionOf(() => applyTreePlan(plan));
+  expect(error, String(error)).toMatchObject({ side: 'destination', faultClass: 'occupied', path: out });
+  expectUnchanged(root, before);
+  return error;
+}
+
+// Staging — a whole copy, a whole build — runs between the plan and the first rename. A destination
+// another writer changed meanwhile used to be taken on the plan's word: a file that appeared at a
+// create was renamed over, and a directory that was empty (so "free") was parked and deleted full.
+describe('applyTreePlan — a destination that changed since the plan is refused and left as found', () => {
+  const FREE = { kind: 'must-be-free' } as const;
+
+  it.each([
+    ['a file appeared where a replace-file was to create one', (out: string): TreeChange => ({ op: 'replace-file', dest: out, ownership: FREE, contents: 'new', label: 'out' }), { out: 'theirs' }],
+    ['a file appeared where a tree was to be created', (out: string): TreeChange => ({ ...replaceWith(out, { 'a.md': 'a' }, 'out'), ownership: FREE }), { out: 'theirs' }],
+    ['a file was put into the directory the plan took as empty', (out: string): TreeChange => ({ ...replaceWith(out, { 'a.md': 'a' }, 'out'), ownership: FREE }), { 'out/theirs.txt': 'theirs' }],
+  ] as const)('%s', async (_label, changeOf, appeared) => {
+    const root = suite.root();
+    const out = safePath.join(root, 'out');
+    // The third row plans over an EMPTY directory, which is free; the others over nothing.
+    if (!('out' in appeared)) mkdirSyncReal(out);
+    const plan = await planTreeChanges([changeOf(out)]);
+    // Another writer, while VAT stages.
+    plant(root, appeared);
+
+    expect(isFsFaultError(await refusedAsChanged(root, plan, out))).toBe(true);
+  });
+
+  it('refuses a replace whose destination vanished since the plan, rather than park nothing and call it replaced', async () => {
+    const root = suite.root();
+    plant(root, { 'out/old.md': 'old' });
+    const out = safePath.join(root, 'out');
+    const plan = await planTreeChanges([replaceWith(out, { 'a.md': 'a' }, 'out')]);
+    rmSync(out, { recursive: true });
+
+    expect(isFsFaultError(await refusedAsChanged(root, plan, out))).toBe(true);
   });
 });

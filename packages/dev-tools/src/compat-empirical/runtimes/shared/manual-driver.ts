@@ -75,7 +75,7 @@ export class ManualDriverBase implements RuntimeDriver {
       this.currentBundleDir = dir;
       return { ok: true, notes: `bundle reused at ${dir}` };
     }
-    await copyTree(skill.rootDir, dir, { links: 'preserve', side: 'source' });
+    await copyTree(skill.rootDir, dir, { links: 'preserve', side: 'source', onto: 'fresh' });
     this.currentBundleDir = dir;
     return { ok: true, notes: `bundle prepared at ${dir}` };
   }

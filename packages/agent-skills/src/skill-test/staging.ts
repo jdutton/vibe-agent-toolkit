@@ -7,6 +7,7 @@ import {
   applyTreePlan,
   copyTree,
   forEachInOrder,
+  makeDirectoryUnder,
   planTreeChanges,
   proveTreeReadable,
   recordSuppressedFault,
@@ -151,7 +152,7 @@ async function replaceStaged(dest: string, label: string, fill: (staged: string)
 
 /** Copy a resolved skill copy — VAT's own staging, symlink-free — into `into`: its reads are the environment's. */
 function copyResolved(resolvedStagedDir: string, into: string): Promise<void> {
-  return copyTree(resolvedStagedDir, into, { links: 'preserve', side: 'environment' });
+  return copyTree(resolvedStagedDir, into, { links: 'preserve', side: 'environment', onto: 'fresh' });
 }
 
 /**
@@ -205,15 +206,19 @@ async function stageOneItem(
     // file the OS will not read there is never coded as the run's output failing.
     await proveTreeReadable(realManifestDir, { links: 'preserve', side: 'source' });
     await replaceStaged(pluginStageRoot, 'staged plugin root', (staged) =>
-      copyTree(realManifestDir, safePath.join(staged, '.claude-plugin'), { links: 'preserve', side: 'source' }));
+      copyTree(realManifestDir, safePath.join(staged, '.claude-plugin'), { links: 'preserve', side: 'source', onto: 'fresh' }));
     preparedPluginRoots.add(pluginStageRoot);
   }
 
   // Copy the skill contents (the resolved flat copy) INTO the nested skill slot so
   // `${pluginStageRoot}/skills/<name>/...` resolves like a real install.
   const stagedSkillDir = safePath.joinUnderRoot(pluginStageRoot, relPathUnderPlugin);
-  await withFsFault({ side: 'destination', action: `write the staged copy of ${item.name} at ${stagedSkillDir}` }, () =>
-    copyResolved(resolvedStagedDir, stagedSkillDir));
+  await withFsFault({ side: 'destination', action: `write the staged copy of ${item.name} at ${stagedSkillDir}` }, async () => {
+    // The staged root already holds the author's manifest directory, links kept: the slot is made
+    // component by component, never through one of them.
+    await makeDirectoryUnder(pluginStageRoot, safePath.relative(pluginStageRoot, stagedSkillDir), `the staged copy of ${item.name}`);
+    await copyResolved(resolvedStagedDir, stagedSkillDir);
+  });
 
   return { pluginDir: pluginStageRoot, skillDir: stagedSkillDir, pluginRoot: pluginStageRoot };
 }

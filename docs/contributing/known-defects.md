@@ -152,19 +152,52 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Plugin install and uninstall
 
-### Two concurrent installs of one plugin version can interleave
+### Nothing holds a lock across an install's plan and its apply
 
 - **Severity:** Minor · **Effort:** M · **User-visible:** yes
-- **Mechanism:** an install plans against the trees and registry files it reads, then stages, swaps
-  and rewrites them, with no lock across the plan and its apply. Two `vat claude plugin install`
-  runs of the same plugin can both plan against the same previous state: each swap is atomic and
-  each registry file is replaced whole, so no file is ever half-written, but the second run's
-  registry edit is computed from what it read before the first one landed. Traced, not run.
-- **Where:** `planPackageInstall` in
-  [`package-install.ts`](../../packages/claude-marketplace/src/install/package-install.ts),
-  `applyTreePlan` in [`apply.ts`](../../packages/utils/src/tree-change/apply.ts)
+- **Mechanism:** an install or uninstall plans against the trees and registry files it reads, then
+  stages, swaps and rewrites them, with no lock across the plan and its apply. The apply re-examines
+  each destination before it parks or creates it, and the registry edit re-reads each registry file
+  and refuses when its bytes are no longer what the plan read — so a writer that lands BEFORE those
+  checks is refused, not overwritten. What is left is the instant between a check and the rename or
+  write it guards, and the fact that a second run is refused (`RUN_INCOMPLETE`, "changed by another
+  program … re-run") rather than made to wait. Traced, not run.
+- **Where:** `requireUnchanged` in
+  [`registry-edit.ts`](../../packages/claude-marketplace/src/install/registry-edit.ts),
+  `requireAsPlanned` in [`apply.ts`](../../packages/utils/src/tree-change/apply.ts)
 - **Fix:** take a lock file under the Claude plugins directory for the plan-and-apply, as the
-  skill-test harness lock does, and refuse a second run `USAGE_INVALID` while it is held.
+  skill-test harness lock does. It cannot cover Claude Code's own writes of `settings.json`, which
+  is why the byte comparison stays.
+
+### `vat claude plugin uninstall <key>` cannot recognise a plugin a pre-marker VAT installed
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes
+- **Mechanism:** the `.vat-marketplace` marker is the only witness that VAT made a marketplace
+  directory, and VAT releases before the marker wrote none. An uninstall of a key the user names has
+  nothing else to go on — its `known_marketplaces.json` entry has the same shape Claude Code writes
+  for an npm marketplace — so such a plugin is reported `PLUGIN_NOT_INSTALLED_BY_VAT` and left
+  alone until `--force` is given. `uninstall --all` (which knows the package) and a re-install of the
+  same package both recognise it by the registry entry naming that package, and the re-install
+  writes the marker. Traced.
+- **Where:** `marketplaceProvenance` in
+  [`plugin-uninstall.ts`](../../packages/claude-marketplace/src/install/plugin-uninstall.ts)
+- **Fix:** none without a second witness; the remedy is in the finding (`--force`, or re-install).
+
+### Every lister has to remember that a tree-change leftover is not a sibling
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes
+- **Mechanism:** a staged or parked entry (`.<name>.vat-staged-*`, `….previous`) sits beside its
+  destination until the change finishes, and stays when a run is killed (nothing handles SIGINT or
+  SIGTERM, and only the fetch cache sweeps its own leftovers). Each code path that lists such a
+  directory calls `isTreeChangeResidue` itself; nothing makes a new lister do so. Seven listers do
+  today (skills install, skills list, plugin install, plugin build, plugin list, agent installed,
+  the inventory extractor). `vat verify`, `vat audit` and `npm pack` of a `dist/` holding a leftover
+  were not checked. Traced.
+- **Where:** `isTreeChangeResidue` in
+  [`staging-names.ts`](../../packages/utils/src/tree-change/staging-names.ts) and its callers
+- **Fix:** one listing helper in `utils` that owns the filter, with a lint rule against a raw
+  `readdir` of a directory a tree change stages in; and a sweep (or a signal handler) for the
+  user-facing destinations, so a killed run leaves nothing to filter.
 
 ## Packaging and build
 
@@ -196,6 +229,27 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Where:** `writeAgentBuild` in [`builder.ts`](../../packages/agent-skills/src/builder.ts)
 - **Fix:** declare the builder's own additions to the packager (explicit `files:` dests are exempt
   from the unreferenced-file check), then apply `refuseFailedChecks` as `packageSkill` does.
+
+### `vat claude plugin build` says on stderr only that something did not ship
+
+- **Severity:** Important · **Effort:** M · **User-visible:** yes (new findings in the report)
+- **Mechanism:** four conditions change what a built plugin holds and are written as
+  `logger.info('warning: …')`, never as a finding, so the report is `status: ok`, `findings: []`:
+  a plugin-local skill directory git does not track ("was NOT packaged"), a plugin-local skill
+  dropped for the pool copy of the same name, the `plugin.json` merge's warnings, and the version
+  resolution's. The same file names this shape "the bug" for dead `exclude:` patterns and fixes it
+  there (`PLUGIN_EXCLUDE_PATTERN_UNUSED`). Traced.
+- **What a user sees:** `vat claude plugin build` exits 0 with `status: ok` and no findings, and the
+  built plugin is missing a skill (or carries a different copy of it, a different `plugin.json`
+  field or version than the source says). The only trace is a `warning:` line on stderr, which a
+  CI log scrolls past and a script reading the report never receives. Parked for this release by
+  the controller: registered, not fixed.
+- **Where:** `discoverPluginLocalSkills`, the collision loop of `buildOnePlugin`,
+  `writeMergedPluginJson` and the `resolveVersion` call in
+  [`build.ts`](../../packages/cli/src/commands/claude/plugin/build.ts)
+- **Fix:** one registry code per condition (each is overridable project validation, so each needs a
+  `CODE_REGISTRY` entry, a `docs/validation-codes.md` section and the skill-doc golden regenerated),
+  built through `materializeIssue` and joined to the plugin's `issues` as the exclude finding is.
 
 ### `vat claude plugin build` stops the whole build at the first refused skill
 
@@ -260,13 +314,16 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ### A tracked file deleted but not yet staged is enumerated, then reported unreadable
 
-- **Severity:** Important · **Effort:** S · **User-visible:** yes
+- **Severity:** Important · **Effort:** S · **User-visible:** traced, not shown — the mechanism is
+  in the crawl every validating verb shares, but no verb has been run against it: the one
+  reproduction is this repository's own system test. Whether `vat resources validate` publishes
+  the same finding for an adopter is the first thing a fix must establish.
 - **Mechanism:** the crawl's git route takes its population from `git ls-files`, which lists the
   INDEX. A tracked markdown file removed from the working tree and not yet staged is still in the
   index, so it is enumerated; the read then fails `ENOENT` and the registry files a
   `RESOURCE_UNREADABLE` error for a file that is simply gone. A gate run on an uncommitted tree
   that deletes a tracked `.md` therefore fails until the deletion is staged.
-- **Reproduce:** delete a tracked markdown file without `git rm`, then run
+- **Reproduce (the test, not a verb):** delete a tracked markdown file without `git rm`, then run
   `packages/resources/test/system/project-validation.system.test.ts`: one `RESOURCE_UNREADABLE`
   per deleted file ("was enumerated but could not be read … (ENOENT)"). Staging the deletion, or
   restoring the file, clears it.
@@ -340,6 +397,30 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   and reserved device names.
 
 ## Test-suite health
+
+### The fault matrix cannot see a fault answered as "absent"
+
+- **Severity:** Important · **Effort:** L · **User-visible:** no
+- **Mechanism:** three gaps, one consequence — the class "absent concluded from could-not-look" is
+  the one the matrix is structurally blind to. (1) `existsSync` is not in the harness's op table
+  (`OPS`), so no injection point is ever selected at such a probe; every file on the ratchet still calls it
+  (the `no-existssync` ratchet). (2) Invariant I8 judges only a refusal built from a classified
+  fault: a verb that catches an injected `EACCES` and refuses with a hand-built "does not exist"
+  passes I1, I2 and I4 and skips I8. (3) At exit 0 only the units are held to golden, so a refused
+  probe of an OPTIONAL input (absent in the fixture) that the verb reads as "absent" passes.
+  Read from the invariants; the size of the red is unknown until (1) is switched on.
+- **What a user sees:** nothing from the matrix — that is the defect. A verb with this bug tells
+  them "not found" (or builds, installs or audits without the file, exit 0) when the truth is that
+  the OS refused the look: a permission, a full disk, a stale mount. They go looking for a file
+  that is there. The commit that added the matrix says it runs every destructive verb under every
+  errno class; it does not run this class. Parked for this release by the controller.
+- **Where:** `OPS` in [`fault-spec.ts`](../../packages/utils/src/testing/fault-spec.ts),
+  `refusalOwedByTable` and `exitedZero` in
+  [`invariants.ts`](../../packages/cli/test/fault-matrix/invariants.ts)
+- **Fix:** trace `existsSync` as an op whose injected fault makes it answer `false` (what the OS
+  does), then triage what goes red file by file as the ratchet shrinks; require a classified fault
+  under a `refused`- or `exhausted`-class injection; fail an exit-0 run whose `refused` injection no
+  finding names. Not a local change: each file on that ratchet is a potential red.
 
 ### Tests in the wrong tier
 
@@ -464,6 +545,10 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   section is about 157 KB. GitHub's limit on a release body is unmeasured; 125,000 characters is
   the figure recalled. `pre-publish --release-readiness` has no size check. The rule file also
   cites a vendor claim ("states no maximum") that is not cached under `docs/external/`.
+- **What a user sees:** if the limit is below the section's size, the stable release is on npm and
+  both marketplace branches are published, and the workflow then fails at its last step: no GitHub
+  release, no release notes, a red publish run for a version that cannot be re-published. An
+  adopter sees a new version with no notes. Parked for this release by the controller.
 - **Where:** [`pre-publish-check.ts`](../../packages/dev-tools/src/pre-publish-check.ts),
   [`changelog-adopter-visible.md`](../../.claude/rules/changelog-adopter-visible.md)
 - **Fix:** measure the limit, add a size check to release-readiness, and cache the vendor page.

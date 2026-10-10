@@ -31,7 +31,7 @@ describe('applyTreePlan — a rollback that cannot finish keeps every leftover r
     const discardRm = { op: 'rm', path: (p: string) => p.endsWith('.discard'), errno: 'EACCES' } as const;
 
     const error = await suite.failApply(root, plan, [
-      { family: 'rename', path: (p) => p.endsWith('.previous'), nth: 2, errno: 'EACCES' },
+      { family: 'rename', path: (p) => p.endsWith('.previous'), nth: 2, errno: 'EACCES', everyTry: true },
       discardRm,
       { ...discardRm },
     ], REGISTRY_FAILS);
@@ -72,7 +72,7 @@ describe('applyTreePlan — the parents a create made', () => {
     // `b` makes `new/`; `a` is created inside it and cannot be moved back off.
     const plan = await planTreeChanges([replaceWith(safePath.join(root, 'new', 'b'), { 'b.md': 'b' }, 'b'), replaceWith(safePath.join(root, 'new', 'a'), { 'a.md': 'a' }, 'a')]);
 
-    const error = await suite.failApply(root, plan, [{ op: 'rename', path: (p) => p.includes('/new/.a.') && p.endsWith('.discard'), errno: 'EACCES' }], REGISTRY_FAILS);
+    const error = await suite.failApply(root, plan, [{ op: 'rename', path: (p) => p.includes('/new/.a.') && p.endsWith('.discard'), errno: 'EACCES', everyTry: true }], REGISTRY_FAILS);
 
     expect(isVatError(error, TREE_ROLLBACK_INCOMPLETE_CODE)).toBe(true);
     expect(messagesOf(error)).toEqual([]);

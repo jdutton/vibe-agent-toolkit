@@ -95,6 +95,7 @@ export { linkDevSkills } from './install/dev-skill-links.js';
 // Plugin uninstall
 export type {
   PluginUninstallPlan,
+  UninstallAuthority,
   UninstallPluginsOutcome,
   UninstallPluginOptions,
   UninstallPluginResult,

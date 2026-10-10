@@ -1,14 +1,27 @@
-import { homedir } from 'node:os';
+import type * as NodeOs from 'node:os';
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 
 import {
   SKILL_TARGETS,
   SKILL_TARGET_NAMES,
   SKILL_SCOPE_NAMES,
+  normalizedTmpdir,
   resolveSkillTarget,
+  safePath,
   toForwardSlash,
 } from '../src/index.js';
+
+/**
+ * Where `os.homedir()` points for the code under test. An environment stub cannot do this: under
+ * the threads pool a worker's `process.env` is a copy, and `homedir()` reads the PROCESS's `HOME`.
+ */
+const homeStub = vi.hoisted(() => ({ dir: undefined as string | undefined }));
+
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof NodeOs>();
+  return { ...actual, homedir: () => homeStub.dir ?? actual.homedir() };
+});
 
 /**
  * These tests deliberately do NOT restate the fourteen literal paths in
@@ -63,9 +76,34 @@ describe('SKILL_TARGETS constant', () => {
 });
 
 describe('resolveSkillTarget', () => {
-  const home = toForwardSlash(homedir());
-  // Use a deterministic fake path; homedir is not publicly writable
+  // A home under the temp tree — the only kind a test process may resolve a user scope against
+  // (`requireTestScratch`). Nothing is created: the resolver only joins.
+  const home = safePath.join(toForwardSlash(normalizedTmpdir()), 'vat-skill-targets-home');
   const cwd = `${home}/fake-project`;
+
+  beforeEach(() => {
+    homeStub.dir = home;
+  });
+
+  afterEach(() => {
+    homeStub.dir = undefined;
+  });
+
+  describe('in a test process, against a home outside the temp tree', () => {
+    const realHome = safePath.resolve(toForwardSlash(normalizedTmpdir()), '..', 'vat-not-the-temp-tree');
+
+    for (const name of SKILL_TARGET_NAMES) {
+      it(`refuses the user scope of ${name} — that directory is somebody's`, () => {
+        homeStub.dir = realHome;
+        expect(() => resolveSkillTarget(name, 'user', cwd)).toThrow(/outside .* refusing to resolve it in a test process/);
+      });
+    }
+
+    it('still answers the project scope, which never reads the home directory', () => {
+      homeStub.dir = realHome;
+      expect(resolveSkillTarget('claude', 'project', cwd)).toBe(`${cwd}/${SKILL_TARGETS.claude.projectRel}`);
+    });
+  });
 
   for (const name of SKILL_TARGET_NAMES) {
     it(`joins the user-scope entry for ${name} onto the home directory`, () => {

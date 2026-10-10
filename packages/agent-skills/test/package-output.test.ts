@@ -10,7 +10,7 @@
 import { chmodSync, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 
-import { FS_FAULT_CODE, safePath, TREE_DEST_HOLDS_SOURCE_CODE, TREE_DEST_NOT_OWNED_CODE } from '@vibe-agent-toolkit/utils';
+import { FS_FAULT_CODE, safePath, TREE_DEST_HOLDS_SOURCE_CODE, TREE_DEST_NOT_OWNED_CODE, TREE_DEST_OCCUPIED_CODE } from '@vibe-agent-toolkit/utils';
 import { CANNOT_DENY_READS, installFaultFs, withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -103,7 +103,7 @@ describe('packageSkill - artifacts the OS will not let it write', () => {
     await mkdir(safePath.join(`${out}.zip`, 'inside'), { recursive: true });
 
     await expect(packageSkill(sp, { outputPath: out, formats: [DIRECTORY, 'zip'], replaceExistingOutput: true }))
-      .rejects.toMatchObject({ code: TREE_DEST_NOT_OWNED_CODE });
+      .rejects.toMatchObject({ code: TREE_DEST_OCCUPIED_CODE, message: expect.stringContaining('is a directory') as unknown });
     expect(existsSync(safePath.join(`${out}.zip`, 'inside'))).toBe(true);
     expect(existsSync(out)).toBe(false);
   });

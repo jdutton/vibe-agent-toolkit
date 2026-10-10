@@ -6,16 +6,19 @@
  * the new plugins registered, the replaced ones gone — or changes nothing.
  */
 
-import fs from 'node:fs/promises';
-
-import { safePath, type TreeChange, type TreeFill } from '@vibe-agent-toolkit/utils';
+import { type Ownership, safePath, type TreeChange, type TreeFill, VatError, writeFileUnder } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
 import {
+  dropUserInstall,
   enabledPluginsOf,
+  installerIdentity,
   type InstallPluginSource,
-  MARKER_CONTENTS,
+  isEmptyDirectory,
+  markerContents,
+  marketplaceVerdict,
+  PLUGIN_KEY_INVALID_CODE,
   pluginCacheDir,
   readRegistryFiles,
   recordPluginInstall,
@@ -52,6 +55,11 @@ export interface PackageInstallOptions {
   readonly source: InstallPluginSource;
   /** `<plugin>@<marketplace>` keys the package's `vat.replaces` uninstalls, in the same transaction. */
   readonly replacedPluginKeys: readonly string[];
+  /**
+   * The user's `--force`: replace a marketplace directory VAT cannot prove it installed from `source`.
+   * Required — without it, a directory with no marker of this installer is refused, never replaced.
+   */
+  readonly force: boolean;
   readonly paths: ClaudeUserPaths;
 }
 
@@ -63,19 +71,21 @@ export interface PackageInstallPlan {
   readonly replaced: ReadonlyArray<{ readonly pluginKey: string; readonly index: number }>;
 }
 
-/** The marketplace's own replace: the caller's fill, then VAT's marker in the same staged tree. */
-function marketplaceChange(paths: ClaudeUserPaths, marketplace: PackageMarketplaceInstall): TreeChange {
+/** The marketplace's own replace: the caller's fill, then VAT's marker — naming the installer — in the same staged tree. */
+function marketplaceChange(paths: ClaudeUserPaths, marketplace: PackageMarketplaceInstall, ownership: Ownership, installedFrom: string): TreeChange {
   const { marketplaceName, write, reads } = marketplace;
   return {
     op: 'replace',
     dest: safePath.join(paths.marketplacesDir, marketplaceName),
-    ownership: VAT_STATE,
+    ownership,
     fill: {
       from: 'write',
       reads,
       write: async (staged) => {
         await write(staged);
-        await fs.writeFile(safePath.join(staged, VAT_MARKETPLACE_MARKER), MARKER_CONTENTS);
+        // Exclusive, never through a link: the caller's fill may have copied in whatever the package
+        // ships — a link named like the marker included — and the marker is VAT's alone to make.
+        await writeFileUnder(staged, VAT_MARKETPLACE_MARKER, markerContents(installedFrom), { existing: 'refuse', writing: `VAT's ${VAT_MARKETPLACE_MARKER} marker` });
       },
     },
     label: `marketplace ${marketplaceName}`,
@@ -93,11 +103,11 @@ function keptPluginDirs(opts: PackageInstallOptions, files: RegistryFiles, repla
   return [...installing, ...staying].map(({ pluginName, marketplace }) => safePath.join(opts.paths.pluginsCacheDir, marketplace, pluginName));
 }
 
-/** Drop each replaced key from installed_plugins.json and settings.json (its marketplace stays: the package installs into it). */
+/** Drop each replaced key's user-scope record from installed_plugins.json, and its settings.json entry (its marketplace stays: the package installs into it). */
 function dropReplaced(files: RegistryFiles, keys: readonly string[]): void {
   const enabled = enabledPluginsOf(files.settings);
   for (const key of keys) {
-    delete files.installed.plugins[key];
+    dropUserInstall(files, key);
     delete enabled[key];
   }
   files.settings['enabledPlugins'] = enabled;
@@ -110,7 +120,11 @@ function dropReplaced(files: RegistryFiles, keys: readonly string[]): void {
  * {@link requirePluginInstallNames}, {@link parsePluginKey}). The changes, in order:
  * - replace `marketplaces/<marketplace>/` whole with the caller's fill plus VAT's
  *   `.vat-marketplace` marker, so a plugin dropped from the package does not survive, and the
- *   marker lands exactly with the copy;
+ *   marker lands exactly with the copy. What stands there is replaced only when it is a marketplace
+ *   VAT installed from this very installer (its marker says so; a marker that names none, or — what
+ *   every VAT before the marker left — no marker, only when known_marketplaces.json records this
+ *   installer), an empty directory, or under `force`; anything else refuses the plan
+ *   (`TREE_DEST_NOT_OWNED`), nothing changed;
  * - replace `cache/<marketplace>/<plugin>/<version>/` with each plugin's `cacheFill`;
  * - remove `cache/<marketplace>/<plugin>/` of each replaced key, KEPT where it is, or could not be
  *   ruled out to be, the same entry as a plugin directory the install writes or a registered plugin
@@ -120,7 +134,8 @@ function dropReplaced(files: RegistryFiles, keys: readonly string[]): void {
  * package also installs stays registered, as the new install.
  *
  * @throws VatError `PLUGIN_KEY_INVALID` or `CLAUDE_USER_STATE_UNREADABLE`; a `destination` fault for a
- *   registry file the OS will not read
+ *   registry file the OS will not read. The marketplace ownership refusal is the planner's
+ *   (`planTreeChanges`), which reads the marker from disk when it decides.
  */
 export function planPackageInstall(opts: PackageInstallOptions): PackageInstallPlan {
   const { marketplaces, version, source, paths } = opts;
@@ -130,12 +145,28 @@ export function planPackageInstall(opts: PackageInstallOptions): PackageInstallP
   const replacedKeys = [...new Set(opts.replacedPluginKeys)];
   const replacedNames = replacedKeys.map((pluginKey) => ({ pluginKey, ...parsePluginKey(pluginKey) }));
 
+  const installedFrom = installerIdentity(source);
+  if (installedFrom === undefined) throw new VatError(PLUGIN_KEY_INVALID_CODE, 'The install names no package, repository or URL it comes from, so nothing could later show VAT installed it.');
+
   const files = readRegistryFiles(paths);
   // Taken now, before the edit below records the new keys and drops the replaced ones: the registry as it IS.
   const kept = keptPluginDirs(opts, files, new Set(replacedKeys));
   const keepIfSameAs = (): readonly string[] => kept;
+  // Own keys only: a marketplace named `constructor` must not read `Object.prototype`.
+  const knownBefore = new Map(Object.entries(files.known));
+  const ownershipOf = (marketplaceName: string): Ownership => {
+    if (opts.force) return { kind: 'force' };
+    return {
+      kind: 'vat-made',
+      recognise: (dest) => {
+        if (isEmptyDirectory(dest)) return { owned: true };
+        const verdict = marketplaceVerdict(dest, { kind: 'installer', installedFrom }, knownBefore.get(marketplaceName));
+        return verdict.owned ? verdict : { owned: false, reason: `${verdict.reason}; it is left as it is` };
+      },
+    };
+  };
   const trees: TreeChange[] = [
-    ...marketplaces.map((marketplace) => marketplaceChange(paths, marketplace)),
+    ...marketplaces.map((marketplace) => marketplaceChange(paths, marketplace, ownershipOf(marketplace.marketplaceName), installedFrom)),
     ...marketplaces.flatMap(({ marketplaceName, plugins }) => plugins.map(({ pluginName, cacheFill }): TreeChange => ({
       op: 'replace',
       dest: pluginCacheDir(paths, { marketplaceName, pluginName, version }),

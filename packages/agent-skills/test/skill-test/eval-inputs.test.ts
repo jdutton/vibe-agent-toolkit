@@ -1,6 +1,7 @@
 import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { FS_FAULT_CODE, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { installFaultFs } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { EvalInputError, parseEvalSuite, stageEvalWorkspaces } from '../../src/skill-test/eval-inputs.js';
@@ -320,6 +321,11 @@ function setupEvalWorkspaces(): { evalsDir: string; workspacesRoot: string } {
  */
 const WITH_ONLY = { with: 'a1b2c3d4e5f60718' } as const;
 
+/** A suite of one eval (id 7) declaring the one fixture file as its input. */
+const ONE_INPUT_SUITE = { skill_name: 'demo', evals: [
+  { id: 7, prompt: 'fix', expected_output: 'fixed', files: [FIXTURES_DOC], expectations: ['ok'] },
+] };
+
 /** Stage a one-eval suite declaring `rel`, asserting it throws with no control bytes in the message. */
 async function expectStagingRejects(rel: string, id: number): Promise<void> {
   const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
@@ -350,10 +356,7 @@ describe('stageEvalWorkspaces', () => {
 
   it('copies declared files into <workspacesRoot>/<id>/ preserving structure', async () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
-    const suite = { skill_name: 'demo', evals: [
-      { id: 7, prompt: 'fix', expected_output: 'fixed', files: [FIXTURES_DOC], expectations: ['ok'] },
-    ] };
-    const returned = await stageEvalWorkspaces({ suite, evalsDir, workspacesRoot, armDirs: WITH_ONLY });
+    const returned = await stageEvalWorkspaces({ suite: ONE_INPUT_SUITE, evalsDir, workspacesRoot, armDirs: WITH_ONLY });
     expect(returned).toBe(workspacesRoot);
     expect(existsSync(safePath.join(workspacesRoot, WITH_ONLY.with, '7', FIXTURES_DOC))).toBe(true);
   });
@@ -391,6 +394,26 @@ describe('stageEvalWorkspaces', () => {
     const dir = safePath.join(workspacesRoot, WITH_ONLY.with, '2');
     expect(existsSync(dir)).toBe(true);
     expect(readdirSync(dir)).toEqual([]);
+  });
+
+  // The workspace is VAT's own scratch. A capacity or permission fault WRITING it was caught with every
+  // other failure and published as the author's eval suite being unreadable (INPUT_UNREADABLE).
+  it.each([
+    ['writing the copy of a declared input', { family: 'write' }],
+    ['making an eval\'s workspace directory', { family: 'create', op: 'mkdir' }],
+  ] as const)('classifies a full disk while %s as the ENVIRONMENT\'s fault, never as an eval input error', async (_label, where) => {
+    const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
+    const session = installFaultFs({ within: workspacesRoot, faults: [{ ...where, path: () => true, errno: 'ENOSPC' }] });
+    let failure: unknown;
+    try {
+      failure = await stageEvalWorkspaces({ suite: ONE_INPUT_SUITE, evalsDir, workspacesRoot, armDirs: WITH_ONLY }).then(() => undefined, (error: unknown) => error);
+    } finally {
+      session.restore();
+    }
+
+    expect(session.fired.length).toBeGreaterThan(0);
+    expect(failure, String(failure)).toMatchObject({ code: FS_FAULT_CODE, side: 'environment', faultClass: 'exhausted' });
+    expect(failure).not.toBeInstanceOf(EvalInputError);
   });
 
   it('throws EvalInputError when a declared file is absent', async () => {

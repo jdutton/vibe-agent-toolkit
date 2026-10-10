@@ -61,6 +61,11 @@
 # 1.31.0 (GHSA-6qxp-vccf-f47h). Each fix is inside the range its dependents
 # declare, except sharp for @huggingface/transformers' `^0.33.5`, which the
 # existing sharp pin already overrode.
+#
+# Reconciled 2026-10-09 (3 new advisories, all against handlebars 4.7.9, all
+# fixed in 4.7.10): fixed under rule 1 by moving the existing `overrides` pin
+# 4.7.9 -> 4.7.10, inside `@vibe-agent-toolkit/resources`' declared `^4.7.8`.
+# Nothing else in the lockfile moved; nothing listed.
 # ---------------------------------------------------------------------------
 
 # --- esbuild (dev-server file read) ------------------------------------------

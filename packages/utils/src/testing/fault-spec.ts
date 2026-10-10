@@ -8,8 +8,12 @@
 
 import { constants } from 'node:os';
 
-/** Every errno the injector raises (`EDQUOT` too on a host whose `os.constants.errno` lacks it: it gets `-1`). */
-export const INJECTED_ERRNOS = ['EACCES', 'EPERM', 'ENOSPC', 'EDQUOT', 'EROFS', 'EMFILE', 'ENFILE', 'ENOENT', 'EISDIR', 'ENOTDIR', 'EBUSY', 'EXDEV'] as const;
+/**
+ * Every errno the injector raises (`EDQUOT` too on a host whose `os.constants.errno` lacks it: it gets
+ * `-1`). At least one of every class of the errno table: `EEXIST` / `ENOTEMPTY` (`occupied`) are what a
+ * concurrent writer or a name collision produces, `EIO` (`device`) what a failing disk does.
+ */
+export const INJECTED_ERRNOS = ['EACCES', 'EPERM', 'ENOSPC', 'EDQUOT', 'EROFS', 'EMFILE', 'ENFILE', 'ENOENT', 'EISDIR', 'ENOTDIR', 'EBUSY', 'EXDEV', 'EEXIST', 'ENOTEMPTY', 'EIO'] as const;
 export type InjectedErrno = (typeof INJECTED_ERRNOS)[number];
 
 const FS_OP_FAMILIES = ['read', 'write', 'meta', 'list', 'remove', 'rename', 'create'] as const;
@@ -23,6 +27,16 @@ export interface FaultRule {
   /** 1-based among calls matching family / op / path. Default 1. */
   readonly nth?: number;
   readonly errno: InjectedErrno;
+  /**
+   * Also fail every IMMEDIATE repeat of the call the rule failed — the same operation on the same
+   * paths, no other traced call between: what a retry is. The repeats are not matches of their own,
+   * so `nth` numbers the same calls whoever retries.
+   *
+   * Without it a rule fails exactly one call, and a caller that retries turns that into a success:
+   * under win32 every tree-change rename is retried on `EACCES`, `EPERM` and `EBUSY`. A test that
+   * means "this rename is refused" sets it, and then asks the same thing on every platform.
+   */
+  readonly everyTry?: boolean;
 }
 
 /**

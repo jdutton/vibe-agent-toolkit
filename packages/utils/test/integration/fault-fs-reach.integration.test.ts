@@ -238,4 +238,57 @@ describe('installFaultFs rewrites stat results and counts nth', () => {
     namedWriteFileSync(safePath.join(root, 'c'), '3');
     expect(session.fired.map((c) => safePath.relative(root, c.path))).toEqual(['b']);
   });
+
+  // A caller that retries (a rename under win32, on contention) turns ONE injected refusal into a
+  // success. `everyTry` is how a test says "this call is refused", whoever retries it.
+  describe('everyTry', () => {
+    const refusedRename = expect.objectContaining({ code: 'EBUSY' });
+    /** Files `a` and `c` (no `b`) in a fresh root, with one rule refusing a rename `EBUSY` installed. */
+    const refusingRename = (rule: { nth?: number; everyTry?: boolean }): { a: string; b: string; c: string } => {
+      const root = scratch.create();
+      const paths = { a: safePath.join(root, 'a'), b: safePath.join(root, 'b'), c: safePath.join(root, 'c') };
+      namedWriteFileSync(paths.a, '1');
+      namedWriteFileSync(paths.c, '3');
+      session = installFaultFs({ within: root, faults: [{ family: 'rename', path: () => true, errno: 'EBUSY', ...rule }] });
+      return paths;
+    };
+
+    it('fails every immediate repeat of the call it failed, and counts them as the one match', () => {
+      const { a, b, c } = refusingRename({ everyTry: true });
+
+      for (let attempt = 0; attempt < 6; attempt++) expect(() => nodeFs.renameSync(a, b)).toThrow(refusedRename);
+      // A different call ends the run: the rule has fired, and fails nothing else.
+      nodeFs.renameSync(c, b);
+      nodeFs.renameSync(a, c);
+
+      expect(session?.fired).toHaveLength(6);
+      expect(nodeFs.readFileSync(c, 'utf8')).toBe('1');
+    });
+
+    it('a traced call between two tries ends the run: the second try is a new call', () => {
+      const { a, b, c } = refusingRename({ everyTry: true });
+
+      expect(() => nodeFs.renameSync(a, b)).toThrow(refusedRename);
+      nodeFs.statSync(c);
+      nodeFs.renameSync(a, b);
+
+      expect(session?.fired).toHaveLength(1);
+    });
+
+    it('holds nth numbering still: the retries of the failed call are not matches of their own', () => {
+      const { a, b, c } = refusingRename({ nth: 2, everyTry: true });
+
+      nodeFs.renameSync(a, b);
+      expect(() => nodeFs.renameSync(c, a)).toThrow(refusedRename);
+      expect(() => nodeFs.renameSync(c, a)).toThrow(refusedRename);
+      nodeFs.renameSync(b, a);
+    });
+
+    it('without it, a rule fails exactly one call', () => {
+      const { a, b } = refusingRename({});
+
+      expect(() => nodeFs.renameSync(a, b)).toThrow(refusedRename);
+      nodeFs.renameSync(a, b);
+    });
+  });
 });

@@ -1,7 +1,7 @@
 import os from 'node:os';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   scopeLocationsFor,
@@ -11,6 +11,13 @@ import {
 
 describe('scope-locations', () => {
   const AGENT_SKILL = 'agent-skill';
+
+  // The shared setup's guard (a Claude directory outside the temp tree throws) is lifted for THIS
+  // suite, and said so: it computes where a scope would be — the real home's among them — and reads
+  // or writes nothing there.
+  beforeEach(() => {
+    vi.stubEnv('VAT_TEST_USER_STATE_UNDER', '');
+  });
 
   afterEach(() => {
     vi.unstubAllEnvs();

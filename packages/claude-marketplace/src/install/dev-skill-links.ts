@@ -24,6 +24,8 @@ export interface DevSkillLink {
  */
 export async function linkDevSkills(into: string, links: readonly DevSkillLink[]): Promise<void> {
   const skillsDir = safePath.join(into, 'skills');
-  await fs.mkdir(skillsDir, { recursive: true });
+  // Plain, not recursive: `into` is the copy just made, and nothing may stand at `skills` in it — the
+  // copy leaves that name out. A recursive `mkdir` would adopt a link there and link through it.
+  await fs.mkdir(skillsDir);
   await forEachInOrder(links, ({ name, target }) => fs.symlink(target, safePath.join(skillsDir, name), 'dir'));
 }

@@ -6,9 +6,8 @@
  * directory ready to be committed to the publish branch.
  */
 
-import { writeFile } from 'node:fs/promises';
 
-import { copyTree, safePath, withFsFault } from '@vibe-agent-toolkit/utils';
+import { copyTree, safePath, withFsFault, writeFileUnder } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from '../../../utils/command-refusal.js';
 import { configNamedFileAbsent, readInputFile, requireInputPath } from '../../../utils/project-root-policy.js';
@@ -178,10 +177,16 @@ function isMarketplaceManifest(value: unknown): value is { plugins?: PublishedPl
   return plugins === undefined || (Array.isArray(plugins) && plugins.every(isRecord));
 }
 
-/** Write one file into the publish tree VAT stages in the temp directory: a fault is the `environment`'s. */
+/**
+ * Write one file VAT composes into the publish tree it stages in the temp directory: a fault is the
+ * `environment`'s. The tree was copied from the build with its links kept, so the write never goes
+ * over or through a link there (`writeFileUnder`); a regular file of that name the build shipped is
+ * replaced — the composed one is the published one.
+ */
 function writeStaged(outputDir: string, name: string, content: string): Promise<void> {
   const target = safePath.join(outputDir, name);
-  return withFsFault({ side: 'environment', action: `write ${name} into the publish tree`, path: target }, () => writeFile(target, content));
+  return withFsFault({ side: 'environment', action: `write ${name} into the publish tree`, path: target }, () =>
+    writeFileUnder(outputDir, name, content, { existing: 'replace', writing: `${name} of the publish tree` }));
 }
 
 /**
@@ -206,7 +211,7 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
   // reads, links kept as links); the copy lands in VAT's own staging (an `environment` write).
   await withFsFault(
     { side: 'environment', action: `copy the marketplace build into ${outputDir}` },
-    () => copyTree(buildDir, outputDir, { links: 'preserve', side: 'source' }),
+    () => copyTree(buildDir, outputDir, { links: 'preserve', side: 'source', onto: 'fresh' }),
   );
   files.push('.claude-plugin/marketplace.json', 'plugins/');
 

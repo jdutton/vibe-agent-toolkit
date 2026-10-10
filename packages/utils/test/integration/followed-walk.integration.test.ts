@@ -20,7 +20,7 @@ import { type HostileTree, hostileTreePerTest } from '../../src/testing/hostile-
 import { copyTree } from '../../src/tree-change/copy-tree.js';
 import { CopyLinkEscapesSourceError, DirectoryWalkRevisitedError, FollowedWalk } from '../../src/tree-change/followed-walk.js';
 
-const FOLLOW = { links: 'follow-contained', side: 'source' } as const;
+const FOLLOW = { links: 'follow-contained', side: 'source', onto: 'fresh' } as const;
 
 let session: FaultFsSession | undefined;
 afterEach(() => {

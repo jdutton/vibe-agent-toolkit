@@ -33,8 +33,8 @@ afterEach(async () => {
   scratch.cleanupAll();
 });
 
-const FOLLOW = { links: 'follow-contained', side: 'source' } as const;
-const PRESERVE = { links: 'preserve', side: 'source' } as const;
+const FOLLOW = { links: 'follow-contained', side: 'source', onto: 'fresh' } as const;
+const PRESERVE = { links: 'preserve', side: 'source', onto: 'fresh' } as const;
 const SUBDIR = 'subdir';
 const NESTED_TXT = 'nested.txt';
 const NESTED_CONTENT = 'nested content';

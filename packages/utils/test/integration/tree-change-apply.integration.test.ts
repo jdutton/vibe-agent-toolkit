@@ -273,7 +273,7 @@ describe('applyTreePlan — every step failing leaves the tree as it was', () =>
     const oldMp = subtree(snapshotTree(root), 'mp');
     const plan = await planTreeChanges([replaceMp]);
     // The park's rename names `.previous` as its target (1st); putting it back names it as its source (2nd).
-    const error = await suite.failApply(root, plan, [{ family: 'rename', path: (p) => p.endsWith('.previous'), nth: 2, errno: 'EACCES' }], { afterSwap: () => Promise.reject(new Error('registry')) });
+    const error = await suite.failApply(root, plan, [{ family: 'rename', path: (p) => p.endsWith('.previous'), nth: 2, errno: 'EACCES', everyTry: true }], { afterSwap: () => Promise.reject(new Error('registry')) });
 
     expect(isVatError(error, TREE_ROLLBACK_INCOMPLETE_CODE)).toBe(true);
     const [parked, ...others] = residueIn(root).filter((name) => name.endsWith('.previous'));

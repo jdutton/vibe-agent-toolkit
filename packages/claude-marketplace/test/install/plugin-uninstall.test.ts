@@ -10,9 +10,9 @@ import { CANNOT_DENY_READS, diffSnapshots, type FaultRule, refuseSyncFs, snapsho
 import { describe, expect, it } from 'vitest';
 
 import { CLAUDE_USER_STATE_UNREADABLE_CODE, PLUGIN_KEY_INVALID_CODE, VAT_MARKETPLACE_MARKER } from '../../src/install/plugin-registry.js';
-import { findPluginsByPackage, parsePluginKey, planPluginUninstall, type UninstallPluginResult, uninstallPlugins } from '../../src/install/plugin-uninstall.js';
+import { findPluginsByPackage, parsePluginKey, planPluginUninstall, type UninstallAuthority, type UninstallPluginResult, uninstallPlugins } from '../../src/install/plugin-uninstall.js';
 import type { ClaudeUserPaths } from '../../src/paths/claude-paths.js';
-import { rejectionOf, setupPluginTestPaths, stagedWriteOf, underFaults } from '../test-helpers.js';
+import { refusedRegistryWrite, rejectionOf, setupPluginTestPaths, underFaults } from '../test-helpers.js';
 
 function setupInstalledPlugin(
   paths: ClaudeUserPaths,
@@ -53,9 +53,12 @@ function setupInstalledPlugin(
   writeFileSync(safePath.join(paths.marketplacesDir, marketplace, VAT_MARKETPLACE_MARKER), 'vat\n');
 }
 
+/** The authority of a key the user named: VAT's marker alone. */
+const MARKER: UninstallAuthority = { kind: 'marker' };
+
 /** Uninstall one key: the single result of a one-key transaction. */
-async function uninstallPlugin(opts: { pluginKey: string; paths: ClaudeUserPaths; dryRun?: boolean }): Promise<UninstallPluginResult> {
-  const { results: [result], leftover } = await uninstallPlugins({ pluginKeys: [opts.pluginKey], paths: opts.paths, ...(opts.dryRun === undefined ? {} : { dryRun: opts.dryRun }) });
+async function uninstallPlugin(opts: { pluginKey: string; paths: ClaudeUserPaths; dryRun?: boolean; authority?: UninstallAuthority }): Promise<UninstallPluginResult> {
+  const { results: [result], leftover } = await uninstallPlugins({ pluginKeys: [opts.pluginKey], paths: opts.paths, authority: opts.authority ?? MARKER, ...(opts.dryRun === undefined ? {} : { dryRun: opts.dryRun }) });
   if (leftover !== undefined) throw leftover;
   if (result === undefined) throw new Error('uninstallPlugins returned no result for its one key');
   return result;
@@ -120,7 +123,7 @@ describe('uninstallPlugin', () => {
     setupInstalledPlugin(paths, 'my-skill', 'my-market', '@test/pkg');
     const before = snapshotTree(paths.claudeDir);
 
-    const { changes } = await uninstallPlugins({ pluginKeys: ['my-skill@my-market'], paths, dryRun: true });
+    const { changes } = await uninstallPlugins({ pluginKeys: ['my-skill@my-market'], paths, authority: MARKER, dryRun: true });
 
     expect(changes).toEqual([
       `subsumed marketplace copy of my-skill@my-market ${safePath.join(paths.marketplacesDir, 'my-market', 'plugins', 'my-skill')} (parked by remove marketplace my-market)`,
@@ -138,7 +141,7 @@ describe('uninstallPlugin', () => {
     const parkedCache = (p: string): boolean => p.includes('/.my-skill.vat-staged-') && p.endsWith('.previous');
 
     const outcome = await underFaults(caseRoot(paths), { faults: [{ family: 'remove', op: 'rm', path: parkedCache, errno: 'EBUSY' }] }, () =>
-      uninstallPlugins({ pluginKeys: ['my-skill@my-market'], paths }));
+      uninstallPlugins({ pluginKeys: ['my-skill@my-market'], paths, authority: MARKER }));
 
     expect(outcome.results).toMatchObject([{ removed: true, artifacts: { cacheDir: true, installedPlugins: true } }]);
     expect(outcome.leftover, String(outcome.leftover)).toMatchObject({ code: FS_FAULT_CODE, side: 'destination', errno: 'EBUSY' });
@@ -147,29 +150,81 @@ describe('uninstallPlugin', () => {
     expect(existsSync(safePath.join(paths.pluginsCacheDir, 'my-market', 'my-skill'))).toBe(false);
   });
 
-  // A marketplace Claude Code added (a github clone) is the user's: VAT's last plugin of it going
-  // must not take the clone, nor its known_marketplaces.json entry.
-  // Claude Code registers marketplaces of every source — npm included — so the source proves nothing.
-  // Only VAT's marker does: an unmarked marketplace (a Claude Code one, or one an older VAT installed
-  // before the marker existed) is the user's, and its directory and entry stay.
+  // Ruling R1: VAT removes only what it can prove it installed. Claude Code registers marketplaces of
+  // every source — npm included — so the source proves nothing; only VAT's marker does. A plugin in an
+  // unmarked marketplace is the user's: its directory inside the clone, its cache, its registry records
+  // (user AND project scope) and its settings entry all stay, and the result says why.
   it.for([
     ['a github clone', { source: 'github', repo: 'o/r' }],
     ['an npm marketplace Claude Code registered', { source: 'npm', package: '@someone/mp' }],
-  ] as const)('keeps a marketplace with no VAT marker — %s — directory and entry, saying why, when its last plugin goes', async ([, source]) => {
+  ] as const)('leaves a plugin of a marketplace with no VAT marker — %s — exactly as it is, saying why', async ([, source]) => {
     const paths = getPaths();
-    setupInstalledPlugin(paths, 'my-skill', 'their-market', '@test/pkg');
-    writeFileSync(paths.knownMarketplacesPath, JSON.stringify({ 'their-market': { source, installLocation: '', lastUpdated: '' } }));
-    const clone = safePath.join(paths.marketplacesDir, 'their-market');
-    rmSync(safePath.join(clone, VAT_MARKETPLACE_MARKER));
-    writeFileSync(safePath.join(clone, 'README.md'), 'the user\'s marketplace');
+    const clone = foreignPlugin(paths, source);
+    const before = snapshotTree(paths.claudeDir);
 
     const result = await uninstallPlugin({ pluginKey: 'my-skill@their-market', paths });
 
-    expect(readFileSync(safePath.join(clone, 'README.md'), 'utf-8')).toBe('the user\'s marketplace');
-    expect(existsSync(safePath.join(clone, 'plugins', 'my-skill'))).toBe(false);
-    expect(Object.keys(JSON.parse(readFileSync(paths.knownMarketplacesPath, 'utf-8')))).toEqual(['their-market']);
-    expect(result.artifacts).toMatchObject({ pluginDir: true, marketplaceDir: false, knownMarketplaces: false });
-    expect(result.warning).toContain(`no ${VAT_MARKETPLACE_MARKER} marker`);
+    expect(diffSnapshots(before, snapshotTree(paths.claudeDir))).toEqual([]);
+    expect(result).toMatchObject({ removed: false, artifacts: { pluginDir: false, cacheDir: false, marketplaceDir: false, installedPlugins: false, knownMarketplaces: false, settings: false } });
+    expect(result.notVats).toContain(`no ${VAT_MARKETPLACE_MARKER} marker`);
+    expect(result.notVats).toContain('--force');
+    expect(existsSync(safePath.join(clone, 'plugins', 'my-skill', 'SKILL.md'))).toBe(true);
+  });
+
+  it('--force is the one way past: the plugin of an unmarked marketplace is removed, with the marketplace its last plugin leaves', async () => {
+    const paths = getPaths();
+    const clone = foreignPlugin(paths, { source: 'github', repo: 'o/r' }, 'user-only');
+
+    const result = await uninstallPlugin({ pluginKey: 'my-skill@their-market', paths, authority: { kind: 'force' } });
+
+    expect(result).toMatchObject({ removed: true, artifacts: { pluginDir: true, cacheDir: true, marketplaceDir: true, installedPlugins: true } });
+    expect(existsSync(clone)).toBe(false);
+  });
+
+  // `--all` answers for a package: what every VAT before the marker left is an unmarked marketplace
+  // whose registry entry names that package — and only that package's word takes it.
+  it.for([
+    ['the package the registry records', '@test/pkg', true],
+    ['another package', '@test/other', false],
+  ] as const)('under package authority, an unmarked marketplace goes on the word of %s only', async ([, name, goes]) => {
+    const paths = getPaths();
+    const clone = foreignPlugin(paths, { source: 'npm', package: '@test/pkg', version: '1.0.0' }, 'user-only');
+
+    const result = await uninstallPlugin({ pluginKey: 'my-skill@their-market', paths, authority: { kind: 'package', name } });
+
+    expect(result.removed).toBe(goes);
+    expect(existsSync(clone)).toBe(!goes);
+  });
+
+  it('under package authority, a marker that names ANOTHER package keeps the plugin', async () => {
+    const paths = getPaths();
+    setupInstalledPlugin(paths, 'my-skill', 'my-market', '@test/pkg');
+    writeFileSync(safePath.join(paths.marketplacesDir, 'my-market', VAT_MARKETPLACE_MARKER), 'installed-from: "npm:@test/first"\n');
+
+    const result = await uninstallPlugin({ pluginKey: 'my-skill@my-market', paths, authority: { kind: 'package', name: '@test/pkg' } });
+
+    expect(result.removed).toBe(false);
+    expect(result.notVats).toContain('npm:@test/first');
+    expect(existsSync(safePath.join(paths.marketplacesDir, 'my-market', 'plugins', 'my-skill'))).toBe(true);
+  });
+
+  // One record per scope: a project-scope install Claude Code made of the same key still uses the
+  // directories, so only VAT's user-scope record and the user settings entry go.
+  it('removes only the user-scope record of a key Claude Code also installed at project scope, keeping its directories', async () => {
+    const paths = getPaths();
+    setupInstalledPlugin(paths, 'my-skill', 'my-market', '@test/pkg');
+    const projectScope = { scope: 'project', projectPath: '/work/repo', installPath: '/x', version: '1.0.0', installedAt: '', lastUpdated: '' };
+    const ip = JSON.parse(readFileSync(paths.installedPluginsPath, 'utf-8'));
+    ip.plugins['my-skill@my-market'].push(projectScope);
+    writeFileSync(paths.installedPluginsPath, JSON.stringify(ip));
+
+    const result = await uninstallPlugin({ pluginKey: 'my-skill@my-market', paths });
+
+    expect(JSON.parse(readFileSync(paths.installedPluginsPath, 'utf-8')).plugins).toEqual({ 'my-skill@my-market': [projectScope] });
+    expect(existsSync(safePath.join(paths.marketplacesDir, 'my-market', 'plugins', 'my-skill', 'SKILL.md'))).toBe(true);
+    expect(existsSync(safePath.join(paths.pluginsCacheDir, 'my-market', 'my-skill', '1.0.0', 'SKILL.md'))).toBe(true);
+    expect(result).toMatchObject({ removed: true, artifacts: { pluginDir: false, cacheDir: false, marketplaceDir: false, installedPlugins: true, settings: true } });
+    expect(result.warning).toContain('1 other scope');
   });
 
   // The marker is the target's own: a probe of it the OS refuses (or answers ENOENT while it is listed)
@@ -181,7 +236,7 @@ describe('uninstallPlugin', () => {
     const before = snapshotTree(paths.claudeDir);
 
     const thrown = await underFaults(caseRoot(paths), { faults: [{ op: 'lstat', path: (p) => p === marker, errno }] }, () =>
-      rejectionOf(() => uninstallPlugins({ pluginKeys: ['my-skill@my-market'], paths })));
+      rejectionOf(() => uninstallPlugins({ pluginKeys: ['my-skill@my-market'], paths, authority: MARKER })));
 
     expect(thrown, String(thrown)).toMatchObject({ code: FS_FAULT_CODE, side: 'destination', errno, path: marker });
     expect(diffSnapshots(before, snapshotTree(paths.claudeDir))).toEqual([]);
@@ -216,7 +271,7 @@ describe('uninstallPlugin', () => {
       setupInstalledPlugin(paths, 'my-skill', 'my-market', '@test/pkg');
       const before = snapshotTree(paths.claudeDir);
 
-      const thrown = await underFaults(caseRoot(paths), { faults: [{ family: 'rename', path: stagedWriteOf(paths[file]), errno: 'EACCES' }] }, () =>
+      const thrown = await underFaults(caseRoot(paths), { faults: [refusedRegistryWrite(paths[file], 'EACCES')] }, () =>
         rejectionOf(() => uninstallPlugin({ pluginKey: 'my-skill@my-market', paths })));
 
       expect(thrown, String(thrown)).toMatchObject({ code: FS_FAULT_CODE, side: 'destination', faultClass: 'refused' });
@@ -234,9 +289,9 @@ describe('uninstallPlugin', () => {
 
     const thrown = await underFaults(caseRoot(paths), {
       faults: [
-        { family: 'rename', path: stagedWriteOf(paths.userSettingsPath), errno: 'EACCES' },
-        // The second rename of installed_plugins.json's temp is its restore.
-        { family: 'rename', path: stagedWriteOf(paths.installedPluginsPath), nth: 2, errno: 'EACCES' },
+        refusedRegistryWrite(paths.userSettingsPath, 'EACCES'),
+        // The second write of installed_plugins.json is its restore.
+        refusedRegistryWrite(paths.installedPluginsPath, 'EACCES', 2),
       ],
     }, () => rejectionOf(() => uninstallPlugin({ pluginKey: 'my-skill@my-market', paths })));
 
@@ -264,29 +319,42 @@ describe('uninstallPlugin', () => {
     // touching the first key; key-by-key, the first was already gone.
     const bCache = safePath.join(paths.pluginsCacheDir, 'mp', 'b');
     const thrown = await underFaults(caseRoot(paths), { faults: [{ op: 'lstat', path: (p) => p === bCache, errno: 'EACCES' }] }, () =>
-      rejectionOf(() => uninstallPlugins({ pluginKeys: keys, paths })));
+      rejectionOf(() => uninstallPlugins({ pluginKeys: keys, paths, authority: MARKER })));
     expect(thrown, String(thrown)).toMatchObject({ code: FS_FAULT_CODE, side: 'destination' });
     expect(diffSnapshots(before, snapshotTree(paths.claudeDir))).toEqual([]);
 
-    const { results } = await uninstallPlugins({ pluginKeys: keys, paths });
+    const { results } = await uninstallPlugins({ pluginKeys: keys, paths, authority: MARKER });
     expect(results.map((r) => r.removed)).toEqual([true, true]);
     expect(existsSync(safePath.join(paths.marketplacesDir, 'mp'))).toBe(false);
     expect(JSON.parse(readFileSync(paths.installedPluginsPath, 'utf-8')).plugins).toEqual({});
     expect(JSON.parse(readFileSync(paths.knownMarketplacesPath, 'utf-8'))).toEqual({});
   });
 
-  // A known marketplace whose directory is already gone has nothing on disk to disagree with:
-  // its entry goes with its last plugin.
-  // A directory that is gone carries no marker: nothing shows VAT made the entry, so it is not VAT's to drop.
-  it('keeps the known entry of a marketplace whose directory is already gone: nothing marks it VAT\'s', async () => {
+  // A directory that is gone carries no marker: nothing shows VAT made what is left of the plugin
+  // (its cache, its entries), so a key the user named leaves all of it — and says so.
+  it('leaves a plugin whose marketplace directory is already gone: nothing marks it VAT\'s', async () => {
+    const paths = getPaths();
+    setupInstalledPlugin(paths, 'my-skill', 'my-market', '@test/pkg');
+    rmSync(safePath.join(paths.marketplacesDir, 'my-market'), { recursive: true });
+    const before = snapshotTree(paths.claudeDir);
+
+    const result = await uninstallPlugin({ pluginKey: 'my-skill@my-market', paths });
+
+    expect(result.removed).toBe(false);
+    expect(result.notVats).toContain('is not there');
+    expect(diffSnapshots(before, snapshotTree(paths.claudeDir))).toEqual([]);
+  });
+
+  // …while the package the registry records can still vouch for it (`--all`): the cache and the entries go.
+  it('under package authority, cleans up a plugin whose marketplace directory is gone when the registry records that package', async () => {
     const paths = getPaths();
     setupInstalledPlugin(paths, 'my-skill', 'my-market', '@test/pkg');
     rmSync(safePath.join(paths.marketplacesDir, 'my-market'), { recursive: true });
 
-    const result = await uninstallPlugin({ pluginKey: 'my-skill@my-market', paths });
+    const result = await uninstallPlugin({ pluginKey: 'my-skill@my-market', paths, authority: { kind: 'package', name: '@test/pkg' } });
 
-    expect(result.artifacts).toMatchObject({ marketplaceDir: false, knownMarketplaces: false, cacheDir: true });
-    expect(Object.keys(JSON.parse(readFileSync(paths.knownMarketplacesPath, 'utf-8')))).toEqual(['my-market']);
+    expect(result.artifacts).toMatchObject({ cacheDir: true, installedPlugins: true, knownMarketplaces: true });
+    expect(JSON.parse(readFileSync(paths.knownMarketplacesPath, 'utf-8'))).toEqual({});
   });
 
   // An older VAT build copied a read-only plugin's modes into ~/.claude: a tree its owner cannot
@@ -311,29 +379,61 @@ describe('uninstallPlugin', () => {
     expect(existsSync(safePath.join(paths.marketplacesDir, 'my-market'))).toBe(false);
   });
 
-  it('warns and cleans if plugin dir exists but not in registry', async () => {
+  it('warns and cleans a plugin directory no registry recorded, inside a marketplace VAT installed', async () => {
     const paths = getPaths();
-    // Only artifact 1 (dir) exists — not VAT-installed
-    const mpPluginDir = safePath.join(paths.marketplacesDir, 'my-market', 'plugins', 'orphan');
-    mkdirSyncReal(mpPluginDir, { recursive: true });
+    const mpPluginDir = orphanPlugin(paths, true);
     const result = await uninstallPlugin({ pluginKey: 'orphan@my-market', paths });
     expect(result.removed).toBe(true);
-    expect(result.warning).toContain('not installed via VAT');
+    expect(result.warning).toContain('no registry recorded it');
     expect(existsSync(mpPluginDir)).toBe(false);
+  });
+
+  // A path existing is not proof: the same directory in a marketplace with no marker is the user's.
+  it('leaves a plugin directory no registry recorded when its marketplace is not VAT\'s', async () => {
+    const paths = getPaths();
+    const mpPluginDir = orphanPlugin(paths, false);
+    const result = await uninstallPlugin({ pluginKey: 'orphan@my-market', paths });
+    expect(result.removed).toBe(false);
+    expect(result.notVats).toContain(`no ${VAT_MARKETPLACE_MARKER} marker`);
+    expect(existsSync(mpPluginDir)).toBe(true);
   });
 
   it('a dry-run over an orphan says the directory WOULD be removed, never that it is cleaning up', async () => {
     const paths = getPaths();
-    const mpPluginDir = safePath.join(paths.marketplacesDir, 'my-market', 'plugins', 'orphan');
-    mkdirSyncReal(mpPluginDir, { recursive: true });
+    const mpPluginDir = orphanPlugin(paths, true);
     const result = await uninstallPlugin({ pluginKey: 'orphan@my-market', paths, dryRun: true });
     expect(result.removed).toBe(true);
-    expect(result.warning).toContain('not installed via VAT');
+    expect(result.warning).toContain('no registry recorded it');
     expect(result.warning).toContain('would be removed');
     expect(result.warning).not.toContain('cleaning up');
     expect(existsSync(mpPluginDir)).toBe(true);
   });
 });
+
+/**
+ * `my-skill@their-market` as Claude Code installs a plugin of a marketplace it added: the marketplace a
+ * clone with the user's own file and no VAT marker, registered under `source`, the key at user AND project scope.
+ */
+function foreignPlugin(paths: ClaudeUserPaths, source: Record<string, unknown>, scopes: 'user-and-project' | 'user-only' = 'user-and-project'): string {
+  setupInstalledPlugin(paths, 'my-skill', 'their-market', '@test/pkg');
+  writeFileSync(paths.knownMarketplacesPath, JSON.stringify({ 'their-market': { source, installLocation: '', lastUpdated: '' } }));
+  const clone = safePath.join(paths.marketplacesDir, 'their-market');
+  rmSync(safePath.join(clone, VAT_MARKETPLACE_MARKER));
+  writeFileSync(safePath.join(clone, 'README.md'), 'the user\'s marketplace');
+  if (scopes === 'user-only') return clone;
+  const ip = JSON.parse(readFileSync(paths.installedPluginsPath, 'utf-8'));
+  ip.plugins['my-skill@their-market'].push({ scope: 'project', projectPath: '/work/repo', installPath: '/x', version: '1.0.0', installedAt: '', lastUpdated: '' });
+  writeFileSync(paths.installedPluginsPath, JSON.stringify(ip));
+  return clone;
+}
+
+/** A plugin directory no registry recorded, inside a marketplace that is (`marked`) or is not VAT's. */
+function orphanPlugin(paths: ClaudeUserPaths, marked: boolean): string {
+  const mpPluginDir = safePath.join(paths.marketplacesDir, 'my-market', 'plugins', 'orphan');
+  mkdirSyncReal(mpPluginDir, { recursive: true });
+  if (marked) writeFileSync(safePath.join(paths.marketplacesDir, 'my-market', VAT_MARKETPLACE_MARKER), 'vat\n');
+  return mpPluginDir;
+}
 
 /** Add `pluginKey` to the registry, its install path `installPath`. */
 function registerKey(paths: ClaudeUserPaths, pluginKey: string, installPath: string): void {
@@ -478,7 +578,7 @@ describe('uninstallPlugin never removes a directory another registered plugin is
     const kept = safePath.join(paths.pluginsCacheDir, 'mp2', 'other');
     const refuseSibling: FaultRule[] = [{ op: 'lstat', path: (p) => p === sibling, errno: 'EACCES' }];
 
-    const { plan } = await underFaults(caseRoot(paths), { faults: refuseSibling }, () => planPluginUninstall({ pluginKeys: ['other@mp2'], paths }));
+    const { plan } = await underFaults(caseRoot(paths), { faults: refuseSibling }, () => planPluginUninstall({ pluginKeys: ['other@mp2'], paths, authority: MARKER }));
     expect(plan.changes.find((c) => c.change.dest === kept)).toMatchObject({ action: 'keep', reason: expect.stringContaining(sibling) as unknown });
 
     let touched: string[] = [];

@@ -68,5 +68,5 @@ export async function copyTreeIntoMarketplace(
   // Every file of it, links kept as links: a refusal names the entry the OS refused.
   const walk = { links: 'preserve', side: source.side } as const;
   await proveTreeReadable(source.path, walk);
-  await writingMarketplace(`copy ${sourceLabel} into ${targetLabel}`, () => copyTree(source.path, target, walk));
+  await writingMarketplace(`copy ${sourceLabel} into ${targetLabel}`, () => copyTree(source.path, target, { ...walk, onto: 'fresh' }));
 }

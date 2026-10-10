@@ -2,11 +2,14 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
-import { applyTreePlan, isPathAbsentError, planTreeChanges, safePath } from '@vibe-agent-toolkit/utils';
+import { applyTreePlan, isPathAbsentError, pathPresent, planTreeChanges, safePath } from '@vibe-agent-toolkit/utils';
 import { stringify as stringifyYaml } from 'yaml';
 
 import { parseFrontmatter } from './parsers/frontmatter-parser.js';
 import { AgentSkillFrontmatterSchema, VATAgentSkillFrontmatterSchema } from './schemas/agent-skill-frontmatter.js';
+
+/** The manifest an import writes, and what it is called in every message. */
+const AGENT_YAML = 'agent.yaml';
 
 export interface ImportOptions {
   /**
@@ -21,9 +24,9 @@ export interface ImportOptions {
   outputPath?: string;
 
   /**
-   * Replace whatever is at the output (`--force`). Default `false`: anything there but an
-   * empty directory is refused (`TREE_DEST_OCCUPIED`, thrown by the plan before anything
-   * is written) and left as it was.
+   * Overwrite the FILE at the output (`--force`). Default `false`: anything there is refused
+   * (`TREE_DEST_OCCUPIED`, thrown by the plan before anything is written) and left as it was.
+   * A directory at the output is refused either way (`USAGE_INVALID`): a file never replaces one.
    */
   force?: boolean;
 }
@@ -40,7 +43,8 @@ export interface ImportError {
    * Which refusal this is, decided where it was raised: a SKILL.md that is not
    * there is the invocation's mistake (`USAGE_INVALID`); a SKILL.md the OS will
    * not read, or whose frontmatter no Agent Skills schema accepts, is the
-   * input's (`INPUT_UNREADABLE`). What the write's plan refuses is not an
+   * input's (`INPUT_UNREADABLE`); an output that is a directory is the invocation's
+   * (`USAGE_INVALID`), `force` or not. What the write's plan refuses is not an
    * `ImportError`: it is thrown — an agent.yaml already there without `force`
    * as `TREE_DEST_OCCUPIED`, a destination the OS will not examine or write as
    * a classified `destination` fault (`FsFaultError`, `RUN_INCOMPLETE`).
@@ -110,7 +114,17 @@ export async function importSkillToAgent(options: ImportOptions): Promise<Import
   }
 
   // Determine output path
-  const agentPath = outputPath ?? safePath.join(path.dirname(skillPath), 'agent.yaml');
+  const agentPath = outputPath ?? safePath.join(path.dirname(skillPath), AGENT_YAML);
+
+  // A file is never written over a directory, `force` or not (the plan refuses it too): said here in
+  // the output's own words, because `--force` is no remedy for it.
+  if (pathPresent(agentPath, 'follow', 'destination', 'probe') && fs.statSync(agentPath).isDirectory()) {
+    return {
+      success: false,
+      error: `Cannot write agent.yaml: ${agentPath} is a directory. Name the file to write, such as ${safePath.join(agentPath, AGENT_YAML)}.`,
+      refusal: 'USAGE_INVALID',
+    };
+  }
 
   // Build agent.yaml structure
   const agentManifest = buildAgentManifest(frontmatter);
@@ -125,7 +139,7 @@ export async function importSkillToAgent(options: ImportOptions): Promise<Import
     dest: agentPath,
     ownership: force ? { kind: 'force' } : { kind: 'must-be-free' },
     contents: yamlContent,
-    label: 'agent.yaml',
+    label: AGENT_YAML,
   }]);
   await applyTreePlan(plan);
   return { success: true, agentPath };

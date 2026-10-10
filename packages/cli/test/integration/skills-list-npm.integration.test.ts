@@ -26,6 +26,7 @@ async function buildFakeTarball(
   skillName: string,
   subdirName: string,
   declaredName: string = skillName,
+  alsoPlant: (distSkillsDir: string) => void = () => undefined,
 ): Promise<string> {
   const pkgDir = safePath.join(tempDir, subdirName, 'package');
   const skillDir = safePath.join(pkgDir, 'dist', 'skills', skillName);
@@ -40,6 +41,8 @@ async function buildFakeTarball(
     JSON.stringify({ name: subdirName, version: '1.0.0' }),
     'utf-8',
   );
+
+  alsoPlant(safePath.join(pkgDir, 'dist', 'skills'));
 
   const tarModule = await import('tar');
   const tarballPath = safePath.join(tempDir, `${subdirName}-1.0.0.tgz`);
@@ -85,6 +88,21 @@ describe('vat skills list — npm source', () => {
     const report = await runListCommand(tarballPath);
 
     expect(report.data?.skills.map((skill) => skill.name)).toStrictEqual(['modern-name']);
+  });
+
+  // What `vat skills build --skill x` leaves beside a skill when it is interrupted mid-swap, or when a
+  // parked previous bundle could not be deleted: `vat skills install` skips it, so the preview must too.
+  it('never lists a tree-change leftover beside a skill as a second skill', async () => {
+    const tarballPath = await buildFakeTarball(tempDir, 'good', 'fake-residue', 'good', (distSkillsDir) => {
+      for (const residue of ['.good.vat-staged-deadbeef', '.good.vat-staged-0a1b2c3d.previous']) {
+        mkdirSyncReal(safePath.join(distSkillsDir, residue), { recursive: true });
+        writeFileSync(safePath.join(distSkillsDir, residue, 'SKILL.md'), '---\nname: good\ndescription: A leftover.\n---\n', 'utf-8');
+      }
+    });
+
+    const report = await runListCommand(tarballPath);
+
+    expect(report.data?.skills.map((skill) => skill.name)).toStrictEqual(['good']);
   });
 
   it('reports zero skills when tgz dist/skills/ is empty', async () => {

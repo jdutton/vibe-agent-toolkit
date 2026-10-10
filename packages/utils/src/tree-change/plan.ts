@@ -25,10 +25,12 @@
  * 4. **Ownership** of whatever is there: `must-be-free` refuses anything but an
  *    empty directory ({@link TREE_DEST_OCCUPIED_CODE}); `vat-made` refuses what its
  *    `recognise` disowns ({@link TREE_DEST_NOT_OWNED_CODE}); `force` and
- *    `vat-state` take anything.
+ *    `vat-state` take anything — except that a `replace-file` never takes a directory
+ *    (or a link to one), under any ownership ({@link TREE_DEST_OCCUPIED_CODE}).
  * 5. **Holding.** A `copy` source, or a `write` fill's declared `reads`, that is the
  *    destination or inside it ({@link TREE_DEST_HOLDS_SOURCE_CODE}: the replace
- *    would delete it), or that holds the destination
+ *    would delete it — never asked of a destination that is a link, which holds
+ *    nothing: only the link is parked), or that holds the destination
  *    ({@link TREE_SOURCE_HOLDS_DEST_CODE}: a copy into itself), is refused.
  * 6. **Readable source.** Every `copy` source is proven readable (the one
  *    special-file and link policy, `proveTreeReadable`, on the fill's declared `side`).
@@ -37,7 +39,7 @@
  * decides which refusal each is.
  */
 
-import { lstatSync, readdirSync } from 'node:fs';
+import { lstatSync, readdirSync, statSync } from 'node:fs';
 
 import { requireConfirmedAbsent } from '../errors/confirmed-absent.js';
 import { isPathAbsentError } from '../errors/errno-table.js';
@@ -138,6 +140,8 @@ export interface PlanFacts {
   /** What is at `dest`; throws when the OS refuses to examine it. */
   readonly existing: (dest: string) => EntryKind;
   readonly isEmptyDirectory: (dest: string) => boolean;
+  /** Whether the link at `dest` leads to a directory (false for a dangling link, or one to a file). */
+  readonly linksToDirectory: (dest: string) => boolean;
   readonly sameEntry: (a: string, b: string) => EntrySameness;
   readonly isInside: (child: string, ancestor: string) => EntryContainment;
   /** Throws when the OS refuses to examine `dest`'s identity: a remove's own unexaminability is never a keep. */
@@ -229,10 +233,27 @@ function checkOverlap(planned: readonly PlannedChange[], facts: PlanFacts): void
   }
 }
 
+/**
+ * Refuse a FILE change whose destination is a directory, or a link to one — under every ownership,
+ * `force` included: `--force` means "overwrite the file", and a file landing on a directory's name
+ * would park the whole tree and delete it.
+ */
+function checkFileOverDirectory({ change, existing }: PlannedChange, facts: PlanFacts): void {
+  if (change.op !== 'replace-file') return;
+  const { dest, label } = change;
+  if (existing === 'directory') {
+    throw refusal(TREE_DEST_OCCUPIED_CODE, `${label}: ${dest} is a directory; a file is never written over a directory`);
+  }
+  if (existing === 'link' && facts.linksToDirectory(dest)) {
+    throw refusal(TREE_DEST_OCCUPIED_CODE, `${label}: ${dest} is a link to a directory; a file is never written over a directory`);
+  }
+}
+
 /** Refuse a destination its ownership does not let this change take. */
 function checkOwnership(planned: PlannedChange, facts: PlanFacts): void {
   const { change, existing, action } = planned;
   if (existing === 'absent' || action === 'keep' || action === 'subsumed') return;
+  checkFileOverDirectory(planned, facts);
   const { ownership, dest, label } = change;
   // An empty directory is free for a tree that lands in its place, never for a FILE: a file
   // replacing a directory the user made (a folder they named as an output) is a surprise, not a fill.
@@ -258,8 +279,11 @@ function readsOf(change: TreeChange): readonly string[] {
 function checkHolding(planned: PlannedChange, facts: PlanFacts): void {
   if (planned.action !== 'create' && planned.action !== 'replace') return;
   const { dest, label } = planned.change;
+  // A destination that is a LINK holds nothing: the replace parks the link itself, never what it points
+  // at — so a source the link leads to (a `--dev` link to the build being installed) is not lost with it.
+  const destHoldsEntries = planned.existing !== 'link';
   for (const source of readsOf(planned.change)) {
-    if (facts.sameEntry(source, dest) === 'same' || facts.isInside(source, dest) === 'inside') {
+    if (destHoldsEntries && (facts.sameEntry(source, dest) === 'same' || facts.isInside(source, dest) === 'inside')) {
       throw refusal(TREE_DEST_HOLDS_SOURCE_CODE, `${label}: ${source} is ${dest} or lies inside it, so replacing ${dest} would delete it`);
     }
     if (facts.isInside(dest, source) === 'inside') {
@@ -311,12 +335,35 @@ function kindOf(dest: string): EntryKind {
   return stats.isFile() ? 'file' : 'special';
 }
 
+/** Whether the link at `dest` leads to a directory: a dangling link leads nowhere; a target the OS refuses to examine is a fault. */
+function linksToDirectory(dest: string): boolean {
+  try {
+    return statSync(dest).isDirectory();
+  } catch (error: unknown) {
+    if (isPathAbsentError(error)) return false;
+    throw classifyFsFault(error, { ...EXAMINE_DEST, path: dest });
+  }
+}
+
+/**
+ * What is at `dest` NOW, for the apply to hold against what the plan decided
+ * (`changedSincePlan`). The emptiness of a directory is read only where the plan took it as free.
+ *
+ * @throws FsFaultError side `destination` when the OS refuses to examine or list it
+ */
+export function destinationNow(dest: string, planned: PlannedChange): { kind: EntryKind; emptyDirectory: boolean } {
+  const kind = kindOf(dest);
+  const askEmpty = kind === 'directory' && planned.existing === 'directory' && planned.change.ownership.kind === 'must-be-free';
+  return { kind, emptyDirectory: askEmpty && withFsFaultSync({ side: 'destination', action: 'list the destination', path: dest }, () => readdirSync(dest).length === 0) };
+}
+
 /** The live facts of one plan: every identity question asks each entry once, so no two decisions see the filesystem differently. */
 function liveFacts(): PlanFacts {
   const oracle = identityOracle();
   return {
     existing: kindOf,
     isEmptyDirectory: (dest) => withFsFaultSync({ side: 'destination', action: 'list the destination', path: dest }, () => readdirSync(dest).length === 0),
+    linksToDirectory,
     sameEntry: oracle.sameEntry,
     isInside: oracle.isInside,
     requireExaminable: (dest) => {

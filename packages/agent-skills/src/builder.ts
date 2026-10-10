@@ -234,7 +234,7 @@ async function writeAgentBuild(input: {
   if (sources.scriptsPath !== undefined) {
     const scriptsPath = sources.scriptsPath;
     const outputScriptsPath = safePath.join(staged, 'scripts');
-    await writingOutput(`copy ${scriptsPath} to ${outputScriptsPath}`, () => copyTree(scriptsPath, outputScriptsPath, SCRIPTS_LINKS));
+    await writingOutput(`copy ${scriptsPath} to ${outputScriptsPath}`, () => copyTree(scriptsPath, outputScriptsPath, { ...SCRIPTS_LINKS, onto: 'fresh' }));
     files.push(outputScriptsPath);
   }
 

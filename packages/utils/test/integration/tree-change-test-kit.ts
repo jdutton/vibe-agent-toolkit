@@ -124,8 +124,12 @@ export function replaceWith(dest: string, files: Record<string, string>, label =
   return { op: 'replace', dest, ownership: { kind: 'force' }, fill: { from: 'write', write: (staged) => promised(() => plant(staged, files)) }, label };
 }
 
-/** A rule failing the `nth` rename under the session root with `errno`. */
-export const nthRename = (nth: number, errno: FaultRule['errno']): FaultRule => ({ family: 'rename', path: () => true, nth, errno });
+/**
+ * A rule refusing the `nth` rename under the session root with `errno` — every try of it
+ * (`everyTry`): under win32 a rename refused on contention is retried, and one injected refusal
+ * would be a change that succeeds there.
+ */
+export const nthRename = (nth: number, errno: FaultRule['errno']): FaultRule => ({ family: 'rename', path: () => true, nth, errno, everyTry: true });
 
 /** Whether `path` is a staged tree (never its parked `.previous` twin). */
 export const isStaged = (path: string): boolean => path.includes('.vat-staged-') && !path.endsWith('.previous');

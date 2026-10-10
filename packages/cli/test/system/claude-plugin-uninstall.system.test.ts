@@ -66,6 +66,17 @@ function setupInstalledPlugin(
   writeTestFile(safePath.join(pluginsDir, 'marketplaces', marketplace, VAT_MARKETPLACE_MARKER), 'vat\n');
 }
 
+const HALF_KEY = 'half-skill@half-market';
+
+/** A plugin directory on disk that no registry names, in a marketplace that does (`marked`) or does not carry VAT's marker. */
+function halfRemovedPlugin(fakeHome: string, marked: boolean): string {
+  const marketplace = safePath.join(fakeHome, '.claude', 'plugins', 'marketplaces', 'half-market');
+  const pluginDir = safePath.join(marketplace, 'plugins', 'half-skill');
+  mkdirSyncReal(pluginDir, { recursive: true });
+  if (marked) writeTestFile(safePath.join(marketplace, VAT_MARKETPLACE_MARKER), 'vat\n');
+  return pluginDir;
+}
+
 /** A fresh fake HOME holding an empty `.claude/`. */
 function createUninstallTestHome(createTempDir: () => string): string {
   const fakeHome = safePath.join(createTempDir(), 'home');
@@ -135,18 +146,39 @@ describe('claude plugin uninstall command (system test)', () => {
     ).toBe(true);
   });
 
-  it('uninstall of a half-removed plugin reports a PLUGIN_UNINSTALL_INCOMPLETE finding', async () => {
+  it('uninstall of a half-removed plugin in a marketplace VAT installed reports a PLUGIN_UNINSTALL_INCOMPLETE finding', async () => {
     const fakeHome = createUninstallTestHome(createTempDir);
-    // The plugin directory is on disk, but no registry names it.
-    mkdirSyncReal(safePath.join(fakeHome, '.claude', 'plugins', 'marketplaces', 'half-market', 'plugins', 'half-skill'), { recursive: true });
+    // The plugin directory is on disk, in a marketplace carrying VAT's marker, but no registry names it.
+    const halfDir = halfRemovedPlugin(fakeHome, true);
 
-    const { status, report } = await runUninstall(binPath, fakeHome, ['half-skill@half-market']);
+    const { status, report } = await runUninstall(binPath, fakeHome, [HALF_KEY]);
 
-    // A warning: the cleanup ran, and the operator is told the install was not VAT's.
+    // A warning: the cleanup ran, and the operator is told no registry had recorded the plugin.
     expect(status).toBe(0);
     expect(report.status).toBe('findings');
-    expect(report.findings).toMatchObject([{ code: 'PLUGIN_UNINSTALL_INCOMPLETE', severity: 'warning', location: 'half-skill@half-market' }]);
-    expect(report.data?.plugins).toStrictEqual([{ key: 'half-skill@half-market', removed: true }]);
+    expect(report.findings).toMatchObject([{ code: 'PLUGIN_UNINSTALL_INCOMPLETE', severity: 'warning', location: HALF_KEY }]);
+    expect(report.data?.plugins).toStrictEqual([{ key: HALF_KEY, removed: true }]);
+    expect(existsSync(halfDir)).toBe(false);
+  });
+
+  // VAT removes only what it can show it installed: the same directory in a marketplace with no
+  // marker is the user's (Claude Code's own install), left exactly as it is unless --force is given.
+  it('leaves a plugin of a marketplace VAT did not install, with a PLUGIN_NOT_INSTALLED_BY_VAT finding; --force removes it', async () => {
+    const fakeHome = createUninstallTestHome(createTempDir);
+    const halfDir = halfRemovedPlugin(fakeHome, false);
+
+    const left = await runUninstall(binPath, fakeHome, [HALF_KEY]);
+
+    expect(left.status).toBe(0);
+    expect(left.report.findings).toMatchObject([{ code: 'PLUGIN_NOT_INSTALLED_BY_VAT', severity: 'warning', location: HALF_KEY }]);
+    expect(left.report.data?.plugins).toStrictEqual([{ key: HALF_KEY, removed: false }]);
+    expect(existsSync(halfDir)).toBe(true);
+
+    const forced = await runUninstall(binPath, fakeHome, [HALF_KEY, '--force']);
+
+    expect(forced.status).toBe(0);
+    expect(forced.report.data?.plugins).toStrictEqual([{ key: HALF_KEY, removed: true }]);
+    expect(existsSync(halfDir)).toBe(false);
   });
 
   // Read-only modes are what this test needs; the same hosts that cannot deny a read cannot deny a write.

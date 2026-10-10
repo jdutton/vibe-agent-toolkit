@@ -25,7 +25,7 @@ import {
  * Containment walks the path's lexical parents and compares ids, as the live
  * `isInsideByIdentity` walks real ones.
  */
-function world(entries: Record<string, { kind: EntryKind; id?: string; empty?: boolean }>): PlanFacts {
+function world(entries: Record<string, { kind: EntryKind; id?: string; empty?: boolean; toDirectory?: boolean }>): PlanFacts {
   const idOf = (path: string): string | undefined => entries[path]?.id ?? (entries[path] === undefined ? undefined : path);
   const same = (a: string, b: string): 'same' | 'different' | 'unknown' => {
     const left = idOf(a);
@@ -37,6 +37,7 @@ function world(entries: Record<string, { kind: EntryKind; id?: string; empty?: b
   return {
     existing: (dest) => entries[dest]?.kind ?? 'absent',
     isEmptyDirectory: (dest) => entries[dest]?.empty === true,
+    linksToDirectory: (dest) => entries[dest]?.toDirectory === true,
     // A fake world refuses no examination of a target: its `?` ids are other entries' unknowns.
     requireExaminable: () => undefined,
     // `?` in the fake world is an identity the OS refused to examine.
@@ -214,6 +215,33 @@ describe('planFromFacts — ownership', () => {
     expect(codeThrownBy(() => planFromFacts([file], facts))).toBe(TREE_DEST_OCCUPIED_CODE);
   });
 
+  // Ruling R2: `--force` means "overwrite the file". A file change that took a directory parked the
+  // whole tree, put a file on its name and deleted the tree — exit 0.
+  it.each([
+    ['force', FORCE],
+    ['vat-state', { kind: 'vat-state' }],
+    ['must-be-free', FREE],
+    ['vat-made, recognised', { kind: 'vat-made', recognise: () => ({ owned: true }) }],
+  ] as const)('refuses a replace-file over a DIRECTORY under %s ownership, saying it is a directory', (_kind, ownership) => {
+    const facts = world({ '/p/out': { kind: 'directory' } });
+    const file = { op: 'replace-file', dest: '/p/out', ownership, contents: 'x', label: 'agent.yaml' } as const;
+    let thrown: unknown;
+    try {
+      planFromFacts([file], facts);
+    } catch (error: unknown) {
+      thrown = error;
+    }
+    expect(isVatError(thrown, TREE_DEST_OCCUPIED_CODE), String(thrown)).toBe(true);
+    expect(String(thrown)).toContain('/p/out is a directory');
+  });
+
+  it('refuses a replace-file over a LINK to a directory under force, and takes a link to a file', () => {
+    const facts = world({ '/p/out': { kind: 'link', toDirectory: true }, '/p/alias.yaml': { kind: 'link' } });
+    const file = (dest: string) => ({ op: 'replace-file', dest, ownership: FORCE, contents: 'x', label: 'agent.yaml' }) as const;
+    expect(codeThrownBy(() => planFromFacts([file('/p/out')], facts))).toBe(TREE_DEST_OCCUPIED_CODE);
+    expect(planFromFacts([file('/p/alias.yaml')], facts).changes.map((c) => c.action)).toEqual(['replace']);
+  });
+
   it('refuses vat-made when recognise says not owned, with TREE_DEST_NOT_OWNED and its reason', () => {
     const facts = world({ '/p/db': { kind: 'directory' } });
     const ownership = { kind: 'vat-made', recognise: () => ({ owned: false, reason: 'it holds notes.txt' }) } as const;
@@ -253,6 +281,17 @@ describe('planFromFacts — source holding', () => {
   it('refuses a source that is its destination with TREE_DEST_HOLDS_SOURCE', () => {
     const facts = world({ '/p/a': { kind: 'directory', id: 'x' }, '/p/A': { kind: 'directory', id: 'x' } });
     expect(codeThrownBy(() => planFromFacts([copy('/p/a', '/p/A')], facts))).toBe(TREE_DEST_HOLDS_SOURCE_CODE);
+  });
+
+  // A destination that is a LINK holds nothing: replacing it parks the link, never what it points at.
+  // A `--dev` link to the very build being installed (or to a directory above it) was refused as
+  // "replacing it would delete the source" — false, and it left `--force` unable to leave dev mode.
+  it.each([
+    ['the source itself', { '/skills/good': { kind: 'link', id: 'src' }, '/dist/good': { kind: 'directory', id: 'src' } }],
+    ['a directory above the source', { '/skills/good': { kind: 'link', id: 'dist' }, '/dist': { kind: 'directory', id: 'dist' }, '/dist/good': { kind: 'directory' } }],
+  ] as const)('replaces a destination that is a link to %s: the link goes, the source stays', (_label, entries) => {
+    const plan = planFromFacts([copy('/dist/good', '/skills/good')], world(entries));
+    expect(plan.changes.map((c) => c.action)).toEqual(['replace']);
   });
 
   it('refuses a destination inside its source (a copy into itself) with TREE_SOURCE_HOLDS_DEST', () => {

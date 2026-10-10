@@ -1292,6 +1292,7 @@ export type NonOverridableCode =
   | 'CORPUS_ENTRY_INCOMPLETE'
   // `vat claude plugin uninstall`
   | 'PLUGIN_UNINSTALL_INCOMPLETE'
+  | 'PLUGIN_NOT_INSTALLED_BY_VAT'
   // `vat claude plugin uninstall`, and `vat claude plugin install`'s vat.replaces uninstall
   | 'PLUGIN_KEPT_SIBLING_UNEXAMINED'
   // Any verb's refusal whose failure path left a temporary or staged entry behind

@@ -7,13 +7,13 @@
  * `--print` stdout is the `skill-test-config` artifact — the config text alone.
  */
 
-import { statSync, writeFileSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { upsertTestConfig } from '@vibe-agent-toolkit/agent-skills';
 import { parseConfigAllowingUnknownKeys, type ProjectConfig, ProjectConfigSchema, readConfigText } from '@vibe-agent-toolkit/resources';
 import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
-import { classifyFsFault, isFsFaultError, safePath, toForwardSlash, withFsFaultSync } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, isFsFaultError, replaceFile, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
 
@@ -216,9 +216,14 @@ async function requireDeclaredSkill(
   );
 }
 
-/** Write the updated config over the file — a failed write stopped the run, it is not VAT's defect. */
-function writeConfig(configPath: string, updatedYaml: string): void {
-  withFsFaultSync({ side: 'destination', action: 'write the project config', path: configPath }, () => writeFileSync(configPath, updatedYaml, 'utf-8'));
+/**
+ * Replace the config with the updated text in one step (`replaceFile`: a temp beside it, renamed over
+ * it), never truncating it in place — it is the adopter's hand-authored file, and a full disk or an
+ * interruption after a truncate would leave it empty or cut short. A link is written through and the
+ * file keeps its mode. A failed write stopped the run; it is not VAT's defect.
+ */
+function writeConfig(configPath: string, updatedYaml: string): Promise<void> {
+  return withFsFault({ side: 'destination', action: 'write the project config', path: configPath }, () => replaceFile(configPath, updatedYaml));
 }
 
 async function configureCommand(
@@ -246,7 +251,7 @@ async function configureCommand(
       return;
     }
 
-    writeConfig(configPath, updatedYaml);
+    await writeConfig(configPath, updatedYaml);
     logger.info(`Updated ${configPath}`);
     endWithReport('skill test configure', buildReport({
       examined: 1,

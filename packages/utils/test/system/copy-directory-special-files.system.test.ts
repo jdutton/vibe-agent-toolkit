@@ -26,7 +26,7 @@ const refusedSpecial = (path: string): Record<string, unknown> => ({
   code: FS_FAULT_CODE, side: 'source', faultClass: 'wrong-type', errno: 'EFTYPE', path,
 });
 
-const FOLLOW = { links: 'follow-contained', side: 'source' } as const;
+const FOLLOW = { links: 'follow-contained', side: 'source', onto: 'fresh' } as const;
 
 /** Run `body` traced under `within`: its outcome, and whether anything opened `fifo`. */
 async function tracingOpens(within: string, fifo: string, body: () => Promise<unknown>): Promise<{ outcome: unknown; opened: boolean }> {

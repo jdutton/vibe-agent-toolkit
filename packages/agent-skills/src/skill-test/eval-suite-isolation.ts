@@ -42,12 +42,13 @@ import {
   copyTree,
   forEachInOrder,
   isVatError,
-  mkdirSyncReal,
   PathEscapesRootError,
   planTreeChanges,
   safePath,
   withFsFault,
 } from '@vibe-agent-toolkit/utils';
+
+import { makeWorkspaceDir } from './eval-inputs.js';
 
 /**
  * Where a skill's eval suite lives by convention. Defined here, beside the code
@@ -143,7 +144,7 @@ async function holdEntry(from: string, to: string): Promise<void> {
   // The reads are classified by the copy itself; a write into the hold dir — VAT's own scratch — here.
   await withFsFault({ side: 'environment', action: `hold the eval suite entry ${from} at ${to}` }, async () => {
     if (lstatSync(from).isDirectory()) {
-      await copyTree(from, to, { links: 'preserve', side: 'environment' });
+      await copyTree(from, to, { links: 'preserve', side: 'environment', onto: 'fresh' });
       return;
     }
     await copyRegularFile(from, to, { side: 'environment', reading: `the staged eval suite ${from}` });
@@ -171,7 +172,7 @@ export async function isolateEvalSuite(input: IsolateEvalSuiteInput): Promise<bo
 
   let preserved = false;
   if (input.holdDir !== undefined) {
-    mkdirSyncReal(input.holdDir, { recursive: true, mode: 0o700 });
+    makeWorkspaceDir(input.holdDir);
     // A directory unit's CONTENTS become the hold dir's contents, so the suite file
     // lands at `<holdDir>/<basename(evalsSubpath)>` either way and `fixtures/` keep
     // their positions relative to it — exactly the shape the eval-input staging

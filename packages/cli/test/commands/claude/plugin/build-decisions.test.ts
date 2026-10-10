@@ -35,6 +35,11 @@ describe('matchesSelector', () => {
     ['vat-audit', '*aud*', true],
     ['vat-audit', 'vat', false],
     ['my-vat-audit', 'vat-*', false],
+    // Only `*` is a wildcard: every other character of a selector is itself, a `.` included.
+    ['vatxaudit', 'vat.audit', false],
+    ['vat.audit', 'vat.audit', true],
+    ['vat-audit', 'vat-(audit|rag)', false],
+    ['a+b', 'a+*', true],
   ])('%s against %s → %s', (name, selector, matched) => {
     expect(matchesSelector(name, selector)).toBe(matched);
   });

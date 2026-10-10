@@ -86,6 +86,16 @@ describe('listLocalPlugins', () => {
     expect(result.legacySkills[0]?.path).toBe(skillDir);
   });
 
+  // A parked or staged tree the tree-change primitive left beside a skill is not a skill.
+  it('never lists a tree-change leftover in skillsDir as a legacy skill', () => {
+    const paths = getPaths();
+    for (const name of ['old-skill', '.old-skill.vat-staged-deadbeef', '.old-skill.vat-staged-0a1b2c3d.previous']) {
+      mkdirSyncReal(safePath.join(paths.skillsDir, name), { recursive: true });
+    }
+
+    expect(listLocalPlugins(paths).legacySkills.map((skill) => skill.name)).toEqual(['old-skill']);
+  });
+
   it('skips non-directory/non-symlink entries in skillsDir', () => {
     const paths = getPaths();
     // Write a plain file (not a skill dir)

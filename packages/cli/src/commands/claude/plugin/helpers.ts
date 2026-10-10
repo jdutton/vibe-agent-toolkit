@@ -11,7 +11,7 @@
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { type FsSide, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import { z } from 'zod';
 
@@ -35,20 +35,37 @@ const PackageJsonVatReplacesSchema = z.object({
   flatSkills: z.array(z.string()).optional(),
 }).strict();
 
-type PackageJsonVatReplaces = z.infer<typeof PackageJsonVatReplacesSchema>;
+/** Every name once: a list that names one skill twice plans two changes over one directory. */
+const hasNoDuplicate = (names: readonly string[]): boolean => new Set(names).size === names.length;
 
-export interface PackageJsonVat {
-  version?: string;
-  // DEPRECATED(v0.1.x): vat.type — tolerated but ignored
-  type?: string;
-  skills?: string[];
-  replaces?: PackageJsonVatReplaces;
-}
+/**
+ * Everything an install reads from a package's `package.json`, as ONE schema: `name`, `version`,
+ * `vat.skills` and `vat.replaces`. Each becomes a path, a registry key or a list the install walks,
+ * so a wrong type is refused here — the package is the input (`INPUT_UNREADABLE`) — and never met
+ * later as a `TypeError` or as a string walked letter by letter.
+ *
+ * Passthrough at both levels, on purpose: `package.json` is npm's file (every other top-level key is
+ * npm's or another tool's), and `vat` carries keys other verbs own (`vat.version`, the tolerated
+ * `vat.type`, `vat.pureJs`), which an install does not read and must not refuse.
+ */
+const PackageJsonForInstallSchema = z.object({
+  name: z.string().min(1),
+  version: z.string().optional(),
+  vat: z.object({
+    skills: z.array(z.string()).refine(hasNoDuplicate, 'names a skill more than once').optional(),
+    replaces: PackageJsonVatReplacesSchema.optional(),
+  }).passthrough().optional(),
+}).passthrough();
 
+type PackageJsonForInstall = z.infer<typeof PackageJsonForInstallSchema>;
+
+export type PackageJsonVat = NonNullable<PackageJsonForInstall['vat']>;
+
+/** A package's `package.json`, as far as an install reads it. `version` is absent for a package that declares none. */
 export interface PackageJson {
   name: string;
-  version: string;
-  vat?: PackageJsonVat;
+  version?: string | undefined;
+  vat?: PackageJsonVat | undefined;
 }
 
 /** What an install source looks like, for a refusal of one that is not. */
@@ -95,42 +112,42 @@ export function detectSource(input: string): SkillSource {
 }
 
 /**
- * Read `dir/package.json`: not JSON (or a malformed `vat.replaces`) is the input's
- * refusal; a read the OS refuses propagates for the caller to classify by path.
+ * Read `dir/package.json` as an install reads it ({@link PackageJsonForInstallSchema}). The package
+ * is the input, so everything wrong with what it HOLDS is the input's refusal (`INPUT_UNREADABLE`),
+ * nothing changed: no `package.json` at all (naming `packageLabel`, since for an archive `dir` is
+ * VAT's staging and names nothing the user has), not JSON, or a field of the wrong shape (naming
+ * it). A read the OS refuses propagates for the caller to classify by path.
+ *
+ * @param dir - The package directory
+ * @param from - The side `dir` is on (the operator's tree, or VAT's staging of an archive or a
+ *   download), and what the user named as the package: the directory, the archive, or the npm spec
  */
-export async function readPackageJson(dir: string): Promise<PackageJson> {
+export async function readPackageJson(dir: string, from: { readonly side: FsSide; readonly label: string }): Promise<PackageJson> {
   const packageJsonPath = safePath.join(dir, 'package.json');
+  // Asked first, and believed only when the directory's listing agrees: a package with no
+  // package.json is the input's shape, never "VAT's scratch space vanished".
+  if (!pathPresent(packageJsonPath, 'follow', from.side, 'confirmed')) {
+    throw new CommandRefusalError('INPUT_UNREADABLE', `${from.label} holds no package.json, so it is not a package VAT can install; nothing was changed.`);
+  }
   // A read the OS refuses propagates as the errno: the install classifies it by the path it
   // names (the package the operator named, or VAT's staging of an archive or a download).
   const content = await readFile(packageJsonPath, 'utf-8');
-  let packageJson: PackageJson;
+  let parsed: unknown;
   try {
-    packageJson = JSON.parse(content) as PackageJson;
+    parsed = JSON.parse(content);
   } catch (error) {
     throw new CommandRefusalError('INPUT_UNREADABLE', `${packageJsonPath} is not valid JSON: ${String(error)}`, { cause: error });
   }
-  assertVatReplacesShape(packageJson, packageJsonPath);
-  return packageJson;
-}
-
-/**
- * Refuse, before anything is read further or changed, a `vat.replaces` that is
- * not `{ plugins?: string[], flatSkills?: string[] }`. The package is the
- * input, so its malformed field is the input's refusal (`INPUT_UNREADABLE`),
- * naming the package and the field.
- */
-function assertVatReplacesShape(packageJson: PackageJson, packageJsonPath: string): void {
-  const replaces: unknown = (packageJson as { vat?: { replaces?: unknown } } | null)?.vat?.replaces;
-  if (replaces === undefined) return;
-  const result = PackageJsonVatReplacesSchema.safeParse(replaces);
-  if (result.success) return;
-  const problems = result.error.issues
-    .map((issue) => `${['vat', 'replaces', ...issue.path.map(String)].join('.')}: ${issue.message}`)
-    .join('; ');
+  const result = PackageJsonForInstallSchema.safeParse(parsed);
+  if (result.success) return result.data;
+  const problems = result.error.issues.map((issue) => `${issue.path.map(String).join('.') || 'the document'}: ${issue.message}`).join('; ');
+  // By its own name where it has one: the label is the path the user typed, the name what they know it as.
+  const declared: unknown = (parsed as { name?: unknown } | null)?.name;
+  const named = typeof declared === 'string' && declared !== '' ? `Package ${declared}` : from.label;
   throw new CommandRefusalError(
     'INPUT_UNREADABLE',
-    `Package ${String(packageJson.name)} cannot be installed, nothing was changed: ${packageJsonPath} ${problems}. ` +
-      'vat.replaces is { plugins?: string[], flatSkills?: string[] }.',
+    `${named} cannot be installed, nothing was changed: ${packageJsonPath} — ${problems}. ` +
+      'An install reads name (a string), version (a string), vat.skills (string[], each skill once) and vat.replaces ({ plugins?: string[], flatSkills?: string[] }).',
   );
 }
 
@@ -138,9 +155,10 @@ function assertVatReplacesShape(packageJson: PackageJson, packageJsonPath: strin
  * Read package.json and extract vat field
  */
 export async function readPackageJsonVatMetadata(
-  dir: string
+  dir: string,
+  from: { readonly side: FsSide; readonly label: string },
 ): Promise<{ packageJson: PackageJson; skills: string[] }> {
-  const packageJson = await readPackageJson(dir);
+  const packageJson = await readPackageJson(dir, from);
 
   if (!packageJson.vat?.skills || packageJson.vat.skills.length === 0) {
     throw new CommandRefusalError(

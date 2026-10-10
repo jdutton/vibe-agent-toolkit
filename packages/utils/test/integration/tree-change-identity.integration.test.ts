@@ -275,6 +275,20 @@ describe('isInsideByIdentity', () => {
     expect(isInsideByIdentity(child, link)).toBe('inside');
   });
 
+  // A link to a directory strictly BELOW the ancestor: no lexical parent of the child is the ancestor,
+  // nor a link to it — the directories between the link's target and the ancestor were never visited,
+  // so a copy recursed into its own staging and a `--force` replace deleted the source it copied from.
+  it('answers inside through a link that points BELOW the ancestor, existing or not yet', ({ skip }) => {
+    const root = scratch.create();
+    const installed = makeDir(root, 'installed');
+    makeDir(root, 'installed', 'sub', 'pkg');
+    const work = safePath.join(root, 'work');
+    linkTo(safePath.join(installed, 'sub'), work, skip);
+    expect(isInsideByIdentity(safePath.join(work, 'pkg'), installed)).toBe('inside');
+    expect(isInsideByIdentity(safePath.join(work, 'not', 'yet'), installed)).toBe('inside');
+    expect(isInsideByIdentity(safePath.join(root, 'elsewhere', 'pkg'), installed)).toBe('outside');
+  });
+
   it('answers inside through a case alias reported by dev:ino (simulated, any OS)', () => {
     const root = scratch.create();
     const real = makeDir(root, 'Plugins');

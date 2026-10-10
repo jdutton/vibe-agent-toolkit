@@ -25,5 +25,11 @@ export function writeTree(dir: string, files: readonly TreeFile[]): void {
   }
 }
 
+/**
+ * Where the publish-tree lane's git stand-in (`publish-tree-git-mock.ts`) leaves the tree it was
+ * handed, relative to the project: the unit the `marketplace/publish-tree` case holds to golden.
+ */
+export const PUBLISHED_TREE_CAPTURE = '.fault-matrix-published-tree';
+
 /** The same files, one directory deeper. */
 export const prefixed = (prefix: string, files: readonly TreeFile[]): TreeFile[] => files.map(([path, body]) => [`${prefix}/${path}`, body]);

@@ -11,7 +11,8 @@ export {
 export { proveTreeReadable, readRegularFile } from './readable-tree.js';
 export type { ProveTreeReadableOptions } from './readable-tree.js';
 export { copyRegularFile, copyTree } from './copy-tree.js';
-export type { CopyRegularFileOptions } from './copy-tree.js';
+export type { CopyRegularFileOptions, CopyTreeOptions } from './copy-tree.js';
+export type { CopyOnto } from './copy-decisions.js';
 export type { LinkPolicy, TreeWalkOptions } from './tree-walk.js';
 export {
   planTreeChanges,
@@ -27,5 +28,5 @@ export { TREE_ROLLBACK_INCOMPLETE_CODE, TreeRollbackIncompleteError } from './ro
 export type { TreeRollbackStranded } from './rollback-error.js';
 export type { ApplyOptions, ApplyOutcome, ApplyResult, TreeChangeWarning } from './apply.js';
 export type { TempDirOutcome } from './files.js';
-export { disposeTempDir, disposeTempDirAfterFailure, renameFileAtomic, replaceFile, TEMP_DIR_OUTSIDE_TMPDIR_CODE, withTempDir } from './files.js';
+export { disposeTempDir, disposeTempDirAfterFailure, makeDirectoryUnder, renameFileAtomic, replaceFile, TEMP_DIR_OUTSIDE_TMPDIR_CODE, withTempDir, writeFileUnder } from './files.js';
 export { isParkedTreeEntry, isTreeChangeResidue } from './staging-names.js';

@@ -55,6 +55,7 @@ const BARREL_EXPORTS = [
   'SKILL_TARGET_NAMES',
   'SOURCE_ORIGINS',
   'TEMP_DIR_OUTSIDE_TMPDIR_CODE',
+  'TEST_USER_STATE_UNDER',
   'TREE_CLEANUP_INCOMPLETE_CODE',
   'TREE_DESTS_OVERLAP_CODE',
   'TREE_DEST_HOLDS_SOURCE_CODE',
@@ -130,6 +131,7 @@ const BARREL_EXPORTS = [
   'isZodOptional',
   'isZodType',
   'issueLocation',
+  'makeDirectoryUnder',
   'mapConcurrentFailingInOrder',
   'mapInOrder',
   'mapWithConcurrency',
@@ -161,6 +163,7 @@ const BARREL_EXPORTS = [
   'renameFileAtomic',
   'replaceFile',
   'requireConfirmedAbsent',
+  'requireTestScratch',
   'resetProjectRootCaches',
   'resolveAssetReference',
   'resolveFromImportMeta',
@@ -182,6 +185,7 @@ const BARREL_EXPORTS = [
   'withFsFaultSync',
   'withOuterBracket',
   'withTempDir',
+  'writeFileUnder',
   'writeTimingDump',
 ];
 

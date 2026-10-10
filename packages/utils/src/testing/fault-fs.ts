@@ -112,6 +112,8 @@ interface Session extends FaultFsSession {
   readonly faults: readonly FaultRule[];
   readonly rewrites: readonly StatRewrite[];
   readonly hits: Map<FaultRule, number>;
+  /** The call an `everyTry` rule failed last, while no other traced call has followed it. */
+  readonly retried: { last?: { readonly rule: FaultRule; readonly call: FsCall } };
   readonly fdPaths: Map<number, string>;
   readonly patches: Patch[];
   readonly mutableCalls: FsCall[];
@@ -123,8 +125,26 @@ interface Session extends FaultFsSession {
 }
 
 let active: Session | undefined;
-/** Non-zero while an intercepted call is running its original body synchronously. */
+/** Non-zero while an intercepted call is running its original body synchronously, or while {@link untracedFs} runs. */
 let depth = 0;
+
+/**
+ * Run `work` — synchronous fs calls a TEST makes on its own behalf while a session is active (a mock
+ * standing in for a child process, capturing what it was handed) — outside the session: none of its
+ * calls is traced, so none becomes an injection point, and none is failed. Without it a harness's own
+ * bookkeeping is indistinguishable from the code under test.
+ *
+ * ⛔ Synchronous only: an asynchronous call started inside returns to the event loop with the session
+ * active again, and its continuation is traced.
+ */
+export function untracedFs<T>(work: () => T): T {
+  depth += 1;
+  try {
+    return work();
+  } finally {
+    depth -= 1;
+  }
+}
 
 const isUnder = (root: string, path: string): boolean => !relativeEscapesRoot(safePath.relative(root, path));
 
@@ -179,7 +199,16 @@ function trace(session: Session, op: string, spec: OpSpec, style: FsApi, self: u
   return call;
 }
 
+/** Whether `call` is `earlier` asked again: the same operation, through the same API, on the same paths. */
+function isRepeatOf(earlier: FsCall, call: FsCall): boolean {
+  return earlier.op === call.op && earlier.api === call.api && earlier.path === call.path && earlier.dest === call.dest;
+}
+
 function faultFor(session: Session, call: FsCall): InjectedErrno | undefined {
+  // A retry of the call an `everyTry` rule just failed fails again, and is no new match of any rule.
+  const { last } = session.retried;
+  if (last !== undefined && isRepeatOf(last.call, call)) return last.rule.errno;
+  delete session.retried.last;
   for (const rule of session.faults) {
     const matches = (rule.family === undefined || rule.family === call.family)
       && (rule.op === undefined || rule.op === call.op)
@@ -187,7 +216,9 @@ function faultFor(session: Session, call: FsCall): InjectedErrno | undefined {
     if (!matches) continue;
     const seen = (session.hits.get(rule) ?? 0) + 1;
     session.hits.set(rule, seen);
-    if (seen === (rule.nth ?? 1)) return rule.errno;
+    if (seen !== (rule.nth ?? 1)) continue;
+    if (rule.everyTry === true) session.retried.last = { rule, call };
+    return rule.errno;
   }
   return undefined;
 }
@@ -389,6 +420,7 @@ export function installFaultFs(options: {
     faults: options.faults ?? [],
     rewrites: options.rewrites ?? [],
     hits: new Map(),
+    retried: {},
     fdPaths: new Map(),
     patches: [],
     mutableCalls,

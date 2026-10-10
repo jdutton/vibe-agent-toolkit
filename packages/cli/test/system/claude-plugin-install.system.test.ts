@@ -181,8 +181,10 @@ async function setupReplacesCase(
   }
   const legacySkill = safePath.join(claudeDir, 'skills', 'legacy', 'SKILL.md');
   plantFile(legacySkill, '# legacy\n');
+  // A later version of the SAME package: `vat.replaces` names what this package used to publish, and
+  // only the package that installed a marketplace may replace it (another package's install is refused).
   const replacing = setupPluginTestProject(tempDir, 'new-pkg', 'r-market', [{ name: 'new-plugin', skills: ['new-skill'] }]);
-  writeTestFile(safePath.join(replacing.projectDir, 'package.json'), JSON.stringify({ name: '@test/new-pkg', version: '1.2.3', vat: { replaces } }));
+  writeTestFile(safePath.join(replacing.projectDir, 'package.json'), JSON.stringify({ name: '@test/my-plugin-pkg', version: '1.2.4', vat: { replaces } }));
   return { tempDir, fakeHome, claudeDir, legacySkill, ...replacing };
 }
 
@@ -529,7 +531,7 @@ describe('claude plugin install command (system test)', () => {
     // `l`, `e`, `g`… are what a letter-by-letter walk of "legacy" removed.
     plantFile(safePath.join(claudeDir, 'skills', 'l', 'SKILL.md'), '# l\n');
 
-    await expectInputRefusal(binPath, fakeHome, [projectDir], ['@test/new-pkg', field]);
+    await expectInputRefusal(binPath, fakeHome, [projectDir], ['@test/my-plugin-pkg', field]);
     expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES))).toBe(false);
     expect(fs.existsSync(legacySkill)).toBe(true);
     expect(fs.existsSync(safePath.join(claudeDir, 'skills', 'l', 'SKILL.md'))).toBe(true);

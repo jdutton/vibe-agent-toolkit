@@ -83,6 +83,7 @@ import { GRADER_FRAGMENT_UNPARSEABLE, GraderFragmentUnparseableError, runGraderF
 import {
   armDirSegment,
   EvalInputError,
+  makeWorkspaceDir,
   parseEvalSuite,
   stageEvalWorkspaces,
   type ArmWorkspaceDirs,
@@ -1002,7 +1003,7 @@ async function stageWorkspacesForRun(
   // files, which with an out-of-tree suite may be data that was never in the repo
   // at all. Inheriting the umask (0755) left them readable by any local user the
   // moment `--out` relocated the harness root out from under its 0700 parent.
-  mkdirSyncReal(workspacesRoot, { recursive: true, mode: 0o700 });
+  makeWorkspaceDir(workspacesRoot);
   // The same shared-tmp hardening the harness root gets. `mkdirSync(recursive)`
   // on an existing path neither throws nor chmods, so without this an attacker
   // winning the race between the rmSync and the mkdir owns the executor's working

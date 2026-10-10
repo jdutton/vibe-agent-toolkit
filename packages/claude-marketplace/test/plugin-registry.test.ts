@@ -24,7 +24,7 @@ import {
   writeUserState,
 } from '../src/install/plugin-registry.js';
 
-import { buildTestPaths, installOnePlugin, rejectionOf, stagedWriteOf, underFaults, useScratchTmpdir } from './test-helpers.js';
+import { buildTestPaths, installOnePlugin, refusedRegistryWrite, rejectionOf, stagedWriteOf, underFaults, useScratchTmpdir } from './test-helpers.js';
 
 // String constants to avoid sonarjs/no-duplicate-string
 const MARKETPLACE_NAME = 'my-marketplace';
@@ -171,10 +171,42 @@ describe('readUserSettings', () => {
     expect(readUserSettings(buildTestPaths(getDir()), 'destination')).toEqual({});
   });
 
-  it('returns {} when settings.json is JSON but not an object', () => {
+  // Every read here is followed by a write of the same file: a file that is there but is not the shape
+  // Claude Code writes must refuse, never read as empty (the write would replace it) nor crash.
+  it.each([
+    ['a JSON array', '[1, 2]'],
+    ['an enabledPlugins that is not an object', '{"enabledPlugins": ["a@b"]}'],
+  ])('refuses settings.json holding %s as unreadable user state, naming the file', (_label, content) => {
     const paths = buildTestPaths(getDir());
-    plantFile(paths.userSettingsPath, '[1, 2]');
-    expect(readUserSettings(paths, 'destination')).toEqual({});
+    plantFile(paths.userSettingsPath, content);
+    expect(() => readUserSettings(paths, 'destination')).toThrow(expect.objectContaining({ code: CLAUDE_USER_STATE_UNREADABLE_CODE, message: expect.stringContaining(paths.userSettingsPath) as unknown }) as Error);
+  });
+});
+
+describe('a registry file of the wrong shape', () => {
+  const { getDir } = setupTempDir(REGISTRY_TEST_PREFIX);
+
+  it.each([
+    ['no plugins object', '{}'],
+    ['plugins as an array', '{"version": 2, "plugins": []}'],
+    ['a key whose value is not a list', '{"version": 2, "plugins": {"a@b": {"scope": "user"}}}'],
+    ['a list holding something that is not a record', '{"version": 2, "plugins": {"a@b": ["x"]}}'],
+    ['a JSON array', '[]'],
+  ])('refuses installed_plugins.json with %s as unreadable user state — never a TypeError', (_label, content) => {
+    const paths = buildTestPaths(getDir());
+    plantFile(paths.installedPluginsPath, content);
+    expect(() => readInstalledPlugins(paths, 'source')).toThrow(expect.objectContaining({ code: CLAUDE_USER_STATE_UNREADABLE_CODE, message: expect.stringContaining(paths.installedPluginsPath) as unknown }) as Error);
+  });
+
+  it.each([
+    ['a JSON array', '[]'],
+    ['an entry with no source', '{"mp": {"installLocation": ""}}'],
+    ['an entry that is not an object', '{"mp": "x"}'],
+    ['a source that names no kind', '{"mp": {"source": {"repo": "o/r"}}}'],
+  ])('refuses known_marketplaces.json with %s as unreadable user state', (_label, content) => {
+    const paths = buildTestPaths(getDir());
+    plantFile(paths.knownMarketplacesPath, content);
+    expect(() => readKnownMarketplaces(paths, 'source')).toThrow(expect.objectContaining({ code: CLAUDE_USER_STATE_UNREADABLE_CODE, message: expect.stringContaining(paths.knownMarketplacesPath) as unknown }) as Error);
   });
 
   it('throws, naming the file, when settings.json is present but not JSON', () => {
@@ -503,7 +535,7 @@ describe('installing one plugin (planPackageInstall)', () => {
     const pluginDir = builtPlugin(getDir());
     const marker = safePath.join(paths.marketplacesDir, MARKETPLACE_NAME, VAT_MARKETPLACE_MARKER);
 
-    const refused = await underFaults(getDir(), { faults: [{ family: 'rename', path: stagedWriteOf(paths.userSettingsPath), errno: 'EACCES' }] }, () =>
+    const refused = await underFaults(getDir(), { faults: [refusedRegistryWrite(paths.userSettingsPath, 'EACCES')] }, () =>
       rejectionOf(() => installAt(pluginDir, paths)));
     expect(refused).toBeDefined();
     expect(existsSync(marker)).toBe(false);
@@ -564,7 +596,7 @@ describe('a plugin install is one transaction with the registry', () => {
       writeFileSync(safePath.join(pluginDir, 'second.txt'), 'v2');
       const before = snapshotTree(paths.claudeDir);
 
-      const error = await underFaults(getDir(), { faults: [{ family: 'rename', path: stagedWriteOf(paths[file]), errno: 'EACCES' }] }, () =>
+      const error = await underFaults(getDir(), { faults: [refusedRegistryWrite(paths[file], 'EACCES')] }, () =>
         rejectionOf(() => installAt(pluginDir, paths)));
 
       expect(error, String(error)).toMatchObject({ code: FS_FAULT_CODE, side: 'destination', faultClass: 'refused' });
@@ -588,9 +620,9 @@ describe('a plugin install is one transaction with the registry', () => {
     const { paths, pluginDir } = await installedOnce(getDir());
 
     const error = await underFaults(getDir(), { faults: [
-      { family: 'rename', path: stagedWriteOf(paths.userSettingsPath), errno: 'EACCES' },
-      // The second rename of known_marketplaces.json's temp is its restore.
-      { family: 'rename', path: stagedWriteOf(paths.knownMarketplacesPath), nth: 2, errno: 'EACCES' },
+      refusedRegistryWrite(paths.userSettingsPath, 'EACCES'),
+      // The second write of known_marketplaces.json is its restore.
+      refusedRegistryWrite(paths.knownMarketplacesPath, 'EACCES', 2),
     ] }, () => rejectionOf(() => installAt(pluginDir, paths)));
 
     expect(isVatError(error, TREE_ROLLBACK_INCOMPLETE_CODE), String(error)).toBe(true);

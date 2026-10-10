@@ -164,7 +164,7 @@ describe('vat claude plugin uninstall: which invocation is refused before any lo
 
 describe('vat claude marketplace publish: the report over what was published', () => {
   const { leftoverFindings, publishReport } = publishInternal;
-  const published = { marketplace: 'mp', version: '1.0.0', branch: 'claude-marketplace', files: 3, dryRun: false };
+  const published = { marketplace: 'mp', version: '1.0.0', branch: 'claude-marketplace', files: ['.claude-plugin/marketplace.json', 'plugins/'], dryRun: false };
 
   it('each temp directory left behind is one warning linking it; none is no finding', () => {
     expect(leftoverFindings([])).toEqual([]);

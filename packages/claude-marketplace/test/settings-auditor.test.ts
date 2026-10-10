@@ -254,9 +254,22 @@ describe('settings auditor answer shapes', () => {
       expect(access).toEqual({ exists: true, readable: true });
     });
 
-    it('reports a name too long for this host as UNDETERMINED, never as absent', async () => {
-      // ENAMETOOLONG is the classifier's `wrong-type`, not `absent`: no file could ever be at
-      // that path, and skipping it as "not there" would hide a settings path nothing can load.
+    // ENAMETOOLONG is the classifier's `wrong-type`, not `absent`: no file could ever be at that
+    // path, and skipping it as "not there" would hide a settings path nothing can load. The errno
+    // is the subject, so it is injected: the case runs on every host.
+    it('reports ENAMETOOLONG from the probe as UNDETERMINED, never as absent', async () => {
+      const tooLong = `${dir}/too-long.json`;
+      const restore = refuseAsyncFs('access', tooLong, 'ENAMETOOLONG');
+      try {
+        expect(await probePathAccess(tooLong)).toEqual({ exists: 'undetermined', readable: 'undetermined', accessError: 'ENAMETOOLONG' });
+      } finally {
+        restore();
+      }
+    });
+
+    // …and for real where the OS raises it. Windows does not: a path component over 255 characters is
+    // ERROR_INVALID_NAME there, which Node reports as ENOENT — an honest "nothing is there".
+    it.skipIf(process.platform === 'win32')('reports a name too long for this host as UNDETERMINED, never as absent', async () => {
       const access = await probePathAccess(`${dir}/${'n'.repeat(300)}.json`);
 
       expect(access).toEqual({ exists: 'undetermined', readable: 'undetermined', accessError: 'ENAMETOOLONG' });

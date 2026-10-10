@@ -71,6 +71,8 @@ export async function copyResources(options: CopyResourcesOptions): Promise<void
     await copyTree(safePath.resolve(sourceDir), safePath.resolve(targetDir), {
       side: 'source',
       links: 'follow-contained',
+      // The adopter's build output, written again on every build: what a previous build left is replaced.
+      onto: 'merge',
       ...(exclude.length === 0 ? {} : { filter: (relative: string) => !isExcludedPath(relative, exclude) }),
     });
 
@@ -79,7 +81,8 @@ export async function copyResources(options: CopyResourcesOptions): Promise<void
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Failed to copy resources: ${message}`);
+    // The classified fault (its side, class and errno) stays reachable as the cause.
+    throw new Error(`Failed to copy resources: ${message}`, { cause: error });
   }
 }
 

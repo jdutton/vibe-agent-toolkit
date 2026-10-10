@@ -9,7 +9,7 @@
  * Follows Postel's Law: reads with fallbacks (liberal), writes with structured data.
  */
 
-import { lstatSync, readFileSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 
 import {
   classifyFsFault,
@@ -21,6 +21,7 @@ import {
   safePath,
   VatError,
   withFsFault,
+  withFsFaultSync,
 } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
@@ -67,8 +68,8 @@ export interface InstallPluginOptions {
 }
 
 /**
- * A Claude Code registry or settings file whose CONTENT VAT cannot use: not JSON, the
- * wrong shape, or an entry that is not a plugin key. A file the OS refuses is not this:
+ * A Claude Code registry or settings file whose CONTENT VAT cannot use: not JSON, the wrong
+ * shape (not an object, no `plugins` object, an entry with no `source`), or an entry that is not a plugin key. A file the OS refuses is not this:
  * it is a classified filesystem fault (`FS_FAULT`), decided by the refusal table.
  */
 export const CLAUDE_USER_STATE_UNREADABLE_CODE = 'CLAUDE_USER_STATE_UNREADABLE';
@@ -179,38 +180,77 @@ function readRegistry(filePath: string, side: FsSide): RegistryRead {
   }
 }
 
-/** `value` as an object, or `{}` when it is absent or JSON that is not one. */
-function objectOf(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+const isPlainObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+/** A registry file whose JSON is not the shape Claude Code writes: refused, naming the file and what is wrong. */
+function wrongShape(filePath: string, what: string): VatError {
+  return new VatError(CLAUDE_USER_STATE_UNREADABLE_CODE, `${filePath} is not a file VAT can use: ${what}. Repair or remove the file, then re-run.`);
 }
 
-function installedPluginsOf(read: RegistryRead): InstalledPlugins {
-  return (read.parsed as InstalledPlugins | undefined) ?? { version: 2, plugins: {} };
+/**
+ * `read` as a JSON object — `{}` only when there is NO file. A file holding anything else (an array, a
+ * string) is refused: every reader here is followed by a write of the same file, and reading it as
+ * empty would replace it.
+ */
+function objectIn(filePath: string, read: RegistryRead): Record<string, unknown> {
+  if (read.prior === undefined) return {};
+  if (!isPlainObject(read.parsed)) throw wrongShape(filePath, 'it does not hold a JSON object');
+  return read.parsed;
+}
+
+/** installed_plugins.json as read: `plugins` an object whose every value is a list of install records. */
+function installedPluginsIn(filePath: string, read: RegistryRead): InstalledPlugins {
+  if (read.prior === undefined) return { version: 2, plugins: {} };
+  const parsed = objectIn(filePath, read);
+  const { plugins } = parsed;
+  if (!isPlainObject(plugins)) throw wrongShape(filePath, 'it has no "plugins" object');
+  for (const [key, entries] of Object.entries(plugins)) {
+    if (!Array.isArray(entries) || !entries.every((entry) => isPlainObject(entry))) throw wrongShape(filePath, `"plugins"["${key}"] is not a list of install records`);
+  }
+  return parsed as unknown as InstalledPlugins;
+}
+
+/** known_marketplaces.json as read: every entry an object whose `source` is an object naming its kind. */
+function knownMarketplacesIn(filePath: string, read: RegistryRead): KnownMarketplaces {
+  const parsed = objectIn(filePath, read);
+  for (const [name, entry] of Object.entries(parsed)) {
+    const source = isPlainObject(entry) ? entry['source'] : undefined;
+    if (!isPlainObject(source) || typeof source['source'] !== 'string') throw wrongShape(filePath, `its entry "${name}" has no "source" naming where the marketplace came from`);
+  }
+  return parsed as KnownMarketplaces;
+}
+
+/** settings.json as read: an object whose `enabledPlugins`, when there, is an object. */
+function userSettingsIn(filePath: string, read: RegistryRead): Record<string, unknown> {
+  const parsed = objectIn(filePath, read);
+  const enabled = parsed['enabledPlugins'];
+  if (enabled !== undefined && !isPlainObject(enabled)) throw wrongShape(filePath, 'its "enabledPlugins" is not an object');
+  return parsed;
 }
 
 /**
  * Read known_marketplaces.json from the Claude plugins directory.
- * Returns an empty object if the file does not exist; throws if it is there but unreadable.
+ * Returns an empty object if the file does not exist; throws if it is there but unreadable or the wrong shape.
  */
 export function readKnownMarketplaces(paths: ClaudeUserPaths, side: FsSide): KnownMarketplaces {
-  return objectOf(readRegistry(paths.knownMarketplacesPath, side).parsed) as KnownMarketplaces;
+  return knownMarketplacesIn(paths.knownMarketplacesPath, readRegistry(paths.knownMarketplacesPath, side));
 }
 
 /**
  * Read installed_plugins.json from the Claude plugins directory.
- * Returns empty registry if the file does not exist; throws if it is there but unreadable.
+ * Returns empty registry if the file does not exist; throws if it is there but unreadable or the wrong shape.
  */
 export function readInstalledPlugins(paths: ClaudeUserPaths, side: FsSide): InstalledPlugins {
-  return installedPluginsOf(readRegistry(paths.installedPluginsPath, side));
+  return installedPluginsIn(paths.installedPluginsPath, readRegistry(paths.installedPluginsPath, side));
 }
 
 /**
  * Read user settings.json as a plain object.
- * Returns an empty object if the file does not exist or holds JSON that is not an
- * object; throws if it is there but cannot be read or parsed.
+ * Returns an empty object if the file does not exist; throws if it is there but cannot be read or
+ * parsed, or holds JSON that is not an object.
  */
 export function readUserSettings(paths: ClaudeUserPaths, side: FsSide): Record<string, unknown> {
-  return objectOf(readRegistry(paths.userSettingsPath, side).parsed);
+  return userSettingsIn(paths.userSettingsPath, readRegistry(paths.userSettingsPath, side));
 }
 
 /**
@@ -233,7 +273,12 @@ export function readRegistryFiles(paths: ClaudeUserPaths): RegistryFiles {
     installed: readRegistry(paths.installedPluginsPath, 'destination'),
     settings: readRegistry(paths.userSettingsPath, 'destination'),
   };
-  return { reads, known: objectOf(reads.known.parsed) as KnownMarketplaces, installed: installedPluginsOf(reads.installed), settings: objectOf(reads.settings.parsed) };
+  return {
+    reads,
+    known: knownMarketplacesIn(paths.knownMarketplacesPath, reads.known),
+    installed: installedPluginsIn(paths.installedPluginsPath, reads.installed),
+    settings: userSettingsIn(paths.userSettingsPath, reads.settings),
+  };
 }
 
 /** One file of an edit: its prior bytes, and `data` serialised as its new content. */
@@ -241,45 +286,127 @@ export function registryFileChange(path: string, read: RegistryRead, data: unkno
   return { path, prior: read.prior, next: JSON.stringify(data, null, 2) };
 }
 
-/** `settings.enabledPlugins` as an object, or `{}` when it is absent or not one. */
+/** `settings.enabledPlugins` as an object, or `{}` when it is absent (a `settings` read here never holds another shape). */
 export function enabledPluginsOf(settings: Record<string, unknown>): Record<string, unknown> {
-  return objectOf(settings['enabledPlugins']);
+  const enabled = settings['enabledPlugins'];
+  return isPlainObject(enabled) ? enabled : {};
 }
 
-/** What VAT may replace or remove under ~/.claude: the marketplace copies and the plugin cache are its own. */
+/** What VAT may replace or remove under ~/.claude once a marketplace is proven its own: that marketplace's plugin cache. */
 export const VAT_STATE = { kind: 'vat-state' } as const;
 
 /**
  * The file VAT writes into the root of a marketplace directory its install made — in the
- * marketplace's own staged tree (`planPackageInstall`), so it lands exactly with the copy. Claude Code registers marketplaces of every source — npm included — so neither a
- * known_marketplaces.json entry nor its source can tell VAT's from the user's; an uninstall removes a
- * marketplace directory only when this marker is in it. It carries no version: it is there or it is not.
+ * marketplace's own staged tree (`planPackageInstall`), so it lands exactly with the copy. It is the
+ * ONLY witness that VAT made the directory: Claude Code registers marketplaces of every source — npm
+ * included — so neither a known_marketplaces.json entry nor a directory's name can tell VAT's from the
+ * user's. An install replaces, and an uninstall removes, a marketplace only on its word (or `--force`).
+ * It records what the marketplace was installed from, and no version.
  */
 export const VAT_MARKETPLACE_MARKER = '.vat-marketplace';
 
-/** What {@link VAT_MARKETPLACE_MARKER} holds: fixed text, no version — it is there or it is not. */
-export const MARKER_CONTENTS = 'This marketplace was installed by vibe-agent-toolkit (vat claude plugin install).\n'
-  + 'vat claude plugin uninstall removes it, with this file, when the last plugin it installed here goes.\n';
+/** The line of the marker that records the installer, as JSON after this prefix. */
+const MARKER_INSTALLER_PREFIX = 'installed-from: ';
 
 /**
- * Whether VAT made the marketplace directory `dir`: its {@link VAT_MARKETPLACE_MARKER} is a regular file
- * in it. No marker — or no directory — is not VAT's. The marker is the marketplace's own, so a probe of
- * it the OS refuses proves nothing either way and is thrown: "absent" is believed only when the
- * directory's listing agrees.
- *
- * @throws a `destination` fault naming the marker when it cannot be examined
+ * What {@link VAT_MARKETPLACE_MARKER} holds for a marketplace installed from `installedFrom`
+ * ({@link installerIdentity}): two sentences for whoever opens it, and the installer on a line of its own.
  */
-export function vatMarketplaceVerdict(dir: string): OwnershipVerdict {
+export function markerContents(installedFrom: string): string {
+  return 'This marketplace was installed by vibe-agent-toolkit (vat claude plugin install).\n'
+    + 'vat claude plugin uninstall removes it, with this file, when the last plugin it installed here goes.\n'
+    + `${MARKER_INSTALLER_PREFIX}${JSON.stringify(installedFrom)}\n`;
+}
+
+/** Which field of a marketplace source names what it came from, per source kind. */
+const INSTALLER_FIELD: Readonly<Record<string, string>> = { npm: 'package', github: 'repo', url: 'url' };
+
+/**
+ * What names the installer of a marketplace — `npm:<package>`, `github:<repo>`, `url:<url>` — as its
+ * source records it; `undefined` for a source that names none VAT can compare.
+ */
+export function installerIdentity(source: { readonly source: string; readonly [key: string]: unknown }): string | undefined {
+  const field = Object.hasOwn(INSTALLER_FIELD, source.source) ? INSTALLER_FIELD[source.source] : undefined;
+  const value = field === undefined ? undefined : source[field];
+  return typeof value === 'string' && value !== '' ? `${source.source}:${value}` : undefined;
+}
+
+/** VAT's marker in a marketplace directory: absent, or present with the installer it records (`undefined`: a marker written before it recorded one). */
+type MarkerRead = { readonly present: false } | { readonly present: true; readonly installedFrom: string | undefined };
+
+/** The installer a marker's text records: the JSON string after the prefix, on a line of its own. */
+const MARKER_INSTALLER_LINE = /^installed-from: ("(?:[^"\\]|\\.)*")$/m;
+
+/** The installer `text` records, or `undefined` for a marker that records none (written before it did, or edited). */
+function installerRecordedIn(text: string): string | undefined {
+  const quoted = MARKER_INSTALLER_LINE.exec(text)?.[1];
+  // The pattern admits only a JSON string literal, so the parse cannot fail on what it matched.
+  const value: unknown = quoted === undefined ? undefined : JSON.parse(quoted);
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+/**
+ * Read VAT's marker in `dir`. The marker is the marketplace's own, so a probe or a read of it the OS
+ * refuses proves nothing either way and is thrown: "absent" is believed only when the directory's
+ * listing agrees.
+ *
+ * @throws a `destination` fault naming the marker when it cannot be examined or read
+ */
+function readMarker(dir: string): MarkerRead {
   const marker = safePath.join(dir, VAT_MARKETPLACE_MARKER);
-  const notOurs = { owned: false, reason: `it holds no ${VAT_MARKETPLACE_MARKER} marker: VAT did not install it (or an older VAT did, before the marker), so it is left for its owner` } as const;
   const ctx = { side: 'destination', action: "examine VAT's marketplace marker", path: marker } as const;
   try {
-    return lstatSync(marker).isFile() ? { owned: true } : notOurs;
+    if (!lstatSync(marker).isFile()) return { present: false };
   } catch (error) {
     if (!isPathAbsentError(error)) throw classifyFsFault(error, ctx);
     requireConfirmedAbsent(marker, error, ctx, { follows: false });
-    return notOurs;
+    return { present: false };
   }
+  return { present: true, installedFrom: installerRecordedIn(withFsFaultSync(ctx, () => readFileSync(marker, 'utf-8'))) };
+}
+
+/**
+ * Whose word a marketplace is taken on.
+ * - `marker`: VAT's marker alone (a key the user named: nothing says which package it should be from).
+ * - `installer`: VAT's marker recording this installer; or — for a marker that records none, and for a
+ *   directory with no marker at all, which is what every VAT before the marker left — a
+ *   known_marketplaces.json entry whose source is this very installer. Never the directory's name.
+ */
+export type MarketplaceClaim = { readonly kind: 'marker' } | { readonly kind: 'installer'; readonly installedFrom: string };
+
+const NO_MARKER = `it holds no ${VAT_MARKETPLACE_MARKER} marker`;
+
+/** What known_marketplaces.json says a marketplace came from, for a refusal's wording. */
+function registryRecord(known: KnownMarketplaceEntry | undefined): string {
+  if (known === undefined) return 'known_marketplaces.json does not list it';
+  const recorded = installerIdentity(known.source) ?? `a ${known.source.source} marketplace`;
+  return `known_marketplaces.json records it as ${recorded}`;
+}
+
+/**
+ * Whether the marketplace directory `dir` — which is there — is VAT's to replace or remove under `claim`.
+ *
+ * @param dir - The marketplace directory
+ * @param claim - Whose word it is taken on
+ * @param known - Its known_marketplaces.json entry, as the registry was read
+ * @throws a `destination` fault naming the marker when it cannot be examined
+ */
+export function marketplaceVerdict(dir: string, claim: MarketplaceClaim, known: KnownMarketplaceEntry | undefined): OwnershipVerdict {
+  const marker = readMarker(dir);
+  if (claim.kind === 'marker') {
+    return marker.present ? { owned: true } : { owned: false, reason: `${NO_MARKER}: VAT did not install it (or a VAT older than the marker did), so it is left for its owner` };
+  }
+  const recorded = marker.present ? marker.installedFrom : undefined;
+  if (recorded !== undefined) {
+    return recorded === claim.installedFrom ? { owned: true } : { owned: false, reason: `VAT installed it from ${recorded}, not from ${claim.installedFrom}` };
+  }
+  if (known !== undefined && installerIdentity(known.source) === claim.installedFrom) return { owned: true };
+  return { owned: false, reason: `${marker.present ? 'its marker names no installer' : NO_MARKER} and ${registryRecord(known)}, so nothing shows VAT installed it from ${claim.installedFrom}` };
+}
+
+/** Whether `dir` is a directory holding nothing: nothing of anyone's is lost by installing over it. */
+export function isEmptyDirectory(dir: string): boolean {
+  return withFsFaultSync({ side: 'destination', action: 'list the marketplace directory', path: dir }, () => lstatSync(dir).isDirectory() && readdirSync(dir).length === 0);
 }
 
 /** Where a plugin's version lives in the cache: `cache/<marketplace>/<plugin>/<version>`. */
@@ -301,8 +428,24 @@ export function recordPluginInstall(
   const { marketplaceName, pluginName, version, source } = install;
   const pluginKey = `${pluginName}@${marketplaceName}`;
   files.known[marketplaceName] = { source: source as MarketplaceSource, installLocation: safePath.join(paths.marketplacesDir, marketplaceName), lastUpdated: now };
-  files.installed.plugins[pluginKey] = [{ scope: 'user', installPath: pluginCacheDir(paths, install), version, installedAt: now, lastUpdated: now }];
+  // One record per scope: only the user-scope one is this install's to replace.
+  files.installed.plugins[pluginKey] = [{ scope: 'user', installPath: pluginCacheDir(paths, install), version, installedAt: now, lastUpdated: now }, ...otherScopeInstalls(files, pluginKey)];
   files.settings['enabledPlugins'] = { ...enabledPluginsOf(files.settings), [pluginKey]: true };
+}
+
+/** The install records of `pluginKey` that are not the user-scope one VAT writes (a project-scope install Claude Code made). */
+export function otherScopeInstalls(files: RegistryFiles, pluginKey: string): InstalledPluginEntry[] {
+  return (files.installed.plugins[pluginKey] ?? []).filter((entry) => entry.scope !== 'user');
+}
+
+/**
+ * Drop the user-scope install record of `pluginKey` — VAT's — keeping any other scope's; the key goes
+ * when none is left. Mutates `files`.
+ */
+export function dropUserInstall(files: RegistryFiles, pluginKey: string): void {
+  const others = otherScopeInstalls(files, pluginKey);
+  if (others.length === 0) delete files.installed.plugins[pluginKey];
+  else files.installed.plugins[pluginKey] = others;
 }
 
 /** The edit that writes all three registry files as `files` now holds them, each with its prior bytes. */

@@ -222,11 +222,9 @@ const COMMANDS_IMPORT_BOUNDARY_RATCHET = { allowFiles: [
   'packages/cli/src/commands/agent/install.ts',                       // access — the package.json probe around the agent
   'packages/cli/src/commands/agent/installed.ts',                     // ENUM: readdir of the install dir
   'packages/cli/src/commands/audit.ts',                               // existsSync/stat probes only — the walker is gone (audit/scan-population.ts)
-  'packages/cli/src/commands/audit/git-url-clone.ts',                 // mkdtempSync — clone scratch dir (disposed of via disposeTempDir)
   'packages/cli/src/commands/build.ts',                               // ENUM: readdir for phase output; existsSync probes
   'packages/cli/src/commands/cache/clear.ts',                         // ENUM: readdir/lstat measuring the cache before its remove plan
-  'packages/cli/src/commands/claude/marketplace/git-publish.ts',      // ENUM: readdirSync of the publish tree; mkdtempSync — staging repo
-  'packages/cli/src/commands/claude/marketplace/publish-tree.ts',     // writeFile/cp/readFileSync — publish tree assembly
+  'packages/cli/src/commands/claude/marketplace/git-publish.ts',      // ENUM: readdirSync of the publish tree
   'packages/cli/src/commands/claude/marketplace/validate.ts',         // ENUM: readdirSync over plugins/ and skills/ (lane table: raw-readdir)
   'packages/cli/src/commands/claude/org/skills.ts',                   // ENUM: readdirSync collectFiles + node_modules listing (lane table: raw-readdir)
   'packages/cli/src/commands/claude/plugin/build.ts',                 // ENUM: readdir; mkdir/cp/writeFile — marketplace build
@@ -285,7 +283,6 @@ const NO_EXISTSSYNC_RATCHET = { allowFiles: [
   'packages/agent-skills/src/validators/plugin-hosted-shape.ts',
   'packages/agent-skills/src/validators/referenced-path-missing.ts',
   'packages/agent-skills/src/validators/skill-validator.ts',
-  'packages/claude-marketplace/src/install/plugin-list.ts',
   'packages/cli/src/bin/vat.ts',
   'packages/cli/src/commands/audit.ts',
   'packages/cli/src/commands/build.ts',

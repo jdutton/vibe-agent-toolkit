@@ -8,7 +8,7 @@
 import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 
-import { direntKindFollowing, forEachInOrder, isNoSuchEntryError, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, forEachInOrder, isNoSuchEntryError, isPathAbsentError, requireTestScratch, safePath } from '@vibe-agent-toolkit/utils';
 
 import { SessionNotFoundError } from './errors.js';
 import {
@@ -41,7 +41,8 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
   private readonly ttl: number | undefined;
 
   constructor(options: FileSessionStoreOptions<TState> = {}) {
-    this.baseDir = options.baseDir ?? safePath.join(homedir(), '.vat-sessions');
+    // The default is user state under the home directory: a test process must name its own `baseDir`.
+    this.baseDir = options.baseDir ?? requireTestScratch(safePath.join(homedir(), '.vat-sessions'), 'The session store');
     this.generateId = options.generateId ?? (() => crypto.randomUUID());
     this.createInitialState = options.createInitialState;
     this.ttl = options.ttl;

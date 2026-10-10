@@ -41,7 +41,10 @@ export {
 // the host gates, and the hostile tree every sink is tested against.
 export * from './testing/executables.js';
 export * from './testing/fault-fs.js';
-export * from './testing/fault-spec.js';
+// By name: the harness's vocabulary, not its op table (`OPS`, `OpSpec`, `PathShape` are `fault-fs.ts`'s
+// own wiring, and an `export *` here made them this subpath's API). Pinned by `module-subpaths.test.ts`.
+export { faultFsSpecOf, faultRuleOf, INJECTED_ERRNOS, injectedErrnoError } from './testing/fault-spec.js';
+export type { FaultFsSpec, FaultRule, FaultSpec, FsApi, FsOpFamily, InjectedErrno } from './testing/fault-spec.js';
 export * from './testing/hostile-tree.js';
 export * from './testing/platform-gates.js';
 export * from './testing/temp-dir.js';

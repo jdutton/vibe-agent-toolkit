@@ -101,6 +101,9 @@ async function planCase(c: VerbCase, base: string, shard: readonly [number, numb
   const roots = rootsOf(c, run.r);
   const [slice, count] = shard;
   const all = selectInjectionPoints(run.session.calls, roots, MODE).map((point) => ({ point, id: injectionId(c, point, run.r) }));
+  // The floor beside the per-file ceiling: a case whose trace selects NO injection is two green golden
+  // tests per file and nothing else — a matrix case that injects nothing has stopped being one.
+  if (all.length === 0 && goldenIsClean(golden.outcome)) throw new Error(`fault matrix: ${c.id} selected no injection point from ${run.session.calls.length} traced call(s)`);
   const allIds = all.map(({ id }) => id);
   const duplicate = allIds.find((id, index) => allIds.indexOf(id) !== index);
   if (duplicate !== undefined) throw new Error(`fault matrix: two injections of ${c.id} share the id ${duplicate}`);
@@ -192,7 +195,7 @@ export function shardFileName(name: string, index: number, files: number): strin
 
 /**
  * Plan shard file `index` of `shard.files`: run the case's golden and discovery runs, keep this
- * file's slice of the injections (point `i` when `i % files === index`), and hand back its tests.
+ * file's slice of the injections (those whose id hashes to it: `shardOf(id, files) === index`), and hand back its tests.
  * Await it at the top level of the file and declare each test it returns.
  *
  * A `posixOnly` case on win32 declares its own visible skip and returns no tests.

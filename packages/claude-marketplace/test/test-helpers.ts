@@ -106,6 +106,19 @@ export async function rejectionOf(run: () => Promise<unknown>): Promise<unknown>
 /** Whether a path is the temp a registry write of `file` goes through (`replaceFile` stages beside the file, then renames it over). */
 export const stagedWriteOf = (file: string) => (p: string): boolean => p.includes(`/.${file.slice(file.lastIndexOf('/') + 1)}.vat-staged-`);
 
+/**
+ * The rule that makes VAT's write of the registry file `file` fail with `errno`: the exclusive open of
+ * the temp `replaceFile` stages beside it (the `nth` such open: 2 is the restore of a file already
+ * written once).
+ *
+ * ⛔ The open, never the rename that follows it. A rename refused with `EACCES`, `EPERM` or `EBUSY` is
+ * CONTENTION on win32 — a scanner, an indexer — and `renameFileAtomic` retries it there, so a single
+ * injected refusal of the rename is a write that succeeds on Windows: the test would be asking for a
+ * failure the product is right not to have. The open is not retried on any host.
+ */
+export const refusedRegistryWrite = (file: string, errno: FaultRule['errno'], nth = 1): FaultRule =>
+  ({ family: 'write', op: 'open', path: stagedWriteOf(file), nth, errno });
+
 /** Build a markdown bash code block containing a single command */
 export function bashCodeBlock(command: string): string {
   return ['```bash', command, '```'].join('\n');
@@ -136,13 +149,14 @@ export async function installOnePlugin(
   const { changes, registry } = planPackageInstall({
     marketplaces: [{
       marketplaceName,
-      write: (staged) => copyTree(pluginDir, safePath.join(staged, 'plugins', pluginName), { links: 'preserve', side }),
+      write: (staged) => copyTree(pluginDir, safePath.join(staged, 'plugins', pluginName), { links: 'preserve', side, onto: 'fresh' }),
       reads: [pluginDir],
       plugins: [{ pluginName, cacheFill: { from: 'copy', source: pluginDir, side, links: 'preserve' } }],
     }],
     version,
     source,
     replacedPluginKeys: [],
+    force: false,
     paths,
   });
   return applyTreePlan(await planTreeChanges(changes), { afterSwap: () => registry.apply() });

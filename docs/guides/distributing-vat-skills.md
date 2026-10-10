@@ -78,6 +78,15 @@ Inspect what is installed with `vat skills list --user` (reads `~/.claude` only)
 (`--all` for every plugin the current package installed); skills installed flat into a skills
 directory are not registered as plugins — delete the directory. There is no `vat skills uninstall`.
 
+A marketplace belongs to the package that installed it. `vat claude plugin install` writes a
+`.vat-marketplace` marker naming the package into `~/.claude/plugins/marketplaces/<name>/`, replaces
+that directory only when the marker (or, for an install older than the marker, the
+`known_marketplaces.json` entry) names the same package, and refuses anything else standing there —
+a marketplace Claude Code added, or one another package installed — unless `--force` is given. So
+one marketplace name is one npm package: two packages cannot ship plugins into the same marketplace.
+`vat claude plugin uninstall` follows the same witness: a plugin it cannot show VAT installed is left
+as it is and reported (`PLUGIN_NOT_INSTALLED_BY_VAT`); `--force` removes it anyway.
+
 ## Packaging options
 
 `skills.config.<name>` in `vibe-agent-toolkit.config.yaml` (never `package.json`) controls what a

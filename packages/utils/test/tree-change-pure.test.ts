@@ -8,9 +8,12 @@ import { describe, expect, it } from 'vitest';
 
 import { classifyFsFault } from '../src/errors/fs-fault.js';
 import { isVatError } from '../src/errors/vat-error.js';
-import { identityOf, identityOracleOver, insideBy, sameBy, type Examiner, type Identity } from '../src/tree-change/identity-compare.js';
+import { identityOf, identityOracleOver, insideBy, type PhysicalSpellings, sameBy, type Examiner, type Identity } from '../src/tree-change/identity-compare.js';
 import { TREE_ROLLBACK_INCOMPLETE_CODE, TreeRollbackIncompleteError } from '../src/tree-change/rollback-error.js';
 import { isParkedTreeEntry, isTreeChangeResidue, PARKED_SUFFIX, stagingName, stagingPrefix } from '../src/tree-change/staging-names.js';
+
+/** An entry that is physically exactly where its spelling says: no link on the way. */
+const NOWHERE_ELSE: PhysicalSpellings = () => [];
 
 describe('isTreeChangeResidue', () => {
   it.each([
@@ -95,30 +98,44 @@ describe('sameBy', () => {
 describe('insideBy', () => {
   const id = (value: string): Identity => ({ id: value });
 
+  // A link to a directory strictly BELOW the ancestor: no directory of the spelling given is the
+  // ancestor or a link to it; only where the child physically is leads up through it.
+  it('is inside when only the PHYSICAL way up passes through the ancestor (a link pointing below it)', () => {
+    const examine = examinerOver({ '/installed': [id('1:5')], '/installed/sub': [id('1:6')], '/work': [id('1:7'), id('1:6')], '/': [id('1:2')] });
+    const physical: PhysicalSpellings = (entry) => (entry === '/work/pkg' ? ['/installed/sub/pkg'] : []);
+    expect(insideBy(examine, '/work/pkg', '/installed', NOWHERE_ELSE)).toBe('outside');
+    expect(insideBy(examine, '/work/pkg', '/installed', physical)).toBe('inside');
+  });
+
+  it('is unknown, never outside, when the OS will not say where the child physically is', () => {
+    const examine = examinerOver({ '/installed': [id('1:5')], '/work': [id('1:7')], '/': [id('1:2')] });
+    expect(insideBy(examine, '/work/pkg', '/installed', () => undefined)).toBe('unknown');
+  });
+
   it('is inside when a directory on the way up is the ancestor under another spelling', () => {
     const examine = examinerOver({ '/real/plugins': [id('1:5')], '/alias': [id('1:5')], '/alias/x': [id('1:6')] });
-    expect(insideBy(examine, '/alias/x/file', '/real/plugins')).toBe('inside');
+    expect(insideBy(examine, '/alias/x/file', '/real/plugins', NOWHERE_ELSE)).toBe('inside');
   });
 
   it('is outside when every directory up to the root was examined and none is the ancestor', () => {
     const examine = examinerOver({ '/real/plugins': [id('1:5')], '/other': [id('1:7')], '/': [id('1:2')] });
-    expect(insideBy(examine, '/other/file', '/real/plugins')).toBe('outside');
+    expect(insideBy(examine, '/other/file', '/real/plugins', NOWHERE_ELSE)).toBe('outside');
   });
 
   it('is not inside itself: only a strict ancestor counts', () => {
     const examine = examinerOver({ '/real/plugins': [id('1:5')], '/real': [id('1:4')], '/': [id('1:2')] });
-    expect(insideBy(examine, '/real/plugins', '/real/plugins')).toBe('outside');
+    expect(insideBy(examine, '/real/plugins', '/real/plugins', NOWHERE_ELSE)).toBe('outside');
   });
 
   it('is unknown when the ancestor cannot be examined, or a directory on the way up cannot and none matched', () => {
-    expect(insideBy(examinerOver({ '/anc': undefined }), '/x/y', '/anc')).toBe('unknown');
+    expect(insideBy(examinerOver({ '/anc': undefined }), '/x/y', '/anc', NOWHERE_ELSE)).toBe('unknown');
     const examine = examinerOver({ '/anc': [id('1:5')], '/x': undefined, '/': [id('1:2')] });
-    expect(insideBy(examine, '/x/y', '/anc')).toBe('unknown');
+    expect(insideBy(examine, '/x/y', '/anc', NOWHERE_ELSE)).toBe('unknown');
   });
 
   it('a match above an unexaminable directory still answers inside', () => {
     const examine = examinerOver({ '/anc': [id('1:5')], '/anc/sub': undefined });
-    expect(insideBy(examine, '/anc/sub/file', '/anc')).toBe('inside');
+    expect(insideBy(examine, '/anc/sub/file', '/anc', NOWHERE_ELSE)).toBe('inside');
   });
 });
 
@@ -169,7 +186,7 @@ describe('identityOracleOver', () => {
     const oracle = identityOracleOver((entry) => {
       reads.push(entry);
       return [{ id: entry === '/a/link' || entry === '/a/target' ? '1:9' : `1:${entry.length}` }];
-    });
+    }, NOWHERE_ELSE);
 
     expect(oracle.sameEntry('/a/link', '/a/target')).toBe('same');
     expect(oracle.sameEntry('/a/link', '/a/target')).toBe('same');
@@ -184,7 +201,7 @@ describe('identityOracleOver', () => {
       reads += 1;
       if (entry === '/a/locked') throw fault;
       return [{ id: '1:5' }];
-    });
+    }, NOWHERE_ELSE);
 
     expect(oracle.refuses('/a/locked')).toBe(true);
     expect(() => oracle.identities('/a/locked')).toThrow(fault as Error);
@@ -196,7 +213,7 @@ describe('identityOracleOver', () => {
   });
 
   it('answers containment from the same memo', () => {
-    const oracle = identityOracleOver((entry) => (entry === '/real' || entry === '/alias' ? [{ id: '1:5' }] : [{ id: `2:${entry.length}` }]));
+    const oracle = identityOracleOver((entry) => (entry === '/real' || entry === '/alias' ? [{ id: '1:5' }] : [{ id: `2:${entry.length}` }]), NOWHERE_ELSE);
     expect(oracle.isInside('/alias/sub/file', '/real')).toBe('inside');
     expect(oracle.isInside('/elsewhere/file', '/real')).toBe('outside');
   });
@@ -207,7 +224,7 @@ describe('identityOracleOver', () => {
     const oracle = identityOracleOver(() => {
       reads += 1;
       throw defect;
-    });
+    }, NOWHERE_ELSE);
 
     expect(() => oracle.identities('/a')).toThrow(defect);
     expect(() => oracle.refuses('/a')).toThrow(defect);
