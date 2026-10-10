@@ -338,7 +338,7 @@ export function defineTwoPhaseConversationalAssistant<TInput, TOutput>(
   }
 
   // Default implementation: Two-phase pattern
-  const defaultHandler = async (_input: TInput, ctx: ConversationalContext): Promise<TOutput> => {
+  const defaultHandler = (_input: TInput, ctx: ConversationalContext): Promise<TOutput> => {
     // Check if gathering prompt is in history
     const hasGatheringPrompt = ctx.history.some(
       (msg) => msg.role === 'system' && msg.content.includes(gatheringPrompt),
@@ -355,9 +355,11 @@ export function defineTwoPhaseConversationalAssistant<TInput, TOutput>(
     // Phase 1: Gathering
     // Phase 2: Extraction
 
-    throw new Error(
-      'Default two-phase handler not yet implemented. ' +
-        'Please provide a custom handler or use the generated prompts manually.',
+    return Promise.reject(
+      new Error(
+        'Default two-phase handler not yet implemented. ' +
+          'Please provide a custom handler or use the generated prompts manually.',
+      ),
     );
   };
 

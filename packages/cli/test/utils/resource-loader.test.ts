@@ -154,6 +154,7 @@ describe('loadResourcesWithConfig', () => {
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
       unreadable: 'refuse',
+      outputs: [],
       include: INCLUDE_PATTERNS,
       exclude: EXCLUDE_PATTERNS,
     });
@@ -178,6 +179,7 @@ describe('loadResourcesWithConfig', () => {
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
       unreadable: 'refuse',
+      outputs: [],
       include: SUBTREE_INCLUDE,
       exclude: EXCLUDE_PATTERNS,
     });
@@ -194,6 +196,7 @@ describe('loadResourcesWithConfig', () => {
     expect(crawlPatterns()).toEqual({
       baseDir: PROJECT_ROOT,
       unreadable: 'refuse',
+      outputs: [],
       include: ['**/*.md', '**/*.html', '**/*.htm'],
       exclude: EXCLUDE_PATTERNS,
     });
@@ -209,6 +212,7 @@ describe('loadResourcesWithConfig', () => {
     expect(crawlPatterns()).toEqual({
       baseDir: safePath.resolve('.'),
       unreadable: 'refuse',
+      outputs: [],
       include: ['docs/**/*.md', 'docs/**/*.html', 'docs/**/*.htm'],
       exclude: EXCLUDE_PATTERNS,
     });
@@ -223,7 +227,7 @@ describe('loadResourcesWithConfig', () => {
 
     const result = await loadResourcesWithConfig(EXPLICIT_PATH, PROJECT_ROOT, logger);
 
-    expect(crawlPatterns()).toEqual({ baseDir: EXPLICIT_PATH, unreadable: 'refuse' });
+    expect(crawlPatterns()).toEqual({ baseDir: EXPLICIT_PATH, unreadable: 'refuse', outputs: [] });
     expect(warnCalls.join('\n')).toContain(EXPLICIT_PATH);
     expect(result.scanPath).toBe(EXPLICIT_PATH);
   });
@@ -316,7 +320,7 @@ describe('loadResourcesWithConfig', () => {
 
     const result = await loadResourcesWithConfig(undefined, PROJECT_ROOT, logger);
 
-    expect(crawlPatterns()).toEqual({ baseDir: PROJECT_ROOT, unreadable: 'refuse' });
+    expect(crawlPatterns()).toEqual({ baseDir: PROJECT_ROOT, unreadable: 'refuse', outputs: [] });
     expect(result.config).toBeUndefined();
   });
 

@@ -14,7 +14,7 @@
  *
  * ## What the primitive expresses, measured against the shipped walker
  *
- * The equality experiment lives in `test/projection-skill-extent.test.ts`, and
+ * The equality experiment lives in `test/integration/projection-skill-extent.integration.test.ts`, and
  * its result is that **membership** agrees exactly on a corpus whose every link
  * target is an ordinary reachable file, and — since the primitive gained a
  * labelled `refusals` cascade plus `admitPaths` — on three of the cascade
@@ -69,7 +69,7 @@
  * aggregate "verified" would be false for one of them.**
  *
  * - **`skill-definition` IS measured against the walker, at FIXTURE scale.**
- *   `projection-skill-extent.test.ts` builds a corpus containing a sibling
+ *   `projection-skill-extent.integration.test.ts` builds a corpus containing a sibling
  *   `skills/tool-b/SKILL.md`, and that divergence — named there, as a
  *   one-element equality — closes when this rule lands.
  * - **`gitignored` is reasoned, not measured against the walker anywhere.** The

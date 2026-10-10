@@ -365,7 +365,6 @@ describe('ExtentDeclarationSchema', () => {
 
   it('is reachable from ProjectConfigSchema as an extents record keyed by name', () => {
     const config = ProjectConfigSchema.parse({
-      version: 1,
       extents: {
         [EXTENT_NAME]: {
           kind: SKILL_KIND,

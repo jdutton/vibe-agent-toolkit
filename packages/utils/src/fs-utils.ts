@@ -16,10 +16,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { FollowedWalk } from './dirent-kind.js';
-import { isFilesystemAccessError } from './errors/errno.js';
-import { VatError } from './errors/vat-error.js';
-import { isUnderRoot } from './path-containment.js';
+import { fsFaultOf, isRetryableShortageError } from './errors/errno-table.js';
+import { everyInOrder } from './in-order.js';
 import { toForwardSlash, toNfc } from './path-core.js';
 import { safePath } from './path-utils.js';
 
@@ -77,7 +75,7 @@ export type DirectoryListing =
 /**
  * Turn a `readdir` rejection into the failure it actually is.
  *
- * ⚠️ **`isFilesystemAccessError` is deliberately NOT used here, and that is not
+ * ⚠️ **`fsFaultOf` is deliberately NOT used here, and that is not
  * an oversight.** It answers a different question — *"is this the environment's
  * fault or a bug in our code?"* — and to answer it, it deliberately groups
  * `ENOENT` together with `EACCES`. That grouping IS the conflation this function
@@ -93,42 +91,44 @@ export type DirectoryListing =
  * @returns The listing outcome that error stands for
  */
 export function listingFailure(error: unknown): DirectoryListing {
-  const code =
-    typeof error === 'object' && error !== null && 'code' in error
-      ? (error as { code: unknown }).code
-      : undefined;
-
-  // `ENOTDIR` is absence too: a path component that is a file is a directory
-  // that does not exist, which is exactly what the caller has to report.
-  if (code === 'ENOENT' || code === 'ENOTDIR') return { outcome: 'absent' };
+  const facts = fsFaultOf(error);
+  // The `absent` class holds `ENOTDIR` too: a path component that is a file is a
+  // directory that does not exist, which is exactly what the caller has to report.
+  if (facts?.faultClass === 'absent') return { outcome: 'absent' };
+  if (facts !== undefined) return { outcome: 'unreadable', code: facts.errno };
+  // An errno outside the classifier's table is still a refusal, reported as itself.
+  const code = typeof error === 'object' && error !== null && 'code' in error ? (error as { code: unknown }).code : undefined;
   return { outcome: 'unreadable', code: typeof code === 'string' ? code : 'UNKNOWN' };
 }
 
 /**
- * Refusal errnos that a *re-ask* can legitimately answer differently.
+ * Whether a listing refused with `code` could be answered differently by a later
+ * ask — {@link isRetryableShortageError}: busy, or out of descriptors.
  *
- * ⚠️ **This set decides what may be MEMOIZED, which makes it a correctness
- * boundary rather than a taxonomy.** `EACCES` (a mode bit) and `ELOOP` (a
- * committed symlink cycle) are facts about the tree: they hold for the whole
- * run, re-asking buys the same refusal, and caching them is exactly what
- * {@link FsLookupCache} is for. Descriptor exhaustion is not a fact about the
- * tree at all — it is a fact about this process at one instant — and a memo
- * that keeps one un-verifies every path under that directory for the rest of
- * the run, producing a burst of findings that a re-run does not reproduce.
+ * ⚠️ **This decides what may be MEMOIZED, which makes it a correctness boundary
+ * rather than a taxonomy.** `EACCES` (a mode bit) and `ELOOP` (a committed
+ * symlink cycle) are facts about the tree: they hold for the whole run, re-asking
+ * buys the same refusal, and caching them is exactly what {@link FsLookupCache}
+ * is for. A descriptor shortage or a busy handle is not a fact about the tree at
+ * all — it is a fact about this process at one instant — and a memo that keeps
+ * one un-verifies every path under that directory for the rest of the run,
+ * producing a burst of findings that a re-run does not reproduce.
  *
- * **Deliberately short, and everything unlisted is treated as stable.** The two
- * mistakes are not symmetric: memoizing a transient refusal costs a burst of
- * wrong answers *within one run*, while re-asking a stable one costs an
- * unbounded number of syscalls on a `--x` directory that will refuse every one
- * of them — and on a dead network mount, each of those blocks. `EAGAIN` is
- * included because it is literally "try again"; `ETIMEDOUT`/`ESTALE`/`EBUSY`
- * are not, because a re-ask against failing hardware or a hung mount is the
- * storm this set exists to avoid.
+ * **Everything else is treated as stable.** The two mistakes are not symmetric:
+ * memoizing a transient refusal costs a burst of wrong answers *within one run*,
+ * while re-asking a stable one costs an unbounded number of syscalls on a `--x`
+ * directory that will refuse every one of them. The `device` class (`ETIMEDOUT`,
+ * `ESTALE`, `EIO`) stays stable — a re-ask against failing hardware or a hung
+ * mount is the storm this boundary exists to avoid — and so does a full disk
+ * (`ENOSPC`, `EDQUOT`): re-asking frees no space, and the clause below would
+ * tell the reader to re-run.
  */
-const TRANSIENT_LISTING_ERRNOS: ReadonlySet<string> = new Set(['EMFILE', 'ENFILE', 'EAGAIN']);
+function isTransientListingCode(code: string): boolean {
+  return isRetryableShortageError({ code });
+}
 
 /**
- * The clause a finding prints about a refusal {@link TRANSIENT_LISTING_ERRNOS}
+ * The clause a finding prints about a refusal {@link isTransientListingCode}
  * calls transient — owned here, beside the list, so it describes every member.
  *
  * 🪤 Both consumers of `AbsenceCause.transient` used to write their own: "`X`
@@ -143,12 +143,12 @@ const TRANSIENT_LISTING_ERRNOS: ReadonlySet<string> = new Set(['EMFILE', 'ENFILE
  *   trailing punctuation so a caller can continue the sentence
  */
 export function transientRefusalClause(code: string): string {
-  return `${code} is a transient shortage (a descriptor or other resource this process ran out of for a moment), not a permission`;
+  return `${code} is a transient shortage (a descriptor this process ran out of, or something busy, for a moment), not a permission`;
 }
 
 /** Whether this listing failed in a way a later ask could get past. */
 function isTransientRefusal(listing: DirectoryListing): boolean {
-  return listing.outcome === 'unreadable' && TRANSIENT_LISTING_ERRNOS.has(listing.code);
+  return listing.outcome === 'unreadable' && isTransientListingCode(listing.code);
 }
 
 /** How many probes a {@link FsLookupCache} answered, and how many cost syscalls. */
@@ -270,10 +270,10 @@ export class FsLookupCache {
         // than guessing `false`, which would read as "it is a file", and the
         // link walker reports it as an unreadable target — so the refusal is
         // SEEN, not swallowed. A bug from under the stat is not a refusal and
-        // stays loud; `isFilesystemAccessError` is the right predicate here
+        // stays loud; `fsFaultOf` is the right predicate here
         // precisely because it groups every environmental errno together and
         // excludes a `TypeError`.
-        if (!isFilesystemAccessError(error)) throw error;
+        if (fsFaultOf(error) === undefined) throw error;
         isDirectory = null;
       }
     }
@@ -407,7 +407,7 @@ export class FsLookupCache {
    *
    * A *stable* failure is cached like a success: re-asking a directory whose
    * mode bits refuse us, or whose path is a symlink cycle, is the same failed
-   * syscall. A **transient** one is not — see {@link TRANSIENT_LISTING_ERRNOS}.
+   * syscall. A **transient** one is not — see {@link isTransientListingCode}.
    *
    * ⚠️ **The transient entry is dropped only once the promise has SETTLED, and
    * that timing is the whole design.** Deleting the row up front, or refusing to
@@ -463,71 +463,6 @@ export class FsLookupCache {
       this.#listings.delete(dirPath);
     }
     return listing;
-  }
-}
-
-/** Thrown when a link inside the tree being copied points outside it. */
-export class CopyLinkEscapesSourceError extends VatError {
-  constructor(link: string, src: string) {
-    super(
-      'COPY_LINK_ESCAPES_SOURCE',
-      `Refusing to copy ${link}: it is a symlink to a path outside ${src}. ` +
-        'A copy follows links, so this would ship content the source tree does not own — ' +
-        'replace the link with the files, or point it inside the tree.',
-    );
-  }
-}
-
-/**
- * Recursively copy a directory, following symlinks — contained to `src`.
- *
- * A link is copied as what it points at (a linked directory as its tree, a
- * linked file as its bytes; a dangling link fails loudly in `stat`). Two
- * refusals bound that: a link whose target is not under `src` throws
- * {@link CopyLinkEscapesSourceError} — `scripts/etc -> /etc` used to copy
- * `/etc` into `dist` — and a link that leads the walk back into a directory
- * it already entered throws `DirectoryWalkRevisitedError` (`scripts/loop -> .`
- * used to create `dest/loop/loop/…` until `ENAMETOOLONG`, writing every file
- * at every level first). Adopter-authored trees reach this through
- * `vat agent build`, so neither shape is exotic.
- *
- * @param src - Source directory path
- * @param dest - Destination directory path
- *
- * @example
- * await copyDirectory('/source/dir', '/dest/dir');
- */
-export async function copyDirectory(src: string, dest: string): Promise<void> {
-  const walk = new FollowedWalk();
-  walk.enter(src);
-  await copyTree(src, dest, src, walk);
-}
-
-/** One level of {@link copyDirectory}; every directory it recurses into has been `enter`ed. */
-async function copyTree(src: string, dest: string, root: string, walk: FollowedWalk): Promise<void> {
-  await fs.mkdir(dest, { recursive: true });
-  const entries = await fs.readdir(src, { withFileTypes: true });
-
-  for (const entry of entries) {
-    const srcPath = safePath.join(src, entry.name);
-    const destPath = safePath.join(dest, entry.name);
-
-    // (Inline rather than `direntKindFollowing`: that module imports this one.)
-    let isDirectory = entry.isDirectory();
-    if (entry.isSymbolicLink()) {
-      isDirectory = (await fs.stat(srcPath)).isDirectory();
-      // Revisit first, so a link back into the tree is named as the loop it
-      // is; then containment, so a link out is named as the escape it is.
-      if (isDirectory) walk.enter(srcPath);
-      if (isUnderRoot(root, srcPath) !== 'inside') throw new CopyLinkEscapesSourceError(srcPath, root);
-    } else if (isDirectory) {
-      walk.enter(srcPath);
-    }
-    if (isDirectory) {
-      await copyTree(srcPath, destPath, root, walk);
-    } else {
-      await fs.copyFile(srcPath, destPath);
-    }
   }
 }
 
@@ -663,7 +598,7 @@ export type AbsenceCause =
       readonly directory: string;
       /**
        * Whether re-running could get a different answer — see
-       * {@link TRANSIENT_LISTING_ERRNOS}.
+       * {@link isTransientListingCode}.
        *
        * Derived once, here, rather than by each consumer: two lanes write a
        * "re-run before investigating" remedy off this fact, and a second errno
@@ -695,8 +630,24 @@ export function directoryRefusalFor(
     kind: 'directory_unreadable',
     code: listing.code,
     directory: toForwardSlash(directory),
-    transient: TRANSIENT_LISTING_ERRNOS.has(listing.code),
+    transient: isTransientListingCode(listing.code),
   };
+}
+
+/**
+ * The refusal a failed `stat` or `readdir` of a scan ROOT stands for, or
+ * `undefined` when the root is simply absent (`ENOENT`/`ENOTDIR`).
+ *
+ * For a caller that must decide whether a root exists before it scans it: an
+ * `existsSync` answers `false` for an untraversable parent too, and the root
+ * then reads as scanned and empty.
+ *
+ * @param error - What the `stat` or `readdir` of `directory` threw
+ * @param directory - The root that was asked about
+ */
+export function rootListingRefusal(error: unknown, directory: string): DirectoryRefusal | undefined {
+  const listing = listingFailure(error);
+  return listing.outcome === 'unreadable' ? directoryRefusalFor(listing, directory) : undefined;
 }
 
 /**
@@ -963,18 +914,19 @@ export class DirectorySpellingIndex {
     const actual: string[] = [];
     let worst: Exclude<FilenameMatch, 'absent'> = 'exact';
     let directory = root;
+    let absent: PathSpelling | undefined;
 
-    for (const segment of segments) {
-      // Sequential by necessity: which directory holds the next component
-      // depends on how this one is really spelled. Every listing is memoized,
-      // so a run pays per DIRECTORY, not per path and not per component.
+    // In order by necessity: which directory holds the next component depends
+    // on how this one is really spelled. Every listing is memoized, so a run
+    // pays per DIRECTORY, not per path and not per component.
+    await everyInOrder(segments, async (segment) => {
       const found = await this.lookup(directory, segment);
       if (found.match === 'absent') {
         // The cause travels with the verdict rather than being re-derived: by
         // the time a caller reports this, the directory that refused is
         // several frames gone and nothing else can tell the two absences
         // apart. So does what was learned ABOVE it — see `verified`.
-        return {
+        absent = {
           match: 'absent',
           askedPath,
           actualPath: '',
@@ -985,12 +937,15 @@ export class DirectorySpellingIndex {
             actualPath: actual.join('/'),
           },
         };
+        return false;
       }
 
       if (SPELLING_RANK[found.match] > SPELLING_RANK[worst]) worst = found.match;
       actual.push(found.actualName);
       directory = safePath.join(directory, found.actualName);
-    }
+      return true;
+    });
+    if (absent !== undefined) return absent;
 
     return { match: worst, askedPath, actualPath: actual.join('/') };
   }

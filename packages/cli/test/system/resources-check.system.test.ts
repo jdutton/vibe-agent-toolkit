@@ -24,6 +24,8 @@ import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
+
 import {
   cleanupTestTempDir,
   createTestTempDir,
@@ -34,6 +36,10 @@ import {
 // The SYNCHRONOUS `executeCli` — `test-common.ts` exports an async one of the
 // same name whose result has no `stdout` until awaited.
 import { createMarkdownGitFixture, executeCli } from './test-helpers/index.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-7-');
 
 const binPath = getBinPath(import.meta.url);
 
@@ -84,7 +90,7 @@ function severityOverride(code: string, level: string): string {
 function writeChecksIn(root: string, checks: string, moreResources = ''): void {
   fs.writeFileSync(
     safePath.join(root, CONFIG_FILE),
-    `version: 1\nresources:\n  checks:\n${checks}${moreResources}`,
+    `resources:\n  checks:\n${checks}${moreResources}`,
     'utf-8',
   );
 }
@@ -358,11 +364,11 @@ describe('vat resources check', () => {
 
     // 2, not 1: a mistyped flag is an operator error, not a content violation.
     expect(status).toBe(2);
-    // The command-error document, not the report envelope: nothing ran.
+    // The envelope's error branch: nothing ran, and the refusal is the operator's.
     expect(doc['status']).toBe('error');
     // The typo AND the valid set, so the operator does not go read the config.
-    expect(doc['error']).toContain('declared-none');
-    expect(doc['error']).toContain('declared-one');
+    expect(doc['error']).toMatchObject({ code: 'USAGE_INVALID', message: expect.stringContaining('declared-none') });
+    expect(doc['error']).toMatchObject({ message: expect.stringContaining('declared-one') });
   });
 
   it('refuses a [path] that does not exist rather than running the checks it walked up to', () => {
@@ -411,7 +417,7 @@ describe('vat resources check', () => {
     // `noCheckRanFinding` — and the unit suite drives it at `costs: []`.
     fs.writeFileSync(
       safePath.join(projectDir, CONFIG_FILE),
-      'version: 1\nresources:\n  include:\n    - "**/*.md"\n',
+      'resources:\n  include:\n    - "**/*.md"\n',
       'utf-8',
     );
 
@@ -437,7 +443,7 @@ describe('vat resources check', () => {
     // when a project declares none.
     fs.writeFileSync(
       safePath.join(projectDir, CONFIG_FILE),
-      'version: 1\nresources:\n  include:\n    - "**/*.md"\n',
+      'resources:\n  include:\n    - "**/*.md"\n',
       'utf-8',
     );
 
@@ -456,8 +462,8 @@ describe('vat resources check', () => {
     const { status, doc } = check('--check', 'claude-rule-glob-inertt');
 
     expect(status).toBe(2);
-    expect(doc['error']).toContain('declared-one');
-    expect(doc['error']).toContain(BUILTIN_CHECK_NAMES[0] ?? '');
+    expect(doc['error']).toMatchObject({ code: 'USAGE_INVALID', message: expect.stringContaining('declared-one') });
+    expect(doc['error']).toMatchObject({ message: expect.stringContaining(BUILTIN_CHECK_NAMES[0] ?? '') });
   });
 });
 

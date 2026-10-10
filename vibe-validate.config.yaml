@@ -97,9 +97,14 @@ validation:
         - name: 'Code duplication check'
           command: 'bun run duplication-check'
 
-        - name: 'Skills validation'
-          command: 'bun run vat skills validate'
-          description: 'Validates all SKILL.md files (unified: resources + skill-specific rules). Full tier only.'
+        - name: 'Skills validation: vat-development-agents'
+          command: 'bun run vat skills validate packages/vat-development-agents'
+          description: 'Validates the SKILL.md files this package ships (unified: resources + skill-specific rules). The repo root declares no `skills:`, so a root run examines nothing and refuses. Full tier only.'
+          runScope: ci
+
+        - name: 'Skills validation: vat-example-cat-agents'
+          command: 'bun run vat skills validate packages/vat-example-cat-agents'
+          description: 'Validates the SKILL.md files this package ships. Full tier only.'
           runScope: ci
 
         - name: 'VAT dogfood: build skills and claude artifacts'

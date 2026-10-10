@@ -76,25 +76,24 @@ interface RunItemDeps<T, R> {
   onRetriesExhausted?: (item: T, index: number, error: RateLimitSignal) => Promise<R> | R;
 }
 
-async function runItemWithRetry<T, R>(item: T, index: number, deps: RunItemDeps<T, R>): Promise<R> {
-  let attempt = 0;
-  for (;;) {
-    try {
-      return await deps.worker(item, index);
-    } catch (error) {
-      if (!(error instanceof RateLimitSignal)) {
-        throw error;
-      }
-      attempt += 1;
-      if (attempt > MAX_RATE_LIMIT_RETRIES) {
-        // Budget spent. This is the ONE place that can tell an exhausted signal from
-        // a retryable one, so it is the only place that can offer the caller the
-        // choice — see {@link RunPipelineOptions.onRetriesExhausted}.
-        if (deps.onRetriesExhausted === undefined) throw error;
-        return await deps.onRetriesExhausted(item, index, error);
-      }
-      await deps.sleep(deps.onRateLimit(attempt));
+async function runItemWithRetry<T, R>(item: T, index: number, deps: RunItemDeps<T, R>, attempt = 0): Promise<R> {
+  try {
+    return await deps.worker(item, index);
+  } catch (error) {
+    if (!(error instanceof RateLimitSignal)) {
+      throw error;
     }
+    const nextAttempt = attempt + 1;
+    if (nextAttempt > MAX_RATE_LIMIT_RETRIES) {
+      // Budget spent. This is the ONE place that can tell an exhausted signal from
+      // a retryable one, so it is the only place that can offer the caller the
+      // choice — see {@link RunPipelineOptions.onRetriesExhausted}.
+      if (deps.onRetriesExhausted === undefined) throw error;
+      return await deps.onRetriesExhausted(item, index, error);
+    }
+    await deps.sleep(deps.onRateLimit(nextAttempt));
+    // Each attempt follows the previous one's backoff.
+    return runItemWithRetry(item, index, deps, nextAttempt);
   }
 }
 
@@ -116,18 +115,20 @@ export async function runPipeline<T, R>(o: RunPipelineOptions<T, R>): Promise<R[
   };
   let nextIndex = 0;
 
-  async function runWorkerLoop(): Promise<void> {
-    for (;;) {
-      const index = nextIndex;
-      nextIndex += 1;
-      if (index >= items.length) {
-        return;
-      }
-      // Non-null: index < items.length was just checked above.
-      const item = items[index] as T;
-      results[index] = await runItemWithRetry(item, index, deps);
+  // Each worker pulls the next index once its current item settles.
+  const runWorkerLoop = (): Promise<void> => {
+    const index = nextIndex;
+    nextIndex += 1;
+    if (index >= items.length) {
+      return Promise.resolve();
     }
-  }
+    // Non-null: index < items.length was just checked above.
+    const item = items[index] as T;
+    return runItemWithRetry(item, index, deps).then((result) => {
+      results[index] = result;
+      return runWorkerLoop();
+    });
+  };
 
   const poolSize = Math.min(concurrency, items.length);
   const pool = Array.from({ length: poolSize }, () => runWorkerLoop());

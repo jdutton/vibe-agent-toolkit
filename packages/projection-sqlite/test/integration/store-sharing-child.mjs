@@ -40,6 +40,7 @@ import {
   ContributorRegistry,
   DISCARD_BLOB_POPULATION,
   exportProjection,
+  crawlSourceFor,
   FilesystemExtentContributor,
   populate,
   serializeProjection,
@@ -103,7 +104,7 @@ function registryFor(question) {
     throw new Error(`unknown question "${question}"; expected one of ${Object.keys(QUESTIONS).join(', ')}.`);
   }
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, 'source')));
   for (const name of closures) registry.register(new ClosureExtentContributor(name, SKILL_KIND));
   return registry;
 }

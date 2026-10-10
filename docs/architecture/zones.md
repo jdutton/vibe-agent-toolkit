@@ -398,7 +398,9 @@ Three things Claude Code does with a memory file depend on its bytes and nothing
 are **blob-scoped**, but keyed `(blob, harness)` rather than `blob` alone — a second harness adds
 rows under its own id, never a second set of columns
 (`packages/resources/src/schemas/projection-harness.ts`, transcribed from the shipped reader in
-[`claude-code-memory-loader.md`](../external/claude-code-memory-loader.md)):
+[`claude-code-memory-loader.md`](../external/claude-code-memory-loader.md); the second harness's
+loader, Codex's `AGENTS.md` reader, is transcribed the same way in
+[`codex-context-loader.md`](../external/codex-context-loader.md)):
 
 - **`harness_blob_facts`** — one row per `(blob, harness)`: `injectedBytes` / `injectedTokens`, the
   size of the text the harness INJECTS (frontmatter and block-level HTML comments removed, trimmed;

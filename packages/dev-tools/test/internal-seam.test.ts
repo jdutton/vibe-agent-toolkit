@@ -31,11 +31,12 @@ const SEAM = '__internal';
  */
 function sources(): Map<string, string> {
   const files = crawlDirectorySync({
+    outputs: [],
     baseDir: REPO_ROOT,
     include: ['packages/*/src/**/*.ts'],
     includeUntracked: true,
     absolute: false,
-    unreadable: { refuse: { root: REPO_ROOT, remedy: 'Fix the directory permissions and re-run.' } },
+    unreadable: { refuse: { root: REPO_ROOT, remedy: 'Fix the directory permissions and re-run.', side: 'source' } },
   });
   const out = new Map<string, string>();
   for (const file of files) {

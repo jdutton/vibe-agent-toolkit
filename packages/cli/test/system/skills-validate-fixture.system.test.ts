@@ -5,6 +5,9 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import * as yaml from 'yaml';
+
+import { SKILLS_VALIDATE_REPORT_SCHEMA } from '../../src/commands/skills/validate-schema.js';
 
 import { getBinPath, getFixturePath } from './test-common.js';
 import { executeSkillsCommandAndExpectYaml } from './test-helpers/index.js';
@@ -16,70 +19,19 @@ describe('skills validate command - fixture tests (system test)', () => {
   // vitest is invoked from the monorepo root or from packages/cli directly.
   const fixtureDir = getFixturePath(import.meta.url, 'skills-minimal');
 
-  it('should validate skills in fixture directory', () => {
-    // `--verbose`: the default `results[]` lists only skills WITH findings, so a
-    // fixture where every skill is clean has zero rows there by design. This test
-    // asserts the opposite — that both skills are present and each carries an
-    // empty `allErrors` and its `metadata` — which is per-skill detail only the
-    // verbose form carries. `skillsValidated` below is the run-level denominator
-    // and is 2 in both modes.
-    const { result, parsed: raw } = executeSkillsCommandAndExpectYaml(
-      binPath,
-      'validate',
-      fixtureDir,
-      ['--verbose'],
-    );
+  it('validates both fixture skills clean, each with its own row', () => {
+    const { result } = executeSkillsCommandAndExpectYaml(binPath, 'validate', fixtureDir);
+    const document = SKILLS_VALIDATE_REPORT_SCHEMA.parse(yaml.parse(result.stdout));
 
     expect(result.status).toBe(0);
-
-    const parsed = raw as unknown as {
-      status: string;
-      skillsValidated: number;
-      results: Array<{
-        skillName: string;
-        status: string;
-        allErrors: Array<unknown>;
-        metadata: {
-          skillLines: number;
-          totalLines: number;
-          fileCount: number;
-          directFileCount: number;
-          maxLinkDepth: number;
-          excludedReferenceCount: number;
-        };
-      }>;
-    };
-
-    expect(parsed.status).toBe('success');
-    expect(parsed.skillsValidated).toBe(2);
-    expect(parsed.results).toHaveLength(2);
-
-    // All skills should be valid
-    for (const skillResult of parsed.results) {
-      expect(skillResult.status).toBe('success');
-      // `allErrors` is the sole issue container: the emitted set is serialized
-      // once, with no `activeErrors` / `activeWarnings` second full copy.
-      expect(skillResult.allErrors).toHaveLength(0);
-      expect(skillResult).not.toHaveProperty('activeErrors');
-      expect(skillResult).not.toHaveProperty('activeWarnings');
-      expect(skillResult.metadata).toHaveProperty('skillLines');
-      expect(skillResult.metadata).toHaveProperty('totalLines');
-      expect(skillResult.metadata).toHaveProperty('directFileCount');
-      expect(skillResult.metadata).toHaveProperty('excludedReferenceCount');
+    expect(document.status).toBe('ok');
+    expect(document.examined).toBe(2);
+    expect(document.findings).toEqual([]);
+    // Every validated skill has a row — clean ones included — so the rows and
+    // `examined` agree without `--verbose`.
+    expect(document.data.skills).toHaveLength(2);
+    for (const skill of document.data.skills) {
+      expect(skill).toEqual({ name: skill.name, status: 'ok', summary: { errors: 0, warnings: 0, info: 0 }, allowed: 0 });
     }
-  });
-
-  it('should output YAML format for fixture validation', () => {
-    const { result, parsed } = executeSkillsCommandAndExpectYaml(binPath, 'validate', fixtureDir);
-
-    expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
-  });
-
-  it('should validate with exit code 0 when all valid', () => {
-    const { result, parsed } = executeSkillsCommandAndExpectYaml(binPath, 'validate', fixtureDir);
-
-    expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
   });
 });

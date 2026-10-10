@@ -60,6 +60,7 @@ import {
 import {
   ContributorRegistry,
   DISCARD_BLOB_POPULATION,
+  crawlSourceFor,
   FilesystemExtentContributor,
   ProjectionBuilder,
   populate,
@@ -265,6 +266,7 @@ const IGNORED_PATHS = ['ignored/secret.md', 'ignored/behind-secret.md'] as const
  */
 async function discoverSkills(root: string): Promise<CorpusSkill[]> {
   const found = await crawlDirectory({
+    outputs: [],
     baseDir: root,
     unreadable: refuseUnreadableFixture(root),
     include: ['**/SKILL.md'],
@@ -324,7 +326,7 @@ async function populateCorpus(
   gitTracker: GitTracker | undefined,
 ): Promise<{ projection: Projection; extentIdByName: Map<string, string> }> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
 
   const parameters: Record<string, JsonValue> = {};
   for (const skill of skills) {

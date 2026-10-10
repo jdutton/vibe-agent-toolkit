@@ -5,14 +5,15 @@
  * 1. managed (system-wide, IT admin)
  * 2. project-local (<projectDir>/.claude/settings.local.json)
  * 3. project (<projectDir>/.claude/settings.json)
- * 4. user (~/.claude/settings.json)
+ * 4. user (`getClaudeUserPaths().userSettingsPath` — honours `CLAUDE_CONFIG_DIR`)
  */
 
 import * as fs from 'node:fs/promises';
-import { homedir } from 'node:os';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, everyInOrder, isPathAbsentError, VatError } from '@vibe-agent-toolkit/utils';
 
+import { CLAUDE_USER_STATE_UNREADABLE_CODE } from '../install/plugin-registry.js';
+import { getClaudeProjectPaths, getClaudeUserPaths } from '../paths/claude-paths.js';
 import { getManagedSettingsCandidatePaths } from '../paths/managed-settings-path.js';
 import {
   ManagedSettingsSchema,
@@ -33,20 +34,28 @@ export interface ReadSettingsOptions {
   settingsFile?: string | undefined;
 }
 
+/**
+ * Only an ABSENT file is no layer. One the OS refuses is present and unread, so
+ * skipping it would let the run answer as if that layer said nothing: it is a
+ * classified fault on the settings file, an input this audit reads (`source`,
+ * origin `config`).
+ *
+ * @throws FsFaultError for a file the OS refuses; VatError {@link CLAUDE_USER_STATE_UNREADABLE_CODE}
+ *   for one that is not JSON, naming the file
+ */
 async function tryReadJson(filePath: string): Promise<unknown> {
+  let content: string;
   try {
-    const content = await fs.readFile(filePath, 'utf-8');
+    content = await fs.readFile(filePath, 'utf-8');
+  } catch (err) {
+    if (isPathAbsentError(err)) return null;
+    throw classifyFsFault(err, { side: 'source', origin: 'config', action: 'read a settings file', path: filePath });
+  }
+  try {
     return JSON.parse(content) as unknown;
   } catch (err) {
-    if (isNodeError(err) && (err.code === 'ENOENT' || err.code === 'EACCES')) {
-      return null;
-    }
-    throw new Error(`Failed to parse settings file ${filePath}: ${String(err)}`);
+    throw new VatError(CLAUDE_USER_STATE_UNREADABLE_CODE, `Failed to parse settings file ${filePath}: ${String(err)}`, { cause: err });
   }
-}
-
-function isNodeError(err: unknown): err is NodeJS.ErrnoException {
-  return err instanceof Error && 'code' in err;
 }
 
 function selectSettingsSchema(level: SettingsLevel) {
@@ -66,7 +75,8 @@ async function tryReadLayer(
   const result = schema.safeParse(raw);
 
   if (!result.success) {
-    throw new Error(
+    throw new VatError(
+      CLAUDE_USER_STATE_UNREADABLE_CODE,
       `Invalid settings file ${filePath}: ${JSON.stringify(result.error)}`
     );
   }
@@ -91,24 +101,25 @@ async function readManagedLayer(options: ReadSettingsOptions): Promise<SettingsL
   if (options.settingsFile) {
     return tryReadLayer(options.settingsFile, 'managed');
   }
-  const candidates = getManagedSettingsCandidatePaths();
-  for (const candidate of candidates) {
-    const layer = await tryReadLayer(candidate, 'managed');
-    if (layer !== null) return layer;
-  }
-  return null;
+  let found: SettingsLayer | null = null;
+  // In order: the first candidate present wins, and an unreadable one refuses before any later one is read.
+  await everyInOrder(getManagedSettingsCandidatePaths(), async (candidate) => {
+    found = await tryReadLayer(candidate, 'managed');
+    return found === null;
+  });
+  return found;
 }
 
 /**
  * Read all available settings layers in precedence order (highest first).
- * Skips files that don't exist or aren't readable.
- * Throws for malformed JSON/YAML in files that DO exist.
+ * Skips files that don't exist. Throws a classified filesystem fault for a file the
+ * OS refuses, and {@link CLAUDE_USER_STATE_UNREADABLE_CODE} for one that does not
+ * parse or fails its schema.
  */
 export async function readSettingsLayers(
   options: ReadSettingsOptions = {}
 ): Promise<SettingsLayer[]> {
   const layers: SettingsLayer[] = [];
-  const home = homedir();
 
   // 1. Managed settings (or explicit override)
   const managedLayer = await readManagedLayer(options);
@@ -116,12 +127,13 @@ export async function readSettingsLayers(
 
   // 2 & 3. Project settings (local overrides base)
   if (options.projectDir) {
-    await tryAddLayer(layers, `${options.projectDir}/.claude/settings.local.json`, 'project-local');
-    await tryAddLayer(layers, `${options.projectDir}/.claude/settings.json`, 'project');
+    const { projectSettingsLocalPath, projectSettingsPath } = getClaudeProjectPaths(options.projectDir);
+    await tryAddLayer(layers, projectSettingsLocalPath, 'project-local');
+    await tryAddLayer(layers, projectSettingsPath, 'project');
   }
 
   // 4. User settings
-  await tryAddLayer(layers, safePath.join(home, '.claude', 'settings.json'), 'user');
+  await tryAddLayer(layers, getClaudeUserPaths().userSettingsPath, 'user');
 
   return layers;
 }

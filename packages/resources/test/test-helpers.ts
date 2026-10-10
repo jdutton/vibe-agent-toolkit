@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
+  forEachInOrder,
   isPathAbsentError,
   mkdirSyncReal,
   normalizedTmpdir,
@@ -24,7 +25,10 @@ import { parseMarkdown } from '../src/link-parser.js';
 import type { FragmentIndex, ValidateLinkOptions as LinkValidatorOptions } from '../src/link-validator.js';
 import { validateLink } from '../src/link-validator.js';
 import { mimeTypeForPath } from '../src/mime-type.js';
-import type { ExtentContribution, ExtentContributor } from '../src/projection/contributor.js';
+import { ContributorRegistry, type ExtentContribution, type ExtentContributor } from '../src/projection/contributor.js';
+import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
+import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { ProjectionBuilder } from '../src/projection/projection.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 import {
@@ -750,9 +754,10 @@ export async function writeCorpusFiles(
   directories: readonly string[],
   corpus: readonly CorpusFile[],
 ): Promise<void> {
-  for (const directory of directories) {
+  // In order: a directory may be the parent of a later one.
+  await forEachInOrder(directories, async (directory) => {
     await mkdir(safePath.join(root, directory), { recursive: true });
-  }
+  });
   await Promise.all(
     corpus.map((file) =>
       writeFile(safePath.join(root, file.path), file.content, 'utf-8'),
@@ -925,4 +930,18 @@ export function scratchFixtureWriter(prefix: string): ScratchFixtureWriter {
       await Promise.all(dirs.splice(0).map((dir) => removeScratchDir(dir)));
     },
   };
+}
+
+/**
+ * The two shipped contributors a closure fixture measures, in registration order: the
+ * filesystem extent over a tree the run only reads, then the closure extent.
+ *
+ * @param extentName - The closure extent's name
+ * @param kind - The kind the closure extent declares
+ */
+export function registryWithClosure(extentName: string, kind: string): ContributorRegistry {
+  const registry = new ContributorRegistry();
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
+  registry.register(new ClosureExtentContributor(extentName, kind));
+  return registry;
 }

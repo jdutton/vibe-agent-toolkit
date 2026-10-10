@@ -4,23 +4,7 @@
 
 import { Command } from 'commander';
 
-import { rejectUnscopablePath, type SkillsScopeSubject } from './scope-guard.js';
 import { type SkillsValidateCommandOptions, validateCommand } from './validate.js';
-
-/**
- * What a mis-scoped `vat skills validate` used to do.
- *
- * In a package where the bare invocation validates 13 skills, one mistyped
- * character rescoped it to nothing and still reported success — the same
- * "went wide / went narrow and reported success" defect
- * `rejectPositionalArguments` was added to `vat verify` / `vat validate` /
- * `vat build` for, arrived at from the opposite direction. `vat skills build`
- * carried the identical hole and is guarded by the same module.
- */
-const SCOPE_SUBJECT: SkillsScopeSubject = {
-  command: 'vat skills validate',
-  silentSuccess: 'nothing to validate',
-};
 
 export function createValidateCommand(): Command {
   const command = new Command('validate');
@@ -29,10 +13,9 @@ export function createValidateCommand(): Command {
     .description('Validate skills for packaging (reads skills config from config yaml)')
     .argument('[path]', 'Path to directory with config yaml (default: current directory)')
     .option('--skill <name>', 'Validate specific skill only')
-    .option('-v, --verbose', 'Show all validated skills and every individual finding, including excluded reference paths')
+    .option('-v, --verbose', 'Print every finding in full on stderr, with allowed issues and excluded reference paths')
     .option('-d, --debug', 'Enable debug logging')
     .action(async (pathArg: string | undefined, options: SkillsValidateCommandOptions) => {
-      rejectUnscopablePath(SCOPE_SUBJECT, pathArg);
       await validateCommand(pathArg, options);
     })
     .addHelpText(
@@ -90,42 +73,38 @@ Validation Config:
   whole skill). All codes are configurable via severity (error/warning/ignore)
   or allow entries. Expired allow entries are reported as ALLOW_EXPIRED warnings.
 
-Output:
-  YAML summary → stdout (for programmatic parsing)
-  Findings report → stderr (for human reading)
+Output (YAML on stdout — the report envelope):
+  status: ok | findings | error. findings means at least one finding was
+          published; error means the run did not finish (error.code says why).
+  examined: the number of skills validated.
+  summary: the findings by severity — every skill's plus the run's.
+  findings[]: every finding, flat — {code, severity, message, location, …};
+          location is relative to data.root. Run-level findings (validation.allow
+          entries no skill matched) are here too, with no skill attached.
+  data.root: the directory the config was read from.
+  data.skills[]: one row per skill validated, clean or not —
+          {name, status, summary, allowed}. allowed counts the findings
+          validation.allow suppressed; they are never published as findings.
 
-  The stdout summary always publishes:
-    - status: success/warning/error (worst actionable severity in the run)
-    - issueCounts / runIssueCounts: the run total, always with all three
-      buckets, and the run-level (project config) share of it. The run total
-      always equals the sum of the per-skill rows plus runIssueCounts.
-    - skillsValidated: number of skills validated (the true denominator)
-    - durationSecs: validation time
-
-  By default, results[] is one row per skill WITH findings — its issue counts
-  and a per-code tally, dominant code first. A skill with no findings is
-  omitted from the listing entirely; a zero count is an absent field, never
-  "errors: 0". stderr prints the same thing as one line per skill.
-
-  --verbose publishes every validated skill (findings or not) with its full
-  detail: allErrors, ignoredErrors, observations, evidence and complete
-  metadata on stdout, one block per individual finding on stderr. That form is
-  meant for redirect-then-grep, not for reading — on a 90-skill repo it is
-  ~30x the default output.
-
-  Run-level findings (validation.allow entries no skill matched) are printed
-  in full in both forms; they belong to the project config, not to any skill.
+  stderr is the human report: one line per skill with findings and every
+  error in full. --verbose adds every warning and info in full, the allowed
+  issues and the excluded reference paths. The document is the same either way.
 
   A run that validated ZERO skills — skills.include globs that matched no
-  SKILL.md — is refused, not passed: one non-overridable RESOURCE_CHECK_BROKEN
-  at error naming the globs, status: error, exit 1. A config with no skills:
-  block at all is "nothing to validate": no document, exit 0.
+  SKILL.md, or a config with no skills: block — is not a clean run: the
+  document carries one non-overridable RESOURCE_CHECK_BROKEN at error, exit 1,
+  and stderr names the globs that matched nothing.
 
-Exit Codes:
-  0 - All validations passed (or all errors allowed by valid config)
-  1 - Validation errors found (severity=error, not allowed), or the run
-      validated no skill (skills.include matched nothing)
-  2 - System error (config invalid, skill path not found)
+Exit Codes (derived from the document):
+  0 - status ok, or findings with no error-severity finding (warnings and
+      info never fail this command; allowed findings are not published)
+  1 - status findings with at least one error-severity finding, including
+      a run that validated no skill
+  2 - status error: the run did not finish — USAGE_INVALID for a [path] that
+      names no directory holding a config, an unknown --skill, or no project
+      root; INPUT_UNREADABLE for a directory the OS will not list, or a file
+      in the git repository the OS will not let git read (named);
+      CONFIG_INVALID for a config that does not parse
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)

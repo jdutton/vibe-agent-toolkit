@@ -24,6 +24,7 @@ import {
 } from '../src/projection/contributors/claude-import-extent.js';
 import { extentContextId } from '../src/projection/contributors/context-id.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { ClosureNonConvergenceError, DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
@@ -44,7 +45,7 @@ const CHAIN: Readonly<Record<string, string>> = {
 /** Populate {@link CHAIN} with one claude-import extent declared at {@link START}. */
 function populateChain(maxIterations?: number) {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
   registry.register(new ClaudeImportExtentContributor(START));
   return populate({
     root: suite.tempDir,

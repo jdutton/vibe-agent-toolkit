@@ -64,8 +64,8 @@ bounds nothing an unlisted file is not already bound to; the allowlist test refu
 and the seed script prints `DELIST` for one that has become so.
 
 **When the reporter fails your new or changed file:** first ask whether the file is in the right
-tier (a unit file that builds a real temp tree, spawns a process or inits a repo belongs in
-integration). The same question is asked at the desk by `local/no-io-in-unit-tier`, which flags
+tier (a unit file that builds a real temp tree belongs in integration; one that spawns a process —
+`git init` included — belongs in system, per the classification table below). The same question is asked at the desk by `local/no-io-in-unit-tier`, which flags
 `mkdtemp*`, `spawn*`, `exec*` and `child_process` imports in a unit-tier file; its `allowFiles`
 ratchet in `eslint.config.js` names today's 116 offenders and may only shrink. The two ratchets
 overlap by only a third — I/O is not the only thing that makes a file slow — so a file leaving one

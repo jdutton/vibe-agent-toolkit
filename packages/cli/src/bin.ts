@@ -12,8 +12,10 @@ import { describeStdioBlocking, makeStdioBlocking } from '@vibe-agent-toolkit/ut
 import { Command, CommanderError } from 'commander';
 
 import { COMMAND_LOADERS } from './command-loaders.js';
+import { applyCommandTreePolicy } from './command-tree.js';
 import { registerCacheControl } from './commands/cache/cache-control.js';
-import { exitCodeForCommanderEnding } from './utils/command-error.js';
+import { exitCodeForCommanderEnding } from './utils/commander-ending.js';
+import { setDebugDiagnostics } from './utils/debug-diagnostics.js';
 import { loadVerboseHelp, writeHelpSync } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
 import { createRootArgvGrammar } from './utils/root-argv.js';
@@ -76,6 +78,9 @@ program
     if (thisCommand.opts()['debug'] === true) {
       actionCommand.setOptionValue('debug', true);
     }
+    // The refusal path has no logger: it asks this, so `--debug` names the
+    // throw site of every refusal, not only of an INTERNAL_ERROR.
+    setDebugDiagnostics(actionCommand.opts()['debug'] === true);
   })
   .showHelpAfterError()
   .configureOutput({
@@ -154,11 +159,10 @@ const VERBOSE_HELP_GROUPS: readonly { readonly group: string; readonly show: () 
   },
 ];
 
-for (const { group, show } of VERBOSE_HELP_GROUPS) {
-  if (rootArgv.wantsGroupVerboseHelp(argv, group)) {
-    await show();
-    process.exit(ExitCode.OK);
-  }
+const verboseHelpGroup = VERBOSE_HELP_GROUPS.find(({ group }) => rootArgv.wantsGroupVerboseHelp(argv, group));
+if (verboseHelpGroup) {
+  await verboseHelpGroup.show();
+  process.exit(ExitCode.OK);
 }
 
 /** Registers `doctor`, which attaches itself to the program rather than being added. */
@@ -193,7 +197,13 @@ if (requestedCommand === 'doctor') {
 } else if (!versionOnly) {
   // Help, a bare `vat`, or an unknown command: the whole tree has to exist so
   // `--help` lists it and `command:*` can report what was not recognised.
-  for (const load of Object.values(COMMAND_LOADERS)) program.addCommand(await load());
+  // Loaded together, added in table order — `--help` order is the table's. A broken
+  // module still fails as the FIRST broken one in table order, as a serial load did.
+  const loaded = await Promise.allSettled(Object.values(COMMAND_LOADERS).map(load => load()));
+  for (const outcome of loaded) {
+    if (outcome.status === 'rejected') throw outcome.reason;
+    program.addCommand(outcome.value);
+  }
   await loadDoctor();
 }
 
@@ -205,26 +215,9 @@ program.on('command:*', (operands) => {
   program.help({ error: true });
 });
 
-/**
- * Route EVERY command's usage errors through VAT's exit-code contract.
- *
- * 🪤 **`exitOverride()` on the root alone reaches nothing.** Commander's
- * `_exit` reads `this._exitCallback` off the command that actually errored and
- * never walks up to a parent, and `addCommand()` — how every command here is
- * registered — does NOT copy inherited settings (only the `.command()` factory
- * does, at command.js:164). So the override has to be applied to each node.
- *
- * This must run AFTER the lazy dispatcher above has added whichever commands
- * this invocation needs, and after `loadDoctor()`, or it walks a tree that is
- * still empty and the very commands being invoked keep commander's default.
- *
- * @param command - The command whose subtree gets the override
- */
-function overrideExitAcrossTree(command: Command): void {
-  command.exitOverride();
-  for (const sub of command.commands) overrideExitAcrossTree(sub);
-}
-overrideExitAcrossTree(program);
+// Every node's parse policy (exit codes, excess operands) — see command-tree.ts.
+// After the lazy dispatcher and loadDoctor(), or it walks a tree still empty.
+applyCommandTreePolicy(program);
 
 try {
   program.parse();

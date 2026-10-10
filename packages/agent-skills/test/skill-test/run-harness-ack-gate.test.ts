@@ -20,7 +20,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runSkillTestHarness } from '../../src/skill-test/run-harness.js';
 import { stageHarness } from '../../src/skill-test/staging.js';
-import { setupStubbedHarnessSubject } from '../test-helpers.js';
+import { setupStubbedHarnessSubject, useScratchTmpdir } from '../test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test (and every child
+// a test spawns), so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-4-');
 
 // resolvedAuth is null: the ack gate (Step 6) returns before any auth-dependent
 // step, so this run must not depend on one being resolved.
@@ -64,7 +68,9 @@ describe('runSkillTestHarness — security ack gate', () => {
 
     expect(result.exitCode).toBe(ExitCode.ERROR);
     expect(result.reason).toBe('preflight');
-    expect(result.summary).toContain('Security acknowledgment required');
+    // The missing flag is the invocation's mistake, coded where the harness decides it.
+    expect(result).toMatchObject({ refusal: 'USAGE_INVALID' });
+    expect(result.description).toContain('Security acknowledgment required');
     // The gate must short-circuit BEFORE any executor/grader spawn.
     expect(vi.mocked(spawnHeadlessClaude)).not.toHaveBeenCalled();
   });

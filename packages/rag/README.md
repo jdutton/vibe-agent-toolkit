@@ -108,10 +108,7 @@ import type { RAGQueryProvider, RAGQuery } from '@vibe-agent-toolkit/rag';
 const rag: RAGQueryProvider = ...; // Implementation
 
 // Query the RAG database
-// `tags` and `type` are METADATA fields: they are honoured under `filters.metadata`
-// and only there. A shipped provider throws on them at the top level of `filters` —
-// it used to ignore them, which silently turned a filtered query into an unfiltered
-// full-recall search over the whole index.
+// `tags` and `type` are METADATA fields: filter them under `filters.metadata`.
 const result = await rag.query({
   text: 'How do I validate schemas?',
   limit: 5,
@@ -155,17 +152,10 @@ if (chunkResult.success) {
 > search over the whole index. The exception is `filters.metadata`, whose shape is your own
 > metadata schema — the provider validates that against the schema you supplied.
 >
-> Structure is still not provider support: `dateRange`, `tags`, `type`, `headingPath` and
-> `hybridSearch.enabled: true` are all declared here, all parse, and are all refused by
-> `query()`.
->
-> **`filters.dateRange` bounds accept an ISO-8601 date-time string as well as a `Date`, and
-> parse to a `Date` either way.** JSON carries no date type, so a string is the only value
-> that can cross a wire — and it is exactly what the published `RAGQueryJsonSchema` declares
-> (`{"type":"string","format":"date-time"}`). A bare `z.date()` rejected that string, so a
-> payload that validated against VAT's own published schema failed VAT's own `safeParse`:
-> the two halves of one exported contract disagreed on the only representation either could
-> receive. The emitted JSON Schema is unchanged; the TypeScript half now honours it.
+> The query declares exactly `text`, `limit`, `filters.resourceId` and `filters.metadata`.
+> `hybridSearch`, `filters.dateRange` and the top-level `filters.tags` / `type` /
+> `headingPath` were declared but implemented by no provider; they are removed, and a query
+> carrying one is a parse error. Filter metadata fields under `filters.metadata`.
 
 ### Using JSON Schemas
 
@@ -386,7 +376,7 @@ import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 
 // 1. Get resource from ResourceRegistry
 const registry = new ResourceRegistry();
-await registry.crawl({ baseDir: './docs' });
+await registry.crawl({ outputs: [], baseDir: './docs' });
 const metadata = registry.getResourceById('resource-id');
 
 // 2. Read file content and parse frontmatter (not included in ResourceMetadata)

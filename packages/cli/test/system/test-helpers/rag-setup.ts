@@ -8,11 +8,18 @@ import * as fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
+import { RAG_QUERY_REPORT_SCHEMA, type RagQueryData } from '../../../src/commands/rag/query-schema.js';
 import { createTestTempDir } from '../test-common.js';
 
 import type { CliResult } from './cli-runner.js';
 import { executeAndParseYaml } from './cli-runner.js';
 import { setupTestProject } from './project-setup.js';
+
+/**
+ * The first bytes of a `.DS_Store` Finder writes (a "Bud1" buddy allocator): the
+ * signature, not the name, is what makes the file operating-system litter.
+ */
+export const FINDER_DS_STORE = Buffer.from([0x00, 0x00, 0x00, 0x01, 0x42, 0x75, 0x64, 0x31, 0x00]);
 
 /**
  * Setup RAG test project with markdown files
@@ -157,13 +164,13 @@ export function setupRagTestSuite(
 }
 
 /**
- * Execute RAG query command and verify basic success response
- * Eliminates duplication in RAG query tests
+ * Execute RAG query command, parse its document with the verb's published
+ * schema, and require a clean answer. Eliminates duplication in RAG query tests.
  *
  * @param binPath - Path to CLI binary
  * @param args - Command arguments (e.g., ['rag', 'query', 'term', '--limit', '5'])
  * @param cwd - Working directory
- * @returns Object with result and typed output
+ * @returns Object with result and the report's `data`
  */
 export function executeRagQueryAndExpectSuccess(
   binPath: string,
@@ -171,20 +178,18 @@ export function executeRagQueryAndExpectSuccess(
   cwd: string
 ): {
   result: CliResult;
-  output: any;
+  output: RagQueryData;
 } {
   const { result, parsed } = executeAndParseYaml(binPath, args, { cwd });
 
-  const output = parsed as any;
-
-  // Common assertions for successful RAG query
   if (result.status !== 0) {
     throw new Error(`Expected status 0, got ${String(result.status ?? 'null')}`);
   }
 
-  if (output.status !== 'success') {
-    throw new Error(`Expected success status, got ${String(output.status)}`);
+  const report = RAG_QUERY_REPORT_SCHEMA.parse(parsed);
+  if (report.status !== 'ok') {
+    throw new Error(`Expected ok status, got ${report.status}`);
   }
 
-  return { result, output };
+  return { result, output: report.data };
 }

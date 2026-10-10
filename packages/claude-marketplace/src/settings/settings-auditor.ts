@@ -6,13 +6,11 @@ import * as fs from 'node:fs/promises';
 import { platform } from 'node:os';
 
 import {
-  calculateValidationStatus,
-  countBySeverity,
+  summarizeIssues,
   type IssueSeverity,
   type SeverityCounts,
-  type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
+import { fsFaultOf, isPathAbsentError } from '@vibe-agent-toolkit/utils';
 
 import { getClaudeProjectPaths, getClaudeUserPaths } from '../paths/claude-paths.js';
 import {
@@ -87,47 +85,36 @@ export type SettingsTypeConfidence =
   | 'inferred'
   /** Could be user or project — the shared schema cannot tell them apart. */
   | 'ambiguous'
-  /** The file could not be read or parsed, so there was nothing to detect. */
+  /** The file does not parse as JSON (an unreadable one throws instead). */
   | 'undetermined';
 
-/** One thing wrong with (or worth noting about) a settings file. */
+/**
+ * One thing wrong with (or worth noting about) a settings file — the fields of a
+ * report `Finding` the validator knows. The file itself is the caller's: it
+ * becomes the finding's `location`, the file you would open.
+ */
 export interface SettingsFinding {
-  /** Dotted path inside the settings document; `''` means the document itself. */
-  path: string;
-  message: string;
+  /** Not a `validation.severity` key: nothing that validates a settings file reads a project's validation config. */
+  code: 'SETTINGS_FILE_INVALID' | 'SETTINGS_TYPE_AMBIGUOUS';
   severity: IssueSeverity;
+  message: string;
+  /** What to do about it. */
+  fix: string;
+  /** Dotted key path inside the settings document; absent when the finding is about the document as a whole. */
+  field?: string;
 }
 
+/** "Is this settings file valid?" is `summary.errors > 0`; `status` is the literal `resultStatus`. */
 export interface SettingsValidateResult {
-  /** Worst ACTIONABLE severity across `findings`. */
-  status: 'success' | 'warning' | 'error';
-  /** The severity distribution, published beside the status rather than folded into it. */
-  issueCounts: SeverityCounts;
+  status: 'ok' | 'findings';
+  /** The severity distribution of `findings`, as the report envelope publishes it. */
+  summary: SeverityCounts;
   findings: SettingsFinding[];
   detectedType: SettingsDetectedType;
   typeConfidence: SettingsTypeConfidence;
 }
 
-/**
- * Status + counts for a set of settings findings, via the ONE shared collapse.
- *
- * Settings findings are not registry-coded `ValidationIssue`s — the code
- * registry has no `SETTINGS_*` entry — but `calculateValidationStatus` and
- * `countBySeverity` read nothing except `severity`. The structural cast is here
- * so that this lane does NOT become yet another hand-rolled issues→status
- * collapse with its own answer for an info-only set.
- */
-export function summarizeSettingsFindings(findings: readonly SettingsFinding[]): {
-  status: 'success' | 'warning' | 'error';
-  issueCounts: SeverityCounts;
-} {
-  const issues = findings.map(f => ({ severity: f.severity })) as unknown as ValidationIssue[];
-  return { status: calculateValidationStatus(issues), issueCounts: countBySeverity(issues) };
-}
-
-/** Errno values that genuinely answer "it is not there". Anything else means we could not look. */
-const ABSENT_CODES = new Set(['ENOENT', 'ENOTDIR', 'ENAMETOOLONG']);
-
+/** The errno a probe failed with, for the report; a failure that is not a filesystem errno reports its own code. */
 function errorCode(err: unknown): string {
   const code = (err as { code?: unknown } | null)?.code;
   return typeof code === 'string' ? code : 'UNKNOWN';
@@ -138,7 +125,10 @@ function errorCode(err: unknown): string {
  *
  * Returns `'undetermined'` for both when the probe failed for a reason that is
  * not "absent" (e.g. a permission error on a parent directory): claiming
- * `exists: false` there would report a determination we never made.
+ * `exists: false` there would report a determination we never made. Only the
+ * classifier's `absent` class is "not there": a name too long for this host
+ * (`ENAMETOOLONG`, `wrong-type`) names a path nothing could ever be at, which is
+ * reported, never skipped.
  */
 export async function probePathAccess(
   filePath: string
@@ -150,22 +140,20 @@ export async function probePathAccess(
   try {
     await fs.access(filePath, fs.constants.F_OK);
   } catch (err) {
-    const code = errorCode(err);
-    if (ABSENT_CODES.has(code)) {
+    if (fsFaultOf(err)?.faultClass === 'absent') {
       return { exists: false, readable: false };
     }
-    return { exists: 'undetermined', readable: 'undetermined', accessError: code };
+    return { exists: 'undetermined', readable: 'undetermined', accessError: errorCode(err) };
   }
 
   try {
     await fs.access(filePath, fs.constants.R_OK);
     return { exists: true, readable: true };
   } catch (err) {
-    const code = errorCode(err);
-    if (code === 'EACCES' || code === 'EPERM') {
+    if (fsFaultOf(err)?.faultClass === 'refused') {
       return { exists: true, readable: false };
     }
-    return { exists: true, readable: 'undetermined', accessError: code };
+    return { exists: true, readable: 'undetermined', accessError: errorCode(err) };
   }
 }
 
@@ -303,21 +291,26 @@ function detectSettingsType(
   return { detectedType: 'user', typeConfidence: 'ambiguous' };
 }
 
+const INVALID_FILE_FIX =
+  'Fix the field the finding names (its `field` is the dotted key path), or the JSON syntax, then re-run vat audit settings --file.';
+
 /**
  * Validate a specific settings file against the appropriate schema.
+ *
+ * @throws The read error for an absent or refused file — nothing was read, so it is no finding.
  */
 export async function validateSettingsFile(
   filePath: string,
   typeHint?: Exclude<SettingsDetectedType, 'unknown'>
 ): Promise<SettingsValidateResult> {
+  // A read error propagates (see @throws); only content that does not parse is a finding.
+  const content = await fs.readFile(filePath, 'utf-8');
   let raw: unknown;
-
   try {
-    const content = await fs.readFile(filePath, 'utf-8');
     raw = JSON.parse(content) as unknown;
   } catch (err) {
     return buildValidateResult(
-      [{ path: '', message: `Failed to read/parse file: ${String(err)}`, severity: 'error' }],
+      [{ code: 'SETTINGS_FILE_INVALID', message: `Not valid JSON: ${err instanceof Error ? err.message : String(err)}`, severity: 'error', fix: INVALID_FILE_FIX }],
       'unknown',
       'undetermined',
     );
@@ -332,18 +325,21 @@ export async function validateSettingsFile(
   const findings: SettingsFinding[] = [];
   if (typeConfidence === 'ambiguous') {
     findings.push({
-      path: '',
+      code: 'SETTINGS_TYPE_AMBIGUOUS',
       message:
         'Could not determine whether this is a user or project settings file — they share one ' +
         'schema. Validated as "user"; pass --type to state which it is.',
       severity: 'info',
+      fix: 'Pass --type user or --type project to state which it is.',
     });
   }
 
   const result = schema.safeParse(raw);
   if (!result.success) {
     for (const e of result.error.errors) {
-      findings.push({ path: e.path.join('.'), message: e.message, severity: 'error' });
+      // A violation at the document's root has no key path: the finding is about the whole file.
+      const field = e.path.join('.');
+      findings.push({ code: 'SETTINGS_FILE_INVALID', ...(field === '' ? {} : { field }), message: e.message, severity: 'error', fix: INVALID_FILE_FIX });
     }
   }
 
@@ -355,7 +351,7 @@ function buildValidateResult(
   detectedType: SettingsDetectedType,
   typeConfidence: SettingsTypeConfidence,
 ): SettingsValidateResult {
-  return { ...summarizeSettingsFindings(findings), findings, detectedType, typeConfidence };
+  return { ...summarizeIssues(findings), findings, detectedType, typeConfidence };
 }
 
 /** One field present in a settings file. */
@@ -370,13 +366,10 @@ export interface SettingsFileField {
  *
  * Returns `null` when there is nothing to list: the file is not there, is not
  * JSON, or is not an object. `[]` means the file parsed and genuinely declares
- * no fields — the two were the same empty array before, so "I could not look"
- * was reported as "there is nothing there".
+ * no fields.
  *
- * A file that IS there and the OS refuses (`EACCES`, `EISDIR`) is neither, and
- * propagates: `null` for it would report a permission bit as an empty settings
- * file. `validateSettingsFile` on the same path already carries the OS message
- * as an error finding, and the CLI's error path names it.
+ * A file the OS refuses (`EACCES`, `EISDIR`) throws, as it does from
+ * {@link validateSettingsFile}; an ABSENT file is `null` here but throws there.
  */
 export async function getSettingsFileFields(
   filePath: string

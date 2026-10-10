@@ -100,7 +100,7 @@ async function buildIgnoredFixture(): Promise<GitTracker> {
  */
 async function populateCapturing(tracker: GitTracker): Promise<CapturingStore> {
   const store = new CapturingStore();
-  await buildResourcePopulation({
+  await buildResourcePopulation({ outputs: [],
     root: suite.tempDir,
     gitTracker: tracker,
     cache: { store, treeUnchanged: () => true, treeHash: FIXTURE_TREE_HASH },
@@ -110,13 +110,13 @@ async function populateCapturing(tracker: GitTracker): Promise<CapturingStore> {
 
 /** The enumerator the run actually used, as the population reports it. */
 async function extentSourceOf(): Promise<CrawlSourceKind> {
-  const { extentSource } = await buildResourcePopulation({ root: suite.tempDir });
+  const { extentSource } = await buildResourcePopulation({ outputs: [], root: suite.tempDir });
   return extentSource;
 }
 
 /** The population as root-relative, forward-slashed paths — the readable unit. */
 async function populationOf(gitTracker?: GitTracker): Promise<string[]> {
-  const { paths } = await buildResourcePopulation({
+  const { paths } = await buildResourcePopulation({ outputs: [],
     root: suite.tempDir,
     ...(gitTracker !== undefined && { gitTracker }),
   });

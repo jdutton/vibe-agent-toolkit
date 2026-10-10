@@ -128,10 +128,25 @@ function ceilingFor(counts: LineCounts): number {
   return Math.ceil((counts.commentLines / counts.nonBlankLines) * 1000) / 10;
 }
 
-/** NUL-separated `git ls-files` output as a list of repo-relative paths. */
-function gitListing(repoRoot: string, args: readonly string[]): string[] {
-  const listing = String(runGitOrThrow(['ls-files', '-z', ...args, '--', 'packages'], { cwd: repoRoot, trim: false }));
-  return listing.split('\0').filter((rel) => rel.length > 0);
+/**
+ * `git ls-files <listArgs> -- <pathspec>`, minus any path also reported by
+ * `git ls-files --deleted -- <pathspec>` (same pathspec).
+ *
+ * `git ls-files` answers from the index, so it still reports a path deleted
+ * from the working tree as long as the deletion is unstaged — a rule that then
+ * reads the path gets ENOENT. An uncommitted deletion is not a document or
+ * source file to check, not one whose absence is itself a finding, so it is
+ * subtracted here rather than read-and-caught at every call site. Shared by
+ * every `ls-files` reader in this package that goes on to read the files it
+ * lists — see `derived-artifact-rules.ts`'s `trackedMarkdownFiles`.
+ */
+export function nonDeletedGitListing(repoRoot: string, pathspec: readonly string[], listArgs: readonly string[] = []): string[] {
+  const list = (args: readonly string[]): string[] =>
+    String(runGitOrThrow(['ls-files', '-z', ...args, '--', ...pathspec], { cwd: repoRoot, trim: false }))
+      .split('\0')
+      .filter((rel) => rel.length > 0);
+  const deleted = new Set(list(['--deleted']));
+  return list(listArgs).filter((rel) => !deleted.has(rel));
 }
 
 /**
@@ -141,11 +156,10 @@ function gitListing(repoRoot: string, args: readonly string[]): string[] {
  * added or removed since the last commit counts as of now.
  */
 function listSourceFiles(repoRoot: string): ReadonlyMap<string, readonly string[]> {
-  const deleted = new Set(gitListing(repoRoot, ['--deleted']));
   const byPackage = new Map<string, string[]>();
-  for (const rel of gitListing(repoRoot, ['--cached', '--others', '--exclude-standard'])) {
+  for (const rel of nonDeletedGitListing(repoRoot, ['packages'], ['--cached', '--others', '--exclude-standard'])) {
     const match = SOURCE_FILE.exec(rel);
-    if (match === null || EXCLUDED_SOURCE.test(rel) || deleted.has(rel)) continue;
+    if (match === null || EXCLUDED_SOURCE.test(rel)) continue;
     const dir = match[1] as string;
     const files = byPackage.get(dir) ?? [];
     files.push(rel);

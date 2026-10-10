@@ -114,8 +114,10 @@ import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync } from '
 import { basename, isAbsolute } from 'node:path';
 
 import {
+  forEachInOrder,
+  fsFaultOf,
   isAbsoluteAnyPlatform,
-  isFilesystemAccessError,
+  isInvalidArgumentError,
   isPathAbsentError,
   relativeEscapesRoot,
   safePath,
@@ -140,7 +142,7 @@ import type {
   ExtentContribution,
   ExtentContributor,
 } from '../contributor.js';
-import { crawlSourceFor, gitExtentSelected, type CrawlSource, type CrawlSourceKind } from '../crawl-source.js';
+import { gitExtentSelected, type CrawlSource, type CrawlSourceKind } from '../crawl-source.js';
 import type { ProjectionBase } from '../projection.js';
 import { collectRealization, type ContentDemand } from '../realizations.js';
 
@@ -311,17 +313,17 @@ export class FilesystemExtentContributor implements ExtentContributor {
   readonly #contentDemand: ContentDemand;
 
   /**
-   * @param sourceFor - How to obtain this extent's enumerator, defaulting to
-   *   {@link crawlSourceFor}. Injected only so the parity suite can pin one
-   *   implementation against the other on a single root; production selects at
-   *   the seam, never per construction site
+   * @param sourceFor - How to obtain this extent's enumerator — usually
+   *   {@link crawlSourceFor} built with the verb's side. Required: only the caller
+   *   knows which side of its verb the tree is on. Injected so the parity suite can
+   *   pin one implementation against the other on a single root
    * @param contentDemand - Whether this registration wants the bytes keyed, and
    *   which half of the tree. A **lane's** decision, not this class's — see the
    *   class docstring — defaulting to {@link DEFAULT_CONTENT_DEMAND} so a caller
    *   that has not thought about it is left exactly where it was
    */
   constructor(
-    sourceFor: (root: string) => CrawlSource = crawlSourceFor,
+    sourceFor: (root: string) => CrawlSource,
     contentDemand: ContentDemand = DEFAULT_CONTENT_DEMAND,
   ) {
     this.#sourceFor = sourceFor;
@@ -363,7 +365,7 @@ export class FilesystemExtentContributor implements ExtentContributor {
     const realizations: ResourceRealizationRow[] = [];
     const declined = declinedPathFilter(base.gitTracker, parameters);
 
-    for (const { absolutePath, contentHint, shape } of enumerated) {
+    await forEachInOrder(enumerated, async ({ absolutePath, contentHint, shape }) => {
       // BEFORE `idFor` and before `collectRealization`, which is the whole
       // saving and the reason this is not a filter over the finished rows:
       // `idFor` costs a `realpathSync.native` for any path git's index cannot
@@ -371,7 +373,7 @@ export class FilesystemExtentContributor implements ExtentContributor {
       // opens with an unconditional `lstat`. Declining afterwards would pay both
       // and then throw the answer away, which is what the consuming lane was
       // already doing.
-      if (declined(absolutePath)) continue;
+      if (declined(absolutePath)) return;
       const resourceId = base.identities.idFor(absolutePath);
       // Sequential on purpose: under a keying demand `collectRealization` reads
       // and keys every file's bytes, and fanning the whole crawl out at once
@@ -412,7 +414,7 @@ export class FilesystemExtentContributor implements ExtentContributor {
           vatId: null,
         });
       }
-    }
+    });
 
     const memberships: ResourceExtentRow[] = [...resources.keys()].map((resourceId) => ({
       resourceId,
@@ -747,7 +749,7 @@ function readTargetText(link: string): TargetText {
   try {
     return { readable: true, target: readlinkSync(link) };
   } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return { readable: false, error };
   }
 }
@@ -874,7 +876,7 @@ function realRootOf(root: string): string {
   try {
     return toForwardSlash(realpathSync.native(root));
   } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return root;
   }
 }
@@ -906,7 +908,7 @@ function hostResolution(link: string, realRoot: string): HostResolution {
   } catch (error) {
     // Dangling, looping or unreadable: the host reaches nothing, which is an
     // answer rather than a bug. Anything that is not a filesystem refusal is.
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return { kind: 'nowhere' };
   }
   const relative = toForwardSlash(safePath.relative(realRoot, real));
@@ -994,7 +996,7 @@ function isSymbolicLink(absolutePath: string): boolean {
   try {
     return lstatSync(absolutePath).isSymbolicLink();
   } catch (error) {
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return true;
   }
 }
@@ -1016,7 +1018,7 @@ function unreadableTargetClause(error: unknown, recordedBy: CrawlSourceKind): st
   // checkout with `core.symlinks=false` (the Windows default without
   // Developer Mode). From the walk it can only mean the link was replaced
   // since it was listed, and git is not involved.
-  if ((error as { code?: unknown }).code === 'EINVAL') {
+  if (isInvalidArgumentError(error)) {
     return recordedBy === 'git'
       ? 'in git that is not a symbolic link on disk (a checkout with core.symlinks=false writes it as a plain file holding the target text)'
       : 'that is no longer a symbolic link on disk';
@@ -1171,7 +1173,7 @@ function realThroughNearestAncestor(path: string): string | undefined {
     try {
       return safePath.join(realpathSync.native(directory), ...tail);
     } catch (error) {
-      if (!isFilesystemAccessError(error)) throw error;
+      if (fsFaultOf(error) === undefined) throw error;
       if (!isPathAbsentError(error)) return undefined;
     }
     const up = safePath.resolve(directory, '..');

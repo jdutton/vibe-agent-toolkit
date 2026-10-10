@@ -4,8 +4,13 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { resolveSkillSource } from '../../src/skill-source/resolve-skill-source.js';
+import { useScratchTmpdir } from '../test-helpers.js';
 
 import { setupSkillSourceTestSuite } from './test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test (and every child
+// a test spawns), so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-2-');
 
 const suite = setupSkillSourceTestSuite('vat-dispatch-');
 

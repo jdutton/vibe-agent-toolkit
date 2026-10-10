@@ -47,12 +47,13 @@
  * precisely so that nothing here has to know what it is.
  */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { InstrumentVersion } from '../envelope/coordinate.js';
 import type { ReportEnvelope } from '../envelope/envelope.js';
 import { writeReport } from '../store.js';
 
+import type { ArmEnvironment } from './arm-env.js';
 import type { MeasuredCommandSpec } from './commands.js';
 import { type Estimate, estimate } from './estimator.js';
 import { coordinateLines, instrumentLabel, instrumentTrustNotes } from './render.js';
@@ -171,8 +172,8 @@ export interface AbSpec<TBody, TComparison extends ComparisonLike>
   readonly armA: ResolvedInstrument;
   readonly armB: ResolvedInstrument;
   /**
-   * Extra environment for one arm's children only, merged over `process.env` by
-   * the runner.
+   * One arm's environment, for that arm's children only — applied over
+   * `process.env` by the runner, arm-owned keys stripped (see `arm-env.ts`).
    *
    * The second axis this verb can vary. Without it the only difference an A/B
    * can express is WHICH BUILD ran, so a setting — `VAT_PARSE_POOL`, a transport
@@ -183,8 +184,8 @@ export interface AbSpec<TBody, TComparison extends ComparisonLike>
    * included. A setting that changes what the cache clear does would therefore
    * change the two arms' starting states as well as their runs.
    */
-  readonly envA?: Readonly<Record<string, string>>;
-  readonly envB?: Readonly<Record<string, string>>;
+  readonly envA: ArmEnvironment;
+  readonly envB: ArmEnvironment;
   readonly commands: readonly MeasuredCommandSpec[];
   /** How many A-then-B cycles to run. */
   readonly pairs: number;
@@ -267,15 +268,15 @@ export interface AbResult {
   readonly instrumentA: InstrumentVersion;
   readonly instrumentB: InstrumentVersion;
   /**
-   * Each arm's extra environment, when it had one.
+   * Each arm's environment.
    *
    * Published so {@link renderAb} can disclose it. When one build is measured in
    * two configurations the two instrument labels are IDENTICAL, so the config is
    * the only visible axis and an effect printed without it is a number the
    * reader cannot attribute to anything.
    */
-  readonly envA?: Readonly<Record<string, string>>;
-  readonly envB?: Readonly<Record<string, string>>;
+  readonly envA: ArmEnvironment;
+  readonly envB: ArmEnvironment;
   /** The header lines of the last capture, so the run names its coordinate. */
   readonly subjectLines: readonly string[];
 }
@@ -324,14 +325,13 @@ async function captureArm<TBody, TComparison extends ComparisonLike>(
 ): Promise<ReportEnvelope<TBody>> {
   // Keyed on the arm rather than on the instrument: a control run passes the
   // SAME instrument object as both arms, so identity cannot tell them apart.
-  const env = arm === 'a' ? spec.envA : spec.envB;
   const report = await spec.capture({
     instrument,
     subject: spec.subject,
     commands: spec.commands,
     runs: spec.runs,
     cache: spec.cache,
-    ...(env === undefined ? {} : { env }),
+    env: arm === 'a' ? spec.envA : spec.envB,
     capturedAt: spec.now(),
   });
   await writeReport(safePath.join(spec.outDir, `pair-${String(pair)}`, arm), report);
@@ -497,12 +497,10 @@ function foldCommands<TBody, TComparison extends ComparisonLike>(
 export async function runAb<TBody, TComparison extends ComparisonLike>(
   spec: AbSpec<TBody, TComparison>,
 ): Promise<AbResult> {
-  const outcomes: PairOutcome[] = [];
-  for (let pair = 1; pair <= spec.pairs; pair++) {
-    // Sequential on purpose: two captures in flight would compete for the very
-    // machine whose spread this design exists to control for.
-    outcomes.push(await runPair(spec, pair));
-  }
+  // Sequential on purpose: two captures in flight would compete for the very
+  // machine whose spread this design exists to control for.
+  const pairNumbers = Array.from({ length: Math.max(0, spec.pairs) }, (_, index) => index + 1);
+  const outcomes: PairOutcome[] = await mapInOrder(pairNumbers, (pair) => runPair(spec, pair));
 
   return {
     control: spec.control,
@@ -517,8 +515,8 @@ export async function runAb<TBody, TComparison extends ComparisonLike>(
     commands: foldCommands(spec, outcomes),
     instrumentA: spec.armA.version,
     instrumentB: spec.armB.version,
-    ...(spec.envA === undefined ? {} : { envA: spec.envA }),
-    ...(spec.envB === undefined ? {} : { envB: spec.envB }),
+    envA: spec.envA,
+    envB: spec.envB,
     subjectLines: outcomes.at(-1)?.coordinateLines.slice(0, 1) ?? [],
   };
 }
@@ -563,21 +561,32 @@ function num(value: number): string {
 }
 
 /**
- * One arm's extra environment, rendered for the report.
+ * One arm's environment, rendered for the report.
  *
  * `(none)` rather than an empty string, so an arm that set nothing is stated
- * rather than left to be inferred from a blank.
+ * rather than left to be inferred from a blank. An unset key renders as
+ * `-KEY`, so removing a variable reads as a configuration, not as nothing.
  *
- * @param env - That arm's env, or `undefined`
- * @returns A single value, `KEY=value` joined by spaces
+ * @param env - That arm's environment
+ * @returns A single value, `KEY=value` and `-KEY` joined by spaces
  */
-function configLabel(env: Readonly<Record<string, string>> | undefined): string {
-  const entries = Object.entries(env ?? {});
-  if (entries.length === 0) return '(none)';
-  return entries
+function configLabel(env: ArmEnvironment): string {
+  const set = Object.entries(env.set)
     .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}=${value}`)
-    .join(' ');
+    .map(([key, value]) => `${key}=${value}`);
+  const unset = env.unset.toSorted((left, right) => left.localeCompare(right)).map((key) => `-${key}`);
+  const parts = [...set, ...unset];
+  return parts.length === 0 ? '(none)' : parts.join(' ');
+}
+
+/**
+ * Whether an arm changes its environment at all.
+ *
+ * @param env - That arm's environment
+ * @returns True when it sets or unsets anything
+ */
+function configured(env: ArmEnvironment): boolean {
+  return Object.keys(env.set).length > 0 || env.unset.length > 0;
 }
 
 /**
@@ -597,7 +606,7 @@ function configLabel(env: Readonly<Record<string, string>> | undefined): string 
  * @returns Two lines, or none
  */
 function configLines(result: AbResult): readonly string[] {
-  if (result.envA === undefined && result.envB === undefined) return [];
+  if (!configured(result.envA) && !configured(result.envB)) return [];
   return [`Config A: ${configLabel(result.envA)}`, `Config B: ${configLabel(result.envB)}`];
 }
 

@@ -30,7 +30,7 @@ vat audit [git-url-or-path] [options]
 - `--user` - Audit user-level Claude plugins installation (`~/.claude/plugins`)
 - `--no-recursive` - Scan the top level only (recursive scanning is the default; there is no `--recursive` flag)
 - `--compat` - Run compatibility analysis for each plugin; adds a `compatibility:` block to its entry (see [Compatibility and settings blocks](#compatibility-and-settings-blocks))
-- `--settings [file]` - Check each plugin against Claude settings (auto-discovered, or the given file); adds a `settings:` block. Requires `--compat`
+- `--settings [file]` - Check each plugin against Claude settings (auto-discovered, or the given file); adds a `settings:` block. Requires `--compat`: without it, or with `--user`, the run is refused (`USAGE_INVALID`, exit 2). A named file that does not exist is `USAGE_INVALID`; one the OS refuses, or that does not parse or fails the settings schema, is `INPUT_UNREADABLE` — and so is an auto-discovered managed, project or user settings file in any of those states (only an absent one is skipped) — the settings check never runs silently unchecked
 - `--debug` - Enable debug logging (outputs to stderr)
 
 ### Gitignore-aware scanning
@@ -158,9 +158,11 @@ vat audit --user
 - All skills within plugins
 
 **Output format**:
-- Hierarchical structure: marketplace → plugin → skill
-- Cache status for each plugin
-- Issue counts at each level
+- The same report envelope as every other audit (see [Output Format](#output-format)),
+  with `data.hierarchical` grouping the skills: marketplace → plugin → skill
+- Cache status for each cached plugin skill
+- Each skill's findings distributed by severity (`summary`); the findings
+  themselves are the envelope's, each naming its file in `location`
 
 ### Multi-dir Workflows
 
@@ -182,46 +184,65 @@ detection strategy doc, workstream B).
 
 **Example output**:
 ```yaml
-status: success
-summary:
-  filesScanned: 42
-  filesPassed: 40
-  filesWithWarnings: 2
-  filesWithErrors: 0
-  marketplaces: 2
-  standalonePlugins: 3
-  standaloneSkills: 5
-hierarchical:
-  marketplaces:
-    - name: anthropic-agent-skills
-      status: success
-      plugins:
-        - name: document-skills
-          status: warning
-          cacheStatus: fresh
-          skills:
-            - path: .../pdf.md
-              status: warning
-              issues:
-                - code: SKILL_TOO_LONG
-                  message: Skill exceeds recommended length
+status: findings
+examined: 42
+findings:
+  - code: SKILL_TOO_LONG
+    severity: warning
+    message: Skill exceeds recommended length
+    location: plugins/marketplaces/anthropic-agent-skills/document-skills/skills/pdf/SKILL.md
+summary: { errors: 0, warnings: 1, info: 0 }
+gate: { strict: false }
+durationMs: 812
+data:
+  root: /Users/me/.claude
+  provenance: null
+  counts: { filesPassed: 41, filesWithWarnings: 1, filesWithErrors: 0, pathsUnreadable: 0 }
+  files: [...]
+  hierarchical:
+    marketplaces:
+      - name: anthropic-agent-skills
+        plugins:
+          - name: document-skills
+            skills:
+              - name: pdf
+                path: plugins/marketplaces/anthropic-agent-skills/document-skills/skills/pdf/SKILL.md
+                status: findings
+                summary: { errors: 0, warnings: 1, info: 0 }
+    cachedPlugins: []
+    standalonePlugins: []
+    standaloneSkills: []
 ```
+
+A standalone `SKILL.md` directly under `plugins/` (which Claude Code will not
+load) carries `SKILL_MISCONFIGURED_LOCATION` at `error` — among the envelope's
+findings, counted in its `summary`, and gating the exit code like any other
+error.
 
 ## `status` and the exit code
 
-The YAML `status` describes the findings — the worst actionable severity across
-them — and the exit code follows it, exactly as in every other command of this
-CLI. `vat audit` used to be the one exception ("advisory": exit 0 over
-`status: error`), which a CI author reading the shared contract got wrong on
-exactly this verb.
+One rule, the same in every report verb of this CLI:
 
-A run that audited **zero files** is refused, not passed. An existing directory
-with nothing auditable in it — plugins that moved, a wrong subdirectory, an
-excluded tree, files no lane recognises — used to publish `status: success`
-beside `filesScanned: 0`, which is the same document a clean tree produces. It
-now publishes `status: error` with one non-overridable `RESOURCE_CHECK_BROKEN`
-finding under a top-level `issues:` key (the claim is about the run, so it is
-not a `files[]` row and does not count toward `filesScanned`), and exits `1`.
+- `status` is literal. `ok`: the audit finished and found nothing. `findings`:
+  it finished and found at least one thing, at any severity. `error`: it **did
+  not finish** — the reason is `error.code` (a refusal such as `USAGE_INVALID`
+  or `INPUT_UNREADABLE`) and `error.message`.
+- The exit code is derived from the published report: `2` when `status` is
+  `error`; `1` when `summary.errors > 0`; otherwise `0`. `gate.strict` is
+  always `false` — audit has no `--strict`, so warnings never move the exit
+  code.
+
+`status: error` used to mean "an error-severity finding exists" in this command
+alone. An error-severity finding is now `status: findings` with
+`summary.errors > 0` and exit `1`; `status: error` is reserved for a run that
+did not finish.
+
+A run that audited **zero files** is not a pass. An existing directory with
+nothing auditable in it — plugins that moved, a wrong subdirectory, an excluded
+tree, files no lane recognises — used to publish the same document a clean tree
+produces. It now carries one non-overridable `RESOURCE_CHECK_BROKEN` finding at
+`error` (with no `location`: the claim is about the run, not a file), beside
+`examined: 0`, and exits `1`.
 
 What still sets audit apart from `vat skills validate` is not the exit code but
 what it shows: audit ignores `validation.allow` (every finding is reported and
@@ -233,9 +254,9 @@ stops moving the exit code; set it to `ignore` and it disappears from the report
 
 The three-way contract every command shares:
 
-- **0** - The audit completed with nothing at error severity. Warnings and informational findings are in the report, not the exit code.
-- **1** - The audit completed and reports `status: error`: at least one error-severity finding, or zero files audited. A directory or file INSIDE the tree that the scan could not read — permission denied, a vanished mount — is `SCAN_PATH_UNREADABLE` (warning): the run is degraded, not failed, every readable sibling is still validated, and the refused path is reported under `summary.pathsUnreadable` rather than counted in `filesScanned` — so a root with nothing readable audited zero files and is refused like an empty tree. A governing `vibe-agent-toolkit.config.yaml` that cannot be loaded, or whose `skills.include` reaches a directory the crawl cannot list, is warned about once on stderr and filed as `SCAN_PATH_UNREADABLE` on the config file or the directory; the skills it governs are validated config-free rather than dropped. Degrading beats destroying, and the report says where it degraded.
-- **2** - The audit could not run at all, so there is no report to read: the path does not exist, is a directory the OS will not list, or is a file no audit lane recognises (the same ending `vat resources validate` and `vat skill review` give that argument), `--user` with no Claude config directory installed, a git URL that could not be cloned, an unknown flag, or an internal failure (a validator defect). An invalid config and a permission problem inside the tree are **not** exit 2 — they are findings, above.
+- **0** - The audit finished and no finding is at error severity. Warnings and informational findings are in the report, not the exit code.
+- **1** - The audit finished with at least one error-severity finding (`status: findings`, `summary.errors > 0`), including a run that audited zero files. A directory or file INSIDE the tree that the scan could not read — permission denied, a vanished mount — is `SCAN_PATH_UNREADABLE` (warning): the run is degraded, not failed, every readable sibling is still validated, and the refused path is counted in `data.counts.pathsUnreadable`, never in `examined` — so a root with nothing readable audited zero files and is refused like an empty tree. A governing `vibe-agent-toolkit.config.yaml` that cannot be loaded, or whose `skills.include` reaches a directory the crawl cannot list, is warned about once on stderr and filed as `SCAN_PATH_UNREADABLE` on the config file or the directory; the skills it governs are validated config-free rather than dropped. Degrading beats destroying, and the report says where it degraded.
+- **2** - The audit did not finish: `status: error`, with the refusal in `error.code`. `USAGE_INVALID` — the path does not exist, is a file no audit lane recognises (the same ending `vat resources validate` and `vat skill review` give that argument), a git URL that does not parse, or `--user` with no Claude config directory installed. `INPUT_UNREADABLE` — a root directory the OS will not list, or a git URL that could not be cloned (or whose ref or subpath it does not hold). `INTERNAL_ERROR` — a defect in VAT, with its stack on stderr. An invalid config and a permission problem inside the tree are **not** exit 2 — they are findings, above.
 
 ## Validation Configuration
 
@@ -276,7 +297,7 @@ Errors prevent the resource from being used correctly:
 - **Schema validation failures**: Manifest/frontmatter doesn't match expected format
 - **Broken links**: Links to non-existent files (Skills only)
 - **Reserved words in names**: `anthropic` or `claude` in a skill name (`RESERVED_WORD_IN_NAME`, a warning — Claude Code rejects non-certified skills using them)
-- **XML tags in frontmatter**: XML-like tags in name/description (Skills only)
+- **XML tags in frontmatter**: XML-like tags in the description (Skills only)
 
 ### Warnings (Should Fix)
 
@@ -321,8 +342,7 @@ Warnings indicate potential issues but don't prevent usage:
 | `SKILL_NAME_INVALID` | error | Name contains invalid characters | Use only letters, numbers, hyphens, underscores |
 | `SKILL_DESCRIPTION_TOO_LONG` | error | Description exceeds 1024 characters (the frontmatter schema limit; `SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT` warns earlier at 250, where the Claude Code `/skills` listing truncates) | Shorten description |
 | `RESERVED_WORD_IN_NAME` | warning | Name contains `anthropic` or `claude`; Claude Code rejects non-certified skills using these words | Rename the skill to avoid these words |
-| `SKILL_NAME_XML_TAGS` | error | Name contains markup — a declaration (`<!--`, `<?`, `<![`), a closing or self-closing tag, an opening tag with an attribute, a bare `<word>` that is not part of a compound token, or a prompt-channel name (`<system>`, `<function_results>`) however joined | Remove the tag, or backtick a literal placeholder (backticks do not exempt real markup) |
-| `SKILL_DESCRIPTION_XML_TAGS` | error | Description contains markup, judged the same way as the name | Remove the tag, or backtick a literal placeholder (backticks do not exempt real markup) |
+| `SKILL_DESCRIPTION_XML_TAGS` | error | Description contains markup — VAT's reading of the vendor's "cannot contain XML tags" | Remove the tag, or backtick a literal placeholder (backticks do not exempt real markup) |
 | `SKILL_DESCRIPTION_EMPTY` | error | Description is empty or whitespace | Provide meaningful description |
 | `SKILL_MISCONFIGURED_LOCATION` | error | Standalone skill in `~/.claude/plugins/` won't be recognized | Move to `~/.claude/skills/` for standalone skills, or add `.claude-plugin/plugin.json` for a proper plugin |
 | `LINK_INTEGRITY_BROKEN` | error | Link to non-existent file | Fix or remove broken link |
@@ -349,40 +369,49 @@ Warnings indicate potential issues but don't prevent usage:
 
 ### Standard Output (stdout)
 
-Structured YAML report for programmatic parsing:
+The report envelope every report verb publishes, as YAML. Its JSON Schema is
+`packages/cli/schemas/audit.json`:
 
 ```yaml
-root: /abs/path/to/scan/root   # The ONE absolute path in the document
-status: success | warning | error
-summary:
-  filesScanned: number        # Files the audit READ — never a path it could not
-  filesPassed: number         # Files with no ACTIONABLE issues (info-only counts as passed)
-  filesWithWarnings: number   # Files whose worst actionable severity is warning
-  filesWithErrors: number     # Files carrying at least one error
-  pathsUnreadable: number     # `files[]` rows that are a refused path (SCAN_PATH_UNREADABLE),
-                              #   outside every count above: files.length === filesScanned + pathsUnreadable
-issueCounts:                  # FINDINGS, not files — same field name and meaning
-  errors: number              #   as the `issueCounts` on each entry below,
-  warnings: number            #   plus the run-level `issues` when present
-  info: number
-issues:                       # Only when the RUN itself is refused — a run over
-  - code: RESOURCE_CHECK_BROKEN   # zero files. Not a file, so not in `files[]`.
-    severity: error
+status: ok | findings | error      # literal: findings iff the list is non-empty; error = did not finish
+examined: number                   # FILES the audit read — never a path it could not
+findings:                          # every file's findings, flattened
+  - code: SKILL_TOO_LONG
+    severity: error | warning | info
     message: ...
-duration: "123ms"
-files:
-  - path: plugins/my-plugin            # relative to `root`
-    status: success | warning | error
-    type: plugin | marketplace | registry | skill
-    issues:
-      - location: plugins/my-plugin/.claude-plugin/plugin.json   # relative to `root`
+    location: plugins/my-plugin/skills/x/SKILL.md   # the file to open, relative to `data.root`
+    line: 12                                        # when the producer knows it
+summary: { errors, warnings, info } # FINDINGS by severity — the one meaning of `summary`
+gate: { strict: false }            # audit has no --strict: warnings never gate
+durationMs: number
+error: { code, message }           # only when status is error (a refusal code)
+data:
+  root: /abs/path/to/scan/root     # the ONE absolute path in the document; null for a URL audit
+  provenance: null                 # a URL audit's source: { url, ref, commit, subpath? }
+  counts:                          # FILES by their worst actionable severity
+    filesPassed: number            # no ACTIONABLE finding (info-only counts as passed)
+    filesWithWarnings: number
+    filesWithErrors: number
+    pathsUnreadable: number        # `files[]` rows that are a refused path (SCAN_PATH_UNREADABLE),
+                                   #   outside every count above: files.length === examined + pathsUnreadable
+  files:
+    - path: plugins/my-plugin      # relative to `root`
+      type: agent-skill | vat-agent | claude-plugin | marketplace | registry | unknown
+      status: ok | findings        # literal: findings iff this file carries any finding
+      summary: { errors, warnings, info }  # this file's findings by severity
+  hierarchical: null               # `--user` only: the marketplace → plugin → skill view
 ```
+
+The one finding without a `location` is the run's own `RESOURCE_CHECK_BROKEN`
+over zero files: it is about the run, not a file. Every other finding names its
+file; one a validator reported without a location inherits its file row's
+`path`.
 
 #### One stated root, and everything relative to it
 
-`root` is the invocation scan root and the only absolute path a report contains.
-Every `path` and every issue `location` beneath it is forward-slashed and
-relative to that root, so:
+`data.root` is the invocation scan root and the only absolute path a report
+contains. Every `path` and every finding `location` beneath it is
+forward-slashed and relative to that root, so:
 
 - `join(root, path)` and `join(root, location)` name real files — a consumer
   never has to guess, or reimplement, the base a value was written against.
@@ -398,13 +427,15 @@ say in how a path is spelled.
 
 `--user` scans three sibling directories (`plugins/`, `skills/`,
 `marketplaces/`), so its `root` is their shared Claude config dir
-(`$CLAUDE_CONFIG_DIR`, else `~/.claude`). A URL audit omits `root`: the clone
-lives in a random tempdir that nothing downstream can resolve, so the provenance
-header states the base instead and paths are relative to the cloned repo.
+(`$CLAUDE_CONFIG_DIR`, else `~/.claude`). A URL audit's `root` is `null`, and
+only a URL audit's: the clone lives in a random tempdir that nothing downstream
+can resolve, so `data.provenance` states the base instead and paths are relative
+to the cloned repo. The schema enforces both halves — `root` is `null` exactly
+when `provenance` is not.
 
 #### Compatibility and settings blocks
 
-Under `--compat`, every `claude-plugin` entry carries a `compatibility:` block;
+Under `--compat`, every `claude-plugin` entry of `data.files` carries a `compatibility:` block;
 under `--compat --settings`, a `settings:` block beside it. **Both blocks are
 always present for every plugin the run was asked about** — a lane that could
 not run says so in its block rather than leaving it out, because a plugin the
@@ -579,9 +610,9 @@ jobs:
 
 ## Troubleshooting
 
-### "User plugins directory not found"
+### "No user-level Claude directories found"
 
-**Problem**: `--user` flag but no `~/.claude/plugins/` directory
+**Problem**: `--user` flag but no `plugins/`, `skills/` or `marketplaces/` under the Claude config dir — a `USAGE_INVALID` refusal, exit 2
 
 **Solution**: Install Claude Desktop and plugins first, or audit specific path instead
 
@@ -637,16 +668,22 @@ The `#ref[:subpath]` fragment form works on every URL form above.
 
 ### Output
 
-Output begins with a provenance header showing the URL, ref, and resolved commit SHA, then the normal audit output with paths relative to the cloned repo root. Each header line is emitted as a YAML comment so the rest of the output remains pipe-parseable (`vat audit <url> | yq` works without preprocessing):
+The report names its source in `data.provenance` — the URL, the ref, the resolved commit SHA and any subpath — and `data.root` is `null`: every path is relative to the cloned repo (or the subpath). stderr carries the same provenance as a human line (`Audited: <url> @ <ref> (commit abc123de)`), and stdout is the report alone:
 
-```
-# Audited: https://github.com/foo/bar.git @ main (commit abc123de)
-# Subpath: plugins/baz
----
-status: success
-files:
-  - path: plugins/baz/SKILL.md
-    ...
+```yaml
+status: ok
+examined: 1
+findings: []
+data:
+  root: null
+  provenance:
+    url: https://github.com/foo/bar.git
+    ref: main
+    commit: abc123de…
+    subpath: plugins/baz
+  files:
+    - path: SKILL.md
+      ...
 ```
 
 ### Authentication
@@ -664,6 +701,46 @@ Pass `--debug` to preserve the cloned tempdir for inspection (its location is pr
 - `--depth 1` cloning cannot resolve arbitrary deep commit SHAs. Use a branch or tag name for the ref.
 - GitHub web URLs are parsed only for `github.com`. For GitLab/Bitbucket/Gitea, use the `.git` URL form directly.
 - Cache-skip-on-unchanged-SHA is not implemented in v1; every URL audit pays the clone cost.
+
+## `vat audit settings`
+
+Shows what Claude is allowed to do from the current directory — the managed,
+user and project settings layers merged, each value with the chain of values it
+overrode — or validates one settings file (`--file`), or probes every settings
+path (`--show-paths`). Every mode reads the user layer from the same place:
+`settings.json` under `$CLAUDE_CONFIG_DIR`, else `~/.claude`. It publishes the
+same report envelope as `vat audit`
+(schema: `packages/cli/schemas/audit-settings.json`):
+
+- `data.mode` says which mode ran: `effective` (default: `layers`,
+  `effectiveSettings`, `conflicts`), `file` (`file`, `detectedType`,
+  `typeConfidence`, `fields`) or `paths` (`paths`).
+- `findings` carry the `SETTINGS_*` codes (see
+  [`docs/validation-codes.md`](../../../docs/validation-codes.md#claude-settings-codes)) —
+  non-overridable: no `validation.severity` or `validation.allow` key applies to them,
+  and both refuse one — and `SCAN_PATH_UNREADABLE` for a settings path the probe could
+  not check. Each finding's `location` is the settings file; `field` is the dotted key
+  path inside it when there is one, and is absent for a finding about the document as a
+  whole (JSON that does not parse, a violation at its root).
+- `data.root` is the directory the command ran in — the one absolute path in the
+  document, as `vat audit`'s `data.root` is. Every other path (a finding's
+  `location`, `layers[].file`, a rule's `source` / `ruleSource` /
+  `shadowedBySource`, a probed `paths[].path`, `file`) is forward-slashed and
+  relative to it, so a user or managed settings file reads `../…` rather than
+  leaking `$HOME`. A file on another Windows drive has no relative spelling: it is
+  the one path published absolutely, and a finding about it names it at the start
+  of its `message` (a `location` must be relative) — said, never dropped.
+- `examined` counts the settings documents read: the layers loaded, the one
+  `--file`, or the paths whose existence was determined. Zero — no settings
+  file readable from here — is not a clean answer: it carries
+  `RESOURCE_CHECK_BROKEN` and exits `1`.
+- Exit codes follow the one rule: `1` for an error-severity finding (an invalid
+  settings file, a legacy managed-settings path) or nothing read; `2` when it did
+  not finish (`USAGE_INVALID` for a `--file` that does not exist or an unknown
+  `--type`, `INPUT_UNREADABLE` for a `--file` the OS will not let it read, or, in
+  the default mode, for a discovered settings layer the OS refuses, that does not
+  parse, or that fails its schema — a file nothing could be read from is a
+  refusal, never a finding about it, and never a layer silently left out).
 
 ## Cross-Platform Considerations
 
@@ -701,7 +778,8 @@ governing context rather than a single top-level `projectRoot`:
 - **Config**: accept defaults. Per-skill `validation.severity` overrides come
   from whichever `vibe-agent-toolkit.config.yaml` each skill walks up to;
   `validation.allow` is not applied by audit (see the config section above).
-  The exit code follows the report's `status`, like every other command.
+  The exit code is derived from the published report by the one rule every
+  report verb shares (see [`status` and the exit code](#status-and-the-exit-code)).
 
 The per-skill walk-up is cached via a module-level two-layer cache and pre-warmed
 during top-down descent for efficiency on large trees.
@@ -722,3 +800,129 @@ for VAT's audit stance.
 - [Agent Command](./agent.md) - Agent build and import commands
 - [Resources Command](./resources.md) - Markdown resource validation
 - [Doctor Command](./doctor.md) - Environment diagnostics
+
+## Example reports
+
+Each block below is a real document from the built CLI, trimmed where noted; `packages/cli/test/integration/tagged-report-examples.integration.test.ts` validates every `vat-report=<verb>` block against that verb's registered schema.
+
+### `audit`
+
+A built marketplace with one finding, cut to the first file entry: `status: findings`, exit `1` only on an error. Produced by `vat audit dist/.claude/plugins/marketplaces/mp1`.
+
+```yaml vat-report=audit
+status: findings
+examined: 4
+findings:
+  - severity: info
+    code: PLUGIN_MISSING_LICENSE
+    message: plugin.json is missing the recommended `license` field.
+    location: plugins/sample/.claude-plugin/plugin.json
+    fix: Add a "license" SPDX identifier (e.g. "MIT") to plugin.json so redistribution terms are explicit.
+    reference: "#plugin_missing_license"
+summary:
+  errors: 0
+  warnings: 0
+  info: 1
+gate:
+  strict: false
+durationMs: 16689
+data:
+  root: /work/project/dist/.claude/plugins/marketplaces/mp1
+  provenance: null
+  counts:
+    filesPassed: 4
+    filesWithWarnings: 0
+    filesWithErrors: 0
+    pathsUnreadable: 0
+  files:
+    - path: .
+      type: marketplace
+      status: ok
+      summary:
+        errors: 0
+        warnings: 0
+        info: 0
+    - path: plugins/sample
+      type: claude-plugin
+      status: findings
+      summary:
+        errors: 0
+        warnings: 0
+        info: 1
+  hierarchical: null
+```
+
+### `inventory`
+
+The inventory of a project directory. Produced by `vat inventory .`.
+
+```yaml vat-report=inventory
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+durationMs: 75
+data:
+  inventory:
+    kind: plugin
+    vendor: claude-code
+    path: /work/project
+    shape: claude-plugin
+    manifest: {}
+    declared:
+      skills: null
+      commands: null
+      agents: null
+      hooks: null
+      mcpServers: null
+      outputStyles: null
+      lspServers: null
+    discovered:
+      skills: []
+      commands: []
+      agents: []
+    references: []
+    unexpected:
+      skillManifests:
+        - /work/project/dist/skills/test-skill-1/SKILL.md
+      pluginManifests: []
+    parseErrors: []
+```
+
+### `audit settings`
+
+The effective settings of a project with one allow and one deny rule. Produced by `vat audit settings`.
+
+```yaml vat-report=audit settings
+status: ok
+examined: 1
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  mode: effective
+  root: /work/project
+  layers:
+    - level: project
+      file: .claude/settings.json
+  effectiveSettings:
+    permissions:
+      deny:
+        - rule: Read(./.env)
+          source: .claude/settings.json
+          level: project
+      allow:
+        - rule: Read(./docs/**)
+          source: .claude/settings.json
+          level: project
+  conflicts: []
+```

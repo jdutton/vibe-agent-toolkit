@@ -17,28 +17,31 @@ import { crawlDirectorySync } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot, isGitIgnored } from '@vibe-agent-toolkit/utils/git';
 
 /**
+ * Absolute path to a built marketplace: `<configDir>/dist/.claude/plugins/marketplaces/<mp>/`.
+ */
+export function getMarketplaceOutputDir(configDir: string, marketplaceName: string): string {
+  return safePath.join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', marketplaceName);
+}
+
+/**
+ * Absolute path to one plugin inside a marketplace tree — the built one, or the staged tree
+ * a build writes before it lands: `<marketplaceDir>/plugins/<name>/`.
+ */
+export function pluginDirInMarketplace(marketplaceDir: string, pluginName: string): string {
+  return safePath.join(marketplaceDir, 'plugins', pluginName);
+}
+
+/**
  * Absolute path to the built plugin output directory.
  *
  * Shape: `<configDir>/dist/.claude/plugins/marketplaces/<mp>/plugins/<name>/`
- *
- * Extracted verbatim from build.ts lines 577–580 so that build can later adopt
- * this helper with zero behavior change.
  */
 export function getPluginOutputDir(
   configDir: string,
   marketplaceName: string,
   pluginName: string,
 ): string {
-  return safePath.join(
-    configDir,
-    'dist',
-    '.claude',
-    'plugins',
-    'marketplaces',
-    marketplaceName,
-    'plugins',
-    pluginName,
-  );
+  return pluginDirInMarketplace(getMarketplaceOutputDir(configDir, marketplaceName), pluginName);
 }
 
 /**
@@ -139,6 +142,7 @@ function crawlSkillDirs(pluginSourceDir: string, respectGitignore: boolean): str
   // above exists to prevent. Expressed against the plugin source dir so the
   // message reads `skills/<group>`, the path the author sees.
   const skillFiles = crawlDirectorySync({
+    outputs: [],
     baseDir: skillsDir,
     include: ['**/SKILL.md'],
     exclude: [],
@@ -150,6 +154,7 @@ function crawlSkillDirs(pluginSourceDir: string, respectGitignore: boolean): str
         root: pluginSourceDir,
         remedy:
           'Fix the permissions on that directory, or move it out of the plugin\'s `skills/` tree so the build no longer has to list it.',
+        side: 'source',
       },
     },
   });

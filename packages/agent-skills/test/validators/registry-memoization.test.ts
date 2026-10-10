@@ -1,7 +1,8 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import type { ResourcePopulationSource } from '@vibe-agent-toolkit/resources';
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { FS_FAULT_CODE, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { withReaddirSyncRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -43,22 +44,22 @@ describe('crawlAndResolveRegistry — memoized per project root', () => {
   });
 
   it('returns the same registry instance for a repeated root', async () => {
-    const first = await crawlAndResolveRegistry(rootA, { unreadable: 'refuse' });
-    const second = await crawlAndResolveRegistry(rootA, { unreadable: 'refuse' });
+    const first = await crawlAndResolveRegistry(rootA, { outputs: [], unreadable: 'refuse' });
+    const second = await crawlAndResolveRegistry(rootA, { outputs: [], unreadable: 'refuse' });
 
     expect(second).toBe(first);
   });
 
   it('keys on the resolved path, so a non-normalized spelling still hits', async () => {
-    const first = await crawlAndResolveRegistry(rootA, { unreadable: 'refuse' });
-    const viaDotSegment = await crawlAndResolveRegistry(`${rootA}/./`, { unreadable: 'refuse' });
+    const first = await crawlAndResolveRegistry(rootA, { outputs: [], unreadable: 'refuse' });
+    const viaDotSegment = await crawlAndResolveRegistry(`${rootA}/./`, { outputs: [], unreadable: 'refuse' });
 
     expect(viaDotSegment).toBe(first);
   });
 
   it('does not share a registry across different roots', async () => {
-    const a = await crawlAndResolveRegistry(rootA, { unreadable: 'refuse' });
-    const b = await crawlAndResolveRegistry(rootB, { unreadable: 'refuse' });
+    const a = await crawlAndResolveRegistry(rootA, { outputs: [], unreadable: 'refuse' });
+    const b = await crawlAndResolveRegistry(rootB, { outputs: [], unreadable: 'refuse' });
 
     // Sharing across roots is the failure the caller-side cache guarded against:
     // every `getResource()` lookup would miss and the walker would walk an empty
@@ -160,10 +161,10 @@ describe('crawlAndResolveRegistry — a population never crosses between callers
     const root = rootWithMarkdown({ 'kept.md': '# Kept\n', 'hidden.md': '# Hidden\n' });
     const { source } = countingSource(root, ['kept.md']);
 
-    const sourced = await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: source });
+    const sourced = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse', populationSource: source });
     expect(sourced.getResource(safePath.resolve(root, 'hidden.md'))).toBeUndefined();
 
-    const walked = await crawlAndResolveRegistry(root, { unreadable: 'refuse' });
+    const walked = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' });
 
     expect(walked).not.toBe(sourced);
     expect(walked.getResource(safePath.resolve(root, 'hidden.md'))).toBeDefined();
@@ -173,10 +174,10 @@ describe('crawlAndResolveRegistry — a population never crosses between callers
     const root = rootWithMarkdown({ 'kept.md': '# Kept\n', 'hidden.md': '# Hidden\n' });
     const { source } = countingSource(root, ['kept.md']);
 
-    const walked = await crawlAndResolveRegistry(root, { unreadable: 'refuse' });
+    const walked = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' });
     expect(walked.getResource(safePath.resolve(root, 'hidden.md'))).toBeDefined();
 
-    const sourced = await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: source });
+    const sourced = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse', populationSource: source });
 
     expect(sourced).not.toBe(walked);
     expect(sourced.getResource(safePath.resolve(root, 'hidden.md'))).toBeUndefined();
@@ -187,8 +188,8 @@ describe('crawlAndResolveRegistry — a population never crosses between callers
     const first = countingSource(root, ['kept.md']);
     const second = countingSource(root, ['hidden.md']);
 
-    const fromFirst = await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: first.source });
-    const fromSecond = await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: second.source });
+    const fromFirst = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse', populationSource: first.source });
+    const fromSecond = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse', populationSource: second.source });
 
     expect(fromSecond).not.toBe(fromFirst);
     expect(fromFirst.getResource(safePath.resolve(root, 'kept.md'))).toBeDefined();
@@ -201,8 +202,8 @@ describe('crawlAndResolveRegistry — a population never crosses between callers
     const root = rootWithMarkdown({ 'kept.md': '# Kept\n' });
     const { source, calls } = countingSource(root, ['kept.md']);
 
-    const first = await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: source });
-    const second = await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: source });
+    const first = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse', populationSource: source });
+    const second = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse', populationSource: source });
 
     expect(second).toBe(first);
     expect(calls()).toBe(1);
@@ -212,12 +213,12 @@ describe('crawlAndResolveRegistry — a population never crosses between callers
     const root = rootWithMarkdown({ 'kept.md': '# Kept\n' });
     const { source, calls } = countingSource(root, ['kept.md']);
 
-    const before = await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: source });
-    const walkedBefore = await crawlAndResolveRegistry(root, { unreadable: 'refuse' });
+    const before = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse', populationSource: source });
+    const walkedBefore = await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' });
     resetPackagingRegistryCache();
 
-    expect(await crawlAndResolveRegistry(root, { unreadable: 'refuse', populationSource: source })).not.toBe(before);
-    expect(await crawlAndResolveRegistry(root, { unreadable: 'refuse' })).not.toBe(walkedBefore);
+    expect(await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse', populationSource: source })).not.toBe(before);
+    expect(await crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' })).not.toBe(walkedBefore);
     expect(calls()).toBe(2);
   });
 });
@@ -248,11 +249,43 @@ describe('validateSkillForPackaging — routes its private crawl through the sha
 
     const result = await validateSkillForPackaging(skillPath, undefined, 'source', {
       unreadable: 'refuse',
+      outputs: [],
       populationSource: source,
     });
 
     expect(calls()).toBe(1);
     expect(result.metadata.fileCount).toBe(2);
     expect(result.metadata.maxLinkDepth).toBe(0);
+  });
+});
+
+/**
+ * A fault at the crawl's base is classified on the side the CALLER declares: a packaging run
+ * writes its output into the project it crawls, so a project that vanishes under it is a
+ * destination fault (`RUN_INCOMPLETE`), while `vat skills validate` only reads it. The memo is
+ * keyed on the side too: a rejected crawl is memoized, and handing one side's fault to the
+ * other's caller would re-code it.
+ */
+describe('crawlAndResolveRegistry — the side of the crawl base, from what the caller writes', () => {
+  it('classifies a vanished base as the destination\'s only when it holds a declared output, and never serves one declaration\'s crawl to the other', async () => {
+    resetPackagingRegistryCache();
+    const root = rootWithMarkdown({ 'a.md': '# A\n' });
+
+    await expect(withReaddirSyncRefused(root, 'ENOENT', () => crawlAndResolveRegistry(root, { outputs: [], unreadable: 'refuse' })))
+      .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'source', faultClass: 'absent' });
+    await expect(withReaddirSyncRefused(root, 'ENOENT', () => crawlAndResolveRegistry(root, { unreadable: 'refuse', outputs: [safePath.join(root, 'dist')] })))
+      .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'destination', faultClass: 'absent' });
+  });
+});
+
+// A verb that writes its output into the project it validates (`vat skills build`) declares so:
+// its pre-build validation's crawl then classifies a project vanishing under it as the destination's.
+describe('validateSkillForPackaging — the calling verb declares the side of the project', () => {
+  it('classifies a vanished project on the side the shared context declares', async () => {
+    resetPackagingRegistryCache();
+    const { root, skillPath } = chainRoot();
+
+    await expect(withReaddirSyncRefused(root, 'ENOENT', () => validateSkillForPackaging(skillPath, undefined, 'source', { unreadable: 'refuse', outputs: [safePath.join(root, 'dist')] })))
+      .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'destination', faultClass: 'absent' });
   });
 });

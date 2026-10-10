@@ -2,13 +2,16 @@
  * vat agent run command
  *
  * Executes an agent with user input and displays the response.
+ *
+ * A protocol leaf: its stdout is the agent's reply, not a document, so a
+ * failure goes to stderr and ends on `ERROR` with nothing on stdout.
  */
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { errorDiagnostics, ExitCode } from '@vibe-agent-toolkit/schema';
 
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { runAgent } from '../../utils/agent-runner.js';
-import { handleCommandError } from '../../utils/command-error.js';
+import { errorMessageOf } from '../../utils/command-refusal.js';
 import { createLogger } from '../../utils/logger.js';
 import { projectRootOrNull } from '../../utils/project-root-policy.js';
 
@@ -62,6 +65,8 @@ export async function runCommand(
 
     process.exit(ExitCode.OK);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'AgentRun');
+    logger.error(`vat agent run failed: ${errorMessageOf(error)}`);
+    logger.debug(errorDiagnostics(error));
+    process.exit(ExitCode.ERROR);
   }
 }

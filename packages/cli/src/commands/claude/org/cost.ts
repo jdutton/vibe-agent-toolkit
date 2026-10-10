@@ -6,19 +6,7 @@
  */
 import { Command } from 'commander';
 
-import { defaultFirstOfMonth, executeOrgCommand } from './helpers.js';
-
-interface CostBucket {
-  starting_at: string;
-  ending_at: string;
-  results: Array<{ amount: string; [key: string]: unknown }>;
-}
-
-interface CostResponse {
-  data: CostBucket[];
-  has_more: boolean;
-  next_page: string | null;
-}
+import { autopaginateReport, defaultFirstOfMonth, executeOrgCommand } from './helpers.js';
 
 export function createOrgCostCommand(): Command {
   const command = new Command('cost');
@@ -31,41 +19,17 @@ export function createOrgCostCommand(): Command {
     .option('--debug', 'Enable debug logging')
     .action(
       async (options: { from?: string; to?: string; groupBy?: string; debug?: boolean }) => {
-        await executeOrgCommand('OrgCost', options.debug, async ({ client }) => {
-          let startingAt = options.from ?? defaultFirstOfMonth();
-          const endingAt = options.to ?? new Date().toISOString();
-          const allData: CostBucket[] = [];
-
-          let hasMore = true;
-          while (hasMore) {
-            const urlParams = new URLSearchParams();
-            urlParams.set('starting_at', startingAt);
-            urlParams.set('ending_at', endingAt);
-
-            if (options.groupBy) {
-              for (const field of options.groupBy.split(',')) {
-                urlParams.append('group_by[]', field.trim());
-              }
-            }
-
-            const path = `/v1/organizations/cost_report?${urlParams.toString()}`;
-            const resp = await client.get<CostResponse>(path);
-            allData.push(...resp.data);
-
-            if (!resp.has_more || resp.data.length === 0) {
-              hasMore = false;
-            } else {
-              // Advance starting_at to last bucket's ending_at for next page
-              const lastBucket = resp.data.at(-1);
-              if (lastBucket) {
-                startingAt = lastBucket.ending_at;
-              } else {
-                hasMore = false;
-              }
-            }
+        await executeOrgCommand('claude org cost', options.debug, ({ client }) => {
+          // group_by[] repeats, which QueryParams cannot express, so it rides in the path.
+          const groupBy = new URLSearchParams();
+          for (const field of options.groupBy ? options.groupBy.split(',') : []) {
+            groupBy.append('group_by[]', field.trim());
           }
-
-          return { count: allData.length, data: allData };
+          const query = groupBy.size > 0 ? `?${groupBy.toString()}` : '';
+          return autopaginateReport(client, `/v1/organizations/cost_report${query}`, {
+            starting_at: options.from ?? defaultFirstOfMonth(),
+            ending_at: options.to ?? new Date().toISOString(),
+          });
         });
       },
     )
@@ -75,7 +39,6 @@ Description:
   Note: amount is a string (not a number) in the API response.
 
 Output:
-  - status: success
   - count: number of cost entries
   - data[]: array of cost entries with amount as string
 

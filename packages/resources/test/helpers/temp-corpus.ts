@@ -21,7 +21,7 @@
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { replantableCorpus } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach } from 'vitest';
 
@@ -71,11 +71,11 @@ export async function plantTree(
   files: Readonly<Record<string, string>>,
 ): Promise<string> {
   const dir = await mkdtemp(safePath.join(normalizedTmpdir(), prefix));
-  for (const [relativePath, content] of Object.entries(files)) {
+  await forEachInOrder(Object.entries(files), async ([relativePath, content]) => {
     const absolute = safePath.join(dir, relativePath);
     await mkdir(safePath.resolve(absolute, '..'), { recursive: true });
     await writeFile(absolute, content);
-  }
+  });
   return dir;
 }
 

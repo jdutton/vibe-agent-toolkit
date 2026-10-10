@@ -1,48 +1,28 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 
 import {
 	type AnchorRootOptions,
+	describeIssues,
 	detectHostedIncompatibleShape,
 	detectKebabCaseViolation,
 	detectMissingRecommendedFields,
 	detectPackagedAgentInstructionFiles,
 	generateFixSuggestion,
+	manifestReadFailure,
 	resolveAnchorRoot,
 	type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
-import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { issueLocation, promised, safePath } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
 const PLUGIN_TYPE = 'claude-plugin' as const;
 
 /**
- * Derive `status`, `summary` and `issueCounts` from ONE issue set.
- *
- * These three fields are three views of the same findings, so they are
- * computed together — maintaining them independently is how a result ends up
- * declaring `{errors: 0, warnings: 0, info: 0}` directly above the issues it
- * just reported.
- *
- * `summary` keys off `issues.length`, not `status === 'success'`: an
- * info-only set is `success` (see `calculateValidationStatus`) yet still has
- * findings to report.
- */
-function summarizeIssues(
-	issues: readonly ValidationIssue[]
-): Pick<ValidationResult, 'issueCounts' | 'status' | 'summary'> {
-	return {
-		status: calculateValidationStatus(issues),
-		summary: issues.length === 0 ? 'Valid plugin' : `Found ${issues.length} issue(s)`,
-		issueCounts: countBySeverity(issues),
-	};
-}
-
-/**
  * Apply schema-success post-checks: set metadata, warn on missing version,
  * and surface recommended-field observations. Mutates `issues` and
- * `validationResult` in place; callers re-use the computed status/summary.
+ * `validationResult` in place; callers re-use the computed status/description/summary.
  *
  * Extracted from `validatePlugin` to keep cognitive complexity under the
  * project threshold.
@@ -88,7 +68,7 @@ function applyPostSchemaChecks(args: {
 
 	// Re-derive every summary field: this function has just pushed issues that
 	// the caller's initial derivation could not have seen.
-	Object.assign(validationResult, summarizeIssues(issues));
+	Object.assign(validationResult, describeIssues(issues, PLUGIN_TYPE));
 }
 
 /**
@@ -101,10 +81,20 @@ function applyPostSchemaChecks(args: {
  *   {@link AnchorRootOptions}).
  * @returns Validation result with issues
  */
-export async function validatePlugin(
+export function validatePlugin(
 	pluginPath: string,
 	options?: { strict?: boolean } & AnchorRootOptions
 ): Promise<ValidationResult> {
+	// Promise-shaped for the injectable validator type over synchronous work; a
+	// throw still arrives as a rejection.
+	return promised(() => validatePluginNow(pluginPath, options));
+}
+
+/** The synchronous body of {@link validatePlugin}. */
+function validatePluginNow(
+	pluginPath: string,
+	options?: { strict?: boolean } & AnchorRootOptions
+): ValidationResult {
 	const issues: ValidationIssue[] = [];
 	const pluginJsonPath = safePath.join(pluginPath, '.claude-plugin', 'plugin.json');
 	// Anchor contract: relative to the run's ONE stated root, never absolute.
@@ -120,44 +110,40 @@ export async function validatePlugin(
 	// config, no `files:` entry anywhere) is a distributed artifact, so the file
 	// demonstrably shipped; a plugin SOURCE directory in an adopter's repo is not,
 	// because `vat build`'s tree-copy now excludes these basenames at any depth and
-	// a `files:` glob filters them out of its matches. Saying "tree-copied verbatim,
-	// so it ships to every consumer" was true when this scan was written and is
-	// false for the source lane today — measured on a real adopter, `vat audit`
-	// warned about a plugin-root CLAUDE.md that `vat verify` proved was absent from
-	// the built output. The finding still fires for both (the file IS in the tree
-	// being scanned), but the remediation must not prescribe deleting a file the
-	// build already excludes — see PACKAGED_AGENT_INSTRUCTION_FILE's registry entry,
-	// which states both lanes.
+	// a `files:` glob filters them out of its matches. The finding fires for both
+	// (the file IS in the scanned tree); the remediation must not prescribe deleting
+	// a file the build already excludes — see PACKAGED_AGENT_INSTRUCTION_FILE's
+	// registry entry, which states both lanes.
 	// No declared dests: this lane inspects a plugin TREE, and a plugin has no
 	// `files:` block of its own — the per-skill `files:` config that could sanction
 	// a dest lives in the project config the SKILL lanes read. `[]` is the honest
 	// answer here, not a defaulted one.
-	issues.push(...detectPackagedAgentInstructionFiles(pluginPath, anchorRoot, []));
+	issues.push(...detectPackagedAgentInstructionFiles(pluginPath, anchorRoot, [], []));
 
-	// Check plugin.json exists
-	if (!existsSync(pluginJsonPath)) {
-		issues.push({
-			severity: 'error',
+	// One read decides missing / unreadable / unparseable: `existsSync` would read
+	// a refused parent as absent, and one `try` around read + parse would report a
+	// refused file as invalid JSON — each with a fix the reader cannot act on.
+	let content: string;
+	try {
+		content = readFileSync(pluginJsonPath, 'utf-8');
+	} catch (error) {
+		const halted = manifestReadFailure(error, location, {
 			code: 'PLUGIN_MISSING_MANIFEST',
 			message: 'Plugin manifest not found',
-			location,
 			fix: 'Create .claude-plugin/plugin.json with required fields (name, description, version)',
 		});
-
+		issues.push(halted);
+		const headline = halted.code === 'PLUGIN_MISSING_MANIFEST' ? 'missing' : 'unreadable';
 		return {
 			path: pluginPath,
 			type: PLUGIN_TYPE,
-			status: 'error',
-			summary: 'Plugin manifest missing',
+			...describeIssues(issues, PLUGIN_TYPE, `Plugin manifest ${headline}`),
 			issues,
-			issueCounts: countBySeverity(issues),
 		};
 	}
 
-	// Parse and validate plugin.json
 	let pluginData: unknown;
 	try {
-		const content = readFileSync(pluginJsonPath, 'utf-8');
 		pluginData = JSON.parse(content);
 	} catch (error) {
 		issues.push({
@@ -171,10 +157,8 @@ export async function validatePlugin(
 		return {
 			path: pluginPath,
 			type: PLUGIN_TYPE,
-			status: 'error',
-			summary: 'Plugin manifest is invalid JSON',
+			...describeIssues(issues, PLUGIN_TYPE, 'Plugin manifest is invalid JSON'),
 			issues,
-			issueCounts: countBySeverity(issues),
 		};
 	}
 
@@ -215,7 +199,7 @@ export async function validatePlugin(
 	const validationResult: ValidationResult = {
 		path: pluginPath,
 		type: PLUGIN_TYPE,
-		...summarizeIssues(issues),
+		...describeIssues(issues, PLUGIN_TYPE),
 		issues,
 	};
 

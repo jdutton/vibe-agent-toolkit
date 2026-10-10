@@ -5,11 +5,14 @@
  * Uses child_process.spawnSync for git commands (no external dependencies).
  */
 
-import { cpSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import type { RefusalCode } from '@vibe-agent-toolkit/schema';
+import { copyTree, disposeTempDir, disposeTempDirAfterFailure, safePath, withFsFault } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
+import { makeStagingDir } from '../../../utils/archive-staging.js';
+import { CommandRefusalError } from '../../../utils/command-refusal.js';
 import type { Logger } from '../../../utils/logger.js';
 import { redactUrlCredentials } from '../../../utils/url-redact.js';
 
@@ -22,6 +25,8 @@ export interface PublishGitOptions {
   publishDir: string;
   branch: string;
   remote: string;
+  /** Whether `remote` came from `publish.remote` (true) or is the default (false) — named when it is not found. */
+  remoteFromConfig: boolean;
   commitMessage: string;
   force: boolean;
   dryRun: boolean;
@@ -59,7 +64,9 @@ export function createCommitMessage(
 
 /**
  * Execute a git command and return the result.
- * Throws on non-zero exit code unless allowFailure is true.
+ * Refuses on non-zero exit code unless allowFailure is true: `refusal` (default
+ * `RUN_INCOMPLETE` — a publish step stopped) names what the failure means, so
+ * the one step that talks to the remote (the push) says `EXTERNAL_API_FAILED`.
  *
  * 🔴 Running through `runGit` is a data-loss guard, not a style choice. Every
  * call here targets the private staging repo under the temp directory — a
@@ -71,7 +78,7 @@ export function createCommitMessage(
  */
 function git(
   args: string[],
-  options: { cwd: string; allowFailure?: boolean; timeout?: number; input?: string; trim?: boolean }
+  options: { cwd: string; allowFailure?: boolean; timeout?: number; input?: string; trim?: boolean; refusal?: RefusalCode }
 ): { stdout: string; stderr: string; status: number } {
   const result = runGit(args, {
     cwd: options.cwd,
@@ -89,13 +96,14 @@ function git(
   // "ran and exited non-zero". Collapsing the first into an exit code invents a
   // failure git never reported and discards the only diagnostic there is — the
   // symptom is a confident "exit 1" with empty stderr.
+  const refusal = options.refusal ?? 'RUN_INCOMPLETE';
   if (result.error && !options.allowFailure) {
-    throw new Error(`git ${label} could not run: ${result.error.message}`);
+    throw new CommandRefusalError(refusal, `git ${label} could not run: ${result.error.message}`, { cause: result.error });
   }
 
   const status = result.status === -1 ? 1 : result.status;
   if (status !== 0 && !options.allowFailure) {
-    throw new Error(`git ${label} failed (exit ${status}):\n${result.stderr}`);
+    throw new CommandRefusalError(refusal, `git ${label} failed (exit ${status}):\n${result.stderr}`);
   }
 
   return { stdout: result.stdout, stderr: result.stderr, status };
@@ -118,14 +126,18 @@ function listedPaths(cwd: string, args: string[], allowFailure = false): string[
  * If the value already looks like a URL, returns it as-is.
  * In CI, injects GITHUB_TOKEN into HTTPS URLs for push authentication.
  */
-function resolveRemoteUrl(remote: string, cwd: string): string {
+function resolveRemoteUrl(remote: string, remoteFromConfig: boolean, cwd: string): string {
   let url: string;
   if (remote.includes('/') || remote.includes(':')) {
     url = remote;
   } else {
     const urlResult = git(['remote', 'get-url', remote], { cwd, allowFailure: true });
     if (urlResult.status !== 0) {
-      throw new Error(`Git remote "${remote}" not found. Configure it or use a full URL.`);
+      const origin = remoteFromConfig ? 'from publish.remote' : 'the default — publish.remote is not set';
+      throw new CommandRefusalError(
+        'CONFIG_INVALID',
+        `Git remote "${remote}" (${origin}) not found. Add it with git remote add, or set publish.remote to a remote name or a full URL.`,
+      );
     }
     url = urlResult.stdout;
   }
@@ -142,7 +154,7 @@ function resolveRemoteUrl(remote: string, cwd: string): string {
 /**
  * Deliver the commit: dry-run (show info), no-push (local branch), or push to remote.
  */
-function deliverCommit(
+export function deliverCommit(
   tmpRepo: string,
   cwd: string,
   options: Pick<
@@ -177,7 +189,7 @@ function deliverCommit(
   if (force) {
     pushArgs.splice(1, 0, '--force');
   }
-  git(pushArgs, { cwd: tmpRepo });
+  git(pushArgs, { cwd: tmpRepo, refusal: 'EXTERNAL_API_FAILED' });
   logger.info(`   Pushed to ${redactUrlCredentials(remoteUrl)} branch ${branch}`);
 }
 
@@ -190,83 +202,98 @@ function deliverCommit(
  * 3. Fetch the existing branch (if any) from the remote
  * 4. Create a new commit on top of the branch history
  * 5. Deliver: dry-run (preview), no-push (local branch), or push to remote
+ *
+ * The temp repo is kept on a dry run, for the user to inspect, and disposed of otherwise. A
+ * failure is rethrown unchanged, a repo that will not go recorded beside it
+ * (`suppressedFaultsOf`).
+ *
+ * @returns `undefined`, or the leftover: the classified fault naming a temp repo the OS would
+ *   not remove once the publish was DONE — for the caller to report as a warning beside it
  */
-export async function publishToGitBranch(options: PublishGitOptions): Promise<void> {
-  const { publishDir, branch, commitMessage, force, dryRun, logger } = options;
+export async function publishToGitBranch(options: PublishGitOptions): Promise<unknown> {
+  const { branch, dryRun, logger } = options;
 
   const cwd = process.cwd();
-  const remoteUrl = resolveRemoteUrl(options.remote, cwd);
+  const remoteUrl = resolveRemoteUrl(options.remote, options.remoteFromConfig, cwd);
 
   logger.info(`   Remote: ${redactUrlCredentials(remoteUrl)}`);
   logger.info(`   Branch: ${branch}`);
 
-  const tmpRepo = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-marketplace-publish-'));
+  // Through the one classified creation: a temp directory the OS will not make is the environment's fault.
+  const tmpRepo = await makeStagingDir('vat-marketplace-publish-');
   logger.debug(`   Staging repo: ${tmpRepo}`);
 
   try {
-    git(['init'], { cwd: tmpRepo });
-    git(['config', 'user.email', 'vat-publish@localhost'], { cwd: tmpRepo });
-    git(['config', 'user.name', 'vat marketplace publish'], { cwd: tmpRepo });
-    git(['checkout', '-b', branch], { cwd: tmpRepo });
+    await commitAndDeliver(tmpRepo, cwd, remoteUrl, options);
+  } catch (error) {
+    if (!dryRun) await disposeTempDirAfterFailure(tmpRepo, error);
+    throw error;
+  }
+  return dryRun ? undefined : disposeTempDir(tmpRepo);
+}
 
-    // Try to fetch existing branch history (skip for dry-run — commit parent doesn't matter)
-    if (!dryRun) {
-      const fetchResult = git(
-        ['fetch', remoteUrl, `refs/heads/${branch}`],
-        { cwd: tmpRepo, allowFailure: true, timeout: 30_000 }
-      );
-      if (fetchResult.status === 0 && !force) {
-        // Reset to fetched branch tip so our commit builds on top of it
-        git(['reset', '--soft', 'FETCH_HEAD'], { cwd: tmpRepo });
-      }
-    }
+/** {@link publishToGitBranch}'s work in the temp repo: stage the tree, commit it, deliver it. */
+async function commitAndDeliver(tmpRepo: string, cwd: string, remoteUrl: string, options: PublishGitOptions): Promise<void> {
+  const { publishDir, branch, commitMessage, force, dryRun, logger } = options;
+  git(['init'], { cwd: tmpRepo });
+  git(['config', 'user.email', 'vat-publish@localhost'], { cwd: tmpRepo });
+  git(['config', 'user.name', 'vat marketplace publish'], { cwd: tmpRepo });
+  git(['checkout', '-b', branch], { cwd: tmpRepo });
 
-    // Copy publish tree content into temp repo
-    cpSync(publishDir, tmpRepo, { recursive: true });
-
-    // Log what cpSync placed in the temp repo (filesystem truth before git touches it)
-    // A link is an entry cpSync placed and git will add, so it is listed as
-    // one — this is a record of the tree, not a walk into it.
-    const tmpRepoFiles = readdirSync(tmpRepo, { recursive: true, withFileTypes: true })
-      .filter(entry => (entry.isSymbolicLink() || entry.isFile()) && !entry.parentPath.includes('.git'))
-      .map(entry => safePath.join(entry.parentPath, entry.name))
-      .map(p => safePath.relative(tmpRepo, p));
-    logger.debug(`   Files in tmpRepo after cpSync (${tmpRepoFiles.length}):\n${tmpRepoFiles.join('\n')}`);
-
-    git(['add', '-A'], { cwd: tmpRepo });
-
-    // Log what git is tracking vs what's on disk but untracked/ignored
-    const tracked = listedPaths(tmpRepo, []);
-    logger.debug(`   Git tracked files:\n${tracked.join('\n')}`);
-
-    const ignored = listedPaths(tmpRepo, ['--others', '--ignored', '--exclude-standard'], true);
-    if (ignored.length > 0) {
-      logger.info(`   ⚠ Git IGNORED files (on disk but not tracked):\n${ignored.join('\n')}`);
-    }
-
-    // Check if there are changes to commit
-    const diffResult = git(['diff', '--cached', '--quiet'], { cwd: tmpRepo, allowFailure: true });
-    if (diffResult.status === 0) {
-      logger.info('   No changes to publish (tree is identical to current branch)');
-      const currentTree = listedPaths(tmpRepo, []);
-      logger.debug(`   Current tree (${currentTree.length} files):\n${currentTree.join('\n')}`);
-      return;
-    }
-
-    // `-F -` (message on stdin), never `-m`. The message embeds the release's whole
-    // changelog section, and Linux caps a SINGLE argv entry at MAX_ARG_STRLEN (131,072
-    // bytes) independently of the much larger ARG_MAX — so a long enough release note
-    // made `git commit` fail to spawn at all. stdin has no such ceiling.
-    git(['commit', '-F', '-'], { cwd: tmpRepo, input: commitMessage });
-
-    const log = git(['log', '--oneline', '-1'], { cwd: tmpRepo });
-    logger.info(`   Commit: ${log.stdout}`);
-
-    deliverCommit(tmpRepo, cwd, options, remoteUrl);
-  } finally {
-    // Keep temp repo for dry-run so user can inspect
-    if (!dryRun) {
-      rmSync(tmpRepo, { recursive: true, force: true });
+  // Try to fetch existing branch history (skip for dry-run — commit parent doesn't matter)
+  if (!dryRun) {
+    const fetchResult = git(
+      ['fetch', remoteUrl, `refs/heads/${branch}`],
+      { cwd: tmpRepo, allowFailure: true, timeout: 30_000 }
+    );
+    if (fetchResult.status === 0 && !force) {
+      // Reset to fetched branch tip so our commit builds on top of it
+      git(['reset', '--soft', 'FETCH_HEAD'], { cwd: tmpRepo });
     }
   }
+
+  // Copy publish tree content into temp repo. Both trees are VAT's own staging: a fault
+  // reading or writing either is the environment's. Links are copied as links.
+  await withFsFault({ side: 'environment', action: 'copy the publish tree into the staging repo', path: tmpRepo }, () =>
+    copyTree(publishDir, tmpRepo, '', { links: 'preserve', side: 'environment', onto: 'fresh' }));
+
+  // Log what the copy placed in the temp repo (filesystem truth before git touches it)
+  // A link is an entry the copy placed and git will add, so it is listed as
+  // one — this is a record of the tree, not a walk into it.
+  const tmpRepoFiles = readdirSync(tmpRepo, { recursive: true, withFileTypes: true })
+    .filter(entry => (entry.isSymbolicLink() || entry.isFile()) && !entry.parentPath.includes('.git'))
+    .map(entry => safePath.join(entry.parentPath, entry.name))
+    .map(p => safePath.relative(tmpRepo, p));
+  logger.debug(`   Files in tmpRepo after the copy (${tmpRepoFiles.length}):\n${tmpRepoFiles.join('\n')}`);
+
+  git(['add', '-A'], { cwd: tmpRepo });
+
+  // Log what git is tracking vs what's on disk but untracked/ignored
+  const tracked = listedPaths(tmpRepo, []);
+  logger.debug(`   Git tracked files:\n${tracked.join('\n')}`);
+
+  const ignored = listedPaths(tmpRepo, ['--others', '--ignored', '--exclude-standard'], true);
+  if (ignored.length > 0) {
+    logger.info(`   ⚠ Git IGNORED files (on disk but not tracked):\n${ignored.join('\n')}`);
+  }
+
+  // Check if there are changes to commit
+  const diffResult = git(['diff', '--cached', '--quiet'], { cwd: tmpRepo, allowFailure: true });
+  if (diffResult.status === 0) {
+    logger.info('   No changes to publish (tree is identical to current branch)');
+    const currentTree = listedPaths(tmpRepo, []);
+    logger.debug(`   Current tree (${currentTree.length} files):\n${currentTree.join('\n')}`);
+    return;
+  }
+
+  // `-F -` (message on stdin), never `-m`. The message embeds the release's whole
+  // changelog section, and Linux caps a SINGLE argv entry at MAX_ARG_STRLEN (131,072
+  // bytes) independently of the much larger ARG_MAX — so a long enough release note
+  // made `git commit` fail to spawn at all. stdin has no such ceiling.
+  git(['commit', '-F', '-'], { cwd: tmpRepo, input: commitMessage });
+
+  const log = git(['log', '--oneline', '-1'], { cwd: tmpRepo });
+  logger.info(`   Commit: ${log.stdout}`);
+
+  deliverCommit(tmpRepo, cwd, options, remoteUrl);
 }

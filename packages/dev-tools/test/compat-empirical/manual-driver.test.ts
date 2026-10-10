@@ -15,7 +15,7 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { StagedSkill } from '../../src/compat-empirical/corpus/fetch-sources.js';
 import { ManualDriverBase } from '../../src/compat-empirical/runtimes/shared/manual-driver.js';
@@ -35,9 +35,12 @@ function makeStagedSkill(entryId: string): StagedSkill {
 beforeEach(() => {
   tmpRoot = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-manual-driver-test-'));
   stagedRoot = safePath.join(tmpRoot, 'staged');
+  // ⛔ teardown() disposes of the bundle root under the temp directory: make that this test's scratch.
+  for (const name of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(name, tmpRoot);
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   rmSync(tmpRoot, { recursive: true, force: true });
 });
 

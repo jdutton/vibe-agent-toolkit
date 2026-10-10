@@ -83,20 +83,23 @@ Requirements:
                  \`data\` and emission fails.
 
 Exit Codes:
-  0 - Manifest written — INCLUDING one that advertises nothing. An empty
-      \`entries\` list is a legal ARD document, and skipped surfaces are reported
-      on stderr at this exit code. Gate on \`--format json\` (the report
-      envelope: \`examined\`, \`findings\`, \`summary\`, \`data.entryCount\`,
-      \`data.skippedCount\`; schema: packages/cli/schemas/ard-emit.json), or
-      make both conditions fail with \`--strict\`
+  0 - Manifest written over at least one configured surface. Skipped surfaces
+      are reported on stderr at this exit code. Gate on \`--format json\` (the
+      report envelope: \`examined\`, \`findings\`, \`summary\`, \`gate\`,
+      \`data.entryCount\`, \`data.skippedCount\`; schema:
+      packages/cli/schemas/ard-emit.json), or make skips fail with \`--strict\`
   1 - No \`ard:\` block, or a surface that could not be derived — each an
       error-severity finding about the PROJECT (ARD_NOT_CONFIGURED,
       ARD_DERIVATION_FAILED), with \`data.outputPath\` null as nothing was
-      written. Under \`--strict\`, also an empty manifest or a skipped surface
-      (ARD_STRICT_REFUSED). The code is derived from the report, never chosen
-      beside it
-  2 - System error (no project root, no config file, invalid config, unexpected
-      internal failure)
+      written. An \`ard:\` block that reaches no surface at all examined
+      nothing, and is refused (RESOURCE_CHECK_BROKEN). Under \`--strict\`, also
+      an empty manifest or a skipped surface (ARD_STRICT_REFUSED). The code is
+      derived from the published report, never chosen beside it
+  2 - The command could not do its job; \`error.code\` says which: USAGE_INVALID
+      (no such project root), CONFIG_INVALID (no config file, or one that does
+      not parse), INPUT_UNREADABLE (a config the OS will not read),
+      RUN_INCOMPLETE (the OS refused the --output write), INTERNAL_ERROR (a
+      VAT defect)
 
 Example:
   $ vat ard emit --format json --strict

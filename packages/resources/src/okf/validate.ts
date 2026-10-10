@@ -22,7 +22,7 @@
  */
 
 import type { Severity } from '@vibe-agent-toolkit/schema';
-import { FsLookupCache, safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, FsLookupCache, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ParseResult } from '../link-parser.js';
 import { importParserModule, isParserUnavailable } from '../parse-cache.js';
@@ -395,12 +395,13 @@ export async function validateOkfBundle(
     ...files.reservedDocuments.map((document) => [document, true] as const),
   ];
 
-  for (const [document, reserved] of documents) {
+  // In order: one shared directory index, and the first declared version wins.
+  await forEachInOrder(documents, async ([document, reserved]) => {
     const inspection = await inspectDocument(root, document, reserved, options.specVersion, index);
     drafts.push(...inspection.drafts);
     hardFindings.push(...inspection.hardFindings);
     declaredOkfVersion ??= inspection.declaredOkfVersion;
-  }
+  });
 
   // The dial is stamped by `stamp`, which withholds it from the codes that say
   // conformance was never ASSESSED — see UNASSESSED_CODES and the dial's doc. The

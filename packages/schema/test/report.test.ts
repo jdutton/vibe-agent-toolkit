@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import {
+  buildErrorReport,
   buildReport,
   compareSeverity,
   FindingSchema,
@@ -22,6 +23,8 @@ import {
   SeveritySchema,
   strongerSeverity,
   toFindings,
+  withAddedFindings,
+  withDurationMs,
   type Finding,
   type ValidationIssue,
 } from '../src/index.js';
@@ -90,14 +93,17 @@ describe('toFindings', () => {
   });
 });
 
+const LENIENT = { strict: false } as const;
+
 describe('buildReport', () => {
   it('says ok with a denominator when nothing was found', () => {
-    const report = buildReport({ examined: 12, findings: [], data: { root: '.' } });
+    const report = buildReport({ examined: 12, findings: [], data: { root: '.' }, gate: LENIENT });
     expect(report).toEqual({
       status: 'ok',
       examined: 12,
       findings: [],
       summary: { errors: 0, warnings: 0, info: 0 },
+      gate: { strict: false },
       data: { root: '.' },
     });
   });
@@ -107,16 +113,18 @@ describe('buildReport', () => {
       examined: 3,
       findings: [finding('info'), finding('error'), finding('warning'), finding('error')],
       data: undefined,
+      gate: { strict: true },
       durationMs: 42,
     });
     expect(report.status).toBe('findings');
     expect(report.summary).toEqual({ errors: 2, warnings: 1, info: 1 });
+    expect(report.gate).toEqual({ strict: true });
     expect(report.durationMs).toBe(42);
   });
 
   it('cannot be built without examined — the type requires it and the schema refuses its absence', () => {
-    const schema = reportSchema(z.object({ root: z.string() }).strict());
-    const report = buildReport({ examined: 0, findings: [], data: { root: '.' } });
+    const schema = reportSchema(z.object({ root: z.string() }).strict(), FindingSchema);
+    const report = buildReport({ examined: 0, findings: [], data: { root: '.' }, gate: LENIENT });
     expect(schema.safeParse(report).success).toBe(true);
     const withoutExamined: Record<string, unknown> = { ...report };
     delete withoutExamined['examined'];
@@ -124,25 +132,195 @@ describe('buildReport', () => {
   });
 });
 
-describe('reportSchema', () => {
-  const schema = reportSchema(z.object({ root: z.string() }).strict());
+describe('buildErrorReport', () => {
+  it('buildErrorReport keeps finished findings and derives summary from them', () => {
+    // 🔑 `error` means "did not finish", not "did nothing": a run that checked
+    // two of three things before one refused keeps what it found, and the
+    // summary is still derived from that list rather than zeroed.
+    const report = buildErrorReport({
+      error: { code: 'INPUT_UNREADABLE', message: 'could not read docs/c.md' },
+      gate: LENIENT,
+      examined: 2,
+      findings: [finding('warning'), finding('error')],
+      data: { root: '.' },
+    });
+    expect(report).toEqual({
+      status: 'error',
+      examined: 2,
+      findings: [finding('warning'), finding('error')],
+      summary: { errors: 1, warnings: 1, info: 0 },
+      gate: { strict: false },
+      error: { code: 'INPUT_UNREADABLE', message: 'could not read docs/c.md' },
+      data: { root: '.' },
+    });
+  });
 
-  it('carries every envelope key and refuses one nobody declared', () => {
-    const shape = Object.keys(schema.shape);
-    for (const key of REPORT_ENVELOPE_KEYS) expect(shape).toContain(key);
-    const report = buildReport({ examined: 1, findings: [finding('error')], data: { root: '.' } });
+  it('spells "nothing finished" at the call site and never carries a duration', () => {
+    const report = buildErrorReport({
+      error: { code: 'INTERNAL_ERROR', message: 'boom' },
+      gate: LENIENT,
+      examined: 0,
+      findings: [],
+      data: null,
+      // An untyped caller handing one in: a refusal document still carries none.
+      durationMs: 7,
+    } as Parameters<typeof buildErrorReport>[0]);
+    expect(report.data).toBeNull();
+    expect(report.summary).toEqual({ errors: 0, warnings: 0, info: 0 });
+    expect('durationMs' in report).toBe(false);
+  });
+});
+
+describe('withDurationMs', () => {
+  it('times a completed report and leaves a refusal untimed', () => {
+    const done = buildReport({ examined: 1, findings: [], data: { root: '.' }, gate: LENIENT });
+    expect(withDurationMs(done, 5)).toMatchObject({ status: 'ok', durationMs: 5 });
+
+    const refused = buildErrorReport({
+      error: { code: 'INTERNAL_ERROR', message: 'boom' },
+      gate: LENIENT,
+      examined: 0,
+      findings: [],
+      data: null,
+    });
+    expect(withDurationMs(refused, 5)).toBe(refused);
+  });
+});
+
+describe('withAddedFindings', () => {
+  const LEFTOVER: Finding = { code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', message: 'left /tmp/x' } as Finding;
+
+  it('appends to a completed report and derives its status and summary again, keeping its duration and data', () => {
+    const done = withDurationMs(buildReport({ examined: 2, findings: [], data: { root: '.' }, gate: LENIENT }), 9);
+    const added = withAddedFindings(done, [LEFTOVER]);
+    expect(added).toMatchObject({ status: 'findings', examined: 2, durationMs: 9, data: { root: '.' }, summary: { errors: 0, warnings: 1, info: 0 } });
+    expect(added.findings).toEqual([LEFTOVER]);
+  });
+
+  it('keeps a refusal a refusal, with its error and finished data', () => {
+    const refused = buildErrorReport({ error: { code: 'RUN_INCOMPLETE', message: 'stopped' }, gate: LENIENT, examined: 1, findings: [], data: null });
+    expect(withAddedFindings(refused, [LEFTOVER])).toMatchObject({ status: 'error', error: { code: 'RUN_INCOMPLETE' }, summary: { warnings: 1 } });
+  });
+
+  it('returns the report itself when nothing is added', () => {
+    const done = buildReport({ examined: 0, findings: [], data: null, gate: LENIENT });
+    expect(withAddedFindings(done, [])).toBe(done);
+  });
+});
+
+describe('reportSchema', () => {
+  const schema = reportSchema(z.object({ root: z.string() }).strict(), FindingSchema);
+  const errorReport = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    ...buildErrorReport({
+      error: { code: 'INPUT_UNREADABLE', message: 'could not read docs/c.md' },
+      gate: LENIENT,
+      examined: 2,
+      findings: [finding('warning')],
+      data: { root: '.' },
+    }),
+    ...overrides,
+  });
+
+  it('constructs without throwing', () => {
+    // The regression a per-branch refinement would have caused: a ZodEffects
+    // cannot be a discriminatedUnion option, and zod throws at CONSTRUCTION.
+    expect(() => reportSchema(z.object({}).strict(), FindingSchema)).not.toThrow();
+  });
+
+  it('reportSchema requires a finding schema', () => {
+    // Tests are not typechecked, so the one-argument call is asserted at runtime.
+    expect(() => reportSchema(z.object({}), undefined as never)).toThrow(/finding schema/);
+  });
+
+  it('is a refinement over a per-status discriminated union whose every option is strict and carries every envelope key', () => {
+    const union = schema.innerType();
+    expect(union).toBeInstanceOf(z.ZodDiscriminatedUnion);
+    expect(union.options).toHaveLength(3);
+    for (const option of union.options) {
+      expect(option._def.unknownKeys).toBe('strict');
+      for (const key of REPORT_ENVELOPE_KEYS) expect(Object.keys(option.shape)).toContain(key);
+    }
+  });
+
+  it('refuses an envelope key nobody declared', () => {
+    const report = buildReport({ examined: 1, findings: [finding('error')], data: { root: '.' }, gate: LENIENT });
     expect(schema.safeParse(report).success).toBe(true);
     expect(schema.safeParse({ ...report, issueCounts: report.summary }).success).toBe(false);
   });
 
-  it('refuses a status that contradicts the findings vocabulary', () => {
-    const report = buildReport({ examined: 1, findings: [], data: { root: '.' } });
+  it('refuses a status outside the vocabulary', () => {
+    const report = buildReport({ examined: 1, findings: [], data: { root: '.' }, gate: LENIENT });
     expect(schema.safeParse({ ...report, status: 'success' }).success).toBe(false);
-    expect(schema.safeParse({ ...report, status: 'error', error: 'could not read root' }).success).toBe(true);
+  });
+
+  it('rejects ok with a finding and findings with none', () => {
+    const ok = buildReport({ examined: 1, findings: [], data: { root: '.' }, gate: LENIENT });
+    const found = buildReport({ examined: 1, findings: [finding('info')], data: { root: '.' }, gate: LENIENT });
+    expect(schema.safeParse(ok).success).toBe(true);
+    expect(schema.safeParse(found).success).toBe(true);
+    expect(schema.safeParse({ ...found, status: 'ok' }).success).toBe(false);
+    expect(schema.safeParse({ ...ok, status: 'findings' }).success).toBe(false);
+  });
+
+  it('rejects an ok report whose data is null', () => {
+    const ok = buildReport({ examined: 1, findings: [], data: { root: '.' }, gate: LENIENT });
+    expect(schema.safeParse({ ...ok, data: null }).success).toBe(false);
+  });
+
+  it('accepts an error report carrying partial data, a real examined and the findings that finished', () => {
+    expect(schema.safeParse(errorReport()).success).toBe(true);
+    // …and one that finished nothing, with data null.
+    expect(schema.safeParse(errorReport({ examined: 0, findings: [], summary: { errors: 0, warnings: 0, info: 0 }, data: null })).success)
+      .toBe(true);
+  });
+
+  it('rejects an error report carrying durationMs: a refusal is never timed', () => {
+    expect(schema.safeParse(errorReport({ durationMs: 3 })).success).toBe(false);
+  });
+
+  it('rejects an error report without error.code', () => {
+    expect(schema.safeParse(errorReport({ error: { message: 'no code' } })).success).toBe(false);
+    expect(schema.safeParse(errorReport({ error: 'a bare string' })).success).toBe(false);
+    const withoutError = errorReport();
+    delete withoutError['error'];
+    expect(schema.safeParse(withoutError).success).toBe(false);
+  });
+
+  it('rejects error.code that is a finding code', () => {
+    expect(schema.safeParse(errorReport({ error: { code: 'LINK_MISSING_TARGET', message: 'x' } })).success).toBe(false);
+    // Positive control: the same document with a refusal code parses.
+    expect(schema.safeParse(errorReport({ error: { code: 'RESOURCE_CHECK_BROKEN', message: 'x' } })).success).toBe(true);
+  });
+
+  it('rejects an error key on a completed report', () => {
+    const ok = buildReport({ examined: 1, findings: [], data: { root: '.' }, gate: LENIENT });
+    expect(schema.safeParse({ ...ok, error: { code: 'INTERNAL_ERROR', message: 'x' } }).success).toBe(false);
+  });
+
+  it('rejects a report without gate', () => {
+    const ok = buildReport({ examined: 1, findings: [], data: { root: '.' }, gate: LENIENT });
+    const withoutGate: Record<string, unknown> = { ...ok };
+    delete withoutGate['gate'];
+    expect(schema.safeParse(withoutGate).success).toBe(false);
+    expect(schema.safeParse({ ...ok, gate: {} }).success).toBe(false);
+    expect(schema.safeParse({ ...ok, gate: { strict: false, extra: 1 } }).success).toBe(false);
+  });
+
+  it('rejects a summary that disagrees with the findings', () => {
+    const found = buildReport({ examined: 1, findings: [finding('error')], data: { root: '.' }, gate: LENIENT });
+    expect(schema.safeParse({ ...found, summary: { errors: 0, warnings: 1, info: 0 } }).success).toBe(false);
+    expect(schema.safeParse(errorReport({ summary: { errors: 0, warnings: 0, info: 0 } })).success).toBe(false);
   });
 
   it('validates data through the schema it was given', () => {
-    const report = buildReport({ examined: 1, findings: [], data: { root: 1 } });
+    const report = buildReport({ examined: 1, findings: [], data: { root: 1 }, gate: LENIENT });
     expect(schema.safeParse(report).success).toBe(false);
+  });
+
+  it('validates findings through the finding schema it was given', () => {
+    const narrowed = reportSchema(z.object({}).strict(), FindingSchema.extend({ line: z.number().int().positive() }).strict());
+    const report = buildReport({ examined: 1, findings: [finding('error')], data: {}, gate: LENIENT });
+    expect(narrowed.safeParse(report).success).toBe(false);
+    expect(narrowed.safeParse({ ...report, findings: [{ ...finding('error'), line: 3 }] }).success).toBe(true);
   });
 });

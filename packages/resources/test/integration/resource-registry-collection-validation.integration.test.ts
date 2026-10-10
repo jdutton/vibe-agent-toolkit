@@ -70,7 +70,6 @@ function createSingleCollectionConfig(
   collectionId: string = 'skills'
 ): ProjectConfig {
   return {
-    version: 1,
     resources: {
       collections: {
         [collectionId]: {
@@ -137,7 +136,6 @@ async function setupMultiCollectionTest(
   await createSchemaFile(tempDir, 'skill.schema.json', categorySchema);
 
   const config: ProjectConfig = {
-    version: 1,
     resources: {
       collections: {
         docs: {
@@ -254,7 +252,6 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
   it('should handle missing schema file gracefully', async () => {
     // Create config pointing to non-existent schema
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           skills: {
@@ -301,7 +298,6 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
 
     // Create config with specific pattern that won't match
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           skills: {
@@ -355,7 +351,6 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
 
     // Create config with collection schema
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           docs: {
@@ -399,7 +394,6 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
 
     // Create config WITHOUT specifying mode (should default to permissive)
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           skills: {

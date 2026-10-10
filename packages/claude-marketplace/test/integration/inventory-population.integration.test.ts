@@ -108,7 +108,7 @@ beforeAll(() => {
   // as happily with the projection lane broken. One config file is what makes
   // `findProjectRoot` answer `root`, and the two arms actually differ in which
   // code runs.
-  write(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+  write(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), '{}\n');
 
   mkdirSyncReal(safePath.join(root, '.claude-plugin'), { recursive: true });
   write(safePath.join(root, '.claude-plugin', 'plugin.json'),

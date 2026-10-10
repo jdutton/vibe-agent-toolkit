@@ -1,9 +1,12 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { applyTreePlan, type ApplyResult, copyTree, mkdirSyncReal, normalizedTmpdir, planTreeChanges, safePath } from '@vibe-agent-toolkit/utils';
+import { type FaultFsSession, type FaultRule, installFaultFs, registerScratchTmpdir, type StatRewrite } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach } from 'vitest';
 
+import { planPackageInstall } from '../src/install/package-install.js';
+import type { InstallPluginOptions } from '../src/install/plugin-registry.js';
 import type { ClaudeUserPaths } from '../src/paths/claude-paths.js';
 
 export interface SetupPluginTestPathsOptions {
@@ -36,7 +39,21 @@ export function setupPluginTestPaths(opts: SetupPluginTestPathsOptions = {}): { 
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
   });
+  useScratchTmpdir('vat-plugin-test-tmp-');
   return { getPaths: () => buildTestPaths(tempDir) };
+}
+
+/**
+ * ⛔ Point TMPDIR, TEMP and TMP at a fresh scratch directory for each test (`scratchTmpdirEnv`): an
+ * install or uninstall under test removes and chmods trees, and neither it nor a mutation run of
+ * its guards may ever reach the real temp directory. Register it AFTER the hook that makes the
+ * suite's own fixture root, so the scratch sits beside the fixture, never around it.
+ *
+ * @param prefix - The scratch directory's prefix, so a leaked one names its suite
+ * @returns The current test's scratch temp directory
+ */
+export function useScratchTmpdir(prefix: string): () => string {
+  return registerScratchTmpdir(prefix, { beforeEach, afterEach });
 }
 
 /**
@@ -59,6 +76,49 @@ export function buildTestPaths(base: string): ClaudeUserPaths {
   };
 }
 
+/**
+ * Run `body` with `faults` injected and `rewrites` applied to fs calls under `within`; the
+ * session is restored after, whatever happened. `body` is handed the session (its traced calls).
+ */
+export async function underFaults<T>(
+  within: string,
+  options: { faults?: readonly FaultRule[]; rewrites?: readonly StatRewrite[] },
+  body: (session: FaultFsSession) => Promise<T>,
+): Promise<T> {
+  const session = installFaultFs({ within, ...options });
+  try {
+    return await body(session);
+  } finally {
+    session.restore();
+  }
+}
+
+/** What `run` rejected with, or `undefined` when it resolved. */
+export async function rejectionOf(run: () => Promise<unknown>): Promise<unknown> {
+  try {
+    await run();
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
+/** Whether a path is the temp a registry write of `file` goes through (`replaceFile` stages beside the file, then renames it over). */
+export const stagedWriteOf = (file: string) => (p: string): boolean => p.includes(`/.${file.slice(file.lastIndexOf('/') + 1)}.vat-staged-`);
+
+/**
+ * The rule that makes VAT's write of the registry file `file` fail with `errno`: the exclusive open of
+ * the temp `replaceFile` stages beside it (the `nth` such open: 2 is the restore of a file already
+ * written once).
+ *
+ * ⛔ The open, never the rename that follows it. A rename refused with `EACCES`, `EPERM` or `EBUSY` is
+ * CONTENTION on win32 — a scanner, an indexer — and `renameFileAtomic` retries it there, so a single
+ * injected refusal of the rename is a write that succeeds on Windows: the test would be asking for a
+ * failure the product is right not to have. The open is not retried on any host.
+ */
+export const refusedRegistryWrite = (file: string, errno: FaultRule['errno'], nth = 1): FaultRule =>
+  ({ family: 'write', op: 'open', path: stagedWriteOf(file), nth, errno });
+
 /** Build a markdown bash code block containing a single command */
 export function bashCodeBlock(command: string): string {
   return ['```bash', command, '```'].join('\n');
@@ -72,3 +132,32 @@ export function bashCodeBlock(command: string): string {
  * already-root-relative file paths, which round-trip unchanged through any root.
  */
 export const TEST_LOCATION_ROOT = safePath.resolve('/scan-root');
+
+/**
+ * Install the one plugin at `pluginDir` the way `vat claude plugin install` does — `planPackageInstall`,
+ * then the plan applied with its registry edit as `afterSwap` — as a package whose one marketplace
+ * holds only that plugin: the marketplace copy is `plugins/<pluginName>`, the cache a copy of `pluginDir`.
+ */
+export async function installOnePlugin(
+  pluginDir: string,
+  paths: ClaudeUserPaths,
+  names: InstallPluginOptions,
+): Promise<ApplyResult> {
+  const { marketplaceName, pluginName, version, source } = names;
+  // The plugin is the operator's tree: every read of it is a fault on the source side.
+  const side = 'source';
+  const { changes, registry } = planPackageInstall({
+    marketplaces: [{
+      marketplaceName,
+      write: (staged) => copyTree(pluginDir, staged, `plugins/${pluginName}`, { links: 'preserve', side, onto: 'fresh' }),
+      reads: [pluginDir],
+      plugins: [{ pluginName, cacheFill: { from: 'copy', source: pluginDir, side, links: 'preserve' } }],
+    }],
+    version,
+    source,
+    replacedPluginKeys: [],
+    force: false,
+    paths,
+  });
+  return applyTreePlan(await planTreeChanges(changes), { afterSwap: () => registry.apply() });
+}

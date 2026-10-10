@@ -57,16 +57,20 @@ export function convertPureFunctionToTool<TInput, TOutput>(
     name: manifest.name,
     description: manifest.description,
     schema: inputSchema,
-    func: async (input: TInput) => {
-      // Execute the agent - returns output directly (unwrapped)
-      // The agent's execute wrapper validates input/output schemas and throws on error
-      const output = agent.execute(input);
+    func: (input: TInput) => {
+      try {
+        // Execute the agent - returns output directly (unwrapped)
+        // The agent's execute wrapper validates input/output schemas and throws on error
+        const output = agent.execute(input);
 
-      // Validate the output with schema (redundant but explicit)
-      const validated = outputSchema.parse(output);
+        // Validate the output with schema (redundant but explicit)
+        const validated = outputSchema.parse(output);
 
-      // LangChain tools must return string or object that can be JSON stringified
-      return JSON.stringify(validated);
+        // LangChain tools must return string or object that can be JSON stringified
+        return Promise.resolve(JSON.stringify(validated));
+      } catch (error) {
+        return Promise.reject(error as Error);
+      }
     },
   });
 

@@ -1,9 +1,21 @@
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import {
+  applyTreePlan,
+  copyTree,
+  forEachInOrder,
+  planTreeChanges,
+  proveTreeReadable,
+  recordSuppressedFault,
+  safePath,
+  suppressedFaultsOf,
+  toForwardSlashAnyPlatform,
+  withFsFault,
+  withFsFaultSync,
+} from '@vibe-agent-toolkit/utils';
 import { ZodError } from 'zod';
 
 import type {
@@ -13,7 +25,7 @@ import type {
 } from '../skill-source/types.js';
 
 import { DEFAULT_EVALS_SUBPATH, isolateEvalSuite } from './eval-suite-isolation.js';
-import { assertSafeHarnessRoot } from './harness-location.js';
+import { assertSafeHarnessRoot, createHarnessRoot } from './harness-location.js';
 import { StagedManifestSchema, type StagedEntry, type StagedManifest } from './manifest.js';
 import type { PluginLayout } from './plugin-layout.js';
 
@@ -121,6 +133,25 @@ export interface StageHarnessResult {
    * what a re-run picks up.
    */
   subjectEvalSuiteHeld: boolean;
+  /**
+   * What resolving the items left behind once each was resolved: every
+   * {@link ResolvedSkillSource.leftovers} entry, in item order — a skipped optional item's
+   * included, since its resolution ran. The harness reports each as a warning beside its result.
+   */
+  leftovers: unknown[];
+}
+
+/**
+ * Replace the harness entry `dest` with what `fill` writes into a staged directory beside it,
+ * in one swap. The harness is VAT's own: whatever a previous run left there goes.
+ */
+async function replaceStaged(dest: string, label: string, fill: (staged: string) => Promise<void>): Promise<void> {
+  await applyTreePlan(await planTreeChanges([{ op: 'replace', dest, ownership: { kind: 'vat-state' }, fill: { from: 'write', write: fill }, label }]));
+}
+
+/** Copy a resolved skill copy — VAT's own staging, symlink-free — to `relative` under `root`: its reads are the environment's. */
+function copyResolved(resolvedStagedDir: string, root: string, relative: string): Promise<void> {
+  return copyTree(resolvedStagedDir, root, relative, { links: 'preserve', side: 'environment', onto: 'fresh' });
 }
 
 /**
@@ -134,22 +165,21 @@ export interface StageHarnessResult {
  * `preparedPluginRoots` tracks which staged plugin roots have already been wiped
  * and had their `.claude-plugin/` manifest copied in this `stageHarness` run. When
  * two items share the same on-disk plugin the root is prepared exactly ONCE; later
- * items skip the destructive rmSync so already-staged sibling skill dirs survive.
+ * items skip the replace so already-staged sibling skill dirs survive.
  */
-function stageOneItem(
+async function stageOneItem(
   harnessRoot: string,
   item: StageItem,
   resolvedStagedDir: string,
   preparedPluginRoots: Set<string>,
-): { pluginDir: string; skillDir: string; pluginRoot: string | null } {
+): Promise<{ pluginDir: string; skillDir: string; pluginRoot: string | null }> {
   if (item.pluginLayout === undefined) {
     // Standalone: flat dest, exactly as before. item.name may be an absolute path
     // (the positional CLI arg) — never join it raw. See stagedDirName.
     const dest = safePath.joinUnderRoot(harnessRoot, stagedDirName(item.name));
-    // v1 re-stages fully every run; wipe dest first so each re-stage is a clean
+    // v1 re-stages fully every run; the copy REPLACES dest so each re-stage is a clean
     // mirror of source (a stale staged evals/evals.json must not survive).
-    rmSync(dest, { recursive: true, force: true });
-    cpSync(resolvedStagedDir, dest, { recursive: true });
+    await replaceStaged(dest, `staged copy of ${item.name}`, (staged) => copyResolved(resolvedStagedDir, staged, ''));
     return { pluginDir: dest, skillDir: dest, pluginRoot: null };
   }
 
@@ -170,19 +200,22 @@ function stageOneItem(
     // First item for this plugin root in this stageHarness run: wipe the stale
     // staged tree (clean re-stage) and copy the plugin's manifest dir so the
     // staged tree is recognized as a plugin.
-    rmSync(pluginStageRoot, { recursive: true, force: true });
     const realManifestDir = safePath.join(realPluginDir, '.claude-plugin');
-    const stagedManifestDir = safePath.joinUnderRoot(pluginStageRoot, '.claude-plugin');
-    mkdirSyncReal(stagedManifestDir, { recursive: true });
-    cpSync(realManifestDir, stagedManifestDir, { recursive: true });
+    // The manifest dir is the author's: prove it readable first (a `source` fault), so a
+    // file the OS will not read there is never coded as the run's output failing.
+    await proveTreeReadable(realManifestDir, { links: 'preserve', side: 'source' });
+    await replaceStaged(pluginStageRoot, 'staged plugin root', (staged) =>
+      copyTree(realManifestDir, staged, '.claude-plugin', { links: 'preserve', side: 'source', onto: 'fresh' }));
     preparedPluginRoots.add(pluginStageRoot);
   }
 
   // Copy the skill contents (the resolved flat copy) INTO the nested skill slot so
   // `${pluginStageRoot}/skills/<name>/...` resolves like a real install.
   const stagedSkillDir = safePath.joinUnderRoot(pluginStageRoot, relPathUnderPlugin);
-  mkdirSyncReal(stagedSkillDir, { recursive: true });
-  cpSync(resolvedStagedDir, stagedSkillDir, { recursive: true });
+  // The staged root already holds the author's manifest directory, links kept: the copy names the
+  // root and the slot under it, so the slot is made component by component, never through one of them.
+  await withFsFault({ side: 'destination', action: `write the staged copy of ${item.name} at ${stagedSkillDir}` }, () =>
+    copyResolved(resolvedStagedDir, pluginStageRoot, safePath.relative(pluginStageRoot, stagedSkillDir)));
 
   return { pluginDir: pluginStageRoot, skillDir: stagedSkillDir, pluginRoot: pluginStageRoot };
 }
@@ -256,7 +289,7 @@ function readExistingManifest(harnessRoot: string): StagedManifest | null {
 
 export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarnessResult> {
   assertSafeHarnessRoot(opts.harnessRoot, opts.currentUid);
-  mkdirSyncReal(opts.harnessRoot, { recursive: true, mode: 0o700 });
+  createHarnessRoot(opts.harnessRoot);
 
   // v1: full re-stage every run. Task 15 wires reconcile-reuse via this return value.
   readExistingManifest(opts.harnessRoot);
@@ -264,6 +297,7 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
   const entries: StagedEntry[] = [];
   const pluginDirs: string[] = [];
   const skippedOptional: SkippedOptionalItem[] = [];
+  const leftovers: unknown[] = [];
   let subjectStagedDir: string | null = null;
   let subjectPluginRoot: string | null = null;
   let subjectEvalSuiteHeld = false;
@@ -278,8 +312,8 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
   // nowhere else and the run has to read it back. Every other item's, and the
   // subject's when an authored copy already exists, is simply removed. See
   // eval-suite-isolation.ts for the full rationale.
-  const stripEvalSuite = (stagedDir: string, role: StageItem['role']): boolean => {
-    const preserved = isolateEvalSuite({
+  const stripEvalSuite = async (stagedDir: string, role: StageItem['role']): Promise<boolean> => {
+    const preserved = await isolateEvalSuite({
       stagedDir,
       stagingRoot: opts.ctx.stagingRoot,
       evalsSubpath: opts.evalsSubpath,
@@ -301,7 +335,7 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
     // IS the convention the first call already removed it. Never held — the hold
     // dir is for the suite being graded.
     if (opts.evalsSubpath !== undefined && opts.evalsSubpath !== DEFAULT_EVALS_SUBPATH) {
-      isolateEvalSuite({
+      await isolateEvalSuite({
         stagedDir,
         stagingRoot: opts.ctx.stagingRoot,
         evalsSubpath: DEFAULT_EVALS_SUBPATH,
@@ -309,7 +343,8 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
     }
     return preserved;
   };
-  for (const item of opts.items) {
+  // In order: every resolver stages into one root, and a required item fails closed in order.
+  await forEachInOrder(opts.items, async (item) => {
     // A `--with-optional` companion degrades to skip-with-warning on ANY failure
     // resolving or staging it (unresolvable source, build failure, etc.) — it must
     // never take down a run whose subject and required `--with` companions are
@@ -320,24 +355,28 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
     if (item.optional === true) {
       try {
         const resolved = await opts.resolve(item.source, opts.ctx);
-        stripEvalSuite(resolved.stagedDir, item.role);
+        leftovers.push(...resolved.leftovers);
+        await stripEvalSuite(resolved.stagedDir, item.role);
         // An optional item is never the subject, so only `pluginDir` (pushed to
         // --plugin-dir) is needed here — skillDir/pluginRoot only matter for the
         // subject's own dir, tracked below.
-        const { pluginDir } = stageOneItem(opts.harnessRoot, item, resolved.stagedDir, preparedPluginRoots);
+        const { pluginDir } = await stageOneItem(opts.harnessRoot, item, resolved.stagedDir, preparedPluginRoots);
         const contentHash = computeDirContentHash(pluginDir);
         entries.push({ name: item.name, identity: resolved.identity, contentHash });
         pluginDirs.push(pluginDir);
       } catch (error) {
         skippedOptional.push({ name: item.name, reason: error instanceof Error ? error.message : String(error) });
+        // What the failed item could not clean up is still on disk: the skip keeps it for the run to report.
+        leftovers.push(...suppressedFaultsOf(error));
       }
-      continue;
+      return;
     }
 
     const resolved = await opts.resolve(item.source, opts.ctx);
-    if (stripEvalSuite(resolved.stagedDir, item.role)) subjectEvalSuiteHeld = true;
+    leftovers.push(...resolved.leftovers);
+    if (await stripEvalSuite(resolved.stagedDir, item.role)) subjectEvalSuiteHeld = true;
     // Stage flat (standalone) or under the real plugin-root layout (plugin skill).
-    const { pluginDir, skillDir, pluginRoot } = stageOneItem(opts.harnessRoot, item, resolved.stagedDir, preparedPluginRoots);
+    const { pluginDir, skillDir, pluginRoot } = await stageOneItem(opts.harnessRoot, item, resolved.stagedDir, preparedPluginRoots);
     // Content-hash the staged plugin dir (the whole thing pushed to --plugin-dir),
     // so a change to the plugin manifest OR the skill body invalidates the entry.
     const contentHash = computeDirContentHash(pluginDir);
@@ -347,17 +386,20 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
       subjectStagedDir = skillDir;
       subjectPluginRoot = pluginRoot;
     }
-  }
+  }).catch((error: unknown) => {
+    // No result will carry what earlier items left behind, so it rides the throw (`suppressedFaultsOf`).
+    for (const leftover of leftovers) recordSuppressedFault(error, leftover);
+    throw error;
+  });
 
   const fingerprint = createHash('sha256')
     .update(entries.map(e => `${e.name}:${e.identity}:${e.contentHash}`).join('|'))
     .digest('hex');
   const manifest: StagedManifest = { fingerprint, entries };
-  writeFileSync(
-    safePath.joinUnderRoot(opts.harnessRoot, 'staged.manifest.json'),
-    JSON.stringify(manifest, null, 2) + '\n',
-    'utf8',
-  );
+  const manifestPath = safePath.joinUnderRoot(opts.harnessRoot, 'staged.manifest.json');
+  withFsFaultSync({ side: 'destination', action: `write the staged manifest ${manifestPath}` }, () => {
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+  });
 
-  return { manifest, pluginDirs, subjectStagedDir, subjectPluginRoot, skippedOptional, subjectEvalSuiteHeld };
+  return { manifest, pluginDirs, subjectStagedDir, subjectPluginRoot, skippedOptional, subjectEvalSuiteHeld, leftovers };
 }

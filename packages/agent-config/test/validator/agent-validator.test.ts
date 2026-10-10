@@ -5,11 +5,15 @@ import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/u
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { validateAgent } from '../../src/validator/agent-validator.js';
-import {
-  assertValidationFailedWithUnknownManifest,
-  assertValidationHasError,
-  createTestAgent,
-} from '../test-helpers.js';
+import { assertValidationHasError, createTestAgent } from '../test-helpers.js';
+
+/** Validate `agentDir` and expect nothing found. */
+async function expectCleanAgent(agentDir: string, locationRoot: string): Promise<void> {
+  const result = await validateAgent(agentDir, { locationRoot });
+  expect(result.status).toBe('ok');
+  expect(result.issues).toEqual([]);
+  expect(result.summary).toEqual({ errors: 0, warnings: 0, info: 0 });
+}
 
 describe('agent-validator', () => {
   let tempDir: string;
@@ -35,10 +39,7 @@ describe('agent-validator', () => {
         description: 'Simple agent',
       });
 
-      const result = await validateAgent(agentDir);
-      expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
-      expect(result.warnings).toEqual([]);
+      await expectCleanAgent(agentDir, tempDir);
     });
 
     it('should detect missing RAG database', async () => {
@@ -49,8 +50,13 @@ describe('agent-validator', () => {
         rag: { sources: [{ path: './docs' }] },
       });
 
-      const result = await validateAgent(agentDir);
-      assertValidationHasError(result, ['RAG', 'database']);
+      const result = await validateAgent(agentDir, { locationRoot: tempDir });
+      assertValidationHasError(result, 'AGENT_REFERENCE_MISSING', ['RAG', 'database']);
+      // Shown relative to the manifest, like every other reference — never the
+      // developer's absolute path, which a published finding must not carry.
+      const message = result.issues.find((issue) => issue.code === 'AGENT_REFERENCE_MISSING')?.message;
+      expect(message).toContain('RAG database not found: .rag-db.');
+      expect(message).not.toContain(tempDir);
     });
 
     it('should validate agent with existing RAG database', async () => {
@@ -66,8 +72,8 @@ describe('agent-validator', () => {
         { '.rag-db/.keep': '' }
       );
 
-      const result = await validateAgent(agentDir);
-      expect(result.valid).toBe(true);
+      const result = await validateAgent(agentDir, { locationRoot: tempDir });
+      expect(result.status).toBe('ok');
     });
 
     it('should detect missing resource files', async () => {
@@ -79,8 +85,8 @@ describe('agent-validator', () => {
         resources: { docs: { path: DOCS_GUIDE_MD, type: DOCUMENTATION } },
       });
 
-      const result = await validateAgent(agentDir);
-      assertValidationHasError(result, ['prompts/system.md', 'guide.md']);
+      const result = await validateAgent(agentDir, { locationRoot: tempDir });
+      assertValidationHasError(result, 'AGENT_REFERENCE_MISSING', ['prompts/system.md', 'guide.md']);
     });
 
     it('should validate agent with existing resources', async () => {
@@ -100,9 +106,7 @@ describe('agent-validator', () => {
         }
       );
 
-      const result = await validateAgent(agentDir);
-      expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
+      await expectCleanAgent(agentDir, tempDir);
     });
 
     it('should return validation result with manifest info', async () => {
@@ -112,7 +116,7 @@ describe('agent-validator', () => {
         description: 'Test agent',
       });
 
-      const result = await validateAgent(agentDir);
+      const result = await validateAgent(agentDir, { locationRoot: tempDir });
       expect(result.manifest.name).toBe(INFO_AGENT);
       expect(result.manifest.version).toBe('1.2.3');
       expect(result.manifest.path).toContain(AGENT_YAML);
@@ -124,8 +128,8 @@ describe('agent-validator', () => {
         description: 'Agent without version',
       });
 
-      const result = await validateAgent(agentDir);
-      expect(result.manifest.version).toBe('unknown');
+      const result = await validateAgent(agentDir, { locationRoot: tempDir });
+      expect(result.manifest.version).toBeNull();
     });
 
     it('should warn when RAG config has no sources', async () => {
@@ -140,9 +144,11 @@ describe('agent-validator', () => {
         { '.rag-db/.keep': '' }
       );
 
-      const result = await validateAgent(agentDir);
-      expect(result.valid).toBe(true);
-      expect(result.warnings).toContain('RAG configuration defined but no sources specified');
+      const result = await validateAgent(agentDir, { locationRoot: tempDir });
+      expect(result.summary).toEqual({ errors: 0, warnings: 1, info: 0 });
+      expect(result.issues).toEqual([
+        expect.objectContaining({ code: 'AGENT_RAG_NO_SOURCES', severity: 'warning', location: 'rag-no-sources-agent/agent.yaml' }),
+      ]);
     });
 
     it('should validate nested resources', async () => {
@@ -165,9 +171,7 @@ describe('agent-validator', () => {
         }
       );
 
-      const result = await validateAgent(agentDir);
-      expect(result.valid).toBe(true);
-      expect(result.errors).toEqual([]);
+      await expectCleanAgent(agentDir, tempDir);
     });
 
     it('should detect missing nested resources', async () => {
@@ -181,8 +185,8 @@ describe('agent-validator', () => {
         },
       });
 
-      const result = await validateAgent(agentDir);
-      assertValidationHasError(result, [`${DOCUMENTATION}.api`, 'docs/api.md']);
+      const result = await validateAgent(agentDir, { locationRoot: tempDir });
+      assertValidationHasError(result, 'AGENT_REFERENCE_MISSING', [`${DOCUMENTATION}.api`, 'docs/api.md']);
     });
 
     it('should validate user prompt', async () => {
@@ -197,8 +201,8 @@ describe('agent-validator', () => {
         { 'prompts/user.md': '# User Prompt' }
       );
 
-      const result = await validateAgent(agentDir);
-      expect(result.valid).toBe(true);
+      const result = await validateAgent(agentDir, { locationRoot: tempDir });
+      expect(result.status).toBe('ok');
     });
 
     it('should detect missing user prompt', async () => {
@@ -208,11 +212,12 @@ describe('agent-validator', () => {
         prompts: { user: './prompts/user.md' },
       });
 
-      const result = await validateAgent(agentDir);
-      assertValidationHasError(result, ['User prompt', 'user.md']);
+      const result = await validateAgent(agentDir, { locationRoot: tempDir });
+      assertValidationHasError(result, 'AGENT_REFERENCE_MISSING', ['User prompt', 'user.md']);
+      expect(result.issues[0]?.location).toBe('missing-user-prompt-agent/agent.yaml');
     });
 
-    it('should handle invalid manifest file', async () => {
+    it('refuses a manifest that is not YAML as unreadable, publishing no result', async () => {
       const agentDir = safePath.join(tempDir, 'invalid-manifest-agent');
       mkdirSyncReal(agentDir);
       fs.writeFileSync(
@@ -220,16 +225,29 @@ describe('agent-validator', () => {
         'invalid: yaml: [[[{'
       );
 
-      const result = await validateAgent(agentDir);
-      assertValidationFailedWithUnknownManifest(result);
+      await expect(validateAgent(agentDir, { locationRoot: tempDir })).rejects.toMatchObject({ code: 'AGENT_MANIFEST_UNREADABLE' });
     });
 
-    it('should handle nonexistent manifest file', async () => {
+    it('refuses a directory holding no manifest as not found', async () => {
       const agentDir = safePath.join(tempDir, 'nonexistent-agent');
       mkdirSyncReal(agentDir);
 
-      const result = await validateAgent(agentDir);
-      assertValidationFailedWithUnknownManifest(result, { checkVersion: false });
+      await expect(validateAgent(agentDir, { locationRoot: tempDir })).rejects.toMatchObject({ code: 'AGENT_MANIFEST_NOT_FOUND' });
+    });
+
+    it('reports each schema violation of a manifest it read as a finding at the manifest', async () => {
+      const agentDir = safePath.join(tempDir, 'schema-invalid-agent');
+      mkdirSyncReal(agentDir);
+      fs.writeFileSync(safePath.join(agentDir, AGENT_YAML), 'metadata:\n  name: x\nspec:\n  llm: 5\n');
+
+      const result = await validateAgent(agentDir, { locationRoot: tempDir });
+      expect(result.status).toBe('findings');
+      expect(result.issues.length).toBeGreaterThan(0);
+      for (const issue of result.issues) {
+        expect(issue).toMatchObject({ code: 'AGENT_MANIFEST_INVALID', severity: 'error', location: 'schema-invalid-agent/agent.yaml' });
+      }
+      expect(result.issues.map((issue) => issue.field)).toContain('spec.llm');
+      expect(result.manifest).toEqual({ name: null, version: null, path: safePath.join(agentDir, AGENT_YAML) });
     });
 
     describe('a file the OS refuses is reported as refused, not as missing', () => {
@@ -258,11 +276,13 @@ describe('agent-validator', () => {
           return original(target, mode);
         });
 
-        const result = await validateAgent(agentDir);
-        expect(result.valid).toBe(false);
-        expect(result.errors).toHaveLength(1);
-        expect(result.errors[0]).toMatch(/Resource 'docs' could not be checked: .*guide\.md.*EACCES/);
-        expect(result.errors[0]).not.toContain('not found');
+        const result = await validateAgent(agentDir, { locationRoot: tempDir });
+        expect(result.status).toBe('findings');
+        expect(result.issues).toHaveLength(1);
+        expect(result.issues[0]?.code).toBe('AGENT_REFERENCE_UNREADABLE');
+        expect(result.issues[0]?.message).toMatch(/Resource 'docs' could not be checked: .*guide\.md.*EACCES/);
+        expect(result.issues[0]?.message).not.toContain('not found');
+        expect(result.issues[0]?.message).not.toContain(tempDir);
       });
     });
   });

@@ -46,39 +46,34 @@ const WALK_STOP_BASENAMES = new Set(['node_modules', '.git']);
  * (`analyzeCompatibility`, via `vat audit`) already reports a thrown analysis
  * as "could not run", with the reason, rather than as no verdict.
  */
-export async function readMarketplaceDefaultTargets(
+export function readMarketplaceDefaultTargets(
   startingDir: string,
 ): Promise<Target[] | undefined> {
-  let currentDir = startingDir;
+  return walkUpForTargets(startingDir, 0);
+}
 
-  for (let depth = 0; depth < MAX_WALK_DEPTH; depth++) {
-    const base = basename(currentDir);
-    if (WALK_STOP_BASENAMES.has(base)) {
-      return undefined;
-    }
+/** One level of {@link readMarketplaceDefaultTargets}'s upward walk. */
+async function walkUpForTargets(currentDir: string, depth: number): Promise<Target[] | undefined> {
+  // Max depth exceeded without finding a marketplace.
+  if (depth >= MAX_WALK_DEPTH) return undefined;
+  if (WALK_STOP_BASENAMES.has(basename(currentDir))) return undefined;
 
-    const manifestPath = safePath.join(currentDir, '.claude-plugin', 'marketplace.json');
-    let raw: string | undefined;
-    try {
-      raw = await readFile(manifestPath, 'utf8');
-    } catch (error) {
-      // Not present here — keep walking. Anything else stays loud.
-      if (!isPathAbsentError(error)) throw error;
-    }
-    if (raw !== undefined) {
-      return targetsOf(raw);
-    }
-
-    const parent = dirname(currentDir);
-    if (parent === currentDir) {
-      // Filesystem root reached.
-      return undefined;
-    }
-    currentDir = parent;
+  const manifestPath = safePath.join(currentDir, '.claude-plugin', 'marketplace.json');
+  let raw: string | undefined;
+  try {
+    raw = await readFile(manifestPath, 'utf8');
+  } catch (error) {
+    // Not present here — keep walking. Anything else stays loud.
+    if (!isPathAbsentError(error)) throw error;
+  }
+  if (raw !== undefined) {
+    return targetsOf(raw);
   }
 
-  // Max depth exceeded without finding a marketplace.
-  return undefined;
+  const parent = dirname(currentDir);
+  // Filesystem root reached.
+  if (parent === currentDir) return undefined;
+  return walkUpForTargets(parent, depth + 1);
 }
 
 /**

@@ -28,6 +28,8 @@ import { z } from 'zod';
 
 import { buildWhereClause } from '../src/filter-builder.js';
 
+import { caughtFrom, expectUnrecognizedKeys } from './refusal-assertions.js';
+
 /**
  * Reach the runtime guard with a shape the TypeScript surface already rejects.
  *
@@ -51,56 +53,22 @@ describe('unsupported filters refuse rather than widen', () => {
     headingPath: z.string().optional(),
   });
 
-  describe('filters implemented at no position', () => {
-    it('throws on dateRange rather than returning an unfiltered search', () => {
-      expect(() =>
-        buildWhereClause(asUntypedFilters({ dateRange: { start: new Date(0), end: new Date(1) } }), schema),
-      ).toThrow(/dateRange/);
-    });
-
-    it('names the widening in the message, so the caller learns the direction of the failure', () => {
-      expect(() =>
-        buildWhereClause(asUntypedFilters({ dateRange: { start: new Date(0), end: new Date(1) } }), schema),
-      ).toThrow(/entire index/);
-    });
-  });
-
-  describe('metadata fields declared at the wrong position', () => {
-    // Each case asserts the key and its OWN remedy together. Asserting only
-    // /filters\.metadata/ would pass even if the remedies were swapped between keys —
-    // that substring appears in every message in the table, including dateRange's.
+  describe('keys the schema does not declare are refused through the schema', () => {
+    // One contract: `RAGQuerySchema.shape.filters` is strict, and `buildWhereClause`
+    // validates against it. The former declared-but-unimplemented keys are simply unknown.
     it.each([
-      [/`filters\.tags`: move it to `filters\.metadata\.tags`/, { tags: ['auth'] }],
-      [/`filters\.type`: move it to `filters\.metadata\.type`/, { type: 'guide' }],
-      [
-        /`filters\.headingPath`: move it to `filters\.metadata\.headingPath`/,
-        { headingPath: 'Architecture > RAG Design' },
-      ],
-    ])('pairs the key with its own remedy: %s', (pattern, filters) => {
-      expect(() => buildWhereClause(asUntypedFilters(filters), schema)).toThrow(pattern);
+      ['dateRange', { dateRange: { start: new Date(0), end: new Date(1) } }],
+      ['tags', { tags: ['auth'] }],
+      ['type', { type: 'guide' }],
+      ['headingPath', { headingPath: 'Architecture > RAG Design' }],
+      ['resourceid', { resourceid: 'doc-1' }],
+      ['keywords', { keywords: ['oauth'] }],
+    ])('throws on %s, naming the key', async (key, filters) => {
+      expectUnrecognizedKeys(await caughtFrom(() => buildWhereClause(asUntypedFilters(filters), schema)), [key], []);
     });
 
     it('honours the same fields under filters.metadata', () => {
-      const result = buildWhereClause({ metadata: { type: 'guide' } }, schema);
-      expect(result).toBe("type = 'guide'");
-    });
-  });
-
-  describe('unknown keys — the class, not just the four known instances', () => {
-    // This is what an allowlist buys and a blocklist cannot. None of these keys was ever
-    // enumerated as unimplemented, and each of them silently widened before.
-    it.each([
-      ['a case typo on the one filter that works', { resourceid: 'doc-1' }],
-      ['a field lifted from a design document', { keywords: ['oauth'] }],
-      ['a plausible-sounding invention', { filePath: 'docs/security/**' }],
-    ])('throws on %s', (_label, filters) => {
-      expect(() => buildWhereClause(asUntypedFilters(filters), schema)).toThrow(/Unsupported RAG query field/);
-    });
-
-    it('names the keys it does read, so the caller can correct the spelling', () => {
-      expect(() => buildWhereClause(asUntypedFilters({ resourceid: 'doc-1' }), schema)).toThrow(
-        /`resourceId` and `metadata`/,
-      );
+      expect(buildWhereClause({ metadata: { type: 'guide' } }, schema)).toBe("type = 'guide'");
     });
   });
 
@@ -196,15 +164,24 @@ describe('unsupported filters refuse rather than widen', () => {
   });
 
   describe('the guard reports every offender at once', () => {
-    it('names all present unsupported keys in one error', () => {
-      let message = '';
-      try {
-        buildWhereClause(asUntypedFilters({ tags: ['auth'], type: 'guide' }), schema);
-      } catch (error) {
-        message = (error as Error).message;
-      }
-      expect(message).toMatch(/filters\.tags/);
-      expect(message).toMatch(/filters\.type/);
+    it('names all present unknown keys in one error', async () => {
+      const error = await caughtFrom(() => buildWhereClause(asUntypedFilters({ tags: ['auth'], type: 'guide' }), schema));
+      expectUnrecognizedKeys(error, ['tags', 'type'], []);
+    });
+
+    it('is not satisfied by a neighbouring refusal that merely mentions the same fields', () => {
+      // The shape the old `/tags/` + `/type/` message match also accepted: a strict
+      // schema that DECLARES both keys and refuses their values. Same field names in the
+      // message, the opposite verdict about whether the key is supported.
+      const neighbour = z.object({ tags: z.string(), type: z.string() }).strict().safeParse({ tags: 1, type: 2 });
+      expect(neighbour.success).toBe(false);
+      const error = neighbour.error;
+      expect(error?.message).toMatch(/tags/);
+      expect(error?.message).toMatch(/type/);
+      expect(() => expectUnrecognizedKeys(error, ['tags', 'type'], [])).toThrow();
+      // And an unknown-key refusal naming only ONE of them is not "every offender".
+      const partial = z.object({ type: z.string() }).strict().safeParse({ tags: ['auth'], type: 'guide' });
+      expect(() => expectUnrecognizedKeys(partial.error, ['tags', 'type'], [])).toThrow();
     });
   });
 
@@ -215,12 +192,6 @@ describe('unsupported filters refuse rather than widen', () => {
 
     it('still returns null for no filters at all', () => {
       expect(buildWhereClause({}, schema)).toBeNull();
-    });
-
-    it('does not fire on an explicitly undefined unsupported key', () => {
-      expect(buildWhereClause(asUntypedFilters({ resourceId: 'doc-123', tags: undefined }), schema)).toBe(
-        "resourceid IN ('doc-123')",
-      );
     });
   });
 });

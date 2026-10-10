@@ -34,9 +34,10 @@ describe('validate (unified validator)', () => {
 			const stubResult = {
 				path: pluginDir,
 				type: PLUGIN_TYPE,
-				status: 'success' as const,
-				summary: 'Valid plugin',
+				status: 'ok' as const,
+				description: 'Valid plugin',
 				issues: [],
+				summary: { errors: 0, warnings: 0, info: 0 },
 				metadata: { name: TEST_PLUGIN_NAME, version: '1.0.0' },
 			};
 			let receivedPath: string | undefined;
@@ -76,7 +77,7 @@ describe('validate (unified validator)', () => {
 
 			const result = await validate(marketplaceDir);
 
-			expect(result.status).toBe('success');
+			expect(result.summary).toMatchObject({ errors: 0, warnings: 0 });
 			expect(result.type).toBe('marketplace');
 			expect(result.metadata?.name).toBe('test-marketplace');
 		});
@@ -123,10 +124,10 @@ describe('validate (unified validator)', () => {
 
 			const result = await validate(nonExistentPath);
 
-			expect(result.status).toBe('error');
+			expect(result.summary.errors).toBeGreaterThan(0);
 			expect(result.type).toBe('unknown');
 			assertSingleError(result, 'UNKNOWN_FORMAT');
-			expect(result.summary).toContain('Path does not exist');
+			expect(result.description).toContain('Path does not exist');
 			expect(result.issues[0]?.message).toContain('Path does not exist');
 		});
 
@@ -137,10 +138,10 @@ describe('validate (unified validator)', () => {
 
 			const result = await validate(emptyDir);
 
-			expect(result.status).toBe('error');
+			expect(result.summary.errors).toBeGreaterThan(0);
 			expect(result.type).toBe('unknown');
 			assertSingleError(result, 'UNKNOWN_FORMAT');
-			expect(result.summary).toContain('no .claude-plugin subdirectory');
+			expect(result.description).toContain('no .claude-plugin subdirectory');
 		});
 
 		it('should return error for ambiguous directory (both plugin and marketplace)', async () => {
@@ -153,10 +154,10 @@ describe('validate (unified validator)', () => {
 
 			const result = await validate(ambiguousDir);
 
-			expect(result.status).toBe('error');
+			expect(result.summary.errors).toBeGreaterThan(0);
 			expect(result.type).toBe('unknown');
 			assertSingleError(result, 'UNKNOWN_FORMAT');
-			expect(result.summary).toContain('both plugin.json and marketplace.json');
+			expect(result.description).toContain('both plugin.json and marketplace.json');
 		});
 
 		it('should return error for non-JSON file', async () => {
@@ -166,10 +167,10 @@ describe('validate (unified validator)', () => {
 
 			const result = await validate(textFilePath);
 
-			expect(result.status).toBe('error');
+			expect(result.summary.errors).toBeGreaterThan(0);
 			expect(result.type).toBe('unknown');
 			assertSingleError(result, 'UNKNOWN_FORMAT');
-			expect(result.summary).toContain('Not a JSON file');
+			expect(result.description).toContain('Not a JSON file');
 		});
 
 		it('should return error for unrecognized JSON file', async () => {
@@ -179,10 +180,10 @@ describe('validate (unified validator)', () => {
 
 			const result = await validate(jsonFilePath);
 
-			expect(result.status).toBe('error');
+			expect(result.summary.errors).toBeGreaterThan(0);
 			expect(result.type).toBe('unknown');
 			assertSingleError(result, 'UNKNOWN_FORMAT');
-			expect(result.summary).toContain('not a recognized registry');
+			expect(result.description).toContain('not a recognized registry');
 		});
 	});
 
@@ -193,7 +194,7 @@ describe('validate (unified validator)', () => {
 
 			const result = await validate(invalidPath);
 
-			expect(result.status).toBe('error');
+			expect(result.summary.errors).toBeGreaterThan(0);
 			expect(result.type).toBe('unknown');
 			expect(result.issues.length).toBeGreaterThan(0);
 			expect(result.issues[0]?.severity).toBe('error');

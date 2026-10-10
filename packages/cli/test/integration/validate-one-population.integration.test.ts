@@ -65,8 +65,7 @@ const STORE_WRITE = 'projection-store:write';
 const STORE_READ = 'projection-store:read';
 
 /** Both surfaces, so the run has more than one lane in it to share a population. */
-const BOTH_SURFACES_CONFIG = `version: 1
-resources:
+const BOTH_SURFACES_CONFIG = `resources:
   exclude:
     - "node_modules/**"
 skills:

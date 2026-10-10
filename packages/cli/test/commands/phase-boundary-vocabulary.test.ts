@@ -1,9 +1,9 @@
 /**
  * The three orchestrator commands describe the process they actually run in.
  *
- * `runPhase` runs every phase in THIS process: a phase hands back a
- * `{ document, exitCode }` pair, which is everything an orchestrator ever read
- * back across the old boundary. With the boundary gone, three failure arms went
+ * `runPhase` runs every phase in THIS process: a phase hands back its
+ * `{ report }`, which is everything an orchestrator ever read back across the
+ * old boundary. With the boundary gone, three failure arms went
  * with it rather than being handled — a phase can no longer be killed by a
  * signal without taking the orchestrator with it, exit without a status code,
  * or write a document that fails to parse.

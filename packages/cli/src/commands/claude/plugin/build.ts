@@ -7,41 +7,45 @@
  * imports pool skills (from dist/skills/) via the `skills:` selector.
  */
 
-import { cpSync, existsSync, readFileSync } from 'node:fs';
-import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir } from 'node:fs/promises';
 
-import { conventionalSuiteProbe, createProjectRegistry, getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
-import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
-import { countBySeverity, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowing, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { conventionalSuiteProbe, createProjectRegistry, getMarketplaceOutputDir, getPluginSourceDir, isSkillPackagingInputError, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkillInto, packagingConfigToPackageOptions, pluginDirInMarketplace, skillNameToFsPath, stagedPathMapper, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
+import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ProjectConfig, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
+import { buildReport, toFindings, type Finding, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { applyTreePlan, writeFileUnder, compareCodeUnits, direntKindFollowing, everyInOrder, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, relativeEscapesRoot, safePath, toForwardSlash, VatError, withFsFault } from '@vibe-agent-toolkit/utils';
+import { onCrawlOutput } from '@vibe-agent-toolkit/utils/crawl';
 import { Command } from 'commander';
 
 import { readPluginLocalSkillName } from '../../../commands/skills/skill-discovery.js';
-import { reportCommandError } from '../../../utils/command-error.js';
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { loadConfig } from '../../../utils/config-loader.js';
+import { endWithReport, leftoverFindingsOf, leftoverIssue, NOTHING_FINISHED, refusalReport, type FinishedWork } from '../../../utils/document-writer.js';
 import {
   collectPostBuildIssues,
   formatIssueLines,
   formatIssueSetHeading,
   formatPackagedFileCount,
   issuesToRenderAtVerbosity,
-  sumSeverityCounts,
 } from '../../../utils/issue-rendering.js';
 import { createLogger } from '../../../utils/logger.js';
-import { writeYamlOutput } from '../../../utils/output.js';
+import { copyFileIntoMarketplace, copyTreeIntoMarketplace, writingMarketplace } from '../../../utils/marketplace-io.js';
 import { readPackageJsonOrAbsent } from '../../../utils/package-json.js';
+import { requireInputPath } from '../../../utils/project-root-policy.js';
 import { withResourcePopulationSource } from '../../../utils/resource-loader.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig, pluginLocalSkillConfigEntry } from '../../../utils/skill-packaging-config.js';
-import { finishCommand, type PhaseOutcome } from '../../phase-utils.js';
+import type { PhaseOutcome } from '../../phase-utils.js';
+import { packagingFailedIssue } from '../../skills/build.js';
 import { discoverSkillsFromConfig } from '../../skills/skill-discovery.js';
-import { loadClaudeProjectConfig } from '../claude-config.js';
+import { assertMarketplaceDeclared, loadClaudeProjectConfig } from '../claude-config.js';
 
+import type { PluginBuildData } from './build-schema.js';
 import { buildMarketplaceJson, type MarketplaceJsonPluginEntry } from './marketplace-json.js';
 import { resolvePluginChangelogPath } from './plugin-changelog.js';
-import { applyPluginFiles } from './plugin-files.js';
+import { applyPluginFiles, foldedSegment } from './plugin-files.js';
 import { mergePluginJson, resolveVersion } from './plugin-json-merge.js';
 import {
   parsePluginJsonFiles,
+  readAuthorPluginJson,
   verifyNoCaseCollidingPluginNames,
   verifyPluginDirCaseMatch,
 } from './plugin-validators.js';
@@ -74,30 +78,35 @@ interface PluginBuildResult {
   treeFilesCopied: number;
   /**
    * Source-relative paths of the in-tree FILE symlinks the tree-copy resolved
-   * and shipped BY CONTENT (each also counted in `treeFilesCopied`). Published
-   * because a bundle is a plain tree: the target's bytes travel under the
-   * link's name, and a count alone reads the same as a tree with no symlinks.
+   * and shipped BY CONTENT (each also counted in `treeFilesCopied`). Not in the
+   * published report: it reaches programmatic callers of
+   * {@link runClaudePluginBuild} through this result, and the operator through
+   * one `<path> (symlink, copied by content)` stderr line per link — a bundle
+   * is a plain tree, so the target's bytes travel under the link's name.
    * Always present (`[]` when there were none), like the other tree-copy facts.
    */
   symlinksCopied: string[];
   explicitFilesCopied: number;
   localSkillsPackaged: number;
   /**
-   * Per-severity findings for the WHOLE plugin: its plugin-local skills'
-   * post-build findings PLUS plugin-level findings that belong to no skill (a
-   * dead `exclude:` pattern, say).
-   *
-   * Published rather than folded into the plugin's success/failure: the build
-   * gate is two-valued (a warning does not fail it), so a bare `status` cannot
-   * say whether a "built" plugin shipped warnings or info findings — and the
-   * reading a consumer takes from silence is the reassuring one.
-   *
-   * Named for the plugin, not for its skills: as `localSkillIssueCounts` this
-   * field silently defined "a plugin's findings" as "its skills' findings", so
-   * a plugin-level finding had nowhere to land and was written to stderr beside
-   * a published `warnings: 0`.
+   * Every finding for the WHOLE plugin: its plugin-local skills' post-build
+   * findings PLUS plugin-level findings that belong to no skill (a dead
+   * `exclude:` pattern, say). Published as the report's `findings`, so a
+   * warning a built plugin shipped is named, not only counted.
    */
-  issueCounts: SeverityCounts;
+  issues: ValidationIssue[];
+}
+
+/**
+ * A plugin whose plugin-local skills emitted error-severity post-build
+ * findings. The build stops there, before the plugin is assembled: the findings
+ * are published and fail the gate (exit 1) — a finding, never a crash.
+ */
+interface PluginGateFailure {
+  /** The one sentence naming the plugin and the failing skills. */
+  reason: string;
+  /** Every finding the plugin's skills emitted, the failing ones included. */
+  issues: ValidationIssue[];
 }
 
 /**
@@ -115,11 +124,17 @@ export interface ExternalPluginBuildResult {
 
 export interface MarketplaceBuildResult {
   name: string;
-  status: 'built' | 'error';
-  reason?: string;
+  /** The plugins assembled — all of them unless {@link MarketplaceBuildResult.gate} stopped the build. */
   plugins: PluginBuildResult[];
   /** Plugins referenced via `externalSource` — see {@link ExternalPluginBuildResult}. */
   externalPlugins: ExternalPluginBuildResult[];
+  /** The plugin that failed the gate, when one did: the marketplace is then not replaced — the previous one stays. */
+  gate: PluginGateFailure | undefined;
+  /**
+   * What the marketplace's plan made and could not remove — the previous marketplace parked by
+   * the swap, a staged tree a gated build discarded — each the warning naming it.
+   */
+  residue: ValidationIssue[];
 }
 
 export function createPluginBuildCommand(): Command {
@@ -155,6 +170,10 @@ Description:
   wherever the other marketplace/repo actually publishes it. Use this to
   cherry-pick a plugin from one marketplace into another without vendoring it.
 
+  Each marketplace is built whole beside dist/.claude/plugins/marketplaces/
+  <marketplace> and swapped in once every plugin passed: a failure, or a plugin
+  the post-build gate stops, leaves the previous marketplace exactly as it was.
+
 Output structure:
   dist/.claude/plugins/marketplaces/<marketplace>/
     .claude-plugin/marketplace.json
@@ -163,19 +182,39 @@ Output structure:
       skills/<skillName>/SKILL.md
 
 Output:
-  YAML summary -> stdout
+  YAML report -> stdout: status (ok | findings | error), summary, examined
+  (marketplaces built), findings (each with its location), and data:
+  marketplacesBuilt, pluginsBuilt, pluginsReferenced, skillsPackaged, and
+  marketplaces[] of { name, status, reason?, plugins[] { name, outputPath,
+  skills }, externalPlugins[] }. Paths are relative to the directory holding
+  vibe-agent-toolkit.config.yaml.
   Build progress -> stderr
 
   On stderr, each packaged skill's findings heading names the whole set and
   its severity breakdown, and errors are always printed in full beneath it.
   Warnings and info findings stay collapsed into that heading unless
-  --verbose. The stdout YAML is NOT affected by --verbose: its issueCounts
-  cover every finding at every verbosity.
+  --verbose. The stdout report is NOT affected by --verbose: its findings
+  are every finding at every verbosity.
 
 Exit Codes:
-  0 - Build successful
-  1 - Build error (empty plugin, invalid config)
-  2 - System error
+  0 - Built; findings, if any, are warnings or info
+  1 - An error-severity finding: a plugin-local skill failed the post-build
+      gate (the build stops there — that marketplace is not replaced and
+      nothing after it is built), or no marketplace is configured
+      (RESOURCE_CHECK_BROKEN)
+  2 - The build could not run (error.code): USAGE_INVALID (an undeclared
+      --marketplace), CONFIG_INVALID (no config; an empty or colliding plugin
+      declaration; an invalid files[].dest), INPUT_UNREADABLE (a plugin file
+      that is not JSON, a pool skill or files[].source nothing built, a
+      symlink no bundle can ship, a file the build copies -- LICENSE,
+      README.md, CHANGELOG.md, a plugin file, a files[].source, a built skill
+      in dist/skills -- that the OS will not read), RUN_INCOMPLETE (the packager refused a
+      plugin-local skill's content, e.g. a skill files: source that does not
+      exist — the SKILL_PACKAGING_FAILED finding names the skill — or the OS
+      would not let the build write its output: a full disk, a read-only
+      dist/; no finding). Known gap: a disk so full that the git snapshot
+      of the project fails first is still INTERNAL_ERROR ("git did not
+      answer ...").
 
 Example:
   $ vat skills build && vat claude plugin build    # Build skills then wrap for Claude
@@ -186,18 +225,46 @@ Example:
 }
 
 /**
- * Discover available skill names by listing directories in dist/skills/.
+ * What `vat claude plugin build` writes in the project at `configDir`: every marketplace it
+ * replaces lives under this one tree. The one definition — the build's own declaration of its
+ * outputs, and what `vat build` tells its skills phase the run writes after it.
  */
-async function discoverBuiltSkills(configDir: string): Promise<string[]> {
+export function pluginBuildOutput(configDir: string): string {
+  return safePath.join(configDir, 'dist', '.claude', 'plugins', 'marketplaces');
+}
+
+/**
+ * Which side of the run `dist/skills` — the pool skills this build copies in — is on. Under
+ * `vat claude plugin build` it is an INPUT another build wrote (`source`: a refusal is fixed by
+ * rebuilding it); under `vat build` the run's own skills phase wrote it, so it is one of the
+ * run's outputs (`destination`). Asked of the run's ONE declaration of what it writes
+ * (`onCrawlOutput`), never decided here a second way.
+ */
+function distSkillsSide(distSkillsDir: string, outputs: readonly string[]): FsSide {
+  return onCrawlOutput(distSkillsDir, outputs) ? 'destination' : 'source';
+}
+
+/**
+ * Discover available skill names by listing directories in dist/skills/.
+ *
+ * @param outputs - What the run writes (its one declaration), which decides `dist/skills`' side
+ */
+function discoverBuiltSkills(configDir: string, outputs: readonly string[]): Promise<string[]> {
   const skillsDir = safePath.join(configDir, 'dist', 'skills');
 
-  if (!existsSync(skillsDir)) {
-    return [];
+  // A probe or a listing the OS refuses is on dist/skills' side of the run (see `distSkillsSide`).
+  const side = distSkillsSide(skillsDir, outputs);
+  // The run's own output is "not built" only once `dist/` agrees; another build's is taken at the probe's word.
+  if (!pathPresent(skillsDir, 'follow', side, side === 'destination' ? 'confirmed' : 'probe')) {
+    return Promise.resolve([]);
   }
 
-  const entries = await readdir(skillsDir, { withFileTypes: true });
-  const kinds = await Promise.all(entries.map((entry) => direntKindFollowing(skillsDir, entry)));
-  return entries.filter((_, i) => kinds[i] === 'directory').map((entry) => entry.name);
+  return withFsFault({ side, origin: 'content', action: 'list the built skills', path: skillsDir }, async () => {
+    const entries = await readdir(skillsDir, { withFileTypes: true });
+    const kinds = await Promise.all(entries.map((entry) => direntKindFollowing(skillsDir, entry)));
+    // A staged or parked tree a concurrent or killed `vat skills build` left beside a bundle is no skill.
+    return entries.filter((entry, i) => kinds[i] === 'directory' && !isTreeChangeResidue(entry.name)).map((entry) => entry.name);
+  });
 }
 
 /**
@@ -205,35 +272,43 @@ async function discoverBuiltSkills(configDir: string): Promise<string[]> {
  * core shared by the `vat claude plugin build` CLI action and `vat skill test`
  * (which builds a declared skill's owning marketplace before staging its dist).
  *
- * Throws on any build error; never calls `process.exit` and never emits the YAML
- * summary — those belong to the CLI wrapper. Returns one result per built
- * marketplace (empty when no `claude.marketplaces` are configured).
+ * Pushes each marketplace into `built` as it finishes, so a caller whose catch
+ * reads the same array publishes the marketplaces that finished before a throw.
+ * A marketplace whose plugin failed the gate ({@link MarketplaceBuildResult.gate})
+ * is pushed and ends the run. Never calls `process.exit` and never writes stdout.
  *
  * `configDir` is threaded in (the project root that holds
  * vibe-agent-toolkit.config.yaml), so callers that already know the root build
- * against it rather than re-discovering from cwd. `options.marketplace` restricts
- * the build to a single marketplace by name.
+ * against it rather than re-discovering from cwd. `projectConfig` is the config
+ * the caller already parsed from it, so the file is read (and any unknown-key
+ * warning printed) once per run. `options.marketplace` restricts
+ * the build to a single marketplace by name, and refuses a name the config does
+ * not declare.
  *
  * `options.verbose` affects the stderr findings report ONLY (see
- * `summarizePackagedSkillIssues`); it changes nothing this function returns, so a
- * programmatic caller — `vat skill test`, which builds a marketplace purely to
- * stage a skill — can leave it off and still get the same result objects.
+ * `summarizePackagedSkillIssues`); it changes nothing this function returns.
  */
-export async function runClaudePluginBuild(
+async function buildClaudePluginMarketplaces(
   configDir: string,
+  projectConfig: ProjectConfig | undefined,
   options: {
-    marketplace?: string;
-    logger?: ReturnType<typeof createLogger>;
-    verbose?: boolean;
-  } = {},
-): Promise<MarketplaceBuildResult[]> {
-  const logger = options.logger ?? createLogger({});
-  const verbose = options.verbose === true;
+    marketplace?: string | undefined;
+    logger: ReturnType<typeof createLogger>;
+    verbose: boolean;
+    /** What the RUN already wrote that this build reads (`vat build`: `dist/skills`); `[]` when it wrote nothing. */
+    runOutputs: readonly string[];
+  },
+  built: MarketplaceBuildResult[],
+): Promise<void> {
+  const { logger, verbose } = options;
+  // The run's ONE declaration of what it writes: the marketplaces this build replaces, and what the
+  // run wrote before it. A fault on, in or above any of them is the destination's.
+  const outputs = [pluginBuildOutput(configDir), ...options.runOutputs];
 
-  const projectConfig = loadConfig(configDir);
-  const marketplaces = projectConfig?.claude?.marketplaces;
-  if (!marketplaces || Object.keys(marketplaces).length === 0) {
-    return [];
+  const marketplaces = projectConfig?.claude?.marketplaces ?? {};
+  assertMarketplaceDeclared(options.marketplace, Object.keys(marketplaces));
+  if (Object.keys(marketplaces).length === 0) {
+    return;
   }
 
   // Read version from root package.json — lowest-precedence fallback in the
@@ -247,7 +322,7 @@ export async function runClaudePluginBuild(
   const rootVersion = typeof rootPkg?.['version'] === 'string' ? rootPkg['version'] : undefined;
 
   // Discover available skills from dist/skills/ for pool-to-plugin selectors
-  const availableSkills = await discoverBuiltSkills(configDir);
+  const availableSkills = await discoverBuiltSkills(configDir, outputs);
 
   // Load the project's skills config (defaults + per-skill) so each plugin-local
   // skill is PACKAGED with its own effective packaging config — the same config
@@ -271,8 +346,11 @@ export async function runClaudePluginBuild(
   // this is a change of COST, not of what the build sees.
   const sharedRegistry = await withResourcePopulationSource(
     { root: configDir },
-    async (populationSource) =>
+    (populationSource) =>
       createProjectRegistry(configDir, {
+        // What this run writes (see `outputs` above). A fault on, in or above it (the project
+        // root included) is the destination's.
+        outputs,
         ...(populationSource !== undefined && { populationSource }),
       }),
   );
@@ -284,8 +362,8 @@ export async function runClaudePluginBuild(
   // a plugin-local skill's bundle must exclude the OTHER skills' suites too — not
   // just its own. Discovery is not free, hence once per run rather than per skill.
   // `'refuse'`: a bundle assembled around a directory discovery could not
-  // list may ship another skill's answer key. The throw lands in this
-  // command's catch → `reportCommandError`, exit 2.
+  // list may ship another skill's answer key. The throw carries the classified
+  // fault (a `source` listing), which the command publishes as the table says.
   const projectSkills = skillsConfig === undefined
     ? []
     : collectDeclaredEvalSuites(skillsConfig, await discoverSkillsFromConfig(skillsConfig, configDir, 'refuse'));
@@ -302,18 +380,18 @@ export async function runClaudePluginBuild(
   // outliving the run would keep answering for a tree that has since changed.
   const suiteProbe = conventionalSuiteProbe();
 
-  const results: MarketplaceBuildResult[] = [];
-
   const allPluginNames: string[] = [];
   for (const mp of Object.values(marketplaces)) {
     for (const p of mp.plugins) allPluginNames.push(p.name);
   }
   verifyNoCaseCollidingPluginNames(allPluginNames);
 
-  for (const name of Object.keys(marketplaces)) {
+  // In order, stopping at the first gated marketplace: each writes its own tree
+  // and the log reads marketplace by marketplace.
+  await everyInOrder(Object.keys(marketplaces), async (name) => {
     // Skip if --marketplace filter specified and doesn't match
     if (options.marketplace && options.marketplace !== name) {
-      continue;
+      return true;
     }
 
     const mpConfig = marketplaces[name] as ClaudeMarketplaceConfig;
@@ -329,135 +407,165 @@ export async function runClaudePluginBuild(
       registry: sharedRegistry,
       projectSkills,
       suiteProbe,
+      outputs,
       logger,
       verbose,
     });
-    results.push(result);
-
-    if (result.status === 'error') {
-      throw new Error(
-        `Claude plugin build failed for marketplace '${name}': ${result.reason ?? 'unknown error'}`,
-      );
-    }
-  }
-
-  return results;
+    built.push(result);
+    return result.gate === undefined;
+  });
 }
 
 /**
- * Build every configured plugin marketplace and hand back the document and exit
- * code, printing the document nowhere.
- *
- * The phase entry point for `vat build`, whose `claude` phase is this command.
+ * {@link buildClaudePluginMarketplaces} for a programmatic caller that only
+ * wants the built tree: one result per marketplace built (empty when no
+ * `claude.marketplaces` are configured), and a throw — carrying the gate's
+ * reason — when a plugin failed the post-build gate, since there is then no
+ * complete marketplace to stage from.
  */
-export async function runClaudePluginBuildPhase(
-  options: PluginBuildCommandOptions,
-): Promise<PhaseOutcome> {
+export async function runClaudePluginBuild(
+  configDir: string,
+  options: {
+    marketplace?: string;
+    logger?: ReturnType<typeof createLogger>;
+    verbose?: boolean;
+    /** What the caller's run already wrote that this build reads (its `dist/skills`, when it built them); `[]` for none. */
+    runOutputs: readonly string[];
+  },
+): Promise<MarketplaceBuildResult[]> {
+  const built: MarketplaceBuildResult[] = [];
+  await buildClaudePluginMarketplaces(
+    configDir,
+    loadConfig(configDir),
+    { marketplace: options.marketplace, logger: options.logger ?? createLogger({}), verbose: options.verbose === true, runOutputs: options.runOutputs },
+    built,
+  );
+  const gated = built.find((result) => result.gate !== undefined)?.gate;
+  if (gated !== undefined) throw new Error(gated.reason);
+  return built;
+}
+
+/** Plugin build has no `--strict`: warnings never fail it. */
+const GATE: Gate = { strict: false };
+
+/** Every finding the built marketplaces carry, the stopped plugin's included. */
+function marketplaceIssues(result: MarketplaceBuildResult): ValidationIssue[] {
+  return [...result.plugins.flatMap((plugin) => plugin.issues), ...(result.gate?.issues ?? []), ...result.residue];
+}
+
+/**
+ * The report's `data` for the marketplaces built — paths relative to
+ * `configDir`, the directory whose config the build read.
+ */
+function pluginBuildData(configDir: string, built: readonly MarketplaceBuildResult[]): PluginBuildData {
+  const plugins = built.flatMap((result) => result.plugins);
+  return {
+    marketplacesBuilt: built.filter((result) => result.gate === undefined).length,
+    pluginsBuilt: plugins.length,
+    pluginsReferenced: built.flatMap((result) => result.externalPlugins).length,
+    skillsPackaged: plugins.flatMap((plugin) => plugin.skillsCopied).length,
+    marketplaces: built.map((result) => ({
+      name: result.name,
+      status: toFindings(marketplaceIssues(result)).length === 0 ? 'ok' : 'findings',
+      ...(result.gate === undefined ? {} : { reason: result.gate.reason }),
+      plugins: result.plugins.map((plugin) => ({
+        name: plugin.pluginName,
+        outputPath: toForwardSlash(safePath.relative(configDir, plugin.pluginDir)),
+        skills: plugin.skillsCopied,
+      })),
+      // Referenced, not built — no output path. `source` is the same object
+      // emitted verbatim into marketplace.json, so the report and the artifact
+      // can never disagree about what a reference points at.
+      externalPlugins: result.externalPlugins.map((plugin) => ({
+        name: plugin.pluginName,
+        ...(plugin.pluginVersion === undefined ? {} : { version: plugin.pluginVersion }),
+        source: plugin.source,
+      })),
+    })),
+  };
+}
+
+/**
+ * The packager refused one plugin-local skill's own CONTENT — a `files:` source
+ * that is not there, a bundled nested `SKILL.md`, a name that is no path segment.
+ *
+ * That is the project's to fix, so it is coded where it is caught: the run
+ * stopped (`RUN_INCOMPLETE`) on a `SKILL_PACKAGING_FAILED` finding at the skill —
+ * the refusal `vat skill test run` and `vat agent build` publish for the same
+ * cause. An uncoded packager throw is not wrapped: it stays a defect.
+ */
+class SkillPackagingStop extends CommandRefusalError {
+  /** The refused skill's `SKILL.md`, absolute. */
+  readonly skillPath: string;
+
+  constructor(cause: unknown, skillPath: string) {
+    super('RUN_INCOMPLETE', errorMessageOf(cause), { cause });
+    this.skillPath = skillPath;
+  }
+}
+
+/**
+ * `finished`, plus the `SKILL_PACKAGING_FAILED` finding a {@link SkillPackagingStop} stands for.
+ *
+ * @param finished - What the run finished before it stopped
+ * @param error - What stopped it
+ * @param configDir - The project root the finding's `location` is relative to, when known
+ */
+function withPackagingStop(finished: FinishedWork, error: unknown, configDir: string | undefined): FinishedWork {
+  if (!(error instanceof SkillPackagingStop)) return finished;
+  const relative = configDir === undefined ? undefined : issueLocation(error.skillPath, configDir);
+  const location = relative === undefined || relativeEscapesRoot(relative) ? undefined : relative;
+  return { ...finished, findings: [...finished.findings, ...toFindings([packagingFailedIssue(error.message, location, 'rebuild', error.cause)])] };
+}
+
+/** What the marketplaces built so far are, as the report or a refusal's finished work. */
+function builtWork(configDir: string, built: readonly MarketplaceBuildResult[]): FinishedWork & { data: PluginBuildData; findings: Finding[] } {
+  return {
+    examined: built.length,
+    findings: toFindings(built.flatMap(marketplaceIssues)),
+    data: pluginBuildData(configDir, built),
+  };
+}
+
+/**
+ * Build every configured plugin marketplace and hand back the report — the
+ * refusal branch when it could not run, carrying the marketplaces that
+ * finished — printing it nowhere.
+ *
+ * ONE function for both lanes: `vat claude plugin build` publishes it with
+ * `endWithReport`, and `vat build`'s `claude` phase (run only when
+ * `claude.marketplaces` is configured) folds it. The report is the one BEFORE
+ * the writer's run-integrity pass.
+ */
+export async function runClaudePluginBuildPhase(options: PluginBuildCommandOptions, runOutputs: readonly string[]): Promise<PhaseOutcome> {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
+  const built: MarketplaceBuildResult[] = [];
+  let configDir: string | undefined;
 
   try {
-    const { configDir, claudeConfig } = await loadClaudeProjectConfig();
-
-    if (!claudeConfig?.marketplaces || Object.keys(claudeConfig.marketplaces).length === 0) {
-      return {
-        document: {
-          status: 'success',
-          message: 'No claude.marketplaces configured — nothing to build',
-          duration: `${Date.now() - startTime}ms`,
-        },
-        exitCode: 0,
-      };
-    }
-
-    const results = await runClaudePluginBuild(configDir, {
-      ...(options.marketplace ? { marketplace: options.marketplace } : {}),
-      logger,
-      verbose: options.verbose === true,
-    });
-
-    const duration = Date.now() - startTime;
-    const totalPlugins = results.flatMap((r) => r.plugins).length;
-    const totalExternalPlugins = results.flatMap((r) => r.externalPlugins).length;
-    const totalSkills = results.flatMap((r) => r.plugins).flatMap((p) => p.skillsCopied).length;
-
-    const allPlugins = results.flatMap((r) => r.plugins);
-
-    // KNOWN, DELIBERATELY NOT FIXED — this lane NAMES NOTHING. Every level of this
-    // document publishes severity counts and no findings: `vat build --only claude`
-    // on a real adopter monorepo published `warnings: 70, info: 30` with zero named
-    // findings anywhere in the document, at any verbosity. A reader is told how many
-    // things are wrong and never which. The findings exist — `summarizePackagedSkillIssues`
-    // and `reportPluginIssues` render them — but only to stderr, where no CI consumer
-    // reads them.
-    //
-    // Same class as the `validationFailedSkills` rows in ../../skills/build.ts, a
-    // different lane. Fixing it means carrying `ValidationIssue[]` up through
-    // `PluginBuildResult`/`MarketplaceBuildResult` beside the counts they already
-    // carry, then publishing it on the plugin rows below.
-    const document = {
-      status: 'success',
-      // The build gate is two-valued and a warning does not fail it, so the
-      // distribution has to travel next to the status rather than inside it.
-      issueCounts: sumSeverityCounts(allPlugins.map((p) => p.issueCounts)),
-      marketplacesBuilt: results.filter((r) => r.status === 'built').length,
-      pluginsBuilt: totalPlugins,
-      pluginsReferenced: totalExternalPlugins,
-      skillsPackaged: totalSkills,
-      marketplaces: results.map((r) => ({
-        name: r.name,
-        status: r.status,
-        ...(r.reason ? { reason: r.reason } : {}),
-        plugins: r.plugins.map((p) => ({
-          name: p.pluginName,
-          // KNOWN, DELIBERATELY NOT FIXED — an ABSOLUTE path, so stdout carries
-          // `$HOME`. Measured on a real adopter monorepo run: 5 places in the
-          // published document. Failure MESSAGES in this change were scrubbed of
-          // absolute project paths and are confirmed clean; the success-path fields
-          // like this one were not, so the leak survives in the reports CI keeps.
-          //
-          // Do NOT relativize it on its own. It is blocked on the same undecided
-          // question as `skills[].outputPath` in ../../skills/build.ts: which root
-          // these reports anchor on. Picking one here picks it by accident, and the
-          // two build lanes then publish paths in two coordinate systems.
-          dir: p.pluginDir,
-          skills: p.skillsCopied,
-          commandsCopied: p.commandsCopied,
-          hooksCopied: p.hooksCopied,
-          agentsCopied: p.agentsCopied,
-          mcpCopied: p.mcpCopied,
-          treeFilesCopied: p.treeFilesCopied,
-          symlinksCopied: p.symlinksCopied,
-          explicitFilesCopied: p.explicitFilesCopied,
-          localSkillsPackaged: p.localSkillsPackaged,
-          issueCounts: p.issueCounts,
-        })),
-        // Referenced, not built — no dir, no counts to report. `source` is the
-        // same object emitted verbatim into marketplace.json, so the report and
-        // the artifact can never disagree about what a reference points at.
-        externalPlugins: r.externalPlugins.map((p) => ({
-          name: p.pluginName,
-          ...(p.pluginVersion ? { version: p.pluginVersion } : {}),
-          source: p.source,
-        })),
-      })),
-      duration: `${duration}ms`,
-    };
-
-    return { document, exitCode: 0 };
+    const loaded = loadClaudeProjectConfig();
+    configDir = loaded.configDir;
+    // The config this lane already parsed is handed down, so the build reads it
+    // once (and warns about an unknown key once).
+    await buildClaudePluginMarketplaces(
+      configDir,
+      loaded.projectConfig,
+      { marketplace: options.marketplace, logger, verbose: options.verbose === true, runOutputs },
+      built,
+    );
+    const work = builtWork(configDir, built);
+    return { report: buildReport({ ...work, gate: GATE, durationMs: Date.now() - startTime }) };
   } catch (error) {
-    return {
-      document: reportCommandError(error, logger, startTime, 'ClaudePluginBuild'),
-      exitCode: 2,
-      failed: true,
-    };
+    const finished = configDir === undefined || built.length === 0 ? NOTHING_FINISHED : builtWork(configDir, built);
+    return { report: refusalReport(refusalCodeOf(error), error, GATE, withPackagingStop(finished, error, configDir)) };
   }
 }
 
 async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<void> {
-  // `undefined`: this command offers no `--format`, so its failure envelope is
-  // YAML like its report.
-  finishCommand(await runClaudePluginBuildPhase(options), writeYamlOutput, undefined);
+  // This command offers no `--format`: the report is YAML.
+  // On its own, this verb writes nothing before its marketplaces: `dist/skills` is an input.
+  endWithReport('claude plugin build', (await runClaudePluginBuildPhase(options, [])).report, 'yaml');
 }
 
 /**
@@ -475,18 +583,20 @@ async function copyDistributionFiles(
     'CHANGELOG.md': config.publish?.changelog,
   };
 
-  for (const file of ['LICENSE', 'README.md', 'CHANGELOG.md']) {
+  // In order: the log names the files in this order, and the first failed copy is the one reported.
+  await forEachInOrder(['LICENSE', 'README.md', 'CHANGELOG.md'], async (file) => {
     const override = overrides[file];
     const srcPath = override ? safePath.join(configDir, override) : safePath.join(configDir, file);
-    if (existsSync(srcPath)) {
-      cpSync(srcPath, safePath.join(marketplaceDir, file));
+    // Absent is skipped; a file the OS will not let the build examine refuses, never skipped as absent.
+    if (pathPresent(srcPath, 'follow', 'source', 'probe')) {
+      await copyFileIntoMarketplace(srcPath, { root: marketplaceDir, relative: file }, issueLocation(srcPath, configDir), issueLocation(safePath.join(marketplaceDir, file), configDir));
       if (override) {
         logger.info(`   ${file} (from publish.${file === 'README.md' ? 'readme' : 'changelog'}: ${override})`);
       } else {
         logger.info(`   ${file} (copied from project root)`);
       }
     }
-  }
+  });
 }
 
 /**
@@ -508,33 +618,92 @@ interface BuildMarketplaceInput {
   projectSkills: readonly DeclaredEvalSuite[];
   /** The run's conventional-suite probe, created once beside `projectSkills`. */
   suiteProbe: ConventionalSuiteProbe;
+  /** What the run writes — its one declaration (see `buildClaudePluginMarketplaces`). */
+  outputs: readonly string[];
   logger: ReturnType<typeof createLogger>;
   /** Render every finding, not just the errors (stderr only). */
   verbose: boolean;
 }
 
+/**
+ * Thrown from a marketplace's staging fill when a plugin failed the gate: the plan discards what
+ * it staged, and the previous marketplace stays exactly as it was. One per marketplace.
+ */
+class MarketplaceNotEarned extends VatError {
+  constructor(name: string) {
+    super('PLUGIN_BUILD_NOT_EARNED', `marketplace ${name}: a plugin failed the gate, so the build does not replace the previous marketplace`);
+  }
+}
+
+/**
+ * Build ONE marketplace as one tree-change plan: a `replace` of
+ * `dist/.claude/plugins/marketplaces/<name>` whose staged tree the whole build is written
+ * into ({@link buildMarketplaceInto}). It lands only when every plugin passed the gate; a
+ * failure anywhere — a refused write, a refused input, a gated plugin — leaves the previous
+ * marketplace byte-equal (orphaned plugins of a previous build go with the swap).
+ */
 async function buildMarketplace(input: BuildMarketplaceInput): Promise<MarketplaceBuildResult> {
-  const { name, config, availableSkills, configDir, skillsConfig, rootVersion, registry, projectSkills, suiteProbe, logger, verbose } = input;
+  const { name, configDir } = input;
+  // The config schema already refuses a name that is not one path segment; this re-check keeps the
+  // replace below from ever aiming outside dist/ if a caller skips it.
+  if (!isSingleFsSegment(name)) {
+    throw new CommandRefusalError('CONFIG_INVALID', `Marketplace name ${JSON.stringify(name)} is not a single path segment; rename it in vibe-agent-toolkit.config.yaml under claude.marketplaces.`);
+  }
+  const marketplaceDir = getMarketplaceOutputDir(configDir, name);
+  const notEarned = new MarketplaceNotEarned(name);
+  // A holder, not a `let`: the fill assigns it inside the plan, where flow analysis cannot see.
+  const holder: { built?: MarketplaceBuildResult; staged?: string } = {};
+  const plan = await planTreeChanges([{
+    op: 'replace',
+    dest: marketplaceDir,
+    ownership: { kind: 'vat-state' },
+    label: `marketplace ${name}`,
+    fill: {
+      from: 'write',
+      write: async (staged) => {
+        holder.staged = staged;
+        holder.built = await buildMarketplaceInto(input, staged);
+        if (holder.built.gate !== undefined) throw notEarned;
+      },
+    },
+  }]);
+  let residue: ValidationIssue[];
+  try {
+    residue = (await applyTreePlan(plan)).warnings.map(({ message, path }) => leftoverIssue(message, path));
+  } catch (error: unknown) {
+    if (error !== notEarned) throw error;
+    residue = leftoverFindingsOf(error);
+  }
+  const { built, staged } = holder;
+  // The plan resolves, or ends gated, only once its fill has run.
+  if (built === undefined || staged === undefined) throw new Error(`plugin build: the plan for marketplace ${name} ended without building it`);
+  return landedMarketplace(built, stagedPathMapper(configDir, staged, marketplaceDir), residue);
+}
+
+/** A marketplace built into its staged tree, every path it names re-anchored onto where it landed. */
+function landedMarketplace(built: MarketplaceBuildResult, landedPath: (value: string) => string, residue: ValidationIssue[]): MarketplaceBuildResult {
+  const landedIssues = (issues: readonly ValidationIssue[]): ValidationIssue[] =>
+    issues.map((issue) => (issue.location === undefined ? issue : { ...issue, location: landedPath(issue.location) }));
+  return {
+    ...built,
+    plugins: built.plugins.map((plugin) => ({ ...plugin, pluginDir: landedPath(plugin.pluginDir), issues: landedIssues(plugin.issues) })),
+    gate: built.gate === undefined ? undefined : { ...built.gate, issues: landedIssues(built.gate.issues) },
+    residue,
+  };
+}
+
+/** The whole marketplace build, into `marketplaceDir`: its plan's staged tree. */
+async function buildMarketplaceInto(input: BuildMarketplaceInput, marketplaceDir: string): Promise<MarketplaceBuildResult> {
+  const { name, config, availableSkills, configDir, skillsConfig, rootVersion, registry, projectSkills, suiteProbe, outputs, logger, verbose } = input;
   const plugins: PluginBuildResult[] = [];
   const externalPlugins: ExternalPluginBuildResult[] = [];
-
-  // Clean stale marketplace directory before rebuilding — removes orphaned plugins
-  const marketplaceBaseDir = safePath.join(
-    configDir,
-    'dist',
-    '.claude',
-    'plugins',
-    'marketplaces',
-    name,
-  );
-  if (existsSync(marketplaceBaseDir)) {
-    await rm(marketplaceBaseDir, { recursive: true, force: true });
-  }
 
   // Marketplace-level skills filter restricts pool available to plugins that use "*"
   const marketplaceAvailable = resolveMarketplaceAvailableSkills(config, availableSkills);
 
-  for (const pluginDef of config.plugins) {
+  let gate: PluginGateFailure | undefined;
+  // In order, stopping at the first gated plugin: each writes into this marketplace's tree.
+  await everyInOrder(config.plugins, async (pluginDef) => {
     // externalSource plugins are never built or copied — they route straight
     // to a marketplace.json entry referencing the other repo. Every phase
     // buildPlugin runs (empty-plugin guard, tree-copy, skills packaging,
@@ -550,11 +719,11 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
         pluginVersion: pluginDef.version,
         source: pluginDef.externalSource,
       });
-      continue;
+      return true;
     }
 
-    const pluginResult = await buildPlugin({
-      marketplaceName: name,
+    const outcome = await buildPlugin({
+      marketplaceDir,
       pluginDef,
       marketplaceAvailable,
       configDir,
@@ -564,17 +733,23 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
       registry,
       projectSkills,
       suiteProbe,
+      outputs,
       logger,
       verbose,
     });
-    plugins.push(pluginResult);
+    if (outcome.kind === 'gated') {
+      gate = outcome.failure;
+      return false;
+    }
+    plugins.push(outcome.result);
+    return true;
+  });
+  if (gate !== undefined) {
+    // No marketplace.json over a plugin that was never assembled: the plan discards the staged tree.
+    return { name, plugins, externalPlugins, gate, residue: [] };
   }
 
   // Generate .claude-plugin/marketplace.json
-  const marketplaceDir = marketplaceBaseDir;
-  const claudePluginDir = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
-  await mkdir(claudePluginDir, { recursive: true });
-
   // Each BUILT entry's author is the plugin's own MERGED author (see
   // marketplace-json.ts), so marketplace.json and that plugin's plugin.json
   // cannot disagree. External entries carry no author — see marketplace-json.ts.
@@ -599,12 +774,14 @@ async function buildMarketplace(input: BuildMarketplaceInput): Promise<Marketpla
     ],
   });
 
-  await writeFile(safePath.join(claudePluginDir, 'marketplace.json'), JSON.stringify(marketplaceJson, null, 2));
+  const marketplaceJsonPath = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME, 'marketplace.json');
+  await writingMarketplace(`write ${marketplaceJsonPath}`, () =>
+    writeFileUnder(marketplaceDir, `${CLAUDE_PLUGIN_DIRNAME}/marketplace.json`, JSON.stringify(marketplaceJson, null, 2), { existing: 'replace', writing: 'the marketplace manifest' }));
   logger.info(`   .claude-plugin/marketplace.json`);
 
   await copyDistributionFiles(marketplaceDir, configDir, config, logger);
 
-  return { name, status: 'built', plugins, externalPlugins };
+  return { name, plugins, externalPlugins, gate: undefined, residue: [] };
 }
 
 /**
@@ -663,35 +840,22 @@ function resolvePluginSkills(
  * Supports exact match and simple glob patterns (prefix*, suffix*, *contains*).
  */
 function matchesSelector(skillName: string, selector: string): boolean {
-  if (selector === '*') {
-    return true;
+  // `*` is the selector's ONE wildcard (any run of characters, none included); every other character
+  // is itself. Matched by its literal pieces, in order — never compiled to a regular expression, where
+  // a `.` or a `(` in a skill name's selector would mean something else.
+  const pieces = selector.split('*');
+  const first = pieces[0] ?? '';
+  const last = pieces.at(-1) ?? '';
+  if (pieces.length === 1) return skillName === selector;
+  if (skillName.length < first.length + last.length || !skillName.startsWith(first) || !skillName.endsWith(last)) return false;
+  const end = skillName.length - last.length;
+  let from = first.length;
+  for (const piece of pieces.slice(1, -1)) {
+    const at = skillName.indexOf(piece, from);
+    if (at === -1 || at + piece.length > end) return false;
+    from = at + piece.length;
   }
-
-  // eslint-disable-next-line security/detect-non-literal-regexp -- selector is from project config, bounded by name format
-  const regex = new RegExp(`^${selector.replaceAll('*', '.*')}$`);
-  return regex.test(skillName);
-}
-
-/**
- * Read the author-supplied .claude-plugin/plugin.json from the plugin source dir,
- * if present. Returns undefined when the file doesn't exist; throws on invalid JSON.
- */
-function readAuthorPluginJson(
-  pluginSourceDir: string,
-): (Record<string, unknown> & { version?: string }) | undefined {
-  const authorPluginJsonPath = safePath.join(pluginSourceDir, CLAUDE_PLUGIN_DIRNAME, 'plugin.json');
-  if (!existsSync(authorPluginJsonPath)) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(
-      readFileSync(authorPluginJsonPath, 'utf-8'),
-    ) as Record<string, unknown>;
-  } catch (e) {
-    throw new Error(
-      `Author .claude-plugin/plugin.json is not valid JSON: ${(e as Error).message}`,
-    );
-  }
+  return true;
 }
 
 async function writeMergedPluginJson(
@@ -702,9 +866,6 @@ async function writeMergedPluginJson(
   owner: ClaudeMarketplaceConfig['owner'],
   logger: ReturnType<typeof createLogger>,
 ): Promise<Record<string, unknown>> {
-  const pluginJsonDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
-  await mkdir(pluginJsonDir, { recursive: true });
-
   const { merged, author, warnings } = mergePluginJson({
     vat: {
       name: pluginDef.name,
@@ -715,7 +876,9 @@ async function writeMergedPluginJson(
     authorJson,
   });
   for (const w of warnings) logger.info(`warning: ${w}`);
-  await writeFile(safePath.join(pluginJsonDir, 'plugin.json'), JSON.stringify(merged, null, 2));
+  const pluginJsonPath = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME, 'plugin.json');
+  await writingMarketplace(`write ${pluginJsonPath}`, () =>
+    writeFileUnder(pluginDir, `${CLAUDE_PLUGIN_DIRNAME}/plugin.json`, JSON.stringify(merged, null, 2), { existing: 'replace', writing: 'the merged plugin.json' }));
   logger.info(`         .claude-plugin/plugin.json`);
   return author;
 }
@@ -741,27 +904,44 @@ async function copyPoolSkills(
   configDir: string,
   pluginDir: string,
   destOverrides: ReadonlyMap<string, string>,
+  outputs: readonly string[],
   logger: ReturnType<typeof createLogger>,
 ): Promise<string[]> {
-  const selected = resolvePluginSkills(pluginDef, marketplaceAvailable);
+  // By destination path, whatever order the selector or `readdir` named them in — every directory
+  // before anything under it, since a path sorts after each of its prefixes. A pool skill that holds a
+  // link is then always in place before a skill landing under it, so that layout is refused one way
+  // (the link, an input fault) and never as this run's own half-written output. Compared as a
+  // filesystem that folds names compares them (`Group/sub` is under `group` there); the name breaks a
+  // tie, so two skills sent to one destination are also copied in one order on every host.
+  const selected = resolvePluginSkills(pluginDef, marketplaceAvailable)
+    .map((skillName) => {
+      const fsPath = destOverrides.get(skillName) ?? skillNameToFsPath(skillName);
+      return { skillName, fsPath, placed: toForwardSlash(fsPath).split('/').map(foldedSegment).join('/') };
+    })
+    .toSorted((a, b) => compareCodeUnits(a.placed, b.placed) || compareCodeUnits(a.skillName, b.skillName));
   const copied: string[] = [];
 
-  for (const skillName of selected) {
+  // In order: each copy writes into the plugin dir, `destOverrides` may collide, and the first failure wins.
+  await forEachInOrder(selected, async ({ skillName, fsPath }) => {
     const skillDistPath = safePath.join(configDir, 'dist', 'skills', skillName);
-    if (!existsSync(skillDistPath)) {
-      throw new Error(
-        `Skill "${skillName}" not built at ${skillDistPath}. ` +
-          `Run: vat skills build (or vat build to build everything)`,
-      );
-    }
+    requireInputPath(skillDistPath, {
+      origin: 'content',
+      message: `Skill "${skillName}" not built at dist/skills/${skillName}. Run: vat skills build (or vat build to build everything)`,
+    });
 
-    const fsPath = destOverrides.get(skillName) ?? skillNameToFsPath(skillName);
     const destPath = safePath.join(pluginDir, 'skills', fsPath);
-    await mkdir(destPath, { recursive: true });
-    cpSync(skillDistPath, destPath, { recursive: true });
+    // A file in dist/skills the OS will not read is on dist/skills' side of the run (`distSkillsSide`):
+    // an input another build wrote (INPUT_UNREADABLE, fixed by rebuilding it), or this run's own output.
+    await copyTreeIntoMarketplace(
+      { path: skillDistPath, side: distSkillsSide(skillDistPath, outputs) },
+      // From the plugin's own directory down: an earlier pool copy may have left a link on the way.
+      { root: pluginDir, relative: `skills/${toForwardSlash(fsPath)}` },
+      `dist/skills/${skillName}`,
+      issueLocation(destPath, configDir),
+    );
     copied.push(fsPath);
     logger.info(`         ${skillName} -> skills/${fsPath}`);
-  }
+  });
 
   return copied;
 }
@@ -791,7 +971,7 @@ interface PluginLocalSkill {
  * gitignored/untracked skill dir must not be published by one producer when the
  * other would never have shipped it).
  */
-async function discoverPluginLocalSkills(
+function discoverPluginLocalSkills(
   pluginSourceDir: string,
   logger: ReturnType<typeof createLogger>,
 ): Promise<PluginLocalSkill[]> {
@@ -806,15 +986,14 @@ async function discoverPluginLocalSkills(
         `add it to .gitignore to silence this.`,
     );
   }
-  const skills: PluginLocalSkill[] = [];
-  for (const skillDirPath of listPluginSourceSkillDirs(pluginSourceDir)) {
+  // In order: a SKILL.md that will not read must be the first one named, deterministically.
+  return mapInOrder(listPluginSourceSkillDirs(pluginSourceDir), async (skillDirPath) => {
     const skillSourceDir = safePath.join(pluginSourceDir, 'skills', skillDirPath);
     // Resolved through the SAME reader `vat skills build` and `vat verify` use — per-skill
     // config is keyed by name, so two answers would mean two effective configs.
     const skillName = await readPluginLocalSkillName(skillSourceDir, skillDirPath);
-    skills.push({ skillDirPath, skillPath: safePath.join(skillSourceDir, 'SKILL.md'), skillName });
-  }
-  return skills;
+    return { skillDirPath, skillPath: safePath.join(skillSourceDir, 'SKILL.md'), skillName };
+  });
 }
 
 /**
@@ -873,15 +1052,20 @@ export async function packagePluginLocalSkills(input: {
    * entry, so a probe rebuilt inside this per-skill loop would be O(S²) for the run.
    */
   suiteProbe: ConventionalSuiteProbe;
+  /** What the run writes — its one declaration (see `buildClaudePluginMarketplaces`). */
+  outputs: readonly string[];
   logger: ReturnType<typeof createLogger>;
 }): Promise<Array<{ skillDirPath: string; result: PackageSkillResult }>> {
   const packaged: Array<{ skillDirPath: string; result: PackageSkillResult }> = [];
   // KNOWN GAP — NO PER-SKILL CONTAINMENT. `packageSkill` reports most problems by
   // RETURNING a result whose `hasErrors` is set, but it THROWS on structural packaging
-  // failures (filename collisions, unreadable sources). This loop awaits it bare, so one
-  // throw escapes the whole plugin build and discards every skill packaged before it —
-  // while the partial `skills/<dir>/` trees already written stay on disk, described by
-  // nothing.
+  // failures (filename collisions, unreadable sources). One throw escapes the whole
+  // plugin build and discards every skill packaged before it — while the partial
+  // `skills/<dir>/` trees already written stay on disk, described by nothing.
+  //
+  // What IS done: the packager's refusal of a skill's own content is CODED where it is
+  // caught below (`SkillPackagingStop`), so the stopped run names the skill and is not
+  // published as a defect in VAT. It still stops the run; containment is the gap.
   //
   // This is the SAME defect, in the same shape, that `packageSkills` had until commit
   // ba140fae ("fix(skills): one unbuildable skill no longer discards the whole build").
@@ -899,7 +1083,8 @@ export async function packagePluginLocalSkills(input: {
   // collision no longer throws — it is a returned finding. The remaining throw paths
   // are an absent or unreadable `files:` source; do not use a collision as the fixture
   // when adding that guard, or the test will pass without the guard existing.
-  for (const { skillDirPath, skillPath, skillName } of input.skills) {
+  // In order: every skill packages against the one shared registry, and the log follows `input.skills`.
+  await forEachInOrder(input.skills, async ({ skillDirPath, skillPath, skillName }) => {
     // Per-skill config goes through `pluginLocalSkillConfigEntry` — the one lookup
     // `vat verify` also uses to check what this packaged — so verify never checks
     // `files:` dests or severity overrides this build did not apply.
@@ -939,7 +1124,8 @@ export async function packagePluginLocalSkills(input: {
     // bounded 17-entry reconciliation, not an unbounded one. UNVERIFIED how much of the
     // 17 - 14 delta is the false-positive class described above versus genuinely dead
     // entries; nobody has classified them entry by entry.
-    const result = await packageSkill(skillPath, {
+    // In place: the plugin dir is inside the marketplace's staged tree, which its plan lands whole.
+    const { result } = await packageSkillInto(skillPath, skillOutputDir, {
       ...packagingConfigToPackageOptions(
         packagingConfig,
         { skillPath, outputPath: skillOutputDir },
@@ -947,12 +1133,14 @@ export async function packagePluginLocalSkills(input: {
         input.suiteProbe,
       ),
       registry: input.registry,
+    }, input.outputs).catch((error: unknown) => {
+      throw isSkillPackagingInputError(error) ? new SkillPackagingStop(error, skillPath) : error;
     });
     input.logger.info(
       `         ${skillName} -> skills/${skillDirPath} (${formatPackagedFileCount(result)})`,
     );
     packaged.push({ skillDirPath, result });
-  }
+  });
   return packaged;
 }
 
@@ -979,14 +1167,14 @@ export async function packagePluginLocalSkills(input: {
 export function summarizePackagedSkillIssues(
   packaged: Array<{ skillDirPath: string; result: PackageSkillResult }>,
   verbose: boolean,
-): { lines: string[]; withErrors: string[]; issueCounts: SeverityCounts } {
+): { lines: string[]; withErrors: string[]; issues: ValidationIssue[] } {
   const lines: string[] = [];
   const withErrors: string[] = [];
-  const perSkillCounts: SeverityCounts[] = [];
+  const all: ValidationIssue[] = [];
 
   for (const { skillDirPath, result } of packaged) {
     const issues = collectPostBuildIssues(result);
-    perSkillCounts.push(countBySeverity(issues));
+    all.push(...issues);
     if (issues.length > 0) {
       lines.push(`         ${skillDirPath}: ${formatIssueSetHeading(issues, 'post-build')}`);
       for (const issue of issuesToRenderAtVerbosity(issues, verbose)) {
@@ -996,7 +1184,7 @@ export function summarizePackagedSkillIssues(
     if (result.hasErrors) withErrors.push(skillDirPath);
   }
 
-  return { lines, withErrors, issueCounts: sumSeverityCounts(perSkillCounts) };
+  return { lines, withErrors, issues: all };
 }
 
 /** Print the summary to stderr and return what the caller gates on. */
@@ -1004,12 +1192,12 @@ function reportPackagedSkillIssues(
   packaged: Array<{ skillDirPath: string; result: PackageSkillResult }>,
   logger: ReturnType<typeof createLogger>,
   verbose: boolean,
-): { withErrors: string[]; issueCounts: SeverityCounts } {
-  const { lines, withErrors, issueCounts } = summarizePackagedSkillIssues(packaged, verbose);
+): { withErrors: string[]; issues: ValidationIssue[] } {
+  const { lines, withErrors, issues } = summarizePackagedSkillIssues(packaged, verbose);
   for (const line of lines) {
     logger.info(line);
   }
-  return { withErrors, issueCounts };
+  return { withErrors, issues };
 }
 
 /**
@@ -1040,7 +1228,7 @@ function unusedExcludeIssues(
 }
 
 /**
- * Print the plugin-level findings to stderr and return their severity counts.
+ * Print the plugin-level findings to stderr.
  *
  * Rendered IN FULL at every verbosity — `issuesToRenderAtVerbosity(…, true)` —
  * rather than collapsing warnings into the heading. The verbosity collapse
@@ -1054,7 +1242,7 @@ function unusedExcludeIssues(
 function reportPluginIssues(
   issues: readonly ValidationIssue[],
   logger: ReturnType<typeof createLogger>,
-): SeverityCounts {
+): void {
   if (issues.length > 0) {
     logger.info(`         plugin: ${formatIssueSetHeading(issues)}`);
     for (const issue of issuesToRenderAtVerbosity(issues, true)) {
@@ -1063,7 +1251,6 @@ function reportPluginIssues(
       }
     }
   }
-  return countBySeverity(issues);
 }
 
 /** A plugin-local skill and the pool skill whose output directory it would overwrite. */
@@ -1124,7 +1311,8 @@ function resolveCollidingSkills(
 }
 
 interface BuildPluginInput {
-  marketplaceName: string;
+  /** The marketplace tree the plugin is built into: its plan's staged tree. */
+  marketplaceDir: string;
   pluginDef: ClaudeMarketplacePluginEntry;
   marketplaceAvailable: string[];
   configDir: string;
@@ -1137,15 +1325,22 @@ interface BuildPluginInput {
   projectSkills: readonly DeclaredEvalSuite[];
   /** The run's conventional-suite probe, created once beside `projectSkills`. */
   suiteProbe: ConventionalSuiteProbe;
+  /** What the run writes — its one declaration (see `buildClaudePluginMarketplaces`). */
+  outputs: readonly string[];
   logger: ReturnType<typeof createLogger>;
   /** Render every finding, not just the errors (stderr only). */
   verbose: boolean;
 }
 
-async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> {
-  const { marketplaceName, pluginDef, marketplaceAvailable, configDir, skillsConfig, owner, rootVersion, registry, projectSkills, suiteProbe, logger, verbose } =
+/** A plugin assembled, or stopped by the post-build gate before it was. */
+type PluginBuildOutcome =
+  | { kind: 'built'; result: PluginBuildResult }
+  | { kind: 'gated'; failure: PluginGateFailure };
+
+async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildOutcome> {
+  const { marketplaceDir, pluginDef, marketplaceAvailable, configDir, skillsConfig, owner, rootVersion, registry, projectSkills, suiteProbe, outputs, logger, verbose } =
     input;
-  const pluginDir = getPluginOutputDir(configDir, marketplaceName, pluginDef.name);
+  const pluginDir = pluginDirInMarketplace(marketplaceDir, pluginDef.name);
   const pluginSourceDir = getPluginSourceDir(configDir, pluginDef);
 
   logger.info(`      Building plugin: ${pluginDef.name}`);
@@ -1153,14 +1348,15 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
   // Phase 1: validators.
   await verifyPluginDirCaseMatch(configDir, pluginDef.name);
 
-  const pluginSourceExists = existsSync(pluginSourceDir);
+  const pluginSourceExists = pathPresent(pluginSourceDir, 'follow', 'source', 'probe');
   const hasExplicitFiles = (pluginDef.files?.length ?? 0) > 0;
   const hasPoolSkills =
     pluginDef.skills === '*'
       ? marketplaceAvailable.length > 0
       : pluginDef.skills.length > 0;
   if (!pluginSourceExists && !hasExplicitFiles && !hasPoolSkills) {
-    throw new Error(
+    throw new CommandRefusalError(
+      'CONFIG_INVALID',
       `Plugin '${pluginDef.name}' has no content: no plugin dir found at ` +
         `'${toForwardSlash(safePath.relative(configDir, pluginSourceDir))}', no files mapped, and no skills selected. ` +
         `Add one of: (a) create the plugin directory, ` +
@@ -1172,7 +1368,7 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
   if (pluginSourceExists) {
     await parsePluginJsonFiles(pluginSourceDir);
   }
-  await mkdir(pluginDir, { recursive: true });
+  await writingMarketplace(`create ${pluginDir}`, () => mkdir(pluginDir, { recursive: true }));
 
   // Phase 1.4: discover the plugin's own skills ONCE (recursive; git-visible only),
   // resolving each declared name. Every phase below reads this list.
@@ -1192,7 +1388,8 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
   );
   if (conflicts.length > 0) {
     const pluginSourceRel = toForwardSlash(safePath.relative(configDir, pluginSourceDir));
-    throw new Error(
+    throw new CommandRefusalError(
+      'CONFIG_INVALID',
       `Plugin '${pluginDef.name}': two DIFFERENT skills claim the same output directory.\n` +
         conflicts
           .map(({ skill, poolSkillFsPath }) =>
@@ -1233,15 +1430,21 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
     registry,
     projectSkills,
     suiteProbe,
+    outputs,
     logger,
   });
-  const { withErrors: skillsWithErrors, issueCounts: localSkillCounts } =
+  const { withErrors: skillsWithErrors, issues: localSkillIssues } =
     reportPackagedSkillIssues(packagedLocalSkills, logger, verbose);
   if (skillsWithErrors.length > 0) {
-    throw new Error(
-      `Plugin '${pluginDef.name}': ${skillsWithErrors.length} plugin-local skill(s) emitted ` +
-        `post-build validation errors: ${skillsWithErrors.join(', ')}`,
-    );
+    return {
+      kind: 'gated',
+      failure: {
+        reason:
+          `Plugin '${pluginDef.name}': ${skillsWithErrors.length} plugin-local skill(s) emitted ` +
+          `post-build validation errors: ${skillsWithErrors.join(', ')}`,
+        issues: localSkillIssues,
+      },
+    };
   }
   const localSkillsPackaged = packagedLocalSkills.length;
 
@@ -1296,13 +1499,11 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
   }
 
   // Plugin-level findings: they belong to the plugin, not to any one skill, and
-  // they are summed into the SAME `issueCounts` the skills' findings land in.
-  // Anything else republishes the bug: a build that changed what ships while its
+  // they join the SAME `issues` the skills' findings land in. Anything else
+  // republishes the bug: a build that changed what ships while its
   // machine-readable report said `warnings: 0`.
-  const pluginIssueCounts = reportPluginIssues(
-    unusedExcludeIssues(treeResult.unusedExcludePatterns, configDir, pluginSourceDir),
-    logger,
-  );
+  const pluginIssues = unusedExcludeIssues(treeResult.unusedExcludePatterns, configDir, pluginSourceDir);
+  reportPluginIssues(pluginIssues, logger);
 
   // Phase 3: pool-skill copy-in (from dist/skills/ via the plugin's skills: selector).
   const skillsCopied = await copyPoolSkills(
@@ -1311,6 +1512,7 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
     configDir,
     pluginDir,
     poolDestOverrides,
+    outputs,
     logger,
   );
 
@@ -1352,11 +1554,17 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
   // copyDistributionFiles) is unaffected.
   const changelogPath = resolvePluginChangelogPath(pluginSourceDir, pluginDef);
   if (changelogPath) {
-    cpSync(changelogPath, safePath.join(pluginDir, 'CHANGELOG.md'));
+    const target = { root: pluginDir, relative: 'CHANGELOG.md' };
+    await copyFileIntoMarketplace(
+      changelogPath,
+      target,
+      issueLocation(changelogPath, configDir),
+      issueLocation(safePath.join(target.root, target.relative), configDir),
+    );
     logger.info(`         CHANGELOG.md`);
   }
 
-  return {
+  return { kind: 'built', result: {
     pluginName: pluginDef.name,
     pluginDir,
     pluginVersion,
@@ -1370,6 +1578,23 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
     symlinksCopied: treeResult.symlinksCopied,
     explicitFilesCopied,
     localSkillsPackaged,
-    issueCounts: sumSeverityCounts([localSkillCounts, pluginIssueCounts]),
-  };
+    issues: [...localSkillIssues, ...pluginIssues],
+  } };
 }
+
+/** Test-facing seam: the pure decisions of this module, reached by its unit tests. */
+export const __internal = {
+  builtWork,
+  landedMarketplace,
+  marketplaceIssues,
+  matchesSelector,
+  pluginBuildData,
+  reportPackagedSkillIssues,
+  reportPluginIssues,
+  resolveCollidingSkills,
+  resolveMarketplaceAvailableSkills,
+  resolvePluginSkills,
+  SkillPackagingStop,
+  unusedExcludeIssues,
+  withPackagingStop,
+};

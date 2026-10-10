@@ -1,7 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, promised, safePath } from '@vibe-agent-toolkit/utils';
+
 
 import type { ResourceFormat, Surface } from './types.js';
 
@@ -30,9 +31,14 @@ const CLAUDE_PLUGIN_DIR_NAME = '.claude-plugin';
  * @param resourcePath - Path to the resource to detect
  * @returns ResourceFormat discriminated union
  */
-export async function detectResourceFormat(
+export function detectResourceFormat(
 	resourcePath: string,
 ): Promise<ResourceFormat> {
+	return promised(() => detectResourceFormatNow(resourcePath));
+}
+
+/** The synchronous body of {@link detectResourceFormat}. */
+function detectResourceFormatNow(resourcePath: string): ResourceFormat {
 	try {
 		// Check if path exists
 		const exists = fs.existsSync(resourcePath);
@@ -240,7 +246,12 @@ function detectFileFormat(filePath: string): ResourceFormat {
  * @param dirPath - Absolute path to a directory
  * @returns Array of surfaces in enumerator-stable order (skill, plugin, marketplace)
  */
-export async function enumerateSurfaces(dirPath: string): Promise<Surface[]> {
+export function enumerateSurfaces(dirPath: string): Promise<Surface[]> {
+	return promised(() => enumerateSurfacesNow(dirPath));
+}
+
+/** The synchronous body of {@link enumerateSurfaces}. */
+function enumerateSurfacesNow(dirPath: string): Surface[] {
 	let stats: fs.Stats;
 	try {
 		stats = fs.statSync(dirPath);

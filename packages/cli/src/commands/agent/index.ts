@@ -63,6 +63,17 @@ Description:
     - agents/
     - . (current directory)
 
+Output (YAML on stdout; the human list on stderr):
+  status: ok | findings;  examined: 3 (the search paths scanned)
+  findings[]: SCAN_PATH_UNREADABLE (warning) per search path, agent
+    directory or manifest the OS would not read — the list is then a
+    floor, not the answer
+  data: { root, agents: [{ name, version, path }] } — path relative to root
+
+Exit Codes (derived from the document):
+  0 - ok, or findings (an unreadable path is a warning)
+  2 - error: only a defect in VAT (INTERNAL_ERROR)
+
 Requirements:
   projectRoot: optional (tolerates absence)
   config:      not used
@@ -80,6 +91,7 @@ Example:
     .description('Build agent for deployment target')
     .option('--target <type>', 'Build target (skill, langchain, etc.)', 'skill')
     .option('--output <path>', 'Output directory (default: dist/vat-bundles/<target>/<agent>)')
+    .option('--force', 'Replace a previous build at <output>/<agent> (swapped in whole once built); without it, one that holds anything is refused')
     .option('--debug', DEBUG_OPTION_DESC)
     .action(buildCommand)
     .addHelpText(
@@ -91,15 +103,43 @@ Description:
 
   Argument: agent name OR path to agent directory/manifest file
 
+  VAT never deletes or overwrites what it did not produce. With --output, an
+  <output>/<agent-name>/ that already holds anything is refused (USAGE_INVALID)
+  and left exactly as it was, unless --force says it is a previous build to
+  replace. An empty directory is replaced as-is; an output holding the agent's
+  own source is refused even with --force. The default location is VAT's and
+  is replaced. Every source is read before anything is written, and the build
+  is written whole beside its output and swapped in: a failure partway leaves
+  a previous build exactly as it was.
+
 Targets:
   - skill: Agent Skills (for Claude Desktop/Code)
   - More targets coming soon (langchain, etc.)
 
-Output:
-  Default location: dist/vat-bundles/<target>/<agent-name>/
+Output (YAML on stdout):
+  status: ok | error;  examined: 1 (the agent built)
+  data: { agent, target, output, files }
+  findings[]: SKILL_PACKAGING_FAILED on the error branch; on success, a
+    TREE_CLEANUP_INCOMPLETE warning naming a previous build the swap replaced
+    that the OS would not let VAT remove
+  Default build location: dist/vat-bundles/<target>/<agent-name>/
 
-Exit Codes:
-  0 - Success  |  1 - Build error  |  2 - System error
+Exit Codes (derived from the document):
+  0 - ok: the agent was built
+  2 - error: nothing was built — USAGE_INVALID (a --target other than
+      skill, no projectRoot, the path or name names no manifest, no
+      package.json encloses the agent and --output was not given, an
+      --output whose agent directory holds something and no --force, or an
+      output holding the agent's own source),
+      CONFIG_INVALID (the manifest does not validate, declares no system
+      prompt, or its $ref names no file), INPUT_UNREADABLE (an agent
+      search path looked up by name, the manifest, its system prompt,
+      scripts/, LICENSE.txt or package.json cannot be read, or the system
+      prompt, LICENSE.txt or a file under scripts/ is a named pipe, socket or
+      device), RUN_INCOMPLETE (the packager refused the bundle's content — a
+      SKILL_PACKAGING_FAILED finding at the agent — or the OS would not let
+      the build write its output: a full disk, a read-only or unwritable
+      --output, a file in its way; no finding)
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -111,6 +151,7 @@ Examples:
   $ vat agent build agent-generator                    # Build as Agent Skill
   $ vat agent build agent-generator --target skill     # Explicit target
   $ vat agent build ./my-agent --output ./my-skill     # Custom output path
+  $ vat agent build ./my-agent --output ./my-skill --force  # Replace the previous build there
 `
     );
 
@@ -130,7 +171,7 @@ Description:
   User input: The input text/query for the agent
 
 Exit Codes:
-  0 - Success  |  1 - Execution error  |  2 - System error
+  0 - Success  |  2 - Any failure (the agent did not load, or the run failed)
 
 Examples:
   $ vat agent run agent-generator "Create a code review agent"
@@ -160,19 +201,28 @@ Requirements:
 Description:
   Validates agent manifest schema (using @vibe-agent-toolkit/schema),
   LLM configuration, tool definitions, and resource availability. Outputs
-  YAML validation report to stdout, errors to stderr.
+  the report envelope (YAML) to stdout, findings to stderr.
 
   Argument: agent name OR path to agent directory/manifest file
 
 Validation Checks:
-  - Manifest schema (apiVersion, kind, metadata, spec)
-  - LLM provider and model configuration
-  - Tool configurations (RAG databases)
-  - Resource files (prompts, docs, templates)
-  - Prompt references ($ref paths)
+  - Manifest schema (apiVersion, kind, metadata, spec) — AGENT_MANIFEST_INVALID
+  - Tool configurations (RAG databases) — AGENT_REFERENCE_MISSING,
+    AGENT_RAG_NO_SOURCES
+  - Resource files and prompt $ref paths — AGENT_REFERENCE_MISSING,
+    AGENT_REFERENCE_UNREADABLE
 
-Exit Codes:
-  0 - Valid  |  1 - Validation errors  |  2 - System error
+Output (YAML on stdout):
+  status: ok | findings | error;  examined: 1 (the manifest read)
+  findings[]: each located at the manifest, relative to data.root
+  data: { root, manifest: { name, version, path } }
+
+Exit Codes (derived from the document):
+  0 - ok, or findings with no error-severity finding
+  1 - findings with an error-severity finding
+  2 - error: no manifest to judge — USAGE_INVALID (the path or name names
+      no manifest), INPUT_UNREADABLE (the manifest is unreadable or not
+      YAML, or an agent search path looked up by name cannot be read)
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -211,8 +261,18 @@ Conversion:
   - Preserves version from metadata.version or defaults to 0.1.0
   - Validates frontmatter before conversion
 
-Exit Codes:
-  0 - Success  |  1 - Validation/conversion error  |  2 - System error
+Output (YAML on stdout):
+  status: ok | error;  examined: 1 (the skill imported)
+  data: { agentPath }
+
+Exit Codes (derived from the document):
+  0 - ok: agent.yaml was written
+  2 - error: nothing was written — USAGE_INVALID (no SKILL.md at the path,
+      or something is already at the output and --force was not given),
+      INPUT_UNREADABLE (the SKILL.md cannot be read, or no Agent Skills schema
+      accepts its frontmatter), RUN_INCOMPLETE (the OS would not let VAT
+      examine or write the output). A --output whose directory does not exist
+      yet is made.
 
 Examples:
   $ vat agent import ./my-skill/SKILL.md              # Import to same directory
@@ -235,15 +295,34 @@ Examples:
       `
 Description:
   Installs a built agent skill to Agent Skills directory. By default,
-  copies to user scope (~/.claude/skills/). Use --dev for symlink mode
+  copies to user scope. Use --dev for symlink mode
   (rapid development iteration).
 
 Scopes:
-  - user: ~/.claude/skills/ (default, personal skills)
-  - project: ./.claude/skills/ (project-local skills)
+  - user: $CLAUDE_CONFIG_DIR/skills/, else ~/.claude/skills/ (default, personal skills)
+  - project: .claude/skills/ under the working directory (--cwd sets it)
 
-Exit Codes:
-  0 - Success  |  1 - Installation error  |  2 - System error
+Output (YAML on stdout):
+  status: ok | error;  examined: 1 (the agent named)
+  data: { agent, installPath, symlink } — symlink is true under --dev
+  findings: a TREE_CLEANUP_INCOMPLETE warning naming a replaced install
+    VAT could not remove (the new one is in place)
+
+Exit Codes (derived from the document):
+  0 - ok: the agent was installed
+  2 - error: nothing was installed — USAGE_INVALID (an unknown --scope or
+      --runtime, a name that is not one path segment or names no agent,
+      anything but an empty directory is at the install path and --force
+      was not given, or no package.json encloses the agent),
+      NOT_IMPLEMENTED (--dev on Windows), CONFIG_INVALID (the manifest does
+      not validate), INPUT_UNREADABLE (the bundle was never built, holds a
+      named pipe, socket or device or a symlink that leads out of it or
+      nowhere, or a search path, the manifest or any file in the bundle
+      cannot be read), RUN_INCOMPLETE (the install path cannot be examined,
+      or a write under the scope directory failed).
+      The copy or link is staged beside the install and swapped in whole,
+      so a refused run, --force --dev included, leaves a previous install
+      as it was
 
 Examples:
   $ vat agent install agent-generator                  # Install to user scope
@@ -270,11 +349,23 @@ Description:
   Handles both copied installations and symlinks.
 
 Scopes:
-  - user: ~/.claude/skills/ (default)
-  - project: ./.claude/skills/
+  - user: $CLAUDE_CONFIG_DIR/skills/, else ~/.claude/skills/ (default)
+  - project: .claude/skills/ under the working directory (--cwd sets it)
 
-Exit Codes:
-  0 - Success  |  1 - Not installed  |  2 - System error
+Output (YAML on stdout):
+  status: ok | error;  examined: 1 (the agent named)
+  data: { agent, installPath, wasSymlink } — wasSymlink for a --dev install
+    (only the link is removed, never its target)
+
+Exit Codes (derived from the document):
+  0 - ok: the install was removed
+  2 - error: USAGE_INVALID (an unknown --scope or --runtime, a name that is
+      not one path segment, or the agent is not installed in that scope:
+      nothing was removed), RUN_INCOMPLETE (the install path cannot be
+      examined or moved off its path: nothing was removed). The install is
+      first moved off its path whole, then deleted: a deletion the OS stops
+      after that is still RUN_INCOMPLETE, but the uninstall is done — data is
+      present, and a TREE_CLEANUP_INCOMPLETE warning names where the rest is
 
 Examples:
   $ vat agent uninstall agent-generator                  # Remove from user scope
@@ -298,15 +389,19 @@ Description:
 
 Scopes:
   - all: Scan all scopes (default)
-  - user: Only ~/.claude/skills/
-  - project: Only ./.claude/skills/
+  - user: Only $CLAUDE_CONFIG_DIR/skills/, else ~/.claude/skills/
+  - project: Only .claude/skills/ under the working directory (--cwd sets it)
 
-Output:
-  YAML summary → stdout (for programmatic parsing)
-  Human-readable list → stderr
+Output (YAML on stdout; the human list on stderr):
+  status: ok | findings | error;  examined: the scopes scanned
+  findings[]: SCAN_PATH_UNREADABLE (warning) per scope directory the OS
+    would not list — the list is then a floor, not the answer; its field
+    is the scope, its location the scope directory's last two segments
+  data: { scanned, skills: [{ name, scope, type: symlink | directory, path }] }
 
-Exit Codes:
-  0 - Success  |  2 - System error
+Exit Codes (derived from the document):
+  0 - ok, or findings (an unreadable scope is a warning)
+  2 - error: USAGE_INVALID (a --scope or --runtime it does not know)
 
 Examples:
   $ vat agent installed                    # List all installed skills

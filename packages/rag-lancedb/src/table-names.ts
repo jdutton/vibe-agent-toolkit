@@ -13,11 +13,12 @@ import type { Connection } from '@lancedb/lancedb';
  */
 export async function listAllTableNames(connection: Connection): Promise<string[]> {
   const names: string[] = [];
-  let pageToken: string | undefined;
-  do {
+  // Each page's request carries the previous page's token, so the walk recurses.
+  const readFrom = async (pageToken: string | undefined): Promise<void> => {
     const page = await connection.listTables(pageToken === undefined ? {} : { pageToken });
     names.push(...page.tables);
-    pageToken = page.pageToken;
-  } while (pageToken !== undefined && pageToken !== '');
+    if (page.pageToken !== undefined && page.pageToken !== '') await readFrom(page.pageToken);
+  };
+  await readFrom(undefined);
   return names;
 }

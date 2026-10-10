@@ -32,7 +32,7 @@
 import type { Dirent } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
 
-import { compareCodeUnits, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, forEachInOrder, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import { isWithinProject } from '../utils.js';
 
@@ -263,7 +263,8 @@ async function walkInto(root: string, dir: string, found: OkfBundleFiles): Promi
     return;
   }
 
-  for (const entry of entries) {
+  // In order: every entry pushes into the shared `found` accumulators.
+  await forEachInOrder(entries, async (entry) => {
     const absolute = safePath.join(dir, entry.name);
 
     // The link decision, on this binding, before the type test: a linked
@@ -271,14 +272,14 @@ async function walkInto(root: string, dir: string, found: OkfBundleFiles): Promi
     // {@link recordMarkdownEntry}, which classifies its target.
     if (entry.isSymbolicLink()) {
       if (isMarkdownFilename(entry.name)) await recordMarkdownEntry(root, absolute, entry, found);
-      continue;
+      return;
     }
     if (entry.isDirectory()) {
       await walkInto(root, absolute, found);
     } else if (isMarkdownFilename(entry.name)) {
       await recordMarkdownEntry(root, absolute, entry, found);
     }
-  }
+  });
 }
 
 /**

@@ -23,6 +23,7 @@ describe('System Test: Project Link Validation (Dogfooding)', () => {
     // Crawl the entire project for markdown files
     await registry.crawl({
       unreadable: 'refuse',
+      outputs: [],
       baseDir: projectRoot,
       include: ['**/*.md'],
       exclude: [

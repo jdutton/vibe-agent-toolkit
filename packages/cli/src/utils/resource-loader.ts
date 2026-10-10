@@ -18,6 +18,7 @@ import {
 import { relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { GitTracker, gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 
+import { CommandRefusalError } from './command-refusal.js';
 import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
 import { collectionsOption } from './population-wiring.js';
@@ -108,6 +109,31 @@ export function scopeIncludeToSubtree(include: readonly string[], relDir: string
 }
 
 /**
+ * Refuse a `--collection` that names no collection the project declares.
+ *
+ * A typo'd filter used to run the verb over zero resources and answer with a
+ * run-integrity finding (or, in `scan`, a zero count under the typo'd name) —
+ * a report about a collection that does not exist. It is the invocation's
+ * mistake, and `resources validate` and `resources scan` refuse it the same way.
+ * A declared collection that matched no file is NOT refused here: that is a run
+ * over nothing, and the writer's run-integrity refusal says so.
+ *
+ * @param config - The loaded project config, when there is one
+ * @param collection - The `--collection` value, when one was passed
+ * @throws {CommandRefusalError} `USAGE_INVALID` naming the declared collections
+ */
+export function assertDeclaredCollection(config: ProjectConfig | undefined, collection: string | undefined): void {
+  if (collection === undefined) return;
+  const declared = Object.keys(config?.resources?.collections ?? {});
+  if (declared.includes(collection)) return;
+  throw new CommandRefusalError(
+    'USAGE_INVALID',
+    `--collection ${collection} names no collection in resources.collections`
+      + ` (declared: ${declared.length === 0 ? 'none' : declared.join(', ')})`,
+  );
+}
+
+/**
  * Build the crawl options for an explicit path argument.
  *
  * The path argument RESTATES which tree to scan; it does not license scanning
@@ -140,7 +166,7 @@ function crawlOptionsForPath(
       `${resolved} is outside projectRoot ${projectRoot}; ` +
         `resources include/exclude patterns from the config do not apply to it`,
     );
-    return { baseDir: resolved, unreadable: RESOURCES_UNREADABLE };
+    return { baseDir: resolved, unreadable: RESOURCES_UNREADABLE, outputs: [] };
   }
 
   // The crawler used to perform this check itself, because it received the path
@@ -152,6 +178,8 @@ function crawlOptionsForPath(
   return {
     baseDir: projectRoot,
     unreadable: RESOURCES_UNREADABLE,
+    // Every resources verb only reads the tree it crawls.
+    outputs: [],
     include: scopeIncludeToSubtree(DEFAULT_RESOURCE_INCLUDE, normalizedRelDir),
     ...(config?.resources?.exclude ? { exclude: config.resources.exclude } : {}),
   };
@@ -272,16 +300,18 @@ function populationSourceFor(
   root: string,
   gitTracker: GitTracker,
   observeExtentSource: (kind: CrawlSourceKind) => void,
-  cache: PopulationCache | undefined
+  cache: PopulationCache | undefined,
 ): ResourcePopulationSource | undefined {
   if (!resourcesProjectionCrawlSelected()) {
     return undefined;
   }
   return {
     root: safePath.resolve(root),
-    enumerate: async (enumeratedRoot: string) => {
+    // `outputs` come from the crawl that asks (the registry's one declaration of what its verb writes).
+    enumerate: async (enumeratedRoot: string, outputs: readonly string[]) => {
       const population = await buildResourcePopulation({
         root: enumeratedRoot,
+        outputs,
         gitTracker,
         ...(cache !== undefined && { cache }),
         // `enumeratedRoot` and this source's own `root` are the SAME directory,
@@ -336,7 +366,7 @@ function populationSourceFor(
  * @param work - Given the source, or `undefined` when the walk stays selected
  * @returns Whatever `work` returned
  */
-export async function withResourcePopulationSource<T>(
+export function withResourcePopulationSource<T>(
   options: {
     root: string;
     gitTracker?: GitTracker | undefined;
@@ -344,25 +374,29 @@ export async function withResourcePopulationSource<T>(
   },
   work: (populationSource: ResourcePopulationSource | undefined) => Promise<T>,
 ): Promise<T> {
-  // Checked before anything is built or opened: an unselected lane must cost
-  // nothing, or every command pays a tracker and a store to decline them.
-  if (!resourcesProjectionCrawlSelected()) {
-    return work(undefined);
-  }
-
-  const gitTracker = options.gitTracker ?? new GitTracker(options.root);
-
-  return withPopulationCache({ root: options.root }, async (cache) => {
-    // Initialized inside the bracket for the reason `loadResourcesWithConfig`
-    // gives at its own call: the store has already taken the snapshot that
-    // answers this tracker's question, so asking git again is a spawn spent
-    // rebuilding a set the process is holding.
-    if (options.gitTracker === undefined) {
-      await gitTracker.initialize();
+  try {
+    // Checked before anything is built or opened: an unselected lane must cost
+    // nothing, or every command pays a tracker and a store to decline them.
+    if (!resourcesProjectionCrawlSelected()) {
+      return work(undefined);
     }
 
-    return work(populationSourceFor(options.root, gitTracker, options.observeExtentSource ?? (() => undefined), cache));
-  });
+    const gitTracker = options.gitTracker ?? new GitTracker(options.root);
+
+    return withPopulationCache({ root: options.root }, async (cache) => {
+      // Initialized inside the bracket for the reason `loadResourcesWithConfig`
+      // gives at its own call: the store has already taken the snapshot that
+      // answers this tracker's question, so asking git again is a spawn spent
+      // rebuilding a set the process is holding.
+      if (options.gitTracker === undefined) {
+        await gitTracker.initialize();
+      }
+
+      return work(populationSourceFor(options.root, gitTracker, options.observeExtentSource ?? (() => undefined), cache));
+    });
+  } catch (error) {
+    return Promise.reject(error as Error);
+  }
 }
 
 /**
@@ -445,6 +479,7 @@ export async function loadResourcesWithConfig(
     crawlOptions = {
       baseDir: projectRoot,
       unreadable: RESOURCES_UNREADABLE,
+      outputs: [],
       // Apply include patterns from config (if specified)
       ...(config?.resources?.include ? { include: config.resources.include } : {}),
       // Apply exclude patterns from config (if specified)

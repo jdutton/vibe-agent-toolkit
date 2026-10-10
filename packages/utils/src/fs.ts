@@ -22,6 +22,7 @@ export {
 export {
   exceedsDecodableLength,
   MAX_DECODABLE_BYTES,
+  openForReading,
   readDecodableBytes,
   readTextContent,
   readTextContentSync,
@@ -32,9 +33,8 @@ export type { DecodedText, EncodingSource, TextEncoding, TextProvenance } from '
 // Two materialized columns, each a fill+judge pair and nothing else. In both the
 // row IS the answer, so the row lookup — `pathSpellingFrom`, `realpathFrom` — is
 // itself the judge and is exported. See `index.ts` for the full reasoning.
-export { isFilesystemAccessError, isPathAbsentError } from './errors/errno.js';
+export { fsFaultOf, isPathAbsentError } from './errors/errno-table.js';
 export {
-  copyDirectory,
   DirectorySpellingIndex,
   fillPathSpellings,
   fillRealpaths,

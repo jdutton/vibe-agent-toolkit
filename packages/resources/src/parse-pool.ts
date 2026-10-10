@@ -604,7 +604,7 @@ class WorkerParsePool implements ParsePool {
   }
 
   /** @inheritdoc */
-  async parseIntoCache(
+  parseIntoCache(
     kind: DocumentParserKind,
     content: string,
     byteLength: number,
@@ -624,11 +624,11 @@ class WorkerParsePool implements ParsePool {
    * @param job - The request minus the fields this pool owns
    * @returns The parse, or `null` when the worker cached it instead
    */
-  async #enqueue(
+  #enqueue(
     job: Omit<ParseWorkerParseRequest, 'type' | 'id'>,
   ): Promise<ParseResult | null> {
     if (this.#closed) {
-      throw new Error('This parse pool has been shut down; create a new one to parse again.');
+      return Promise.reject(new Error('This parse pool has been shut down; create a new one to parse again.'));
     }
 
     this.#nextId += 1;
@@ -641,7 +641,7 @@ class WorkerParsePool implements ParsePool {
   }
 
   /** @inheritdoc */
-  async shutdown(): Promise<void> {
+  shutdown(): Promise<void> {
     this.#shutdown ??= this.#performShutdown();
     return this.#shutdown;
   }
@@ -658,7 +658,7 @@ class WorkerParsePool implements ParsePool {
     await this.#drained();
 
     const closing = this.#workers.splice(0, this.#workers.length);
-    await Promise.all(closing.map(async (poolWorker) => closeWorker(poolWorker)));
+    await Promise.all(closing.map((poolWorker) => closeWorker(poolWorker)));
   }
 
   /** Assign queued jobs to idle threads, spawning up to {@link size} of them. */
@@ -779,8 +779,8 @@ class WorkerParsePool implements ParsePool {
   }
 
   /** Resolves once nothing is queued and no thread holds a job. */
-  async #drained(): Promise<void> {
-    if (this.#isDrained()) return;
+  #drained(): Promise<void> {
+    if (this.#isDrained()) return Promise.resolve();
     return new Promise<void>((resolve) => {
       this.#drainWaiters.push(resolve);
     });

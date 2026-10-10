@@ -143,10 +143,11 @@ function runKnip(): KnipJsonReport {
 function loadTestCorpus(): string[] {
   const sources: string[] = [];
   const files = crawlDirectorySync({
+    outputs: [],
     baseDir: PROJECT_ROOT,
     include: ['packages/*/test/**/*.ts'],
     includeUntracked: true,
-    unreadable: { refuse: { root: PROJECT_ROOT, remedy: 'Fix the directory permissions and re-run.' } },
+    unreadable: { refuse: { root: PROJECT_ROOT, remedy: 'Fix the directory permissions and re-run.', side: 'source' } },
   });
   for (const file of files) {
     try {

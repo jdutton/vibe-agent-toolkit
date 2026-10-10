@@ -44,7 +44,7 @@ interface PackagedFixture {
 async function packageFixture(tempDir: string): Promise<PackagedFixture> {
   // A config marker pins findProjectRoot() to tempDir, so `/docs/...` resolves
   // against the fixture project rather than whatever encloses the temp dir.
-  writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+  writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), '{}\n');
 
   const skillDir = safePath.join(tempDir, 'skills', 'demo');
   mkdirSyncReal(skillDir, { recursive: true });

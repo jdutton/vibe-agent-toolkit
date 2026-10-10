@@ -20,6 +20,7 @@ import {
   describeVersionSweepFailures,
   reportHalfDeleted,
 } from '../src/commands/claude/org/skills.js';
+import { exitCodeForExternal } from '../src/report-schemas.js';
 
 import { recordingLogger } from './helpers/upload-logger.js';
 
@@ -103,23 +104,30 @@ describe('describeVersionSweepFailures', () => {
 });
 
 describe('reportHalfDeleted', () => {
-  it('exits 1 and publishes both lists, so the operator can finish the job', () => {
+  it('ends partial (exit 2) and publishes both lists, so the operator can finish the job', () => {
     const ending = buildOrgCommandEnding(reportHalfDeleted({
       skillId: 'skill_abc',
       deletedVersions: ['v1', 'v3'],
       failedVersions: ['v2'],
-      error: 'v2: API error 429: rate limited',
-    }), 5);
+      reason: 'v2: API error 429: rate limited',
+    }));
+    const document = ending.document as Record<string, unknown>;
 
-    expect(ending.exitCode).toBe(1);
-    expect(ending.document['status']).toBe('error');
-    expect(ending.document['deleted']).toBe(false);
+    // v2 still there, and the skill itself never deleted on this path.
+    expect(ending.outcome).toStrictEqual({ kind: 'partial', failed: 2 });
+    expect(exitCodeForExternal('claude org skills delete', ending.outcome)).toBe(2);
+    expect(document).not.toHaveProperty('status');
+    expect(document['deleted']).toBe(false);
+    // `error` means `{ code, message }` on this verb's refusal; the half-deleted
+    // payload's sentence is `reason`, so one field name keeps one meaning.
+    expect(document).not.toHaveProperty('error');
+    expect(document['reason']).toBe('v2: API error 429: rate limited');
     // The record of what is already gone — irreversible, and unreconstructable
     // from anywhere else.
-    expect(ending.document['deletedVersions']).toEqual(['v1', 'v3']);
+    expect(document['deletedVersions']).toEqual(['v1', 'v3']);
     // …and what is still there, which is what a re-run has to deal with.
-    expect(ending.document['failedVersions']).toEqual(['v2']);
-    expect(String(ending.document['note'])).toContain('still exists');
+    expect(document['failedVersions']).toEqual(['v2']);
+    expect(String(document['note'])).toContain('still exists');
   });
 
   it('keeps the failure tag out of the published document', () => {
@@ -127,8 +135,8 @@ describe('reportHalfDeleted', () => {
       skillId: 'skill_abc',
       deletedVersions: ['v1'],
       failedVersions: [],
-      error: 'API error 400: cannot delete',
-    }), 5);
+      reason: 'API error 400: cannot delete',
+    }));
 
     expect(ending.document).not.toHaveProperty('orgCommandFailed');
     expect(ending.document).not.toHaveProperty('document');

@@ -32,6 +32,7 @@
 import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 
 import {
+  FS_FAULT_CODE,
   mkdirSyncReal,
   normalizedTmpdir,
   safePath,
@@ -66,8 +67,8 @@ const IGNORED_LOCKED_DIR = 'build/locked';
 const IGNORED_LOCKED_FILE = `${IGNORED_LOCKED_DIR}/b.md`;
 
 const ARMS: readonly (readonly [string, (root: string) => CrawlSource])[] = [
-  ['filesystem', (root) => new FilesystemCrawlSource(root)],
-  ['git', (root) => new GitCrawlSource(root)],
+  ['filesystem', (root) => new FilesystemCrawlSource(root, [])],
+  ['git', (root) => new GitCrawlSource(root, [])],
 ];
 
 let root: string;
@@ -109,7 +110,7 @@ async function thrownBy(source: CrawlSource): Promise<unknown> {
 /** What the registry's incumbent walk (`VAT_RESOURCES_CRAWL=walk`) threw over `crawlRoot`, or `undefined`. */
 async function thrownByWalk(crawlRoot: string): Promise<unknown> {
   try {
-    await new ResourceRegistry({ baseDir: crawlRoot }).crawl({ unreadable: 'refuse', baseDir: crawlRoot, include: ['**/*.md'] });
+    await new ResourceRegistry({ baseDir: crawlRoot }).crawl({ unreadable: 'refuse', outputs: [], baseDir: crawlRoot, include: ['**/*.md'] });
     return undefined;
   } catch (error) {
     return error;
@@ -119,7 +120,7 @@ async function thrownByWalk(crawlRoot: string): Promise<unknown> {
 /** What the filesystem arm and the walk lane each threw for `docs/locked` refusing to list under `crawlRoot`. */
 async function refusalsOn(crawlRoot: string): Promise<{ projection: unknown; walk: unknown }> {
   return withReaddirSyncRefused(safePath.join(crawlRoot, LOCKED_DIR), 'EACCES', async () => ({
-    projection: await thrownBy(new FilesystemCrawlSource(crawlRoot)),
+    projection: await thrownBy(new FilesystemCrawlSource(crawlRoot, [])),
     walk: await thrownByWalk(crawlRoot),
   }));
 }
@@ -184,7 +185,7 @@ describe.skipIf(CANNOT_DENY_READS)('crawl sources: a refused listing gets one ve
     it('the registry walk lane throws the SAME class and sentence as the projection arms', async () => {
       lock(LOCKED_DIR);
       const fromWalk = await thrownByWalk(root);
-      const fromGit = await thrownBy(new GitCrawlSource(root));
+      const fromGit = await thrownBy(new GitCrawlSource(root, []));
 
       expect(fromWalk).toBeInstanceOf(DirectoryListingRefusedError);
       expect((fromWalk as Error).message).toBe((fromGit as Error).message);
@@ -292,5 +293,47 @@ describe('a refused listing under a root with NO repository', () => {
     const { projection, walk } = await refusalsOn(plainRoot);
     expect(walk).toBeInstanceOf(DirectoryListingRefusedError);
     expect((walk as Error).message).toBe((projection as Error).message);
+  });
+});
+
+// The walk arm derives the side of its base from what the caller writes: a project the verb writes its
+// output into that vanishes under it is the destination's fault (RUN_INCOMPLETE), never the input's.
+describe('FilesystemCrawlSource - the side of its base', () => {
+  let base: string;
+  beforeEach(() => {
+    base = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-crawl-base-side-'));
+  });
+  afterEach(() => rmSync(base, { recursive: true, force: true }));
+
+  // The base's side is derived from what the verb writes: a base holding an output is the destination's.
+  it.each([
+    ['writes nothing beneath it', (): string[] => [], 'source'],
+    ['writes an output inside it', (): string[] => [safePath.join(base, 'dist')], 'destination'],
+  ] as const)('classifies a vanished base by what the verb declares it writes (%s)', async (_what, outputs, side) => {
+    const thrown = await withReaddirSyncRefused(base, 'ENOENT', () => thrownBy(new FilesystemCrawlSource(base, outputs())));
+    expect(thrown).toMatchObject({ code: FS_FAULT_CODE, side, faultClass: 'absent' });
+  });
+});
+
+// A verb that writes beneath the root it crawls (a build writing `dist/skills`) declares those trees:
+// a listing refused at, inside or above one of them is the verb's destination (RUN_INCOMPLETE); a
+// listing refused anywhere else beneath the root is still its input's.
+describe('FilesystemCrawlSource - a refused listing on the verb\'s own output', () => {
+  let base: string;
+  beforeEach(() => {
+    base = toForwardSlash(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-crawl-outputs-')));
+    for (const dir of ['dist/skills/demo', 'docs']) mkdirSyncReal(safePath.join(base, dir), { recursive: true });
+  });
+  afterEach(() => rmSync(base, { recursive: true, force: true }));
+
+  it.each([
+    ['inside the output', 'dist/skills/demo', 'destination'],
+    ['the output itself', 'dist/skills', 'destination'],
+    ['above the output', 'dist', 'destination'],
+    ['beside it, in the corpus', 'docs', 'source'],
+  ] as const)('%s (%s) is refused on the %s side', async (_where, directory, side) => {
+    const outputs = [safePath.join(base, 'dist', 'skills')];
+    const thrown = await withReaddirSyncRefused(safePath.join(base, directory), 'EACCES', () => thrownBy(new FilesystemCrawlSource(base, outputs)));
+    expect(thrown).toMatchObject({ code: FS_FAULT_CODE, cause: expect.objectContaining({ side }) as unknown });
   });
 });

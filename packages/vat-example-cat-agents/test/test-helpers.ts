@@ -64,49 +64,49 @@ export function createNumberValidator(
 /**
  * Helper to find content matching a pattern across multiple attempts
  */
-export async function findMatchingContent<T>(
+export function findMatchingContent<T>(
   generator: () => Promise<T>,
   matcher: (result: T) => boolean,
   options: { maxAttempts?: number } = {},
 ): Promise<{ found: boolean; result?: T }> {
   const { maxAttempts = 10 } = options;
 
-  for (let index = 0; index < maxAttempts; index++) {
-    const result = await generator();
-    if (matcher(result)) {
-      return { found: true, result };
+  // Attempts run one after another and stop at the first match.
+  const attempt = async (index: number): Promise<{ found: boolean; result?: T }> => {
+    if (index < maxAttempts) {
+      const result = await generator();
+      return matcher(result) ? { found: true, result } : attempt(index + 1);
     }
-  }
+    return { found: false };
+  };
 
-  return { found: false };
+  return attempt(0);
 }
 
 /**
  * Helper to find haiku containing specific keywords
  */
-export async function findHaikuWithKeywords(
+export function findHaikuWithKeywords(
   generator: () => Promise<{ line1: string; line2: string; line3: string }>,
   keywords: string[],
   options: { maxAttempts?: number } = {},
 ): Promise<boolean> {
   const { maxAttempts = 10 } = options;
 
-  for (let index = 0; index < maxAttempts; index++) {
-    const result = await generator();
-    const fullText = `${result.line1} ${result.line2} ${result.line3}`.toLowerCase();
-
-    if (keywords.some((keyword) => fullText.includes(keyword))) {
-      return true;
-    }
-  }
-
-  return false;
+  return findMatchingContent(
+    generator,
+    (result) => {
+      const fullText = `${result.line1} ${result.line2} ${result.line3}`.toLowerCase();
+      return keywords.some((keyword) => fullText.includes(keyword));
+    },
+    { maxAttempts },
+  ).then(({ found }) => found);
 }
 
 /**
  * Helper to find content with invalid syllable count in specific line
  */
-export async function findInvalidSyllableLine(
+export function findInvalidSyllableLine(
   generator: () => Promise<{ line1: string; line2: string; line3: string }>,
   validator: (haiku: { line1: string; line2: string; line3: string }) => {
     valid: boolean;
@@ -121,19 +121,18 @@ export async function findInvalidSyllableLine(
   const lineKey = `line${lineNumber}` as const;
   const lineLabel = `Line ${lineNumber}`;
 
-  for (let index = 0; index < maxAttempts; index++) {
-    const result = await generator();
-    const validation = validator(result);
-
-    if (!validation.valid && validation.syllables[lineKey] !== expectedSyllables) {
-      const hasCorrectError = validation.errors.some((e) => e.includes(lineLabel));
-      if (hasCorrectError) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+  return findMatchingContent(
+    generator,
+    (result) => {
+      const validation = validator(result);
+      return (
+        !validation.valid &&
+        validation.syllables[lineKey] !== expectedSyllables &&
+        validation.errors.some((e) => e.includes(lineLabel))
+      );
+    },
+    { maxAttempts },
+  ).then(({ found }) => found);
 }
 
 /**

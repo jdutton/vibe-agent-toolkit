@@ -360,6 +360,7 @@ export async function enumerateAuditPopulation(options: AuditScanOptions): Promi
   // so it prunes inside the crawl; the project's `resources.exclude` is
   // project-relative and is applied below, against every ancestor.
   const listed = await crawlDirectory({
+    outputs: [],
     baseDir: resolvedScanDir,
     include: recursive ? [...SUBJECT_INCLUDE] : [...TOP_LEVEL_INCLUDE],
     exclude: [...NEVER_CRAWL_GLOBS, ...userExcludes, ...(recursive ? [] : [TOP_LEVEL_PRUNE])],

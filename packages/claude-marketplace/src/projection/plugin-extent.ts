@@ -75,7 +75,7 @@ import {
   type RealizationConditionRow,
   type ResourceRealizationRow,
 } from '@vibe-agent-toolkit/resources';
-import { compareCodeUnits, safePath } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, promised, safePath } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
@@ -190,13 +190,13 @@ export class PluginExtentContributor implements ExtentContributor {
    *   manifests the base enumerated, so there is nothing to scope it by
    * @returns The contributed rows
    */
-  async contribute(base: ProjectionBase, _parameters: JsonValue): Promise<ExtentContribution> {
-    return contributeEachManifest(base, {
+  contribute(base: ProjectionBase, _parameters: JsonValue): Promise<ExtentContribution> {
+    return promised(() => contributeEachManifest(base, {
       suffix: PLUGIN_MANIFEST,
       kind: PLUGIN_KIND,
       contributorId: PLUGIN_CONTRIBUTOR_ID,
       contribute: contributePlugin,
-    });
+    }));
   }
 }
 
@@ -222,13 +222,13 @@ export class MarketplaceExtentContributor implements ExtentContributor {
    * @param _parameters - Unused, for the same reason as the plugin extent
    * @returns The contributed rows
    */
-  async contribute(base: ProjectionBase, _parameters: JsonValue): Promise<ExtentContribution> {
-    return contributeEachManifest(base, {
+  contribute(base: ProjectionBase, _parameters: JsonValue): Promise<ExtentContribution> {
+    return promised(() => contributeEachManifest(base, {
       suffix: MARKETPLACE_MANIFEST,
       kind: MARKETPLACE_KIND,
       contributorId: MARKETPLACE_CONTRIBUTOR_ID,
       contribute: contributeMarketplace,
-    });
+    }));
   }
 }
 

@@ -6,7 +6,7 @@ import * as fs from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import { allowedToolsOf, parseFrontmatter } from '@vibe-agent-toolkit/agent-skills';
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, mapWithConcurrency, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { SettingsConflict } from '../types.js';
 import { reasonOf, walkFollowingLinks, type WalkedTree } from '../walk-following-links.js';
@@ -272,9 +272,10 @@ export async function checkSettingsCompatibility(
 
   // Each SKILL.md is read ONCE, here, and every lane below consults the same
   // reading — a file the checker could not read is unchecked for all of them.
+  // The reads are independent and run concurrently; their results fold in file order.
+  const reads = await mapWithConcurrency(skillFiles, async (path) => ({ path, read: await parseSkillFrontmatter(path) }));
   const skills: ReadSkill[] = [];
-  for (const path of skillFiles) {
-    const read = await parseSkillFrontmatter(path);
+  for (const { path, read } of reads) {
     if ('reason' in read) unchecked.push({ path, reason: read.reason });
     else skills.push({ path, frontmatter: read.frontmatter });
   }

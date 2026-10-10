@@ -37,14 +37,18 @@ function wrapPureFunctionForGateway<TInput, TOutput>(
   return {
     name: pureFunctionAgent.name,
     manifest: pureFunctionAgent.manifest,
-    execute: async (input: TInput) => {
-      // Execute the pure function (synchronous)
-      const data = pureFunctionAgent.execute(input as Parameters<typeof pureFunctionAgent.execute>[0]);
+    execute: (input: TInput) => {
+      try {
+        // Execute the pure function (synchronous)
+        const data = pureFunctionAgent.execute(input as Parameters<typeof pureFunctionAgent.execute>[0]);
 
-      // Wrap result in OneShotAgentOutput envelope
-      return {
-        result: createSuccess(data as TOutput),
-      };
+        // Wrap result in OneShotAgentOutput envelope
+        return Promise.resolve({
+          result: createSuccess(data as TOutput),
+        });
+      } catch (error) {
+        return Promise.reject(error as Error);
+      }
     },
   };
 }

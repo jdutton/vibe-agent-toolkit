@@ -1,0 +1,446 @@
+{
+  "$ref": "#/definitions/claude-plugin-build",
+  "definitions": {
+    "claude-plugin-build": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "ok"
+            },
+            "examined": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "summary": {
+              "type": "object",
+              "properties": {
+                "errors": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "warnings": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "info": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "errors",
+                "warnings",
+                "info"
+              ],
+              "additionalProperties": false
+            },
+            "gate": {
+              "type": "object",
+              "properties": {
+                "strict": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "strict"
+              ],
+              "additionalProperties": false
+            },
+            "durationMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "location": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "field": {
+                    "type": "string"
+                  },
+                  "link": {
+                    "type": "string"
+                  },
+                  "fix": {
+                    "type": "string"
+                  },
+                  "reference": {
+                    "type": "string"
+                  },
+                  "suggestion": {
+                    "type": "string"
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "error",
+                      "warning",
+                      "info"
+                    ]
+                  },
+                  "column": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "severity"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 0
+            },
+            "data": {
+              "type": "object",
+              "properties": {
+                "marketplacesBuilt": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "pluginsBuilt": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "pluginsReferenced": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "skillsPackaged": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "marketplaces": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "ok",
+                          "findings"
+                        ]
+                      },
+                      "reason": {
+                        "type": "string"
+                      },
+                      "plugins": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "outputPath": {
+                              "type": "string"
+                            },
+                            "skills": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "outputPath",
+                            "skills"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "externalPlugins": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string"
+                            },
+                            "version": {
+                              "type": "string"
+                            },
+                            "source": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "source": {
+                                      "type": "string",
+                                      "const": "github"
+                                    },
+                                    "repo": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "description": "owner/repo"
+                                    },
+                                    "ref": {
+                                      "type": "string",
+                                      "description": "Branch or tag (default: the repo default branch)"
+                                    },
+                                    "sha": {
+                                      "type": "string",
+                                      "description": "Pin to an exact commit (overrides ref for reproducibility)"
+                                    }
+                                  },
+                                  "required": [
+                                    "source",
+                                    "repo"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "source": {
+                                      "type": "string",
+                                      "const": "url"
+                                    },
+                                    "url": {
+                                      "type": "string",
+                                      "format": "uri"
+                                    },
+                                    "ref": {
+                                      "type": "string"
+                                    },
+                                    "sha": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "source",
+                                    "url"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "source": {
+                                      "type": "string",
+                                      "const": "npm"
+                                    },
+                                    "package": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "version": {
+                                      "type": "string"
+                                    },
+                                    "registry": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "source",
+                                    "package"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "source": {
+                                      "type": "string",
+                                      "const": "pip"
+                                    },
+                                    "package": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "version": {
+                                      "type": "string"
+                                    },
+                                    "registry": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "source",
+                                    "package"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              ],
+                              "description": "External plugin source, passed through verbatim to marketplace.json"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "source"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "status",
+                      "plugins",
+                      "externalPlugins"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "marketplacesBuilt",
+                "pluginsBuilt",
+                "pluginsReferenced",
+                "skillsPackaged",
+                "marketplaces"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "status",
+            "examined",
+            "summary",
+            "gate",
+            "findings",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "findings"
+            },
+            "examined": {
+              "$ref": "#/definitions/claude-plugin-build/anyOf/0/properties/examined"
+            },
+            "summary": {
+              "$ref": "#/definitions/claude-plugin-build/anyOf/0/properties/summary"
+            },
+            "gate": {
+              "$ref": "#/definitions/claude-plugin-build/anyOf/0/properties/gate"
+            },
+            "durationMs": {
+              "$ref": "#/definitions/claude-plugin-build/anyOf/0/properties/durationMs"
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/claude-plugin-build/anyOf/0/properties/findings/items"
+              },
+              "minItems": 1
+            },
+            "data": {
+              "$ref": "#/definitions/claude-plugin-build/anyOf/0/properties/data"
+            }
+          },
+          "required": [
+            "status",
+            "examined",
+            "summary",
+            "gate",
+            "findings",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "error"
+            },
+            "examined": {
+              "$ref": "#/definitions/claude-plugin-build/anyOf/0/properties/examined"
+            },
+            "summary": {
+              "$ref": "#/definitions/claude-plugin-build/anyOf/0/properties/summary"
+            },
+            "gate": {
+              "$ref": "#/definitions/claude-plugin-build/anyOf/0/properties/gate"
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/claude-plugin-build/anyOf/0/properties/findings/items"
+              }
+            },
+            "error": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "USAGE_INVALID",
+                    "CONFIG_INVALID",
+                    "INPUT_UNREADABLE",
+                    "BACKEND_UNAVAILABLE",
+                    "EXTERNAL_API_FAILED",
+                    "NOT_IMPLEMENTED",
+                    "RUN_INCOMPLETE",
+                    "INTERNAL_ERROR",
+                    "RESOURCE_CHECK_BROKEN",
+                    "ARD_NOT_CONFIGURED",
+                    "ARD_DERIVATION_FAILED"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            "data": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/claude-plugin-build/anyOf/0/properties/data"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "examined",
+            "summary",
+            "gate",
+            "findings",
+            "error",
+            "data"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

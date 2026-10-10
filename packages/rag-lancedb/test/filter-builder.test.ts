@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { z } from 'zod';
+import { z, ZodError } from 'zod';
 
 import {
   buildMetadataFilter,
@@ -245,7 +245,7 @@ describe('Filter Builder', () => {
     // (`z.record(z.string(), z.unknown())`), so a `%` straight out of a JSON payload turned a
     // request to be filtered into full-recall search.
     //
-    // Neither new guard can see it: `assertQuerySupported` sees a supported key, and
+    // Neither guard can see it: the strict filters schema sees a declared key, and
     // `assertFiltersProducedConditions` counts one condition and is satisfied. Counting cannot
     // distinguish a condition that discriminates from one that does not — which is why the
     // table below EVALUATES the emitted pattern instead of asserting on its text. `decoy` is a
@@ -562,6 +562,20 @@ describe('Filter Builder', () => {
       const filters = { metadata: { notes: "It's a ''trap''" } };
       const result = buildWhereClause(filters, schema);
       expect(result).toBe("notes = 'It''s a ''''trap'''''");
+    });
+  });
+
+  describe('one contract for filter keys', () => {
+    const schema = z.object({ domain: z.string().optional() });
+
+    it('refuses an unknown filter key through the schema', () => {
+      expect(() =>
+        buildWhereClause({ resourceID: 'doc-1' } as unknown as { resourceId?: string }, schema),
+      ).toThrow(ZodError);
+    });
+
+    it('still accepts metadata (positive control)', () => {
+      expect(buildWhereClause({ metadata: { domain: 'security' } }, schema)).toBe("domain = 'security'");
     });
   });
 });

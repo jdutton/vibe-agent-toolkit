@@ -73,6 +73,18 @@ export function createTestTempDir(prefix: string): string {
 }
 
 /**
+ * Write a tree of files under `dir`: each key a `/`-separated path relative to
+ * it, each value the file's UTF-8 content. Parent directories are created.
+ */
+export function writeFileTree(dir: string, files: Readonly<Record<string, string>>): void {
+  for (const [relative, content] of Object.entries(files)) {
+    const target = safePath.join(dir, relative);
+    mkdirSyncReal(pathDirname(target), { recursive: true });
+    fs.writeFileSync(target, content, 'utf-8');
+  }
+}
+
+/**
  * Clean up a temporary directory.
  *
  * `force: true` already tolerates a directory that is gone, and the retries
@@ -203,7 +215,7 @@ function mergeEnvWithOverrides(overrides: Record<string, string>): NodeJS.Proces
   return merged;
 }
 
-async function spawnAndCollect(
+function spawnAndCollect(
   command: string,
   args: string[],
   options: SpawnOptionsWithoutStdio,
@@ -267,13 +279,15 @@ async function spawnAndCollect(
 /**
  * Execute CLI command and return result
  * Handles ESLint suppressions for test execution
+ *
+ * `nodeArgs` go to node itself, before the binary: `['--import', preload]` runs a module first.
  */
-export async function executeCli(
+export function executeCli(
   binPath: string,
   args: string[],
-  options?: { cwd?: string; env?: Record<string, string> }
+  options?: { cwd?: string; env?: Record<string, string>; nodeArgs?: readonly string[] }
 ): Promise<SpawnSyncReturns<string>> {
-  return spawnAndCollect('node', [binPath, ...args], {
+  return spawnAndCollect('node', [...(options?.nodeArgs ?? []), binPath, ...args], {
     cwd: options?.cwd,
     env: options?.env ? mergeEnvWithOverrides(options.env) : undefined,
   });
@@ -325,7 +339,7 @@ export async function buildSkillsThenPlugin(
  * @param args - Arguments to pass to vat command
  * @param options - Optional execution options
  */
-export async function executeBunVat(
+export function executeBunVat(
   testFileUrl: string,
   args: string[],
   options?: { cwd?: string }
@@ -432,7 +446,7 @@ export function createSkillsConfigYaml(
   includeGlobs: string[],
   excludeGlobs?: string[]
 ): string {
-  let content = `version: 1\nskills:\n  include:\n`;
+  let content = `skills:\n  include:\n`;
   for (const glob of includeGlobs) {
     content += `    - "${glob}"\n`;
   }

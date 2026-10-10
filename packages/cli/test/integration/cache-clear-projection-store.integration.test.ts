@@ -85,9 +85,9 @@ describe('vat cache clear and the projection store', () => {
       writeFileSync(safePath.join(storeDir, name), DATABASE_BYTES, 'utf-8');
     }
 
-    const report = await clearCacheDirectory(cacheDir);
+    const { leftover, data: report } = await clearCacheDirectory(cacheDir);
 
-    expect(report.status).toBe('success');
+    expect(leftover).toBeUndefined();
     expect(report.existed).toBe(true);
     expect(report.removed).toEqual([vatCacheNamespace()]);
     // Three files, all of them: a clear that walked only as far as the database
@@ -98,6 +98,6 @@ describe('vat cache clear and the projection store', () => {
     // the "nothing to clear" path, which is the only observation that can tell
     // the two apart from out here.
     const second = await clearCacheDirectory(cacheDir);
-    expect(second.existed).toBe(false);
+    expect(second.data.existed).toBe(false);
   });
 });

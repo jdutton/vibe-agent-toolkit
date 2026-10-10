@@ -52,7 +52,6 @@ const MULTI_SITE_REWRITES: Array<[string, string, string]> = [
   [RULE.mkdir, namedImport('mkdirSync', NODE_FS), 'mkdirSync(a)'],
   [RULE.realpath, namedImport('realpathSync', NODE_FS), 'realpathSync(a)'],
   [RULE.execSync, namedImport('execSync', NODE_CHILD_PROCESS), 'execSync(a)'],
-  [RULE.cp, namedImport('cp', 'node:fs/promises'), 'cp(a, b)'],
   // No import to remove — the import INSERT alone spans the file.
   [RULE.normalize, '', String.raw`a.split('\\').join('/')`],
 ];
@@ -119,7 +118,6 @@ const SUPPRESSION_CASES: Array<[string, string, string]> = [
   [RULE.mkdir, namedImport('mkdirSync', NODE_FS), "mkdirSync('/d')"],
   [RULE.realpath, namedImport('realpathSync', NODE_FS), "realpathSync('/p')"],
   [RULE.execSync, namedImport('execSync', NODE_CHILD_PROCESS), "execSync('ls')"],
-  [RULE.cp, namedImport('cp', 'node:fs/promises'), "cp('a', 'b')"],
   [RULE.normalize, '', String.raw`'x'.split('\\').join('/')`],
 ];
 

@@ -24,6 +24,7 @@ Call sites today — the templates for a new one (generated; regenerate with
 `bun run generate:claude-md`, never edit between the markers):
 <!-- gen:asset-reference-sites -->
 - `packages/agent-skills/src/skill-packager.ts`
+- `packages/agent-skills/src/skill-source/resolve-skill-source.ts`
 - `packages/agent-skills/src/skill-source/sources/npm-source.ts`
 - `packages/agent-skills/src/skill-source/sources/path-source.ts`
 - `packages/agent-skills/src/skill-test/run-harness.ts`

@@ -1,10 +1,11 @@
 // Test file - all file operations are in temp directories, duplicated strings acceptable
-import { mkdir, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, writeFile } from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { FS_FAULT_CODE, safePath } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { loadConfig, parseConfigFile } from '../src/config-parser.js';
+import { loadConfig, parseConfigFile, readConfigText, readConfigTextSync } from '../src/config-parser.js';
 import { ClaudeMarketplaceSchema, ProjectConfigSchema } from '../src/schemas/project-config.js';
 
 import { setupTempDirTestSuite } from './test-helpers.js';
@@ -20,7 +21,6 @@ describe('parseConfigFile', () => {
   it('should parse valid config file', async () => {
     const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     const content = `
-version: 1
 resources:
   collections:
     rag-kb:
@@ -30,7 +30,6 @@ resources:
 
     const config = await parseConfigFile(configPath);
 
-    expect(config.version).toBe(1);
     expect(config.resources?.collections).toHaveProperty('rag-kb');
     expect(config.resources?.collections['rag-kb']?.include).toEqual(['docs']);
   });
@@ -38,7 +37,6 @@ resources:
   it('should parse config with validation settings', async () => {
     const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
-version: 1
 resources:
   collections:
     skills:
@@ -61,7 +59,6 @@ resources:
   it('should parse config with exclude patterns', async () => {
     const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
-version: 1
 resources:
   collections:
     rag-kb:
@@ -79,7 +76,6 @@ resources:
   it('should throw on invalid YAML', async () => {
     const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
-version: 1
   invalid: yaml: syntax
 `;
     await writeFile(configPath, content);
@@ -87,7 +83,7 @@ version: 1
     await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid YAML');
   });
 
-  it('accepts a config with no version field', async () => {
+  it('accepts a config with only a resources section', async () => {
     const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
 resources:
@@ -100,20 +96,22 @@ resources:
     expect(config.resources?.collections['test']?.include).toEqual(['docs']);
   });
 
-  it('accepts and ignores any version value (the npm package version is the only version)', async () => {
+  it('warns about a version key, naming it and the file, and drops it', async () => {
     const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
-    const content = `
-version: 2
-`;
-    await writeFile(configPath, content);
+    await writeFile(configPath, 'version: 2\n');
+    const warnings: string[] = [];
 
-    await expect(parseConfigFile(configPath)).resolves.toBeDefined();
+    const config = await parseConfigFile(configPath, (message) => warnings.push(message));
+
+    expect(config).toEqual({});
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('unrecognized key "version"');
+    expect(warnings[0]).toContain(configPath);
   });
 
   it('should throw on a section of the wrong type', async () => {
     const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
-version: 1
 resources: 42
 `;
     await writeFile(configPath, content);
@@ -124,7 +122,6 @@ resources: 42
   it('should throw on collection without include', async () => {
     const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
-version: 1
 resources:
   collections:
     invalid:
@@ -138,7 +135,6 @@ resources:
   it('should throw on empty include array', async () => {
     const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
-version: 1
 resources:
   collections:
     invalid:
@@ -150,6 +146,42 @@ resources:
   });
 });
 
+describe('a config the OS will not read', () => {
+  const suite = setupTempDirTestSuite('config-unreadable-');
+  beforeEach(suite.beforeEach);
+  afterEach(suite.afterEach);
+
+  /** The classified fault a config read the OS refused becomes: the user's config, a source. */
+  const configFault = (faultClass: string): Record<string, unknown> => ({ code: FS_FAULT_CODE, side: 'source', origin: 'config', faultClass });
+
+  // A directory where the file should be: EISDIR on every platform.
+  it('classifies a directory at the config path as a wrong-type config source fault, async and sync', async () => {
+    const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
+    await mkdir(configPath);
+
+    await expect(parseConfigFile(configPath)).rejects.toMatchObject(configFault('wrong-type'));
+    expect(() => readConfigTextSync(configPath)).toThrow(expect.objectContaining(configFault('wrong-type')));
+  });
+
+  it('classifies the read on the side the verb names: the config a verb edits is its destination', async () => {
+    const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
+    await mkdir(configPath);
+
+    await expect(readConfigText(configPath, 'destination')).rejects.toMatchObject({ ...configFault('wrong-type'), side: 'destination' });
+  });
+
+  it.skipIf(CANNOT_DENY_READS)('classifies a mode-000 config as a refused config source fault', async () => {
+    const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
+    await writeFile(configPath, '{}\n');
+    await chmod(configPath, 0o000);
+    try {
+      await expect(parseConfigFile(configPath)).rejects.toMatchObject(configFault('refused'));
+    } finally {
+      await chmod(configPath, 0o600);
+    }
+  });
+});
+
 describe('loadConfig', () => {
   const suite = setupTempDirTestSuite('config-load-');
   beforeEach(suite.beforeEach);
@@ -158,7 +190,6 @@ describe('loadConfig', () => {
   it('should load config from current directory', async () => {
     const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
-version: 1
 resources:
   collections:
     test: { include: ['docs'] }
@@ -168,14 +199,12 @@ resources:
     const config = await loadConfig(suite.tempDir);
 
     expect(config).toBeDefined();
-    expect(config?.version).toBe(1);
     expect(config?.resources?.collections).toHaveProperty('test');
   });
 
   it('should load config from parent directory', async () => {
     const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
-version: 1
 resources:
   collections:
     test: { include: ['docs'] }
@@ -188,7 +217,6 @@ resources:
     const config = await loadConfig(subDir);
 
     expect(config).toBeDefined();
-    expect(config?.version).toBe(1);
   });
 
   it('should return undefined when no config exists', async () => {
@@ -211,7 +239,7 @@ describe('claude: config section', () => {
 
   it('should parse config with no claude: section', async () => {
     const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
-    await writeFile(configPath, 'version: 1\n');
+    await writeFile(configPath, '{}\n');
 
     const config = await parseConfigFile(configPath);
 
@@ -221,7 +249,6 @@ describe('claude: config section', () => {
   it('should parse config with claude.managedSettings', async () => {
     const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     const content = `
-version: 1
 claude:
   managedSettings: managed-settings.json
 `;
@@ -236,7 +263,6 @@ claude:
   it('should parse inline marketplace with plugins', async () => {
     const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     const content = `
-version: 1
 claude:
   marketplaces:
     acme-tools:
@@ -263,7 +289,6 @@ claude:
   it('should parse multiple marketplaces', async () => {
     const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     const content = `
-version: 1
 claude:
   marketplaces:
     first:
@@ -297,7 +322,6 @@ claude:
     // below — only the exit changed. See `parseConfigAllowingUnknownKeys`.
     const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     const content = `
-version: 1
 claude:
   unknownField: value
 `;
@@ -306,7 +330,7 @@ claude:
     const warnings: string[] = [];
     const config = await parseConfigFile(configPath, (m) => warnings.push(m));
 
-    expect(config.version).toBe(1);
+    expect(config).toEqual({ claude: {} });
     expect(warnings.join('')).toContain('unrecognized key "unknownField"');
     expect((config.claude as Record<string, unknown> | undefined)?.['unknownField']).toBeUndefined();
   });
@@ -314,7 +338,6 @@ claude:
   it('should reject unknown fields in marketplace plugin entry (strict schema)', async () => {
     const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     const content = `
-version: 1
 claude:
   marketplaces:
     acme-tools:
@@ -369,7 +392,7 @@ resources:
     const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     // `marketplaces` must be a mapping. That is not a word VAT does not know,
     // it is an instruction VAT cannot follow — the boundary of the downgrade.
-    await writeFile(configPath, '\nversion: 1\nclaude:\n  marketplaces: nope\n');
+    await writeFile(configPath, '\nclaude:\n  marketplaces: nope\n');
 
     await expect(parseConfigFile(configPath, () => undefined)).rejects.toThrow('Invalid configuration in');
   });
@@ -377,14 +400,14 @@ resources:
 
 describe('collections optional', () => {
   it('should accept resources section without collections field', () => {
-    const result = ProjectConfigSchema.safeParse({ version: 1, resources: { include: ['docs/**/*.md'] } });
+    const result = ProjectConfigSchema.safeParse({ resources: { include: ['docs/**/*.md'] } });
 
     expect(result.success).toBe(true);
     expect(result.data?.resources?.collections).toBeUndefined();
   });
 
   it('should accept resources section with only exclude patterns', () => {
-    const result = ProjectConfigSchema.safeParse({ version: 1, resources: { exclude: ['**/node_modules/**'] } });
+    const result = ProjectConfigSchema.safeParse({ resources: { exclude: ['**/node_modules/**'] } });
 
     expect(result.success).toBe(true);
   });
@@ -409,7 +432,6 @@ describe('resources section strictness', () => {
     // never runs. Exactly the argument ValidationConfigSchema is strict for,
     // with more at stake: the silent outcome here is an unenforced RULE.
     const result = ProjectConfigSchema.safeParse({
-      version: 1,
       resources: { cheks: EVERY_KEY.checks },
     });
 
@@ -418,7 +440,6 @@ describe('resources section strictness', () => {
 
   it('does not silently keep the correctly-spelled half of a typo pair', () => {
     const result = ProjectConfigSchema.safeParse({
-      version: 1,
       resources: { checks: EVERY_KEY.checks, cheks: EVERY_KEY.checks },
     });
 
@@ -428,7 +449,7 @@ describe('resources section strictness', () => {
   it('still accepts every legitimate key together', () => {
     // The accept direction matters as much as the reject one: a strict schema
     // that turns away a real key is a worse defect than the one it fixed.
-    const result = ProjectConfigSchema.safeParse({ version: 1, resources: EVERY_KEY });
+    const result = ProjectConfigSchema.safeParse({ resources: EVERY_KEY });
 
     expect(result.success).toBe(true);
     expect(new Set(Object.keys(result.data?.resources ?? {}))).toStrictEqual(new Set(Object.keys(EVERY_KEY)));
@@ -438,7 +459,6 @@ describe('resources section strictness', () => {
 describe('resources.validation config block', () => {
   it('should accept a resources.validation severity override', () => {
     const result = ProjectConfigSchema.safeParse({
-      version: 1,
       resources: { validation: { severity: { EXTERNAL_URL_DEAD: 'ignore' } } },
     });
 
@@ -448,7 +468,6 @@ describe('resources.validation config block', () => {
 
   it('should reject a bogus issue-code key in resources.validation.severity', () => {
     const result = ProjectConfigSchema.safeParse({
-      version: 1,
       resources: { validation: { severity: { NOT_A_REAL_CODE: 'error' } } },
     });
 
@@ -508,7 +527,6 @@ describe('external URL validation config', () => {
   it('should parse externalUrls config', async () => {
     const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
-version: 1
 resources:
   collections:
     docs:

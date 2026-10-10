@@ -8,19 +8,14 @@
  * `dist/`. Deleting `dist/` and re-emitting it therefore opens a window seconds
  * wide in which a reader sees no module at all (`ERR_MODULE_NOT_FOUND`) or a
  * barrel whose re-export target has not been written back yet ("does not
- * provide an export named X"). Both were observed in CI, naming a different
- * package and a different symbol each run — the signature of a schedule, not of
- * a broken export.
+ * provide an export named X").
  *
  * So this script never deletes `dist/`, and it never lets the compiler write
  * into `dist/` either. Overwriting in place is not enough: `tsc` writes an
  * output file with a plain truncate-then-write, so between the truncate and the
  * write the file is **zero bytes on disk**, and a reader that imports it in that
  * instant gets the very "does not provide an export named X" this script exists
- * to prevent. Measured on a 12-module fixture, a sampler polling at
- * `setImmediate` cadence caught a zero-byte `dist/index.js` in 9 of 24 rebuilds;
- * the real barrels are 10-30x larger than that fixture's, so the production
- * window is wider still.
+ * to prevent.
  *
  * Instead the compiler emits into a staging directory beside `dist/`, and each
  * emitted file is then `rename(2)`d into place. A rename within one filesystem
@@ -70,9 +65,7 @@
  * So the constraint lands on the SOURCES instead: no file may import the package
  * it lives in by that package's own name. `local/no-self-package-import` (in
  * `@vibe-agent-toolkit/utils/eslint`, scoped in `eslint.config.js` to every
- * package's compiled `src` tree) is what holds that line, and it exists because
- * this override exposed exactly two such imports that had been latent for as long
- * as they had been written.
+ * package's compiled `src` tree) is what holds that line.
  *
  * That failure is also invisible to any tree that has built before — a stale
  * `dist/` satisfies the literal lookup, so the build passes by typechecking
@@ -110,20 +103,12 @@
  * because an incremental build trusts a leftover buildinfo and would then skip
  * re-emitting files that are not on disk.
  *
- * Invoked through `tsc-clean-build.ts`, the thin CLI beside this module, from a
- * package's build script run in the package directory:
- *   "build": "tsx ../dev-tools/src/tsc-clean-build.ts"
- *   "build": "tsx ../dev-tools/src/tsc-clean-build.ts --compiler=tspc"
- *
- * `--compiler=<name>` selects a PATH-resolved drop-in tsc replacement (e.g. `tspc`
- * for ts-patch-based transformers); it's stripped before the remaining args are
- * passed through to the compiler. Defaults to `tsc`.
+ * Invoked through `tsc-clean-build.ts`, the thin CLI beside this module. `--compiler=<name>`
+ * selects a PATH-resolved drop-in tsc replacement (e.g. `tspc`); it defaults to `tsc`.
  *
  * 🔑 **Dependency-free on purpose.** `@vibe-agent-toolkit/utils` is built by this
  * script too, and on a clean clone its `dist/` does not exist until it has been —
- * so this module imports nothing from the workspace. While it did, `utils` alone
- * kept a `rimraf dist && tsc` build, which is precisely the delete-then-emit this
- * whole file exists to prevent, on the one package all twenty-four others read.
+ * so this module imports nothing from the workspace.
  */
 
 /* eslint-disable local/no-raw-node-path, local/no-fs-mkdirSync -- Bootstrap: this is the build script of `@vibe-agent-toolkit/utils` itself, so it cannot import `safePath`/`mkdirSyncReal` from a `dist/` it has not produced yet; `fwd()` below does the forward-slash normalisation those wrappers exist for */

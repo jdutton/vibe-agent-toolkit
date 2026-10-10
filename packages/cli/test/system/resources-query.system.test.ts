@@ -52,6 +52,8 @@ import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
+import { RESOURCES_QUERY_REPORT_SCHEMA } from '../../src/commands/resources/query-schema.js';
+
 import {
   cleanupTestTempDir,
   createTestTempDir,
@@ -279,18 +281,30 @@ function createCommittedCorpus(options: {
   return root;
 }
 
-/** Run the verb and parse its document, failing loudly if it did not produce one. */
+/**
+ * Run the verb and parse its report with the published schema — the envelope
+ * (`doc`) and the query's own `data` beside it (`{}` for a refusal, whose
+ * `data` is null).
+ */
 function query(sql: string, options?: { env?: NodeJS.ProcessEnv; cwd?: string; args?: readonly string[] }): {
   status: number | null;
   doc: Record<string, unknown>;
+  data: Record<string, unknown>;
   stderr: string;
 } {
   const result = executeCli(binPath, ['resources', 'query', sql, ...(options?.args ?? [])], {
     cwd: options?.cwd ?? projectDir,
     ...(options?.env === undefined ? {} : { env: options.env }),
   });
-  const doc = (yaml.parse(result.stdout) ?? {}) as Record<string, unknown>;
-  return { status: result.status, doc, stderr: result.stderr };
+  const parsed: unknown = yaml.parse(result.stdout);
+  const doc = (parsed === null || parsed === undefined ? {} : RESOURCES_QUERY_REPORT_SCHEMA.parse(parsed)) as Record<string, unknown>;
+  const data = (doc['data'] ?? {}) as Record<string, unknown>;
+  return { status: result.status, doc, data, stderr: result.stderr };
+}
+
+/** The run's wall time in seconds, from the envelope's `durationMs`. */
+function durationSecsOf(doc: Record<string, unknown>): number {
+  return (doc['durationMs'] as number) / 1000;
 }
 
 describe('vat resources query', () => {
@@ -333,12 +347,13 @@ describe('vat resources query', () => {
     // discriminator: they come from the blob stage, which the OTHER resources
     // lanes skip outright — so a non-zero count here proves this lane really
     // does derive content where its siblings deliberately do not.
-    const { status, doc } = query('SELECT COUNT(*) AS n FROM blob_sections');
+    const { status, doc, data } = query('SELECT COUNT(*) AS n FROM blob_sections');
 
     expect(status).toBe(0);
-    expect(doc['status']).toBe('success');
-    expect(doc['rowCount']).toBe(1);
-    const rows = doc['rows'] as { n: number }[];
+    expect(doc['status']).toBe('ok');
+    expect(data['columns']).toEqual(['n']);
+    const rows = data['rows'] as { n: number }[];
+    expect(rows).toHaveLength(1);
     expect(rows[0]?.n).toBeGreaterThan(0);
   });
 
@@ -367,8 +382,8 @@ describe('vat resources query', () => {
     // This corpus is `docs/`, `docs/a.md`, `docs/b.md`. Stated absolutely as
     // well as compared, so two arms broken the same way cannot agree their way
     // to green.
-    expect(withoutStore.doc['rows']).toStrictEqual([{ n: 3 }]);
-    expect(withStore.doc['rows']).toStrictEqual(withoutStore.doc['rows']);
+    expect(withoutStore.data['rows']).toStrictEqual([{ n: 3 }]);
+    expect(withStore.data['rows']).toStrictEqual(withoutStore.data['rows']);
   });
 
   it('answers about THIS tree only, never about the other tree in the same store', () => {
@@ -381,7 +396,7 @@ describe('vat resources query', () => {
     // 🪤 No `isDirectory` filter. The predicate is prefix-only so the foreign
     // DIRECTORY row (`pkgs`) is caught too — an earlier version filtered
     // directories out and would have missed half the leak.
-    const { status, doc, stderr } = query(
+    const { status, data, stderr } = query(
       `SELECT path FROM resource_realizations WHERE path NOT LIKE '${OWN_PREFIX}%' ORDER BY path`,
       { env: storeEnv() },
     );
@@ -392,7 +407,9 @@ describe('vat resources query', () => {
     // that could have been present is shown to exist.
     expect(readSharedStoreFile().includes(FOREIGN_PATH)).toBe(true);
     // Against the pre-fix build this is `[{ path: 'pkgs' }, { path: 'pkgs/zzz.md' }]`.
-    expect(doc['rows']).toStrictEqual([]);
+    // Zero rows over a populated tree is an answer: `ok`, the columns still named.
+    expect(data['rows']).toStrictEqual([]);
+    expect(data['columns']).toStrictEqual(['path']);
   });
 
   it('flips the cache tell from derived to store, in the directory it NAMED', () => {
@@ -419,11 +436,11 @@ describe('vat resources query', () => {
 
     expect(first.status, first.stderr).toBe(0);
     expect(second.status, second.stderr).toBe(0);
-    expect(first.doc['population']).toBe('derived');
-    expect(second.doc['population']).toBe('store');
+    expect(first.data['population']).toBe('derived');
+    expect(second.data['population']).toBe('store');
     // And the answer did not move, which is what makes the flip a saving rather
     // than a difference.
-    expect(second.doc['rows']).toStrictEqual(first.doc['rows']);
+    expect(second.data['rows']).toStrictEqual(first.data['rows']);
     // Where the store actually went. The positive half first, so the empty
     // second is an answer rather than a detector that never ran.
     expect(databasesUnder(flipDir)).toStrictEqual([PROJECTION_DATABASE]);
@@ -447,9 +464,9 @@ describe('vat resources query', () => {
     // other direction — a field wired to the wrong term cannot be a subset of
     // the run that contains it.
     for (const run of [first, second]) {
-      expect(typeof run.doc['populationSecs']).toBe('number');
-      expect(run.doc['populationSecs']).toBeGreaterThan(0);
-      expect(run.doc['populationSecs']).toBeLessThanOrEqual(run.doc['durationSecs'] as number);
+      expect(typeof run.data['populationSecs']).toBe('number');
+      expect(run.data['populationSecs']).toBeGreaterThan(0);
+      expect(run.data['populationSecs']).toBeLessThanOrEqual(durationSecsOf(run.doc));
     }
   });
 
@@ -513,16 +530,16 @@ describe('vat resources query', () => {
     expect(withoutStore.status, withoutStore.stderr).toBe(0);
     // A cold directory, so both arms really did populate. Without this the
     // fraction could be high because the run was a warm no-op on both terms.
-    expect(withStore.doc['population']).toBe('derived');
-    expect(withoutStore.doc['population']).toBe('derived');
+    expect(withStore.data['population']).toBe('derived');
+    expect(withoutStore.data['population']).toBe('derived');
     // The store arm was really keyed and opened — otherwise this asserts the
     // no-store path twice under a store-shaped name.
     expect(databasesUnder(coldDir)).toStrictEqual([PROJECTION_DATABASE]);
 
     for (const run of [withStore, withoutStore]) {
-      const durationSecs = run.doc['durationSecs'] as number;
+      const durationSecs = durationSecsOf(run.doc);
       expect(durationSecs).toBeGreaterThan(0);
-      expect((run.doc['populationSecs'] as number) / durationSecs)
+      expect((run.data['populationSecs'] as number) / durationSecs)
         .toBeGreaterThan(HONEST_SPAN_FRACTION);
     }
   });
@@ -561,9 +578,9 @@ describe('vat resources query', () => {
     const located = query(COUNT_REALIZATIONS, { args: [OWN_PREFIX] });
 
     expect(located.status, located.stderr).toBe(0);
-    expect(located.doc['root']).toBe(whole.doc['root']);
-    expect((located.doc['rows'] as { n: number }[])[0]?.n)
-      .toBe((whole.doc['rows'] as { n: number }[])[0]?.n);
+    expect(located.data['root']).toBe(whole.data['root']);
+    expect((located.data['rows'] as { n: number }[])[0]?.n)
+      .toBe((whole.data['rows'] as { n: number }[])[0]?.n);
   });
 
   it('refuses a [path] that does not exist instead of answering about the tree it walked up to', () => {
@@ -576,7 +593,8 @@ describe('vat resources query', () => {
     expect(status).toBe(2);
     expect(stderr).toContain('Path does not exist');
     expect(stderr).toContain('nope');
-    expect(doc['rows']).toBeUndefined();
+    expect(doc['error']).toMatchObject({ code: 'USAGE_INVALID' });
+    expect(doc['data']).toBeNull();
   });
 
   it('refuses a [path] that is a file, which cannot locate anything', () => {
@@ -595,10 +613,12 @@ describe('vat resources query', () => {
     const under = query('SELECT ? AS x, ? AS y', { args: ['--param', 'a'] });
     expect(under.status).toBe(2);
     expect(under.stderr).toContain('2 placeholders and 1 value was bound');
+    // The operator's statement, refused by code — never INTERNAL_ERROR.
+    expect(under.doc['error']).toMatchObject({ code: 'USAGE_INVALID' });
 
     const bound = query('SELECT ? AS x, ? AS y', { args: ['--param', 'a', '--param', 'b'] });
     expect(bound.status, bound.stderr).toBe(0);
-    expect(bound.doc['rows']).toEqual([{ x: 'a', y: 'b' }]);
+    expect(bound.data['rows']).toEqual([{ x: 'a', y: 'b' }]);
   });
 
   it('refuses a write at the engine and names the surface for a bad column', () => {
@@ -607,8 +627,10 @@ describe('vat resources query', () => {
     // SQLite, which would leave this case asserting the gate's message and no
     // longer proving `PRAGMA query_only` is armed. This spelling is real SQLite
     // grammar, passes the kind gate on its first token, and is refused by the
-    // ENGINE — which is the property under test.
-    const write = query('WITH c(a) AS (VALUES (1)) DELETE FROM blobs');
+    // ENGINE — which is the property under test. `RETURNING` gives it a result
+    // column, so the store's result-shape check (a write with no result column
+    // is not a read) passes it too; without it that check answers first.
+    const write = query('WITH c(a) AS (VALUES (1)) DELETE FROM blobs RETURNING contentKey');
     expect(write.status).toBe(2);
     expect(write.stderr).toContain('readonly database');
 
@@ -649,9 +671,10 @@ describe('vat resources query', () => {
     // The other direction of the same bug, and the control that stops the fix
     // being "refuse anything with a bracket in it". A `;` inside a quoted
     // identifier is not a separator.
-    const { status, doc } = query('SELECT 1 AS [a;b]');
+    const { status, data } = query('SELECT 1 AS [a;b]');
 
     expect(status).toBe(0);
-    expect(doc['rowCount']).toBe(1);
+    expect(data['rows']).toHaveLength(1);
+    expect(data['columns']).toEqual(['a;b']);
   });
 });

@@ -28,12 +28,20 @@ import * as fs from 'node:fs';
 import { stagedDirName } from '@vibe-agent-toolkit/agent-skills';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import yaml from 'yaml';
+
+import { SKILL_TEST_RUN_REPORT_SCHEMA } from '../../src/commands/skill/test/run-schema.js';
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 import {
   createSuiteContext,
   executeCli,
   writeTestFile,
 } from './test-common.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-9-');
 
 // ---------------------------------------------------------------------------
 // claude + auth detection (module-level, synchronous)
@@ -166,7 +174,6 @@ function skillFilesConfigLines(
  */
 function writeDeclaredProjectConfig(projectRoot: string, perSkillLines: string[]): void {
   const lines = [
-    'version: 1',
     'skills:',
     '  include:',
     '    - "skills/**/SKILL.md"',
@@ -317,6 +324,24 @@ function expectStatus(
   ).toBe(expected);
 }
 
+/** The report the run published on stdout, validated against its registered schema. */
+function publishedReport(stdout: string): ReturnType<typeof SKILL_TEST_RUN_REPORT_SCHEMA.parse> {
+  return SKILL_TEST_RUN_REPORT_SCHEMA.parse(yaml.parse(stdout));
+}
+
+/** The refusal code a run that could not run published. */
+function refusalCodeIn(stdout: string): string | undefined {
+  const report = publishedReport(stdout);
+  return report.status === 'error' ? report.error.code : undefined;
+}
+
+/** The harness's human verdict line, as the completed report carries it in `data.description`. */
+function descriptionIn(stdout: string): string {
+  const report = publishedReport(stdout);
+  expect(report.status, stdout).not.toBe('error');
+  return report.status === 'error' ? '' : report.data.description;
+}
+
 /**
  * Absolute path of `relPath` inside the harness-staged directory for the companion
  * staged under `alias`. Staging maps a name onto a single safe path segment via
@@ -414,6 +439,9 @@ describe('vat skill test run (system)', () => {
     ]);
 
     expectStatus(result, 2);
+    // The gate this environment hits: with no claude on PATH the preflight refuses
+    // first (the backend's); with one, the missing acknowledgment does (the invocation's).
+    expect(refusalCodeIn(result.stdout)).toBe(hasClaude ? 'USAGE_INVALID' : 'BACKEND_UNAVAILABLE');
 
     // Confirm grading.json was NOT written inside the harness root.
     const gradingPath = safePath.join(outDir, 'results', 'grading.json');
@@ -437,9 +465,11 @@ describe('vat skill test run (system)', () => {
       outDir,
     ]);
 
-    // ERROR with `Reason: bootstrap` — the run stopped before any spawn.
+    // ERROR with `Reason: bootstrap` — the run stopped before any spawn. The input it
+    // needed is absent, so the published refusal is INPUT_UNREADABLE.
     expectStatus(result, 2);
     expect(result.stderr).toContain('Reason: bootstrap');
+    expect(refusalCodeIn(result.stdout)).toBe('INPUT_UNREADABLE');
 
     // Bootstrap is the happy "wrote a template, fill it in" path — it
     // must NOT be printed as a hard error. The message reaches the user without
@@ -507,6 +537,8 @@ describe('vat skill test run (system)', () => {
     expectStatus(result, 2);
     // The actionable hint must point the user at `vat build`.
     expect(result.stderr).toContain('vat build');
+    // The operator's to fix — never a VAT defect.
+    expect(refusalCodeIn(result.stdout)).toBe('USAGE_INVALID');
   });
 
   // -------------------------------------------------------------------------
@@ -608,13 +640,14 @@ describe('vat skill test run (system)', () => {
       ]);
 
       expect(result.status).toBe(0);
-      // Dry-run must mention the assembled command (not spawn). The run summary
-      // now lands on stdout (programmatic-consumer routing); only the security
-      // warning and the `Harness:` debug line stay on stderr.
-      expect(result.stdout).toContain('dry-run');
+      // Dry-run must mention the assembled command (not spawn). The preview is the
+      // report's `data.description`; a dry run grades nothing, so it lists no evals.
+      const description = descriptionIn(result.stdout);
+      expect(publishedReport(result.stdout)).toMatchObject({ status: 'ok', data: { evals: [] } });
+      expect(description).toContain('dry-run');
       // The assembled command surfaces the model passed verbatim to claude --model,
       // and the selected model is echoed to stderr on every run.
-      expect(result.stdout).toContain('--model claude-opus-4-8');
+      expect(description).toContain('--model claude-opus-4-8');
       expect(result.stderr).toContain('Model: claude-opus-4-8');
       // grading.json must NOT exist — dry-run does not spawn Claude.
       const gradingPath = safePath.join(outDir, 'results', 'grading.json');
@@ -627,9 +660,9 @@ describe('vat skill test run (system)', () => {
       const { result, outDir } = await runDeclaredDryRun('harness-dry-declared-nodist', false, true);
 
       // Must be explicit that nothing was built
-      expect(result.stdout).toContain('Staged the declared skill WITHOUT building');
+      expect(descriptionIn(result.stdout)).toContain('Staged the declared skill WITHOUT building');
       // Must say it fell back to source since no dist exists yet
-      expect(result.stdout).toContain('fell back to the source dir');
+      expect(descriptionIn(result.stdout)).toContain('fell back to the source dir');
       // grading.json must NOT be written
       expect(fs.existsSync(safePath.join(outDir, 'results', 'grading.json'))).toBe(false);
       // Provenance must NOT exist: a dry run names the path it WOULD write and writes
@@ -640,9 +673,9 @@ describe('vat skill test run (system)', () => {
       expect(fs.existsSync(provenancePath)).toBe(false);
       // …but the summary must still tell the operator where it would go, and still
       // report the staged fingerprint (which now comes from the summary, not from disk).
-      expect(result.stdout).toContain('Provenance would be written to:');
-      expect(result.stdout).toContain('provenance.json');
-      expect(result.stdout).toMatch(/fingerprint: \S+/);
+      expect(descriptionIn(result.stdout)).toContain('Provenance would be written to:');
+      expect(descriptionIn(result.stdout)).toContain('provenance.json');
+      expect(descriptionIn(result.stdout)).toMatch(/fingerprint: \S+/);
     });
 
     it('--no-build --dry-run for a declared pool skill (existing dist): says it did NOT build, flags stale', async () => {
@@ -652,13 +685,13 @@ describe('vat skill test run (system)', () => {
       const { result } = await runDeclaredDryRun('harness-dry-declared-stale', true, true);
 
       // Must be explicit that nothing was built
-      expect(result.stdout).toContain('Staged the declared skill WITHOUT building');
+      expect(descriptionIn(result.stdout)).toContain('Staged the declared skill WITHOUT building');
       // Must warn that the preview used an unbuilt (possibly stale) dist
-      expect(result.stdout).toContain('STALE');
+      expect(descriptionIn(result.stdout)).toContain('STALE');
       // Must point users at `vat build`
-      expect(result.stdout).toContain('vat build');
+      expect(descriptionIn(result.stdout)).toContain('vat build');
       // Must reference the provenance path
-      expect(result.stdout).toContain('provenance.json');
+      expect(descriptionIn(result.stdout)).toContain('provenance.json');
     });
   });
 

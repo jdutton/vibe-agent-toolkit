@@ -25,7 +25,8 @@
  * every gate:
  *
  * - `import.meta.main` was added in Node **24.2 / 22.18**. Measured on the exact
- *   floor this repo declares — `>=22.13.0` — the property is `undefined`:
+ *   floor this repo declares — `>=22.16.0`, and on 22.13.0 before it — the
+ *   property is `undefined`:
  *
  *   ```
  *   $ node-v22.13.0 --input-type=module -e "console.log(import.meta.main)"  -> undefined
@@ -186,7 +187,7 @@ module.exports = {
       // Node floor rather than a portable fact. `import.meta.main` shipped in Node
       // 24.2 / 22.18; an adopter whose floor is at or above that writes it
       // correctly and would get a finding they cannot act on. This package's own
-      // floor spans 22.13–22.17 where the property is `undefined`, so the hazard
+      // floor spans 22.16–22.17 where the property is `undefined`, so the hazard
       // is real for some adopters and absent for others, and only they know which.
       // The other half (`rawEntrypointCompare`) has no such dependency — a raw
       // string compare misses a symlinked entry on every Node there has ever been

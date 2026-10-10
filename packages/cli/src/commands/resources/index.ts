@@ -45,24 +45,31 @@ const DERIVED_RELATIONS_HELP = `Derived relations (evaluated only when a stateme
   count is what stops a chain whose largest file could not be sized from
   passing. (A WHERE on 'charged' would also filter those rows away.)`;
 
-/** The two serializations `scan` and `query` offer of one document. */
+/** The serializations the resources verbs offer of one document. */
 const OUTPUT_YAML = 'yaml';
 const OUTPUT_JSON = 'json';
+const OUTPUT_TEXT = 'text';
 
 /**
- * The `--format` option `scan` and `query` share.
+ * A verb's `--format` option, refusing any value it does not offer.
  *
  * A factory rather than a shared instance: Commander mutates an `Option` as it
  * is added, so one object handed to two commands is one object two commands
- * disagree about. `validate` deliberately does NOT use this — it offers a third
- * format, `text`, which is a different question.
+ * disagree about. `.choices()` because a bare `.option()` let `validate
+ * --format bogus` fall through to YAML at exit 0.
  *
+ * @param choices - The formats this verb offers; the first is the default
  * @returns A fresh option for one command
  */
+function formatOption(...choices: [string, ...string[]]): Option {
+  return new Option('--format <format>', `Output format: ${choices.join(', ')} (default ${choices[0]})`)
+    .choices(choices)
+    .default(choices[0]);
+}
+
+/** The `--format` option `scan`, `query` and `check` share. */
 function yamlOrJsonFormat(): Option {
-  return new Option('--format <format>', 'Output format: yaml (default) or json')
-    .choices([OUTPUT_YAML, OUTPUT_JSON])
-    .default(OUTPUT_YAML);
+  return formatOption(OUTPUT_YAML, OUTPUT_JSON);
 }
 
 export function createResourcesCommand(): Command {
@@ -94,9 +101,9 @@ Configuration:
       'after',
       `
 Description:
-  Scans for markdown files and reports statistics. Outputs YAML to stdout,
-  or JSON with --format json (the same document, for consumers without a
-  YAML parser).
+  Scans for markdown files and reports what it found. Publishes the shared
+  report envelope on stdout as YAML, or JSON with --format json (the same
+  document; schema: packages/cli/schemas/resources-scan.json).
 
 Path Argument Behavior:
   WITH path: Scans all *.md/*.html recursively under path, still applying the
@@ -105,14 +112,31 @@ Path Argument Behavior:
 
 Filtering:
   --collection <id>: Only scan files in specified collection
-                     (requires config mode - no path argument)
+                     (requires config mode - no path argument). A name
+                     resources.collections does not declare is refused (exit 2)
 
-Output Fields:
-  status, filesScanned, linksFound, anchorsFound, durationSecs
-  root: The one absolute path every reported file path is relative to
-  lane: Which enumerator produced the population — 'walk' or 'projection'
-  collections: Per-collection resource counts (resourceCount)
-  files: (only with --verbose) Array with per-file details
+Output Fields (the shared report envelope):
+  status:     ok | findings | error. A scan reports no finding of its own:
+              findings means it scanned NOTHING (RESOURCE_CHECK_BROKEN)
+  examined:   Files scanned
+  durationMs: Wall time of the run
+  data.root:  The one absolute path every data.files[].path is relative to
+  data.lane:  Which enumerator produced the population — 'walk' or 'projection'
+  data.extentSource:
+              The projection lane's enumerator ('git' or 'filesystem'), or
+              null for the walk
+  data.collections:
+              Per-collection resource counts ({resourceCount}); {} when none
+  data.files: (only with --verbose) {path, links, anchors, checksum} per file
+
+Exit Codes:
+  0 - Scanned at least one file
+  1 - Scanned nothing (RESOURCE_CHECK_BROKEN): the path or config enumerates
+      no markdown, or --collection names a collection no file matched
+  2 - The scan could not run: [path] names no directory, a directory the OS
+      will not list, an undeclared --collection, or an unusable config
+  The code is derived from the document's status and summary, never chosen
+  beside it.
 
 Requirements:
   projectRoot: optional (falls back to cwd with a warning)
@@ -187,22 +211,32 @@ One query, and read-only:
   error, so trailing text would be silently ignored. A comment after the
   terminating semicolon is fine ('SELECT 1;  -- see ADR-14').
 
-Output Fields:
-  status, root, rowCount, durationSecs
-  population: 'derived' or 'store' -- whether the rows were built this run or
+Output Fields (the shared report envelope; schema: packages/cli/schemas/resources-query.json):
+  status:     ok | findings | error. A statement that selects NO row over a
+              populated tree is ok -- an empty answer is an answer
+  examined:   Resources in the population the statement ran over (the
+              tracked tree), never the rows it selected. 0 is refused as
+              RESOURCE_CHECK_BROKEN: a statement over nothing answers nothing
+  durationMs: Wall time of the run
+  data.root:  The project the statement was asked about
+  data.columns:
+              The statement's result columns, in order -- present even when it
+              selected no row
+  data.population: 'derived' or 'store' -- whether the rows were built this run or
               read from the projection store. Reported because it cannot be
               inferred: a correct hit and a correct re-derivation produce
               identical rows
-  populationSecs:
+  data.populationSecs:
               What that population cost. The store's whole job is to make it
               cheap, so this is the number that says whether it did
-  lensSecs:   What evaluating the derived relations cost. Not part of
+  data.lensSecs:
+              What evaluating the derived relations cost. Not part of
               populationSecs: a store hit does not make a lens cheaper
-  lensesEvaluated:
+  data.lensesEvaluated:
               Which lenses that covers -- only those whose relations the
               statement names. An empty list is a statement that asked for
               none, not a lens that stopped running
-  rows:       The selected rows, exactly as SQLite holds them -- a boolean as
+  data.rows:  The selected rows, exactly as SQLite holds them -- a boolean as
               0/1, a date and a JSON column as text. Values are NOT decoded,
               because decoding needs a table spec and arbitrary SQL has none
 
@@ -218,9 +252,13 @@ Path Argument:
   exist, or is not a directory, is refused (exit 2).
 
 Exit Codes:
-  0 - The statement ran
-  2 - The statement was refused (not a query, a second statement, a placeholder
-      with no --param behind it), [path] names no directory, or the crawl failed
+  0 - The statement ran over a populated tree (whatever it selected)
+  1 - The population was empty (RESOURCE_CHECK_BROKEN)
+  2 - The statement was refused -- not a query, a second statement, a
+      placeholder with no --param behind it, a name the projection lacks
+      (USAGE_INVALID) -- or [path] names no directory, or the crawl failed
+  The code is derived from the document's status and summary, never chosen
+  beside it.
 
 Requirements:
   projectRoot: optional (falls back to cwd with a warning)
@@ -461,7 +499,7 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
              Four checks over 8,000 files and four over 0 are otherwise the
              same document, and only one of them is a gate. It counts the
              TRACKED TREE and not your configured resource set, so it is
-             legitimately far larger than scan's filesScanned -- see above
+             legitimately far larger than scan's examined -- see above
   findings:  One row per violation ({code, severity, message, location?})
   summary:   {errors, warnings, info} over findings; exit 1 iff errors > 0
   durationMs: wall time of the whole run
@@ -512,8 +550,12 @@ Examples:
     .option('--debug', DEBUG_HELP)
     .option('-v, --verbose', 'Show all scanned resources, including those without issues')
     .option('--frontmatter-schema <path>', 'Validate frontmatter against JSON Schema file (.json or .yaml)')
-    .option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive', 'strict')
-    .option('--format <format>', 'Output format: yaml (default), json, or text', 'yaml')
+    .addOption(
+      new Option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive')
+        .choices(['strict', 'permissive'])
+        .default('strict'),
+    )
+    .addOption(formatOption(OUTPUT_YAML, OUTPUT_JSON, OUTPUT_TEXT))
     .option('--collection <id>', 'Filter by collection ID')
     .option('--check-external-urls', 'Validate external URLs (default: false, slow operation)')
     .option('--check-html-anchors', 'Strictly validate HTML fragment anchors against element ids (default: false; HTML fragments are often runtime-defined by JS)')
@@ -548,53 +590,51 @@ Path Argument Behavior:
 
 Filtering:
   --collection <id>: Only validate files in specified collection
-                     (requires config mode - no path argument)
+                     (requires config mode - no path argument). It scopes the
+                     whole report -- findings, examined and so the exit code --
+                     to that collection's files. A finding at a path that is no
+                     resource (a file the collection matched and could not read)
+                     stays in it. A name resources.collections does not declare
+                     is refused (USAGE_INVALID, exit 2)
 
 Output Formats:
   --format yaml (default)
-    Structured YAML output to stdout. Errors grouped by file.
+    The shared report envelope on stdout (schema:
+    packages/cli/schemas/resources-validate.json).
 
   --format json
-    Structured JSON output to stdout. Issues grouped by file.
+    The same document as JSON.
 
   --format text
-    Human-readable format. Issues to stderr as
-    file:line:column: severity: message
+    One line per finding on stdout, location:line: severity: message [code],
+    then a status line with the counts and the number of resources examined.
 
-Output Fields (success):
-  status, filesScanned, linksChecked, durationSecs, validationMode
-  collections: Per-collection stats (resourceCount, hasSchema, validationMode)
+Output Fields (the shared report envelope):
+  status:     ok | findings | error -- ok when nothing was found, findings when
+              anything was (at any severity), error when the run could not
+              finish (exit 2, with error.code saying which refusal)
+  examined:   Resources validated
+  findings:   Every finding, flat -- {code, severity, message, location, line?,
+              link?, fix?, reference?}; location is relative to data.root
+  summary:    {errors, warnings, info} over findings; exit 1 iff errors > 0
+  durationMs: Wall time of the run
+  data.root:  The project root, the one base every location and path is
+              relative to
+  data.collections:
+              Per configured collection: resourceCount, hasSchema,
+              validationMode?, filesWithErrors, and summary over the findings
+              in its files; {} when the project configures none
 
-Output Fields (issues found):
-  A field named error* counts ERROR-severity issues only — the ones that fail
-  the run. A field named issue* counts issues of every severity.
-
-  status: success | warning | error — the worst ACTIONABLE severity found, the
-          same vocabulary every other vat validation lane reports. An info-only
-          run is success; issueCounts below says what was actually seen.
-  filesScanned, durationSecs
-  errorsFound: Count of error-severity issues (drives the exit code)
-  filesWithErrors: Files carrying at least one error-severity issue
-  issueCounts: {errors, warnings, info} — every issue, split by severity
-  issueSummary: Count of each issue code, ALL severities
-  collections: Per-collection stats including filesWithErrors, errorCount
-  issues: One row per file with findings, carrying only that file's counts
-          ({file, errors?, warnings?, info?, codes}). A zero bucket is omitted,
-          and a file that emitted nothing has no row — filesScanned above stays
-          the true denominator.
-
-  filesScanned: 0 is never a pass. A run that scanned no file (a --collection
-  that matched nothing, a path with no markdown, an enumeration emptied by
-  exclude or a sparse checkout) is reported as RESOURCE_CHECK_BROKEN at error
-  and exits 1 — the document is not a verdict, and the code is not overridable.
+  examined: 0 is never a pass. A run that validated no resource (a
+  declared --collection that matched no file, a path with no markdown, an enumeration
+  emptied by exclude or a sparse checkout) carries RESOURCE_CHECK_BROKEN at
+  error and exits 1 — the document is not a verdict, and the code is not
+  overridable. The same message is written to stderr.
 
 Verbosity:
   -v, --verbose
-    Replaces each file's counts row with its per-issue detail (line, column,
-    code, severity, message) — the pre-summary shape. That form is for
-    '> file' then grep, not for reading. Every other field above is a total
-    about the run and is identical in both modes.
-    --format text is unaffected: it already prints one line per issue.
+    Adds data.files: one {path, status, summary} row per resource validated,
+    the clean ones included. Every envelope field is identical in both modes.
 
 Validation Checks:
   - Internal file links (relative paths)
@@ -660,7 +700,16 @@ Frontmatter Validation:
       - Extra fields should not cause validation failures
 
 Exit Codes:
-  0 - Success  |  1 - Validation errors  |  2 - System error
+  0 - No error-severity finding (warnings and info never fail it)
+  1 - At least one error-severity finding, or nothing validated
+      (RESOURCE_CHECK_BROKEN)
+  2 - The run could not finish: [path] or --frontmatter-schema names nothing
+      (USAGE_INVALID), an input the OS will not read (INPUT_UNREADABLE), or an
+      unusable config (CONFIG_INVALID). Also invalid usage rejected before the
+      verb runs -- an unknown option, or a --format or --validation-mode value
+      outside its choices: Commander's message on stderr, no document
+  The code is derived from the document's status and summary, never chosen
+  beside it.
 
 Requirements:
   projectRoot: optional (falls back to cwd with a warning)

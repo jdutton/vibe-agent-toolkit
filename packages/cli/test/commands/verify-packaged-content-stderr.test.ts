@@ -36,8 +36,8 @@ describe('verify packaged-content — the refusal reaches stderr', () => {
     const phase = runPackagedContentPhase('/no-such-project-pc', [], fakePluginLocalIndex([]), new Map(), logger);
     const stderr = lines.join('\n');
 
-    expect(phase.status).toBe('error');
-    expect(phase.bundlesInspected).toBe(0);
+    expect(phase.report.status).toBe('findings');
+    expect(phase.report.examined).toBe(0);
     expect(stderr).toContain('▶ Phase: packaged-content');
     expect(stderr).toContain('RESOURCE_CHECK_BROKEN');
     expect(stderr).toContain('inspected 0 built skill bundles');
@@ -51,7 +51,7 @@ describe('verify packaged-content — the refusal reaches stderr', () => {
     const phase = buildPackagedContentPhase({ ...crawl, bundlesInPlace: 2 });
     reportPackagedContentPhase(phase, logger);
 
-    expect(phase.status).toBe('success');
+    expect(phase.report.status).toBe('ok');
     expect(lines.join('\n')).toContain('nothing to inspect: all 2 discovered skill(s) are in place');
 
     // Control: a stale in-place bundle that WAS inspected cleanly logs no such line.

@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 
-import { direntKindFollowing, FollowedWalk, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, FollowedWalk, forEachInOrder, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
+
+/** A refusal while hashing is a fault of the skill source's content, naming the path read. */
+const SKILL_SOURCE = { side: 'source', origin: 'content' } as const;
 
 /**
  * Deterministic SHA-256 content hash of a directory tree.
@@ -13,9 +16,10 @@ import { direntKindFollowing, FollowedWalk, safePath, toForwardSlash } from '@vi
  *
  * @param dir Absolute path to the directory to hash.
  * @returns 64-char lowercase hex SHA-256.
+ * @throws {FsFaultError} A `source` fault, when the OS will not read a file or list a directory in it.
  */
 export async function hashDirectory(dir: string): Promise<string> {
-  const walk = new FollowedWalk();
+  const walk = new FollowedWalk(SKILL_SOURCE.side);
   walk.enter(dir);
   const files = await collectFiles(dir, dir, walk);
   files.sort((a, b) => {
@@ -25,12 +29,13 @@ export async function hashDirectory(dir: string): Promise<string> {
   });
 
   const hash = createHash('sha256');
-  for (const { rel, abs } of files) {
+  // In order: `hash.update` order is the digest, and one file's bytes are held at a time.
+  await forEachInOrder(files, async ({ rel, abs }) => {
     hash.update(rel, 'utf-8');
     hash.update('\0');
-    hash.update(await readFile(abs));
+    hash.update(await withFsFault({ ...SKILL_SOURCE, action: `read the skill source at ${abs}`, path: abs }, () => readFile(abs)));
     hash.update('\0');
-  }
+  });
   return hash.digest('hex');
 }
 
@@ -39,16 +44,21 @@ async function collectFiles(
   current: string,
   walk: FollowedWalk,
 ): Promise<Array<{ rel: string; abs: string }>> {
-  const entries = await readdir(current, { withFileTypes: true });
+  const entries = await withFsFault(
+    { ...SKILL_SOURCE, action: `list the skill source at ${current}`, path: current },
+    () => readdir(current, { withFileTypes: true }),
+  );
   const out: Array<{ rel: string; abs: string }> = [];
-  for (const entry of entries) {
+  // In order: the walk guard's cycle detection depends on it.
+  await forEachInOrder(entries, async (entry) => {
     const abs = safePath.join(current, entry.name);
     // The hash covers what ships, so a link is followed to its bytes. A
     // dangling link or a special file has no bytes to hash and contributes
     // nothing — decided here, by name, rather than by falling off the end.
     // A link back into the tree is refused by the walk guard rather than
     // followed until the stack gives out.
-    switch (await direntKindFollowing(current, entry)) {
+    const kind = await withFsFault({ ...SKILL_SOURCE, action: `examine the skill source at ${abs}`, path: abs }, () => direntKindFollowing(current, entry));
+    switch (kind) {
       case 'directory':
         walk.enter(abs);
         out.push(...(await collectFiles(root, abs, walk)));
@@ -60,6 +70,6 @@ async function collectFiles(
       case 'other':
         break;
     }
-  }
+  });
   return out;
 }

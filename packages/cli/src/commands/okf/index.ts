@@ -115,11 +115,12 @@ Output (the shared report envelope; schema: packages/cli/schemas/okf-validate.js
 Exit Codes:
   0 - No error-severity findings, and at least one document examined
   1 - At least one error-severity finding, or nothing examined
-      (RESOURCE_CHECK_BROKEN). Anything unreadable — the bundle
-      root, one subdirectory, or one document — is reported as a finding naming
-      exactly what could not be read, so the rest of that bundle and every other
-      bundle in the run are still checked and still reported
-  2 - System error (no config file, unknown bundle name)
+      (RESOURCE_CHECK_BROKEN). An unreadable subdirectory or document is a
+      finding naming exactly what could not be read, so the rest of that bundle
+      and every other bundle are still checked and still reported
+  2 - The run could not do its job: no config file, an unknown bundle name
+      (USAGE_INVALID), or a bundle root the OS will not list (INPUT_UNREADABLE —
+      every other bundle's findings are still published with it)
 
 Example:
   $ vat okf validate knowledge --format json

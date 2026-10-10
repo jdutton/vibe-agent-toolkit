@@ -127,13 +127,13 @@ export const nameGeneratorAgent: Agent<
       temperature: 0.9,
     },
   },
-  execute: async (input: NameGeneratorInput) => {
+  execute: (input: NameGeneratorInput) => {
     const validatedOrError = validateAgentInput<NameGeneratorInput, NameSuggestion>(
       input,
       NameGeneratorInputSchema
     );
     if ('result' in validatedOrError) {
-      return validatedOrError;
+      return Promise.resolve(validatedOrError);
     }
 
     const { characteristics, mockable = true } = validatedOrError;

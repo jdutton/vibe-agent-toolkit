@@ -1,8 +1,8 @@
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import type { SymlinkCapability } from '@vibe-agent-toolkit/utils';
-import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
+import { createSymlink, FS_FAULT_CODE, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS, refuseAsyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -17,6 +17,7 @@ import {
   verifyDestSet,
   type SkillFileEntry,
 } from '../src/files-config.js';
+import { SKILL_PACKAGING_INPUT_INVALID_CODE } from '../src/packaging-errors.js';
 
 const CLI_SOURCE = 'dist/bin/cli.mjs';
 const CLI_DEST = 'scripts/cli.mjs';
@@ -49,6 +50,26 @@ function makeApplySandbox(): { projectRoot: string; skillOutputDir: string } {
   return { projectRoot, skillOutputDir };
 }
 
+
+// A glob match the machine could not examine (out of descriptors) says nothing about the match:
+// the run stops, classified — it is never counted as "not copyable" and silently skipped.
+describe('applyFilesConfig - a glob match the machine could not examine', () => {
+  afterEach(() => {
+    for (const dir of APPLY_TMP_DIRS.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.each(['EMFILE', 'EBUSY'])('throws a %s on the match\'s lstat as a capacity fault, never a skip', async (code) => {
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    const match = safePath.join(projectRoot, 'dist', 'gen', DATA_FILE);
+    const restore = refuseAsyncFs('lstat', match, code);
+    try {
+      await expect(applyFilesConfig({ filesConfig: [{ source: 'dist/gen/*', dest: 'data' }], projectRoot, skillOutputDir }))
+        .rejects.toMatchObject({ code: FS_FAULT_CODE, errno: code });
+    } finally {
+      restore();
+    }
+  });
+});
 /**
  * Shared shape for the "glob entry whose matched source is also link-bundled" cases.
  *
@@ -634,6 +655,10 @@ describe('applyFilesConfig', () => {
     await expect(
       applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles }),
     ).rejects.toThrow(/content mismatch/);
+    // An integrity post-condition failing is VAT's defect: uncoded.
+    await expect(
+      applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles }),
+    ).rejects.not.toMatchObject({ code: SKILL_PACKAGING_INPUT_INVALID_CODE });
   });
 
   it('throws when a declared source does not exist', async () => {
@@ -643,6 +668,10 @@ describe('applyFilesConfig', () => {
     await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).rejects.toThrow(
       /does not exist/,
     );
+    // The adopter's to fix, so coded as such — a caller tells it from a defect by code, never message.
+    await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).rejects.toMatchObject({
+      code: SKILL_PACKAGING_INPUT_INVALID_CODE,
+    });
   });
 
   it('throws a helpful error when non-glob source is a directory', async () => {
@@ -1009,9 +1038,9 @@ describe('applyFilesConfig', () => {
         await expect(
           applyFilesConfig({ filesConfig: [nonRegularGlob], projectRoot, skillOutputDir }),
         ).rejects.toThrow(
-          // All three, in one message: which entry caught it, which path failed,
-          // and what to do. The bare errno gave none of them.
-          /files: source 'gen\/assets\/\*'[\s\S]*locked\.mjs[\s\S]*permissions and ownership/,
+          // Both, in one message: which entry caught it and which path failed. The
+          // bare errno gave neither; the remedy is the refusal table's to append.
+          /files: source 'gen\/assets\/\*'[\s\S]*locked\.mjs/,
         );
       } finally {
         // Restore before cleanup — `rm -rf` copes with a 000 FILE, but leaving it
@@ -1042,7 +1071,12 @@ describe('applyFilesConfig', () => {
           // Literal, not a RegExp built from the constant: escaping the path's
           // separators back into a pattern is noise, and the point of the case is
           // that the ENTRY's own `source:` string appears verbatim in the message.
-        ).rejects.toThrow(`files: source '${DATA_SOURCE}'`);
+          // A source-side fault: the unreadable file is the author's own.
+        ).rejects.toMatchObject({
+          code: FS_FAULT_CODE,
+          side: 'source',
+          message: expect.stringContaining(`files: source '${DATA_SOURCE}'`) as unknown,
+        });
       } finally {
         chmodSync(locked, 0o644);
       }
@@ -1065,7 +1099,14 @@ describe('applyFilesConfig', () => {
             projectRoot,
             skillOutputDir,
           }),
-        ).rejects.toThrow(/could not be copied into the bundle[\s\S]*output directory is writable/);
+          // A refused write says nothing about the layout the skill's `files:` decided:
+          // `shapeFromSource` moves only layout classes, so this stays the output's.
+        ).rejects.toMatchObject({
+          code: FS_FAULT_CODE,
+          side: 'destination',
+          faultClass: 'refused',
+          message: expect.stringMatching(/copy files: source '[^']*' resolved to [\s\S]* into the bundle/) as unknown,
+        });
       } finally {
         chmodSync(skillOutputDir, 0o755);
       }
@@ -1383,7 +1424,7 @@ describe('applyFilesConfig never-package defaults', () => {
 // A thrown message from this module is MACHINE-READABLE OUTPUT.
 //
 // Every throw here reaches `vat skills build`'s stdout verbatim, as
-// `failedSkills[].message` — the document adopters paste into issues and CI
+// a `SKILL_PACKAGING_FAILED` finding's `message` — the document adopters paste into issues and CI
 // logs. So each path a message states has to be project-relative: an absolute
 // one publishes the developer's home directory and whatever the directories
 // above the project are called, which this project treats as worse than
@@ -1392,7 +1433,7 @@ describe('applyFilesConfig never-package defaults', () => {
 // Parameterized over EVERY route that throws, deliberately. The pre-existing
 // guard for this contract (`build-run-ledger.test.ts`) drove a single NON-GLOB
 // fixture, which is the one route whose message never interpolated a path —
-// so it certified "no absolute path in failedSkills[]" for a feature where the
+// so it certified "no absolute path in the published message" for a feature where the
 // glob routes published one ([[fixtures-that-cannot-distinguish]]).
 // ---------------------------------------------------------------------------
 
@@ -1479,6 +1520,17 @@ function makeIntegrityPair(dstName = 'dst.txt'): { srcFile: string; dstFile: str
 }
 
 describe('verifyFilesIntegrity', () => {
+  const SUBJECT = "files: source 'src.txt'";
+
+  const integrityError = (absSource: string, absDest: string): unknown => {
+    try {
+      verifyFilesIntegrity(SUBJECT, [{ absSource, absDest }]);
+    } catch (error) {
+      return error;
+    }
+    throw new Error('verifyFilesIntegrity did not throw');
+  };
+
   afterEach(() => {
     for (const dir of APPLY_TMP_DIRS.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
@@ -1488,7 +1540,7 @@ describe('verifyFilesIntegrity', () => {
     writeFileSync(srcFile, 'hello');
     writeFileSync(dstFile, 'hello');
 
-    expect(() => verifyFilesIntegrity([{ absSource: srcFile, absDest: dstFile }])).not.toThrow();
+    expect(() => verifyFilesIntegrity(SUBJECT, [{ absSource: srcFile, absDest: dstFile }])).not.toThrow();
   });
 
   it('throws when dest content differs from source', () => {
@@ -1496,7 +1548,7 @@ describe('verifyFilesIntegrity', () => {
     writeFileSync(srcFile, 'original');
     writeFileSync(dstFile, 'tampered');
 
-    expect(() => verifyFilesIntegrity([{ absSource: srcFile, absDest: dstFile }])).toThrow(
+    expect(() => verifyFilesIntegrity(SUBJECT, [{ absSource: srcFile, absDest: dstFile }])).toThrow(
       toForwardSlash(dstFile),
     );
   });
@@ -1505,9 +1557,42 @@ describe('verifyFilesIntegrity', () => {
     const { srcFile, dstFile } = makeIntegrityPair('missing.txt');
     writeFileSync(srcFile, 'data');
 
-    expect(() => verifyFilesIntegrity([{ absSource: srcFile, absDest: dstFile }])).toThrow(
+    expect(() => verifyFilesIntegrity(SUBJECT, [{ absSource: srcFile, absDest: dstFile }])).toThrow(
       toForwardSlash(dstFile),
     );
+  });
+
+  // The check reads BOTH trees, so each read is classified by the tree it touched: an
+  // unreadable dest is the build's output, never the skill's source.
+  it.skipIf(CANNOT_DENY_READS)('codes a dest it cannot read as the output\'s fault, naming the verification', () => {
+    const { srcFile, dstFile } = makeIntegrityPair();
+    writeFileSync(srcFile, 'same');
+    writeFileSync(dstFile, 'same');
+    chmodSync(dstFile, 0o000);
+
+    try {
+      expect(integrityError(srcFile, dstFile)).toMatchObject({
+        code: FS_FAULT_CODE,
+        side: 'destination',
+        faultClass: 'refused',
+        action: expect.stringMatching(/^verify .* in the bundle$/) as unknown,
+      });
+    } finally {
+      chmodSync(dstFile, 0o644);
+    }
+  });
+
+  it.skipIf(CANNOT_DENY_READS)('codes a source it cannot read as the skill\'s refusal', () => {
+    const { srcFile, dstFile } = makeIntegrityPair();
+    writeFileSync(srcFile, 'same');
+    writeFileSync(dstFile, 'same');
+    chmodSync(srcFile, 0o000);
+
+    try {
+      expect(integrityError(srcFile, dstFile)).toMatchObject({ code: FS_FAULT_CODE, side: 'source', faultClass: 'refused' });
+    } finally {
+      chmodSync(srcFile, 0o644);
+    }
   });
 });
 

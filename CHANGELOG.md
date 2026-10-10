@@ -565,9 +565,7 @@ with a regression test.
   `API_SKILL_MAX_UPLOAD_BYTES` (31,457,280), `describeOversizeBundle()`, `formatBytes()`,
   `SizedFile`, `declaredSkillNameIn()` and the three portability collectors, so your own uploader
   can apply VAT's checks. `claude-marketplace`: `matchesAllowRule`, `matchesDenyRule`,
-  `PermissionLane`. `rag`: `assertFiltersProducedConditions`, and `assertQuerySupported(query,
-  support)` / `QuerySupport`, which a custom provider should call to get the filter refusals
-  above. `rag-lancedb`: `LANCEDB_QUERY_SUPPORT`.
+  `PermissionLane`. `rag`: `assertFiltersProducedConditions`.
 
 - **(library) Claude `@`-import closures are now projected.** `ClaudeImportExtentContributor`
   registers one closure extent per `CLAUDE.md` / `CLAUDE.local.md` / `.claude/rules` file to the
@@ -586,10 +584,6 @@ with a regression test.
   `filters.metadata` was stripped — the one filter path that works could not be expressed.
 
 ### Changed
-
-- **The `version:` key in `vibe-agent-toolkit.config.yaml` is accepted and ignored** — any value,
-  or none. The npm package version is the only version VAT has; an existing config carrying
-  `version: 1` loads unchanged, and a new config need not carry the key.
 
 - **`vat audit --include-artifacts` help text says what the flag lifts and what no flag lifts.**
 
@@ -1155,10 +1149,6 @@ with a regression test.
   compiled to one `tags LIKE '%a,b%'`, so a document tagged `b,a` did not match. Each element now
   gets its own condition, ANDed. **A query relying on the old adjacency behaviour will return more
   rows than before.**
-
-- **`filters.dateRange` could not be expressed on the wire.** The published `RAGQueryJsonSchema`
-  declared `start`/`end` as `date-time` strings while the Zod half accepted only a `Date`. The Zod
-  half now accepts what the JSON half always advertised; the emitted JSON Schema is byte-identical.
 
 - **The chunker rejected a whole document rather than splitting its longest line**, so one wide
   table row or unwrapped bullet produced zero chunks for the entire file. It now never throws and

@@ -3,7 +3,7 @@ import nodeFs, { rmSync, symlinkSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 
-import { isFilesystemAccessError } from './errors/errno.js';
+import { fsFaultOf, isSymlinkUnsupportedError } from './errors/errno-table.js';
 import { normalizedTmpdir, safePath, toForwardSlash } from './path-utils.js';
 
 declare const symlinkCapabilityBrand: unique symbol;
@@ -23,17 +23,6 @@ export type SymlinkCapability = { readonly [symlinkCapabilityBrand]: true };
 let cachedCapability: SymlinkCapability | null | undefined;
 
 /**
- * The errnos that mean "this host cannot create symlinks": Windows without
- * Developer Mode or `SeCreateSymbolicLinkPrivilege` (`EPERM`), and a
- * filesystem that has no symlinks to offer (`ENOTSUP` / `EOPNOTSUPP`).
- */
-const SYMLINK_UNSUPPORTED_ERRNOS: ReadonlySet<string> = new Set(['EPERM', 'ENOTSUP', 'EOPNOTSUPP']);
-
-function isSymlinkUnsupported(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && typeof error.code === 'string' && SYMLINK_UNSUPPORTED_ERRNOS.has(error.code);
-}
-
-/**
  * Whether this PROCESS can create symlinks — probed once and memoized.
  *
  * On Windows, `symlink()` needs either Developer Mode or
@@ -47,7 +36,7 @@ function isSymlinkUnsupported(error: unknown): boolean {
  *
  * Because the answer is memoized for the whole process, what reads as "no"
  * matters more than usual: a `null` here silently `skip()`s every symlink test
- * for the rest of the run. So ONLY {@link SYMLINK_UNSUPPORTED_ERRNOS} is a
+ * for the rest of the run. So ONLY {@link isSymlinkUnsupportedError} is a
  * no. A tmpdir that is unwritable or missing, or a bug, is not an answer about
  * symlinks at all and stays loud rather than becoming a process-wide skip for
  * a reason nothing reported.
@@ -67,7 +56,7 @@ export function symlinkCapability(): SymlinkCapability | null {
       symlinkSync('.', probe);
       cachedCapability = {} as SymlinkCapability;
     } catch (error) {
-      if (!isSymlinkUnsupported(error)) throw error;
+      if (!isSymlinkUnsupportedError(error)) throw error;
       cachedCapability = null;
     }
     if (cachedCapability !== null) {
@@ -79,7 +68,7 @@ export function symlinkCapability(): SymlinkCapability | null {
       try {
         rmSync(probe, { force: true });
       } catch (error) {
-        if (!isFilesystemAccessError(error)) throw error;
+        if (fsFaultOf(error) === undefined) throw error;
       }
     }
   }
@@ -207,14 +196,17 @@ export function detachGitEnv(): () => void {
 
 /**
  * The errno-shaped error a refused `fs` call throws: a message, the `code`,
- * and the `syscall`, exactly as Node shapes one.
+ * the `syscall` and the `path`, exactly as Node shapes one — a caller that names
+ * the refused file from `path` (a tree probe naming the nested file) reads it.
  */
 export function errnoError(code: string, syscall: string, target: string): NodeJS.ErrnoException {
-  return Object.assign(new Error(`${code}: refused, ${syscall} '${target}'`), { code, syscall });
+  return Object.assign(new Error(`${code}: refused, ${syscall} '${target}'`), { code, syscall, path: target });
 }
 
 /** The sync `node:fs` calls a refusal can be injected into. */
 export type RefusableSyncFsMethod =
+  | 'cpSync'
+  | 'openSync'
   | 'readdirSync'
   | 'readFileSync'
   | 'statSync'
@@ -222,10 +214,11 @@ export type RefusableSyncFsMethod =
   | 'realpathSync'
   | 'renameSync'
   | 'rmSync'
-  | 'unlinkSync';
+  | 'unlinkSync'
+  | 'writeFileSync';
 
 /** The `node:fs/promises` calls a refusal can be injected into. */
-export type RefusableAsyncFsMethod = 'readdir' | 'readFile' | 'stat' | 'lstat' | 'access';
+export type RefusableAsyncFsMethod = 'readdir' | 'readFile' | 'stat' | 'lstat' | 'access' | 'copyFile' | 'mkdir' | 'writeFile';
 
 /**
  * Assign `fn` over `module[method]` and republish the builtin's ESM bindings.
@@ -269,12 +262,23 @@ export function refuseSyncFs(method: RefusableSyncFsMethod, targetPath: string, 
 /**
  * `fs/promises[method]` rejects with `code` for exactly `targetPath` until the
  * returned restore is called; every other path, and every other method, is real.
+ * `beforeRefusing`, when given, runs first on each refused call — a write that
+ * fails partway (a full disk) leaves a truncated file behind, and a test of the
+ * cleanup needs that file to exist.
  */
-export function refuseAsyncFs(method: RefusableAsyncFsMethod, targetPath: string, code: string): () => void {
+export function refuseAsyncFs(
+  method: RefusableAsyncFsMethod,
+  targetPath: string,
+  code: string,
+  beforeRefusing?: () => void,
+): () => void {
   const original = (fs[method] as (...args: unknown[]) => Promise<unknown>).bind(fs);
   const refused = toForwardSlash(targetPath);
-  republish(fs, method, async (target: unknown, ...rest: unknown[]): Promise<unknown> => {
-    if (toForwardSlash(String(target)) === refused) throw errnoError(code, method, String(target));
+  republish(fs, method, (target: unknown, ...rest: unknown[]): Promise<unknown> => {
+    if (toForwardSlash(String(target)) === refused) {
+      beforeRefusing?.();
+      return Promise.reject(errnoError(code, method, String(target)));
+    }
     return original(target, ...rest);
   });
   return () => republish(fs, method, original);
@@ -308,7 +312,7 @@ export async function withSyncFsRefused<T>(
  * @param body - Runs while the refusal is in force; may be async
  * @returns Whatever `body` returned
  */
-export async function withReaddirSyncRefused<T>(
+export function withReaddirSyncRefused<T>(
   directory: string,
   code: string,
   body: () => T | Promise<T>,

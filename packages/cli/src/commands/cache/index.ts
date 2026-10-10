@@ -81,21 +81,27 @@ Description:
   A cache directory that does not exist is not an error — nothing to remove is
   a successful clear.
 
-  The tree is shared by every VAT on the machine, so another run writing into
-  it can make the delete stop part-way. That is reported as status: partial,
-  naming what went and what stayed, rather than failing with no account of it.
+  The tree is moved off its path whole, then removed: a delete the OS stops
+  (another VAT writing into the shared tree, a file it will not remove) leaves
+  no part of a cache at <tmpdir>/.vat-cache. That is the report's error branch
+  (error.code RUN_INCOMPLETE) still carrying the data of the clear, with a
+  TREE_CLEANUP_INCOMPLETE warning naming where the moved-aside tree is, so you
+  can remove it yourself.
 
 Output:
+  A YAML report on stdout (status ok, or error); its data holds:
   - cacheDir: absolute path that was targeted
   - existed: whether the directory was there at all
   - removed: top-level entries that are now gone
-  - remaining / reason: what survived a partial clear, and why (partial only)
-  - entriesRemoved / bytesRemoved: file count and total size actually removed
+  - entriesRemoved / bytesRemoved: file count and total size removed
 
 Exit Codes:
   0 - Cache cleared (or already absent)
-  1 - Cleared only in part, because something else is using the tree
-  2 - Could not read or target the cache at all (permissions, unexpected layout)
+  2 - RUN_INCOMPLETE: the cache could not be examined, listed, measured or
+      moved off its path (nothing cleared, data null), or the moved-aside tree
+      could not then be deleted (cleared, data present, a warning naming it).
+      The cache is VAT's own scratch, so a refusal there is the run not
+      finishing; the document's error says which
 
 Example:
   $ vat cache clear                    # Reclaim the temp-directory cache tree

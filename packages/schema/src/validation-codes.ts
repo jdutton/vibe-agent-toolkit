@@ -1,9 +1,20 @@
 /**
  * Canonical code registry.
  *
- * Single source of truth for every overridable validation code VAT emits.
- * Describes default severity, human description, fix hint, and a stable
- * reference anchor into docs/validation-codes.md.
+ * Single source of truth for every registered code VAT emits, of two kinds:
+ *
+ * - **finding** — a statement about the thing examined. Overridable: a
+ *   `validation.severity` key can move its severity and a `validation.allow`
+ *   entry can waive it per path.
+ * - **refusal** — a statement that the RUN could not do its job (a usage
+ *   mistake, an unreadable input, an unavailable backend, a check that could
+ *   not execute). It is the only code space a report's `error.code` may be
+ *   drawn from, and it may also appear as an error-severity finding when the
+ *   run completed but one declared unit of it could not run. Never a config
+ *   key: a run that did not do its job has no legitimate `ignore`.
+ *
+ * Each entry describes its kind, default severity, human description, fix
+ * hint, and a stable reference anchor into docs/validation-codes.md.
  *
  * Renderers (CLI help, skill docs, runtime output) all pull from this
  * registry — no duplication.
@@ -24,7 +35,11 @@ export const IssueSeveritySchema = z.enum([...SEVERITIES, 'ignore']);
 
 export type IssueSeverity = z.infer<typeof IssueSeveritySchema>;
 
+/** `finding`: about the thing examined, overridable. `refusal`: the run could not do its job, never overridable. */
+export type CodeKind = 'finding' | 'refusal';
+
 export interface CodeRegistryEntry {
+  kind: CodeKind;
   defaultSeverity: IssueSeverity;
   description: string;
   fix: string;
@@ -32,15 +47,22 @@ export interface CodeRegistryEntry {
   reference: string;
 }
 
-const entry = (
+/**
+ * One registry entry. Generic in `kind` so each entry keeps its LITERAL kind in
+ * the registry's type — that is what lets {@link RefusalCode} and
+ * {@link FindingCode} be derived from the registry rather than hand-listed.
+ */
+const entry = <K extends CodeKind>(
+  kind: K,
   defaultSeverity: IssueSeverity,
   description: string,
   fix: string,
   anchor: string,
-): CodeRegistryEntry => ({ defaultSeverity, description, fix, reference: `#${anchor}` });
+): CodeRegistryEntry & { kind: K } => ({ kind, defaultSeverity, description, fix, reference: `#${anchor}` });
 
 export const CODE_REGISTRY = {
   LINK_OUTSIDE_PROJECT: entry(
+    'finding',
     'error',
     'Markdown link points to a file outside the project root.',
     'Move the target inside the project or remove the link. Use validation.allow if the reference is intentional and cross-project.',
@@ -51,12 +73,14 @@ export const CODE_REGISTRY = {
   // other. `ignore`: the packager bundles the target and rewrites the link, so
   // only a skill that must be self-contained raises it.
   LINK_OUTSIDE_SKILL_DIR: entry(
+    'finding',
     'ignore',
     "Markdown link resolves to a file outside the skill's directory (inside the project).",
     'Move the target into the skill directory to keep the skill self-contained. By default the target is bundled and the link rewritten silently; set validation.severity.LINK_OUTSIDE_SKILL_DIR to error (per skill under skills.config.<name>.validation, or tree-wide under skills.defaults.validation) to make validate and build fail instead of bundling, or to warning to bundle and report.',
     'link_outside_skill_dir',
   ),
   LINK_TARGETS_DIRECTORY: entry(
+    'finding',
     'error',
     'A typed single-file reference (e.g. a packaging `files:` source entry) resolves to a directory instead of a file.',
     'Point the `files:` source (or other single-file reference) at a specific file, not a directory. Navigational prose links to a directory are valid and do not trigger this code.',
@@ -84,6 +108,7 @@ export const CODE_REGISTRY = {
   // link resolves perfectly well for a reader browsing the repo, which is why
   // the report is about packaging, not about the link being malformed.
   LINK_TO_UNBUNDLED_DIRECTORY: entry(
+    'finding',
     'warning',
     'Markdown link targets a directory; directories are never bundled, so the target did not ship and the packaged link points at nothing.',
     // Deliberately does NOT offer "point it at the directory's README.md": VAT
@@ -93,12 +118,14 @@ export const CODE_REGISTRY = {
     'link_to_unbundled_directory',
   ),
   LINK_TO_NAVIGATION_FILE: entry(
+    'finding',
     'warning',
     'Markdown link targets a navigation file (README.md, index.md, etc.) which was excluded from the bundle.',
     'Link to the specific content instead of the navigation file, or set severity.LINK_TO_NAVIGATION_FILE to ignore if this is intentional.',
     'link_to_navigation_file',
   ),
   LINK_TO_AGENT_INSTRUCTION_FILE: entry(
+    'finding',
     'error',
     // "excluded from the bundle" used to be asserted unconditionally, and it was
     // FALSE in the one configuration the fix string recommended: with an explicit
@@ -122,36 +149,42 @@ export const CODE_REGISTRY = {
     'link_to_agent_instruction_file',
   ),
   LINK_TO_GITIGNORED_FILE: entry(
+    'finding',
     'error',
     'Markdown link targets a gitignored file; risks leaking ignored data into the bundle.',
     'Link to a non-ignored file or adjust .gitignore. Allow the specific path via validation.allow if the risk has been reviewed. If the target is a build artifact, declare it under skills.config.<name>.files instead.',
     'link_to_gitignored_file',
   ),
   LINK_MISSING_TARGET: entry(
+    'finding',
     'error',
     'Markdown link target does not exist on disk and is not a declared build artifact.',
     'Fix the link path, create the file, or declare it under skills.config.<name>.files as a build artifact.',
     'link_missing_target',
   ),
   LINK_TARGET_UNREADABLE: entry(
+    'finding',
     'error',
-    'Markdown link target could not be checked: a read failure along its path left its existence, spelling, and anchor all unverified, and — when packaging — the target was not bundled either. Usually permissions; sometimes a transient errno (EMFILE/ENFILE/EAGAIN — re-run before investigating) or a change racing the walk.',
-    'Re-run first if the errno looks transient (EMFILE/ENFILE/EAGAIN) — the target may check out clean on a second pass. Otherwise fix the permissions on the path, or investigate what changed mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read.',
+    'Markdown link target could not be checked: a read failure along its path left its existence, spelling, and anchor all unverified, and — when packaging — the target was not bundled either. Usually permissions; sometimes a transient errno (EMFILE/ENFILE/EAGAIN/EBUSY/ETXTBSY — re-run before investigating), a change racing the walk, or a target that is not a regular file (a named pipe, socket or device), refused unread.',
+    'Re-run first if the errno looks transient (EMFILE/ENFILE/EAGAIN/EBUSY/ETXTBSY) — the target may check out clean on a second pass. Otherwise fix the permissions on the path, link a regular file in place of a named pipe, socket or device, or investigate what changed mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read.',
     'link_target_unreadable',
   ),
   LINK_DEFERRED_ARTIFACT: entry(
+    'finding',
     'info',
     'Link targets a deferred build artifact declared in the skill files: config; it will exist after the build materializes it.',
     'No action needed if the files: entry is correct. To silence, set validation.severity.LINK_DEFERRED_ARTIFACT: ignore.',
     'link_deferred_artifact',
   ),
   LINK_TO_SKILL_DEFINITION: entry(
+    'finding',
     'error',
     "Markdown link targets another skill's SKILL.md; bundling it creates duplicate skill definitions.",
     'Link to a specific resource inside the other skill, or reference the other skill by name.',
     'link_to_skill_definition',
   ),
   LINK_FROM_NON_ROUTABLE_FILE: entry(
+    'finding',
     'warning',
     // States the mechanism, because the author cannot infer it: the referring
     // file WAS bundled, which makes the missing target look like a rewriter bug
@@ -161,6 +194,7 @@ export const CODE_REGISTRY = {
     'link_from_non_routable_file',
   ),
   LINK_DROPPED_BY_DEPTH: entry(
+    'finding',
     'warning',
     "Depth counts hops from SKILL.md: SKILL.md's own links are depth 1, a link inside a depth-1 file is depth 2, and so on. This link was found deeper than the configured linkFollowDepth, so its target was not bundled and the packaged link points at nothing. A drop caused by an excludeReferencesFromBundle rule instead produces the sibling LINK_EXCLUDED_BY_PATTERN (info).",
     'Raise linkFollowDepth, bundle the file via files config, declare the drop intentional with validation.allow, or exclude via excludeReferencesFromBundle.rules.',
@@ -183,12 +217,14 @@ export const CODE_REGISTRY = {
   // emitting lane from the walker's own `matchedRule` record — with several
   // rules configured, knowing that one of them fired is not an answer.
   LINK_EXCLUDED_BY_PATTERN: entry(
+    'finding',
     'info',
     'A reference was excluded from the bundle by an excludeReferencesFromBundle rule this project declared; the target did not ship.',
     'No action needed if the exclusion is intended — the rule did exactly what it was configured to do. If the target should have shipped, narrow or remove the matching excludeReferencesFromBundle rule, or declare the file under skills.config.<name>.files. Set severity.LINK_EXCLUDED_BY_PATTERN to ignore to drop these from the report entirely.',
     'link_excluded_by_pattern',
   ),
   PACKAGED_UNREFERENCED_FILE: entry(
+    'finding',
     'error',
     'File in the packaged output is not referenced from any packaged markdown.',
     'Add a markdown link or code-block mention in SKILL.md or a linked resource. A file consumed programmatically belongs in skills.config.<name>.files as a source/dest pair — a declared dest is exempt, so do NOT restate it in validation.allow.',
@@ -217,6 +253,7 @@ export const CODE_REGISTRY = {
   // caller, and the whole subsystem behind it has been DELETED, so the documented
   // rate and the shipped rate cannot drift apart again.
   PACKAGED_REFERENCED_PATH_MISSING: entry(
+    'finding',
     'warning',
     'SKILL.md (or a bundled reference file) names a path under a bundled subdirectory that is not present in the packaged output.',
     'Ship the file, correct the path, or — if the token is an illustrative example rather than a real reference — reword it so it is not a bare bundled-subdirectory path. A file injected at build time belongs in skills.config.<name>.files as a source/dest pair.',
@@ -242,12 +279,14 @@ export const CODE_REGISTRY = {
   // over it publishes and installs perfectly well as a Claude Code plugin, and VAT
   // has no API publish target to condition on yet. Promote it there when it exists.
   PACKAGED_SIZE_EXCEEDS_API_LIMIT: entry(
+    'finding',
     'warning',
     'The packaged skill totals 30 MiB (31,457,280 bytes) or more uncompressed — at or over the Anthropic Skills API upload ceiling. The total leaves out the directories the uploader never sends (evals/, node_modules/, .git/) and any symbolic link, so it will not agree with `du -sb` on the same directory.',
     'Shrink the bundle: drop or externalise the largest files the message names — a runtime that a skill downloads or that its host already provides does not have to ship inside the skill. The ceiling applies to Skills API uploads only; a bundle over it still installs as a Claude Code plugin, so if this skill is never published to the API, waive the finding with a validation.allow entry whose paths name the largest file the message reports — each finding carries that file as its link, so one entry waives the bundles that file explains and every other skill keeps the check. Set severity.PACKAGED_SIZE_EXCEEDS_API_LIMIT to ignore only as the blunt fallback: that disables the check for the whole project.',
     'packaged_size_exceeds_api_limit',
   ),
   PACKAGED_AGENT_INSTRUCTION_FILE: entry(
+    'finding',
     'warning',
     'A repo-internal agent-instruction file (CLAUDE.md, AGENTS.md, GEMINI.md) is present in the scanned tree — a built skill bundle, an installed plugin, or a plugin source directory.',
     // Two lanes hand this detector different trees, and one remediation has to be
@@ -285,6 +324,7 @@ export const CODE_REGISTRY = {
   // holds agent-instruction files: with none there, nothing was left unclassified
   // and healthy git would have said nothing either.
   TREE_PROVENANCE_INDETERMINATE: entry(
+    'finding',
     'warning',
     'Could not determine whether a scanned skill tree is repository source or a distributed artifact, because `git` could not be consulted; agent-instruction files present in the tree were left unclassified rather than silently accepted.',
     'Make `git` runnable for this tree — install it, put it on PATH, or repair the repository whose `.git` directory could not be read — then re-run the audit. Set severity.TREE_PROVENANCE_INDETERMINATE to ignore if this environment deliberately has no git and the unclassified files are known to be repository source.',
@@ -307,17 +347,19 @@ export const CODE_REGISTRY = {
   // findings that DID come back are trustworthy and an unreadable path is usually
   // an environment fact rather than a defect in the audited tree.
   SCAN_PATH_UNREADABLE: entry(
+    'finding',
     'warning',
-    'A path under the audited tree could not be read — a directory the scan could not enter, or a file it could not open — so it was not scanned; findings from every readable sibling are still reported.',
-    // `--exclude` leads, and the severity override is qualified, because the
-    // override is NOT reachable in the case that produces this finding most
-    // often: `applySeverityFilter` early-returns unless a VAT config is found
+    'A path the command had to read could not be read — a directory it could not enter, or a file it could not open — so it was not scanned; findings from every readable sibling are still reported.',
+    // Restoring access leads; `--exclude` is the deliberate drop. The severity
+    // override is qualified because it is NOT reachable in the case that produces
+    // this finding most often: `applySeverityFilter` early-returns unless a VAT config is found
     // above the scan path, and there is normally none above `~/.claude/plugins`.
     // Advertising a remedy an adopter cannot apply is worse than not offering it.
-    'Make the path readable — check its permissions and ownership — then re-run the audit, or pass --exclude to drop it from the scan deliberately. Set severity.SCAN_PATH_UNREADABLE to ignore if the path is expected to be unreadable and the scan runs inside a project whose config VAT can find.',
+    'Make the path readable — check its permissions and ownership — then re-run. To drop it deliberately instead: vat audit takes --exclude, and a verb that reads a project config VAT can find honours severity.SCAN_PATH_UNREADABLE: ignore; other verbs have no lever, and their result stays a floor.',
     'scan_path_unreadable',
   ),
   FILES_GLOB_DROPPED_NEVER_PACKAGED: entry(
+    'finding',
     'warning',
     'A `files:` glob matched a file that is never packaged into a skill bundle (an agent-instruction file such as CLAUDE.md, or a navigation file such as README.md); it was dropped and did not ship.',
     'No action needed if the drop is intended — a glob is a net, not a declaration. To ship that specific file deliberately, add an explicit `files:` entry naming it (`source: <path>`); to stop matching it at all, narrow the glob.',
@@ -335,6 +377,7 @@ export const CODE_REGISTRY = {
   // the expected outcome. It replaces a raw `ENOTSUP` that killed the build naming
   // neither the entry nor the path.
   FILES_GLOB_SKIPPED_NON_REGULAR_FILE: entry(
+    'finding',
     'warning',
     'A `files:` glob matched something that is not a regular file (a symlink to a directory, a dangling symlink, a FIFO, a socket or a device node); it cannot be packaged and was skipped, so it did not ship.',
     'Point the glob at regular files, or narrow it so it stops matching this path. To ship the contents a directory symlink targets, name the real directory in a glob of its own (`source: <real-dir>/**/*`) — a link cannot be packaged as one file. Set severity.FILES_GLOB_SKIPPED_NON_REGULAR_FILE to ignore if the skip is expected.',
@@ -358,6 +401,7 @@ export const CODE_REGISTRY = {
   // wrong. Louder than `info` because, unlike an empty directory, a directory
   // containing only never-packaged files is not the ordinary pre-build state.
   FILES_GLOB_MATCHED_ONLY_NEVER_PACKAGED: entry(
+    'finding',
     'warning',
     'A `files:` glob matched only files that are never packaged into a skill bundle (agent-instruction files such as CLAUDE.md, navigation files such as README.md), so the entry ships nothing and `vat skills build` fails on it.',
     // Deliberately does NOT say "widen the glob": the never-package filter matches
@@ -379,18 +423,21 @@ export const CODE_REGISTRY = {
   // drop that is harmless by design while staying silent about the zero-match
   // that is fatal.
   FILES_GLOB_MATCHED_NOTHING: entry(
+    'finding',
     'info',
     'A `files:` glob currently matches no files; `vat skills build` fails on a glob that matches nothing, so the build will fail unless that artifact is produced first.',
     'No action needed if the glob points at a build artifact your project produces before `vat skills build` runs — matching nothing beforehand is expected. Otherwise correct the pattern (a `files:` source resolves relative to the project root) or drop the entry. Set severity.FILES_GLOB_MATCHED_NOTHING to ignore to silence it everywhere.',
     'files_glob_matched_nothing',
   ),
   PACKAGED_TEST_INPUT: entry(
+    'finding',
     'warning',
     "A link or files: entry pointed into the skill's declared test input (its test.evals path) and was NOT packaged; test input — including the expected_output answer key — never ships to consumers.",
     'No action needed — the build already excluded it. Remove the link or files: entry to silence this, or move the target out of the test.evals directory if it is genuinely a shipped resource.',
     'packaged_test_input',
   ),
   PACKAGED_BROKEN_LINK: entry(
+    'finding',
     'error',
     // The CAUSE deliberately lives in `fix`, not here. This code has two
     // populations — a link-rewriter bug, and a target the never-package filter
@@ -407,12 +454,14 @@ export const CODE_REGISTRY = {
     'packaged_broken_link',
   ),
   FILENAME_COLLISION: entry(
+    'finding',
     'error',
     'Two source files package to the same destination path in the bundle; one would overwrite the other.',
     "Rename one of the files, or switch resourceNaming to a path-based strategy ('resource-id' or 'preserve-path') so the sources map to distinct destinations.",
     'filename_collision',
   ),
   PLUGIN_EXCLUDE_PATTERN_UNUSED: entry(
+    'finding',
     'warning',
     'A plugin `exclude:` pattern matched no file in the plugin source tree; it excluded nothing from the built bundle.',
     // Names only what the author can act on. A dead pattern has no "correct"
@@ -423,12 +472,14 @@ export const CODE_REGISTRY = {
     'plugin_exclude_pattern_unused',
   ),
   DUPLICATE_RESOURCE_ID: entry(
+    'finding',
     'error',
     'Two files resolve to the same resource id after path normalization.',
     'Rename one of the files so they produce distinct resource ids.',
     'duplicate_resource_id',
   ),
   RESOURCE_UNREADABLE: entry(
+    'finding',
     'error',
     'A file the crawl enumerated could not be read, so it was skipped. Most often a committed symlink whose target is missing; also permissions, or a file deleted between enumeration and parse.',
     'Repoint or delete the dangling symlink, restore the missing target, or fix the permissions. Set severity.RESOURCE_UNREADABLE to warning if a corpus is expected to contain unresolvable entries.',
@@ -440,12 +491,14 @@ export const CODE_REGISTRY = {
   // severities MATCH the row severities the projection writes, so the two
   // channels never disagree about how loud one fact is.
   COLLECTION_MIME_CONFLICT: entry(
+    'finding',
     'error',
     'Two collections declare different mimeType values for the same file. A file has one type and one parser, so the run used the built-in type table\'s answer for it and the declared routing was ignored.',
     'Make the two collections\' mimeType declarations agree, or drop mimeType from the collection that should not be typing this file.',
     'collection_mime_conflict',
   ),
   EXTENT_DIRECTORY_UNLISTABLE: entry(
+    'finding',
     'warning',
     'A gitignored directory could not be listed, so nothing beneath it was enumerated. The directory itself is recorded and every readable sibling was enumerated; nothing beneath a gitignored directory is in the validation population, so no count in this report is narrowed by it.',
     'Fix the permissions on that directory if what is beneath it should be visible to the projection. Set severity.EXTENT_DIRECTORY_UNLISTABLE to ignore for a directory that is expected to be unreadable (a root-owned cache under an ignored build directory).',
@@ -454,6 +507,7 @@ export const CODE_REGISTRY = {
   // `info` because committing a symlink is ordinary: the row records that VAT
   // did not count the file, it does not say the author did anything wrong.
   EXTENT_SYMLINK_NOT_REALIZED: entry(
+    'finding',
     'info',
     'A symbolic link in the tree is not realized: VAT never realizes a link\'s own path, so nothing in the projection is at that path and no size, Claude context chain or load, or claude_rule_patterns row counts it — although Claude Code reads a CLAUDE.md or rules file through a link. The finding names the target, root-relative, and says whether it is realized at its own path. A link whose target resolves outside the project root draws EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT instead, and one that resolves to nothing draws EXTENT_SYMLINK_TARGET_UNRESOLVED, so a query about declined links asks for all three codes.',
     'Nothing to fix when the target is realized at its own path and nothing needs to count the link. If the link is a CLAUDE.md or rules file whose load matters to a budget or rules check, replace the link with the file (or an @ import of it) so VAT sees it at that path. Set severity.EXTENT_SYMLINK_NOT_REALIZED to ignore to silence it.',
@@ -465,6 +519,7 @@ export const CODE_REGISTRY = {
   // three (with EXTENT_SYMLINK_TARGET_UNRESOLVED) are always read together
   // through `DECLINED_SYMLINK_CODES`.
   EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT: entry(
+    'finding',
     'info',
     'A symbolic link in the tree is not realized and its target resolves outside the project root, so the target is realized nowhere in this projection and is never named — its text can carry a home directory or any absolute path. Everything EXTENT_SYMLINK_NOT_REALIZED says about the link applies; this code adds only where the target lies, which decides whether Claude Code loads a linked rules file at all.',
     'Nothing to fix when nothing needs to count the link. If the link is a rules file or rules directory, Claude Code skips it too — it loads one reached through a link only when the target stays inside the directory the session started in — so copy or vendor the content into the repository rather than linking it in. What Claude Code does with a CLAUDE.md linked from outside the root is not sourced. Set severity.EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT to ignore to silence it.',
@@ -474,96 +529,112 @@ export const CODE_REGISTRY = {
   // nothing. Neither sibling can say that truthfully — NOT_REALIZED means the
   // link reaches something, OUTSIDE_ROOT would call an in-root spelling outside.
   EXTENT_SYMLINK_TARGET_UNRESOLVED: entry(
+    'finding',
     'info',
     'A symbolic link in the tree is not realized and resolves to nothing on this host — its target does not exist, the link loops, or it cannot be resolved — while its target text stays inside the project root. Everything EXTENT_SYMLINK_NOT_REALIZED says about the link applies; this code adds that Claude Code reads nothing through it.',
     'Point the link at a file that exists, or delete it. A link that dangles only on this host (its target is generated or checked out elsewhere) resolves where the target exists. Set severity.EXTENT_SYMLINK_TARGET_UNRESOLVED to ignore to silence it.',
     'extent_symlink_target_unresolved',
   ),
   SKILL_LENGTH_EXCEEDS_RECOMMENDED: entry(
+    'finding',
     'warning',
     'SKILL.md line count exceeds the recommended limit; longer files degrade skill triggering.',
     'Split content into linked resources (progressive disclosure) or allow if the length is justified.',
     'skill_length_exceeds_recommended',
   ),
   SKILL_TOTAL_SIZE_LARGE: entry(
+    'finding',
     'warning',
     'Total packaged line count exceeds the recommended limit.',
     'Reduce bundled content, move references out of the bundle, or allow if the size is justified.',
     'skill_total_size_large',
   ),
   SKILL_TOO_MANY_FILES: entry(
+    'finding',
     'warning',
     'Packaged file count exceeds the recommended limit.',
     'Consolidate or restructure references, or allow if the file count is justified.',
     'skill_too_many_files',
   ),
   REFERENCE_TOO_DEEP: entry(
+    'finding',
     'warning',
     'Bundled link graph exceeds the recommended depth; deeply nested references hurt discoverability.',
     'Flatten the reference structure or allow if depth is intentional.',
     'reference_too_deep',
   ),
   DESCRIPTION_TOO_VAGUE: entry(
+    'finding',
     'warning',
     'SKILL.md description is too short to reliably trigger the skill.',
     'Expand the description with concrete triggers and use cases.',
     'description_too_vague',
   ),
   NO_PROGRESSIVE_DISCLOSURE: entry(
+    'finding',
     'warning',
     'Long SKILL.md with no linked references; progressive disclosure recommended.',
     'Move background detail into linked resources and reference them from SKILL.md.',
     'no_progressive_disclosure',
   ),
   SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT: entry(
+    'finding',
     'warning',
     'SKILL.md description exceeds the 250-character Claude Code /skills display limit.',
     'Shorten the description below 250 chars (target ≤200 for a safety margin, or ≤130 if shipping a large skill collection).',
     'skill_description_over_claude_code_limit',
   ),
   SKILL_DESCRIPTION_FILLER_OPENER: entry(
+    'finding',
     'warning',
     'SKILL.md description opens with meta-filler (e.g., "This skill...", "A skill that...", "Use when you want to...").',
     'Lead with a verb phrase ("Extracts text from PDFs...") or "Use when <concrete trigger>".',
     'skill_description_filler_opener',
   ),
   SKILL_DESCRIPTION_WRONG_PERSON: entry(
+    'finding',
     'warning',
     'SKILL.md description uses first-person or conversational second-person voice.',
     'Rewrite in third person. "I can extract PDFs" → "Extracts text from PDFs". "You can use this to..." → the action itself.',
     'skill_description_wrong_person',
   ),
   SKILL_CLAUDE_PLUGIN_NAME_MISMATCH: entry(
+    'finding',
     'warning',
     'plugin.json name does not match the co-located root SKILL.md frontmatter name.',
     'Align the names: update plugin.json `name` to match SKILL.md `name` (the skill is authoritative), or intentionally namespace the plugin (configure `validation.severity` or `validation.allow` with a reason).',
     'skill_claude_plugin_name_mismatch',
   ),
   SKILL_NAME_MISMATCHES_DIR: entry(
+    'finding',
     'warning',
     'Frontmatter name field does not match the skill parent directory name.',
     'Align them: rename the directory to match name, or update name to match the directory.',
     'skill_name_mismatches_dir',
   ),
   RESERVED_WORD_IN_NAME: entry(
+    'finding',
     'warning',
     'Frontmatter `name` contains a reserved word (`anthropic` or `claude`); Claude Code rejects non-certified skills using these words.',
     'Rename the skill to avoid `anthropic` or `claude` in the name.',
     'reserved_word_in_name',
   ),
   SKILL_TIME_SENSITIVE_CONTENT: entry(
+    'finding',
     'info',
     'SKILL.md body contains time-sensitive prose (e.g., "as of November 2025") that may become stale.',
     'Remove the time qualifier, or move deprecated guidance into a clearly labeled "## Old patterns" section with a <details> block.',
     'skill_time_sensitive_content',
   ),
   NON_PORTABLE_ASSET_REFERENCE: entry(
+    'finding',
     'warning',
     'A skill document (SKILL.md or a reachable bundled reference file) references a bundled script/asset via a non-portable anchor — a family of five variants, each named in its own finding: CLAUDE_PLUGIN_ROOT, CLAUDE_PROJECT_DIR, CLAUDE_SKILL_DIR, the API code-execution container mount point /skills/<name>/, or an absolute path passed to a runtime. None is part of the portable Agent Skills contract, so the path breaks on some surface the skill can be mounted on.',
     'Reference bundled files by a path relative to the skill directory (e.g. `scripts/run.mjs`), never via an env-var anchor (CLAUDE_PLUGIN_ROOT, CLAUDE_SKILL_DIR), a host-specific mount point (/skills/<name>/), or an absolute path. When a process genuinely needs an absolute path, instruct the agent to cd into the skill directory first. CLAUDE_PROJECT_DIR is the exception: it denotes the repository the skill operates ON, which no skill-relative path can express, so take that location as an explicit parameter with $CLAUDE_PROJECT_DIR only as a fallback. See the vibe-agent-toolkit:vat-skill-authoring skill.',
     'non_portable_asset_reference',
   ),
   NON_PORTABLE_COMMAND: entry(
+    'finding',
     'warning',
     'A skill document (SKILL.md or a reachable bundled reference file) instructs an agent to run a shell command that hard-codes a GNU/Linux-only utility or flag (e.g. `timeout`, `grep -P`, `sed -i` with no suffix, `readlink -f`, `date -d`). These fail, or behave differently, on macOS/BSD where the agent may execute them.',
     'Use a portable equivalent: `grep -E` for PCRE, `sed -i.bak`/an explicit suffix, a temp file instead of bare `-i`, a portable resolve instead of `readlink -f`, and `date -v`/`-j -f` instead of `date -d`. Gate or avoid `timeout` (absent on macOS by default). See the vibe-agent-toolkit:vat-skill-review skill.',
@@ -594,162 +665,187 @@ export const CODE_REGISTRY = {
   // wording is conditional for the same reason — "especially when multiple MCP
   // servers are available".
   MCP_TOOL_NAME_UNQUALIFIED: entry(
+    'finding',
     'warning',
     'A skill document tells an agent to call an MCP tool by its bare name, in a document that spells that same tool fully-qualified elsewhere.',
     'Write the tool fully-qualified everywhere the skill tells an agent to call it — `ServerName:tool_name` for the API, or the `mcp__<server>__<tool>` form Claude Code uses. Without the server prefix Claude may fail to locate the tool when several MCP servers are mounted. A line that already spells the tool fully-qualified is exempt, so a bare-to-qualified mapping table needs no waiver. If an occurrence really is deliberate — an availability probe naming the tool the way the host lists it, say — waive that one identifier with a validation.allow entry whose paths name the tool.',
     'mcp_tool_name_unqualified',
   ),
   SKILL_FRONTMATTER_EXTRA_FIELDS: entry(
+    'finding',
     'warning',
     'SKILL.md frontmatter contains a field outside the standard agentskills.io + Claude Code key set.',
     'Move custom data under `metadata.<key>`, or remove the field. Per-project config belongs in vibe-agent-toolkit.config.yaml, not SKILL.md frontmatter.',
     'skill_frontmatter_extra_fields',
   ),
   SKILL_CROSS_SKILL_AUTH_UNDECLARED: entry(
+    'finding',
     'warning',
     'SKILL.md body declares a dependency on a sibling skill or ANTHROPIC_*_KEY environment variable that is not mentioned in the description.',
     'Name the dependency in the description (e.g. "Requires ado skill for auth" or "Requires ANTHROPIC_ADMIN_API_KEY") so agents loading the skill discover it without reading the body. Allow via validation.allow with a reason when the dependency is genuinely runtime-optional.',
     'skill_cross_skill_auth_undeclared',
   ),
   SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE: entry(
+    'finding',
     'warning',
     'Sibling skills in the same package use mixed YAML scalar styles for their `description` frontmatter (e.g., folded `>-` alongside inline double-quoted).',
     'Pick one YAML style and apply it to every skill in the package.',
     'skill_description_style_mixed_in_package',
   ),
   PLUGIN_MISSING_DESCRIPTION: entry(
+    'finding',
     'info',
     'plugin.json is missing the recommended `description` field.',
     'Add a "description" field to plugin.json so users see what the plugin does in the listing.',
     'plugin_missing_description',
   ),
   PLUGIN_MISSING_AUTHOR: entry(
+    'finding',
     'info',
     'plugin.json is missing the recommended `author` field.',
     'Add an "author" object (e.g. { "name": "..." }) to plugin.json so downstream consumers can attribute the plugin.',
     'plugin_missing_author',
   ),
   PLUGIN_MISSING_LICENSE: entry(
+    'finding',
     'info',
     'plugin.json is missing the recommended `license` field.',
     'Add a "license" SPDX identifier (e.g. "MIT") to plugin.json so redistribution terms are explicit.',
     'plugin_missing_license',
   ),
   PLUGIN_TOPLEVEL_BIN_DIR: entry(
+    'finding',
     'warning',
     'Plugin ships a top-level `bin/` directory. `bin/` is a supported Claude Code CLI feature (its entries join the Bash tool PATH as bare commands), but a claude.ai-hosted marketplace sync has been observed to skip plugins containing it.',
     'If nothing invokes these as bare commands, move them to `scripts/` — the documented home for helper scripts — and invoke by path. Keep `bin/` only if you rely on PATH exposure and distribute via the CLI. Set severity.PLUGIN_TOPLEVEL_BIN_DIR to ignore, or add a validation.allow entry, to opt out.',
     'plugin_toplevel_bin_dir',
   ),
   PLUGIN_NAME_NOT_KEBAB_CASE: entry(
+    'finding',
     'info',
     'Plugin name does not match the kebab-case convention required by Claude Code (lowercase alphanumeric with single hyphens).',
     'Rename the plugin to kebab-case (e.g. "my-plugin"). Schema parse already errors; this code surfaces the same finding with a more actionable message.',
     'plugin_name_not_kebab_case',
   ),
   SKILL_NAME_NOT_KEBAB_CASE: entry(
+    'finding',
     'info',
     'Skill frontmatter `name` does not match the kebab-case convention.',
     'Rename the skill to kebab-case (e.g. "my-skill"). Schema parse already errors; this code surfaces the same finding with a more actionable message.',
     'skill_name_not_kebab_case',
   ),
   SKILL_REFERENCES_BUT_NO_LINKS: entry(
+    'finding',
     'info',
     'Skill directory contains scripts/, references/, or assets/ subdirectories but the SKILL.md body has zero markdown links into them.',
     'Add explicit markdown links from SKILL.md (or a linked file) into the bundled subdirectories, or remove the unreferenced directory. Assets consumed programmatically belong in skills.config.<name>.files as source/dest pairs — a declared dest is exempt, so do NOT restate them in validation.allow.',
     'skill_references_but_no_links',
   ),
   SKILL_BODY_NOT_IMPERATIVE: entry(
+    'finding',
     'info',
     'SKILL.md body contains second-person instructional openers (e.g. "You should…", "You need to…", "You can…").',
     'Rewrite as imperative ("Configure the MCP server…" instead of "You should configure…"). Skill bodies read more cleanly as instructions to the agent rather than to a human reader. Allow via validation.allow if the heuristic misfires on quoted prompts or user dialog.',
     'skill_body_not_imperative',
   ),
   CAPABILITY_LOCAL_SHELL: entry(
+    'finding',
     'info',
     'Skill references a local-shell tool (Bash/Edit/Write/NotebookEdit) or invokes a shell.',
     'Informational. Declare a plugin target that provides shell (claude-code, claude-cowork) so this observation resolves to an expected verdict.',
     'capability_local_shell',
   ),
   CAPABILITY_EXTERNAL_CLI: entry(
+    'finding',
     'info',
     'Skill invokes an external CLI binary not bundled with the skill.',
     'Informational. Ensure the declared target guarantees the binary or document the prerequisite.',
     'capability_external_cli',
   ),
   CAPABILITY_BROWSER_AUTH: entry(
+    'finding',
     'info',
     'Skill appears to require an interactive browser login flow.',
     'Informational. If a service-principal flow would work, prefer it. Otherwise declare a browser-capable target.',
     'capability_browser_auth',
   ),
   COMPAT_TARGET_INCOMPATIBLE: entry(
+    'finding',
     'warning',
     "Skill's declared target runtime definitively lacks a required capability.",
     'Narrow the declared target to runtimes that support the capability, or allow with a reason.',
     'compat_target_incompatible',
   ),
   COMPAT_TARGET_NEEDS_REVIEW: entry(
+    'finding',
     'warning',
     "Declared target's capability profile covers the axis but a specific resource is uncertain.",
     'Document the prerequisite or allow with a reason.',
     'compat_target_needs_review',
   ),
   COMPAT_TARGET_UNDECLARED: entry(
+    'finding',
     'info',
     'Skill has capability observations but no target is declared.',
     'Declare targets in vibe-agent-toolkit.config.yaml, plugin.json, or marketplace.json defaults.',
     'compat_target_undeclared',
   ),
   ALLOW_EXPIRED: entry(
+    'finding',
     'warning',
     "A validation.allow entry's expires date is in the past; the allowance still applies but should be re-reviewed.",
     'Re-review the allow entry: extend expires, remove the entry, or fix the underlying issue. Upgrade severity to error for zero-tolerance expiry.',
     'allow_expired',
   ),
   ALLOW_UNUSED: entry(
+    'finding',
     'warning',
     'A validation.allow entry did not match any emitted issue; the allow entry is dead weight.',
     'Remove the entry or fix the pattern. Upgrade severity to error to block on unused allow entries.',
     'allow_unused',
   ),
   COMPONENT_DECLARED_BUT_MISSING: entry(
+    'finding',
     'warning',
     'A component path declared in the plugin manifest does not exist on disk.',
     'Add the missing file, remove the manifest declaration, or correct the path. Use validation.allow if the artifact is generated by an install-time build step.',
     'component_declared_but_missing',
   ),
   COMPONENT_PRESENT_BUT_UNDECLARED: entry(
+    'finding',
     'info',
     'A component is present under the canonical layout but the manifest declares an explicit list that omits it; the runtime may silently skip it at install.',
     'Add the component to the appropriate manifest field, or remove the file if unintended. Skipped when the manifest omits the field entirely (auto-discovery is intentional).',
     'component_present_but_undeclared',
   ),
   REFERENCE_TARGET_MISSING: entry(
+    'finding',
     'error',
     'A cross-component reference resolved from the manifest points to a path that does not exist.',
     'Add the referenced file or correct the path in the manifest.',
     'reference_target_missing',
   ),
   MARKETPLACE_PLUGIN_SOURCE_MISSING: entry(
+    'finding',
     'error',
     'A marketplace declares a plugin with a path-based source that does not exist.',
     'Correct the source path or remove the entry from marketplace.plugins[].',
     'marketplace_plugin_source_missing',
   ),
   REGISTRY_SHAPE_DRIFT: entry(
+    'finding',
     'info',
     "An installed-plugins registry written by Claude Code carries a field or scope value VAT's model does not recognize; the registry shape is newer than the model reading it. The value was preserved, not rejected.",
     "No action needed — VAT reads registries it does not own liberally, so the unknown value passed through untouched. Report the field so VAT's model can catch up, or set severity.REGISTRY_SHAPE_DRIFT to ignore.",
     'registry_shape_drift',
   ),
-
   // Resources path — link / frontmatter / external-URL codes
   // Promotions of existing resources-package validator behavior (formerly free-form
   // lowercase `type` strings). Severities are locked by the design spec and reflect
   // existing behavior. LINK_TO_GITIGNORED here is intentionally distinct from the
   // skills-packaging code LINK_TO_GITIGNORED_FILE — both coexist.
   LINK_BROKEN_FILE: entry(
+    'finding',
     'error',
     'Local file link points to a non-existent file.',
     'Fix the path or create the target.',
@@ -761,126 +857,147 @@ export const CODE_REGISTRY = {
   // not. `warning`, because it is genuinely fine where it was written and only
   // fails where the corpus is deployed or CI-checked.
   LINK_NORMALIZATION_MISMATCH: entry(
+    'finding',
     'warning',
     'A local file link resolves only after Unicode normalization: the link text and the filename on disk are the same visible characters in different normalization forms (NFC vs NFD). It opens on macOS and Windows and fails on a byte-exact filesystem such as Linux/ext4.',
     'Make the two spellings byte-identical — rename the file on disk to its NFC form and write the link in NFC, which is the form editors and git produce. Or set severity.LINK_NORMALIZATION_MISMATCH to ignore if the corpus is only ever read on a normalization-insensitive filesystem.',
     'link_normalization_mismatch',
   ),
   LINK_BROKEN_ANCHOR: entry(
+    'finding',
     'error',
     'Anchor link points to a non-existent heading/id.',
     'Fix the fragment or the target heading.',
     'link_broken_anchor',
   ),
   LINK_UNKNOWN: entry(
+    'finding',
     'warning',
     'Link type could not be classified.',
     'Use a recognized link form.',
     'link_unknown',
   ),
   LINK_TO_GITIGNORED: entry(
+    'finding',
     'error',
     'A tracked file links to a gitignored file.',
     'Link a tracked target or un-ignore it. If the target is a build artifact, declare it under skills.config.<name>.files instead.',
     'link_to_gitignored',
   ),
   LINK_UNRESOLVED_REFERENCE: entry(
+    'finding',
     'warning',
     'A reference-style link ([text][label] or collapsed [label][]) has no matching [label]: url definition anywhere in the document.',
     'Add the missing [label]: url definition, or rewrite as an inline link [text](url).',
     'link_unresolved_reference',
   ),
   MALFORMED_HTML: entry(
+    'finding',
     'info',
     'HTML resource has well-formedness issues reported by the parser.',
     'Fix the malformed markup (unclosed tags, stray characters). Informational by default; raise severity via validation.severity to enforce.',
     'malformed_html',
   ),
   FRONTMATTER_MISSING: entry(
+    'finding',
     'error',
     'Schema requires frontmatter but the file has none.',
     'Add the required frontmatter.',
     'frontmatter_missing',
   ),
   FRONTMATTER_INVALID_YAML: entry(
+    'finding',
     'error',
     'Frontmatter YAML failed to parse.',
     'Fix the YAML syntax.',
     'frontmatter_invalid_yaml',
   ),
   FRONTMATTER_SCHEMA_ERROR: entry(
+    'finding',
     'error',
     'Frontmatter failed JSON Schema validation.',
     'Make the frontmatter conform to the schema.',
     'frontmatter_schema_error',
   ),
   FRONTMATTER_LINK_BROKEN: entry(
+    'finding',
     'error',
     'A frontmatter URI reference points to a non-existent file.',
     'Fix the reference path.',
     'frontmatter_link_broken',
   ),
   FRONTMATTER_ANCHOR_MISSING: entry(
+    'finding',
     'error',
     'A frontmatter URI reference points to a missing anchor.',
     'Fix the fragment.',
     'frontmatter_anchor_missing',
   ),
   FRONTMATTER_LINK_TO_GITIGNORED: entry(
+    'finding',
     'error',
     'A frontmatter URI reference targets a gitignored file.',
     'Reference a tracked target.',
     'frontmatter_link_to_gitignored',
   ),
   FRONTMATTER_UNKNOWN_LINK: entry(
+    'finding',
     'warning',
     'A frontmatter URI reference could not be classified.',
     'Use a recognized reference form.',
     'frontmatter_unknown_link',
   ),
   EXTERNAL_URL_DEAD: entry(
+    'finding',
     'warning',
     'External URL returned an error status (4xx/5xx).',
     'Fix or remove the link; or set severity: ignore.',
     'external_url_dead',
   ),
   EXTERNAL_URL_TIMEOUT: entry(
+    'finding',
     'warning',
     'External URL request timed out.',
     'Retry; raise timeout; or set severity: ignore.',
     'external_url_timeout',
   ),
   EXTERNAL_URL_ERROR: entry(
+    'finding',
     'warning',
     'External URL validation failed (DNS/network).',
     'Check the host; or set severity: ignore.',
     'external_url_error',
   ),
   LINK_AUTH_DEAD: entry(
+    'finding',
     'error',
     'Authenticated external link returned 404/410 from a host that gives honest 404s (notFoundMeaning: dead). Genuine link rot.',
     'Fix or remove the link; or set severity.LINK_AUTH_DEAD to ignore if the path is expected to be transient.',
     'link_auth_dead',
   ),
   LINK_AUTH_DEAD_OR_UNAUTHORIZED: entry(
+    'finding',
     'warning',
     'Authenticated external link returned 404 from a host that masks access-denied as 404 (notFoundMeaning: ambiguous, e.g. GitHub). The link is either rotted or inaccessible to the current identity — cannot tell which.',
     'Verify the URL by hand (or with a more-privileged token) to disambiguate; fix or remove if rotted; or set severity.LINK_AUTH_DEAD_OR_UNAUTHORIZED to ignore if cross-identity ambiguity is expected.',
     'link_auth_dead_or_unauthorized',
   ),
   LINK_AUTH_FORBIDDEN: entry(
+    'finding',
     'warning',
     'Authenticated external link returned 403: the configured identity is authenticated but lacks access to that resource. Not link rot.',
     'Grant the identity access to the resource; switch to an identity that has access; or set severity.LINK_AUTH_FORBIDDEN to ignore if cross-identity inaccessibility is expected.',
     'link_auth_forbidden',
   ),
   LINK_AUTH_UNAUTHORIZED: entry(
+    'finding',
     'warning',
     'Authenticated external link returned 401: the configured token is missing, expired, or invalid.',
     "Refresh the token (e.g. `gh auth login`, `az login`); check the `token` config in resources.linkAuth; or promote severity.LINK_AUTH_UNAUTHORIZED to error on strict CI lanes.",
     'link_auth_unauthorized',
   ),
   LINK_AUTH_UNVERIFIED: entry(
+    'finding',
     'warning',
     'A provider in resources.linkAuth claims this host, but no token source resolved (none of the configured env/command sources produced a value), so no authenticated request was attempted.',
     "Configure a `token` source (env var or argv command); log in to the underlying CLI (e.g. `gh auth login`, `az login`); or set severity.LINK_AUTH_UNVERIFIED to ignore if running without auth is intentional.",
@@ -897,6 +1014,7 @@ export const CODE_REGISTRY = {
   // validate` refuses the run for them at config load, exit 2 — so what carries
   // it is per-URL: a declared capture that did not participate in this match.
   LINK_AUTH_PROVIDER_ERROR: entry(
+    'finding',
     'error',
     'A provider in resources.linkAuth claims this host but could not build the authenticated request for this URL — a template read a capture the matching rule did not produce, or a transform refused the value — so the link was neither authenticated nor checked anonymously.',
     "Fix the provider: make every capture the template reads mandatory in that rule's `when` (or give the rule a `to` that does not read it), then re-run. The message names the host, the template and the missing name.",
@@ -908,6 +1026,7 @@ export const CODE_REGISTRY = {
   // because an inert glob can be deliberate: docs/validation-rule-design.md,
   // "Worked case: CLAUDE_RULE_GLOB_INERT ships at info".
   CLAUDE_RULE_GLOB_INERT: entry(
+    'finding',
     'info',
     'A path-scoped rules file under .claude/rules/ declares a paths: glob that matches no file VAT can see — tracked files, and untracked files git does not ignore — so no such file can load that rule. Reported per inert pattern, not per rule: a rule whose other patterns still match is reported only for the dead one. A ! pattern is reported when it excludes no file the rule would otherwise load, so it has no effect.',
     'First check whether the glob covers ignored or generated output that VAT cannot see (a glob whose only matches would sit inside an ignored directory it does not itself name, or files an ignore line names that have not been generated yet). If it does, keep it. Otherwise delete the dead glob, or correct it to the path it meant — VAT reports the pattern and never rewrites it. The usual causes are a directory renamed or moved out from under the pattern, a missing ** between segments, or a leading ./ (Claude Code never matches ./docs/**; write docs/**). If the glob is deliberately ahead of its files, or scopes ignored output, set resources.validation.severity.CLAUDE_RULE_GLOB_INERT to ignore.',
@@ -921,6 +1040,7 @@ export const CODE_REGISTRY = {
   // same file: a new default-on rule ships at `warning` until a corpus says
   // otherwise (docs/validation-rule-design.md). The doc entry says so.
   CLAUDE_RULE_FRONTMATTER_INVALID: entry(
+    'finding',
     'warning',
     'A rules file under .claude/rules/ has YAML frontmatter VAT could not read — it does not parse, or it parses to a sequence or a scalar rather than a mapping — so VAT read no paths: from it: the rule is counted as if it had no paths: (a project-root rule at launch, a nested one on demand), and claude_rule_patterns holds no row for any glob it declares — which is why CLAUDE_RULE_GLOB_INERT cannot report them. What Claude Code does with such a file is not documented.',
     'Fix the YAML. The usual cause is a glob that starts with * left unquoted — YAML reads a leading * as an alias — so quote every paths: entry ("**/x/*.ts"); a value containing ": " needs quoting for the same reason. A block that is valid YAML but decodes to a sequence or a scalar draws the same code: frontmatter has to be a mapping for paths: to exist at all. Set resources.validation.severity.CLAUDE_RULE_FRONTMATTER_INVALID to ignore to silence it.',
@@ -934,10 +1054,123 @@ export const CODE_REGISTRY = {
   // its prose: one concern, one severity entry, the same size of defect each
   // way. Not `error` (the link is legitimate), not `info` (VAT is not guessing).
   CLAUDE_RULE_LINK_UNCHECKED: entry(
+    'finding',
     'warning',
     'A .claude directory, a .claude/rules/ directory, or a file under one is itself a symbolic link. VAT realizes no link path, so the linked rule is in no claude_rule_patterns row and in no blobs row at that path — CLAUDE_RULE_GLOB_INERT cannot see its paths: globs and CLAUDE_RULE_FRONTMATTER_INVALID cannot see its frontmatter. Whether the rule is in force depends on where the link points, and the finding says which of three arms applies: Claude Code loads a rules file or directory reached through a link whose target stays inside the directory the session started in, skips one whose target resolves outside it, and loads nothing through a link that resolves to nothing.',
     'For a target inside the project root the rule is in force and unchecked: replace the link with the file itself, or with an @ import of the shared file from a rules file that is not a link, if you want VAT to check its globs and frontmatter. For a target outside it the rule is in force nowhere, because Claude Code skips the link too — copy or vendor those rules into the repository, since sharing one rule set across repositories by symlink does not work. For a link that resolves to nothing no rule is loaded through it: point it at a file that exists or delete it. Keep the link and set resources.validation.severity.CLAUDE_RULE_LINK_UNCHECKED to ignore to accept the blind spot.',
     'claude_rule_link_unchecked',
+  ),
+
+  // ---------------------------------------------------------------------------
+  // Refusal codes — the run could not do its job. A report's `error.code` is
+  // always one of these, and none is a `validation.severity` / `allow` key.
+  // ---------------------------------------------------------------------------
+  USAGE_INVALID: entry(
+    'refusal',
+    'error',
+    'The command line could not be acted on: a missing or conflicting argument, an unknown option value, or a path argument that names nothing.',
+    'Correct the invocation; the message names the argument, and --help on the verb lists what it accepts.',
+    'usage_invalid',
+  ),
+  CONFIG_INVALID: entry(
+    'refusal',
+    'error',
+    'The project configuration could not be used: vibe-agent-toolkit.config.yaml is missing where the verb needs one, does not parse, or fails its schema.',
+    'Fix the config file at the path the message names; the message carries the schema error. Run the verb from inside the project it configures.',
+    'config_invalid',
+  ),
+  INPUT_UNREADABLE: entry(
+    'refusal',
+    'error',
+    'An input the command must read to answer at all could not be read — absent, refused by permissions, or not the kind of thing the verb expected.',
+    'Make the named input readable, or point the command at the right one.',
+    'input_unreadable',
+  ),
+  BACKEND_UNAVAILABLE: entry(
+    'refusal',
+    'error',
+    'A local backend the command depends on (an optional package, a vector store, a database file, a binary on PATH) is not installed or could not be opened.',
+    'Install or start the named backend; the message says which one and how.',
+    'backend_unavailable',
+  ),
+  EXTERNAL_API_FAILED: entry(
+    'refusal',
+    'error',
+    'A remote API the command calls failed or refused the request — a network error, an authentication failure, or a non-success response.',
+    "Check credentials and connectivity for the named service, then re-run. The message carries the service's own error.",
+    'external_api_failed',
+  ),
+  NOT_IMPLEMENTED: entry(
+    'refusal',
+    'error',
+    'The command was asked for a mode, target or format VAT does not implement.',
+    'Choose a supported alternative; the message lists what is supported.',
+    'not_implemented',
+  ),
+  RUN_INCOMPLETE: entry(
+    'refusal',
+    'error',
+    'The run started and stopped before it finished — a phase failed, a population was interrupted, or a unit of work threw. The report carries whatever did finish.',
+    'Fix the unit the message names as having stopped the run. The findings already in the report are real and stand on their own.',
+    'run_incomplete',
+  ),
+  INTERNAL_ERROR: entry(
+    'refusal',
+    'error',
+    'VAT failed in a way it did not anticipate — a defect in VAT, not in the project.',
+    'Re-run with --debug for the stack and report it as a VAT bug.',
+    'internal_error',
+  ),
+  // 🔑 A DECLARED CHECK COULD NOT RUN — a run-integrity report, and the reason it
+  // is a REFUSAL rather than a finding is a defect that this kind makes
+  // unrepresentable.
+  //
+  // A `vat resources check` finding carries the code `CUSTOM:<name>`, and so did
+  // this one: the same code for "the check found a violation" and for "the check
+  // is broken". That collision was harmless only while `CUSTOM:` keys were
+  // (wrongly) unconfigurable. The moment they parse, `severity: { 'CUSTOM:foo':
+  // 'ignore' }` — a documented, ordinary thing to write about a check you
+  // inherited and disagree with — ALSO silences "foo could not run", and
+  // `'warning'` demotes it below the exit threshold. A renamed projection column
+  // would then yield exit 0 from a command whose entire purpose is to be a gate.
+  //
+  // So the report gets its own code, and that code is NOT overridable at all:
+  // `ValidationConfigSchema` refuses every refusal-kind code as a `severity` or
+  // `allow` key, because a run whose assertions did not execute has no
+  // legitimate `ignore`. Downgrade the CHECK all you like; you cannot downgrade
+  // the news that it stopped checking.
+  //
+  // It is also the ONE code every gate uses for "this run checked nothing, so
+  // its green means nothing" — a scan over zero files, a budget over no matched
+  // path, a marketplace walk that found fewer than the declared local plugins, a
+  // verify phase over zero built bundles. One code, because it is one claim and
+  // needs one non-overridability; see `run-integrity.ts` in the CLI. It is the
+  // generic refusal-AS-FINDING: published at `error` in `findings` (exit 1) when
+  // the run itself completed.
+  RESOURCE_CHECK_BROKEN: entry(
+    'refusal',
+    'error',
+    "A declared check could not run, or a gate examined nothing (a scan over zero files, a budget over no matched path, a verify over zero bundles) — the run's green would mean nothing.",
+    'Fix the check or the population the message names. This code cannot be downgraded or waived, by design.',
+    'resource_check_broken',
+  ),
+  // `vat ard emit` publishes these two as error-severity FINDINGS (exit 1): VAT
+  // read the project and its own rules produced no manifest, so the PROJECT is
+  // the subject and editing config fixes it. Registered here so the command has
+  // no private code vocabulary.
+  ARD_NOT_CONFIGURED: entry(
+    'refusal',
+    'error',
+    'The project was read and declares no ard: block, so no ARD manifest was built.',
+    'Add an ard: block to vibe-agent-toolkit.config.yaml declaring the surfaces to advertise, or do not run vat ard emit for this project.',
+    'ard_not_configured',
+  ),
+  ARD_DERIVATION_FAILED: entry(
+    'refusal',
+    'error',
+    'A surface declared under ard: could not be derived into a conformant ARD entry, so no manifest was written.',
+    'Fix the declared surface the message names so it derives a conformant entry.',
+    'ard_derivation_failed',
   ),
 } as const satisfies Record<string, CodeRegistryEntry>;
 
@@ -947,19 +1180,43 @@ export const IssueCodeSchema = z.enum(
   Object.keys(CODE_REGISTRY) as [IssueCode, ...IssueCode[]],
 );
 
+type CodesOfKind<K extends CodeKind> = {
+  [C in IssueCode]: (typeof CODE_REGISTRY)[C]['kind'] extends K ? C : never;
+}[IssueCode];
+
+/** A registered code saying the run could not do its job — the only space `error.code` is drawn from. */
+export type RefusalCode = CodesOfKind<'refusal'>;
+
+/** A registered code about the thing examined — the only space `validation.severity` / `allow` keys are drawn from. */
+export type FindingCode = CodesOfKind<'finding'>;
+
+/**
+ * The registry's codes of one kind, in registry order.
+ *
+ * @param kind - Which kind
+ * @returns A non-empty tuple, as `z.enum` requires
+ */
+function codesOfKind<K extends CodeKind>(kind: K): [CodesOfKind<K>, ...CodesOfKind<K>[]] {
+  return IssueCodeSchema.options.filter((code) => CODE_REGISTRY[code].kind === kind) as [
+    CodesOfKind<K>,
+    ...CodesOfKind<K>[],
+  ];
+}
+
+export const RefusalCodeSchema = z.enum(codesOfKind('refusal'));
+
+/** Every refusal code, derived from the registry by kind — never a hand-kept list. */
+export const REFUSAL_CODES: readonly RefusalCode[] = RefusalCodeSchema.options;
+
+export const FindingCodeSchema = z.enum(codesOfKind('finding'));
+
 /**
  * Codes the verify-time consistency check emits (`vat verify`, module
  * `consistency-check.ts` in the CLI): config.yaml discovery cross-referenced
  * against `package.json` `vat.skills` and the plugin assignments.
  *
- * Deliberately NOT `CODE_REGISTRY` entries. Each is emitted with a fixed
- * severity from its one site and nothing reads a `validation.severity`
- * override for it, so making it an `IssueCode` would let an adopter write
- * `severity: { PUBLISHED_SKILL_NOT_IN_PLUGIN: ignore }`, watch it parse, and
- * see no effect — the declared-but-inert shape this registry exists to prevent.
- * They are documented beside the registry in docs/validation-codes.md under
- * "Codes outside the overridable framework", and that doc is held to the
- * emit sites by `test/docs/emitted-codes-documented.test.ts`.
+ * Deliberately NOT `CODE_REGISTRY` entries, for the reason every lane-owned
+ * code in {@link NonOverridableCode} is not: nothing reads an override for them.
  */
 export const CONSISTENCY_CODES = [
   'CONFIG_REFERENCES_UNKNOWN_SKILL',
@@ -989,41 +1246,13 @@ export type NonOverridableCode =
   | 'SKILL_MISSING_NAME'
   | 'SKILL_MISSING_DESCRIPTION'
   | 'SKILL_NAME_INVALID'
-  | 'SKILL_NAME_XML_TAGS'
   | 'SKILL_DESCRIPTION_XML_TAGS'
   | 'SKILL_DESCRIPTION_TOO_LONG'
   | 'SKILL_DESCRIPTION_EMPTY'
   | 'SKILL_MISCONFIGURED_LOCATION'
   | 'LINK_INTEGRITY_BROKEN'
-  // 🔑 A DECLARED CHECK COULD NOT RUN — a run-integrity report, and the reason it
-  // is here rather than in CODE_REGISTRY is a defect that this list makes
-  // unrepresentable.
-  //
-  // A `vat resources check` finding carries the code `CUSTOM:<name>`, and so did
-  // this one: the same code for "the check found a violation" and for "the check
-  // is broken". That collision was harmless only while `CUSTOM:` keys were
-  // (wrongly) unconfigurable. The moment they parse, `severity: { 'CUSTOM:foo':
-  // 'ignore' }` — a documented, ordinary thing to write about a check you
-  // inherited and disagree with — ALSO silences "foo could not run", and
-  // `'warning'` demotes it below the exit threshold. A renamed projection column
-  // would then yield exit 0 from a command whose entire purpose is to be a gate.
-  //
-  // So the report gets its own code, and that code is NOT overridable at all:
-  // `ValidationConfigSchema` refuses it as a `severity` key, because a run whose
-  // assertions did not execute has no legitimate `ignore`. Downgrade the CHECK
-  // all you like; you cannot downgrade the news that it stopped checking.
-  //
-  // It is also the ONE code every gate uses for "this run checked nothing, so
-  // its green means nothing" — a scan over zero files, a budget over no matched
-  // path, a marketplace walk that found fewer than the declared local plugins, a
-  // verify phase over zero built bundles. One code, because it is one claim and
-  // needs one non-overridability; see `run-integrity.ts` in the CLI.
-  | 'RESOURCE_CHECK_BROKEN'
-  // FILENAME_COLLISION is NOT here: it has a CODE_REGISTRY entry and is emitted
-  // through the same framework as every other packaging finding. Listing a code
-  // in both places is a contradiction, not a belt-and-braces — `finalize()` finds
-  // the registry entry and resolves severity, so the NonOverridable claim would
-  // simply be false.
+  // FILENAME_COLLISION is NOT here: it has a CODE_REGISTRY entry, so `finalize()`
+  // resolves its severity and a NonOverridable claim would be false.
   | 'DUPLICATE_FILES_DEST'
   | 'PLUGIN_MISSING_MANIFEST'
   | 'PLUGIN_INVALID_JSON'
@@ -1039,4 +1268,43 @@ export type NonOverridableCode =
   | 'REGISTRY_INVALID_JSON'
   | 'REGISTRY_INVALID_SCHEMA'
   | 'UNKNOWN_FORMAT'
-  | 'SKILL_TOO_LONG';
+  | 'SKILL_TOO_LONG'
+  // Lane-owned findings: the verb that emits each fixes its severity and reads no
+  // `validation.severity`, so a registry entry would let the config accept an inert
+  // key — the declared-but-inert shape this registry exists to prevent. Each is
+  // documented in docs/validation-codes.md, "Codes outside the overridable
+  // framework", which `test/docs/emitted-codes-documented.test.ts` holds to the emit sites.
+  // `vat skills build`
+  | 'SKILL_BUILD_TARGET_NOT_BUILDABLE'
+  | 'SKILL_PACKAGING_FAILED'
+  // `vat skills package` (not PACKAGED_SIZE_EXCEEDS_API_LIMIT, the Skills API warning)
+  | 'SKILL_PACKAGE_TOO_LARGE'
+  // `vat verify`, files-config-dests phase
+  | 'FILES_CONFIG_DEST_MISSING'
+  // `vat skill test run` (`warning` under `--allow-eval-failure`, a flag, not config)
+  | 'SKILL_TEST_EVAL_FAILED'
+  // `vat doctor`
+  | 'DOCTOR_CHECK_FAILED'
+  | 'DOCTOR_CHECK_WARNED'
+  // `vat rag index`
+  | 'RAG_DOCUMENT_INDEX_FAILED'
+  // `vat corpus scan`
+  | 'CORPUS_ENTRY_INCOMPLETE'
+  // `vat claude plugin uninstall`
+  | 'PLUGIN_UNINSTALL_INCOMPLETE'
+  | 'PLUGIN_NOT_INSTALLED_BY_VAT'
+  // `vat claude plugin uninstall`, and `vat claude plugin install`'s vat.replaces uninstall
+  | 'PLUGIN_KEPT_SIBLING_UNEXAMINED'
+  // Any verb's refusal whose failure path left a temporary or staged entry behind
+  | 'TREE_CLEANUP_INCOMPLETE'
+  // `vat audit settings`
+  | 'SETTINGS_FILE_INVALID'
+  | 'SETTINGS_TYPE_AMBIGUOUS'
+  | 'SETTINGS_PATH_DEPRECATED'
+  | 'SETTINGS_RULE_SHADOWED'
+  | 'SETTINGS_MARKETPLACE_TOKEN_MISSING'
+  // `vat agent validate`
+  | 'AGENT_MANIFEST_INVALID'
+  | 'AGENT_REFERENCE_MISSING'
+  | 'AGENT_REFERENCE_UNREADABLE'
+  | 'AGENT_RAG_NO_SOURCES';

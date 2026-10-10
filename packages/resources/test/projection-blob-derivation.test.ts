@@ -21,6 +21,7 @@ import { ContributorRegistry } from '../src/projection/contributor.js';
 import type { ExtentContribution, ExtentContributor } from '../src/projection/contributor.js';
 import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
@@ -53,7 +54,7 @@ beforeEach(async () => {
 /** The filesystem extent alone — a population nothing reads blob tables from. */
 function filesystemOnly(): ContributorRegistry {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
   return registry;
 }
 

@@ -1,8 +1,8 @@
 /**
  * `vat claude org skills` — manage organization skills via Skills API.
  */
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
-import type { Dirent } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import type { Dirent, Stats } from 'node:fs';
 import {   basename } from 'node:path';
 
 import {
@@ -29,24 +29,20 @@ import type {
   OrgApiClient,
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { createAllowUsageLedger, runValidationFramework } from '@vibe-agent-toolkit/schema';
-import type { ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
-import {
-  direntKindFollowingSync,
-  isAbsoluteAnyPlatform,
-  isFilesystemAccessError,
-  normalizedTmpdir,
-  safePath,
-  toForwardSlashAnyPlatform,
-} from '@vibe-agent-toolkit/utils';
+import type { RefusalCode, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { classifyFsFault, direntKindFollowingSync, forEachInOrder, fsFaultOf, isAbsoluteAnyPlatform, safePath, toForwardSlashAnyPlatform, withTempDir } from '@vibe-agent-toolkit/utils';
 // Type-only: the runtime import stays lazy inside `inspectZipArchive`, so the
 // archive reader is loaded on the one path that parses an archive.
 import type AdmZipArchive from 'adm-zip';
 import { Command } from 'commander';
 
 import { resolveSkillPackagingConfig } from '../../../skill-resolution/packaging-config.js';
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
+import { leftoverIssueOf } from '../../../utils/document-writer.js';
+import { requireInputPath } from '../../../utils/project-root-policy.js';
 import { downloadNpmPackage } from '../plugin/helpers.js';
 
-import type { OrgCommandFailure } from './helpers.js';
+import type { OrgCommandFailure, OrgFailureOutcome } from './helpers.js';
 import { autopaginateSkills, executeOrgCommand, orgCommandFailure } from './helpers.js';
 
 const SKILL_ID_ARG = '<skill-id>';
@@ -121,7 +117,8 @@ function readSkillUploadResponse(
 			[fields.version, version], [fields.createdAt, createdAt],
 		].filter(([, value]) => value === undefined).map(([key]) => String(key));
 		const present = Object.keys(body).join(', ') || '(none)';
-		throw new Error(
+		throw new CommandRefusalError(
+			'EXTERNAL_API_FAILED',
 			`${endpoint} returned a body with no usable ${missing.join(', ')}. Keys present: ${present}. `
 			+ 'Refusing to report success for an upload whose identifiers cannot be read.',
 		);
@@ -171,7 +168,7 @@ export interface SkillDeleteResult {
  * `skill_deleted` came back from a live `DELETE /v1/skills/{id}`;
  * `skill_version_deleted` is the plausible spelling for the version endpoint and
  * has never been seen. A single guessed string would make every version delete
- * report `deleted: false` — and now exit 1 — if the vendor spells it differently
+ * report `deleted: false` — and now exit 2 — if the vendor spells it differently
  * by one character. Accepting either keeps the check honest about what it knows:
  * a body naming something that is neither is a real divergence worth failing on.
  */
@@ -199,6 +196,9 @@ export const SKILL_DELETED_TYPES: readonly string[] = ['skill_deleted'];
  */
 export const SKILL_VERSION_DELETED_TYPES: readonly string[] = ['skill_version_deleted', 'skill_deleted'];
 
+/** A delete the API answered with an outcome other than a deletion: nothing was destroyed. */
+const NOT_CONFIRMED: OrgFailureOutcome = { kind: 'failed', cause: 'the API named an outcome other than a deletion' };
+
 /**
  * A delete's document, tagged as a FAILED run when the API said the thing was
  * not deleted.
@@ -220,7 +220,7 @@ export function reportDelete(
 	expectedTypes: readonly string[],
 ): SkillDeleteResult | OrgCommandFailure {
 	const result = readDeleteResponse(raw, requestedId, expectedTypes);
-	return result.deleted ? result : orgCommandFailure(result);
+	return result.deleted ? result : orgCommandFailure(result, NOT_CONFIRMED);
 }
 
 /** The document a version delete publishes: which version, of which skill. */
@@ -255,7 +255,7 @@ export function reportVersionDelete(
 ): SkillVersionDeleteResult | OrgCommandFailure {
 	const { deleted } = readDeleteResponse(raw, skillId, SKILL_VERSION_DELETED_TYPES);
 	const document: SkillVersionDeleteResult = { id: skillId, version, deleted };
-	return deleted ? document : orgCommandFailure(document);
+	return deleted ? document : orgCommandFailure(document, NOT_CONFIRMED);
 }
 
 /**
@@ -271,9 +271,8 @@ export function mergeDeleteReport(
 	result: SkillDeleteResult | OrgCommandFailure,
 	deletedVersions: readonly string[],
 ): object {
-	const failed = 'orgCommandFailed' in result;
-	const document = { ...(failed ? result.document : result), deletedVersions };
-	return failed ? orgCommandFailure(document) : document;
+	if (!('orgCommandFailed' in result)) return { ...result, deletedVersions };
+	return orgCommandFailure({ ...result.document, deletedVersions }, result.outcome);
 }
 
 /** Read `POST /v1/skills/{id}/versions`. */
@@ -347,7 +346,7 @@ export function buildUploadBodyOrRefuse(
 	if (multipart.body.length > API_SKILL_MAX_UPLOAD_BYTES) {
 		const sized = files.map(f => ({ path: bundleRelativeName(f.filename, bundleRoot), bytes: f.content.length }));
 		const measure = { of: 'upload-request' as const, bytes: multipart.body.length };
-		throw new Error(`${describeOversizeBundle(sized, measure)}. The API will refuse this upload.`);
+		throw new CommandRefusalError('USAGE_INVALID', `${describeOversizeBundle(sized, measure)}. The API will refuse this upload.`);
 	}
 	return multipart;
 }
@@ -561,13 +560,15 @@ async function deleteSkillOrExplain(
 export function explainAnsweredNothing(error: unknown, bodyBytes: number): unknown {
 	if (!(error instanceof ApiTransportError)) return error;
 	if (error.bytesSent === 0) {
-		return new Error(
+		return new CommandRefusalError(
+			'EXTERNAL_API_FAILED',
 			`${error.message}\nNo byte of the request left this machine, so nothing was created and `
 			+ 'there is nothing to clean up. Fix the connection and re-run the same command.',
 			{ cause: error },
 		);
 	}
-	return new Error(
+	return new CommandRefusalError(
+		'EXTERNAL_API_FAILED',
 		`${error.message}\nThe connection closed before the API answered, so this is not a verdict on `
 		+ `the upload. VAT had sent ${formatBytes(error.bytesSent)} of a ${formatBytes(bodyBytes)} `
 		+ `request body against a ${formatBytes(API_SKILL_MAX_UPLOAD_BYTES)} ceiling; the API has `
@@ -751,7 +752,9 @@ export async function inspectZipArchive(zipPath: string): Promise<ZipInspection 
 		// An archive the FILESYSTEM refuses is a different thing: the path was
 		// readable a moment ago (the caller holds its bytes), so a refusal here
 		// is not a parse disagreement and stays loud.
-		if (isFilesystemAccessError(error)) throw error;
+		if (fsFaultOf(error) !== undefined) {
+			throw classifyFsFault(error, { side: 'source', origin: 'argument', action: `read ${zipPath}`, path: zipPath });
+		}
 		return { archiveUnreadable: describeZipFailure(error) };
 	}
 
@@ -944,7 +947,8 @@ async function sendSkillUpload(
 function requireDeclaredName(skillMdPath: string): string {
 	const declared = readDeclaredSkillName(skillMdPath);
 	if (declared === undefined) {
-		throw new Error(
+		throw new CommandRefusalError(
+			'USAGE_INVALID',
 			`SKILL.md has no usable frontmatter "name" field: ${skillMdPath}`,
 		);
 	}
@@ -1049,7 +1053,8 @@ function resolvesToDirectory(entry: Dirent, fullPath: string, relativePath: stri
 		return statSync(fullPath).isDirectory();
 	} catch (error) {
 		const cause = error instanceof Error ? error.message : String(error);
-		throw new Error(
+		throw new CommandRefusalError(
+			'INPUT_UNREADABLE',
 			`Cannot upload ${relativePath}: it is a symbolic link whose target could not be read `
 			+ `(${cause}). Replace it with the file or directory it should point at, or remove it.`,
 		);
@@ -1113,7 +1118,8 @@ function collectFiles(
 		} else if (entry.isSymbolicLink()) {
 			// Whatever it points at. A link to a FILE used to fall through to the
 			// branch below and be read through — see this function's doc comment.
-			throw new Error(
+			throw new CommandRefusalError(
+				'INPUT_UNREADABLE',
 				`Cannot upload ${relativePath}: it is a symbolic link${linkedDirectory ? ' to a directory' : ''}, `
 				+ 'which a multipart upload cannot express. VAT will not publish the bytes it points '
 				+ 'at under this name: a link out of the skill directory would send whatever the '
@@ -1150,6 +1156,17 @@ interface PreparedUpload {
 }
 
 /**
+ * Stat a path the operator named, refusing through the one absent-vs-unreadable
+ * predicate: absent is the invocation's mistake (`USAGE_INVALID`, with this
+ * site's own sentence); anything else — an `EACCES` parent, an `ELOOP` — means
+ * whether it exists is unknown, the INPUT's refusal (`INPUT_UNREADABLE`).
+ * Never `existsSync`: it answers `false` for both.
+ */
+function statNamedPath(path: string, absentMessage: string): Stats {
+	return requireInputPath(path, { origin: 'argument', message: absentMessage });
+}
+
+/**
  * Package a skill directory into the multipart file set the API takes.
  *
  * Deliberately separate from SENDING it. Creating a skill and adding a version to
@@ -1164,9 +1181,7 @@ async function prepareSkillUpload(
 	logger: UploadLogger,
 ): Promise<PreparedUpload> {
 	const skillMdPath = safePath.join(skillDir, 'SKILL.md');
-	if (!existsSync(skillMdPath)) {
-		throw new Error(`SKILL.md not found in ${skillDir}. Is this a built skill directory?`);
-	}
+	statNamedPath(skillMdPath, `SKILL.md not found in ${skillDir}. Is this a built skill directory?`);
 
 	// The skill's own declared name — not the directory it happens to sit in,
 	// which for a built or extracted tree carries no reliable identity.
@@ -1402,10 +1417,21 @@ export function findSkillsDir(packageDir: string): string | undefined {
 	return undefined;
 }
 
-/** One skill the batch could not publish, and why. */
+/**
+ * One skill the batch could not publish, and why — in the same `{ code, message }`
+ * shape the run's own refusal publishes, so one payload carries one error shape.
+ */
 export interface SkillUploadFailure {
 	readonly skill: string;
-	readonly error: string;
+	readonly error: { readonly code: RefusalCode; readonly message: string };
+}
+
+/**
+ * The failure row for one skill, coded by the thrown value exactly as a run-level
+ * refusal would be. Exported for testing.
+ */
+export function skillUploadFailure(skill: string, error: unknown): SkillUploadFailure {
+	return { skill, error: { code: refusalCodeOf(error), message: errorMessageOf(error) } };
 }
 
 /** The document `install --from-npm` publishes. */
@@ -1415,6 +1441,11 @@ export interface NpmInstallSummary {
 	skillsFailed?: number;
 	errors?: readonly SkillUploadFailure[];
 	skills: readonly SkillUploadResult[];
+	/**
+	 * The downloaded package's temp directory, when the OS would not remove it once the
+	 * uploads were done: one `TREE_CLEANUP_INCOMPLETE` warning naming it. The uploads stand.
+	 */
+	warnings?: readonly ValidationIssue[];
 }
 
 /**
@@ -1437,14 +1468,20 @@ export function summarizeNpmInstall(
 	source: string,
 	results: readonly SkillUploadResult[],
 	errors: readonly SkillUploadFailure[],
+	leftover: unknown,
 ): NpmInstallSummary | OrgCommandFailure {
 	const summary: NpmInstallSummary = {
 		source,
 		skillsUploaded: results.length,
 		...(errors.length > 0 ? { skillsFailed: errors.length, errors } : {}),
 		skills: results,
+		...(leftover === undefined ? {} : { warnings: [leftoverIssueOf(leftover)] }),
 	};
-	return errors.length > 0 ? orgCommandFailure(summary) : summary;
+	if (errors.length === 0) return summary;
+	// Some landed: the workspace is in a mixed state (`partial`). None did: `failed`.
+	return orgCommandFailure(summary, results.length > 0
+		? { kind: 'partial', failed: errors.length }
+		: { kind: 'failed', cause: `no skill from ${source} uploaded` });
 }
 
 /**
@@ -1456,14 +1493,15 @@ async function installFromNpm(
 	client: OrgApiClient,
 	logger: UploadLogger,
 ): Promise<object> {
-	const tempDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-org-skills-'));
-	try {
+	// The download lives in a temp dir disposed of however the upload ends. One the OS will not
+	// remove after the uploads is reported beside them, never in their place: they landed.
+	const { value, leftover } = await withTempDir('vat-org-skills-', async (tempDir) => {
 		logger.info(`Downloading: ${npmPackage}`);
 		const packageDir = downloadNpmPackage(npmPackage, tempDir);
 
 		const skillsDir = findSkillsDir(packageDir);
 		if (!skillsDir) {
-			throw new Error(`No dist/skills/ directory found in ${npmPackage}. Was the package built with vat skills build?`);
+			throw new CommandRefusalError('USAGE_INVALID', `No dist/skills/ directory found in ${npmPackage}. Was the package built with vat skills build?`);
 		}
 		logger.info(`Found skills at: ${safePath.relative(packageDir, skillsDir) || 'dist/skills/'}`);
 
@@ -1473,7 +1511,7 @@ async function installFromNpm(
 			.map(e => e.name);
 
 		if (skillDirs.length === 0) {
-			throw new Error(`No skills found in dist/skills/ of ${npmPackage}`);
+			throw new CommandRefusalError('USAGE_INVALID', `No skills found in dist/skills/ of ${npmPackage}`);
 		}
 
 		const toUpload = skillFilter
@@ -1481,7 +1519,7 @@ async function installFromNpm(
 			: skillDirs;
 
 		if (toUpload.length === 0) {
-			throw new Error(`Skill "${String(skillFilter)}" not found in ${npmPackage}. Available: ${skillDirs.join(', ')}`);
+			throw new CommandRefusalError('USAGE_INVALID', `Skill "${String(skillFilter)}" not found in ${npmPackage}. Available: ${skillDirs.join(', ')}`);
 		}
 
 		logger.info(`Found ${toUpload.length} skill(s) to upload from ${npmPackage}`);
@@ -1489,22 +1527,22 @@ async function installFromNpm(
 		const results: SkillUploadResult[] = [];
 		const errors: SkillUploadFailure[] = [];
 
-		for (const skillName of toUpload) {
+		// In order: one rate-limited API, and the result and failure lists follow `toUpload`.
+		await forEachInOrder(toUpload, async (skillName) => {
 			const skillDir = safePath.join(skillsDir, skillName);
 			try {
 				const result = await uploadSkillDir(client, skillDir, undefined, logger);
 				results.push(result);
 			} catch (error) {
-				const msg = error instanceof Error ? error.message : String(error);
-				logger.info(`   ⚠ ${skillName}: ${msg}`);
-				errors.push({ skill: skillName, error: msg });
+				const failure = skillUploadFailure(skillName, error);
+				logger.info(`   ⚠ ${skillName}: ${failure.error.message}`);
+				errors.push(failure);
 			}
-		}
+		});
 
-		return summarizeNpmInstall(npmPackage, results, errors);
-	} finally {
-		rmSync(tempDir, { recursive: true, force: true });
-	}
+		return { results, errors };
+	});
+	return summarizeNpmInstall(npmPackage, value.results, value.errors, leftover);
 }
 
 /**
@@ -1518,21 +1556,17 @@ export async function installFromLocal(
 ): Promise<object> {
 	const sourcePath = resolveSourceArgument(source);
 
-	if (!existsSync(sourcePath)) {
-		throw new Error(`Source not found: ${sourcePath}`);
-	}
-
-	const stat = statSync(sourcePath);
+	const stat = statNamedPath(sourcePath, `Source not found: ${sourcePath}`);
 
 	// Case-INSENSITIVE. `endsWith('.zip')` refused `MySkill.ZIP` as "not a directory
 	// or .zip file" — a file Windows and macOS both consider a zip archive, and one
 	// an operator has no way to read that refusal as being about capitalisation.
 	if (!stat.isDirectory() && sourcePath.toLowerCase().endsWith('.zip')) {
-		return installZipArchive(sourcePath, titleOverride, client, logger);
+		return await installZipArchive(sourcePath, titleOverride, client, logger);
 	}
 
 	if (!stat.isDirectory()) {
-		throw new Error(`Source must be a directory or .zip file: ${sourcePath}`);
+		throw new CommandRefusalError('USAGE_INVALID', `Source must be a directory or .zip file: ${sourcePath}`);
 	}
 
 	// "Packaging", not "Uploading". Everything that follows this line — reading the
@@ -1544,7 +1578,7 @@ export async function installFromLocal(
 	// all — `--from-npm` packages several skills in a loop, and a packaging error
 	// with no path above it names nothing.
 	logger.info(`Packaging skill directory: ${sourcePath}`);
-	return uploadSkillDir(client, sourcePath, titleOverride, logger);
+	return await uploadSkillDir(client, sourcePath, titleOverride, logger);
 }
 
 /**
@@ -1642,7 +1676,8 @@ function refuseOrWarnOnArchive(
 	// unreadable here. That is a narrower check than the directory lane's,
 	// not a looser verdict on what it does see.
 	if (inspected.neverUploaded.length > 0) {
-		throw new Error(
+		throw new CommandRefusalError(
+			'USAGE_INVALID',
 			`This ZIP contains ${String(inspected.neverUploaded.length)} entr`
 			+ `${inspected.neverUploaded.length === 1 ? 'y' : 'ies'} that are never published with a `
 			+ `skill: ${inspected.neverUploaded.slice(0, 10).join(', ')}`
@@ -1653,7 +1688,8 @@ function refuseOrWarnOnArchive(
 		);
 	}
 	if (inspected.uncompressedBytes > API_SKILL_MAX_UPLOAD_BYTES) {
-		throw new Error(
+		throw new CommandRefusalError(
+			'USAGE_INVALID',
 			`ZIP expands to ${formatBytes(inspected.uncompressedBytes)}, over the `
 			+ `${formatBytes(API_SKILL_MAX_UPLOAD_BYTES)} ceiling. The API expands the archive and `
 			+ `weighs the UNCOMPRESSED total, so ${formatBytes(wireBytes)} on the wire does not `
@@ -1726,9 +1762,9 @@ export interface VersionSweep {
  * 2 of 30 hid the state of the other 28.
  *
  * The sweep therefore ATTEMPTS all of them and reports both lists. The caller
- * decides what the outcome means: some deleted plus some failed is a run that
- * happened and went wrong (exit 1, with the record); nothing deleted at all is
- * the ending the command's help documents as exit 2.
+ * decides what the outcome means: some deleted plus some failed is a `partial`
+ * write that publishes the record; nothing deleted at all is a refusal with no
+ * record worth publishing. Both end on 2.
  *
  * ⛔ It deliberately does NOT stop early on a repeated failure. A "the API is
  * clearly down, give up" heuristic is how the abandoned-versions defect reads
@@ -1743,24 +1779,25 @@ export async function deleteEveryVersion(
 ): Promise<VersionSweep> {
 	const deleted: string[] = [];
 	const failures: VersionDeleteFailure[] = [];
-	for (const version of versions) {
+	// In order: one rate-limited API, and both lists follow the order versions were handed in.
+	await forEachInOrder(versions, async (version) => {
 		try {
 			await client.deleteSkillVersion(skillId, version);
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
 			failures.push({ version, reason });
 			logger.info(`   ⚠ version ${version} was not deleted: ${reason}`);
-			continue;
+			return;
 		}
 		deleted.push(version);
 		logger.info(`   Deleted version ${version}`);
-	}
+	});
 	return { deleted, failures };
 }
 
 /**
  * Every version the sweep could not delete, and why — the one sentence both the
- * published report and the exit-2 throw are built from, so the two endings never
+ * published report and the refusal's throw are built from, so the two endings never
  * describe the same run differently.
  */
 export function describeVersionSweepFailures(failures: readonly VersionDeleteFailure[]): string {
@@ -1773,7 +1810,8 @@ export interface HalfDeletedReport {
 	readonly deletedVersions: readonly string[];
 	/** Versions still present. Empty when the sweep completed and the SKILL delete is what failed. */
 	readonly failedVersions: readonly string[];
-	readonly error: string;
+	/** Why the run stopped. Not `error`: on this verb `error` is the refusal's `{ code, message }`. */
+	readonly reason: string;
 }
 
 /**
@@ -1782,10 +1820,10 @@ export interface HalfDeletedReport {
  *
  * 🔑 The deleted list is a RECORD, not a progress counter. Version deletion is
  * irreversible, so a failure part-way through leaves a workspace nobody can
- * reconstruct — and throwing here would end on `handleCommandError`'s exit 2
- * ("the run could not happen") and DISCARD the document. It happened, and it
- * destroyed things the operator now has no other list of. So the lists travel
- * with the failure and the run ends 1: it happened, and its outcome is wrong.
+ * reconstruct — and throwing here would publish only the refusal and DISCARD
+ * the document. It happened, and it destroyed things the operator now has no
+ * other list of. So the lists travel with the failure as a `partial` outcome:
+ * the payload is published, and the adapter ends the run on 2.
  *
  * `failedVersions` is the other half, and the half a re-run needs: what is still
  * there. Without it the operator knows what they lost and not what they still
@@ -1793,18 +1831,21 @@ export interface HalfDeletedReport {
  */
 export function reportHalfDeleted(report: HalfDeletedReport): OrgCommandFailure {
 	const { skillId, deletedVersions, failedVersions } = report;
+	// Some writes landed (the deleted versions) and some did not: every version
+	// still there, plus the skill itself, which is never deleted on this path.
+	const outcome: OrgFailureOutcome = { kind: 'partial', failed: failedVersions.length + 1 };
 	return orgCommandFailure({
 		id: skillId,
 		deleted: false,
 		deletedVersions,
 		failedVersions,
-		error: report.error,
+		reason: report.reason,
 		note:
 			`${String(deletedVersions.length)} version(s) of ${skillId} were deleted and cannot be `
 			+ `restored; ${String(failedVersions.length)} could not be deleted and are still there. `
 			+ 'The skill itself still exists — the API refuses a skill that still has versions. '
 			+ 'Re-run `--all` once the cause is cleared: it will attempt only what is left.',
-	});
+	}, outcome);
 }
 
 // ── Commands ───────────────────────────────────────────────────────────
@@ -1822,7 +1863,7 @@ export function createOrgSkillsCommand(): Command {
 		.description('List organization skills')
 		.option('--debug', DEBUG_OPT_DESC)
 		.action(async (options: { debug?: boolean }) => {
-			await executeOrgCommand('OrgSkillsList', options.debug, async ({ client }) => {
+			await executeOrgCommand('claude org skills list', options.debug, ({ client }) => {
 				return autopaginateSkills(client, '/v1/skills');
 			});
 		})
@@ -1846,8 +1887,7 @@ Example:
 		.option('--title <title>', 'Display title override (single skill only)')
 		.option('--debug', DEBUG_OPT_DESC)
 		.action(async (source: string | undefined, options: { fromNpm?: string; skill?: string; title?: string; debug?: boolean }) => {
-			const commandName = options.fromNpm ? 'OrgSkillsInstallNpm' : 'OrgSkillsInstall';
-			await executeOrgCommand(commandName, options.debug, async ({ client, logger }) => {
+			await executeOrgCommand('claude org skills install', options.debug, ({ client, logger }) => {
 				// INSIDE the action, like `versions add`'s own guards. Thrown from the
 				// Commander handler instead, these were a floating rejection that
 				// reached no catch: Node printed a raw stack trace with absolute $HOME
@@ -1855,24 +1895,25 @@ Example:
 				// exited 1 — which the documented contract reads as "at least one
 				// error-severity finding" for a run in which nothing executed.
 				if (!source && !options.fromNpm) {
-					throw new Error('Provide a <source> path or use --from-npm <package>');
+					throw new CommandRefusalError('USAGE_INVALID', 'Provide a <source> path or use --from-npm <package>');
 				}
 				if (source && options.fromNpm) {
-					throw new Error('Provide either <source> or --from-npm, not both');
+					throw new CommandRefusalError('USAGE_INVALID', 'Provide either <source> or --from-npm, not both');
 				}
 				// The other two illegal combinations, refused rather than dropped. Both
 				// flags used to be accepted and silently ignored on the lane that cannot
 				// honour them, which is how an operator gets a skill published under the
 				// wrong title — or every skill in a package published when they named one.
 				if (options.title !== undefined && options.fromNpm) {
-					throw new Error(
+					throw new CommandRefusalError(
+						'USAGE_INVALID',
 						'--title applies to a single skill and --from-npm can publish several, so it is '
 						+ 'refused here rather than silently ignored. Publish the one skill with '
 						+ '--skill and set its title in its SKILL.md, or upload its directory directly.',
 					);
 				}
 				if (options.skill !== undefined && !options.fromNpm) {
-					throw new Error('--skill selects one skill inside an npm package; it applies only with --from-npm');
+					throw new CommandRefusalError('USAGE_INVALID', '--skill selects one skill inside an npm package; it applies only with --from-npm');
 				}
 				if (options.fromNpm) {
 					return installFromNpm(options.fromNpm, options.skill, client, logger);
@@ -1943,9 +1984,10 @@ Description:
 
 Exit Codes:
   0 - Every skill uploaded
-  1 - The run completed and at least one skill failed to upload (--from-npm
-      uploads several; the ones that landed are listed under skills)
-  2 - The run could not happen: no API key, no such source, unusable input
+  2 - At least one skill failed to upload (--from-npm uploads several; the ones
+      that landed are still listed under skills, each failure under errors as
+      { skill, error: { code, message } }), or the run was refused: no
+      API key, no such source, unusable input ({ error: { code, message } })
 
 Examples:
   $ vat claude org skills install dist/skills/org-admin
@@ -1962,24 +2004,23 @@ Examples:
 		.option('--all', 'Auto-delete all versions before deleting the skill')
 		.option('--debug', DEBUG_OPT_DESC)
 		.action(async (skillId: string, options: { all?: boolean; debug?: boolean }) => {
-			await executeOrgCommand('OrgSkillsDelete', options.debug, async ({ client, logger }) => {
+			await executeOrgCommand('claude org skills delete', options.debug, async ({ client, logger }) => {
 				// Every version this run actually destroyed, accumulated as it goes.
 				//
 				// 🔑 It is a RECORD, not a progress counter. Version deletion is
 				// irreversible and `--all` does it in a loop, so a failure part-way
 				// through leaves a workspace nobody can reconstruct — and the old code
-				// threw at that point, which ends on `handleCommandError`'s exit 2
-				// ("the run could not happen") and DISCARDS the document. It happened,
-				// and it destroyed things the operator now has no list of. So the list
-				// travels with the failure, and the run ends 1: it happened, and its
-				// outcome is wrong.
+				// threw at that point, which publishes only the refusal and DISCARDS
+				// the document. It happened, and it destroyed things the operator now
+				// has no list of. So the list travels with the failure as a `partial`
+				// outcome: published, and ending on 2.
 				const deletedVersions: string[] = [];
 				const halfDeleted = (error: unknown, failedVersions: readonly string[]): OrgCommandFailure =>
 					reportHalfDeleted({
 						skillId,
 						deletedVersions,
 						failedVersions,
-						error: error instanceof Error ? error.message : String(error),
+						reason: errorMessageOf(error),
 					});
 
 				if (options.all) {
@@ -1996,11 +2037,12 @@ Examples:
 					if (sweep.failures.length > 0) {
 						const detail = describeVersionSweepFailures(sweep.failures);
 						// Nothing was destroyed, so there is no record worth publishing and
-						// "could not happen" (exit 2, via the throw) is the honest ending —
+						// the refusal (EXTERNAL_API_FAILED, exit 2, via the throw) is the honest ending —
 						// the same rule as before, now decided on the WHOLE sweep rather than
 						// on its first refusal.
 						if (deletedVersions.length === 0) {
-							throw new Error(
+							throw new CommandRefusalError(
+								'EXTERNAL_API_FAILED',
 								`No version of ${skillId} could be deleted, so the skill was left alone. `
 								+ `${String(sweep.failures.length)} attempt(s) failed — ${detail}`,
 							);
@@ -2049,10 +2091,11 @@ Description:
   --all deletes irreversibly and in a loop, and it ATTEMPTS EVERY VERSION even
   when one refuses — one refusal is a fact about one version, not about the ones
   after it. When the sweep ends with anything left, the versions it destroyed are
-  listed under deletedVersions, the ones still there under failedVersions, and
-  the run exits 1 — the run happened, and its outcome is wrong. The skill itself
+  listed under deletedVersions, the ones still there under failedVersions, why
+  under reason, and the run exits 2 with that record published. The skill itself
   is then left alone, because the API refuses a skill that still has versions.
-  It exits 2 only when nothing was deleted at all.
+  When nothing was deleted at all, it publishes only the refusal
+  ({ error: { code, message } }), also at 2.
 
   A version delete whose response is lost is replayed, and the replay is answered
   404 because the first attempt already removed it. That 404 is read as the
@@ -2060,10 +2103,10 @@ Description:
 
 Exit Codes:
   0 - The skill was deleted
-  1 - The run completed and the skill was NOT deleted: the API named a different
-      outcome, or --all destroyed some versions and could not destroy the rest
-  2 - The run could not happen: no API key, the first request was refused, or
-      --all deleted no version at all
+  2 - The skill was NOT deleted: the API named a different outcome, or --all
+      destroyed some versions and could not destroy the rest (the document
+      lists both); or the run was refused — no API key, the first request was
+      refused, or --all deleted no version at all ({ error: { code, message } })
 
 Example:
   $ vat claude org skills delete skill_abc123 --all
@@ -2079,7 +2122,7 @@ Example:
 		.argument(SKILL_ID_ARG, SKILL_ID_DESC)
 		.option('--debug', DEBUG_OPT_DESC)
 		.action(async (skillId: string, options: { debug?: boolean }) => {
-			await executeOrgCommand('OrgSkillsVersionsList', options.debug, async ({ client }) => {
+			await executeOrgCommand('claude org skills versions list', options.debug, ({ client }) => {
 				return autopaginateSkills(client, skillVersionsPath(skillId));
 			});
 		})
@@ -2099,7 +2142,7 @@ Example:
 		.argument('<version>', 'Version to delete')
 		.option('--debug', DEBUG_OPT_DESC)
 		.action(async (skillId: string, version: string, options: { debug?: boolean }) => {
-			await executeOrgCommand('OrgSkillsVersionsDelete', options.debug, async ({ client, logger }) => {
+			await executeOrgCommand('claude org skills versions delete', options.debug, async ({ client, logger }) => {
 				logger.info(`Deleting version ${version} of skill ${skillId}`);
 				return reportVersionDelete(
 					await client.deleteSkillVersion<unknown>(skillId, version),
@@ -2121,8 +2164,8 @@ Output:
 
 Exit Codes:
   0 - The version was deleted
-  1 - The run completed and the API named an outcome other than a deletion
-  2 - The run could not happen: no API key, or the request was refused
+  2 - The API named an outcome other than a deletion, or the run was refused:
+      no API key, or the request was refused ({ error: { code, message } })
 
 Example:
   $ vat claude org skills versions delete skill_abc123 1775007400733130
@@ -2141,10 +2184,9 @@ Example:
 		.argument('<source>', 'Path to a built skill directory')
 		.option('--debug', DEBUG_OPT_DESC)
 		.action(async (skillId: string, source: string, options: { debug?: boolean }) => {
-			await executeOrgCommand('OrgSkillsVersionsAdd', options.debug, async ({ client, logger }) => {
+			await executeOrgCommand('claude org skills versions add', options.debug, ({ client, logger }) => {
 				const resolved = resolveSourceArgument(source);
-				if (!existsSync(resolved)) throw new Error(`Source not found: ${resolved}`);
-				if (!statSync(resolved).isDirectory()) {
+				if (!statNamedPath(resolved, `Source not found: ${resolved}`).isDirectory()) {
 					// Name the asymmetry IN the refusal, not only in --help. `install`
 					// accepts a ZIP and this verb does not, so the operator most likely to
 					// hit this is the one who just read that `install` takes one — and a
@@ -2154,7 +2196,7 @@ Example:
 						? ' A ZIP is accepted by `vat claude org skills install`, not here:'
 							+ ' publish a new version from the built skill directory instead.'
 						: '';
-					throw new Error(`Source must be a skill directory: ${resolved}.${zipHint}`);
+					throw new CommandRefusalError('USAGE_INVALID', `Source must be a skill directory: ${resolved}.${zipHint}`);
 				}
 				// "Packaging", not "Publishing" — see `installFromLocal`. Measured: this
 				// line printed, then `Failed to load config: …`, and nothing had been
@@ -2193,7 +2235,8 @@ Description:
 
 Exit Codes:
   0 - The version was published
-  2 - The run could not happen: no API key, no such source, not a directory,
+  2 - The run was refused ({ error: { code, message } }): no API key, no such
+      source, not a directory,
       over the upload ceiling, or a response the version identifier
       cannot be read from
 

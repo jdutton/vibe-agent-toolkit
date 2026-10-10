@@ -17,7 +17,7 @@
   "author": "Jeff Dutton",
   "license": "MIT",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.16.0"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -93,6 +93,7 @@
     "build": "tsx ../dev-tools/src/tsc-clean-build.ts",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:system": "vitest run --config vitest.system.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"

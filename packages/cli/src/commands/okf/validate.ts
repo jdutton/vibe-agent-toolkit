@@ -17,21 +17,14 @@ import {
   type OkfBundleReport,
   type OkfFinding,
 } from '@vibe-agent-toolkit/resources';
-import {
-  buildReport,
-  exitCodeForReport,
-  reportSchema,
-  toFindings,
-  type Finding,
-  type Report,
-} from '@vibe-agent-toolkit/schema';
-import { findConfigFile, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
-import { z } from 'zod';
+import { buildReport, withDurationMs, type Finding } from '@vibe-agent-toolkit/schema';
+import { findConfigFile, issueLocation, mapConcurrentFailingInOrder, safePath } from '@vibe-agent-toolkit/utils';
 
-import { handleReportCommandError } from '../../utils/command-error.js';
-import { createLogger } from '../../utils/logger.js';
-import { writeStructuredOutput } from '../../utils/output.js';
-import { nothingCheckedFinding } from '../../utils/run-integrity.js';
+import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
+import { relativeLocationOrUndefined } from '../../utils/relativize-paths.js';
+
+import type { OkfValidateData, OkfValidateReport } from './validate-schema.js';
 
 export interface OkfValidateOptions {
   format?: 'yaml' | 'json';
@@ -39,46 +32,6 @@ export interface OkfValidateOptions {
   debug?: boolean;
 }
 
-/** One checked bundle's `data` row: what was read, never the findings (those are the envelope's). */
-export const OkfBundleSummarySchema = z.object({
-  /** The `okf.bundles.<name>` key. */
-  bundle: z.string(),
-  /** The root as the config file wrote it — never the resolved absolute path. */
-  root: z.string(),
-  /** Every non-reserved `.md` beneath the root, bundle-relative and sorted. */
-  conceptDocuments: z.array(z.string()),
-  /** Every `index.md` / `log.md` beneath the root, bundle-relative and sorted. */
-  reservedDocuments: z.array(z.string()),
-  /** What the root `index.md` declares, when it declares a well-formed one. Reported, never obeyed. */
-  declaredOkfVersion: z.string().optional(),
-}).strict();
-
-export const OkfValidateDataSchema = z.object({
-  bundles: z.array(OkfBundleSummarySchema),
-  /**
-   * Present only when there was nothing to check, and says what to declare or
-   * which root to look at.
-   *
-   * 🪤 The command used to print `status: passed`, `bundles: []`, exit 0 when a
-   * project declared no `okf.bundles` at all — a report indistinguishable from
-   * a bundle read in full and found conformant, so a mistyped key
-   * (`okf.bundle:`, `okf.Bundles:`) read as a clean bill of health. The
-   * envelope's REQUIRED `examined` now says `0` in that case, this sentence
-   * says why, and the run is refused (`RESOURCE_CHECK_BROKEN`, exit 1): a gate
-   * that examined nothing must not read as a pass to a consumer gating on the
-   * status or the exit code. A project that declares no bundles has no reason
-   * to run this verb.
-   */
-  notice: z.string().optional(),
-}).strict();
-
-export type OkfBundleSummary = z.infer<typeof OkfBundleSummarySchema>;
-export type OkfValidateData = z.infer<typeof OkfValidateDataSchema>;
-
-/** The document this command publishes. */
-export const OKF_VALIDATE_REPORT_SCHEMA = reportSchema(OkfValidateDataSchema);
-
-export type OkfValidateReport = Report<OkfValidateData>;
 
 /** One bundle's report beside the absolute root it was read from. */
 export interface CheckedOkfBundle {
@@ -153,11 +106,16 @@ const NO_BUNDLES_NOTICE =
  * @returns The published finding
  */
 function toFinding(finding: OkfFinding, root: string, projectRoot: string): Finding {
+  const document = safePath.join(root, finding.document);
+  // A bundle root on another drive than the project (an absolute or package
+  // root) has no project-relative spelling: the finding names the document in
+  // its message and carries no `location`, rather than killing the document.
+  const location = relativeLocationOrUndefined(issueLocation(document, projectRoot));
   return {
     code: finding.code,
     severity: finding.severity,
-    message: finding.message,
-    location: issueLocation(safePath.join(root, finding.document), projectRoot),
+    message: location === undefined ? `${finding.message} (${document})` : finding.message,
+    ...(location === undefined ? {} : { location }),
     ...(finding.link === undefined ? {} : { link: finding.link }),
     ...(finding.line === undefined ? {} : { line: finding.line }),
   };
@@ -187,18 +145,15 @@ export function summarizeOkfBundles(
     (sum, report) => sum + report.conceptDocuments.length + report.reservedDocuments.length,
     0,
   );
+  // A run that examined nothing is refused by the writer, from the registry's
+  // declared denominator; `notice` says which case it was.
   const notice = noticeFor(bundles);
-  // A run that examined nothing is refused through the shared run-integrity
-  // mechanism. It stands down when the run already carries a finding: the only
-  // way to examine zero AND find something is an unreadable root, whose own
-  // `error` finding already fails the run and says the truer thing.
-  const refusal = findings.length > 0
-    ? []
-    : toFindings(nothingCheckedFinding(examined, [], () => notice ?? NO_BUNDLES_NOTICE));
 
   return buildReport<OkfValidateData>({
+    // `vat okf validate` offers no `--strict`: warnings never fail it.
+    gate: { strict: false },
     examined,
-    findings: [...refusal, ...findings],
+    findings,
     data: {
       bundles: bundles.map((report) => ({
         bundle: report.bundle,
@@ -210,6 +165,32 @@ export function summarizeOkfBundles(
       ...(notice === undefined ? {} : { notice }),
     },
   });
+}
+
+/** The resources lane's code for a bundle root the OS would not list. */
+const ROOT_UNREADABLE = 'OKF_BUNDLE_ROOT_UNREADABLE';
+
+/**
+ * The refusal a run with an unreadable bundle root ends on: `INPUT_UNREADABLE`,
+ * as a directory the OS will not list is in every verb, publishing what every
+ * other bundle finished. The resources lane reports the root as that bundle's
+ * finding so one bad root cannot discard the rest; this is where it becomes
+ * the run's refusal, and the finished work is what the rest keeps.
+ *
+ * @param report - The assembled report
+ * @returns The refusal, or nothing when every root was read
+ */
+export function unreadableRootRefusal(report: OkfValidateReport): { message: string; finished: FinishedWork } | undefined {
+  const unreadable = report.findings.filter((finding) => finding.code === ROOT_UNREADABLE);
+  if (unreadable.length === 0) return undefined;
+  return {
+    message: unreadable.map((finding) => finding.message).join('\n'),
+    finished: {
+      examined: report.examined,
+      findings: report.findings.filter((finding) => finding.code !== ROOT_UNREADABLE),
+      data: report.data,
+    },
+  };
 }
 
 /**
@@ -226,9 +207,13 @@ export async function okfValidateReport(
 ): Promise<OkfValidateReport> {
   const configPath = findConfigFile(process.cwd());
   if (!configPath) {
-    throw new Error('No vibe-agent-toolkit.config.yaml found. Run from a project directory.');
+    throw new CommandRefusalError('CONFIG_INVALID', 'No vibe-agent-toolkit.config.yaml found. Run from a project directory.');
   }
 
+  // A config the OS will not read throws a classified `source` fault, one that does not
+  // parse or validate `CONFIG_LOAD`, and an undeclared bundle argument
+  // `OKF_UNKNOWN_BUNDLE` — each a coded refusal the
+  // catch reads. Anything else thrown here is VAT's defect and surfaces as one.
   const config = await parseConfigFile(configPath);
   const projectRoot = dirname(configPath);
   const runs = okfBundleRuns(config.okf, projectRoot, {
@@ -236,10 +221,11 @@ export async function okfValidateReport(
     ...(options.specVersion !== undefined && { specVersion: options.specVersion }),
   });
 
-  const checked: CheckedOkfBundle[] = [];
-  for (const run of runs) {
-    checked.push({ report: await validateOkfBundle(run), root: run.root });
-  }
+  // Independent read-only bundles: validated together, summarized in declaration order.
+  const checked: CheckedOkfBundle[] = await mapConcurrentFailingInOrder(
+    runs,
+    async (run) => ({ report: await validateOkfBundle(run), root: run.root }),
+  );
 
   return summarizeOkfBundles(checked, projectRoot);
 }
@@ -249,16 +235,24 @@ export async function okfValidateCommand(
   bundleArg: string | undefined,
   options: OkfValidateOptions,
 ): Promise<void> {
-  const logger = createLogger(options.debug === true ? { debug: true } : {});
   const startTime = Date.now();
+  const format = options.format ?? 'yaml';
+  // What finished before a refusal — read by the catch, so an unreadable root
+  // still publishes every other bundle's findings.
+  let finished = NOTHING_FINISHED;
 
   try {
-    const report = { ...(await okfValidateReport(bundleArg, options)), durationMs: Date.now() - startTime };
-    writeStructuredOutput(report, options.format);
-    // Derived from the report it just PUBLISHED: an adopter who promotes or
-    // lowers a bundle's severity then gates on exactly the number a reader sees.
-    process.exit(exitCodeForReport(report));
+    const report = withDurationMs(await okfValidateReport(bundleArg, options), Date.now() - startTime);
+    const refusal = unreadableRootRefusal(report);
+    if (refusal !== undefined) {
+      finished = refusal.finished;
+      throw new CommandRefusalError('INPUT_UNREADABLE', refusal.message);
+    }
+    // The code derives from the report the writer PUBLISHED: an adopter who
+    // promotes or lowers a bundle's severity gates on exactly what a reader sees.
+    endWithReport('okf validate', report, format);
   } catch (error) {
-    handleReportCommandError(error, logger, startTime, 'OKF validate', options.format);
+    // `vat okf validate` offers no `--strict`: warnings never fail it.
+    endWithRefusal('okf validate', refusalCodeOf(error), error, format, { strict: false }, finished);
   }
 }

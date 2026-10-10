@@ -23,7 +23,7 @@ describe('detectPackagedAgentInstructionFiles', () => {
       mkdirSyncReal(dirname(full), { recursive: true });
       writeFileSync(full, '# content\n');
     }
-    return detectPackagedAgentInstructionFiles(root, root, declaredDests);
+    return detectPackagedAgentInstructionFiles(root, root, declaredDests, []);
   };
 
   it('reports every agent-instruction basename found in the tree', () => {
@@ -83,7 +83,7 @@ describe('detectPackagedAgentInstructionFiles', () => {
     mkdirSyncReal(pluginDir, { recursive: true });
     writeFileSync(safePath.join(pluginDir, 'CLAUDE.md'), GUIDANCE);
 
-    const issues = detectPackagedAgentInstructionFiles(pluginDir, root, []);
+    const issues = detectPackagedAgentInstructionFiles(pluginDir, root, [], []);
 
     expect(issues).toHaveLength(1);
     expect(issues[0]?.location).toBe('plugins/demo/CLAUDE.md');
@@ -91,7 +91,7 @@ describe('detectPackagedAgentInstructionFiles', () => {
 
   it('returns an empty list for a directory that does not exist', () => {
     const missing = safePath.join(getTempDir(), 'not-there');
-    expect(detectPackagedAgentInstructionFiles(missing, missing, [])).toEqual([]);
+    expect(detectPackagedAgentInstructionFiles(missing, missing, [], [])).toEqual([]);
   });
 
   // §8.2 precedence: an EXPLICIT `files:` entry naming a dest is an unambiguous
@@ -147,7 +147,7 @@ describe('detectPackagedAgentInstructionFiles', () => {
     writeFileSync(safePath.join(bundleDir, 'CLAUDE.md'), GUIDANCE);
     writeFileSync(safePath.join(bundleDir, 'SKILL.md'), '# skill\n');
 
-    const issues = detectPackagedAgentInstructionFiles(bundleDir, root, []);
+    const issues = detectPackagedAgentInstructionFiles(bundleDir, root, [], []);
 
     expect(issues.map(i => i.location)).toEqual(['dist/skills/demo/CLAUDE.md']);
   });
@@ -171,7 +171,7 @@ describe('detectPackagedAgentInstructionFiles', () => {
     writeFileSync(safePath.join(locked, 'CLAUDE.md'), '# nested guidance\n');
 
     const issues = await withReaddirSyncRefused(locked, 'EACCES', () =>
-      detectPackagedAgentInstructionFiles(bundle, root, []),
+      detectPackagedAgentInstructionFiles(bundle, root, [], []),
     );
 
     expect(issues.map(i => [i.code, i.location])).toEqual([
@@ -188,7 +188,7 @@ describe('detectPackagedAgentInstructionFiles', () => {
   it('never publishes an empty location when the scanned tree itself refuses', async () => {
     const root = getTempDir();
     const issues = await withReaddirSyncRefused(root, 'EACCES', () =>
-      detectPackagedAgentInstructionFiles(root, root, []),
+      detectPackagedAgentInstructionFiles(root, root, [], []),
     );
     expect(issues.map(i => [i.code, i.location])).toEqual([['SCAN_PATH_UNREADABLE', '.']]);
   });

@@ -4,7 +4,7 @@
  * command's design and must not drift away from the checklist.
  */
 
-import { CODE_REGISTRY } from '@vibe-agent-toolkit/schema';
+import { CODE_REGISTRY, FindingCodeSchema } from '@vibe-agent-toolkit/schema';
 import { describe, it, expect } from 'vitest';
 
 import {
@@ -27,7 +27,6 @@ describe('review-checklist.sectionForCode', () => {
     // Naming
     ['SKILL_NAME_INVALID', SEC_NAMING],
     ['RESERVED_WORD_IN_NAME', SEC_NAMING],
-    ['SKILL_NAME_XML_TAGS', SEC_NAMING],
     ['SKILL_NAME_MISMATCHES_DIR', SEC_NAMING],
     // Description
     ['SKILL_MISSING_DESCRIPTION', SEC_DESCRIPTION],
@@ -186,7 +185,10 @@ const FALLS_TO_CATCH_ALL: ReadonlySet<string> = new Set([
 ]);
 
 describe('review-checklist accounts for every registry code', () => {
-  const registryCodes = Object.keys(CODE_REGISTRY);
+  // FINDING codes only. A refusal code says the run could not do its job — the
+  // review ends on it (exit 2) or publishes it as a run-integrity finding — so
+  // it is never a checklist item to group under a section.
+  const registryCodes: readonly string[] = FindingCodeSchema.options;
 
   it('reads a non-empty registry, so the checks below cannot pass vacuously', () => {
     expect(registryCodes.length).toBeGreaterThan(50);

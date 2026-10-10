@@ -13,7 +13,7 @@ export function createOrgCodeAnalyticsCommand(): Command {
     .option('--from <date>', 'Start date YYYY-MM-DD (default: 30 days ago)')
     .option('--debug', 'Enable debug logging')
     .action(async (options: { from?: string; debug?: boolean }) => {
-      await executeOrgCommand('OrgCodeAnalytics', options.debug, async ({ client }) => {
+      await executeOrgCommand('claude org code-analytics', options.debug, ({ client }) => {
         return autopaginateReport(client, '/v1/organizations/usage_report/claude_code', {
           starting_at: options.from ?? defaultDaysAgoDateOnly(30),
         });

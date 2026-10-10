@@ -1,10 +1,10 @@
 import os from 'node:os';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  SCOPE_LOCATIONS,
+  scopeLocationsFor,
   VALID_SCOPES,
   validateAndGetScopeLocation,
 } from '../../src/utils/scope-locations.js';
@@ -12,22 +12,52 @@ import {
 describe('scope-locations', () => {
   const AGENT_SKILL = 'agent-skill';
 
-  describe('SCOPE_LOCATIONS', () => {
+  // The shared setup's guard (a Claude directory outside the temp tree throws) is lifted for THIS
+  // suite, and said so: it computes where a scope would be — the real home's among them — and reads
+  // or writes nothing there.
+  beforeEach(() => {
+    vi.stubEnv('VAT_TEST_USER_STATE_UNDER', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  describe('scopeLocationsFor', () => {
     it('should define agent-skill user scope', () => {
-      expect(SCOPE_LOCATIONS[AGENT_SKILL]?.user).toBe(
+      vi.stubEnv('CLAUDE_CONFIG_DIR', '');
+      expect(scopeLocationsFor(AGENT_SKILL)?.user).toBe(
         safePath.join(os.homedir(), '.claude', 'skills')
       );
     });
 
     it('should define agent-skill project scope', () => {
-      expect(SCOPE_LOCATIONS[AGENT_SKILL]?.project).toBe(
+      expect(scopeLocationsFor(AGENT_SKILL)?.project).toBe(
         safePath.join(process.cwd(), '.claude', 'skills')
       );
     });
 
-    it('should have agent-skill runtime defined', () => {
-      expect(SCOPE_LOCATIONS[AGENT_SKILL]).toBeDefined();
-      expect(typeof SCOPE_LOCATIONS[AGENT_SKILL]).toBe('object');
+    it('has no locations for a runtime it does not know', () => {
+      expect(scopeLocationsFor('unknown-runtime')).toBeUndefined();
+    });
+  });
+
+  // Resolved at call time, not at module load: `--cwd` changes the working
+  // directory after every module is loaded, and the user scope belongs to the
+  // one Claude-user-paths resolver that every other verb reads.
+  describe('resolution at call time', () => {
+    const CONFIG_DIR = safePath.resolve('vat-scope-config-dir');
+    const MOVED_CWD = safePath.resolve('vat-scope-moved-cwd');
+
+    it('puts the user scope under CLAUDE_CONFIG_DIR', () => {
+      vi.stubEnv('CLAUDE_CONFIG_DIR', CONFIG_DIR);
+      expect(validateAndGetScopeLocation(AGENT_SKILL, 'user')).toBe(safePath.join(CONFIG_DIR, 'skills'));
+    });
+
+    it('puts the project scope under the working directory of the call', () => {
+      vi.spyOn(process, 'cwd').mockReturnValue(MOVED_CWD);
+      expect(validateAndGetScopeLocation(AGENT_SKILL, 'project')).toBe(safePath.join(MOVED_CWD, '.claude', 'skills'));
     });
   });
 
@@ -44,6 +74,7 @@ describe('scope-locations', () => {
 
   describe('validateAndGetScopeLocation', () => {
     it('should return user scope location for agent-skill', () => {
+      vi.stubEnv('CLAUDE_CONFIG_DIR', '');
       const location = validateAndGetScopeLocation(AGENT_SKILL, 'user');
       expect(location).toBe(safePath.join(os.homedir(), '.claude', 'skills'));
     });
@@ -57,6 +88,12 @@ describe('scope-locations', () => {
       expect(() => validateAndGetScopeLocation(AGENT_SKILL, 'invalid')).toThrow(
         "Invalid scope 'invalid' for runtime 'agent-skill'"
       );
+    });
+
+    // Coded at the cause: the command publishes the refusal the error carries.
+    it('refuses an unknown scope or runtime as USAGE_INVALID', () => {
+      expect(() => validateAndGetScopeLocation(AGENT_SKILL, 'invalid')).toThrow(expect.objectContaining({ refusal: 'USAGE_INVALID' }));
+      expect(() => validateAndGetScopeLocation('unknown', 'user')).toThrow(expect.objectContaining({ refusal: 'USAGE_INVALID' }));
     });
 
     it('should throw error with available scopes in message', () => {
@@ -78,20 +115,28 @@ describe('scope-locations', () => {
     });
 
     it('should throw error when scope location not implemented', () => {
-      // A runtime can declare a scope as valid without a location being wired up in
-      // SCOPE_LOCATIONS. That fallback must throw rather than return undefined, so
+      // A runtime can declare a scope as valid without a location being wired up
+      // for it. That fallback must throw rather than return undefined, so
       // register such a runtime for the duration of this test.
       const unwiredRuntime = 'unwired-runtime';
       VALID_SCOPES[unwiredRuntime] = ['user'];
 
       try {
-        expect(SCOPE_LOCATIONS[unwiredRuntime]).toBeUndefined();
+        expect(scopeLocationsFor(unwiredRuntime)).toBeUndefined();
         expect(() => validateAndGetScopeLocation(unwiredRuntime, 'user')).toThrow(
           "Scope 'user' not implemented for runtime 'unwired-runtime'"
         );
+        expect(() => validateAndGetScopeLocation(unwiredRuntime, 'user')).toThrow(expect.objectContaining({ refusal: 'NOT_IMPLEMENTED' }));
       } finally {
         delete VALID_SCOPES[unwiredRuntime];
       }
+    });
+
+    // `--runtime constructor` once read Object.prototype: INTERNAL_ERROR on install, a defect exit on installed.
+    it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty'])('refuses the inherited key %s as a runtime, USAGE_INVALID', (key) => {
+      expect(() => validateAndGetScopeLocation(key, 'user')).toThrow(expect.objectContaining({ refusal: 'USAGE_INVALID' }));
+      expect(scopeLocationsFor(key)).toBeUndefined();
+      expect(() => validateAndGetScopeLocation(AGENT_SKILL, key)).toThrow(expect.objectContaining({ refusal: 'USAGE_INVALID' }));
     });
 
     it('should handle case-sensitive scope names', () => {

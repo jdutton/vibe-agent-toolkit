@@ -22,7 +22,7 @@ export function createVercelAISDKAdapter(): ConversationalRuntimeAdapter<
 > {
   return {
     name: 'Vercel AI SDK',
-    convertToFunction: async (userMessage: string, sessionContext: TransportSessionContext<BreedAdvisorState>) => {
+    convertToFunction: (userMessage: string, sessionContext: TransportSessionContext<BreedAdvisorState>) => {
       // Create conversation context using shared helper
       const agentContext = createAdapterContext(sessionContext.conversationHistory, async (messages: Message[]) => {
         const vercelMessages = messages.map((msg) => ({

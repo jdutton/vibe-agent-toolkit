@@ -61,13 +61,13 @@ Output your final understanding as JSON matching this schema:
     /**
      * Process a user message and extract requirements
      */
-    async processMessage(_message: string): Promise<{ response: string; extracted?: Partial<DesignRequest> }> {
+    processMessage(_message: string): Promise<{ response: string; extracted?: Partial<DesignRequest> }> {
       // This would integrate with an actual LLM in a real implementation
       // For now, just demonstrate the structure
 
-      return {
+      return Promise.resolve({
         response: 'Question based on core principles...',
-      };
+      });
     },
   };
 }

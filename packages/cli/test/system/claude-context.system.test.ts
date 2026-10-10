@@ -28,6 +28,7 @@
  * index-based assertion would pass today and pin the wrong sentence tomorrow.
  */
 
+import { exitCodeForReport, type ExitDeterminingDocument } from '@vibe-agent-toolkit/schema';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { createSuiteContext, executeCli, getMonorepoRoot } from './test-common.js';
@@ -276,6 +277,25 @@ describe.skipIf(process.platform === 'win32')('vat claude context', () => {
   });
 });
 
+describe('vat claude context refusals', () => {
+  beforeAll(context.setup);
+
+  it('claude context publishes through the writer: a refusal is exit 2 with error.code', async () => {
+    const result = await executeCli(
+      context.binPath,
+      ['claude', 'context', '../..', '--format', 'json'],
+      { cwd: repoRoot },
+    );
+    const document = JSON.parse(result.stdout) as ExitDeterminingDocument & { error: unknown };
+
+    // The refusal envelope's error branch: the invocation's mistake, coded — never a bare string.
+    expect(document, result.stdout).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' }, gate: { strict: false } });
+    expect(result.status).toBe(exitCodeForReport(document));
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('outside the corpus root');
+  });
+});
+
 describe('vat claude context with several paths', () => {
   beforeAll(context.setup);
 
@@ -357,9 +377,8 @@ describe('vat claude context with several paths', () => {
     // cold cache — only to then reject what they typed.
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('outside the corpus root');
-    // ⛔ NOT `toBe('')`. `handleCommandError` writes its `status: error` block to
-    // stdout even under `--format json` — a real defect, tracked separately, and
-    // asserting an empty stdout here would pin a fix this change does not make.
+    // ⛔ NOT `toBe('')`. A refusal publishes its `status: error` document on
+    // stdout, so an empty stdout is not the property.
     // What must hold is that a refused run publishes no MEASUREMENT: no
     // envelope, no answers, nothing a consumer could read as context that loads.
     //

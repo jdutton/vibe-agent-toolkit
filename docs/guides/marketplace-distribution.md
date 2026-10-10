@@ -516,7 +516,7 @@ plugins:
         dest: hooks/compiled-hook.mjs         # relative to plugin output dir
 ```
 
-`dest` cannot escape the plugin output dir and cannot target `.claude-plugin/plugin.json` (owned by merge-write). Overwrites are allowed and logged at info level.
+`dest` cannot escape the plugin output dir, cannot land inside `skills/` (owned by the skill stream — use that skill's own `files:`), and cannot target `.claude-plugin/plugin.json` (owned by merge-write). All three are decided by the place `dest` names, not its spelling: `./skills/x`, `docs/../skills/x` and `Skills/x` are refused as `skills/x` is (`CONFIG_INVALID`). A later entry overwrites an earlier one's file, or a tree-copied file, and says so at info level; a `dest` that lands on a directory, or under a file, refuses the build.
 
 ### What the verbatim tree-copy leaves behind
 

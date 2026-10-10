@@ -1,6 +1,6 @@
 import { inspect } from 'node:util';
 
-import type { ReportStatus } from './report.js';
+import type { Gate, ReportStatus } from './report.js';
 import type { SeverityCounts } from './validation-issue.js';
 
 /**
@@ -14,18 +14,19 @@ import type { SeverityCounts } from './validation-issue.js';
  * case $? in 0) ;; 1) echo findings ;; *) echo broken; exit 1 ;; esac
  * ```
  *
- * - {@link ExitCode.OK} — the command ran and found nothing at error severity.
- *   Warnings and informational findings are published in the document, not in
- *   the exit code (a command's `--strict` promotes warnings, where it offers one).
+ * - {@link ExitCode.OK} — the command ran and found nothing its gate fails on:
+ *   no error-severity finding, and no warning when the DOCUMENT's
+ *   `gate.strict` is true. Informational findings never fail it.
  * - {@link ExitCode.FINDINGS} — the command ran to completion and what it
  *   examined failed its gate: an error-severity finding, a failed eval, a
  *   measured change. The document says which.
  * - {@link ExitCode.ERROR} — the command could not do its job: a usage
  *   mistake, an unreadable input, a missing dependency, an internal failure.
- *   Whether the fault is the operator's or VAT's is said in the message and,
- *   where a verb has more than one such cause, in a `reason` beside it — never
- *   in a fourth exit code, because 3 and 4 meant different things in different
- *   verbs and a wrapper cannot read a number it has to look up per command.
+ *   Which fault it was is said in the document's `error.code` — a registered
+ *   refusal code (`RefusalCode`), the same vocabulary for every verb — and its
+ *   `error.message`; never in a fourth exit code, because 3 and 4 meant
+ *   different things in different verbs and a wrapper cannot read a number it
+ *   has to look up per command.
  *
  * Why the finer distinctions were folded rather than kept: the five vocabularies
  * this replaced disagreed on what `1` meant, and the orchestrator that runs
@@ -61,24 +62,25 @@ export function isExitCode(code: number): code is ExitCodeValue {
 export interface ExitDeterminingDocument {
   readonly status: ReportStatus;
   readonly summary: SeverityCounts;
+  readonly gate: Gate;
 }
 
 /**
  * The ONE mapping from a published document to its exit code. `status: error`
  * is {@link ExitCode.ERROR}; otherwise the COUNTS decide, never the status word
- * (`findings` means only a non-empty list): errors fail, warnings only under
- * `strict`, info never.
+ * (`findings` means only a non-empty list): errors fail, warnings only when the
+ * document's own `gate.strict` says so, info never.
+ *
+ * 🔑 No options parameter, deliberately. The gate is READ FROM THE DOCUMENT, so
+ * anyone holding the published report derives the same code the process ended
+ * on — a call-site `strict` flag was a second input no reader could see.
  *
  * @param report - The published document, or its adapter's reading of it
- * @param options - `strict`: treat warnings as failing
  */
-export function exitCodeForReport(
-  report: ExitDeterminingDocument,
-  options: { readonly strict?: boolean } = {},
-): ExitCodeValue {
+export function exitCodeForReport(report: ExitDeterminingDocument): ExitCodeValue {
   if (report.status === 'error') return ExitCode.ERROR;
   if (report.summary.errors > 0) return ExitCode.FINDINGS;
-  if (options.strict === true && report.summary.warnings > 0) return ExitCode.FINDINGS;
+  if (report.gate.strict && report.summary.warnings > 0) return ExitCode.FINDINGS;
   return ExitCode.OK;
 }
 

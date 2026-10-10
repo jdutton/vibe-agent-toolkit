@@ -2,19 +2,22 @@
  * Shallow-clone-and-cleanup helper for `vat audit <git-url>`.
  *
  * Pipeline:
- *  1. mkdtempSync('vat-audit-')
- *  2. install SIGINT handler that removes the tempdir
+ *  1. makeStagingDir('vat-audit-')
+ *  2. install SIGINT handler that disposes of the tempdir
  *  3. git clone --depth 1 --single-branch [--branch <ref>]
  *  4. git rev-parse HEAD → resolved commit SHA
  *  5. yield (tempdir, targetDir, provenance) to caller
- *  6. cleanup in finally — always rm tempdir unless `keepTempForDebug`
+ *  6. cleanup in finally — always dispose of the tempdir unless `keepTempForDebug`
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+
 
 import { cloneGitSource } from '@vibe-agent-toolkit/agent-skills';
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { disposeTempDir, disposeTempDirAfterFailure } from '@vibe-agent-toolkit/utils';
 import { type ParsedGitUrl } from '@vibe-agent-toolkit/utils/git';
+
+import { makeStagingDir } from '../../utils/archive-staging.js';
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
 
 import type { Provenance } from './provenance.js';
 
@@ -33,49 +36,77 @@ export interface CloneOptions {
 }
 
 /**
- * Run `body` against a freshly shallow-cloned repo. Always cleans up the
- * tempdir unless `options.keepTempForDebug` is true. Re-raises any error
- * from the clone or from `body`.
+ * Clone the source, or refuse. A subpath the clone does not hold, or one that
+ * escapes it, arrives coded (`GIT_SUBPATH_INVALID`) and keeps its own refusal —
+ * `USAGE_INVALID`, the argument's mistake. Anything else the clone step throws
+ * (a clone that fails, a ref it does not have) means the source the operator
+ * named could not be read: `INPUT_UNREADABLE`. Only the clone step is coded; a
+ * failure inside the audit that follows is the audit's own.
+ */
+function cloneSource(parsed: ParsedGitUrl, tempdir: string): ReturnType<typeof cloneGitSource> {
+  try {
+    return cloneGitSource(parsed, tempdir);
+  } catch (error) {
+    if (refusalCodeOf(error) !== 'INTERNAL_ERROR') throw error;
+    throw new CommandRefusalError('INPUT_UNREADABLE', errorMessageOf(error), { cause: error });
+  }
+}
+
+/**
+ * Dispose of the clone's tempdir once the work on it is DONE — or, under `keepTempForDebug`,
+ * keep it and say where.
+ *
+ * @returns `undefined`, or the leftover: the classified fault naming a tempdir the OS would not
+ *   remove, for the caller to publish as a warning beside the work it finished
+ */
+async function disposeClone(tempdir: string, options: CloneOptions): Promise<unknown> {
+  if (options.keepTempForDebug) {
+    process.stderr.write(`[vat: debug — temp dir preserved: ${tempdir}]\n`);
+    return undefined;
+  }
+  return await disposeTempDir(tempdir);
+}
+
+/**
+ * Run `body` against a freshly shallow-cloned repo, then dispose of the clone (unless
+ * `options.keepTempForDebug`). `body` must not end the process itself: a caller that exits
+ * does so once this has settled.
+ *
+ * A failure of the clone or of `body` is rethrown unchanged, a clone that will not go recorded
+ * beside it (`suppressedFaultsOf`). Once `body` succeeded, a clone the OS would not remove is
+ * returned as `leftover` beside its value — the work is done, so it is never the refusal.
  */
 export async function withClonedRepo<T>(
   parsed: ParsedGitUrl,
   options: CloneOptions,
   body: (ctx: CloneAndAuditContext) => Promise<T>
-): Promise<T> {
-  const tempdir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-'));
+): Promise<{ readonly value: T; readonly leftover: unknown }> {
+  // Through the one classified creation: a temp directory the OS will not make is the environment's fault.
+  const tempdir = await makeStagingDir('vat-audit-');
+  // Interrupted: dispose of the clone first, then let the signal end the process as it would have.
+  // No report follows a signal, so a clone that will not go is named on stderr.
   const sigintListener = (): void => {
-    try {
-      rmSync(tempdir, { recursive: true, force: true });
-    } finally {
-      process.removeListener('SIGINT', sigintListener);
+    process.removeListener('SIGINT', sigintListener);
+    const resend = (): void => {
       process.kill(process.pid, 'SIGINT');
-    }
+    };
+    disposeClone(tempdir, options).then(
+      (leftover) => {
+        if (leftover !== undefined) process.stderr.write(`[vat: interrupted — temp dir left behind: ${errorMessageOf(leftover)}]\n`);
+        resend();
+      },
+      // A rejection is a refusal to dispose at all (nothing was touched): say that, not "left behind".
+      (refused: unknown) => {
+        process.stderr.write(`[vat: interrupted — temp dir not disposed of: ${errorMessageOf(refused)}]\n`);
+        resend();
+      },
+    );
   };
   process.on('SIGINT', sigintListener);
 
-  // The audit pipeline calls `process.exit()` on completion
-  // (`handleAuditResults` in audit.ts), which would skip any `finally`
-  // block here. Register an `'exit'` listener so cleanup runs even when
-  // the process is ending — this is Node's documented escape hatch for
-  // "always run this sync cleanup". We still keep the `finally` below so
-  // thrown errors and the non-exit path behave the same.
-  let cleaned = false;
-  const cleanup = (): void => {
-    if (cleaned) return;
-    cleaned = true;
-    if (options.keepTempForDebug) {
-      process.stderr.write(`[vat: debug — temp dir preserved: ${tempdir}]\n`);
-    } else {
-      rmSync(tempdir, { recursive: true, force: true });
-    }
-  };
-  const exitListener = (): void => {
-    cleanup();
-  };
-  process.on('exit', exitListener);
-
+  let value: T;
   try {
-    const { ref, commit, targetDir } = cloneGitSource(parsed, tempdir);
+    const { ref, commit, targetDir } = cloneSource(parsed, tempdir);
     const { subpath } = parsed;
     const provenance: Provenance = {
       url: parsed.cloneUrl,
@@ -83,12 +114,13 @@ export async function withClonedRepo<T>(
       commit,
       ...(subpath ? { subpath } : {}),
     };
-    return await body({ tempdir, targetDir, provenance });
-  } finally {
+    value = await body({ tempdir, targetDir, provenance });
+  } catch (error) {
     process.removeListener('SIGINT', sigintListener);
-    process.removeListener('exit', exitListener);
-    cleanup();
+    if (options.keepTempForDebug) await disposeClone(tempdir, options);
+    else await disposeTempDirAfterFailure(tempdir, error);
+    throw error;
   }
+  process.removeListener('SIGINT', sigintListener);
+  return { value, leftover: await disposeClone(tempdir, options) };
 }
-
-

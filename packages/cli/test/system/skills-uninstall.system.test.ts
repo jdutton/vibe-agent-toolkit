@@ -7,6 +7,9 @@
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
+import yaml from 'yaml';
+
+import { PLUGIN_UNINSTALL_REPORT_SCHEMA, type PluginUninstallReport } from '../../src/commands/claude/plugin/uninstall-schema.js';
 
 import {
   createPackageAndHomeContext,
@@ -129,6 +132,11 @@ async function setupInstalledPlugin(suite: ReturnType<typeof setupUninstallTestS
   return { fakeHome, pluginDir, pluginKey };
 }
 
+/** The report `vat claude plugin uninstall` published, validated against its schema. */
+function uninstallReport(stdout: string): PluginUninstallReport {
+  return PLUGIN_UNINSTALL_REPORT_SCHEMA.parse(yaml.parse(stdout));
+}
+
 describe('claude plugin uninstall command (system test)', () => {
   const suite = setupUninstallTestSuite();
 
@@ -142,9 +150,7 @@ describe('claude plugin uninstall command (system test)', () => {
     const result = await suite.runUninstall(fakeHome, [pluginKey]);
 
     expect(result.status).toBe(0);
-    const combined = result.stdout;
-    expect(combined).toContain('status: success');
-    expect(combined).toContain('pluginsRemoved: 1');
+    expect(uninstallReport(result.stdout)).toMatchObject({ status: 'ok', data: { dryRun: false, plugins: [{ key: pluginKey, removed: true }] } });
   });
 
   it('removes plugin directory from marketplacesDir after uninstall', async () => {
@@ -183,7 +189,7 @@ describe('claude plugin uninstall command (system test)', () => {
     expect(result.status).toBe(0);
   });
 
-  it('exits 0 with pluginsRemoved: 0 when --all and nothing installed', async () => {
+  it('exits 0 with no plugins when --all and nothing installed', async () => {
     const { createTempDir } = createTempDirTracker(TEMP_DIR_PREFIX);
     const tempDir = createTempDir();
     const { fakeHome, packageDir } = createPackageAndHomeContext(tempDir);
@@ -195,8 +201,9 @@ describe('claude plugin uninstall command (system test)', () => {
 
     const result = await suite.runUninstall(fakeHome, ['--all'], packageDir);
 
+    // Nothing installed from the package is an answer: one request, examined, ok.
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('pluginsRemoved: 0');
+    expect(uninstallReport(result.stdout)).toMatchObject({ status: 'ok', examined: 1, data: { plugins: [] } });
   });
 
   it('previews removal with --dry-run without deleting files', async () => {
@@ -205,7 +212,7 @@ describe('claude plugin uninstall command (system test)', () => {
     const result = await suite.runUninstall(fakeHome, [pluginKey, '--dry-run']);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('status: success');
+    expect(uninstallReport(result.stdout)).toMatchObject({ status: 'ok', data: { dryRun: true } });
     // Plugin directory must still exist after dry-run
     expect(fs.existsSync(pluginDir)).toBe(true);
   });

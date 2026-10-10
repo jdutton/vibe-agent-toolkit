@@ -19,6 +19,7 @@ import type * as FsPromises from 'node:fs/promises';
 import { mkdtemp, readdir, readFile, stat } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
+import type * as Utils from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { removeScratchDir } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -40,16 +41,24 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       fsCalls.writeFilePaths.push(String(path));
       return (actual.writeFile as (...a: unknown[]) => Promise<void>)(path, ...rest);
     },
-    rename: async (from: unknown, to: unknown) => {
-      fsCalls.renamePairs.push({ from: String(from), to: String(to) });
-      return (actual.rename as (...a: unknown[]) => Promise<void>)(from, to);
-    },
     stat: async (path: unknown, ...rest: unknown[]) => {
       const refusal = fsCalls.refuseStat;
       if (refusal !== null && String(path).endsWith(refusal.suffix)) {
         throw Object.assign(new Error(`${refusal.code}: refused, stat '${String(path)}'`), { code: refusal.code });
       }
       return (actual.stat as (...a: unknown[]) => Promise<unknown>)(path, ...rest);
+    },
+  };
+});
+
+// The publish is `renameFileAtomic` (the one file rename, with its Windows retry): recorded at that seam.
+vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof Utils>();
+  return {
+    ...actual,
+    renameFileAtomic: async (from: string, to: string) => {
+      fsCalls.renamePairs.push({ from, to });
+      return actual.renameFileAtomic(from, to);
     },
   };
 });
@@ -140,6 +149,30 @@ describe('ensureModelFiles publication', () => {
     await expect(ensureModelFiles(MODEL_ID, cacheDir, true)).rejects.toMatchObject({ code: 'EACCES' });
 
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('reports download progress on stderr, never stdout — stdout is the calling command\'s document', async () => {
+    // `vat rag index`/`query` publish a YAML report on stdout; a first run with no
+    // cached model used to print these lines ahead of it, and the report no longer parsed.
+    stubFetch();
+    // `console.log` is spied too: vitest intercepts it before it reaches `process.stdout.write`,
+    // so a stdout spy alone would pass over the very call this test exists to catch.
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await ensureModelFiles(MODEL_ID, cacheDir, true);
+
+      expect(log).not.toHaveBeenCalled();
+      expect(stdout).not.toHaveBeenCalled();
+      const written = stderr.mock.calls.map(([chunk]) => String(chunk)).join('');
+      expect(written).toContain('[vat-onnx] Downloading model');
+      expect(written).toContain('[vat-onnx] Vocab download complete.');
+    } finally {
+      log.mockRestore();
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
   });
 
   it('leaves no temp files behind after a successful download', async () => {

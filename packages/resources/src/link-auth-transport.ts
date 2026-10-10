@@ -92,7 +92,7 @@ export function parseRetryAfter(value: string | null): number | null {
   return Math.max(0, parsedMs - Date.now());
 }
 
-export async function authTransport(
+export function authTransport(
   url: string,
   headers: Record<string, string>,
   fetchImpl: typeof fetch,
@@ -111,15 +111,20 @@ export async function authTransport(
   // {@link sensitiveHeaderValues}.
   const secrets = sensitiveHeaderValues(headers);
 
-  let currentUrl = url;
-  let currentHeaders: Record<string, string> = { ...headers };
-  let redirects = 0;
-  let retries = 0;
-
-  // Bounded loop: every iteration either returns or strictly advances one of
+  // Bounded recursion: every hop either returns or strictly advances one of
   // (retries, redirects), both capped, so termination is guaranteed within
-  // `maxRetries + maxRedirects + 1` fetchImpl calls.
-  while (redirects + retries < maxRedirects + maxRetries + 1) {
+  // `maxRetries + maxRedirects + 1` fetchImpl calls. Each hop depends on the
+  // previous response, so the hops cannot overlap.
+  const hop = async (
+    currentUrl: string,
+    currentHeaders: Record<string, string>,
+    redirects: number,
+    retries: number,
+  ): Promise<Response> => {
+    if (redirects + retries >= maxRedirects + maxRetries + 1) {
+      // Unreachable: every hop returns or advances, and the cap above bounds them.
+      throw new Error('authTransport: unreachable iteration cap exceeded');
+    }
     const init: RequestInit = {
       headers: currentHeaders,
       redirect: 'manual',
@@ -132,25 +137,19 @@ export async function authTransport(
       retries < maxRetries ? computeRetryDelay(response, maxRetryAfterMs) : null;
     if (retryDelay !== null) {
       await sleep(retryDelay);
-      retries++;
-      continue;
+      return hop(currentUrl, currentHeaders, redirects, retries + 1);
     }
 
     if (redirects < maxRedirects) {
       const next = computeRedirect(response, currentUrl, currentHeaders, secrets);
       if (next !== null) {
-        currentUrl = next.url;
-        currentHeaders = next.headers;
-        redirects++;
-        continue;
+        return hop(next.url, next.headers, redirects + 1, retries);
       }
     }
 
     return response;
-  }
-  // Unreachable: the loop returns or continues on every iteration, and the
-  // loop condition strictly bounds total iterations.
-  throw new Error('authTransport: unreachable iteration cap exceeded');
+  };
+  return hop(url, { ...headers }, 0, 0);
 }
 
 /**

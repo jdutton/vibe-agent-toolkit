@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { isFsFaultError, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { findManifestPath, loadAgentManifest } from '../../src/loader/manifest-loader.js';
@@ -69,12 +69,14 @@ describe('manifest-loader', () => {
       await expect(findManifestPath(agentDir)).rejects.toThrow(
         'No agent manifest found'
       );
+      await expect(findManifestPath(agentDir)).rejects.toMatchObject({ code: 'AGENT_MANIFEST_NOT_FOUND' });
     });
 
     it('should throw when manifest file does not exist', async () => {
       const nonexistent = safePath.join(tempDir, 'nonexistent', AGENT_YAML);
 
       await expect(findManifestPath(nonexistent)).rejects.toThrow('Manifest file not found');
+      await expect(findManifestPath(nonexistent)).rejects.toMatchObject({ code: 'AGENT_MANIFEST_NOT_FOUND' });
     });
 
     describe('a manifest the OS refuses is not "not found"', () => {
@@ -90,6 +92,7 @@ describe('manifest-loader', () => {
         refuseAccess(manifestPath);
 
         await expect(findManifestPath(manifestPath)).rejects.toThrow(/EACCES/);
+        await expect(findManifestPath(manifestPath)).rejects.toMatchObject({ code: 'FS_FAULT', side: 'source', faultClass: 'refused', path: manifestPath });
       });
 
       it('propagates a refused candidate instead of walking past it to "no manifest"', async () => {
@@ -99,6 +102,10 @@ describe('manifest-loader', () => {
         refuseAccess(safePath.join(agentDir, AGENT_YAML));
 
         await expect(findManifestPath(agentDir)).rejects.toThrow(/EACCES/);
+        await expect(findManifestPath(agentDir)).rejects.toMatchObject({ code: 'FS_FAULT', side: 'source', faultClass: 'refused' });
+        // Through the loader too: the classified fault itself, never a re-wrapped copy of it.
+        const thrown = await loadAgentManifest(agentDir).then(() => undefined, (error: unknown) => error);
+        expect(isFsFaultError(thrown)).toBe(true);
       });
     });
   });
@@ -132,7 +139,7 @@ spec:
       mkdirSyncReal(agentDir);
       fs.writeFileSync(safePath.join(agentDir, AGENT_YAML), '{ invalid yaml [');
 
-      await expect(loadAgentManifest(agentDir)).rejects.toThrow();
+      await expect(loadAgentManifest(agentDir)).rejects.toMatchObject({ code: 'AGENT_MANIFEST_UNREADABLE' });
     });
 
     it('should throw on schema validation failure', async () => {
@@ -152,6 +159,7 @@ spec:
       );
 
       await expect(loadAgentManifest(agentDir)).rejects.toThrow('validation');
+      await expect(loadAgentManifest(agentDir)).rejects.toMatchObject({ code: 'AGENT_MANIFEST_INVALID' });
     });
 
     it('should include manifest path in loaded result', async () => {

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { mkdirSyncReal, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '../src/index.js';
+import { ASSET_REFERENCE_UNREADABLE_CODE, ASSET_REFERENCE_UNRESOLVED_CODE, isVatError, mkdirSyncReal, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '../src/index.js';
 
 const REPO_ROOT = safePath.resolve(import.meta.dirname, '..', '..', '..');
 const PACKAGE_JSON = 'package.json';
@@ -26,7 +26,7 @@ describe('resolveAssetReference', () => {
       } catch (e) {
         err = e;
       }
-      expect(err).toBeInstanceOf(Error);
+      expect(isVatError(err, ASSET_REFERENCE_UNRESOLVED_CODE)).toBe(true);
       expect((err as Error).message).toContain(MISSING_PKG_SPECIFIER);
       const cause = (err as { cause?: { code?: string } }).cause;
       expect(cause?.code).toBe('MODULE_NOT_FOUND');
@@ -137,6 +137,34 @@ describe('resolveAssetReference', () => {
         expect(message).toMatch(/Rebuild|build step|"exports" subpath/);
         // Does NOT push the user toward running install in baseDir
         expect(message).not.toMatch(/run install in/);
+      });
+    });
+
+    // A package that IS installed but whose manifest Node cannot read names
+    // something — it is the package that is broken, not the reference.
+    describe('a package whose package.json is malformed', () => {
+      let fixtureDir: string;
+
+      beforeAll(() => {
+        fixtureDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-asset-malformed-'));
+        writeFileSync(safePath.join(fixtureDir, PACKAGE_JSON), JSON.stringify({ name: 'consumer' }));
+        const pkgDir = safePath.join(fixtureDir, 'node_modules', '@vat-test', 'malformed');
+        mkdirSyncReal(pkgDir, { recursive: true });
+        writeFileSync(safePath.join(pkgDir, PACKAGE_JSON), '{bad json');
+      });
+
+      afterAll(() => {
+        rmSync(fixtureDir, { recursive: true, force: true });
+      });
+
+      it('is ASSET_REFERENCE_UNREADABLE naming the package, never ASSET_REFERENCE_UNRESOLVED', () => {
+        expect(() => resolveAssetReference('@vat-test/malformed/s.json', fixtureDir)).toThrow(
+          expect.objectContaining({
+            code: ASSET_REFERENCE_UNREADABLE_CODE,
+            message: expect.stringMatching(/@vat-test\/malformed\/s\.json.*installed but Node cannot read it/s) as unknown,
+          }),
+        );
+        expect(ASSET_REFERENCE_UNREADABLE_CODE).not.toBe(ASSET_REFERENCE_UNRESOLVED_CODE);
       });
     });
   });

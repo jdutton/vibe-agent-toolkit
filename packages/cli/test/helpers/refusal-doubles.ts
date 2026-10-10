@@ -73,3 +73,13 @@ export function refusingOnly<F extends (...args: never[]) => unknown>(
 export function realBehind<F extends (...args: never[]) => unknown>(spied: F): F {
   return vi.mocked(spied as (...args: unknown[]) => unknown).getMockImplementation() as unknown as F;
 }
+
+/** What `fn` threw — a test fails when it returns instead. */
+export function thrownBy(fn: () => unknown): unknown {
+  try {
+    fn();
+  } catch (error) {
+    return error;
+  }
+  throw new Error('expected a throw');
+}

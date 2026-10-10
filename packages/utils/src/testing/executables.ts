@@ -19,7 +19,7 @@
 import { accessSync, constants, statSync } from 'node:fs';
 import { delimiter } from 'node:path';
 
-import { isFilesystemAccessError } from '../errors/errno.js';
+import { fsFaultOf } from '../errors/errno-table.js';
 import { safePath } from '../path-core.js';
 
 /** The `node` running this test, absolute. */
@@ -39,9 +39,26 @@ function isExecutableFile(full: string): boolean {
     return statSync(full).isFile();
   } catch (error) {
     // Absent or not executable here: the next directory on PATH may have it.
-    if (isFilesystemAccessError(error)) return false;
+    if (fsFaultOf(error) !== undefined) return false;
     throw error;
   }
+}
+
+/**
+ * The first executable named `name` on `PATH`, absolute — or `undefined` when
+ * there is none. For a test that asks WHETHER a tool is installed (and skips
+ * without it) rather than one that needs it.
+ */
+export function findExecutable(name: string): string | undefined {
+  const candidates = executableCandidates(name, process.platform, process.env['PATHEXT']);
+  for (const dir of (process.env['PATH'] ?? '').split(delimiter)) {
+    if (dir === '') continue;
+    for (const candidate of candidates) {
+      const full = safePath.join(dir, candidate);
+      if (isExecutableFile(full)) return full;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -52,15 +69,9 @@ function isExecutableFile(full: string): boolean {
  *   the reason, not with the OS's `ENOENT` for a bare word.
  */
 export function resolveExecutable(name: string): string {
-  const candidates = executableCandidates(name, process.platform, process.env['PATHEXT']);
-  for (const dir of (process.env['PATH'] ?? '').split(delimiter)) {
-    if (dir === '') continue;
-    for (const candidate of candidates) {
-      const full = safePath.join(dir, candidate);
-      if (isExecutableFile(full)) return full;
-    }
-  }
-  throw new Error(`No executable named "${name}" on PATH (${process.env['PATH'] ?? '<unset>'})`);
+  const found = findExecutable(name);
+  if (found === undefined) throw new Error(`No executable named "${name}" on PATH (${process.env['PATH'] ?? '<unset>'})`);
+  return found;
 }
 
 let resolvedGit: string | undefined;

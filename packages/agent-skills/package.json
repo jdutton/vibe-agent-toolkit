@@ -24,6 +24,7 @@
     "generate:schemas": "tsx scripts/generate-json-schemas.ts",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:system": "vitest run --config vitest.system.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
@@ -58,6 +59,6 @@
   "author": "Jeff Dutton",
   "license": "MIT",
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.16.0"
   }
 }

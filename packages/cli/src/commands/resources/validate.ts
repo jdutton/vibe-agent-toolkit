@@ -1,5 +1,10 @@
 /**
  * Resources validate command - strict validation with error reporting
+ *
+ * Publishes the `Report<T>` envelope (`validate-schema.ts`): every finding flat
+ * with its `location` relative to `data.root`, `examined` = resources validated.
+ * A run over zero resources is refused by the writer, from the registry's
+ * declared denominator — never by a check at this site.
  */
 
 import { readFile } from 'node:fs/promises';
@@ -8,222 +13,89 @@ import * as path from 'node:path';
 import { conventionalSuiteProbe, packagedFileEntries } from '@vibe-agent-toolkit/agent-skills';
 import {
   DeferredArtifacts,
+  matchesCollection,
+  type CollectionConfig,
   type CollectionStats,
   type DeferredSkillFiles,
   type ProjectConfig,
-  type RegistryStats,
-  type ValidationResult,
 } from '@vibe-agent-toolkit/resources';
 import {
-  calculateValidationStatus,
+  buildReport,
   countBySeverity,
-  type IssueSeverity,
-  type SeverityCounts,
+  resultStatus,
+  toFindings,
+  type Finding,
   type ValidationIssue,
-  type ValidationIssueCode,
 } from '@vibe-agent-toolkit/schema';
-import { resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
+import { ASSET_REFERENCE_UNRESOLVED_CODE, isVatError, resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
 import type { GitTracker } from '@vibe-agent-toolkit/utils/git';
 import * as yaml from 'yaml';
 
-import { reportCommandError } from '../../utils/command-error.js';
-import { formatDurationSecs } from '../../utils/duration.js';
-import { summarizeFindings, type FindingCountSummary } from '../../utils/issue-rendering.js';
+import type { DocumentFormat } from '../../report-schemas.js';
+import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
+import { endWithReport, NOTHING_FINISHED, publishedReport, refusalReport } from '../../utils/document-writer.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { writeTestFormatError } from '../../utils/output.js';
-import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
-import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
-import { nothingCheckedFinding } from '../../utils/run-integrity.js';
+import { classifyInputFault, projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
+import { assertDeclaredCollection, loadResourcesWithConfig } from '../../utils/resource-loader.js';
+import { warnRunIntegrity } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
-import { finishCommand, type PhaseOutcome } from '../phase-utils.js';
+import type { PhaseOutcome } from '../phase-utils.js';
 import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
 
-/**
- * Collection statistics with error tracking.
- */
-interface CollectionStatWithErrors {
-  resourceCount: number;
-  hasSchema: boolean;
-  validationMode?: 'strict' | 'permissive';
-  filesWithErrors?: number;
-  errorCount?: number;
+import type { ResourcesValidateData, ResourcesValidateReport } from './validate-schema.js';
+
+/** The verb, as registered. */
+const VERB = 'resources validate';
+
+/** `vat resources validate` offers no `--strict`: warnings never fail it. */
+const GATE = { strict: false } as const;
+
+/** The refusal for a `--frontmatter-schema` read the OS refused: a fault on the argument, absent said in its own words. */
+function unreadableSchema(resolvedPath: string, error: unknown): unknown {
+  return classifyInputFault(resolvedPath, error, { origin: 'argument', message: `--frontmatter-schema names no file: ${resolvedPath}` });
 }
 
+/**
+ * Read the `--frontmatter-schema` file the operator named.
+ *
+ * Each way it can fail is a refusal by code, decided HERE — the one site that
+ * knows the file is the operator's input: an unsupported extension, an
+ * absent file or a bare specifier that resolves to nothing → `USAGE_INVALID`
+ * (the flag names nothing usable), a read the OS
+ * refuses → `INPUT_UNREADABLE`, and content that is not a JSON/YAML object →
+ * `INPUT_UNREADABLE` (not the kind of thing the flag takes).
+ */
 async function loadSchema(schemaPath: string): Promise<object> {
-  const resolvedPath = resolveAssetReference(schemaPath, process.cwd());
-
-  const content = await readFile(resolvedPath, 'utf-8');
+  let resolvedPath: string;
+  try {
+    resolvedPath = resolveAssetReference(schemaPath, process.cwd());
+  } catch (error) {
+    if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE)) throw error;
+    throw new CommandRefusalError('USAGE_INVALID', `--frontmatter-schema names no file: ${error.message}`, { cause: error });
+  }
   const ext = path.extname(resolvedPath).toLowerCase();
-
-  if (ext === '.json') {
-    return JSON.parse(content) as object;
-  } else if (ext === '.yaml' || ext === '.yml') {
-    const parsed = yaml.parse(content);
-    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-      return parsed as object;
-    }
-    throw new Error('YAML schema must be an object');
-  } else {
-    throw new Error(`Unsupported schema format: ${ext} (use .json or .yaml)`);
-  }
-}
-
-/**
- * Issues grouped by file — the `--verbose` row.
- *
- * Each entry carries the validation `code` and resolved `severity` so the
- * serialized output is honest about what fired and at what level. Warning- and
- * info-severity issues appear here too (so users see them); only error-severity
- * issues drive the exit code, which the library decides via `hasErrors`.
- *
- * This shape is optimized for `> file` then `grep`, not for reading.
- */
-interface FileIssues {
-  file: string;
-  issues: Array<{
-    line: number;
-    column: number;
-    code: string;
-    severity: IssueSeverity;
-    message: string;
-  }>;
-}
-
-/**
- * One file's DEFAULT row: which file has problems, how many, of what code — and
- * nothing else.
- *
- * The unit is the file because the file is what a reader opens to act. Zero
- * severity buckets are ABSENT keys rather than `0` (see {@link summarizeFindings}):
- * three zero columns per file is what makes a listing unreadable at corpus
- * scale, and `errors: 0` beside a red exit code reads as a contradiction.
- */
-type FileIssueSummary = FindingCountSummary & { file: string };
-
-/** A file's row in the reported listing — counts by default, detail under `--verbose`. */
-type FileIssueRow = FileIssues | FileIssueSummary;
-
-/**
- * The verdict vocabulary, taken from the shared collapse rather than restated —
- * so this command cannot drift into a private vocabulary again. Every other
- * validation lane answers "issues → status" with these same three values.
- */
-type ValidationStatus = ReturnType<typeof calculateValidationStatus>;
-
-/**
- * Output data structure for validation results.
- *
- * Naming contract, and it is load-bearing: a field named `error*` counts
- * ERROR-severity issues only — the ones that fail the run. A field named
- * `issue*` counts issues of every severity. Mixing the two is what made an
- * earlier shape of this object contradict itself (`status: success` beside
- * `filesWithErrors: 1` beside `errorsFound: 0`).
- */
-interface ValidationOutputData {
-  /** Worst ACTIONABLE severity over the reported issues; info-only is `success`. */
-  status: ValidationStatus;
-  filesScanned: number;
-  /** Files carrying at least one ERROR-severity issue. */
-  filesWithErrors?: number;
-  linksChecked?: number;
-  /** ERROR-severity issues only; this is what drives the exit code. */
-  errorsFound?: number;
-  /** Every issue, split by severity. Only `errors` is fatal. */
-  issueCounts?: SeverityCounts;
-  /** Count per validation code, ALL severities. */
-  issueSummary?: Record<string, number>;
-  validationMode: 'strict' | 'permissive';
-  frontmatterSchema?: string;
-  collections?: Record<string, CollectionStatWithErrors>;
-  /**
-   * Per-file rows, ALL severities. Counts-only by default; per-issue detail
-   * under `--verbose`. A file that emitted nothing has no row in either mode —
-   * `filesScanned` above stays the true denominator.
-   */
-  issues?: FileIssueRow[];
-  durationSecs: number;
-}
-
-/**
- * Write structured output in specified format.
- */
-function writeStructuredOutput(data: ValidationOutputData, format: Exclude<OutputFormat, 'text'>): void {
-  if (format === 'json') {
-    console.log(JSON.stringify(data, null, 2));
-  } else {
-    console.log(yaml.stringify(data, { indent: 2, lineWidth: 0, aliasDuplicateObjects: false }));
-  }
-}
-
-/**
- * Issue data for a single validation issue, flattened for display.
- *
- * - `file` is RELATIVE to projectRoot (matches `issue.location`), used for display.
- * - `absPath` is the ABSOLUTE resource path, used for registry/collection lookups.
- * - `code` / `severity` come straight from the unified `ValidationIssue`, and stay
- *   typed as such: that makes an `ErrorData` a structural `ValidationIssue`, so the
- *   shared `calculateValidationStatus`/`countBySeverity` consume this list directly
- *   instead of a local re-implementation counting severities its own way.
- */
-type ErrorData = {
-  file: string;
-  absPath: string;
-  line: number;
-  column: number;
-  code: ValidationIssueCode;
-  severity: IssueSeverity;
-  message: string;
-};
-
-/**
- * Output format options.
- */
-type OutputFormat = 'yaml' | 'json' | 'text';
-
-/**
- * Group issues by file path, preserving first-seen file order.
- *
- * ONE grouping serves both listing modes, so the two can never disagree about
- * which files have findings — only about how much they say per file.
- */
-function groupIssuesByFile(issues: ErrorData[]): Map<string, ErrorData[]> {
-  const fileMap = new Map<string, ErrorData[]>();
-
-  for (const issue of issues) {
-    const existing = fileMap.get(issue.file);
-    if (existing) {
-      existing.push(issue);
-    } else {
-      fileMap.set(issue.file, [issue]);
-    }
+  if (ext !== '.json' && ext !== '.yaml' && ext !== '.yml') {
+    throw new CommandRefusalError('USAGE_INVALID', `Unsupported schema format: ${ext} (use .json or .yaml): ${schemaPath}`);
   }
 
-  return fileMap;
-}
+  let content: string;
+  try {
+    content = await readFile(resolvedPath, 'utf-8');
+  } catch (error) {
+    throw unreadableSchema(resolvedPath, error);
+  }
 
-/**
- * Project the grouping onto the rows the report publishes.
- *
- * A file only reaches this function if it emitted something, so "clean files are
- * omitted" is a property of the input, not a filter applied here.
- */
-function buildIssueRows(issues: ErrorData[], verbose: boolean): FileIssueRow[] {
-  return [...groupIssuesByFile(issues).entries()].map(([file, fileIssues]) => {
-    if (verbose) {
-      return {
-        file,
-        issues: fileIssues.map((issue) => ({
-          line: issue.line,
-          column: issue.column,
-          code: issue.code,
-          severity: issue.severity,
-          message: issue.message,
-        })),
-      };
-    }
-    const { codes, ...counts } = summarizeFindings(fileIssues);
-    return { file, ...counts, codes };
-  });
+  let parsed: unknown;
+  try {
+    parsed = ext === '.json' ? JSON.parse(content) : yaml.parse(content);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new CommandRefusalError('INPUT_UNREADABLE', `--frontmatter-schema ${resolvedPath} does not parse: ${detail}`, { cause: error });
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new CommandRefusalError('INPUT_UNREADABLE', `--frontmatter-schema ${resolvedPath} must hold a schema object`);
+  }
+  return parsed;
 }
 
 /**
@@ -236,269 +108,95 @@ function logGitTrackerStats(gitTracker: GitTracker | undefined, logger: Logger):
   }
 }
 
-/**
- * Context for validation output.
- */
-interface ValidationContext {
-  stats: RegistryStats;
-  validationMetadata: Pick<ValidationOutputData, 'validationMode' | 'frontmatterSchema'>;
-  collectionStats: CollectionStats | undefined;
-  duration: number;
-  /**
-   * The `--collection` filter, when one was passed. Carried so the
-   * run-integrity refusal can name the filter that matched nothing — the builder
-   * asks the denominator, not the config, but the MESSAGE should say what the
-   * operator most likely typed wrong.
-   */
-  collection?: string;
+/** One resource this run validated: its absolute path and the collections it belongs to. */
+export interface ValidatedResource {
+  readonly filePath: string;
+  readonly collections?: readonly string[] | undefined;
 }
 
-/** The only thing the output layer needs from the registry: collection lookup by ABSOLUTE path. */
-type RegistryLookup = {
-  getResource: (path: string) => { collections?: (string[] | undefined) } | undefined;
-};
+/** What {@link buildResourcesValidateReport} needs — the run's results, nothing it has to go and read. */
+export interface ResourcesValidateInput {
+  /** The project root: the ONE base every `location` and `path` is relative to. */
+  readonly root: string;
+  /** The resources in scope (the `--collection` ones when filtered) — `examined` is their count. */
+  readonly resources: readonly ValidatedResource[];
+  /** The library's severity-resolved issues over those resources; `ignore` is dropped here. */
+  readonly issues: readonly ValidationIssue[];
+  /** The configured collections, narrowed to the `--collection` one when filtered. */
+  readonly collectionStats: CollectionStats | undefined;
+  /** `--verbose`: publish one `data.files` row per resource validated. */
+  readonly verbose: boolean;
+  readonly durationMs: number;
+}
 
-/**
- * Merge per-collection error stats into the base collection stats for output.
- */
-function buildCollectionsWithErrors(
-  collectionStats: CollectionStats | undefined,
-  collectionErrorStats: Map<string, { filesWithErrors: number; errorCount: number }>
-): Record<string, CollectionStatWithErrors> {
-  const collectionsWithErrors: Record<string, CollectionStatWithErrors> = {};
-  if (!collectionStats) {
-    return collectionsWithErrors;
+/** A validated resource, with its path relative to the stated root. */
+type LocatedResource = ValidatedResource & { readonly relativePath: string };
+
+/** The findings located at each root-relative path. */
+function findingsByLocation(findings: readonly Finding[]): Map<string, Finding[]> {
+  const byLocation = new Map<string, Finding[]>();
+  for (const finding of findings) {
+    if (finding.location === undefined) continue;
+    const located = byLocation.get(finding.location) ?? [];
+    located.push(finding);
+    byLocation.set(finding.location, located);
   }
-  for (const [id, baseStat] of Object.entries(collectionStats.collections)) {
-    const errorStat = collectionErrorStats.get(id);
-    collectionsWithErrors[id] = {
-      ...baseStat,
-      ...(errorStat ? {
-        filesWithErrors: errorStat.filesWithErrors,
-        errorCount: errorStat.errorCount,
-      } : {}),
+  return byLocation;
+}
+
+/** Each configured collection, with the findings located in its files counted. */
+function collectionsData(
+  collectionStats: CollectionStats | undefined,
+  resources: readonly LocatedResource[],
+  byLocation: ReadonlyMap<string, readonly Finding[]>,
+): ResourcesValidateData['collections'] {
+  const collections: ResourcesValidateData['collections'] = {};
+  for (const [id, stat] of Object.entries(collectionStats?.collections ?? {})) {
+    const perFile = resources
+      .filter((resource) => resource.collections?.includes(id) ?? false)
+      .map((resource) => byLocation.get(resource.relativePath) ?? []);
+    collections[id] = {
+      ...stat,
+      filesWithErrors: perFile.filter((findings) => findings.some((finding) => finding.severity === 'error')).length,
+      summary: countBySeverity(perFile.flat()),
     };
   }
-  return collectionsWithErrors;
+  return collections;
 }
 
 /**
- * Build the structured (yaml/json) payload for a run that surfaced issues.
+ * Build the report. Pure: no file system, no clock, no `process.exit`.
  *
- * Surfaces ALL severity-resolved issues (errors AND warnings/info) so users see
- * them; only the `error*`-named counts are error-severity. Exported so the
- * reported vocabulary is unit-testable without spawning the CLI.
+ * `status` and `summary` are derived by `buildReport` from the findings, so an
+ * info-only run is `findings` with `summary.info` naming what was found — one
+ * vocabulary with every other report verb. The run-integrity refusal for a run
+ * over zero resources is NOT decided here; the writer adds it from the
+ * registry's declared denominator.
  *
- * `verbose` picks the UNIT of the `issues` listing, not the content: one
- * counts-only row per file by default, one entry per issue when asked. Every
- * other field is a total about the run and is byte-identical in both modes.
- * It defaults to the summary, so a caller that has no opinion gets the readable
- * form rather than the 90-skill-scale one.
+ * @param input - The run's results
+ * @returns The report, before the writer's run-integrity pass
  */
-export function buildIssuesOutputData(
-  issueData: ErrorData[],
-  context: ValidationContext,
-  registry: RegistryLookup,
-  verbose = false
-): ValidationOutputData {
-  const summary = buildIssueSummary(issueData, registry);
-  const collectionsWithErrors = buildCollectionsWithErrors(
-    context.collectionStats,
-    summary.collectionErrorStats
-  );
-  // ONE answer to "issues → status", from the shared collapse in schema —
-  // the worst ACTIONABLE severity, so an info-only run is `success`. That is
-  // honest only because `issueCounts` rides beside it, naming what was found.
-  const issueCounts = countBySeverity(issueData);
+export function buildResourcesValidateReport(input: ResourcesValidateInput): ResourcesValidateReport {
+  const findings = toFindings(input.issues);
+  const byLocation = findingsByLocation(findings);
+  const resources: LocatedResource[] = input.resources.map((resource) => ({
+    ...resource,
+    relativePath: safePath.relative(input.root, resource.filePath),
+  }));
 
-  return {
-    status: calculateValidationStatus(issueData),
-    filesScanned: context.stats.totalResources,
-    filesWithErrors: summary.filesWithErrors,
-    errorsFound: issueCounts.errors,
-    issueCounts,
-    issueSummary: summary.issueSummary,
-    durationSecs: formatDurationSecs(context.duration),
-    ...context.validationMetadata,
-    ...(Object.keys(collectionsWithErrors).length > 0 ? { collections: collectionsWithErrors } : {}),
-    issues: buildIssueRows(issueData, verbose),
+  const data: ResourcesValidateData = {
+    // Stated once, and the only absolute path in the document.
+    root: input.root,
+    collections: collectionsData(input.collectionStats, resources, byLocation),
   };
-}
-
-/** The success half of {@link SuccessContext}, as the document publishes it. */
-type SuccessContext = Pick<
-  ValidationContext,
-  'stats' | 'validationMetadata' | 'collectionStats' | 'duration'
->;
-
-/**
- * The document for a run that emitted nothing.
- *
- * Reached only when NOTHING was emitted, so the literal `success` is not a second
- * derivation of the verdict — it is what the shared collapse returns for an empty
- * issue set. Any run that emitted anything, at any severity, goes through
- * {@link buildIssuesOutputData} instead.
- */
-function buildSuccessOutputData(context: SuccessContext): ValidationOutputData {
-  return {
-    status: 'success',
-    filesScanned: context.stats.totalResources,
-    linksChecked: context.stats.totalLinks,
-    durationSecs: formatDurationSecs(context.duration),
-    ...context.validationMetadata,
-    ...(context.collectionStats ? { collections: context.collectionStats.collections } : {}),
-  };
-}
-
-/** The human-readable success block, for `--format text` only. */
-function printTextSuccess(context: SuccessContext): void {
-  console.log('✓ All validations passed');
-  console.log(`Files scanned: ${context.stats.totalResources}`);
-  console.log(`Links checked: ${context.stats.totalLinks}`);
-  if (context.collectionStats) {
-    console.log(`Collections: ${context.collectionStats.totalCollections}`);
-    console.log(`Resources in collections: ${context.collectionStats.resourcesInCollections}`);
-  }
-  console.log(`Duration: ${context.duration}ms`);
-}
-
-/**
- * Build error summary from validation issues.
- *
- * Calculates:
- * - Error counts by type
- * - Unique files with errors
- * - Per-collection error statistics
- *
- * @param issues - Flattened validation issues (relative `file`, absolute `absPath`, `code`)
- * @param registry - Resource registry for collection lookups (keyed by ABSOLUTE path)
- * @returns Error summary statistics
- */
-function buildIssueSummary(
-  issues: ErrorData[],
-  registry: RegistryLookup
-): {
-  issueSummary: Record<string, number>;
-  filesWithErrors: number;
-  collectionErrorStats: Map<string, { filesWithErrors: number; errorCount: number }>;
-} {
-  // 1. Count by code — ALL severities, so an info-only scan still reports WHICH
-  //    codes fired rather than an empty object.
-  const issueSummary: Record<string, number> = {};
-  for (const issue of issues) {
-    issueSummary[issue.code] = (issueSummary[issue.code] ?? 0) + 1;
-  }
-
-  // 2. Every remaining count in this function is named `error*`, so every one of
-  //    them is computed over ERROR-severity issues only. A file carrying nothing
-  //    but info notes is not a file with errors.
-  //    And a FILE: a finding that names none (the run-integrity refusal, a
-  //    config-level error) is counted in `issueCounts`, never as a file — else
-  //    `filesWithErrors: 1` would sit beside `filesScanned: 0`.
-  const errorIssues = issues.filter((i) => i.severity === 'error');
-  const filesWithErrorsSet = new Set(errorIssues.map(i => i.file).filter((file) => file !== ''));
-
-  // 3. Map files to collections and count errors per collection.
-  //    registry.getResource keys on the ABSOLUTE path, so look up via absPath.
-  const collectionErrors = new Map<string, {
-    filesWithErrors: Set<string>;
-    errorCount: number;
-  }>();
-
-  for (const issue of errorIssues) {
-    const resource = registry.getResource(issue.absPath);
-    const collections = resource?.collections;
-    if (collections) {
-      for (const collectionId of collections) {
-        const stat = collectionErrors.get(collectionId) ?? {
-          filesWithErrors: new Set(),
-          errorCount: 0,
-        };
-        stat.filesWithErrors.add(issue.file);
-        stat.errorCount++;
-        collectionErrors.set(collectionId, stat);
-      }
-    }
-  }
-
-  // Convert Sets to counts
-  const collectionStats = new Map<string, { filesWithErrors: number; errorCount: number }>();
-  for (const [id, stat] of collectionErrors.entries()) {
-    collectionStats.set(id, {
-      filesWithErrors: stat.filesWithErrors.size,
-      errorCount: stat.errorCount,
+  if (input.verbose) {
+    data.files = resources.map((resource) => {
+      const located = byLocation.get(resource.relativePath) ?? [];
+      return { path: resource.relativePath, status: resultStatus(located), summary: countBySeverity(located) };
     });
   }
 
-  return {
-    issueSummary,
-    filesWithErrors: filesWithErrorsSet.size,
-    collectionErrorStats: collectionStats,
-  };
-}
-
-/**
- * Restrict issues and stats to a single collection.
- *
- * Issue locations are RELATIVE to projectRoot, but `resource.filePath` is
- * ABSOLUTE — convert the collection's resource paths to the same relative basis
- * before comparing, so the filter actually matches.
- */
-function filterByCollection(
-  registry: {
-    getAllResources: () => Array<{ collections?: string[] | undefined; filePath: string; links: unknown[] }>;
-  },
-  validationResult: ValidationResult,
-  collection: string,
-  projectRoot: string
-): { filteredIssues: ValidationResult['issues']; filteredStats: RegistryStats } {
-  const collectionResources = registry
-    .getAllResources()
-    .filter(r => r.collections?.includes(collection) ?? false);
-  const collectionPaths = new Set(
-    collectionResources.map(r => safePath.relative(projectRoot, r.filePath))
-  );
-
-  const filteredIssues = validationResult.issues.filter(
-    issue => issue.location !== undefined && collectionPaths.has(issue.location)
-  );
-
-  const totalLinks = collectionResources.reduce((sum, r) => sum + r.links.length, 0);
-  return {
-    filteredIssues,
-    filteredStats: {
-      totalResources: collectionResources.length,
-      totalLinks,
-      linksByType: validationResult.linksByType, // Keep all link types
-    },
-  };
-}
-
-/**
- * Flatten severity-resolved issues for display.
- *
- * `file` is RELATIVE to projectRoot (matches `issue.location`, used for display);
- * `absPath` is ABSOLUTE (for registry/collection lookups via getResource).
- *
- * `code` is re-narrowed on the way through: `ValidationResult` is Zod-inferred and
- * its schema widens `code` to `string` on purpose, while the hand-written
- * `ValidationIssue` interface — the contract every producer builds against — types
- * it as `ValidationIssueCode`. Restoring that narrowing here is what lets the
- * shared `calculateValidationStatus`/`countBySeverity` read this list directly.
- */
-function flattenIssuesForDisplay(issues: ValidationResult['issues'], projectRoot: string): ErrorData[] {
-  return issues.map(issue => {
-    const file = issue.location ?? '';
-    return {
-      file,
-      absPath: file ? safePath.resolve(projectRoot, file) : '',
-      line: issue.line ?? 1,
-      column: 1,
-      code: issue.code as ValidationIssueCode,
-      severity: issue.severity,
-      message: issue.message,
-    };
-  });
+  return buildReport({ examined: resources.length, findings, data, gate: GATE, durationMs: input.durationMs });
 }
 
 export interface ValidateOptions {
@@ -507,7 +205,7 @@ export interface ValidateOptions {
   verbose?: boolean;
   frontmatterSchema?: string; // Path to JSON Schema file
   validationMode?: 'strict' | 'permissive'; // Validation mode for schemas
-  format?: OutputFormat; // Output format
+  format?: DocumentFormat; // Output format: yaml (default), json or text
   collection?: string; // Filter by collection ID
   checkExternalUrls?: boolean; // NEW: Validate external URLs
   checkHtmlAnchors?: boolean; // Strictly validate HTML fragment anchors against element ids
@@ -578,7 +276,7 @@ export async function computeDeferredArtifacts(
   }
 
   // `'refuse'`: the `files:` dest check below is only as complete as this
-  // list. The throw lands in the command's catch → `reportCommandError`, exit 2.
+  // list. The throw lands in the command's catch → a refusal by its code, exit 2.
   const discovered = await discoverSkillsFromConfig(config.skills, projectRoot, 'refuse');
   const { defaults, config: perSkillConfig } = config.skills;
 
@@ -617,14 +315,128 @@ export async function computeDeferredArtifacts(
   return DeferredArtifacts.from(skillFiles, projectRoot);
 }
 
+
 /**
- * Validate resources and hand back the document and exit code, printing the
- * document nowhere.
+ * Validate resources and build the report, printing nothing.
  *
- * The phase entry point for `vat validate` and `vat verify`. Everything that was
- * already streaming to stderr — progress, git-tracker stats, `--format text`
- * findings — still streams from here, because stderr was inherited by the child
- * process this replaces and so was free either way.
+ * @throws Whatever refuses the run — a refusal by its code (`refusalCodeOf`)
+ */
+async function runValidation(
+  pathArg: string | undefined,
+  options: ValidateOptions,
+  logger: Logger,
+  startTime: number,
+): Promise<ResourcesValidateReport> {
+  // Resolve projectRoot at the CLI boundary (spec §5/§7 — loud-cwd policy).
+  const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
+
+  // Load resources with config support (includes GitTracker initialization)
+  const { registry, config, gitTracker } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
+  assertDeclaredCollection(config, options.collection);
+
+  // CLI flag: --no-check-frontmatter-links disables the check for every collection.
+  // Commander represents the negated form as options.checkFrontmatterLinks === false.
+  if (options.checkFrontmatterLinks === false) {
+    applyNoCheckFrontmatterLinksFlag(config);
+  }
+
+  let frontmatterSchemaObj: object | undefined;
+  if (options.frontmatterSchema) {
+    logger.debug(`Loading frontmatter schema from: ${options.frontmatterSchema}`);
+    frontmatterSchemaObj = await loadSchema(options.frontmatterSchema);
+  }
+
+  // Compute deferred build-artifact coverage from the SAME skill discovery +
+  // config-merge `vat skills validate` uses, so a `files:`-declared link that
+  // lane reports as LINK_DEFERRED_ARTIFACT (info) is never independently
+  // reported here as LINK_BROKEN_FILE (error) — the headline bug this closes.
+  const deferredArtifacts = await computeDeferredArtifacts(config, projectRoot);
+
+  const validationResult = await registry.validate({
+    ...(frontmatterSchemaObj ? { frontmatterSchema: frontmatterSchemaObj } : {}),
+    validationMode: options.validationMode ?? 'strict',
+    checkExternalUrls: options.checkExternalUrls ?? false,
+    checkHtmlAnchors: options.checkHtmlAnchors ?? false,
+    noCache: resolveNoCache(options),
+    // Thread the project's resources.validation config in. The CLI does NOT
+    // resolve severity itself — ResourceRegistry.validate() runs the framework.
+    validationConfig: config?.resources?.validation ?? {},
+    ...(deferredArtifacts !== undefined && { deferredArtifacts }),
+  });
+  logGitTrackerStats(gitTracker, logger);
+
+  // 🔑 `--collection` scopes the WHOLE report — findings, `examined`, and so
+  // the exit code — to that collection's resources. The exit code derives from
+  // the published document alone, so a report and its exit code never disagree.
+  const resources = registry.getAllResources()
+    .filter((resource) => options.collection === undefined || (resource.collections?.includes(options.collection) ?? false));
+  // `ValidationResult` is Zod-inferred and widens `code` to string; the issues
+  // themselves are the `ValidationIssue`s every producer built.
+  const issues = inCollectionScope(validationResult.issues as ValidationIssue[], {
+    projectRoot,
+    all: registry.getAllResources(),
+    inScope: resources,
+    collection: options.collection === undefined ? undefined : config?.resources?.collections?.[options.collection],
+  });
+
+  return buildResourcesValidateReport({
+    root: projectRoot,
+    resources,
+    issues,
+    collectionStats: narrowCollectionStats(registry.getCollectionStats(), options.collection),
+    verbose: options.verbose === true,
+    durationMs: Date.now() - startTime,
+  });
+}
+
+/**
+ * The findings `--collection` keeps: those about the named collection, and
+ * those about the run.
+ *
+ * - A finding with no location is about the run: kept.
+ * - One located at a RESOURCE is kept when that resource is in the collection.
+ * - One located at a path that never became a resource (a file the glob
+ *   matched and could not read, a MIME conflict) is kept when the collection's
+ *   OWN include/exclude patterns match that path — the same `matchesCollection`
+ *   the registry assigns membership with.
+ *
+ * 🚨 Keeping only "findings at the collection's resources" published `ok`, exit
+ * 0, over an unreadable file in the collection; keeping every non-resource
+ * path failed `--collection X` on collection Y's unreadable file.
+ *
+ * @param issues - The library's issues over the whole run
+ * @param scope - The root, every resource, the collection's resources, and its config
+ * @returns The issues in scope — all of them when no collection is named
+ */
+function inCollectionScope(
+  issues: readonly ValidationIssue[],
+  scope: {
+    projectRoot: string;
+    all: readonly { filePath: string }[];
+    inScope: readonly { filePath: string }[];
+    collection: CollectionConfig | undefined;
+  },
+): ValidationIssue[] {
+  const { collection, projectRoot } = scope;
+  if (collection === undefined) return [...issues];
+  const relative = (resource: { filePath: string }): string => safePath.relative(projectRoot, resource.filePath);
+  const resourcePaths = new Set(scope.all.map(relative));
+  const inScope = new Set(scope.inScope.map(relative));
+  return issues.filter((issue) => {
+    if (issue.location === undefined) return true;
+    if (resourcePaths.has(issue.location)) return inScope.has(issue.location);
+    return matchesCollection(safePath.resolve(projectRoot, issue.location), collection);
+  });
+}
+
+/**
+ * Validate resources and hand back the report, printing it nowhere.
+ *
+ * The phase entry point for `vat validate` and `vat verify`, and the command's
+ * own. The report is the one BEFORE the writer's run-integrity pass: inside an
+ * orchestrator, zero examined is judged on the whole run, not on this phase. A
+ * refusal is the envelope's error branch, its message already on stderr, and a
+ * site-specific run-integrity finding is warned here, where both lanes see it.
  */
 export async function runResourcesValidatePhase(
   pathArg: string | undefined,
@@ -634,151 +446,29 @@ export async function runResourcesValidatePhase(
   const startTime = Date.now();
 
   try {
-    // Resolve projectRoot at the CLI boundary (spec §5/§7 — loud-cwd policy).
-    const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
-
-    // Load resources with config support (includes GitTracker initialization)
-    const { registry, config, gitTracker } = await loadResourcesWithConfig(
-      pathArg,
-      projectRoot,
-      logger,
-    );
-
-    // CLI flag: --no-check-frontmatter-links disables the check for every collection.
-    // Commander represents the negated form as options.checkFrontmatterLinks === false.
-    if (options.checkFrontmatterLinks === false) {
-      applyNoCheckFrontmatterLinksFlag(config);
-    }
-
-    // Load frontmatter schema if provided
-    let frontmatterSchemaObj: object | undefined;
-    if (options.frontmatterSchema) {
-      logger.debug(`Loading frontmatter schema from: ${options.frontmatterSchema}`);
-      frontmatterSchemaObj = await loadSchema(options.frontmatterSchema);
-    }
-
-    // Compute deferred build-artifact coverage from the SAME skill discovery +
-    // config-merge `vat skills validate` uses, so a `files:`-declared link that
-    // lane reports as LINK_DEFERRED_ARTIFACT (info) is never independently
-    // reported here as LINK_BROKEN_FILE (error) — the headline bug this closes.
-    const deferredArtifacts = await computeDeferredArtifacts(config, projectRoot);
-
-    // Validate all resources
-    const validationMode = options.validationMode ?? 'strict';
-    const validationResult = await registry.validate({
-      ...(frontmatterSchemaObj ? { frontmatterSchema: frontmatterSchemaObj } : {}),
-      validationMode,
-      checkExternalUrls: options.checkExternalUrls ?? false,
-      checkHtmlAnchors: options.checkHtmlAnchors ?? false,
-      noCache: resolveNoCache(options),
-      // Thread the project's resources.validation config in. The CLI does NOT
-      // resolve severity itself — ResourceRegistry.validate() runs the framework.
-      validationConfig: config?.resources?.validation ?? {},
-      ...(deferredArtifacts !== undefined && { deferredArtifacts }),
-    });
-
-    // Filter by collection if specified
-    const { filteredIssues, filteredStats } = options.collection
-      ? filterByCollection(registry, validationResult, options.collection, projectRoot)
-      : { filteredIssues: validationResult.issues, filteredStats: registry.getStats() };
-
-    const duration = Date.now() - startTime;
-
-    // Build validation metadata
-    const validationMetadata: Pick<ValidationOutputData, 'validationMode' | 'frontmatterSchema'> = {
-      validationMode,
-      ...(options.frontmatterSchema ? { frontmatterSchema: options.frontmatterSchema } : {}),
-    };
-
-    // Get collection stats (narrowed to the requested collection, if any).
-    const collectionStats = narrowCollectionStats(registry.getCollectionStats(), options.collection);
-
-    // The library already severity-resolved every issue (allow-filtered, ignored
-    // dropped) and decided pass/fail. The CLI is a dumb orchestrator: the failure
-    // decision is exactly the framework's severity-based `hasErrors`. Warning- and
-    // info-severity issues are surfaced below but DO NOT flip the exit code.
-    //
-    // The reported `status` is derived separately, from the issues actually
-    // REPORTED (post `--collection` filter) — see `buildIssuesOutputData`. Without
-    // a filter the two are the same question with the same answer: `hasErrors` and
-    // `calculateValidationStatus(...) === 'error'` are both "any error-severity
-    // issue". With `--collection`, `status` describes the collection asked about
-    // while the exit code still covers the whole project.
-    const { hasErrors } = validationResult;
-
-    // Flatten issues for display (relative `file` + absolute `absPath`).
-    const issueData = flattenIssuesForDisplay(filteredIssues, projectRoot);
-
-    const context: ValidationContext = {
-      stats: filteredStats,
-      validationMetadata,
-      collectionStats,
-      duration,
-      ...(options.collection === undefined ? {} : { collection: options.collection }),
-    };
-
-    const document = buildValidationDocument(
-      issueData,
-      context,
-      registry,
-      options.verbose === true,
-    );
-    if ((options.format ?? 'yaml') === 'text') {
-      // Prints every reported row, refusal included, so it needs no warning.
-      emitTextResult(issueData, context);
-    } else {
-      warnRunIntegrity(issueData, context, logger);
-    }
-    logGitTrackerStats(gitTracker, logger);
-    // Two verdicts, OR'd: the library's severity-based `hasErrors` over the
-    // whole project, and the document's own `status`, which is where the
-    // run-integrity refusal lands and which `hasErrors` cannot see — see
-    // {@link exitCodeForValidateRun}.
-    return { document, exitCode: exitCodeForValidateRun(hasErrors, document) };
+    const report = await runValidation(pathArg, options, logger, startTime);
+    warnRunIntegrity(report);
+    return { report };
   } catch (error) {
-    return {
-      document: reportCommandError(error, logger, startTime, 'Validation'),
-      exitCode: 2,
-      failed: true,
-    };
+    return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED) };
   }
-}
-
-/**
- * The exit code for a run, from the two verdicts that can each fail it.
- *
- * `hasErrors` is the library's, computed over the WHOLE project before any
- * `--collection` filter, so an error the filter hid from the document still
- * fails the run. The document's `status` is computed over what was REPORTED —
- * which is where the run-integrity refusal lands (see
- * {@link buildValidationDocument}), and it has no counterpart in `hasErrors`
- * because the library never sees the filter. Either alone lets one of those two
- * failures through; the run fails on both.
- */
-export function exitCodeForValidateRun(
-  hasErrors: boolean,
-  document: Pick<ValidationOutputData, 'status'>,
-): 0 | 1 {
-  return hasErrors || document.status === 'error' ? 1 : 0;
 }
 
 export async function validateCommand(
   pathArg: string | undefined,
   options: ValidateOptions
 ): Promise<void> {
-  const format = options.format ?? 'yaml';
-  finishCommand(await runResourcesValidatePhase(pathArg, options), (document) => {
-    // `--format text` already rendered itself inside the run and publishes no
-    // document, so there is nothing left to write for it.
-    if (format !== 'text') {
-      writeStructuredOutput(document as ValidationOutputData, format);
-    }
-  }, format);
+  const { report } = await runResourcesValidatePhase(pathArg, options);
+  const published = publishedReport(VERB, report);
+  // The writer's own zero-examined refusal, warned in the lane that publishes it.
+  if (published !== report) warnRunIntegrity(published);
+  endWithReport('resources validate', published, options.format ?? 'yaml');
 }
 
 /**
- * Narrow collection stats to a single requested collection (no-op when no
- * collection filter is active or the collection has no stats).
+ * Narrow collection stats to the one requested collection — or to none when it
+ * holds no resource (the registry's stats list only collections with members;
+ * an undeclared name was refused before this runs).
  */
 function narrowCollectionStats(
   collectionStats: CollectionStats | undefined,
@@ -789,147 +479,11 @@ function narrowCollectionStats(
   }
   const collectionStat = collectionStats.collections[collection];
   if (!collectionStat) {
-    return collectionStats;
+    return undefined;
   }
   return {
     totalCollections: 1,
     resourcesInCollections: collectionStat.resourceCount,
     collections: { [collection]: collectionStat },
   };
-}
-
-/**
- * THE document this command publishes, for either outcome.
- *
- * Built as a value and rendered separately, because the same document now has
- * two destinations: stdout for a command-line run, and `phases[].report` when
- * `vat validate` or `vat verify` runs this as one of its phases in their own
- * process. Deriving it twice — once to print, once to hand back — is how the two
- * lanes come to disagree about what this command reported.
- */
-export function buildValidationDocument(
-  issueData: ErrorData[],
-  context: ValidationContext,
-  registry: RegistryLookup,
-  verbose: boolean
-): ValidationOutputData {
-  const reported = withRunIntegrity(issueData, context);
-  return reported.length === 0
-    ? buildSuccessOutputData(context)
-    : buildIssuesOutputData(reported, context, registry, verbose);
-}
-
-/** What did not run and what to do, for the two ways a scan comes back empty. */
-function nothingScannedMessage(collection: string | undefined): string {
-  const scope = collection === undefined ? '' : ` for --collection ${collection}`;
-  const cause = collection === undefined
-    ? ' The path names no markdown, or `resources.include`/`resources.exclude` enumerate'
-      + ' nothing — a broad exclude, a shallow or sparse checkout, or a root that resolved'
-      + ' somewhere else.'
-    : ' The collection name is usually a typo or a collection that was renamed; if it is'
-      + ' meant to be empty, drop the filter rather than leaving a step that can only pass.';
-  return `No resource was scanned${scope},`
-    + ' so this document is not a verdict: a run over zero files produces the same report'
-    + ' as a clean run, and this one cannot tell you which it was.'
-    + cause
-    + ' `vat resources scan` over the same path lists what an enumeration finds.';
-}
-
-/**
- * The refusal for a run that scanned NO file, ahead of whatever it found.
- *
- * 🚨 **This shipped.** `vat resources validate --collection <typo>` reported
- * `status: success`, `filesScanned: 0`, exit 0: the filter matched no resource,
- * zero issues over zero files serialized as "every file is clean", and the exit
- * code came from the library's `hasErrors`, which never sees the filter. A path
- * naming a tree with no markdown reached the same document through
- * {@link buildSuccessOutputData}. Nothing refused the zero denominator at either
- * layer, and no test covered it.
- *
- * 🔑 Derived here — the one seam both the document builder and the `--format
- * text` renderer read — and not in the handler, so no lane can build a clean
- * document over `filesScanned: 0`. The registry's own `validate()` is left
- * unchanged on purpose: it is a library, and a caller validating an
- * intentionally empty registry is asking a legitimate question. The CLI is the
- * gate, and a gate is what must not answer `success` for a run that checked
- * nothing.
- *
- * Published as a row with no `file` — the claim is about the run, not a file —
- * at line 1, the same coordinates every location-less library finding already
- * takes through {@link flattenIssuesForDisplay}.
- */
-function withRunIntegrity(issueData: ErrorData[], context: ValidationContext): ErrorData[] {
-  return [
-    ...runIntegrityRefusal(issueData, context).map((issue): ErrorData => ({
-      file: '',
-      absPath: '',
-      line: 1,
-      column: 1,
-      code: issue.code,
-      severity: issue.severity,
-      message: issue.message,
-    })),
-    ...issueData,
-  ];
-}
-
-/** The refusal itself, before it is shaped into a row — the one derivation both channels read. */
-function runIntegrityRefusal(
-  issueData: readonly ErrorData[],
-  context: ValidationContext,
-): readonly ValidationIssue[] {
-  return nothingCheckedFinding(context.stats.totalResources, issueData, () =>
-    nothingScannedMessage(context.collection));
-}
-
-/**
- * The human half of {@link withRunIntegrity}: the same message, on stderr.
- *
- * 🚨 **The message never reached the operator.** The refusal is a row with
- * `file: ''`, and the default listing projects a row to `{file, errors,
- * codes}` — so the document read `RESOURCE_CHECK_BROKEN: 1` beside an empty
- * file name and nothing said which collection matched nothing or what to do.
- * The remedy text existed only under `--verbose`; through `vat validate` it was
- * nested under `phases[].report` with stderr reading `▶ Surface: resources`.
- * `vat resources check` and `vat claude budget` already warn on stderr beside
- * their document refusal; this is the same statement for the same reason. It
- * decides nothing — the document is what gates.
- */
-function warnRunIntegrity(
-  issueData: readonly ErrorData[],
-  context: ValidationContext,
-  logger: Logger,
-): void {
-  for (const issue of runIntegrityRefusal(issueData, context)) {
-    logger.warn(`Warning: ${issue.message}`);
-  }
-}
-
-/**
- * Render the `--format text` output, which publishes NO document.
- *
- * Kept inside the run rather than in the command wrapper because it renders the
- * run's internal state — the flattened issue rows and the stats context — not
- * the published document. It is the one output format with nothing for an
- * orchestrator to fold, and no orchestrator asks for it.
- *
- * Unaffected by `verbose`: it is already one `file:line:col:` line per issue,
- * which is what `--verbose` restores in the structured formats.
- */
-function emitTextResult(issueData: ErrorData[], context: ValidationContext): void {
-  // The same derivation the document goes through, so the human channel cannot
-  // print "All validations passed" over a run the document refused.
-  const reported = withRunIntegrity(issueData, context);
-  if (reported.length === 0) {
-    printTextSuccess(context);
-    return;
-  }
-
-  // One `file:line:col: severity: message` line per issue, to stderr. The
-  // severity is what tells a reader which lines are fatal — the text renderer
-  // prints no verdict word of its own, so it cannot contradict the `status` the
-  // structured renderer reports.
-  for (const issue of reported) {
-    writeTestFormatError(issue.file, issue.line, issue.column, issue.severity, issue.message);
-  }
 }

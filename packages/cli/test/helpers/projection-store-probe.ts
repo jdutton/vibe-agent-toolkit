@@ -4,9 +4,9 @@
  * Shared by the suites that measure the store from outside the process, because
  * the store's effects are only visible on disk and in the crawl-timing dump:
  *
- * - `projection-store-cache-control.integration.test.ts` — that the cache
+ * - `projection-store-cache-control.system.test.ts` — that the cache
  *   controls reach it across the spawn.
- * - `projection-store-equivalence.integration.test.ts` — that the ANSWER is the
+ * - `projection-store-equivalence.system.test.ts` — that the ANSWER is the
  *   same whether or not it is engaged.
  *
  * ## 🪤 Rows, never file size

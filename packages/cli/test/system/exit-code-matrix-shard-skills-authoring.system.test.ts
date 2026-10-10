@@ -1,0 +1,36 @@
+/**
+ * The exit-code matrix, shard `skills-authoring`: `vat skill review`, `skill test configure`, `skill test run` and `skills validate`.
+ *
+ * The scenarios are not here. This file runs the slice of the ONE table that
+ * `MATRIX_SHARDS` assigns to the shard it is NAMED after — see
+ * `test-helpers/exit-code-matrix.ts`, and `exit-code-matrix.system.test.ts` for
+ * what keeps the shards a partition of the table.
+ */
+
+import { describe, expect, it } from 'vitest';
+
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
+
+import {
+  exitCodeTheContractGives,
+  expectScenarioEndsOnItsDerivedCode,
+  MATRIX_SCENARIO_TIMEOUT_MS,
+  useExitCodeMatrixShard,
+} from './test-helpers/exit-code-matrix.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-17-');
+
+// `expectScenarioEndsOnItsDerivedCode` asserts status, refusal code, gate and derived exit code; the call
+// site checks the exit code against the contract's literal rules over the findings list, independent of the derivation.
+describe('exit codes are derived from the published document — shard skills-authoring (system test)', () => {
+  it.for(useExitCodeMatrixShard(import.meta.url))(
+    '$verb → $status ends on the code its document derives (skills-authoring)',
+    { timeout: MATRIX_SCENARIO_TIMEOUT_MS },
+    (scenario, context) => {
+      const run = expectScenarioEndsOnItsDerivedCode(scenario, context);
+      expect(run.exitCode).toBe(exitCodeTheContractGives(run.document));
+    },
+  );
+});

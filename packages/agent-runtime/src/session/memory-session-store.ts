@@ -1,9 +1,10 @@
 /**
  * In-memory session store for VAT runtime.
  *
- * Provides ephemeral session storage suitable for development,
- * testing, and single-process deployments.
+ * Ephemeral storage for development, tests and single-process deployments.
  */
+
+import { promised } from '@vibe-agent-toolkit/utils';
 
 import { SessionNotFoundError } from './errors.js';
 import {
@@ -38,49 +39,56 @@ export class MemorySessionStore<TState = unknown> implements SessionStore<TState
     this.createInitialState = options.createInitialState;
   }
 
-  async create(initialState?: TState): Promise<string> {
-    const id = this.generateId();
-    const session = createInitialSession(id, initialState, this.createInitialState, this.ttl);
-    this.sessions.set(id, session);
-    return id;
+  create(initialState?: TState): Promise<string> {
+    return promised(() => {
+      const id = this.generateId();
+      const session = createInitialSession(id, initialState, this.createInitialState, this.ttl);
+      this.sessions.set(id, session);
+      return id;
+    });
   }
 
-  async load(sessionId: string): Promise<RuntimeSession<TState>> {
+  load(sessionId: string): Promise<RuntimeSession<TState>> {
+    return promised(() => this.loadNow(sessionId));
+  }
+
+  private loadNow(sessionId: string): RuntimeSession<TState> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       throw new SessionNotFoundError(sessionId);
     }
 
-    // Check expiration
     if (isSessionExpired(session)) {
       this.sessions.delete(sessionId);
       throw new SessionNotFoundError(sessionId);
     }
 
-    // Update last access and extend TTL
     updateSessionAccess(session, this.ttl);
 
     return session;
   }
 
-  async save(session: RuntimeSession<TState>): Promise<void> {
-    session.metadata.lastAccessedAt = new Date();
-    this.sessions.set(session.id, session);
+  save(session: RuntimeSession<TState>): Promise<void> {
+    return promised(() => {
+      session.metadata.lastAccessedAt = new Date();
+      this.sessions.set(session.id, session);
+    });
   }
 
-  async delete(sessionId: string): Promise<void> {
+  delete(sessionId: string): Promise<void> {
     this.sessions.delete(sessionId);
+    return Promise.resolve();
   }
 
-  async exists(sessionId: string): Promise<boolean> {
-    return this.sessions.has(sessionId);
+  exists(sessionId: string): Promise<boolean> {
+    return Promise.resolve(this.sessions.has(sessionId));
   }
 
-  async list(): Promise<string[]> {
-    return [...this.sessions.keys()];
+  list(): Promise<string[]> {
+    return Promise.resolve([...this.sessions.keys()]);
   }
 
-  async cleanup(): Promise<number> {
+  cleanup(): Promise<number> {
     let cleaned = 0;
 
     for (const [id, session] of this.sessions.entries()) {
@@ -90,6 +98,6 @@ export class MemorySessionStore<TState = unknown> implements SessionStore<TState
       }
     }
 
-    return cleaned;
+    return Promise.resolve(cleaned);
   }
 }

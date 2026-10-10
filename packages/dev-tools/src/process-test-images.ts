@@ -21,7 +21,7 @@ import { mkdir, readdir, stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import sharp from 'sharp';
 import { z } from 'zod';
 
@@ -146,7 +146,7 @@ async function processImage(
 /**
  * Interactive metadata prompt (simple version - can be enhanced)
  */
-async function promptForMetadata(filename: string): Promise<TestFixtureMetadata> {
+function promptForMetadata(filename: string): TestFixtureMetadata {
   console.log(`\n📸 Processing: ${filename}`);
   console.log('Please provide metadata (press Enter to use defaults shown in brackets):');
 
@@ -233,30 +233,31 @@ async function processDirectory(inputDir: string, outputDir: string, config?: Pr
   let processed = 0;
   let skipped = 0;
 
-  for (const entry of entries) {
+  // In order: CPU-heavy image work, one image at a time, with a running count.
+  await forEachInOrder(entries, async (entry) => {
     if (direntKindFollowingSync(inputDir, entry) !== 'file') {
-      continue;
+      return;
     }
 
     const ext = extname(entry.name).toLowerCase();
     if (!SUPPORTED_FORMATS.has(ext)) {
       console.log(`⏭️  Skipping ${entry.name} (unsupported format)`);
       skipped++;
-      continue;
+      return;
     }
 
     const inputPath = safePath.join(inputDir, entry.name);
     const outputPath = safePath.join(outputDir, entry.name);
 
     try {
-      const metadata = await promptForMetadata(entry.name);
+      const metadata = promptForMetadata(entry.name);
       await processImage(inputPath, outputPath, metadata, config);
       processed++;
     } catch (error) {
       console.error(`❌ Error processing ${entry.name}:`, error);
       skipped++;
     }
-  }
+  });
 
   console.log(`\n✅ Processed: ${processed}, Skipped: ${skipped}`);
 }
@@ -287,7 +288,7 @@ async function main() {
 // Run if executed directly.
 //
 // ⛔ NOT `import.meta.main` — undefined before Node 24.2 / 22.18, and this
-// repo's floor is 22.13.0, so that form is silently always-false there.
+// repo's floor is 22.16.0, so that form is silently always-false there.
 if (isEntrypoint(import.meta.url)) {
   await main();
 }

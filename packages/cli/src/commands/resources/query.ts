@@ -45,18 +45,20 @@
  * authority on why.
  */
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { buildReport } from '@vibe-agent-toolkit/schema';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { refusalCodeOf } from '../../utils/command-refusal.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../../utils/document-writer.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { writeStructuredOutput } from '../../utils/output.js';
 import { assertDirectoryArgument, projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import {
   withQueriedProjection,
   type ProjectionProvenance,
 } from '../../utils/projection-query.js';
 import { relationBoundsFor } from '../../utils/relation-limits.js';
+
+import type { ResourcesQueryReport } from './query-schema.js';
 
 interface QueryOptions {
   debug?: boolean;
@@ -68,7 +70,11 @@ interface QueryOptions {
 
 /** What one query run produced, and what produced it. */
 interface QueryOutcome extends ProjectionProvenance {
+  /** The statement's result columns, in order — known even when it selected no row. */
+  columns: readonly string[];
   rows: readonly Record<string, unknown>[];
+  /** Resources the population enumerated: what the statement was asked OVER. */
+  membersEnumerated: number;
 }
 
 export interface ProjectionQueryPayloadInput extends QueryOutcome {
@@ -78,47 +84,51 @@ export interface ProjectionQueryPayloadInput extends QueryOutcome {
 }
 
 /**
- * Build the query payload.
+ * Build the query report.
  *
  * Pure: no file system, no clock, no `process.exit` — the same contract
- * `buildScanOutputData` follows, and for the same reason: it keeps the
- * document's shape, field names included, under unit test rather than only
- * under a CLI spawn.
+ * `buildScanReport` follows, and for the same reason: it keeps the document's
+ * shape, field names included, under unit test rather than only under a CLI
+ * spawn.
  *
- * `rowCount` is stated beside `rows` rather than left for the consumer to
- * count, because the two answer different questions once a caller pipes the
- * document somewhere: a truncated read still carries the true total.
+ * 🔑 `examined` is the POPULATION the statement ran over, never the rows it
+ * selected. Zero rows over a populated tree is an answer (`ok`); a statement
+ * over a population of nothing answers nothing, and the writer refuses it.
  *
  * @param input - The rows and the provenance of the run that produced them
- * @returns The document to serialize
+ * @returns The report to publish
  */
-export function buildProjectionQueryOutputData(input: ProjectionQueryPayloadInput): Record<string, unknown> {
-  return {
-    status: 'success',
-    // Stated once, and the only absolute path in the document.
-    root: input.root,
-    // The cache tell — see the header.
-    population: input.population,
-    // Immediately after the origin, because the two are one statement: served
-    // or derived, and what that was worth. Separated they read as two unrelated
-    // numbers in a list.
-    populationSecs: formatDurationSecs(input.populationMs),
-    // Beside the population it is NOT part of. A store hit does not make a lens
-    // evaluation cheaper, so folding it into `populationSecs` would read as the
-    // store having got worse. See `ProjectionProvenance.lensMs`.
-    lensSecs: formatDurationSecs(input.lensMs),
-    // 🔑 What that number covers. A lens is evaluated only when THIS statement
-    // names one of its relations, so an empty list beside `lensSecs: 0` is the
-    // statement saying it asked for none — not a lens that silently stopped
-    // running. See `ProjectionProvenance.lensesEvaluated`.
-    lensesEvaluated: input.lensesEvaluated,
-    // The bounds of the rows below, stated ONCE and only when a bounded lens
-    // ran — `relation-limits.ts` carries why the SQL route owes them at all.
-    ...relationBoundsFor(input.lensesEvaluated),
-    rowCount: input.rows.length,
-    durationSecs: formatDurationSecs(input.durationMs),
-    rows: input.rows,
-  };
+export function buildProjectionQueryReport(input: ProjectionQueryPayloadInput): ResourcesQueryReport {
+  return buildReport({
+    examined: input.membersEnumerated,
+    findings: [],
+    // `vat resources query` offers no `--strict`, and reports no finding of its own.
+    gate: { strict: false },
+    durationMs: input.durationMs,
+    data: {
+      // Stated once, and the only absolute path in the document.
+      root: input.root,
+      columns: [...input.columns],
+      rows: [...input.rows],
+      // The cache tell — see the header.
+      population: input.population,
+      // Immediately after the origin, because the two are one statement: served
+      // or derived, and what that was worth.
+      populationSecs: formatDurationSecs(input.populationMs),
+      // Beside the population it is NOT part of. A store hit does not make a lens
+      // evaluation cheaper, so folding it into `populationSecs` would read as the
+      // store having got worse. See `ProjectionProvenance.lensMs`.
+      lensSecs: formatDurationSecs(input.lensMs),
+      // 🔑 What that number covers. A lens is evaluated only when THIS statement
+      // names one of its relations, so an empty list beside `lensSecs: 0` is the
+      // statement saying it asked for none — not a lens that silently stopped
+      // running. See `ProjectionProvenance.lensesEvaluated`.
+      lensesEvaluated: [...input.lensesEvaluated],
+      // The bounds of the rows, stated ONCE and only when a bounded lens ran —
+      // `relation-limits.ts` carries why the SQL route owes them at all.
+      ...relationBoundsFor(input.lensesEvaluated),
+    },
+  });
 }
 
 /**
@@ -137,7 +147,7 @@ export function buildProjectionQueryOutputData(input: ProjectionQueryPayloadInpu
  * @param options.logger - Where blob-stage refusals are reported
  * @returns The rows and the provenance of the population behind them
  */
-async function runProjectionQuery(options: {
+function runProjectionQuery(options: {
   root: string;
   sql: string;
   parameters: readonly string[];
@@ -153,7 +163,12 @@ async function runProjectionQuery(options: {
     // derived relations get evaluated at all. One statement, two questions asked
     // of it.
     { root, logger, preflight: [{ sql, parameters }], statements: [sql] },
-    (ask, provenance) => ({ rows: ask(sql, ...parameters), ...provenance }),
+    (ask, provenance, extent, _projection, columnsOf) => ({
+      columns: columnsOf(sql, ...parameters),
+      rows: ask(sql, ...parameters),
+      membersEnumerated: extent.membersEnumerated,
+      ...provenance,
+    }),
   );
 }
 
@@ -188,6 +203,8 @@ export async function queryCommand(
 ): Promise<void> {
   const logger = createLogger({ debug: options.debug ?? false });
   const startTime = Date.now();
+  // The two formats this verb offers (Commander refuses any other).
+  const format = options.format === 'json' ? 'json' : 'yaml';
 
   try {
     if (pathArg !== undefined) assertDirectoryArgument(pathArg);
@@ -202,15 +219,13 @@ export async function queryCommand(
       logger,
     });
 
-    const payload = buildProjectionQueryOutputData({
+    endWithReport('resources query', buildProjectionQueryReport({
       ...outcome,
       root: projectRoot,
       durationMs: Date.now() - startTime,
-    });
-    writeStructuredOutput(payload, options.format);
-
-    process.exit(ExitCode.OK);
+    }), format);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'Query', options.format);
+    // A refused statement is USAGE_INVALID by its code; see `describedFailure`.
+    endWithRefusal('resources query', refusalCodeOf(error), error, format, { strict: false }, NOTHING_FINISHED);
   }
 }

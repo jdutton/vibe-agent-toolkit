@@ -13,7 +13,7 @@
 
 import * as fs from 'node:fs/promises';
 
-import { createSymlinkAsync, normalizedTmpdir, safePath, type SymlinkCapability } from '@vibe-agent-toolkit/utils';
+import { createSymlinkAsync, forEachInOrder, normalizedTmpdir, safePath, type SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll } from 'vitest';
 
 export const BASH_SKILL = (name: string): string =>
@@ -76,7 +76,7 @@ export function setupRefusedSkillFixture(prefix: string): () => RefusedSkillFixt
   });
 
   afterAll(async () => {
-    for (const p of locked) await fs.chmod(p, 0o700).catch(() => undefined);
+    await forEachInOrder(locked, (p) => fs.chmod(p, 0o700).catch(() => undefined));
     if (fixture !== undefined) await fs.rm(fixture.root, { recursive: true, force: true });
   });
 

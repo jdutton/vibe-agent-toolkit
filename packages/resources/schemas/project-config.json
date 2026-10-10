@@ -4,9 +4,6 @@
     "project-config": {
       "type": "object",
       "properties": {
-        "version": {
-          "description": "Accepted and ignored. The npm package version is the only version VAT has; a `version:` key of any value is not read."
-        },
         "skills": {
           "type": "object",
           "properties": {

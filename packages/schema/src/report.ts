@@ -1,10 +1,10 @@
 /**
  * The ONE envelope a VAT command publishes when it has looked at something and
- * has findings to report — or none.
+ * has findings to report — or none — or could not finish.
  *
  * 🔑 **`examined` is REQUIRED, and that is the whole reason this envelope
- * exists.** Every one of the twelve command-level envelopes this replaced could
- * say "zero findings", and only some of them could say "of how many". A run over
+ * exists.** Every one of the per-command envelopes this replaced could say
+ * "zero findings", and only some of them could say "of how many". A run over
  * an empty directory, a mistyped config key, a root one level too deep, a
  * population the ignore rules declined — each produced a document
  * byte-identical to a clean pass, and this repo has an incident log of exactly
@@ -19,12 +19,25 @@
  * the per-severity distribution and the exit code carries the gate verdict, so
  * a consumer reads the number it needs rather than decoding a word.
  *
- * `error` is a branch of the SAME envelope, not a second document: `examined`
- * is 0, `findings` is empty, `error` carries the reason and `data` is `null`
- * ({@link buildErrorReport}). The emitted `schemas/<command>.json` therefore
- * describes every run the command can end on — the five schemas used to
- * declare an `error` status that no producer wrote, while the real failure
- * document was a different shape an adopter's validator rejected.
+ * 🔑 **The schema is a per-status discriminated union, not only the TS type.**
+ * `ok` carries no findings and its `data`; `findings` carries at least one and
+ * its `data`; `error` carries `error: { code, message }` — `code` a registered
+ * REFUSAL (`RefusalCode`), never a finding code — and `data` that is the
+ * command's own type or `null`. A single object with a nullable `data` and an
+ * optional `error` let an `ok` report with `data: null` validate, and let an
+ * `error` report carry no reason; the union makes both unrepresentable in the
+ * emitted `schemas/<command>.json` an adopter validates against.
+ *
+ * `error` means "did not finish", NOT "did nothing": the branch keeps a real
+ * `examined`, the `findings` (and derived `summary`) of whatever finished, and
+ * partial `data` where the verb produced any ({@link buildErrorReport}).
+ * "Nothing finished" is spelled out by the caller — `examined: 0, findings: [],
+ * data: null` — never a default that silently drops finished work.
+ *
+ * 🔑 **The gate is in the document.** `gate: { strict }` is required on every
+ * branch: whether warnings fail this run is a fact about the run, so the exit
+ * code (`exitCodeForReport`) reads it from the published document rather than
+ * from a call-site option a reader of the document cannot see.
  *
  * The finding element is {@link Finding}: `ValidationIssue`'s anchor contract
  * (`location` is the project-relative POSIX path of the file you would open,
@@ -32,13 +45,16 @@
  * href the finding is about) with `ignore` removed from the severity — an
  * ignored issue was suppressed by the adopter and is never published — and
  * `column` added, because the one lane that had it (`resources validate`)
- * carried it in a private shape.
+ * carried it in a private shape. {@link reportSchema} takes the finding schema
+ * as a REQUIRED parameter so a verb whose findings carry more (a subject, a
+ * harness) passes a narrowed one rather than widening this one.
  */
 
 import { z } from 'zod';
 
 import { SeveritySchema, type Severity } from './severity.js';
-import { countBySeverity, ValidationIssueSchema, type SeverityCounts, type ValidationIssue } from './validation-issue.js';
+import { RefusalCodeSchema, type RefusalCode } from './validation-codes.js';
+import { countBySeverity, resultStatus, ValidationIssueSchema, type SeverityCounts, type ValidationIssue } from './validation-issue.js';
 
 export const REPORT_STATUSES = ['ok', 'findings', 'error'] as const;
 
@@ -79,83 +95,178 @@ export const SeverityCountsSchema = z.object({
   info: z.number().int().nonnegative(),
 }).strict();
 
+/** The gate the run was judged by. `strict`: warnings fail it, as errors always do. */
+export const GateSchema = z.object({ strict: z.boolean() }).strict();
+
+/** The gate the run was judged by — recorded in the document so its exit code derives from it. */
+export interface Gate {
+  strict: boolean;
+}
+
+/** Why a run did not finish: a registered refusal code and the words for a human. */
+const ReportErrorSchema = z.object({
+  code: RefusalCodeSchema,
+  message: z.string().min(1),
+}).strict();
+
+/** Why a run did not finish. `code` is a refusal — a finding code is never an `error.code`. */
+export interface ReportError {
+  code: RefusalCode;
+  message: string;
+}
+
 /**
- * The envelope, with `data` for what the command reports beyond its findings.
+ * What every branch carries.
  *
  * `summary` is the existing {@link SeverityCounts} shape rather than a second
- * one keyed by severity name: `countBySeverity` is its single producer and 27
- * source files already read `.errors` / `.warnings` off it, so a second
+ * one keyed by severity name: `countBySeverity` is its single producer and
+ * many source files already read `.errors` / `.warnings` off it, so a second
  * spelling would have been the exact duplication this envelope exists to end.
  */
-export interface Report<T> {
-  status: ReportStatus;
+interface ReportBase {
   /** How many things were looked at. A report cannot say "0 findings" without saying "of N". */
   examined: number;
   findings: Finding[];
   /** The per-severity distribution of `findings`. */
   summary: SeverityCounts;
+  /** The gate the exit code is derived from. */
+  gate: Gate;
+}
+
+/** What a COMPLETED run adds: its duration. A refusal carries none. */
+interface CompletedReportBase extends ReportBase {
   /** Wall-clock milliseconds the run took, when the command measures it. */
   durationMs?: number;
-  /** Why the run did not finish; present exactly when `status` is `error`. */
-  error?: string;
-  /** What the command reports beyond its findings. */
+}
+
+/** A completed run that found nothing. */
+export interface OkReport<T> extends CompletedReportBase {
+  status: 'ok';
+  data: T;
+}
+
+/** A completed run that found at least one thing. */
+export interface FindingsReport<T> extends CompletedReportBase {
+  status: 'findings';
   data: T;
 }
 
 /**
- * The envelope a command publishes when it could not finish: {@link Report}
- * with nothing examined and `data: null`. A consumer of `schemas/<command>.json`
- * sees `data` as nullable for that reason; a producer's own `Report<T>` never
- * is, because a completed run always has its data.
+ * A run that did not finish, with whatever did: `data` is the command's own
+ * type, or `null` when nothing was produced. No `durationMs` — `never`, so
+ * reading it off any {@link Report} still type-checks and answers `undefined`.
  */
-export interface ErrorReport extends Report<null> {
+export interface ErrorReport<T> extends ReportBase {
   status: 'error';
-  examined: 0;
-  error: string;
-  data: null;
+  error: ReportError;
+  data: T | null;
+  durationMs?: never;
+}
+
+/** The envelope, discriminated on `status`. */
+export type Report<T> = OkReport<T> | FindingsReport<T> | ErrorReport<T>;
+
+/** The one shape a finding schema must produce: a severity the summary can count. */
+type FindingZodSchema = z.ZodType<Pick<Finding, 'severity'>>;
+
+/**
+ * Every published finding's severity, counted, must equal `summary`.
+ *
+ * On the WHOLE union rather than per branch: a `ZodEffects` cannot be a
+ * `discriminatedUnion` option, and zod throws at construction if it is.
+ */
+function summaryMatchesFindings(
+  report: { findings: readonly Pick<Finding, 'severity'>[]; summary: SeverityCounts },
+  ctx: z.RefinementCtx,
+): void {
+  const counted = countBySeverity(report.findings);
+  const { summary } = report;
+  if (counted.errors !== summary.errors || counted.warnings !== summary.warnings || counted.info !== summary.info) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['summary'],
+      message: `summary ${JSON.stringify(summary)} disagrees with the findings, which count ${JSON.stringify(counted)}`,
+    });
+  }
 }
 
 /**
- * The Zod schema of a {@link Report} whose `data` is `dataSchema`.
+ * The Zod schema of a {@link Report} whose `data` is `dataSchema` and whose
+ * findings are `findingSchema`.
  *
  * Strict at every level it owns: an envelope key nobody declared is a typo in
  * a producer or a consumer, and the emitted `schemas/<command>.json` is what
  * an adopter validates their `jq` recipe against.
  *
  * @param dataSchema - The schema of the command's own `data`
- * @returns The strict envelope schema
+ * @param findingSchema - The schema of one finding — REQUIRED, so a verb with a
+ *   narrower finding passes it rather than widening {@link FindingSchema}
+ * @returns The per-status union, refined so `summary` agrees with `findings`
  */
-export function reportSchema<T extends z.ZodTypeAny>(dataSchema: T): ReportZodSchema<T> {
-  return z.object({
-    status: ReportStatusSchema,
+export function reportSchema<T extends z.ZodTypeAny, F extends FindingZodSchema>(
+  dataSchema: T,
+  findingSchema: F,
+): ReportZodSchema<T, F> {
+  // Tests and JavaScript callers are not typechecked: a one-argument call would
+  // otherwise build an array of `undefined` and fail on the first finding.
+  if ((findingSchema as F | undefined) === undefined) {
+    throw new TypeError('reportSchema: a finding schema is required');
+  }
+  const base = {
     examined: z.number().int().nonnegative(),
-    findings: z.array(FindingSchema),
     summary: SeverityCountsSchema,
-    durationMs: z.number().nonnegative().optional(),
-    error: z.string().optional(),
-    data: dataSchema.nullable(),
-  }).strict();
+    gate: GateSchema,
+  };
+  // Only a completed run is timed: the error branch refuses `durationMs`.
+  const durationMs = z.number().nonnegative().optional();
+  return z.discriminatedUnion('status', [
+    z.object({ status: z.literal('ok'), ...base, durationMs, findings: z.array(findingSchema).max(0), data: dataSchema }).strict(),
+    z.object({ status: z.literal('findings'), ...base, durationMs, findings: z.array(findingSchema).min(1), data: dataSchema }).strict(),
+    z.object({
+      status: z.literal('error'),
+      ...base,
+      findings: z.array(findingSchema),
+      error: ReportErrorSchema,
+      data: dataSchema.nullable(),
+    }).strict(),
+  ]).superRefine(summaryMatchesFindings);
 }
 
-/** The strict object schema {@link reportSchema} returns, spelled out so the shape is nameable. */
-export type ReportZodSchema<T extends z.ZodTypeAny> = z.ZodObject<
-  {
-    status: typeof ReportStatusSchema;
-    examined: z.ZodNumber;
-    findings: z.ZodArray<typeof FindingSchema>;
-    summary: typeof SeverityCountsSchema;
-    durationMs: z.ZodOptional<z.ZodNumber>;
-    error: z.ZodOptional<z.ZodString>;
-    data: z.ZodNullable<T>;
-  },
-  'strict'
+/**
+ * The fields every branch of {@link reportSchema} shares. A type alias, not an
+ * interface: a zod shape must satisfy `ZodRawShape`'s string index signature,
+ * which an alias gets implicitly and an interface does not.
+ */
+type ReportZodBase<F extends FindingZodSchema> = {
+  examined: z.ZodNumber;
+  summary: typeof SeverityCountsSchema;
+  gate: typeof GateSchema;
+  findings: z.ZodArray<F>;
+};
+
+/** The duration only a completed branch carries. */
+type ReportZodDuration = { durationMs: z.ZodOptional<z.ZodNumber> };
+
+/** The union {@link reportSchema} returns, spelled out so the shape is nameable. */
+export type ReportZodSchema<T extends z.ZodTypeAny, F extends FindingZodSchema> = z.ZodEffects<
+  z.ZodDiscriminatedUnion<
+    'status',
+    [
+      z.ZodObject<ReportZodBase<F> & ReportZodDuration & { status: z.ZodLiteral<'ok'>; data: T }, 'strict'>,
+      z.ZodObject<ReportZodBase<F> & ReportZodDuration & { status: z.ZodLiteral<'findings'>; data: T }, 'strict'>,
+      z.ZodObject<
+        ReportZodBase<F> & { status: z.ZodLiteral<'error'>; error: typeof ReportErrorSchema; data: z.ZodNullable<T> },
+        'strict'
+      >,
+    ]
+  >
 >;
 
 /**
- * The keys every {@link Report} carries, for a test that asks "is this schema
- * an envelope?" without parsing a document through it.
+ * The keys every {@link Report} branch carries, for a test that asks "is this
+ * schema an envelope?" without parsing a document through it.
  */
-export const REPORT_ENVELOPE_KEYS = ['status', 'examined', 'findings', 'summary', 'data'] as const;
+export const REPORT_ENVELOPE_KEYS = ['status', 'examined', 'findings', 'summary', 'gate', 'data'] as const;
 
 /**
  * The published findings among a validator's issues: everything the adopter
@@ -176,50 +287,109 @@ export function toFindings(issues: readonly ValidationIssue[]): Finding[] {
   return findings;
 }
 
-/** What {@link buildReport} needs: the denominator, the findings, and the command's own data. */
+/** What {@link buildReport} needs: the denominator, the findings, the gate, and the command's own data. */
 export interface ReportInput<T> {
   examined: number;
   findings: readonly Finding[];
   data: T;
+  gate: Gate;
   durationMs?: number | undefined;
+}
+
+/**
+ * What {@link buildErrorReport} needs. Every field REQUIRED: an error report
+ * must say what finished. "Nothing finished" is spelled out at the call site
+ * (`examined: 0, findings: [], data: null`) — never a default that silently
+ * drops finished work. No `durationMs`: a refusal document carries none.
+ */
+export interface ErrorReportInput<T> {
+  error: ReportError;
+  gate: Gate;
+  examined: number;
+  findings: readonly Finding[];
+  data: T | null;
+}
+
+/**
+ * The fields every branch shares, with `summary` DERIVED from the findings —
+ * the one place it is computed, for completed and unfinished runs alike.
+ *
+ * @param input - The denominator, the findings and the gate
+ * @returns The shared fields, in published key order
+ */
+function reportBase(input: Pick<ReportInput<unknown>, 'examined' | 'findings' | 'gate'>): ReportBase {
+  const findings = [...input.findings];
+  return { examined: input.examined, findings, summary: countBySeverity(findings), gate: input.gate };
 }
 
 /**
  * Assemble a completed run's report. Status and summary are DERIVED from the
  * findings here, in the one place, so no command can publish a status its own
- * list contradicts.
+ * list contradicts — through {@link resultStatus}, as every library result does.
  *
- * @param input - The denominator, the findings, and the command's data
+ * @param input - The denominator, the findings, the gate, and the command's data
  * @returns The report, status `ok` or `findings`
  */
-export function buildReport<T>(input: ReportInput<T>): Report<T> {
-  const findings = [...input.findings];
+export function buildReport<T>(input: ReportInput<T>): OkReport<T> | FindingsReport<T> {
+  const base = reportBase(input);
   return {
-    status: findings.length === 0 ? 'ok' : 'findings',
-    examined: input.examined,
-    findings,
-    summary: countBySeverity(findings),
+    status: resultStatus(base.findings),
+    ...base,
     ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
     data: input.data,
   };
 }
 
 /**
- * The envelope for a run that did not finish. Same keys as a completed
- * report, so one schema — and one `jq` recipe — reads both.
+ * The envelope for a run that did not finish. Same keys as a completed report
+ * plus `error`, so one schema — and one `jq` recipe — reads both. The summary is
+ * derived from the findings that finished, exactly as {@link buildReport} does.
  *
- * @param error - Why the run did not finish, for a human
- * @param durationMs - Wall-clock milliseconds until it stopped
- * @returns The `status: 'error'` envelope, nothing examined, `data: null`
+ * @param input - Why it stopped, the gate, and everything that did finish
+ * @returns The `status: 'error'` envelope
  */
-export function buildErrorReport(error: string, durationMs: number): ErrorReport {
-  return {
-    status: 'error',
-    examined: 0,
-    findings: [],
-    summary: { errors: 0, warnings: 0, info: 0 },
-    durationMs,
-    error,
-    data: null,
-  };
+export function buildErrorReport<T>(input: ErrorReportInput<T>): ErrorReport<T> {
+  return { status: 'error', ...reportBase(input), error: input.error, data: input.data };
+}
+
+/**
+ * Stamp a report with the run's duration — on a COMPLETED run only. An error
+ * report is returned unchanged: a refusal document carries no `durationMs`,
+ * and its schema refuses one, so a `{ ...report, durationMs }` spread over the
+ * union would publish a document the writer must reject.
+ *
+ * @param report - Any branch of the envelope
+ * @param durationMs - Wall-clock milliseconds the run took
+ * @returns The report, timed when it completed
+ */
+export function withDurationMs<T>(report: Report<T>, durationMs: number): Report<T> {
+  return report.status === 'error' ? report : { ...report, durationMs };
+}
+
+/**
+ * The same report with `added` findings appended — its status and summary DERIVED again, as
+ * {@link buildReport} derives them, so the result never contradicts its list. For a finding a
+ * run learns of only after its document was built (a temp directory left behind once the work
+ * was done). Every other field — the branch, `error`, the gate, `examined`, `data`, the
+ * duration of a completed run — is kept.
+ *
+ * @param report - Any branch of the envelope
+ * @param added - The findings to append; none returns `report` itself
+ * @returns The report with them
+ */
+export const withAddedFindings: WithAddedFindings = (<T>(report: Report<T>, added: readonly Finding[]): Report<T> => {
+  if (added.length === 0) return report;
+  const findings = [...report.findings, ...added];
+  if (report.status === 'error') {
+    return buildErrorReport({ error: report.error, gate: report.gate, examined: report.examined, findings, data: report.data });
+  }
+  return buildReport({ examined: report.examined, findings, data: report.data, gate: report.gate, durationMs: report.durationMs });
+  // The branch is kept — a completed report stays completed, a refusal a refusal — which the
+  // overloads below state and the one body cannot.
+}) as WithAddedFindings;
+
+/** {@link withAddedFindings}'s call shapes: a completed report stays completed; any report stays a report. */
+export interface WithAddedFindings {
+  <T>(report: OkReport<T> | FindingsReport<T>, added: readonly Finding[]): OkReport<T> | FindingsReport<T>;
+  <T>(report: Report<T>, added: readonly Finding[]): Report<T>;
 }

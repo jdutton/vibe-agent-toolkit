@@ -10,246 +10,213 @@
  * where `resources validate`, `check`, `query` and `scan` exit 2. The fix is ONE
  * derivation, `exitCodeForReport(document)`; the lint rule
  * `no-literal-process-exit` (`derived`) refuses a code decided beside the
- * document, and this file proves, by running the verbs, that the code each one
+ * document, and the matrix proves, by running the verbs, that the code each one
  * ends on IS the code its document derives.
+ *
+ * ## The matrix is several spec files over ONE table
+ *
+ * Running every scenario spawns the built CLI well over a hundred times — more
+ * than one spec file may spend (the per-file duration budget). So:
+ *
+ * - **this file** asserts everything that is true of the WHOLE table, and runs
+ *   nothing but the one external-verb spawn;
+ * - `exit-code-matrix-shard-<name>.system.test.ts` run the envelope scenarios,
+ *   each the slice `MATRIX_SHARDS` assigns to the shard it is named after;
+ * - `exit-code-matrix-path-{missing,unlistable,untraversable}.system.test.ts`
+ *   run ONE outcome each across every document verb that takes a path.
+ *
+ * The table, the fixtures and the shard definition live in
+ * `test-helpers/exit-code-matrix.ts`; the path verbs in
+ * `test-helpers/exit-code-path-verbs.ts`.
  *
  * ## What is enumerated, and asserted both ways
  *
- * - Every `report` entry of `REPORT_SCHEMAS` — the registered commands whose
- *   document is the envelope — has scenarios here, one per status the envelope
- *   can take, and no scenario names a verb that is not registered. Adding an
- *   envelope verb without adding it here is a red test, not a silent gap.
- * - One OUTCOME across every document verb that takes a path: a path that does
- *   not exist, and a directory the OS will not list. Each is the invocation's
- *   mistake — nothing could be examined — so each ends on 2 in every verb.
+ * - Every `report` entry of `PUBLISHED_SHAPES` — the registered commands whose
+ *   document is the envelope — has scenarios in the table, one per status the
+ *   envelope can take, and no scenario names a verb that is not registered.
+ *   Adding an envelope verb without adding it there is a red test, not a silent
+ *   gap.
+ * - Every scenario is RUN, by exactly one file: the shards partition the
+ *   table's verbs, and the shard spec files on disk are exactly the declared
+ *   shards. A verb with scenarios and no shard, a verb in two shards, a shard
+ *   with no file and a shard file with no shard are each a red test here — and
+ *   so is a path-outcome file that is missing or names no declared outcome.
+ * - Every `error` scenario names the refusal code its document must carry: a
+ *   user's mistake published as `INTERNAL_ERROR` reads as a VAT bug.
+ * - Every outcome of every `external` entry's adapter maps to its code, and
+ *   the adapter's table and this file's cases match both ways.
  */
 
-import { spawnSync } from 'node:child_process';
-import { chmodSync, writeFileSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import {
-  exitCodeForReport,
-  ExitCode,
-  REPORT_STATUSES,
-  type ExitDeterminingDocument,
-  type ReportStatus,
-} from '@vibe-agent-toolkit/schema';
+import { ExitCode, REPORT_STATUSES } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS, gitExecutable } from '@vibe-agent-toolkit/utils/testing';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import yaml from 'yaml';
+import { describe, expect, it } from 'vitest';
 
-import { REPORT_SCHEMAS } from '../../src/report-schemas.js';
+import { exitCodeForExternal, PUBLISHED_SHAPES, type ExternalOutcome } from '../../src/report-schemas.js';
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
-import { cleanupTestTempDir, createTestTempDir, getBinPath } from './test-common.js';
+import { fakeHomeEnv } from './test-common.js';
+import {
+  byName,
+  documentOf,
+  ENVELOPE_SCENARIOS,
+  MATRIX_BIN_PATH,
+  MATRIX_SHARD_FILE,
+  MATRIX_SHARDS,
+  matrixTempDir,
+  REGISTERED_ENVELOPE_VERBS,
+  UNREACHABLE_STATUSES,
+  useMatrixTempDir,
+} from './test-helpers/exit-code-matrix.js';
+import { MATRIX_PATH_FILE, MATRIX_PATH_OUTCOMES } from './test-helpers/exit-code-path-verbs.js';
 import { executeCli } from './test-helpers/index.js';
 
-const binPath = getBinPath(import.meta.url);
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-16-');
 
-/** A directory's mode bits when nothing may read or enter it, and when everything may. */
-const UNREADABLE = 0o000;
-const READABLE = 0o755;
+/** The registered external verbs — the passed-through Admin API payloads, whose code an adapter decides. */
+const REGISTERED_EXTERNAL_VERBS = PUBLISHED_SHAPES.flatMap((entry) => (entry.kind === 'external' ? entry.verbs : []));
 
-let tempDir: string;
-
-/** Alphabetical, spelled out so the sort does not depend on the default comparator. */
-const byName = (a: string, b: string): number => a.localeCompare(b);
-
-/** A git project under the suite's temp dir, with a config and the given files. */
-function project(name: string, config: string, files: Readonly<Record<string, string>> = {}): string {
-  const dir = safePath.join(tempDir, name);
-  mkdirSyncReal(dir, { recursive: true });
-  writeFileSync(safePath.join(dir, 'vibe-agent-toolkit.config.yaml'), config, 'utf-8');
-  for (const [relative, content] of Object.entries(files)) {
-    const target = safePath.join(dir, relative);
-    mkdirSyncReal(dirname(target), { recursive: true });
-    writeFileSync(target, content, 'utf-8');
-  }
-  spawnSync(gitExecutable(), ['init', '--quiet'], { cwd: dir });
-  spawnSync(gitExecutable(), ['add', '.'], { cwd: dir });
-  return dir;
-}
-
-/** A SKILL.md nothing complains about at error or warning severity. */
-const CLEAN_SKILL = '---\nname: clean\ndescription: Reviews widgets for quality. Use when a reviewer wants a '
-  + 'checklist walkthrough of a widget in depth.\n---\n\n# clean\n\nPurpose statement goes here.\n\nDoes one thing well.\n';
-/** A SKILL.md with an error-severity finding: a description past the 1024-character limit. */
-const BROKEN_SKILL = `---\nname: broken\ndescription: Reviews widgets. ${'Use when a reviewer wants a walkthrough. '.repeat(30)}\n---\n\n# broken\n\nBody.\n`;
-
-const OKF_CONFIG = 'version: 1\nokf:\n  bundles:\n    knowledge:\n      root: ./bundles/knowledge\n';
-const ARD_CONFIG = 'version: 1\nard:\n  publisher: example.com\n  baseUrl: https://example.com/catalog\n';
-const CHECK_CONFIG = (sql: string): string =>
-  `version: 1\nresources:\n  checks:\n    probe:\n      description: probe\n      sql: "${sql}"\n`;
-
-/** One run of one envelope verb, and the status its document must carry. */
-interface Scenario {
-  readonly status: ReportStatus;
-  /** The verb's arguments and working directory, built inside the suite's temp dir. */
-  readonly run: () => { args: string[]; cwd: string };
-}
-
-/**
- * The envelope verbs, keyed exactly as `REPORT_SCHEMAS` names them. Every
- * scenario asks for a machine document (`--format json` or `--yaml`) so the
- * code can be compared with what was published.
- */
-const ENVELOPE_SCENARIOS: Readonly<Record<string, readonly Scenario[]>> = {
-  'resources check': [
-    {
-      status: 'ok',
-      run: () => ({
-        args: ['resources', 'check', '--budget', '0', '--format', 'json'],
-        cwd: project('check-ok', CHECK_CONFIG("SELECT path FROM resource_realizations WHERE ext = '.txt'"), { 'docs/a.md': '# A\n' }),
-      }),
-    },
-    {
-      status: 'findings',
-      run: () => ({
-        args: ['resources', 'check', '--budget', '0', '--format', 'json'],
-        cwd: project('check-findings', CHECK_CONFIG("SELECT path FROM resource_realizations WHERE ext = '.md'"), { 'docs/a.md': '# A\n' }),
-      }),
-    },
-    {
-      // Killed before the population: nothing examined, so the command could
-      // not do its job — the ending that used to be 1 or 2 by timing.
-      status: 'error',
-      run: () => ({
-        args: ['resources', 'check', '--budget', '0.001', '--format', 'json'],
-        cwd: project('check-error', CHECK_CONFIG("SELECT path FROM resource_realizations WHERE ext = '.md'"), { 'docs/a.md': '# A\n' }),
-      }),
-    },
-  ],
-  'skill review': [
-    { status: 'ok', run: () => ({ args: ['skill', 'review', 'SKILL.md', '--yaml'], cwd: project('review-ok', 'version: 1\n', { 'SKILL.md': CLEAN_SKILL }) }) },
-    { status: 'findings', run: () => ({ args: ['skill', 'review', 'SKILL.md', '--yaml'], cwd: project('review-findings', 'version: 1\n', { 'SKILL.md': BROKEN_SKILL }) }) },
-    { status: 'error', run: () => ({ args: ['skill', 'review', 'never-created', '--yaml'], cwd: project('review-error', 'version: 1\n') }) },
-  ],
-  'okf validate': [
-    {
-      status: 'ok',
-      run: () => ({
-        args: ['okf', 'validate', '--format', 'json'],
-        cwd: project('okf-ok', OKF_CONFIG, { 'bundles/knowledge/concepts/a.md': '---\ntype: concept\ntitle: A\n---\n# A\n' }),
-      }),
-    },
-    {
-      status: 'findings',
-      run: () => ({
-        args: ['okf', 'validate', '--format', 'json'],
-        cwd: project('okf-findings', OKF_CONFIG, { 'bundles/knowledge/concepts/a.md': '# A\n' }),
-      }),
-    },
-    { status: 'error', run: () => ({ args: ['okf', 'validate', 'no-such-bundle', '--format', 'json'], cwd: project('okf-error', OKF_CONFIG) }) },
-  ],
-  'ard emit': [
-    { status: 'ok', run: () => ({ args: ['ard', 'emit', '--format', 'json'], cwd: project('ard-ok', ARD_CONFIG) }) },
-    // A project with no `ard:` block: a finding about the PROJECT. It used to be
-    // the envelope's error branch at exit 1 — the document and the code disagreed.
-    { status: 'findings', run: () => ({ args: ['ard', 'emit', '--format', 'json'], cwd: project('ard-findings', 'version: 1\n') }) },
-    { status: 'error', run: () => ({ args: ['ard', 'emit', '--format', 'json', '--project-root', safePath.join(tempDir, 'never-created')], cwd: tempDir }) },
-  ],
+/** One case per outcome an external adapter maps: only a write that fully landed is OK. */
+const EXTERNAL_OUTCOMES: Readonly<Record<ExternalOutcome['kind'], { outcome: ExternalOutcome; code: number }>> = {
+  ok: { outcome: { kind: 'ok' }, code: ExitCode.OK },
+  partial: { outcome: { kind: 'partial', failed: 1 }, code: ExitCode.ERROR },
+  failed: { outcome: { kind: 'failed', cause: 'refused' }, code: ExitCode.ERROR },
 };
 
-/** The registered envelope verbs, as `REPORT_SCHEMAS` names them. */
-const REGISTERED_ENVELOPE_VERBS = REPORT_SCHEMAS
-  .filter((entry) => entry.kind === 'report')
-  .map((entry) => entry.command);
-
-/** The document on stdout — JSON or YAML, whichever the verb wrote. */
-function documentOf(stdout: string): ExitDeterminingDocument & Record<string, unknown> {
-  return yaml.parse(stdout) as ExitDeterminingDocument & Record<string, unknown>;
+/** What each spec file beside this one is named after, for one file-name pattern — what actually runs. */
+function namedOnDisk(pattern: RegExp): string[] {
+  return readdirSync(dirname(fileURLToPath(import.meta.url))).flatMap((file) => {
+    const name = pattern.exec(file)?.[1];
+    return name === undefined ? [] : [name];
+  });
 }
 
 /**
- * The verb published a document, and it says what its code says: `error`.
+ * Every scenario that may SKIP, and what its skip costs — the whole list, both ways.
  *
- * 🪤 This used to return early on an empty stdout ("…IfAny"), and that escape
- * hatch is exactly how `vat skills validate <missing path>` shipped exiting 2
- * with zero bytes on stdout while this row stayed green. Every document verb
- * publishes its document on failure too.
- */
-function expectErrorDocument(stdout: string): void {
-  expect(stdout.trim(), 'the verb published no document').not.toBe('');
-  expect(documentOf(stdout).status).toBe('error');
-}
-
-/**
- * Every document verb whose path argument is WHERE TO LOOK — a root to scan, a
- * project to locate, a subject to review. A path that names nothing, and a
- * directory the OS will not list, are the same OUTCOME in all of them.
+ * A skipped scenario "still counts as present" in every check above, so a green
+ * run says nothing about a status whose scenario did not run. This list is
+ * where that is said out loud:
  *
- * ⚠️ `vat claude context [paths...]` is not here, and not by oversight: its
- * paths are QUESTIONS ("what loads at X?"), not a root, and a path the
- * projection never realized is answered with a `kind: unknown` document at exit
- * 0 by design. Whether an unanswerable question should end on 2 is a separate
- * decision about that verb, not this outcome.
+ * - `platform` — skips only where the platform cannot do what the scenario sets
+ *   up: a mode that denies a read or a write (Windows, or root), or a `--dev`
+ *   symlink install (Windows). It RUNS on the ubuntu CI leg.
+ * - `network` — skips when the npm registry does not answer. It runs on CI.
+ * - `never-on-ci` — ⚠️ needs something NO CI runner provisions: a `claude` binary
+ *   on PATH, or the ONNX embedding model already cached under the real home. On
+ *   CI these scenarios always skip, so the matrix never observes that status of
+ *   that verb there — it is checked only on a developer machine that has both.
+ *
+ * Adding a `skipReason` to a scenario, or removing one, is a red test here until
+ * this list says which kind it is.
  */
-const PATH_VERBS: ReadonlyArray<{ readonly verb: string; readonly args: (path: string) => string[] }> = [
-  { verb: 'resources validate', args: (path) => ['resources', 'validate', path] },
-  { verb: 'resources scan', args: (path) => ['resources', 'scan', path] },
-  { verb: 'resources check', args: (path) => ['resources', 'check', path] },
-  { verb: 'resources query', args: (path) => ['resources', 'query', 'SELECT 1', path] },
-  { verb: 'audit', args: (path) => ['audit', path] },
-  { verb: 'skills validate', args: (path) => ['skills', 'validate', path] },
-  { verb: 'skill review', args: (path) => ['skill', 'review', path, '--yaml'] },
-];
+const SKIPPABLE_SCENARIOS: Readonly<Record<string, 'platform' | 'network' | 'never-on-ci'>> = {
+  'agent installed → findings': 'platform',
+  'agent list → findings': 'platform',
+  'cache clear → error': 'platform',
+  'claude plugin install → findings': 'platform',
+  'doctor → ok': 'network',
+  'inventory → findings': 'platform',
+  'rag index → findings': 'platform',
+  'rag query → ok': 'never-on-ci',
+  'skill test run → ok': 'never-on-ci',
+  'skills list → findings': 'platform',
+};
 
 describe('exit codes are derived from the published document (system test)', () => {
-  beforeAll(() => {
-    tempDir = createTestTempDir('vat-exit-matrix-');
+  useMatrixTempDir();
+
+  it('names every scenario that may skip — no scenario skips unlisted, and no listed one always runs', () => {
+    const skippable = Object.entries(ENVELOPE_SCENARIOS).flatMap(([verb, scenarios]) =>
+      scenarios.filter((scenario) => scenario.skipReason !== undefined).map((scenario) => `${verb} → ${scenario.status}`));
+
+    expect(skippable.toSorted(byName)).toStrictEqual(Object.keys(SKIPPABLE_SCENARIOS).sort(byName));
   });
 
-  afterAll(() => {
-    cleanupTestTempDir(tempDir);
+  // The bound on what a green CI run does not show: two statuses, of two verbs, and no third.
+  it('leaves exactly two scenarios that no CI runner can run', () => {
+    const neverOnCi = Object.entries(SKIPPABLE_SCENARIOS).flatMap(([scenario, kind]) => (kind === 'never-on-ci' ? [scenario] : []));
+
+    expect(neverOnCi.toSorted(byName)).toStrictEqual(['rag query → ok', 'skill test run → ok']);
   });
 
   it('covers EXACTLY the registered envelope verbs — no more, no fewer', () => {
     expect(Object.keys(ENVELOPE_SCENARIOS).sort(byName)).toStrictEqual([...REGISTERED_ENVELOPE_VERBS].sort(byName));
   });
 
-  it('gives every envelope verb one scenario per status the envelope can take', () => {
-    for (const scenarios of Object.values(ENVELOPE_SCENARIOS)) {
-        expect(scenarios.map((scenario) => scenario.status).sort(byName)).toStrictEqual([...REPORT_STATUSES].sort(byName));
+  it('gives every envelope verb one scenario per status, or the reason a status is unreachable', () => {
+    for (const [verb, scenarios] of Object.entries(ENVELOPE_SCENARIOS)) {
+      const shown = scenarios.map((scenario) => scenario.status);
+      const unreachable = Object.keys(UNREACHABLE_STATUSES[verb] ?? {});
+      expect(shown.filter((status) => unreachable.includes(status)), verb).toStrictEqual([]);
+      expect([...shown, ...unreachable].sort(byName), verb).toStrictEqual([...REPORT_STATUSES].sort(byName));
     }
   });
 
-  const cases = Object.entries(ENVELOPE_SCENARIOS).flatMap(([verb, scenarios]) =>
-    scenarios.map((scenario) => ({ verb, ...scenario })),
-  );
+  it('declares unreachable statuses only for envelope verbs', () => {
+    expect(Object.keys(UNREACHABLE_STATUSES).filter((verb) => !REGISTERED_ENVELOPE_VERBS.includes(verb))).toStrictEqual([]);
+  });
 
-  it.each(cases)('$verb → $status ends on the code its document derives', ({ run, status }) => {
-    const { args, cwd } = run();
-    const result = executeCli(binPath, args, { cwd });
-    const document = documentOf(result.stdout);
+  /**
+   * The scenarios are run by the shard files, not here — so "the table covers
+   * the registry" proves nothing about what RUNS unless the shards are the
+   * table. Compared as sorted LISTS, not sets: a verb in two shards is in the
+   * left list twice, a verb in none is missing from it, and a shard naming a
+   * verb the table lacks adds one the right list does not have.
+   */
+  it('assigns every verb of the table to EXACTLY one shard', () => {
+    expect(Object.values(MATRIX_SHARDS).flat().sort(byName)).toStrictEqual(Object.keys(ENVELOPE_SCENARIOS).sort(byName));
+  });
 
-    expect(document.status, `${result.stdout}\n${result.stderr}`).toBe(status);
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCodeForReport(document));
-  }, 60_000);
+  // A shard file takes its slice by its own name (`exitCodeMatrixShard`),
+  // so the files on disk ARE the shards that run: a declared shard with no file
+  // runs nothing, and a file naming no declared shard throws when collected.
+  it('has EXACTLY one spec file per declared shard', () => {
+    expect(namedOnDisk(MATRIX_SHARD_FILE).sort(byName)).toStrictEqual(Object.keys(MATRIX_SHARDS).sort(byName));
+  });
 
-  describe('ONE outcome, one code: a path argument nothing can be examined under', () => {
-    it.each(PATH_VERBS)('$verb over a path that does not exist ends on ERROR', ({ args }) => {
-      const result = executeCli(binPath, args(safePath.join(tempDir, 'never-created')), { cwd: tempDir });
+  // A path file runs every path verb for its one outcome and takes no slice,
+  // so nothing in it can notice it is gone: a path file moved away would drop
+  // an outcome from every verb with every other file still green.
+  it('has EXACTLY one spec file per declared path outcome', () => {
+    expect(namedOnDisk(MATRIX_PATH_FILE).sort(byName)).toStrictEqual([...MATRIX_PATH_OUTCOMES].sort(byName));
+  });
 
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(ExitCode.ERROR);
-      expectErrorDocument(result.stdout);
+  /**
+   * An external verb has no envelope to derive a code from, so its entry's
+   * adapter maps what the Admin API write did to the code. Only `failed` is
+   * reachable by a spawned CLI — the org client has no base-URL override, so
+   * `ok` and `partial` need the live API — so the table is asserted for every
+   * verb through the adapter itself, and `failed` is also observed end to end.
+   */
+  describe('external verbs: the adapter decides the code', () => {
+    it('covers every external adapter outcome', () => {
+      const externals = PUBLISHED_SHAPES.filter((entry) => entry.kind === 'external');
+      expect(externals.length).toBeGreaterThan(0);
+      for (const entry of externals) {
+        // Both ways: every outcome the adapter maps has a case here, and every case is one it maps.
+        expect(Object.keys(entry.exitCodes).sort(byName), entry.verbs.join(', ')).toStrictEqual(Object.keys(EXTERNAL_OUTCOMES).sort(byName));
+      }
+      for (const verb of REGISTERED_EXTERNAL_VERBS) {
+        for (const [kind, { outcome, code }] of Object.entries(EXTERNAL_OUTCOMES)) {
+          expect(exitCodeForExternal(verb, outcome), `${verb} ${kind}`).toBe(code);
+        }
+      }
     });
 
-    it.skipIf(CANNOT_DENY_READS).each(PATH_VERBS)(
-      '$verb over a directory the OS will not list ends on ERROR',
-      ({ args }) => {
-        const locked = safePath.join(tempDir, 'locked');
-        mkdirSyncReal(locked, { recursive: true });
-        chmodSync(locked, UNREADABLE);
-        try {
-          const result = executeCli(binPath, args(locked), { cwd: tempDir });
+    it('claude org info with no admin key publishes its USAGE_INVALID refusal and ends on the adapter\'s failed code', () => {
+      const home = safePath.join(matrixTempDir(), 'homes', 'external-org-info');
+      mkdirSyncReal(home, { recursive: true });
+      const env = { ...process.env, ...fakeHomeEnv(home), ANTHROPIC_ADMIN_API_KEY: '', ANTHROPIC_API_KEY: '' };
+      const result = executeCli(MATRIX_BIN_PATH, ['claude', 'org', 'info'], { cwd: matrixTempDir(), env });
 
-          expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(ExitCode.ERROR);
-          expectErrorDocument(result.stdout);
-        } finally {
-          chmodSync(locked, READABLE);
-        }
-      },
-    );
+      expect(documentOf(result.stdout), `${result.stdout}\n${result.stderr}`).toMatchObject({ error: { code: 'USAGE_INVALID' } });
+      expect(result.status).toBe(exitCodeForExternal('claude org info', { kind: 'failed', cause: 'refused' }));
+    });
   });
 });

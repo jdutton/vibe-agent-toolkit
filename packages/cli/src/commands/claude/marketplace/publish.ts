@@ -6,22 +6,20 @@
  * then creates a squashed commit on the target branch.
  */
 
-import { mkdtempSync } from 'node:fs';
-
-
 import type { ClaudeMarketplaceConfig } from '@vibe-agent-toolkit/resources';
-import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { buildReport, toFindings, type Finding, type Gate } from '@vibe-agent-toolkit/schema';
+import { forEachInOrder, withTempDir } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
-import { handleCommandError } from '../../../utils/command-error.js';
+import { refusalCodeOf } from '../../../utils/command-refusal.js';
+import { endWithRefusal, endWithReport, leftoverIssueOf, NOTHING_FINISHED } from '../../../utils/document-writer.js';
 import { createLogger, type Logger } from '../../../utils/logger.js';
-import { writeYamlOutput } from '../../../utils/output.js';
 import { redactUrlCredentials } from '../../../utils/url-redact.js';
-import { loadClaudeProjectConfig } from '../claude-config.js';
+import { assertMarketplaceDeclared, loadClaudeProjectConfig } from '../claude-config.js';
 
 import { createCommitMessage, publishToGitBranch } from './git-publish.js';
-import { explainUnusableLicense, isFilePath } from './license-utils.js';
+import { assertRenderableLicense, isFilePath } from './license-utils.js';
+import type { MarketplacePublishData, MarketplacePublishReport } from './publish-schema.js';
 import { composePublishTree, type ComposeOptions, type LicenseOptions } from './publish-tree.js';
 
 export interface MarketplacePublishOptions {
@@ -33,19 +31,21 @@ export interface MarketplacePublishOptions {
   debug?: boolean;
 }
 
-interface PublishResult {
-  marketplace: string;
-  /**
-   * Marketplace label version: the single plugin's version when the marketplace
-   * contains exactly one plugin, otherwise undefined (multi-plugin marketplaces
-   * have no aggregate version — per-plugin versions are in the published
-   * marketplace.json).
-   */
-  version: string | undefined;
-  branch: string;
-  files: string[];
-  dryRun: boolean;
-}
+/**
+ * One published marketplace, as the report's `data.published[]` row.
+ *
+ * `version` is the marketplace label version: the single plugin's version
+ * when the marketplace contains exactly one plugin, otherwise `null`
+ * (multi-plugin marketplaces have no aggregate version — per-plugin versions
+ * are in the published marketplace.json).
+ */
+type PublishResult = MarketplacePublishData['published'][number];
+
+/** The remote publish pushes to when `publish.remote` is not set. */
+const DEFAULT_REMOTE = 'origin';
+
+/** Publish has no `--strict`: nothing it reports is a warning to gate on. */
+const GATE: Gate = { strict: false };
 
 export function createMarketplacePublishCommand(): Command {
   const command = new Command('publish');
@@ -89,13 +89,26 @@ Per-plugin versioning:
   single-version model — preserved for backwards compatibility).
 
 Output:
-  YAML summary -> stdout
+  YAML report -> stdout: status (ok | findings | error), examined
+  (marketplaces with a publish: block), and data.published[] of
+  { marketplace, version (null for a multi-plugin marketplace), branch,
+  files, dryRun }. A refusal after a marketplace was published still lists it.
+  A temporary directory the OS would not remove after a publish is a
+  TREE_CLEANUP_INCOMPLETE warning naming it; the publish stands and the
+  remaining marketplaces still publish.
   Progress -> stderr
 
 Exit Codes:
-  0 - Published successfully (or dry-run completed)
-  1 - Publish error (missing build, changelog missing release notes for version)
-  2 - System error
+  0 - Published (or dry-run completed)
+  1 - No marketplace declares a publish: block (RESOURCE_CHECK_BROKEN)
+  2 - Publish could not run (error.code): USAGE_INVALID (an undeclared
+      --marketplace), CONFIG_INVALID (no config, a license value VAT cannot
+      render, a configured changelog/readme/license file that does not exist,
+      an unknown git remote), INPUT_UNREADABLE (no build output, or build
+      output with no readable marketplace.json — run vat build; a changelog
+      with no release notes for this version),
+      EXTERNAL_API_FAILED (the push was rejected), RUN_INCOMPLETE (a git step
+      failed)
 
 Example:
   $ vat build && vat claude marketplace publish --no-push  # Create local branch
@@ -115,26 +128,27 @@ function resolveLicenseOptions(
   if (isFilePath(licenseValue)) {
     return { type: 'file', filePath: licenseValue };
   }
-  const problem = explainUnusableLicense(licenseValue);
-  if (problem !== undefined) {
-    throw new Error(problem);
-  }
+  assertRenderableLicense(licenseValue);
   return { type: 'spdx', value: licenseValue, ownerName };
 }
 
+/** Test seam: a config `license` value as the composer's options. */
+export const __internal = { leftoverFindings, publishReport, resolveLicenseOptions };
+
 /**
- * Build ComposeOptions for a single marketplace entry.
+ * Build ComposeOptions for a single marketplace entry, composing into `outputDir`.
  */
 function buildComposeOptions(
   mpName: string,
   configDir: string,
   publishConfig: NonNullable<ClaudeMarketplaceConfig['publish']>,
   licenseOpts: LicenseOptions | undefined,
+  outputDir: string,
 ): ComposeOptions {
   const opts: ComposeOptions = {
     marketplaceName: mpName,
     configDir,
-    outputDir: mkdtempSync(safePath.join(normalizedTmpdir(), `vat-publish-tree-${mpName}-`)),
+    outputDir,
   };
   if (publishConfig.changelog) {
     opts.changelog = { sourcePath: publishConfig.changelog };
@@ -157,19 +171,34 @@ interface PublishOneOptions {
   logger: Logger;
 }
 
+/** One marketplace published, and the temp directories it left behind once it was. */
+interface PublishedMarketplace {
+  readonly result: PublishResult;
+  /** Each the classified fault naming a temp directory the OS would not remove: a warning, never the refusal. */
+  readonly leftovers: readonly unknown[];
+}
+
 /**
- * Publish a single marketplace and return the result.
+ * Publish a single marketplace. The publish tree is composed in VAT's own staging under the
+ * temp directory, disposed of however the publish ends; it and the git staging repo, when the
+ * OS will not remove them after the publish, come back as `leftovers` beside the result.
  */
-async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishResult> {
+async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishedMarketplace> {
+  const { value, leftover } = await withTempDir(`vat-publish-tree-${ctx.mpName}-`, (staging) => publishFromStaging(ctx, staging));
+  return { result: value.result, leftovers: [...value.leftovers, ...(leftover === undefined ? [] : [leftover])] };
+}
+
+/** {@link publishOneMarketplace}, composing the publish tree into `staging`. */
+async function publishFromStaging(ctx: PublishOneOptions, staging: string): Promise<PublishedMarketplace> {
   const { mpName, mpConfig, publishConfig, configDir, options, logger } = ctx;
   const branch = options.branch ?? publishConfig.branch ?? 'claude-marketplace';
-  const remote = publishConfig.remote ?? 'origin';
+  const remote = publishConfig.remote ?? DEFAULT_REMOTE;
 
   const licenseOpts = publishConfig.license
     ? resolveLicenseOptions(publishConfig.license, mpConfig.owner.name)
     : undefined;
 
-  const composeOpts = buildComposeOptions(mpName, configDir, publishConfig, licenseOpts);
+  const composeOpts = buildComposeOptions(mpName, configDir, publishConfig, licenseOpts, staging);
   const composeResult = await composePublishTree(composeOpts);
 
   const labelVersion = composeResult.version;
@@ -198,10 +227,11 @@ async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishRes
     logger.info(`[no-push] Creating local branch ${branch}`);
   }
 
-  await publishToGitBranch({
+  const repoLeftover = await publishToGitBranch({
     publishDir: composeOpts.outputDir,
     branch,
     remote,
+    remoteFromConfig: publishConfig.remote !== undefined,
     commitMessage,
     force: options.force ?? false,
     dryRun: options.dryRun ?? false,
@@ -210,12 +240,20 @@ async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishRes
   });
 
   return {
-    marketplace: mpName,
-    version: labelVersion,
-    branch,
-    files: composeResult.files,
-    dryRun: options.dryRun ?? false,
+    result: {
+      marketplace: mpName,
+      version: labelVersion ?? null,
+      branch,
+      files: composeResult.files,
+      dryRun: options.dryRun ?? false,
+    },
+    leftovers: repoLeftover === undefined ? [] : [repoLeftover],
   };
+}
+
+/** The report over the marketplaces published — a refusal's finished work reads the same list. */
+function publishReport(published: readonly PublishResult[], findings: readonly Finding[], durationMs: number): MarketplacePublishReport {
+  return buildReport({ examined: published.length, findings, data: { published: [...published] }, gate: GATE, durationMs });
 }
 
 async function marketplacePublishCommand(_options: MarketplacePublishOptions, command: Command): Promise<void> {
@@ -223,48 +261,45 @@ async function marketplacePublishCommand(_options: MarketplacePublishOptions, co
   const options = command.optsWithGlobals() as MarketplacePublishOptions;
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
+  // Pushed as each marketplace publishes, so a refusal on the next one still
+  // reports what already reached its branch.
+  const published: PublishResult[] = [];
+  // Temp directories the OS would not remove once their marketplace was published: one warning
+  // each, beside the work — on the report, or on a later marketplace's refusal.
+  const leftovers: unknown[] = [];
 
   try {
-    const { configDir, claudeConfig } = await loadClaudeProjectConfig();
+    const { configDir, claudeConfig } = loadClaudeProjectConfig();
+    const marketplaces = claudeConfig?.marketplaces ?? {};
+    assertMarketplaceDeclared(options.marketplace, Object.keys(marketplaces));
 
-    if (!claudeConfig?.marketplaces) {
-      throw new Error(
-        'No marketplaces defined in config. Add a claude.marketplaces section to vibe-agent-toolkit.config.yaml.',
-      );
-    }
-
-    const results: PublishResult[] = [];
-
-    for (const [mpName, mpConfig] of Object.entries(claudeConfig.marketplaces)) {
+    // In order: each is a git push, and a refusal reports exactly those already published.
+    await forEachInOrder(Object.entries(marketplaces), async ([mpName, mpConfig]) => {
       if (options.marketplace && options.marketplace !== mpName) {
-        continue;
+        return;
       }
       if (!mpConfig.publish) {
         logger.info(`Skipping "${mpName}" (no publish config)`);
-        continue;
+        return;
       }
 
-      const result = await publishOneMarketplace({
-        mpName, mpConfig, publishConfig: mpConfig.publish, configDir, options, logger,
-      });
-      results.push(result);
-    }
-
-    if (results.length === 0) {
-      throw new Error(
-        options.marketplace
-          ? `Marketplace "${options.marketplace}" not found or has no publish config.`
-          : 'No marketplaces with publish config found.',
-      );
-    }
-
-    writeYamlOutput({
-      status: 'success',
-      published: results,
+      const done = await publishOneMarketplace({ mpName, mpConfig, publishConfig: mpConfig.publish, configDir, options, logger });
+      published.push(done.result);
+      leftovers.push(...done.leftovers);
     });
-
-    process.exit(ExitCode.OK);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'MarketplacePublish');
+    const finished = published.length === 0
+      ? NOTHING_FINISHED
+      : { examined: published.length, findings: leftoverFindings(leftovers), data: { published } };
+    endWithRefusal('claude marketplace publish', refusalCodeOf(error), error, 'yaml', GATE, finished);
   }
+
+  // Nothing published because nothing declares `publish:` is examined-zero:
+  // the writer refuses that green.
+  endWithReport('claude marketplace publish', publishReport(published, leftoverFindings(leftovers), Date.now() - startTime), 'yaml');
+}
+
+/** Each temp directory left behind as the one `TREE_CLEANUP_INCOMPLETE` warning naming it. */
+function leftoverFindings(leftovers: readonly unknown[]): Finding[] {
+  return toFindings(leftovers.map((leftover) => leftoverIssueOf(leftover)));
 }

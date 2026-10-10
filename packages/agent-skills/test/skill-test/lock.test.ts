@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { acquireHarnessLock, HarnessLockBusyError, installSignalCleanup } from '../../src/skill-test/lock.js';
@@ -25,6 +26,14 @@ describe('acquireHarnessLock', () => {
   it('acquires then releases', () => {
     const lock = acquireHarnessLock(root);
     expect(() => lock.release()).not.toThrow();
+  });
+
+  // A lockfile the OS will not let the run create (a full disk, a read-only root) is
+  // the run not finishing — RUN_INCOMPLETE — never an uncoded errno (INTERNAL_ERROR).
+  it('codes a lockfile the OS refuses to create as the run\'s output (a destination fault)', async () => {
+    await withSyncFsRefused('openSync', safePath.join(root, '.vat-skill-test.lock'), 'ENOSPC', () => {
+      expect(() => acquireHarnessLock(root)).toThrow(expect.objectContaining({ code: 'FS_FAULT', side: 'destination', faultClass: 'exhausted' }));
+    });
   });
 
   it('a second acquire fails fast while held', () => {
@@ -94,11 +103,13 @@ describe('acquireHarnessLock', () => {
 });
 
 describe('installSignalCleanup', () => {
+  const settled = (): Promise<void> => Promise.resolve();
+
   it('registers SIGINT and SIGTERM handlers and removes them on dispose', () => {
     const beforeInt = process.listenerCount('SIGINT');
     const beforeTerm = process.listenerCount('SIGTERM');
 
-    const remove = installSignalCleanup({ onSignal: () => {}, exit: () => {} });
+    const remove = installSignalCleanup({ onSignal: settled, exit: () => {} });
     expect(process.listenerCount('SIGINT')).toBe(beforeInt + 1);
     expect(process.listenerCount('SIGTERM')).toBe(beforeTerm + 1);
 
@@ -107,26 +118,32 @@ describe('installSignalCleanup', () => {
     expect(process.listenerCount('SIGTERM')).toBe(beforeTerm);
   });
 
-  it('runs onSignal and exits 130 on SIGINT, self-removing the handler', () => {
-    let cleaned = false;
+  it('runs onSignal and exits 130 on SIGINT only once it has settled, self-removing the handler', async () => {
+    let finishCleanup: () => void = () => {};
     const exitCodes: number[] = [];
-    installSignalCleanup({ onSignal: () => { cleaned = true; }, exit: (c) => { exitCodes.push(c); } });
+    installSignalCleanup({
+      onSignal: () => new Promise<void>((resolve) => { finishCleanup = resolve; }),
+      exit: (c) => { exitCodes.push(c); },
+    });
 
     const before = process.listenerCount('SIGINT');
     process.emit('SIGINT');
 
-    expect(cleaned).toBe(true);
-    expect(exitCodes).toEqual([130]); // 128 + SIGINT(2)
     // The handler removed itself, so no listener leaks even on the signal path.
     expect(process.listenerCount('SIGINT')).toBe(before - 1);
+    // Cleanup still running: an exit now would leave half of what it removes.
+    await settled();
+    expect(exitCodes).toEqual([]);
+    finishCleanup();
+    await vi.waitFor(() => { expect(exitCodes).toEqual([130]); }); // 128 + SIGINT(2)
   });
 
-  it('exits 143 on SIGTERM', () => {
+  it('exits 143 on SIGTERM, even when cleanup rejects', async () => {
     const exitCodes: number[] = [];
-    const remove = installSignalCleanup({ onSignal: () => {}, exit: (c) => { exitCodes.push(c); } });
+    const remove = installSignalCleanup({ onSignal: () => Promise.reject(new Error('cleanup failed')), exit: (c) => { exitCodes.push(c); } });
 
     process.emit('SIGTERM');
-    expect(exitCodes).toEqual([143]); // 128 + SIGTERM(15)
+    await vi.waitFor(() => { expect(exitCodes).toEqual([143]); }); // 128 + SIGTERM(15)
 
     remove(); // idempotent after the handler already self-removed
   });

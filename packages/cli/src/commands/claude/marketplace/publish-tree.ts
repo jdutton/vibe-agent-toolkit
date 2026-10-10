@@ -6,10 +6,11 @@
  * directory ready to be committed to the publish branch.
  */
 
-import { cpSync, existsSync, readFileSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { copyTree, safePath, withFsFault, writeFileUnder } from '@vibe-agent-toolkit/utils';
+
+import { CommandRefusalError } from '../../../utils/command-refusal.js';
+import { configNamedFileAbsent, readInputFile, requireInputPath } from '../../../utils/project-root-policy.js';
 
 import {
   parseUnreleasedSection,
@@ -114,16 +115,86 @@ async function extractChangelogDelta(
     const reason = derivedVersion
       ? `has neither a non-empty [Unreleased] section nor a [${derivedVersion}] section`
       : `has no non-empty [Unreleased] section`;
-    throw new Error(
+    throw new CommandRefusalError(
+      'INPUT_UNREADABLE',
       `Changelog "${changelog.sourcePath}" ${reason}. Document the release before publishing.`,
     );
   }
 
-  await writeFile(safePath.join(outputDir, 'CHANGELOG.md'), rawChangelog);
+  await writeStaged(outputDir, 'CHANGELOG.md', rawChangelog);
 
   return stampedSection === '' ? unreleasedSection : stampedSection;
 }
 
+/**
+ * The staged copy of the build's `marketplace.json`, parsed.
+ *
+ * The build output is this command's INPUT. A directory holding no manifest is
+ * a build that stopped half-way, and a manifest that is not JSON is a damaged
+ * one: both are the project's state — `INPUT_UNREADABLE` — never a defect in
+ * VAT, which is what a raw errno or `SyntaxError` would publish.
+ *
+ * @throws {CommandRefusalError} `INPUT_UNREADABLE`, naming the build output project-relative
+ */
+function readBuiltMarketplaceJson(outputDir: string, marketplaceName: string): { plugins?: PublishedPluginInfo[] } {
+  const built = `dist/.claude/plugins/marketplaces/${marketplaceName}`;
+  const raw = readInputFile(safePath.join(outputDir, '.claude-plugin', 'marketplace.json'), {
+    origin: 'content',
+    message: `Marketplace build output at ${built} holds no .claude-plugin/marketplace.json — the build did not finish. Run "vat build" first.`,
+  });
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new CommandRefusalError(
+      'INPUT_UNREADABLE',
+      `${built}/.claude-plugin/marketplace.json is not valid JSON. Run "vat build" to regenerate it.`,
+      { cause: error },
+    );
+  }
+  if (!isMarketplaceManifest(parsed)) {
+    throw new CommandRefusalError(
+      'INPUT_UNREADABLE',
+      `${built}/.claude-plugin/marketplace.json is not a marketplace manifest (an object whose "plugins", when present, is a list of objects). Run "vat build" to regenerate it.`,
+    );
+  }
+  return parsed;
+}
+
+/** A non-null, non-array object. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Whether parsed JSON has the one shape this command reads from a built
+ * manifest: an object whose `plugins`, when present, is a list of objects.
+ * Each entry's own fields are read defensively by the caller.
+ */
+function isMarketplaceManifest(value: unknown): value is { plugins?: PublishedPluginInfo[] } {
+  if (!isRecord(value)) return false;
+  const { plugins } = value;
+  return plugins === undefined || (Array.isArray(plugins) && plugins.every(isRecord));
+}
+
+/**
+ * Write one file VAT composes into the publish tree it stages in the temp directory: a fault is the
+ * `environment`'s. The tree was copied from the build with its links kept, so the write never goes
+ * over or through a link there (`writeFileUnder`); a regular file of that name the build shipped is
+ * replaced — the composed one is the published one.
+ */
+function writeStaged(outputDir: string, name: string, content: string): Promise<void> {
+  const target = safePath.join(outputDir, name);
+  return withFsFault({ side: 'environment', action: `write ${name} into the publish tree`, path: target }, () =>
+    writeFileUnder(outputDir, name, content, { existing: 'replace', writing: `${name} of the publish tree` }));
+}
+
+/**
+ * Compose the publish tree into `options.outputDir`: the fresh, empty directory publish made for
+ * it under VAT's temp directory, which nothing else holds. It is written in place — there is no
+ * previous tree there for a replace plan to protect, and a staged sibling would only be a second
+ * entry in `$TMPDIR` (the directory itself is disposed of by publish's temp-dir lifecycle).
+ */
 export async function composePublishTree(options: ComposeOptions): Promise<ComposeResult> {
   const { marketplaceName, configDir, outputDir } = options;
   const files: string[] = [];
@@ -131,24 +202,24 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
 
   // 1. Verify build output exists
   const buildDir = safePath.join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', marketplaceName);
-  if (!existsSync(buildDir)) {
-    throw new Error(
-      `Marketplace build output not found at ${buildDir}. Run "vat build" first.`,
-    );
-  }
+  requireInputPath(buildDir, {
+    origin: 'content',
+    message: `Marketplace build output not found at dist/.claude/plugins/marketplaces/${marketplaceName}. Run "vat build" first.`,
+  });
 
-  // 2. Copy marketplace artifacts to output
-  // Use cpSync instead of async cp() — Node 22 cp() drops files in nested directories
-  cpSync(buildDir, outputDir, { recursive: true });
+  // 2. Copy marketplace artifacts to output. The build output is this command's INPUT (`source`
+  // reads, links kept as links); the copy lands in VAT's own staging (an `environment` write).
+  await withFsFault(
+    { side: 'environment', action: `copy the marketplace build into ${outputDir}` },
+    () => copyTree(buildDir, outputDir, '', { links: 'preserve', side: 'source', onto: 'fresh' }),
+  );
   files.push('.claude-plugin/marketplace.json', 'plugins/');
 
   // 2b. Read the published marketplace.json to recover each plugin's resolved
   //     version for label derivation. The build pipeline writes this file; we
   //     just observe it here. Defensive parsing because marketplace.json is
   //     build output, not validated input at this layer.
-  const marketplaceJsonPath = safePath.join(outputDir, '.claude-plugin', 'marketplace.json');
-  const marketplaceJsonRaw = readFileSync(marketplaceJsonPath, 'utf-8');
-  const marketplaceJson = JSON.parse(marketplaceJsonRaw) as { plugins?: PublishedPluginInfo[] };
+  const marketplaceJson = readBuiltMarketplaceJson(buildDir, marketplaceName);
   // Plugins without a resolved version don't contribute to the label — skip them.
   const publishedPlugins = (marketplaceJson.plugins ?? [])
     .filter((p): p is { name: string; version: string } =>
@@ -169,8 +240,8 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
   // 4. Process readme
   if (options.readme) {
     const readmePath = safePath.resolve(configDir, options.readme.sourcePath);
-    const readmeContent = readFileSync(readmePath, 'utf-8');
-    await writeFile(safePath.join(outputDir, 'README.md'), readmeContent);
+    const readmeContent = readInputFile(readmePath, configNamedFileAbsent('publish.readme', options.readme.sourcePath));
+    await writeStaged(outputDir, 'README.md', readmeContent);
     files.push('README.md');
   }
 
@@ -186,7 +257,7 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
     } else {
       licenseContent = readLicenseFile(options.license.filePath, configDir);
     }
-    await writeFile(safePath.join(outputDir, 'LICENSE'), licenseContent);
+    await writeStaged(outputDir, 'LICENSE', licenseContent);
     files.push('LICENSE');
   }
 

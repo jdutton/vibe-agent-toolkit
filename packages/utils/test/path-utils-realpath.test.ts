@@ -93,7 +93,7 @@ describe('path-utils realpath helpers: absence is the only failure answered lexi
       expect(normalizedTmpdir()).toBe(fs.realpathSync.native(normalizedTmpdir()));
     });
 
-    it('throws when the OS refuses the tmpdir rather than handing back a spelling it could not resolve', () => {
+    it('throws (an environment fault) when the OS refuses the tmpdir rather than handing back a spelling it could not resolve', () => {
       // The spy must see the exact string `tmpdir()` hands over, so it is keyed
       // on what the real helper answers — the spy passes that first call through.
       const real = normalizedTmpdir();
@@ -101,7 +101,7 @@ describe('path-utils realpath helpers: absence is the only failure answered lexi
         throw Object.assign(new Error(`EACCES: injected, realpath '${real}'`), { code: 'EACCES' });
       }) as typeof fs.realpathSync.native);
       restore = () => spy.mockRestore();
-      expect(errnoOf(() => normalizedTmpdir())).toBe('EACCES');
+      expect(() => normalizedTmpdir()).toThrow(expect.objectContaining({ code: 'FS_FAULT', side: 'environment', errno: 'EACCES' }));
     });
   });
 

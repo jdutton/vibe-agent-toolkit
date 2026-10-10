@@ -258,7 +258,7 @@ export function observationToIssue(obs: Observation, location: string): Validati
   return {
     severity: entry.defaultSeverity,
     code,
-    message: obs.summary,
+    message: obs.description,
     location,
     fix: entry.fix,
     reference: entry.reference,

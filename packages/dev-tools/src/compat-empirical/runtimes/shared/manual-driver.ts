@@ -6,9 +6,11 @@
  */
 
 
-import { cpSync, existsSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 
 import {
+  copyTree,
+  disposeTempDir,
   mkdirSyncReal,
   normalizedTmpdir,
   safePath,
@@ -73,8 +75,7 @@ export class ManualDriverBase implements RuntimeDriver {
       this.currentBundleDir = dir;
       return { ok: true, notes: `bundle reused at ${dir}` };
     }
-    mkdirSyncReal(dir, { recursive: true });
-    cpSync(skill.rootDir, dir, { recursive: true });
+    await copyTree(skill.rootDir, this.bundleRoot, skill.entryId, { links: 'preserve', side: 'source', onto: 'fresh' });
     this.currentBundleDir = dir;
     return { ok: true, notes: `bundle prepared at ${dir}` };
   }
@@ -168,8 +169,10 @@ export class ManualDriverBase implements RuntimeDriver {
     // accumulates one tree per run, and stale dirs from prior runs with the
     // same PID could short-circuit a future install() via the existsSync
     // reuse branch.
-    if (this.bundleRoot && existsSync(this.bundleRoot)) {
-      rmSync(this.bundleRoot, { recursive: true, force: true });
+    if (this.bundleRoot !== undefined) {
+      // A bundle left behind would be reused by the next setup(): the run stops on it.
+      const leftover = await disposeTempDir(this.bundleRoot);
+      if (leftover !== undefined) throw leftover;
     }
     this.bundleRoot = undefined;
     this.currentBundleDir = undefined;

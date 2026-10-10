@@ -4,8 +4,6 @@
  * Implements both RAGQueryProvider and RAGAdminProvider using LanceDB.
  */
 
-import fs from 'node:fs';
-
 import type { Connection, Table } from '@lancedb/lancedb';
 import * as lancedb from '@lancedb/lancedb';
 import type {
@@ -22,12 +20,12 @@ import type {
 } from '@vibe-agent-toolkit/rag';
 import {
   ApproximateTokenCounter,
-  assertQuerySupported,
   chunkResource,
   DefaultRAGMetadataSchema,
   enrichChunks,
   generateContentHash,
   OnnxEmbeddingProvider,
+  RAGQuerySchema,
 } from '@vibe-agent-toolkit/rag';
 import {
   isParserUnavailable,
@@ -36,9 +34,18 @@ import {
   type ContentTransformOptions,
   type ResourceMetadata,
 } from '@vibe-agent-toolkit/resources';
+import {
+  forEachInOrder,
+  isVatError,
+  RAG_DATABASE_UNREADABLE_CODE,
+  RAG_INDEX_EMPTY_CODE,
+  VatError,
+} from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape } from 'zod';
 
+import { chunkTableReadFailure, type ChunkTableShape, foreignTableRefusal } from './chunk-table-failure.js';
 import { resolveChunkingConfig } from './chunking-config.js';
+import { DOCUMENTS_TABLE_NAME, removeRagDatabase, TABLE_NAME } from './database-directory.js';
 import { getDirectorySize } from './directory-size.js';
 import {
   createDocumentRecord,
@@ -49,7 +56,7 @@ import {
   type DocumentColumn,
   type DocumentRecord,
 } from './document-helpers.js';
-import { buildWhereClause, escapeSQLString, LANCEDB_QUERY_SUPPORT } from './filter-builder.js';
+import { buildWhereClause, escapeSQLString } from './filter-builder.js';
 import {
   chunkToLanceRow,
   deserializeMetadata,
@@ -173,9 +180,6 @@ function progressAfter(
 function arrowColumn(field: { name: string; type: { toString(): string } }): DocumentColumn {
   return { name: field.name, type: String(field.type) };
 }
-
-const TABLE_NAME = 'rag_chunks';
-const DOCUMENTS_TABLE_NAME = 'rag_documents';
 
 /**
  * What the documents table remembers about a resource, minus its content.
@@ -323,7 +327,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
 
     const tableNames = await listAllTableNames(connection);
     if (tableNames.includes(TABLE_NAME)) {
-      this.table = await connection.openTable(TABLE_NAME);
+      this.table = await this.openChunkTable(connection);
     } else {
       // Table doesn't exist
       // In admin mode: will be created on first insert
@@ -331,6 +335,52 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       this.table = null;
     }
     return connection;
+  }
+
+  /**
+   * Open the chunk table the listing says is there. A table LanceDB lists and
+   * cannot open is the caller's store being unreadable, coded so, and
+   * `removeRagDatabase` can still remove it without opening it.
+   *
+   * @param connection - The connection whose listing holds the table
+   * @returns The opened table
+   * @throws {VatError} `RAG_DATABASE_UNREADABLE` when LanceDB cannot open it
+   */
+  private openChunkTable(connection: Connection): Promise<Table> {
+    return this.readingChunkTable(() => connection.openTable(TABLE_NAME));
+  }
+
+  /**
+   * Run a LanceDB read of the chunk table. A table opens from its manifest
+   * alone, so damaged DATA files, refused permissions and a foreign schema
+   * surface only here, on the first read — the store's failure either way, and
+   * {@link chunkTableReadFailure} names which, so the remedy it gives is right.
+   *
+   * @param read - The open, count, scan or search
+   * @param table - The open table the read is of; absent for the open itself
+   * @returns What it returned
+   * @throws {VatError} `RAG_DATABASE_UNREADABLE` when LanceDB fails the read
+   */
+  private async readingChunkTable<T>(read: () => Promise<T>, table?: Table): Promise<T> {
+    try {
+      return await read();
+    } catch (error) {
+      throw await chunkTableReadFailure(this.chunkTableShape(), error, table);
+    }
+  }
+
+  private chunkTableShape(): ChunkTableShape {
+    return { dbPath: this.config.dbPath, metadataSchema: this.metadataSchema, dimensions: this.config.embeddingProvider.dimensions };
+  }
+
+  /**
+   * Refuse a chunk table this build does not write before reading or writing
+   * it: LanceDB accepts rows of another vector size, truncating them.
+   */
+  private async requireChunkTableShape(table: Table): Promise<void> {
+    const schema = await this.readingChunkTable(() => table.schema(), table);
+    const refusal = foreignTableRefusal(this.chunkTableShape(), schema.fields);
+    if (refusal) throw refusal;
   }
 
   /**
@@ -348,41 +398,34 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    *
    * @returns A connection every write path can rely on
    */
-  private async connected(): Promise<Connection> {
-    return this.connection ?? this.reconnectAndOpenTable();
+  private connected(): Promise<Connection> {
+    return this.connection ? Promise.resolve(this.connection) : this.reconnectAndOpenTable();
   }
 
   /**
    * Query the RAG database
    */
   async query(query: RAGQuery<TMetadata>): Promise<RAGResult<TMetadata>> {
-    // Refuse a query this provider cannot honour BEFORE doing any work — the check is
-    // deterministic and needs neither a connection nor an embedding, so an unindexed
-    // provider reports the unsupported field rather than reporting that nothing is
-    // indexed yet.
-    //
-    // One call covers BOTH halves, so a query carrying an unsupported filter AND an
-    // unsupported `hybridSearch` reports all of them together. An earlier shape threw on
-    // `hybridSearch` first and reached the filter check only afterwards, which reported
-    // one offender out of three and made the caller fix the same query twice.
-    //
-    // The check lives in `@vibe-agent-toolkit/rag`, not here: the query surface it
-    // enforces is declared there, and a second provider (the RAG skill actively invites
-    // pgvector/Qdrant implementations) would otherwise inherit the declared fields and
-    // none of the enforcement. What THIS provider supports is data it declares.
-    assertQuerySupported(query as { filters?: Record<string, unknown> }, LANCEDB_QUERY_SUPPORT);
+    // Refuse a malformed query BEFORE doing any work. The schema is strict, so an unknown
+    // filter key or a removed field (`hybridSearch`, `filters.tags`) is an error here, and the
+    // check needs neither a connection nor an embedding.
+    RAGQuerySchema.parse(query);
 
     // Workaround for the @lancedb/lancedb + Bun Arrow buffer lifecycle bug:
     // after table modifications we recreate the connection entirely before reading.
     await this.reconnectAndOpenTable();
 
     if (!this.table) {
-      throw new Error(
+      // Coded: the caller's index holds nothing to search — its input, not a
+      // defect. `vat rag query` maps the code to its INPUT_UNREADABLE refusal.
+      throw new VatError(
+        RAG_INDEX_EMPTY_CODE,
         `No data indexed yet: no '${TABLE_NAME}' table at ${this.config.dbPath}. ` +
           'If indexResources() was called, check its returned `errors` for resources that failed to chunk or embed, ' +
           'and `resourcesEmpty` for resources that had no prose to index (frontmatter-only or blank).',
       );
     }
+    await this.requireChunkTableShape(this.table);
 
     const startTime = Date.now();
 
@@ -400,7 +443,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       }
     }
 
-    const results = await search.toArray();
+    const results = await this.readingChunkTable(() => search.toArray(), this.table);
 
     // Convert results to plain objects immediately to avoid Arrow buffer issues
     // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
@@ -442,14 +485,14 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       };
     }
 
-    const count = await this.table.countRows();
+    const table = this.table;
+    await this.requireChunkTableShape(table);
+    const count = await this.readingChunkTable(() => table.countRows(), table);
 
-    // Get unique resource count (use a condition that matches all rows)
-    const allRows = await this.table.query().where('1 = 1').toArray();
-    // Materialize immediately to avoid Arrow buffer issues
-    // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
-    const rows = JSON.parse(JSON.stringify(allRows)) as LanceDBRow[];
-    const uniqueResources = new Set(rows.map((r) => r.resourceid)).size;
+    // Distinct resources, from the one column that names them — never the text and vectors.
+    // Each id is copied out to a primitive at once, before the Arrow buffers can detach.
+    const idRows = await this.readingChunkTable(() => table.query().select(['resourceid']).toArray(), table);
+    const uniqueResources = new Set(idRows.map((row: Pick<LanceDBRow, 'resourceid'>) => String(row.resourceid))).size;
 
     // Calculate database size by traversing the directory
     const dbSizeBytes = getDirectorySize(this.config.dbPath);
@@ -514,6 +557,10 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * @throws {ParserUnavailableError} If the markdown parser module cannot be
    *   loaded — a broken install fails the whole batch rather than becoming one
    *   error entry per resource
+   * @throws {VatError} `RAG_DATABASE_UNREADABLE` when the chunk table cannot be
+   *   read or is not one this build writes — files the OS refuses, a foreign
+   *   schema or vector size, or damage, the message says which — the store's
+   *   failure, so the whole batch, for the same reason
    */
   async indexResources(
     resources: ResourceMetadata[],
@@ -526,8 +573,9 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // Reopened here if `close()` released it, so change detection sees the
     // chunk table and the insert below has a connection to create it on. Without
     // this the loop ran to completion against nothing and counted every
-    // resource as indexed.
+    // resource as indexed. A foreign chunk table is refused before any write.
     await this.connected();
+    if (this.table) await this.requireChunkTableShape(this.table);
 
     // Which resources already have a document record, read ONCE for the whole
     // batch. `detectResourceChangeStatus` needs it to refuse a `skip` for a
@@ -566,7 +614,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     };
 
     let processedCount = 0;
-    for (const resource of resources) {
+    // In order: each resource writes the same LanceDB tables, and progress counts them one at a time.
+    await forEachInOrder(resources, async (resource) => {
       processedCount++;
 
       try {
@@ -586,6 +635,9 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
         // type VAT constructs at one place, so it is complete by construction —
         // not the guessed blocklist of Node loader codes that was deleted.
         if (isParserUnavailable(error)) throw error;
+        // A damaged STORE, not a damaged resource: every later resource would fail
+        // the same read, so the batch is refused once, as stats and query refuse it.
+        if (isVatError(error, RAG_DATABASE_UNREADABLE_CODE)) throw error;
 
         const message = describeError(error);
         // Also surfaced on stderr: a caller that ignores `result.errors` would
@@ -609,7 +661,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
           resourceId: resource.id,
         }),
       );
-    }
+    });
 
     result.durationMs = Date.now() - startTime;
     return result;
@@ -782,7 +834,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       return { action: 'new', deleteCount: 0 };
     }
 
-    const existingRows = await this.table.query().where(`resourceid = '${escapeSQLString(resourceId)}'`).toArray();
+    const table = this.table;
+    const existingRows = await this.readingChunkTable(() => table.query().where(`resourceid = '${escapeSQLString(resourceId)}'`).toArray(), table);
     // Materialize immediately to avoid Arrow buffer issues
     // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
     const existing = JSON.parse(JSON.stringify(existingRows)) as LanceDBRow[];
@@ -969,8 +1022,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   /**
    * Update a specific resource
    */
-  async updateResource(_resourceId: string): Promise<void> {
-    throw new Error('Not implemented - use indexResources() instead');
+  updateResource(_resourceId: string): Promise<void> {
+    return Promise.reject(new Error('Not implemented - use indexResources() instead'));
   }
 
   /**
@@ -1010,6 +1063,9 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    *
    * Deletes all data and removes the database directory.
    * This is a destructive operation that cannot be undone.
+   *
+   * @throws {VatError} `TREE_DEST_NOT_OWNED` when the path is a link or holds anything a RAG database does not
+   *   (see `removeRagDatabase`); nothing is removed then
    */
   async clear(): Promise<void> {
     if (this.config.readonly) {
@@ -1019,10 +1075,10 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // Close connection first
     await this.close();
 
-    // Delete entire database directory
-    if (fs.existsSync(this.config.dbPath)) {
-      fs.rmSync(this.config.dbPath, { recursive: true, force: true });
-    }
+    // Delete the database directory — refused if it holds anything a database does not. Once it is off
+    // its path the clear is done; a deletion the OS then stops is still this call's failure, naming where it is.
+    const { leftover } = await removeRagDatabase(this.config.dbPath);
+    if (leftover !== undefined) throw leftover;
   }
 
   /**

@@ -201,7 +201,7 @@ interface ScanReport {
  * @param corpus - The project to scan
  * @returns Every markdown document, content already read
  */
-async function readCorpus(corpus: string): Promise<Document[]> {
+function readCorpus(corpus: string): Promise<Document[]> {
   const scan = safeExecResult('node', [
     VAT_BIN,
     'resources',
@@ -469,7 +469,7 @@ async function main(): Promise<void> {
 // vitest's own argv as a corpus path.
 //
 // ⛔ NOT `import.meta.main` — undefined before Node 24.2 / 22.18, and this
-// repo's floor is 22.13.0, so that form is silently always-false there.
+// repo's floor is 22.16.0, so that form is silently always-false there.
 if (isEntrypoint(import.meta.url)) {
   try {
     await main();

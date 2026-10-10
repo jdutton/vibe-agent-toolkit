@@ -22,7 +22,13 @@ export {
 	isSkillInventory,
 } from './types.js';
 
-export { serializeInventory, serializeInventoryShallow } from './serialize.js';
+export {
+	countInventories,
+	InventorySerializedSchema,
+	serializedInventory,
+	unreadableParseErrors,
+} from './serialize.js';
+export type { InventoryProjection, InventorySerialized } from './serialize.js';
 
 export {
 	detectDeclaredButMissing,

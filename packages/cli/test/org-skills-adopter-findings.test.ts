@@ -117,7 +117,8 @@ describe('inspectZipArchive', () => {
       return (realRead as (...args: unknown[]) => Buffer)(target, ...rest);
     });
     try {
-      await expect(inspectZipArchive(zipPath)).rejects.toMatchObject({ code: 'EACCES' });
+      // Classified as the INPUT's (a source fault on the argument), carrying the errno it was refused with.
+      await expect(inspectZipArchive(zipPath)).rejects.toMatchObject({ code: 'FS_FAULT', side: 'source', origin: 'argument', errno: 'EACCES', cause: { code: 'EACCES' } });
     } finally {
       spy.mockRestore();
     }

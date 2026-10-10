@@ -16,6 +16,8 @@ import { dirname } from 'node:path';
 
 import { canonicalPath, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
+import { CommandRefusalError } from './command-refusal.js';
+
 /**
  * The argument's root-relative spelling, or `undefined` when no ancestor of it
  * IS the root.
@@ -55,7 +57,7 @@ function relativeThroughRoot(root: string, target: string): string | undefined {
  * @param pathArg - The path argument, or undefined for the current directory
  * @param commandName - The command saying so, for the refusal's wording
  * @returns The root-relative, forward-slashed target. `''` is the corpus root
- * @throws When the argument resolves outside `root` — answering for it would
+ * @throws {CommandRefusalError} `USAGE_INVALID` when the argument resolves outside `root` — answering for it would
  *   mean querying a corpus this projection never enumerated, and a confident
  *   "nothing here" would be indistinguishable from a typo inside the tree
  */
@@ -70,7 +72,8 @@ export function targetPathWithin(
   // a spelling that escapes lexically is asked the filesystem's opinion.
   const relative = relativeEscapesRoot(lexical) ? relativeThroughRoot(root, target) : lexical;
   if (relative === undefined || relativeEscapesRoot(relative)) {
-    throw new Error(
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
       `${pathArg ?? process.cwd()} resolves outside the corpus root ${root}.`
       + ` ${commandName} answers only for paths inside the root it discovered —`
       + ' run it from within the project you mean to ask about.',

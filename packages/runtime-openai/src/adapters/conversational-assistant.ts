@@ -74,7 +74,7 @@ export function convertConversationalAssistantToFunction<TInput, TOutput>(
   const baseCallLLM = createConversationalCallLLM(openaiConfig);
 
   // Wrap it to handle system prompt
-  const callLLM = async (messages: Message[]): Promise<string> => {
+  const callLLM = (messages: Message[]): Promise<string> => {
     // Prepend system prompt if provided
     const messagesWithSystem = effectiveSystemPrompt
       ? [{ role: 'system' as const, content: effectiveSystemPrompt }, ...messages]

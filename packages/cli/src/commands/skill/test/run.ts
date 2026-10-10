@@ -2,34 +2,51 @@
  * `vat skill test run <skill>` — execute a packaged skill's eval suite in isolation.
  *
  * Thin orchestration layer: parse flags, resolve precedence (flag > config > default),
- * print the §12 security warning, call runSkillTestHarness, map result/error to exit code.
- * All domain logic lives in run-harness.ts (agent-skills package).
+ * print the §12 security warning, call runSkillTestHarness, and publish its outcome as
+ * the Report envelope (`run-schema.ts`): each failed eval a finding, a harness that could
+ * not run a coded refusal. All domain logic lives in run-harness.ts (agent-skills package).
  */
 
 import { existsSync } from 'node:fs';
 import { basename, dirname, extname } from 'node:path';
 
 import {
-  BootstrapNeededError,
+  asPackagerRefusal,
   buildStaleDistWarningLines,
   DuplicateStagedSkillError,
   isAcknowledged,
+  isSkillPackagingInputError,
   conventionalSuiteProbe,
+  locateSkillSource,
   packageSkill,
   packagingConfigToPackageOptions,
   runPreStageBuild,
   runSkillTestHarness,
   SecurityAckError,
+  SKILL_SOURCE_SPEC_INVALID_CODE,
   SKILL_TEST_BUILTIN_CAPS,
   SkillBuildError,
   type SkillTestFailureReason,
   skillTestFailureReason,
+  type RunHarnessResult,
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig, SkillSourceDescriptor, TestConfig } from '@vibe-agent-toolkit/resources';
-import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, prefixMessageOnce, resolveAssetReference, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
-import { DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
+import { buildReport, ExitCode, toFindings, type Gate, type RefusalCode, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import {
+  ASSET_REFERENCE_UNRESOLVED_CODE,
+  findProjectRoot,
+  forEachInOrder,
+  isVatError,
+  issueLocation,
+  pathPresent,
+  prefixMessageOnce,
+  relativeEscapesRoot,
+  resolveAssetReference,
+  safePath,
+  toForwardSlash,
+  toForwardSlashAnyPlatform,
+} from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { parseSourceSpec } from '../../../skill-resolution/classify.js';
@@ -41,10 +58,13 @@ import {
   type BuildableReference,
   type DeclaredSkillLink,
 } from '../../../skill-resolution/index.js';
-import { ConfigLoadError, loadConfig, loadConfigCached } from '../../../utils/config-loader.js';
+import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../../utils/command-refusal.js';
+import { loadConfig, loadConfigCached } from '../../../utils/config-loader.js';
+import { endWithRefusal, endWithReport, leftoverIssueOf, NOTHING_FINISHED } from '../../../utils/document-writer.js';
 import { collectRepeated } from '../../../utils/repeatable-option.js';
 import { isSkillPublished } from '../../../utils/skill-packaging-config.js';
 import { runClaudePluginBuild } from '../../claude/plugin/build.js';
+import { packagingFailedIssue } from '../../skills/build.js';
 
 import { assertValidAuth, assertValidRequireAuth } from './auth-flags.js';
 
@@ -133,7 +153,7 @@ function coercePositiveInt(value: string | undefined, flagName: string): number 
   if (value === undefined) return undefined;
   const n = Number.parseInt(value, 10);
   if (!Number.isInteger(n) || n <= 0) {
-    throw new Error(`${flagName} must be a positive integer. Got: ${value}`);
+    throw new CommandRefusalError('USAGE_INVALID', `${flagName} must be a positive integer. Got: ${value}`);
   }
   return n;
 }
@@ -142,7 +162,7 @@ function coercePositiveFloat(value: string | undefined, flagName: string): numbe
   if (value === undefined) return undefined;
   const n = Number.parseFloat(value);
   if (!Number.isFinite(n) || n <= 0) {
-    throw new Error(`${flagName} must be a positive number. Got: ${value}`);
+    throw new CommandRefusalError('USAGE_INVALID', `${flagName} must be a positive number. Got: ${value}`);
   }
   return n;
 }
@@ -240,7 +260,8 @@ export function deriveDeclaredExecutableNames(
 function parseWithPair(pair: string): [string, SkillSourceSpec] {
   const eq = pair.indexOf('=');
   if (eq <= 0) {
-    throw new Error(
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
       `--with entries must be "name=<src>" (e.g. mydep=workspace:foo, bar=npm:@scope/s@1.2.3, baz=path:../baz). Got: ${pair}`,
     );
   }
@@ -248,7 +269,8 @@ function parseWithPair(pair: string): [string, SkillSourceSpec] {
   try {
     return [name, parseSourceSpec(pair.slice(eq + 1))];
   } catch (e) {
-    throw new Error(`--with: ${e instanceof Error ? e.message : String(e)} (in ${pair})`);
+    // A source spec that does not parse is the flag's mistake, whatever parseSourceSpec threw.
+    throw new CommandRefusalError('USAGE_INVALID', `--with: ${e instanceof Error ? e.message : String(e)} (in ${pair})`, { cause: e });
   }
 }
 
@@ -388,7 +410,6 @@ function applyFlagOnlyOptions(opts: HarnessOpts, options: SkillTestRunOptions): 
   if (options.dryRun !== undefined) opts.dryRun = options.dryRun;
   if (options.allowUnverifiedSkillSource !== undefined) opts.allowUnverifiedSkillSource = options.allowUnverifiedSkillSource;
   if (options.iUnderstandThisRunsSkillCode !== undefined) opts.acknowledgedRunsSkillCode = options.iUnderstandThisRunsSkillCode;
-  if (options.allowEvalFailure !== undefined) opts.tolerateEvalFailure = options.allowEvalFailure;
 }
 
 /** Apply flag>config merges for scalar knobs (auth, model, baseline, eval/prompt). */
@@ -406,9 +427,22 @@ function applyScalarMerges(opts: HarnessOpts, options: SkillTestRunOptions, conf
   // against the skill source, because config travels with the skill. Both then
   // reach the harness as one field, and both accept a path or an npm bare
   // specifier (a suite published as a shared corpus).
-  const evalsRef =
-    options.evals === undefined ? config?.evals : resolveAssetReference(options.evals, process.cwd());
+  const evalsRef = options.evals === undefined ? config?.evals : resolveEvalsFlag(options.evals);
   if (evalsRef !== undefined) opts.evalsSubpath = evalsRef;
+}
+
+/**
+ * Resolve `--evals` against the cwd, refusing a specifier that names nothing as
+ * the invocation's mistake. (`test.evals` from config is resolved — and refused
+ * as the config's — by the harness, which knows the skill source it is relative to.)
+ */
+function resolveEvalsFlag(evals: string): string {
+  try {
+    return resolveAssetReference(evals, process.cwd());
+  } catch (error) {
+    if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE)) throw error;
+    throw new CommandRefusalError('USAGE_INVALID', `--evals names no eval suite: ${error.message}`, { cause: error });
+  }
 }
 
 /**
@@ -506,7 +540,8 @@ function applyKnobMerges(
 function parseEnvPair(pair: string): [string, string] {
   const eq = pair.indexOf('=');
   if (eq <= 0) {
-    throw new Error(
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
       `--env entries must be "KEY=VALUE" (e.g. CUSTOMER_SNAPSHOT_PATH=\${fixturesDir}/snapshot.json). Got: ${pair}`,
     );
   }
@@ -550,10 +585,39 @@ function applyEnvMerges(opts: HarnessOpts, options: SkillTestRunOptions, config:
   if (passEnv !== undefined) opts.passEnv = passEnv;
 }
 
-/** Apply flag>config merges for the companion-skill records (with/optional). */
-function applyDepMerges(opts: HarnessOpts, options: SkillTestRunOptions, config: TestConfig | undefined): void {
-  const withSources = parseWithFlags(options.with) ?? descriptorsToRecord(config?.with);
-  if (withSources !== undefined) opts.withSources = withSources;
+/**
+ * Refuse a `{ path }` or `{ npm }` skill source that names nothing — an npm
+ * package that is not installed, a scoped specifier, an unpinned npm spec — as
+ * the mistake of whoever wrote it: `refusal` is `USAGE_INVALID` for a flag or
+ * the positional, `CONFIG_INVALID` for the config. Checked here because staging,
+ * where it would otherwise surface, cannot tell the two apart.
+ */
+function requireSourceLocatable(source: SkillSourceSpec, repoRoot: string, refusal: RefusalCode, origin: string): void {
+  try {
+    locateSkillSource(source, repoRoot);
+  } catch (error) {
+    if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE) && !isVatError(error, SKILL_SOURCE_SPEC_INVALID_CODE)) throw error;
+    throw new CommandRefusalError(refusal, `${origin} names no skill source: ${errorMessageOf(error)}`, { cause: error });
+  }
+}
+
+/**
+ * Apply flag>config merges for the companion-skill records (with/optional).
+ *
+ * Required companions must name something ({@link requireSourceLocatable}).
+ * Optional ones are not checked: one that cannot stage is skipped with a warning.
+ */
+function applyDepMerges(opts: HarnessOpts, options: SkillTestRunOptions, config: TestConfig | undefined, repoRoot: string): void {
+  const withFlags = parseWithFlags(options.with);
+  const withSources = withFlags ?? descriptorsToRecord(config?.with);
+  if (withSources !== undefined) {
+    const [refusal, origin]: [RefusalCode, string] =
+      withFlags === undefined ? ['CONFIG_INVALID', 'test.with in the project config'] : ['USAGE_INVALID', '--with'];
+    for (const [name, spec] of Object.entries(withSources)) {
+      requireSourceLocatable(spec, repoRoot, refusal, `${origin} companion '${name}'`);
+    }
+    opts.withSources = withSources;
+  }
   const withOptional = parseWithFlags(options.withOptional) ?? descriptorsToRecord(config?.optional);
   if (withOptional !== undefined) opts.withOptional = withOptional;
 }
@@ -595,7 +659,7 @@ function buildHarnessOpts(
   applyFlagOnlyOptions(opts, options);
   applyScalarMerges(opts, options, config);
   applyKnobMerges(opts, knobs, config);
-  applyDepMerges(opts, options, config);
+  applyDepMerges(opts, options, config, repoRoot);
   applyEnvMerges(opts, options, config);
   applyGraderMerges(opts, options, knobs, globalTest);
   applyResolvedSubject(opts, resolvedSubject);
@@ -725,6 +789,7 @@ export async function resolveSubjectForTest(
   const resolved = await resolveSkillReference(ref, cwd);
   switch (resolved.kind) {
     case 'source':
+      requireSourceLocatable(resolved.source, resolveRepoRoot(), 'USAGE_INVALID', `the skill reference '${ref}'`);
       return {
         subjectSource: resolved.source,
         rebuilt: false,
@@ -784,7 +849,7 @@ function resolveExistingDistOrThrow(
   ref: BuildableReference,
   flags: { noBuild: boolean; dryRun: boolean },
 ): BuildDeclaredSkillResult {
-  if (existsSync(ref.expectedDistDir)) {
+  if (pathPresent(ref.expectedDistDir, 'follow', 'source', 'probe')) {
     if (flags.noBuild) {
       process.stderr.write(`Using existing dist (NOT rebuilt): ${ref.expectedDistDir}\n`);
     }
@@ -856,14 +921,14 @@ export function buildMemoKey(ref: BuildableReference): string {
  * and is always checked.
  */
 function verifyBuiltDist(ref: BuildableReference): BuildDeclaredSkillResult {
-  if (!existsSync(ref.expectedDistDir)) {
+  if (!pathPresent(ref.expectedDistDir, 'follow', 'source', 'probe')) {
     throw new SkillBuildError(
       `Skill build for '${ref.name}' reported success but produced no output at ${ref.expectedDistDir}. ` +
         `Check the skill's packaging config (\`vat build\` should create this directory).`,
     );
   }
   const skillMdPath = safePath.join(ref.expectedDistDir, 'SKILL.md');
-  if (!existsSync(skillMdPath)) {
+  if (!pathPresent(skillMdPath, 'follow', 'source', 'probe')) {
     throw new SkillBuildError(
       `Skill build for '${ref.name}' reported success but produced no SKILL.md at ${ref.expectedDistDir}. ` +
         `Check the skill's packaging config (\`vat build\` should create this file).`,
@@ -920,6 +985,7 @@ async function runDeclaredSkillBuild(ref: BuildableReference): Promise<void> {
     // excludes every skill's test input. Getting this wrong would hand the executor
     // under test another skill's answer key — the exact signal the harness exists to
     // protect. Memoized per config root, so a multi-skill run discovers once.
+    // A source fault inside the packager is the SKILL_PACKAGING_FAILED finding (buildFailureOf).
     await packageSkill(
       ref.sourcePath,
       packagingConfigToPackageOptions(
@@ -939,10 +1005,13 @@ async function runDeclaredSkillBuild(ref: BuildableReference): Promise<void> {
         // 103 paths) hoists its probe; see the comment there.
         conventionalSuiteProbe(),
       ),
-    );
+    ).catch((error: unknown) => {
+      throw asPackagerRefusal(error);
+    });
     return;
   }
-  await runClaudePluginBuild(ref.configRoot, { marketplace: ref.distribution.marketplaceName });
+  // This run built no `dist/skills` of its own: the pool the marketplace copies in is an input.
+  await runClaudePluginBuild(ref.configRoot, { marketplace: ref.distribution.marketplaceName, runOutputs: [] });
 }
 
 /**
@@ -1023,8 +1092,10 @@ async function buildDeclaredSkill(
   try {
     await runDeclaredSkillBuild(ref);
   } catch (e) {
+    // The throw rides along as `cause`: it, not this wrap, decides the refusal (runFailureOf).
     throw new SkillBuildError(
       `Skill build failed for '${ref.name}': ${e instanceof Error ? e.message : String(e)}`,
+      { cause: e, sourcePath: ref.sourcePath },
     );
   }
   // Record the operation as soon as the build COMMAND succeeded — before verifying
@@ -1203,9 +1274,10 @@ export async function resolveCompanionSources(
 ): Promise<Record<string, SkillSourceSpec> | undefined> {
   if (sources === undefined) return undefined;
   const resolved: Record<string, SkillSourceSpec> = {};
-  for (const [name, spec] of Object.entries(sources)) {
+  // In order: the shared `memo` may stage or clone, and its first user must not race.
+  await forEachInOrder(Object.entries(sources), async ([name, spec]) => {
     resolved[name] = await resolveCompanionSpec(name, spec, repoRoot, flags, optional, memo);
-  }
+  });
   return resolved;
 }
 
@@ -1244,21 +1316,28 @@ function warnIfPathTargetBypassesConfig(subject: ResolvedSubject): void {
 // Testable action
 // ---------------------------------------------------------------------------
 
+/** `vat skill test run` has no `--strict`: a warning (a tolerated eval failure) never fails it. */
+const RUN_GATE: Gate = { strict: false };
+
 /**
  * Validate usage-level flags (auth values, numeric knobs) and load the subject's
- * persisted test config. Runs before the async harness work, so a bad flag exits
- * with a clean message + `Reason: preflight` instead of surfacing as an unhandled
- * promise rejection (raw stack trace, exit 1).
+ * persisted test config. Runs before the async harness work, so a bad flag is a
+ * coded refusal instead of an unhandled promise rejection (raw stack trace).
+ *
+ * @returns The knobs and config, or `undefined` once the run has been refused
  */
 async function preflightKnobsAndConfig(
   subject: string,
   options: SkillTestRunOptions,
   cwd: string,
-): Promise<{
-  knobs: ReturnType<typeof coerceKnobs>;
-  config: TestConfig | undefined;
-  globalTest: SkillTestGlobalConfig;
-}> {
+): Promise<
+  | {
+    knobs: ReturnType<typeof coerceKnobs>;
+    config: TestConfig | undefined;
+    globalTest: SkillTestGlobalConfig;
+  }
+  | undefined
+> {
   try {
     assertValidAuth(options.auth);
     assertValidRequireAuth(options.requireAuth);
@@ -1268,52 +1347,157 @@ async function preflightKnobsAndConfig(
       globalTest: loadGlobalTestConfig(cwd),
     };
   } catch (err) {
-    process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
-    exitWithReason('preflight');
+    refuseRun(err);
+    return undefined;
   }
 }
 
-/**
- * End the run on `ERROR`, saying WHY on stderr.
- *
- * The reason used to be three exit codes (1 internal, 2 preflight, 3
- * bootstrap). Under the one exit-code contract every verb shares, every way the
- * harness could not run is `ERROR`, and the `Reason:` line is where a CI
- * author reads "harness broke" apart from "my environment is wrong".
- */
-function exitWithReason(reason: SkillTestFailureReason): never {
-  process.stderr.write(`Reason: ${reason}\n`);
-  process.exit(ExitCode.ERROR);
+/** How a thrown value refuses the run: its refusal, the `Reason:` restating it, and the findings that stand. */
+interface RunFailure {
+  code: RefusalCode;
+  reason: SkillTestFailureReason;
+  findings: readonly ValidationIssue[];
 }
 
 /**
- * End the run on the harness's own verdict: the `Summary:` line on stdout (the
- * one channel kept machine-readable), the `Reason:` line on stderr when the
- * harness could not run, and the exit code the harness decided.
+ * `path` as a finding `location`: relative to the project root, or `undefined`
+ * when it lies outside the project (a location is a file inside the project to
+ * open — an OS temp copy or another tree is not one).
  */
-function exitWithResult(result: Awaited<ReturnType<typeof runSkillTestHarness>>): never {
-  process.stdout.write(`Summary: ${result.summary}\n`);
-  if (result.reason !== undefined) process.stderr.write(`Reason: ${result.reason}\n`);
-  process.exit(result.exitCode);
+function projectLocation(path: string): string | undefined {
+  const relative = issueLocation(path, resolveRepoRoot());
+  return relativeEscapesRoot(relative) ? undefined : relative;
 }
 
 /**
- * The reason for an error escaping EITHER phase of {@link runSkillTestRun}.
+ * The refusal of a build that THREW, decided by what it threw: a coded value keeps
+ * its own refusal — an unlistable directory `INPUT_UNREADABLE`, a broken config
+ * `CONFIG_INVALID`, the same codes those carry on every other path; the packager
+ * refusing the skill's own content is the `SKILL_PACKAGING_FAILED` finding (as
+ * `vat skills build` / `package` publish it) on a run that stopped before any eval,
+ * `RUN_INCOMPLETE`; and anything uncoded is a defect, `INTERNAL_ERROR`.
  *
- * A broken governing config ({@link ConfigLoadError}) is a user-fixable PREFLIGHT
- * problem, not an internal harness failure — {@link skillTestFailureReason} has
- * no case for it and falls through to `internal`. ONE helper shared by BOTH catch
- * blocks so the SUBJECT arm and the COMPANION arm can never drift: a companion's
- * governing config root can differ from the subject's, so a broken config is
- * reachable from either arm and must report the same reason from both.
+ * @param thrown - What the build threw
+ * @param message - The refusal's message, as the lane words it
+ * @param sourcePath - The skill's `SKILL.md`, when the lane knows which skill it was building
  */
-function reasonForRunError(err: unknown): SkillTestFailureReason {
-  // A directory the governing `skills.include` reaches and the crawl cannot list
-  // is the same class: discovery refuses it by name, and the remedy is `chmod` or
-  // a narrower include pattern — the operator's, not the harness's.
-  return err instanceof ConfigLoadError || err instanceof DirectoryListingRefusedError
-    ? 'preflight'
-    : skillTestFailureReason(err);
+function buildFailureOf(thrown: unknown, message: string, sourcePath: string | undefined): Pick<RunFailure, 'code' | 'findings'> {
+  const code = refusalCodeOf(thrown);
+  if (code !== 'INTERNAL_ERROR') return { code, findings: [] };
+  if (!isSkillPackagingInputError(thrown)) return { code: 'INTERNAL_ERROR', findings: [] };
+  const location = sourcePath === undefined ? undefined : projectLocation(sourcePath);
+  return { code: 'RUN_INCOMPLETE', findings: [packagingFailedIssue(message, location, 're-run vat skill test run', thrown)] };
+}
+
+/**
+ * WHY a thrown value stopped the run: the refusal the document publishes, the
+ * `Reason:` stderr restates for a CI log, and any finding that stands.
+ *
+ * The code is the thrown value's own ({@link refusalCodeOf}): each skill-test error
+ * names its refusal by its code, and anything uncoded is `INTERNAL_ERROR`. A build
+ * that threw ({@link SkillBuildError}) is classified by its cause, and a packager
+ * refusal that arrives unwrapped — a `workspace:` companion is packaged inside the
+ * harness — by itself, both through {@link buildFailureOf}: a broken config, an
+ * unlistable directory or a skill the packager refused publishes the same thing
+ * whichever of subject resolution, companion resolution or staging surfaced it.
+ * `Reason:` then follows the code, so the two can never disagree: `internal` exactly
+ * for `INTERNAL_ERROR`, `bootstrap` for the scaffolded `evals.json`, and `preflight`
+ * for every other refusal.
+ */
+function runFailureOf(err: unknown): RunFailure {
+  const built = isVatError(err, 'SKILL_TEST_BUILD_FAILED') && err.cause !== undefined
+    ? buildFailureOf(err.cause, err.message, (err as SkillBuildError).sourcePath)
+    : buildFailureOf(err, errorMessageOf(err), undefined);
+  if (skillTestFailureReason(err) === 'bootstrap') return { ...built, reason: 'bootstrap' };
+  return { ...built, reason: built.code === 'INTERNAL_ERROR' ? 'internal' : 'preflight' };
+}
+
+/**
+ * Refuse the run: `Reason:` on stderr, then the envelope's error branch (its
+ * message on stderr too), exit 2. No eval finished — every refusal lands before the
+ * harness has a verdict — so what stands is only the findings the failure names.
+ */
+function refuse(failure: RunFailure, error: unknown): void {
+  process.stderr.write(`Reason: ${failure.reason}\n`);
+  const finished = failure.findings.length === 0
+    ? NOTHING_FINISHED
+    : { examined: 0, findings: toFindings(failure.findings), data: null };
+  endWithRefusal('skill test run', failure.code, error, 'yaml', RUN_GATE, finished);
+}
+
+/** Refuse the run for a thrown value, as {@link runFailureOf} classifies it. */
+function refuseRun(err: unknown): void {
+  refuse(runFailureOf(err), err);
+}
+
+/**
+ * Name, on stderr, the paths the operator reads next.
+ *
+ * `Harness:` is asked of the PATH rather than re-derived from --keep/--out/--workdir:
+ * the retention rule has ONE author (cleanupHarness), which runs inside the harness's
+ * own `finally` before this result arrives — a run that returns before Step 7 creates
+ * `results/` has had its root removed outright. `existsSync` is right here and only
+ * here: the question is whether a cosmetic line about VAT's own scratch dir is worth
+ * printing, and a root the OS refuses to stat is not one worth sending anyone to.
+ *
+ * `Results:` names the artifacts the help text tells the operator to read — on a
+ * default run results/ is the only thing left under the root. `Workspaces:` names the
+ * executor's working directories, which live outside the root under an unguessable
+ * token and survive only under --keep; the harness reports them only then.
+ */
+function reportHarnessPaths(result: RunHarnessResult): void {
+  if (existsSync(result.harnessPath)) process.stderr.write(`Harness: ${result.harnessPath}\n`);
+  if (result.resultsPath !== undefined) process.stderr.write(`Results: ${result.resultsPath}\n`);
+  if (result.workspacesPath !== undefined) process.stderr.write(`Workspaces: ${result.workspacesPath}\n`);
+}
+
+/**
+ * One failed eval as a finding about the eval: `error` by default (fail-closed, exit
+ * 1), `warning` under `--allow-eval-failure`, so the exit derives 0 while the
+ * finding still says which eval failed.
+ */
+function evalFailedIssue(id: string, suiteLocation: string | undefined, tolerated: boolean): ValidationIssue {
+  return {
+    code: 'SKILL_TEST_EVAL_FAILED',
+    severity: tolerated ? 'warning' : 'error',
+    message: `Eval '${id}' did not pass: an output expectation or its tool verdict failed.`,
+    // The file to open is the suite; the eval inside it is the field.
+    ...(suiteLocation === undefined ? {} : { location: suiteLocation }),
+    field: id,
+    fix: "Read the eval's entry in results/grading.json and results/tool-eval.json.",
+  };
+}
+
+/**
+ * Publish what the harness returned and end on the code the document derives: a
+ * completed run's evals as the report (each failed one a finding), or the refusal
+ * the harness decided where it saw the cause. The human verdict line stays on
+ * stderr as `Summary:`; stdout carries the document and nothing else.
+ */
+function endWithHarnessResult(subject: string, result: RunHarnessResult, allowEvalFailure: boolean): void {
+  // Temp directories the harness could not remove once the run was done: one warning each, on either branch.
+  const leftovers = result.leftovers.map((leftover) => leftoverIssueOf(leftover));
+  if (result.exitCode === ExitCode.ERROR) {
+    refuse({ code: result.refusal, reason: result.reason, findings: leftovers }, result.description);
+    return;
+  }
+  process.stderr.write(`Summary: ${result.description}\n`);
+  const failed = result.evals.filter((outcome) => !outcome.passed);
+  const suiteLocation = projectLocation(result.evalsPath);
+  endWithReport('skill test run', buildReport({
+    examined: result.examined,
+    findings: toFindings([...failed.map((outcome) => evalFailedIssue(outcome.id, suiteLocation, allowEvalFailure)), ...leftovers]),
+    data: {
+      skill: subject,
+      description: result.description,
+      evals: result.evals.map(({ id, passed }) => ({ id, passed })),
+      artifacts: {
+        frictionReport: result.frictionReportPath === null ? null : toForwardSlash(result.frictionReportPath),
+        outputDir: toForwardSlash(result.harnessPath),
+      },
+    },
+    gate: RUN_GATE,
+  }), 'yaml');
 }
 
 /**
@@ -1337,6 +1521,32 @@ function applyResolvedSubject(harnessOpts: HarnessOpts, subject: ResolvedSubject
 }
 
 /**
+ * Assemble the harness options (companion records included) and run the harness.
+ * Every throw here — a repeated companion name, a companion that would not build,
+ * a broken companion config, the harness's own refusals — reaches the caller's one
+ * refusal path.
+ */
+async function runHarnessFor(
+  subject: string,
+  options: SkillTestRunOptions,
+  preflight: NonNullable<Awaited<ReturnType<typeof preflightKnobsAndConfig>>>,
+  resolvedSubject: ResolvedSubject,
+  buildFlags: BuildFlags,
+  buildMemo: BuildMemo,
+): Promise<RunHarnessResult> {
+  const harnessOpts = buildHarnessOpts(subject, options, preflight.knobs, preflight.config, preflight.globalTest, resolvedSubject);
+  // Companion build resolution: a --with/--with-optional companion whose source is a
+  // path into a declared skill gets built (its `files:` injection runs) exactly like
+  // the subject, instead of a raw source-tree copy.
+  const repoRoot = resolveRepoRoot();
+  const withSources = await resolveCompanionSources(harnessOpts.withSources, repoRoot, buildFlags, false, buildMemo);
+  if (withSources !== undefined) harnessOpts.withSources = withSources;
+  const withOptional = await resolveCompanionSources(harnessOpts.withOptional, repoRoot, buildFlags, true, buildMemo);
+  if (withOptional !== undefined) harnessOpts.withOptional = withOptional;
+  return runSkillTestHarness(harnessOpts);
+}
+
+/**
  * The unit-testable action for `vat skill test run`. Exported so tests can
  * call it directly without parsing CLI args. Calls process.exit on completion.
  *
@@ -1351,7 +1561,9 @@ export async function runSkillTestRun(
 ): Promise<void> {
   printSecurityWarning();
 
-  const { knobs, config, globalTest } = await preflightKnobsAndConfig(subject, options, process.cwd());
+  const preflight = await preflightKnobsAndConfig(subject, options, process.cwd());
+  // 🪤 `return` after a refusal: under test `process.exit` is a spy that RETURNS.
+  if (preflight === undefined) return;
 
   // Commander stores the `--no-build` negatable flag under `build` (=== false when set);
   // honor an explicit programmatic `noBuild` too.
@@ -1377,85 +1589,18 @@ export async function runSkillTestRun(
   // that is both the subject and a companion builds exactly once, and N companions
   // in one marketplace trigger ONE marketplace build, not N.
   const buildMemo: BuildMemo = new Set();
-  let resolvedSubject: ResolvedSubject;
+  let result: RunHarnessResult;
   try {
-    resolvedSubject = await resolveSubjectForTest(subject, process.cwd(), buildFlags, buildMemo, config?.build);
+    const resolvedSubject = await resolveSubjectForTest(subject, process.cwd(), buildFlags, buildMemo, preflight.config?.build);
+    warnIfPathTargetBypassesConfig(resolvedSubject);
+    result = await runHarnessFor(subject, options, preflight, resolvedSubject, buildFlags, buildMemo);
   } catch (err) {
-    // A broken governing config surfacing during subject resolution is a preflight
-    // problem the user must fix, not an internal harness failure.
-    process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
-    // 🪤 `return` after a `never`: under test `process.exit` is a spy that RETURNS.
-    exitWithReason(reasonForRunError(err));
+    refuseRun(err);
     return;
   }
 
-  warnIfPathTargetBypassesConfig(resolvedSubject);
-
-  try {
-    // buildHarnessOpts assembles the companion records (--with/--with-optional and
-    // config with:/optional:) and can throw DuplicateStagedSkillError on a repeated
-    // name — inside the try so it reads as preflight like every other preflight error.
-    const harnessOpts = buildHarnessOpts(subject, options, knobs, config, globalTest, resolvedSubject);
-    // Companion build resolution: a --with/--with-optional companion
-    // whose source is a path into a declared skill gets built (its `files:`
-    // injection runs) exactly like the subject, instead of a raw source-tree copy.
-    const repoRoot = resolveRepoRoot();
-    const withSources = await resolveCompanionSources(harnessOpts.withSources, repoRoot, buildFlags, false, buildMemo);
-    if (withSources !== undefined) harnessOpts.withSources = withSources;
-    const withOptional = await resolveCompanionSources(harnessOpts.withOptional, repoRoot, buildFlags, true, buildMemo);
-    if (withOptional !== undefined) harnessOpts.withOptional = withOptional;
-    const result = await runSkillTestHarness(harnessOpts);
-
-    // Same rule as the `Workspaces:` line below — "a populated value is a promise
-    // that the path is still there" — applied to the sibling it was written next to
-    // and not applied to. Harness cleanup runs inside the harness's own `finally`,
-    // BEFORE this result reaches the CLI: a run that returns before Step 7 creates
-    // `results/` (the §12 security-ack refusal, and the preflight-failure branch
-    // reachable from a `--require-auth` mismatch) leaves the harness root with no
-    // `results/` child, and cleanup removes the ROOT outright. Printing the path
-    // anyway hands the operator a directory that no longer exists.
-    //
-    // Asked of the PATH rather than re-derived from --keep/--out/--workdir on
-    // purpose: the retention rule has ONE author (cleanupHarness), and a second copy
-    // of its predicate here would drift from it. The filesystem cannot.
-    if (existsSync(result.harnessPath)) {
-      process.stderr.write(`Harness: ${result.harnessPath}\n`);
-    }
-    // The artifacts this command's help text tells the operator to read
-    // (grading.json / friction.json / baseline.json). Reported separately from the
-    // harness path because on a default run — no --out, no --workdir, no --keep —
-    // results/ is the ONLY thing left under it: everything else is staged untrusted
-    // bytes that cleanup evicts. Pointing at the harness root alone made the
-    // operator guess which of its children still existed.
-    if (result.resultsPath !== undefined) {
-      process.stderr.write(`Results: ${result.resultsPath}\n`);
-    }
-    // The executor's working directories live OUTSIDE the harness root under an
-    // unguessable token, so the harness path no longer leads an operator to them.
-    // Under --keep they survive holding everything the evals produced; unreported,
-    // they would be an orphan the operator cannot find to inspect or reap. On every
-    // other run cleanup deletes them, and the harness answers with no
-    // `workspacesPath` at all — the retention rule has ONE author, over there, so
-    // this stays a plain presence check and never a second copy of it.
-    if (result.workspacesPath !== undefined) {
-      process.stderr.write(`Workspaces: ${result.workspacesPath}\n`);
-    }
-    exitWithResult(result);
-    return;
-  } catch (err) {
-    // Same rule as the subject arm above (see {@link reasonForRunError}): companion
-    // resolution can surface a ConfigLoadError from a DIFFERENT config root than the
-    // subject's, and that must read as preflight, not internal.
-    // BootstrapNeededError is the happy "wrote a template, fill it in and
-    // re-run" path — surface its message plainly, not as a hard `Error:`.
-    if (err instanceof BootstrapNeededError) {
-      process.stderr.write(`${err.message}\n`);
-    } else {
-      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
-    }
-    exitWithReason(reasonForRunError(err));
-    return;
-  }
+  reportHarnessPaths(result);
+  endWithHarnessResult(subject, result, options.allowEvalFailure === true);
 }
 
 // ---------------------------------------------------------------------------
@@ -1513,7 +1658,7 @@ export function createSkillTestRunCommand(): Command {
     )
     .option(
       '--allow-eval-failure',
-      'Opt out of the fail-closed default: exit 0 even when an eval fails (for interactive use). By DEFAULT a failing eval exits 1, distinct from the harness-could-not-run exit 2 (with a Reason: line) so CI can gate on it.',
+      'Opt out of the fail-closed default: publish each failed eval as a warning and exit 0 (for interactive use). By DEFAULT a failed eval is an error finding and exits 1, distinct from the harness-could-not-run exit 2 (a refusal with error.code) so CI can gate on it.',
     )
     .option('--allow-unverified-skill-source', 'Skip the vendored manifest integrity check')
     .option('--i-understand-this-runs-skill-code', 'Acknowledge this command executes skill code (required)')
@@ -1566,7 +1711,9 @@ Artifacts:
   it are removed.
 
   --out or --workdir spares only the harness ROOT: it is a location you own, so
-  vat never deletes it, and the staged (untrusted) skill bytes inside it stay
+  vat never deletes it (nor changes an existing --out's mode: on POSIX it must
+  already be a 0700 directory, or not exist yet; Windows has no mode check, so
+  there it need only be a directory), and the staged (untrusted) skill bytes inside it stay
   until you delete them yourself. It is NOT a blanket "keep everything". Three
   vat-owned directories live OUTSIDE that root -- the grader's output dir, the
   held eval suite, and the per-eval executor WORKSPACES (every eval's working
@@ -1600,13 +1747,52 @@ Model:
   --concurrency follows the same GLOBAL precedence for the executor->grader
   pipeline width (default 4).
 
+Output:
+  YAML report on stdout (schema: packages/cli/schemas/skill-test-run.json):
+  status ok|findings|error, examined (the evals graded; on --dry-run, the evals
+  staged), one SKILL_TEST_EVAL_FAILED finding per failed eval (location: the
+  evals.json, field: the eval id), and data: skill, description (the PASS/FAIL line, also on stderr as
+  "Summary:"), evals[] {id, passed}, artifacts {frictionReport, outputDir}.
+  Progress, the Harness:/Results:/Workspaces: paths and Reason: go to stderr.
+
 Exit Codes:
-  0 - Harness ran to completion and every eval passed (or --allow-eval-failure suppressed a failing verdict)
-  1 - An eval FAILED (the harness completed and produced a valid grading.json; expectations did not all pass). This is the fail-closed DEFAULT -- suppress with --allow-eval-failure.
-  2 - The harness could not run. A 'Reason: <reason>' line on stderr says why:
-        internal  - the harness broke (grader fragment absent or off-schema, summary/expectations skew, executor/grader crash, stall/timeout)
-        preflight - the environment or inputs need fixing (missing binary, auth error, eval inputs absent, unsafe workdir, ack missing, broken project config, a required skill -- subject or --with companion -- failed to build, --no-build with no existing dist for one of them, or an OPTIONAL --with-optional companion hitting a non-survivable failure: a destructive plugin-local build failure, missing security ack, or broken config)
-        bootstrap - evals.json was absent, so VAT wrote a starter template next to the skill source. Fill it in and re-run.
+  0 - Every eval passed (or --allow-eval-failure published the failures as warnings)
+  1 - An eval FAILED: the harness completed and an expectation or tool verdict did
+      not pass. The fail-closed DEFAULT -- --allow-eval-failure downgrades it to 0.
+  2 - The harness could not run; error.code says which refusal, and a
+      'Reason: <reason>' line on stderr restates it:
+        preflight - the operator can fix it. BACKEND_UNAVAILABLE: no claude
+                    binary, or one too old for a flag the spawn needs.
+                    USAGE_INVALID: an invalid flag, an auth mismatch, the missing
+                    ack, an unsafe --workdir, an --out that exists and is not a
+                    directory (or, on POSIX, not 0700: VAT never changes its
+                    mode), a held harness lock, a skill name the config does not
+                    declare (or --no-build with no dist), a bad env token or
+                    test.build hook, a --with source, --evals or skill reference
+                    that names nothing (an npm package not installed, an
+                    unpinned npm spec, a scoped specifier as a path).
+                    RUN_INCOMPLETE: the packager refused the
+                    skill's content (with a SKILL_PACKAGING_FAILED finding), or
+                    the OS would not let the run write its output -- the harness
+                    root, its lockfile, the staged skill copies and manifest, the
+                    results/ files, a dist bundle: a full disk, a read-only
+                    directory; no finding (known gap: a disk so full that a
+                    skill build's git snapshot fails first is still
+                    INTERNAL_ERROR). A build that threw keeps
+                    its cause's code; an uncoded one is INTERNAL_ERROR.
+                    CONFIG_INVALID: a broken project config, or a test.with or
+                    test.evals reference in it that names nothing (an optional
+                    companion that names nothing is skipped with a warning).
+                    INPUT_UNREADABLE: a
+                    declared eval input or dependency absent, an evals.json that
+                    is not a valid suite, a vendored copy failing its manifest,
+                    a --with path: companion holding a file or directory the
+                    OS will not read (named).
+        bootstrap - INPUT_UNREADABLE: evals.json was absent, so VAT wrote a
+                    starter template next to the skill source. Fill it in, re-run.
+        internal  - INTERNAL_ERROR: the harness broke (grader fragment absent or
+                    off-schema, summary/expectations skew, executor/grader crash,
+                    stall/timeout). Re-run with --debug and report it.
 
   The same three-way contract as every other vat command, so a CI consumer
   can tolerate eval failures while failing closed on a harness that broke:
@@ -1615,11 +1801,10 @@ Exit Codes:
     case $? in
       0) ;;              # all evals passed
       1) ;;              # evals failed but the harness is healthy -- tolerate/warn
-      *) exit 1 ;;       # harness could not run -- fail the build; read Reason:
+      *) exit 1 ;;       # harness could not run -- fail the build; read error.code
     esac
 
-  Which specific evals failed lives in grading.json, never in the exit code.
-  For interactive iteration, --allow-eval-failure downgrades 1 to 0.
+  Why an eval failed lives in grading.json and tool-eval.json under results/.
 
 Example:
   $ vat skill test run my-skill --i-understand-this-runs-skill-code

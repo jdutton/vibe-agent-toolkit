@@ -87,5 +87,7 @@ function main(): number {
 }
 
 if (isEntrypoint(import.meta.url)) {
-  process.exit(main());
+  // Not `process.exit()`: stdout is a pipe in CI, a capture is megabytes, and exiting drops
+  // whatever the pipe has not taken yet — the log ended mid-line, before the failing lane.
+  process.exitCode = main();
 }

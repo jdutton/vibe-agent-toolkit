@@ -209,7 +209,12 @@ second shape is a 0-byte emit of a file that still exists.
 but turbo's task graph only sees `package.json` dependency edges, so `utils#build` is not guaranteed
 to finish first.
 **Tell:** an intermittent `does not provide an export named …` for a symbol that exists, in one
-workflow and not another on the same commit.
+workflow and not another on the same commit — naming a different package and a different symbol
+each run, which is the signature of a schedule, not of a broken export. The same message comes from
+a reader that imports a `dist/` file while `tsc` is rewriting it in place: `tsc` truncates, then
+writes, so the file is zero bytes for an instant (a sampler caught a zero-byte `dist/index.js` in 9
+of 24 rebuilds of a 12-module fixture). That is why `clean-build.ts` emits into a staging directory
+and renames each file into place.
 **Remedy:** the dependency the script needs must be a manifest edge; treat a build race between two
 workflows on one commit as scheduling, not language.
 
@@ -374,6 +379,19 @@ loader).
 **Tell:** a precise attribution that does not move when the suspected code is removed.
 **Remedy:** `--cpu-prof` for attribution; the lab's `io` facet for fs counting.
 
+### Node's promise `rm` captures its `fs` functions on its first call in a process
+
+The recursive `fs.promises.rm` walks the tree with `fs` functions it binds the FIRST time it runs
+in a process. The fault harness (`installFaultFs`) patches those functions, so a per-entry `unlink`
+or `rmdir` inside a removal is injectable only when no `rm` ran before the harness was installed.
+After one earlier `rm` — another test in the file, a `beforeEach` that cleans up — the walk keeps
+the unpatched functions: the injection never fires, the removal succeeds, and a test of a
+partly-refused removal passes or fails for a reason that has nothing to do with the code under it.
+**Tell:** `session.fired` is empty although `session.calls` shows the removal's own `rm`; the test
+changes verdict when it is run alone or moved within its file.
+**Remedy:** give a direct partial-removal test its own file, make it that file's only test, and
+assert `session.fired` so a silent miss is red. Clean the scratch tree with a sync `rmSync`.
+
 ### A `toContain` prefix assertion narrows when a column is appended
 
 `toContain('a\tfalse\tfalse\t-')` written to pin two fields kept passing after two columns landed
@@ -501,9 +519,9 @@ production code and watch the test go red.
 ### A notice on stderr is not a finding
 
 A build that dropped two files from a bundle wrote `warning:` to stderr and reported
-`status: success, warnings: 0` in the YAML — the machine-readable contract said clean. Deleting the
+`status: ok` with `summary.warnings: 0` in the YAML — the machine-readable contract said clean. Deleting the
 stderr line left every test green.
-**Tell:** a human-visible line with no counterpart in `issueCounts`.
+**Tell:** a human-visible line with no counterpart in `summary`.
 **Remedy:** anything worth telling a human is a `ValidationIssue` through the findings channel;
 raw stderr is for progress chatter only.
 
@@ -613,6 +631,43 @@ linter: `sonarjs/no-duplicate-string` (a warning, promoted to a block by `--max-
 autofix that made a JSON round-trip test unable to fail.
 **Tell:** every implementer reporting the same gate failure.
 **Remedy:** put known plan defects in every subsequent brief verbatim; lint before claiming.
+
+### A test that stubs `HOME` still writes the real Claude config
+
+`vat` resolves the Claude directory from `CLAUDE_CONFIG_DIR` first and from `$HOME/.claude` only when
+that is blank. A developer's shell that exports `CLAUDE_CONFIG_DIR` therefore aims every install,
+uninstall and clear at their live configuration, whatever `HOME` a reproduction or a test stubbed —
+and unsetting the variable is no escape, because the fallback is the real home. A second way in: the
+fault-matrix driver's `runVerb` undoes the case root's env stubs when it returns, so a second verb in
+the same test runs against the ambient environment. Each has installed a fixture plugin into a live
+Claude config, exit 0, with nothing in the test output to say so.
+**Tell:** a directory or registry key named after a test fixture under the real
+`~/.claude/plugins/`; an install test that passes without ever creating its fake home.
+**Remedy:** three guards now stand, and each fails closed. The shared `vitest.setup.js` replaces
+`CLAUDE_CONFIG_DIR` with a scratch path under the temp directory for every worker and sets
+`VAT_TEST_USER_STATE_UNDER`; every resolver of user state under the home directory passes its root
+through `requireTestScratch` (utils) and throws when that variable is set and the root is outside
+the temp tree — `getClaudeUserPaths`, the user scope of `resolveSkillTarget` for every target, and
+`FileSessionStore`'s default directory (a path-only suite lifts it explicitly, and says why); and
+`runVerb` throws when the case root's stubs are gone — call `makeCaseRoot(root)` again before a
+second verb. For a hand reproduction none of these apply: export `CLAUDE_CONFIG_DIR`, `HOME`,
+`TMPDIR`, `TEMP` and `TMP` to scratch, and `--dry-run` once to read the printed destinations.
+`packages/claude-marketplace/test/test-env-guarantee.ts` asks the guarantee in the unit, integration
+and system lanes. A new resolver of a `homedir()`-derived root that VAT WRITES under goes through
+`requireTestScratch` too; a download cache nothing destructive touches (the ONNX model cache) does not.
+
+### `vi.stubEnv('HOME', …)` does not move `os.homedir()` in a unit test
+
+On POSIX the unit tier runs in the threads pool, and a worker thread's `process.env` is a copy:
+assigning `HOME` there changes what JavaScript reads from `process.env` and nothing `os.homedir()`
+reads, which is the process's own environment. A unit test that "points HOME at a temp directory"
+and then calls code using `homedir()` is still on the developer's real home. (The integration and
+system tiers fork, where the assignment reaches the process; Windows forks every tier.)
+**Tell:** a path assertion built from `homedir()` on both sides passes with or without the stub; a
+`requireTestScratch` refusal naming the real home from a test that stubbed `HOME`.
+**Remedy:** mock the module — `vi.mock('node:os', …)` returning a stubbed `homedir`, as
+`packages/utils/test/skill-targets.test.ts` does — or pass the directory in (`baseDir`, `cwd`).
+
 
 ## Git and worktrees
 

@@ -4,13 +4,12 @@
  * ## What this is, and what it deliberately is not
  *
  * `packages/cli/src/pipeline-oracles/` holds the *oracles*: population-aware
- * captures that name a lane and a row. `~/Workspaces/vat-perf-baseline/` held
- * the other half: whole-command stdout, broad enough to catch anything and
- * unable to localize any of it. Neither is worth much alone — "something
- * changed" plus "here is where" is the pair — and the second used to be
- * reproducible only on one macOS machine.
- *
- * This module wraps both as one capture over any directory, and is therefore a
+ * captures that name a lane and a row. This module wraps them as one capture
+ * over any directory. The other half of the pair — whole-command output, broad
+ * enough to catch anything and unable to localize any of it — is not here: it
+ * is the lab's `verdict` facet (`packages/lab/src/facets/verdict/`), which
+ * compares what two vat builds DECIDE over a subject set and owns the one
+ * output normalizer. This module is a
  * **QA instrument, not a gate**. A gate must be cheap, portable and
  * green-by-default; this is none of those and never will be. It must only be
  * callable, and its output must be *small* — see below.
@@ -25,8 +24,8 @@
  *
  * ## The output is the part that needed designing, not the capture
  *
- * The scarce resource is agent context, not disk. `vat audit` alone emits
- * 1.81 MB of YAML carrying 1,755 findings; handing that to a reader to decide
+ * The scarce resource is agent context, not disk. An oracle artifact over a
+ * large corpus runs to thousands of lines; handing that to a reader to decide
  * "did anything move" is both expensive and exactly the judgement a model is
  * worst at across a large blob. So a comparison defaults to a **summary** —
  * which artifacts changed, by how many lines, and the headline facts that moved
@@ -47,38 +46,6 @@ export const MANIFEST_FILENAME = 'manifest.json';
 
 /** Subdirectory holding the oracle artifacts. */
 export const ORACLE_DIR = 'oracle';
-
-/** Subdirectory holding the whole-command artifacts. */
-export const COMMAND_DIR = 'command';
-
-/**
- * The whole-command half: which verbs are run, and how they are invoked.
- *
- * These three are the verbs the frozen baseline recorded, for the reason it
- * recorded them — they are the ones that enumerate and parse a corpus. Note the
- * asymmetry, which is a finding rather than an oversight: `resources scan` and
- * `audit` have **no output-format flag at all** and emit YAML unconditionally,
- * so only `resources validate` can be asked for JSON.
- */
-export interface CommandSpec {
-  /** Stable artifact name. Appears in the summary table and in `--detail`. */
-  name: string;
-  /**
-   * Arguments after the binary, with `{corpus}` substituted at capture time.
-   * Written as a template so the manifest can record what was actually run.
-   */
-  args: readonly string[];
-}
-
-/** The three corpus-enumerating verbs, in a stable order. */
-export const COMMAND_SPECS: readonly CommandSpec[] = Object.freeze([
-  { name: 'resources-scan', args: Object.freeze(['resources', 'scan', '{corpus}']) },
-  {
-    name: 'resources-validate',
-    args: Object.freeze(['resources', 'validate', '{corpus}', '--format', 'json']),
-  },
-  { name: 'audit', args: Object.freeze(['audit', '{corpus}']) },
-]);
 
 /** What one lane contributed to a snapshot. */
 export interface LaneManifestEntry {
@@ -106,27 +73,6 @@ export interface LaneManifestEntry {
   restatementDriftCount: number;
   /** The lane's production builder threw. A lane that dies is recorded, not fatal. */
   buildError: string | null;
-}
-
-/** What one whole-command run contributed to a snapshot. */
-export interface CommandManifestEntry {
-  name: string;
-  /** The fully-substituted argv, minus the node binary and the CLI entry. */
-  args: string[];
-  /** `null` when the child was killed by a signal rather than exiting. */
-  exitCode: number | null;
-  signal: string | null;
-  /**
-   * Wall time in milliseconds. **Never compared** — it is the one field three
-   * runs of every verb were observed to disagree on, and comparing it would
-   * make every snapshot differ from every other.
-   */
-  wallMs: number;
-  stdoutArtifact: string;
-  stderrArtifact: string;
-  /** Byte lengths after normalization, so a summary can be produced without re-reading. */
-  stdoutBytes: number;
-  stderrBytes: number;
 }
 
 /**
@@ -162,7 +108,6 @@ export interface SnapshotManifest {
   /** `true` when the corpus working tree had uncommitted changes at capture time. */
   corpusGitDirty: boolean | null;
   lanes: LaneManifestEntry[];
-  commands: CommandManifestEntry[];
   /** Artifact name of the parse-fact snapshot, or `null` when it was skipped. */
   parseFactArtifact: string | null;
   parseFactBlobCount: number | null;
@@ -189,7 +134,7 @@ export interface SnapshotManifest {
  *
  * ⛔ **Do not add a version field back.** See the repo's NO VERSIONS rule: the
  * schema decides whether the layout is readable, the manifest's own `lanes` and
- * `commands` decide which artifacts a build captured (`pairArtifacts` diffs
+ * `parseFactArtifact` decide which artifacts a build captured (`pairArtifacts` diffs
  * them, and `presenceConstraints` states what appeared on one side only), and
  * the integer decided neither.
  */
@@ -219,21 +164,6 @@ export const SnapshotManifestSchema = z
         })
         .strict(),
     ),
-    commands: z.array(
-      z
-        .object({
-          name: z.string().min(1),
-          args: z.array(z.string()),
-          exitCode: z.number().int().nullable(),
-          signal: z.string().min(1).nullable(),
-          wallMs: z.number().nonnegative(),
-          stdoutArtifact: z.string().min(1),
-          stderrArtifact: z.string().min(1),
-          stdoutBytes: z.number().int().nonnegative(),
-          stderrBytes: z.number().int().nonnegative(),
-        })
-        .strict(),
-    ),
     parseFactArtifact: z.string().min(1).nullable(),
     parseFactBlobCount: z.number().int().nonnegative().nullable(),
     parseFactKeyDisagreementCount: z.number().int().nonnegative().nullable(),
@@ -250,17 +180,13 @@ export interface LoadedSnapshot {
   artifacts: Map<string, string>;
 }
 
-/** Whether an artifact came from an oracle or from a whole command. */
-export type ArtifactKind = 'oracle' | 'command';
-
 /** What happened to one artifact between two snapshots. */
 export type ArtifactStatus = 'same' | 'changed' | 'added' | 'removed';
 
 /** One row of the comparison summary. */
 export interface ArtifactDelta {
-  /** Selector for `--detail`, e.g. `enumeration.resources` or `command.audit.stdout`. */
+  /** Selector for `--detail`, e.g. `enumeration.resources` or `parse-facts`. */
   name: string;
-  kind: ArtifactKind;
   /** Artifact path relative to the snapshot directory. */
   artifact: string;
   status: ArtifactStatus;
