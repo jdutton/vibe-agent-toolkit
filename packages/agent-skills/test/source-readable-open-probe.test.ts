@@ -80,7 +80,7 @@ describe('a source the OS lets access() pass but refuses to open', () => {
     const source = safePath.join(tempDir, `${ACL_DENIED}.md`);
     await fs.writeFile(source, '# denied');
 
-    const thrown = await copyIntoBundle('linked file acl-denied.md', source, safePath.join(tempDir, 'out', 'x.md'))
+    const thrown = await copyIntoBundle('linked file acl-denied.md', source, tempDir, safePath.join(tempDir, 'out', 'x.md'))
       .then(() => undefined, (error: unknown) => error);
 
     expect(isSkillPackagingInputError(thrown), String(thrown)).toBe(true);

@@ -184,8 +184,8 @@ function entrySubject(entry: SkillFileEntry, absPath: string, projectRoot: strin
 }
 
 /** Copy one file a `files:` entry names into the bundle, each side's refusal coded as that side's. */
-function copyEntryFile(entry: SkillFileEntry, absSource: string, absDest: string, projectRoot: string): Promise<void> {
-  return copyIntoBundle(entrySubject(entry, absSource, projectRoot), absSource, absDest);
+function copyEntryFile(entry: SkillFileEntry, absSource: string, bundle: { root: string; dest: string }, projectRoot: string): Promise<void> {
+  return copyIntoBundle(entrySubject(entry, absSource, projectRoot), absSource, bundle.root, bundle.dest);
 }
 
 /** One file a GLOB `files:` entry matched and the never-package list refused. */
@@ -661,7 +661,7 @@ async function copyNonGlobEntry(
   // joinUnderRoot rejects a dest that escapes the skill output dir (absolute /
   // drive-letter / '..'), defense-in-depth beyond the schema refine.
   const absoluteDest = safePath.joinUnderRoot(skillOutputDir, entry.dest);
-  await copyEntryFile(entry, absoluteSource, absoluteDest, projectRoot);
+  await copyEntryFile(entry, absoluteSource, { root: skillOutputDir, dest: absoluteDest }, projectRoot);
   return { relDest: normalizeRelPath(entry.dest), absSource: absoluteSource, absDest: absoluteDest };
 }
 
@@ -873,7 +873,7 @@ async function copyGlobEntry(
     // the author DECLARED and expects in the bundle, so shipping silently without
     // it would change the artifact behind their back. A non-regular match can
     // never be packaged at all, which is why that one degrades instead.
-    await copyEntryFile(entry, absSource, absDest, projectRoot);
+    await copyEntryFile(entry, absSource, { root: skillOutputDir, dest: absDest }, projectRoot);
 
     copied.push(relDest);
     pairs.push({ absSource, absDest });

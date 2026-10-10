@@ -10,12 +10,11 @@ import { chmodSync } from 'node:fs';
 
 
 import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS, resolveExecutable, tmpdirFoldsCase } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, resolveExecutable } from '@vibe-agent-toolkit/utils/testing';
 import AdmZip from 'adm-zip';
 import * as tar from 'tar';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { PLUGIN_INSTALL_REPORT_SCHEMA } from '../../src/commands/claude/plugin/install-schema.js';
 import { tarballOf } from '../helpers/tarball.js';
 
 import {
@@ -25,168 +24,22 @@ import {
   getBinPath,
   writeTestFile,
 } from './test-common.js';
+import {
+  createInstallTestContext,
+  expectInputRefusal,
+  plantFile,
+  PLUGINS_MARKETPLACES,
+  reinstallOverLockedEntry,
+  runInstall,
+  runPluginInstall,
+  setupPluginTestProject,
+} from './test-helpers/plugin-install-setup.js';
 
 const TEMP_DIR_PREFIX = 'vat-plugin-install-test-';
 
-/** Write `content` at `filePath`, creating its directory. */
-function plantFile(filePath: string, content: string): void {
-  mkdirSyncReal(safePath.join(filePath, '..'), { recursive: true });
-  writeTestFile(filePath, content);
-}
-
-// String constants to avoid sonarjs/no-duplicate-string violations
-// Used as suffix after claudeDir (which already includes '.claude')
-const PLUGINS_MARKETPLACES = safePath.join('plugins', 'marketplaces');
 const MULTI_MARKET = 'multi-market';
 const SKILL_ALPHA = 'skill-alpha';
 const SKILL_BETA = 'skill-beta';
-
-/**
- * Create an isolated temp/home/claudeDir context for a single test.
- * Extracted to eliminate the repeated 4-line setup block across tests.
- */
-function createInstallTestContext(createTempDir: () => string): {
-  tempDir: string;
-  fakeHome: string;
-  claudeDir: string;
-} {
-  const tempDir = createTempDir();
-  const fakeHome = safePath.join(tempDir, 'home');
-  const claudeDir = safePath.join(fakeHome, '.claude');
-  mkdirSyncReal(fakeHome, { recursive: true });
-  return { tempDir, fakeHome, claudeDir };
-}
-
-/**
- * Create a plugin tree directory structure that mirrors the output of `vat build`.
- * Places files at: <projectDir>/dist/.claude/plugins/marketplaces/<marketplace>/plugins/<plugin>/
- *
- * When `skills` is provided on a plugin entry, they are placed in the proper
- * `plugins/<plugin>/skills/<skillName>/` subdirectory (real `vat build` layout).
- * When omitted, a flat `SKILL.md` is written at the plugin root (legacy test layout).
- */
-function setupPluginTestProject(
-  baseDir: string,
-  name: string,
-  marketplaceName: string,
-  plugins: Array<{ name: string; skills?: string[] }>
-): { projectDir: string; marketplacesDir: string } {
-  const projectDir = safePath.join(baseDir, name);
-  mkdirSyncReal(projectDir, { recursive: true });
-
-  writeTestFile(
-    safePath.join(projectDir, 'package.json'),
-    JSON.stringify({ name: '@test/my-plugin-pkg', version: '1.2.3' })
-  );
-
-  const marketplacesDir = safePath.join(projectDir, 'dist', '.claude', 'plugins', 'marketplaces');
-  for (const plugin of plugins) {
-    const pluginDir = safePath.join(marketplacesDir, marketplaceName, 'plugins', plugin.name);
-    mkdirSyncReal(pluginDir, { recursive: true });
-    writeTestFile(safePath.join(pluginDir, 'plugin.json'), JSON.stringify({ name: plugin.name, version: '1.2.3' }));
-
-    if (plugin.skills) {
-      for (const skillName of plugin.skills) {
-        const skillDir = safePath.join(pluginDir, 'skills', skillName);
-        mkdirSyncReal(skillDir, { recursive: true });
-        writeTestFile(safePath.join(skillDir, 'SKILL.md'), `# ${skillName}\nTest skill content`);
-      }
-    } else {
-      writeTestFile(safePath.join(pluginDir, 'SKILL.md'), `# ${plugin.name}\nTest plugin content`);
-    }
-  }
-
-  return { projectDir, marketplacesDir };
-}
-
-type InstallReport = ReturnType<typeof PLUGIN_INSTALL_REPORT_SCHEMA.parse>;
-
-/** Run `vat claude plugin install <args>` under `fakeHome` and parse the report it publishes. */
-async function runInstall(
-  binPath: string,
-  fakeHome: string,
-  args: string[],
-  env: Record<string, string> = {},
-): Promise<{ status: number | null; output: string; report: InstallReport }> {
-  const { result, parsed } = await executeCliAndParseYaml(binPath, ['claude', 'plugin', 'install', ...args], {
-    env: { ...fakeHomeEnv(fakeHome), ...env },
-  });
-  return { status: result.status, output: `${result.stdout}${result.stderr}`, report: PLUGIN_INSTALL_REPORT_SCHEMA.parse(parsed) };
-}
-
-/**
- * Run `vat claude plugin install <projectDir>` and assert it exits 0 with status: ok.
- * Returns the parsed report for further assertions.
- */
-async function runPluginInstall(binPath: string, projectDir: string, fakeHome: string): Promise<InstallReport> {
-  const { status, report } = await runInstall(binPath, fakeHome, [projectDir]);
-  expect(status).toBe(0);
-  expect(report.status).toBe('ok');
-  return report;
-}
-
-/**
- * Lock a directory (holding a file) inside `<parentDir>/<entry>/<lockedRel>` of a previous
- * install, re-install `projectDir`, and restore the lock on every copy of it under `parentDir`
- * — the re-install parks the previous tree beside `entry`, so the locked copy may have moved.
- */
-async function reinstallOverLockedEntry(
-  binPath: string,
-  fakeHome: string,
-  projectDir: string,
-  where: { parentDir: string; entry: string; lockedRel: string[] },
-): Promise<{ status: number | null; report: InstallReport }> {
-  const locked = safePath.join(where.parentDir, where.entry, ...where.lockedRel);
-  plantFile(safePath.join(locked, 'held.txt'), 'x');
-  chmodSync(locked, 0o555);
-  try {
-    return await runInstall(binPath, fakeHome, [projectDir]);
-  } finally {
-    for (const entry of fs.readdirSync(where.parentDir)) {
-      const leftover = safePath.join(where.parentDir, entry, ...where.lockedRel);
-      if (fs.existsSync(leftover)) chmodSync(leftover, 0o755);
-    }
-  }
-}
-
-/** Run the install and assert it was refused as the input's (exit 2), its message naming each of `mentions`. */
-async function expectInputRefusal(binPath: string, fakeHome: string, args: string[], mentions: string[]): Promise<void> {
-  const { status, report } = await runInstall(binPath, fakeHome, args);
-  expect(status).toBe(2);
-  expect(report).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
-  for (const mention of mentions) expect(report.error?.message).toContain(mention);
-}
-
-/** The plugin keys Claude's registry under `claudeDir` holds. */
-function installedKeys(claudeDir: string): string[] {
-  const registry = JSON.parse(fs.readFileSync(safePath.join(claudeDir, 'plugins', 'installed_plugins.json'), 'utf-8')) as { plugins: Record<string, unknown> };
-  return Object.keys(registry.plugins).sort((a, b) => a.localeCompare(b));
-}
-
-/**
- * An installed `old-plugin@r-market` (unless `installOld` is false), a legacy
- * flat skill `legacy` under the skills dir, and a package `new-pkg` (one plugin,
- * `new-plugin`) whose `vat.replaces` is `replaces` — every replaces case's start.
- */
-async function setupReplacesCase(
-  binPath: string,
-  createTempDir: () => string,
-  replaces: unknown,
-  installOld = true,
-): Promise<{ tempDir: string; fakeHome: string; claudeDir: string; projectDir: string; marketplacesDir: string; legacySkill: string }> {
-  const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
-  if (installOld) {
-    const old = setupPluginTestProject(tempDir, 'old-pkg', 'r-market', [{ name: 'old-plugin', skills: ['old-skill'] }]);
-    await runPluginInstall(binPath, old.projectDir, fakeHome);
-  }
-  const legacySkill = safePath.join(claudeDir, 'skills', 'legacy', 'SKILL.md');
-  plantFile(legacySkill, '# legacy\n');
-  // A later version of the SAME package: `vat.replaces` names what this package used to publish, and
-  // only the package that installed a marketplace may replace it (another package's install is refused).
-  const replacing = setupPluginTestProject(tempDir, 'new-pkg', 'r-market', [{ name: 'new-plugin', skills: ['new-skill'] }]);
-  writeTestFile(safePath.join(replacing.projectDir, 'package.json'), JSON.stringify({ name: '@test/my-plugin-pkg', version: '1.2.4', vat: { replaces } }));
-  return { tempDir, fakeHome, claudeDir, legacySkill, ...replacing };
-}
 
 describe('claude plugin install command (system test)', () => {
   const binPath = getBinPath(import.meta.url);
@@ -508,88 +361,6 @@ describe('claude plugin install command (system test)', () => {
     expect(fs.readFileSync(existing, 'utf-8')).toBe('# previous\n');
   });
 
-  // `vat.replaces.plugins` was uninstalled BEFORE a bad `vat.replaces.flatSkills` entry was refused,
-  // so the refused run had already removed the user's plugin and installed nothing in its place.
-  it('refuses a vat.replaces.flatSkills entry that is not one path segment before uninstalling any replaced plugin', async () => {
-    const { fakeHome, claudeDir, projectDir } = await setupReplacesCase(binPath, createTempDir, { plugins: ['old-plugin'], flatSkills: ['../victim'] });
-
-    await expectInputRefusal(binPath, fakeHome, [projectDir], ['nothing was changed', 'vat.replaces.flatSkills']);
-    expect(installedKeys(claudeDir)).toEqual(['old-plugin@r-market']);
-    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'r-market', 'plugins', 'old-plugin', 'skills', 'old-skill', 'SKILL.md'))).toBe(true);
-  });
-
-  // `vat.replaces` was never shape-checked: a string `flatSkills` crashed (INTERNAL_ERROR), a
-  // non-string entry crashed, and a string `plugins` was walked letter by letter — each letter
-  // uninstalled as a plugin name.
-  it.each([
-    ['a string flatSkills', { flatSkills: 'legacy' }, 'vat.replaces.flatSkills'],
-    ['a non-string flatSkills entry', { flatSkills: [123] }, 'vat.replaces.flatSkills.0'],
-    ['a string plugins', { plugins: 'old-plugin' }, 'vat.replaces.plugins'],
-    ['an unknown key', { flatskills: ['legacy'] }, 'flatskills'],
-  ])('refuses %s as INPUT_UNREADABLE naming the field, before anything changes', async (_label, replaces, field) => {
-    const { fakeHome, claudeDir, projectDir, legacySkill } = await setupReplacesCase(binPath, createTempDir, replaces, false);
-    // `l`, `e`, `g`… are what a letter-by-letter walk of "legacy" removed.
-    plantFile(safePath.join(claudeDir, 'skills', 'l', 'SKILL.md'), '# l\n');
-
-    await expectInputRefusal(binPath, fakeHome, [projectDir], ['@test/my-plugin-pkg', field]);
-    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES))).toBe(false);
-    expect(fs.existsSync(legacySkill)).toBe(true);
-    expect(fs.existsSync(safePath.join(claudeDir, 'skills', 'l', 'SKILL.md'))).toBe(true);
-  });
-
-  // The replaced plugin and the legacy flat skill were removed BEFORE the marketplace copy, so a
-  // copy that then failed left the user with neither the old nor the new.
-  it.skipIf(CANNOT_DENY_READS)('refuses a package it cannot read before removing what it replaces', async () => {
-    const { fakeHome, claudeDir, marketplacesDir, projectDir, legacySkill } = await setupReplacesCase(
-      binPath, createTempDir, { plugins: ['old-plugin'], flatSkills: ['legacy'] },
-    );
-    const unreadable = safePath.join(marketplacesDir, 'r-market', 'plugins', 'new-plugin', 'skills', 'new-skill', 'secret.md');
-    plantFile(unreadable, 'x');
-    chmodSync(unreadable, 0o000);
-    try {
-      await expectInputRefusal(binPath, fakeHome, [projectDir], ['secret.md']);
-      expect(installedKeys(claudeDir)).toEqual(['old-plugin@r-market']);
-      expect(fs.existsSync(legacySkill)).toBe(true);
-    } finally {
-      chmodSync(unreadable, 0o644);
-    }
-  });
-
-  // A legacy flat skill the OS would not let it remove was INTERNAL_ERROR, after the replaced
-  // plugin was already uninstalled and before anything new was installed. Its removal is now part
-  // of the install's one transaction: moved aside, then removed whatever its modes.
-  it.skipIf(CANNOT_DENY_READS)('removes a legacy flat skill holding a read-only directory in the install\'s own transaction, exit 0', async () => {
-    const { fakeHome, claudeDir, projectDir } = await setupReplacesCase(
-      binPath, createTempDir, { plugins: ['old-plugin'], flatSkills: ['legacy'] },
-    );
-
-    const { status, report } = await reinstallOverLockedEntry(binPath, fakeHome, projectDir, {
-      parentDir: safePath.join(claudeDir, 'skills'), entry: 'legacy', lockedRel: ['ro'],
-    });
-
-    expect(status, JSON.stringify(report)).toBe(0);
-    expect(fs.readdirSync(safePath.join(claudeDir, 'skills'))).toEqual([]);
-    expect(installedKeys(claudeDir)).toEqual(['new-plugin@r-market']);
-    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'r-market', 'plugins', 'new-plugin', 'skills', 'new-skill', 'SKILL.md'))).toBe(true);
-  });
-
-  // `vat.replaces` runs after the install. A package renaming `Old` → `old` that replaces `Old`
-  // then uninstalled `Old@mp` — on a case-insensitive filesystem the very directories it had just
-  // installed — exit 0, status ok, registry dangling. Only a folding filesystem has the alias;
-  // the uninstall's identity decision is pinned on every filesystem by a linked-marketplace unit test.
-  it.skipIf(!tmpdirFoldsCase())('keeps the plugin it installed when vat.replaces names it in another letter case', async () => {
-    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
-    const v1 = setupPluginTestProject(tempDir, 'v1', 'case-market', [{ name: 'Old', skills: ['s1'] }]);
-    await runPluginInstall(binPath, v1.projectDir, fakeHome);
-    const v2 = setupPluginTestProject(tempDir, 'v2', 'case-market', [{ name: 'old', skills: ['s1'] }]);
-    writeTestFile(safePath.join(v2.projectDir, 'package.json'), JSON.stringify({ name: '@test/my-plugin-pkg', version: '2.0.0', vat: { replaces: { plugins: ['Old'] } } }));
-
-    await runPluginInstall(binPath, v2.projectDir, fakeHome);
-
-    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'case-market', 'plugins', 'old', 'skills', 's1', 'SKILL.md'))).toBe(true);
-    expect(fs.existsSync(safePath.join(claudeDir, 'plugins', 'cache', 'case-market', 'old', '2.0.0'))).toBe(true);
-    expect(installedKeys(claudeDir)).toEqual(['old@case-market']);
-  });
 
   // The package's `plugins/` directory was listed raw — twice, before the readable-source check
   // could run — so one the OS would not list surfaced as INTERNAL_ERROR, not the input's refusal.

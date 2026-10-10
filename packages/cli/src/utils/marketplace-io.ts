@@ -10,9 +10,6 @@
  * staged tree (see `buildMarketplace`): nothing here touches the built marketplace.
  */
 
-import { mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
-
 import { copyRegularFile, copyTree, type FsSide, proveTreeReadable, withFsFault } from '@vibe-agent-toolkit/utils';
 
 /**
@@ -32,21 +29,26 @@ export function writingMarketplace<T>(what: string, write: () => Promise<T>): Pr
  * source's (opened without blocking — a named pipe is refused, never waited on),
  * the write the destination's.
  *
+ * The tree already holds what earlier phases copied into it, links kept as links, so the
+ * copy is made the one way a file is made there (`copyRegularFile`): every directory on the
+ * way must be a real one, and the file is created exclusively. A regular file already at the
+ * name is replaced (a later `files[]` entry over an earlier one, a CHANGELOG over the
+ * tree-copied one); a link or a directory there — or a link where a directory goes — refuses
+ * the copy, as the input's layout, naming it.
+ *
  * @param source - Absolute path the build reads
- * @param target - Absolute path in the marketplace tree
+ * @param target - Where it goes: `relative` (forward slashes) under `root`, a directory of the marketplace tree the build made
  * @param sourceLabel - What a read refusal says the build was reading
  * @param targetLabel - What a write refusal says the build was writing
  */
 export async function copyFileIntoMarketplace(
   source: string,
-  target: string,
+  target: { readonly root: string; readonly relative: string },
   sourceLabel: string,
   targetLabel: string,
 ): Promise<void> {
-  await writingMarketplace(`write ${targetLabel}`, async () => {
-    await mkdir(dirname(target), { recursive: true });
-    await copyRegularFile(source, target, { side: 'source', reading: sourceLabel });
-  });
+  await writingMarketplace(`write ${targetLabel}`, () =>
+    copyRegularFile(source, target.root, target.relative, { side: 'source', reading: sourceLabel, existing: 'replace', writing: targetLabel }));
 }
 
 /**

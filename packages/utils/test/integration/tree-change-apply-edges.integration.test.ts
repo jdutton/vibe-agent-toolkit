@@ -7,7 +7,7 @@
 
 import { readFileSync, rmSync } from 'node:fs';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { isFsFaultError } from '../../src/errors/fs-fault.js';
 import { suppressedFaultsOf } from '../../src/errors/suppressed-faults.js';
@@ -22,6 +22,9 @@ import { TREE_ROLLBACK_INCOMPLETE_CODE } from '../../src/tree-change/rollback-er
 import { expectUnchanged, isStaged, plant, present, readText, rejectionOf, replaceWith, residueIn, treeChangeSuite } from './tree-change-test-kit.js';
 
 const suite = treeChangeSuite('tree-change-edges-');
+// The win32 rename retry's backoff is recorded, never waited out (see the module).
+vi.mock('node:timers/promises', () => import('./tree-change-no-backoff.js'));
+
 
 const removeOf = (dest: string, label = 'legacy'): TreeChange => ({ op: 'remove', dest, ownership: { kind: 'force' }, label });
 

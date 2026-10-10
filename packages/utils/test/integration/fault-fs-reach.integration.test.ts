@@ -26,6 +26,17 @@ const failWritesUnder = (root: string): FaultFsSession =>
 
 const enospc = expect.objectContaining({ code: 'ENOSPC' });
 
+/** List `dir`, then each name of `below` under it in turn, with the callback API: one chain of fs calls. */
+const listDown = (dir: string, below: readonly string[]): Promise<void> =>
+  new Promise((resolve, reject) => {
+    nodeFs.readdir(dir, (error) => {
+      const [next, ...rest] = below;
+      if (error) reject(error);
+      else if (next === undefined) resolve();
+      else listDown(safePath.join(dir, next), rest).then(resolve, reject);
+    });
+  });
+
 describe('installFaultFs reaches every way VAT and its dependencies call fs', () => {
   it('a named sync import', () => {
     const root = scratch.create();
@@ -182,22 +193,24 @@ describe('installFaultFs reaches every way VAT and its dependencies call fs', ()
     expect(namedRealpathSync.native(root)).toBe(syncNative(root));
   });
 
-  // Node's rm rejects on the FIRST child that fails while the siblings it started keep going. A
-  // session restored at that rejection hands the rest of that work to the next session, on its own
-  // tree when the root path is reused: the fault matrix saw an injection that never fired.
+  // A concurrent walk (Node's recursive rm is one) rejects on the FIRST child that fails while the
+  // siblings it started keep going. A session restored at that rejection hands the rest of that
+  // work to the next session, on its own tree when the root path is reused: the fault matrix saw
+  // an injection that never fired. The walk is this test's own, not Node's rm: rm keeps the fs
+  // functions it found when Node first removed a tree, which on Node 22 is any earlier recursive
+  // rmSync, so no session is sure to see inside it.
   it('settled() resolves only once the fs work started under the session has stopped', async () => {
     const root = scratch.create();
-    for (const dir of ['a', 'b', 'c', 'd']) {
-      nodeFs.mkdirSync(safePath.join(root, 'tree', dir, 'x', 'y'), { recursive: true });
-      nodeFs.writeFileSync(safePath.join(root, 'tree', dir, 'x', 'y', 'f'), 'f');
-    }
-    const failing = safePath.join(root, 'tree', 'a');
+    const dirs = ['a', 'b', 'c', 'd'].map((dir) => safePath.join(root, 'tree', dir));
+    for (const dir of dirs) nodeFs.mkdirSync(safePath.join(dir, 'x', 'y'), { recursive: true });
+    const failing = dirs[0];
     session = installFaultFs({ within: root, faults: [{ family: 'list', op: 'readdir', path: (p) => p === failing, errno: 'ENOTDIR' }] });
-    await expect(nodeFs.promises.rm(safePath.join(root, 'tree'), { recursive: true })).rejects.toMatchObject({ code: 'ENOTDIR' });
+    await expect(Promise.all(dirs.map((dir) => listDown(dir, ['x', 'y'])))).rejects.toMatchObject({ code: 'ENOTDIR' });
     await session.settled();
-    const atSettle = session.calls.length;
+    // One refused listing, and three siblings that each went on to list three directories.
+    expect(session.calls).toHaveLength(10);
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(session.calls).toHaveLength(atSettle);
+    expect(session.calls).toHaveLength(10);
   });
 
   it('refuses a second install while one is active', () => {

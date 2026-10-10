@@ -61,12 +61,58 @@ async function plantDeep(src: string): Promise<string> {
 
 const readUtf8 = (path: string): Promise<string> => fs.readFile(path, 'utf-8');
 
+/** `tree/` (the root a single-file copy goes under), `outside/victim.md`, and the file `new.md` to copy. */
+async function treeAndVictim(): Promise<{ root: string; tree: string; from: string; victim: string }> {
+  const { root } = await srcAndDest();
+  const tree = safePath.join(root, 'tree');
+  const victim = safePath.join(root, 'outside', 'victim.md');
+  await fs.mkdir(tree);
+  await fs.mkdir(safePath.join(root, 'outside'));
+  await fs.writeFile(victim, 'precious');
+  const from = safePath.join(root, 'new.md');
+  await fs.writeFile(from, 'new');
+  return { root, tree, from, victim };
+}
+
 describe('copyTree', () => {
   it('copies an empty directory', async () => {
     const { src, dest } = await srcAndDest();
     await copyTree(src, dest, FOLLOW);
     expect((await fs.stat(dest)).isDirectory()).toBe(true);
     expect(await fs.readdir(dest)).toHaveLength(0);
+  });
+
+  // The root is where a copy into a tree that already holds a links-preserved copy lands: adopted
+  // through a link, the whole copy was written into the link's target and that directory chmod-ed.
+  it.for(['fresh', 'merge'] as const)('never adopts a LINK to a directory as its root (onto: %s): refused, the target untouched', async (onto, { skip }) => {
+    const cap = symlinkCapability() ?? skip(SKIP_NO_LINKS);
+    const { root, src, dest } = await srcAndDest();
+    await fs.writeFile(safePath.join(src, 'SKILL.md'), 'copied');
+    const outside = safePath.join(root, 'outside');
+    await fs.mkdir(outside, { mode: 0o755 });
+    await fs.writeFile(safePath.join(outside, 'kept.md'), 'kept');
+    await createSymlinkAsync(cap, outside, dest, 'dir');
+
+    const failure: unknown = await copyTree(src, dest, { ...PRESERVE, onto }).catch((error: unknown) => error);
+
+    expect(failure, String(failure)).toMatchObject({ code: 'EEXIST' });
+    expect(isFsFaultError(failure)).toBe(false);
+    expect(await fs.readdir(outside)).toEqual(['kept.md']);
+    expect((await fs.lstat(dest)).isSymbolicLink()).toBe(true);
+  });
+
+  it('never adopts a FILE as its root, and adopts a real directory that is there', async () => {
+    const { root, src, dest } = await srcAndDest();
+    await fs.writeFile(safePath.join(src, 'a.md'), 'a');
+    const file = safePath.join(root, 'a-file');
+    await fs.writeFile(file, 'kept');
+
+    expect(await copyTree(src, file, FOLLOW).catch((error: unknown) => error)).toMatchObject({ code: 'EEXIST' });
+    expect(await readUtf8(file)).toBe('kept');
+
+    await fs.mkdir(dest);
+    await copyTree(src, dest, FOLLOW);
+    expect(await readUtf8(safePath.join(dest, 'a.md'))).toBe('a');
   });
 
   it('copies files, nested and deeply nested directories, creating the destination and its parents', async () => {
@@ -253,13 +299,13 @@ describe('copyTree', () => {
       const { root, src, dest } = await srcAndDest();
       await fs.writeFile(safePath.join(src, 'a.md'), 'a');
       await fs.writeFile(safePath.join(src, 'b.md'), 'b');
-      session = installFaultFs({ within: root, faults: [{ family: 'write', op: 'write', path: under(dest), nth: 2, errno: 'ENOSPC' }] });
+      session = installFaultFs({ within: root, faults: [{ family: 'write', op: 'writeFile', path: under(dest), nth: 2, errno: 'ENOSPC' }] });
       const boundary = fsBoundary({ source: [src], destination: [dest] });
 
       await expect(boundary.run(`copy ${src} to ${dest}`, 'destination', () => copyTree(src, dest, FOLLOW)))
         .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'destination', faultClass: 'exhausted', errno: 'ENOSPC' });
       expect(session.fired).toHaveLength(1);
-      expect(session.fired[0]?.op).toBe('write');
+      expect(session.fired[0]?.op).toBe('writeFile');
     });
 
     // Both fail: the write the copy could not make is what happened, not the source's close after it.
@@ -270,14 +316,14 @@ describe('copyTree', () => {
       session = installFaultFs({
         within: root,
         faults: [
-          { family: 'write', op: 'write', path: under(dest), errno: 'ENOSPC' },
+          { family: 'write', op: 'writeFile', path: under(dest), errno: 'ENOSPC' },
           { family: 'meta', op: 'close', path: (p) => p === file, errno: 'EPERM' },
         ],
       });
       const failure: unknown = await copyTree(src, dest, FOLLOW).catch((error: unknown) => error);
       expect(isFsFaultError(failure)).toBe(false);
       expect(failure).toMatchObject({ code: 'ENOSPC' });
-      expect(session.fired.map((call) => call.op)).toEqual(['write', 'close']);
+      expect(session.fired.map((call) => call.op)).toEqual(['writeFile', 'close']);
     });
   });
 });
@@ -367,17 +413,73 @@ describe('readRegularFile', () => {
 });
 
 describe('copyRegularFile', () => {
-  it('copies one file\'s bytes and mode, from the handle it judged', async () => {
+  const COPY = { side: 'source', reading: 'the file', existing: 'replace', writing: 'the copy' } as const;
+  const IN_THE_WAY = { code: FS_FAULT_CODE, side: 'source', origin: 'content', faultClass: 'occupied' } as const;
+
+  it('copies one file\'s bytes and mode, from the handle it judged, making the real directories on its way', async () => {
     const { root } = await srcAndDest();
     const from = safePath.join(root, 'run.sh');
     await fs.writeFile(from, 'echo hi');
     await fs.chmod(from, 0o751);
-    const to = safePath.join(root, 'copied.sh');
 
-    await copyRegularFile(from, to, { side: 'source', reading: 'the script' });
+    await copyRegularFile(from, root, 'bin/tools/copied.sh', COPY);
 
+    const to = safePath.join(root, 'bin', 'tools', 'copied.sh');
     expect(await readUtf8(to)).toBe('echo hi');
     if (PERMISSIONS_ENFORCED) expect((await fs.stat(to)).mode & 0o777).toBe(0o751);
+  });
+
+  // The destination is made as `writeFileUnder` makes a file: a copy written through a link a tree
+  // kept overwrote the file the link pointed at, and chmod-ed it.
+  it.for(['refuse', 'replace'] as const)('never writes or chmods through a LINK at the copy\'s name (existing: %s): the target outside keeps its bytes and mode', async (existing, { skip }) => {
+    const cap = symlinkCapability() ?? skip(SKIP_NO_LINKS);
+    const { tree, from, victim } = await treeAndVictim();
+    await fs.chmod(victim, 0o600);
+    await fs.chmod(from, 0o755);
+    await createSymlinkAsync(cap, victim, safePath.join(tree, 'link.md'), 'file');
+
+    const failure: unknown = await copyRegularFile(from, tree, 'link.md', { ...COPY, existing }).catch((error: unknown) => error);
+
+    expect(failure, String(failure)).toMatchObject({ ...IN_THE_WAY, path: safePath.join(tree, 'link.md'), message: expect.stringContaining('write the copy') as unknown });
+    expect(await readUtf8(victim)).toBe('precious');
+    if (PERMISSIONS_ENFORCED) expect((await fs.stat(victim)).mode & 0o777).toBe(0o600);
+    expect((await fs.lstat(safePath.join(tree, 'link.md'))).isSymbolicLink()).toBe(true);
+  });
+
+  it('never goes through a LINK standing where one of the copy\'s directories goes: nothing is created where it points', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip(SKIP_NO_LINKS);
+    const { root, tree, from } = await treeAndVictim();
+    await createSymlinkAsync(cap, safePath.join(root, 'outside'), safePath.join(tree, 'linkdir'), 'dir');
+
+    const failure: unknown = await copyRegularFile(from, tree, 'linkdir/deep/x.md', COPY).catch((error: unknown) => error);
+
+    expect(failure, String(failure)).toMatchObject({ ...IN_THE_WAY, path: safePath.join(tree, 'linkdir') });
+    expect(await fs.readdir(safePath.join(root, 'outside'))).toEqual(['victim.md']);
+  });
+
+  it('replace takes the place of a regular file there; refuse leaves it as it was; neither removes a directory', async () => {
+    const { tree, from } = await treeAndVictim();
+    await fs.writeFile(safePath.join(tree, 'a.md'), 'earlier');
+    await fs.mkdir(safePath.join(tree, 'dir.md'));
+
+    expect(await copyRegularFile(from, tree, 'a.md', { ...COPY, existing: 'refuse' }).catch((error: unknown) => error)).toMatchObject(IN_THE_WAY);
+    expect(await readUtf8(safePath.join(tree, 'a.md'))).toBe('earlier');
+
+    await copyRegularFile(from, tree, 'a.md', COPY);
+    expect(await readUtf8(safePath.join(tree, 'a.md'))).toBe('new');
+
+    expect(await copyRegularFile(from, tree, 'dir.md', COPY).catch((error: unknown) => error)).toMatchObject(IN_THE_WAY);
+    expect((await fs.stat(safePath.join(tree, 'dir.md'))).isDirectory()).toBe(true);
+  });
+
+  it('replace removes nothing for a source that cannot be read', async () => {
+    const { root, tree } = await treeAndVictim();
+    await fs.writeFile(safePath.join(tree, 'a.md'), 'earlier');
+
+    const failure: unknown = await copyRegularFile(safePath.join(root, 'absent.md'), tree, 'a.md', COPY).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: FS_FAULT_CODE, side: 'source', faultClass: 'absent' });
+    expect(await readUtf8(safePath.join(tree, 'a.md'))).toBe('earlier');
   });
 
   it('classifies a refused read on the side named, saying what was read, and writes nothing', async () => {
@@ -387,7 +489,7 @@ describe('copyRegularFile', () => {
     const to = safePath.join(root, 'out.md');
     session = installFaultFs({ within: root, faults: [{ family: 'read', op: 'open', path: (p) => p === from, errno: 'EACCES' }] });
 
-    const failure: unknown = await copyRegularFile(from, to, { side: 'source', reading: 'linked file notes.md' }).catch((error: unknown) => error);
+    const failure: unknown = await copyRegularFile(from, root, 'out.md', { ...COPY, reading: 'linked file notes.md' }).catch((error: unknown) => error);
 
     expect(failure).toMatchObject({ code: FS_FAULT_CODE, side: 'source', origin: 'content', path: from, message: expect.stringContaining('read linked file notes.md') as unknown });
     session.restore();
@@ -396,15 +498,29 @@ describe('copyRegularFile', () => {
 
   it('refuses a directory on the side named, never copying it', async () => {
     const { src, root } = await srcAndDest();
-    const failure: unknown = await copyRegularFile(src, safePath.join(root, 'x'), { side: 'destination', reading: 'the dir' }).catch((error: unknown) => error);
+    const failure: unknown = await copyRegularFile(src, root, 'x', { ...COPY, side: 'destination', reading: 'the dir' }).catch((error: unknown) => error);
     expect(isFsFaultError(failure) && failure.side === 'destination', String(failure)).toBe(true);
   });
 
-  it('leaves a write failure raw, for the caller to classify', async () => {
+  it.for(['open', 'writeFile', 'fchmod', 'close'])('leaves a failure writing the copy (%s) raw, for the caller to classify', async (op) => {
     const { root } = await srcAndDest();
     const from = safePath.join(root, 'a.md');
     await fs.writeFile(from, 'a');
-    const failure: unknown = await copyRegularFile(from, safePath.join(root, 'missing-dir', 'a.md'), { side: 'source', reading: 'a' }).catch((error: unknown) => error);
+    const to = safePath.join(root, 'out', 'a.md');
+    session = installFaultFs({ within: root, faults: [{ op, path: (p) => p === to, errno: 'ENOSPC' }] });
+
+    const failure: unknown = await copyRegularFile(from, root, 'out/a.md', COPY).catch((error: unknown) => error);
+
+    expect(session.fired.map((call) => call.op)).toEqual([op]);
+    expect(isFsFaultError(failure)).toBe(false);
+    expect(failure).toMatchObject({ code: 'ENOSPC' });
+  });
+
+  it('leaves a root that is not there raw (ENOENT): the root is the caller\'s to make', async () => {
+    const { root } = await srcAndDest();
+    const from = safePath.join(root, 'a.md');
+    await fs.writeFile(from, 'a');
+    const failure: unknown = await copyRegularFile(from, safePath.join(root, 'missing-dir'), 'a.md', COPY).catch((error: unknown) => error);
     expect(isFsFaultError(failure)).toBe(false);
     expect(failure).toMatchObject({ code: 'ENOENT' });
   });

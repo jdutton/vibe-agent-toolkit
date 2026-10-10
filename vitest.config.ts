@@ -123,10 +123,10 @@ export default defineConfig({
       // justified file by file. Never lower one by hand: a drop is a coverage
       // regression to fix, or an exclusion to justify in place.
       thresholds: {
-        statements: 84,
-        branches: 78,
+        statements: 85,
+        branches: 79,
         functions: 87,
-        lines: 84,
+        lines: 85,
         autoUpdate: process.env['COVERAGE_RATCHET'] === 'write' ? (measured: number) => Math.floor(measured) : false,
       },
     },

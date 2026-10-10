@@ -364,16 +364,17 @@ export async function stageEvalWorkspaces(input: StageEvalWorkspacesInput): Prom
 }
 
 /**
- * Copy one declared input — a file, or a directory with everything under it — to `dest`. A
+ * Copy one declared input — a file, or a directory with everything under it — to `dest`, under the
+ * eval's workspace. A
  * link is followed (the workspace gets what it points at), and inside a directory only to
  * what lies under that directory.
  */
-async function copyEvalInput(src: string, dest: string): Promise<void> {
+async function copyEvalInput(src: string, evalWorkspace: string, dest: string): Promise<void> {
   if (statSync(src).isDirectory()) {
     await copyTree(src, dest, { links: 'follow-contained', side: 'source', onto: 'fresh' });
     return;
   }
-  await copyRegularFile(src, dest, { side: 'source', reading: `eval input ${src}` });
+  await copyRegularFile(src, evalWorkspace, safePath.relative(evalWorkspace, dest), { side: 'source', reading: `eval input ${src}`, existing: 'replace', writing: `eval input ${src} into its workspace` });
 }
 
 /**
@@ -446,7 +447,7 @@ async function stageEvalInput(evalsDir: string, evalWorkspace: string, id: strin
     // 0700 like the workspaces root above it: with an out-of-tree suite these
     // hold data that may never have been in the repo.
     makeWorkspaceDir(safePath.join(dest, '..'));
-    await copyEvalInput(src, dest);
+    await copyEvalInput(src, evalWorkspace, dest);
   } catch (err) {
     const fault = workspaceWriteFault(err, id, rel, dest);
     if (fault !== undefined) throw fault;

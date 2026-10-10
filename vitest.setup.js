@@ -48,8 +48,10 @@ for (const key of Object.keys(process.env)) {
 // target's user-scope skills directory, and the session store. Each resolver of such
 // a root (`requireTestScratch`, utils) throws when this variable is set and the
 // directory it resolved is outside the tree it names — before any path is handed out. Set
-// AFTER the scrub above (it is a VAT_ variable), and inherited by every `vat` child
-// a test spawns, so a system test that forgets `fakeHomeEnv` stops the same way.
+// AFTER the scrub above (it is a VAT_ variable), and inherited by a `vat` child a test
+// spawns with `process.env` (the default), so a system test that forgets `fakeHomeEnv`
+// stops the same way. A child given an `env` object built by hand inherits NEITHER this
+// guard nor the scratch CLAUDE_CONFIG_DIR above: that spawn must carry both itself.
 // (enforced by: packages/claude-marketplace/test/test-env-guarantee.ts, declared in the unit,
 // integration and system lanes of that package; packages/utils/test/test-scratch-guard.test.ts)
 // Both spellings of the temp directory (on macOS `/var/…` is a link to `/private/var/…`): the

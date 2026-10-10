@@ -201,6 +201,35 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Packaging and build
 
+### Three writes into a tree VAT fills still follow a link, where no link is today
+
+- **Severity:** Minor (not reachable from an input today) · **Effort:** S each · **User-visible:** no
+- **Mechanism:** every file VAT makes in a tree that holds a links-preserved copy goes through one
+  exclusive, non-following primitive (`writeFileUnder` / `copyRegularFile` / `makeDirectoryUnder`).
+  Three writes into trees that hold NO kept link today are still plain, following writes, so each is
+  safe by the shape of the tree and not by the primitive. Traced, not run.
+  - The skill-source staging copy (`copyTreeNoSymlinks`) makes its root with a recursive `mkdir` and
+    writes each file with `writeFile` then `chmod` by path, into a content-keyed directory under
+    VAT's 0700 staging root that later runs reuse. The source's links are refused, so the only link
+    it could meet is one something else planted in that root.
+  - `regenerateVendoredManifest` writes `vendored.manifest.json` into a vendored directory with a
+    following `writeFileSync`.
+  - The packager writes a link-rewritten markdown or HTML file into the bundle with a following
+    `writeFile` (the files it copies verbatim go through the primitive), and
+    `vat claude plugin build` makes each plugin's directory in the staged marketplace with a
+    recursive `mkdir`.
+- **What a user sees:** nothing. One `links: 'preserve'` copy added ahead of any of these writes,
+  or a reorder of a build's phases, makes the next one a write through a link.
+- **Where:** `copyTreeNoSymlinks` in
+  [`stage.ts`](../../packages/agent-skills/src/skill-source/stage.ts); `regenerateVendoredManifest`
+  in [`vendor-manifest.ts`](../../packages/agent-skills/src/skill-test/vendor-manifest.ts);
+  `copyAndRewriteFile` in [`skill-packager.ts`](../../packages/agent-skills/src/skill-packager.ts);
+  `buildPlugin` in [`build.ts`](../../packages/cli/src/commands/claude/plugin/build.ts)
+- **Fix:** `writeFileUnder` (with `existing: 'replace'`) for the three file writes and
+  `makeDirectoryUnder` for the two directories, each rooted at the tree's own root. The staging copy
+  could instead become a `copyTree` with a link-refusing policy. Each changes the calls a fault-matrix
+  lane traces, so re-run that lane.
+
 ### A library packaging validation dropped a link silently in a repo with no config file
 
 - **Severity:** Minor (cause unknown) · **Effort:** L · **User-visible:** yes
@@ -396,7 +425,42 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** run the hostile-name set on the Windows box first. Then refuse trailing dot/space, `:`
   and reserved device names.
 
+### The single-rename fault tests have not run on a real Windows host since they were re-mechanised
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** no
+- **Mechanism:** under win32 `renameFileAtomic` retries a rename refused with contention (`EPERM`,
+  `EBUSY`, `EACCES`) up to 6 tries, so a test that fails ONE rename saw the retry succeed there.
+  Every such rule now sets the harness's `everyTry` (fail every immediate repeat of the failed call,
+  without counting it as a new match). The mechanism is proven on every host by two cases that stub
+  the platform to win32 and assert six fired calls; what has not happened is a run of the suites that
+  use it on Windows itself. If the assumption behind `everyTry` is wrong there — a traced call
+  between two tries, a different errno — the next Windows red is in one of these files and is this
+  entry, not a regression. Each case also waits the full 1.55 s backoff on Windows.
+- **Reproduce:** on Windows, the utils integration files `tree-change-apply`,
+  `tree-change-apply-rollback`, `tree-change-apply-edges`, `tree-change-files` and
+  `tree-change-win32-retry`, and the CLI fault matrix.
+- **Where:** `everyTry` in [`fault-spec.ts`](../../packages/utils/src/testing/fault-spec.ts) and
+  `faultFor` in [`fault-fs.ts`](../../packages/utils/src/testing/fault-fs.ts); `nthRename` in the
+  tree-change test kit
+- **Fix:** none expected: delete this entry when the Windows CI job is green on those files.
+
 ## Test-suite health
+
+### `--force` over a marketplace VAT did not make has no fault-matrix lane
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** no
+- **Mechanism:** the plugin-install matrix lanes named `…/force` no longer pass `--force` — they
+  install over a marketplace that carries VAT's marker, so the marker path is what the matrix runs
+  under every errno class. The `force` ownership override itself (`planPackageInstall` with
+  `force: true`: replace a marketplace directory nothing shows VAT installed) is covered by unit
+  and integration tests only, so no injected fault is ever placed inside that replace. Read from
+  the cases, not run.
+- **What a user sees:** nothing from the matrix. The rollback of a `--force` install that fails
+  midway over someone else's marketplace clone is unproven under faults.
+- **Where:** `pluginInstallCase` in
+  [`install-family.ts`](../../packages/cli/test/fault-matrix/cases/install-family.ts)
+- **Fix:** add a variant whose prior marketplace is unmarked and whose argv carries `--force`, with
+  its own shard table entry; rename the existing `…/force` variants for what they now run.
 
 ### The fault matrix cannot see a fault answered as "absent"
 
@@ -421,6 +485,28 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   does), then triage what goes red file by file as the ratchet shrinks; require a classified fault
   under a `refused`- or `exhausted`-class injection; fail an exit-0 run whose `refused` injection no
   finding names. Not a local change: each file on that ratchet is a potential red.
+
+### The fault matrix sees inside a recursive removal only by load order
+
+- **Severity:** Important · **Effort:** M · **User-visible:** no
+- **Mechanism:** Node's recursive `fs.rm` / `fs.promises.rm` capture `lstat`, `readdir`, `rmdir` and
+  `unlink` from the `fs` module once, the first time anything in the process removes a tree. On
+  Node 22 a recursive `rmSync` triggers that capture, and every test's cleanup calls one; on
+  Node 24 and later `rmSync` is native and only an `fs.rm` does. When the capture happens outside a
+  fault session it holds the unwrapped functions, and from then on no session traces or fails a
+  call inside a removal — only the `rm` call as a whole. `removeOnce` removes with recursive
+  `fs.rm`, so whether the matrix can fail one child of a tree being removed depends on the Node
+  version and on what ran earlier in the test file. Traced with a probe that wraps `fs.readdir`
+  after an `rmSync`: 0 wrapped calls on Node 22, 5 on Node 24 and 26.
+- **What a user sees:** nothing from the matrix. A remove that half-finishes on a refused child is
+  the case whose report (`RUN_INCOMPLETE`, what is left) is unproven on the Node floor.
+- **Where:** `installFaultFs` in [`fault-fs.ts`](../../packages/utils/src/testing/fault-fs.ts);
+  `removeOnce` in [`files.ts`](../../packages/utils/src/tree-change/files.ts)
+- **Fix:** either remove with VAT's own walk (the harness header already says a verb that wants
+  per-file fault coverage must not use a natively recursive call), or have `installFaultFs` make
+  Node's capture happen under its wrappers before any removal runs. Both change which calls every
+  matrix file traces, so expect new cases and run the whole matrix on the Node floor and on the
+  current Node.
 
 ### Tests in the wrong tier
 

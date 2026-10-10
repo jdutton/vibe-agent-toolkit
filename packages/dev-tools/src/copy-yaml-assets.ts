@@ -14,7 +14,6 @@
  */
 
 import { readdirSync, statSync } from 'node:fs';
-import { dirname } from 'node:path';
 
 import { copyRegularFile, forEachInOrder, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -29,12 +28,11 @@ async function walk(dir: string): Promise<void> {
       await walk(full);
     } else if (entry.endsWith('.yaml') || entry.endsWith('.yml')) {
       const rel = safePath.relative(srcDir, full);
-      const dest = safePath.join(distDir, rel);
-      mkdirSyncReal(dirname(dest), { recursive: true });
       // One regular file, its mode kept; a named pipe is refused rather than waited on.
-      await copyRegularFile(full, dest, { side: 'source', reading: `the YAML asset ${rel}` });
+      await copyRegularFile(full, distDir, rel, { side: 'source', reading: `the YAML asset ${rel}`, existing: 'replace', writing: `the YAML asset dist/${rel}` });
     }
   });
 }
 
+mkdirSyncReal(distDir, { recursive: true });
 await walk(srcDir);

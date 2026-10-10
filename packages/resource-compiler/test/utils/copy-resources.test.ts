@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, afterEach, beforeEach, beforeAll, afterAll } from 'vitest';
 
@@ -120,6 +120,21 @@ describe('copyResources', () => {
   const SKILLS_DIR = 'skills';
   const EXCLUDED_SUBDIR = `${SKILLS_DIR}/evals`;
   const SIBLING_SUBDIR = `${SKILLS_DIR}/evals-notes`;
+
+  // The copy is never written where a link standing at `targetDir` points: the copy's root is a
+  // real directory or nothing.
+  it('refuses a targetDir that is a symbolic link to a directory, writing nothing where it points', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    mkdirSyncReal(sourceDir);
+    writeFileSync(safePath.join(sourceDir, 'test.txt'), 'content', 'utf-8');
+    const elsewhere = safePath.join(tempDir, 'elsewhere');
+    mkdirSyncReal(elsewhere);
+    createSymlink(cap, elsewhere, targetDir, 'dir');
+
+    await expect(copyResources({ sourceDir, targetDir })).rejects.toThrow(/^Failed to copy resources: EEXIST/);
+
+    expect(readdirSync(elsewhere)).toEqual([]);
+  });
 
   it('should exclude a specified subdirectory and its contents', async () => {
     mkdirSyncReal(safePath.join(sourceDir, EXCLUDED_SUBDIR, 'fixtures'), { recursive: true });

@@ -23,7 +23,7 @@ export async function prepareBinaries(packageRoot: string): Promise<void> {
   }
 
   // Copy file
-  await copyRegularFile(sourcePath, targetPath, { side: 'source', reading: 'the built CLI entry vat.js' });
+  await copyRegularFile(sourcePath, distBinDir, 'vat', { side: 'source', reading: 'the built CLI entry vat.js', existing: 'replace', writing: 'the CLI binary dist/bin/vat' });
 
   // Make executable (cross-platform)
   // On Windows, this is a no-op but doesn't error

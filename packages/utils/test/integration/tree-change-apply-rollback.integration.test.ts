@@ -6,7 +6,7 @@
  * occupies is not reported as a leftover.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { isFsFaultError } from '../../src/errors/fs-fault.js';
 import { suppressedFaultsOf } from '../../src/errors/suppressed-faults.js';
@@ -19,6 +19,9 @@ import { TREE_ROLLBACK_INCOMPLETE_CODE } from '../../src/tree-change/rollback-er
 import { expectUnchanged, plant, replaceWith, residueIn, treeChangeSuite } from './tree-change-test-kit.js';
 
 const suite = treeChangeSuite('tree-change-rollback-');
+// The win32 rename retry's backoff is recorded, never waited out (see the module).
+vi.mock('node:timers/promises', () => import('./tree-change-no-backoff.js'));
+
 
 const REGISTRY_FAILS = { afterSwap: (): Promise<void> => Promise.reject(new Error('registry write failed')) };
 const messagesOf = (error: unknown): string[] => suppressedFaultsOf(error).map((fault) => (fault as Error).message);

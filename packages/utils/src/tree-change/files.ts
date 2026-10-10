@@ -7,7 +7,7 @@
  */
 
 import type { Stats } from 'node:fs';
-import fs from 'node:fs/promises';
+import fs, { type FileHandle } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { requireConfirmedAbsent } from '../errors/confirmed-absent.js';
@@ -240,17 +240,49 @@ export async function makeDirectoryUnder(root: string, relative: string, writing
   return await plainDirectoryUnder(root, segmentsUnderRoot(relative), writing);
 }
 
+/** What decides the entry already AT the name of a file VAT makes under a tree, and what a refusal calls the file. */
+export interface FileUnderOptions {
+  /**
+   * - `refuse`: anything there refuses the file.
+   * - `replace`: a regular file there is removed first (VAT's own earlier output, or a file the source
+   *   shipped that VAT's supersedes); a link or a directory still refuses.
+   */
+  readonly existing: 'refuse' | 'replace';
+  /** What the file is, for a refusal's message. */
+  readonly writing: string;
+}
+
 /**
- * Write a file VAT makes into a tree it is building — a staged tree that may hold whatever its source
- * shipped, links included — without ever writing over or through what is already there.
+ * The ONE way VAT makes a file in a tree it is building — a staged tree that may hold whatever its
+ * source shipped, links included — without ever writing over or through what is already there.
  *
  * Every directory of `relative` under `root` must be a real directory (a link standing where one goes
  * would carry the write outside the tree); a missing one is made by a plain `mkdir`. The file itself
- * is created exclusively (`wx`, which no link satisfies). What `existing` decides is only the entry
- * AT the file's name:
- * - `refuse`: anything there refuses the write.
- * - `replace`: a regular file there is removed first (VAT's own earlier output, or a file the source
- *   shipped that VAT's supersedes); a link or a directory still refuses.
+ * is made by `create`, which must be an EXCLUSIVE create (`wx`, which no link satisfies).
+ *
+ * @throws FsFaultError side `source`, origin `content`, class `occupied`, naming the entry in the
+ *   way; any other failure is the raw errno, for the caller's boundary to classify
+ */
+async function createUnder<T>(root: string, relative: string, options: FileUnderOptions, create: (target: string) => Promise<T>): Promise<T> {
+  const segments = segmentsUnderRoot(relative);
+  const name = segments.at(-1);
+  if (name === undefined) throw new TypeError(`"${relative}" names no file under the tree's root`);
+  const target = safePath.join(await plainDirectoryUnder(root, segments.slice(0, -1), options.writing), name);
+  if (options.existing === 'replace') {
+    const there = await entryAt(target);
+    if (there?.isFile() === true) await fs.unlink(target);
+  }
+  try {
+    return await create(target);
+  } catch (error: unknown) {
+    throw isAlreadyExistsError(error) ? entryInTheWayFault(target, options.writing, error) : error;
+  }
+}
+
+/**
+ * Write a file VAT makes into a tree it is building, never over or through what is already there
+ * (see {@link createUnder}: real directories only, an exclusive create, `existing` deciding the
+ * entry at the file's own name).
  *
  * @param root - The tree's root, which the caller made
  * @param relative - The file, relative to `root`, forward slashes
@@ -259,25 +291,18 @@ export async function makeDirectoryUnder(root: string, relative: string, writing
  * @throws FsFaultError side `source`, origin `content`, class `occupied`, naming the entry in the
  *   way; any other failure is the raw errno, for the caller's boundary to classify
  */
-export async function writeFileUnder(
-  root: string,
-  relative: string,
-  contents: string | Uint8Array,
-  options: { readonly existing: 'refuse' | 'replace'; readonly writing: string },
-): Promise<void> {
-  const segments = segmentsUnderRoot(relative);
-  const name = segments.at(-1);
-  if (name === undefined) throw new TypeError(`writeFileUnder: "${relative}" names no file`);
-  const target = safePath.join(await plainDirectoryUnder(root, segments.slice(0, -1), options.writing), name);
-  if (options.existing === 'replace') {
-    const there = await entryAt(target);
-    if (there?.isFile() === true) await fs.unlink(target);
-  }
-  try {
-    await fs.writeFile(target, contents, { flag: 'wx' });
-  } catch (error: unknown) {
-    throw isAlreadyExistsError(error) ? entryInTheWayFault(target, options.writing, error) : error;
-  }
+export async function writeFileUnder(root: string, relative: string, contents: string | Uint8Array, options: FileUnderOptions): Promise<void> {
+  await createUnder(root, relative, options, (target) => fs.writeFile(target, contents, { flag: 'wx' }));
+}
+
+/**
+ * {@link writeFileUnder} for bytes that are streamed: the file is made the same way and handed back
+ * OPEN, for the caller to fill and close. What the copy of one file into such a tree is built on.
+ *
+ * @returns The new file's handle, open for writing; the caller closes it
+ */
+export function openFileUnder(root: string, relative: string, options: FileUnderOptions): Promise<FileHandle> {
+  return createUnder(root, relative, options, (target) => fs.open(target, 'wx'));
 }
 
 /** The classified fault disposing of `dir` raised, or `undefined` once it is gone. A non-filesystem error is a defect and propagates. */

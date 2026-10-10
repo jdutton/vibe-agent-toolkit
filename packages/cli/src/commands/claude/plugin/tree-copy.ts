@@ -519,11 +519,10 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
 
   // In order: bundle writes, where the first failed copy is the one reported.
   await forEachInOrder([...shippedRegular, ...copyable], async (entry) => {
-    const target = safePath.join(destDir, entry.rel);
     // `copyFile` follows a symlink, which is the point for the in-tree file
     // links that reach here: the bundle carries the target's bytes. The plugin
     // file is read first (INPUT_UNREADABLE), then the bundle written (RUN_INCOMPLETE).
-    await copyFileIntoMarketplace(entry.abs, target, `plugin file ${entry.rel}`, `${entry.rel} into the plugin bundle`);
+    await copyFileIntoMarketplace(entry.abs, { root: destDir, relative: entry.rel }, `plugin file ${entry.rel}`, `${entry.rel} into the plugin bundle`);
     result.filesCopied += 1;
 
     const bucket = classifyRelative(entry.rel);

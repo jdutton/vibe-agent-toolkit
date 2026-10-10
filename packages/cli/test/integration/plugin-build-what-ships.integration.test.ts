@@ -221,6 +221,32 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     expect(existsSync(safePath.join(outDir, SKILLS_DIR, NESTED_SKILL, SKILL_FILE))).toBe(false);
   });
 
+  // The refereed pool copy lands at the plugin-local skill's NESTED path (`skills/group/<skill>`).
+  // A pool skill named `group`, copied first with its links kept, can hold a link at that very
+  // name: the nested copy then took the link for its root and wrote the skill where it pointed.
+  it('never copies a refereed pool skill THROUGH a link an earlier pool copy left at its nested destination', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    tempDir = createTestTempDir('vat-plugin-skills-nested-link-');
+    writeFixture(tempDir, '"*"');
+    const outside = safePath.join(tempDir, 'outside');
+    mkdirSyncReal(outside, { recursive: true });
+    writeTestFile(safePath.join(outside, 'kept.md'), 'kept');
+
+    const pool = safePath.join(tempDir, 'dist', 'skills');
+    mkdirSyncReal(safePath.join(pool, NESTED_SKILL), { recursive: true });
+    writeTestFile(safePath.join(pool, NESTED_SKILL, SKILL_FILE), skillMd(NESTED_SKILL));
+    // Sorts before the nested skill, so it is copied first; its link is named as that skill's directory is.
+    mkdirSyncReal(safePath.join(pool, 'group'), { recursive: true });
+    writeTestFile(safePath.join(pool, 'group', SKILL_FILE), skillMd('group'));
+    createSymlink(cap, outside, safePath.join(pool, 'group', NESTED_SKILL), 'dir');
+
+    const failure: unknown = await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] }).catch((error: unknown) => error);
+
+    expect(readdirSync(outside)).toEqual(['kept.md']);
+    expect(failure, String(failure)).toMatchObject({ code: 'FS_FAULT', side: 'destination', faultClass: 'occupied' });
+    expect(String((failure as Error).message)).toContain(`group/${NESTED_SKILL}`);
+  });
+
   it('fails the build when two DIFFERENT skills claim one output directory', async () => {
     tempDir = createTestTempDir('vat-plugin-skills-dirclash-');
 

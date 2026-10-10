@@ -14,10 +14,7 @@
  * the OS named.
  */
 
-import { mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
-
-import { copyRegularFile, withFsFault } from '@vibe-agent-toolkit/utils';
+import { copyRegularFile, safePath, withFsFault } from '@vibe-agent-toolkit/utils';
 import { openForReading } from '@vibe-agent-toolkit/utils/fs';
 
 /**
@@ -39,14 +36,18 @@ async function proveReadable(path: string): Promise<void> {
  * Copy one file into the bundle, creating the directory it lands in — only once the
  * source is proven readable, so a refused source never leaves a directory behind.
  *
+ * The copy is made the one way a file is made in a tree VAT is building (`copyRegularFile`):
+ * each directory on the way is a real one or is made, the file is created exclusively, and a
+ * regular file already at the name is replaced. A file where one of its directories goes is the
+ * skill's own layout — a `source` fault naming it — like every other shape the config decides.
+ *
  * @param subject What the author can locate: `files: entry 'x'`, `linked file docs/a.md`
  * @param sourcePath The author's file
- * @param targetPath Where it lands in the bundle
+ * @param bundleRoot The bundle's root directory, which the packager made
+ * @param targetPath Where it lands, under `bundleRoot`
  */
-export async function copyIntoBundle(subject: string, sourcePath: string, targetPath: string): Promise<void> {
+export async function copyIntoBundle(subject: string, sourcePath: string, bundleRoot: string, targetPath: string): Promise<void> {
   await withFsFault({ side: 'source', origin: 'content', action: `read ${subject}` }, () => proveReadable(sourcePath));
-  await withFsFault({ side: 'destination', shapeFromSource: true, action: `copy ${subject} into the bundle` }, async () => {
-    await mkdir(dirname(targetPath), { recursive: true });
-    await copyRegularFile(sourcePath, targetPath, { side: 'source', reading: subject });
-  });
+  await withFsFault({ side: 'destination', shapeFromSource: true, action: `copy ${subject} into the bundle` }, () =>
+    copyRegularFile(sourcePath, bundleRoot, safePath.relative(bundleRoot, targetPath), { side: 'source', reading: subject, existing: 'replace', writing: `${subject} into the bundle` }));
 }

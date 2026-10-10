@@ -68,7 +68,7 @@ describe('installing one plugin', () => {
     const before = snapshotTree(paths.claudeDir);
     const versions = safePath.join(paths.pluginsCacheDir, 'mp', 'p');
     const underVersions = (p: string): boolean => !relativeEscapesRoot(safePath.relative(versions, p));
-    session = installFaultFs({ within: base, faults: [{ family: 'write', op: 'write', path: underVersions, nth: 2, errno: 'ENOSPC' }] });
+    session = installFaultFs({ within: base, faults: [{ family: 'write', op: 'writeFile', path: underVersions, nth: 2, errno: 'ENOSPC' }] });
 
     await expect(install()).rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'destination', faultClass: 'exhausted' });
     session.restore();

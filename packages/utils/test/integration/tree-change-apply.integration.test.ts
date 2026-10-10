@@ -8,7 +8,7 @@
 
 import { chmodSync, existsSync } from 'node:fs';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { isFsFaultError } from '../../src/errors/fs-fault.js';
 import { isVatError } from '../../src/errors/vat-error.js';
@@ -35,6 +35,9 @@ import {
 } from './tree-change-test-kit.js';
 
 const suite = treeChangeSuite('tree-change-apply-');
+// The win32 rename retry's backoff is recorded, never waited out (see the module).
+vi.mock('node:timers/promises', () => import('./tree-change-no-backoff.js'));
+
 
 const OLD_MP = { 'mp/a.txt': 'old a', 'mp/sub/b.txt': 'old b' };
 const NEW_MP = { 'a.txt': 'new a', 'c.txt': 'new c' };

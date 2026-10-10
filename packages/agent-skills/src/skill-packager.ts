@@ -980,6 +980,7 @@ async function preparePackage(
     );
 
     await copyAndRewriteFiles(skillPath, bundledFiles, {
+      outputPath,
       pathMap,
       rewriteLinks,
       fromRegistry: registry as WalkableRegistry,
@@ -2384,6 +2385,8 @@ function buildRewriteRules(
 
 /** Shared context for copying and rewriting files during packaging */
 interface CopyRewriteContext {
+  /** The bundle's root directory: every `pathMap` target is under it. */
+  outputPath: string;
   pathMap: Map<string, string>;
   rewriteLinks: boolean;
   fromRegistry: WalkableRegistry;
@@ -2575,7 +2578,7 @@ async function copyAndRewriteFile(
 
   // Non-rewritable files or rewriting disabled: plain binary copy
   if ((!isMarkdown && !isHtml) || !ctx.rewriteLinks) {
-    await copyIntoBundle(subject, sourcePath, targetPath);
+    await copyIntoBundle(subject, sourcePath, ctx.outputPath, targetPath);
     return;
   }
 

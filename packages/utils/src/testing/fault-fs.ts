@@ -32,6 +32,11 @@
  * harness can fail the CALL (family `write` / `remove`) but never a file inside it.
  * A verb that wants per-file fault coverage must not use those calls.
  *
+ * ⚠️ Recursive `fs.rm` / `fs.promises.rm` keep the `fs` functions they found the first time Node
+ * removed a tree in this process. If that was outside a session — on Node 22 any earlier
+ * recursive `rmSync`, which is what a test's cleanup does; on later Nodes an earlier `fs.rm` — no
+ * session sees or fails a call INSIDE the removal, only the `rm` call itself.
+ *
  * ⚠️ A `FileHandle` is only traced when it was opened AFTER `installFaultFs`:
  * the fd to path map cannot know the path of a handle that was already open, and
  * the prototype is patched when the first traced handle is opened. Install first,

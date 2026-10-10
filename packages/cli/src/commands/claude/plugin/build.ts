@@ -589,8 +589,7 @@ async function copyDistributionFiles(
     const srcPath = override ? safePath.join(configDir, override) : safePath.join(configDir, file);
     // Absent is skipped; a file the OS will not let the build examine refuses, never skipped as absent.
     if (pathPresent(srcPath, 'follow', 'source', 'probe')) {
-      const target = safePath.join(marketplaceDir, file);
-      await copyFileIntoMarketplace(srcPath, target, issueLocation(srcPath, configDir), issueLocation(target, configDir));
+      await copyFileIntoMarketplace(srcPath, { root: marketplaceDir, relative: file }, issueLocation(srcPath, configDir), issueLocation(safePath.join(marketplaceDir, file), configDir));
       if (override) {
         logger.info(`   ${file} (from publish.${file === 'README.md' ? 'readme' : 'changelog'}: ${override})`);
       } else {
@@ -751,9 +750,6 @@ async function buildMarketplaceInto(input: BuildMarketplaceInput, marketplaceDir
   }
 
   // Generate .claude-plugin/marketplace.json
-  const claudePluginDir = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
-  await writingMarketplace(`create ${claudePluginDir}`, () => mkdir(claudePluginDir, { recursive: true }));
-
   // Each BUILT entry's author is the plugin's own MERGED author (see
   // marketplace-json.ts), so marketplace.json and that plugin's plugin.json
   // cannot disagree. External entries carry no author — see marketplace-json.ts.
@@ -778,7 +774,7 @@ async function buildMarketplaceInto(input: BuildMarketplaceInput, marketplaceDir
     ],
   });
 
-  const marketplaceJsonPath = safePath.join(claudePluginDir, 'marketplace.json');
+  const marketplaceJsonPath = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME, 'marketplace.json');
   await writingMarketplace(`write ${marketplaceJsonPath}`, () =>
     writeFileUnder(marketplaceDir, `${CLAUDE_PLUGIN_DIRNAME}/marketplace.json`, JSON.stringify(marketplaceJson, null, 2), { existing: 'replace', writing: 'the marketplace manifest' }));
   logger.info(`   .claude-plugin/marketplace.json`);
@@ -870,9 +866,6 @@ async function writeMergedPluginJson(
   owner: ClaudeMarketplaceConfig['owner'],
   logger: ReturnType<typeof createLogger>,
 ): Promise<Record<string, unknown>> {
-  const pluginJsonDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
-  await writingMarketplace(`create ${pluginJsonDir}`, () => mkdir(pluginJsonDir, { recursive: true }));
-
   const { merged, author, warnings } = mergePluginJson({
     vat: {
       name: pluginDef.name,
@@ -883,7 +876,7 @@ async function writeMergedPluginJson(
     authorJson,
   });
   for (const w of warnings) logger.info(`warning: ${w}`);
-  const pluginJsonPath = safePath.join(pluginJsonDir, 'plugin.json');
+  const pluginJsonPath = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME, 'plugin.json');
   await writingMarketplace(`write ${pluginJsonPath}`, () =>
     writeFileUnder(pluginDir, `${CLAUDE_PLUGIN_DIRNAME}/plugin.json`, JSON.stringify(merged, null, 2), { existing: 'replace', writing: 'the merged plugin.json' }));
   logger.info(`         .claude-plugin/plugin.json`);
@@ -1550,12 +1543,12 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildOutcome>
   // copyDistributionFiles) is unaffected.
   const changelogPath = resolvePluginChangelogPath(pluginSourceDir, pluginDef);
   if (changelogPath) {
-    const changelogTarget = safePath.join(pluginDir, 'CHANGELOG.md');
+    const target = { root: pluginDir, relative: 'CHANGELOG.md' };
     await copyFileIntoMarketplace(
       changelogPath,
-      changelogTarget,
+      target,
       issueLocation(changelogPath, configDir),
-      issueLocation(changelogTarget, configDir),
+      issueLocation(safePath.join(target.root, target.relative), configDir),
     );
     logger.info(`         CHANGELOG.md`);
   }

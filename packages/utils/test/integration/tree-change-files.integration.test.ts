@@ -22,6 +22,9 @@ import { disposeTempDir, disposeTempDirAfterFailure, makeDirectoryUnder, replace
 import { plant, present, readText, rejectionOf, residueIn, treeChangeSuite } from './tree-change-test-kit.js';
 
 const suite = treeChangeSuite('tree-change-files-');
+// The win32 rename retry's backoff is recorded, never waited out (see the module).
+vi.mock('node:timers/promises', () => import('./tree-change-no-backoff.js'));
+
 
 /** Run `withTempDir` whose work rejects with `failure` while its disposal is refused: what it threw, and the directory it was given. */
 async function failBoth(prefix: string, failure: unknown): Promise<{ error: unknown; dir: string }> {
@@ -369,6 +372,24 @@ describe('writeFileUnder', () => {
     await expect(makeDirectoryUnder(safePath.join(root, 'tree'), relative, 'the slot')).rejects.toBeInstanceOf(TypeError);
     expect(present(safePath.join(root, 'escape.json'))).toBe(false);
     expect(present(safePath.join(root, 'tree', 'a'))).toBe(false);
+  });
+
+  // `replace` is remove-then-create, not one step: every caller writes into a staged tree its plan
+  // discards on failure. What it owes is the truth — the raw errno of the create, never a refusal
+  // blaming an entry "in the way" of a file it has itself removed.
+  it('replace whose create fails AFTER the unlink reports the create\'s raw errno, with the old file gone', async () => {
+    const root = suite.root();
+    plant(root, { 'file.json': 'shipped' });
+    const target = safePath.join(root, 'file.json');
+    const session = suite.faults(root, [{ op: 'writeFile', path: (p) => p === target, errno: 'ENOSPC' }]);
+
+    const error = await rejectionOf(() => writeFileUnder(root, 'file.json', 'vat', MANIFEST));
+    suite.restoreFaults();
+
+    expect(session.calls.filter((call) => call.path === target).map((call) => call.op)).toEqual(['lstat', 'unlink', 'writeFile']);
+    expect(isFsFaultError(error)).toBe(false);
+    expect(error).toMatchObject({ code: 'ENOSPC' });
+    expect(present(target)).toBe(false);
   });
 
   it('replace never removes a directory standing at the file name', async () => {

@@ -5,13 +5,13 @@
  * 50·2ⁿ ms); anywhere else, and for any other errno, they do not. The platform is
  * stubbed so the retry runs on every OS; the faults are injected.
  *
- * ⏱ The exhausted-retry case waits out the whole backoff (1.55 s) on purpose: it
- * is the bound being pinned.
+ * The backoff is recorded, not waited out (`tree-change-no-backoff.ts`): the exhausted-retry
+ * cases pin the bound by the waits the retry asked for — five, 1.55 s in all — to the millisecond.
  */
 
 import { writeFileSync } from 'node:fs';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { isFsFaultError } from '../../src/errors/fs-fault.js';
 import { safePath } from '../../src/path-core.js';
@@ -22,9 +22,15 @@ import { applyTreePlan } from '../../src/tree-change/apply.js';
 import { renameFileAtomic } from '../../src/tree-change/files.js';
 import { planTreeChanges } from '../../src/tree-change/plan.js';
 
+import { backoffWaits } from './tree-change-no-backoff.js';
 import { expectUnchanged, isStaged, nthRename, plant, present, readText, rejectionOf, replaceWith, treeChangeSuite } from './tree-change-test-kit.js';
 
 const suite = treeChangeSuite('tree-change-win32-');
+// The win32 rename retry's backoff is recorded, never waited out (see the module).
+vi.mock('node:timers/promises', () => import('./tree-change-no-backoff.js'));
+
+/** The whole backoff of six tries: 50·2ⁿ ms between each two, 1.55 s in all. */
+const FULL_BACKOFF = [50, 100, 200, 400, 800];
 const busySwap = { op: 'rename', path: isStaged, errno: 'EBUSY' } as const;
 
 /** Replace `mp/` under `faults`, expecting a refusal after all six tries with the tree as it was; answers the fault and what fired. */
@@ -38,6 +44,7 @@ async function refusedReplace(faults: readonly FaultRule[]): Promise<{ error: un
   const error = await rejectionOf(() => applyTreePlan(plan));
 
   expect(session.fired).toHaveLength(6);
+  expect(backoffWaits).toEqual(FULL_BACKOFF);
   suite.restoreFaults();
   expectUnchanged(root, before);
   return { error, fired: session.fired };
@@ -46,6 +53,7 @@ async function refusedReplace(faults: readonly FaultRule[]): Promise<{ error: un
 describe('under win32', () => {
   const real = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor;
   beforeEach(() => {
+    backoffWaits.length = 0;
     Object.defineProperty(process, 'platform', { value: 'win32' });
   });
   afterEach(() => {
@@ -61,6 +69,7 @@ describe('under win32', () => {
     expect(await applyTreePlan(plan)).toEqual({ warnings: [] });
 
     expect(session.fired).toHaveLength(2);
+    expect(backoffWaits).toEqual([50, 100]);
     suite.restoreFaults();
     expect(readText(safePath.join(root, 'mp', 'a.txt'))).toBe('new');
   });
@@ -109,6 +118,7 @@ describe('under win32', () => {
 
     expect(await rejectionOf(() => renameFileAtomic(from, safePath.join(root, 'final.json')))).toMatchObject({ code: 'EXDEV' });
     expect(session.calls.filter((call) => call.op === 'rename')).toHaveLength(1);
+    expect(backoffWaits).toEqual([]);
   });
 });
 

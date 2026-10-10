@@ -225,7 +225,8 @@ describe('planPackageInstall never writes its marker through an entry the packag
     ['a link to a file outside the tree', 'link'],
     ['a regular file of that name', 'file'],
   ] as const) it(`refuses a package whose marketplace already holds the marker name as ${label}: the source's fault, nothing installed, the outside file untouched`, async ({ skip }) => {
-    const cap = symlinkCapability() ?? skip();
+    // Only the link row needs the privilege: the regular-file row runs on every host.
+    const link = kind === 'link' ? { cap: symlinkCapability() ?? skip() } : undefined;
     const paths = getPaths();
     writeFileSync(paths.userSettingsPath, '{"theme":"dark"}');
     const base = options(paths);
@@ -236,8 +237,8 @@ describe('planPackageInstall never writes its marker through an entry the packag
       write: async (staged) => {
         await marketplace.write(staged);
         const entry = safePath.join(staged, VAT_MARKETPLACE_MARKER);
-        if (kind === 'link') createSymlink(cap, paths.userSettingsPath, entry, 'file');
-        else writeFileSync(entry, 'the package\'s own');
+        if (link === undefined) writeFileSync(entry, 'the package\'s own');
+        else createSymlink(link.cap, paths.userSettingsPath, entry, 'file');
       },
     }] };
 
@@ -340,6 +341,24 @@ describe('planPackageInstall never replaces a marketplace VAT cannot prove it in
     writeFileSync(safePath.join(paths.marketplacesDir, MP, VAT_MARKETPLACE_MARKER), 'vat\n');
 
     expect(await rejectionOf(() => planOf(options(paths)))).toMatchObject({ code: TREE_DEST_NOT_OWNED_CODE });
+  });
+
+  // The registry is read by its OWN keys: a marketplace named like a member of `Object.prototype` has
+  // no entry, and is refused for that — never judged against the inherited `constructor`.
+  it('refuses an unmarked directory named `constructor` as one the registry does not list', async () => {
+    const paths = getPaths();
+    const dir = safePath.join(paths.marketplacesDir, 'constructor');
+    mkdirSyncReal(dir, { recursive: true });
+    writeFileSync(safePath.join(dir, 'LOCAL-NOTES.md'), 'mine');
+    writeFileSync(paths.knownMarketplacesPath, '{}');
+    const base = options(paths);
+    const named: PackageInstallOptions = { ...base, marketplaces: base.marketplaces.map((marketplace) => ({ ...marketplace, marketplaceName: 'constructor' })) };
+
+    const refused = await rejectionOf(() => planOf(named));
+
+    expect(refused, String(refused)).toMatchObject({ code: TREE_DEST_NOT_OWNED_CODE });
+    expect(String(refused)).toContain('known_marketplaces.json does not list it');
+    expect(readFileSync(safePath.join(dir, 'LOCAL-NOTES.md'), 'utf8')).toBe('mine');
   });
 
   it('installs over an EMPTY directory of that name: nothing of anyone\'s is lost', async () => {

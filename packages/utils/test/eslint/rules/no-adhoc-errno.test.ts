@@ -125,10 +125,14 @@ const CASES: RuleCases = {
 };
 
 // The rule spells its errno set out (a rule module may require nothing external),
-// so this is what stops the list drifting from the host's own table.
+// so this is what stops the list drifting from the host's own table. On Windows that table also
+// carries the Winsock constants (`WSAEINTR`, …): numbers Node translates before it reports an
+// error, so no `error.code` is ever one of those names and the rule does not list them.
+const isErrorCodeName = (name: string): boolean => !name.startsWith('WSA');
+
 const HOST_ERRNOS: RuleCases = {
   valid: [],
-  invalid: Object.keys(constants.errno).map((name) => ({
+  invalid: Object.keys(constants.errno).filter(isErrorCodeName).map((name) => ({
     code: `if (e.code === '${name}') { stop(); }`,
     filename: SRC_FILE,
     options: OPTIONS,

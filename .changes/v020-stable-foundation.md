@@ -336,7 +336,9 @@
   successful build of nothing). Refusals carry codes: `CONFIG_INVALID` (no config, empty plugin,
   two skills claiming one directory, duplicate or case-colliding plugin names, plugin dir case
   mismatch, invalid `files[].dest`), `INPUT_UNREADABLE` (hooks.json, .mcp.json or plugin.json not
-  JSON; a pool skill or `files[].source` nothing built; a symlink no bundle can ship). Under
+  JSON; a pool skill or `files[].source` nothing built; a symlink no bundle can ship; a
+  `files[].dest` that lands on a directory of the built plugin, or under one of its files — a later
+  entry still overwrites an earlier one's FILE). Under
   `vat build` the claude phase's gate failure is a `findings` phase and the build exits 1 (was
   `system-error`, exit 2).
 - **`vat claude marketplace publish` publishes the report contract** (schema
@@ -691,6 +693,13 @@
   NUL or drive prefix — or the config is `CONFIG_INVALID`. A marketplace named
   `"../../../../victim"` made `vat claude plugin build` (and `vat build`) delete that directory,
   outside `dist/`, and write the marketplace over it, exit 0.
+- **A plugin `files[].dest` is refused by the place it names, however it is spelled.**
+  `vat claude plugin build` (and `vat build`) refused `skills/x` and `.claude-plugin/plugin.json`
+  by comparing text, so `./skills/x`, `docs/../skills/x`, `./.claude-plugin/plugin.json` — and
+  `Skills/x` or `skills./x`, which are `skills/x` on a volume that folds names — were written:
+  into a packaged skill, or over the generated `plugin.json`. Every such spelling is now
+  `CONFIG_INVALID`, exit 2, naming the `dest`, on every host. Write the file somewhere else in the
+  plugin, or ship it with the skill through that skill's own `files:`.
 - **`vat skills package` refuses an `--output` that is, or contains, the skill's own source** — the
   SKILL.md or any file it bundles — `USAGE_INVALID`, exit 2, `--force` or not, and writes nothing.
   It skipped every occupancy check then and overwrote the author's SKILL.md and the files beside it.
@@ -942,7 +951,8 @@
     leaves a partial file to remove.
 - **`@vibe-agent-toolkit/utils`:** a `replace-file` change's `contents` may be a function, called when
   the file is staged (after every earlier change of the plan has staged); new `copyRegularFile`
-  (one file, judged by `fstat` on the handle it is read from); `onCrawlOutput` on the `./crawl`
+  (one file, judged by `fstat` on the handle it is read from, created exclusively under a root
+  and never through a link); `onCrawlOutput` on the `./crawl`
   subpath.
 
 - **`vat agent install` changes the install as one transaction, `--dev` included.** The copy, or the
@@ -1003,7 +1013,10 @@
 - **A temp-directory disposal only ever removes a directory inside the temp directory**: one
   outside it is named in the warning and left alone.
 - **`@vibe-agent-toolkit/resource-compiler`: `copyResources()` and `createPostBuildScript()` are
-  async.** Await them. The copy still goes INTO `targetDir` and removes nothing there.
+  async.** Await them. The copy still goes INTO `targetDir` and removes nothing there. A
+  `targetDir` that is itself a symbolic link (to a directory included) is refused — `Failed to copy
+  resources: EEXIST …` — where the copy used to be written into the link's target: point
+  `targetDir` at the real directory.
 - **`@vibe-agent-toolkit/agent-skills`:**
   - `stageEvalWorkspaces()` and `isolateEvalSuite()` are async.
   - `ResolvedSkillSource` gains a required `leftovers`, `StageHarnessResult` gains `leftovers`,
@@ -1163,10 +1176,10 @@
   `FsBoundary.classify(error, action, fallback)` for a catch that already holds the error.
 
 - `@vibe-agent-toolkit/utils`: `writeFileUnder(root, relative, contents, { existing, writing })` and
-  `makeDirectoryUnder(root, relative, writing)` — the one way to write a file, or make a directory,
-  VAT composes into a tree it copied with links kept: every directory component must be a real
-  directory, the file is created exclusively, and a link (or, for `existing: 'refuse'`, anything)
-  in the way is a `source` fault naming it.
+  `makeDirectoryUnder(root, relative, writing)` — how VAT writes a file, or makes a directory, in a
+  tree it copied with links kept: every directory component must be a real directory, the file is
+  created exclusively, and a link (or, for `existing: 'refuse'`, anything) in the way is a `source`
+  fault naming it. `copyRegularFile` makes its copy the same way, through the same code.
 - `@vibe-agent-toolkit/utils`: `requireTestScratch(root, what)` and `TEST_USER_STATE_UNDER`. A test
   process that sets `VAT_TEST_USER_STATE_UNDER` to its temp tree gets an error, instead of a path,
   from every VAT resolver of user state that lands outside it: the Claude directory, a user-scope
@@ -1216,7 +1229,18 @@
     VAT composes into a tree copied with its links kept (`marketplace.json`, `plugin.json`, a
     publish tree's `README.md` / `LICENSE` / `CHANGELOG.md`), is now created exclusively and never
     through a link (`writeFileUnder`); such a package is refused `INPUT_UNREADABLE` naming the
-    entry, nothing installed. 0.1.42 wrote no marker.
+    entry, nothing installed. 0.1.42 wrote no marker. (The files a plugin build COPIES into such a
+    tree are made the same way — see Security.)
+  - `@vibe-agent-toolkit/utils` `copyRegularFile(source, root, relative, { side, reading, existing,
+    writing })` replaces `copyRegularFile(source, dest, { side, reading })`: the copy goes to
+    `relative` under `root` as `writeFileUnder` writes a file (it is the same primitive) — real
+    directories only, made when absent; an exclusive create; bytes and mode set on that handle.
+    `existing: 'replace'` removes a regular file there first; a link or a directory in the way is a
+    `source` fault (`occupied`) naming it. It no longer needs its directory made first, and no
+    longer overwrites through whatever is at `dest`.
+  - `@vibe-agent-toolkit/utils` `copyTree` no longer adopts a symbolic link (or a file) standing
+    where its root goes: `EEXIST`, raw, under `fresh` and `merge` alike. A real directory there is
+    still adopted, and an absent root still made with its parents.
   - Errno-only codes are gone, each replaced by the one classified fault (`FS_FAULT`):
     `SKILL_PACKAGING_OUTPUT_FAILED_CODE`, `HarnessOutputError` (`HARNESS_OUTPUT_UNWRITABLE`),
     `AGENT_SOURCE_UNREADABLE_CODE`, `COPY_SOURCE_NOT_REGULAR_CODE`, `CLAUDE_USER_STATE_WRITE_FAILED_CODE`,
@@ -1403,6 +1427,19 @@
   `USAGE_INVALID`) and refuses any link in the selected subtree — followed through inside links,
   dangling ones included — whose target resolves outside the clone (`COPY_LINK_ESCAPES_SOURCE`,
   `INPUT_UNREADABLE`, exit 2). Links that stay inside the clone are still followed.
+
+- **A plugin build never writes through a link it copied into the plugin.** A pool skill is copied
+  out of `dist/skills` with its links kept as links. Two later writes of `vat claude plugin build`
+  (and `vat build`) followed such a link out of the build output: a plugin `files[]` entry whose
+  `dest` named the link (or a path through it) overwrote the file it pointed at and took its mode,
+  or created files in the directory it pointed at; and a pool skill sent to a nested directory
+  (`skills/<group>/<skill>`, when it wins over a plugin-local skill of its name) was written into
+  whatever a link of that name in an earlier pool skill pointed at. It needed a `dist/skills` that
+  VAT's own packager did not write — links placed there by hand or by another tool. Both are now
+  refused, exit 2, with nothing written outside the build and the previous marketplace left as it
+  was: the `files[]` entry as `CONFIG_INVALID` (its `dest` is inside `skills/`), the nested copy as
+  `RUN_INCOMPLETE` naming the link. Every file the build copies into the plugin or marketplace is
+  now created exclusively, under real directories only.
 
 - **Advisories cleared from the dependency tree via root `overrides`:** `smol-toml` 1.8.0 → 1.9.0,
   `sharp` 0.35.4 → 0.35.5, and new pins `proxy-addr` 2.0.8, `source-map-js` 1.2.2 and

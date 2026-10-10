@@ -140,14 +140,15 @@ export interface IsolateEvalSuiteInput {
 }
 
 /** Copy one entry of the staged suite into the hold dir. VAT's own staged copy: its reads are the environment's. */
-async function holdEntry(from: string, to: string): Promise<void> {
+async function holdEntry(from: string, holdDir: string, name: string): Promise<void> {
+  const to = safePath.join(holdDir, name);
   // The reads are classified by the copy itself; a write into the hold dir — VAT's own scratch — here.
   await withFsFault({ side: 'environment', action: `hold the eval suite entry ${from} at ${to}` }, async () => {
     if (lstatSync(from).isDirectory()) {
       await copyTree(from, to, { links: 'preserve', side: 'environment', onto: 'fresh' });
       return;
     }
-    await copyRegularFile(from, to, { side: 'environment', reading: `the staged eval suite ${from}` });
+    await copyRegularFile(from, holdDir, name, { side: 'environment', reading: `the staged eval suite ${from}`, existing: 'replace', writing: `the held eval suite entry ${name}` });
   });
 }
 
@@ -180,9 +181,9 @@ export async function isolateEvalSuite(input: IsolateEvalSuiteInput): Promise<bo
     // dir itself: a tree copy gives its root the SOURCE's mode, and the hold dir stays 0700.
     if (lstatSync(unit).isDirectory()) {
       const holdDir = input.holdDir;
-      await forEachInOrder(readdirSync(unit), (name) => holdEntry(safePath.join(unit, name), safePath.join(holdDir, name)));
+      await forEachInOrder(readdirSync(unit), (name) => holdEntry(safePath.join(unit, name), holdDir, name));
     } else {
-      await holdEntry(unit, safePath.join(input.holdDir, basename(unit)));
+      await holdEntry(unit, input.holdDir, basename(unit));
     }
     preserved = true;
   }
