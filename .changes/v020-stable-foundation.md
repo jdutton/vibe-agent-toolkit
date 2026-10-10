@@ -1225,7 +1225,8 @@
 ### Changed
 
 - **`vat claude plugin build` copies a plugin's pool skills, and lists them in its report's
-  `skills`, by destination path** — where both followed the `skills:` selector's order, or the
+  `skills`, by destination path** (compared with letter case and Unicode form folded, then by
+  skill name) — where both followed the `skills:` selector's order, or the
   directory listing's under `skills: "*"`, which differs by host. The set is the same.
 
 - **For adopters on a `0.2.0-rc` build: library API that changed between release candidates.** None
@@ -1465,10 +1466,10 @@
   it, pointed at. It needed a `dist/skills` that VAT's own packager did not write — links placed
   there by hand or by another tool. Both are now refused, exit 2, with nothing written outside the
   build and the previous marketplace left as it was: the `files[]` entry as `CONFIG_INVALID` (its
-  `dest` is inside `skills/`), the nested copy as `INPUT_UNREADABLE` naming the link, in whichever order the skills
-  were selected (pool skills are copied by destination path, a directory before anything under it). Every file
-  and every skill the build copies into a plugin is now placed from the plugin's own directory
-  down, through real directories only, each file created exclusively.
+  `dest` is inside `skills/`), the nested copy as `INPUT_UNREADABLE` naming the link, in whichever
+  order the skills were selected (pool skills are copied by destination path, a directory before
+  anything under it). Every file and every skill the build copies into a plugin is now placed from
+  the plugin's own directory down, through real directories only, each file created exclusively.
 
 - **Advisories cleared from the dependency tree via root `overrides`:** `smol-toml` 1.8.0 → 1.9.0,
   `sharp` 0.35.4 → 0.35.5, and new pins `proxy-addr` 2.0.8, `source-map-js` 1.2.2 and

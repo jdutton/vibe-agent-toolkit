@@ -201,23 +201,31 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Packaging and build
 
-### Two pool skills sent to one plugin directory are refused as a half-written build, not as a config fault
+### A refereed pool skill's directory is never checked against the other selected pool skills
 
 - **Severity:** Minor · **Effort:** S · **User-visible:** yes (a misleading refusal)
 - **Mechanism:** when a plugin-local skill and a pool skill declare one name, the pool copy takes
   the plugin-local skill's authored directory. `resolveCollidingSkills` checks a plugin-local
   skill's directory against the selected pool names only when the skill did NOT collide by name, so
   a refereed skill's directory is never checked. A plugin-local skill named `foo` authored at
-  `skills/bar/`, with pool skills `foo` and `bar` both selected, sends both to `skills/bar`.
-- **What a user sees:** the second copy is refused with a raw `EEXIST` on the build's own output
+  `skills/bar/`, with pool skills `foo` and `bar` both selected, sends both to `skills/bar`; one
+  authored UNDER a selected pool skill's directory (`skills/group/x`, pool `group` selected) is sent
+  inside it. Separately, the check that does run compares directory names as exact strings, so on
+  a volume that folds case `skills/Bar` beside pool `bar` passes it. The copy order is decided with
+  a fold of its own (`foldedSegment`, a superset of the one `copyTree` refuses twins by), so
+  "are these one directory" has more than one answer in the build.
+- **What a user sees:** for two skills at one directory, the second copy is refused with a raw `EEXIST` on the build's own output
   (`RUN_INCOMPLETE`), naming whichever skill sorts second, where the cause is the config: two
   skills claim one directory, which the build reports as `CONFIG_INVALID` in the un-refereed case.
-  Nothing is written outside the build and the previous marketplace is kept.
+  Nothing is written outside the build and the previous marketplace is kept. For a skill sent
+  under another's directory with no link in the way, the build exits 0 and ships one skill inside
+  the other — the layout the un-refereed check refuses.
 - **Reproduce:** by reading; not run.
 - **Where:** `resolveCollidingSkills` in
   [`build.ts`](../../packages/cli/src/commands/claude/plugin/build.ts)
 - **Fix:** run the directory-clash check for a refereed skill too, against every other selected
-  pool skill's destination.
+  pool skill's destination, comparing by the one fold `copyTree` uses (moved to `utils`, and used
+  for the copy order as well).
 
 ### Writes and directories in a tree VAT fills that still follow a link, where no link is today
 
@@ -227,14 +235,15 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   `copyTree` takes a root and a path under it, and makes every directory between the two the same
   way. The writes and directories below, into trees that hold NO kept link today, are still plain and
   following, so each is safe by the shape of the tree and not by the primitive. Traced, not run.
-  - The skill-source staging copy (`copyTreeNoSymlinks`) makes its root with a recursive `mkdir` and
+  - The skill-source staging copy (`copyTreeNoSymlinks`) makes its root, and each directory under it, with a recursive `mkdir` and
     writes each file with `writeFile` then `chmod` by path, into a content-keyed directory under
     VAT's 0700 staging root that later runs reuse. The source's links are refused, so the only link
     it could meet is one something else planted in that root.
   - `regenerateVendoredManifest` writes `vendored.manifest.json` into a vendored directory with a
     following `writeFileSync`.
   - The packager writes a link-rewritten markdown or HTML file into the bundle with a following
-    `writeFile` (the files it copies verbatim go through the primitive), and
+    `writeFile`, after making that file's parents with a recursive `mkdir` (the files it copies
+    verbatim go through the primitive), and
     `vat claude plugin build` makes each plugin's directory in the staged marketplace with a
     recursive `mkdir`.
   - The packager makes the bundle's own root with a recursive `mkdir`, and the eval-workspace staging

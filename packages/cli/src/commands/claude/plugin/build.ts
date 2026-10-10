@@ -884,6 +884,32 @@ async function writeMergedPluginJson(
 }
 
 /**
+ * The selected pool skills with the `skills/`-relative directory each lands in, in the order they are
+ * copied: by destination path, whatever order the selector or `readdir` named them in — every
+ * directory before anything under it, since a path sorts after each of its prefixes. A pool skill that
+ * holds a link is then always in place before a skill landing under it, so that layout is refused one
+ * way (the link, an input fault) and never as this run's own half-written output.
+ *
+ * Destinations are compared as a filesystem that folds names compares them (`Group/sub` is under
+ * `group` there); the skill's name breaks a tie, so two skills sent to one destination are also
+ * copied in one order on every host.
+ *
+ * Pure: it reads nothing.
+ */
+function poolCopyOrder(
+  selected: readonly string[],
+  destOverrides: ReadonlyMap<string, string>,
+): Array<{ skillName: string; fsPath: string }> {
+  return selected
+    .map((skillName) => {
+      const fsPath = destOverrides.get(skillName) ?? skillNameToFsPath(skillName);
+      return { skillName, fsPath, placed: toForwardSlash(fsPath).split('/').map(foldedSegment).join('/') };
+    })
+    .toSorted((a, b) => compareCodeUnits(a.placed, b.placed) || compareCodeUnits(a.skillName, b.skillName))
+    .map(({ skillName, fsPath }) => ({ skillName, fsPath }));
+}
+
+/**
  * Copy pool skills (from dist/skills/) selected by the plugin's skills: selector
  * into the plugin bundle's skills/ directory.
  *
@@ -907,18 +933,7 @@ async function copyPoolSkills(
   outputs: readonly string[],
   logger: ReturnType<typeof createLogger>,
 ): Promise<string[]> {
-  // By destination path, whatever order the selector or `readdir` named them in — every directory
-  // before anything under it, since a path sorts after each of its prefixes. A pool skill that holds a
-  // link is then always in place before a skill landing under it, so that layout is refused one way
-  // (the link, an input fault) and never as this run's own half-written output. Compared as a
-  // filesystem that folds names compares them (`Group/sub` is under `group` there); the name breaks a
-  // tie, so two skills sent to one destination are also copied in one order on every host.
-  const selected = resolvePluginSkills(pluginDef, marketplaceAvailable)
-    .map((skillName) => {
-      const fsPath = destOverrides.get(skillName) ?? skillNameToFsPath(skillName);
-      return { skillName, fsPath, placed: toForwardSlash(fsPath).split('/').map(foldedSegment).join('/') };
-    })
-    .toSorted((a, b) => compareCodeUnits(a.placed, b.placed) || compareCodeUnits(a.skillName, b.skillName));
+  const selected = poolCopyOrder(resolvePluginSkills(pluginDef, marketplaceAvailable), destOverrides);
   const copied: string[] = [];
 
   // In order: each copy writes into the plugin dir, `destOverrides` may collide, and the first failure wins.
@@ -1589,6 +1604,7 @@ export const __internal = {
   marketplaceIssues,
   matchesSelector,
   pluginBuildData,
+  poolCopyOrder,
   reportPackagedSkillIssues,
   reportPluginIssues,
   resolveCollidingSkills,

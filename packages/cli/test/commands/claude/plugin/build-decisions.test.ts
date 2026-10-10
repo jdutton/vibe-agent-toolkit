@@ -11,7 +11,7 @@ import { __internal, pluginBuildOutput } from '../../../../src/commands/claude/p
 import { NOTHING_FINISHED } from '../../../../src/utils/document-writer.js';
 
 const {
-  builtWork, marketplaceIssues, matchesSelector, pluginBuildData, reportPackagedSkillIssues, reportPluginIssues, resolveCollidingSkills,
+  builtWork, marketplaceIssues, matchesSelector, pluginBuildData, poolCopyOrder, reportPackagedSkillIssues, reportPluginIssues, resolveCollidingSkills,
   resolveMarketplaceAvailableSkills, resolvePluginSkills, SkillPackagingStop, unusedExcludeIssues, withPackagingStop,
 } = __internal;
 
@@ -74,6 +74,33 @@ describe('resolvePluginSkills', () => {
 
   it('a skill two selectors match is taken once', () => {
     expect(resolvePluginSkills({ skills: ['vat-*', 'vat-audit'] } as never, ['vat-audit', 'x'])).toEqual(['vat-audit']);
+  });
+});
+
+describe('poolCopyOrder', () => {
+  const placedAt = (selected: string[], overrides: Array<[string, string]> = []): string[] =>
+    poolCopyOrder(selected, new Map(overrides)).map((skill) => `${skill.skillName} -> ${skill.fsPath}`);
+
+  it('copies a directory before anything under it, whatever order the skills were selected in', () => {
+    const overrides: Array<[string, string]> = [['deep', 'group/sub/deep'], ['nested', 'group/nested']];
+    const ordered = ['group -> group', 'nested -> group/nested', 'deep -> group/sub/deep'];
+    expect(placedAt(['group', 'nested', 'deep'], overrides)).toEqual(ordered);
+    expect(placedAt(['deep', 'nested', 'group'], overrides)).toEqual(ordered);
+  });
+
+  // `Group/sub` is under `group` where the filesystem folds case, and `G` sorts before `g`.
+  it('compares destinations as a filesystem that folds names does', () => {
+    expect(placedAt(['deep', 'group'], [['deep', 'Group/sub/deep']])).toEqual(['group -> group', 'deep -> Group/sub/deep']);
+  });
+
+  it('copies two skills sent to one destination in name order', () => {
+    const overrides: Array<[string, string]> = [['foo', 'bar']];
+    expect(placedAt(['foo', 'bar'], overrides)).toEqual(['bar -> bar', 'foo -> bar']);
+    expect(placedAt(['bar', 'foo'], overrides)).toEqual(['bar -> bar', 'foo -> bar']);
+  });
+
+  it('sends a colon-namespaced skill to its fs-safe directory', () => {
+    expect(placedAt(['pkg:sub'])).toEqual(['pkg:sub -> pkg__sub']);
   });
 });
 

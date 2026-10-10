@@ -24,7 +24,7 @@ vi.mock('@vibe-agent-toolkit/utils/crawl', async (importOriginal) => {
   };
 });
 
-/** Spelled as the registry resolves it (a `/`-rooted literal gains a drive letter on Windows). Never made: nothing here touches the disk. */
+/** Spelled as the registry resolves it (a `/`-rooted literal gains a drive letter on Windows). Never made: no test here reads or writes under it. */
 const ROOT = safePath.resolve(normalizedTmpdir(), 'vat-crawl-base-side');
 const OUTPUT = safePath.join(ROOT, 'dist/skills');
 
