@@ -13,7 +13,7 @@ import { createSymlink, mkdirSyncReal, safePath, symlinkCapability } from '@vibe
 import { diffSnapshots, type FaultRule, installFaultFs, snapshotTree, tempDirTracker } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { pluginInstallCase } from '../fault-matrix/cases/install-family.js';
+import { pluginInstallCase, skillsInstallCase } from '../fault-matrix/cases/install-family.js';
 import { writeTree } from '../fault-matrix/cases/tree-files.js';
 import { makeCaseRoot, runVerb, type CaseRoot, type VerbCase } from '../fault-matrix/drive.js';
 import type { VerbOutcome } from '../fault-matrix/invariants.js';
@@ -152,6 +152,40 @@ describe('vat claude plugin install — skills lanes', () => {
 
     expect(outcome).toMatchObject({ exitCode: 2, refusal: 'INPUT_UNREADABLE' });
     expect(outcome.message).toContain(zipPath(r));
+  });
+
+  // Which errno a host answers for "a file is where a directory must be" is the host's: POSIX says
+  // `ENOTDIR`, win32 `ENOENT` — anywhere else a vanished output, the run's own (`RUN_INCOMPLETE`). So
+  // the write under the file is made to answer as win32 does, in every lane that extracts an archive:
+  // the refusal is the archive's all the same, decided from its entry list before anything is written.
+  it.each([
+    ['vat claude plugin install <zip> --dry-run', 'plugin', 'zip', ['--dry-run']],
+    ['vat claude plugin install <zip>', 'plugin', 'zip', []],
+    ['vat claude plugin install <tgz>', 'plugin', 'tgz', []],
+    ['vat skills install <zip>', 'skills', 'zip', []],
+    ['vat skills install <tgz>', 'skills', 'tgz', []],
+  ] as const)('%s refuses a file `a` beside a file `a/b` as INPUT_UNREADABLE naming the archive and both entries, whatever errno the host answers', async (_label, verb, format, extraArgv) => {
+    const archive = (r: CaseRoot): string => safePath.join(r.root, 'input', `clash.${format}`);
+    const [file, under] = format === 'zip' ? ['a', 'a/b'] : ['package/a', 'package/a/b'];
+    const clash: VerbCase = {
+      ...(verb === 'plugin' ? pluginInstallCase('local', 'fresh') : skillsInstallCase('zip', 'fresh')),
+      argv: (r) => (verb === 'plugin' ? ['install', archive(r)] : ['install', archive(r), '--target', 'claude', '--scope', 'user']),
+      fixture: (r) => {
+        mkdirSyncReal(safePath.join(r.root, 'input'), { recursive: true });
+        if (format === 'zip') writeZipFixture(safePath.join(r.root, 'input'), 'clash.zip', [[file, Buffer.from('a\n')], [under, Buffer.from('b\n')]]);
+        else writeFileSync(archive(r), tarballOf([[file, 'a\n'], [under, 'b\n']]));
+      },
+    };
+
+    // The call that reaches under the file, by extractor: adm-zip and a synchronous node-tar open `a/b`; an asynchronous node-tar makes `a` a directory first.
+    const underTheFile: FaultRule[] = [{ op: 'open', path: (p) => p.endsWith('/a/b'), errno: 'ENOENT' }, { op: 'mkdir', path: (p) => p.endsWith('/package/a'), errno: 'ENOENT' }];
+
+    const { r, outcome, before } = await runWith(clash, underTheFile, extraArgv);
+
+    expect(outcome).toMatchObject({ exitCode: 2, refusal: 'INPUT_UNREADABLE' });
+    expect(outcome.message).toContain(archive(r));
+    expect(outcome.message).toContain(`\`${file}\` and \`${under}\``);
+    expect(diffSnapshots(before, snapshotTree(claude(r)))).toEqual([]);
   });
 
   it('two declared skills, the second already installed without --force: USAGE_INVALID saying --force, and neither installed', async () => {

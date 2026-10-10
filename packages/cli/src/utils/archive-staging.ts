@@ -7,18 +7,80 @@
  * decided while it was being written into staging — a file `a` beside a file `a/b`,
  * an entry landing on a directory — is the archive's (`shapeFromSource`). Bytes that
  * are no archive at all are the archive's (`INPUT_UNREADABLE`).
+ *
+ * One layout is refused from the archive's own entry list, before anything is written
+ * ({@link entryClash}): a file entry with another entry at or under it. Which errno a host
+ * answers for the write under that file is the host's — POSIX `ENOTDIR`, win32 `ENOENT`,
+ * a vanished output anywhere else — so the errno cannot say whose fault it was.
  */
 
 import * as nodeFs from 'node:fs';
 import { mkdtemp } from 'node:fs/promises';
 
-import { classifyFsFault, fsBoundary, fsFaultOf, isCapacityFault, normalizedTmpdir, relativeEscapesRoot, safePath, withFsFault } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, fsBoundary, fsFaultOf, isCapacityFault, normalizedTmpdir, relativeEscapesRoot, safePath, toForwardSlash, toForwardSlashAnyPlatform, withFsFault } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
 import * as tar from 'tar';
 
 import { CommandRefusalError } from './command-refusal.js';
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** The archive's own refusal: it cannot be extracted, for a reason that is no filesystem errno. */
+function unextractable(archive: string, why: string, cause?: unknown): CommandRefusalError {
+  return new CommandRefusalError('INPUT_UNREADABLE', `${archive} could not be extracted, nothing was changed: ${why}`, { cause });
+}
+
+/** One entry of an archive: its name, `/` between segments (and the host's own separator, as node-tar reads a tarball's), and whether it is a directory. */
+export interface ArchiveEntry {
+  readonly name: string;
+  readonly directory: boolean;
+}
+
+/** Where an entry lands under the extraction root: no empty or `.` segment, a `..` climbing no higher than the root. */
+function placeOf(name: string): string[] {
+  const place: string[] = [];
+  for (const segment of toForwardSlash(name).split('/')) {
+    if (segment === '..') place.pop();
+    else if (segment !== '' && segment !== '.') place.push(segment);
+  }
+  return place;
+}
+
+/**
+ * The first pair of entries no directory can hold together: a FILE entry, and another entry at
+ * its place as a directory or anywhere under it — in either order. Pure: it reads nothing.
+ *
+ * Names are compared exactly. Two names that differ only in letter case or Unicode form are one
+ * place on some volumes and two on others, which only the volume can answer.
+ *
+ * @param entries - Every entry of the archive, in any order
+ * @returns The file entry and the entry at or under it, as the archive spells them
+ */
+export function entryClash(entries: readonly ArchiveEntry[]): { file: string; under: string } | undefined {
+  const files = new Map<string, string>();
+  for (const entry of entries) if (!entry.directory) files.set(placeOf(entry.name).join('/'), entry.name);
+  for (const entry of entries) {
+    const place = placeOf(entry.name);
+    // A directory entry needs its own place to be a directory; a file entry, only every place above it.
+    const deepest = entry.directory ? place.length : place.length - 1;
+    for (let depth = 1; depth <= deepest; depth += 1) {
+      const file = files.get(place.slice(0, depth).join('/'));
+      if (file !== undefined) return { file, under: entry.name };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Refuse `archive` when its entries cannot all be extracted into one directory ({@link entryClash}).
+ *
+ * @throws CommandRefusalError `INPUT_UNREADABLE`, naming the archive and both entries
+ */
+function assertEntriesCoexist(archive: string, entries: readonly ArchiveEntry[]): void {
+  const clash = entryClash(entries);
+  if (clash === undefined) return;
+  throw unextractable(archive, `it holds both \`${clash.file}\` and \`${clash.under}\`, and \`${clash.file}\` is a file, so no directory can hold the two`);
+}
 
 /** A fresh staging directory under the OS temp dir; one the OS will not create is an `environment` fault. */
 export function makeStagingDir(prefix: string): Promise<string> {
@@ -41,7 +103,7 @@ export function makeStagingDir(prefix: string): Promise<string> {
 export function archiveFailure(archive: string, staging: readonly string[], error: unknown): unknown {
   const facts = fsFaultOf(error);
   if (facts === undefined) {
-    return new CommandRefusalError('INPUT_UNREADABLE', `${archive} could not be extracted, nothing was changed: ${messageOf(error)}`, { cause: error });
+    return unextractable(archive, messageOf(error), error);
   }
   const [stagingRoot] = staging;
   if (facts.path === undefined && facts.dest === undefined && stagingRoot !== undefined) {
@@ -88,12 +150,34 @@ function keepingEntryFailures(file: string, cwd: string): { options: tar.TarOpti
 }
 
 /**
+ * Refuse the tarball `archive` when its entries cannot all be extracted ({@link assertEntriesCoexist}),
+ * from a listing pass that reads it whole and writes nothing. A warning in that pass is the
+ * extraction's to report.
+ *
+ * @throws {@link archiveFailure} for a tarball that cannot be read
+ */
+function assertTarballEntriesCoexist(archive: string, cwd: string): void {
+  const entries: ArchiveEntry[] = [];
+  const onReadEntry = (entry: tar.ReadEntry): void => {
+    // `GNUDumpDir` is a directory to node-tar's extraction too.
+    entries.push({ name: entry.path, directory: entry.type === 'Directory' || entry.type === 'GNUDumpDir' });
+  };
+  try {
+    tar.list({ file: archive, sync: true, onReadEntry });
+  } catch (error) {
+    throw archiveFailure(archive, [cwd], error);
+  }
+  assertEntriesCoexist(archive, entries);
+}
+
+/**
  * Extract the tarball `archive` into the staging directory `cwd`, every entry or none.
  *
  * @throws {@link archiveFailure}
  */
 export async function extractTarball(archive: string, cwd: string): Promise<void> {
   const { options, firstFailure } = keepingEntryFailures(archive, cwd);
+  assertTarballEntriesCoexist(archive, cwd);
   try {
     await tar.extract(options);
   } catch (error) {
@@ -106,6 +190,7 @@ export async function extractTarball(archive: string, cwd: string): Promise<void
 /** {@link extractTarball}, synchronously. */
 export function extractTarballSync(archive: string, cwd: string): void {
   const { options, firstFailure } = keepingEntryFailures(archive, cwd);
+  assertTarballEntriesCoexist(archive, cwd);
   try {
     tar.extract({ ...options, sync: true });
   } catch (error) {
@@ -140,6 +225,27 @@ function openFailureBehind(error: unknown, openFailures: ReadonlyMap<string, unk
   return syscall === 'chmod' && path !== undefined && openFailures.has(path) ? openFailures.get(path) : error;
 }
 
+/** As much of an opened ZIP as {@link zipEntries} reads. */
+interface ZipListing {
+  getEntries(): ReadonlyArray<{ readonly entryName: string; readonly isDirectory: boolean }>;
+}
+
+/**
+ * Every entry of an opened ZIP. adm-zip parses the central directory here, at the first read of
+ * the entries, not when the archive is opened: one it cannot parse (a name listed twice, a
+ * truncated record) is the archive's, as a failed extraction of it is.
+ *
+ * @throws {@link archiveFailure}
+ */
+function zipEntries(zip: ZipListing, archive: string, extracted: string): ArchiveEntry[] {
+  try {
+    // adm-zip reads a backslash in an entry name as `/` on every host.
+    return zip.getEntries().map((entry) => ({ name: toForwardSlashAnyPlatform(entry.entryName), directory: entry.isDirectory }));
+  } catch (error) {
+    throw archiveFailure(archive, [extracted], error);
+  }
+}
+
 /**
  * Open `archive` (its central directory only; entry data inflates lazily).
  *
@@ -162,6 +268,7 @@ export function openZip(archive: string, fs: typeof nodeFs = nodeFs): StagedZip 
   return {
     zip,
     extractTo(source, extracted) {
+      assertEntriesCoexist(source, zipEntries(zip, source, extracted));
       try {
         zip.extractAllTo(extracted, /* overwrite */ true);
       } catch (error) {
@@ -172,4 +279,4 @@ export function openZip(archive: string, fs: typeof nodeFs = nodeFs): StagedZip 
 }
 
 /** Test-facing seam: the pure decisions of this module, reached by its unit tests. */
-export const __internal = { keepingEntryFailures, openFailureBehind };
+export const __internal = { keepingEntryFailures, openFailureBehind, zipEntries };

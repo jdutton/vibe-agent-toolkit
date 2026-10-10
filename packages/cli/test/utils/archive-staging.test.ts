@@ -8,20 +8,29 @@
 import { isFsFaultError } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { __internal, archiveFailure, extractTarball, extractTarballSync } from '../../src/utils/archive-staging.js';
+import { __internal, type ArchiveEntry, archiveFailure, entryClash, extractTarball, extractTarballSync } from '../../src/utils/archive-staging.js';
 import { CommandRefusalError } from '../../src/utils/command-refusal.js';
 
-const { keepingEntryFailures, openFailureBehind } = __internal;
+const { keepingEntryFailures, openFailureBehind, zipEntries } = __internal;
 
 type Onwarn = (code: string, message: string, data: unknown) => void;
-const { extract } = vi.hoisted(() => ({ extract: vi.fn() }));
-vi.mock('tar', () => ({ extract }));
+const { extract, list } = vi.hoisted(() => ({ extract: vi.fn(), list: vi.fn() }));
+vi.mock('tar', () => ({ extract, list }));
 
 afterEach(() => {
   extract.mockReset();
+  list.mockReset();
 });
 
 const errno = (code: string, extra: Record<string, unknown> = {}): Error => Object.assign(new Error(`${code}: failed`), { code, ...extra });
+const rejectedSync = (work: () => unknown): unknown => {
+  try {
+    work();
+  } catch (error) {
+    return error;
+  }
+  throw new Error('expected a throw');
+};
 const rejectionOf = async (work: () => Promise<unknown>): Promise<unknown> => {
   try {
     await work();
@@ -142,5 +151,87 @@ describe('openFailureBehind', () => {
     expect(openFailureBehind(elsewhere, opened)).toBe(elsewhere);
     expect(openFailureBehind(write, opened)).toBe(write);
     expect(openFailureBehind(pathless, opened)).toBe(pathless);
+  });
+});
+
+describe('entryClash', () => {
+  const file = (name: string): ArchiveEntry => ({ name, directory: false });
+  const dir = (name: string): ArchiveEntry => ({ name, directory: true });
+
+  it.each([
+    ['a file beside a file under it', [file('a'), file('a/b')], { file: 'a', under: 'a/b' }],
+    ['the same two in the other order', [file('a/b'), file('a')], { file: 'a', under: 'a/b' }],
+    ['a file under it at any depth', [file('pkg/a'), file('pkg/a/b/c/d')], { file: 'pkg/a', under: 'pkg/a/b/c/d' }],
+    ['a directory entry under it', [file('a'), dir('a/b/')], { file: 'a', under: 'a/b/' }],
+    ['a directory entry at its own place', [dir('a/'), file('a')], { file: 'a', under: 'a/' }],
+    ['names spelled with `.`, `..` and doubled separators', [file('./x/../a'), file('a//b')], { file: './x/../a', under: 'a//b' }],
+  ])('names %s', (_label, entries, clash) => {
+    expect(entryClash(entries)).toEqual(clash);
+  });
+
+  it.each([
+    ['siblings, and a name that only starts like another', [file('a'), file('ab'), file('a.d/b'), dir('c/'), file('c/d')]],
+    ['the same file twice', [file('a/b'), file('a/b')]],
+    ['a directory entry twice, with the files in it', [dir('a'), dir('a/'), file('a/b')]],
+    ['two names that differ only in letter case: one place on some volumes only', [file('A'), file('a/b')]],
+    ['no entry at all', []],
+  ])('finds none among %s', (_label, entries) => {
+    expect(entryClash(entries)).toBeUndefined();
+  });
+});
+
+describe('zipEntries', () => {
+  // adm-zip parses the central directory at the first read of the entries, not when the archive is opened.
+  it('a central directory adm-zip cannot parse is the archive\'s, with nothing changed', () => {
+    const cause = new Error('ADM-ZIP: Duplicate entry name');
+    const unparsable = { getEntries: (): never => { throw cause; } };
+    const failure = rejectedSync(() => zipEntries(unparsable, 'in/pkg.zip', 'stage/x'));
+    expect(failure).toBeInstanceOf(CommandRefusalError);
+    expect(failure).toMatchObject({ refusal: 'INPUT_UNREADABLE', message: 'in/pkg.zip could not be extracted, nothing was changed: ADM-ZIP: Duplicate entry name', cause });
+  });
+
+  it('names each entry with `/` between segments, as adm-zip extracts a backslash', () => {
+    const zip = { getEntries: () => [{ entryName: String.raw`a\b`, isDirectory: false }, { entryName: 'd/', isDirectory: true }] };
+    expect(zipEntries(zip, 'in/pkg.zip', 'stage/x')).toEqual([{ name: 'a/b', directory: false }, { name: 'd/', directory: true }]);
+  });
+});
+
+describe('a tarball whose entries cannot coexist', () => {
+  type Listing = { onReadEntry: (entry: { path: string; type: string }) => void; sync?: boolean };
+  const listingAClash = (options: Listing): void => {
+    expect(options.sync).toBe(true);
+    options.onReadEntry({ path: 'package/a', type: 'File' });
+    options.onReadEntry({ path: 'package/a/b', type: 'File' });
+  };
+  const CLASH = '/in/pkg.tgz could not be extracted, nothing was changed: it holds both `package/a` and `package/a/b`, and `package/a` is a file, so no directory can hold the two';
+
+  it('is refused from its listing as the archive\'s, naming both entries, before extractTarballSync writes anything', () => {
+    list.mockImplementation(listingAClash);
+    expect(() => extractTarballSync('/in/pkg.tgz', '/tmp/stage')).toThrow(expect.objectContaining({ refusal: 'INPUT_UNREADABLE', message: CLASH }));
+    expect(extract).not.toHaveBeenCalled();
+  });
+
+  it('is refused the same way before extractTarball writes anything', async () => {
+    list.mockImplementation(listingAClash);
+    expect(await rejectionOf(() => extractTarball('/in/pkg.tgz', '/tmp/stage'))).toMatchObject({ refusal: 'INPUT_UNREADABLE', message: CLASH });
+    expect(extract).not.toHaveBeenCalled();
+  });
+
+  // `GNUDumpDir` is how an incremental GNU tar spells a directory; node-tar extracts it as one.
+  it.each(['Directory', 'GNUDumpDir'])('a %s entry is no file: the files under it are extracted', (type) => {
+    list.mockImplementation((options: Listing) => {
+      options.onReadEntry({ path: 'package/a/', type });
+      options.onReadEntry({ path: 'package/a/b', type: 'File' });
+    });
+    expect(() => extractTarballSync('/in/pkg.tgz', '/tmp/stage')).not.toThrow();
+    expect(extract).toHaveBeenCalledTimes(1);
+  });
+
+  it('a listing the OS refuses is classified as the extraction\'s own read of the archive would be, and nothing is extracted', () => {
+    list.mockImplementation(() => {
+      throw errno('ENOSPC');
+    });
+    expect(() => extractTarballSync('/in/pkg.tgz', '/tmp/stage')).toThrow(expect.objectContaining({ side: 'environment', faultClass: 'exhausted', path: '/tmp/stage' }));
+    expect(extract).not.toHaveBeenCalled();
   });
 });

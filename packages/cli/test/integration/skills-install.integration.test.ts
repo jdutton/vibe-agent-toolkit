@@ -424,7 +424,7 @@ describe('vat skills install — refusals coded at their cause', () => {
       ['package/a/b', 'B'],
     ]));
 
-    await expectRefusal(tarballPath, at(), 'INPUT_UNREADABLE', /Could not extract /);
+    await expectRefusal(tarballPath, at(), 'INPUT_UNREADABLE', /could not be extracted, nothing was changed: it holds both `package\/a` and `package\/a\/b`/);
     expect(existsSync(safePath.join(projectDir, '.claude', 'skills', 'clash'))).toBe(false);
   });
 

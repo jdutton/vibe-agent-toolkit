@@ -201,6 +201,50 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Packaging and build
 
+### Archives have no single extract or create primitive, and nothing enforces one
+
+- **Severity:** Important (deferred scope) · **Effort:** M · **User-visible:** not today
+- **Mechanism:** every recursive copy, remove and rename goes through the tree-change primitive, held
+  there by `local/no-destructive-fs`. Archives have no equivalent. `adm-zip` is used directly at
+  four sites and `tar` at one, and no lint rule restricts who imports either. The two zip
+  extractors are not equally careful: `archive-staging.ts` classifies failures, recovers the errno
+  `adm-zip`'s `chmod` retry hides, and refuses a file entry with another entry under it from the
+  entry list; the URL skill source is a bare `extractAllTo(dir, true)` — no classification, no
+  entry-list check — on bytes fetched from the network. Path escape (`../x`, an absolute name) and
+  link entries are left to the two libraries; what they guarantee has not been verified here.
+- **What a user sees:** nothing known. The install lanes extract only into staging directories VAT
+  made, and the tree-change primitive governs what leaves staging; the URL skill source extracts
+  into its fetch cache directory. Narrower than the libraries, by design of the entry-list check:
+  a tarball that replaces a file by a directory in sequence is refused (`npm pack` emits none); a
+  drive-rooted tar name (`C:/a`), which node-tar strips, is not compared; every tarball is read
+  twice, the first time synchronously.
+- **Reproduce:** by reading; not run.
+- **Where:** `openZip` / `extractTarball` in
+  [`archive-staging.ts`](../../packages/cli/src/utils/archive-staging.ts); `extractZipBytes` in
+  [`url-source.ts`](../../packages/agent-skills/src/skill-source/sources/url-source.ts); the zip
+  writer in [`skill-packager.ts`](../../packages/agent-skills/src/skill-packager.ts); the entry
+  reader in [`skills.ts`](../../packages/cli/src/commands/claude/org/skills.ts)
+- **Fix:** one extract and one create primitive in `utils` (escape, link entries, entry clashes and
+  failure classification decided once), the four sites migrated, and an import restriction on
+  `adm-zip` and `tar` outside it. Before that, read both extractors for escape and link entries.
+
+### An archive whose entries are one name only where the volume folds names is not judged from its entry list
+
+- **Severity:** Important · **Effort:** S · **User-visible:** yes (a file silently left out, or a refusal code that differs by host)
+- **Mechanism:** `entryClash` compares entry names exactly, so a file `A` beside an entry `a/b` is
+  not refused from the entry list. On a volume that keeps case the two are two names and both
+  extract, correctly. On a volume that folds case the outcome is the library's and the order's:
+  with `A` listed first the write under it fails and the refusal is classified from the host's
+  errno (`INPUT_UNREADABLE` where that is `ENOTDIR`, `RUN_INCOMPLETE` on win32, where it is
+  `ENOENT`); with `a/b` listed first in a ZIP, adm-zip finds a directory where `A` goes, skips the
+  entry and reports nothing.
+- **What a user sees:** on a folding volume, either a refusal whose code differs by host, or — a ZIP
+  listing `a/b` before `A` — an install that exits 0 without `A`. For names that match exactly
+  both orders are refused on every host.
+- **Reproduce:** by reading; not run.
+- **Where:** `entryClash` in [`archive-staging.ts`](../../packages/cli/src/utils/archive-staging.ts)
+- **Fix:** with the archive primitive above, compare entry names by the one fold `copyTree` uses.
+
 ### A refereed pool skill's directory is never checked against the other selected pool skills
 
 - **Severity:** Minor · **Effort:** S · **User-visible:** yes (a misleading refusal)
@@ -488,6 +532,26 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   from the platform read before any test stubs it) and record it elsewhere.
 
 ## Test-suite health
+
+### The fault matrix is 490 committed one-statement files and a hand-typed sizing table
+
+- **Severity:** Minor (deferred scope) · **Effort:** M · **User-visible:** no
+- **Mechanism:** each matrix file is one `planMatrixShard(<TABLE>['<case>'], <index>)` statement.
+  The files exist to keep a file under the 40-injection limit and the per-file duration budget.
+  How many files a case gets is 40 integer literals typed by hand in two shard tables, and a
+  third test holds the files and the tables to each other both ways. The number of injections a
+  case selects is the host's (the filesystem's case behaviour, the Node version), so a table sized
+  on one host overflows on another and is found by a CI red. Windows totals have not been measured.
+- **What a user sees:** nothing. A contributor adding a traced call to an install or a build may
+  have to add files and edit a table on a host they cannot run.
+- **Where:** [`cases/install-family.ts`](../../packages/cli/test/fault-matrix/cases/install-family.ts),
+  [`cases/build-family.ts`](../../packages/cli/test/fault-matrix/cases/build-family.ts),
+  `shardFilesFor` in [`select.ts`](../../packages/cli/test/fault-matrix/select.ts), and the
+  `fault-matrix-*` files under `packages/cli/test/integration/`
+- **Fix:** compute the shards at run time from the trace — no committed shard files, no sizing
+  table, no consistency test, no overflow on a new host. Separately, measure whether a sampled
+  matrix on a pull request (one errno per fault class per call) with the exhaustive one nightly
+  would still have caught the defects the exhaustive one found, before choosing it.
 
 ### `--force` over a marketplace VAT did not make has no fault-matrix lane
 

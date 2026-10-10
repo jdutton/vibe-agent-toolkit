@@ -1873,7 +1873,12 @@
 - **A replaced plugin that is the one being installed on disk (`Old` → `old` on a case-insensitive
   filesystem) keeps its directory** — the new plugin is installed into it and only `Old`'s registry entry goes.
 - **`vat claude plugin install <zip> --dry-run` refuses a zip the real run refuses**: the dry run extracts
-  into its `$TMPDIR` staging too.
+  into its `$TMPDIR` staging too. An archive (`.zip`, `.tgz`, npm package) holding a file and another entry
+  at or under it — a file `a` beside `a/b`, in either order — is now refused from its entry list, before
+  anything is extracted: `INPUT_UNREADABLE`, naming the archive and both entries, in `vat claude plugin
+  install` and `vat skills install` alike. The refusal used to be read off the errno of the write that
+  failed, which on Windows is the one a vanished staging directory gives (`RUN_INCOMPLETE`); and a `.zip`
+  listing `a/b` before `a` was extracted without `a`, silently.
 - **A plugin install and an uninstall are one transaction with Claude Code's registry.** The trees are
   staged and swapped, then `known_marketplaces.json`, `installed_plugins.json` and `settings.json` are each
   replaced whole (never truncated in place); a failure anywhere puts every tree and every registry file
