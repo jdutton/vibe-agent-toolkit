@@ -18,11 +18,9 @@ import yaml from 'yaml';
 
 import { CACHE_CLEAR_REPORT_SCHEMA, type CacheClearReport } from '../../src/commands/cache/clear-schema.js';
 
-import { cleanupTestTempDir, createTestTempDir, executeCli, getBinPath, getMonorepoRoot, writeFileTree } from './test-common.js';
+import { cleanupTestTempDir, createTestTempDir, executeCli, faultPreloadArgs, getBinPath, writeFileTree } from './test-common.js';
 
 const binPath = getBinPath(import.meta.url);
-/** The in-process fault injector, loaded into the spawned binary before it runs (`VAT_FAULT_FS` says what to fail). */
-const preload = safePath.join(getMonorepoRoot(import.meta.url), 'packages', 'utils', 'dist', 'testing', 'fault-fs-preload.js');
 
 /** Mode bits: a directory whose entries cannot be removed, one nothing may read, and the restore. */
 const UNWRITABLE = 0o555;
@@ -45,7 +43,7 @@ function tempRoot(name: string): { root: string; cacheDir: string } {
  * fault injector), and read its document with the published schema.
  */
 async function clearUnder(root: string, faults?: FaultFsSpec['faults']): Promise<{ status: number | null; stderr: string; report: CacheClearReport }> {
-  const injected = faults === undefined ? {} : { nodeArgs: ['--import', preload] };
+  const injected = faults === undefined ? {} : { nodeArgs: faultPreloadArgs(import.meta.url) };
   const spec: FaultFsSpec = { within: root, faults: faults ?? [] };
   const env = { TMPDIR: root, TEMP: root, TMP: root, ...(faults === undefined ? {} : { VAT_FAULT_FS: JSON.stringify(spec) }) };
   const result = await executeCli(binPath, ['cache', 'clear'], { cwd: tempDir, env, ...injected });

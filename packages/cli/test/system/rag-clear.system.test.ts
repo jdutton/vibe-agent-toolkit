@@ -14,12 +14,10 @@ import YAML from 'yaml';
 import { RAG_CLEAR_REPORT_SCHEMA } from '../../src/commands/rag/admin-schema.js';
 
 import { describe, executeCliAndParseYaml, expect, FINDER_DS_STORE, fs, getBinPath, getTestOutputDir, it, setupRagTestSuite } from './rag-test-setup.js';
-import { executeCli, getMonorepoRoot } from './test-common.js';
+import { executeCli, faultPreloadArgs } from './test-common.js';
 import { setupTestProject } from './test-helpers/index.js';
 
 const binPath = getBinPath(import.meta.url);
-/** The in-process fault injector, loaded into the spawned binary before it runs (`VAT_FAULT_FS` says what to fail). */
-const faultPreload = safePath.join(getMonorepoRoot(import.meta.url), 'packages', 'utils', 'dist', 'testing', 'fault-fs-preload.js');
 const suite = setupRagTestSuite('clear', binPath, getTestOutputDir);
 
 /**
@@ -178,7 +176,7 @@ describe('RAG clear command (system test)', () => {
   it('a clear the OS stops partway is RUN_INCOMPLETE, leaves nothing at --db, and names where the rest is', async () => {
     const partial = copyOfDatabase('partial-db');
     const spec: FaultFsSpec = { within: suite.tempDir, faults: [{ family: 'remove', op: 'unlink', pathIncludes: '/rag_chunks.lance/data/', errno: 'EBUSY' }] };
-    const result = await executeCli(binPath, ['rag', 'clear', '--db', partial], { cwd: suite.projectDir, nodeArgs: ['--import', faultPreload], env: { ...scratchTmp(), VAT_FAULT_FS: JSON.stringify(spec) } });
+    const result = await executeCli(binPath, ['rag', 'clear', '--db', partial], { cwd: suite.projectDir, nodeArgs: faultPreloadArgs(import.meta.url), env: { ...scratchTmp(), VAT_FAULT_FS: JSON.stringify(spec) } });
     const [first] = YAML.parseAllDocuments(result.stdout);
     const document = first?.toJS() as { error?: { code?: string; message?: string }; data?: unknown; findings?: Array<{ code?: string; link?: string }> } | undefined;
     const error = document?.error;

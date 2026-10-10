@@ -7,7 +7,7 @@ import type { SpawnOptionsWithoutStdio, SpawnSyncReturns } from 'node:child_proc
 import { spawn as nodeSpawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
-import { fileURLToPath as urlFileURLToPath } from 'node:url';
+import { fileURLToPath as urlFileURLToPath, pathToFileURL } from 'node:url';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
@@ -59,6 +59,16 @@ export function getFixturePath(testFileUrl: string, fixtureName: string): string
  * invoked from the monorepo root or from packages/cli directly.
  * @param testFileUrl - import.meta.url from the test file
  */
+/**
+ * The `nodeArgs` that load the in-process fault injector into a spawned binary before it runs
+ * (`VAT_FAULT_FS` says what to fail). A `file:` URL, never a path: node's `--import` reads a
+ * Windows absolute path's drive letter as a URL scheme and refuses to load it.
+ */
+export function faultPreloadArgs(testFileUrl: string): readonly string[] {
+  const preload = safePath.join(getMonorepoRoot(testFileUrl), 'packages', 'utils', 'dist', 'testing', 'fault-fs-preload.js');
+  return ['--import', pathToFileURL(preload).href];
+}
+
 export function getMonorepoRoot(testFileUrl: string): string {
   const testDir = pathDirname(urlFileURLToPath(testFileUrl));
   return pathResolve(testDir, '../../../..');

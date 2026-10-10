@@ -7,7 +7,7 @@
  * staging (R7: that once exited 0 with a truncated install), and a file table exhausted at the
  * first file adm-zip opens for writing.
  */
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { faultRuleOf, installFaultFs, type FaultFsSpec, type FaultSpec } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import * as YAML from 'yaml';
@@ -16,10 +16,9 @@ import { pluginInstallCase, skillsInstallCase } from '../fault-matrix/cases/inst
 import { makeCaseRoot, type CaseRoot, type VerbCase } from '../fault-matrix/drive.js';
 import { runOnce } from '../fault-matrix/matrix.js';
 
-import { createTempDirTracker, executeCli, getBinPath, getMonorepoRoot } from './test-common.js';
+import { createTempDirTracker, executeCli, faultPreloadArgs, getBinPath } from './test-common.js';
 
 const binPath = getBinPath(import.meta.url);
-const preload = safePath.join(getMonorepoRoot(import.meta.url), 'packages', 'utils', 'dist', 'testing', 'fault-fs-preload.js');
 const scratch = createTempDirTracker('vat-fault-smoke-');
 afterAll(() => scratch.cleanupTempDirs());
 
@@ -72,7 +71,7 @@ async function spawned(smoke: Smoke): Promise<Verdict & { message: string }> {
   const spec: FaultFsSpec = { within: withinOf(r), faults: [smoke.fault(r)] };
   const result = await executeCli(binPath, [...smoke.command, ...smoke.c.argv(r)], {
     cwd: smoke.c.cwd?.(r) ?? r.project,
-    nodeArgs: ['--import', preload],
+    nodeArgs: faultPreloadArgs(import.meta.url),
     env: {
       HOME: r.home, USERPROFILE: r.home, TMPDIR: r.tmp, TEMP: r.tmp, TMP: r.tmp,
       CLAUDE_CONFIG_DIR: '', VAT_CACHE: '0', VAT_FAULT_FS: JSON.stringify(spec),

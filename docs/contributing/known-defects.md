@@ -503,32 +503,23 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** run the hostile-name set on the Windows box first. Then refuse trailing dot/space, `:`
   and reserved device names.
 
-### The single-rename fault tests have not run on a real Windows host since they were re-mechanised
+### On Windows the tree-change suites retry a rename with no real wait, so a transient refusal is a flake
 
 - **Severity:** Minor · **Effort:** S · **User-visible:** no
 - **Mechanism:** under win32 `renameFileAtomic` retries a rename refused with contention (`EPERM`,
-  `EBUSY`, `EACCES`) up to 6 tries, so a test that fails ONE rename saw the retry succeed there.
-  Every such rule now sets the harness's `everyTry` (fail every immediate repeat of the failed call,
-  without counting it as a new match). The mechanism is proven on every host by two cases that stub
-  the platform to win32 and assert six fired calls; what has not happened is a run of the suites that
-  use it on Windows itself. If the assumption behind `everyTry` is wrong there — a traced call
-  between two tries, a different errno — the next Windows red is in one of these files and is this
-  entry, not a regression.
-
-  The five utils suites that use it replace `node:timers/promises` (`tree-change-no-backoff.ts`), so
-  the backoff is recorded and never waited — on Windows too. There, the six tries of ANY rename in
-  those files, the un-faulted ones included, are then over in microseconds: a real, transient
-  `EPERM` / `EBUSY` from a scanner or indexer that the 1.55 s backoff would have absorbed is not, and
-  shows as a flake in whichever case made the rename. The CLI fault matrix does not replace the
-  timer and waits the real backoff.
-- **Reproduce:** on Windows, the utils integration files `tree-change-apply`,
+  `EBUSY`, `EACCES`) up to 6 tries. The five utils suites that fail a rename on purpose replace
+  `node:timers/promises` (`tree-change-no-backoff.ts`), so the backoff is recorded and never
+  waited — on Windows too. There, the six tries of ANY rename in those files, the un-faulted ones
+  included, are then over in microseconds: a real, transient `EPERM` / `EBUSY` from a scanner or
+  indexer that the 1.55 s backoff would have absorbed is not, and shows as a flake in whichever
+  case made the rename. The CLI fault matrix does not replace the timer and waits the real backoff.
+  (The harness's `everyTry`, which those suites and the matrix fail a retried rename with, has run
+  green on a Windows host.)
+- **Reproduce:** not seen. On Windows, the utils integration files `tree-change-apply`,
   `tree-change-apply-rollback`, `tree-change-apply-edges`, `tree-change-files` and
-  `tree-change-win32-retry`, and the CLI fault matrix.
-- **Where:** `everyTry` in [`fault-spec.ts`](../../packages/utils/src/testing/fault-spec.ts) and
-  `faultFor` in [`fault-fs.ts`](../../packages/utils/src/testing/fault-fs.ts); `nthRename` in the
-  tree-change test kit
-- **Fix:** none expected for the mechanism: delete that half when the Windows CI job is green on those
-  files. If the flake appears, have the stand-in serve the real wait on a real win32 host (decided
+  `tree-change-win32-retry`.
+- **Where:** `tree-change-no-backoff.ts` in the tree-change test kit
+- **Fix:** if the flake appears, have the stand-in serve the real wait on a real win32 host (decided
   from the platform read before any test stubs it) and record it elsewhere.
 
 ## Test-suite health
