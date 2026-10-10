@@ -201,13 +201,14 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Packaging and build
 
-### Three writes into a tree VAT fills still follow a link, where no link is today
+### Writes and directories in a tree VAT fills that still follow a link, where no link is today
 
 - **Severity:** Minor (not reachable from an input today) · **Effort:** S each · **User-visible:** no
 - **Mechanism:** every file VAT makes in a tree that holds a links-preserved copy goes through one
   exclusive, non-following primitive (`writeFileUnder` / `copyRegularFile` / `makeDirectoryUnder`).
-  Three writes into trees that hold NO kept link today are still plain, following writes, so each is
-  safe by the shape of the tree and not by the primitive. Traced, not run.
+  `copyTree` takes a root and a path under it, and makes every directory between the two the same
+  way. The writes and directories below, into trees that hold NO kept link today, are still plain and
+  following, so each is safe by the shape of the tree and not by the primitive. Traced, not run.
   - The skill-source staging copy (`copyTreeNoSymlinks`) makes its root with a recursive `mkdir` and
     writes each file with `writeFile` then `chmod` by path, into a content-keyed directory under
     VAT's 0700 staging root that later runs reuse. The source's links are refused, so the only link
@@ -218,13 +219,17 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
     `writeFile` (the files it copies verbatim go through the primitive), and
     `vat claude plugin build` makes each plugin's directory in the staged marketplace with a
     recursive `mkdir`.
+  - The packager makes the bundle's own root with a recursive `mkdir`, and the eval-workspace staging
+    makes the parents of each declared input with a recursive `mkdirSync` (`makeWorkspaceDir`, for
+    their `0700` mode) before the primitive copies the input — which then only checks them.
 - **What a user sees:** nothing. One `links: 'preserve'` copy added ahead of any of these writes,
   or a reorder of a build's phases, makes the next one a write through a link.
 - **Where:** `copyTreeNoSymlinks` in
   [`stage.ts`](../../packages/agent-skills/src/skill-source/stage.ts); `regenerateVendoredManifest`
   in [`vendor-manifest.ts`](../../packages/agent-skills/src/skill-test/vendor-manifest.ts);
   `copyAndRewriteFile` in [`skill-packager.ts`](../../packages/agent-skills/src/skill-packager.ts);
-  `buildPlugin` in [`build.ts`](../../packages/cli/src/commands/claude/plugin/build.ts)
+  `buildPlugin` in [`build.ts`](../../packages/cli/src/commands/claude/plugin/build.ts);
+  `stageEvalInput` in [`eval-inputs.ts`](../../packages/agent-skills/src/skill-test/eval-inputs.ts)
 - **Fix:** `writeFileUnder` (with `existing: 'replace'`) for the three file writes and
   `makeDirectoryUnder` for the two directories, each rooted at the tree's own root. The staging copy
   could instead become a `copyTree` with a link-refusing policy. Each changes the calls a fault-matrix
@@ -435,14 +440,23 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   the platform to win32 and assert six fired calls; what has not happened is a run of the suites that
   use it on Windows itself. If the assumption behind `everyTry` is wrong there — a traced call
   between two tries, a different errno — the next Windows red is in one of these files and is this
-  entry, not a regression. Each case also waits the full 1.55 s backoff on Windows.
+  entry, not a regression.
+
+  The five utils suites that use it replace `node:timers/promises` (`tree-change-no-backoff.ts`), so
+  the backoff is recorded and never waited — on Windows too. There, the six tries of ANY rename in
+  those files, the un-faulted ones included, are then over in microseconds: a real, transient
+  `EPERM` / `EBUSY` from a scanner or indexer that the 1.55 s backoff would have absorbed is not, and
+  shows as a flake in whichever case made the rename. The CLI fault matrix does not replace the
+  timer and waits the real backoff.
 - **Reproduce:** on Windows, the utils integration files `tree-change-apply`,
   `tree-change-apply-rollback`, `tree-change-apply-edges`, `tree-change-files` and
   `tree-change-win32-retry`, and the CLI fault matrix.
 - **Where:** `everyTry` in [`fault-spec.ts`](../../packages/utils/src/testing/fault-spec.ts) and
   `faultFor` in [`fault-fs.ts`](../../packages/utils/src/testing/fault-fs.ts); `nthRename` in the
   tree-change test kit
-- **Fix:** none expected: delete this entry when the Windows CI job is green on those files.
+- **Fix:** none expected for the mechanism: delete that half when the Windows CI job is green on those
+  files. If the flake appears, have the stand-in serve the real wait on a real win32 host (decided
+  from the platform read before any test stubs it) and record it elsewhere.
 
 ## Test-suite health
 

@@ -61,7 +61,7 @@ describe.each([FRESH, MERGE])('copyTree onto: $onto — never through a link alr
     await fs.mkdir(dest);
     await createSymlinkAsync(cap, victim, safePath.join(dest, 'notes'));
 
-    const failure = await rejectionOf(() => copyTree(src, dest, options));
+    const failure = await rejectionOf(() => copyTree(src, dest, '', options));
 
     expect(await fs.readFile(victim, 'utf-8')).toBe(VICTIM_BYTES);
     // A fresh tree refuses what is there; a merge replaces the LINK with the file, never its target.
@@ -77,7 +77,7 @@ describe.each([FRESH, MERGE])('copyTree onto: $onto — never through a link alr
     await fs.mkdir(at('dest'));
     await createSymlinkAsync(cap, at('victimdir'), at('dest', 'data'));
 
-    const failure = await rejectionOf(() => copyTree(at('src'), at('dest'), options));
+    const failure = await rejectionOf(() => copyTree(at('src'), at('dest'), '', options));
 
     expect(failure).toMatchObject({ code: 'EEXIST' });
     expect(await fs.readdir(at('victimdir'))).toEqual([]);
@@ -90,7 +90,7 @@ describe('copyTree onto: fresh / merge — what is already there', () => {
     await fs.mkdir(dest);
     await fs.writeFile(safePath.join(dest, 'notes'), 'already there');
 
-    expect(await rejectionOf(() => copyTree(src, dest, FRESH))).toMatchObject({ code: 'EEXIST' });
+    expect(await rejectionOf(() => copyTree(src, dest, '', FRESH))).toMatchObject({ code: 'EEXIST' });
     expect(await fs.readFile(safePath.join(dest, 'notes'), 'utf-8')).toBe('already there');
   });
 
@@ -102,7 +102,7 @@ describe('copyTree onto: fresh / merge — what is already there', () => {
     await fs.writeFile(safePath.join(dest, 'notes'), 'old');
     await fs.writeFile(safePath.join(dest, 'sub', 'kept.md'), 'kept');
 
-    await copyTree(src, dest, MERGE);
+    await copyTree(src, dest, '', MERGE);
 
     expect(await fs.readFile(safePath.join(dest, 'notes'), 'utf-8')).toBe('the copy\'s bytes');
     expect(await fs.readFile(safePath.join(dest, 'sub', 'a.md'), 'utf-8')).toBe('new');
@@ -118,9 +118,9 @@ describe('copyTree onto: merge — two names that differ only in case, on a tree
     await fs.writeFile(at('src', 'README.md'), 'upper');
     await fs.writeFile(at('src', 'readme.md'), 'lower');
 
-    await copyTree(at('src'), at('dest'), MERGE);
+    await copyTree(at('src'), at('dest'), '', MERGE);
     await fs.writeFile(at('src', 'readme.md'), 'lower, edited');
-    await copyTree(at('src'), at('dest'), MERGE);
+    await copyTree(at('src'), at('dest'), '', MERGE);
 
     expect(await fs.readFile(at('dest', 'README.md'), 'utf-8')).toBe('upper');
     expect(await fs.readFile(at('dest', 'readme.md'), 'utf-8')).toBe('lower, edited');
@@ -139,7 +139,7 @@ async function copyTwoNames(onto: 'fresh' | 'merge'): Promise<{ failure: unknown
   const file = at('src', 'file-entry');
   await createSymlinkAsync(cap, at('victim.txt'), link);
   await fs.writeFile(file, 'the copy\'s bytes');
-  const visitor = copyVisitor(at('dest'), 'source', onto);
+  const visitor = copyVisitor({ root: at('dest'), relative: '' }, at('src'), 'source', onto);
   const handle = await fs.open(file, 'r');
   try {
     const failure = await rejectionOf(async () => {

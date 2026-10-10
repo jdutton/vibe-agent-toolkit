@@ -77,7 +77,7 @@ async function treeAndVictim(): Promise<{ root: string; tree: string; from: stri
 describe('copyTree', () => {
   it('copies an empty directory', async () => {
     const { src, dest } = await srcAndDest();
-    await copyTree(src, dest, FOLLOW);
+    await copyTree(src, dest, '', FOLLOW);
     expect((await fs.stat(dest)).isDirectory()).toBe(true);
     expect(await fs.readdir(dest)).toHaveLength(0);
   });
@@ -93,12 +93,49 @@ describe('copyTree', () => {
     await fs.writeFile(safePath.join(outside, 'kept.md'), 'kept');
     await createSymlinkAsync(cap, outside, dest, 'dir');
 
-    const failure: unknown = await copyTree(src, dest, { ...PRESERVE, onto }).catch((error: unknown) => error);
+    const failure: unknown = await copyTree(src, dest, '', { ...PRESERVE, onto }).catch((error: unknown) => error);
 
     expect(failure, String(failure)).toMatchObject({ code: 'EEXIST' });
     expect(isFsFaultError(failure)).toBe(false);
     expect(await fs.readdir(outside)).toEqual(['kept.md']);
     expect((await fs.lstat(dest)).isSymbolicLink()).toBe(true);
+  });
+
+  // A copy that goes UNDER a tree — one that may hold links its own source shipped — names that tree's
+  // root and where under it: the link standing above the copy took the whole copy outside the tree.
+  it.for([
+    { relative: 'sub/x', made: false, label: 'the copy\'s directory is not there yet' },
+    { relative: 'sub/x', made: true, label: 'a directory of that name is already where the link points' },
+    { relative: 'sub/deep/er/x', made: false, label: 'the link is three levels above' },
+  ])('never goes through a LINK above where the copy goes under a root ($relative: $label): refused naming the link, nothing made where it points', async ({ relative, made }, { skip }) => {
+    const cap = symlinkCapability() ?? skip(SKIP_NO_LINKS);
+    const { root, src } = await srcAndDest();
+    await fs.writeFile(safePath.join(src, 'SKILL.md'), 'copied');
+    const tree = safePath.join(root, 'tree');
+    const outside = safePath.join(root, 'outside');
+    await fs.mkdir(tree);
+    await fs.mkdir(outside);
+    if (made) await fs.mkdir(safePath.join(outside, 'x'));
+    await createSymlinkAsync(cap, outside, safePath.join(tree, 'sub'), 'dir');
+
+    const failure: unknown = await copyTree(src, tree, relative, PRESERVE).catch((error: unknown) => error);
+
+    expect(failure, String(failure)).toMatchObject({ code: FS_FAULT_CODE, side: 'source', origin: 'content', faultClass: 'occupied', path: safePath.join(tree, 'sub') });
+    expect(await fs.readdir(outside)).toEqual(made ? ['x'] : []);
+    if (made) expect(await fs.readdir(safePath.join(outside, 'x'))).toEqual([]);
+  });
+
+  it('copies under a root, making the real directories on the way and adopting the ones there', async () => {
+    const { root, src } = await srcAndDest();
+    await fs.writeFile(safePath.join(src, 'a.md'), 'a');
+    const tree = safePath.join(root, 'tree');
+    await fs.mkdir(safePath.join(tree, 'skills'), { recursive: true });
+    await fs.writeFile(safePath.join(tree, 'skills', 'kept.md'), 'kept');
+
+    await copyTree(src, tree, 'skills/group/x', FOLLOW);
+
+    expect(await readUtf8(safePath.join(tree, 'skills', 'group', 'x', 'a.md'))).toBe('a');
+    expect(await readUtf8(safePath.join(tree, 'skills', 'kept.md'))).toBe('kept');
   });
 
   it('never adopts a FILE as its root, and adopts a real directory that is there', async () => {
@@ -107,11 +144,11 @@ describe('copyTree', () => {
     const file = safePath.join(root, 'a-file');
     await fs.writeFile(file, 'kept');
 
-    expect(await copyTree(src, file, FOLLOW).catch((error: unknown) => error)).toMatchObject({ code: 'EEXIST' });
+    expect(await copyTree(src, file, '', FOLLOW).catch((error: unknown) => error)).toMatchObject({ code: 'EEXIST' });
     expect(await readUtf8(file)).toBe('kept');
 
     await fs.mkdir(dest);
-    await copyTree(src, dest, FOLLOW);
+    await copyTree(src, dest, '', FOLLOW);
     expect(await readUtf8(safePath.join(dest, 'a.md'))).toBe('a');
   });
 
@@ -121,7 +158,7 @@ describe('copyTree', () => {
     await plantDeep(srcDir);
     const dest = safePath.join(root, 'non', 'existent', 'dest');
 
-    await copyTree(srcDir, dest, FOLLOW);
+    await copyTree(srcDir, dest, '', FOLLOW);
 
     expect(await readUtf8(safePath.join(dest, SUBDIR, NESTED_TXT))).toBe(NESTED_CONTENT);
     expect(await readUtf8(safePath.join(dest, 'a', 'b', 'c', 'deep.md'))).toBe('deep');
@@ -132,7 +169,7 @@ describe('copyTree', () => {
     const { src, dest } = await srcAndDest();
     const binary = Buffer.from([0x00, 0x01, 0x02, 0xff]);
     await fs.writeFile(safePath.join(src, 'binary.dat'), binary);
-    await copyTree(src, dest, FOLLOW);
+    await copyTree(src, dest, '', FOLLOW);
     expect(Buffer.compare(await fs.readFile(safePath.join(dest, 'binary.dat')), binary)).toBe(0);
   });
 
@@ -140,7 +177,7 @@ describe('copyTree', () => {
     const { src, dest } = await srcAndDest();
     await fs.writeFile(safePath.join(src, 'run.sh'), '#!/bin/sh\n');
     await fs.chmod(safePath.join(src, 'run.sh'), 0o755);
-    await copyTree(src, dest, FOLLOW);
+    await copyTree(src, dest, '', FOLLOW);
     expect((await fs.stat(safePath.join(dest, 'run.sh'))).mode & 0o777).toBe(0o755);
   });
 
@@ -154,7 +191,7 @@ describe('copyTree', () => {
     await fs.chmod(src, 0o555);
     restoreModes.push({ path: sub, mode: 0o755 }, { path: src, mode: 0o755 });
 
-    await copyTree(src, dest, FOLLOW);
+    await copyTree(src, dest, '', FOLLOW);
 
     expect((await fs.stat(dest)).mode & 0o777).toBe(0o755);
     expect((await fs.stat(safePath.join(dest, 'sub'))).mode & 0o777).toBe(0o755);
@@ -167,7 +204,7 @@ describe('copyTree', () => {
       const { src, dest } = await srcAndDest();
       await fs.writeFile(safePath.join(src, 'real.md'), 'real');
       await createSymlinkAsync(cap, safePath.join(src, 'real.md'), safePath.join(src, 'alias.md'));
-      await copyTree(src, dest, FOLLOW);
+      await copyTree(src, dest, '', FOLLOW);
       expect((await fs.lstat(safePath.join(dest, 'alias.md'))).isSymbolicLink()).toBe(false);
       expect(await readUtf8(safePath.join(dest, 'alias.md'))).toBe('real');
     });
@@ -182,7 +219,7 @@ describe('copyTree', () => {
       const link = safePath.join(src, 'scripts', 'etc');
       await createSymlinkAsync(cap, outside, link, 'dir');
 
-      await expect(copyTree(src, dest, FOLLOW)).rejects.toThrow(CopyLinkEscapesSourceError);
+      await expect(copyTree(src, dest, '', FOLLOW)).rejects.toThrow(CopyLinkEscapesSourceError);
       await expect(fs.access(safePath.join(dest, 'scripts', 'etc'))).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
@@ -193,7 +230,7 @@ describe('copyTree', () => {
       await createSymlinkAsync(cap, 'nowhere', dangling);
       session = installFaultFs({ within: root });
 
-      await copyTree(src, dest, PRESERVE);
+      await copyTree(src, dest, '', PRESERVE);
 
       expect((await fs.lstat(safePath.join(dest, 'dangling'))).isSymbolicLink()).toBe(true);
       expect(await fs.readlink(safePath.join(dest, 'dangling'))).toBe('nowhere');
@@ -211,7 +248,7 @@ describe('copyTree', () => {
     const made = safePath.join(dest, 'link');
     session = installFaultFs({ within: root, faults: [{ family: 'create', op: 'symlink', path: (p) => p === made, errno: 'EPERM' }] });
 
-    const failure: unknown = await copyTree(src, dest, PRESERVE).catch((error: unknown) => error);
+    const failure: unknown = await copyTree(src, dest, '', PRESERVE).catch((error: unknown) => error);
     expect(isFsFaultError(failure)).toBe(false);
     expect(failure).toMatchObject({ code: 'EPERM', path: made });
     expect(session.fired.map((call) => call.op)).toEqual(['symlink']);
@@ -225,7 +262,7 @@ describe('copyTree', () => {
     const excluded = safePath.join(src, 'a');
     session = installFaultFs({ within: root });
 
-    await copyTree(src, dest, { ...FOLLOW, filter: (relative) => relative !== 'a' });
+    await copyTree(src, dest, '', { ...FOLLOW, filter: (relative) => relative !== 'a' });
 
     expect(session.calls.filter((call) => under(excluded)(call.path))).toEqual([]);
     expect(session.calls.some((call) => call.op === 'open' && call.path === safePath.join(src, 'top.md'))).toBe(true);
@@ -240,21 +277,21 @@ describe('copyTree', () => {
     it('a source directory that is not there', async () => {
       const { root, dest } = await srcAndDest();
       const missing = safePath.join(root, 'no-such-dir');
-      await expectSourceFault(copyTree(missing, dest, FOLLOW), missing, 'absent');
+      await expectSourceFault(copyTree(missing, dest, '', FOLLOW), missing, 'absent');
     });
 
     it('a source that is a file, not a directory', async () => {
       const { root, dest } = await srcAndDest();
       const file = safePath.join(root, 'file.txt');
       await fs.writeFile(file, 'content');
-      await expectSourceFault(copyTree(file, dest, FOLLOW), file, 'absent');
+      await expectSourceFault(copyTree(file, dest, '', FOLLOW), file, 'absent');
     });
 
     it('a file the OS will not open, three levels down', async () => {
       const { root, src, dest } = await srcAndDest();
       const deep = await plantDeep(src);
       session = installFaultFs({ within: root, faults: [{ family: 'read', op: 'open', path: (p) => p === deep, errno: 'EACCES' }] });
-      await expectSourceFault(copyTree(src, dest, FOLLOW), deep, 'refused');
+      await expectSourceFault(copyTree(src, dest, '', FOLLOW), deep, 'refused');
     });
 
     it.skipIf(!PERMISSIONS_ENFORCED)('a file a real mode makes unreadable', async () => {
@@ -262,7 +299,7 @@ describe('copyTree', () => {
       const locked = safePath.join(src, 'locked.md');
       await fs.writeFile(locked, 'secret');
       await fs.chmod(locked, 0o000);
-      await expectSourceFault(copyTree(src, dest, FOLLOW), locked, 'refused');
+      await expectSourceFault(copyTree(src, dest, '', FOLLOW), locked, 'refused');
     });
 
     // The copy reads the tree the caller named, on the side the caller names — the proof's side. A plugin
@@ -272,7 +309,7 @@ describe('copyTree', () => {
       const { root, src, dest } = await srcAndDest();
       const deep = await plantDeep(src);
       session = installFaultFs({ within: root, faults: [{ family: 'read', op: 'read', path: (p) => p === deep, errno: 'EACCES' }] });
-      await expect(copyTree(src, dest, { ...FOLLOW, side })).rejects.toMatchObject({ code: FS_FAULT_CODE, side, origin: 'content', faultClass: 'refused', path: deep });
+      await expect(copyTree(src, dest, '', { ...FOLLOW, side })).rejects.toMatchObject({ code: FS_FAULT_CODE, side, origin: 'content', faultClass: 'refused', path: deep });
     });
 
     it('a dangling link under follow-contained', async ({ skip }) => {
@@ -280,7 +317,7 @@ describe('copyTree', () => {
       const { src, dest } = await srcAndDest();
       const dangling = safePath.join(src, 'dangling');
       await createSymlinkAsync(cap, safePath.join(src, 'nowhere'), dangling);
-      await expectSourceFault(copyTree(src, dest, FOLLOW), dangling, 'absent');
+      await expectSourceFault(copyTree(src, dest, '', FOLLOW), dangling, 'absent');
     });
   });
 
@@ -290,7 +327,7 @@ describe('copyTree', () => {
       await fs.writeFile(safePath.join(src, 'a.md'), 'a');
       const blocked = safePath.join(root, 'blocked');
       await fs.writeFile(blocked, 'a file where the destination directory should go');
-      const failure: unknown = await copyTree(src, safePath.join(blocked, 'dest'), FOLLOW).catch((error: unknown) => error);
+      const failure: unknown = await copyTree(src, safePath.join(blocked, 'dest'), '', FOLLOW).catch((error: unknown) => error);
       expect(isFsFaultError(failure)).toBe(false);
       expect(failure).toMatchObject({ code: expect.stringMatching(/^E[A-Z]+$/) as unknown });
     });
@@ -302,7 +339,7 @@ describe('copyTree', () => {
       session = installFaultFs({ within: root, faults: [{ family: 'write', op: 'writeFile', path: under(dest), nth: 2, errno: 'ENOSPC' }] });
       const boundary = fsBoundary({ source: [src], destination: [dest] });
 
-      await expect(boundary.run(`copy ${src} to ${dest}`, 'destination', () => copyTree(src, dest, FOLLOW)))
+      await expect(boundary.run(`copy ${src} to ${dest}`, 'destination', () => copyTree(src, dest, '', FOLLOW)))
         .rejects.toMatchObject({ code: FS_FAULT_CODE, side: 'destination', faultClass: 'exhausted', errno: 'ENOSPC' });
       expect(session.fired).toHaveLength(1);
       expect(session.fired[0]?.op).toBe('writeFile');
@@ -320,7 +357,7 @@ describe('copyTree', () => {
           { family: 'meta', op: 'close', path: (p) => p === file, errno: 'EPERM' },
         ],
       });
-      const failure: unknown = await copyTree(src, dest, FOLLOW).catch((error: unknown) => error);
+      const failure: unknown = await copyTree(src, dest, '', FOLLOW).catch((error: unknown) => error);
       expect(isFsFaultError(failure)).toBe(false);
       expect(failure).toMatchObject({ code: 'ENOSPC' });
       expect(session.fired.map((call) => call.op)).toEqual(['writeFile', 'close']);

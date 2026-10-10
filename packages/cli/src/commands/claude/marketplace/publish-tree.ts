@@ -211,7 +211,7 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
   // reads, links kept as links); the copy lands in VAT's own staging (an `environment` write).
   await withFsFault(
     { side: 'environment', action: `copy the marketplace build into ${outputDir}` },
-    () => copyTree(buildDir, outputDir, { links: 'preserve', side: 'source', onto: 'fresh' }),
+    () => copyTree(buildDir, outputDir, '', { links: 'preserve', side: 'source', onto: 'fresh' }),
   );
   files.push('.claude-plugin/marketplace.json', 'plugins/');
 

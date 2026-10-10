@@ -68,7 +68,7 @@ export async function copyResources(options: CopyResourcesOptions): Promise<void
   }
 
   try {
-    await copyTree(safePath.resolve(sourceDir), safePath.resolve(targetDir), {
+    await copyTree(safePath.resolve(sourceDir), safePath.resolve(targetDir), '', {
       side: 'source',
       links: 'follow-contained',
       // The adopter's build output, written again on every build: what a previous build left is replaced.

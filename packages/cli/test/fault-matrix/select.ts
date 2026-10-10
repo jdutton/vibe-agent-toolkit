@@ -75,11 +75,44 @@ export function normaliseCallPath(path: string, roots: Roots): string {
 /** The most injections one matrix file may carry (C10). A longer list is split into another file. */
 export const MAX_INJECTIONS_PER_FILE = 40;
 
-/** Fail a matrix file whose case list grew past the shard limit, naming the file. */
-export function assertWithinShardLimit(count: number, label: string): void {
-  if (count > MAX_INJECTIONS_PER_FILE) {
-    throw new Error(`${label}: ${count} injections exceeds the shard limit of ${MAX_INJECTIONS_PER_FILE}; split it into another matrix file`);
-  }
+/**
+ * How many injections a case's files should carry on AVERAGE. The slices are cut by a hash of each
+ * injection's id (it must be: see `shardOf`), so a file's count scatters about the mean like a
+ * count of random draws (Poisson) — and the matrix has some five hundred files, so the tail is met:
+ * measured, a case at a mean of 26 had a file of 41, and one at 23 a file of 37. At a mean of 20 a
+ * file past the limit of 40 is a 1-in-40,000 draw, which leaves the limit for what it is there to
+ * catch: a host whose trace is longer than the one the table was sized on.
+ */
+const MEAN_INJECTIONS_PER_FILE = 20;
+
+/** How many matrix files a case selecting `total` injections needs, with that headroom. */
+export function shardFilesFor(total: number): number {
+  return Math.ceil(total / MEAN_INJECTIONS_PER_FILE);
+}
+
+/** The host a matrix file ran on, and what its case selected there: what an overflow has to say to be acted on. */
+interface ShardSelection {
+  /** The file, e.g. `plugin/install/local/fresh (file 2 of 9)`. */
+  readonly label: string;
+  /** The host: platform and Node version. A trace is the host's — a case-keeping filesystem, a Node that traces inside `rm`. */
+  readonly host: string;
+  /** Every injection the case selected on this host, all its files together. */
+  readonly total: number;
+  /** How many files the shard table gives the case. */
+  readonly files: number;
+}
+
+/**
+ * Fail a matrix file whose slice grew past the shard limit — saying on which host, by how much, and
+ * how many files the case needs there, so the table is sized from the host with the longest trace.
+ */
+export function assertWithinShardLimit(count: number, selection: ShardSelection): void {
+  if (count <= MAX_INJECTIONS_PER_FILE) return;
+  const { label, host, total, files } = selection;
+  throw new Error(
+    `${label} on ${host}: ${count} injections, ${count - MAX_INJECTIONS_PER_FILE} over the shard limit of ${MAX_INJECTIONS_PER_FILE}. `
+    + `The case selects ${total} on this host across ${files} file(s); give it ${shardFilesFor(total)} in its shard table and add the matrix files.`,
+  );
 }
 
 const within = (root: string, path: string): boolean => !relativeEscapesRoot(safePath.relative(root, path));

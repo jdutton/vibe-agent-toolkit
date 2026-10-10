@@ -363,22 +363,23 @@ function cacheClearCase(): VerbCase {
 
 /**
  * Every build-family case, and how many matrix files share its injections: each file holds the
- * injections with `shardOf(id, files) === index`, which must fit the shard limit (C10).
+ * injections with `shardOf(id, files) === index`, which must fit the shard limit (C10). A count is
+ * `shardFilesFor` of the most injections the case selects on any host (see the install family's table).
  * `fault-matrix-shards.integration.test.ts` holds each file to this table.
  */
 export const BUILD_FAMILY_SHARDS = {
-  'skills/build': { make: skillsBuildCase, files: 17 },
-  'skills/package/o-fresh': { make: () => skillsPackageCase('o-fresh'), files: 10 },
-  'skills/package/o-force': { make: () => skillsPackageCase('o-force'), files: 14 },
-  'skills/package/o-occupied': { make: () => skillsPackageCase('o-occupied'), files: 12 },
-  'agent/build/output': { make: () => agentBuildCase('output'), files: 10 },
-  'agent/build/force': { make: () => agentBuildCase('force'), files: 9 },
-  'plugin/build': { make: pluginBuildCase, files: 11 },
-  'top-level-build': { make: topLevelBuildCase, files: 30 },
-  'rag/clear/default': { make: () => ragClearCase('default'), files: 3 },
-  'rag/clear/db': { make: () => ragClearCase('db'), files: 3 },
+  'skills/build': { make: skillsBuildCase, files: 18 },
+  'skills/package/o-fresh': { make: () => skillsPackageCase('o-fresh'), files: 15 },
+  'skills/package/o-force': { make: () => skillsPackageCase('o-force'), files: 19 },
+  'skills/package/o-occupied': { make: () => skillsPackageCase('o-occupied'), files: 16 },
+  'agent/build/output': { make: () => agentBuildCase('output'), files: 13 },
+  'agent/build/force': { make: () => agentBuildCase('force'), files: 15 },
+  'plugin/build': { make: pluginBuildCase, files: 16 },
+  'top-level-build': { make: topLevelBuildCase, files: 36 },
+  'rag/clear/default': { make: () => ragClearCase('default'), files: 4 },
+  'rag/clear/db': { make: () => ragClearCase('db'), files: 4 },
   'cache/clear': { make: cacheClearCase, files: 3 },
-  'marketplace/publish-tree': { make: marketplacePublishTreeCase, files: 6 },
-  'skill/test/configure': { make: skillTestConfigureCase, files: 2 },
+  'marketplace/publish-tree': { make: marketplacePublishTreeCase, files: 8 },
+  'skill/test/configure': { make: skillTestConfigureCase, files: 3 },
   'agent/import': { make: agentImportCase, files: 2 },
 } as const satisfies Readonly<Record<string, MatrixShard>>;

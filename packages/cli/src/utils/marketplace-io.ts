@@ -57,18 +57,21 @@ export async function copyFileIntoMarketplace(
  * links kept as links. Both read the tree on its `side`.
  *
  * @param source - The directory the build reads, and the side of the run it is on
- * @param target - Absolute directory in the marketplace tree
+ * @param target - Where it goes: `relative` (forward slashes) under `root`, a directory of the
+ *   marketplace tree the build made. The tree holds what earlier copies kept, links included, so
+ *   every directory between the two must be a real one: a link or a file there refuses the copy as
+ *   the input's layout, naming it — the copy is never made where a link points
  * @param sourceLabel - What the build reads, for a write refusal's message
  * @param targetLabel - What a write refusal says the build was writing
  */
 export async function copyTreeIntoMarketplace(
   source: { readonly path: string; readonly side: FsSide },
-  target: string,
+  target: { readonly root: string; readonly relative: string },
   sourceLabel: string,
   targetLabel: string,
 ): Promise<void> {
   // Every file of it, links kept as links: a refusal names the entry the OS refused.
   const walk = { links: 'preserve', side: source.side } as const;
   await proveTreeReadable(source.path, walk);
-  await writingMarketplace(`copy ${sourceLabel} into ${targetLabel}`, () => copyTree(source.path, target, { ...walk, onto: 'fresh' }));
+  await writingMarketplace(`copy ${sourceLabel} into ${targetLabel}`, () => copyTree(source.path, target.root, target.relative, { ...walk, onto: 'fresh' }));
 }

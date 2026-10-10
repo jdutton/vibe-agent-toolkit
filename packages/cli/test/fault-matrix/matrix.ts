@@ -36,6 +36,8 @@ interface PlannedCase {
   readonly drift: readonly string[];
   readonly points: readonly InjectionPoint[];
   readonly ids: readonly string[];
+  /** How many injections the case selected on this host, every shard file's together. */
+  readonly total: number;
 }
 
 /** How much of an INTERNAL_ERROR run's stderr (its stack) a failing injection prints. */
@@ -111,7 +113,7 @@ async function planCase(c: VerbCase, base: string, shard: readonly [number, numb
   const mine = all.filter(({ id }) => shardOf(id, count) === slice);
   const points = mine.map(({ point }) => point);
   const ids = mine.map(({ id }) => id);
-  return { c, base, golden: golden.after, goldenOutcome: golden.outcome, drift: diffSnapshots(golden.after.watched, run.after.watched), points, ids };
+  return { c, base, golden: golden.after, goldenOutcome: golden.outcome, drift: diffSnapshots(golden.after.watched, run.after.watched), points, ids, total: all.length };
 }
 
 async function injectAndJudge(plan: PlannedCase, index: number): Promise<void> {
@@ -213,7 +215,11 @@ export async function planMatrixShard(shard: MatrixShard, index: number): Promis
   afterAll(() => scratch.cleanupAll());
   try {
     const plan = await planCase(c, scratch.create(), [index, shard.files]);
-    if (MODE === 'covering') assertWithinShardLimit(plan.points.length, `${c.id} (file ${index + 1} of ${shard.files})`);
+    if (MODE === 'covering') {
+      assertWithinShardLimit(plan.points.length, {
+        label: `${c.id} (file ${index + 1} of ${shard.files})`, host: `${process.platform}, Node ${process.version}`, total: plan.total, files: shard.files,
+      });
+    }
     return testsOf(plan);
   } catch (error) {
     // A file that fails while it is collected never runs its afterAll: the case root goes now.

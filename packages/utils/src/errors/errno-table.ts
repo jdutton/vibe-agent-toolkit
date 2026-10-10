@@ -19,7 +19,7 @@
 export type FsFaultClass = 'absent' | 'refused' | 'exhausted' | 'wrong-type' | 'occupied' | 'busy' | 'unsupported' | 'device';
 
 /** The one place an errno gets a class. `EROFS` is `unsupported`: the filesystem cannot be written, no permission would change it. */
-const ERRNOS_BY_CLASS: Readonly<Record<FsFaultClass, readonly string[]>> = {
+export const FS_FAULT_ERRNOS_BY_CLASS: Readonly<Record<FsFaultClass, readonly string[]>> = {
   absent: ['ENOENT', 'ENOTDIR'],
   refused: ['EACCES', 'EPERM'],
   exhausted: ['ENOSPC', 'EDQUOT', 'EMFILE', 'ENFILE'],
@@ -33,7 +33,7 @@ const ERRNOS_BY_CLASS: Readonly<Record<FsFaultClass, readonly string[]>> = {
 };
 
 const CLASS_BY_ERRNO: ReadonlyMap<string, FsFaultClass> = new Map(
-  (Object.entries(ERRNOS_BY_CLASS) as Array<[FsFaultClass, readonly string[]]>)
+  (Object.entries(FS_FAULT_ERRNOS_BY_CLASS) as Array<[FsFaultClass, readonly string[]]>)
     .flatMap(([faultClass, errnos]) => errnos.map((errno): [string, FsFaultClass] => [errno, faultClass])),
 );
 
@@ -106,7 +106,7 @@ function hasAnyErrno(error: unknown, errnos: readonly string[]): boolean {
  * bug is rethrown.
  */
 export function isPathAbsentError(error: unknown): boolean {
-  return hasAnyErrno(error, ERRNOS_BY_CLASS.absent);
+  return hasAnyErrno(error, FS_FAULT_ERRNOS_BY_CLASS.absent);
 }
 
 /**
@@ -136,7 +136,7 @@ export function isAlreadyExistsError(error: unknown): boolean {
 
 /** The `occupied` class (`EEXIST`, `ENOTEMPTY`): something is in the way — a directory `rmdir` was asked to remove still holds entries. */
 export function isOccupiedError(error: unknown): boolean {
-  return hasAnyErrno(error, ERRNOS_BY_CLASS.occupied);
+  return hasAnyErrno(error, FS_FAULT_ERRNOS_BY_CLASS.occupied);
 }
 
 /** `ELOOP`: a symlink chain that never ends. */
@@ -191,7 +191,7 @@ export function isSymlinkUnsupportedError(error: unknown): boolean {
  * be the wrong advice.
  */
 export function isRetryableShortageError(error: unknown): boolean {
-  return hasAnyErrno(error, [...ERRNOS_BY_CLASS.busy, 'EMFILE', 'ENFILE']);
+  return hasAnyErrno(error, [...FS_FAULT_ERRNOS_BY_CLASS.busy, 'EMFILE', 'ENFILE']);
 }
 
 /**
@@ -209,5 +209,5 @@ export function isRenameContentionError(error: unknown): boolean {
  * a read-only directory refuses the removal of its entries.
  */
 export function isAccessRefusedError(error: unknown): boolean {
-  return hasAnyErrno(error, ERRNOS_BY_CLASS.refused);
+  return hasAnyErrno(error, FS_FAULT_ERRNOS_BY_CLASS.refused);
 }

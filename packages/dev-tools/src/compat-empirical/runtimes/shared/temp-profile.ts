@@ -54,7 +54,7 @@ export async function resetSkillsDir(profile: TempProfile): Promise<void> {
 export async function installSkillIntoProfile(profile: TempProfile, skill: StagedSkill, skillId: string): Promise<string> {
   await resetSkillsDir(profile);
   const dest = safePath.join(profile.skillsDir, skillId);
-  await copyTree(skill.rootDir, dest, { links: 'preserve', side: 'source', onto: 'fresh' });
+  await copyTree(skill.rootDir, profile.skillsDir, skillId, { links: 'preserve', side: 'source', onto: 'fresh' });
   return dest;
 }
 

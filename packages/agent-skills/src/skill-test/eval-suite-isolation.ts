@@ -145,7 +145,7 @@ async function holdEntry(from: string, holdDir: string, name: string): Promise<v
   // The reads are classified by the copy itself; a write into the hold dir — VAT's own scratch — here.
   await withFsFault({ side: 'environment', action: `hold the eval suite entry ${from} at ${to}` }, async () => {
     if (lstatSync(from).isDirectory()) {
-      await copyTree(from, to, { links: 'preserve', side: 'environment', onto: 'fresh' });
+      await copyTree(from, holdDir, name, { links: 'preserve', side: 'environment', onto: 'fresh' });
       return;
     }
     await copyRegularFile(from, holdDir, name, { side: 'environment', reading: `the staged eval suite ${from}`, existing: 'replace', writing: `the held eval suite entry ${name}` });

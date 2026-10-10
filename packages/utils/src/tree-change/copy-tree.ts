@@ -11,7 +11,7 @@ import { safePath } from '../path-core.js';
 import { openForReading } from '../text-file.js';
 
 import { aliasFault, type CopiedEntry, type CopyOnto, foldedNameIsTwin, mayTakeOver, nameOf, parentOf, sameNameWhereFolded } from './copy-decisions.js';
-import { type FileUnderOptions, openFileUnder } from './files.js';
+import { type FileUnderOptions, makeDirectoryUnder, openFileUnder } from './files.js';
 import { sameEntry } from './identity.js';
 import type { ProveTreeReadableOptions } from './readable-tree.js';
 import { readingTree, treeReadFault, type TreeVisitor, walkTree } from './tree-walk.js';
@@ -66,6 +66,35 @@ async function claimRoot(into: string): Promise<void> {
   else if (!there.isDirectory()) await fs.mkdir(into);
 }
 
+/** Where a tree copy goes: `relative` (forward slashes; `''` for the root itself) under `root`. */
+interface CopyDestination {
+  /**
+   * A directory that is the CALLER's: one it made, or one its user named. Made with its parents
+   * when absent — whatever stands above it is the caller's too, a link in the user's own layout
+   * (`~/.claude` kept in a dotfiles repository) included — and adopted when a real directory. A link
+   * or a file AT its name is never adopted ({@link claimRoot}).
+   */
+  readonly root: string;
+  /**
+   * Where under `root` the copy goes. Everything between the two is inside a tree that may hold
+   * what an earlier copy kept — links included — so each component must be a real directory
+   * (`makeDirectoryUnder`): a link or a file standing there refuses the copy, naming it.
+   */
+  readonly relative: string;
+}
+
+/**
+ * Make the directory a copy goes into ({@link CopyDestination}): the root as the caller's, every
+ * component under it as a real directory or not at all.
+ *
+ * @param copied - What is copied, for a refusal's message
+ * @returns The directory's path
+ */
+async function claimDestination(into: CopyDestination, copied: string): Promise<string> {
+  await claimRoot(into.root);
+  return into.relative === '' ? into.root : await makeDirectoryUnder(into.root, into.relative, `the copy of ${copied}`);
+}
+
 /** What {@link copyTree} is told: the walk, the side its reads are on, and what it does about what is already there. */
 export interface CopyTreeOptions extends ProveTreeReadableOptions {
   /** Required: only the caller knows whether its destination is new ({@link CopyOnto}). */
@@ -88,14 +117,16 @@ export interface CopyTreeOptions extends ProveTreeReadableOptions {
  *    and the entry made anew; anything else — a directory where a file goes, a link where a
  *    directory goes — is refused as it is (`mayTakeOver`).
  *
- * The root itself is the caller's: made with its parents when absent, adopted when a real directory
- * is there — and refused (`EEXIST`) when a link or a file is: a link taken for the root would put
- * the whole copy where it points ({@link claimRoot}).
+ * Where the copy goes is made by {@link claimDestination}: the root is the caller's (made with its
+ * parents when absent, adopted when a real directory, refused `EEXIST` when a link or a file — a link
+ * taken for it would put the whole copy where it points), and every directory from the root down to
+ * the copy is a real one or is refused as the layout of the tree it is in.
  *
  * Exported for `copyTree` and for the suite that hands it two entries by name — a real alias needs
  * a case-sensitive source and a case-folding destination, which no one temp directory offers.
  */
-export function copyVisitor(dest: string, side: FsSide, onto: CopyOnto): TreeVisitor {
+export function copyVisitor(where: CopyDestination, copied: string, side: FsSide, onto: CopyOnto): TreeVisitor {
+  const dest = where.relative === '' ? where.root : safePath.join(where.root, where.relative);
   const target = (relative: string): string => (relative === '' ? dest : safePath.join(dest, relative));
   /** What this copy made, by the directory (relative to the root) it made it in. */
   const made = new Map<string, CopiedEntry[]>();
@@ -136,7 +167,7 @@ export function copyVisitor(dest: string, side: FsSide, onto: CopyOnto): TreeVis
   return {
     async directory(entry, stats) {
       const into = target(entry.relative);
-      if (entry.relative === '') await claimRoot(into);
+      if (entry.relative === '') await claimDestination(where, copied);
       else await create(entry, 'directory', (path) => fs.mkdir(path));
       await fs.chmod(into, (stats.mode & 0o7777) | OWNER_RWX);
     },
@@ -155,8 +186,16 @@ export function copyVisitor(dest: string, side: FsSide, onto: CopyOnto): TreeVis
 }
 
 /**
- * Copy the directory `source` to `dest` (created, with its parents, when absent; adopted when a
- * real directory; refused, `EEXIST`, when a link or a file stands there).
+ * Copy the directory `source` to `relative` under `root` ({@link CopyDestination}).
+ *
+ * `root` is a directory the caller made or its user named: created, with its parents, when absent;
+ * adopted when a real directory; refused, `EEXIST`, when a link or a file stands there. `relative`
+ * is `''` for a copy onto `root` itself. A copy that goes INSIDE a tree — a pool skill into a staged
+ * plugin that earlier copies filled, links kept — names that tree's root and where under it, and
+ * every directory between the two must then be a real one (made when absent): a link or a file
+ * there is a `source` fault (origin `content`, class `occupied`) naming it, never followed. So a
+ * caller cannot reach through a link by how deep its destination is: the only directory taken on
+ * trust is the one it declares as `root`.
  *
  * Entries are walked, and refused, exactly as `proveTreeReadable` proves them (see
  * `tree-walk.ts`): a `follow-contained` link is copied as what it points at, inside
@@ -167,11 +206,11 @@ export function copyVisitor(dest: string, side: FsSide, onto: CopyOnto): TreeVis
  * owner's rwx kept (`| 0o700`): a read-only source must not become a copy nothing
  * can fill or remove.
  *
- * Below `dest` nothing already there is ever adopted or written through, and two source
+ * Below the copy's own directory nothing already there is ever adopted or written through, and two source
  * entries that are one name there are refused as the source's layout (a `source` fault
  * naming both): see {@link copyVisitor} and `options.onto`.
  *
- * The copy names no side for what it WRITES: a failure writing `dest` is the raw
+ * The copy names no side for what it WRITES: a failure writing the copy is the raw
  * errno, for the caller's boundary to classify — a link this host cannot create, and an
  * `EEXIST` for something already at a name of a `fresh` destination, included. What it READS is on the side the caller names, as the proof's reads
  * are: a refusal is a classified fault on `options.side` (origin `content`) naming
@@ -179,11 +218,12 @@ export function copyVisitor(dest: string, side: FsSide, onto: CopyOnto): TreeVis
  * staging (`environment`) or a copy already made into user state (`destination`).
  *
  * @param source - The directory to copy
- * @param dest - Where the copy goes
+ * @param root - The directory the caller made or owns, which the copy goes into or under
+ * @param relative - Where under `root` the copy goes, forward slashes; `''` for `root` itself
  * @param options - `links`, `filter` and `side`, exactly as `proveTreeReadable` was given them, and `onto`
  */
-export async function copyTree(source: string, dest: string, options: CopyTreeOptions): Promise<void> {
-  await walkTree(source, options, options.side, copyVisitor(dest, options.side, options.onto));
+export async function copyTree(source: string, root: string, relative: string, options: CopyTreeOptions): Promise<void> {
+  await walkTree(source, options, options.side, copyVisitor({ root, relative }, source, options.side, options.onto));
 }
 
 /** What {@link copyRegularFile} is told: the file it reads, and (as `writeFileUnder` is) the entry already where the copy goes. */

@@ -227,7 +227,8 @@ describe('plugin build — what each phase produces under skills/ (integration)'
   it('never copies a refereed pool skill THROUGH a link an earlier pool copy left at its nested destination', async ({ skip }) => {
     const cap = symlinkCapability() ?? skip();
     tempDir = createTestTempDir('vat-plugin-skills-nested-link-');
-    writeFixture(tempDir, '"*"');
+    // Selected in this order, so `group` — and its link — is copied before the skill that lands on it.
+    writeFixture(tempDir, `["group", "${NESTED_SKILL}"]`);
     const outside = safePath.join(tempDir, 'outside');
     mkdirSyncReal(outside, { recursive: true });
     writeTestFile(safePath.join(outside, 'kept.md'), 'kept');
@@ -235,7 +236,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     const pool = safePath.join(tempDir, 'dist', 'skills');
     mkdirSyncReal(safePath.join(pool, NESTED_SKILL), { recursive: true });
     writeTestFile(safePath.join(pool, NESTED_SKILL, SKILL_FILE), skillMd(NESTED_SKILL));
-    // Sorts before the nested skill, so it is copied first; its link is named as that skill's directory is.
+    // Its link is named as the nested skill's directory is.
     mkdirSyncReal(safePath.join(pool, 'group'), { recursive: true });
     writeTestFile(safePath.join(pool, 'group', SKILL_FILE), skillMd('group'));
     createSymlink(cap, outside, safePath.join(pool, 'group', NESTED_SKILL), 'dir');
@@ -243,8 +244,38 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     const failure: unknown = await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] }).catch((error: unknown) => error);
 
     expect(readdirSync(outside)).toEqual(['kept.md']);
-    expect(failure, String(failure)).toMatchObject({ code: 'FS_FAULT', side: 'destination', faultClass: 'occupied' });
+    expect(failure, String(failure)).toMatchObject({ code: 'FS_FAULT', side: 'source', origin: 'content', faultClass: 'occupied' });
     expect(String((failure as Error).message)).toContain(`group/${NESTED_SKILL}`);
+  });
+
+  // One segment deeper: the link is not AT the refereed copy's destination but ABOVE it
+  // (`skills/group/sub -> outside`, the skill authored at `skills/group/sub/<skill>`). Looking only at
+  // the destination's own name went through `sub` and made the skill's directory outside the build.
+  it('never copies a refereed pool skill through a link standing ABOVE its nested destination', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    tempDir = createTestTempDir('vat-plugin-skills-ancestor-link-');
+    const DEEP_SKILL = 'deep-skill';
+    // Selected in this order, so `group` — and its link — is copied before the skill that lands under it.
+    writeFixture(tempDir, `["group", "${NESTED_SKILL}", "${DEEP_SKILL}"]`, (skillsDir) => {
+      mkdirSyncReal(safePath.join(skillsDir, 'group', 'sub', DEEP_SKILL), { recursive: true });
+      writeTestFile(safePath.join(skillsDir, 'group', 'sub', DEEP_SKILL, SKILL_FILE), skillMd(DEEP_SKILL));
+    });
+    const outside = safePath.join(tempDir, 'outside');
+    mkdirSyncReal(outside, { recursive: true });
+
+    const pool = safePath.join(tempDir, 'dist', 'skills');
+    for (const name of [NESTED_SKILL, DEEP_SKILL, 'group']) {
+      mkdirSyncReal(safePath.join(pool, name), { recursive: true });
+      writeTestFile(safePath.join(pool, name, SKILL_FILE), skillMd(name));
+    }
+    createSymlink(cap, outside, safePath.join(pool, 'group', 'sub'), 'dir');
+
+    const failure: unknown = await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] }).catch((error: unknown) => error);
+
+    expect(readdirSync(outside)).toEqual([]);
+    expect(failure, String(failure)).toMatchObject({ code: 'FS_FAULT', side: 'source', origin: 'content', faultClass: 'occupied' });
+    expect(String((failure as Error).message)).toContain('skills/group/sub');
+    expect(String((failure as Error).message)).toContain(`dist/skills/${DEEP_SKILL}`);
   });
 
   it('fails the build when two DIFFERENT skills claim one output directory', async () => {

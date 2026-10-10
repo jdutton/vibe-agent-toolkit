@@ -429,35 +429,40 @@ function agentUninstallCase(mode: 'copy' | 'dev'): VerbCase {
 
 /**
  * Every install-family case, and how many matrix files share its injections: each file holds
- * one case's slice (the injections whose id hashes to it: `shardOf(id, files) === index`), which must fit the shard limit (C10). A count with
- * headroom under the limit, so a host whose trace runs a few calls longer still fits.
+ * one case's slice (the injections whose id hashes to it: `shardOf(id, files) === index`), which must fit the shard limit (C10).
+ *
+ * A case's count is `shardFilesFor` of the MOST injections it selects on any host (the overflow
+ * refusal prints that total and the count to use). The trace is the host's: the `case-aliased`
+ * variants install over a real alias only where the filesystem folds case — where it keeps case the
+ * two spellings are two directories, the replaced one is really removed, and the case selects about
+ * a fifth more; a Node that traces inside `rm` selects more than one that does not.
  * `fault-matrix-shards.integration.test.ts` holds each file to this table.
  */
 export const INSTALL_FAMILY_SHARDS = {
-  'plugin/install/local/fresh': { make: () => pluginInstallCase('local', 'fresh'), files: 9 },
-  'plugin/install/local/force': { make: () => pluginInstallCase('local', 'force'), files: 11 },
-  'plugin/install/local/replaces': { make: () => pluginInstallCase('local', 'replaces'), files: 17 },
-  'plugin/install/local/case-aliased': { make: () => pluginInstallCase('local', 'case-aliased'), files: 11 },
-  'plugin/install/local/replaces-case-alias': { make: () => pluginInstallCase('local', 'replaces-case-alias'), files: 11 },
-  'plugin/install/tgz/fresh': { make: () => pluginInstallCase('tgz', 'fresh'), files: 17 },
-  'plugin/install/npm/fresh': { make: () => pluginInstallCase('npm', 'fresh'), files: 19 },
-  'plugin/install/npm-postinstall/fresh': { make: () => pluginInstallCase('npm-postinstall', 'fresh'), files: 9 },
-  'plugin/install/dev/fresh': { make: () => pluginInstallCase('dev', 'fresh'), files: 9, posixOnly: true },
-  'plugin/install/dev/force': { make: () => pluginInstallCase('dev', 'force'), files: 11, posixOnly: true },
-  'plugin/install/dev/replaces': { make: () => pluginInstallCase('dev', 'replaces'), files: 15, posixOnly: true },
-  'plugin/install/dev/case-aliased': { make: () => pluginInstallCase('dev', 'case-aliased'), files: 10, posixOnly: true },
-  'plugin/install/zip/fresh': { make: () => pluginInstallZipCase('fresh'), files: 6 },
-  'plugin/install/zip/force': { make: () => pluginInstallZipCase('force'), files: 7 },
-  'plugin/uninstall/key': { make: () => pluginUninstallCase('key'), files: 5 },
-  'plugin/uninstall/all': { make: () => pluginUninstallCase('all'), files: 13 },
-  'skills/install/dir/fresh': { make: () => skillsInstallCase('dir', 'fresh'), files: 6 },
-  'skills/install/dir/force': { make: () => skillsInstallCase('dir', 'force'), files: 6 },
-  'skills/install/zip/fresh': { make: () => skillsInstallCase('zip', 'fresh'), files: 7 },
-  'skills/install/zip/force': { make: () => skillsInstallCase('zip', 'force'), files: 8 },
-  'agent/install/copy/fresh': { make: () => agentInstallCase('copy', 'fresh'), files: 5 },
-  'agent/install/copy/force': { make: () => agentInstallCase('copy', 'force'), files: 6 },
-  'agent/install/dev/fresh': { make: () => agentInstallCase('dev', 'fresh'), files: 2, posixOnly: true },
-  'agent/install/dev/force': { make: () => agentInstallCase('dev', 'force'), files: 3, posixOnly: true },
-  'agent/uninstall/copy': { make: () => agentUninstallCase('copy'), files: 1 },
-  'agent/uninstall/dev': { make: () => agentUninstallCase('dev'), files: 1, posixOnly: true },
+  'plugin/install/local/fresh': { make: () => pluginInstallCase('local', 'fresh'), files: 14 },
+  'plugin/install/local/force': { make: () => pluginInstallCase('local', 'force'), files: 16 },
+  'plugin/install/local/replaces': { make: () => pluginInstallCase('local', 'replaces'), files: 22 },
+  'plugin/install/local/case-aliased': { make: () => pluginInstallCase('local', 'case-aliased'), files: 19 },
+  'plugin/install/local/replaces-case-alias': { make: () => pluginInstallCase('local', 'replaces-case-alias'), files: 17 },
+  'plugin/install/tgz/fresh': { make: () => pluginInstallCase('tgz', 'fresh'), files: 23 },
+  'plugin/install/npm/fresh': { make: () => pluginInstallCase('npm', 'fresh'), files: 23 },
+  'plugin/install/npm-postinstall/fresh': { make: () => pluginInstallCase('npm-postinstall', 'fresh'), files: 14 },
+  'plugin/install/dev/fresh': { make: () => pluginInstallCase('dev', 'fresh'), files: 12, posixOnly: true },
+  'plugin/install/dev/force': { make: () => pluginInstallCase('dev', 'force'), files: 14, posixOnly: true },
+  'plugin/install/dev/replaces': { make: () => pluginInstallCase('dev', 'replaces'), files: 20, posixOnly: true },
+  'plugin/install/dev/case-aliased': { make: () => pluginInstallCase('dev', 'case-aliased'), files: 17, posixOnly: true },
+  'plugin/install/zip/fresh': { make: () => pluginInstallZipCase('fresh'), files: 10 },
+  'plugin/install/zip/force': { make: () => pluginInstallZipCase('force'), files: 10 },
+  'plugin/uninstall/key': { make: () => pluginUninstallCase('key'), files: 8 },
+  'plugin/uninstall/all': { make: () => pluginUninstallCase('all'), files: 18 },
+  'skills/install/dir/fresh': { make: () => skillsInstallCase('dir', 'fresh'), files: 7 },
+  'skills/install/dir/force': { make: () => skillsInstallCase('dir', 'force'), files: 7 },
+  'skills/install/zip/fresh': { make: () => skillsInstallCase('zip', 'fresh'), files: 10 },
+  'skills/install/zip/force': { make: () => skillsInstallCase('zip', 'force'), files: 10 },
+  'agent/install/copy/fresh': { make: () => agentInstallCase('copy', 'fresh'), files: 8 },
+  'agent/install/copy/force': { make: () => agentInstallCase('copy', 'force'), files: 8 },
+  'agent/install/dev/fresh': { make: () => agentInstallCase('dev', 'fresh'), files: 3, posixOnly: true },
+  'agent/install/dev/force': { make: () => agentInstallCase('dev', 'force'), files: 4, posixOnly: true },
+  'agent/uninstall/copy': { make: () => agentUninstallCase('copy'), files: 2 },
+  'agent/uninstall/dev': { make: () => agentUninstallCase('dev'), files: 2, posixOnly: true },
 } as const satisfies Readonly<Record<string, MatrixShard>>;

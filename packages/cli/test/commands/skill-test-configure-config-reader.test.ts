@@ -26,7 +26,7 @@
 import * as fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
+import { installFaultFs, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { updateSkillTestConfig } from '../../src/commands/skill/test/configure.js';
@@ -194,10 +194,18 @@ describe('updateSkillTestConfig (the third config reader)', () => {
   });
 
   it('classifies a presence check the OS refuses on the config\'s side for this run, never as "no config"', async () => {
-    // A name too long for the host: ENAMETOOLONG (wrong-type) on every platform, no permissions needed.
-    const configPath = safePath.join(tempDir, `${'n'.repeat(300)}.yaml`);
+    // Injected, never provoked: no real path makes every host refuse the `stat` — a name too long for
+    // the host is ENAMETOOLONG on POSIX and plain ENOENT on Windows, which IS "no config" there.
+    const configPath = safePath.join(tempDir, CONFIG_FILENAME);
+    const session = installFaultFs({ within: tempDir, faults: [{ op: 'stat', path: (path) => path === configPath, errno: 'ENAMETOOLONG' }] });
 
-    const failure = await refusalFrom(configPath, 'destination');
+    let failure: unknown;
+    try {
+      failure = await refusalFrom(configPath, 'destination');
+    } finally {
+      session.restore();
+    }
+    expect(session.fired.map((call) => call.op)).toEqual(['stat']);
     expect(failure).toMatchObject({ code: 'FS_FAULT', side: 'destination', faultClass: 'wrong-type' });
     expect(refusalCodeOf(failure)).toBe('RUN_INCOMPLETE');
   });

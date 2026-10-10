@@ -159,7 +159,7 @@ async function stageTree(slot: Slot, fill: Exclude<Extract<PlannedChange['change
   const staged = toForwardSlash(await onDestination(slot, 'stage the new', () => makeStagedDirectory(destOf(slot), fill.from)));
   slot.staged = staged;
   if (fill.from === 'copy') {
-    await onDestination(slot, 'copy the new', () => copyTree(fill.source, staged, { links: fill.links, side: fill.side, onto: 'fresh', ...(fill.filter === undefined ? {} : { filter: fill.filter }) }));
+    await onDestination(slot, 'copy the new', () => copyTree(fill.source, staged, '', { links: fill.links, side: fill.side, onto: 'fresh', ...(fill.filter === undefined ? {} : { filter: fill.filter }) }));
   } else if (fill.from === 'write') {
     // `try`/`await`, not `.catch`: a callback that throws synchronously is judged the same way.
     try {

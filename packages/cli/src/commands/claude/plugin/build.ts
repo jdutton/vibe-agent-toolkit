@@ -924,7 +924,8 @@ async function copyPoolSkills(
     // an input another build wrote (INPUT_UNREADABLE, fixed by rebuilding it), or this run's own output.
     await copyTreeIntoMarketplace(
       { path: skillDistPath, side: distSkillsSide(skillDistPath, outputs) },
-      destPath,
+      // From the plugin's own directory down: an earlier pool copy may have left a link on the way.
+      { root: pluginDir, relative: `skills/${toForwardSlash(fsPath)}` },
       `dist/skills/${skillName}`,
       issueLocation(destPath, configDir),
     );

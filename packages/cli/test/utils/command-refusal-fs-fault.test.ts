@@ -4,11 +4,10 @@
  * the vocabulary the table is keyed by are one set, and the docs' errno table agrees with utils.
  */
 import { readFileSync } from 'node:fs';
-import { constants } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { FS_FAULT_REFUSALS } from '@vibe-agent-toolkit/schema';
-import { classifyFsFault, FS_SIDES, fsFaultOf, SOURCE_ORIGINS, type FsFaultContext } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, FS_FAULT_ERRNOS_BY_CLASS, FS_SIDES, fsFaultOf, SOURCE_ORIGINS, type FsFaultContext } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { refusalCodeOf } from '../../src/utils/command-refusal.js';
@@ -18,10 +17,11 @@ const errnoError = (code: string, path = '/p/x'): NodeJS.ErrnoException => Objec
 const classified = (code: string, ctx: FsFaultContext): unknown => classifyFsFault(errnoError(code), ctx);
 
 /**
- * Every errno Node can name: `os.constants.errno`, plus what libuv reports that it omits — `EFTYPE`
- * (BSD), `EHOSTDOWN` (libuv's `UV_EHOSTDOWN`, missing from `os.constants` on macOS) and `UNKNOWN`.
+ * Every errno utils classifies, from the classifier's own table — never from `os.constants.errno`,
+ * which is the HOST's list: Windows names no `EDQUOT` or `ESTALE`, and a check drawn from it said
+ * the docs listed two errnos too many there.
  */
-const CANDIDATE_ERRNOS = [...new Set([...Object.keys(constants.errno), 'EFTYPE', 'EHOSTDOWN', 'UNKNOWN'])];
+const CLASSIFIED_ERRNOS: ReadonlyMap<string, readonly string[]> = new Map(Object.entries(FS_FAULT_ERRNOS_BY_CLASS));
 const TABLE_CLASSES = Object.keys(FS_FAULT_REFUSALS.destination);
 
 describe('refusalCodeOf: a classified filesystem fault', () => {
@@ -46,7 +46,7 @@ describe('refusalCodeOf: a classified filesystem fault', () => {
 });
 
 describe('utils classifies into exactly the classes the schema table is keyed by', () => {
-  const classes = new Set(CANDIDATE_ERRNOS.map((code) => fsFaultOf({ code })?.faultClass).filter((c) => c !== undefined));
+  const classes = new Set([...CLASSIFIED_ERRNOS.values()].flat().map((code) => fsFaultOf({ code })?.faultClass).filter((c) => c !== undefined));
 
   it('every class utils produces has a row', () => {
     expect([...classes].filter((c) => !TABLE_CLASSES.includes(c))).toEqual([]);
@@ -88,7 +88,10 @@ describe('docs/validation-codes.md lists the errnos of each class as utils class
   });
 
   it.each(TABLE_CLASSES)('%s: exactly the errnos utils puts in it', (faultClass) => {
-    const expected = CANDIDATE_ERRNOS.filter((code) => fsFaultOf({ code })?.faultClass === faultClass);
+    const expected = CLASSIFIED_ERRNOS.get(faultClass) ?? [];
+    expect(expected.length).toBeGreaterThan(0);
+    // The table and the classifier are one thing: each errno it lists is classified into that class.
+    expect(expected.filter((code) => fsFaultOf({ code })?.faultClass !== faultClass)).toEqual([]);
     expect(new Set(listed.get(faultClass))).toEqual(new Set(expected));
   });
 });

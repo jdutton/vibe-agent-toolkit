@@ -255,7 +255,7 @@ async function commitAndDeliver(tmpRepo: string, cwd: string, remoteUrl: string,
   // Copy publish tree content into temp repo. Both trees are VAT's own staging: a fault
   // reading or writing either is the environment's. Links are copied as links.
   await withFsFault({ side: 'environment', action: 'copy the publish tree into the staging repo', path: tmpRepo }, () =>
-    copyTree(publishDir, tmpRepo, { links: 'preserve', side: 'environment', onto: 'fresh' }));
+    copyTree(publishDir, tmpRepo, '', { links: 'preserve', side: 'environment', onto: 'fresh' }));
 
   // Log what the copy placed in the temp repo (filesystem truth before git touches it)
   // A link is an entry the copy placed and git will add, so it is listed as

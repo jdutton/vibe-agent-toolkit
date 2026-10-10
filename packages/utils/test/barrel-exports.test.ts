@@ -41,6 +41,7 @@ const BARREL_EXPORTS = [
   'DirectoryWalkRevisitedError',
   'FS_CONCURRENCY',
   'FS_FAULT_CODE',
+  'FS_FAULT_ERRNOS_BY_CLASS',
   'FS_SIDES',
   'FollowedWalk',
   'FsFaultError',

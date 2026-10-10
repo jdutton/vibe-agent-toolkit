@@ -15,6 +15,8 @@
  * produces the facts.
  */
 
+import { toForwardSlash } from '../path-core.js';
+
 import { type FsFaultClass, fsFaultOf, isFileInTheWayError } from './errno-table.js';
 import { isVatError, VatError } from './vat-error.js';
 
@@ -55,12 +57,16 @@ export class FsFaultError extends VatError {
     action: string;
     cause: unknown;
   }) {
-    const where = facts.path === undefined ? '' : `: ${facts.path}`;
+    // The ONE place a fault gets its path, so the one place it gets its spelling: forward slashes,
+    // as every path VAT displays or compares. An errno's own `path` is the host's — on Windows Node
+    // hands back the backslash form whatever the caller passed — while a context's is VAT's.
+    const path = facts.path === undefined ? undefined : toForwardSlash(facts.path);
+    const where = path === undefined ? '' : `: ${path}`;
     super(FS_FAULT_CODE, `Could not ${facts.action} (${facts.errno})${where}`, { cause: facts.cause });
     this.side = facts.side;
     this.faultClass = facts.faultClass;
     this.errno = facts.errno;
-    this.path = facts.path;
+    this.path = path;
     this.origin = facts.origin;
     this.action = facts.action;
   }

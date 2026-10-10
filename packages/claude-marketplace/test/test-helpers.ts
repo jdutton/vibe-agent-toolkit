@@ -149,7 +149,7 @@ export async function installOnePlugin(
   const { changes, registry } = planPackageInstall({
     marketplaces: [{
       marketplaceName,
-      write: (staged) => copyTree(pluginDir, safePath.join(staged, 'plugins', pluginName), { links: 'preserve', side, onto: 'fresh' }),
+      write: (staged) => copyTree(pluginDir, staged, `plugins/${pluginName}`, { links: 'preserve', side, onto: 'fresh' }),
       reads: [pluginDir],
       plugins: [{ pluginName, cacheFill: { from: 'copy', source: pluginDir, side, links: 'preserve' } }],
     }],

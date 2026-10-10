@@ -89,6 +89,7 @@ export * from './asset-reference.js';
 // someone tries — not a silent break in existing code.
 // The lookups themselves, plus the memo every fill shares.
 export {
+  FS_FAULT_ERRNOS_BY_CLASS,
   fsFaultOf,
   isAlreadyExistsError,
   isFileInTheWayError,

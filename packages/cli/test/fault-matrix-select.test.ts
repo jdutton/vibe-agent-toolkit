@@ -9,6 +9,7 @@ import {
   ERRNOS_FOR_FAMILY,
   MAX_INJECTIONS_PER_FILE,
   assertWithinShardLimit,
+  shardFilesFor,
   normaliseCallPath,
   selectInjectionPoints,
   shardOf,
@@ -246,9 +247,22 @@ describe('selectInjectionPoints (full)', () => {
 });
 
 describe('shard limit (C10)', () => {
-  it('allows exactly the limit and refuses one past it, naming the file', () => {
-    expect(() => assertWithinShardLimit(MAX_INJECTIONS_PER_FILE, 'lane-a')).not.toThrow();
-    expect(() => assertWithinShardLimit(MAX_INJECTIONS_PER_FILE + 1, 'lane-a')).toThrow(/lane-a.*41.*40/);
+  const selection = { label: 'lane-a (file 2 of 11)', host: 'linux, Node v24.0.0', total: 378, files: 11 };
+
+  it('allows exactly the limit', () => {
+    expect(() => assertWithinShardLimit(MAX_INJECTIONS_PER_FILE, selection)).not.toThrow();
+  });
+
+  it('refuses one past it, naming the file, the host, the overflow, and how many files the case needs there', () => {
+    expect(() => assertWithinShardLimit(MAX_INJECTIONS_PER_FILE + 6, selection)).toThrow(
+      'lane-a (file 2 of 11) on linux, Node v24.0.0: 46 injections, 6 over the shard limit of 40. The case selects 378 on this host across 11 file(s); give it 19 in its shard table',
+    );
+  });
+
+  // A table sized by this never fills its files to the limit: the fullest hashed slice runs well over the mean.
+  it('sizes a case so its files average 20 injections, half the limit', () => {
+    expect([1, 20, 21, 280, 378].map((total) => shardFilesFor(total))).toEqual([1, 1, 2, 14, 19]);
+    expect(shardFilesFor(MAX_INJECTIONS_PER_FILE)).toBe(2);
   });
 });
 

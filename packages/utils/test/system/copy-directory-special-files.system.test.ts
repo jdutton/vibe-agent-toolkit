@@ -62,7 +62,7 @@ describe.skipIf(process.platform === 'win32')('copyTree — a named pipe in the 
 
   it('refuses a named pipe, coded as the source\'s, without opening it', async () => {
     const { outcome, opened } = await tracingOpens(suite.dir(), suite.fifo(), () =>
-      outcomeOrHang(copyTree(safePath.join(suite.dir(), 'src'), safePath.join(suite.dir(), 'dest'), FOLLOW)));
+      outcomeOrHang(copyTree(safePath.join(suite.dir(), 'src'), safePath.join(suite.dir(), 'dest'), '', FOLLOW)));
     expect(outcome).toMatchObject(refusedSpecial(suite.fifo()));
     expect(opened).toBe(false);
   });
@@ -77,7 +77,7 @@ describe.skipIf(process.platform === 'win32')('copyTree — a named pipe in the 
     await createSymlinkAsync(symlinkCapability() ?? skip(), suite.fifo(), link);
 
     const outcome = await withListing(src, (entries) => entries.filter((entry) => entry.name === 'scripts'), () =>
-      outcomeOrHang(copyTree(src, safePath.join(suite.dir(), 'dest'), FOLLOW)),
+      outcomeOrHang(copyTree(src, safePath.join(suite.dir(), 'dest'), '', FOLLOW)),
     );
     // The path is the LINK's: the walk reached the link, not the pipe beside it (R7 d-M-3).
     expect(outcome).toMatchObject(refusedSpecial(link));
@@ -91,7 +91,7 @@ describe.skipIf(process.platform === 'win32')('copyTree — a named pipe in the 
     const asRegularFile = (entry: Dirent): Dirent =>
       Object.assign(Object.create(entry) as Dirent, { isFile: () => true, isFIFO: () => false });
     const outcome = await withListing(src, (entries) => entries.map((entry) => (entry.name === 'pipe' ? asRegularFile(entry) : entry)), () =>
-      outcomeOrHang(copyTree(src, safePath.join(suite.dir(), 'dest'), FOLLOW)),
+      outcomeOrHang(copyTree(src, safePath.join(suite.dir(), 'dest'), '', FOLLOW)),
     );
     expect(outcome).toMatchObject(refusedSpecial(suite.fifo()));
   });

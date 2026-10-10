@@ -621,12 +621,12 @@ function devPlugin(plugin: PluginSource, rootDir: string): DevPlugin {
 }
 
 /**
- * Fill `into` with one `--dev` plugin: its non-skill content copied, and a link per built
+ * Fill `relative` under the staged directory (`''`: the directory itself) with one `--dev` plugin: its non-skill content copied, and a link per built
  * skill to `dist/skills/<name>`, so a rebuild is picked up live.
  */
-async function writeDevPlugin(dev: DevPlugin, into: string): Promise<void> {
-  await copyTree(dev.plugin.srcPluginDir, into, { links: 'preserve', side: dev.plugin.side, onto: 'fresh', filter: notSkills });
-  if (dev.hasSkills) await linkDevSkills(into, dev.links);
+async function writeDevPlugin(dev: DevPlugin, staged: string, relative: string): Promise<void> {
+  await copyTree(dev.plugin.srcPluginDir, staged, relative, { links: 'preserve', side: dev.plugin.side, onto: 'fresh', filter: notSkills });
+  if (dev.hasSkills) await linkDevSkills(relative === '' ? staged : safePath.join(staged, relative), dev.links);
 }
 
 /** The plugins one marketplace of the package ships, with where each goes under `paths`. */
@@ -654,13 +654,13 @@ function copiedMarketplace(marketplaceName: string, srcMpDir: string, plugins: r
   return {
     install: {
       marketplaceName,
-      write: (staged) => copyTree(srcMpDir, staged, { links: 'preserve', side, onto: 'fresh' }),
+      write: (staged) => copyTree(srcMpDir, staged, '', { links: 'preserve', side, onto: 'fresh' }),
       reads: [srcMpDir],
       // A `write` fill, not a `copy`: the planner proves every `copy` source again, and the whole package was
       // proven readable once already ({@link planPluginTree}). The holding check still sees it (`reads`).
       plugins: plugins.map(({ pluginName, srcPluginDir }) => ({
         pluginName,
-        cacheFill: { from: 'write', write: (staged) => copyTree(srcPluginDir, staged, { links: 'preserve', side, onto: 'fresh' }), reads: [srcPluginDir] },
+        cacheFill: { from: 'write', write: (staged) => copyTree(srcPluginDir, staged, '', { links: 'preserve', side, onto: 'fresh' }), reads: [srcPluginDir] },
       })),
     },
     skills,
@@ -675,14 +675,14 @@ function devMarketplace(marketplaceName: string, srcMpDir: string, plugins: read
     install: {
       marketplaceName,
       write: async (staged) => {
-        await copyTree(srcMpDir, staged, { links: 'preserve', side, onto: 'fresh', filter: notPlugins });
+        await copyTree(srcMpDir, staged, '', { links: 'preserve', side, onto: 'fresh', filter: notPlugins });
         // In order: each plugin is built into the one staged tree, and the first refusal stops the fill.
-        await forEachInOrder(linked, (dev) => writeDevPlugin(dev, safePath.join(staged, 'plugins', dev.plugin.pluginName)));
+        await forEachInOrder(linked, (dev) => writeDevPlugin(dev, staged, `plugins/${dev.plugin.pluginName}`));
       },
       reads: [srcMpDir],
       plugins: linked.map((dev) => ({
         pluginName: dev.plugin.pluginName,
-        cacheFill: { from: 'write', write: (staged) => writeDevPlugin(dev, staged), reads: [dev.plugin.srcPluginDir] },
+        cacheFill: { from: 'write', write: (staged) => writeDevPlugin(dev, staged, ''), reads: [dev.plugin.srcPluginDir] },
       })),
     },
     skills: linked.flatMap((each) => each.skills),

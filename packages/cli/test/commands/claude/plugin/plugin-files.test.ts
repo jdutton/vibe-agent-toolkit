@@ -35,7 +35,8 @@ describe('pluginFilesDest — where a files[].dest lands, not how it is spelled'
     ['skills-extra/x.md', 'skills-extra/x.md'],
     ['docs/skills/x.md', 'docs/skills/x.md'],
     ['.claude-plugin/extra.json', '.claude-plugin/extra.json'],
-    ['.claude-plugin/plugin.json/x', '.claude-plugin/plugin.json/x'],
+    ['.claude-plugin/plugin.jsonx', '.claude-plugin/plugin.jsonx'],
+    ['skillsı/x.md', 'skillsı/x.md'],
     ['Hooks/H.mjs', 'Hooks/H.mjs'],
   ])('%s lands at %s', (dest, landed) => {
     expect(pluginFilesDest(dest)).toBe(landed);
@@ -46,11 +47,13 @@ describe('pluginFilesDest — where a files[].dest lands, not how it is spelled'
     // One name where the filesystem folds it: letter case, Unicode form (a fullwidth `s`, U+FF53),
     // and the trailing dots and spaces Windows drops.
     'Skills/x.md', 'SKILLS/x.md', `${String.fromCodePoint(0xff53)}kills/x.md`, 'skills./x.md', 'skills /x.md', 'skills. ./x.md',
+    // NTFS: the directory by its stream name, and a dotless `ı` (U+0131), which it upper-cases to `I`.
+    'skills::$INDEX_ALLOCATION/x.md', `sk${String.fromCodePoint(0x131)}lls/x.md`,
   ])('%s is inside skills/', (dest) => {
     expect(refused(dest)).toMatchObject({ refusal: 'CONFIG_INVALID', message: expect.stringContaining(`"${dest}" resolves inside skills/`) as unknown });
   });
 
-  it.each(['.claude-plugin/plugin.json', './.claude-plugin/plugin.json', '.claude-plugin/x/../plugin.json', '.Claude-Plugin/PLUGIN.json', '.claude-plugin/plugin.json.'])(
+  it.each(['.claude-plugin/plugin.json', './.claude-plugin/plugin.json', '.claude-plugin/x/../plugin.json', '.Claude-Plugin/PLUGIN.json', '.claude-plugin/plugin.json.', '.claude-plugin/plugin.json/x'])(
     '%s is the generated plugin.json',
     (dest) => {
       expect(refused(dest)).toMatchObject({ refusal: 'CONFIG_INVALID', message: expect.stringContaining(`"${dest}" targets plugin.json`) as unknown });

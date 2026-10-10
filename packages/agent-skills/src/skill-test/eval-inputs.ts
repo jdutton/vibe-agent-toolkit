@@ -370,11 +370,12 @@ export async function stageEvalWorkspaces(input: StageEvalWorkspacesInput): Prom
  * what lies under that directory.
  */
 async function copyEvalInput(src: string, evalWorkspace: string, dest: string): Promise<void> {
+  const relative = safePath.relative(evalWorkspace, dest);
   if (statSync(src).isDirectory()) {
-    await copyTree(src, dest, { links: 'follow-contained', side: 'source', onto: 'fresh' });
+    await copyTree(src, evalWorkspace, relative, { links: 'follow-contained', side: 'source', onto: 'fresh' });
     return;
   }
-  await copyRegularFile(src, evalWorkspace, safePath.relative(evalWorkspace, dest), { side: 'source', reading: `eval input ${src}`, existing: 'replace', writing: `eval input ${src} into its workspace` });
+  await copyRegularFile(src, evalWorkspace, relative, { side: 'source', reading: `eval input ${src}`, existing: 'replace', writing: `eval input ${src} into its workspace` });
 }
 
 /**

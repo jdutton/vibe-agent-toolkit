@@ -79,7 +79,7 @@ describe('copyTree (follow-contained) on the hostile tree', () => {
     writeFileSync(safePath.join(src, 'deep', 'file.txt'), 'deep\n');
     createSymlink(cap, safePath.join(src, 'deep', 'file.txt'), safePath.join(src, 'alias.txt'), 'file');
 
-    await copyTree(src, dest(), FOLLOW);
+    await copyTree(src, dest(), '', FOLLOW);
 
     expect(readFileSync(safePath.join(dest(), 'deep', 'file.txt'), 'utf8')).toBe('deep\n');
     expect(readFileSync(safePath.join(dest(), 'alias.txt'), 'utf8')).toBe('deep\n');
@@ -91,7 +91,7 @@ describe('copyTree (follow-contained) on the hostile tree', () => {
     const src = safePath.join(tree().root, 'nested');
     createSymlink(cap, tree().victim, safePath.join(src, 'escape'), 'dir');
 
-    await expect(copyTree(src, dest(), FOLLOW)).rejects.toThrow(CopyLinkEscapesSourceError);
+    await expect(copyTree(src, dest(), '', FOLLOW)).rejects.toThrow(CopyLinkEscapesSourceError);
     expect(existsSync(safePath.join(dest(), 'escape', 'secret.txt'))).toBe(false);
   });
 
@@ -102,7 +102,7 @@ describe('copyTree (follow-contained) on the hostile tree', () => {
     const src = safePath.join(tree().root, 'nested');
     createSymlink(cap, src, safePath.join(src, 'deep', 'back'), 'dir');
 
-    await expect(copyTree(src, dest(), FOLLOW)).rejects.toThrow(DirectoryWalkRevisitedError);
+    await expect(copyTree(src, dest(), '', FOLLOW)).rejects.toThrow(DirectoryWalkRevisitedError);
     expect(existsSync(safePath.join(dest(), 'deep', 'back', 'deep'))).toBe(false);
   });
 });

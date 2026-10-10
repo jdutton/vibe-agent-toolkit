@@ -107,19 +107,27 @@ describe('marketplace copies', () => {
     expect(readdirSync(safePath.join(root, 'out', 'a-directory'))).toEqual([]);
   });
 
-  it('never copies a tree onto a link standing where its root goes: refused as the run stopping, the directory it points at untouched', async ({ skip }) => {
+  // A pool skill goes UNDER the staged plugin, which holds what earlier copies kept. The link an
+  // earlier one left — at the copy's own name, or above it — is the input's layout, never followed.
+  it.for([
+    { link: 'skills/group/pool-a', label: 'where the copy goes' },
+    { link: 'skills/group', label: 'one directory above it' },
+    { link: 'skills', label: 'two directories above it' },
+  ])('never copies a tree through a link standing $label ($link): refused as the input\'s, naming it, the directory it points at untouched', async ({ link }, { skip }) => {
     const cap = symlinkCapability() ?? skip();
     const tree = safePath.join(root, 'dist', 'skills', 'pool-a');
     mkdirSyncReal(tree, { recursive: true });
     writeFileSync(safePath.join(tree, 'SKILL.md'), '# a\n');
     mkdirSyncReal(safePath.join(root, 'outside'));
-    mkdirSyncReal(safePath.join(root, 'out', 'skills', 'group'), { recursive: true });
-    const nested = safePath.join(root, 'out', 'skills', 'group', 'pool-a');
-    createSymlink(cap, safePath.join(root, 'outside'), nested, 'dir');
+    const standing = safePath.join(root, 'out', link);
+    mkdirSyncReal(safePath.join(standing, '..'), { recursive: true });
+    createSymlink(cap, safePath.join(root, 'outside'), standing, 'dir');
 
-    const refusal = await refusalOf(() => copyTreeIntoMarketplace({ path: tree, side: 'source' }, nested, 'dist/skills/pool-a', 'skills/group/pool-a'));
+    const refusal = await refusalOf(() => copyTreeIntoMarketplace({ path: tree, side: 'source' }, { root: safePath.join(root, 'out'), relative: 'skills/group/pool-a' }, 'dist/skills/pool-a', 'skills/group/pool-a'));
 
-    expect(refusal).toMatchObject({ code: 'RUN_INCOMPLETE', side: 'destination', message: expect.stringContaining('skills/group/pool-a') as unknown });
+    expect(refusal).toMatchObject({ code: 'INPUT_UNREADABLE', side: 'source' });
+    expect(refusal.message).toContain(standing);
+    expect(refusal.message).toContain('dist/skills/pool-a');
     expect(readdirSync(safePath.join(root, 'outside'))).toEqual([]);
   });
 
@@ -130,7 +138,7 @@ describe('marketplace copies', () => {
     writeFileSync(safePath.join(tree, 'resources', 'r.md'), '# r\n');
     restore = refuseOpen(root, safePath.join(tree, 'resources', 'r.md'));
 
-    const refusal = await refusalOf(() => copyTreeIntoMarketplace({ path: tree, side: 'source' }, safePath.join(root, 'out'), 'dist/skills/pool-a', 'out'));
+    const refusal = await refusalOf(() => copyTreeIntoMarketplace({ path: tree, side: 'source' }, { root: safePath.join(root, 'out'), relative: '' }, 'dist/skills/pool-a', 'out'));
 
     expect(refusal).toMatchObject({ code: 'INPUT_UNREADABLE', side: 'source', message: expect.stringContaining(safePath.join(tree, 'resources', 'r.md')) as unknown });
   });
@@ -151,7 +159,7 @@ describe('marketplace copies', () => {
     writeFileSync(safePath.join(tree, 'SKILL.md'), '# a\n');
     restore = refuseAsyncFs('mkdir', safePath.join(root, 'out'), 'ENOSPC');
 
-    const refusal = await refusalOf(() => copyTreeIntoMarketplace({ path: tree, side: 'source' }, safePath.join(root, 'out'), 'tree', 'out'));
+    const refusal = await refusalOf(() => copyTreeIntoMarketplace({ path: tree, side: 'source' }, { root: safePath.join(root, 'out'), relative: '' }, 'tree', 'out'));
 
     expect(refusal).toMatchObject({ code: 'RUN_INCOMPLETE', side: 'destination' });
   });
@@ -164,7 +172,7 @@ describe('marketplace copies', () => {
     writeFileSync(safePath.join(tree, 'SKILL.md'), '# b\n');
     restore = refuseOpen(root, safePath.join(tree, 'SKILL.md'));
 
-    const refusal = await refusalOf(() => copyTreeIntoMarketplace({ path: tree, side: 'destination' }, safePath.join(root, 'out'), 'dist/skills/pool-b', 'out'));
+    const refusal = await refusalOf(() => copyTreeIntoMarketplace({ path: tree, side: 'destination' }, { root: safePath.join(root, 'out'), relative: '' }, 'dist/skills/pool-b', 'out'));
 
     expect(refusal).toMatchObject({ code: 'RUN_INCOMPLETE', side: 'destination' });
   });
