@@ -39,12 +39,13 @@ const DROPPED_AT_SEGMENT_END: ReadonlySet<string> = new Set(['.', ' ']);
 /**
  * A path segment as a filesystem that folds names compares it: letter case and Unicode form (APFS,
  * NTFS, exFAT, SMB), the trailing dots and spaces Windows drops, and — NTFS — whatever follows a
- * `:` (`skills::$INDEX_ALLOCATION` is the directory `skills` by its stream name).
+ * `:` (`skills::$INDEX_ALLOCATION` is the directory `skills` by its stream name). The cut is made on
+ * every host, so a POSIX directory really named `skills:notes` compares as `skills` too.
  *
  * Case is folded UP and then down: NTFS compares upper-cased names, and a dotless `ı` (U+0131) is
  * `I` there, which lower-casing alone leaves apart from `i`.
  */
-function foldedSegment(segment: string): string {
+export function foldedSegment(segment: string): string {
   const stream = segment.indexOf(':');
   let end = stream === -1 ? segment.length : stream;
   while (end > 0 && DROPPED_AT_SEGMENT_END.has(segment.charAt(end - 1))) end -= 1;

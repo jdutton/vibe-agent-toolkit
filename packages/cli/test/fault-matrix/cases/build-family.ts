@@ -364,7 +364,7 @@ function cacheClearCase(): VerbCase {
 /**
  * Every build-family case, and how many matrix files share its injections: each file holds the
  * injections with `shardOf(id, files) === index`, which must fit the shard limit (C10). A count is
- * `shardFilesFor` of the most injections the case selects on any host (see the install family's table).
+ * at least `shardFilesFor` of the most injections the case selects on any host (see the install family's table).
  * `fault-matrix-shards.integration.test.ts` holds each file to this table.
  */
 export const BUILD_FAMILY_SHARDS = {

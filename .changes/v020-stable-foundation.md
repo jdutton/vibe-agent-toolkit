@@ -699,8 +699,10 @@
   volume that folds names — was written into a packaged skill; and `./.claude-plugin/plugin.json`
   was accepted, written, and then silently discarded when the build generated `plugin.json` over
   it. Every such spelling is now `CONFIG_INVALID`, exit 2, naming the `dest`, on every host, as is
-  a `dest` under `.claude-plugin/plugin.json`. Write the file somewhere else in the plugin, or ship
-  it with the skill through that skill's own `files:`.
+  a `dest` under `.claude-plugin/plugin.json`. "On every host" includes the NTFS stream spelling: a
+  first segment is compared up to its `:`, so a POSIX directory really named `skills:notes` is
+  refused as `skills` is. Write the file somewhere else in the plugin, or ship it with the skill
+  through that skill's own `files:`.
 - **`vat skills package` refuses an `--output` that is, or contains, the skill's own source** — the
   SKILL.md or any file it bundles — `USAGE_INVALID`, exit 2, `--force` or not, and writes nothing.
   It skipped every occupancy check then and overwrote the author's SKILL.md and the files beside it.
@@ -802,9 +804,16 @@
   `configs.recommended`.
 - **`copyDirectory` is removed from `@vibe-agent-toolkit/utils`** (and from the `./fs` subpath); use
   `copyTree(source, root, relative, { links, side, onto, filter? })`. `copyDirectory(src, dest)` is
-  `copyTree(src, dest, '', { links: 'follow-contained', side: 'source', onto: 'merge' })` — except
-  that a `dest` which is itself a symbolic link (or a file) is refused `EEXIST`, where
-  `copyDirectory` copied into the link's target.
+  `copyTree(src, dest, '', { links: 'follow-contained', side: 'source', onto: 'merge' })`, which is
+  the nearest call and not the same behaviour. Among the places `copyDirectory` differed: a `dest` that is
+  itself a symbolic link (or a file) is refused `EEXIST`, where it copied into the link's target; a
+  source link to a file OUTSIDE the tree is refused (`COPY_LINK_ESCAPES_SOURCE`), where its target
+  was copied; a source link to a directory inside the tree is followed, where the copy failed
+  (`EISDIR` on Linux); a link already standing below `dest` is replaced or refused, where it was
+  written or made through; a named pipe, socket or device is refused, where it was opened; and a
+  failure READING the source is an `FsFaultError` carrying the errno as its cause, where it was the
+  raw errno. A failure writing the copy (`ENOSPC`, `EACCES`, `EEXIST`, `EPERM`) is still the raw
+  errno, so keep the errno branch of a `catch`.
 - **`readKnownMarketplaces(paths, side)`, `readInstalledPlugins(paths, side)` and
   `readUserSettings(paths, side)` (`@vibe-agent-toolkit/claude-marketplace`) take the caller's side**,
   the side a fault reading the file is classified on.
@@ -1215,12 +1224,15 @@
 
 ### Changed
 
-- **On Windows, a filesystem refusal names its path with forward slashes** — in the message and in
-  `FsFaultError.path` — as every other path VAT prints. A refusal built from the OS's own error
-  carried the backslash spelling there, one built from VAT's own path the forward one.
+- **`vat claude plugin build` copies a plugin's pool skills, and lists them in its report's
+  `skills`, by destination path** — where both followed the `skills:` selector's order, or the
+  directory listing's under `skills: "*"`, which differs by host. The set is the same.
 
 - **For adopters on a `0.2.0-rc` build: library API that changed between release candidates.** None
   of it was in 0.1.42, so none of it breaks an upgrade from a stable release.
+  - On Windows, a filesystem refusal names its path with forward slashes — in the message and in
+    `FsFaultError.path` — as every other path VAT prints. An rc's refusal built from the OS's own
+    error carried the backslash spelling there, one built from VAT's own path the forward one.
   - `@vibe-agent-toolkit/utils` `copyTree` requires `onto`: `'fresh'` for a new destination —
     anything already at a name it creates is `EEXIST`, never adopted or written through — or
     `'merge'` for an output directory written again (a file or link there is replaced, a real
@@ -1453,7 +1465,8 @@
   it, pointed at. It needed a `dist/skills` that VAT's own packager did not write — links placed
   there by hand or by another tool. Both are now refused, exit 2, with nothing written outside the
   build and the previous marketplace left as it was: the `files[]` entry as `CONFIG_INVALID` (its
-  `dest` is inside `skills/`), the nested copy as `INPUT_UNREADABLE` naming the link. Every file
+  `dest` is inside `skills/`), the nested copy as `INPUT_UNREADABLE` naming the link, in whichever order the skills
+  were selected (pool skills are copied by destination path, a directory before anything under it). Every file
   and every skill the build copies into a plugin is now placed from the plugin's own directory
   down, through real directories only, each file created exclusively.
 

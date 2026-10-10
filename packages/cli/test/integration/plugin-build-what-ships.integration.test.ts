@@ -227,7 +227,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
   it('never copies a refereed pool skill THROUGH a link an earlier pool copy left at its nested destination', async ({ skip }) => {
     const cap = symlinkCapability() ?? skip();
     tempDir = createTestTempDir('vat-plugin-skills-nested-link-');
-    // Selected in this order, so `group` — and its link — is copied before the skill that lands on it.
+    // `group` — and its link — is copied before the skill that lands on it: pool skills go by destination path.
     writeFixture(tempDir, `["group", "${NESTED_SKILL}"]`);
     const outside = safePath.join(tempDir, 'outside');
     mkdirSyncReal(outside, { recursive: true });
@@ -251,12 +251,20 @@ describe('plugin build — what each phase produces under skills/ (integration)'
   // One segment deeper: the link is not AT the refereed copy's destination but ABOVE it
   // (`skills/group/sub -> outside`, the skill authored at `skills/group/sub/<skill>`). Looking only at
   // the destination's own name went through `sub` and made the skill's directory outside the build.
-  it('never copies a refereed pool skill through a link standing ABOVE its nested destination', async ({ skip }) => {
-    const cap = symlinkCapability() ?? skip();
+  //
+  // In either selection order: pool skills are copied by destination path, so `group` — and
+  // its link — is always there before the skill that lands under it, and the refusal is one code.
+  // Copied in selection order, the deep skill went first, made `skills/group/sub` a real directory,
+  // and `group`'s own link was then refused as the build's own half-written output.
+  const DEEP_SKILL = 'deep-skill';
+  it.skipIf(!symlinkCapability()).each([
+    ['before', ['group', NESTED_SKILL, DEEP_SKILL]],
+    ['after', [DEEP_SKILL, NESTED_SKILL, 'group']],
+  ])('never copies a refereed pool skill through a link standing ABOVE its nested destination (its holder selected %s it)', async (_order, selected) => {
+    const cap = symlinkCapability();
+    if (!cap) throw new Error('gated by skipIf');
     tempDir = createTestTempDir('vat-plugin-skills-ancestor-link-');
-    const DEEP_SKILL = 'deep-skill';
-    // Selected in this order, so `group` — and its link — is copied before the skill that lands under it.
-    writeFixture(tempDir, `["group", "${NESTED_SKILL}", "${DEEP_SKILL}"]`, (skillsDir) => {
+    writeFixture(tempDir, JSON.stringify(selected), (skillsDir) => {
       mkdirSyncReal(safePath.join(skillsDir, 'group', 'sub', DEEP_SKILL), { recursive: true });
       writeTestFile(safePath.join(skillsDir, 'group', 'sub', DEEP_SKILL, SKILL_FILE), skillMd(DEEP_SKILL));
     });

@@ -12,7 +12,7 @@ import { mkdir, readdir } from 'node:fs/promises';
 import { conventionalSuiteProbe, createProjectRegistry, getMarketplaceOutputDir, getPluginSourceDir, isSkillPackagingInputError, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkillInto, packagingConfigToPackageOptions, pluginDirInMarketplace, skillNameToFsPath, stagedPathMapper, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ProjectConfig, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Finding, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { applyTreePlan, writeFileUnder, direntKindFollowing, everyInOrder, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, relativeEscapesRoot, safePath, toForwardSlash, VatError, withFsFault } from '@vibe-agent-toolkit/utils';
+import { applyTreePlan, writeFileUnder, compareCodeUnits, direntKindFollowing, everyInOrder, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, relativeEscapesRoot, safePath, toForwardSlash, VatError, withFsFault } from '@vibe-agent-toolkit/utils';
 import { onCrawlOutput } from '@vibe-agent-toolkit/utils/crawl';
 import { Command } from 'commander';
 
@@ -41,7 +41,7 @@ import { assertMarketplaceDeclared, loadClaudeProjectConfig } from '../claude-co
 import type { PluginBuildData } from './build-schema.js';
 import { buildMarketplaceJson, type MarketplaceJsonPluginEntry } from './marketplace-json.js';
 import { resolvePluginChangelogPath } from './plugin-changelog.js';
-import { applyPluginFiles } from './plugin-files.js';
+import { applyPluginFiles, foldedSegment } from './plugin-files.js';
 import { mergePluginJson, resolveVersion } from './plugin-json-merge.js';
 import {
   parsePluginJsonFiles,
@@ -907,18 +907,28 @@ async function copyPoolSkills(
   outputs: readonly string[],
   logger: ReturnType<typeof createLogger>,
 ): Promise<string[]> {
-  const selected = resolvePluginSkills(pluginDef, marketplaceAvailable);
+  // By destination path, whatever order the selector or `readdir` named them in — every directory
+  // before anything under it, since a path sorts after each of its prefixes. A pool skill that holds a
+  // link is then always in place before a skill landing under it, so that layout is refused one way
+  // (the link, an input fault) and never as this run's own half-written output. Compared as a
+  // filesystem that folds names compares them (`Group/sub` is under `group` there); the name breaks a
+  // tie, so two skills sent to one destination are also copied in one order on every host.
+  const selected = resolvePluginSkills(pluginDef, marketplaceAvailable)
+    .map((skillName) => {
+      const fsPath = destOverrides.get(skillName) ?? skillNameToFsPath(skillName);
+      return { skillName, fsPath, placed: toForwardSlash(fsPath).split('/').map(foldedSegment).join('/') };
+    })
+    .toSorted((a, b) => compareCodeUnits(a.placed, b.placed) || compareCodeUnits(a.skillName, b.skillName));
   const copied: string[] = [];
 
   // In order: each copy writes into the plugin dir, `destOverrides` may collide, and the first failure wins.
-  await forEachInOrder(selected, async (skillName) => {
+  await forEachInOrder(selected, async ({ skillName, fsPath }) => {
     const skillDistPath = safePath.join(configDir, 'dist', 'skills', skillName);
     requireInputPath(skillDistPath, {
       origin: 'content',
       message: `Skill "${skillName}" not built at dist/skills/${skillName}. Run: vat skills build (or vat build to build everything)`,
     });
 
-    const fsPath = destOverrides.get(skillName) ?? skillNameToFsPath(skillName);
     const destPath = safePath.join(pluginDir, 'skills', fsPath);
     // A file in dist/skills the OS will not read is on dist/skills' side of the run (`distSkillsSide`):
     // an input another build wrote (INPUT_UNREADABLE, fixed by rebuilding it), or this run's own output.

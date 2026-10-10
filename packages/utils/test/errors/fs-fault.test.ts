@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  FS_FAULT_ERRNOS_BY_CLASS,
   fsFaultOf,
   isAccessRefusedError,
   isAlreadyExistsError,
@@ -60,6 +61,14 @@ describe('the errno table', () => {
     expect(fsFaultOf(errno(code))?.faultClass).toBe(faultClass);
     const wrapped = new Error('outer', { cause: new Error('middle', { cause: errno(code, { path: '/p' }) }) });
     expect(fsFaultOf(wrapped)).toMatchObject({ errno: code, faultClass, path: '/p' });
+  });
+
+  // The classifier's lookup is built from the exported table once: a list a consumer could push to
+  // would then name an errno the classifier does not know.
+  it('exports the table it classifies by, and nobody can change it', () => {
+    expect(Object.entries(FS_FAULT_ERRNOS_BY_CLASS)).toEqual(TABLE);
+    expect(Object.isFrozen(FS_FAULT_ERRNOS_BY_CLASS)).toBe(true);
+    expect(Object.values(FS_FAULT_ERRNOS_BY_CLASS).every((errnos) => Object.isFrozen(errnos))).toBe(true);
   });
 
   it('gives no errno two classes', () => {

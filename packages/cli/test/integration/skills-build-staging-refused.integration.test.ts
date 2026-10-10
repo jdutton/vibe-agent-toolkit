@@ -11,6 +11,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { installFaultFs, type FaultRule } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { SkillBuildRun } from '../../src/commands/skills/build.js';
 import { refusalCodeOf } from '../../src/utils/command-refusal.js';
 import {
   build,

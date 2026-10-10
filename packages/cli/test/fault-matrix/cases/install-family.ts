@@ -431,8 +431,9 @@ function agentUninstallCase(mode: 'copy' | 'dev'): VerbCase {
  * Every install-family case, and how many matrix files share its injections: each file holds
  * one case's slice (the injections whose id hashes to it: `shardOf(id, files) === index`), which must fit the shard limit (C10).
  *
- * A case's count is `shardFilesFor` of the MOST injections it selects on any host (the overflow
- * refusal prints that total and the count to use). The trace is the host's: the `case-aliased`
+ * A case's count is at least `shardFilesFor` of the MOST injections it selects on any host (the
+ * overflow refusal prints that total and the count to use — one more than it has, when it already
+ * has that many and one slice overflowed by the hash's scatter). The trace is the host's: the `case-aliased`
  * variants install over a real alias only where the filesystem folds case — where it keeps case the
  * two spellings are two directories, the replaced one is really removed, and the case selects about
  * a fifth more; a Node that traces inside `rm` selects more than one that does not.

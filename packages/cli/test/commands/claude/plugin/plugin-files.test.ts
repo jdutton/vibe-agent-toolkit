@@ -49,11 +49,13 @@ describe('pluginFilesDest — where a files[].dest lands, not how it is spelled'
     'Skills/x.md', 'SKILLS/x.md', `${String.fromCodePoint(0xff53)}kills/x.md`, 'skills./x.md', 'skills /x.md', 'skills. ./x.md',
     // NTFS: the directory by its stream name, and a dotless `ı` (U+0131), which it upper-cases to `I`.
     'skills::$INDEX_ALLOCATION/x.md', `sk${String.fromCodePoint(0x131)}lls/x.md`,
+    // Cut at the `:` on every host, so a POSIX directory really named `skills:notes` is refused too.
+    'skills:notes/x.md',
   ])('%s is inside skills/', (dest) => {
     expect(refused(dest)).toMatchObject({ refusal: 'CONFIG_INVALID', message: expect.stringContaining(`"${dest}" resolves inside skills/`) as unknown });
   });
 
-  it.each(['.claude-plugin/plugin.json', './.claude-plugin/plugin.json', '.claude-plugin/x/../plugin.json', '.Claude-Plugin/PLUGIN.json', '.claude-plugin/plugin.json.', '.claude-plugin/plugin.json/x'])(
+  it.each(['.claude-plugin/plugin.json', './.claude-plugin/plugin.json', '.claude-plugin/x/../plugin.json', '.Claude-Plugin/PLUGIN.json', '.claude-plugin/plugin.json.', '.claude-plugin/plugin.json/x', '.claude-plugin:x/plugin.json'])(
     '%s is the generated plugin.json',
     (dest) => {
       expect(refused(dest)).toMatchObject({ refusal: 'CONFIG_INVALID', message: expect.stringContaining(`"${dest}" targets plugin.json`) as unknown });

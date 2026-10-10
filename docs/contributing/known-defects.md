@@ -201,6 +201,24 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Packaging and build
 
+### Two pool skills sent to one plugin directory are refused as a half-written build, not as a config fault
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** yes (a misleading refusal)
+- **Mechanism:** when a plugin-local skill and a pool skill declare one name, the pool copy takes
+  the plugin-local skill's authored directory. `resolveCollidingSkills` checks a plugin-local
+  skill's directory against the selected pool names only when the skill did NOT collide by name, so
+  a refereed skill's directory is never checked. A plugin-local skill named `foo` authored at
+  `skills/bar/`, with pool skills `foo` and `bar` both selected, sends both to `skills/bar`.
+- **What a user sees:** the second copy is refused with a raw `EEXIST` on the build's own output
+  (`RUN_INCOMPLETE`), naming whichever skill sorts second, where the cause is the config: two
+  skills claim one directory, which the build reports as `CONFIG_INVALID` in the un-refereed case.
+  Nothing is written outside the build and the previous marketplace is kept.
+- **Reproduce:** by reading; not run.
+- **Where:** `resolveCollidingSkills` in
+  [`build.ts`](../../packages/cli/src/commands/claude/plugin/build.ts)
+- **Fix:** run the directory-clash check for a refereed skill too, against every other selected
+  pool skill's destination.
+
 ### Writes and directories in a tree VAT fills that still follow a link, where no link is today
 
 - **Severity:** Minor (not reachable from an input today) · **Effort:** S each · **User-visible:** no
@@ -230,8 +248,10 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   `copyAndRewriteFile` in [`skill-packager.ts`](../../packages/agent-skills/src/skill-packager.ts);
   `buildPlugin` in [`build.ts`](../../packages/cli/src/commands/claude/plugin/build.ts);
   `stageEvalInput` in [`eval-inputs.ts`](../../packages/agent-skills/src/skill-test/eval-inputs.ts)
-- **Fix:** `writeFileUnder` (with `existing: 'replace'`) for the three file writes and
-  `makeDirectoryUnder` for the two directories, each rooted at the tree's own root. The staging copy
+- **Fix:** `writeFileUnder` (with `existing: 'replace'`) for the three file writes (the staging
+  copy's, the vendored manifest, the rewritten markdown) and `makeDirectoryUnder` for the five
+  directories (the staging root, the rewritten file's parents, the plugin directory, the bundle
+  root, the eval input's parents), each rooted at the tree's own root. The staging copy
   could instead become a `copyTree` with a link-refusing policy. Each changes the calls a fault-matrix
   lane traces, so re-run that lane.
 

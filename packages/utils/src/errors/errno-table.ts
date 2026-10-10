@@ -18,7 +18,12 @@
 /** What kind of thing the OS said went wrong, independent of which side of a verb it happened on. */
 export type FsFaultClass = 'absent' | 'refused' | 'exhausted' | 'wrong-type' | 'occupied' | 'busy' | 'unsupported' | 'device';
 
-/** The one place an errno gets a class. `EROFS` is `unsupported`: the filesystem cannot be written, no permission would change it. */
+/**
+ * The one place an errno gets a class. `EROFS` is `unsupported`: the filesystem cannot be written, no permission would change it.
+ *
+ * Frozen, lists included: the classifier's lookup is built from it once, at load, so a list a
+ * consumer could change afterwards would be a second table the classifier does not agree with.
+ */
 export const FS_FAULT_ERRNOS_BY_CLASS: Readonly<Record<FsFaultClass, readonly string[]>> = {
   absent: ['ENOENT', 'ENOTDIR'],
   refused: ['EACCES', 'EPERM'],
@@ -31,6 +36,8 @@ export const FS_FAULT_ERRNOS_BY_CLASS: Readonly<Record<FsFaultClass, readonly st
   // UNKNOWN: Windows surfaces it for reparse points and some network paths
   device: ['EIO', 'ESTALE', 'ETIMEDOUT', 'EHOSTDOWN', 'ENETDOWN', 'UNKNOWN'],
 };
+for (const errnos of Object.values(FS_FAULT_ERRNOS_BY_CLASS)) Object.freeze(errnos);
+Object.freeze(FS_FAULT_ERRNOS_BY_CLASS);
 
 const CLASS_BY_ERRNO: ReadonlyMap<string, FsFaultClass> = new Map(
   (Object.entries(FS_FAULT_ERRNOS_BY_CLASS) as Array<[FsFaultClass, readonly string[]]>)

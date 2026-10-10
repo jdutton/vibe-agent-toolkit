@@ -18,6 +18,18 @@ function tick(ms = 0): Promise<void> {
 }
 
 /**
+ * Resolves after `count` turns of the event loop. Calls that overlap finish in order of
+ * their counts whatever the host's load — two timers a millisecond apart do not: a
+ * stalled loop finds both expired and the order is the timer queue's.
+ */
+function turns(count: number): Promise<void> {
+  if (count <= 0) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  }).then(() => turns(count - 1));
+}
+
+/**
  * A callback that records start/end events and the peak number of calls in
  * flight. Item `failOn` rejects instead of resolving; a reversed delay makes later
  * items finish FIRST when calls overlap, so an order-preserving result is earned.
@@ -30,7 +42,7 @@ function recorder(options: { failOn?: number; count: number }) {
     events.push(`start ${item}@${index}`);
     active++;
     peak = Math.max(peak, active);
-    return tick(options.count - item).then(() => {
+    return turns(options.count - item).then(() => {
       active--;
       events.push(`end ${item}`);
       if (item === options.failOn) throw new Error(`boom ${item}`);

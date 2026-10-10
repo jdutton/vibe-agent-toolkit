@@ -109,9 +109,14 @@ interface ShardSelection {
 export function assertWithinShardLimit(count: number, selection: ShardSelection): void {
   if (count <= MAX_INJECTIONS_PER_FILE) return;
   const { label, host, total, files } = selection;
+  const sized = shardFilesFor(total);
+  // No fewer files than its total asks for: this slice is over by the hash's scatter alone, and one more file moves it.
+  const advice = sized > files
+    ? `give it ${sized} in its shard table and add the matrix files`
+    : `its total asks for only ${sized}, so this slice is over by the scatter of the hash alone; give it ${files + 1} in its shard table and add the matrix file`;
   throw new Error(
     `${label} on ${host}: ${count} injections, ${count - MAX_INJECTIONS_PER_FILE} over the shard limit of ${MAX_INJECTIONS_PER_FILE}. `
-    + `The case selects ${total} on this host across ${files} file(s); give it ${shardFilesFor(total)} in its shard table and add the matrix files.`,
+    + `The case selects ${total} on this host across ${files} file(s); ${advice}.`,
   );
 }
 

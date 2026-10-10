@@ -259,6 +259,14 @@ describe('shard limit (C10)', () => {
     );
   });
 
+  // A lane already at the count its total asks for overflows only by the hash's scatter: naming that
+  // same count again would be advice that changes nothing.
+  it.each([[19, 20], [22, 23]])('asks for one more file when the case has %i, no fewer than its total asks for', (files, next) => {
+    expect(() => assertWithinShardLimit(MAX_INJECTIONS_PER_FILE + 1, { ...selection, files })).toThrow(
+      `The case selects 378 on this host across ${files} file(s); its total asks for only 19, so this slice is over by the scatter of the hash alone; give it ${next} in its shard table`,
+    );
+  });
+
   // A table sized by this never fills its files to the limit: the fullest hashed slice runs well over the mean.
   it('sizes a case so its files average 20 injections, half the limit', () => {
     expect([1, 20, 21, 280, 378].map((total) => shardFilesFor(total))).toEqual([1, 1, 2, 14, 19]);
