@@ -355,7 +355,6 @@ export function violations(e: CaseEvidence): string[] {
   const tmp = [...e.tmpAfter.keys()].filter((key) => key !== ROOT_KEY);
   for (const key of unnamedTmpResidue(tmp, e)) found.push(`I6: ${key} was left in TMPDIR`);
   for (const key of unnamedResidue(residueKeys(e.after), e.before, e)) found.push(`I6: staging residue ${key} was left behind and nothing names it`);
-  found.push(...registryAgrees(e));
-  found.push(...refusalOwedByTable(e));
+  found.push(...registryAgrees(e), ...refusalOwedByTable(e));
   return found;
 }

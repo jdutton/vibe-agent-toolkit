@@ -160,6 +160,8 @@ function refusedWith(seen: number | undefined): { thrown?: unknown } {
 
 const isRegisteredCode = (code: string): code is keyof typeof CODE_REGISTRY => Object.hasOwn(CODE_REGISTRY, code);
 
+const topLevelRecord = (outcome: VerbOutcome): RefusalOfRecord => ({ refusal: outcome.refusal, message: outcome.message, via: 'top level' });
+
 /**
  * Why `outcome.thrown` is not the value the published refusal was built from: the message the
  * refusal path derives from it (the unmocked `errorMessageOf`, then `withFsFaultRemedy`; the code's
@@ -169,7 +171,7 @@ const isRegisteredCode = (code: string): code is keyof typeof CODE_REGISTRY => O
  * records every `errorMessageOf` call, so without this a stale earlier value would pass for the
  * refusal's — and I8 would judge the wrong error.
  */
-export async function provenanceMismatch(outcome: VerbOutcome, record: RefusalOfRecord = { refusal: outcome.refusal, message: outcome.message, via: 'top level' }): Promise<string | undefined> {
+export async function provenanceMismatch(outcome: VerbOutcome, record: RefusalOfRecord = topLevelRecord(outcome)): Promise<string | undefined> {
   const { refusal } = record;
   if (!('thrown' in outcome) || refusal === undefined || refusal === NO_REPORT) return undefined;
   const actual = await vi.importActual<typeof CommandRefusal>('../../src/utils/command-refusal.js');

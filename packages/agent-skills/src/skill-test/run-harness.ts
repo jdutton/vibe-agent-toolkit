@@ -3121,12 +3121,14 @@ async function runHarnessCollecting(opts: RunHarnessOptions, leftovers: unknown[
     // for why a call-site guard is the weaker of the two forms.
     swallowCleanupFailure(killAllActiveClaudeChildren);
     lock.release();
-    leftovers.push(...await cleanupHarness(harnessRoot, { keep: opts.keep === true, created: harnessCreated }));
-    leftovers.push(...await removeVatOnlyDir(graderOutDir));
-    // The held eval suite is the answer key: reap it on EVERY exit path (including
-    // --keep, which retains the harness dir for inspection but has no business
-    // retaining the key), and never conditionally.
-    leftovers.push(...await removeVatOnlyDir(evalSuiteHoldDir));
+    leftovers.push(
+      ...await cleanupHarness(harnessRoot, { keep: opts.keep === true, created: harnessCreated }),
+      ...await removeVatOnlyDir(graderOutDir),
+      // The held eval suite is the answer key: reap it on EVERY exit path (including
+      // --keep, which retains the harness dir for inspection but has no business
+      // retaining the key), and never conditionally.
+      ...await removeVatOnlyDir(evalSuiteHoldDir),
+    );
     // Per-eval workspaces are the executor's cwd; `retainWorkspaces` (minted with
     // the root above) is the single author of whether they survive.
     if (!retainWorkspaces) leftovers.push(...await removeVatOnlyDir(workspacesRoot));

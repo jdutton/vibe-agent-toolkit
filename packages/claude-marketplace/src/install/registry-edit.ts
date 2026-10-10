@@ -42,8 +42,8 @@ async function restore(change: RegistryFileChange): Promise<TreeRollbackStranded
   try {
     await (change.prior === undefined ? fs.rm(change.path, { force: true }) : replaceFile(change.path, change.prior));
     return undefined;
-  } catch (refused: unknown) {
-    return { dest: change.path, parked: undefined, why: `it could not be put back: ${messageOf(refused)}` };
+  } catch (error_: unknown) {
+    return { dest: change.path, parked: undefined, why: `it could not be put back: ${messageOf(error_)}` };
   }
 }
 

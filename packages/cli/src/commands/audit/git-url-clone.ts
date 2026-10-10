@@ -96,8 +96,8 @@ export async function withClonedRepo<T>(
         resend();
       },
       // A rejection is a refusal to dispose at all (nothing was touched): say that, not "left behind".
-      (refused: unknown) => {
-        process.stderr.write(`[vat: interrupted — temp dir not disposed of: ${errorMessageOf(refused)}]\n`);
+      (error_: unknown) => {
+        process.stderr.write(`[vat: interrupted — temp dir not disposed of: ${errorMessageOf(error_)}]\n`);
         resend();
       },
     );

@@ -491,9 +491,9 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     try {
       requireConfirmedAbsent(target, error, { side: crawlSideOf(target, outputs, unreadable), origin: 'content', action: `crawl ${target}` }, { follows: true });
       return true;
-    } catch (refused: unknown) {
-      const facts = fsFaultOf(refused);
-      if (facts === undefined) throw refused;
+    } catch (error_: unknown) {
+      const facts = fsFaultOf(error_);
+      if (facts === undefined) throw error_;
       raiseRefusal(directoryRefusalFor({ outcome: 'unreadable', code: facts.errno }, facts.path ?? target));
       return false;
     }

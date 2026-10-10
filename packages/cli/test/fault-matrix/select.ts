@@ -257,20 +257,36 @@ function bucketsOf(trace: readonly FsCall[], roots: Roots): Map<string, { side: 
  */
 export function selectInjectionPoints(trace: readonly FsCall[], roots: Roots, mode: 'covering' | 'full', target: Roots = roots): InjectionPoint[] {
   const points: InjectionPoint[] = [];
+  const at = { trace, roots, target };
   for (const { side, calls } of bucketsOf(trace, roots).values()) {
     const family = calls[0]?.family;
     if (family === undefined) continue;
     const errnos = ERRNOS_FOR_FAMILY[family];
-    if (mode === 'full') {
-      for (const call of calls) for (const errno of errnos) points.push({ rule: ruleFor(call, errno, trace, roots, target), side, call });
-      continue;
-    }
-    for (const [index, { site, call }] of sitesOf(calls, roots).entries()) {
-      for (const errno of errnosOfSite(index, site, errnos)) points.push({ rule: ruleFor(call, errno, trace, roots, target), side, call });
-    }
-    points.push(...fullDiskMidWrite(points, calls, side, { trace, roots, target }));
+    points.push(...(mode === 'full' ? everyCallTimesEveryErrno(calls, errnos, side, at) : coveringSample(calls, errnos, side, at)));
   }
   return points;
+}
+
+/** One bucket's `covering` sample: its sites, then the full disk mid-write (a call of this bucket, so only these points can have dealt it). */
+function coveringSample(calls: readonly FsCall[], errnos: readonly InjectedErrno[], side: Side, at: SelectionAt): InjectionPoint[] {
+  const sites = oneCallPerSite(calls, errnos, side, at);
+  return [...sites, ...fullDiskMidWrite(sites, calls, side, at)];
+}
+
+/** Where a selection's rules are built from: the traced case and the case they will be installed in. */
+interface SelectionAt {
+  trace: readonly FsCall[];
+  roots: Roots;
+  target: Roots;
+}
+
+function everyCallTimesEveryErrno(calls: readonly FsCall[], errnos: readonly InjectedErrno[], side: Side, at: SelectionAt): InjectionPoint[] {
+  return calls.flatMap((call) => errnos.map((errno) => ({ rule: ruleFor(call, errno, at.trace, at.roots, at.target), side, call })));
+}
+
+function oneCallPerSite(calls: readonly FsCall[], errnos: readonly InjectedErrno[], side: Side, at: SelectionAt): InjectionPoint[] {
+  return sitesOf(calls, at.roots).flatMap(({ site, call }, index) =>
+    errnosOfSite(index, site, errnos).map((errno) => ({ rule: ruleFor(call, errno, at.trace, at.roots, at.target), side, call })));
 }
 
 /** A full disk on the middle data write under tmp, unless the round-robin already dealt it there. */

@@ -249,7 +249,9 @@ function failAfterClosing(style: FsApi, close: Fn, args: readonly unknown[], err
   depth += 1;
   try {
     if (style === 'promise' || style === 'handle') {
-      return (close(...args) as Promise<unknown>).then(() => Promise.reject(error));
+      return (close(...args) as Promise<unknown>).then(() => {
+        throw error;
+      });
     }
     const index = args.findLastIndex((arg) => typeof arg === 'function');
     if (style === 'callback' && index >= 0) {

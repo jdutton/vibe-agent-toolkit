@@ -78,8 +78,8 @@ export function fsBoundary(roots: FsRoots, options: { origin?: SourceOrigin; sha
   function sideOfFault(error: unknown): FsSide | undefined {
     try {
       return sideOfError(error);
-    } catch (defect: unknown) {
-      throw new AggregateError([defect, error], 'Could not classify a filesystem fault: examining a root failed');
+    } catch (error_: unknown) {
+      throw new AggregateError([error_, error], 'Could not classify a filesystem fault: examining a root failed');
     }
   }
 

@@ -124,7 +124,7 @@ async function removeOnce(entry: string): Promise<boolean> {
   if (stats === undefined) return false;
   const directory = stats.isDirectory();
   // Best effort: a root the OS will not chmod may still be removable, and the walk below asks again.
-  if (directory) await fs.chmod(entry, OWNER_RWX).catch((refused: unknown) => refused);
+  if (directory) await fs.chmod(entry, OWNER_RWX).catch((error_: unknown) => error_);
   try {
     await fs.rm(entry, { recursive: true, force: true });
   } catch (error: unknown) {
@@ -184,8 +184,8 @@ export async function replaceFile(dest: string, contents: string | Uint8Array): 
     if (target.mode !== undefined) await fs.chmod(temp, target.mode);
     await renameFileAtomic(temp, target.path);
   } catch (error: unknown) {
-    await fs.rm(temp, { force: true }).catch((cleanup: unknown) => {
-      recordSuppressedFault(error, classifyFsFault(cleanup, { side: 'destination', action: 'remove the temporary file', path: temp }));
+    await fs.rm(temp, { force: true }).catch((error_: unknown) => {
+      recordSuppressedFault(error, classifyFsFault(error_, { side: 'destination', action: 'remove the temporary file', path: temp }));
     });
     throw error;
   }

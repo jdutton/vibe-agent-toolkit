@@ -244,8 +244,8 @@ async function discard(entry: string | undefined, error: unknown): Promise<void>
   if (entry === undefined) return;
   try {
     await removeEntry(entry);
-  } catch (refused: unknown) {
-    recordSuppressedFault(error, classifyFsFault(refused, { side: 'destination', action: `remove the staged ${entry}`, path: entry }));
+  } catch (error_: unknown) {
+    recordSuppressedFault(error, classifyFsFault(error_, { side: 'destination', action: `remove the staged ${entry}`, path: entry }));
   }
 }
 
@@ -264,9 +264,9 @@ function removeMadeParents(slot: Slot, error: unknown): Promise<void> {
     if (step === 'stop') return Promise.resolve();
     return fs.rmdir(dir).then(
       () => (step === 'last' ? undefined : removeFrom(safePath.resolve(path.dirname(dir)))),
-      (refused: unknown) => {
-        if (isOccupiedError(refused)) return;
-        recordSuppressedFault(error, classifyFsFault(refused, { side: 'destination', action: 'remove the directory made for', path: dir }));
+      (error_: unknown) => {
+        if (isOccupiedError(error_)) return;
+        recordSuppressedFault(error, classifyFsFault(error_, { side: 'destination', action: 'remove the directory made for', path: dir }));
       },
     );
   };
@@ -280,8 +280,8 @@ async function unswap(slot: Slot): Promise<TreeRollbackStranded | undefined> {
     await renameFileAtomic(destOf(slot), discarded);
     slot.staged = discarded;
     return undefined;
-  } catch (refused: unknown) {
-    return { dest: destOf(slot), parked: slot.parked, why: `the new content could not be moved off it: ${messageOf(refused)}` };
+  } catch (error_: unknown) {
+    return { dest: destOf(slot), parked: slot.parked, why: `the new content could not be moved off it: ${messageOf(error_)}` };
   }
 }
 
@@ -294,8 +294,8 @@ async function restore(slot: Slot, error: unknown): Promise<TreeRollbackStranded
   try {
     await renameFileAtomic(slot.parked, slot.spelled ?? destOf(slot));
     return undefined;
-  } catch (refused: unknown) {
-    return { dest: destOf(slot), parked: slot.parked, why: messageOf(refused) };
+  } catch (error_: unknown) {
+    return { dest: destOf(slot), parked: slot.parked, why: messageOf(error_) };
   }
 }
 
@@ -318,9 +318,9 @@ async function removeParked(slot: Slot): Promise<unknown> {
   try {
     await removeEntry(parked);
     return undefined;
-  } catch (refused: unknown) {
-    const fault = classifyFsFault(refused, { side: 'destination', action: `remove the previous ${labelOf(slot)}, parked at ${parked}`, path: parked });
-    if (!isFsFaultError(fault)) throw refused;
+  } catch (error_: unknown) {
+    const fault = classifyFsFault(error_, { side: 'destination', action: `remove the previous ${labelOf(slot)}, parked at ${parked}`, path: parked });
+    if (!isFsFaultError(fault)) throw error_;
     return fault;
   }
 }
