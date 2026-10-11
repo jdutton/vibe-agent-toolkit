@@ -951,10 +951,11 @@ describe('ParseCache maintenance', () => {
     // An operator who asked for the space back is told why they did not get
     // it. Injected rather than chmod'ed: a refusal on `rm -r` needs a mode on
     // the PARENT, which is the shared tmpdir.
+    // Refused twice: the removal retries once the owner's modes are granted.
     const refusal = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
-    const rm = vi.spyOn(fs, 'rm').mockRejectedValueOnce(refusal);
+    const rm = vi.spyOn(fs, 'rm').mockRejectedValueOnce(refusal).mockRejectedValueOnce(refusal);
     try {
-      await expect(suite.makeCache().clear()).rejects.toBe(refusal);
+      await expect(suite.makeCache().clear()).rejects.toMatchObject({ code: 'FS_FAULT', side: 'destination', errno: 'EACCES' });
     } finally {
       rm.mockRestore();
     }

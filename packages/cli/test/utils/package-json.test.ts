@@ -13,8 +13,9 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { refusalCodeOf } from '../../src/utils/command-refusal.js';
 import { readPackageJsonOrAbsent } from '../../src/utils/package-json.js';
-import { errno } from '../helpers/refusal-doubles.js';
+import { errno, thrownBy } from '../helpers/refusal-doubles.js';
 
 // The reader names `readFileSync` at import time, so the refusal is injected
 // at the module seam.
@@ -55,20 +56,24 @@ describe('readPackageJsonOrAbsent', () => {
     writeFileSync(manifest, '{ "name": "x", ');
 
     expect(() => readPackageJsonOrAbsent(manifest)).toThrow(/package\.json is not valid JSON/);
+    expect(refusalCodeOf(thrownBy(() => readPackageJsonOrAbsent(manifest)))).toBe('INPUT_UNREADABLE');
   });
 
   it('refuses a manifest whose JSON is not an object', () => {
     writeFileSync(manifest, '"just a string"');
 
     expect(() => readPackageJsonOrAbsent(manifest)).toThrow(/not a JSON object/);
+    expect(refusalCodeOf(thrownBy(() => readPackageJsonOrAbsent(manifest)))).toBe('INPUT_UNREADABLE');
   });
 
-  it('lets a refusal through as itself rather than as an absence', () => {
+  it('refuses a manifest the OS will not read as INPUT_UNREADABLE rather than as an absence', () => {
     writeFileSync(manifest, '{}');
     vi.mocked(readFileSync).mockImplementationOnce(() => {
       throw errno('EACCES');
     });
 
-    expect(() => readPackageJsonOrAbsent(manifest)).toThrow(expect.objectContaining({ code: 'EACCES' }));
+    const error = thrownBy(() => readPackageJsonOrAbsent(manifest));
+    expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
+    expect(error).toMatchObject({ cause: expect.objectContaining({ code: 'EACCES' }) });
   });
 });

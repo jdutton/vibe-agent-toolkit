@@ -1,101 +1,104 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { AgentManifestSchema, summarizeIssues, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { forEachInOrder, isPathAbsentError, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
-import { loadAgentManifest, type LoadedAgentManifest } from '../loader/manifest-loader.js';
+import { AGENT_MANIFEST_INVALID_CODE, readAgentManifestDocument, type LoadedAgentManifest } from '../loader/manifest-loader.js';
 
+/**
+ * What {@link validateAgent} found about ONE manifest it read; `status` and
+ * `summary` come from `summarizeIssues`, as every library result's do.
+ */
 export interface ValidationResult {
-  valid: boolean;
-  errors: string[];
-  warnings: string[];
-  manifest: {
-    name: string;
-    version: string;
-    path: string;
+  status: 'ok' | 'findings';
+  summary: SeverityCounts;
+  /** Each located at the manifest, relative to `locationRoot`. */
+  issues: ValidationIssue[];
+  /** `name`/`version` are `null` when the manifest does not say (or does not validate); `path` is absolute. */
+  manifest: { name: string | null; version: string | null; path: string };
+}
+
+export interface ValidateAgentOptions {
+  /** The directory every issue `location` is relative to. */
+  locationRoot: string;
+}
+
+interface IssueSink {
+  readonly issues: ValidationIssue[];
+  readonly location: string;
+}
+
+function report(sink: IssueSink, issue: Pick<ValidationIssue, 'code' | 'severity' | 'message'>): void {
+  sink.issues.push({ ...issue, location: sink.location });
+}
+
+/**
+ * Validate agent manifest and check prerequisites: schema (one
+ * `AGENT_MANIFEST_INVALID` per violation), RAG database, resource and prompt files.
+ *
+ * @throws VatError `AGENT_MANIFEST_NOT_FOUND` / `AGENT_MANIFEST_UNREADABLE` —
+ *   no manifest was read, so there is nothing to report findings about
+ */
+export async function validateAgent(pathArg: string, options: ValidateAgentOptions): Promise<ValidationResult> {
+  const { manifestPath, data } = await readAgentManifestDocument(pathArg);
+  const sink: IssueSink = { issues: [], location: issueLocation(manifestPath, options.locationRoot) };
+
+  const parsed = AgentManifestSchema.safeParse(data);
+  if (!parsed.success) {
+    for (const violation of parsed.error.errors) {
+      const field = violation.path.join('.');
+      sink.issues.push({
+        code: AGENT_MANIFEST_INVALID_CODE,
+        severity: 'error',
+        message: field === '' ? violation.message : `${field}: ${violation.message}`,
+        location: sink.location,
+        ...(field === '' ? {} : { field }),
+      });
+    }
+    return { ...summarizeIssues(sink.issues), issues: sink.issues, manifest: { name: null, version: null, path: manifestPath } };
+  }
+
+  const manifest: LoadedAgentManifest = { ...parsed.data, __manifestPath: manifestPath };
+  const agentDir = path.dirname(manifestPath);
+
+  if (manifest.spec.rag) await validateRAGConfig(manifest, agentDir, sink);
+  if (manifest.spec.resources) await validateResources(manifest, agentDir, sink);
+  if (manifest.spec.prompts) await validatePrompts(manifest, agentDir, sink);
+
+  return {
+    ...summarizeIssues(sink.issues),
+    issues: sink.issues,
+    manifest: {
+      name: manifest.metadata.name,
+      version: manifest.metadata.version ?? null,
+      path: manifestPath,
+    },
   };
 }
 
 /**
- * Validate agent manifest and check prerequisites
- * Performs:
- * - Schema validation (via loader)
- * - Tool configuration checks (RAG databases, etc.)
- * - Resource file existence checks
- */
-export async function validateAgent(pathArg: string): Promise<ValidationResult> {
-  const errors: string[] = [];
-  const warnings: string[] = [];
-
-  try {
-    // Load and validate schema
-    const manifest = await loadAgentManifest(pathArg);
-    const agentDir = path.dirname(manifest.__manifestPath);
-
-    // Validate RAG configuration
-    if (manifest.spec.rag) {
-      await validateRAGConfig(manifest, agentDir, errors, warnings);
-    }
-
-    // Validate resource files
-    if (manifest.spec.resources) {
-      await validateResources(manifest, agentDir, errors, warnings);
-    }
-
-    // Validate prompt references
-    if (manifest.spec.prompts) {
-      await validatePrompts(manifest, agentDir, errors, warnings);
-    }
-
-    return {
-      valid: errors.length === 0,
-      errors,
-      warnings,
-      manifest: {
-        name: manifest.metadata.name,
-        version: manifest.metadata.version ?? 'unknown',
-        path: manifest.__manifestPath,
-      },
-    };
-  } catch (error) {
-    // Schema validation or file loading failed
-    return {
-      valid: false,
-      errors: [error instanceof Error ? error.message : 'Unknown validation error'],
-      warnings: [],
-      manifest: {
-        name: 'unknown',
-        version: 'unknown',
-        path: pathArg,
-      },
-    };
-  }
-}
-
-/**
- * Push an error when `fullPath` cannot be reached.
- *
- * An absent path reports `${subject} not found`, plus `absentHint` when there
- * is a remedy to name. Any OTHER refusal — `EACCES`, `ELOOP`, a component that
- * the OS will not traverse — is reported with the OS message, because "not
- * found" would send the reader to create a file that is already there.
+ * Record a finding when `fullPath` cannot be reached: `AGENT_REFERENCE_MISSING`
+ * when absent, `AGENT_REFERENCE_UNREADABLE` (the errno, never the absolute path) for any other
+ * refusal — "not found" would send the reader to create a file that is there.
  */
 async function requireReachable(
   fullPath: string,
   subject: string,
   shown: string,
-  errors: string[],
+  sink: IssueSink,
   absentHint = ''
 ): Promise<void> {
   try {
     await fs.access(fullPath);
   } catch (error) {
     if (isPathAbsentError(error)) {
-      errors.push(`${subject} not found: ${shown}${absentHint}`);
+      report(sink, { code: 'AGENT_REFERENCE_MISSING', severity: 'error', message: `${subject} not found: ${shown}${absentHint}` });
       return;
     }
-    const reason = error instanceof Error ? error.message : String(error);
-    errors.push(`${subject} could not be checked: ${shown} (${reason})`);
+    const errno = (error as NodeJS.ErrnoException).code;
+    const reason = errno ?? (error instanceof Error ? error.message : String(error));
+    report(sink, { code: 'AGENT_REFERENCE_UNREADABLE', severity: 'error', message: `${subject} could not be checked: ${shown} (${reason})` });
   }
 }
 
@@ -105,20 +108,19 @@ async function requireReachable(
 async function validateRAGConfig(
   manifest: LoadedAgentManifest,
   agentDir: string,
-  errors: string[],
-  warnings: string[]
+  sink: IssueSink,
 ): Promise<void> {
   // Check if RAG database exists
   // Default location is .rag-db in agent directory
   const ragDbPath = safePath.join(agentDir, '.rag-db');
-  await requireReachable(ragDbPath, 'RAG database', ragDbPath, errors, ". Run 'vat rag index' to create database.");
+  await requireReachable(ragDbPath, 'RAG database', '.rag-db', sink, ". Run 'vat rag index' to create database.");
 
   // Warn if no RAG sources defined
   if (manifest.spec.rag) {
     const ragConfigs = Object.values(manifest.spec.rag);
     const hasSources = ragConfigs.some(config => config.sources);
     if (!hasSources) {
-      warnings.push('RAG configuration defined but no sources specified');
+      report(sink, { code: 'AGENT_RAG_NO_SOURCES', severity: 'warning', message: 'RAG configuration defined but no sources specified' });
     }
   }
 }
@@ -129,19 +131,19 @@ async function validateRAGConfig(
 async function validateResources(
   manifest: LoadedAgentManifest,
   agentDir: string,
-  errors: string[],
-  _warnings: string[]
+  sink: IssueSink,
 ): Promise<void> {
   if (!manifest.spec.resources) return;
 
-  for (const [resourceId, resource] of Object.entries(manifest.spec.resources)) {
+  // In order: each check pushes into the shared sink, whose order is the report order.
+  await forEachInOrder(Object.entries(manifest.spec.resources), async ([resourceId, resource]) => {
     // Resource can be either a Resource object or a nested record of Resource objects
     if ('path' in resource && typeof resource.path === 'string') {
-      await validateSingleResource(agentDir, resourceId, resource.path, errors);
+      await validateSingleResource(agentDir, resourceId, resource.path, sink);
     } else {
-      await validateNestedResources(agentDir, resourceId, resource, errors);
+      await validateNestedResources(agentDir, resourceId, resource, sink);
     }
-  }
+  });
 }
 
 /**
@@ -151,10 +153,10 @@ async function validateSingleResource(
   agentDir: string,
   resourceId: string,
   resourcePath: string,
-  errors: string[]
+  sink: IssueSink,
 ): Promise<void> {
   const fullPath = safePath.resolve(agentDir, resourcePath);
-  await requireReachable(fullPath, `Resource '${resourceId}'`, resourcePath, errors);
+  await requireReachable(fullPath, `Resource '${resourceId}'`, resourcePath, sink);
 }
 
 /**
@@ -164,16 +166,16 @@ async function validateNestedResources(
   agentDir: string,
   resourceId: string,
   resourceRecord: Record<string, unknown>,
-  errors: string[]
+  sink: IssueSink,
 ): Promise<void> {
-  for (const [nestedId, nestedResource] of Object.entries(resourceRecord)) {
+  await forEachInOrder(Object.entries(resourceRecord), async ([nestedId, nestedResource]) => {
     if (typeof nestedResource !== 'object' || !nestedResource || !('path' in nestedResource)) {
-      continue;
+      return;
     }
 
     const shown = nestedResource.path as string;
-    await requireReachable(safePath.resolve(agentDir, shown), `Resource '${resourceId}.${nestedId}'`, shown, errors);
-  }
+    await requireReachable(safePath.resolve(agentDir, shown), `Resource '${resourceId}.${nestedId}'`, shown, sink);
+  });
 }
 
 /**
@@ -182,18 +184,17 @@ async function validateNestedResources(
 async function validatePrompts(
   manifest: LoadedAgentManifest,
   agentDir: string,
-  errors: string[],
-  _warnings: string[]
+  sink: IssueSink,
 ): Promise<void> {
   if (!manifest.spec.prompts) return;
 
   if (manifest.spec.prompts.system) {
     const ref = manifest.spec.prompts.system.$ref;
-    await requireReachable(safePath.resolve(agentDir, ref), 'System prompt', ref, errors);
+    await requireReachable(safePath.resolve(agentDir, ref), 'System prompt', ref, sink);
   }
 
   if (manifest.spec.prompts.user) {
     const ref = manifest.spec.prompts.user.$ref;
-    await requireReachable(safePath.resolve(agentDir, ref), 'User prompt', ref, errors);
+    await requireReachable(safePath.resolve(agentDir, ref), 'User prompt', ref, sink);
   }
 }

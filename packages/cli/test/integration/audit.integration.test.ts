@@ -35,6 +35,14 @@ const silentLogger = {
 
 // Helper to run audit validation directly (no CLI subprocess)
 // options.recursive defaults to true (recursive by default), set to false to disable
+/** Write a registry file, audit it, and expect one result with nothing actionable. */
+async function expectCleanRegistryAudit(registryFile: string, content: unknown): Promise<void> {
+  fs.writeFileSync(registryFile, JSON.stringify(content));
+  const results = await runAudit(registryFile);
+  expect(results).toHaveLength(1);
+  expect(results[0]?.summary).toMatchObject({ errors: 0, warnings: 0 });
+}
+
 async function runAudit(targetPath: string, options: AuditCommandOptions = {}) {
   resetAuditCaches();
   return getValidationResults(
@@ -131,7 +139,7 @@ describe('audit command (integration)', () => {
       const results = await runAudit(pluginDir);
 
       expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('success');
+      expect(results[0].summary).toMatchObject({ errors: 0, warnings: 0 });
       expect(results[0].metadata?.name).toBe(TEST_PLUGIN_NAME);
     });
 
@@ -144,7 +152,7 @@ describe('audit command (integration)', () => {
       const results = await runAudit(pluginDir);
 
       expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('error');
+      expect(results[0].summary.errors).toBeGreaterThan(0);
     });
 
     it('should warn when plugin.json is missing version field', async () => {
@@ -157,7 +165,8 @@ describe('audit command (integration)', () => {
       const results = await runAudit(pluginDir);
 
       expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('warning');
+      expect(results[0].summary).toMatchObject({ errors: 0 });
+      expect(results[0].summary.warnings).toBeGreaterThan(0);
       const codes = results[0].issues.map((i) => i.code);
       expect(codes).toContain('PLUGIN_MISSING_VERSION');
       // Plugin-recommended-fields detector also fires (info severity) for
@@ -212,31 +221,33 @@ describe('audit command (integration)', () => {
       // The findings are there, so the verdict beside them must follow them.
       // Pushing into `issues` without recomputing left `status: success` and an
       // all-zero `issueCounts` sitting next to a warning in the same document.
-      expect(plugin?.status).toBe('warning');
-      expect(plugin?.issueCounts).toEqual(countBySeverity(plugin?.issues ?? []));
-      expect(plugin?.issueCounts?.warnings).toBeGreaterThanOrEqual(1);
-      expect(plugin?.issueCounts?.info).toBeGreaterThanOrEqual(1);
+      expect(plugin?.status).toBe('findings');
+      expect(plugin?.summary.errors).toBe(0);
+      expect(plugin?.summary).toEqual(countBySeverity(plugin?.issues ?? []));
+      expect(plugin?.summary.warnings).toBeGreaterThanOrEqual(1);
+      expect(plugin?.summary.info).toBeGreaterThanOrEqual(1);
       // "Valid plugin" is not a summary of a document that carries a warning.
-      expect(plugin?.summary).not.toBe('Valid plugin');
+      expect(plugin?.description).not.toBe('Valid plugin');
     });
 
     it('names file counts and finding counts differently in the report document', async () => {
       const pluginDir = writeInventoryFindingsPlugin(tempDir, 'summary-denominator-plugin');
 
-      const { document } = await buildAuditReport(pluginDir, {}, Date.now(), silentLogger);
+      const { report } = await buildAuditReport(pluginDir, {}, Date.now(), silentLogger);
 
-      // Files, by their own status.
-      expect(document.summary.filesScanned).toBeGreaterThanOrEqual(1);
-      expect(document.summary.filesWithWarnings).toBe(1);
+      // Files: how many were read, and by their own status.
+      expect(report.examined).toBeGreaterThanOrEqual(1);
+      expect(report.data.counts.filesWithWarnings).toBe(1);
       // Findings, by their own severity — a different denominator, so a
       // different name. `summary.warnings: 0` beside `issues.warnings: 1` was
-      // the same word measuring two things in adjacent keys.
-      expect(document.issueCounts.warnings).toBe(1);
-      expect(document.issueCounts.info).toBeGreaterThanOrEqual(1);
-      expect(document.summary).not.toHaveProperty('warnings');
-      expect(document.summary).not.toHaveProperty('errors');
-      expect(document.summary).not.toHaveProperty('success');
-      expect(document).not.toHaveProperty('issues');
+      // the same word measuring two things in adjacent keys; now `summary`
+      // has ONE meaning (findings) and the file counts live in `data.counts`.
+      expect(report.summary.warnings).toBe(1);
+      expect(report.summary.info).toBeGreaterThanOrEqual(1);
+      expect(report.data.counts).not.toHaveProperty('warnings');
+      expect(report.data.counts).not.toHaveProperty('errors');
+      expect(report).not.toHaveProperty('issueCounts');
+      expect(report).not.toHaveProperty('issues');
     });
   });
 
@@ -252,7 +263,7 @@ describe('audit command (integration)', () => {
       const results = await runAudit(marketplaceDir);
 
       const marketplaceResult = results.find((r) => r.type === 'marketplace');
-      expect(marketplaceResult?.status).toBe('success');
+      expect(marketplaceResult?.summary).toMatchObject({ errors: 0, warnings: 0 });
       expect(marketplaceResult?.issues).toHaveLength(0);
       expect(marketplaceResult?.metadata?.name).toBe(TEST_MARKETPLACE_NAME);
     });
@@ -267,60 +278,41 @@ describe('audit command (integration)', () => {
       expect(codes).toContain('MARKETPLACE_PLUGIN_SOURCE_MISSING');
       // The verdict follows the findings: an error-severity finding cannot sit
       // under `status: success` with an all-zero counts block beside it.
-      expect(results[0].status).toBe('error');
-      expect(results[0].issueCounts).toEqual(countBySeverity(results[0].issues));
-      expect(results[0].issueCounts?.errors).toBeGreaterThanOrEqual(1);
+      expect(results[0].summary).toEqual(countBySeverity(results[0].issues));
+      expect(results[0].summary.errors).toBeGreaterThanOrEqual(1);
     });
   });
 
   describe('registry validation', () => {
     it('should validate installed_plugins.json registry', async () => {
-      const registryFile = safePath.join(tempDir, INSTALLED_PLUGINS_FILENAME);
-      fs.writeFileSync(
-        registryFile,
-        JSON.stringify({
-          version: 2,
-          plugins: {
-            'test-plugin@test-marketplace': [
-              {
-                scope: 'user',
-                installPath: '/path/to/plugin',
-                version: '1.0.0',
-                installedAt: new Date().toISOString(),
-                lastUpdated: new Date().toISOString(),
-                isLocal: false,
-              },
-            ],
-          },
-        })
-      );
-
-      const results = await runAudit(registryFile);
-
-      expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('success');
+      await expectCleanRegistryAudit(safePath.join(tempDir, INSTALLED_PLUGINS_FILENAME), {
+        version: 2,
+        plugins: {
+          'test-plugin@test-marketplace': [
+            {
+              scope: 'user',
+              installPath: '/path/to/plugin',
+              version: '1.0.0',
+              installedAt: new Date().toISOString(),
+              lastUpdated: new Date().toISOString(),
+              isLocal: false,
+            },
+          ],
+        },
+      });
     });
 
     it('should validate known_marketplaces.json registry', async () => {
-      const registryFile = safePath.join(tempDir, KNOWN_MARKETPLACES_FILENAME);
-      fs.writeFileSync(
-        registryFile,
-        JSON.stringify({
-          [TEST_MARKETPLACE_NAME]: {
-            source: {
-              source: 'github',
-              repo: 'test/marketplace',
-            },
-            installLocation: '/path/to/marketplace',
-            lastUpdated: new Date().toISOString(),
+      await expectCleanRegistryAudit(safePath.join(tempDir, KNOWN_MARKETPLACES_FILENAME), {
+        [TEST_MARKETPLACE_NAME]: {
+          source: {
+            source: 'github',
+            repo: 'test/marketplace',
           },
-        })
-      );
-
-      const results = await runAudit(registryFile);
-
-      expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('success');
+          installLocation: '/path/to/marketplace',
+          lastUpdated: new Date().toISOString(),
+        },
+      });
     });
   });
 
@@ -344,7 +336,7 @@ This is a test skill.
       const results = await runAudit(skillFile);
 
       expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('success');
+      expect(results[0].summary).toMatchObject({ errors: 0, warnings: 0 });
     });
 
     it('should validate VAT agent SKILL.md', async () => {
@@ -381,7 +373,7 @@ This is a test agent.
       const results = await runAudit(agentDir);
 
       expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('success');
+      expect(results[0].summary).toMatchObject({ errors: 0, warnings: 0 });
     });
   });
 
@@ -393,7 +385,7 @@ This is a test agent.
       const results = await runAudit(unknownFile);
 
       expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('error');
+      expect(results[0].summary.errors).toBeGreaterThan(0);
       expect(results[0].issues.some(i => i.code === 'UNKNOWN_FORMAT')).toBe(true);
     });
   });

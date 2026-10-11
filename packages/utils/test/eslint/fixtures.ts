@@ -66,7 +66,6 @@ export const RULE = {
   mkdir: 'no-fs-mkdirSync',
   realpath: 'no-fs-realpathSync',
   execSync: 'no-child-process-execSync',
-  cp: 'no-fs-promises-cp',
   normalize: 'no-manual-path-normalize',
 } as const;
 

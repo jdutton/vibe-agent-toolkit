@@ -68,7 +68,7 @@ function writeConfigWithResourcesExclude(dir: string, excludePatterns: string[])
   const patternsYaml = excludePatterns.map(p => `    - "${p}"`).join('\n');
   fs.writeFileSync(
     safePath.join(dir, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1\n\nresources:\n  exclude:\n${patternsYaml}\n`,
+    `\nresources:\n  exclude:\n${patternsYaml}\n`,
   );
 }
 
@@ -127,7 +127,7 @@ describe('audit honors resources.exclude from config (integration)', () => {
       // Config with NO resources.exclude
       fs.writeFileSync(
         safePath.join(noExcludeTempDir, 'vibe-agent-toolkit.config.yaml'),
-        'version: 1\n',
+        '{}\n',
       );
 
       writeSkillWithBrokenLink(

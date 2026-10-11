@@ -20,11 +20,11 @@
  */
 
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
+import { exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { describe, expect, it, vi } from 'vitest';
 
-import { exitCodeForPhases } from '../../src/commands/phase-utils.js';
 import type { DiscoveredSkill } from '../../src/commands/skills/command-helpers.js';
 import {
   buildPackagedContentPhase,
@@ -70,7 +70,7 @@ describe('checkPackagedAgentInstructionFiles — a plugin-local skill is never i
     const found = crawl(false, [PLUGIN_LOCAL], []);
 
     expect(found).toMatchObject({ bundlesInspected: 0, bundlesExpected: 0, bundlesInPlace: 1 });
-    expect(exitCodeForPhases([buildPackagedContentPhase(found)])).toBe(0);
+    expect(exitCodeForReport(buildPackagedContentPhase(found).report)).toBe(0);
   });
 
   it('a repo-only skill sharing its declared name with a plugin-local one is still in place', () => {
@@ -91,17 +91,17 @@ describe('buildPackagedContentPhase — a phase over PART of the build is not a 
       bundlesMissing: [BETA_BUNDLE],
     }));
 
-    expect(phase.status).toBe('error');
-    expect(phase.bundlesInspected).toBe(1);
-    expect(phase.bundlesExpected).toBe(2);
-    expect(phase.bundlesMissing).toEqual([BETA_BUNDLE]);
-    expect(phase.issueCounts).toEqual({ errors: 1, warnings: 0, info: 0 });
-    expect(phase.issues.map((i) => [i.code, i.severity])).toEqual([[RUN_INTEGRITY_CODE, 'error']]);
-    const message = phase.issues[0]?.message ?? '';
+    expect(phase.report.status).toBe('findings');
+    expect(phase.report.examined).toBe(1);
+    expect(phase.report.data?.bundlesExpected).toBe(2);
+    expect(phase.report.data?.bundlesMissing).toEqual([BETA_BUNDLE]);
+    expect(phase.report.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(phase.report.findings.map((i) => [i.code, i.severity])).toEqual([[RUN_INTEGRITY_CODE, 'error']]);
+    const message = phase.report.findings[0]?.message ?? '';
     expect(message).toContain(BETA_BUNDLE);
     expect(message).toContain('vat build');
     // The exit code the orchestrator derives from this document.
-    expect(exitCodeForPhases([phase])).toBe(1);
+    expect(exitCodeForReport(phase.report)).toBe(1);
   });
 
   it('names EVERY missing bundle, not just the first', () => {
@@ -111,8 +111,8 @@ describe('buildPackagedContentPhase — a phase over PART of the build is not a 
       bundlesMissing: [BETA_BUNDLE, 'dist/.claude/plugins/marketplaces/m/plugins/p/skills/gamma'],
     }));
 
-    expect(phase.issues).toHaveLength(1);
-    const message = phase.issues[0]?.message ?? '';
+    expect(phase.report.findings).toHaveLength(1);
+    const message = phase.report.findings[0]?.message ?? '';
     expect(message).toContain(BETA_BUNDLE);
     expect(message).toContain('plugins/p/skills/gamma');
   });
@@ -121,12 +121,12 @@ describe('buildPackagedContentPhase — a phase over PART of the build is not a 
     // 🔑 The over-correction guard: the control arm of the reproduced case.
     const phase = buildPackagedContentPhase(crawlOf({ bundlesInspected: 2, bundlesExpected: 2 }));
 
-    expect(phase.status).toBe('success');
-    expect(phase.bundlesInspected).toBe(2);
-    expect(phase.bundlesExpected).toBe(2);
-    expect(phase.bundlesMissing).toEqual([]);
-    expect(phase.issues).toEqual([]);
-    expect(exitCodeForPhases([phase])).toBe(0);
+    expect(phase.report.status).toBe('ok');
+    expect(phase.report.examined).toBe(2);
+    expect(phase.report.data?.bundlesExpected).toBe(2);
+    expect(phase.report.data?.bundlesMissing).toEqual([]);
+    expect(phase.report.findings).toEqual([]);
+    expect(exitCodeForReport(phase.report)).toBe(0);
   });
 
   it('reports ONE refusal, not two, when nothing at all was built', () => {
@@ -139,10 +139,10 @@ describe('buildPackagedContentPhase — a phase over PART of the build is not a 
       bundlesMissing: ['dist/skills/alpha', BETA_BUNDLE],
     }));
 
-    expect(phase.status).toBe('error');
-    expect(phase.issues.map((i) => i.code)).toEqual([RUN_INTEGRITY_CODE]);
-    expect(phase.issues[0]?.message).toContain('dist/skills/alpha');
-    expect(phase.issues[0]?.message).toContain(BETA_BUNDLE);
+    expect(phase.report.status).toBe('findings');
+    expect(phase.report.findings.map((i) => i.code)).toEqual([RUN_INTEGRITY_CODE]);
+    expect(phase.report.findings[0]?.message).toContain('dist/skills/alpha');
+    expect(phase.report.findings[0]?.message).toContain(BETA_BUNDLE);
   });
 
   it('keeps the zero-bundle refusal for a run that discovered nothing to expect', () => {
@@ -150,20 +150,20 @@ describe('buildPackagedContentPhase — a phase over PART of the build is not a 
     // still not a verdict, and still refused through the original message.
     const phase = buildPackagedContentPhase(crawlOf({}));
 
-    expect(phase.status).toBe('error');
-    expect(phase.issues.map((i) => i.code)).toEqual([RUN_INTEGRITY_CODE]);
-    expect(phase.issues[0]?.message).toContain('inspected 0 built skill bundles');
+    expect(phase.report.status).toBe('findings');
+    expect(phase.report.findings.map((i) => i.code)).toEqual([RUN_INTEGRITY_CODE]);
+    expect(phase.report.findings[0]?.message).toContain('inspected 0 built skill bundles');
   });
 
   it('passes a run whose every discovered skill is in place: nothing expected, nothing inspected, the count published', () => {
     const phase = buildPackagedContentPhase(crawlOf({ bundlesInPlace: 2 }));
 
-    expect([phase.status, phase.bundlesInPlace, phase.issues, exitCodeForPhases([phase])]).toEqual(['success', 2, [], 0]);
+    expect([phase.report.status, phase.report.data?.bundlesInPlace, phase.report.findings, exitCodeForReport(phase.report)]).toEqual(['ok', 2, [], 0]);
   });
 
   it('still refuses zero inspected when a published bundle was expected beside in-place skills', () => {
     const phase = buildPackagedContentPhase(crawlOf({ bundlesExpected: 1, bundlesInPlace: 2, bundlesMissing: [BETA_BUNDLE] }));
 
-    expect([phase.status, ...phase.issues.map((i) => i.code)]).toEqual(['error', RUN_INTEGRITY_CODE]);
+    expect([phase.report.status, ...phase.report.findings.map((i) => i.code)]).toEqual(['findings', RUN_INTEGRITY_CODE]);
   });
 });

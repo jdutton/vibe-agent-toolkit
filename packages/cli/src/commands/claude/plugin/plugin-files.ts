@@ -5,16 +5,26 @@
  *   - dest must not resolve outside pluginOutputDir (no ".." escape)
  *   - dest must not resolve inside skills/ (owned by skill-stream)
  *   - dest must not target .claude-plugin/plugin.json (owned by merge-write)
- *   - parent dirs are created automatically
- *   - overwrites are allowed and logged at info level
+ *     — all three decided by where the dest lands, not by its spelling (`pluginFilesDest`)
+ *   - parent dirs are created automatically, never through a link
+ *   - a later entry overwrites an earlier one's REGULAR file (logged at info level); a link or a
+ *     directory at the dest name refuses the build, naming the entry
  */
 
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir } from 'node:fs/promises';
-import { dirname } from 'node:path';
 
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
-import { issueLocation, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, issueLocation, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+
+import { CommandRefusalError } from '../../../utils/command-refusal.js';
+import { copyFileIntoMarketplace } from '../../../utils/marketplace-io.js';
+import { requireInputPath } from '../../../utils/project-root-policy.js';
+
+
+/** A `files[].dest` the config may not declare. */
+function invalidDest(message: string): CommandRefusalError {
+  return new CommandRefusalError('CONFIG_INVALID', message);
+}
 
 export interface ApplyPluginFilesArgs {
   projectRoot: string;
@@ -23,54 +33,97 @@ export interface ApplyPluginFilesArgs {
   info?: (message: string) => void;
 }
 
-function validateDest(rawDest: string, pluginOutputDir: string): string {
+/** The characters Windows drops from the end of a path segment: `skills.` and `skills ` are `skills` there. */
+const DROPPED_AT_SEGMENT_END: ReadonlySet<string> = new Set(['.', ' ']);
+
+/**
+ * A path segment as a filesystem that folds names compares it: letter case and Unicode form (APFS,
+ * NTFS, exFAT, SMB), the trailing dots and spaces Windows drops, and — NTFS — whatever follows a
+ * `:` (`skills::$INDEX_ALLOCATION` is the directory `skills` by its stream name). The cut is made on
+ * every host, so a POSIX directory really named `skills:notes` compares as `skills` too.
+ *
+ * Case is folded UP and then down: NTFS compares upper-cased names, and a dotless `ı` (U+0131) is
+ * `I` there, which lower-casing alone leaves apart from `i`.
+ */
+export function foldedSegment(segment: string): string {
+  const stream = segment.indexOf(':');
+  let end = stream === -1 ? segment.length : stream;
+  while (end > 0 && DROPPED_AT_SEGMENT_END.has(segment.charAt(end - 1))) end -= 1;
+  return segment.slice(0, end).normalize('NFKD').toUpperCase().toLowerCase();
+}
+
+/**
+ * Where a plugin `files[].dest` lands under the plugin output dir — decided by the place it names,
+ * never by how it is spelled: `.` and `..` segments are resolved first, and the two places a
+ * `files[]` entry may not write are compared as a filesystem that folds names would compare them
+ * ({@link foldedSegment}). So `./skills/x`, `docs/../skills/x` and `Skills/x` are refused exactly as
+ * `skills/x` is, on every host: a plugin whose build depended on the volume it was built on would
+ * install differently on the next one.
+ *
+ * Pure: it reads nothing.
+ *
+ * @param rawDest - The `dest` the config declares
+ * @returns The dest relative to the plugin output dir, forward slashes, with no `.` or `..` segment
+ * @throws CommandRefusalError `CONFIG_INVALID`, naming the dest: absolute; outside the plugin output
+ *   dir; inside `skills/` (owned by the skill stream); or at or under `.claude-plugin/plugin.json`
+ *   (generated)
+ */
+export function pluginFilesDest(rawDest: string): string {
   const normalized = toForwardSlashAnyPlatform(rawDest);
-  if (normalized.startsWith('/')) {
-    throw new Error(`plugin files[].dest must be relative; got absolute path: ${rawDest}`);
+  if (normalized.startsWith('/') || /^[A-Za-z]:/.test(normalized)) {
+    throw invalidDest(`plugin files[].dest must be relative; got absolute path: ${rawDest}`);
   }
-  if (normalized.startsWith('skills/') || normalized === 'skills') {
-    throw new Error(
+  const outside = (): CommandRefusalError =>
+    invalidDest(`plugin files[].dest "${rawDest}" resolves outside plugin output dir (path traversal rejected)`);
+  const segments: string[] = [];
+  for (const segment of normalized.split('/')) {
+    if (segment === '' || segment === '.') continue;
+    if (segment !== '..') segments.push(segment);
+    else if (segments.pop() === undefined) throw outside();
+  }
+  const folded = segments.map(foldedSegment);
+  // Nothing left names the plugin output dir itself, which is not a file in it.
+  if (folded.length === 0) throw outside();
+  if (folded[0] === 'skills') {
+    throw invalidDest(
       `plugin files[].dest "${rawDest}" resolves inside skills/ — that surface is owned ` +
         `by the skill-stream. Place the file under a skill's own files[] instead.`,
     );
   }
-  if (normalized === '.claude-plugin/plugin.json') {
-    throw new Error(
+  // At it or under it: a dest under it would make the generated file a directory.
+  if (folded[0] === '.claude-plugin' && folded[1] === 'plugin.json') {
+    throw invalidDest(
       `plugin files[].dest "${rawDest}" targets plugin.json — that file is generated by ` +
         `VAT from the merged manifest. Put your custom fields in .claude-plugin/plugin.json inside the plugin source dir.`,
     );
   }
-  const resolved = safePath.resolve(pluginOutputDir, rawDest);
-  const resolvedBase = safePath.resolve(pluginOutputDir);
-  if (!toForwardSlash(resolved).startsWith(toForwardSlash(resolvedBase) + '/')) {
-    throw new Error(
-      `plugin files[].dest "${rawDest}" resolves outside plugin output dir (path traversal rejected)`,
-    );
-  }
-  return resolved;
+  return segments.join('/');
 }
 
 export async function applyPluginFiles(args: ApplyPluginFilesArgs): Promise<void> {
   const { projectRoot, pluginOutputDir, entries, info } = args;
 
-  for (const entry of entries) {
+  // In order: a later entry deliberately overwrites an earlier one's dest.
+  await forEachInOrder(entries, async (entry) => {
     const sourceAbs = safePath.resolve(projectRoot, entry.source);
-    if (!existsSync(sourceAbs)) {
-      // Project-relative, never absolute: this throw is reported as a build
-      // failure on machine-readable stdout, where an absolute path publishes the
-      // developer's home directory into whatever issue or CI log it lands in.
-      throw new Error(
-        `plugin files[].source not found: ${entry.source} ` +
-          `(resolved to ${issueLocation(sourceAbs, projectRoot) || '.'})`,
-      );
-    }
-    const destAbs = validateDest(entry.dest, pluginOutputDir);
+    // Project-relative, never absolute: this refusal is published on
+    // machine-readable stdout, where an absolute path publishes the developer's
+    // home directory into whatever issue or CI log it lands in.
+    requireInputPath(sourceAbs, {
+      origin: 'content',
+      message: `plugin files[].source not found: ${entry.source} (resolved to ${issueLocation(sourceAbs, projectRoot) || '.'})`,
+    });
+    const dest = pluginFilesDest(entry.dest);
 
-    if (existsSync(destAbs) && info) {
+    if (existsSync(safePath.join(pluginOutputDir, dest)) && info) {
       info(`plugin files[]: overwriting existing ${toForwardSlashAnyPlatform(entry.dest)}`);
     }
 
-    await mkdir(dirname(destAbs), { recursive: true });
-    await copyFile(sourceAbs, destAbs);
-  }
+    await copyFileIntoMarketplace(
+      sourceAbs,
+      { root: pluginOutputDir, relative: dest },
+      `plugin files[].source ${issueLocation(sourceAbs, projectRoot) || '.'}`,
+      `plugin files[].dest ${toForwardSlashAnyPlatform(entry.dest)}`,
+    );
+  });
 }

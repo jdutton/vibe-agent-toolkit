@@ -17,3 +17,20 @@ describe('resolveSeverity', () => {
     expect(resolveSeverity('LINK_OUTSIDE_PROJECT', cfg)).toBe('error');
   });
 });
+
+describe('resolveSeverity — code kinds', () => {
+  it('resolves a refusal to its registry default, whatever an (unparsed) config says', () => {
+    // The config schema refuses a refusal key; this is the second wall, for a
+    // config object that never went through the schema.
+    const cfg = { severity: { RESOURCE_CHECK_BROKEN: 'ignore' } } as unknown as Parameters<typeof resolveSeverity>[1];
+    expect(resolveSeverity('RESOURCE_CHECK_BROKEN', cfg)).toBe('error');
+  });
+
+  it('still resolves a CUSTOM: check code to its override — a non-registry code is not a refusal', () => {
+    // `resolveIssueSeverity` in the CLI hands a `CUSTOM:` code here once it has
+    // found its override. Deciding "overridable" by looking up the registry
+    // entry's kind threw on it.
+    const code = 'CUSTOM:my-check' as unknown as Parameters<typeof resolveSeverity>[0];
+    expect(resolveSeverity(code, { severity: { 'CUSTOM:my-check': 'warning' } })).toBe('warning');
+  });
+});

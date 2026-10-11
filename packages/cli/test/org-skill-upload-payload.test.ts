@@ -26,6 +26,7 @@ import { ApiRequestError, ApiTransportError, buildMultipartFormData } from '@vib
 import type { MultipartFile, OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
 import type { SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import {
+  classifyFsFault,
   createSymlink,
   mkdirSyncReal,
   normalizedTmpdir,
@@ -52,11 +53,13 @@ import {
   reportVersionDelete,
   resolveSourceArgument,
   SKILL_DELETED_TYPES,
+  skillUploadFailure,
   SKILL_VERSION_DELETED_TYPES,
   summarizeNpmInstall,
   VERSION_NAME_MISMATCH_REFUSAL,
   withRemedy,
 } from '../src/commands/claude/org/skills.js';
+import { exitCodeForExternal, type ExternalOutcome } from '../src/report-schemas.js';
 
 import { recordingLogger } from './helpers/upload-logger.js';
 import { skillMdBytes, writeZipFixture } from './helpers/zip-fixtures.js';
@@ -115,7 +118,6 @@ function createAdopterProject(dirName: string, evalsSubpath: string): string {
   const projectRoot = safePath.join(tempDir, dirName);
   mkdirSyncReal(projectRoot, { recursive: true });
   writeAt(projectRoot, 'vibe-agent-toolkit.config.yaml', [
-    'version: 1',
     'skills:',
     '  include: ["skills/**/SKILL.md"]',
     '  config:',
@@ -905,7 +907,6 @@ describe('what installFromLocal actually reads out of a REAL archive', () => {
     const projectRoot = safePath.join(tempDir, 'waived-project');
     mkdirSyncReal(projectRoot, { recursive: true });
     writeAt(projectRoot, 'vibe-agent-toolkit.config.yaml', [
-      'version: 1',
       'skills:',
       '  include: ["skills/**/SKILL.md"]',
       '  config:',
@@ -1353,19 +1354,19 @@ describe('readDeleteResponse', () => {
  * the skill was still there. Two independent reviewers found it.
  */
 describe('reportDelete', () => {
-  it('exits 0 with status success when the API confirms the delete', () => {
+  it('exits 0 on an ok outcome when the API confirms the delete', () => {
     const result = ending(reportDelete({ id: 'skill_abc', type: 'skill_deleted' }, 'skill_abc', SKILL_DELETED_TYPES));
 
     expect(result.exitCode).toBe(0);
-    expect(result.document['status']).toBe('success');
+    expect(result.outcome).toStrictEqual({ kind: 'ok' });
     expect(result.document['deleted']).toBe(true);
   });
 
-  it('exits 1 with status error when the API names a different outcome', () => {
+  it('exits 2 on a failed outcome when the API names a different outcome', () => {
     const result = ending(reportDelete({ id: 'skill_abc', type: 'skill_archived' }, 'skill_abc', SKILL_DELETED_TYPES));
 
-    expect(result.exitCode).toBe(1);
-    expect(result.document['status']).toBe('error');
+    expect(result.exitCode).toBe(2);
+    expect(result.outcome.kind).toBe('failed');
     // The document is still published: the verdict is what the operator needs.
     expect(result.document['id']).toBe('skill_abc');
     expect(result.document['deleted']).toBe(false);
@@ -1409,15 +1410,15 @@ describe('reportVersionDelete', () => {
     expect(result.document['deleted']).toBe(true);
   });
 
-  it('exits 1, still naming the version, when the API names a different outcome', () => {
+  it('exits 2, still naming the version, when the API names a different outcome', () => {
     const result = ending(reportVersionDelete(
       { type: 'skill_version_archived' },
       'skill_abc',
       '1775007400733130',
     ));
 
-    expect(result.exitCode).toBe(1);
-    expect(result.document['status']).toBe('error');
+    expect(result.exitCode).toBe(2);
+    expect(result.outcome.kind).toBe('failed');
     expect(result.document['version']).toBe('1775007400733130');
     expect(result.document['deleted']).toBe(false);
   });
@@ -1438,7 +1439,8 @@ describe('mergeDeleteReport', () => {
 
     const result = ending(mergeDeleteReport(failed, ['v1']));
 
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(2);
+    expect(result.outcome.kind).toBe('failed');
     expect(result.document['deletedVersions']).toEqual(['v1']);
     expect(result.document).not.toHaveProperty('orgCommandFailed');
     expect(result.document).not.toHaveProperty('document');
@@ -1452,30 +1454,56 @@ function uploaded(id: string): SkillUploadResult {
   return { id, displayTitle: id, version: '1', createdAt: CREATED_AT };
 }
 
-/** The document and exit code `executeOrgCommand` would actually publish. */
-function ending(outcome: object): { document: Record<string, unknown>; exitCode: number } {
-  return buildOrgCommandEnding(outcome, 5);
+/**
+ * The payload `executeOrgCommand` would actually publish, the outcome, and the
+ * code the external entry's adapter maps it to. The payload is the action's own
+ * document: an external verb adds no `status` word to it.
+ */
+function ending(result: object): { document: Record<string, unknown>; outcome: ExternalOutcome; exitCode: number } {
+  const { document, outcome } = buildOrgCommandEnding(result);
+  expect(document).not.toHaveProperty('status');
+  return { document: document as Record<string, unknown>, outcome, exitCode: exitCodeForExternal('claude org skills install', outcome) };
 }
 
+describe('skillUploadFailure', () => {
+  // One payload, one error shape: a per-skill row carries the same `{ code, message }`
+  // the top-level refusal does, so a reader branches on `code` in both places.
+  it('carries the refusal code the thrown value maps to, beside its message', () => {
+    const vendor403 = new ApiRequestError('API error 403: forbidden', 403, undefined);
+
+    expect(skillUploadFailure('a', vendor403)).toStrictEqual({
+      skill: 'a',
+      error: { code: 'EXTERNAL_API_FAILED', message: 'API error 403: forbidden' },
+    });
+  });
+
+  it('codes an uncoded throw INTERNAL_ERROR rather than passing it off as the vendor\'s', () => {
+    expect(skillUploadFailure('b', new TypeError('defect'))).toStrictEqual({
+      skill: 'b',
+      error: { code: 'INTERNAL_ERROR', message: 'defect' },
+    });
+  });
+});
+
 describe('summarizeNpmInstall', () => {
-  it('exits 0 with status success when every skill uploaded', () => {
-    const result = ending(summarizeNpmInstall('pkg@1.0.0', [uploaded('a')], []));
+  it('exits 0 on an ok outcome when every skill uploaded', () => {
+    const result = ending(summarizeNpmInstall('pkg@1.0.0', [uploaded('a')], [], undefined));
 
     expect(result.exitCode).toBe(0);
-    expect(result.document['status']).toBe('success');
+    expect(result.outcome).toStrictEqual({ kind: 'ok' });
     expect(result.document['skillsUploaded']).toBe(1);
   });
 
   it('does not report success when EVERY skill failed', () => {
     const errors = [
-      { skill: 'a', error: '403 forbidden' },
-      { skill: 'b', error: 'over the upload ceiling' },
-      { skill: 'c', error: 'SKILL.md has no usable frontmatter "name" field' },
+      { skill: 'a', error: { code: 'EXTERNAL_API_FAILED', message: '403 forbidden' } },
+      { skill: 'b', error: { code: 'USAGE_INVALID', message: 'over the upload ceiling' } },
+      { skill: 'c', error: { code: 'USAGE_INVALID', message: 'SKILL.md has no usable frontmatter "name" field' } },
     ];
-    const result = ending(summarizeNpmInstall('pkg@1.0.0', [], errors));
+    const result = ending(summarizeNpmInstall('pkg@1.0.0', [], errors, undefined));
 
-    expect(result.exitCode).toBe(1);
-    expect(result.document['status']).toBe('error');
+    expect(result.exitCode).toBe(2);
+    expect(result.outcome.kind).toBe('failed');
     expect(result.document['skillsUploaded']).toBe(0);
     expect(result.document['skillsFailed']).toBe(3);
     expect(result.document['errors']).toEqual(errors);
@@ -1485,13 +1513,31 @@ describe('summarizeNpmInstall', () => {
     const result = ending(summarizeNpmInstall(
       'pkg@1.0.0',
       [uploaded('a')],
-      [{ skill: 'b', error: '413 payload too large' }],
+      [{ skill: 'b', error: { code: 'EXTERNAL_API_FAILED', message: '413 payload too large' } }],
+      undefined,
     ));
 
-    expect(result.exitCode).toBe(1);
-    expect(result.document['status']).toBe('error');
+    expect(result.exitCode).toBe(2);
+    expect(result.outcome).toStrictEqual({ kind: 'partial', failed: 1 });
     // What DID land still has to be readable — the workspace is now mixed.
     expect(result.document['skillsUploaded']).toBe(1);
     expect(result.document['skills']).toHaveLength(1);
+  });
+
+  // The uploads LANDED — a remote, irreversible effect — before the downloaded package's temp
+  // directory refused to go. That leftover is a warning beside them, never a refusal that hides them.
+  it('reports the uploads that landed, ok, with a temp dir left behind as one TREE_CLEANUP_INCOMPLETE warning', () => {
+    const leftover = classifyFsFault(
+      Object.assign(new Error('EBUSY: resource busy'), { code: 'EBUSY', path: '/tmp/vat-org-skills-abc' }),
+      { side: 'environment', action: 'remove the temporary directory /tmp/vat-org-skills-abc' },
+    );
+    const result = ending(summarizeNpmInstall('pkg@1.0.0', [uploaded('a')], [], leftover));
+
+    expect(result.exitCode).toBe(0);
+    expect(result.outcome).toStrictEqual({ kind: 'ok' });
+    expect(result.document['skillsUploaded']).toBe(1);
+    expect(result.document['warnings']).toEqual([
+      expect.objectContaining({ code: 'TREE_CLEANUP_INCOMPLETE', severity: 'warning', link: '/tmp/vat-org-skills-abc' }),
+    ]);
   });
 });

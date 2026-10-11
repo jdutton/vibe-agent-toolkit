@@ -8,6 +8,7 @@
 
 import type { InstrumentVersion, SubjectRef, SubjectVersion } from '../envelope/coordinate.js';
 
+import type { ArmEnvironment } from './arm-env.js';
 import type { MeasuredCommandSpec } from './commands.js';
 
 /**
@@ -153,8 +154,13 @@ export interface CaptureRequest {
   readonly runs: number;
   readonly cache: CacheMode;
   readonly timeoutMs?: number;
-  /** Extra environment for every child, the cache clear included. */
-  readonly env?: Readonly<Record<string, string>>;
+  /**
+   * The arm's environment for every child, the cache clear included.
+   *
+   * Required: see {@link RunOptions.env}. `EMPTY_ARM_ENVIRONMENT` when
+   * the arm sets nothing.
+   */
+  readonly env: ArmEnvironment;
   /** Wall-clock stamp for the report, supplied so the caller owns the clock. */
   readonly capturedAt: string;
 }
@@ -182,14 +188,20 @@ export interface RunOptions {
   /** Working directory for the child. */
   readonly cwd: string;
   /**
-   * Extra environment for the child, merged over `process.env`.
+   * The arm's environment: `process.env` minus the arm-owned keys minus
+   * `unset`, plus `set` — see `arm-env.ts`.
    *
    * **Merged, never replaced.** The I/O facet works by `NODE_OPTIONS=--require`
    * and vat's own launcher spawns a second node process for the real binary; a
    * harness that replaced `env` wholesale would strip the preload and silently
    * measure the launcher alone.
+   *
+   * **Required, not optional.** The arm-owned keys (`VAT_BIN`, `VAT_ROOT_DIR`, …)
+   * are stripped from every child whether or not the caller thought about them;
+   * an optional field would be a seam whose omission compiles, and the omission
+   * is the leak.
    */
-  readonly env?: Readonly<Record<string, string>>;
+  readonly env: ArmEnvironment;
   /** Milliseconds before the child is killed. */
   readonly timeoutMs?: number;
 }

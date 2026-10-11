@@ -46,7 +46,7 @@ async function setupAndValidate() {
     baseDir: fixturesDir,
   });
 
-  await registry.crawl({ unreadable: 'refuse', baseDir: fixturesDir });
+  await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: fixturesDir });
   const result = await registry.validate();
 
   return { config, registry, result };

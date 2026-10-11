@@ -11,6 +11,9 @@ import { describe, expect, it } from 'vitest';
 import { findBarrelDrift } from '../../dev-tools/src/pin-barrel-exports.js';
 
 const BARREL_EXPORTS = [
+  'AGENT_MANIFEST_INVALID_CODE',
+  'AGENT_MANIFEST_NOT_FOUND_CODE',
+  'AGENT_MANIFEST_UNREADABLE_CODE',
   'findManifestPath',
   'loadAgentManifest',
   'validateAgent',

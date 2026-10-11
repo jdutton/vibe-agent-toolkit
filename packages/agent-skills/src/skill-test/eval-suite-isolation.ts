@@ -33,10 +33,22 @@
  * never a window in which the key exists in the sandbox.
  */
 
-import { cpSync, existsSync, lstatSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-import { isVatError, mkdirSyncReal, PathEscapesRootError, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  applyTreePlan,
+  copyRegularFile,
+  copyTree,
+  forEachInOrder,
+  isVatError,
+  PathEscapesRootError,
+  planTreeChanges,
+  safePath,
+  withFsFault,
+} from '@vibe-agent-toolkit/utils';
+
+import { makeWorkspaceDir } from './eval-inputs.js';
 
 /**
  * Where a skill's eval suite lives by convention. Defined here, beside the code
@@ -127,6 +139,19 @@ export interface IsolateEvalSuiteInput {
   holdDir?: string;
 }
 
+/** Copy one entry of the staged suite into the hold dir. VAT's own staged copy: its reads are the environment's. */
+async function holdEntry(from: string, holdDir: string, name: string): Promise<void> {
+  const to = safePath.join(holdDir, name);
+  // The reads are classified by the copy itself; a write into the hold dir — VAT's own scratch — here.
+  await withFsFault({ side: 'environment', action: `hold the eval suite entry ${from} at ${to}` }, async () => {
+    if (lstatSync(from).isDirectory()) {
+      await copyTree(from, holdDir, name, { links: 'preserve', side: 'environment', onto: 'fresh' });
+      return;
+    }
+    await copyRegularFile(from, holdDir, name, { side: 'environment', reading: `the staged eval suite ${from}`, existing: 'replace', writing: `the held eval suite entry ${name}` });
+  });
+}
+
 /**
  * Strip one staged skill's eval suite, optionally preserving it out-of-band.
  *
@@ -140,7 +165,7 @@ export interface IsolateEvalSuiteInput {
  * `copyTreeNoSymlinks`, which refuses to copy any symlinked entry, so the unit is
  * always a real file or directory.
  */
-export function isolateEvalSuite(input: IsolateEvalSuiteInput): boolean {
+export async function isolateEvalSuite(input: IsolateEvalSuiteInput): Promise<boolean> {
   const unit = evalSuiteUnitPath(input.stagedDir, input.evalsSubpath);
   if (unit === undefined || !existsSync(unit)) return false;
 
@@ -148,16 +173,22 @@ export function isolateEvalSuite(input: IsolateEvalSuiteInput): boolean {
 
   let preserved = false;
   if (input.holdDir !== undefined) {
-    mkdirSyncReal(input.holdDir, { recursive: true, mode: 0o700 });
+    makeWorkspaceDir(input.holdDir);
     // A directory unit's CONTENTS become the hold dir's contents, so the suite file
     // lands at `<holdDir>/<basename(evalsSubpath)>` either way and `fixtures/` keep
     // their positions relative to it — exactly the shape the eval-input staging
-    // expects from an authored evals dir.
-    const dest = lstatSync(unit).isDirectory() ? input.holdDir : safePath.join(input.holdDir, basename(unit));
-    cpSync(unit, dest, { recursive: true });
+    // expects from an authored evals dir. Entry by entry, never the unit onto the hold
+    // dir itself: a tree copy gives its root the SOURCE's mode, and the hold dir stays 0700.
+    if (lstatSync(unit).isDirectory()) {
+      const holdDir = input.holdDir;
+      await forEachInOrder(readdirSync(unit), (name) => holdEntry(safePath.join(unit, name), holdDir, name));
+    } else {
+      await holdEntry(unit, input.holdDir, basename(unit));
+    }
     preserved = true;
   }
 
-  rmSync(unit, { recursive: true, force: true });
+  // The staged copy is VAT's own: the unit goes, whole, whatever it is.
+  await applyTreePlan(await planTreeChanges([{ op: 'remove', dest: unit, ownership: { kind: 'vat-state' }, label: 'staged eval suite' }]));
   return preserved;
 }

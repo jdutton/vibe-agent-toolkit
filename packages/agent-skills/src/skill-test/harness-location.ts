@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, statSync } from 'node:fs';
 
-import { normalizedTmpdir, relativeEscapesRoot, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, relativeEscapesRoot, safePath, VatError, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 
 /** Harness-location failure — maps to exit code 2. */
 export class HarnessLocationError extends VatError {
@@ -72,26 +72,46 @@ export function assertSafeWorkdir(dir: string, stopAt?: string): void {
  * caller creates it at 0700 via mkdirSyncReal). If it exists:
  *
  * - Symlink → throw HarnessLocationError (security gate; never relax).
- * - Real directory whose mode != 0700 → chmod to 0700. Removing group/other
- *   access is strictly safer, never a relaxation.
+ * - A root VAT derived (`'vat'`) whose mode != 0700 → chmod to 0700. Removing
+ *   group/other access from a directory VAT made is strictly safer.
+ * - A root the OPERATOR supplied (`--out`, `'operator'`) is never re-moded. A
+ *   chmod to 0700 can ADD access — 0555 → 0700 grants owner write, which let a
+ *   run write into a directory its owner had made read-only — and it is not
+ *   VAT's directory to change. `assertSafeHarnessRoot` refuses one that is not
+ *   0700, naming the fix.
  *
  * Mode checks/changes are only performed on non-win32 (matching
  * assertSafeHarnessRoot's platform guard).
  */
-export function prepareHarnessRoot(dir: string): void {
+export function prepareHarnessRoot(dir: string, owner: 'vat' | 'operator'): void {
   if (!existsSync(dir)) return;
 
   const ls = lstatSync(dir);
   if (ls.isSymbolicLink()) {
     throw new HarnessLocationError(`Refusing to use a symlinked harness root: ${dir}.`);
   }
+  if (!ls.isDirectory()) {
+    throw new HarnessLocationError(
+      `Harness root ${dir} exists and is not a directory. VAT never removes what it did not create: `
+        + 'move it aside, or pass an --out that names a directory (or does not exist yet).',
+    );
+  }
 
-  if (process.platform !== 'win32') {
+  if (owner === 'vat' && process.platform !== 'win32') {
     const mode = statSync(dir).mode & 0o777;
     if (mode !== 0o700) {
       chmodSync(dir, 0o700);
     }
   }
+}
+
+/**
+ * Create the harness root (and any missing parent) at 0700. A refusal is the
+ * run not finishing — a `destination` fault, `RUN_INCOMPLETE` — never a defect
+ * in VAT.
+ */
+export function createHarnessRoot(dir: string): void {
+  withFsFaultSync({ side: 'destination', action: `create the harness root ${dir}` }, () => mkdirSyncReal(dir, { recursive: true, mode: 0o700 }));
 }
 
 /** True when `child` is a strict descendant of `root` (neither equal nor escaping). */
@@ -174,6 +194,10 @@ export function assertSafeHarnessRoot(
   if (!existsSync(resolved)) return; // not yet created — caller creates it 0700
   const mode = statSync(resolved).mode & 0o777;
   if (mode !== 0o700 && process.platform !== 'win32') {
-    throw new HarnessLocationError(`Harness root ${resolved} must be 0700 (found ${mode.toString(8)}).`);
+    throw new HarnessLocationError(
+      `Harness root ${resolved} must be 0700 (found ${mode.toString(8)}). VAT does not change the mode of a `
+      + `directory it did not create: run \`chmod 700 ${resolved}\`, or pass an --out that does not exist yet `
+      + '(VAT creates it 0700).',
+    );
   }
 }

@@ -46,17 +46,21 @@ export interface DescriptionParserOptions {
  * @param options - Configuration options
  * @returns Cat characteristics extracted from the description
  */
-export async function parseDescription(
+export function parseDescription(
   description: string,
   options: DescriptionParserOptions = {},
 ): Promise<CatCharacteristics> {
   const { mockable = true } = options;
 
-  if (mockable) {
-    return mockParseDescription(description);
+  if (!mockable) {
+    return Promise.reject(new Error('Real LLM parsing not implemented yet. Use mockable: true for testing.'));
   }
 
-  throw new Error('Real LLM parsing not implemented yet. Use mockable: true for testing.');
+  try {
+    return Promise.resolve(mockParseDescription(description));
+  } catch (error) {
+    return Promise.reject(error as Error);
+  }
 }
 
 /**
@@ -387,13 +391,13 @@ export const descriptionParserAgent: Agent<
       model: 'claude-haiku-4-5',
     },
   },
-  execute: async (input: DescriptionParserInput) => {
+  execute: (input: DescriptionParserInput) => {
     // Validate input
     const parsed = DescriptionParserInputSchema.safeParse(input);
     if (!parsed.success) {
-      return {
+      return Promise.resolve({
         result: { status: RESULT_ERROR, error: LLM_INVALID_OUTPUT },
-      };
+      });
     }
 
     const { description, mockable = true } = parsed.data;
@@ -401,12 +405,11 @@ export const descriptionParserAgent: Agent<
     return executeLLMAnalyzer({
       mockable,
       mockFn: () => mockParseDescription(description),
-      realFn: async () => {
-        throw new Error('Real LLM parsing not implemented yet. Use mockable: true for testing.');
-        // When real LLM parsing is implemented, use:
-        // systemPrompt: _DescriptionParserResources.fragments.systemPrompt.body
-        // See resources/agents/description-parser.md for prompts and domain knowledge
-      },
+      // When real LLM parsing is implemented, use:
+      // systemPrompt: _DescriptionParserResources.fragments.systemPrompt.body
+      // See resources/agents/description-parser.md for prompts and domain knowledge
+      realFn: () =>
+        Promise.reject(new Error('Real LLM parsing not implemented yet. Use mockable: true for testing.')),
       parseOutput: (raw) => {
         const parsed = JSON.parse(raw as string);
         return CatCharacteristicsSchema.parse(parsed);

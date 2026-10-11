@@ -7,7 +7,7 @@
  * would take. A thread-based harness would exercise a different code path and
  * report a pass that says nothing about the claim being tested.
  *
- * Imports the built package rather than the source, because this runs under
+ * Imports the built packages rather than the source, because this runs under
  * plain `node` with no TypeScript loader — which is why the package's own
  * `build` is a dependency of `test:integration` (see `turbo.json`).
  *
@@ -28,6 +28,7 @@
  */
 
 import { openSqliteProjectionStore } from '@vibe-agent-toolkit/projection-sqlite';
+import { forEachInOrder } from '@vibe-agent-toolkit/utils';
 
 const [directory, writerId, mode, iterationsRaw, retentionRaw] = process.argv.slice(2);
 const iterations = Number(iterationsRaw);
@@ -95,20 +96,18 @@ const store = openSqliteProjectionStore(
   retentionRaw === undefined ? { directory } : { directory, retainedExtentsPerRoot: Number(retentionRaw) },
 );
 try {
+  // In order: each write is one transaction, and the contention under test is between processes, not
+  // between this writer's own writes — overlapping them would measure something else.
+  const indexes = Array.from({ length: iterations }, (_, index) => index);
   if (mode === 'distinct') {
-    for (let index = 0; index < iterations; index += 1) {
-      await store.writeBlobFacts(blobBundle(key(writerId, index)));
-    }
+    await forEachInOrder(indexes, (index) => store.writeBlobFacts(blobBundle(key(writerId, index))));
     await store.writeExtent({ rootId: 'root-shared', treeHash: `tree-${writerId}` }, extentBundle('r', 1));
   } else {
-    for (let index = 0; index < iterations; index += 1) {
-      // Alternate the row count so a stale half is detectable rather than
-      // accidentally matching the fresh half.
-      await store.writeExtent(
-        { rootId: 'root-shared', treeHash: 'tree-contended' },
-        extentBundle('r', (index % 3) + 1),
-      );
-    }
+    // Alternate the row count so a stale half is detectable rather than
+    // accidentally matching the fresh half.
+    await forEachInOrder(indexes, (index) =>
+      store.writeExtent({ rootId: 'root-shared', treeHash: 'tree-contended' }, extentBundle('r', (index % 3) + 1)),
+    );
   }
 } finally {
   await store.close();

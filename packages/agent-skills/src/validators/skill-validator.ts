@@ -3,14 +3,12 @@ import { basename, dirname } from 'node:path';
 
 import { isLocalFileLink, isParserUnavailable, parseFileCached, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
 import {
-  calculateValidationStatus,
-  countBySeverity,
   createRegistryIssue,
   runSingleUnitValidation,
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, isPathAbsentError, issueLocation, relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, forEachInOrder, isPathAbsentError, issueLocation, relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
 
 
 import type { EvidenceRecord } from '../evidence/index.js';
@@ -19,6 +17,7 @@ import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 import { detectBundledResourceWithoutLinks } from './bundled-resource-link-detection.js';
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
 import { detectUndeclaredCrossSkillAuth } from './cross-skill-dependency-detection.js';
+import { describeIssues } from './describe-issues.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import { detectNonImperativeBody } from './imperative-body-detection.js';
 import { detectKebabCaseViolation } from './kebab-case-detection.js';
@@ -144,6 +143,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
     skillDir,
     linkedFiles.map((lf) => lf.path),
     locationRoot,
+    options.side,
   );
   issues.push(...bundledResourceIssues);
 
@@ -191,6 +191,16 @@ function isExemptFromUnreferencedCheck(fileName: string): boolean {
 }
 
 /**
+ * Whether `path` (followed through links) is neither a regular file nor a
+ * directory. Asked only after `existsSync` said the path is there; one gone in
+ * between answers `false`, and the parse that follows reports it.
+ */
+function isSpecialFile(path: string): boolean {
+  const stats = fs.statSync(path, { throwIfNoEntry: false });
+  return stats !== undefined && !stats.isFile() && !stats.isDirectory();
+}
+
+/**
  * Validate a single local_file link: boundary check, existence check.
  *
  * @returns 'boundary' | 'broken' | 'valid' indicating the link status
@@ -231,6 +241,23 @@ function validateLocalLink(
       link: link.href,
       fix: 'Fix link path or restore missing file',
     });
+    return { status: 'broken', resolvedPath };
+  }
+
+  // A named pipe, socket or device has no content to check or bundle, and opening
+  // a pipe blocks until a writer appears — so it is refused here, before the walk
+  // would parse it or the packager copy it (a non-markdown one used to be dropped
+  // from the bundle silently, leaving the packaged link dangling).
+  if (isSpecialFile(resolvedPath)) {
+    issues.push(createRegistryIssue(
+      'LINK_TARGET_UNREADABLE',
+      `Link target is not a regular file (a named pipe, socket or device), so it has no content to check or bundle: ${link.href}`,
+      {
+        location: issueLocation(currentPath, locationRoot),
+        ...(link.line !== undefined && { line: link.line }),
+        link: link.href,
+      },
+    ));
     return { status: 'broken', resolvedPath };
   }
 
@@ -317,12 +344,9 @@ async function traverseLinks(
   const linkedFiles: LinkedFileWalkRecord[] = [];
   const queue: string[] = [resolvedSkillPath];
 
-  while (queue.length > 0) {
-    const currentPath = queue.shift();
-    if (!currentPath) {
-      break;
-    }
-
+  // In order: a breadth-first worklist growing from its own results, guarded by
+  // `visited`, whose parses share one cache.
+  await forEachInOrder(queue, async (currentPath) => {
     let parseResult;
     try {
       parseResult = await parseFileCached(currentPath, 'markdown');
@@ -347,7 +371,7 @@ async function traverseLinks(
         message: `File exists but could not be parsed: ${issueLocation(currentPath, locationRoot)}`,
         location: issueLocation(currentPath, locationRoot),
       });
-      continue;
+      return;
     }
 
     const processed = processFileLinks(parseResult, currentPath, skillDir, locationRoot, issues, visited);
@@ -388,7 +412,7 @@ async function traverseLinks(
         linksValidated: processed.linksValidated,
       });
     }
-  }
+  });
 
   return linkedFiles;
 }
@@ -687,17 +711,11 @@ function buildResult(
   metadata?: ValidationResult['metadata']
 ): ValidationResult {
   const issues = runSingleUnitValidation(rawIssues, validation).emitted;
-  const issueCounts = countBySeverity(issues);
-
-  const summary = `${issueCounts.errors} errors, ${issueCounts.warnings} warnings, ${issueCounts.info} info`;
-
   const result: ValidationResult = {
     path: skillPath,
     type: isVATGenerated ? 'vat-agent' : 'agent-skill',
-    status: calculateValidationStatus(issues),
-    summary,
+    ...describeIssues(issues, 'agent-skill'),
     issues,
-    issueCounts,
   };
 
   if (metadata) {

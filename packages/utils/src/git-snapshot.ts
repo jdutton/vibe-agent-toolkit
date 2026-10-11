@@ -47,11 +47,25 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { closeSync, lstatSync, openSync } from 'node:fs';
 
 import { getGitTreeSnapshot, GIT_MODE_GITLINK, GIT_MODE_SYMLINK } from '@vibe-validate/git';
 
-import { gitFindRoot } from './git-utils.js';
+import { fsFaultOf, isPathAbsentError } from './errors/errno-table.js';
+import { VatError } from './errors/vat-error.js';
+import { gitFindRoot, gitLsFiles } from './git-utils.js';
+import { toForwardSlash } from './path-core.js';
 import { safePath } from './path-utils.js';
+
+/**
+ * The `VatError` code of a snapshot git refused because a file in the
+ * repository is one the OS will not let it read — the INPUT's refusal, never
+ * a defect in VAT and never "not a git repository".
+ */
+export const GIT_SNAPSHOT_UNREADABLE_CODE = 'GIT_SNAPSHOT_UNREADABLE';
+
+/** How many unreadable paths a refusal names before it summarizes the rest. */
+const NAMED_UNREADABLE_PATHS = 5;
 
 /** One path in a {@link GitTreeSnapshot}, located absolutely. */
 export interface GitSnapshotEntry {
@@ -298,4 +312,51 @@ function takeSnapshot(cwd: string, repositoryRoot: string): GitTreeSnapshot | nu
       isSubmodule: entry.mode === GIT_MODE_GITLINK,
     })),
   };
+}
+
+/**
+ * Why git could not snapshot `cwd`'s repository, when the cause is a file in it
+ * the OS will not read; `undefined` when it is not (or `cwd` is no repository).
+ *
+ * A snapshot runs `git add --all`, which hashes every un-ignored file — so one
+ * unreadable file anywhere, referenced by nothing, refuses the whole snapshot.
+ * `getGitTreeSnapshot` answers that with the same `null` as "no repository" and
+ * keeps git's stderr to itself, so this asks the question again on the failure
+ * path only: list what `git add --all` would read, and open each.
+ *
+ * @param cwd - Any directory inside the repository whose snapshot was refused
+ * @returns The refusal naming the unreadable paths, repository-relative
+ */
+export function unreadableSnapshotRefusal(cwd: string): VatError | undefined {
+  const root = gitFindRoot(cwd);
+  if (root === null) return undefined;
+  // A directory git could not list is a warning to `git add`, not a refusal of
+  // the snapshot, so it is not this function's cause to report.
+  const listed = gitLsFiles({ cwd: root, includeUntracked: true, unreadable: { degrade: () => undefined } });
+  if (listed === null) return undefined;
+  const unreadable = listed.filter((relative) => !gitCanRead(safePath.join(root, relative)));
+  if (unreadable.length === 0) return undefined;
+  const named = unreadable.slice(0, NAMED_UNREADABLE_PATHS).map((relative) => toForwardSlash(relative)).join(', ');
+  const more = unreadable.length > NAMED_UNREADABLE_PATHS ? ` and ${unreadable.length - NAMED_UNREADABLE_PATHS} more` : '';
+  return new VatError(
+    GIT_SNAPSHOT_UNREADABLE_CODE,
+    `git could not snapshot the repository at ${toForwardSlash(root)}: the OS will not let it read ${named}${more}. `
+      + 'A snapshot reads every file git does not ignore, so fix the permissions, or add the path to .gitignore.',
+  );
+}
+
+/**
+ * Whether `git add` can read `path`: a regular file it can open, or anything it
+ * does not read as bytes (a symlink, a gone tracked file, a submodule).
+ */
+function gitCanRead(path: string): boolean {
+  try {
+    if (!lstatSync(path).isFile()) return true;
+    closeSync(openSync(path, 'r'));
+    return true;
+  } catch (error) {
+    if (isPathAbsentError(error)) return true;
+    if (fsFaultOf(error) !== undefined) return false;
+    throw error;
+  }
 }

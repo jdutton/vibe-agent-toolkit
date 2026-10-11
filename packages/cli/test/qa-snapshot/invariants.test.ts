@@ -88,7 +88,6 @@ function manifestOf(
     corpusGitHead: 'abc1234',
     corpusGitDirty: false,
     lanes: [...lanes],
-    commands: [],
     parseFactArtifact: keyDisagreements === null ? null : 'oracle/parse-facts.txt',
     parseFactBlobCount: keyDisagreements === null ? null : 37,
     parseFactKeyDisagreementCount: keyDisagreements,

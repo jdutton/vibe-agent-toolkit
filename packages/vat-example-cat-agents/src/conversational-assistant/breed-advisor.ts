@@ -163,7 +163,7 @@ async function extractFromConversation<T>(
 /**
  * Extract factors from conversation during gathering phase
  */
-async function extractFactorsFromConversation(
+function extractFactorsFromConversation(
   history: Message[],
   callLLM: (messages: Message[]) => Promise<string>,
 ): Promise<Partial<SelectionProfile>> {
@@ -178,7 +178,7 @@ async function extractFactorsFromConversation(
 /**
  * Extract selected breed from Phase 2 conversation
  */
-async function extractSelectedBreed(
+function extractSelectedBreed(
   history: Message[],
   callLLM: (messages: Message[]) => Promise<string>,
 ): Promise<{ selectedBreed: string | null }> {

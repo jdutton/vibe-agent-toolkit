@@ -249,12 +249,12 @@ function driverSource(mode: DriverMode): string {
     // The import-only arm still loads the whole graph above — ESM imports are
     // not elided for being unused — which is exactly what makes it a baseline.
     "if (mode === 'enumerate') {",
-    '  paths = (await new GitCrawlSource(root).enumerate()).length;',
+    "  paths = (await new GitCrawlSource(root, []).enumerate()).length;",
     "} else if (mode === 'extent') {",
     '  const tracker = new GitTracker(root);',
     '  await tracker.initialize({ includeUntracked: true });',
     '  const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() });',
-    '  const contributor = new FilesystemExtentContributor((r) => new GitCrawlSource(r));',
+    "  const contributor = new FilesystemExtentContributor((r) => new GitCrawlSource(r, []));",
     '  paths = (await contributor.contribute(builder.base(), null)).realizations.length;',
     '}',
     'process.stdout.write(`PATHS=${paths}\\n`);',

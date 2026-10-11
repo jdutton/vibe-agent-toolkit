@@ -39,6 +39,7 @@ await registry.addResource('./README.md');
 
 // Crawl directory for all markdown files
 await registry.crawl({
+  outputs: [],
   baseDir: './docs',
   unreadable: 'refuse',              // required: stop on a directory the crawl cannot list, or { degrade: (refusal) => … }
   include: ['**/*.md'],
@@ -106,6 +107,7 @@ Crawl a directory and add all matching markdown files.
 
 ```typescript
 const resources = await registry.crawl({
+  outputs: [],
   baseDir: './docs',
   unreadable: 'refuse',              // REQUIRED, no default: 'refuse' throws DirectoryListingRefusedError on a directory it cannot list;
                                      // { degrade: (refusal) => … } keeps going and hands you the gap to report
@@ -955,6 +957,7 @@ async function validateDocs() {
 
   // Crawl all markdown in project
   await registry.crawl({
+    outputs: [],
     baseDir: process.cwd(),
     unreadable: 'refuse',
     exclude: ['**/node_modules/**', '**/dist/**', '**/.git/**']
@@ -990,7 +993,7 @@ import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 
 async function buildGraph() {
   const registry = new ResourceRegistry();
-  await registry.crawl({ baseDir: './docs', unreadable: 'refuse' });
+  await registry.crawl({ outputs: [], baseDir: './docs', unreadable: 'refuse' });
 
   // Resolve all cross-references
   registry.resolveLinks();
@@ -1026,7 +1029,7 @@ buildGraph();
 ```typescript
 async function linkReport() {
   const registry = new ResourceRegistry();
-  await registry.crawl({ baseDir: './docs', unreadable: 'refuse' });
+  await registry.crawl({ outputs: [], baseDir: './docs', unreadable: 'refuse' });
 
   const result = await registry.validate();
 

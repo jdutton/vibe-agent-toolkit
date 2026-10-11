@@ -94,7 +94,7 @@ export class WebSocketTransport<TState = any> implements Transport {
   /**
    * Start the WebSocket server.
    */
-  async start(): Promise<void> {
+  start(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.server = new WebSocketServer({ host: this.host, port: this.port });
 
@@ -114,7 +114,7 @@ export class WebSocketTransport<TState = any> implements Transport {
   /**
    * Stop the WebSocket server.
    */
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
     return new Promise((resolve, reject) => {
       if (!this.server) {
         resolve();

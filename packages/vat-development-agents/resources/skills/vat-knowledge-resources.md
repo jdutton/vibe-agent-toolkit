@@ -71,6 +71,10 @@ vat resources query 'SELECT * FROM blob_conditions'        # what was refused, a
 vat resources query 'SELECT rawRef FROM blob_references WHERE syntacticForm = ?' --param markdown-link
 ```
 
+The answer is the shared report envelope: the rows are `data.rows` (`data.columns` names them, even
+for an empty answer), and `examined` is the population the statement ran over — so zero rows over a
+populated tree is `status: ok`, exit 0. A refused statement is `status: error`, `USAGE_INVALID`, exit 2.
+
 A statement naming a table or column that does not exist gets the real columns of the tables it
 named — VAT ships no schema version, so that listing is how you find what a name became. The
 statement is also **compiled before the projection is populated**, so a typo costs milliseconds
@@ -476,25 +480,29 @@ For tools that **modify** frontmatter (not just validate it), see
 
 ## Validation Output
 
+`vat resources validate` publishes the shared report envelope:
+
 ```yaml
-status: success
-filesScanned: 47
-linksChecked: 212
-durationSecs: 0.23
-validationMode: strict
-collections:
-  systems:
-    resourceCount: 7
-    hasSchema: true
-    validationMode: permissive
-  adrs:
-    resourceCount: 12
-    hasSchema: true
-    validationMode: permissive
+status: ok
+examined: 47
+findings: []
+summary: { errors: 0, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 230
+data:
+  root: /abs/path/to/project
+  collections:
+    systems:
+      resourceCount: 7
+      hasSchema: true
+      validationMode: permissive
+      filesWithErrors: 0
+      summary: { errors: 0, warnings: 0, info: 0 }
 ```
 
-On issues the shape changes: `status` becomes the worst actionable severity (`warning` | `error`),
-with `errorsFound`, `filesWithErrors` and `issueCounts: {errors, warnings, info}` — the field
-list is in `vat resources validate --help`.
-
-Errors appear in stderr with `file:line: message` format for editor navigation.
+On issues `status` is `findings` and every finding is listed flat in `findings`
+(`{code, severity, message, location, line?}`, `location` relative to `data.root`);
+`summary` counts them by severity, and the run exits 1 only for an error-severity one.
+`examined: 0` is refused (`RESOURCE_CHECK_BROKEN`). The field list is in
+`vat resources validate --help`; `--format text` prints one
+`location:line: severity: message [code]` line per finding for editor navigation.

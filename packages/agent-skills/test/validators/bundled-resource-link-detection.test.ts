@@ -41,6 +41,7 @@ function runDetector(skillDir: string, linkedFiles: readonly string[] = []) {
     skillDir,
     linkedFiles,
     skillDir,
+    'source',
   );
 }
 

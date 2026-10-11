@@ -3,24 +3,31 @@
  * in vibe-agent-toolkit.config.yaml without disturbing comments or key ordering.
  *
  * Orchestration only. Domain logic lives in upsertTestConfig (agent-skills).
- * Mirrors review.ts error-handling conventions (handleCommandError / projectRootOrNull).
+ * Publishes the report contract (`SKILL_TEST_CONFIGURE_REPORT_SCHEMA`); under
+ * `--print` stdout is the `skill-test-config` artifact — the config text alone.
  */
 
-import { writeFileSync } from 'node:fs';
+import { statSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import { upsertTestConfig } from '@vibe-agent-toolkit/agent-skills';
-import { parseConfigAllowingUnknownKeys, ProjectConfigSchema } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
-import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
+import { parseConfigAllowingUnknownKeys, type ProjectConfig, ProjectConfigSchema, readConfigText } from '@vibe-agent-toolkit/resources';
+import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
+import { classifyFsFault, isFsFaultError, replaceFile, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
 
-import { handleCommandError } from '../../../utils/command-error.js';
+import { CommandRefusalError, refusalCodeOf } from '../../../utils/command-refusal.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED, writeArtifact } from '../../../utils/document-writer.js';
 import { createLogger } from '../../../utils/logger.js';
+import { requireProjectRoot } from '../../../utils/project-root-policy.js';
+import { discoverSkillsFromConfig } from '../../skills/skill-discovery.js';
 
 import { assertValidAuth, type AuthValue } from './auth-flags.js';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
+/** No `--strict`: the edit has no warnings to gate on. */
+const CONFIGURE_GATE: Gate = { strict: false };
 
 export interface SkillTestConfigureOptions {
   auth?: string;
@@ -46,7 +53,7 @@ export interface SkillTestConfigureOptions {
 function parsePositiveInt(value: string, flag: string): number {
   const n = Number.parseInt(value, 10);
   if (!Number.isInteger(n) || n <= 0) {
-    throw new Error(`${flag} must be a positive integer. Got: ${value}`);
+    throw new CommandRefusalError('USAGE_INVALID', `${flag} must be a positive integer. Got: ${value}`);
   }
   return n;
 }
@@ -54,7 +61,7 @@ function parsePositiveInt(value: string, flag: string): number {
 function parsePositiveFloat(value: string, flag: string): number {
   const n = Number.parseFloat(value);
   if (!Number.isFinite(n) || n <= 0) {
-    throw new Error(`${flag} must be a positive number. Got: ${value}`);
+    throw new CommandRefusalError('USAGE_INVALID', `${flag} must be a positive number. Got: ${value}`);
   }
   return n;
 }
@@ -103,6 +110,24 @@ export function buildKnobs(
 }
 
 /**
+ * The presence preflight: the project must HAVE a config to edit. A `.git/` ancestor is a
+ * project root with no config file in it. Nothing there is the project's mistake
+ * (`CONFIG_INVALID`), carrying the classified fault; a `stat` the OS refuses is a fault on the
+ * side the config is on for this run, exactly as its read is.
+ */
+function requireConfigPresent(configPath: string, configSide: 'source' | 'destination'): void {
+  try {
+    statSync(configPath);
+  } catch (error) {
+    const fault = classifyFsFault(error, { side: configSide, origin: 'config', action: 'find the project config', path: configPath });
+    if (isFsFaultError(fault) && fault.faultClass === 'absent') {
+      throw new CommandRefusalError('CONFIG_INVALID', `No ${CONFIG_FILENAME} at the project root: ${configPath}. Create one (a skills: block) first.`, { cause: fault });
+    }
+    throw fault;
+  }
+}
+
+/**
  * Read the config at `configPath`, apply `knobs` to `skillName`'s test block, and
  * hand back the YAML to write — refusing only what VAT would otherwise MISREAD.
  *
@@ -124,7 +149,7 @@ export function buildKnobs(
  * - The message was `validation.error.message`, which in Zod 3 is a **JSON dump
  *   of the issue array**: no file named, no key named in words, no remedy.
  *
- * 🔑 **The read goes through `readTextContent`**, never `readFileSync(path,
+ * 🔑 **The read goes through the shared `readConfigText`**, never `readFileSync(path,
  * 'utf-8')`. This is a read-modify-WRITE path, so a UTF-16LE or BOM-prefixed
  * config (what PowerShell 5.1 writes by default) was decoded as mojibake and then
  * serialized back over the original — destroying a config whose only fault was
@@ -134,32 +159,71 @@ export function buildKnobs(
  * @param skillName - The key under `skills.config` to upsert
  * @param knobs - The knobs the operator typed; only these are changed
  * @param onWarn - Receives the unknown-key warning, if any
+ * @param configSide - Which side of this run the config is on: `destination` when the
+ *   update is written back over it (a refused read is the run not finishing), `source`
+ *   under `--print`, which only reads it (a refused read is the input's)
  * @returns The updated YAML, comments and key ordering preserved
- * @throws Error when the UPDATED config would fail validation for any reason
- *   other than an unknown key
+ * @throws {CommandRefusalError} `CONFIG_INVALID` when the project has no config
+ *   file, or the UPDATED config would fail validation for any reason other than
+ *   an unknown key; `USAGE_INVALID` when `skills.include` discovers no skill named
+ *   `skillName`; `FsFaultError` (origin `config`, on `configSide`: `RUN_INCOMPLETE` as a
+ *   destination, `INPUT_UNREADABLE` as a source) when the OS refuses the read
  */
 export async function updateSkillTestConfig(
   configPath: string,
   skillName: string,
   knobs: Parameters<typeof upsertTestConfig>[2],
   onWarn: (message: string) => void,
+  configSide: 'source' | 'destination',
 ): Promise<string> {
-  const { text: yamlText } = await readTextContent(configPath);
+  requireConfigPresent(configPath, configSide);
+  const yamlText = await readConfigText(configPath, configSide);
   const updatedYaml = upsertTestConfig(yamlText, skillName, knobs);
 
   // Validate the FULL updated config before it can be written.
   const parsed = yaml.parse(updatedYaml) as unknown;
+  let config: ProjectConfig;
   try {
-    parseConfigAllowingUnknownKeys(ProjectConfigSchema, parsed, onWarn, { configPath });
+    config = parseConfigAllowingUnknownKeys(ProjectConfigSchema, parsed, onWarn, { configPath });
   } catch (validationError) {
     // The prefix is kept because it carries information the shared formatter
     // cannot know: what is being judged is the config AFTER this command's
     // edit, so a reader has to be told the file on disk may still be fine.
     const detail = validationError instanceof Error ? validationError.message : String(validationError);
-    throw new Error(`Updated config would fail schema validation.\n${detail}`);
+    throw new CommandRefusalError('CONFIG_INVALID', `Updated config would fail schema validation.\n${detail}`);
   }
 
+  await requireDeclaredSkill(configPath, config.skills, skillName);
   return updatedYaml;
+}
+
+/**
+ * Refuse a skill name `skills.include` does not discover. A typo used to be
+ * persisted as `skills.config.<typo>.test`, exit 0, and only the next
+ * `vat skill test run <typo>` refused it — against the same discovery used here.
+ */
+async function requireDeclaredSkill(
+  configPath: string,
+  skills: ProjectConfig['skills'],
+  skillName: string,
+): Promise<void> {
+  const declared = skills === undefined ? [] : await discoverSkillsFromConfig(skills, dirname(configPath), 'refuse');
+  if (declared.some((skill) => skill.name === skillName)) return;
+  const known = declared.map((skill) => skill.name).sort((a, b) => a.localeCompare(b)).join(', ') || '(none)';
+  throw new CommandRefusalError(
+    'USAGE_INVALID',
+    `No skill named '${skillName}' is declared by ${configPath} (declared: ${known}). Name a skill its skills.include discovers — the SKILL.md frontmatter name — or declare the skill before configuring its tests.`,
+  );
+}
+
+/**
+ * Replace the config with the updated text in one step (`replaceFile`: a temp beside it, renamed over
+ * it), never truncating it in place — it is the adopter's hand-authored file, and a full disk or an
+ * interruption after a truncate would leave it empty or cut short. A link is written through and the
+ * file keeps its mode. A failed write stopped the run; it is not VAT's defect.
+ */
+function writeConfig(configPath: string, updatedYaml: string): Promise<void> {
+  return withFsFault({ side: 'destination', action: 'write the project config', path: configPath }, () => replaceFile(configPath, updatedYaml));
 }
 
 async function configureCommand(
@@ -167,33 +231,36 @@ async function configureCommand(
   options: SkillTestConfigureOptions,
 ): Promise<void> {
   const logger = createLogger(options.debug ? { debug: true } : {});
-  const startTime = Date.now();
 
   try {
-    const projectRoot = findProjectRoot(process.cwd());
-    if (projectRoot === null) {
-      throw new Error(
-        'skill test configure requires a vibe-agent-toolkit.config.yaml or .git/ ancestor. ' +
-          'Run from inside a VAT project or initialize one.',
-      );
-    }
-
+    const projectRoot = requireProjectRoot(process.cwd(), 'vat skill test configure');
     const configPath = safePath.join(projectRoot, CONFIG_FILENAME);
     const updatedYaml = await updateSkillTestConfig(
       configPath,
       skillName,
       buildKnobs(options),
       (message) => { logger.warn(message); },
+      // `--print` writes nothing, so the config is only read: an input, not this run's output.
+      options.print === true ? 'source' : 'destination',
     );
 
     if (options.print) {
-      process.stdout.write(updatedYaml);
-    } else {
-      writeFileSync(configPath, updatedYaml, 'utf-8');
-      logger.info(`Updated ${configPath}`);
+      // The artifact alone: redirectable over the file, so no report rides along.
+      // Returning (exit 0) rather than `process.exit`, which could cut a piped write short.
+      writeArtifact('skill-test-config', updatedYaml, 'raw');
+      return;
     }
+
+    await writeConfig(configPath, updatedYaml);
+    logger.info(`Updated ${configPath}`);
+    endWithReport('skill test configure', buildReport({
+      examined: 1,
+      findings: [],
+      data: { configPath: toForwardSlash(safePath.relative(process.cwd(), configPath)), skill: skillName },
+      gate: CONFIGURE_GATE,
+    }), 'yaml');
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'SkillTestConfigure');
+    endWithRefusal('skill test configure', refusalCodeOf(error), error, 'yaml', CONFIGURE_GATE, NOTHING_FINISHED);
   }
 }
 
@@ -202,7 +269,7 @@ export function createSkillTestConfigureCommand(): Command {
 
   command
     .description('Upsert the test block for a skill in vibe-agent-toolkit.config.yaml')
-    .argument('<skill>', 'Skill name (key under skills.config)')
+    .argument('<skill>', 'Skill name (key under skills.config); must be a skill skills.include discovers')
     .option('--auth <mode>', 'Auth mechanism: inherit | subscription | api-key | auto')
     .option('--max-turns <n>', 'Per-spawn cap on executor/grader turns (positive integer)')
     .option('--max-budget-usd <n>', 'Per-spawn USD budget cap, applied to EACH executor and grader spawn (positive number). Not a whole-run ceiling: a baseline run has twice the spawns, so twice the worst-case spend.')
@@ -237,9 +304,20 @@ Description:
   test block for the named skill. Comments and key ordering are preserved.
   Only the knobs you pass are changed; other knob values remain intact.
 
+Output:
+  YAML report on stdout (schema: packages/cli/schemas/skill-test-configure.json):
+  status ok|error, examined (1 config file), data: configPath (relative to the
+  working directory), skill. With --print, stdout is the updated config text
+  and nothing else, so it can be redirected over the file. Warnings (an
+  unknown config key) go to stderr.
+
 Exit Codes:
-  0 - Config updated successfully (or printed with --print)
-  2 - Error (invalid option value, config validation failure, file not found)
+  0 - Config updated (or printed with --print)
+  2 - Refused; error.code says why: USAGE_INVALID (an invalid option value, a
+      skill the config's skills.include does not discover, or no project
+      root), CONFIG_INVALID (no config file, or the updated config
+      fails its schema), RUN_INCOMPLETE (the config could not be read or
+      written; with --print, a config that cannot be read is INPUT_UNREADABLE)
 
 Example:
   $ vat skill test configure my-skill --auth subscription --max-turns 20

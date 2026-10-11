@@ -65,13 +65,13 @@ export const haikuGeneratorAgent: Agent<
       temperature: 0.8,
     },
   },
-  execute: async (input: HaikuGeneratorInput) => {
+  execute: (input: HaikuGeneratorInput) => {
     const validatedOrError = validateAgentInput<HaikuGeneratorInput, Haiku>(
       input,
       HaikuGeneratorInputSchema
     );
     if ('result' in validatedOrError) {
-      return validatedOrError;
+      return Promise.resolve(validatedOrError);
     }
 
     const { characteristics, mockable = true } = validatedOrError;

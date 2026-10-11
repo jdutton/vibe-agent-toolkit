@@ -48,17 +48,21 @@ export interface PhotoAnalyzerOptions {
  * @param options - Configuration options
  * @returns Cat characteristics extracted from the photo
  */
-export async function analyzePhoto(
+export function analyzePhoto(
   imagePathOrBase64: string,
   options: PhotoAnalyzerOptions = {},
 ): Promise<CatCharacteristics> {
   const { mockable = true } = options;
 
-  if (mockable) {
-    return mockAnalyzePhoto(imagePathOrBase64);
+  if (!mockable) {
+    return Promise.reject(new Error('Real vision API not implemented yet. Use mockable: true for testing.'));
   }
 
-  throw new Error('Real vision API not implemented yet. Use mockable: true for testing.');
+  try {
+    return Promise.resolve(mockAnalyzePhoto(imagePathOrBase64));
+  } catch (error) {
+    return Promise.reject(error as Error);
+  }
 }
 
 /**
@@ -318,13 +322,13 @@ export const photoAnalyzerAgent: Agent<
       model: 'claude-haiku-4-5',
     },
   },
-  execute: async (input: PhotoAnalyzerInput) => {
+  execute: (input: PhotoAnalyzerInput) => {
     // Validate input
     const parsed = PhotoAnalyzerInputSchema.safeParse(input);
     if (!parsed.success) {
-      return {
+      return Promise.resolve({
         result: { status: RESULT_ERROR, error: LLM_INVALID_OUTPUT },
-      };
+      });
     }
 
     const { imagePathOrBase64, mockable = true } = parsed.data;
@@ -332,12 +336,11 @@ export const photoAnalyzerAgent: Agent<
     return executeLLMAnalyzer({
       mockable,
       mockFn: () => mockAnalyzePhoto(imagePathOrBase64),
-      realFn: async () => {
-        throw new Error('Real vision API not implemented yet. Use mockable: true for testing.');
-        // When real vision API is implemented, use:
-        // systemPrompt: _PhotoAnalyzerResources.fragments.systemPrompt.body
-        // See resources/agents/photo-analyzer.md for prompts and domain knowledge
-      },
+      // When real vision API is implemented, use:
+      // systemPrompt: _PhotoAnalyzerResources.fragments.systemPrompt.body
+      // See resources/agents/photo-analyzer.md for prompts and domain knowledge
+      realFn: () =>
+        Promise.reject(new Error('Real vision API not implemented yet. Use mockable: true for testing.')),
       parseOutput: (raw) => {
         const parsed = JSON.parse(raw as string);
         return CatCharacteristicsSchema.parse(parsed);

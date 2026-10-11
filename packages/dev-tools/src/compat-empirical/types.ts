@@ -83,7 +83,7 @@ export type TriggerPromptsFile = z.infer<typeof TriggerPromptsFileSchema>;
 export const ObservationCodeSchema = z
   .object({
     code: z.string(),
-    summary: z.string(),
+    description: z.string(),
     payload: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
@@ -93,7 +93,7 @@ export const VerdictCodeEntrySchema = z
   .object({
     code: z.string(),
     observationCode: z.string(),
-    summary: z.string(),
+    description: z.string(),
   })
   .strict();
 

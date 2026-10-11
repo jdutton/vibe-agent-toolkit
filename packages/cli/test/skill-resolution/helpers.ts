@@ -142,7 +142,7 @@ function buildConfigYaml(spec: ReferenceFixtureSpec): string {
     include.push(`plugins/${PLUGIN_NAME}/skills/*/SKILL.md`);
   }
 
-  const config: Record<string, unknown> = { version: 1 };
+  const config: Record<string, unknown> = {};
   if (include.length > 0) {
     const skills: Record<string, unknown> = { include };
     if (spec.skillsDefaults !== undefined) skills.defaults = spec.skillsDefaults;

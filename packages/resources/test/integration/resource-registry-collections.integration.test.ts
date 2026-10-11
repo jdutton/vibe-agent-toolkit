@@ -28,7 +28,6 @@ describe('ResourceRegistry with collections', () => {
 
     // Create config
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           'rag-kb': {
@@ -72,7 +71,6 @@ describe('ResourceRegistry with collections', () => {
     await writeFile(filePath, 'console.log("test");');
 
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           'docs-only': {
@@ -97,7 +95,6 @@ describe('ResourceRegistry with collections', () => {
     await writeFile(safePath.join(docsDir, 'README.md'), '# Readme');
 
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           'rag-kb': {
@@ -127,7 +124,6 @@ describe('ResourceRegistry with collections', () => {
     await writeFile(skillPath, '# Skill\n\n## Usage');
 
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           'skills': {
@@ -162,7 +158,6 @@ describe('ResourceRegistry with collections', () => {
     await writeFile(safePath.join(suite.tempDir, 'README.md'), '# Project');
 
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           'docs': {
@@ -178,6 +173,7 @@ describe('ResourceRegistry with collections', () => {
     const registry = new ResourceRegistry({ config });
     await registry.crawl({
       unreadable: 'refuse',
+      outputs: [],
       baseDir: suite.tempDir,
       include: ['**/*.md'],
     });

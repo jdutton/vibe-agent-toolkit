@@ -26,6 +26,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
+import { countBySeverity } from '@vibe-agent-toolkit/schema';
 import { createSymlink, direntKindFollowingSync, mkdirSyncReal, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -72,8 +73,7 @@ function writeSkillWithEvals(skillsDir: string, dirPath: string, name: string): 
 }
 
 function configYaml(poolSelector: string): string {
-  return `version: 1
-skills:
+  return `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
   config:
     ${PACKAGED_SKILL}:
@@ -160,7 +160,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     tempDir = createTestTempDir('vat-plugin-skills-dirs-');
     const outDir = writeFixture(tempDir);
 
-    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
+    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] });
 
     // Two skills packaged: the flat one and the NESTED one. The nested skill used to
     // be invisible to the packager and fell through to the verbatim tree-copy.
@@ -186,7 +186,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     tempDir = createTestTempDir('vat-plugin-skills-gitignored-');
     const outDir = writeFixture(tempDir);
 
-    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
+    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] });
 
     // Only the two tracked skills are packaged; the gitignored one is not a skill
     // this project publishes (`vat skills build` cannot discover it either).
@@ -204,7 +204,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     mkdirSyncReal(poolDist, { recursive: true });
     writeTestFile(safePath.join(poolDist, SKILL_FILE), skillMd(NESTED_SKILL));
 
-    await runClaudePluginBuild(tempDir, { logger: silentLogger });
+    await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] });
 
     // The pool copy is the sole source; the plugin-local nested copy is neither
     // packaged nor tree-copied. Two definitions of one skill, at two depths in one
@@ -219,6 +219,71 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     // looking for a dist at `skills/group/nested-skill` the build never wrote.
     expect(existsSync(safePath.join(outDir, SKILLS_DIR, 'group', NESTED_SKILL, SKILL_FILE))).toBe(true);
     expect(existsSync(safePath.join(outDir, SKILLS_DIR, NESTED_SKILL, SKILL_FILE))).toBe(false);
+  });
+
+  // The refereed pool copy lands at the plugin-local skill's NESTED path (`skills/group/<skill>`).
+  // A pool skill named `group`, copied first with its links kept, can hold a link at that very
+  // name: the nested copy then took the link for its root and wrote the skill where it pointed.
+  it('never copies a refereed pool skill THROUGH a link an earlier pool copy left at its nested destination', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    tempDir = createTestTempDir('vat-plugin-skills-nested-link-');
+    // `group` — and its link — is copied before the skill that lands on it: pool skills go by destination path.
+    writeFixture(tempDir, `["group", "${NESTED_SKILL}"]`);
+    const outside = safePath.join(tempDir, 'outside');
+    mkdirSyncReal(outside, { recursive: true });
+    writeTestFile(safePath.join(outside, 'kept.md'), 'kept');
+
+    const pool = safePath.join(tempDir, 'dist', 'skills');
+    mkdirSyncReal(safePath.join(pool, NESTED_SKILL), { recursive: true });
+    writeTestFile(safePath.join(pool, NESTED_SKILL, SKILL_FILE), skillMd(NESTED_SKILL));
+    // Its link is named as the nested skill's directory is.
+    mkdirSyncReal(safePath.join(pool, 'group'), { recursive: true });
+    writeTestFile(safePath.join(pool, 'group', SKILL_FILE), skillMd('group'));
+    createSymlink(cap, outside, safePath.join(pool, 'group', NESTED_SKILL), 'dir');
+
+    const failure: unknown = await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] }).catch((error: unknown) => error);
+
+    expect(readdirSync(outside)).toEqual(['kept.md']);
+    expect(failure, String(failure)).toMatchObject({ code: 'FS_FAULT', side: 'source', origin: 'content', faultClass: 'occupied' });
+    expect(String((failure as Error).message)).toContain(`group/${NESTED_SKILL}`);
+  });
+
+  // One segment deeper: the link is not AT the refereed copy's destination but ABOVE it
+  // (`skills/group/sub -> outside`, the skill authored at `skills/group/sub/<skill>`). Looking only at
+  // the destination's own name went through `sub` and made the skill's directory outside the build.
+  //
+  // In either selection order: pool skills are copied by destination path, so `group` — and
+  // its link — is always there before the skill that lands under it, and the refusal is one code.
+  // Copied in selection order, the deep skill went first, made `skills/group/sub` a real directory,
+  // and `group`'s own link was then refused as the build's own half-written output.
+  const DEEP_SKILL = 'deep-skill';
+  it.skipIf(!symlinkCapability()).each([
+    ['before', ['group', NESTED_SKILL, DEEP_SKILL]],
+    ['after', [DEEP_SKILL, NESTED_SKILL, 'group']],
+  ])('never copies a refereed pool skill through a link standing ABOVE its nested destination (its holder selected %s it)', async (_order, selected) => {
+    const cap = symlinkCapability();
+    if (!cap) throw new Error('gated by skipIf');
+    tempDir = createTestTempDir('vat-plugin-skills-ancestor-link-');
+    writeFixture(tempDir, JSON.stringify(selected), (skillsDir) => {
+      mkdirSyncReal(safePath.join(skillsDir, 'group', 'sub', DEEP_SKILL), { recursive: true });
+      writeTestFile(safePath.join(skillsDir, 'group', 'sub', DEEP_SKILL, SKILL_FILE), skillMd(DEEP_SKILL));
+    });
+    const outside = safePath.join(tempDir, 'outside');
+    mkdirSyncReal(outside, { recursive: true });
+
+    const pool = safePath.join(tempDir, 'dist', 'skills');
+    for (const name of [NESTED_SKILL, DEEP_SKILL, 'group']) {
+      mkdirSyncReal(safePath.join(pool, name), { recursive: true });
+      writeTestFile(safePath.join(pool, name, SKILL_FILE), skillMd(name));
+    }
+    createSymlink(cap, outside, safePath.join(pool, 'group', 'sub'), 'dir');
+
+    const failure: unknown = await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] }).catch((error: unknown) => error);
+
+    expect(readdirSync(outside)).toEqual([]);
+    expect(failure, String(failure)).toMatchObject({ code: 'FS_FAULT', side: 'source', origin: 'content', faultClass: 'occupied' });
+    expect(String((failure as Error).message)).toContain('skills/group/sub');
+    expect(String((failure as Error).message)).toContain(`dist/skills/${DEEP_SKILL}`);
   });
 
   it('fails the build when two DIFFERENT skills claim one output directory', async () => {
@@ -241,7 +306,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     mkdirSyncReal(poolDist, { recursive: true });
     writeTestFile(safePath.join(poolDist, SKILL_FILE), skillMd(POOL_ONLY_SKILL));
 
-    await expect(runClaudePluginBuild(tempDir, { logger: silentLogger })).rejects.toThrow(
+    await expect(runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] })).rejects.toThrow(
       /two DIFFERENT skills claim the same output directory/,
     );
   });
@@ -260,6 +325,7 @@ describe('plugin build — what each phase produces under skills/ (integration)'
 
     const warnings: string[] = [];
     await runClaudePluginBuild(tempDir, {
+      runOutputs: [],
       logger: { ...silentLogger, info: (m: string) => { warnings.push(m); } },
     });
 
@@ -284,8 +350,7 @@ function guidedConfig(
   extraPluginKeys: readonly string[] = [],
 ): string {
   const extra = extraPluginKeys.map((line) => `\n          ${line}`).join('');
-  return `version: 1
-skills:
+  return `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
 claude:
   marketplaces:
@@ -357,7 +422,7 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
     tempDir = createTestTempDir('vat-plugin-never-package-');
     const outDir = writeGuidedFixture(tempDir);
 
-    await runClaudePluginBuild(tempDir, { logger: silentLogger });
+    await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] });
 
     // Tier 1 — no agent-instruction file at any depth. A `CLAUDE.md` beside
     // `plugin.json` used to ship verbatim to every consumer.
@@ -380,22 +445,23 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
   });
 
   // The whole point of the finding: an `exclude:` pattern that no-oped has to
-  // reach the plugin's PUBLISHED counts. It used to be a bare stderr line beside
+  // reach the plugin's PUBLISHED findings. It used to be a bare stderr line beside
   // `issueCounts: {errors: 0, warnings: 0, info: 0}` — so a CI consumer read
   // "clean" for a build whose exclusions demonstrably changed what shipped.
-  it('publishes a dead exclude pattern in the plugin issueCounts, and only the dead ones', async () => {
+  it('publishes a dead exclude pattern in the plugin issues, and only the dead ones', async () => {
     tempDir = createTestTempDir('vat-plugin-dead-exclude-');
     const outDir = writeGuidedFixture(tempDir, [LIVE_EXCLUDE, 'no-such-dir/**', '*.nope']);
 
     const lines: string[] = [];
     const results = await runClaudePluginBuild(tempDir, {
+      runOutputs: [],
       logger: { ...silentLogger, info: (m: string) => lines.push(m) },
     });
 
     const plugin = results[0]?.plugins[0];
     // Two dead patterns, one live — the live one must NOT be accused, or the
     // author is sent to delete a line of config that is doing work.
-    expect(plugin?.issueCounts).toEqual({ errors: 0, warnings: 2, info: 0 });
+    expect(countBySeverity(plugin?.issues ?? [])).toEqual({ errors: 0, warnings: 2, info: 0 });
 
     // ...and the live pattern really did exclude, so this is not a build that
     // no-oped everything. A fixture where the exclusion did nothing could not
@@ -437,12 +503,13 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
 
     const lines: string[] = [];
     const results = await runClaudePluginBuild(tempDir, {
+      runOutputs: [],
       logger: { ...silentLogger, info: (m: string) => lines.push(m) },
     });
 
     // BOTH patterns, including the one that is live in every other fixture: with
     // no tree to walk, "live" is not a property any pattern can have here.
-    expect(results[0]?.plugins[0]?.issueCounts).toEqual({ errors: 0, warnings: 2, info: 0 });
+    expect(countBySeverity(results[0]?.plugins[0]?.issues ?? [])).toEqual({ errors: 0, warnings: 2, info: 0 });
     const rendered = lines.join('\n');
     expect(rendered).toContain('PLUGIN_EXCLUDE_PATTERN_UNUSED');
     expect(rendered).toContain(`'${LIVE_EXCLUDE}'`);
@@ -453,9 +520,9 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
     tempDir = createTestTempDir('vat-plugin-live-exclude-');
     writeGuidedFixture(tempDir);
 
-    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
+    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] });
 
-    expect(results[0]?.plugins[0]?.issueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
+    expect(countBySeverity(results[0]?.plugins[0]?.issues ?? [])).toEqual({ errors: 0, warnings: 0, info: 0 });
     // No symlink in the fixture, so the tell is empty — and PRESENT, never undefined.
     expect(results[0]?.plugins[0]?.symlinksCopied).toEqual([]);
   });
@@ -475,7 +542,7 @@ describe('plugin build — never-package defaults and the exclude knob (integrat
     createSymlink(cap, 'hooks.json', safePath.join(plugin, 'hooks', 'alias.json'));
     commitTestFixture(tempDir);
 
-    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger });
+    const results = await runClaudePluginBuild(tempDir, { logger: silentLogger, runOutputs: [] });
 
     const row = results[0]?.plugins[0];
     expect(row?.symlinksCopied).toEqual(['hooks/alias.json']);

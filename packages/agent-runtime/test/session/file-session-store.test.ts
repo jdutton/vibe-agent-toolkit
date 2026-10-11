@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -169,6 +169,14 @@ describe('FileSessionStore', () => {
       expect(await store.list()).toEqual([]);
     });
 
+    it('throws when the base directory is a FILE: a misconfigured store is not an empty one', async () => {
+      const notADirectory = safePath.join(tempDir, 'sessions-is-a-file');
+      await writeFile(notADirectory, 'x');
+      const store = new FileSessionStore<{ count: number }>({ baseDir: notADirectory });
+
+      await expect(store.list()).rejects.toMatchObject({ code: 'ENOTDIR' });
+    });
+
     it('should return all session IDs', async () => {
       const id1 = await suite.store.create();
       const id2 = await suite.store.create();
@@ -177,6 +185,18 @@ describe('FileSessionStore', () => {
       expect(sessions).toContain(id1);
       expect(sessions).toContain(id2);
       expect(sessions.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  // The default is user state under the home directory, and a test process's home is a developer's
+  // real one (an env stub does not move `os.homedir()` in a worker thread): `requireTestScratch`.
+  describe('the default base directory (~/.vat-sessions) in a test process', () => {
+    it('is refused — that store is somebody\'s', () => {
+      expect(() => new FileSessionStore()).toThrow(/The session store resolves to .* refusing to resolve it in a test process/);
+    });
+
+    it('is never consulted when the caller names a base directory', () => {
+      expect(() => new FileSessionStore({ baseDir: tempDir })).not.toThrow();
     });
   });
 

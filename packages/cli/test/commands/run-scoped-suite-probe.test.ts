@@ -100,7 +100,7 @@ function writeSkillProject(): string {
   }
   writeFileSync(
     safePath.join(root, 'vibe-agent-toolkit.config.yaml'),
-    'version: 1\nskills:\n  include:\n    - "skills/*/SKILL.md"\n',
+    'skills:\n  include:\n    - "skills/*/SKILL.md"\n',
   );
   return root;
 }

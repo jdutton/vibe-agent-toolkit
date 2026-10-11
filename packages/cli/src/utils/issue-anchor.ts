@@ -24,7 +24,7 @@ import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
  * Returns `undefined` when the issue carries no anchor at all, so callers can
  * skip the line entirely rather than print an empty label.
  */
-export function formatIssueAnchor(issue: ValidationIssue): string | undefined {
+export function formatIssueAnchor(issue: Pick<ValidationIssue, 'location' | 'line' | 'field'>): string | undefined {
   const hasLocation = issue.location !== undefined && issue.location !== '';
   const hasField = issue.field !== undefined && issue.field !== '';
   if (!hasLocation && !hasField) {

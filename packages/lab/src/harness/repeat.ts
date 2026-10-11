@@ -21,6 +21,7 @@
  * being unexpectedly fast, which the spread will show.
  */
 
+import { type ArmEnvironment, mergeArmEnvironments } from './arm-env.js';
 import { completedExitCodesOf, type MeasuredCommandSpec } from './commands.js';
 import { runCommand } from './run.js';
 import type {
@@ -55,25 +56,28 @@ export interface RepeatSpec {
   readonly cache: CacheMode;
   readonly timeoutMs?: number;
   /**
-   * Environment for EVERY child, the cache clear included, merged over
-   * `process.env` by {@link runCommand}.
+   * The arm's environment for EVERY child, the cache clear included — applied
+   * over `process.env` by {@link runCommand} (see `arm-env.ts`).
    *
    * The clear needs this: a variable that redirects vat's cache or config (a
    * `VAT_*` root, an XDG override) has to reach the clear too, or the run clears
    * a cache the measured command never uses and every "cold" repeat is warm.
    */
-  readonly env?: Readonly<Record<string, string>>;
+  readonly env: ArmEnvironment;
   /**
-   * Extra environment for the MEASURED run of repeat `index` only, merged over
-   * {@link RepeatSpec.env}.
+   * Variables SET for the MEASURED run of repeat `index` only, layered over
+   * {@link RepeatSpec.env} — a key set here cancels a base `unset` of it.
    *
    * Separate from `env` because of what it is for: the `io` facet gives each
    * repeat its own syscall-log directory, and instrumenting the cache clear with
    * the same one would fold setup's I/O into the repeat's measurement. The clear
    * gets the base environment and nothing more, so it stays uninstrumented.
    */
-  readonly envFor?: (index: number) => Readonly<Record<string, string>> | undefined;
+  readonly envFor?: RepeatEnvFor;
 }
+
+/** Per-repeat variables for the measured run; see {@link RepeatSpec.envFor}. */
+export type RepeatEnvFor = (index: number) => ArmEnvironment['set'] | undefined;
 
 /**
  * Substitute the subject path into a command's arguments.
@@ -148,7 +152,7 @@ export function classifyRunFailure(
 export function runRepeatsFor(
   request: CaptureRequest,
   args: readonly string[],
-  envFor?: (index: number) => Readonly<Record<string, string>> | undefined,
+  envFor?: RepeatEnvFor,
 ): RunResult[] {
   return runRepeats({
     instrument: request.instrument,
@@ -157,7 +161,7 @@ export function runRepeatsFor(
     runs: request.runs,
     cache: request.cache,
     ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
-    ...(request.env === undefined ? {} : { env: request.env }),
+    env: request.env,
     ...(envFor === undefined ? {} : { envFor }),
   });
 }
@@ -257,7 +261,7 @@ export interface SpecMeasurement {
 export function measureSpec(
   request: CaptureRequest,
   spec: MeasuredCommandSpec,
-  envFor?: (index: number) => Readonly<Record<string, string>> | undefined,
+  envFor?: RepeatEnvFor,
 ): SpecMeasurement {
   const args = materializeArgs(spec.args, request.subject.path);
   const results = runRepeatsFor(request, args, envFor);
@@ -300,20 +304,17 @@ function clearCache(spec: RepeatSpec): void {
 }
 
 /**
- * The environment for one measured repeat: base, with its own layered over.
+ * The environment for one measured repeat: the arm's, with the repeat's own
+ * variables layered over.
  *
  * @param spec - The repeats being run
  * @param index - Which repeat is about to run
- * @returns The merged environment, or `undefined` when there is nothing extra
+ * @returns The arm environment for that one child
  */
-function repeatEnv(
-  spec: RepeatSpec,
-  index: number,
-): Readonly<Record<string, string>> | undefined {
+function repeatEnv(spec: RepeatSpec, index: number): ArmEnvironment {
   const own = spec.envFor?.(index);
-  if (spec.env === undefined) return own;
   if (own === undefined) return spec.env;
-  return { ...spec.env, ...own };
+  return mergeArmEnvironments(spec.env, { set: own, unset: [] });
 }
 
 /**
@@ -323,13 +324,10 @@ function repeatEnv(
  * @param env - Environment for this particular child
  * @returns Options for {@link runCommand}
  */
-function runOptions(
-  spec: RepeatSpec,
-  env: Readonly<Record<string, string>> | undefined,
-): RunOptions {
+function runOptions(spec: RepeatSpec, env: ArmEnvironment): RunOptions {
   return {
     cwd: spec.cwd,
-    ...(env === undefined ? {} : { env }),
+    env,
     timeoutMs: spec.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   };
 }

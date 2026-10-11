@@ -10,7 +10,6 @@ import { existsSync, readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
 
@@ -115,13 +114,8 @@ export function validateHelpFiles(): void {
  * nothing, which is the exact opposite of the "fail fast" this file exists for.
  */
 if (isEntrypoint(import.meta.url)) {
-  try {
-    validateHelpFiles();
-    console.log('✓ All required help documentation files exist');
-    process.exit(ExitCode.OK);
-  } catch (error) {
-    console.error('✗ Help file validation failed:');
-    console.error((error as Error).message);
-    process.exit(ExitCode.FINDINGS);
-  }
+  // Not a `vat` verb, so it publishes no document and decides no exit code: a
+  // failure throws, and the build runner ends non-zero on the uncaught throw.
+  validateHelpFiles();
+  console.log('✓ All required help documentation files exist');
 }

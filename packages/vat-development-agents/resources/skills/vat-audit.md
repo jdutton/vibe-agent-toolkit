@@ -83,12 +83,13 @@ vat audit ./plugins/ --compat --settings                                    # au
 vat audit ./plugins/ --compat --settings /etc/claude-code/managed-settings.json
 ```
 
-Every `claude-plugin` entry gets a `compatibility:` block; with `--settings`
+Every `claude-plugin` entry of `data.files` gets a `compatibility:` block; with `--settings`
 (requires `--compat`), a `settings:` block beside it. Both are ALWAYS present for a plugin the run was
 asked about — a lane that could not run says so in its block:
 
 ```yaml
-files:
+data:
+  files:
   - path: plugins/mission-control
     type: claude-plugin
     compatibility:
@@ -96,17 +97,17 @@ files:
       declaredTargets: [claude-code, claude-chat]
       observations:
         - code: CAPABILITY_LOCAL_SHELL
-          summary: Plugin requires a local shell environment.
+          description: Plugin requires a local shell environment.
           supportingEvidence: [ALLOWED_TOOLS_LOCAL_SHELL]
       verdicts:
         - code: COMPAT_TARGET_INCOMPATIBLE
           observationCode: CAPABILITY_LOCAL_SHELL
           target: claude-chat
-          summary: Target 'claude-chat' has no local shell but skill requires one.
+          description: Target 'claude-chat' has no local shell but skill requires one.
       unchecked:                       # files the analysis could not read — the verdicts above were computed WITHOUT them
         - path: plugins/mission-control/skills/locked/SKILL.md
           reason: "EACCES: permission denied, open 'plugins/mission-control/skills/locked/SKILL.md'"
-      summary: { totalFiles: 4, skillFiles: 2, scriptFiles: 1, hookFiles: 0, mcpConfigs: 0 }   # what was ANALYZED
+      fileCounts: { totalFiles: 4, skillFiles: 2, scriptFiles: 1, hookFiles: 0, mcpConfigs: 0 }   # what was ANALYZED
     settings:
       compatible: false                # true ONLY when conflicts and unchecked are both empty
       conflicts:
@@ -132,23 +133,25 @@ Read `verdicts` for the per-target answer (`COMPAT_TARGET_INCOMPATIBLE`,
 over fewer files than the plugin ships. Both lanes follow symlinked skill
 directories and files, and the two lanes are independent — a file the analyzer
 could not read does not stop the settings check. Every path is relative to the
-document's `root`; the plugin-wide `analyzed: false` and the settings-lane
+document's `data.root`; the plugin-wide `analyzed: false` and the settings-lane
 totals are also said on stderr without `--debug`.
 
 Use this before a release to determine which surfaces each plugin supports.
 
 ## Exit Codes
 
-The three-way contract every `vat` command shares — the exit code follows the report's `status`:
+The three-way contract every `vat` report verb shares — the exit code is derived from the published report:
 
-- `0` — the audit completed with nothing at error severity. Warnings and informational findings are
-  in the report, not the exit code.
-- `1` — the audit completed and reports `status: error`: at least one error-severity finding, or
-  zero files audited. A path inside the tree the scan could not read is `SCAN_PATH_UNREADABLE`
-  (warning) — the run degrades, and the refused path is `summary.pathsUnreadable`, not a scanned
-  file; a run that audited zero files is one non-overridable `RESOURCE_CHECK_BROKEN`.
-- `2` — the run itself could not happen: the root path does not exist or is a file no lane
-  recognises, bad usage, a URL that failed to clone, an internal crash. There is no report.
+- `0` — the audit finished and no finding is at error severity. Warnings and informational findings
+  are in the report, not the exit code.
+- `1` — the audit finished with at least one error-severity finding (`status: findings`,
+  `summary.errors > 0`), including a run that audited zero files (one non-overridable
+  `RESOURCE_CHECK_BROKEN`). A path inside the tree the scan could not read is `SCAN_PATH_UNREADABLE`
+  (warning) — the run degrades, and the refused path is `data.counts.pathsUnreadable`, not a file
+  read.
+- `2` — the audit did not finish: `status: error`, the refusal in `error.code` — `USAGE_INVALID`
+  (the root path does not exist or is a file no lane recognises, a git URL that does not parse),
+  `INPUT_UNREADABLE` (a root the OS will not list, a URL that failed to clone), `INTERNAL_ERROR`.
 
 Audit reports every finding: it ignores `validation.allow` and reads `validation.severity` from three
 scopes, so `severity` is the dial that decides what gates. For a check that honors `validation.allow`,
@@ -166,22 +169,28 @@ steps:
 ## Interpreting Output
 
 ```yaml
-root: /abs/path/you/pointed/audit/at   # the ONE absolute path in the document
-status: warning
-summary:
-  filesScanned: 23
-  filesPassed: 21
-  filesWithWarnings: 2
-  filesWithErrors: 0
-  pathsUnreadable: 0                      # refused paths, outside filesScanned
-issueCounts: { errors: 0, warnings: 2, info: 0 }   # every issue, split by severity
-files:
-  - path: plugins/my-plugin                                          # relative to root
-    issues:
-      - location: plugins/my-plugin/.claude-plugin/plugin.json       # relative to root
+status: findings                  # ok | findings | error (error = did not finish)
+examined: 23                      # files read
+findings:
+  - code: PLUGIN_MISSING_VERSION
+    severity: warning
+    message: ...
+    location: plugins/my-plugin/.claude-plugin/plugin.json   # relative to data.root
+summary: { errors: 0, warnings: 2, info: 0 }                 # findings by severity
+gate: { strict: false }
+data:
+  root: /abs/path/you/pointed/audit/at   # the ONE absolute path in the document
+  provenance: null                       # a URL audit's source (then root is null)
+  counts: { filesPassed: 21, filesWithWarnings: 2, filesWithErrors: 0, pathsUnreadable: 0 }
+  files:
+    - path: plugins/my-plugin            # relative to root
+      type: claude-plugin
+      status: findings
+      summary: { errors: 0, warnings: 1, info: 0 }
+  hierarchical: null                     # --user only
 ```
 
-**`root` is the coordinate system for the whole document.** Every `path` and every issue `location` is forward-slashed and relative to it, so `join(root, location)` is the file to open and a `location` identifies a file uniquely even when a run spans several projects with the same internal layout. `root` is the *invocation scan root*, deliberately not each skill's governing-config root — per-skill packaging rules still come from the nearest-ancestor `vibe-agent-toolkit.config.yaml`, but that discovery has no say in how a path is spelled. `--user` states the shared Claude config dir; a URL audit omits `root` and the provenance header names the base instead.
+**`data.root` is the coordinate system for the whole document.** Every `path` and every finding `location` is forward-slashed and relative to it, so `join(root, location)` is the file to open and a `location` identifies a file uniquely even when a run spans several projects with the same internal layout. `root` is the *invocation scan root*, deliberately not each skill's governing-config root — per-skill packaging rules still come from the nearest-ancestor `vibe-agent-toolkit.config.yaml`, but that discovery has no say in how a path is spelled. `--user` states the shared Claude config dir; a URL audit's `root` is `null` and `data.provenance` names the base instead.
 
 Severity taxonomy in audit output:
 - **Errors:** Missing required frontmatter, broken links, invalid plugin.json schema, link integrity violations

@@ -4,10 +4,10 @@
  * filesystem effects), against temp dirs that stand in for the resolver's staged copy.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { evalSuiteUnitPath, isolateEvalSuite } from '../../src/skill-test/eval-suite-isolation.js';
 import { setupTempDir } from '../test-helpers.js';
@@ -82,11 +82,20 @@ describe('evalSuiteUnitPath', () => {
 describe('isolateEvalSuite', () => {
   const { getTempDir } = setupTempDir('vat-eval-isolation-');
 
-  it('removes the suite from a staged copy and reports it was NOT preserved (no hold dir)', () => {
+  // ⛔ A removal path: the temp directory is this suite's scratch, so nothing here — and no
+  // mutation of the code under test — can reach the real one.
+  beforeEach(() => {
+    for (const name of ['TMPDIR', 'TEMP', 'TMP']) vi.stubEnv(name, getTempDir());
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('removes the suite from a staged copy and reports it was NOT preserved (no hold dir)', async () => {
     const root = getTempDir();
     const staged = writeStaged(root, 'companion');
 
-    const preserved = isolateEvalSuite({
+    const preserved = await isolateEvalSuite({
       stagedDir: staged,
       stagingRoot: safePath.join(root, 'staged'),
       evalsSubpath: SUBPATH,
@@ -98,7 +107,7 @@ describe('isolateEvalSuite', () => {
     expect(existsSync(safePath.join(staged, 'SKILL.md'))).toBe(true);
   });
 
-  it('relocates the suite into the hold dir when one is given, then removes it from the staged copy', () => {
+  it('relocates the suite into the hold dir when one is given, then removes it from the staged copy', async () => {
     const root = getTempDir();
     const staged = writeStaged(root, 'subject');
     const holdDir = safePath.join(root, 'hold');
@@ -107,7 +116,7 @@ describe('isolateEvalSuite', () => {
     mkdirSyncReal(fixtures, { recursive: true });
     writeFileSync(safePath.join(fixtures, 'input.md'), '# input\n');
 
-    const preserved = isolateEvalSuite({
+    const preserved = await isolateEvalSuite({
       stagedDir: staged,
       stagingRoot: safePath.join(root, 'staged'),
       evalsSubpath: SUBPATH,
@@ -122,12 +131,29 @@ describe('isolateEvalSuite', () => {
     expect(existsSync(safePath.join(holdDir, 'fixtures', 'input.md'))).toBe(true);
   });
 
-  it('handles a root-level suite file (dirname === ".") without touching the skill dir', () => {
+  // The hold dir holds the answer key, so it stays the owner's alone: a copy of the suite
+  // directory ONTO it would hand it the staged directory's mode (0755 under a usual umask).
+  it.skipIf(process.platform === 'win32')('keeps the hold dir 0700 when it relocates a suite directory into it', async () => {
+    const root = getTempDir();
+    const staged = writeStaged(root, 'subject-mode');
+    const holdDir = safePath.join(root, 'hold-mode');
+    // The unit a tree copy would hand its mode to — the staged suite directory itself — is
+    // not 0700, so a copy of it ONTO the hold dir would be caught.
+    const unit = safePath.join(staged, 'evals');
+    chmodSync(unit, 0o755);
+    expect(statSync(unit).mode & 0o777).not.toBe(0o700);
+
+    await isolateEvalSuite({ stagedDir: staged, stagingRoot: safePath.join(root, 'staged'), evalsSubpath: SUBPATH, holdDir });
+
+    expect(statSync(holdDir).mode & 0o777).toBe(0o700);
+  });
+
+  it('handles a root-level suite file (dirname === ".") without touching the skill dir', async () => {
     const root = getTempDir();
     const staged = writeStaged(root, 'flat', { subpath: SUITE_FILE });
     const holdDir = safePath.join(root, 'hold-flat');
 
-    const preserved = isolateEvalSuite({
+    const preserved = await isolateEvalSuite({
       stagedDir: staged,
       stagingRoot: safePath.join(root, 'staged'),
       evalsSubpath: SUITE_FILE,
@@ -141,12 +167,12 @@ describe('isolateEvalSuite', () => {
     expect(readFileSync(safePath.join(holdDir, SUITE_FILE), 'utf8')).toBe(KEY);
   });
 
-  it('is a no-op when the staged copy carries no suite', () => {
+  it('is a no-op when the staged copy carries no suite', async () => {
     const root = getTempDir();
     const staged = writeStaged(root, 'no-suite', { suite: false });
 
     expect(
-      isolateEvalSuite({
+      await isolateEvalSuite({
         stagedDir: staged,
         stagingRoot: safePath.join(root, 'staged'),
         evalsSubpath: SUBPATH,
@@ -155,7 +181,7 @@ describe('isolateEvalSuite', () => {
     expect(existsSync(safePath.join(staged, 'SKILL.md'))).toBe(true);
   });
 
-  it('is a no-op when the run declares no eval suite at all (evalsSubpath undefined)', () => {
+  it('is a no-op when the run declares no eval suite at all (evalsSubpath undefined)', async () => {
     // Regression: this is the exact runtime shape that crashed 7 integration
     // tests — a caller whose run declares no eval suite passes `evalsSubpath:
     // undefined`. Must return false cleanly and never touch the staged dir.
@@ -163,7 +189,7 @@ describe('isolateEvalSuite', () => {
     const staged = writeStaged(root, 'no-suite-declared');
 
     expect(
-      isolateEvalSuite({
+      await isolateEvalSuite({
         stagedDir: staged,
         stagingRoot: safePath.join(root, 'staged'),
         evalsSubpath: undefined,
@@ -175,29 +201,29 @@ describe('isolateEvalSuite', () => {
     expect(existsSync(safePath.join(staged, 'SKILL.md'))).toBe(true);
   });
 
-  it('REFUSES to delete when the staged dir is outside the staging root, leaving the suite intact', () => {
+  it('REFUSES to delete when the staged dir is outside the staging root, leaving the suite intact', async () => {
     // The guard that matters: every resolver returns a copy under the staging root,
     // but if one ever handed back the user's real source tree, this must throw rather
     // than delete their authored evals.
     const root = getTempDir();
     const notStaged = writeStaged(root, 'authored');
 
-    expect(() =>
+    await expect(
       isolateEvalSuite({
         stagedDir: notStaged,
         stagingRoot: safePath.join(root, 'elsewhere'),
         evalsSubpath: SUBPATH,
       }),
-    ).toThrow(/escapes root/);
+    ).rejects.toThrow(/escapes root/);
     expect(existsSync(safePath.join(notStaged, 'evals', SUITE_FILE))).toBe(true);
   });
 
-  it('leaves a suite configured OUTSIDE the skill dir untouched', () => {
+  it('leaves a suite configured OUTSIDE the skill dir untouched', async () => {
     const root = getTempDir();
     const staged = writeStaged(root, 'external', { suite: false });
 
     expect(
-      isolateEvalSuite({
+      await isolateEvalSuite({
         stagedDir: staged,
         stagingRoot: safePath.join(root, 'staged'),
         evalsSubpath: '../shared/evals.json',

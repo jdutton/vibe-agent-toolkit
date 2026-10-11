@@ -52,7 +52,7 @@ function pathsOf(contribution: ExtentContribution): string[] {
 /** Run the contributor against a fresh base over the fixture root. */
 async function contribute(): Promise<ExtentContribution> {
   const base = new ProjectionBuilder({ root }).base();
-  return new FilesystemExtentContributor().contribute(base, null);
+  return new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(base, null);
 }
 
 /**
@@ -83,7 +83,7 @@ async function contributeWithParameters(parameters: JsonValue): Promise<ExtentCo
   const tracker = new GitTracker(root);
   await tracker.initialize();
   const base = new ProjectionBuilder({ root, gitTracker: tracker }).base();
-  return new FilesystemExtentContributor().contribute(base, parameters);
+  return new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(base, parameters);
 }
 
 /**
@@ -103,8 +103,8 @@ async function contributeUnder(demand?: ContentDemand): Promise<ExtentContributi
   await tracker.initialize();
   const base = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() }).base();
   const contributor = demand === undefined
-    ? new FilesystemExtentContributor()
-    : new FilesystemExtentContributor(crawlSourceFor, demand);
+    ? new FilesystemExtentContributor((at) => crawlSourceFor(at, []))
+    : new FilesystemExtentContributor((at) => crawlSourceFor(at, []), demand);
   return contributor.contribute(base, null);
 }
 
@@ -223,7 +223,7 @@ describe('FilesystemExtentContributor declining the ignored half', () => {
     // the decline has nothing to act on and must not guess from `.gitignore`'s
     // mere presence.
     const base = new ProjectionBuilder({ root }).base();
-    const contribution = await new FilesystemExtentContributor().contribute(base, DECLINE_IGNORED);
+    const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(base, DECLINE_IGNORED);
 
     expect(pathsOf(contribution)).toContain(BUILD_OUTPUT);
   });
@@ -244,7 +244,7 @@ describe('FilesystemExtentContributor declining the ignored half', () => {
 
 describe('FilesystemExtentContributor identity', () => {
   it('declares the contributor triple the registry and provenance key on', () => {
-    const contributor = new FilesystemExtentContributor();
+    const contributor = new FilesystemExtentContributor((at) => crawlSourceFor(at, []));
 
     expect(contributor.id).toBe('builtin:filesystem');
     expect(contributor.kind).toBe('filesystem');
@@ -328,7 +328,7 @@ describe('FilesystemExtentContributor rows', () => {
     // `contextId` alone, so a federated projection over two roots keeps these
     // extents apart only if the root is inside the id.
     const builder = new ProjectionBuilder({ root });
-    const contribution = await new FilesystemExtentContributor().contribute(builder.base(), null);
+    const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(builder.base(), null);
 
     expect(contribution.contexts[0]?.rootId).toBe(builder.identities.rootId);
     expect(contribution.contexts[0]?.contextId)

@@ -47,11 +47,17 @@ Commands and the key each requires:
                       The admin key is never sent to these endpoints and is not
                       needed to run them.
 
+Output:
+  The Admin API / Skills API payload, passed through as the API returns it
+  (no VAT status word). A refused run publishes { error: { code, message } }
+  instead; a not-implemented command publishes the report envelope's error
+  branch (status: error, error.code NOT_IMPLEMENTED).
+
 Exit Codes:
-  0 - Success
-  1 - The run happened and the outcome was not clean (e.g. skills install
-      --from-npm uploaded some skills and failed others), or a stub command
-  2 - The run could not happen: missing key, API failure, unusable input
+  0 - Every write landed (or the read succeeded)
+  2 - A write that did not fully land (e.g. skills install --from-npm uploaded
+      some skills and failed others), a refused run (missing key, API failure,
+      unusable input), or a not-implemented command
 
 Example:
   $ export ANTHROPIC_ADMIN_API_KEY=sk-ant-admin-...

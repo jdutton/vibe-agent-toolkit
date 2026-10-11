@@ -79,7 +79,6 @@ See [the missing target](./does-not-exist.md) for more.
   await fs.writeFile(docPath, docContent, 'utf-8');
 
   return {
-    version: 1,
     resources: {
       collections: {
         docs: {
@@ -104,7 +103,7 @@ describe('Regression guard: no legacy lowercase type strings emitted as codes', 
     const config = await writeFixtureProject(suite.tempDir);
 
     const registry = new ResourceRegistry({ config, baseDir: suite.tempDir });
-    await registry.crawl({ unreadable: 'refuse', baseDir: suite.tempDir });
+    await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: suite.tempDir });
     const result = await registry.validate();
 
     // The fixture must actually produce issues, otherwise the guard is vacuous.

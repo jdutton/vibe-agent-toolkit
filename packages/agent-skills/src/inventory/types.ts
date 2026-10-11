@@ -34,17 +34,17 @@ export type ComponentRef = {
 
 export type HookRef = ComponentRef & {
 	/** Set when the manifest declared an inline config rather than a path. */
-	inline?: object;
+	inline?: Record<string, unknown>;
 };
 
 export type McpRef = ComponentRef & {
 	/** Set when the manifest declared an inline config rather than a path. */
-	inline?: object;
+	inline?: Record<string, unknown>;
 };
 
 export type LspRef = ComponentRef & {
 	/** Set when the manifest declared an inline config rather than a path. */
-	inline?: object;
+	inline?: Record<string, unknown>;
 };
 
 export type PluginRef = ComponentRef & {

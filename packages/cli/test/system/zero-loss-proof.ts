@@ -56,7 +56,7 @@ function diff(a: Map<string, number>, b: Map<string, number>): string[] {
 }
 
 async function main(): Promise<void> {
-  const corpus = await getTestFixturesPath();
+  const corpus = getTestFixturesPath();
   const snapshotPath = safePath.join(__dirname, '../fixtures/legacy-audit-snapshot.json');
   const baseline = JSON.parse(readFileSync(snapshotPath, 'utf-8')) as FindingTuple[];
   const fresh = await collectFindings(corpus);

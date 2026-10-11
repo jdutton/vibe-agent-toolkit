@@ -64,6 +64,7 @@ import {
   CRAWL_STORE_READ_ID,
   CRAWL_STORE_WRITE_ID,
   crawlTimingStart,
+  forEachInOrder,
   recordContributorInvocation,
   recordCrawlPass,
   safePath,
@@ -603,11 +604,11 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
   const parameterSetFor = (contributor: ExtentContributor): JsonValue =>
     parameters?.[contributor.id] ?? null;
 
-  for (const contributor of registry.byStratum('base')) {
-    // Sequential on purpose: each contributor reads the base the previous ones
-    // grew, and `ResourceIdentityMap` is a shared memo rather than a pure
-    // function. Fanning these out with `Promise.all` would make the row set
-    // depend on scheduling.
+  // Sequential on purpose: each contributor reads the base the previous ones
+  // grew, and `ResourceIdentityMap` is a shared memo rather than a pure
+  // function. Fanning these out with `Promise.all` would make the row set
+  // depend on scheduling.
+  await forEachInOrder(registry.byStratum('base'), async (contributor) => {
     const startedAt = performance.now();
     // Wrapped so that any crawl-timing bracket reached from inside this
     // contributor is attributed to the PROJECTION arm rather than to the
@@ -624,7 +625,7 @@ export async function populate(options: PopulateOptions): Promise<Projection> {
       pass: BASE_STRATUM_PASS,
       elapsedMs: performance.now() - startedAt,
     });
-  }
+  });
 
   // Between the strata. The base is what records `contentKey` columns; the
   // closure stratum is what reads `blob_references`. A closure contributor only
@@ -1321,12 +1322,12 @@ async function iterateClosure(
   }
 
   const previousDigests = new Map<string, string>();
-  let moving: string[] = [];
 
-  for (let iteration = 1; iteration <= maxIterations; iteration++) {
-    moving = [];
-    for (const contributor of closure) {
-      // Sequential for the same reason as the base loop above.
+  // One pass at a time: each reads the rows the previous pass merged.
+  const pass = async (iteration: number): Promise<void> => {
+    const moving: string[] = [];
+    // Sequential for the same reason as the base loop above.
+    await forEachInOrder(closure, async (contributor) => {
       const startedAt = performance.now();
       // Same attribution wrapper as the base loop — see the comment there.
       const digest = await withContributorStratum('closure', () =>
@@ -1345,14 +1346,17 @@ async function iterateClosure(
         previousDigests.set(contributor.id, digest);
         moving.push(contributor.id);
       }
-    }
+    });
     if (await harness.run() > 0) moving.push(HARNESS_PASS_ID);
     if (moving.length === 0) {
       return;
     }
-  }
-
-  throw new ClosureNonConvergenceError(moving, maxIterations);
+    if (iteration >= maxIterations) {
+      throw new ClosureNonConvergenceError(moving, maxIterations);
+    }
+    return pass(iteration + 1);
+  };
+  await pass(1);
 }
 
 /**

@@ -21,7 +21,7 @@
 import type { Dirent } from 'node:fs';
 import * as fs from 'node:fs/promises';
 
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 /** A path the walk could not list, and the OS message for it. Absolute. */
 export interface WalkRefusal {
@@ -98,7 +98,8 @@ export async function walkFollowingLinks(rootDir: string, options: WalkOptions =
   }
 
   async function scanEntries(dir: string, entries: Dirent<string>[]): Promise<void> {
-    for (const entry of entries) {
+    // In order: the shared `visited` set and the file order of the walk.
+    await forEachInOrder(entries, async (entry) => {
       const entryPath = safePath.join(dir, entry.name);
       const kind = await entryKind(entry, entryPath, unlistable);
       if (kind === 'file') {
@@ -106,7 +107,7 @@ export async function walkFollowingLinks(rootDir: string, options: WalkOptions =
       } else if (kind === 'directory' && options.skipDirectory?.(entry.name) !== true) {
         await scanDir(entryPath);
       }
-    }
+    });
   }
 
   async function scanDir(dir: string): Promise<void> {

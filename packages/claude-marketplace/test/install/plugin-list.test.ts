@@ -5,7 +5,7 @@
 import { writeFileSync } from 'node:fs';
 
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { FS_FAULT_CODE, mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { refuseSyncFs } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
@@ -86,6 +86,16 @@ describe('listLocalPlugins', () => {
     expect(result.legacySkills[0]?.path).toBe(skillDir);
   });
 
+  // A parked or staged tree the tree-change primitive left beside a skill is not a skill.
+  it('never lists a tree-change leftover in skillsDir as a legacy skill', () => {
+    const paths = getPaths();
+    for (const name of ['old-skill', '.old-skill.vat-staged-deadbeef', '.old-skill.vat-staged-0a1b2c3d.previous']) {
+      mkdirSyncReal(safePath.join(paths.skillsDir, name), { recursive: true });
+    }
+
+    expect(listLocalPlugins(paths).legacySkills.map((skill) => skill.name)).toEqual(['old-skill']);
+  });
+
   it('skips non-directory/non-symlink entries in skillsDir', () => {
     const paths = getPaths();
     // Write a plain file (not a skill dir)
@@ -103,6 +113,15 @@ describe('listLocalPlugins', () => {
     const restore = refuseSyncFs('readdirSync', paths.skillsDir, 'EACCES');
     try {
       expect(() => listLocalPlugins(paths)).toThrow(/EACCES/);
+      // Classified, so a caller can tell the user's unreadable state from a VAT defect:
+      // a listing only reads Claude's state, so it is this verb's input.
+      let thrown: unknown;
+      try {
+        listLocalPlugins(paths);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toMatchObject({ code: FS_FAULT_CODE, side: 'source', faultClass: 'refused', path: paths.skillsDir });
     } finally {
       restore();
     }

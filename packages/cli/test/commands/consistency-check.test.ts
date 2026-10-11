@@ -88,7 +88,7 @@ const withCode = <T extends { code: string }>(issues: T[], code: string): T[] =>
 
 describe('resolveAssignedSkills', () => {
   it('returns an empty set when no marketplaces are configured', () => {
-    expect(resolveAssignedSkills({ version: 1 }, [skillAt('foo')], indexOf([])).size).toBe(0);
+    expect(resolveAssignedSkills({}, [skillAt('foo')], indexOf([])).size).toBe(0);
   });
 
   it('assigns a skill matched by a pool name selector', () => {

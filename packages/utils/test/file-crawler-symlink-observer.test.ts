@@ -49,6 +49,7 @@ describe.skipIf(!cap)('file-crawler: onSymlinkNotFollowed', () => {
   const walk = (followSymlinks: boolean): { results: string[]; heard: string[] } => {
     const heard: string[] = [];
     const results = crawlDirectorySync({
+      outputs: [],
       baseDir: root,
       respectGitignore: false,
       exclude: ['skip/**'],
@@ -70,6 +71,7 @@ describe.skipIf(!cap)('file-crawler: onSymlinkNotFollowed', () => {
 
   it('refuses the observer on the git route, which declines no link', () => {
     expect(() => crawlDirectorySync({
+      outputs: [],
       baseDir: root,
       onSymlinkNotFollowed: () => undefined,
       unreadable: refuseUnreadableFixture(root),

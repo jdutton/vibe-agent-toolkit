@@ -10,9 +10,10 @@
  * directs the user at the file-path form — see {@link UNRENDERABLE_SPDX_IDS}.
  */
 
-import { readFileSync } from 'node:fs';
-
 import { safePath } from '@vibe-agent-toolkit/utils';
+
+import { CommandRefusalError } from '../../../utils/command-refusal.js';
+import { configNamedFileAbsent, readInputFile } from '../../../utils/project-root-policy.js';
 
 /** Build a lowercase-keyed lookup from canonical SPDX identifiers. */
 function byLowercaseId(canonicalIds: readonly string[]): ReadonlyMap<string, string> {
@@ -116,7 +117,7 @@ export function isSpdxIdentifier(value: string): boolean {
  * Shared by every caller so the diagnosis is identical whether the value is
  * rejected during option parsing or during tree composition.
  */
-export function explainUnusableLicense(value: string): string | undefined {
+function explainUnusableLicense(value: string): string | undefined {
   const id = value.toLowerCase();
 
   if (RENDERABLE_SPDX_IDS.has(id)) {
@@ -143,11 +144,23 @@ export function explainUnusableLicense(value: string): string | undefined {
 }
 
 /**
+ * Refuse a license value VAT cannot render — the config's mistake.
+ *
+ * @throws {CommandRefusalError} `CONFIG_INVALID`, with {@link explainUnusableLicense}'s diagnosis
+ */
+export function assertRenderableLicense(value: string): void {
+  const problem = explainUnusableLicense(value);
+  if (problem !== undefined) {
+    throw new CommandRefusalError('CONFIG_INVALID', problem);
+  }
+}
+
+/**
  * Read a license file from disk.
  */
 export function readLicenseFile(filePath: string, baseDir: string): string {
   const resolved = safePath.resolve(baseDir, filePath);
-  return readFileSync(resolved, 'utf-8');
+  return readInputFile(resolved, configNamedFileAbsent('publish.license', filePath));
 }
 
 /**
@@ -159,10 +172,7 @@ export function readLicenseFile(filePath: string, baseDir: string): string {
  *   string straight to disk as LICENSE.
  */
 export function generateLicenseText(spdxId: string, ownerName: string, year: number): string {
-  const problem = explainUnusableLicense(spdxId);
-  if (problem !== undefined) {
-    throw new Error(problem);
-  }
+  assertRenderableLicense(spdxId);
 
   const canonical = RENDERABLE_SPDX_IDS.get(spdxId.toLowerCase()) ?? '';
   const render = LICENSE_TEXT_RENDERERS[canonical];

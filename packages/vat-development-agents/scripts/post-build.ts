@@ -6,7 +6,7 @@
 
 import { createPostBuildScript } from '@vibe-agent-toolkit/resource-compiler/utils';
 
-createPostBuildScript({
+await createPostBuildScript({
   generatedDir: 'generated',
   distDir: 'dist',
   verbose: true,
@@ -17,8 +17,8 @@ createPostBuildScript({
   // ("**/resources/skills/evals/**") in this package's
   // vibe-agent-toolkit.config.yaml, not read from it: copyResources() only
   // matches an exact/nested-prefix relative path, not a glob, and
-  // vibe-agent-toolkit.config.yaml is loaded async (loadConfig() from
-  // @vibe-agent-toolkit/resources) while this script's copy step is sync.
+  // this script does not load vibe-agent-toolkit.config.yaml (loadConfig() from
+  // @vibe-agent-toolkit/resources) to derive it.
   // If that config's exclude list ever changes, update this one to match.
   exclude: ['resources/skills/evals'],
 });

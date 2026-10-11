@@ -15,4 +15,3 @@
 # Deliberately at the fixtures PARENT rather than inside each plugin fixture: a file
 # added inside one would show up in that plugin's own inventory and break the
 # `unexpected`-assets assertions.
-version: 1

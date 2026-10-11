@@ -1,5 +1,10 @@
 /**
  * MCP serve command - exposes agent collections via MCP stdio transport
+ *
+ * A protocol leaf: its stdout is the MCP JSON-RPC stream, not a document, so a
+ * failure goes to stderr and ends on `ERROR` with nothing on stdout. The one
+ * document it publishes is `--print-config`'s `claude-desktop-config` artifact,
+ * through the writer, alone on stdout so it can be redirected into a file.
  */
 
 import {
@@ -7,9 +12,10 @@ import {
   ConsoleLogger,
   NoOpObservabilityProvider,
 } from '@vibe-agent-toolkit/gateway-mcp';
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { errorDiagnostics, ExitCode } from '@vibe-agent-toolkit/schema';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { errorMessageOf } from '../../utils/command-refusal.js';
+import { writeArtifact } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
 
 import { resolveCollection } from './collections.js';
@@ -32,9 +38,9 @@ class ConsoleObservabilityProvider extends NoOpObservabilityProvider {
 }
 
 /**
- * Generate Claude Desktop configuration for a package
+ * Generate Claude Desktop configuration for a package — the object; the writer serializes it.
  */
-function generateClaudeDesktopConfig(packageOrPath: string): string {
+function generateClaudeDesktopConfig(packageOrPath: string): { mcpServers: Record<string, { command: string; args: string[] }> } {
   // Use package name as MCP server key (sanitize for JSON key)
   const serverKey = packageOrPath
     .replaceAll('@vibe-agent-toolkit/', 'vat-')
@@ -49,7 +55,7 @@ function generateClaudeDesktopConfig(packageOrPath: string): string {
     },
   };
 
-  return JSON.stringify(config, null, 2);
+  return config;
 }
 
 /**
@@ -63,18 +69,19 @@ export async function serveCommand(
   const startTime = Date.now();
 
   try {
-    // Handle --print-config flag
+    // Resolved BEFORE `--print-config`: a config for a package that does not
+    // load is a paste-ready block for a server that cannot start — it exited 0
+    // where the same argument without the flag exits 2.
+    logger.debug(`Resolving MCP collection from: ${packageOrPath}`);
+    const collection = await resolveCollection(packageOrPath);
+
     if (options.printConfig) {
       logger.info(`\nClaude Desktop configuration for '${packageOrPath}':\n`);
       logger.info('Add this to ~/.claude/config.json:\n');
-      console.log(generateClaudeDesktopConfig(packageOrPath));
+      writeArtifact('claude-desktop-config', generateClaudeDesktopConfig(packageOrPath), 'json');
       logger.info('\nThen restart Claude Desktop to load the MCP server.');
-      process.exit(ExitCode.OK);
+      return;
     }
-
-    // Resolve collection from package name or file path
-    logger.debug(`Resolving MCP collection from: ${packageOrPath}`);
-    const collection = await resolveCollection(packageOrPath);
 
     logger.debug(`Collection resolved: ${collection.name}`);
     logger.debug(`Agents: ${collection.agents.map((a) => a.name).join(', ')}`);
@@ -112,6 +119,10 @@ export async function serveCommand(
       });
     });
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'MCPServe');
+    // No document: stdout belongs to the protocol. The message, and the stack
+    // under --debug, are for the operator on stderr.
+    logger.error(`vat mcp serve failed: ${errorMessageOf(error)}`);
+    logger.debug(errorDiagnostics(error));
+    process.exit(ExitCode.ERROR);
   }
 }

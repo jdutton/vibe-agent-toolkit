@@ -42,12 +42,7 @@
 import { realpathSync } from 'node:fs';
 
 import { relativize } from '@vibe-agent-toolkit/resources';
-import {
-  isPathAbsentError,
-  relativeEscapesRoot,
-  safePath,
-  toForwardSlash,
-} from '@vibe-agent-toolkit/utils';
+import { isLinkLoopError, isPathAbsentError, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import {
   crawlDirectory,
 } from '@vibe-agent-toolkit/utils/crawl';
@@ -262,8 +257,7 @@ function realPathOrSelf(absolutePath: string): string {
   try {
     return toForwardSlash(realpathSync.native(absolutePath));
   } catch (error) {
-    const loop = (error as { code?: unknown } | null)?.code === 'ELOOP';
-    if (!isPathAbsentError(error) && !loop) throw error;
+    if (!isPathAbsentError(error) && !isLinkLoopError(error)) throw error;
     return toForwardSlash(absolutePath);
   }
 }

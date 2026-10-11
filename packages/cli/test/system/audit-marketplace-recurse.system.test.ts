@@ -36,8 +36,8 @@ const fixtureDir = safePath.join(
 );
 
 interface AuditYamlResult {
-	summary?: { filesScanned?: number };
-	files?: Array<{ type?: string; path?: string }>;
+	examined?: number;
+	data?: { files?: Array<{ type?: string; path?: string }> };
 }
 
 // ---------------------------------------------------------------------------
@@ -56,9 +56,9 @@ describe('vat audit — marketplace recursion (system test)', () => {
 		expect(result.status).toBe(0);
 
 		const audit = parsed as AuditYamlResult;
-		const yamlResults = audit.files ?? [];
+		const yamlResults = audit.data?.files ?? [];
 		// 1 marketplace + 2 plugins (foo, bar) + 1 skill (foo/skills/example) = 4 minimum.
-		expect(audit.summary?.filesScanned ?? 0).toBeGreaterThanOrEqual(4);
+		expect(audit.examined ?? 0).toBeGreaterThanOrEqual(4);
 		expect(yamlResults.length).toBeGreaterThanOrEqual(4);
 
 		const types = yamlResults.map((r) => r.type);

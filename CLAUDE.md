@@ -221,7 +221,7 @@ directory's `CLAUDE.md`) and read the diff — it must be exactly your edit.
   failure that looks like something else goes in `traps.md`.
   <!-- gen:contributing-docs -->
   `baseline-control-adopter-response.md`, `command-lane-table.md`, `content-routing.md`,
-  `cowork-driver-spike.md`, `drift-classes.md`, `extending-the-monorepo.md`,
+  `cowork-driver-spike.md`, `drift-classes.md`, `extending-the-monorepo.md`, `known-defects.md`,
   `no-version-constants.md`, `plugin-distribution-findings.md`, `pull-request-checklist.md`,
   `subagent-execution.md`, `traps.md`, `vat-debugging.md`, `vat-install-architecture.md`,
   `vat-linkauth-contributing.md`

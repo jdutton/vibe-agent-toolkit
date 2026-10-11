@@ -1,4 +1,5 @@
 import type { SeverityCounts, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
+import type { FsSide } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord } from '../evidence/index.js';
 
@@ -6,25 +7,32 @@ export interface ValidationResult {
   path: string;
   type: 'agent-skill' | 'vat-agent' | 'claude-plugin' | 'marketplace' | 'registry' | 'unknown';
   /**
-   * The worst ACTIONABLE severity among {@link ValidationResult.issues}.
+   * `findings` when any issue is published, `ok` when none is — derived by
+   * `resultStatus(issues)` from `@vibe-agent-toolkit/schema`, the same
+   * derivation `buildReport` uses, so a report built from this result cannot
+   * disagree with it.
    *
-   * Three values for a four-valued question, so it cannot express the
-   * distribution — read {@link ValidationResult.issueCounts} for that. In
-   * particular an info-only result is `success`, which is only honest because
-   * the counts sit beside it.
+   * LITERAL, not a verdict: an info-only result is `findings`. How much of it
+   * is actionable is {@link ValidationResult.summary}; whether warnings fail a
+   * run is the caller's gate.
    */
-  status: 'success' | 'warning' | 'error';
-  summary: string;
+  status: 'ok' | 'findings';
+  /** A one-line sentence for a human ("Valid plugin", "0 errors, 2 warnings, 1 info") — from `describeIssues`. Never parsed. */
+  description: string;
   issues: ValidationIssue[];
   /**
-   * Issue counts by resolved severity. REQUIRED, deliberately: this repo had five
-   * "issues → status" collapses and three different answers for an info-only set,
-   * every one of which resolved the ambiguous case to the reassuring one. Making
-   * the counts required means a new producer cannot omit the distribution — the
-   * compiler asks for it rather than a reviewer having to notice it is missing.
-   * Build it with `countBySeverity(issues)`.
+   * Issue counts by resolved severity — the same name and shape the report
+   * envelope publishes. REQUIRED, deliberately: this repo had five
+   * "issues → status" collapses and three different answers for an info-only
+   * set, every one of which resolved the ambiguous case to the reassuring one.
+   * Making the counts required means a new producer cannot omit the
+   * distribution. Build it with `summarizeIssues(issues)`, which derives `status` beside it.
+   *
+   * The human sentence that used to share this name is {@link
+   * ValidationResult.description}: two meanings of `summary` in one shape is
+   * how a reader takes a count for a sentence.
    */
-  issueCounts: SeverityCounts;
+  summary: SeverityCounts;
   metadata?: {
     name?: string;
     description?: string;
@@ -98,6 +106,13 @@ export interface ValidateOptions {
    * no config governs the skill or the caller resolves severity itself.
    */
   validation: ValidationConfig;
+
+  /**
+   * The side of the caller's verb the skill tree is on: `source` for an author's skill, `environment`
+   * for one VAT extracted into its own staging (a ZIP under $TMPDIR). REQUIRED: a fault the validator's
+   * own walk raises is classified there, and only the caller knows which tree it handed over.
+   */
+  side: FsSide;
 }
 
 /**

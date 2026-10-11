@@ -22,9 +22,10 @@
  * connections are long-lived.
  */
 
-import { rm } from 'node:fs/promises';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { RAG_DATABASE_UNREADABLE_CODE, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { resolveChunkingConfig } from '../../src/chunking-config.js';
@@ -197,6 +198,8 @@ More content in section 2.`
     provider = await LanceDBRAGProvider.create({ dbPath });
 
     await expect(provider.query({ text: 'test' })).rejects.toThrow('No data indexed yet');
+    // Coded at the cause, so `vat rag query` refuses it as the input's (INPUT_UNREADABLE), not as a VAT defect.
+    await expect(provider.query({ text: 'test' })).rejects.toMatchObject({ code: 'RAG_INDEX_EMPTY' });
   });
 
   it('should enforce readonly mode', async () => {
@@ -249,6 +252,33 @@ More content in section 2.`
     await expect(provider.query({ text: 'test' })).rejects.toThrow('No data indexed yet');
   });
 
+  // `clear()` removes recursively: a dbPath that holds anything a database does not
+  // (a project, a home directory) must be refused with everything left in place.
+  it('refuses to clear a directory holding anything but its tables, and removes nothing', async () => {
+    provider = await LanceDBRAGProvider.create({ dbPath });
+    await provider.indexResources([await createTestResource(testFilePath)]);
+    await writeFile(safePath.join(dbPath, 'keep.txt'), 'precious');
+
+    await expect(provider.clear()).rejects.toThrow(/not a RAG database \(it holds keep\.txt\)/);
+    expect(await readFile(safePath.join(dbPath, 'keep.txt'), 'utf8')).toBe('precious');
+    expect(existsSync(safePath.join(dbPath, 'rag_chunks.lance'))).toBe(true);
+  });
+
+
+  // Damaged data files behind an intact manifest fail on the first READ of the chunk table.
+  // In `indexResources` that read is change detection, inside the per-resource catch: the
+  // store's failure was reported as one content failure per resource, never as the store's.
+  it('refuses an index into a database whose data files are damaged, as the store\'s failure', async () => {
+    provider = await LanceDBRAGProvider.create({ dbPath });
+    const resource = await createTestResource(testFilePath);
+    await provider.indexResources([resource]);
+    await provider.close();
+    const data = safePath.join(dbPath, 'rag_chunks.lance', 'data');
+    for (const file of readdirSync(data)) writeFileSync(safePath.join(data, file), 'garbage');
+
+    provider = await LanceDBRAGProvider.create({ dbPath });
+    await expect(provider.indexResources([resource])).rejects.toMatchObject({ code: RAG_DATABASE_UNREADABLE_CODE });
+  });
 
   it('should respect limit parameter in queries', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
@@ -792,10 +822,10 @@ Important security information.`
       expect(chunk?.title).toBe('Security Best Practices');
     });
 
-    it('should fail when table exists with wrong schema', async () => {
-      // RED: Test the ACTUAL bug scenario from an adopter project
-      // They had an existing LanceDB table, tried to index with custom metadata,
-      // but got "Found field not in schema" because table schema doesn't have custom columns
+    it('refuses a table an index with another metadata schema wrote, before writing to it', async () => {
+      // An adopter had an existing LanceDB table and indexed with custom metadata into it. The table
+      // has no custom columns, so the batch is refused up front naming them — never one per-resource
+      // "Found field not in schema" error after an update had already deleted the resource's chunks.
 
       const { z } = await import('zod');
       const { DefaultRAGMetadataSchema } = await import('@vibe-agent-toolkit/rag');
@@ -843,16 +873,11 @@ Content.`
 
       const resourceWithMeta = await createTestResource(fileWithMeta, 'doc-2');
 
-      // BUG: This should fail with "Found field not in schema: title"
-      // because table was created with default schema, doesn't have title/category columns
-      const result = await customProvider.indexResources([resourceWithMeta]);
-
-      // This assertion should FAIL (RED phase)
-      expect(result.errors).toBeDefined();
-      if (result.errors) {
-        expect(result.errors.length).toBeGreaterThan(0);
-        expect(result.errors[0]?.error).toContain('not in schema');
-      }
+      await expect(customProvider.indexResources([resourceWithMeta])).rejects.toMatchObject({
+        code: RAG_DATABASE_UNREADABLE_CODE,
+        message: expect.stringContaining('it has no category column'),
+      });
+      await customProvider.close();
     });
 
     it('should handle missing frontmatter on first resource then present on second', async () => {

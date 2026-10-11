@@ -1,8 +1,7 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { applyTreePlan, planTreeChanges, safePath, withTempDir } from '@vibe-agent-toolkit/utils';
 import { isGitUrl, parseGitUrl } from '@vibe-agent-toolkit/utils/git';
 
 import { withCachedFetch } from '../fetch-cache.js';
@@ -22,7 +21,7 @@ const FETCH_TIMEOUT_MS = 30_000;
  *   cache entry keyed on the sha256; identity is url + sha256. This is the one
  *   genuinely new fetch capability (spec §11a).
  */
-export async function resolveUrlSource(
+export function resolveUrlSource(
   url: string,
   sha256: string | undefined,
   ctx: ResolveSkillSourceContext,
@@ -47,13 +46,18 @@ async function resolveGitUrl(
   ctx: ResolveSkillSourceContext,
 ): Promise<ResolvedSkillSource> {
   const parsed = parseGitUrl(url);
-  // Clone once into a throwaway tempdir to learn the commit, then cache by commit.
-  const probe = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-url-git-'));
-  try {
+  // Clone once into a throwaway tempdir to learn the commit, then cache by commit. The tempdir
+  // is disposed of however this ends — its content has been staged into the cache by then.
+  const { value, leftover } = await withTempDir('vat-url-git-', async (probe) => {
     const { commit, targetDir } = cloneGitSource(parsed, probe);
     // Strip .git metadata from the clone root before staging — consumers should
-    // only see skill files, not git internals.
-    await rm(safePath.join(probe, '.git'), { recursive: true, force: true });
+    // only see skill files, not git internals. VAT's own clone: whatever is there may go.
+    await applyTreePlan(await planTreeChanges([{
+      op: 'remove',
+      dest: safePath.join(probe, '.git'),
+      ownership: { kind: 'vat-state' },
+      label: 'git metadata of the probe clone',
+    }]));
     const identity = `url:${url}:${commit}`;
     const cached = await withCachedFetch({
       cacheDir: ctx.fetchCacheDir,
@@ -69,10 +73,8 @@ async function resolveGitUrl(
     });
     const stagedDir = await stageDirInto(cached, ctx, `url-git-${commit}`);
     return { stagedDir, identity };
-  } finally {
-    // Always clean up the probe tempdir — content has been staged into the cache.
-    await rm(probe, { recursive: true, force: true });
-  }
+  });
+  return { ...value, leftovers: leftover === undefined ? [] : [leftover] };
 }
 
 async function resolveZipUrl(
@@ -103,7 +105,7 @@ async function resolveZipUrl(
     },
   });
   const stagedDir = await stageDirInto(cached, ctx, `url-zip-${sha256}`);
-  return { stagedDir, identity: `url:${url}:${sha256}` };
+  return { stagedDir, identity: `url:${url}:${sha256}`, leftovers: [] };
 }
 
 /** Read the raw bytes of a URL. `file://` reads from disk; `http(s)://` via fetch. */

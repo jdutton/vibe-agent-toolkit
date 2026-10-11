@@ -2,14 +2,15 @@
  * RAG query command - search the vector database
  */
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { buildReport } from '@vibe-agent-toolkit/schema';
+import { RAG_INDEX_EMPTY_CODE, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
-import { writeYamlOutput } from '../../utils/output.js';
+import { endWithReport } from '../../utils/document-writer.js';
 import { projectRootOrNull } from '../../utils/project-root-policy.js';
 import { relativizePath } from '../../utils/relativize-paths.js';
 
-import { executeRagOperation, formatDuration } from './command-helpers.js';
+import { executeRagOperation, RAG_GATE } from './command-helpers.js';
+import type { RagQueryData, RagQueryReport } from './query-schema.js';
 
 interface QueryOptions {
   db?: string;
@@ -41,14 +42,13 @@ interface QueriedChunk {
 export interface QueryPayloadInput {
   queryText: string;
   chunks: readonly QueriedChunk[];
-  stats: unknown;
-  durationMs: number;
+  stats: RagQueryData['stats'];
   /** The stated root: the ONE base every reported path is relative to. */
   root: string;
 }
 
 /**
- * Build the query payload.
+ * Build the query `data`.
  *
  * `resourceId` is already relative — the registry derives it from the indexing
  * base — so an absolute `filePath` one line above it put a single record in two
@@ -58,8 +58,8 @@ export interface QueryPayloadInput {
  * Fields are ordered deliberately: short ones first, `content` last, so a long
  * result stays scannable.
  */
-export function buildQueryOutputData(input: QueryPayloadInput): Record<string, unknown> {
-  const { queryText, chunks, stats, durationMs, root } = input;
+export function buildQueryOutputData(input: QueryPayloadInput): RagQueryData {
+  const { queryText, chunks, stats, root } = input;
 
   const formattedChunks = chunks.map((chunk) => ({
     // Identifiers
@@ -82,7 +82,7 @@ export function buildQueryOutputData(input: QueryPayloadInput): Record<string, u
     contentHash: chunk.contentHash,
     tokenCount: chunk.tokenCount,
     embeddingModel: chunk.embeddingModel,
-    embeddedAt: chunk.embeddedAt,
+    embeddedAt: chunk.embeddedAt.toISOString(),
 
     // Context links (short)
     ...(chunk.previousChunkId ? { previousChunkId: chunk.previousChunkId } : {}),
@@ -92,15 +92,29 @@ export function buildQueryOutputData(input: QueryPayloadInput): Record<string, u
     content: chunk.content,
   }));
 
-  // Stats/duration before chunks (short fields first)
-  return {
-    status: 'success',
-    root,
-    query: queryText,
-    stats,
-    duration: formatDuration(durationMs),
-    chunks: formattedChunks,
-  };
+  // Stats before chunks (short fields first)
+  return { root, query: queryText, stats, chunks: formattedChunks };
+}
+
+/**
+ * Refuse an index that holds no chunk, as the provider refuses one with no table.
+ *
+ * "Nothing indexed" reaches this command two ways — a database with no chunk
+ * table (the provider's query throws `RAG_INDEX_EMPTY`) and a table holding
+ * zero chunks (the query would return nothing, and the writer's zero-examined
+ * refusal would publish a finding at exit 1). One situation, one outcome: the
+ * same code, which the refusal map reads as INPUT_UNREADABLE (exit 2).
+ *
+ * @param totalChunks - Chunks in the index, from the provider's stats
+ * @param dbPath - The database, for the message
+ * @throws {VatError} `RAG_INDEX_EMPTY` when the index holds no chunk
+ */
+export function assertIndexHoldsChunks(totalChunks: number, dbPath: string): void {
+  if (totalChunks > 0) return;
+  throw new VatError(
+    RAG_INDEX_EMPTY_CODE,
+    `No data indexed yet: the index at ${dbPath} holds no chunk to search. Run vat rag index first, and check its findings for documents that failed.`,
+  );
 }
 
 export async function queryCommand(
@@ -109,20 +123,24 @@ export async function queryCommand(
 ): Promise<void> {
   const startTime = Date.now();
 
-  const result = await executeRagOperation(
+  const { result, indexedChunks } = await executeRagOperation(
+    'rag query',
     options,
-    async (ragProvider, logger) => {
-      logger.debug(`Querying for: "${queryText}"`);
+    async (ragProvider, logger, dbPath) => {
+      // `examined` is what was searched — the index — so a query that matches
+      // nothing over a populated index is a clean answer, not an empty run.
+      // Asked BEFORE the query, so an empty index refuses one way however it is empty.
+      const { totalChunks } = await ragProvider.getStats();
+      assertIndexHoldsChunks(totalChunks, dbPath);
 
-      // Execute query
+      logger.debug(`Querying for: "${queryText}"`);
       const queryResult = await ragProvider.query({
         text: queryText,
         limit: options.limit ?? 10,
       });
 
-      return queryResult;
+      return { result: queryResult, indexedChunks: totalChunks };
     },
-    'Query'
   );
 
   // The index lives under the project (`<projectRoot>/.rag-db` by default) and
@@ -130,15 +148,12 @@ export async function queryCommand(
   // that puts `filePath` in the same coordinate system.
   const root = projectRootOrNull(process.cwd()) ?? safePath.resolve(process.cwd());
 
-  writeYamlOutput(
-    buildQueryOutputData({
-      queryText,
-      chunks: result.chunks,
-      stats: result.stats,
-      durationMs: Date.now() - startTime,
-      root,
-    })
-  );
-
-  process.exit(ExitCode.OK);
+  const report: RagQueryReport = buildReport({
+    examined: indexedChunks,
+    findings: [],
+    data: buildQueryOutputData({ queryText, chunks: result.chunks, stats: result.stats, root }),
+    gate: RAG_GATE,
+    durationMs: Date.now() - startTime,
+  });
+  endWithReport('rag query', report, 'yaml');
 }

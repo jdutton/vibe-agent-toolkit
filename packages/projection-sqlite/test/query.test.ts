@@ -25,8 +25,8 @@
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 
-import type { ExtentKey } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { PROJECTION_STATEMENT_REFUSED_CODE, type ExtentKey } from '@vibe-agent-toolkit/resources';
+import { isVatError, safePath } from '@vibe-agent-toolkit/utils';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils/fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -54,6 +54,69 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await store.close();
+});
+
+describe('a refused statement carries a code, not only a message', () => {
+  // The caller learns WHICH failure this is — the caller's statement, not the
+  // store — from `code`, never from the words. One case per refusal site.
+  it.each([
+    ['a write', 'DELETE FROM "blobs"'],
+    ['a second statement', 'SELECT 1; SELECT 2'],
+    ['an unbound placeholder', 'SELECT ? AS x'],
+    ['a name the schema lacks', 'SELECT "no_such_column" FROM "blobs"'],
+    // A value over SQLite's length limit is built by the statement, not by the store.
+    ['a value too big to build', 'SELECT zeroblob(2147483647) AS big'],
+    // Two columns under one name: a row is keyed by name, so one value would be lost.
+    ['two result columns sharing a name', 'SELECT 1 AS a, 2 AS a'],
+  ])('%s', (_label, sql) => {
+    let caught: unknown;
+    try {
+      store.query(sql);
+    } catch (error) {
+      caught = error;
+    }
+    expect(isVatError(caught, PROJECTION_STATEMENT_REFUSED_CODE), String(caught)).toBe(true);
+  });
+});
+
+describe('columns', () => {
+  it('names a statement\'s result columns in order, even when it would select no row', () => {
+    // A zero-row answer is still an answer with a SHAPE: rows alone cannot say
+    // which columns it had, so a document built from them would publish none.
+    expect(store.columns('SELECT "contentKey" AS key, "encoding" FROM "blobs" WHERE 0')).toEqual(['key', 'encoding']);
+  });
+
+  it('binds the same parameters as query and runs nothing', () => {
+    expect(store.columns('SELECT COUNT(*) AS n FROM "blobs" WHERE "encoding" = ?', 'utf-16le')).toEqual(['n']);
+    expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
+  });
+
+  it('refuses what query refuses', () => {
+    expect(() => store.columns('DELETE FROM "blobs"')).toThrow(/read/i);
+    expect(() => store.columns('SELECT "no_such_column" FROM "blobs"')).toThrow(/no such column/);
+  });
+
+  // `columns` compiles and never steps, so a refusal SQLite raises only when a
+  // statement runs is invisible to it. These two are decided from the compiled
+  // statement's own shape, so both verbs refuse them — and identically.
+  it.each([
+    ['a write behind a WITH, which produces no result column', 'WITH x AS (SELECT 1) INSERT INTO "blobs" DEFAULT VALUES'],
+    ['two result columns sharing a name', 'SELECT 1 AS a, 2 AS a'],
+  ])('refuses %s, as query does', (_label, sql) => {
+    const refusal = (run: () => unknown): unknown => {
+      try {
+        run();
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    };
+
+    expect(isVatError(refusal(() => store.columns(sql)), PROJECTION_STATEMENT_REFUSED_CODE)).toBe(true);
+    expect(isVatError(refusal(() => store.query(sql)), PROJECTION_STATEMENT_REFUSED_CODE)).toBe(true);
+    // And nothing was written on the way to refusing.
+    expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
+  });
 });
 
 describe('query', () => {
@@ -249,7 +312,10 @@ describe('query requires a statement that is a query', () => {
     // the kind gate passes it and the ENGINE is what refuses (measured on Node
     // 24.13.1). This is the case that makes the two guards layered rather than
     // one of them decoration — do not delete it to "cover" the token gate.
-    expect(() => store.query('WITH c(a) AS (VALUES (1)) DELETE FROM "blobs"')).toThrow(/read/i);
+    // `RETURNING` gives the write a result column, so the result-shape check
+    // passes it too and only `query_only` is left to refuse it — and the
+    // assertion names the ENGINE's words, which no gate of ours emits.
+    expect(() => store.query('WITH c(a) AS (VALUES (1)) DELETE FROM "blobs" RETURNING "contentKey"')).toThrow(/readonly database/);
     expect(store.query(COUNT_BLOBS)[0]?.['n']).toBe(2);
   });
 });
@@ -369,7 +435,7 @@ describe('every placeholder must be bound', () => {
     (sql, form) => {
       // `StatementSync` never binds positional values into a `:a` slot, and on
       // the declared floor it does not bind them into `?NNN` either — measured,
-      // Node 22.13.0 and 22.14.0 throw `column index out of range` for
+      // Node 22.13.0, 22.14.0 and 22.16.0 throw `column index out of range` for
       // `SELECT ?1 AS x` with one value, while 22.22.3 and 24.x bind it. The
       // engine's message is about a column, for a statement with no column
       // problem; a form that works on one supported runtime and fails on

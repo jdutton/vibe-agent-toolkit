@@ -15,6 +15,7 @@ import {
   ContributorRegistry,
   DISCARD_BLOB_POPULATION,
   extentContextId,
+  crawlSourceFor,
   FilesystemExtentContributor,
   populate,
   ResolutionContextRowSchema,
@@ -56,7 +57,7 @@ let marketplaceProjection: Projection;
 /** Populate a fixture root with the filesystem base plus both new extents. */
 async function project(root: string): Promise<Projection> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
   registry.register(new PluginExtentContributor());
   registry.register(new MarketplaceExtentContributor());
   return populate({ root, registry, onBlobPopulation: DISCARD_BLOB_POPULATION });
@@ -236,7 +237,7 @@ describe('the closure fixpoint', () => {
     // re-emitted condition, an order that depends on the growing base — moves
     // its digest and fails here.
     const registry = new ContributorRegistry();
-    registry.register(new FilesystemExtentContributor());
+    registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
     registry.register(new PluginExtentContributor());
     registry.register(new MarketplaceExtentContributor());
     await expect(
@@ -262,7 +263,7 @@ describe('the closure fixpoint', () => {
 describe('ContributorRegistry.forKind (§7.5, from the consumer side)', () => {
   it('throws for "marketplace" until this contributor is registered', () => {
     const registry = new ContributorRegistry();
-    registry.register(new FilesystemExtentContributor());
+    registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
     expect(() => registry.forKind(MARKETPLACE_KIND)).toThrow(/No extent contributor is registered/);
     registry.register(new MarketplaceExtentContributor());
     expect(registry.forKind(MARKETPLACE_KIND)).toHaveLength(1);

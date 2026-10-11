@@ -40,19 +40,23 @@
  * source as `null` in both, because the two are the same fact about the arm: it
  * has no extent source it can name.
  *
- * ## Why JSON only, and why the YAML lane line is deliberately not read
+ * ## Why the default YAML spec now reads a lane too
  *
  * `vat resources scan` prints YAML by default and the same document as JSON
- * under `--format json`. The io/perf default spec (`resources-scan`) prints the
- * YAML, and its `lane:` line is right there in the text — and this reader must
- * not take it. A YAML parser is a dependency this package deliberately does not
- * carry, and a regex over the text would be a second parser that drifts from
- * the first. So a row measured over the default spec honestly reads `lane:
- * null`, and a caller who wants the arm on an io row asks for the spec that
- * prints JSON: `--command resources-population`.
+ * under `--format json`. Before this reader went through `document-shape.ts`'s
+ * `parseDocument`, that YAML was unreadable here on purpose: a second, private
+ * YAML parser (a regex over the text) would have drifted from whatever the
+ * `population` facet used, and this package carried no YAML dependency to
+ * share one with. Now both facets read every document — JSON or YAML — through
+ * the one `parseDocument`, so a row measured over the default spec
+ * (`resources-scan`) reads its real lane, not `lane: null`. `--command
+ * resources-population` (JSON) still works exactly as before; it is simply no
+ * longer the only spec this reader can see into.
  */
 
 import { z } from 'zod';
+
+import { parseDocument } from './document-shape.js';
 
 /** What a subject's output said about the arm it ran. */
 export interface ReportedLane {
@@ -161,21 +165,19 @@ export function laneOfDocument(value: unknown): ReportedLane {
  * the validated value with {@link laneOfDocument}, so the lenient path is
  * unreachable for it.
  *
+ * Read off `parseDocument`'s `payload` — `data` for a `Report`, the whole
+ * document for a legacy one — so the day `resources scan` becomes a `Report`
+ * (wave 3) and moves its own fields under `data`, this reader keeps finding
+ * them without a change here.
+ *
  * @param stdout - Everything the subject wrote to stdout
- * @returns The reported arm, or both `null` when the output is not a JSON
- *   document carrying one
+ * @returns The reported arm, or both `null` when the output carries no
+ *   document this reader can classify, or no lane inside the one it found
  */
 export function readLaneFromOutput(stdout: string): ReportedLane {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(stdout) as unknown;
-  } catch (error) {
-    // Not a JSON document is the one case "unreported" means; JSON.parse
-    // throws nothing else, so anything else here is a bug and stays loud.
-    if (!(error instanceof SyntaxError)) throw error;
-    return UNREPORTED;
-  }
-  return laneOfDocument(raw);
+  const parsed = parseDocument(stdout);
+  if (parsed.shape === 'unparsed') return UNREPORTED;
+  return laneOfDocument(parsed.payload);
 }
 
 /** Said in place of an arm when the subject's output named none. */

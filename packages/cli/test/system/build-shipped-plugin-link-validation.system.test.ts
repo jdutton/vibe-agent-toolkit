@@ -16,8 +16,7 @@ function buildFixture(tempDir: string, skillBody: string): void {
   writeTestFile(safePath.join(tempDir, 'package.json'), JSON.stringify({ name: 't', version: '1.0.0' }));
   writeTestFile(
     safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1
-skills:
+    `skills:
   include: ["resources/skills/**/SKILL.md"]
 claude:
   marketplaces:

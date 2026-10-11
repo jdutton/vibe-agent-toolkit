@@ -159,7 +159,7 @@ function codedError(code: string, message: string): Error {
  * The wrapper is built from the REAL exported class rather than hand-rolled, so
  * a change to what `isParserUnavailable` accepts cannot pass here by agreeing
  * with a fixture's idea of the type. The `EACCES` underneath is deliberate: it
- * is a member of `resource-registry`'s READ_FAILURE_CODES, so it is precisely
+ * is a member of `resource-registry`'s READ_FAILURE_CLASSES, so it is precisely
  * the error an inspection-based guard could never tell apart from an unreadable
  * document — and it must stay reachable only via `loaderError`.
  *
@@ -235,7 +235,7 @@ describe('an ordinary parser failure during blob derivation', () => {
 
 /**
  * The same collision one layer over, and the one the reproduction actually ran:
- * `ResourceRegistry.addResources` demotes any READ_FAILURE_CODES error into a
+ * `ResourceRegistry.addResources` demotes any READ_FAILURE_CLASSES error into a
  * per-file `RESOURCE_UNREADABLE`, and the ESM loader's own failures wear exactly
  * those codes.
  */

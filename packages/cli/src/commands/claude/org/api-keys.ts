@@ -1,11 +1,12 @@
 /**
  * `vat claude org api-keys` — manage organization API keys via Admin API.
  */
-import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { Command } from 'commander';
 
+import { endWithRefusal, NOTHING_FINISHED } from '../../../utils/document-writer.js';
+
 import { addPaginationOptions, buildPaginationParams, executeOrgCommand } from './helpers.js';
-import { writeNotYetImplementedStub } from './stubs.js';
+import { NOT_IMPLEMENTED_MESSAGE } from './stubs.js';
 
 interface ApiKey {
   id: string;
@@ -46,7 +47,7 @@ export function createOrgApiKeysCommand(): Command {
         status?: string;
         debug?: boolean;
       }) => {
-        await executeOrgCommand('OrgApiKeysList', options.debug, async ({ client }) => {
+        await executeOrgCommand('claude org api-keys list', options.debug, async ({ client }) => {
           const params = buildPaginationParams(options, {
             workspace_id: options.workspaceId,
             status: options.status,
@@ -74,8 +75,7 @@ Example:
     .argument('<key-id>', 'API key ID')
     .requiredOption('--name <name>', 'New name for the API key')
     .action(() => {
-      writeNotYetImplementedStub('org api-keys update');
-      process.exit(ExitCode.ERROR);
+      endWithRefusal('claude org api-keys update', 'NOT_IMPLEMENTED', NOT_IMPLEMENTED_MESSAGE, 'yaml', { strict: false }, NOTHING_FINISHED);
     });
 
   command.addCommand(listCmd);

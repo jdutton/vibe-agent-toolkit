@@ -58,8 +58,8 @@ Please report this issue at: https://github.com/jdutton/vibe-agent-toolkit/issue
  * handed to the pipe, so `process.exit` has nothing left to lose.
  *
  * The loop itself now lives in `output.ts` as `writeStdoutSync`, because the very
- * same defect was later found in `writeYamlOutput` — every command's YAML summary
- * was being truncated at one pipe buffer. Two copies of this reasoning is exactly
+ * same defect was later found in the command-document writer — every command's
+ * YAML summary was being truncated at one pipe buffer. Two copies of this reasoning is exactly
  * how the second lane went unfixed for so long, so there is one.
  */
 export function writeHelpSync(content: string): void {

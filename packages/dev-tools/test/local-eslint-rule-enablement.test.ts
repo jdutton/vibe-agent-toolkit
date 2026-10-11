@@ -102,11 +102,21 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   'no-dotdot-containment': REPO_WIDE_PROBE,
   'dirent-type-needs-symlink-check': REPO_WIDE_PROBE,
   'no-version-literal': REPO_WIDE_PROBE,
+  // The two fault-protocol rules, declared repo-wide; each names only STRUCTURAL
+  // exemptions (the classifier, the tree-change primitive, test support), never a ratchet.
+  'no-adhoc-errno': REPO_WIDE_PROBE,
+  'no-destructive-fs': REPO_WIDE_PROBE,
+  // Scoped to `packages/*/src/**` with a shrink-only `allowFiles` ratchet; the probe
+  // asks `pathPresent`, so it is NOT on the list.
+  'no-existssync': 'packages/claude-marketplace/src/inventory/extract-plugin.ts',
   // The exit-code contract, declared repo-wide with no ratchet of product code
   // (its `allow` names three example scripts that are not vat verbs).
   'no-literal-process-exit': REPO_WIDE_PROBE,
   // Scoped to `packages/*/src/**`: tests build schemas as fixtures.
   'explicit-zod-strictness': REPO_WIDE_PROBE,
+  // Scoped by its own `paths` option to the CLI's command modules; the probe
+  // publishes through the document writer, so it is NOT on the `allowFiles` ratchet.
+  'no-stdout-outside-writer': 'packages/cli/src/commands/okf/validate.ts',
 };
 
 /** `error` as ESLint normalizes it out of `calculateConfigForFile`. */

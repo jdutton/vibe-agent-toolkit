@@ -105,19 +105,29 @@ accumulates until a stable bump stamps it.
 - Never name a proprietary adopter — describe abstractly ("an adopter with ~90 skills").
   `bun run validate-structure` fails the build on a contraband name.
 
-## Size is a hard constraint, not a style note
+## Size is a release-path constraint, not a style note
 
-`vat claude marketplace publish` passes the whole `[Unreleased]` section as a **single**
-`git commit -m` argument, and **Linux caps one argument at 131,072 bytes** (`MAX_ARG_STRLEN`
-— separate from, and far smaller than, `ARG_MAX`). Crossing it makes the publish step fail
-*after* npm has already published, with a misleading "exit 1". macOS has no such cap, so a
-local `bun run pre-release` dry-run **cannot** catch it.
+A stable release sends the release's whole changelog section through two steps of
+`.github/workflows/publish.yml`, both of which run *after* npm has published:
 
-Check before releasing:
+- **`vat claude marketplace publish`** embeds the section in a commit message. It passes the
+  message on stdin (`git commit -F -`, `packages/cli/src/commands/claude/marketplace/git-publish.ts`),
+  so the Linux per-argument cap (`MAX_ARG_STRLEN`, 131,072 bytes) that once failed this step no
+  longer applies; `marketplace-publish-large-message.integration.test.ts` pins that.
+- **`gh release create --notes-file`** receives the section `extract-changelog` wrote, as the
+  GitHub release body. That is the limit that remains. GitHub's REST reference for "Create a
+  release" states no maximum for `body` (read 2026-10-03), so there is no vendor-documented
+  number to check against, and nothing in `pre-publish --release-readiness` measures the
+  section. A release whose notes GitHub refuses fails with npm and both marketplaces already
+  published.
+
+Measure before releasing, counting the fragments the stable bump will fold in:
 
 ```bash
 awk '/^## \[Unreleased\]/{f=1} f&&/^## \[0\./&&!/Unreleased/{exit} f' CHANGELOG.md | wc -c
+cat .changes/*.md | wc -c
 ```
 
-If it is anywhere near 131,072 the section has stopped being a changelog. Apply the triage
-above rather than truncating — the size is the symptom.
+Compare the sum with the largest section a past release published successfully, and treat
+anything well beyond it as unproven rather than safe. A section that large has stopped being a
+changelog either way: apply the triage above rather than truncating — the size is the symptom.

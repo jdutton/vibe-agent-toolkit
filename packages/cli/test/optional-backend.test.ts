@@ -11,8 +11,11 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import yaml from 'yaml';
 
-import { lazyAction, type OptionalBackend } from '../src/utils/optional-backend.js';
+import { RAG_INDEX_REPORT_SCHEMA } from '../src/commands/rag/index-schema.js';
+import { refusalCodeOf } from '../src/utils/command-refusal.js';
+import { lazyAction, missingBackendError, type OptionalBackend } from '../src/utils/optional-backend.js';
 
 const BACKEND: OptionalBackend = {
   feature: 'RAG',
@@ -29,10 +32,12 @@ function moduleNotFound(): Error {
 /** Capture stderr, stdout and `process.exit` for one call. */
 function captureExit(): {
   readonly output: string[];
+  readonly stdout: string[];
   readonly exits: number[];
   restore: () => void;
 } {
   const output: string[] = [];
+  const stdoutChunks: string[] = [];
   const exits: number[] = [];
   const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
     output.push(String(chunk));
@@ -40,6 +45,7 @@ function captureExit(): {
   });
   const stdout = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
     output.push(String(chunk));
+    stdoutChunks.push(String(chunk));
     return true;
   });
   // Throws rather than returns: `process.exit` is typed `never`, and a stub
@@ -50,6 +56,7 @@ function captureExit(): {
   }) as never);
   return {
     output,
+    stdout: stdoutChunks,
     exits,
     restore: () => {
       stderr.mockRestore();
@@ -63,7 +70,7 @@ describe('lazyAction', () => {
   it('does not load the backend until the action actually runs', async () => {
     const load = vi.fn(async () => () => undefined);
 
-    const action = lazyAction(BACKEND, load);
+    const action = lazyAction('rag index', BACKEND, load);
 
     // Binding the action is what `createRagCommand` does at startup for every
     // subcommand. If that alone loaded the module, the whole seam would be a
@@ -76,20 +83,24 @@ describe('lazyAction', () => {
 
   it('passes the command arguments through to the loaded handler', async () => {
     const handler = vi.fn();
-    const action = lazyAction(BACKEND, async () => handler);
+    const action = lazyAction('rag index', BACKEND, async () => handler);
 
     await action('docs/', { db: 'custom.db' });
 
     expect(handler).toHaveBeenCalledWith('docs/', { db: 'custom.db' });
   });
 
-  it('names the package to install, and exits 2, when the backend is absent', async () => {
+  it('rag index with an unavailable backend refuses with BACKEND_UNAVAILABLE, exit 2', async () => {
     const captured = captureExit();
     try {
-      const action = lazyAction(BACKEND, (): Promise<() => unknown> => Promise.reject(moduleNotFound()));
+      const action = lazyAction('rag index', BACKEND, (): Promise<() => unknown> => Promise.reject(moduleNotFound()));
 
       await expect(action()).rejects.toThrow('EXITED');
 
+      // The verb's own published document, validated by its registry schema.
+      const report = RAG_INDEX_REPORT_SCHEMA.parse(yaml.parse(captured.stdout.join('')));
+      expect(report.status).toBe('error');
+      expect(report).toMatchObject({ examined: 0, data: null, error: { code: 'BACKEND_UNAVAILABLE' } });
       const all = captured.output.join('');
       expect(all).toContain('@vibe-agent-toolkit/rag-lancedb');
       expect(all).toContain('npm install');
@@ -108,7 +119,7 @@ describe('lazyAction', () => {
     const captured = captureExit();
     try {
       const broken = new SyntaxError('Unexpected token in the backend');
-      const action = lazyAction(BACKEND, (): Promise<() => unknown> => Promise.reject(broken));
+      const action = lazyAction('rag index', BACKEND, (): Promise<() => unknown> => Promise.reject(broken));
 
       await expect(action()).rejects.toThrow('Unexpected token in the backend');
       expect(captured.exits).toEqual([]);
@@ -116,5 +127,20 @@ describe('lazyAction', () => {
     } finally {
       captured.restore();
     }
+  });
+});
+
+/**
+ * The backend chosen from inside a command (the projection store) cannot end
+ * the process itself: it throws, and the verb's own catch publishes the
+ * refusal in that verb's shape.
+ */
+describe('missingBackendError', () => {
+  it('is a BACKEND_UNAVAILABLE refusal naming the package and the install command', () => {
+    const error = missingBackendError(BACKEND);
+
+    expect(refusalCodeOf(error)).toBe('BACKEND_UNAVAILABLE');
+    expect(error.message).toContain('npm install @vibe-agent-toolkit/rag-lancedb');
+    expect(error.message).toContain('RAG');
   });
 });

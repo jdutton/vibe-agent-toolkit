@@ -87,6 +87,7 @@ async function allowUnusedAcrossBuildRun(cwd: string): Promise<{
     projectSkills: [],
     onlySkill: undefined,
     verbose: false,
+    runOutputs: [],
   });
   const unused = [
     ...run.results.flatMap(({ result }) => [
@@ -192,7 +193,7 @@ async function buildRunWithOneThrowingSkill(
       await writeFile(safePath.join(extras, basename), `content of ${basename}\n`);
     }
   }
-  return runSkillBuild({ specs, cwd, logger, projectSkills: [], onlySkill: undefined, verbose: false });
+  return runSkillBuild({ specs, cwd, logger, projectSkills: [], onlySkill: undefined, verbose: false, runOutputs: [] });
 }
 
 describe('runSkillBuild - a skill that throws does not discard the batch', () => {
@@ -219,7 +220,7 @@ describe('runSkillBuild - a skill that throws does not discard the batch', () =>
   });
 
   it('attributes the failure to a skill without publishing where the run happened', async () => {
-    // `failures[]` is published verbatim as `failedSkills[]` on stdout, so this
+    // `failures[]` is published verbatim as SKILL_PACKAGING_FAILED findings on stdout, so this
     // message is machine-readable output — the one place an absolute path is a
     // leak rather than a convenience. Attribution rides on the declared NAME,
     // which is portable; the paths inside the message are the project's own.
@@ -238,7 +239,7 @@ describe('runSkillBuild - a skill that throws does not discard the batch', () =>
 
   // The case above drives ONE `files:` shape — a plain absent non-glob source,
   // whose throw happens to interpolate no path at all. It therefore certified
-  // "no absolute path in failedSkills[]" while three sibling throws in the same
+  // "no absolute path in the published message" while three sibling throws in the same
   // feature published one; a guard that cannot fail is the defect that lets a
   // leak ship. These cases drive the GLOB routes, where the leak actually was.
   //

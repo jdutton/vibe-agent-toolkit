@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { isPathAbsentError } from './errors/errno.js';
+import { isPathAbsentError } from './errors/errno-table.js';
+import { classifyFsFault } from './errors/fs-fault.js';
 import { safePath } from './path-core.js';
 
 /**
@@ -122,6 +123,7 @@ export function normalizePath(...paths: string[]): string {
  * - This is a "works on Mac, fails on Windows CI" bug pattern
  *
  * @returns Normalized temp directory path with **OS-native separators** (resolves short names on Windows)
+ * @throws FsFaultError on side `environment` when the OS refuses to resolve the temp directory
  *
  * @example
  * ```typescript
@@ -133,7 +135,13 @@ export function normalizePath(...paths: string[]): string {
  * ```
  */
 export function normalizedTmpdir(): string {
-  return realpathOrSelf(tmpdir());
+  const tmp = tmpdir();
+  try {
+    return realpathOrSelf(tmp);
+  } catch (error: unknown) {
+    // Every verb roots its scratch, staging and caches here: a refusal is VAT's scratch space failing.
+    throw classifyFsFault(error, { side: 'environment', action: 'resolve the temporary directory', path: tmp });
+  }
 }
 
 /**

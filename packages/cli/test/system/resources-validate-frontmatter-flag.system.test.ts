@@ -27,8 +27,7 @@ const PRD_SCHEMA = {
 function setupBrokenFrontmatterLinkProject(tempDir: string, name: string): string {
   const projectDir = setupTestProject(tempDir, {
     name,
-    config: `version: 1
-resources:
+    config: `resources:
   collections:
     prds:
       include:

@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { CODE_REGISTRY } from '../../src/validation-codes.js';
+import { CODE_REGISTRY, REFUSAL_CODES } from '../../src/validation-codes.js';
 
 const docsPath = fileURLToPath(new URL('../../../../docs/validation-codes.md', import.meta.url));
 // Path is derived from `import.meta.url`, not user input — points at the
@@ -150,5 +150,32 @@ describe('docs/validation-codes.md has no stale sections', () => {
   it('documents each code exactly once', () => {
     const duplicates = headings.filter((heading, index) => headings.indexOf(heading) !== index);
     expect(duplicates).toEqual([]);
+  });
+});
+
+/**
+ * The refusal codes live in their own section, because they are the one part of
+ * the registry `validation.severity` / `validation.allow` cannot move: a reader
+ * who lands on one must learn that from where it sits, not from a footnote.
+ */
+describe('docs/validation-codes.md — Refusal codes', () => {
+  const start = docs.indexOf('\n## Refusal codes\n');
+  const rest = docs.slice(start + 1);
+  const end = /\n## /.exec(rest);
+  const refusalSection = end === null ? rest : rest.slice(0, end.index);
+
+  it('has a "Refusal codes" section', () => {
+    expect(start).toBeGreaterThan(-1);
+  });
+
+  it('documents every refusal code in validation-codes.md, inside that section', () => {
+    for (const code of REFUSAL_CODES) {
+      expect(refusalSection, `${code} is not under "## Refusal codes"`).toContain(`### \`${code}\``);
+    }
+  });
+
+  it('lists no finding code there', () => {
+    const headings = [...refusalSection.matchAll(/^### `([A-Z][A-Z0-9_]*)`/gm)].map((match) => match[1]);
+    expect(new Set(headings)).toEqual(new Set(REFUSAL_CODES));
   });
 });

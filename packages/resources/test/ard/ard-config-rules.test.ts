@@ -95,7 +95,6 @@ describe('an `ard:` block is judged at CONFIG LOAD, not only at emission', () =>
   // a last gate for configs assembled in process.
   it('refuses a whole project config over its ard block alone', () => {
     const result = ProjectConfigSchema.safeParse({
-      version: 1,
       ard: { publisher: 'My Company' },
     });
     expect(result.success).toBe(false);
@@ -103,7 +102,7 @@ describe('an `ard:` block is judged at CONFIG LOAD, not only at emission', () =>
 
   it('accepts the same project config once the ard block is well-formed', () => {
     expect(
-      ProjectConfigSchema.safeParse({ version: 1, ard: { publisher: PUBLISHER } }).success
+      ProjectConfigSchema.safeParse({ ard: { publisher: PUBLISHER } }).success
     ).toBe(true);
   });
 
@@ -121,7 +120,6 @@ describe('an `ard:` block is judged at CONFIG LOAD, not only at emission', () =>
     ['a display name', 'My Company'],
   ])('refuses a trustManifest.identity carrying no bindable authority — %s', (_label, identity) => {
     const result = ProjectConfigSchema.safeParse({
-      version: 1,
       ard: { publisher: PUBLISHER, trustManifest: { identity } },
     });
     expect(result.success).toBe(false);
@@ -133,7 +131,6 @@ describe('an `ard:` block is judged at CONFIG LOAD, not only at emission', () =>
     ['a DID', `did:web:${PUBLISHER}`],
   ])('still accepts the three forms the schema advertises — %s', (_label, identity) => {
     const result = ProjectConfigSchema.safeParse({
-      version: 1,
       ard: { publisher: PUBLISHER, trustManifest: { identity } },
     });
     expect(result.success).toBe(true);

@@ -24,7 +24,7 @@ import { DEPENDENCY_FIELDS } from '../src/resolve-workspace-deps.js';
  *
  * Optional PEERS are the field that means what the seam intends: npm and pnpm
  * do not auto-install them, and an absent one becomes the legible
- * `reportMissingBackend` error naming the package to install.
+ * `missingBackendError` refusal (BACKEND_UNAVAILABLE) naming the package to install.
  *
  * This guard exists because nothing else can see the drift. The seam's runtime
  * behaviour stays green whether the packages are installed or not — a passing

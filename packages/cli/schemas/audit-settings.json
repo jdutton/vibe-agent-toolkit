@@ -1,0 +1,472 @@
+{
+  "$ref": "#/definitions/audit-settings",
+  "definitions": {
+    "audit-settings": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "ok"
+            },
+            "examined": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "summary": {
+              "type": "object",
+              "properties": {
+                "errors": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "warnings": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "info": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "errors",
+                "warnings",
+                "info"
+              ],
+              "additionalProperties": false
+            },
+            "gate": {
+              "type": "object",
+              "properties": {
+                "strict": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "strict"
+              ],
+              "additionalProperties": false
+            },
+            "durationMs": {
+              "type": "number",
+              "minimum": 0
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "location": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  "field": {
+                    "type": "string"
+                  },
+                  "link": {
+                    "type": "string"
+                  },
+                  "fix": {
+                    "type": "string"
+                  },
+                  "reference": {
+                    "type": "string"
+                  },
+                  "suggestion": {
+                    "type": "string"
+                  },
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "error",
+                      "warning",
+                      "info"
+                    ]
+                  },
+                  "column": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "severity"
+                ],
+                "additionalProperties": false
+              },
+              "maxItems": 0
+            },
+            "data": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "const": "file"
+                    },
+                    "root": {
+                      "type": "string"
+                    },
+                    "file": {
+                      "type": "string"
+                    },
+                    "detectedType": {
+                      "type": "string",
+                      "enum": [
+                        "managed",
+                        "user",
+                        "project",
+                        "unknown"
+                      ]
+                    },
+                    "typeConfidence": {
+                      "type": "string",
+                      "enum": [
+                        "declared",
+                        "inferred",
+                        "ambiguous",
+                        "undetermined"
+                      ]
+                    },
+                    "fields": {
+                      "anyOf": [
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "type": "string"
+                              },
+                              "count": {
+                                "type": "integer"
+                              }
+                            },
+                            "required": [
+                              "key"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "mode",
+                    "root",
+                    "file",
+                    "detectedType",
+                    "typeConfidence",
+                    "fields"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "const": "paths"
+                    },
+                    "root": {
+                      "$ref": "#/definitions/audit-settings/anyOf/0/properties/data/anyOf/0/properties/root"
+                    },
+                    "paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "label": {
+                            "type": "string"
+                          },
+                          "path": {
+                            "type": "string"
+                          },
+                          "exists": {
+                            "anyOf": [
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "string",
+                                "const": "undetermined"
+                              }
+                            ]
+                          },
+                          "readable": {
+                            "anyOf": [
+                              {
+                                "type": "boolean"
+                              },
+                              {
+                                "type": "string",
+                                "const": "undetermined"
+                              }
+                            ]
+                          },
+                          "level": {
+                            "type": "string"
+                          },
+                          "accessError": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "label",
+                          "path",
+                          "exists",
+                          "readable",
+                          "level"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "mode",
+                    "root",
+                    "paths"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "const": "effective"
+                    },
+                    "root": {
+                      "$ref": "#/definitions/audit-settings/anyOf/0/properties/data/anyOf/0/properties/root"
+                    },
+                    "layers": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "level": {
+                            "type": "string"
+                          },
+                          "file": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "level",
+                          "file"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "effectiveSettings": {
+                      "type": "object",
+                      "additionalProperties": {}
+                    },
+                    "conflicts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string"
+                          },
+                          "rule": {
+                            "type": "string"
+                          },
+                          "ruleSource": {
+                            "type": "string"
+                          },
+                          "ruleLevel": {
+                            "type": "string"
+                          },
+                          "ruleList": {
+                            "type": "string"
+                          },
+                          "shadowedBy": {
+                            "type": "string"
+                          },
+                          "shadowedBySource": {
+                            "type": "string"
+                          },
+                          "shadowedByLevel": {
+                            "type": "string"
+                          },
+                          "shadowedByList": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "rule",
+                          "ruleSource",
+                          "ruleLevel",
+                          "ruleList",
+                          "shadowedBy",
+                          "shadowedBySource",
+                          "shadowedByLevel",
+                          "shadowedByList"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "mode",
+                    "root",
+                    "layers",
+                    "effectiveSettings",
+                    "conflicts"
+                  ],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "examined",
+            "summary",
+            "gate",
+            "findings",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "findings"
+            },
+            "examined": {
+              "$ref": "#/definitions/audit-settings/anyOf/0/properties/examined"
+            },
+            "summary": {
+              "$ref": "#/definitions/audit-settings/anyOf/0/properties/summary"
+            },
+            "gate": {
+              "$ref": "#/definitions/audit-settings/anyOf/0/properties/gate"
+            },
+            "durationMs": {
+              "$ref": "#/definitions/audit-settings/anyOf/0/properties/durationMs"
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/audit-settings/anyOf/0/properties/findings/items"
+              },
+              "minItems": 1
+            },
+            "data": {
+              "$ref": "#/definitions/audit-settings/anyOf/0/properties/data"
+            }
+          },
+          "required": [
+            "status",
+            "examined",
+            "summary",
+            "gate",
+            "findings",
+            "data"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "const": "error"
+            },
+            "examined": {
+              "$ref": "#/definitions/audit-settings/anyOf/0/properties/examined"
+            },
+            "summary": {
+              "$ref": "#/definitions/audit-settings/anyOf/0/properties/summary"
+            },
+            "gate": {
+              "$ref": "#/definitions/audit-settings/anyOf/0/properties/gate"
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/audit-settings/anyOf/0/properties/findings/items"
+              }
+            },
+            "error": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "enum": [
+                    "USAGE_INVALID",
+                    "CONFIG_INVALID",
+                    "INPUT_UNREADABLE",
+                    "BACKEND_UNAVAILABLE",
+                    "EXTERNAL_API_FAILED",
+                    "NOT_IMPLEMENTED",
+                    "RUN_INCOMPLETE",
+                    "INTERNAL_ERROR",
+                    "RESOURCE_CHECK_BROKEN",
+                    "ARD_NOT_CONFIGURED",
+                    "ARD_DERIVATION_FAILED"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            "data": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/audit-settings/anyOf/0/properties/data"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "examined",
+            "summary",
+            "gate",
+            "findings",
+            "error",
+            "data"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

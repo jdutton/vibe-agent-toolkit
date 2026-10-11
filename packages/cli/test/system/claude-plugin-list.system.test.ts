@@ -7,6 +7,8 @@
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { PLUGIN_LIST_REPORT_SCHEMA } from '../../src/commands/claude/plugin/list-schema.js';
+
 import {
   createTempDirTracker,
   executeCliAndParseYaml,
@@ -53,17 +55,18 @@ describe('claude plugin list command (system test)', () => {
     cleanupTempDirs();
   });
 
-  it('returns empty counts when nothing installed', async () => {
+  it('returns empty listings when nothing installed, both registries consulted', async () => {
     const fakeHome = createListTestHome(createTempDir);
 
     const { status, parsed } = await runPluginList(binPath, fakeHome);
 
     expect(status).toBe(0);
-    expect(parsed.status).toBe('success');
-    expect(parsed.target).toBe('code');
-    const sources = parsed.sources as Record<string, number>;
-    expect(sources.pluginRegistry).toBe(0);
-    expect(sources.legacySkillsDir).toBe(0);
+    const report = PLUGIN_LIST_REPORT_SCHEMA.parse(parsed);
+    expect(report.status).toBe('ok');
+    expect(report.examined).toBe(2);
+    expect(report.data).toMatchObject({ target: 'code', plugins: [], legacySkills: [] });
+    expect(report.data?.sources.pluginRegistry).toBe(safePath.join(fakeHome, '.claude', 'plugins', 'installed_plugins.json'));
+    expect(report.data?.sources.legacySkillsDir).toBe(safePath.join(fakeHome, '.claude', 'skills'));
   });
 
   it('lists plugins from registry', async () => {
@@ -85,14 +88,12 @@ describe('claude plugin list command (system test)', () => {
     const { status, parsed } = await runPluginList(binPath, fakeHome);
 
     expect(status).toBe(0);
-    const sources = parsed.sources as Record<string, number>;
-    expect(sources.pluginRegistry).toBe(1);
-    const plugins = parsed.plugins as Array<Record<string, unknown>>;
+    const plugins = PLUGIN_LIST_REPORT_SCHEMA.parse(parsed).data?.plugins;
     expect(plugins).toHaveLength(1);
-    expect(plugins[0]).toMatchObject({ name: 'my-skill', marketplace: 'test-market', version: '1.0.0' });
+    expect(plugins?.[0]).toMatchObject({ name: 'my-skill', marketplace: 'test-market', version: '1.0.0' });
   });
 
-  it('counts legacy skills from ~/.claude/skills/', async () => {
+  it('lists legacy skills from ~/.claude/skills/', async () => {
     const tempDir = createTempDir();
     const fakeHome = safePath.join(tempDir, 'home');
     const skillsDir = safePath.join(fakeHome, '.claude', 'skills', 'legacy-skill');
@@ -102,17 +103,29 @@ describe('claude plugin list command (system test)', () => {
     const { status, parsed } = await runPluginList(binPath, fakeHome);
 
     expect(status).toBe(0);
-    const sources = parsed.sources as Record<string, number>;
-    expect(sources.legacySkillsDir).toBe(1);
+    expect(PLUGIN_LIST_REPORT_SCHEMA.parse(parsed).data?.legacySkills).toMatchObject([{ name: 'legacy-skill', type: 'directory' }]);
   });
 
-  it('returns not-available for unsupported --target', async () => {
+  it('refuses a plugin registry that is not JSON as INPUT_UNREADABLE, not INTERNAL_ERROR', async () => {
+    const fakeHome = createListTestHome(createTempDir);
+    mkdirSyncReal(safePath.join(fakeHome, '.claude', 'plugins'), { recursive: true });
+    writeTestFile(safePath.join(fakeHome, '.claude', 'plugins', 'installed_plugins.json'), '{ "plugins": ');
+
+    const { status, parsed } = await runPluginList(binPath, fakeHome);
+
+    expect(status).toBe(2);
+    expect(PLUGIN_LIST_REPORT_SCHEMA.parse(parsed)).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
+  });
+
+  it('list --target claude.ai refuses with USAGE_INVALID, exit 2', async () => {
     const fakeHome = createListTestHome(createTempDir);
 
     const { status, parsed } = await runPluginList(binPath, fakeHome, ['--target', 'claude.ai']);
 
-    // ERROR: the command cannot do what was asked; it is not a finding about a plugin.
+    // The command cannot do what was asked; it is not a finding about a plugin.
     expect(status).toBe(2);
-    expect(parsed.status).toBe('not-available');
+    const report = PLUGIN_LIST_REPORT_SCHEMA.parse(parsed);
+    expect(report.status).toBe('error');
+    expect(report).toMatchObject({ error: { code: 'USAGE_INVALID' } });
   });
 });

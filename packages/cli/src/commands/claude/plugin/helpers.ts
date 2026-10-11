@@ -8,37 +8,68 @@
  * - npm postinstall hook
  */
 
-import { existsSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
-
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { type FsSide, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
-import * as tar from 'tar';
+import { z } from 'zod';
+
+import { extractTarballSync } from '../../../utils/archive-staging.js';
+import { CommandRefusalError } from '../../../utils/command-refusal.js';
+import { requireInputPath } from '../../../utils/project-root-policy.js';
 
 
 export type SkillSource = 'npm' | 'local' | 'zip' | 'tgz' | 'npm-postinstall' | 'dev';
 
-export interface PackageJsonVatReplaces {
+/**
+ * `package.json` `vat.replaces`: what an install removes once the package is in
+ * place. Strict, because every entry becomes an uninstall or an `rm -rf` — a
+ * string where the array belongs was walked letter by letter, each letter
+ * uninstalled or removed as a name.
+ */
+const PackageJsonVatReplacesSchema = z.object({
   /** Old plugin names (without marketplace) this package used to publish under */
-  plugins?: string[];
+  plugins: z.array(z.string()).optional(),
   /** Old skill names previously installed to ~/.claude/skills/<name> (legacy flat location) */
-  flatSkills?: string[];
-}
+  flatSkills: z.array(z.string()).optional(),
+}).strict();
 
-export interface PackageJsonVat {
-  version?: string;
-  // DEPRECATED(v0.1.x): vat.type — tolerated but ignored
-  type?: string;
-  skills?: string[];
-  replaces?: PackageJsonVatReplaces;
-}
+/** Every name once: a list that names one skill twice plans two changes over one directory. */
+const hasNoDuplicate = (names: readonly string[]): boolean => new Set(names).size === names.length;
 
+/**
+ * Everything an install reads from a package's `package.json`, as ONE schema: `name`, `version`,
+ * `vat.skills` and `vat.replaces`. Each becomes a path, a registry key or a list the install walks,
+ * so a wrong type is refused here — the package is the input (`INPUT_UNREADABLE`) — and never met
+ * later as a `TypeError` or as a string walked letter by letter.
+ *
+ * Passthrough at both levels, on purpose: `package.json` is npm's file (every other top-level key is
+ * npm's or another tool's), and `vat` carries keys other verbs own (`vat.version`, the tolerated
+ * `vat.type`, `vat.pureJs`), which an install does not read and must not refuse.
+ */
+const PackageJsonForInstallSchema = z.object({
+  name: z.string().min(1),
+  version: z.string().optional(),
+  vat: z.object({
+    skills: z.array(z.string()).refine(hasNoDuplicate, 'names a skill more than once').optional(),
+    replaces: PackageJsonVatReplacesSchema.optional(),
+  }).passthrough().optional(),
+}).passthrough();
+
+type PackageJsonForInstall = z.infer<typeof PackageJsonForInstallSchema>;
+
+export type PackageJsonVat = NonNullable<PackageJsonForInstall['vat']>;
+
+/** A package's `package.json`, as far as an install reads it. `version` is absent for a package that declares none. */
 export interface PackageJson {
   name: string;
-  version: string;
-  vat?: PackageJsonVat;
+  version?: string | undefined;
+  vat?: PackageJsonVat | undefined;
 }
+
+/** What an install source looks like, for a refusal of one that is not. */
+const SOURCE_FORMS_HINT = 'Expected: npm:package-name, /path/to/dir, /path/to/file.zip, or /path/to/file.tgz';
 
 /**
  * Detect source type from user input
@@ -64,27 +95,59 @@ export function detectSource(input: string): SkillSource {
     return 'tgz';
   }
 
-  // Check filesystem
+  // Check filesystem: a path naming nothing is the invocation's mistake, one the OS refuses the input's.
   const absolutePath = safePath.resolve(input);
+  // A bare word that names nothing is most often a source typed wrong: say what a source looks like.
+  const stat = requireInputPath(absolutePath, { origin: 'argument', message: `Path does not exist: ${absolutePath}\n${SOURCE_FORMS_HINT}` });
 
-  if (existsSync(absolutePath)) {
-    const stat = statSync(absolutePath);
-
-    if (stat.isDirectory()) {
-      return 'local';
-    }
-
-    if (stat.isFile()) {
-      if (absolutePath.endsWith('.tgz') || absolutePath.endsWith('.tar.gz')) {
-        return 'tgz';
-      }
-      return 'zip';
-    }
+  if (stat.isDirectory()) {
+    return 'local';
   }
 
-  throw new Error(
-    `Cannot detect source type for: ${input}\n` +
-      `Expected: npm:package-name, /path/to/dir, /path/to/file.zip, or --npm-postinstall`
+  if (stat.isFile()) {
+    return 'zip';
+  }
+
+  throw new CommandRefusalError('USAGE_INVALID', `Cannot detect source type for: ${input}\n${SOURCE_FORMS_HINT}`);
+}
+
+/**
+ * Read `dir/package.json` as an install reads it ({@link PackageJsonForInstallSchema}). The package
+ * is the input, so everything wrong with what it HOLDS is the input's refusal (`INPUT_UNREADABLE`),
+ * nothing changed: no `package.json` at all (naming `packageLabel`, since for an archive `dir` is
+ * VAT's staging and names nothing the user has), not JSON, or a field of the wrong shape (naming
+ * it). A read the OS refuses propagates for the caller to classify by path.
+ *
+ * @param dir - The package directory
+ * @param from - The side `dir` is on (the operator's tree, or VAT's staging of an archive or a
+ *   download), and what the user named as the package: the directory, the archive, or the npm spec
+ */
+export async function readPackageJson(dir: string, from: { readonly side: FsSide; readonly label: string }): Promise<PackageJson> {
+  const packageJsonPath = safePath.join(dir, 'package.json');
+  // Asked first, and believed only when the directory's listing agrees: a package with no
+  // package.json is the input's shape, never "VAT's scratch space vanished".
+  if (!pathPresent(packageJsonPath, 'follow', from.side, 'confirmed')) {
+    throw new CommandRefusalError('INPUT_UNREADABLE', `${from.label} holds no package.json, so it is not a package VAT can install; nothing was changed.`);
+  }
+  // A read the OS refuses propagates as the errno: the install classifies it by the path it
+  // names (the package the operator named, or VAT's staging of an archive or a download).
+  const content = await readFile(packageJsonPath, 'utf-8');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (error) {
+    throw new CommandRefusalError('INPUT_UNREADABLE', `${packageJsonPath} is not valid JSON: ${String(error)}`, { cause: error });
+  }
+  const result = PackageJsonForInstallSchema.safeParse(parsed);
+  if (result.success) return result.data;
+  const problems = result.error.issues.map((issue) => `${issue.path.map(String).join('.') || 'the document'}: ${issue.message}`).join('; ');
+  // By its own name where it has one: the label is the path the user typed, the name what they know it as.
+  const declared: unknown = (parsed as { name?: unknown } | null)?.name;
+  const named = typeof declared === 'string' && declared !== '' ? `Package ${declared}` : from.label;
+  throw new CommandRefusalError(
+    'INPUT_UNREADABLE',
+    `${named} cannot be installed, nothing was changed: ${packageJsonPath} — ${problems}. ` +
+      'An install reads name (a string), version (a string), vat.skills (string[], each skill once) and vat.replaces ({ plugins?: string[], flatSkills?: string[] }).',
   );
 }
 
@@ -92,19 +155,14 @@ export function detectSource(input: string): SkillSource {
  * Read package.json and extract vat field
  */
 export async function readPackageJsonVatMetadata(
-  dir: string
+  dir: string,
+  from: { readonly side: FsSide; readonly label: string },
 ): Promise<{ packageJson: PackageJson; skills: string[] }> {
-  const packageJsonPath = safePath.join(dir, 'package.json');
-
-  if (!existsSync(packageJsonPath)) {
-    throw new Error(`package.json not found in: ${dir}`);
-  }
-
-  const content = await readFile(packageJsonPath, 'utf-8');
-  const packageJson = JSON.parse(content) as PackageJson;
+  const packageJson = await readPackageJson(dir, from);
 
   if (!packageJson.vat?.skills || packageJson.vat.skills.length === 0) {
-    throw new Error(
+    throw new CommandRefusalError(
+      'INPUT_UNREADABLE',
       `No skills found in package.json vat.skills field.\n` +
         `Package: ${packageJson.name}\n` +
         `Expected vat.skills array with at least one skill.`
@@ -129,14 +187,20 @@ export function downloadNpmPackage(packageName: string, tempDir: string): string
     ? packageName.slice(4)
     : packageName;
 
-  // Use npm pack to download package (creates .tgz in current dir)
-  const packOutput = safeExecSync('npm', ['pack', actualPackageName], {
-    cwd: tempDir,
-    encoding: 'utf-8',
-  });
+  // Use npm pack to download package (creates .tgz in current dir). A failure
+  // here is the registry's or the network's answer, not VAT's defect.
+  let packOutput: string | Buffer;
+  try {
+    packOutput = safeExecSync('npm', ['pack', actualPackageName], {
+      cwd: tempDir,
+      encoding: 'utf-8',
+    });
+  } catch (error) {
+    throw new CommandRefusalError('EXTERNAL_API_FAILED', `npm pack failed for package ${actualPackageName}: ${String(error)}`, { cause: error });
+  }
 
   if (!packOutput) {
-    throw new Error(`npm pack failed for package: ${actualPackageName}`);
+    throw new CommandRefusalError('EXTERNAL_API_FAILED', `npm pack failed for package: ${actualPackageName}`);
   }
 
   // npm pack outputs the filename (e.g., "package-1.0.0.tgz")
@@ -144,21 +208,16 @@ export function downloadNpmPackage(packageName: string, tempDir: string): string
   const tarballPath = safePath.join(tempDir, tarballName);
 
   if (!existsSync(tarballPath)) {
-    throw new Error(`npm pack succeeded but tarball not found: ${tarballPath}`);
+    throw new CommandRefusalError('EXTERNAL_API_FAILED', `npm pack succeeded but tarball not found: ${tarballPath}`);
   }
 
-  // Extract tarball using tar npm package (cross-platform)
-  // Creates package/ subdirectory
-  tar.extract({
-    file: tarballPath,
-    cwd: tempDir,
-    sync: true,
-  });
+  // Creates package/ subdirectory; an entry that cannot be extracted refuses, never installs without it
+  extractTarballSync(tarballPath, tempDir);
 
   const packageDir = safePath.join(tempDir, 'package');
 
   if (!existsSync(packageDir)) {
-    throw new Error(`npm tarball extracted but package/ directory not found`);
+    throw new CommandRefusalError('EXTERNAL_API_FAILED', 'npm tarball extracted but package/ directory not found');
   }
 
   return packageDir;
@@ -213,16 +272,4 @@ export function isGlobalNpmInstall(): boolean {
   const isInstallCommand = getEnvCI('npm_command') === 'install';
 
   return isGlobal && isPostinstall && isInstallCommand;
-}
-
-/**
- * Write the common YAML header for skill command output
- * Eliminates duplication between install and uninstall output functions
- */
-export function writeYamlHeader(dryRun?: boolean): void {
-  process.stdout.write('---\n');
-  process.stdout.write(`status: success\n`);
-  if (dryRun) {
-    process.stdout.write(`dryRun: true\n`);
-  }
 }

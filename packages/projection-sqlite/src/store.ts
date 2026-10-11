@@ -111,12 +111,13 @@ import {
   type ProjectionColumnType,
   type ProjectionStore,
   allDerivedSpecs,
+  PROJECTION_STATEMENT_REFUSED_CODE,
   projectionColumnTypes,
   projectionShapeDigest,
   quoteIdentifier,
   vatCacheNamespaceRoot,
 } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { promised, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils/fs';
 
 import {
@@ -342,7 +343,7 @@ const DIGIT = /\d/;
  * reported rather than counted, because positional values cannot reach it on
  * every Node this package supports: a `:x`, `@x` or `$x` name never binds
  * positionally, and `?NNN` does not either on the declared floor — measured,
- * Node 22.13.0 and 22.14.0 throw `column index out of range` for
+ * Node 22.13.0, 22.14.0 and 22.16.0 throw `column index out of range` for
  * `SELECT ?1 AS x` with one value, while 22.22.3 and 24.x bind it. A form that
  * works on one supported runtime and throws an unrelated error on another is
  * refused on all of them, with a message that names the form.
@@ -435,7 +436,8 @@ function indexPastRun(sql: string, from: number, pattern: RegExp): number {
 function assertParametersBound(sql: string, parameters: readonly SqliteValue[]): void {
   const { slots, unreachable } = countBoundParameters(sql);
   if (unreachable !== undefined) {
-    throw new Error(
+    throw new VatError(
+      PROJECTION_STATEMENT_REFUSED_CODE,
       `This statement has a named or numbered parameter (\`${unreachable}\`), and this surface binds`
       + ' values positionally into bare `?` slots only — write `?` instead, once per value.',
     );
@@ -447,7 +449,8 @@ function assertParametersBound(sql: string, parameters: readonly SqliteValue[]):
     ? 'SQLite binds a missing value as NULL, so an under-bound statement compares against nothing'
       + ' and reports that it succeeded'
     : 'there is no placeholder for the extra value';
-  throw new Error(
+  throw new VatError(
+    PROJECTION_STATEMENT_REFUSED_CODE,
     `This statement has ${placeholders} and ${values}; ${consequence}. Bind exactly one value per placeholder.`,
   );
 }
@@ -753,10 +756,31 @@ export interface SqlQueryableStore extends ProjectionStore {
    * @throws If the statement is not a query (`SELECT`, `WITH` or `VALUES`), if
    *   it is not read-only, if it is more than one statement, if its
    *   placeholders and `parameters` do not pair off exactly, if it names a
-   *   parameter (`:x`) positional values cannot reach, or if SQLite rejects it
-   *   — an unknown column included
+   *   parameter (`:x`) positional values cannot reach, if two result columns
+   *   share a name, or if SQLite rejects it — an unknown column included
    */
   query(sql: string, ...parameters: readonly SqliteValue[]): readonly Record<string, unknown>[];
+
+  /**
+   * The result columns one read-only statement would produce, in order —
+   * without running it.
+   *
+   * 🔑 Beside {@link SqlQueryableStore.query} rather than folded into it,
+   * because rows cannot carry this: a statement that selects nothing still has
+   * a shape, and a caller that read its column names off the first row would
+   * publish none for every empty answer. SQLite knows the names at PREPARE
+   * time, so this compiles and never steps — no row is computed.
+   *
+   * @param sql - One `SELECT`, `WITH` or `VALUES` statement
+   * @param parameters - The values {@link SqlQueryableStore.query} would bind, gated the same way
+   * @returns Each result column's name — its alias where the statement gives one
+   * @throws What {@link SqlQueryableStore.query} throws for a statement refused
+   *   by its gates or when it COMPILES — a write, an unknown name, a statement
+   *   with no result column, two columns under one name. ⚠️ Not a refusal SQLite
+   *   raises only when the statement RUNS (`json('{bad')`, a value over the
+   *   length limit): this never steps, so it cannot see one.
+   */
+  columns(sql: string, ...parameters: readonly SqliteValue[]): readonly string[];
 
   /**
    * Write the rows one lens evaluation produced, so SQL can ask about them.
@@ -979,7 +1003,8 @@ function assertSingleStatement(sql: string): void {
   // correct and expected behaviour. A stray LITERAL after the `;` is still
   // refused, because that one really is text the caller meant and SQLite drops.
   if (separator >= 0 && indexPastSpaceAndComments(sql, separator + 1) < sql.length) {
-    throw new Error(
+    throw new VatError(
+      PROJECTION_STATEMENT_REFUSED_CODE,
       'A projection query must be a single statement. SQLite compiles only the first and discards'
       + ' the rest without error, so the trailing text would be ignored rather than run.',
     );
@@ -1019,7 +1044,8 @@ function assertIsQuery(sql: string): void {
 
   const admitted = QUERY_STATEMENT_KEYWORDS.map((word) => `\`${word}\``).join(', ');
   const found = keyword === '' ? 'none of them' : `\`${keyword}\``;
-  throw new Error(
+  throw new VatError(
+    PROJECTION_STATEMENT_REFUSED_CODE,
     `A projection query must be a read-only query, so it has to begin with one of ${admitted}.`
     + ` This one begins with ${found}, and a statement the engine accepts without producing rows`
     + ' cannot be told apart from a check that passed — on this surface, selecting nothing IS'
@@ -1184,8 +1210,10 @@ function createSchema(database: DatabaseSync): void {
  * @returns Whatever `step` returns
  * @throws The kind, single-statement and placeholder-count refusals, or
  *   SQLite's own for a name the schema lacks
+ *
+ * Exported for its unit test only; not on the package barrel.
  */
-function runGated<T>(
+export function runGated<T>(
   database: DatabaseSync,
   sql: string,
   parameters: readonly SqliteValue[],
@@ -1195,12 +1223,120 @@ function runGated<T>(
   assertIsQuery(sql);
   assertParametersBound(sql, parameters);
   database.exec('PRAGMA query_only = 1');
+  let failed = false;
   try {
-    return step(database.prepare(sql));
+    const statement = database.prepare(sql);
+    assertResultColumns(statement);
+    return step(statement);
+  } catch (error) {
+    failed = true;
+    // The engine refusing the CALLER'S statement — a name the schema lacks, a
+    // write `query_only` stopped — is the same claim the gates above make, so it
+    // carries the same code. Anything else — a corrupt file, a lock timeout, a
+    // full disk — is the STORE failing and propagates as it was thrown.
+    if (isStatementRefusal(error)) throw new VatError(PROJECTION_STATEMENT_REFUSED_CODE, error.message, { cause: error });
+    throw error;
   } finally {
+    restoreConnection(database, failed);
+  }
+}
+
+/**
+ * Refuse a compiled statement whose RESULT SHAPE cannot be published, read off
+ * the statement itself — so `query` and `columns` refuse it identically, though
+ * `columns` never steps:
+ *
+ * - **no result column** — the statement is not a query. `WITH x AS (…) INSERT …`
+ *   passes the kind gate on its first keyword and compiles; `query` then meets
+ *   `query_only` when it steps, but `columns` would answer `[]` for a write.
+ * - **two result columns under one name** — a row is keyed by column name, so
+ *   `SELECT 1 AS a, 2 AS a` returns `{ a: 2 }`: one value silently lost, while
+ *   `columns` reports two.
+ *
+ * @param statement - The compiled statement
+ * @throws VatError `PROJECTION_STATEMENT_REFUSED`
+ */
+function assertResultColumns(statement: StatementSync): void {
+  const names = statement.columns().map((column) => column.name);
+  if (names.length === 0) {
+    throw new VatError(PROJECTION_STATEMENT_REFUSED_CODE, 'The statement produces no result column, so it is not a read: only a SELECT, WITH or VALUES that returns rows is admitted.');
+  }
+  const repeated = names.find((name, index) => names.indexOf(name) !== index);
+  if (repeated !== undefined) {
+    throw new VatError(
+      PROJECTION_STATEMENT_REFUSED_CODE,
+      `Two result columns are named "${repeated}". A row is keyed by column name, so one of the two values would be lost — give each column its own alias (AS).`,
+    );
+  }
+}
+
+/**
+ * Put the connection back the way `runGated` found it: writable, with no
+ * foreign schema attached.
+ *
+ * 🔑 After a failed step the ORIGINAL failure wins. A connection the fault left
+ * unusable (closed, corrupt) makes this restore throw too, and a `finally` that
+ * throws replaces the error in flight — so the one thing the caller needed to
+ * see, what actually went wrong, would be lost to a secondary "database is not
+ * open". The secondary failure is dropped; the connection it concerns is
+ * already the subject of the error being thrown. After a SUCCESSFUL step a
+ * restore failure is the only failure, and it propagates.
+ *
+ * @param database - The connection
+ * @param stepFailed - Whether an error is already propagating
+ */
+function restoreConnection(database: DatabaseSync, stepFailed: boolean): void {
+  try {
     database.exec('PRAGMA query_only = 0');
     detachForeignSchemas(database);
+  } catch (restoreError) {
+    if (!stepFailed) throw restoreError;
   }
+}
+
+/**
+ * SQLite's EXTENDED result codes that mean the STATEMENT was refused, matched
+ * exactly:
+ *
+ * - `SQLITE_ERROR` (1) — a name the schema lacks, a syntax error
+ * - `SQLITE_ERROR_MISSING_COLLSEQ` (257) — the statement names a collation that
+ *   does not exist
+ * - `SQLITE_READONLY` (8) — a write `PRAGMA query_only` stopped
+ * - `SQLITE_TOOBIG` (18) — the statement built a string or blob over SQLite's
+ *   length limit (`zeroblob(2147483647)`, a `group_concat` over a large corpus)
+ * - `SQLITE_RANGE` (25) — a bind index out of range
+ *
+ * `SQLITE_MISMATCH` (20) is deliberately absent: only a write raises it (a
+ * non-integer rowid), and `query_only` refuses every write first, as 8.
+ *
+ * 🚨 Never masked to the primary code. `& 0xff` folds whole families in, and
+ * the READONLY family is mostly the ENVIRONMENT: `READONLY_RECOVERY`,
+ * `CANTLOCK`, `ROLLBACK`, `DBMOVED`, `CANTINIT` and `DIRECTORY` are a store
+ * whose directory or file went read-only — which a WAL-mode SELECT can meet.
+ * `ERROR_RETRY` (513) and `ERROR_SNAPSHOT` (769) are not the statement's
+ * fault either.
+ */
+const STATEMENT_REFUSAL_RESULT_CODES: ReadonlySet<number> = new Set([1, 8, 18, 25, 257]);
+
+/**
+ * Whether `error` is SQLite refusing the caller's statement, as opposed to the
+ * store itself failing.
+ *
+ * 🚨 `node:sqlite` reports EVERY SQLite failure under one `code`,
+ * `ERR_SQLITE_ERROR` — `SQLITE_BUSY`, `SQLITE_IOERR`, `SQLITE_CORRUPT`,
+ * `SQLITE_NOTADB`, `SQLITE_FULL` and `SQLITE_NOMEM` included. Keying on that
+ * `code` published a corrupt database as "your statement is wrong". The
+ * EXTENDED result code in `errcode`, matched exactly against
+ * {@link STATEMENT_REFUSAL_RESULT_CODES}, is what says which failure this is.
+ *
+ * Exported for its unit test only; not on the package barrel.
+ */
+export function isStatementRefusal(error: unknown): error is Error {
+  if (!(error instanceof Error)) return false;
+  const { code, errcode } = error as Error & { code?: unknown; errcode?: unknown };
+  return code === 'ERR_SQLITE_ERROR'
+    && typeof errcode === 'number'
+    && STATEMENT_REFUSAL_RESULT_CODES.has(errcode);
 }
 
 /** The {@link ProjectionCompileProbe} contract over one in-memory connection. */
@@ -1223,13 +1359,15 @@ class SqliteCompileProbe implements ProjectionCompileProbe {
   }
 
   /** @inheritdoc */
-  async close(): Promise<void> {
-    // Nothing reads this database after the preflight, so there is no
-    // transaction or statement cache to settle first.
-    if (!this.#closed) {
-      this.#closed = true;
-      this.#database.close();
-    }
+  close(): Promise<void> {
+    return promised(() => {
+      // Nothing reads this database after the preflight, so there is no
+      // transaction or statement cache to settle first.
+      if (!this.#closed) {
+        this.#closed = true;
+        this.#database.close();
+      }
+    });
   }
 }
 
@@ -1368,27 +1506,29 @@ class SqliteProjectionStore implements SqlQueryableStore {
    * over another root that holds the same bytes without reaching them must not
    * delete the facts this one derived.
    */
-  async writeBlobFacts(rows: BlobScopedRows): Promise<void> {
-    this.#assertOpen();
-    const bundle = rows as unknown as Record<string, readonly Record<string, unknown>[]>;
-    const contentKeys = uniqueContentKeys(bundle);
-    if (contentKeys.length === 0) return;
+  writeBlobFacts(rows: BlobScopedRows): Promise<void> {
+    return promised(() => {
+      this.#assertOpen();
+      const bundle = rows as unknown as Record<string, readonly Record<string, unknown>[]>;
+      const contentKeys = uniqueContentKeys(bundle);
+      if (contentKeys.length === 0) return;
 
-    let evicted = 0;
-    this.#transaction(() => {
-      this.#clearSpaceForBlobs(bundle, contentKeys);
-      this.#insertBundle(bundle, 'blob', []);
-      // AFTER the rows, and BEFORE the eviction, for the reason `writeExtent`
-      // records its manifest row before evicting: a key not yet in the ordering
-      // is a key the window cannot see, so a small retention would drop the very
-      // keys this write just inserted.
-      const writtenAt = new Date().toISOString();
-      for (const key of contentKeys) this.#recordBlobKey.run(key, writtenAt);
-      evicted = this.#evictBlobKeysPastRetention(contentKeys.length);
+      let evicted = 0;
+      this.#transaction(() => {
+        this.#clearSpaceForBlobs(bundle, contentKeys);
+        this.#insertBundle(bundle, 'blob', []);
+        // AFTER the rows, and BEFORE the eviction, for the reason `writeExtent`
+        // records its manifest row before evicting: a key not yet in the ordering
+        // is a key the window cannot see, so a small retention would drop the very
+        // keys this write just inserted.
+        const writtenAt = new Date().toISOString();
+        for (const key of contentKeys) this.#recordBlobKey.run(key, writtenAt);
+        evicted = this.#evictBlobKeysPastRetention(contentKeys.length);
+      });
+      // Outside the transaction, because SQLite refuses `incremental_vacuum`
+      // inside one — the same arrangement, and the same reason, as `writeExtent`.
+      if (evicted > 0) this.#database.exec('PRAGMA incremental_vacuum');
     });
-    // Outside the transaction, because SQLite refuses `incremental_vacuum`
-    // inside one — the same arrangement, and the same reason, as `writeExtent`.
-    if (evicted > 0) this.#database.exec('PRAGMA incremental_vacuum');
   }
 
   /**
@@ -1459,48 +1599,52 @@ class SqliteProjectionStore implements SqlQueryableStore {
   }
 
   /** @inheritdoc */
-  async readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
-    this.#assertOpen();
-    return this.#readTransaction(() => {
-      const result: Record<string, unknown[]> = {};
-      for (const { spec } of this.#plansOfScope('blob')) {
-        result[spec.key] = [];
-      }
-      for (const batch of batched([...new Set(contentKeys)])) {
-        for (const plan of this.#plansOfScope('blob')) {
-          const raw = this.#blobStatement('select', plan.spec, batch.length).all(...batch);
-          result[plan.spec.key]?.push(...decodeRows(plan, raw));
+  readBlobFacts(contentKeys: readonly string[]): Promise<BlobScopedRows> {
+    return promised(() => {
+      this.#assertOpen();
+      return this.#readTransaction(() => {
+        const result: Record<string, unknown[]> = {};
+        for (const { spec } of this.#plansOfScope('blob')) {
+          result[spec.key] = [];
         }
-      }
-      return result as unknown as BlobScopedRows;
+        for (const batch of batched([...new Set(contentKeys)])) {
+          for (const plan of this.#plansOfScope('blob')) {
+            const raw = this.#blobStatement('select', plan.spec, batch.length).all(...batch);
+            result[plan.spec.key]?.push(...decodeRows(plan, raw));
+          }
+        }
+        return result as unknown as BlobScopedRows;
+      });
     });
   }
 
   /** @inheritdoc */
-  async writeExtent(key: ExtentKey, rows: ExtentScopedRows): Promise<void> {
-    this.#assertOpen();
-    const bundle = rows as unknown as Record<string, readonly Record<string, unknown>[]>;
-    const keyValues = [key.rootId, key.treeHash];
-    const contexts = contextsNamedBy(bundle, this.#plansOfScope('extent'));
-    let evicted = 0;
-    this.#transaction(() => {
-      for (const plan of this.#plansOfScope('extent')) {
-        this.#clearSpaceFor(plan, bundle, keyValues, contexts);
-      }
-      this.#insertBundle(bundle, 'extent', keyValues);
-      // Recorded on every write, including one that names no context at all:
-      // the manifest row is the only thing separating "written and empty" from
-      // "never written", and an additive write is still a write.
-      this.#recordExtent.run(key.rootId, key.treeHash, new Date().toISOString());
-      // AFTER the manifest row, inside the same transaction. Before it, this
-      // write's own tree would not yet be in the ordering and a retention of one
-      // would evict the newest tree the store had — the one it is replacing.
-      evicted = this.#evictPastRetention(key.rootId) + this.#evictRootsPastRetention();
+  writeExtent(key: ExtentKey, rows: ExtentScopedRows): Promise<void> {
+    return promised(() => {
+      this.#assertOpen();
+      const bundle = rows as unknown as Record<string, readonly Record<string, unknown>[]>;
+      const keyValues = [key.rootId, key.treeHash];
+      const contexts = contextsNamedBy(bundle, this.#plansOfScope('extent'));
+      let evicted = 0;
+      this.#transaction(() => {
+        for (const plan of this.#plansOfScope('extent')) {
+          this.#clearSpaceFor(plan, bundle, keyValues, contexts);
+        }
+        this.#insertBundle(bundle, 'extent', keyValues);
+        // Recorded on every write, including one that names no context at all:
+        // the manifest row is the only thing separating "written and empty" from
+        // "never written", and an additive write is still a write.
+        this.#recordExtent.run(key.rootId, key.treeHash, new Date().toISOString());
+        // AFTER the manifest row, inside the same transaction. Before it, this
+        // write's own tree would not yet be in the ordering and a retention of one
+        // would evict the newest tree the store had — the one it is replacing.
+        evicted = this.#evictPastRetention(key.rootId) + this.#evictRootsPastRetention();
+      });
+      // Outside the transaction, because SQLite refuses `incremental_vacuum`
+      // inside one, and only when something was actually freed — an ordinary
+      // steady-state write evicts nothing and must pay nothing.
+      if (evicted > 0) this.#database.exec('PRAGMA incremental_vacuum');
     });
-    // Outside the transaction, because SQLite refuses `incremental_vacuum`
-    // inside one, and only when something was actually freed — an ordinary
-    // steady-state write evicts nothing and must pay nothing.
-    if (evicted > 0) this.#database.exec('PRAGMA incremental_vacuum');
   }
 
   /**
@@ -1519,31 +1663,33 @@ class SqliteProjectionStore implements SqlQueryableStore {
    * instance fix the review keeps finding. See {@link SqliteProjectionStore.
    * #mayWriteDerived}.
    */
-  async writeDerived(rows: DerivedRows): Promise<void> {
-    this.#assertOpen();
-    if (!this.#mayWriteDerived) {
-      throw new Error(
-        'This store has no derived relations, so a lens evaluation cannot be written to it.'
-        + ' They exist only on the per-run in-memory store from `openEphemeralProjectionStore()`.'
-        + ' The file-backed store is ONE database per VAT release, shared by every root on the'
-        + " machine — a lens's rows are a function of the lens as well as the bytes, and a question"
-        + " asked once, so persisting them there would answer one lens's question with another"
-        + " lens's rows, across repositories. Populate from the file-backed store, then query the"
-        + ' in-memory one.',
-      );
-    }
-    const bundle = rows as Record<string, readonly Record<string, unknown>[] | undefined>;
-    const knownBefore = new Set(this.#derivedPlans.keys());
-    try {
-      this.#writeDerivedRows(bundle);
-    } catch (error) {
-      // The rollback removed every table this write created; forget their plans
-      // too, or the next write would skip the `CREATE` and fail `no such table`.
-      for (const key of this.#derivedPlans.keys()) {
-        if (!knownBefore.has(key)) this.#derivedPlans.delete(key);
+  writeDerived(rows: DerivedRows): Promise<void> {
+    return promised(() => {
+      this.#assertOpen();
+      if (!this.#mayWriteDerived) {
+        throw new Error(
+          'This store has no derived relations, so a lens evaluation cannot be written to it.'
+          + ' They exist only on the per-run in-memory store from `openEphemeralProjectionStore()`.'
+          + ' The file-backed store is ONE database per VAT release, shared by every root on the'
+          + " machine — a lens's rows are a function of the lens as well as the bytes, and a question"
+          + " asked once, so persisting them there would answer one lens's question with another"
+          + " lens's rows, across repositories. Populate from the file-backed store, then query the"
+          + ' in-memory one.',
+        );
       }
-      throw error;
-    }
+      const bundle = rows as Record<string, readonly Record<string, unknown>[] | undefined>;
+      const knownBefore = new Set(this.#derivedPlans.keys());
+      try {
+        this.#writeDerivedRows(bundle);
+      } catch (error) {
+        // The rollback removed every table this write created; forget their plans
+        // too, or the next write would skip the `CREATE` and fail `no such table`.
+        for (const key of this.#derivedPlans.keys()) {
+          if (!knownBefore.has(key)) this.#derivedPlans.delete(key);
+        }
+        throw error;
+      }
+    });
   }
 
   /**
@@ -1596,22 +1742,24 @@ class SqliteProjectionStore implements SqlQueryableStore {
   }
 
   /** @inheritdoc */
-  async readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
-    this.#assertOpen();
-    return this.#readTransaction(() => {
-      // An extent that was written but holds nothing is a hit with empty tables;
-      // one that was never written is a miss. The manifest row is what tells
-      // them apart, since both produce zero rows from every table — and it is
-      // read inside the same snapshot as the tables, so a hit cannot be
-      // followed by rows from a different write.
-      if (this.#extentPresent.get(key.rootId, key.treeHash) === undefined) return undefined;
+  readExtent(key: ExtentKey): Promise<ExtentScopedRows | undefined> {
+    return promised(() => {
+      this.#assertOpen();
+      return this.#readTransaction(() => {
+        // An extent that was written but holds nothing is a hit with empty tables;
+        // one that was never written is a miss. The manifest row is what tells
+        // them apart, since both produce zero rows from every table — and it is
+        // read inside the same snapshot as the tables, so a hit cannot be
+        // followed by rows from a different write.
+        if (this.#extentPresent.get(key.rootId, key.treeHash) === undefined) return undefined;
 
-      const result: Record<string, unknown[]> = {};
-      for (const plan of this.#plansOfScope('extent')) {
-        const raw = plan.selectExtent?.all(key.rootId, key.treeHash) ?? [];
-        result[plan.spec.key] = [...decodeRows(plan, raw)];
-      }
-      return result as unknown as ExtentScopedRows;
+        const result: Record<string, unknown[]> = {};
+        for (const plan of this.#plansOfScope('extent')) {
+          const raw = plan.selectExtent?.all(key.rootId, key.treeHash) ?? [];
+          result[plan.spec.key] = [...decodeRows(plan, raw)];
+        }
+        return result as unknown as ExtentScopedRows;
+      });
     });
   }
 
@@ -1667,10 +1815,22 @@ class SqliteProjectionStore implements SqlQueryableStore {
   }
 
   /** @inheritdoc */
-  async close(): Promise<void> {
-    if (this.#closed) return;
-    this.#closed = true;
-    this.#database.close();
+  columns(sql: string, ...parameters: readonly SqliteValue[]): readonly string[] {
+    this.#assertOpen();
+    // Through the same gates as `query`, and then prepared but never stepped.
+    // `StatementSync.columns()` is why the engines floor is 22.16.0, not 22.13.0:
+    // Node added it in 22.16.0 (see the package header for the rejected
+    // alternative).
+    return runGated(this.#database, sql, parameters, (statement) => statement.columns().map((column) => column.name));
+  }
+
+  /** @inheritdoc */
+  close(): Promise<void> {
+    return promised(() => {
+      if (this.#closed) return;
+      this.#closed = true;
+      this.#database.close();
+    });
   }
 
   /**

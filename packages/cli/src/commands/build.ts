@@ -11,38 +11,41 @@ import { readdir } from 'node:fs/promises';
 
 import { checkBrokenPackagedLinks } from '@vibe-agent-toolkit/agent-skills';
 import {
-  calculateValidationStatus,
-  countBySeverity,
+  buildReport,
   ExitCode,
+  exitCodeForReport,
+  toFindings,
+  type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowing, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, everyInOrder, findConfigFile, mapConcurrentFailingInOrder, mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
-import { handleCommandError } from '../utils/command-error.js';
+import { marksOperandRefusalByHand } from '../command-tree.js';
 import { loadConfig } from '../utils/config-loader.js';
-import { sumSeverityCounts } from '../utils/issue-rendering.js';
-import { writeYamlOutput } from '../utils/output.js';
+import { endWithReport } from '../utils/document-writer.js';
+import { formatIssueLines } from '../utils/issue-rendering.js';
 import { requireProjectRoot } from '../utils/project-root-policy.js';
 
-import { runClaudePluginBuildPhase } from './claude/plugin/build.js';
+import { PLUGIN_BUILD_REPORT_SCHEMA } from './claude/plugin/build-schema.js';
+import { pluginBuildOutput, runClaudePluginBuildPhase } from './claude/plugin/build.js';
 import {
-  aggregatePhaseIssueCounts,
-  aggregatePhaseStatus,
   applyPhaseSelection,
   createPhaseContext,
+  DATALESS_PHASE_REPORT_SCHEMA,
   decidePhaseSelection,
-  exitCodeForPhases,
+  orchestrate,
+  ORCHESTRATOR_FORMAT,
+  ORCHESTRATOR_GATE,
   runPhase,
-  SYSTEM_ERROR,
-  worseOf,
   type Phase,
   type PhaseResult,
   type PhaseSelection,
   type PhaseVocabulary,
 } from './phase-utils.js';
 import { rejectPositionalArguments } from './positional-args.js';
-import { runSkillsBuildPhase } from './skills/build.js';
+import { SKILLS_BUILD_REPORT_SCHEMA } from './skills/build-schema.js';
+import { distSkillsDir, runSkillsBuildPhase } from './skills/build.js';
 
 export interface BuildCommandOptions {
   only?: string;
@@ -51,7 +54,8 @@ export interface BuildCommandOptions {
 }
 
 export function createBuildTopLevelCommand(): Command {
-  const command = new Command('build');
+  // Refuses operands in its action, with a better message than commander's.
+  const command = marksOperandRefusalByHand(new Command('build'));
 
   command
     .description('Build all project artifacts in dependency order (skills → claude plugin tree)')
@@ -74,39 +78,36 @@ Description:
     skills  → builds dist/skills/ from vibe-agent-toolkit.config.yaml (platform-agnostic)
     claude  → builds dist/.claude/plugins/ from dist/skills/ + config (skipped if no claude config)
 
-  '--only claude' in a project with no claude.marketplaces config fails with
-  exit 1: the phase is recognized, it is simply not configured.
+  '--only claude' in a project with no claude.marketplaces config is refused
+  (USAGE_INVALID, exit 2): the phase is recognized, it is simply not configured.
 
   publish: false (skills.defaults or skills.config.<name>) marks an IN-PLACE
   skill: validated at source, never bundled into dist/skills/, never expected
   by 'vat verify'. Plugin-local skills (git-tracked, outermost skill dirs
   under a plugin's skills/) ship with their plugin regardless.
 
-  A phase that ERRORS stops the run: later phases do not execute. So a skills
-  phase that exits 1 (e.g. on FILENAME_COLLISION) leaves dist/skills/ written
-  but NO dist/.claude/ at all — a per-skill finding is reported rather than
-  thrown, but the phase's non-zero exit still gates the marketplace artifact
-  behind a skill tree that built cleanly. Use '--only claude' to rebuild just
-  the marketplace from an existing dist/skills/. Warnings never stop a run.
+  A phase whose report would exit non-zero — an error finding, or a phase that
+  did not finish — stops the run: later phases do not execute. So a skills
+  phase with an error (e.g. FILENAME_COLLISION) leaves dist/skills/ written but
+  NO dist/.claude/ at all. Use '--only claude' to rebuild just the marketplace
+  from an existing dist/skills/. Warnings never stop a run. After the claude
+  phase, 'shipped-links' checks every skill in the built plugin tree for a
+  broken relative link.
 
 Output:
-  ONE YAML document → stdout
-    status (success | warning | error | system-error) plus issueCounts
-    {errors, warnings, info} summed across EVERY phase and the shipped-plugin-
-    tree link check, and the findings themselves when there are any — a
-    warning-only build reports 'warning' with counts, not a bare 'success'.
-    The total reconciles against the phases printed beneath it; a header that
-    counted only the link check reported {0,0,0} over children that had just
-    reported 12 warnings. Each phase's own report is captured and nested under
-    'report' rather than streamed through.
+  ONE report envelope (YAML) → stdout: status (ok | findings | error),
+  examined (the sum over every phase), summary {errors, warnings, info},
+  findings (every phase's, flat), and data.phases — one entry per phase that
+  ran, with its own status, examined, summary, error (when it did not finish)
+  and the phase's own data. Schema: packages/cli/schemas/orchestrator.json.
   Build progress → stderr (streamed live)
 
 Exit Codes:
-  0 - All phases completed successfully (warnings do not fail a build)
-  1 - Build error, or '--only' named a phase that is unrecognized or unconfigured
-  2 - System error (this command's own, a usage error such as a positional
-      argument, or propagated from a phase that could not run: it exited 2, or
-      reported 'system-error' for itself)
+  0 - Every phase finished and no finding is an error (warnings never fail)
+  1 - An error finding, or nothing was examined at all (RESOURCE_CHECK_BROKEN)
+  2 - The run could not do its job: a phase did not finish (RUN_INCOMPLETE,
+      the finished phases still in data.phases), '--only' naming an unknown or
+      unconfigured phase, a path argument (USAGE_INVALID), no project root
 
 Requirements:
   projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
@@ -149,65 +150,84 @@ async function collectShippedSkillDirs(marketplacesDir: string): Promise<string[
     return skillDirs;
   }
 
+  // Read-only. Only the leaf level fans out (bounded); nesting the bound would
+  // multiply it, so the outer levels walk in listing order.
   const marketplaceEntries = await readdir(marketplacesDir, { withFileTypes: true });
-  for (const marketplaceEntry of marketplaceEntries) {
-    if ((await direntKindFollowing(marketplacesDir, marketplaceEntry)) !== 'directory') continue;
+  const perMarketplace = await mapInOrder(marketplaceEntries, async (marketplaceEntry) => {
+    if ((await direntKindFollowing(marketplacesDir, marketplaceEntry)) !== 'directory') return [];
     const pluginsDir = safePath.join(marketplacesDir, marketplaceEntry.name, 'plugins');
-    if (!existsSync(pluginsDir)) continue;
-    skillDirs.push(...await collectPluginSkillDirs(pluginsDir));
-  }
+    if (!existsSync(pluginsDir)) return [];
+    return collectPluginSkillDirs(pluginsDir);
+  });
+  skillDirs.push(...perMarketplace.flat());
 
   return skillDirs;
 }
 
 async function collectPluginSkillDirs(pluginsDir: string): Promise<string[]> {
-  const skillDirs: string[] = [];
   const pluginEntries = await readdir(pluginsDir, { withFileTypes: true });
-  for (const pluginEntry of pluginEntries) {
-    if ((await direntKindFollowing(pluginsDir, pluginEntry)) !== 'directory') continue;
+  const perPlugin = await mapInOrder(pluginEntries, async (pluginEntry) => {
+    if ((await direntKindFollowing(pluginsDir, pluginEntry)) !== 'directory') return [];
     const skillsDir = safePath.join(pluginsDir, pluginEntry.name, 'skills');
-    if (!existsSync(skillsDir)) continue;
-    skillDirs.push(...await collectSkillsInDir(skillsDir));
-  }
-
-  return skillDirs;
+    if (!existsSync(skillsDir)) return [];
+    return collectSkillsInDir(skillsDir);
+  });
+  return perPlugin.flat();
 }
 
 async function collectSkillsInDir(skillsDir: string): Promise<string[]> {
-  const skillDirs: string[] = [];
   const skillEntries = await readdir(skillsDir, { withFileTypes: true });
-  for (const skillEntry of skillEntries) {
+  const perSkill = await mapConcurrentFailingInOrder(skillEntries, async (skillEntry) => {
     // Followed: a symlinked skill directory (a dev install) ships like any other.
-    if ((await direntKindFollowing(skillsDir, skillEntry)) !== 'directory') continue;
+    if ((await direntKindFollowing(skillsDir, skillEntry)) !== 'directory') return [];
     const skillDir = safePath.join(skillsDir, skillEntry.name);
-    if (existsSync(safePath.join(skillDir, 'SKILL.md'))) {
-      skillDirs.push(skillDir);
-    }
-  }
-
-  return skillDirs;
+    return existsSync(safePath.join(skillDir, 'SKILL.md')) ? [skillDir] : [];
+  });
+  return perSkill.flat();
 }
 
-// Run the depth-free packaged-link check (checkBrokenPackagedLinks) against
-// every shipped skill dir inside the built plugin tree(s) at
-// <cwd>/dist/.claude/plugins/marketplaces/. Scoped per skill dir — the skill
-// directory IS the validation boundary. VAT's stance is that a skill is a
-// self-contained, portable unit (it may be mounted standalone — claude.ai
-// upload, API container — where sibling skills do not exist), so a link that
-// escapes the skill's own directory (e.g. `../other-skill/references/foo.md`)
-// is a broken shipped link even when that sibling happens to co-ship in the
-// same plugin. The only correct way for a skill to use another skill's file
-// is to bundle its own copy in and link it as `./foo.md`. This matches how
-// the pool packager already scopes the same check on dist/skills/<name>/.
-export async function validateShippedPluginSkillLinks(cwd: string): Promise<ValidationIssue[]> {
+/** The phase `vat build` runs after `claude`: the shipped plugin tree's links. */
+const SHIPPED_LINKS = 'shipped-links';
+
+/**
+ * Run the depth-free packaged-link check (checkBrokenPackagedLinks) against
+ * every shipped skill dir inside the built plugin tree(s) at
+ * <cwd>/dist/.claude/plugins/marketplaces/, as a report over the skill dirs it
+ * inspected. Each finding's `location` is relative to its skill dir.
+ *
+ * Scoped per skill dir — the skill directory IS the validation boundary. VAT's
+ * stance is that a skill is a self-contained, portable unit (it may be mounted
+ * standalone — claude.ai upload, API container — where sibling skills do not
+ * exist), so a link that escapes the skill's own directory (e.g.
+ * `../other-skill/references/foo.md`) is a broken shipped link even when that
+ * sibling happens to co-ship in the same plugin. The only correct way for a
+ * skill to use another skill's file is to bundle its own copy in and link it as
+ * `./foo.md`. This matches how the pool packager already scopes the same check
+ * on dist/skills/<name>/.
+ */
+export async function checkShippedPluginSkillLinks(cwd: string): Promise<Report<null>> {
   const marketplacesDir = safePath.join(cwd, 'dist', '.claude', 'plugins', 'marketplaces');
   const skillDirs = await collectShippedSkillDirs(marketplacesDir);
 
-  const issues: ValidationIssue[] = [];
-  for (const skillDir of skillDirs) {
-    issues.push(...await checkBrokenPackagedLinks(skillDir));
-  }
-  return issues;
+  // One skill at a time: each check already reads its files with bounded
+  // concurrency, and an outer fan-out would multiply that bound.
+  const perSkill = await mapInOrder(skillDirs, (skillDir) => checkBrokenPackagedLinks(skillDir));
+  const issues: ValidationIssue[] = perSkill.flat();
+  return buildReport({ examined: skillDirs.length, findings: toFindings(issues), data: null, gate: ORCHESTRATOR_GATE });
+}
+
+/**
+ * The `shipped-links` phase over `cwd`'s built plugin tree — run through
+ * `runPhase` like every other, so a throw from the crawl is THIS phase's
+ * refusal with the finished phases still published, and its report is held to
+ * its schema.
+ */
+function shippedLinksPhase(cwd: string): Phase {
+  return {
+    name: SHIPPED_LINKS,
+    schema: DATALESS_PHASE_REPORT_SCHEMA,
+    run: async () => ({ report: await checkShippedPluginSkillLinks(cwd) }),
+  };
 }
 
 /** Phases `vat build` knows how to run, in dependency order. */
@@ -239,152 +259,80 @@ export function selectBuildPhases(
   // A flag not forwarded here is a flag the composite command silently cannot
   // express: `vat build` would always get the collapsed report with no way to
   // ask for the full one.
-  if (!only || only === 'skills') {
-    phases.push({ name: 'skills', run: () => runSkillsBuildPhase(undefined, { verbose }) });
+  const buildsSkills = !only || only === 'skills';
+  const buildsClaude = (!only || only === 'claude') && hasClaudeMarketplaces;
+  if (buildsSkills) {
+    // What the run writes after this phase: the marketplaces the claude phase replaces — under the
+    // directory holding the config the claude phase loads (it finds it the same way), not the cwd.
+    const configPath = findConfigFile(process.cwd());
+    const runOutputs = buildsClaude ? [pluginBuildOutput(configPath === null ? process.cwd() : safePath.resolve(configPath, '..'))] : [];
+    phases.push({ name: 'skills', schema: SKILLS_BUILD_REPORT_SCHEMA, run: () => runSkillsBuildPhase(undefined, { verbose }, runOutputs) });
   }
 
-  if ((!only || only === 'claude') && hasClaudeMarketplaces) {
-    phases.push({ name: 'claude', run: () => runClaudePluginBuildPhase({ verbose }) });
+  if (buildsClaude) {
+    // What this run wrote before the claude phase reads it: the skills phase's `dist/skills`, so a
+    // fault there is the run's own output (`destination`), not an input another build wrote.
+    const runOutputs = buildsSkills ? [distSkillsDir(process.cwd())] : [];
+    phases.push({ name: 'claude', schema: PLUGIN_BUILD_REPORT_SCHEMA, run: () => runClaudePluginBuildPhase({ verbose }, runOutputs) });
   }
 
   return decidePhaseSelection(only, phases, BUILD_VOCABULARY);
 }
 
+/** Whether a phase's report stops the build: it would end the run on a non-zero exit. */
+function stopsTheBuild(result: PhaseResult): boolean {
+  return exitCodeForReport(result.report) !== ExitCode.OK;
+}
+
+/** Test seam: which phase report stops the build. */
+export const __internal = { stopsTheBuild };
+
 async function buildTopLevelCommand(
   options: BuildCommandOptions,
   command: Command,
 ): Promise<void> {
-  // First, and before requireProjectRoot: `vat build dist/skills/demo` used to be
-  // accepted, have its path discarded, and build the WHOLE project — the same
-  // silent-rescope defect fixed on `vat verify` / `vat validate`, and worse here
-  // because this one writes.
-  rejectPositionalArguments(
-    command.args,
-    'vat build',
-    'builds every artifact vibe-agent-toolkit.config.yaml declares, in dependency order',
-  );
-
   const cwd = process.cwd();
-  const { logger, startTime } = createPhaseContext(options.debug);
+  const { logger } = createPhaseContext(options.debug);
 
-  try {
-    // Inside the try, deliberately: this used to throw from outside it, so an
-    // unroutable `--only` produced a raw stack trace and zero bytes of stdout —
-    // and "no project here" exited 1, which the contract reads as FINDINGS.
+  const report = await orchestrate(async (results) => {
+    // First, and before requireProjectRoot: `vat build dist/skills/demo` used to be
+    // accepted, have its path discarded, and build the WHOLE project.
+    rejectPositionalArguments(
+      command.args,
+      'vat build',
+      'builds every artifact vibe-agent-toolkit.config.yaml declares, in dependency order',
+    );
     // Spec §7: `vat build` requires a projectRoot.
     requireProjectRoot(cwd, 'vat build');
     const phases = applyPhaseSelection(
       selectBuildPhases(options.only, hasClaudeMarketplacesConfig(cwd), options.verbose === true),
       logger,
-      startTime,
     );
 
     logger.info(`🔨 vat build (phases: ${phases.map((p) => p.name).join(' → ')})`);
 
-    const phaseResults: PhaseResult[] = [];
-    // Shipped-link findings survive the loop so the final payload can publish
-    // their distribution. They used to be filtered to errors and the rest
-    // dropped on the floor: a build that emitted warnings said `success` with
-    // nothing beside it.
-    let shippedLinkIssues: ValidationIssue[] = [];
-
-    for (const phase of phases) {
+    // In order, deliberately, and here it is a DEPENDENCY rather than a
+    // presentation choice: `claude` packages what `skills` just wrote into dist/,
+    // so overlapping the two would read a half-built tree.
+    const completed = await everyInOrder(phases, async (phase) => {
       logger.info(`\n▶ Phase: ${phase.name}`);
-      // Awaited in the loop, deliberately, and here it is a DEPENDENCY rather
-      // than a presentation choice: `claude` packages what `skills` just wrote
-      // into dist/, so overlapping the two would read a half-built tree.
       const result = await runPhase(phase);
-      phaseResults.push(result);
-
-      // Only a real failure stops the build. A `warning` phase must NOT abort:
-      // warnings are non-blocking everywhere else in VAT, and phase status only
-      // became able to say `warning` when it started being read from the child's
-      // report instead of its exit code — so treating "not success" as fatal
-      // silently turned every warning into a halt. It halted *and* claimed
-      // "Phase 'skills' failed with exit code 0" while exiting 0, so a caller
-      // checking the exit code saw a pass with the later phases never run.
-      if (result.status === 'error' || result.status === SYSTEM_ERROR) {
-        const duration = Date.now() - startTime;
-        // `error` vs `system-error` is the difference between "the build failed"
-        // and "the build never ran" — exit 1 vs the documented exit 2.
-        writeYamlOutput({
-          status: result.status,
-          error: result.error ?? `Phase '${phase.name}' failed with exit code ${result.exitCode ?? 'unknown'}`,
-          phase: phase.name,
-          phases: phaseResults,
-          // The failing phase's OWN counts are the point of this document — a
-          // header of `{0, 0, 0}` on the abort path told a reader the build had
-          // nothing to act on, on the one path where it certainly did.
-          issueCounts: sumSeverityCounts([
-            aggregatePhaseIssueCounts(phaseResults),
-            countBySeverity(shippedLinkIssues),
-          ]),
-          duration: `${duration}ms`,
-        });
-        process.exit(exitCodeForPhases(phaseResults));
-      }
+      results.push(result);
+      // Only a report that would fail the run stops it: a warning never does.
+      if (stopsTheBuild(result)) return false;
 
       if (phase.name === 'claude') {
-        shippedLinkIssues = await validateShippedPluginSkillLinks(cwd);
-        const issueCounts = countBySeverity(shippedLinkIssues);
-        if (issueCounts.errors > 0) {
-          const duration = Date.now() - startTime;
-          writeYamlOutput({
-            status: 'error',
-            error: `Shipped plugin skill tree has ${issueCounts.errors} broken link(s)`,
-            phase: phase.name,
-            issueCounts,
-            issues: shippedLinkIssues,
-            duration: `${duration}ms`,
-          });
-          process.exit(ExitCode.FINDINGS);
+        const shipped = await runPhase(shippedLinksPhase(cwd));
+        results.push(shipped);
+        for (const finding of shipped.report.findings) {
+          for (const line of formatIssueLines(finding, '  ')) logger.error(line);
         }
+        if (stopsTheBuild(shipped)) return false;
       }
-    }
-
-    const duration = Date.now() - startTime;
-    // Both sources, for the same reason `status` below reads both: a header that
-    // counts only the shipped-link pass reported `{0, 0, 0}` over phases that had
-    // just published 12 warnings, so a CI job reading the machine total saw a
-    // clean build while `status` beside it said `warning`.
-    const issueCounts = sumSeverityCounts([
-      aggregatePhaseIssueCounts(phaseResults),
-      countBySeverity(shippedLinkIssues),
-    ]);
-    // The shipped-link tally alone drives the human line below — it names what is
-    // wrong with THIS tree, and the phases already printed their own.
-    const shippedCounts = countBySeverity(shippedLinkIssues);
-    if (shippedLinkIssues.length === 0) {
-      logger.info(`\n✅ Build complete`);
-    } else {
-      logger.info(
-        `\n✅ Build complete — ${shippedCounts.warnings} warning(s), ${shippedCounts.info} info in the shipped plugin tree`,
-      );
-      for (const issue of shippedLinkIssues) {
-        logger.error(`  ${issue.severity.toUpperCase()} [${issue.code}] ${issue.message}`);
-      }
-    }
-    // Warnings and info findings do not fail a build, but they are published:
-    // `success` must mean "nothing you must act on", never "there was nothing
-    // to see".
-    // Worst-wins across BOTH sources. Reading only the shipped-link issues made
-    // a run whose child phase reported `warning` publish `success`, which is the
-    // same blindness `vat verify` had: a status that cannot see what the child
-    // already said.
-    writeYamlOutput({
-      status: worseOf(
-        aggregatePhaseStatus(phaseResults),
-        calculateValidationStatus(shippedLinkIssues),
-      ),
-      phasesCompleted: phases.map((p) => p.name),
-      phases: phaseResults,
-      issueCounts,
-      ...(shippedLinkIssues.length === 0 ? {} : { issues: shippedLinkIssues }),
-      duration: `${duration}ms`,
+      return true;
     });
-
-    process.exit(ExitCode.OK);
-  } catch (error) {
-    handleCommandError(error, logger, startTime, 'Build');
-  }
+    if (!completed) return;
+    logger.info(`\n✅ Build complete`);
+  });
+  endWithReport('build', report, ORCHESTRATOR_FORMAT);
 }

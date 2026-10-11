@@ -47,7 +47,7 @@ describe('ResourceRegistry constructor optionals', () => {
   });
 
   it('should handle only config provided', () => {
-    const config: ProjectConfig = { version: 1 };
+    const config: ProjectConfig = {};
     const registry = new ResourceRegistry({ config });
 
     expect(registry.baseDir).toBeUndefined();
@@ -56,7 +56,7 @@ describe('ResourceRegistry constructor optionals', () => {
   });
 
   it('should handle all parameters provided', () => {
-    const config: ProjectConfig = { version: 1 };
+    const config: ProjectConfig = {};
     const gitTracker = new GitTracker('/test');
 
     const registry = new ResourceRegistry({
@@ -129,7 +129,6 @@ describe('ResourceRegistry.addResource with collections', () => {
 
   it('should handle resources when config has no collections', async () => {
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {}, // Empty collections object
       },
@@ -143,7 +142,6 @@ describe('ResourceRegistry.addResource with collections', () => {
 
   it('should handle resources when no matching collections', async () => {
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           docs: {
@@ -200,7 +198,6 @@ describe('ResourceRegistry schema validation error handling', () => {
 
   it('should handle missing schema file gracefully', async () => {
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           docs: {
@@ -229,7 +226,6 @@ describe('ResourceRegistry schema validation error handling', () => {
 
   it('should handle invalid JSON in schema file', async () => {
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           docs: {
@@ -268,7 +264,6 @@ describe('ResourceRegistry schema validation error handling', () => {
     };
 
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           docs: {
@@ -319,7 +314,7 @@ describe('ResourceRegistry.getCollectionStats edge cases', () => {
   });
 
   it('should handle config without resources field', () => {
-    const config: ProjectConfig = { version: 1 };
+    const config: ProjectConfig = {};
     const registry = new ResourceRegistry({ baseDir: tempDir, config });
 
     const stats = registry.getCollectionStats();
@@ -329,7 +324,6 @@ describe('ResourceRegistry.getCollectionStats edge cases', () => {
 
   it('should handle collection with validation mode defined', async () => {
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           docs: {
@@ -348,7 +342,6 @@ describe('ResourceRegistry.getCollectionStats edge cases', () => {
 
   it('should not set validationMode when undefined', async () => {
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           docs: {

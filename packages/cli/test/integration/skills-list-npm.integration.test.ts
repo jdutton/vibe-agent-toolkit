@@ -1,32 +1,20 @@
 import { writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import yaml from 'yaml';
 
-import { listCommand, type SkillsListCommandOptions } from '../../src/commands/skills/list.js';
-import { captureStdout } from '../helpers/stdout-capture.js';
+import { SKILLS_LIST_REPORT_SCHEMA, type SkillsListReport } from '../../src/commands/skills/list-schema.js';
+import { listCommand } from '../../src/commands/skills/list.js';
+import { captureCommand } from '../helpers/stdout-capture.js';
 
-/**
- * Run listCommand with mocked process.exit and captured stdout.
- * Returns the captured output string.
- */
-async function runListCommand(
-  pathArg: string,
-  options: SkillsListCommandOptions = {},
-): Promise<string> {
-  const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
-  const captured: string[] = [];
-  const restore = captureStdout(captured);
-
-  try {
-    await listCommand(pathArg, options);
-  } finally {
-    restore();
-    exitSpy.mockRestore();
-  }
-
-  return captured.join('');
+/** Run the list lane over `pathArg`: the report it published, validated against its registry schema, at exit 0. */
+async function runListCommand(pathArg: string): Promise<SkillsListReport> {
+  const { stdout, exited, stderr } = await captureCommand(() => listCommand(pathArg, {}));
+  expect(exited, stderr).toBe(ExitCode.OK);
+  return SKILLS_LIST_REPORT_SCHEMA.parse(yaml.parse(stdout));
 }
 
 /**
@@ -38,6 +26,7 @@ async function buildFakeTarball(
   skillName: string,
   subdirName: string,
   declaredName: string = skillName,
+  alsoPlant: (distSkillsDir: string) => void = () => undefined,
 ): Promise<string> {
   const pkgDir = safePath.join(tempDir, subdirName, 'package');
   const skillDir = safePath.join(pkgDir, 'dist', 'skills', skillName);
@@ -52,6 +41,8 @@ async function buildFakeTarball(
     JSON.stringify({ name: subdirName, version: '1.0.0' }),
     'utf-8',
   );
+
+  alsoPlant(safePath.join(pkgDir, 'dist', 'skills'));
 
   const tarModule = await import('tar');
   const tarballPath = safePath.join(tempDir, `${subdirName}-1.0.0.tgz`);
@@ -77,10 +68,10 @@ describe('vat skills list — npm source', () => {
   it('lists skills from a local .tgz package without installing', async () => {
     const tarballPath = await buildFakeTarball(tempDir, 'listed-skill', 'fake-listed');
 
-    const output = await runListCommand(tarballPath);
+    const report = await runListCommand(tarballPath);
 
-    expect(output).toContain('listed-skill');
-    expect(output).toContain('context: npm');
+    expect(report.data?.skills.map((skill) => skill.name)).toStrictEqual(['listed-skill']);
+    expect(report.data?.context).toBe('npm');
   });
 
   it('reports the name the skill declares, which is the name install will use', async () => {
@@ -94,10 +85,24 @@ describe('vat skills list — npm source', () => {
       'modern-name',
     );
 
-    const output = await runListCommand(tarballPath);
+    const report = await runListCommand(tarballPath);
 
-    expect(output).toContain('name: modern-name');
-    expect(output).not.toContain('name: legacy-dir');
+    expect(report.data?.skills.map((skill) => skill.name)).toStrictEqual(['modern-name']);
+  });
+
+  // What `vat skills build --skill x` leaves beside a skill when it is interrupted mid-swap, or when a
+  // parked previous bundle could not be deleted: `vat skills install` skips it, so the preview must too.
+  it('never lists a tree-change leftover beside a skill as a second skill', async () => {
+    const tarballPath = await buildFakeTarball(tempDir, 'good', 'fake-residue', 'good', (distSkillsDir) => {
+      for (const residue of ['.good.vat-staged-deadbeef', '.good.vat-staged-0a1b2c3d.previous']) {
+        mkdirSyncReal(safePath.join(distSkillsDir, residue), { recursive: true });
+        writeFileSync(safePath.join(distSkillsDir, residue, 'SKILL.md'), '---\nname: good\ndescription: A leftover.\n---\n', 'utf-8');
+      }
+    });
+
+    const report = await runListCommand(tarballPath);
+
+    expect(report.data?.skills.map((skill) => skill.name)).toStrictEqual(['good']);
   });
 
   it('reports zero skills when tgz dist/skills/ is empty', async () => {
@@ -118,9 +123,12 @@ describe('vat skills list — npm source', () => {
       ['package'],
     );
 
-    const output = await runListCommand(tarballPath);
+    const report = await runListCommand(tarballPath);
 
-    expect(output).toContain('skillsFound: 0');
-    expect(output).toContain('context: npm');
+    // Zero skills in a package that was scanned is an answer: one root examined, `ok`.
+    expect(report.status).toBe('ok');
+    expect(report.examined).toBe(1);
+    expect(report.data?.skills).toStrictEqual([]);
+    expect(report.data?.context).toBe('npm');
   });
 });

@@ -5,6 +5,7 @@
  */
 
 export { LanceDBRAGProvider, type LanceDBConfig } from './lancedb-rag-provider.js';
+export { foreignDatabaseEntries, linkedDatabasePath, removeRagDatabase, type DatabaseDirectoryEntry, type RagDatabaseRemoval } from './database-directory.js';
 export {
   ESTIMATOR_DIVERGENCE_FACTOR,
   SPECIAL_TOKEN_OVERHEAD,
@@ -18,5 +19,4 @@ export {
   buildMetadataFilter,
   buildMetadataWhereClause,
   buildWhereClause,
-  LANCEDB_QUERY_SUPPORT,
 } from './filter-builder.js';

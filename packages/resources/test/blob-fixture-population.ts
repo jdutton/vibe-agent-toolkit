@@ -23,6 +23,7 @@ import { expect } from 'vitest';
 import type { RunContentCache } from '../src/projection/content-cache.js';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
+import { crawlSourceFor } from '../src/projection/crawl-source.js';
 import { populate, type BlobPopulationReport } from '../src/projection/merge.js';
 import { ProjectionBuilder, type Projection } from '../src/projection/projection.js';
 import type { ResourceRealizationRow } from '../src/schemas/projection-resources.js';
@@ -59,7 +60,7 @@ export async function baseBuilderForRoot(
   contentCache?: RunContentCache,
 ): Promise<ProjectionBuilder> {
   const builder = new ProjectionBuilder({ root: rootDir, contentCache });
-  const contribution = await new FilesystemExtentContributor().contribute(builder.base(), null);
+  const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(builder.base(), null);
   for (const row of contribution.contexts) builder.addContext(row);
   for (const row of contribution.resources) builder.addResource(row);
   for (const row of order(contribution.realizations)) builder.addRealization(row);
@@ -103,7 +104,7 @@ export async function populateFixtureRoot(rootDir: string): Promise<{
 }> {
   let report: BlobPopulationReport | undefined;
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
 
   const projection = await populate({
     root: rootDir,

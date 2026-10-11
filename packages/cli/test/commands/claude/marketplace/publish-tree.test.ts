@@ -5,7 +5,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { composePublishTree } from '../../../../src/commands/claude/marketplace/publish-tree.js';
+import { composePublishTree, type ComposeOptions } from '../../../../src/commands/claude/marketplace/publish-tree.js';
+import { refusalCodeOf } from '../../../../src/utils/command-refusal.js';
 
 function makeTempDir(tempDirs: string[]): string {
   const dir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-publish-tree-'));
@@ -111,6 +112,72 @@ describe('publish-tree', () => {
       configDir: sourceDir,
       outputDir,
     })).rejects.toThrow(/build output/i);
+  });
+
+  it('refuses missing build output as INPUT_UNREADABLE, naming it project-relative', async () => {
+    const sourceDir = makeTempDir(tempDirs);
+    const error = await composePublishTree({ marketplaceName: 'nonexistent', configDir: sourceDir, outputDir: makeTempDir(tempDirs) })
+      .then(() => undefined, (thrown: unknown) => thrown);
+    expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
+    expect((error as Error).message).toBe('Marketplace build output not found at dist/.claude/plugins/marketplaces/nonexistent. Run "vat build" first.');
+  });
+
+  // A build that stopped half-way leaves the directory and no manifest. That is
+  // the project's state, never a defect in VAT: it must not surface as a raw ENOENT.
+  it('refuses build output holding no marketplace.json as INPUT_UNREADABLE, naming it project-relative', async () => {
+    const sourceDir = makeTempDir(tempDirs);
+    mkdirSyncReal(safePath.join(sourceDir, 'dist', '.claude', 'plugins', 'marketplaces', 'half-built', 'plugins'), { recursive: true });
+    const error = await composePublishTree({ marketplaceName: 'half-built', configDir: sourceDir, outputDir: makeTempDir(tempDirs) })
+      .then(() => undefined, (thrown: unknown) => thrown);
+    expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
+    expect((error as Error).message).toBe(
+      'Marketplace build output at dist/.claude/plugins/marketplaces/half-built holds no .claude-plugin/marketplace.json — the build did not finish. Run "vat build" first.',
+    );
+  });
+
+  // A damaged manifest is the project's state — whether it is not JSON at all, or
+  // valid JSON that is not a manifest — never a SyntaxError or TypeError out of VAT.
+  it.each([
+    ['not JSON', '{ "name": ', 'is not valid JSON'],
+    ['null', 'null', 'is not a marketplace manifest'],
+    ['an array', '[]', 'is not a marketplace manifest'],
+    ['a non-array plugins', '{"plugins":"all"}', 'is not a marketplace manifest'],
+    ['a plugins entry that is not an object', '{"plugins":[null]}', 'is not a marketplace manifest'],
+  ])('refuses a built marketplace.json that is %s as INPUT_UNREADABLE', async (_what, body, why) => {
+    const sourceDir = makeTempDir(tempDirs);
+    const mpName = seedMarketplaceBuild(sourceDir);
+    writeFileSync(
+      safePath.join(sourceDir, 'dist', '.claude', 'plugins', 'marketplaces', mpName, '.claude-plugin', 'marketplace.json'),
+      body,
+    );
+    const error = await composePublishTree({ marketplaceName: mpName, configDir: sourceDir, outputDir: makeTempDir(tempDirs) })
+      .then(() => undefined, (thrown: unknown) => thrown);
+    expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
+    expect((error as Error).message).toContain(`dist/.claude/plugins/marketplaces/${mpName}/.claude-plugin/marketplace.json ${why}`);
+  });
+
+  // A `publish.<key>` naming a file that is not there is the config's mistake.
+  it.each<[string, Partial<ComposeOptions>]>([
+    ['publish.changelog', { changelog: { sourcePath: 'NOPE.md' } }],
+    ['publish.readme', { readme: { sourcePath: 'NOPE.md' } }],
+    ['publish.license', { license: { type: 'file', filePath: 'NOPE.md' } }],
+  ])('refuses a %s naming no file as CONFIG_INVALID', async (key, configured) => {
+    const sourceDir = makeTempDir(tempDirs);
+    const mpName = seedMarketplaceBuild(sourceDir, 'test-mp', [{ name: 'only-plugin', version: '1.0.0' }]);
+    const error = await composePublishTree({ marketplaceName: mpName, configDir: sourceDir, outputDir: makeTempDir(tempDirs), ...configured })
+      .then(() => undefined, (thrown: unknown) => thrown);
+    expect(refusalCodeOf(error)).toBe('CONFIG_INVALID');
+    expect((error as Error).message).toBe(`${key} names NOPE.md, which does not exist.`);
+  });
+
+  it('refuses a changelog with no release notes as INPUT_UNREADABLE', async () => {
+    const sourceDir = makeTempDir(tempDirs);
+    const mpName = seedMarketplaceBuild(sourceDir, 'test-mp', [{ name: 'only-plugin', version: '1.0.0' }]);
+    writeFileSync(safePath.join(sourceDir, 'CHANGELOG.md'), '# Changelog\n\n## [Unreleased]\n');
+    const error = await composePublishTree({
+      marketplaceName: mpName, configDir: sourceDir, outputDir: makeTempDir(tempDirs), changelog: { sourcePath: 'CHANGELOG.md' },
+    }).then(() => undefined, (thrown: unknown) => thrown);
+    expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
   });
 
   it('should fail when changelog has neither unreleased content nor matching version section', async () => {

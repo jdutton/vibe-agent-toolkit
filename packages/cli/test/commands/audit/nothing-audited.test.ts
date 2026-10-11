@@ -1,37 +1,22 @@
 /**
- * `vat audit` must never publish `status: success` over a run that audited no
- * file.
+ * `vat audit` must never publish a clean report over a run that audited no file.
  *
  * ## The defect
  *
- * `calculateValidationStatus([])` is `success`, so an existing directory holding
- * nothing auditable — moved plugins, a wrong subdirectory, an excluded tree, or a
- * tree of files no lane recognises — published `status: success` beside
- * `filesScanned: 0`, and stderr said "Audit successful: 0 file(s) passed". The
- * command's own documentation tells CI to gate on that `status`. `vat corpus
- * scan` refuses the identical input one lane up; the command adopters actually
- * wire into CI did not.
+ * An existing directory holding nothing auditable — moved plugins, a wrong
+ * subdirectory, an excluded tree, or a tree of files no lane recognises — used
+ * to publish a clean status beside zero files scanned, and stderr said "Audit
+ * successful: 0 file(s) passed". `vat corpus scan` refused the identical input
+ * one lane up; the command adopters actually wire into CI did not.
  *
- * ## What changes, and what deliberately does not
+ * ## Where the refusal is derived now
  *
- * The refusal goes through the shared mechanism in `run-integrity.ts`: one
- * non-overridable `RESOURCE_CHECK_BROKEN` at `error`, published under a
- * top-level `issues:` (present only when non-empty — the claim is about the run,
- * not about any file, so it is not a `files[]` row and does not inflate
- * `filesScanned`), counted in the header `issueCounts`, and `status: error`.
- *
- * The EXIT CODE is untouched. `vat audit` publishes two verdicts on purpose:
- * `status` describes the findings, the exit code describes whether the run
- * completed — and this run completed. Making exit follow `status` would turn an
- * advisory report into a gate, which its published contract promises it is
- * not (see `status-is-not-the-exit-code.test.ts`).
- *
- * ## Why the rows drive the real report builder
- *
- * `buildAuditReport` is the directory lane's entry point, exported `@internal`
- * for exactly this; the `--user` lane shares the document builder beneath it
- * (`buildBaseSummary`), which is where the refusal is derived, so one lane
- * exercised end to end pins both.
+ * In the WRITER, from the registry's denominator for `audit` (`examined` counts
+ * files): one non-overridable `RESOURCE_CHECK_BROKEN` at `error`, among the
+ * envelope's `findings` with no `location` (the claim is about the run, not a
+ * file), and `status: findings`, exit 1. These rows drive the real report
+ * builder and then the writer's own pass with the registry's declaration, so a
+ * registry entry that stopped declaring the denominator reds them.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -40,6 +25,8 @@ import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/u
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildAuditReport, resetAuditCaches } from '../../../src/commands/audit.js';
+import { reportShapeFor } from '../../../src/report-schemas.js';
+import { withRunIntegrity } from '../../../src/utils/run-integrity.js';
 import { silentLogger } from '../../test-helpers.js';
 
 /** The code every run-integrity refusal carries, shared with every other gate. */
@@ -86,9 +73,11 @@ function skillTree(): string {
   return root;
 }
 
+/** The report as the writer would publish it: the builder's, through the registry's run-integrity pass. */
 async function audit(root: string) {
   resetAuditCaches();
-  return buildAuditReport(root, {}, Date.now(), silentLogger as never);
+  const { report } = await buildAuditReport(root, {}, Date.now(), silentLogger as never);
+  return withRunIntegrity(report, reportShapeFor('audit').examined);
 }
 
 describe('vat audit refuses a run that audited no file', () => {
@@ -99,27 +88,29 @@ describe('vat audit refuses a run that audited no file', () => {
   it.each([
     ['an existing but empty tree', emptyTree],
     ['a tree whose files no lane can audit', unauditableTree],
-  ])('%s is a run-integrity refusal: status error, one finding, zero files', async (_name, make) => {
-    const { document } = await audit(make());
+  ])('%s is a run-integrity refusal: status findings, one finding, zero files', async (_name, make) => {
+    const report = await audit(make());
 
-    expect(document.summary.filesScanned).toBe(0);
-    expect(document.files).toEqual([]);
-    expect(document.status).toBe('error');
-    expect(document.issueCounts).toEqual({ errors: 1, warnings: 0, info: 0 });
-    expect(document.issues).toHaveLength(1);
-    const [refusal] = document.issues ?? [];
+    expect(report.examined).toBe(0);
+    expect(report.data?.files).toEqual([]);
+    expect(report.status).toBe('findings');
+    expect(report.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(report.findings).toHaveLength(1);
+    const [refusal] = report.findings;
     expect(refusal?.code).toBe(RUN_INTEGRITY_CODE);
     expect(refusal?.severity).toBe('error');
+    // About the run, so it names no file.
+    expect(refusal?.location).toBeUndefined();
     // Says what did not run and what the operator can do — not that the tree is broken.
     expect(refusal?.message).toContain('0 files');
     expect(refusal?.message).not.toMatch(/broken/i);
   });
 
-  it('a populated tree carries no run-level issues key at all — the clean shape is unchanged', async () => {
-    const { document } = await audit(skillTree());
+  it('a populated tree carries no run-integrity finding — the clean shape is unchanged', async () => {
+    const report = await audit(skillTree());
 
-    expect(document.summary.filesScanned).toBeGreaterThan(0);
-    expect(document).not.toHaveProperty('issues');
-    expect(document.status).not.toBe('error');
+    expect(report.examined).toBeGreaterThan(0);
+    expect(report.findings.map((finding) => finding.code)).not.toContain(RUN_INTEGRITY_CODE);
+    expect(report.status).not.toBe('error');
   });
 });

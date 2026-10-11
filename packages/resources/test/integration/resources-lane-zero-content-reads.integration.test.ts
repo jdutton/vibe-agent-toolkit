@@ -331,7 +331,7 @@ function driverSource(mode: DriverMode): string {
     '} else {',
     '  const tracker = new GitTracker(root);',
     '  await tracker.initialize({ includeUntracked: true });',
-    '  paths = (await buildResourcePopulation({ root, gitTracker: tracker })).paths.length;',
+    '  paths = (await buildResourcePopulation({ outputs: [], root, gitTracker: tracker })).paths.length;',
     `  if (mode === 'lane-with-stray-read') readFileSync(root + '/' + ${JSON.stringify(STRAY_TARGET)}, 'utf-8');`,
     '}',
     'process.stdout.write(`PATHS=${paths === null ? -1 : paths}\\n`);',

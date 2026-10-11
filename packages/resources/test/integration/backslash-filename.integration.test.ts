@@ -89,10 +89,11 @@ function planted(dir: string | undefined): string {
 /** Every file the crawler lists under `root`, root-relative and sorted. */
 async function crawled(root: string): Promise<string[]> {
   const files = await crawlDirectory({
+    outputs: [],
     baseDir: root,
     absolute: false,
     includeUntracked: true,
-    unreadable: { refuse: { root, remedy: 'fixture' } },
+    unreadable: { refuse: { root, remedy: 'fixture', side: 'source' } },
   });
   return [...files].sort(byName);
 }

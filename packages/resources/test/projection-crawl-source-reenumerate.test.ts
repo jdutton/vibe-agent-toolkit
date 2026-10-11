@@ -35,8 +35,8 @@ describe.skipIf(CAPABILITY === null)('a re-enumerated crawl source forgets a del
   });
 
   it.each([
-    ['filesystem', (at: string) => new FilesystemCrawlSource(at)],
-    ['git', (at: string) => new GitCrawlSource(at)],
+    ['filesystem', (at: string) => new FilesystemCrawlSource(at, [])],
+    ['git', (at: string) => new GitCrawlSource(at, [])],
   ] as const)('%s source', async (_label, make) => {
     if (root === undefined) throw new Error('fixture not planted');
     if (CAPABILITY === null) throw new Error('unreachable — the suite is skipped without the capability');

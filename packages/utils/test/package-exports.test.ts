@@ -68,7 +68,7 @@ function orphanedOutputs(
 
 describe('utils package manifest', () => {
   it('declares the Node floor so adopters get an install-time signal', () => {
-    expect(manifest.engines?.node).toBe('>=22.13.0');
+    expect(manifest.engines?.node).toBe('>=22.16.0');
   });
 
   it.each([

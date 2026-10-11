@@ -25,6 +25,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { packageSkill, packagingConfigToPackageOptions } from '../../src/skill-packager.js';
 import { conventionalSuiteProbe, type DeclaredEvalSuite } from '../../src/test-input.js';
 import { activeErrorsOf, activeWarningsOf, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
+import { packageInPlace } from '../test-helpers.js';
 
 const ANSWER_KEY = 'the model must output exactly forty-two';
 /** Basename of the declared eval suite, used as both a source leaf and a dest. */
@@ -54,7 +55,7 @@ function writeProject(opts: { alsoLink?: string } = {}): {
   mkdirSyncReal(evalsDir, { recursive: true });
   // Anchor the project root so `files:` sources resolve repo-relative (as they do in
   // a real adopter) rather than collapsing onto the skill dir.
-  writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n', 'utf8');
+  writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), '{}\n', 'utf8');
 
   writeFileSync(
     safePath.join(skillDir, 'SKILL.md'),
@@ -106,7 +107,7 @@ function writeCrossSkillProject(): void {
   otherDir = safePath.join(projectRoot, 'skills', 'example-skill');
   mkdirSyncReal(safePath.join(subjectDir, 'evals'), { recursive: true });
   mkdirSyncReal(safePath.join(otherDir, 'evals'), { recursive: true });
-  writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n', 'utf8');
+  writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), '{}\n', 'utf8');
 
   writeFileSync(
     safePath.join(subjectDir, SKILL_MD),
@@ -245,7 +246,8 @@ describe('declared test input never ships (integration)', () => {
     const files = [{ source: 'skills/demo/evals/evals.json', dest: DROPPED_DEST }];
 
     // Lane 1 — the packager: what actually ships.
-    const built = await packageSkill(skillPath, {
+    // In place: the broken-link finding is the subject; `packageSkill` lands only a package that passed.
+    const built = await packageInPlace(skillPath, {
       outputPath,
       formats: ['directory'],
       testInputDirs: [evalsDir],
@@ -265,7 +267,7 @@ describe('declared test input never ships (integration)', () => {
     });
     expect(codesOf(activeErrorsOf(validated))).toContain(BROKEN_LINK_CODE);
     expect(codesOf(validated.allErrors)).not.toContain('LINK_DEFERRED_ARTIFACT');
-    expect(validated.status).toBe('error');
+    expect(validated.summary.errors).toBeGreaterThan(0);
   });
 
   it('still packages a files: entry that points OUTSIDE test input', async () => {
@@ -362,7 +364,7 @@ describe('a skill\'s bundle never carries another skill\'s eval suite (integrati
       skillPath,
       { test: { evals: SUBJECT_EVALS } },
       'source',
-      { unreadable: 'refuse', projectSkills: projectSkills() },
+      { unreadable: 'refuse', outputs: [], projectSkills: projectSkills() },
     );
 
     expect(activeWarningsOf(validated).map((i) => String(i.code))).toContain('PACKAGED_TEST_INPUT');

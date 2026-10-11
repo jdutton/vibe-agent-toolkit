@@ -54,13 +54,11 @@ import {
   type ExtentContribution,
   type ExtentContributor,
 } from '../src/projection/contributor.js';
-import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
-import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
 import { DISCARD_BLOB_POPULATION, populate, type ContributorTiming } from '../src/projection/merge.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 import type { JsonValue } from '../src/schemas/projection-shared.js';
 
-import { setupSubdirTestSuite, useCorpusSuite } from './test-helpers.js';
+import { registryWithClosure, setupSubdirTestSuite, useCorpusSuite } from './test-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Fixture
@@ -116,14 +114,6 @@ function closureDeclaration(): Record<string, JsonValue> {
   };
 }
 
-/** The two shipped contributors this fixture measures, in registration order. */
-function registryWithClosure(): ContributorRegistry {
-  const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
-  registry.register(new ClosureExtentContributor(EXTENT_NAME, SKILL_KIND));
-  return registry;
-}
-
 /**
  * Run the whole driver over the fixture corpus.
  *
@@ -132,7 +122,7 @@ function registryWithClosure(): ContributorRegistry {
 async function runPopulation(onTiming?: (timing: ContributorTiming) => void): Promise<void> {
   await populate({
     root: suite.tempDir,
-    registry: registryWithClosure(),
+    registry: registryWithClosure(EXTENT_NAME, SKILL_KIND),
     parameters: { [CLOSURE_DRIVER_ID]: closureDeclaration() },
     ...(onTiming === undefined ? {} : { onContributorTiming: onTiming }),
     onBlobPopulation: DISCARD_BLOB_POPULATION,
@@ -215,7 +205,7 @@ class RegistryBuildingContributor implements ExtentContributor {
    * @returns An empty contribution — the rows are irrelevant; the registry build is the point
    */
   async contribute(): Promise<ExtentContribution> {
-    const registry = await ResourceRegistry.fromCrawl({ unreadable: 'refuse', baseDir: suite.tempDir });
+    const registry = await ResourceRegistry.fromCrawl({ outputs: [], unreadable: 'refuse', baseDir: suite.tempDir });
     registry.resolveLinks();
     return {
       contexts: [], resources: [], realizations: [], memberships: [], tags: [], conditions: [],
@@ -279,6 +269,7 @@ describe('crawl timing seam', () => {
       const registry = new ResourceRegistry();
       await registry.crawl({
         unreadable: 'refuse',
+        outputs: [],
         baseDir: suite.tempDir,
         populationSource: {
           // Bound to the very root the crawl is about, or the registry's root
@@ -287,7 +278,7 @@ describe('crawl timing seam', () => {
           enumerate: async (root: string) => {
             await populate({
               root,
-              registry: registryWithClosure(),
+              registry: registryWithClosure(EXTENT_NAME, SKILL_KIND),
               parameters: { [CLOSURE_DRIVER_ID]: closureDeclaration() },
               onBlobPopulation: DISCARD_BLOB_POPULATION,
             });
@@ -350,7 +341,7 @@ describe('crawl timing seam', () => {
     // -----------------------------------------------------------------------
 
     it('charges the incumbent for building the registry its walk consumes, not only for the walk', async () => {
-      const registry = await ResourceRegistry.fromCrawl({ unreadable: 'refuse', baseDir: suite.tempDir });
+      const registry = await ResourceRegistry.fromCrawl({ outputs: [], unreadable: 'refuse', baseDir: suite.tempDir });
       registry.resolveLinks();
       const snapshot = __readCrawlTimingSnapshot();
 

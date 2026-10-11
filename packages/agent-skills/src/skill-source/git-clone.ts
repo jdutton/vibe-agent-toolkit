@@ -1,8 +1,7 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { lstatSync, readdirSync, readlinkSync, statSync } from 'node:fs';
+import { dirname } from 'node:path';
 
-import {
-  safePath,
-} from '@vibe-agent-toolkit/utils';
+import { canonicalPath, COPY_LINK_ESCAPES_SOURCE_CODE, isPathAbsentError, isTimedOutError, isUnderRoot, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import {
   nonInteractiveGitOverrides,
   runGit as runGitSafely,
@@ -50,8 +49,7 @@ function runGit(
     timeout: GIT_TIMEOUT_MS,
     maxBuffer: GIT_MAX_BUFFER,
   });
-  const err = result.error as NodeJS.ErrnoException | undefined;
-  if (err?.code === 'ETIMEDOUT') {
+  if (result.error !== undefined && isTimedOutError(result.error)) {
     throw new Error(
       `git ${args[0] ?? ''} timed out after ${(GIT_TIMEOUT_MS / 1000).toString()}s ` +
         `(possible unreachable remote or hang).`,
@@ -59,6 +57,13 @@ function runGit(
   }
   return result;
 }
+
+/**
+ * The code a subpath the clone does not hold — absent, or escaping the repo —
+ * is thrown with. The source WAS read; the subpath is the caller's argument, so
+ * a caller maps it to a usage mistake by code, never by the message.
+ */
+export const GIT_SUBPATH_INVALID_CODE = 'GIT_SUBPATH_INVALID';
 
 /**
  * Shallow-clone `parsed` into the caller-provided `targetTempdir`, validate any
@@ -75,27 +80,116 @@ export function cloneGitSource(parsed: ParsedGitUrl, targetTempdir: string): Git
   const { subpath } = parsed;
   const targetDir = subpath ? safePath.join(targetTempdir, subpath) : targetTempdir;
 
-  if (subpath !== undefined) {
-    const resolvedTarget = safePath.resolve(targetDir);
-    const resolvedTemp = safePath.resolve(targetTempdir);
-    const inside =
-      resolvedTarget === resolvedTemp || resolvedTarget.startsWith(`${resolvedTemp}/`);
-    if (!inside) {
-      throw new Error(
-        `Subpath escapes the cloned repository: ${subpath}. ` +
-          `Subpaths must be relative paths inside the repo (no \`..\` traversal).`,
-      );
-    }
+  // Containment is judged on REAL paths: the repository being cloned is
+  // untrusted, and a committed `skills -> /somewhere/outside` passes any lexical
+  // check while every later read lands outside the clone.
+  const placement = subpathPlacement(targetTempdir, targetDir);
+  if (placement === 'outside') {
+    throw new VatError(
+      GIT_SUBPATH_INVALID_CODE,
+      `Subpath escapes the cloned repository: ${subpath ?? '(none)'}. ` +
+        `Subpaths must be relative paths inside the repo (no \`..\` traversal, no symbolic link out of it).`,
+    );
   }
-
-  if (!existsSync(targetDir)) {
+  if (placement === 'absent') {
     const topLevel = readdirSync(targetTempdir).join(', ');
-    throw new Error(
+    throw new VatError(
+      GIT_SUBPATH_INVALID_CODE,
       `Subpath not found in cloned repo: ${subpath ?? '(none)'}. Repo root contains: ${topLevel}.`,
     );
   }
+  refuseEscapingLinks(targetTempdir, targetDir);
 
   return { ref, commit, targetDir };
+}
+
+/**
+ * Where the subpath stands relative to the clone. A subpath that is itself a
+ * link is judged by its own text too, as {@link followLink} judges one found
+ * while walking: a DANGLING link aimed outside escapes, and one aimed inside
+ * names nothing — either way the subpath's refusal, never a raw ENOENT.
+ */
+function subpathPlacement(cloneRoot: string, targetDir: string): 'inside' | 'outside' | 'absent' {
+  const placement = cloneContainment(cloneRoot, targetDir);
+  if (placement !== 'inside' || targetDir === cloneRoot) return placement;
+  try {
+    if (!lstatSync(targetDir).isSymbolicLink()) return placement;
+  } catch (error) {
+    if (isPathAbsentError(error)) return 'absent';
+    throw error;
+  }
+  if (cloneContainment(cloneRoot, safePath.resolve(dirname(targetDir), readlinkSync(targetDir))) === 'outside') return 'outside';
+  try {
+    statSync(targetDir);
+  } catch (error) {
+    if (isPathAbsentError(error)) return 'absent';
+    throw error;
+  }
+  return placement;
+}
+
+/**
+ * Where `candidate` stands relative to the clone, on real paths. The clone
+ * root itself counts as inside (`isUnderRoot` calls a root `outside` itself,
+ * which is right for a sink and wrong here: `#ref:.` names the whole clone).
+ */
+function cloneContainment(cloneRoot: string, candidate: string): 'inside' | 'outside' | 'absent' {
+  if (canonicalPath(candidate) === canonicalPath(cloneRoot)) return 'inside';
+  return isUnderRoot(cloneRoot, candidate);
+}
+
+/**
+ * Refuse any symbolic link in the selected subtree whose target resolves
+ * outside the clone. Every consumer of `targetDir` (the audit walk, staging)
+ * follows links, so one committed `docs/keys -> ~/.ssh` would read the
+ * operator's own files as the repository's content. Links that stay inside the
+ * clone are followed, so a link into a sibling directory cannot smuggle out a
+ * second-hop link; the visited set stops a link cycle.
+ *
+ * Coded `COPY_LINK_ESCAPES_SOURCE`: the source's own link, never the
+ * argument's mistake, so it is the input's refusal rather than a usage error.
+ */
+function refuseEscapingLinks(cloneRoot: string, subtree: string): void {
+  const gitDir = canonicalPath(safePath.join(cloneRoot, '.git'));
+  const visited = new Set<string>();
+  const pending = [subtree];
+  for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
+    const canonical = canonicalPath(dir);
+    if (canonical === gitDir || visited.has(canonical)) continue;
+    visited.add(canonical);
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const entryPath = safePath.join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        if (followLink(cloneRoot, entryPath)) pending.push(entryPath);
+      } else if (entry.isDirectory()) {
+        pending.push(entryPath);
+      }
+    }
+  }
+}
+
+/**
+ * Throw when the link at `link` escapes the clone; otherwise answer whether it
+ * leads to a directory the walk must enter. The target is judged from the
+ * link's own text as well as its realpath, so a DANGLING link aimed outside is
+ * refused too — nothing reads it today, but it names a path the source does not own.
+ */
+function followLink(cloneRoot: string, link: string): boolean {
+  const target = safePath.resolve(dirname(link), readlinkSync(link));
+  if (cloneContainment(cloneRoot, target) === 'outside' || cloneContainment(cloneRoot, link) === 'outside') {
+    throw new VatError(
+      COPY_LINK_ESCAPES_SOURCE_CODE,
+      `Refusing the cloned repository: ${safePath.relative(cloneRoot, link)} is a symbolic link to a path outside the clone. ` +
+        'Every reader of the source follows links, so it would read files the repository does not hold — ' +
+        'replace the link with the files, or point it inside the repository.',
+    );
+  }
+  try {
+    return statSync(link).isDirectory();
+  } catch (error) {
+    if (isPathAbsentError(error)) return false;
+    throw error;
+  }
 }
 
 function cloneShallow(parsed: ParsedGitUrl, tempdir: string): string {

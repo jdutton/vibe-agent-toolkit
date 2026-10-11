@@ -198,6 +198,12 @@ export function parseTestFileSummary(stdout: string): TestFileSummary | null {
  * an entirely-unimplemented file under its own category) on the very line this
  * reads.
  *
+ * ⚠️ That holds only for a skip decided at COLLECTION (`it.skip`, `skipIf`). A
+ * file whose every case calls `ctx.skip()` at RUN time is counted as PASSED,
+ * yet prints only `↓` lines — no heap — so it reads here as a file that never
+ * reported, and fails this guard. Measured on vitest 4.1. Skip such a file at
+ * collection wherever the condition is knowable then.
+ *
  * Pure + exported: the fail-closed branch is the whole point of the guard and
  * must be testable without spawning vitest.
  *

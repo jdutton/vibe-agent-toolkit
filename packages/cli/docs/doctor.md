@@ -12,7 +12,7 @@ providing actionable suggestions for any problems found.
 **Purpose:** Check environment and project setup health
 
 **What it checks:**
-1. Node.js version (>=22.13.0 required — the range comes from the CLI's own `engines.node`)
+1. Node.js version (>=22.16.0 required — the range comes from the CLI's own `engines.node`)
 2. Git installed and version
 3. Current directory is a git repository
 4. Configuration file exists (vibe-agent-toolkit.config.yaml)
@@ -21,25 +21,36 @@ providing actionable suggestions for any problems found.
 7. CLI build status (when running from VAT source tree)
 
 **Options:**
-- `--verbose` - Show all checks (including passing and skipped ones)
+- `--verbose` - Show all checks (including passing and skipped ones) in the human block
+- `--format <yaml|json|text>` - How the report is rendered on stdout (default `yaml`)
 
 **Check outcomes:**
 
-| Icon | Outcome | Meaning |
-|------|---------|---------|
-| ✅ | `pass` | The check ran and the thing is fine |
-| ❌ | `fail` | The check ran and the thing is wrong — the only outcome that affects the exit code |
-| ❓ | `undetermined` | The check could not reach an answer (registry unreachable, file unreadable). **Nothing was verified** — this is not a pass |
-| ⏭️ | `skipped` | The check does not apply here (e.g. a VAT-source-tree-only check outside the source tree) |
+| Icon | Outcome | Finding | Meaning |
+|------|---------|---------|---------|
+| ✅ | `pass` | none | The check ran and the thing is fine |
+| ❌ | `fail` | `DOCTOR_CHECK_FAILED` (error) | The check ran and the thing is wrong — the only outcome that affects the exit code |
+| ❓ | `undetermined` | `DOCTOR_CHECK_WARNED` (warning) | The check could not reach an answer (registry unreachable, file unreadable). **Nothing was verified** — this is not a pass |
+| ⏭️ | `skipped` | none | The check does not apply here (e.g. a VAT-source-tree-only check outside the source tree) |
 
 **Exit Codes:**
-- `0` - No check failed (an undetermined check is reported in the output, not fatal)
+- `0` - No check failed (an undetermined check is a warning finding, not fatal)
 - `1` - One or more checks failed
-- `2` - Doctor itself could not run (an internal failure, an unknown flag); no verdict was produced
+- `2` - Doctor itself could not run (an internal failure); the report's `error` says why and no verdict was produced
 
-**Output:** Human-friendly formatted text with emojis. The summary always prints the
-full outcome distribution and, when the concise view hides checks, how many it hid —
-so the counts can never contradict the list above them.
+**Output:** The report envelope on stdout — `status`, `summary`, `examined` (the checks
+run), one finding per failed or undetermined check, and `data`:
+
+- `currentDir` — the working directory doctor ran from
+- `projectRoot` / `configPath` — found from `currentDir`, or `null`
+- `checks[]` — every check that ran, in order: `name`, `outcome`, `message`, and
+  `suggestion` when the check has one
+
+The human block below goes to **stderr** under `--format yaml|json`. Under
+`--format text` it is the stdout rendering instead, printed once and listing every
+check. Its summary always prints the full outcome distribution and, when the
+concise view hides checks, how many it hid — so the counts can never contradict
+the list above them.
 
 ## Usage Examples
 
@@ -97,7 +108,7 @@ Running diagnostic checks...
    Current: 0.1.0 — up to date
 
 ✅ Node.js version
-   v22.13.0 (meets requirement: >=22.13.0)
+   v22.16.0 (meets requirement: >=22.16.0)
 
 ✅ Git installed
    git version 2.43.0
@@ -153,7 +164,7 @@ When checks fail, doctor provides specific suggestions:
 
 ```
 ❌ Node.js version
-   v22.4.0 does not satisfy the required range. Node.js >=22.13.0 required.
+   v22.4.0 does not satisfy the required range. Node.js >=22.16.0 required.
    💡 Install a Node.js version in that range: https://nodejs.org/ or use nvm
 ```
 
@@ -234,7 +245,8 @@ vat doctor --verbose
 
 ### CI/CD Integration
 
-Use exit codes for automated checks:
+Use exit codes for automated checks, or read the report (`vat doctor --format json`
+and `jq '.data.checks[] | select(.outcome != "pass")'`):
 
 ```bash
 if vat doctor; then
@@ -249,7 +261,7 @@ fi
 
 ### Node.js Version Check
 
-- **Requirement:** Node.js >=22.13.0, read at runtime from the CLI's `engines.node` so this check cannot drift behind the floor. Checked against `process.version` — the interpreter running VAT — not against a spawned `node` from `PATH`, which differs under any version manager.
+- **Requirement:** Node.js >=22.16.0, read at runtime from the CLI's `engines.node` so this check cannot drift behind the floor. Checked against `process.version` — the interpreter running VAT — not against a spawned `node` from `PATH`, which differs under any version manager.
 - **Why:** VAT uses modern JavaScript features
 - **Fix:** Install Node.js from https://nodejs.org/ or use nvm
 
@@ -314,5 +326,39 @@ for terminology.
 - Run `vat doctor` before reporting issues to verify environment
 - Use `--verbose` flag when debugging to see all check details
 - Doctor checks can be run from any subdirectory in your project
-- Exit code 0 means no check *failed*; read the counts line to see whether any
-  check was undetermined (useful for scripts)
+- Exit code 0 means no check *failed*; read the report's `summary.warnings` (or the
+  counts line) to see whether any check was undetermined
+
+## Example reports
+
+Each block below is a real document from the built CLI, trimmed where noted; `packages/cli/test/integration/tagged-report-examples.integration.test.ts` validates every `vat-report=<verb>` block against that verb's registered schema.
+
+### `doctor`
+
+Cut to the three checks that do not name a tool version. Produced by `vat doctor`.
+
+```yaml vat-report=doctor
+status: ok
+examined: 8
+findings: []
+summary:
+  errors: 0
+  warnings: 0
+  info: 0
+gate:
+  strict: false
+data:
+  currentDir: /work/project
+  projectRoot: /work/project
+  configPath: /work/project/vibe-agent-toolkit.config.yaml
+  checks:
+    - name: Git repository
+      outcome: pass
+      message: Current directory is a git repository
+    - name: Configuration file
+      outcome: pass
+      message: "Found: /work/project/vibe-agent-toolkit.config.yaml"
+    - name: Configuration valid
+      outcome: pass
+      message: Configuration is valid (no collections defined)
+```

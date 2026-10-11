@@ -9,6 +9,9 @@
  * to restore normal package versions.
  */
 
+import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
+import { CommandExecutionError } from '@vibe-agent-toolkit/utils/process';
+
 import { processPackages, safeExecSync } from './common.js';
 
 function unlinkPackage(packageName: string, _packagePath: string): boolean {
@@ -20,17 +23,17 @@ function unlinkPackage(packageName: string, _packagePath: string): boolean {
     });
     return true;
   } catch (error) {
-    // npm unlink can fail if package wasn't linked - that's okay
-    // Also ignore npm internal errors (bugs in npm itself)
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    if (
-      errorMessage.includes('ENOENT') ||
-      errorMessage.includes('not found') ||
-      errorMessage.includes('ERR_PNPM_') ||
-      errorMessage.includes('Cannot read properties of null')
-    ) {
+    // Decided by the failure's SHAPE, never its message text. npm ran and exited
+    // non-zero: the package was not linked, or npm itself erred — nothing to undo.
+    if (error instanceof CommandExecutionError) {
       console.log(`   (was not linked or npm error - skipped)`);
       return true;
+    }
+    // npm never ran: the spawn found no `npm` (ENOENT). That is not "was not
+    // linked" — nothing was unlinked, and the operator must be told.
+    if (isPathAbsentError(error)) {
+      console.error(`❌ Failed to unlink ${packageName}: npm was not found on PATH`);
+      return false;
     }
     console.error(`❌ Failed to unlink ${packageName}:`, error);
     return false;

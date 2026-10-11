@@ -309,29 +309,15 @@ describe('validateFrontmatterRules', () => {
 		});
 	});
 
-	describe('XML tags in name', () => {
-		it('should report SKILL_NAME_XML_TAGS when name contains angle brackets', () => {
-			const issues = validateFrontmatterRules(validFrontmatter({ name: '<my-skill>' }));
+	describe('markup in name', () => {
+		it('reports SKILL_NAME_INVALID alone for a name containing <', () => {
+			const frontmatter = validFrontmatter({ name: '<b>x</b>' });
+			const issues = [
+				...validateFrontmatterSchema(frontmatter, false),
+				...validateFrontmatterRules(frontmatter),
+			];
 
-			const issue = expectIssueAt(issues, 'SKILL_NAME_XML_TAGS', 'error', FIELD_FRONTMATTER_NAME);
-			expect(issue?.fix).toContain('Remove');
-		});
-
-		it.each([
-			['a lone <', 'skill<name'],
-			['a lone >', 'skill>name'],
-			['a generic-type identifier', 'list<item>'],
-		])('should NOT report SKILL_NAME_XML_TAGS for %s (%s)', (_label, name) => {
-			const issues = validateFrontmatterRules(validFrontmatter({ name }));
-
-			expect(findIssueByCode(issues, 'SKILL_NAME_XML_TAGS')).toBeUndefined();
-		});
-
-		it('should report both XML tags and reserved word when both present', () => {
-			const issues = validateFrontmatterRules(validFrontmatter({ name: '<claude>' }));
-
-			expect(findIssueByCode(issues, 'SKILL_NAME_XML_TAGS')).toBeDefined();
-			expect(findIssueByCode(issues, 'RESERVED_WORD_IN_NAME')).toBeDefined();
+			expect(issues.map((issue) => issue.code)).toEqual(['SKILL_NAME_INVALID']);
 		});
 	});
 

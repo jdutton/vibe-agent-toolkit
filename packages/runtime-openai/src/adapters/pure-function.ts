@@ -77,16 +77,20 @@ export function convertPureFunctionToTool<TInput, TOutput>(
   };
 
   // Create executor function
-  const execute = async (args: TInput): Promise<TOutput> => {
-    // Validate input
-    const validatedInput = inputSchema.parse(args);
+  const execute = (args: TInput): Promise<TOutput> => {
+    try {
+      // Validate input
+      const validatedInput = inputSchema.parse(args);
 
-    // Execute agent - returns output directly (unwrapped)
-    // The agent's execute wrapper validates input/output schemas and throws on error
-    const output = agent.execute(validatedInput);
+      // Execute agent - returns output directly (unwrapped)
+      // The agent's execute wrapper validates input/output schemas and throws on error
+      const output = agent.execute(validatedInput);
 
-    // Validate the output with schema (redundant but explicit)
-    return outputSchema.parse(output) as TOutput;
+      // Validate the output with schema (redundant but explicit)
+      return Promise.resolve(outputSchema.parse(output) as TOutput);
+    } catch (error) {
+      return Promise.reject(error as Error);
+    }
   };
 
   return {

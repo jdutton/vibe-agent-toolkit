@@ -74,9 +74,9 @@ export const convertConversationalAssistantToTool: SingleAgentConverter = create
       (input as { session?: ConversationSession }).session ?? { history: [] };
 
     // Build conversational context using helper
-    const context = createConversationalContext(session.history, async (messages: Message[]) => {
-      return callLLM(messages, model, temperature);
-    });
+    const context = createConversationalContext(session.history, (messages: Message[]) =>
+      callLLM(messages, model, temperature),
+    );
 
     // Execute agent with context
     const result = await agent.execute(input, context);
@@ -177,9 +177,7 @@ export function convertConversationalAssistantsToTools(
         addToHistory: (role: 'system' | 'user' | 'assistant', content: string) => {
           currentSession.history.push({ role, content });
         },
-        callLLM: async (messages: Message[]): Promise<string> => {
-          return callLLM(messages, model, temperature);
-        },
+        callLLM: (messages: Message[]): Promise<string> => callLLM(messages, model, temperature),
       };
     },
   );

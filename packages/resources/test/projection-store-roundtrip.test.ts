@@ -43,7 +43,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { ContributorRegistry } from '../src/projection/contributor.js';
 import { ClosureExtentContributor } from '../src/projection/contributors/closure-extent.js';
 import { FilesystemExtentContributor } from '../src/projection/contributors/filesystem-extent.js';
-import { EXTENT_SOURCE_ENV, EXTENT_SOURCE_GIT } from '../src/projection/crawl-source.js';
+import { crawlSourceFor, EXTENT_SOURCE_ENV, EXTENT_SOURCE_GIT } from '../src/projection/crawl-source.js';
 import { serializeProjection } from '../src/projection/export.js';
 import { CONTENT_PARSING_SKIP, DISCARD_BLOB_POPULATION, populate } from '../src/projection/merge.js';
 import type { Projection } from '../src/projection/projection.js';
@@ -224,8 +224,8 @@ function filesystemOnly(contentDemand?: ContentDemand): ContributorRegistry {
   const registry = new ContributorRegistry();
   registry.register(
     contentDemand === undefined
-      ? new FilesystemExtentContributor()
-      : new FilesystemExtentContributor(undefined, contentDemand),
+      ? new FilesystemExtentContributor((at) => crawlSourceFor(at, []))
+      : new FilesystemExtentContributor((at) => crawlSourceFor(at, []), contentDemand),
   );
   return registry;
 }

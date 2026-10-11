@@ -45,6 +45,8 @@
  * `LOADER_DIFFERENTIAL_SEED=<n>`, widen with `LOADER_DIFFERENTIAL_CASES=<n>`.
  */
 
+import { forEachInOrder } from '@vibe-agent-toolkit/utils';
+
 import { estimateTokens } from '../../src/link-classify.js';
 import { account, type AccountedRow } from '../../src/projection/claude-context-accounting.js';
 import { whatLoadsAt } from '../../src/projection/claude-context-query.js';
@@ -414,14 +416,20 @@ const SHRINK_TRIES = 600;
 async function shrink(testCase: LoaderCase, projectionFor: ProjectionFor): Promise<LoaderCase> {
   let current = testCase;
   let tries = 0;
-  for (const drop of [withoutQuery, withoutFile, withoutLine]) {
-    for (let index = 0; tries < SHRINK_TRIES; tries += 1) {
-      const candidate = drop(current, index);
-      if (candidate === undefined) break;
-      if ((await loaderDivergences(candidate, projectionFor)).length > 0) current = candidate;
-      else index += 1;
-    }
-  }
+  // One try at a time: a kept drop changes what the next index refers to.
+  const phase = async (
+    drop: (from: LoaderCase, index: number) => LoaderCase | undefined,
+    index: number,
+  ): Promise<void> => {
+    if (tries >= SHRINK_TRIES) return;
+    const candidate = drop(current, index);
+    if (candidate === undefined) return;
+    const diverges = (await loaderDivergences(candidate, projectionFor)).length > 0;
+    tries += 1;
+    if (diverges) current = candidate;
+    return phase(drop, diverges ? index : index + 1);
+  };
+  await forEachInOrder([withoutQuery, withoutFile, withoutLine], (drop) => phase(drop, 0));
   return current;
 }
 
@@ -453,12 +461,13 @@ export async function loaderDifferentialFailures(
   projectionFor: ProjectionFor,
 ): Promise<string[]> {
   const failures: string[] = [];
-  for (const seed of seeds) {
+  // In order: only the first few failures are shrunk, so which ones depends on order.
+  await forEachInOrder(seeds, async (seed) => {
     const testCase = generatedLoaderCase(seed, features);
-    if ((await loaderDivergences(testCase, projectionFor)).length === 0) continue;
+    if ((await loaderDivergences(testCase, projectionFor)).length === 0) return;
     const minimal = failures.length < SHRUNK_FAILURES ? await shrink(testCase, projectionFor) : testCase;
     const shape = JSON.stringify({ files: minimal.files, queries: minimal.queries });
     failures.push(`seed ${seed}: ${shape}\n  ${(await loaderDivergences(minimal, projectionFor)).join('\n  ')}`);
-  }
+  });
   return failures;
 }

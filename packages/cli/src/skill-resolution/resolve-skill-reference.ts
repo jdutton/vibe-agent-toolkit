@@ -125,11 +125,11 @@ function matchDeclaredDist(scope: DeclaredSkillScope, absPath: string): Declared
 }
 
 /** {@link findDeclaredSkillForSourceDir} within an already-loaded scope. */
-async function matchDeclaredSource(scope: DeclaredSkillScope, absPath: string): Promise<BuildableReference | undefined> {
+function matchDeclaredSource(scope: DeclaredSkillScope, absPath: string): Promise<BuildableReference | undefined> {
   for (const [sourcePath, name] of scope.byPath) {
     if (safePath.resolve(dirname(sourcePath)) === absPath) return buildBuildable(name, sourcePath, scope);
   }
-  return undefined;
+  return Promise.resolve(undefined);
 }
 
 /**
@@ -234,8 +234,14 @@ async function resolveBareName(ref: string, cwd: string): Promise<SkillReference
   };
 }
 
-export async function resolveSkillReference(ref: string, cwd: string): Promise<SkillReference> {
-  const shape = classifyToken(ref);
+export function resolveSkillReference(ref: string, cwd: string): Promise<SkillReference> {
+  let shape: ReturnType<typeof classifyToken>;
+  try {
+    shape = classifyToken(ref);
+  } catch (error) {
+    // A malformed source spec is still this call's rejection.
+    return Promise.reject(error as Error);
+  }
   if (shape.shape === 'source-spec') {
     // `path:<dir>` is a DISAMBIGUATOR — it says "read this token as a path, not a
     // bare name" — not a build directive. So it takes the same rung-2 walk a bare
@@ -245,7 +251,7 @@ export async function resolveSkillReference(ref: string, cwd: string): Promise<S
     // build directive. Scoped to `path:` alone: `workspace:`, `npm:`, `url:` and
     // `vendored` are not paths into this project tree and stay untouched.
     if ('path' in shape.source) return resolveDefinitePath(shape.source.path, cwd);
-    return { kind: 'source', source: shape.source };
+    return Promise.resolve({ kind: 'source', source: shape.source });
   }
   if (shape.shape === 'definite-path') return resolveDefinitePath(ref, cwd);
   return resolveBareName(ref, cwd);

@@ -119,41 +119,27 @@ describe.skipIf(process.platform === 'win32')('Audit Dogfooding (system test)', 
     expectSuccessfulAudit(result);
 
     // Should scan multiple skills (we have 5+ dist skills)
-    const summary = parsed['summary'] as Record<string, unknown> | undefined;
-    expect(summary).toBeDefined();
-    const filesScanned = summary?.['filesScanned'] as number | undefined;
-    expect(filesScanned).toBeDefined();
-    expect(filesScanned).toBeGreaterThan(1);
+    expect(parsed['examined']).toBeGreaterThan(1);
   });
 
   describe('link traversal (end-to-end)', () => {
-    it('should follow transitive links and report linkedFiles', async () => {
+    it('should follow transitive links, reporting a finding in a file only a link reaches', async () => {
       const skillDir = createLinkedSkill(tempDir);
       const skillPath = safePath.join(skillDir, 'SKILL.md');
 
-      const { result, parsed } = await executeCliAndParseYaml(
-        binPath,
-        ['audit', '--verbose', skillPath],
-        { cwd: tempDir },
-      );
+      // The clean tree is clean.
+      const clean = await executeCliAndParseYaml(binPath, ['audit', '--verbose', skillPath], { cwd: tempDir });
+      expect(clean.result.status).toBe(0);
+      expect(clean.parsed['status']).toBe('ok');
+      expect((clean.parsed['data'] as { files: unknown[] }).files).toHaveLength(1);
 
-      expect(result.status).toBe(0);
-      expect(parsed['status']).toBe('success');
+      // guide-c is reachable ONLY through guide-a: a broken link there is seen
+      // only if the traversal followed the transitive link.
+      fs.appendFileSync(safePath.join(skillDir, 'resources', 'guide-c.md'), '\nSee [gone](gone.md).\n');
+      const { parsed } = await executeCliAndParseYaml(binPath, ['audit', '--verbose', skillPath], { cwd: tempDir });
 
-      // Verify linkedFiles are present in the output
-      const files = parsed['files'] as Array<Record<string, unknown>> | undefined;
-      expect(files).toBeDefined();
-      expect(files).toHaveLength(1);
-
-      const skillResult = files?.[0];
-      const linkedFiles = skillResult?.['linkedFiles'] as Array<Record<string, unknown>> | undefined;
-      expect(linkedFiles).toBeDefined();
-      // guide-a, guide-b, and guide-c (transitive from guide-a)
-      expect(linkedFiles).toHaveLength(3);
-
-      // Verify transitive link was followed (guide-c is only reachable via guide-a)
-      const linkedPaths = linkedFiles?.map(f => String(f['path'])) ?? [];
-      expect(linkedPaths.some(p => p.endsWith('guide-c.md'))).toBe(true);
+      const findings = parsed['findings'] as Array<Record<string, unknown>>;
+      expect(findings.some((f) => String(f['location']).endsWith('resources/guide-c.md'))).toBe(true);
     });
 
     it('should detect broken links via CLI', async () => {
@@ -176,11 +162,11 @@ description: Skill with broken links
         { cwd: tempDir },
       );
 
-      // Exit 1: the exit code follows `status`, and this tree has an error-severity finding.
+      // Exit 1: this tree has an error-severity finding.
       expect(result.status).toBe(1);
+      expect(parsed['status']).toBe('findings');
 
-      const files = parsed['files'] as Array<Record<string, unknown>> | undefined;
-      const issues = files?.[0]?.['issues'] as Array<Record<string, unknown>> | undefined;
+      const issues = parsed['findings'] as Array<Record<string, unknown>> | undefined;
       expect(issues).toBeDefined();
       expect(issues?.some(i => i['code'] === 'LINK_INTEGRITY_BROKEN')).toBe(true);
     });
@@ -201,8 +187,7 @@ description: Skill with broken links
       // Should succeed (unreferenced is info, not error)
       expect(result.status).toBe(0);
 
-      const files = parsed['files'] as Array<Record<string, unknown>> | undefined;
-      const issues = files?.[0]?.['issues'] as Array<Record<string, unknown>> | undefined;
+      const issues = parsed['findings'] as Array<Record<string, unknown>> | undefined;
       expect(issues?.some(i =>
         i['code'] === 'SKILL_UNREFERENCED_FILE' &&
         String(i['message']).includes('orphan.md'),
@@ -222,8 +207,9 @@ description: Skill with broken links
         { cwd: tempDir },
       );
 
-      const files = parsed['files'] as Array<Record<string, unknown>> | undefined;
-      const issues = files?.[0]?.['issues'] as Array<Record<string, unknown>> | undefined;
+      const issues = parsed['findings'] as Array<Record<string, unknown>> | undefined;
+      // Vacuity guard: the orphan-free control above proved the detector fires.
+      expect(issues).toBeDefined();
       const unreferencedMessages = issues
         ?.filter(i => i['code'] === 'SKILL_UNREFERENCED_FILE')
         ?.map(i => String(i['message'])) ?? [];

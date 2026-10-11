@@ -1,90 +1,107 @@
 /**
- * `vat rag index` must not report `success` over a run that dropped documents.
+ * `vat rag index` must not report a clean run over one that dropped documents.
  *
  * The command used to publish a HARDCODED `status: 'success'` and an
  * UNCONDITIONAL `process.exit(0)`, no matter what `indexResources` put in
  * `errors`. Observed against this repo's own `docs/`: two resources failed to
- * index, their content became unsearchable, and the report still said
- * `status: success` with exit 0 — nothing a CI step could fail on.
+ * index, their content became unsearchable, and the report still said success
+ * with exit 0 — nothing a CI step could fail on.
  *
- * The mapping from an index result to `{ status, exitCode }` is pure, so it is
- * pinned here rather than through a CLI spawn plus a real vector database.
- * `errors` is optional on `IndexResult`, so BOTH the `undefined` and the `[]`
- * shapes have to land on success — the old code guarded
- * `errors && errors.length > 0`, and a rewrite that reads only `.length` would
- * throw on the shape the provider actually returns when nothing failed.
+ * Each resource the index does not hold is now a `RAG_DOCUMENT_INDEX_FAILED`
+ * finding at its path, and the exit code is DERIVED from the report. The
+ * mapping is pure, so it is pinned here rather than through a CLI spawn plus a
+ * real vector database. `errors` is optional on `IndexResult`, so BOTH the
+ * `undefined` and the `[]` shapes have to be a clean run.
  */
 
+import { exitCodeForReport, toFindings } from '@vibe-agent-toolkit/schema';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { indexOutcome, unreadableIndexErrors } from '../../../src/commands/rag/index-command.js';
+import { buildIndexReport, providerIndexIssues, unreadableIndexIssues } from '../../../src/commands/rag/index-command.js';
+import { RAG_INDEX_REPORT_SCHEMA } from '../../../src/commands/rag/index-schema.js';
+
+const ROOT = safePath.resolve('/srv/project');
+
+const COUNTS = {
+  resourcesIndexed: 1,
+  resourcesSkipped: 0,
+  resourcesEmpty: 0,
+  resourcesUpdated: 0,
+  chunksCreated: 3,
+  chunksDeleted: 0,
+};
 
 /** One failure entry, in the shape `IndexResult['errors']` declares. */
 function failure(resourceId: string): { resourceId: string; error: string } {
   return { resourceId, error: 'A single line of 308 tokens exceeds the chunk budget' };
 }
 
-describe('indexOutcome', () => {
-  it('reports success and exit 0 when errors is undefined', () => {
-    expect(indexOutcome({})).toEqual({ status: 'success', exitCode: 0 });
+describe('buildIndexReport', () => {
+  it('is ok, exit 0, with no issue, and publishes exactly the six counters', () => {
+    const report = buildIndexReport({ examined: 1, result: COUNTS, issues: [], durationMs: 9 });
+
+    expect(RAG_INDEX_REPORT_SCHEMA.parse(report).status).toBe('ok');
+    expect(exitCodeForReport(report)).toBe(0);
+    expect(report.data).toStrictEqual({ resourcesIndexed: 1, resourcesSkipped: 0, resourcesEmpty: 0, resourcesUpdated: 0, chunksCreated: 3, chunksDeleted: 0 });
   });
 
-  it('reports success and exit 0 when errors is an empty array', () => {
-    expect(indexOutcome({ errors: [] })).toEqual({ status: 'success', exitCode: 0 });
-  });
+  it('rag index with one failed document is a findings report, exit 1', () => {
+    const locations = new Map([['docs-guide', 'docs/guide.md']]);
+    const issues = providerIndexIssues([failure('docs-guide')], locations);
+    const report = buildIndexReport({ examined: 2, result: COUNTS, issues, durationMs: 9 });
 
-  // One failed resource and several are the same decision; a table rather than
-  // two near-identical blocks, which this repo's duplication gate rejects.
+    RAG_INDEX_REPORT_SCHEMA.parse(report);
+    expect(report.status).toBe('findings');
+    expect(report.findings).toStrictEqual(toFindings(issues));
+    expect(report.findings).toMatchObject([{ code: 'RAG_DOCUMENT_INDEX_FAILED', severity: 'error', location: 'docs/guide.md' }]);
+    // A REPORTED outcome — the counters for what did land are all there — so 1, never 2.
+    expect(exitCodeForReport(report)).toBe(1);
+  });
+});
+
+describe('providerIndexIssues', () => {
+  // `errors` is optional on `IndexResult`, so a provider MAY omit it; both shapes are "nothing failed".
   it.each([
-    ['a single failed resource', ['docs-validation-codes-md']],
-    ['several failed resources', ['docs-validation-codes-md', 'docs-writing-tests-md', 'readme-md']],
-  ])('reports partial and a non-zero exit for %s', (_label, resourceIds) => {
-    const outcome = indexOutcome({ errors: resourceIds.map(failure) });
-
-    expect(outcome).toEqual({ status: 'partial', exitCode: 1 });
+    ['errors is undefined', undefined],
+    ['errors is empty', []],
+  ])('is no issue when %s', (_label, errors) => {
+    expect(providerIndexIssues(errors, new Map())).toEqual([]);
   });
 
-  it('uses exit 1, the reported-outcome code, not 2 which means system error', () => {
-    // Partially-indexed-with-errors is a REPORTED outcome: the report is on
-    // stdout and is complete. 2 is reserved for a command that could not run.
-    expect(indexOutcome({ errors: [failure('anything')] }).exitCode).toBe(1);
+  it('locates a failure at its resource path, and falls back to the id the registry never mapped', () => {
+    const issues = providerIndexIssues([failure('known'), failure('orphan')], new Map([['known', 'docs/known.md']]));
+
+    expect(issues.map((issue) => issue.location)).toEqual(['docs/known.md', 'orphan']);
+    for (const issue of issues) expect(issue.message).toContain('308 tokens');
   });
 });
 
 /**
  * A resource the crawl enumerated but could not READ never reaches
- * `indexResources`, so it is in none of the provider's counters and not in
- * its `errors` — the registry logs it (`getUnreadableResources()`) and no
- * command read that log. `vat rag index` published `status: success` over a
- * corpus with a document missing from it. The log is folded into the same
- * `errors` list the provider's failures land in, so one status covers both.
+ * `indexResources`, so it is in none of the provider's counters and not in its
+ * `errors` — the registry logs it (`getUnreadableResources()`). It is the same
+ * finding as a provider failure: the document is not in the index.
  */
-describe('unreadableIndexErrors', () => {
-  const root = '/srv/project';
-
+describe('unreadableIndexIssues', () => {
   it('maps nothing to nothing', () => {
-    expect(unreadableIndexErrors([], root)).toEqual([]);
+    expect(unreadableIndexIssues([], ROOT)).toEqual([]);
   });
 
-  it('names each file relative to the crawl root, with the reason', () => {
-    const errors = unreadableIndexErrors(
+  it('locates each file relative to the crawl root, with the reason', () => {
+    const issues = unreadableIndexIssues(
       [
-        { filePath: `${root}/docs/bad.md`, reason: 'EACCES: permission denied', code: 'EACCES' },
-        { filePath: `${root}/docs/gone.md`, reason: 'ENOENT: no such file' },
+        { filePath: safePath.join(ROOT, 'docs/bad.md'), reason: 'EACCES: permission denied', code: 'EACCES' },
+        { filePath: safePath.join(ROOT, 'docs/gone.md'), reason: 'ENOENT: no such file' },
       ],
-      root,
+      ROOT,
     );
 
-    expect(errors.map((e) => e.resourceId)).toEqual(['docs/bad.md', 'docs/gone.md']);
-    expect(errors[0]?.error).toContain('EACCES: permission denied');
-    expect(errors[1]?.error).toContain('ENOENT: no such file');
-    // The entry has to say the document is NOT in the index, not merely that a read failed.
-    for (const entry of errors) expect(entry.error).toMatch(/not (?:in the index|indexed)/u);
-  });
-
-  it('turns a run with an unreadable resource into partial / exit 1 through indexOutcome', () => {
-    const errors = unreadableIndexErrors([{ filePath: `${root}/docs/bad.md`, reason: 'EACCES' }], root);
-
-    expect(indexOutcome({ errors })).toEqual({ status: 'partial', exitCode: 1 });
+    expect(issues.map((issue) => issue.location)).toEqual(['docs/bad.md', 'docs/gone.md']);
+    expect(issues.map((issue) => issue.code)).toEqual(['RAG_DOCUMENT_INDEX_FAILED', 'RAG_DOCUMENT_INDEX_FAILED']);
+    expect(issues[0]?.message).toContain('EACCES: permission denied');
+    expect(issues[1]?.message).toContain('ENOENT: no such file');
+    // The finding has to say the document is NOT in the index, not merely that a read failed.
+    for (const issue of issues) expect(issue.message).toMatch(/not in the index/u);
   });
 });

@@ -8,10 +8,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { stat, mkdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { stat, mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { isPathAbsentError, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, renameFileAtomic, safePath, VatError } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 
 // ---------------------------------------------------------------------------
@@ -707,7 +707,7 @@ async function downloadFile(url: string, destination: string): Promise<void> {
   await writeFile(temporary, Buffer.from(arrayBuffer));
 
   try {
-    await rename(temporary, destination);
+    await renameFileAtomic(temporary, destination);
   } catch (cause) {
     // A concurrent downloader may already hold the destination open, which on
     // Windows makes the replace fail. Its copy is just as complete as ours, so
@@ -715,6 +715,11 @@ async function downloadFile(url: string, destination: string): Promise<void> {
     await unlink(temporary).catch(() => undefined);
     if (!(await fileExists(destination))) throw cause;
   }
+}
+
+/** Download progress goes to STDERR: stdout is the calling command's document. */
+function progress(line: string): void {
+  process.stderr.write(`[vat-onnx] ${line}\n`);
 }
 
 /**
@@ -746,18 +751,18 @@ export async function ensureModelFiles(
   const modelExists = await fileExists(modelPath);
   if (!modelExists) {
     const modelUrl = `${baseUrl}/onnx/${onnxFileName}`;
-    console.log(`[vat-onnx] Downloading model: ${modelUrl}`);
-    console.log(`[vat-onnx] Destination: ${modelPath}`);
+    progress(`Downloading model: ${modelUrl}`);
+    progress(`Destination: ${modelPath}`);
     await downloadFile(modelUrl, modelPath);
-    console.log('[vat-onnx] Model download complete.');
+    progress('Model download complete.');
   }
 
   const vocabExists = await fileExists(vocabPath);
   if (!vocabExists) {
     const vocabUrl = `${baseUrl}/vocab.txt`;
-    console.log(`[vat-onnx] Downloading vocab: ${vocabUrl}`);
+    progress(`Downloading vocab: ${vocabUrl}`);
     await downloadFile(vocabUrl, vocabPath);
-    console.log('[vat-onnx] Vocab download complete.');
+    progress('Vocab download complete.');
   }
 
   return { modelPath, vocabPath };

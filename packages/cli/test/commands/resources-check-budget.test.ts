@@ -37,10 +37,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { ProgressEntry } from '../../src/commands/resources/check-progress.js';
 import { unitInFlight } from '../../src/commands/resources/check-progress.js';
+import { CHECK_REPORT_SCHEMA } from '../../src/commands/resources/check-schema.js';
 import {
   type AbnormalDeath,
   parseBudgetSeconds,
   pollWatchdog,
+  readCompletedDocument,
   requireSupervisableFlags,
   resolveChildEnding,
   resolveSilentCompletion,
@@ -50,7 +52,6 @@ import {
 import {
   buildCheckOutputData,
   buildInterruptedCheckInput,
-  CHECK_REPORT_SCHEMA,
   type CheckPayloadInput,
   NODE_FATAL_ABORT_EXIT_CODE,
 } from '../../src/commands/resources/check.js';
@@ -415,9 +416,12 @@ describe('buildInterruptedCheckInput', () => {
 
     expect(payload.status).toBe('error');
     expect(exitCodeForReport(payload)).toBe(ExitCode.ERROR);
-    expect(payload.error).toContain('before its population completed');
+    expect(payload.error.code).toBe('RUN_INCOMPLETE');
+    expect(payload.error.message).toContain('before its population completed');
     // The envelope's error branch: the reason is in `error`, not in `findings`.
     expect(payload.findings).toStrictEqual([]);
+    // No refusal document carries `durationMs`.
+    expect(payload).not.toHaveProperty('durationMs');
     expect(CHECK_REPORT_SCHEMA.safeParse(payload).success).toBe(true);
   });
 
@@ -451,8 +455,8 @@ describe('buildInterruptedCheckInput', () => {
     // measured timings, and a bare `/2/` was once satisfied by one of those.
     const { error } = buildCheckOutputData(killed([STARTED]));
 
-    expect(error).toContain('no progress for 2s');
-    expect(error).toContain('before its population completed');
+    expect(error.message).toContain('no progress for 2s');
+    expect(error.message).toContain('before its population completed');
   });
 
   it('says the child had not finished STARTING when the log is empty — also exit 2', () => {
@@ -462,8 +466,8 @@ describe('buildInterruptedCheckInput', () => {
     const payload = buildCheckOutputData(killed([]));
 
     expect(exitCodeForReport(payload)).toBe(ExitCode.ERROR);
-    expect(payload.error).toContain('before the child process had finished starting');
-    expect(payload.error).not.toContain('before its population completed');
+    expect(payload.error.message).toContain('before the child process had finished starting');
+    expect(payload.error.message).not.toContain('before its population completed');
   });
 });
 
@@ -646,6 +650,37 @@ describe('resolveSilentCompletion — the WINDOWS half of the signal-death defec
   });
 });
 
+describe('readCompletedDocument — a completion whose document does not survive the trip', () => {
+  // 🚨 One situation, one ending. A child that exits having written a document
+  // cut off mid-write (or anything that is not this verb's document) is the
+  // silent completion's sibling, not a VAT defect: it publishes the interrupted
+  // document from the progress log, exit 1 — never INTERNAL_ERROR, exit 2.
+  it('reads a truncated document as an abnormal death carrying the code', () => {
+    const read = readCompletedDocument(A_DOCUMENT, 1, 'yaml');
+
+    expect(read).toMatchObject({ death: { kind: 'unparseable-output', code: 1 } });
+  });
+
+  it('publishes the interrupted document for it — findings, exit 1, not a refusal', () => {
+    const read = readCompletedDocument(`{"status": "ok", "exam`, 0, 'json');
+    if (!('death' in read)) throw new Error('a truncated document was accepted');
+    const report = buildCheckOutputData(diedOf(read.death));
+
+    expect(report.status).toBe('findings');
+    expect(report.findings.map((finding) => finding.code)).toContain('RESOURCE_CHECK_BROKEN');
+    expect(report.findings[0]?.message).toContain('exited 0');
+    expect(exitCodeForReport(report)).toBe(ExitCode.FINDINGS);
+  });
+
+  it('accepts a whole document, and its exit code is derived from it', () => {
+    // ⛔ The negative control: without it "always a death" passes the two above.
+    const whole = buildCheckOutputData(diedOf({ kind: 'no-status' }));
+    const read = readCompletedDocument(JSON.stringify(whole), 0, 'json');
+
+    expect(read).toMatchObject({ document: { report: { status: whole.status } } });
+  });
+});
+
 describe('the document a SILENT completion publishes', () => {
   /** The Windows shape: exited with a code that encodes an abort, said nothing. */
   const aborted = (): CheckPayloadInput =>
@@ -769,13 +804,13 @@ describe('the document a run that DIED publishes', () => {
 
     expect(exitCodeForReport(payload)).toBe(ExitCode.ERROR);
     expect(payload.data.population).toBeNull();
-    expect(payload.error).toContain(ABORTED);
+    expect(payload.error.message).toContain(ABORTED);
   });
 
   it('does not blame the budget in that error either', () => {
     // 🪤 The name promises an ABSENCE and the assertion was a presence, so a
     // message that said both things would have passed. Both halves now.
-    const message = buildCheckOutputData(died(ABORTED, [STARTED])).error;
+    const message = buildCheckOutputData(died(ABORTED, [STARTED])).error.message;
 
     expect(message).toMatch(/died|terminated/i);
     expect(message).not.toMatch(/Raise it with `--budget/);

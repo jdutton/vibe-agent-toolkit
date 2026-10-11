@@ -25,6 +25,9 @@ export * from './validation-framework.js';
 // The one exit-code contract every VAT process ends on
 export * from './exit-code.js';
 
+// Which refusal a classified filesystem fault is (side × class)
+export * from './fs-fault-refusals.js';
+
 // Core schemas
 export {
   AgentMetadataSchema,

@@ -70,10 +70,15 @@ export function collectAnchors(node: unknown, trail: string, out: AnchorSighting
   }
 }
 
-/** Collect the anchors of a document with its `root` key excluded. */
+/**
+ * Collect the anchors of a document with its stated root excluded — a top-level
+ * `root` (legacy documents) or a report envelope's `data.root`.
+ */
 export function anchorsBelowRoot(document: object): AnchorSighting[] {
   const out: AnchorSighting[] = [];
-  collectAnchors({ ...document, root: undefined }, '', out);
+  const data = (document as { data?: unknown }).data;
+  const dataWithoutRoot = data !== null && typeof data === 'object' ? { data: { ...data, root: undefined } } : {};
+  collectAnchors({ ...document, root: undefined, ...dataWithoutRoot }, '', out);
   return out;
 }
 

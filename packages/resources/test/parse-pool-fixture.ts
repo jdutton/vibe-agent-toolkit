@@ -87,7 +87,7 @@ const LADDER_TOP = 32;
  *
  * @param ms - How long to wait
  */
-async function delay(ms: number): Promise<void> {
+function delay(ms: number): Promise<void> {
   return new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
@@ -144,11 +144,11 @@ export function fakePool(
     // It throws rather than answering `null`, so a change that starts routing
     // here fails loudly instead of falling through to a cache read that finds
     // nothing.
-    parseIntoCache: async (): Promise<never> => {
-      throw new Error('cache transport is not exercised by these suites');
-    },
-    shutdown: async (): Promise<void> => {
+    parseIntoCache: (): Promise<never> =>
+      Promise.reject(new Error('cache transport is not exercised by these suites')),
+    shutdown: (): Promise<void> => {
       record.shutdowns += 1;
+      return Promise.resolve();
     },
   };
 

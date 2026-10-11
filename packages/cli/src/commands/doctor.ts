@@ -10,64 +10,32 @@
 import { existsSync, readFileSync } from 'node:fs';
 
 
-import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { buildReport, toFindings, type FindingsReport, type Gate, type OkReport, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
+  ASSET_REFERENCE_UNREADABLE_CODE,
+  ASSET_REFERENCE_UNRESOLVED_CODE,
   findConfigFile,
-  isFilesystemAccessError,
+  fsFaultOf,
   isPathAbsentError,
+  isVatError,
   resolveAssetReference,
   safePath,
 } from '@vibe-agent-toolkit/utils';
 import {
   getToolVersion,
 } from '@vibe-agent-toolkit/utils/process';
-import type { Command } from 'commander';
+import { Option, type Command } from 'commander';
 import * as semver from 'semver';
 
 import { COMMAND_LOADERS } from '../command-loaders.js';
+import type { DocumentFormat } from '../report-schemas.js';
+import { refusalCodeOf } from '../utils/command-refusal.js';
 import { loadConfig } from '../utils/config-loader.js';
+import { endWithRefusal, endWithReport, NOTHING_FINISHED } from '../utils/document-writer.js';
 import { projectRootOrNull } from '../utils/project-root-policy.js';
 
-/**
- * What a single check concluded.
- *
- * Four values, because a check has four possible answers and a boolean has two.
- * `passed: boolean` forced "I could not tell" and "it does not apply" to be
- * spelled as `true` — the reassuring value — so a swallowed EACCES and a healthy
- * build rendered identically, both as `✅`, and both counted toward
- * "7/7 checks passed".
- *
- * - `pass`         — the check ran and the thing is fine.
- * - `fail`         — the check ran and the thing is wrong. The only outcome that
- *                    affects the exit code.
- * - `undetermined` — the check could not reach an answer (network down, file
- *                    unreadable). NOT a pass: nothing was verified.
- * - `skipped`      — the check does not apply here (e.g. a VAT-source-tree-only
- *                    check outside the source tree). Determinate, but not a pass.
- */
-export type DoctorOutcome = 'pass' | 'fail' | 'undetermined' | 'skipped';
-
-/**
- * Result of a single doctor check
- */
-export interface DoctorCheckResult {
-  /** Name of the check */
-  name: string;
-  /** What the check concluded */
-  outcome: DoctorOutcome;
-  /** Message describing the result */
-  message: string;
-  /** Optional suggestion for fixing the issue */
-  suggestion?: string;
-}
-
-/** How many checks landed in each outcome. Published beside the verdict, never folded into it. */
-export interface DoctorOutcomeCounts {
-  pass: number;
-  fail: number;
-  undetermined: number;
-  skipped: number;
-}
+import { renderDoctorBlock } from './doctor-render.js';
+import type { DoctorCheckResult, DoctorData } from './doctor-schema.js';
 
 /**
  * Project context information
@@ -91,10 +59,6 @@ export interface ProjectContext {
 export interface DoctorResult {
   /** Every check that ran, unfiltered */
   checks: DoctorCheckResult[];
-  /** Total number of checks run (always `checks.length`) */
-  totalChecks: number;
-  /** Distribution across outcomes; sums to `totalChecks` */
-  outcomeCounts: DoctorOutcomeCounts;
   /** Project context information */
   projectContext: ProjectContext;
 }
@@ -170,7 +134,7 @@ function requiredNodeRange(): { range: string } | { problem: 'unreadable' | 'und
     // "Cannot be read" is the FILESYSTEM's answer, and the caller reports it as
     // one ("check permissions"). A throw with no errno is a defect, and is left
     // to the caller's own catch, which names it as what it is.
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return { problem: 'unreadable' };
   }
 
@@ -378,9 +342,10 @@ export function checkConfigFile(): DoctorCheckResult {
 function checkSchemaFiles(
   collections: Record<string, { validation?: { frontmatterSchema?: string | undefined } | undefined }>,
   configDir: string
-): { schemaFiles: string[]; missingSchemas: string[] } {
+): { schemaFiles: string[]; missingSchemas: string[]; unreadableSchemas: string[] } {
   const schemaFiles: string[] = [];
   const missingSchemas: string[] = [];
+  const unreadableSchemas: string[] = [];
 
   for (const collectionConfig of Object.values(collections)) {
     const schemaPath = collectionConfig.validation?.frontmatterSchema;
@@ -392,29 +357,47 @@ function checkSchemaFiles(
           missingSchemas.push(schemaPath);
         }
       } catch (error) {
-        // resolveAssetReference throws for unresolvable bare specifiers
-        // (package not installed, subpath not exported). vat doctor's
-        // contract is "report what's missing" — convert the throw back
-        // to a missingSchemas entry. Only THOSE two: any other throw is not
-        // a missing schema and reaches the caller's own catch, which reports
-        // it under its own message rather than under "Missing:".
-        if (!isUnresolvableSpecifier(error)) throw error;
-        missingSchemas.push(schemaPath);
+        // A bare specifier that names nothing installed is coded
+        // ASSET_REFERENCE_UNRESOLVED: a missingSchemas entry. One whose package
+        // is installed but unreadable (a malformed package.json) is not missing,
+        // and is listed apart. Any other throw reaches the caller's own catch.
+        if (isVatError(error, ASSET_REFERENCE_UNREADABLE_CODE)) unreadableSchemas.push(schemaPath);
+        else if (isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE)) missingSchemas.push(schemaPath);
+        else throw error;
       }
     }
   }
 
-  return { schemaFiles, missingSchemas };
+  return { schemaFiles, missingSchemas, unreadableSchemas };
 }
 
-/**
- * Whether `resolveAssetReference` threw because the specifier names nothing
- * installed. It wraps Node's resolution error and keeps it as `cause`, so the
- * code is one level down.
- */
-function isUnresolvableSpecifier(error: unknown): boolean {
-  const code = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
-  return code === 'MODULE_NOT_FOUND' || code === 'ERR_PACKAGE_PATH_NOT_EXPORTED';
+/** The failed config check for schema references that are missing, or whose package cannot be read. */
+function schemaProblemResult(
+  collectionCount: number,
+  referenced: number,
+  missingSchemas: string[],
+  unreadableSchemas: string[],
+): DoctorCheckResult {
+  const counts = [
+    missingSchemas.length > 0 ? `${missingSchemas.length} missing` : undefined,
+    unreadableSchemas.length > 0 ? `${unreadableSchemas.length} unreadable` : undefined,
+  ].filter((part) => part !== undefined).join(', ');
+  const details = [
+    `Collections: ${collectionCount} defined`,
+    `Schema files: ${referenced} referenced, ${counts}`,
+    ...(missingSchemas.length > 0 ? [`Missing: ${missingSchemas.join(', ')}`] : []),
+    ...(unreadableSchemas.length > 0 ? [`Unreadable: ${unreadableSchemas.join(', ')} (the package is installed but its package.json cannot be read)`] : []),
+  ].join('\n   ');
+  const suggestions = [
+    ...(missingSchemas.length > 0 ? ['Create missing schema files or update collection config'] : []),
+    ...(unreadableSchemas.length > 0 ? ['fix or reinstall the package whose package.json cannot be read'] : []),
+  ];
+  return {
+    name: CHECK_NAME_CONFIG_VALID,
+    outcome: 'fail',
+    message: `Configuration valid but schema files ${counts}:\n   ${details}`,
+    suggestion: suggestions.join('; '),
+  };
 }
 
 /**
@@ -450,22 +433,11 @@ export function checkConfigValid(): DoctorCheckResult {
 
       // Check if schema files exist
       const collectionCount = Object.keys(collections).length;
-      const { schemaFiles, missingSchemas } = checkSchemaFiles(collections, configDir);
+      const { schemaFiles, missingSchemas, unreadableSchemas } = checkSchemaFiles(collections, configDir);
 
       // Build message with details
-      if (missingSchemas.length > 0) {
-        const details = [
-          `Collections: ${collectionCount} defined`,
-          `Schema files: ${schemaFiles.length} referenced, ${missingSchemas.length} missing`,
-          `Missing: ${missingSchemas.join(', ')}`,
-        ].join('\n   ');
-
-        return {
-          name: CHECK_NAME_CONFIG_VALID,
-          outcome: 'fail',
-          message: `Configuration valid but schema files missing:\n   ${details}`,
-          suggestion: 'Create missing schema files or update collection config',
-        };
+      if (missingSchemas.length > 0 || unreadableSchemas.length > 0) {
+        return schemaProblemResult(collectionCount, schemaFiles.length, missingSchemas, unreadableSchemas);
       }
 
       // All good - build success message with details
@@ -664,15 +636,13 @@ function describeLoadFailure(error: unknown): string {
  * @returns A failure listing every command whose module could not be loaded
  */
 export async function checkCommandModules(): Promise<DoctorCheckResult> {
-  const broken: { name: string; reason: string }[] = [];
-
-  for (const [name, load] of Object.entries(COMMAND_LOADERS)) {
-    try {
-      await load();
-    } catch (error) {
-      broken.push({ name, reason: describeLoadFailure(error) });
-    }
-  }
+  // Loaded together; the failures are listed in table order whatever order they land in.
+  const entries = Object.entries(COMMAND_LOADERS);
+  const outcomes = await Promise.allSettled(entries.map(([, load]) => load()));
+  const broken = entries.flatMap(([name], index) => {
+    const outcome = outcomes[index];
+    return outcome?.status === 'rejected' ? [{ name, reason: describeLoadFailure(outcome.reason) }] : [];
+  });
 
   const total = Object.keys(COMMAND_LOADERS).length;
 
@@ -790,91 +760,43 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
     await checkCommandModules(),
   ];
 
-  // 3. Report every check plus the outcome distribution. Filtering is the
-  //    renderer's job — see selectDisplayChecks.
+  // 3. Report every check. Filtering is the renderer's job — see selectDisplayChecks.
+  return { checks, projectContext };
+}
+
+/** Doctor has no `--strict`: an undetermined check warns, and a warning never fails the run. */
+const DOCTOR_GATE: Gate = { strict: false };
+
+/**
+ * A check's outcome as a finding: `fail` is an error, `undetermined` a warning
+ * (nothing was verified — not health, not a failure); `pass` and `skipped` say
+ * nothing a finding should.
+ */
+function checkIssue(check: DoctorCheckResult): ValidationIssue | undefined {
+  if (check.outcome !== 'fail' && check.outcome !== 'undetermined') return undefined;
   return {
-    checks,
-    totalChecks: checks.length,
-    outcomeCounts: countByOutcome(checks),
-    projectContext,
+    code: check.outcome === 'fail' ? 'DOCTOR_CHECK_FAILED' : 'DOCTOR_CHECK_WARNED',
+    severity: check.outcome === 'fail' ? 'error' : 'warning',
+    message: `${check.name}: ${check.message}`,
+    ...(check.suggestion === undefined ? {} : { fix: check.suggestion }),
   };
 }
 
-/** Tally checks by outcome. The four buckets always sum to `checks.length`. */
-export function countByOutcome(checks: readonly DoctorCheckResult[]): DoctorOutcomeCounts {
-  const counts: DoctorOutcomeCounts = { pass: 0, fail: 0, undetermined: 0, skipped: 0 };
-  for (const check of checks) {
-    counts[check.outcome] += 1;
-  }
-  return counts;
-}
-
 /**
- * Which checks the renderer prints.
+ * The document a doctor run publishes: every check a row, every failed or
+ * undetermined one a finding, `examined` the checks run.
  *
- * Verbose prints all of them. Concise hides only the checks with nothing to say:
- * a clean `pass` with no suggestion, and a `skipped` check that does not apply
- * here. `fail` and `undetermined` are ALWAYS printed — an undetermined check is
- * the one a concise view must never swallow.
- *
- * Whatever this hides, {@link formatDoctorSummary} states the number of hidden
- * checks, so the printed list and the printed counts cannot disagree.
+ * @param result - What {@link runDoctor} returned
  */
-export function selectDisplayChecks(
-  checks: readonly DoctorCheckResult[],
-  verbose: boolean,
-): DoctorCheckResult[] {
-  if (verbose) return [...checks];
-  return checks.filter(
-    c => c.suggestion !== undefined || (c.outcome !== 'pass' && c.outcome !== 'skipped'),
-  );
-}
-
-const OUTCOME_ICONS: Record<DoctorOutcome, string> = {
-  pass: '✅',
-  fail: '❌',
-  undetermined: '❓',
-  skipped: '⏭️',
-};
-
-/**
- * The summary block: the distribution, how many checks were not rendered, and
- * the verdict.
- *
- * `displayedCount` is required precisely so the block can never claim more
- * checks than the reader was shown without saying so.
- */
-export function formatDoctorSummary(
-  counts: DoctorOutcomeCounts,
-  displayedCount: number,
-): string[] {
-  const total = counts.pass + counts.fail + counts.undetermined + counts.skipped;
-  const lines = [
-    `📊 Results: ${total} checks — ${counts.pass} passed, ${counts.fail} failed, ` +
-      `${counts.undetermined} undetermined, ${counts.skipped} skipped`,
-  ];
-
-  const hidden = total - displayedCount;
-  if (hidden > 0) {
-    lines.push(
-      `   ${hidden} not shown (nothing to report) — re-run with --verbose to see every check.`,
-    );
-  }
-
-  lines.push('');
-
-  if (counts.fail > 0) {
-    lines.push(`⚠️  ${counts.fail} check(s) failed. See suggestions above to fix.`);
-  } else if (counts.undetermined > 0) {
-    lines.push(
-      `❓ Nothing failed, but ${counts.undetermined} check(s) could not be determined — ` +
-        'that is not the same as healthy.',
-    );
-  } else {
-    lines.push('✨ All checks passed! Your vat setup looks healthy.');
-  }
-
-  return lines;
+export function doctorReport(result: DoctorResult): OkReport<DoctorData> | FindingsReport<DoctorData> {
+  const data: DoctorData = {
+    currentDir: result.projectContext.currentDir,
+    projectRoot: result.projectContext.projectRoot,
+    configPath: result.projectContext.configPath,
+    checks: result.checks,
+  };
+  const issues = result.checks.flatMap((check) => checkIssue(check) ?? []);
+  return buildReport({ examined: result.checks.length, findings: toFindings(issues), data, gate: DOCTOR_GATE });
 }
 
 /**
@@ -885,6 +807,11 @@ export function doctorCommand(program: Command): void {
     .command('doctor')
     .description('Diagnose vat setup and environment')
     .option('-v, --verbose', 'Show all checks including passing ones')
+    .addOption(
+      new Option('--format <format>', 'Output format: yaml (default), json, or text')
+        .choices(['yaml', 'json', 'text'])
+        .default('yaml'),
+    )
     .addHelpText('after', `
 When to run:
   • Before starting development (ensure environment is ready)
@@ -892,14 +819,21 @@ When to run:
   • When debugging setup issues
   • In CI/CD pipelines (validate build environment)
 
+Output:
+  The report document on stdout (YAML by default, --format json): data.checks
+  holds every check with its outcome, message and suggestion, and each failed or
+  undetermined check is also a finding. The human check block goes to stderr.
+  --format text puts that block on stdout instead, listing every check.
+
 Exit Codes:
-  0 - No check failed (an undetermined check is reported, not fatal)
-  1 - One or more checks failed (see output for suggested fixes)
+  0 - No check failed (an undetermined check is a warning finding, not fatal)
+  1 - One or more checks failed (DOCTOR_CHECK_FAILED findings)
+  2 - Doctor itself could not run; the document's error names why
 
 Outcomes:
   ✅ pass          the check ran and the thing is fine
-  ❌ fail          the check ran and the thing is wrong (exit 1)
-  ❓ undetermined  the check could not reach an answer — nothing was verified
+  ❌ fail          the check ran and the thing is wrong (DOCTOR_CHECK_FAILED, exit 1)
+  ❓ undetermined  the check could not reach an answer — nothing was verified (DOCTOR_CHECK_WARNED)
   ⏭️  skipped       the check does not apply here
 
 Requirements:
@@ -916,65 +850,24 @@ More details: vat --help --verbose or see packages/cli/docs/doctor.md
 `)
     .action(async function (this: Command) {
       // Check both command-level and parent (global) options for --verbose flag
-      const localOptions = this.opts<{ verbose?: boolean }>();
+      const localOptions = this.opts<{ verbose?: boolean; format: DocumentFormat }>();
       const parentOptions = this.parent?.opts<{ verbose?: boolean }>();
+      const verbose = localOptions.verbose ?? parentOptions?.verbose ?? false;
+      const format = localOptions.format;
 
-      const options = {
-        verbose: localOptions.verbose ?? parentOptions?.verbose ?? false,
-      };
-
+      let result: DoctorResult;
       try {
-        const result = await runDoctor(options);
-        displayResults(result, options.verbose);
+        result = await runDoctor({ verbose });
       } catch (error) {
         // The command crashed: not a failed check, a run that produced no verdict.
-        console.error('❌ Doctor could not run:');
-        console.error(error instanceof Error ? error.message : String(error));
-        process.exit(ExitCode.ERROR);
+        endWithRefusal('doctor', refusalCodeOf(error), error, format, DOCTOR_GATE, NOTHING_FINISHED);
       }
+
+      const report = doctorReport(result);
+      // Under --format text the block IS the stdout rendering; printing it here too would say it twice.
+      if (format !== 'text') {
+        process.stderr.write(renderDoctorBlock(report.data, verbose));
+      }
+      endWithReport('doctor', report, format);
     });
-}
-
-/**
- * Display doctor results in human-friendly format
- */
-function displayResults(result: DoctorResult, verbose: boolean): void {
-  console.log('🩺 vat doctor\n');
-
-  // Show project context if in subdirectory
-  const { currentDir, projectRoot, configPath } = result.projectContext;
-  const isSubdirectory = projectRoot && projectRoot !== currentDir;
-
-  if (isSubdirectory) {
-    console.log('📍 Project Context');
-    console.log(`   Current directory: ${currentDir}`);
-    console.log(`   Project root:      ${projectRoot}`);
-    if (configPath) {
-      console.log(`   Configuration:     ${configPath}`);
-    }
-    console.log('');
-  }
-
-  console.log('Running diagnostic checks...\n');
-
-  // Show checks
-  const displayed = selectDisplayChecks(result.checks, verbose);
-  for (const check of displayed) {
-    console.log(`${OUTCOME_ICONS[check.outcome]} ${check.name}`);
-    console.log(`   ${check.message}`);
-    if (check.suggestion) {
-      console.log(`   💡 ${check.suggestion}`);
-    }
-    console.log('');
-  }
-
-  // Summary — states the distribution AND how many checks it did not print,
-  // so the count can never contradict the list above it.
-  for (const line of formatDoctorSummary(result.outcomeCounts, displayed.length)) {
-    console.log(line);
-  }
-
-  if (result.outcomeCounts.fail > 0) {
-    process.exit(ExitCode.FINDINGS);
-  }
 }

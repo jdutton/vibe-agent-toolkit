@@ -1,0 +1,26 @@
+{
+  "status": "findings",
+  "examined": 3,
+  "findings": [
+    {
+      "code": "OKF_BUNDLE_MISSING_FRONTMATTER",
+      "severity": "error",
+      "message": "File has no frontmatter",
+      "location": "docs/architecture.md"
+    },
+    {
+      "code": "OKF_ROOT_LINK_LEAVES_BUNDLE",
+      "severity": "warning",
+      "message": "Link resolves outside the bundle root",
+      "location": "docs/architecture.md",
+      "line": 12
+    }
+  ],
+  "summary": { "errors": 1, "warnings": 1, "info": 0 },
+  "durationMs": 214,
+  "data": {
+    "bundles": [
+      { "name": "vat-docs", "root": "docs", "filesInBundle": 3 }
+    ]
+  }
+}

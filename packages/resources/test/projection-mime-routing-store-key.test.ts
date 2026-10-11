@@ -136,7 +136,7 @@ async function storeKeyFor(
 ): Promise<string> {
   const store = new KeyRecordingStore();
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor(() => crawlSourceFor(fixture.root()), 'deferred'));
+  registry.register(new FilesystemExtentContributor(() => crawlSourceFor(fixture.root(), []), 'deferred'));
 
   await populate({
     root: fixture.root(),

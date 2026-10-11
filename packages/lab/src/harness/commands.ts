@@ -99,7 +99,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   'resources-scan': Object.freeze({
     name: 'resources-scan',
     args: Object.freeze(['resources', 'scan', '{subject}']),
-    // Exits 0 whatever it finds — scanning reports statistics, not findings.
+    // Exit 1 is only the refusal for a scan of NOTHING — no measurement — so `[0]`.
   }),
   'resources-population': Object.freeze({
     name: 'resources-population',
@@ -107,8 +107,8 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     // read without a YAML parser. Three flags, each load-bearing and none of
     // them a preference:
     //
-    // - `--verbose` is what makes the command emit `files` at all. Without it
-    //   the document carries `filesScanned` and no population, and a count
+    // - `--verbose` is what makes the command emit `data.files` at all. Without
+    //   it the document carries `examined` and no population, and a count
     //   compares byte-identically against any other run of the same size while
     //   knowing nothing about which files those were.
     // - `--format json` keeps the lab free of a YAML parser.
@@ -117,7 +117,7 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     // spec is what `perf` and `io` measure: widening it would change what every
     // stored timing and call count in this repo was taken over.
     args: Object.freeze(['resources', 'scan', '{subject}', '--verbose', '--format', 'json']),
-    // Exits 0 whatever it finds — scanning reports statistics, not findings.
+    // `[0]`, as `resources-scan`: exit 1 scanned nothing, so there is no population.
   }),
   'resources-query': Object.freeze({
     name: 'resources-query',
@@ -140,8 +140,8 @@ export const MEASURABLE_COMMANDS = Object.freeze({
       '--format',
       'json',
     ]),
-    // Exits 0 when the statement ran; 2 when it was refused or the crawl
-    // failed, and a refusal measured nothing. So the default codes.
+    // Exits 0 over a populated tree whatever it selected; 1 (empty population)
+    // and 2 (refused) measured no population, so the default codes.
   }),
   'resources-validate': Object.freeze({
     name: 'resources-validate',

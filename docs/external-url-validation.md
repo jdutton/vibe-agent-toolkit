@@ -28,7 +28,7 @@ vat resources validate docs/ --check-external-urls
    EXTERNAL_URL_DEAD: https://example.com/old-page (404 Not Found)
 
 # Use JSON format for CI integration
-vat resources validate docs/ --check-external-urls --output json
+vat resources validate docs/ --check-external-urls --format json
 ```
 
 ## Configuration

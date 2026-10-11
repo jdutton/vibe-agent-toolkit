@@ -6,6 +6,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, parse } from 'node:path';
 
+import { errnoForGitReason } from './errors/git-errno.js';
 import { directoryRefusalFor, listingFailure } from './fs-utils.js';
 import { lookupGitRoot, rememberGitRoot } from './git-root-cache.js';
 import { runGit } from './git-run.js';
@@ -25,40 +26,10 @@ import { safePath } from './path-utils.js';
  *
  * Anchored to the line so an unrelated warning naming a directory in passing
  * is not read as a refusal. The reason after the colon is `strerror` text —
- * see {@link STRERROR_TO_ERRNO}.
+ * see `errnoForGitReason`.
  */
 const UNLISTABLE_DIRECTORY_LINE = /^warning: could not open directory '(.+?)\/?': (.*)$/gm;
 
-/**
- * C-locale `strerror` text → errno, for the reasons git can print here.
- *
- * git does not print the errno name, only its message; every listing below
- * runs with `LC_ALL=C` so the message is the C-locale one and this table can
- * be short. An unlisted reason is still a refusal — it becomes `UNKNOWN`, the
- * same answer `listingFailure` gives an error carrying no errno — because
- * dropping the line would reinstate the silent gap for exactly the errnos
- * nobody thought of.
- *
- * The two ABSENCE reasons are listed so that `listingFailure` — the one owner
- * of the absent/unreadable split — can recognise them and the line can be
- * skipped: git prints "No such file or directory" for an untracked directory
- * deleted between its parent's `readdir` and its own `opendir` (a concurrent
- * `rm -rf tmp/`), and the walk route treats that same race as "no longer in
- * the population" rather than as a refusal. Left unmapped it read as an
- * `UNKNOWN` refusal, and the git route aborted a run the walk completed.
- */
-const STRERROR_TO_ERRNO: ReadonlyMap<string, string> = new Map([
-  ['Permission denied', 'EACCES'],
-  ['Too many open files', 'EMFILE'],
-  ['Too many open files in system', 'ENFILE'],
-  ['Too many levels of symbolic links', 'ELOOP'],
-  ['Resource temporarily unavailable', 'EAGAIN'],
-  ['Input/output error', 'EIO'],
-  ['Stale file handle', 'ESTALE'],
-  ['Stale NFS file handle', 'ESTALE'],
-  ['No such file or directory', 'ENOENT'],
-  ['Not a directory', 'ENOTDIR'],
-]);
 
 /**
  * The directories a git listing was REFUSED, read off its stderr.
@@ -79,7 +50,7 @@ export function unlistableDirectoriesIn(stderr: string): { directory: string; co
     const directory = match[1] ?? '';
     if (directory === '' || seen.has(directory)) continue;
     seen.add(directory);
-    const listing = listingFailure({ code: STRERROR_TO_ERRNO.get((match[2] ?? '').trim()) });
+    const listing = listingFailure({ code: errnoForGitReason((match[2] ?? '').trim()) });
     if (listing.outcome === 'unreadable') refusals.push({ directory, code: listing.code });
   }
   return refusals;

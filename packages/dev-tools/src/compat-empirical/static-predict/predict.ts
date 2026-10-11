@@ -30,7 +30,7 @@ function observationToCode(obs: Observation): StaticPrediction['observations'][n
   const payload = obs.payload as Record<string, unknown> | undefined;
   return {
     code: obs.code,
-    summary: obs.summary,
+    description: obs.description,
     ...(payload ? { payload } : {}),
   };
 }
@@ -60,7 +60,7 @@ function buildPerTargetPrediction(
     verdicts: verdicts.map((v) => ({
       code: v.code,
       observationCode: v.observationCode,
-      summary: v.summary,
+      description: v.description,
     })),
     predictedOutcome: outcome,
   };
@@ -92,15 +92,15 @@ export async function predictForSkill(options: PredictOptions): Promise<StaticPr
 
   try {
     // A corpus skill has no governing VAT config: default severities.
-    const result = await validateSkill({ skillPath, validation: {} });
+    const result = await validateSkill({ skillPath, validation: {}, side: 'source' });
 
     // validateSkill does not throw on malformed SKILL.md — it returns
-    // status: 'error' with issues and leaves evidence undefined. Surface
+    // error-severity issues (`summary.errors > 0`) and leaves evidence undefined. Surface
     // that as a prediction error so the matrix doesn't silently treat a
     // failed validation as "no observations, expected on every target."
-    if (result.status === 'error') {
+    if (result.summary.errors > 0) {
       const errorIssues = result.issues.filter((i) => i.severity === 'error');
-      const summary = errorIssues.map((i) => `${i.code}: ${i.message}`).join('; ') || result.summary;
+      const summary = errorIssues.map((i) => `${i.code}: ${i.message}`).join('; ') || result.description;
       return errorPrediction(skillId, vatVersion, `validateSkill failed: ${summary}`);
     }
 

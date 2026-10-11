@@ -219,8 +219,8 @@ beforeAll(async () => {
   mkdirSyncReal(safePath.resolve(root, EMPTY_DIR), { recursive: true });
   mkdirSyncReal(safePath.resolve(root, IGNORED_EMPTY_DIR), { recursive: true });
 
-  walked = await new FilesystemCrawlSource(root).enumerate();
-  gitted = await new GitCrawlSource(root).enumerate();
+  walked = await new FilesystemCrawlSource(root, []).enumerate();
+  gitted = await new GitCrawlSource(root, []).enumerate();
 });
 
 afterAll(() => {
@@ -265,8 +265,8 @@ describe('crawl sources agree on the population', () => {
     writeIn(root, PLANTED, '# planted after the first enumeration\n');
 
     return Promise.all([
-      new FilesystemCrawlSource(root).enumerate(),
-      new GitCrawlSource(root).enumerate(),
+      new FilesystemCrawlSource(root, []).enumerate(),
+      new GitCrawlSource(root, []).enumerate(),
     ]).then(([walkedAgain, gittedAgain]) => {
       expect(relativePaths(gittedAgain)).toEqual(relativePaths(walkedAgain));
       expect(relativePaths(gittedAgain)).toContain(PLANTED);
@@ -373,7 +373,7 @@ async function realizationsFrom(
   const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: new RunContentCache() });
 
   const contributor = new FilesystemExtentContributor((r) =>
-    source === 'git' ? new GitCrawlSource(r) : new FilesystemCrawlSource(r),
+    source === 'git' ? new GitCrawlSource(r, []) : new FilesystemCrawlSource(r, []),
   );
   return (await contributor.contribute(builder.base(), null)).realizations;
 }
@@ -469,8 +469,8 @@ describe.skipIf(!symlinkCapability())('entries whose OID is not file bytes', () 
     gitIn(linkRoot, ['add', '-A']);
     gitIn(linkRoot, [...COMMIT_CONFIG, 'commit', '-m', 'fixture']);
 
-    walkedModes = await new FilesystemCrawlSource(linkRoot).enumerate();
-    gittedModes = await new GitCrawlSource(linkRoot).enumerate();
+    walkedModes = await new FilesystemCrawlSource(linkRoot, []).enumerate();
+    gittedModes = await new GitCrawlSource(linkRoot, []).enumerate();
   });
 
   afterAll(() => {

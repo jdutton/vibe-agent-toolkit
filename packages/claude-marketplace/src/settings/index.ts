@@ -44,7 +44,6 @@ export {
   getSettingsFileFields,
   probePathAccess,
   resolveSettingsPaths,
-  summarizeSettingsFindings,
   validateSettingsFile,
 } from './settings-auditor.js';
 

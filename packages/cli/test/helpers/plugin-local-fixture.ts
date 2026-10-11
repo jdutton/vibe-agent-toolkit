@@ -76,7 +76,6 @@ export function writeProjectConfig(root: string, config: ProjectConfig): void {
 /** A project config declaring the fixture plugin, with `skills.defaults.publish` as given. */
 export function pluginProjectConfig(defaultPublish: boolean): ProjectConfig {
   return {
-    version: 1,
     skills: { include: ['**/SKILL.md'], defaults: { publish: defaultPublish } },
     claude: { marketplaces: { m: { owner: { name: 'Owner' }, plugins: [{ name: FIXTURE_PLUGIN, skills: [] }] } } },
   };
@@ -91,7 +90,6 @@ export function marketplaceConfig(
   options: { include: string; defaultPublish?: boolean | undefined; publish?: Record<string, boolean> | undefined },
 ): ProjectConfig {
   return {
-    version: 1,
     skills: {
       include: [options.include],
       ...(options.defaultPublish === undefined ? {} : { defaults: { publish: options.defaultPublish } }),

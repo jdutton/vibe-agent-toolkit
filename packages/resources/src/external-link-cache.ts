@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 
-import { isFilesystemAccessError, safePath } from '@vibe-agent-toolkit/utils';
+import { fsFaultOf, safePath } from '@vibe-agent-toolkit/utils';
 
 import {
 	type ExternalLinkCacheEntry,
@@ -158,7 +158,7 @@ export class ExternalLinkCache {
 			// reads see the same empty cache (this.cache is set), so we don't
 			// re-spam mkdir/read on every lookup within the same run. A bug in
 			// this class is neither, and stays loud.
-			if (!isFilesystemAccessError(error) && !(error instanceof SyntaxError)) throw error;
+			if (fsFaultOf(error) === undefined && !(error instanceof SyntaxError)) throw error;
 			this.cache = {};
 			return this.cache;
 		}
@@ -181,7 +181,7 @@ export class ExternalLinkCache {
 			// No-op on IO failure. The in-memory cache (`this.cache`) is still
 			// authoritative for the current run; only the disk persistence is
 			// lost. Anything that is not the filesystem refusing is a bug.
-			if (!isFilesystemAccessError(error)) throw error;
+			if (fsFaultOf(error) === undefined) throw error;
 		}
 	}
 

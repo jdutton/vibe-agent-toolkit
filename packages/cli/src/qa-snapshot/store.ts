@@ -5,8 +5,6 @@
  * <dir>/manifest.json
  * <dir>/oracle/enumeration.<laneId>.txt
  * <dir>/oracle/parse-facts.txt
- * <dir>/command/<name>.stdout.txt
- * <dir>/command/<name>.stderr.txt
  * ```
  *
  * Two rules here are about the failure modes of a *comparison*, not about
@@ -25,13 +23,13 @@
  * a capture taken on macOS is comparable against a Windows checkout.
  */
 
-import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { applyTreePlan, forEachInOrder, planTreeChanges, relativeEscapesRoot, safePath } from '@vibe-agent-toolkit/utils';
 
 import {
-  COMMAND_DIR,
   MANIFEST_FILENAME,
   ORACLE_DIR,
   SnapshotManifestSchema,
@@ -39,28 +37,25 @@ import {
   type SnapshotManifest,
 } from './types.js';
 
-/** The three fixed locations inside a snapshot directory. */
+/** The two fixed locations inside a snapshot directory. */
 export interface SnapshotPaths {
   /** Absolute path to `manifest.json`. */
   manifest: string;
   /** Absolute path to the oracle-artifact subdirectory. */
   oracleDir: string;
-  /** Absolute path to the whole-command-artifact subdirectory. */
-  commandDir: string;
 }
 
 /**
  * Resolve the fixed locations inside a snapshot directory.
  *
  * @param dir - Snapshot directory, absolute or relative to the cwd
- * @returns Absolute, forward-slashed paths for the manifest and both subdirectories
+ * @returns Absolute, forward-slashed paths for the manifest and the oracle subdirectory
  */
 export function snapshotPaths(dir: string): SnapshotPaths {
   const root = safePath.resolve(dir);
   return {
     manifest: safePath.join(root, MANIFEST_FILENAME),
     oracleDir: safePath.join(root, ORACLE_DIR),
-    commandDir: safePath.join(root, COMMAND_DIR),
   };
 }
 
@@ -72,39 +67,62 @@ export function snapshotPaths(dir: string): SnapshotPaths {
  * Refuses to touch a non-empty directory that is not a snapshot, because
  * overwriting an arbitrary path a user typed is not recoverable.
  *
+ * The write is ONE tree-change plan: the oracle directory is replaced whole (its
+ * staged tree filled with every artifact) and the manifest beside it, together — a
+ * failure leaves the previous snapshot exactly as it was, never a new manifest over
+ * old artifacts.
+ *
  * @param dir - Snapshot directory to write
  * @param manifest - Provenance and per-artifact bookkeeping for this capture
- * @param artifacts - Artifact relative path (forward-slashed) → text
+ * @param artifacts - Artifact relative path (forward-slashed, under the oracle directory) → text
  * @returns Nothing
- * @throws {Error} When `dir` is non-empty and holds no `manifest.json`
+ * @throws {Error} When `dir` is non-empty and holds no `manifest.json`, or an artifact is not under the oracle directory
  */
-export function writeSnapshot(
+export async function writeSnapshot(
   dir: string,
   manifest: SnapshotManifest,
   artifacts: Map<string, string>,
-): void {
+): Promise<void> {
   const root = safePath.resolve(dir);
   const paths = snapshotPaths(root);
 
   assertWritableSnapshotDir(root, paths.manifest);
+  const oracleArtifacts = [...artifacts].map(([name, text]) => ({ relative: oracleRelative(root, paths.oracleDir, name), text }));
 
   // Wholesale replacement, not a merge: an artifact from a previous capture
   // that this one does not produce would otherwise read as "unchanged".
-  for (const subdir of [paths.oracleDir, paths.commandDir]) {
-    rmSync(subdir, { recursive: true, force: true });
-  }
-  mkdirSyncReal(paths.oracleDir, { recursive: true });
-  mkdirSyncReal(paths.commandDir, { recursive: true });
+  const plan = await planTreeChanges([
+    {
+      op: 'replace',
+      dest: paths.oracleDir,
+      ownership: { kind: 'vat-state' },
+      label: 'snapshot oracle',
+      fill: {
+        from: 'write',
+        write: (staged) => forEachInOrder(oracleArtifacts, async ({ relative, text }) => {
+          const file = safePath.join(staged, relative);
+          await mkdir(dirname(file), { recursive: true });
+          await writeFile(file, toLf(text), 'utf8');
+        }),
+      },
+    },
+    { op: 'replace-file', dest: paths.manifest, ownership: { kind: 'vat-state' }, contents: `${JSON.stringify(manifest, null, 2)}\n`, label: 'snapshot manifest' },
+  ]);
+  await applyTreePlan(plan);
+}
 
-  for (const [name, text] of artifacts) {
-    // joinUnderRoot, not join: an artifact name is manifest data, and a `..`
-    // inside one must not be able to write outside the snapshot directory.
-    const file = safePath.joinUnderRoot(root, name);
-    mkdirSyncReal(dirname(file), { recursive: true });
-    writeFileSync(file, toLf(text), 'utf8');
+/**
+ * Where an artifact lies inside the oracle directory. `joinUnderRoot`, not `join`: an
+ * artifact name is manifest data, and a `..` inside one must not be able to write outside
+ * the snapshot directory. One outside the oracle directory is refused: it would survive a
+ * re-capture, the stale artifact the wholesale replacement exists to prevent.
+ */
+function oracleRelative(root: string, oracleDir: string, name: string): string {
+  const relative = safePath.relative(oracleDir, safePath.joinUnderRoot(root, name));
+  if (relative === '' || relativeEscapesRoot(relative)) {
+    throw new Error(`Snapshot artifact ${name} is not under ${ORACLE_DIR}/: every artifact is replaced with the oracle directory, so none may live elsewhere.`);
   }
-
-  writeFileSync(paths.manifest, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  return relative;
 }
 
 /**
@@ -202,7 +220,7 @@ function readManifest(root: string, manifestPath: string): SnapshotManifest {
  * Every artifact path the manifest names, in a stable order.
  *
  * @param manifest - The loaded manifest
- * @returns Artifact relative paths: lanes, then parse facts, then commands
+ * @returns Artifact relative paths: lanes, then parse facts
  */
 function manifestArtifactNames(manifest: SnapshotManifest): string[] {
   const names: string[] = [];
@@ -212,9 +230,6 @@ function manifestArtifactNames(manifest: SnapshotManifest): string[] {
   }
   if (typeof manifest.parseFactArtifact === 'string') {
     names.push(manifest.parseFactArtifact);
-  }
-  for (const command of Array.isArray(manifest.commands) ? manifest.commands : []) {
-    names.push(command.stdoutArtifact, command.stderrArtifact);
   }
 
   return names;

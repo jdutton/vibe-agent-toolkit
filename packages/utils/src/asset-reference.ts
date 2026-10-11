@@ -2,7 +2,27 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
+import { VatError } from './errors/vat-error.js';
 import { isAbsolutePath, safePath } from './path-utils.js';
+
+/**
+ * A bare specifier Node could not resolve to a file: the package is not
+ * installed, its `exports` map does not expose the subpath, or the file it
+ * points at is not on disk. Always about the reference a user supplied, so a
+ * caller reports it against that input — never as VAT's defect.
+ */
+export const ASSET_REFERENCE_UNRESOLVED_CODE = 'ASSET_REFERENCE_UNRESOLVED';
+
+/**
+ * A bare specifier whose package IS installed, but which Node could not read
+ * its way through: a malformed or unreadable `package.json`, or an `exports`
+ * map that is itself invalid. The reference names something; the package is
+ * broken — so a caller reports it as an unreadable input, never as "missing".
+ */
+export const ASSET_REFERENCE_UNREADABLE_CODE = 'ASSET_REFERENCE_UNREADABLE';
+
+/** Node's codes for "this specifier names nothing it can reach" — everything else is the package's fault. */
+const NAMES_NOTHING_CODES: ReadonlySet<string> = new Set(['MODULE_NOT_FOUND', 'ERR_PACKAGE_PATH_NOT_EXPORTED']);
 
 // First segment must be a valid npm package name (scoped or unscoped),
 // followed by `/` and at least one subpath segment. Paths starting with
@@ -41,7 +61,9 @@ const BARE_SPECIFIER_RE = /^(?:@[^/]+\/[^/]+|[a-z0-9][a-z0-9._-]*)\/.+/i;
  * @param specifier - The asset reference (path or bare npm specifier)
  * @param baseDir - Absolute directory used as the resolution anchor
  * @returns Absolute filesystem path to the asset
- * @throws Error with actionable message and `cause` on resolution failure
+ * @throws {VatError} `ASSET_REFERENCE_UNRESOLVED`, with an actionable message and
+ *   Node's error as `cause`, when a bare specifier names nothing Node can reach;
+ *   `ASSET_REFERENCE_UNREADABLE` when the package is there and Node cannot read it
  */
 export function resolveAssetReference(specifier: string, baseDir: string): string {
   if (!isBareSpecifier(specifier)) {
@@ -60,7 +82,16 @@ export function resolveAssetReference(specifier: string, baseDir: string): strin
     if (!specifier.startsWith('@') && isModuleNotFound(cause)) {
       return safePath.resolve(baseDir, specifier);
     }
-    throw new Error(formatActionableError(specifier, baseDir, cause), { cause: cause as Error });
+    if (!NAMES_NOTHING_CODES.has(errorCodeOf(cause) ?? '')) {
+      throw new VatError(
+        ASSET_REFERENCE_UNREADABLE_CODE,
+        `Failed to resolve asset reference '${specifier}': its package is installed but Node cannot read it ` +
+          `(a malformed or unreadable package.json, or an invalid "exports" map) — fix or reinstall the package.\n` +
+          `Node error: ${formatResolutionError(cause)}`,
+        { cause },
+      );
+    }
+    throw new VatError(ASSET_REFERENCE_UNRESOLVED_CODE, formatActionableError(specifier, baseDir, cause), { cause });
   }
 }
 
@@ -71,7 +102,7 @@ export function resolveAssetReference(specifier: string, baseDir: string): strin
  */
 function formatActionableError(specifier: string, baseDir: string, cause: unknown): string {
   const headline = formatResolutionError(cause);
-  const code = (cause as { code?: string } | null)?.code;
+  const code = errorCodeOf(cause);
   const missingPath = extractMissingModulePath(cause);
 
   // Mode 1: Node walked the package's `exports` map, computed an absolute
@@ -129,13 +160,12 @@ function isBareSpecifier(value: string): boolean {
   return BARE_SPECIFIER_RE.test(value);
 }
 
+function errorCodeOf(err: unknown): string | undefined {
+  return (err as { code?: string } | null)?.code;
+}
+
 function isModuleNotFound(err: unknown): boolean {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    'code' in err &&
-    (err as { code: string }).code === 'MODULE_NOT_FOUND'
-  );
+  return errorCodeOf(err) === 'MODULE_NOT_FOUND';
 }
 
 function formatResolutionError(err: unknown): string {

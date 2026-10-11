@@ -310,8 +310,7 @@ describe.skipIf(cap === null)('checkPackagedSizeLimit — links in the packaged 
 
   // 🚨 The REMEDY, not just the receipt. `SCAN_PATH_UNREADABLE`'s registry `fix`
   // is "Make the path readable — check its permissions and ownership — then
-  // re-run the audit, or pass `--exclude` to drop it from the scan deliberately".
-  // Both halves are wrong for a symlink: it is skipped by POLICY (the uploader
+  // re-run", with `--exclude` as `vat audit`'s lever. Both are wrong for a symlink: it is skipped by POLICY (the uploader
   // refuses it), not because anything about it is unreadable, and this producer
   // runs inside `packageSkill` — `vat build` / `vat skills package` — which have
   // no `--exclude` flag at all. Carrying the registry text verbatim told an

@@ -51,7 +51,7 @@ export function createToolExecutor(
     throw new Error(`No tool found with name: ${toolName}`);
   }
 
-  return async (input: unknown) => executeToolHandler(toolDef.handler, input);
+  return (input: unknown) => executeToolHandler(toolDef.handler, input);
 }
 
 /**
@@ -67,7 +67,7 @@ export function createBatchToolExecutors(
   for (const key of toolKeys) {
     const toolDef = registeredTools[key];
     if (toolDef) {
-      functions[key] = async (input: unknown) => executeToolHandler(toolDef.handler, input);
+      functions[key] = (input: unknown) => executeToolHandler(toolDef.handler, input);
     }
   }
 

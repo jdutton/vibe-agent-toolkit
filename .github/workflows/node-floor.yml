@@ -1,7 +1,10 @@
 # Executes VAT's declared Node floor, rather than merely asserting it.
 #
-# The floor was raised to >=22.13.0 because `node:sqlite` loads unflagged only
-# from that release (it was added in 22.5.0 behind --experimental-sqlite). Before
+# The floor is >=22.16.0. It was first raised to 22.13.0 because `node:sqlite`
+# loads unflagged only from that release (it was added in 22.5.0 behind
+# --experimental-sqlite), then to 22.16.0 because `vat resources query` names its
+# result columns through `StatementSync.columns()`, which Node added in 22.16.0
+# (absent on 22.15.1, present on 22.16.0 — measured). Before
 # this job existed the floor was a *claim*: the validation matrix runs Node 24
 # only, so nothing anywhere executed the oldest Node VAT says it supports, which
 # is exactly how thirteen patch releases came to advertise support for a range

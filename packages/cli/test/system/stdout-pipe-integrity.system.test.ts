@@ -1,7 +1,7 @@
 /**
  * System test: YAML output must survive a PIPE, not just a terminal.
  *
- * Every YAML-emitting command writes via `writeYamlOutput` and then calls
+ * Every YAML-emitting command writes through the document writer and then calls
  * `process.exit(0)` immediately. `process.stdout.write` is ASYNCHRONOUS when
  * stdout is a pipe, and `process.exit` does not wait for the pending write to
  * drain — so everything past the first pipe buffer (64 KB on Linux/macOS) was
@@ -55,7 +55,7 @@ describe('YAML output survives a pipe (system)', () => {
     fs.mkdirSync(docsDir, { recursive: true });
     writeTestFile(
       join(projectDir, 'vibe-agent-toolkit.config.yaml'),
-      'version: 1\n',
+      '{}\n',
     );
     for (let i = 0; i < FILE_COUNT; i++) {
       writeTestFile(
@@ -79,14 +79,14 @@ describe('YAML output survives a pipe (system)', () => {
 
     // A truncated document is cut mid-token, so parsing is the sharpest check.
     const parsed = parseYaml(result.stdout) as {
-      filesScanned: number;
-      files: { path: string }[];
+      examined: number;
+      data: { files: { path: string }[] };
     };
 
     // Every file the command counted must actually appear in the emitted list —
     // truncation drops the tail while leaving the header (and its count) intact,
     // so comparing the two is what catches a partial write.
-    expect(parsed.filesScanned).toBe(FILE_COUNT);
-    expect(parsed.files).toHaveLength(FILE_COUNT);
+    expect(parsed.examined).toBe(FILE_COUNT);
+    expect(parsed.data.files).toHaveLength(FILE_COUNT);
   }, 120_000);
 });

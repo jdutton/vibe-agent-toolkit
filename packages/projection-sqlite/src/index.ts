@@ -11,9 +11,14 @@
  * `node:sqlite` was **added in Node 22.5.0 behind `--experimental-sqlite`**, and the
  * flag requirement was removed in **23.4.0 and 22.13.0**. 22.13.0 is therefore the
  * first version on the 22 line where an ordinary `import('node:sqlite')` resolves
- * without the user passing a flag, which is why this package's `engines` requires
- * `>=22.13.0`. (Saying it "arrived in 22.13.0" is the convenient shorthand and is
- * wrong: on 22.5–22.12 it exists, flagged.)
+ * without the user passing a flag. (Saying it "arrived in 22.13.0" is the
+ * convenient shorthand and is wrong: on 22.5–22.12 it exists, flagged.) The
+ * `engines` floor is one step higher, **`>=22.16.0`**, because
+ * `SqliteProjectionStore.columns()` calls `StatementSync.columns()`, which Node
+ * added in 22.16.0 — absent on 22.15.1, present on 22.16.0, measured. Deriving
+ * the names any other way was tried and refused: wrapping the statement as a
+ * subquery under an always-false outer join renames a duplicate result column
+ * (`a`, `a` comes back `a`, `a:1`), so it answers a different question.
  *
  * ⚠️ **That floor is now the whole toolkit's, and this package is why.** It
  * used to read "while the rest of the toolkit stays at `>=22.0.0` — a backend
@@ -22,7 +27,8 @@
  * outright, and `vat resources query|check` build their ephemeral store from it
  * on every run, so Node 22.0–22.12 could not run those commands while the
  * manifests still advertised support for them. The toolkit floor moved to
- * `>=22.13.0` to stop advertising what it cannot do. This declaration stays
+ * `>=22.13.0` to stop advertising what it cannot do, and later to `>=22.16.0`
+ * for `StatementSync.columns()` above. This declaration stays
  * because the requirement is **intrinsic here** — this is the code that imports
  * `node:sqlite` — not because it differs any more. The
  * module needs no flag from 22.13.0 onward, but **unflagged is not

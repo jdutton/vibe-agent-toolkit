@@ -1,8 +1,8 @@
-import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
+import { basename } from 'node:path';
 
 import type { MarketplaceInventory, PluginInventory } from '@vibe-agent-toolkit/agent-skills';
-import { direntKindFollowing, direntKindFollowingSync, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, direntKindFollowingSync, forEachInOrder, isTreeChangeResidue, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 import { buildClaudeUserPaths, getClaudeUserPaths } from '../paths/claude-paths.js';
@@ -10,6 +10,7 @@ import { buildClaudeUserPaths, getClaudeUserPaths } from '../paths/claude-paths.
 import { extractClaudeMarketplaceInventory } from './extract-marketplace.js';
 import { extractClaudePluginInventory } from './extract-plugin.js';
 import type { GitTrackerSource } from './extract-skill.js';
+import { presenceOrRecord, recordedFailure } from './recorded-failure.js';
 import { ClaudeInstallInventory } from './types.js';
 
 type ParseErrors = ClaudeInstallInventory['parseErrors'];
@@ -85,17 +86,20 @@ async function collectMarketplaces(
 	parseErrors: ParseErrors,
 	gitTrackerSource: GitTrackerSource,
 ): Promise<void> {
-	if (!existsSync(marketplacesDir)) return;
+	if (presenceOrRecord(marketplacesDir, parseErrors) !== 'present') return;
 	try {
 		const entries = await readdir(marketplacesDir, { withFileTypes: true });
-		for (const entry of entries) {
+		// In order: the git-tracker cache is shared, so its first users must not race.
+		await forEachInOrder(entries, async (entry) => {
+			// `vat claude plugin install` stages and parks a marketplace it replaces beside it.
+			if (isTreeChangeResidue(entry.name)) return;
 			// A symlinked marketplace (a dev install) is a marketplace: follow it.
-			if ((await direntKindFollowing(marketplacesDir, entry)) !== 'directory') continue;
+			if ((await direntKindFollowing(marketplacesDir, entry)) !== 'directory') return;
 			const mpPath = safePath.join(marketplacesDir, entry.name);
 			marketplaces.push(await extractClaudeMarketplaceInventory(mpPath, { gitTrackerSource }));
-		}
+		});
 	} catch (e) {
-		parseErrors.push({ path: marketplacesDir, message: (e as Error).message });
+		parseErrors.push(recordedFailure(marketplacesDir, (e as Error).message, e));
 	}
 }
 
@@ -111,7 +115,7 @@ async function subdirectoriesOrRecord(dir: string, parseErrors: ParseErrors): Pr
 			.filter(e => direntKindFollowingSync(dir, e) === 'directory')
 			.map(e => safePath.join(dir, e.name));
 	} catch (e) {
-		parseErrors.push({ path: dir, message: (e as Error).message });
+		parseErrors.push(recordedFailure(dir, (e as Error).message, e));
 		return [];
 	}
 }
@@ -122,11 +126,12 @@ async function collectCachedPlugins(
 	parseErrors: ParseErrors,
 	gitTrackerSource: GitTrackerSource,
 ): Promise<void> {
-	if (!existsSync(cacheDir)) return;
+	if (presenceOrRecord(cacheDir, parseErrors) !== 'present') return;
 
-	for (const mpDir of await subdirectoriesOrRecord(cacheDir, parseErrors)) {
-		await collectPluginsInMarketplaceCache(mpDir, plugins, parseErrors, gitTrackerSource);
-	}
+	// In order, like every walk here: the shared git-tracker cache, and `parseErrors` order.
+	await forEachInOrder(await subdirectoriesOrRecord(cacheDir, parseErrors), (mpDir) =>
+		collectPluginsInMarketplaceCache(mpDir, plugins, parseErrors, gitTrackerSource),
+	);
 }
 
 async function collectPluginsInMarketplaceCache(
@@ -139,9 +144,11 @@ async function collectPluginsInMarketplaceCache(
 	// the cache root above is: an unlisted marketplace used to read as "no plugins".
 	const pluginNameDirs = await subdirectoriesOrRecord(mpDir, parseErrors);
 
-	for (const nameDir of pluginNameDirs) {
-		const versionDirs = await subdirectoriesOrRecord(nameDir, parseErrors);
-		for (const versionDir of versionDirs) {
+	await forEachInOrder(pluginNameDirs, async (nameDir) => {
+		// A dot-named directory is never a version: it is a plugin install's staged copy or
+		// parked previous tree, left by a crash or by a removal the OS refused.
+		const versionDirs = (await subdirectoriesOrRecord(nameDir, parseErrors)).filter(dir => !basename(dir).startsWith('.'));
+		await forEachInOrder(versionDirs, async (versionDir) => {
 			try {
 				// N+1 WHOLE-CORPUS CRAWL — known, not fixed here. No `SharedRegistrySource` is
 				// passed, so every skill in every cached plugin re-crawls and re-parses the whole
@@ -163,8 +170,8 @@ async function collectPluginsInMarketplaceCache(
 				// guard makes this a no-op and the win is smaller than the numbers above imply.
 				plugins.push(await extractClaudePluginInventory(versionDir, { gitTrackerSource }));
 			} catch (e) {
-				parseErrors.push({ path: versionDir, message: (e as Error).message });
+				parseErrors.push(recordedFailure(versionDir, (e as Error).message, e));
 			}
-		}
-	}
+		});
+	});
 }

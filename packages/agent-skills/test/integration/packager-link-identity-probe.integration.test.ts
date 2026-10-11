@@ -22,7 +22,7 @@ import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { cleanupTestTempDir, createTestTempDir, writeTestFile } from '../../../cli/test/system/test-common.js';
-import { packageSkill } from '../../src/skill-packager.js';
+import { packageInPlace } from '../test-helpers.js';
 
 const SKILL_MD = `---
 name: probe
@@ -53,7 +53,8 @@ async function packageFixture(tempDir: string): Promise<string> {
   writeTestFile(safePath.join(skillDir, 'evals', 'diagram.png'), 'not-really-a-png');
 
   const outputPath = safePath.join(tempDir, 'dist', 'probe');
-  await packageSkill(safePath.join(skillDir, 'SKILL.md'), {
+  // In place: the probe reads what the packager wrote, whether or not the package passed its checks.
+  await packageInPlace(safePath.join(skillDir, 'SKILL.md'), {
     outputPath,
     formats: ['directory'],
     testInputDirs: [safePath.join(skillDir, 'evals')],

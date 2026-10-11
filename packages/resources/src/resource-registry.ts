@@ -13,12 +13,20 @@ import path from 'node:path';
 
 import { CODE_REGISTRY, createRegistryIssue, type IssueCode, runSingleUnitValidation, type ValidationConfig, type ValidationIssue, type ValidationIssueCode } from '@vibe-agent-toolkit/schema';
 import {
+  ASSET_REFERENCE_UNREADABLE_CODE,
+  ASSET_REFERENCE_UNRESOLVED_CODE,
   CRAWL_REGISTRY_ADMIT_ID,
   CRAWL_REGISTRY_ENUMERATE_ID,
+  classifyFsFault,
   CRAWL_REGISTRY_RESOLVE_LINKS_ID,
   crawlTimingStart,
+  forEachInOrder,
+  type FsFaultClass,
+  fsFaultOf,
   FsLookupCache,
+  isFsFaultError,
   issueLocation,
+  isVatError,
   recordRegistryPass,
   resolveAssetReference,
   safePath,
@@ -100,8 +108,8 @@ export interface DuplicateIdCollision {
 }
 
 /**
- * Filesystem errno codes that mean "this path could not be read", as opposed to
- * "VAT is broken".
+ * The fault classes ({@link fsFaultOf}) that mean "this path could not be read",
+ * as opposed to "VAT is broken".
  *
  * Deliberately an allow-list rather than a catch-all. Demoting every non-
  * duplicate error to a finding would silently convert a parser or indexing
@@ -109,47 +117,61 @@ export interface DuplicateIdCollision {
  * quietly shrinking population — the exact failure mode this code exists to
  * make loud.
  *
- * `ELOOP` is the symlink cycle; `ENOENT` the dangling symlink and the file
- * deleted between enumeration and parse; `EISDIR`/`ENOTDIR` a path whose type
- * changed underneath the crawl.
+ * `absent` is the dangling symlink and the file deleted between enumeration and
+ * parse; `refused` a mode bit; `wrong-type` a symlink cycle, a name too long, a
+ * path whose type changed underneath the crawl, or a pipe or device where a
+ * file was expected. `exhausted` (descriptors, disk, quota) is deliberately NOT
+ * here: it is the machine's fault, not the file's, so it throws classified and
+ * refuses `RUN_INCOMPLETE` — a per-file finding could be downgraded by config to
+ * exit 0 over a run that never read the file. A `device` fault (a hung mount,
+ * failing hardware) is not something a finding about the file can describe
+ * either.
  *
  * Being an allow-list is also what makes this boundary safe for the parser load
  * that now happens inside `addResource`: a failed load arrives as
- * `ParserUnavailableError`, whose `code` is `VAT_PARSER_UNAVAILABLE` and is
- * therefore not a member, so it is never demoted. That holds by construction —
- * no `isParserUnavailable` call is needed here, and adding one would suggest
- * this set could otherwise contain it.
+ * `ParserUnavailableError`, which carries no errno and no `cause`, so it is never
+ * demoted. That holds by construction — no `isParserUnavailable` call is needed
+ * here, and adding one would suggest this set could otherwise contain it.
  */
-const READ_FAILURE_CODES: ReadonlySet<string> = new Set([
-  'EACCES',
-  'EISDIR',
-  'ELOOP',
-  'EMFILE',
-  'ENAMETOOLONG',
-  'ENFILE',
-  'ENOENT',
-  'ENOTDIR',
-  'EPERM',
-  // Not an errno: the file is past what one JS string can hold, refused by size
-  // before any read. Admitted here because the consequence is the same — the
-  // file is enumerated and cannot be admitted — and it reaches the finding as
-  // its own code, `(TEXT_TOO_LARGE)`, so no reader goes looking for a
-  // permissions problem.
-  TextTooLargeError.code,
-]);
+const READ_FAILURE_CLASSES: ReadonlySet<FsFaultClass> = new Set(['absent', 'refused', 'wrong-type']);
 
 /**
  * Whether an error is a filesystem read failure rather than a defect.
  *
+ * The file past what one JS string can hold (`TEXT_TOO_LARGE`) is admitted too:
+ * not an errno, refused by size before any read, but the consequence is the same
+ * — the file is enumerated and cannot be admitted — and it reaches the finding as
+ * its own code, so no reader goes looking for a permissions problem.
+ *
  * @param error - The thrown value
- * @returns True when the error carries a recognized filesystem errno code
+ * @returns True when the error is a read failure the classifier recognizes
  */
-function isReadFailure(error: unknown): error is Error & { code: string } {
-  if (!(error instanceof Error)) {
-    return false;
-  }
+function isReadFailure(error: unknown): error is Error {
+  if (!(error instanceof Error)) return false;
+  if (isVatError(error, TextTooLargeError.code)) return true;
+  const faultClass = readFault(error)?.faultClass;
+  return faultClass !== undefined && READ_FAILURE_CLASSES.has(faultClass);
+}
+
+/**
+ * The fault a read failure IS: a classified `FsFaultError`, or a raw errno on the
+ * error itself. Deliberately not a walk of the `cause` chain: a coded error, or a
+ * wrapper, that merely carries an errno underneath has already said what it
+ * means, and demoting it to a per-file finding would hide that.
+ */
+function readFault(error: Error): { faultClass: FsFaultClass; errno: string } | undefined {
+  if (isFsFaultError(error)) return { faultClass: error.faultClass, errno: error.errno };
+  if (isVatError(error)) return undefined;
   const { code } = error as { code?: unknown };
-  return typeof code === 'string' && READ_FAILURE_CODES.has(code);
+  return typeof code === 'string' ? fsFaultOf({ code }) : undefined;
+}
+
+/**
+ * The code a {@link isReadFailure} error is recorded under: its errno ({@link readFault}),
+ * else its own code (`TEXT_TOO_LARGE`).
+ */
+function readFailureCode(error: Error): string {
+  return readFault(error)?.errno ?? (isVatError(error) ? error.code : 'UNKNOWN');
 }
 
 /**
@@ -324,6 +346,15 @@ export interface CrawlOptions {
   exclude?: string[];
   /** Follow symbolic links (default: false) */
   followSymlinks?: boolean;
+  /**
+   * The trees the calling verb WRITES — its output and the staging it builds it in — or `[]`
+   * for a verb that only reads: the one declaration of which side a fault is on. A fault at
+   * (or a refused listing of) a directory that is, lies in, or holds one of them — the base of
+   * a project the verb writes into included — is the destination's; anything else the input's.
+   * Required: only the caller knows, and a default would put every omitted caller's output
+   * faults on the input.
+   */
+  outputs: readonly string[];
   /**
    * Where the file list comes from — omit for the incumbent `crawlDirectory`
    * walk, supply one to source it from a projection instead.
@@ -576,7 +607,7 @@ async function readAndCompileSchema(
  *
  * // Add resources
  * await registry.addResource('/project/README.md');
- * await registry.crawl({ baseDir: '/project/docs', unreadable: 'refuse' });
+ * await registry.crawl({ baseDir: '/project/docs', unreadable: 'refuse', outputs: [] });
  *
  * // Validate all links
  * const result = await registry.validate();
@@ -883,6 +914,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * ```typescript
    * const registry = await ResourceRegistry.fromCrawl({
    *   baseDir: '/project/docs',
+   *   outputs: [],
    *   unreadable: 'refuse', // or { degrade } — see RegistryUnreadablePolicy
    *   include: ['**.md'],
    *   exclude: ['node_modules'],
@@ -1002,14 +1034,15 @@ export class ResourceRegistry implements ResourceCollectionInterface {
           filePath,
           reason: error.message,
           error,
-          ...(typeof (error as { code?: unknown }).code === 'string' && {
-            code: (error as { code: string }).code,
-          }),
+          code: readFailureCode(error),
         };
       }
-      // Not a read failure: a genuine defect in parsing, which must not be
-      // demoted to a finding. Carried, not thrown — see the docblock.
-      return { outcome: 'failed', error };
+      // Not a per-file read failure: a genuine defect in parsing, which must not
+      // be demoted to a finding, or a fault that is not the file's (the machine out
+      // of descriptors, disk or quota; a failing device) — classified here, at the
+      // read, so it refuses by the table rather than as a raw errno. Carried, not
+      // thrown — see the docblock.
+      return { outcome: 'failed', error: classifyFsFault(error, { side: 'source', origin: 'content', action: `read ${filePath}`, path: filePath }) };
     }
   }
 
@@ -1257,7 +1290,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       await driveInOrder(
         filePaths,
         dispatcher,
-        async (filePath) => this.prepareAdmission(filePath, dispatcher),
+        (filePath) => this.prepareAdmission(filePath, dispatcher),
         (prepared) => {
           try {
             const admitted = this.emitPreparedResource(prepared);
@@ -1304,6 +1337,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * // Crawl docs directory, excluding node_modules
    * const resources = await registry.crawl({
    *   baseDir: './docs',
+   *   outputs: [],
    *   unreadable: 'refuse',
    *   include: ['**\/*.md'],
    *   exclude: ['**\/node_modules/**']
@@ -1318,6 +1352,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       followSymlinks = false,
       unreadable,
       populationSource,
+      outputs,
     } = options;
     requireRegistryUnreadablePolicy(unreadable);
     if (populationSource !== undefined && unreadable !== 'refuse') {
@@ -1340,6 +1375,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       followSymlinks,
       absolute: true,
       filesOnly: true,
+      outputs,
       // The validation universe is `tracked ∪ (untracked ∧ ¬ignored)` — what a
       // commit made right now WOULD contain. Without this, `crawlDirectory`'s
       // `git ls-files` fast path answers tracked-only, so a brand-new,
@@ -1364,7 +1400,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       // prunes it by name) and is a warning row on the projection, never an
       // abort. Under `{ degrade }` the refusal is the caller's to report.
       unreadable: unreadable === 'refuse'
-        ? { refuse: { root: baseDir, remedy: listingRefusalRemedy(baseDir) } }
+        ? { refuse: { root: baseDir, remedy: listingRefusalRemedy(baseDir), side: 'source' } }
         : unreadable,
     };
 
@@ -1402,7 +1438,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // not re-trigger the walk, while `undefined` is the refusal.
     const enumerationStartedAt = crawlTimingStart();
     const sourced = populationSource
-      ? await withOuterBracket(() => this.populationFrom(populationSource, baseDir, include, exclude))
+      ? await withOuterBracket(() => this.populationFrom(populationSource, baseDir, include, exclude, outputs))
       : undefined;
     const files = sourced ?? await crawlDirectory(crawlOptions);
     recordRegistryPass(CRAWL_REGISTRY_ENUMERATE_ID, enumerationStartedAt);
@@ -1459,6 +1495,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     baseDir: string,
     include: string[],
     exclude: string[],
+    outputs: readonly string[],
   ): Promise<string[] | undefined> {
     const base = safePath.resolve(baseDir);
     if (!sameDirectory(source.root, base)) {
@@ -1466,7 +1503,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return undefined;
     }
     const isMember = crawlPathFilter(include, exclude);
-    const { paths, conditions } = await source.enumerate(base);
+    const { paths, conditions } = await source.enumerate(base, outputs);
     // Kept whole, not narrowed by `include`/`exclude`: a condition is about the
     // enumeration, and a gap the enumerator met outside this crawl's globs is
     // still a gap in the population the projection will answer queries from.
@@ -1762,10 +1799,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return issues;
     }
 
-    for (const resource of this.resourcesByPath.values()) {
+    // In order: issues follow resource order.
+    await forEachInOrder(this.resourcesByPath.values(), async (resource) => {
       // Skip if resource has no collections
       if (!resource.collections || resource.collections.length === 0) {
-        continue;
+        return;
       }
 
       // Validate against each collection's schema
@@ -1776,7 +1814,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         skipGitIgnoreCheck,
       );
       issues.push(...collectionIssues);
-    }
+    });
 
     return issues;
   }
@@ -1797,12 +1835,14 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return issues;
     }
 
-    for (const collectionId of resource.collections) {
-      const collection = this.config.resources.collections[collectionId];
+    const collections = this.config.resources.collections;
+    // In order: issues follow the resource's collection order.
+    await forEachInOrder(resource.collections, async (collectionId) => {
+      const collection = collections[collectionId];
 
       // Skip if collection has no validation or no schema
       if (!collection?.validation?.frontmatterSchema) {
-        continue;
+        return;
       }
 
       const collectionIssues = await this.validateAgainstCollectionSchema(
@@ -1813,7 +1853,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         skipGitIgnoreCheck,
       );
       issues.push(...collectionIssues);
-    }
+    });
 
     return issues;
   }
@@ -1841,10 +1881,27 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return [];
     }
 
-    const schemaPath = resolveAssetReference(
-      validation.frontmatterSchema,
-      this.baseDir ?? process.cwd(),
-    );
+    const schemaSpecifier = validation.frontmatterSchema;
+    const schemaFailure = (error: unknown): ValidationIssue[] => [
+      createRegistryIssue(
+        'FRONTMATTER_SCHEMA_ERROR',
+        `Failed to load or parse frontmatter schema '${schemaSpecifier}': ${error instanceof Error ? error.message : String(error)}`,
+        { location: issueLocation(resource.filePath, locationRoot(this.baseDir)), line: 1 },
+      ),
+    ];
+
+    // A bare specifier that resolves to nothing (package not installed, or its
+    // `exports` target not on disk) — or to a package Node cannot read (a
+    // malformed package.json) — is the config's schema not loading, the same
+    // finding as a schema path naming no file. Only those codes: any other
+    // throw is not about the schema reference.
+    let schemaPath: string;
+    try {
+      schemaPath = resolveAssetReference(schemaSpecifier, this.baseDir ?? process.cwd());
+    } catch (error) {
+      if (!isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE) && !isVatError(error, ASSET_REFERENCE_UNREADABLE_CODE)) throw error;
+      return schemaFailure(error);
+    }
 
     // Determine validation mode (default to permissive)
     const mode = validation.mode ?? 'permissive';
@@ -1888,14 +1945,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       compiled = loaded.compiled;
     } catch (error) {
       // Handle missing or invalid schema files gracefully
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      return [
-        createRegistryIssue(
-          'FRONTMATTER_SCHEMA_ERROR',
-          `Failed to load or parse frontmatter schema '${validation.frontmatterSchema}': ${errorMessage}`,
-          { location: issueLocation(resource.filePath, locationRoot(this.baseDir)), line: 1 },
-        ),
-      ];
+      return schemaFailure(error);
     }
 
     // Validate frontmatter against JSON Schema
@@ -1949,7 +1999,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    *
    * @private
    */
-  private async loadCollectionSchema(
+  private loadCollectionSchema(
     schemaPath: string,
     mode: ValidationMode,
     fsModule: typeof fs,

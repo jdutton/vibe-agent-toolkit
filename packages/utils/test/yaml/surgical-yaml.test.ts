@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { updateYamlIn, verifyConfinedYamlEdit } from '../../src/yaml.js';
+import { updateYamlIn, verifyConfinedYamlEdit, YAML_EDIT_INPUT_REFUSED_CODE } from '../../src/yaml.js';
 
 describe('updateYamlIn — surgical scalar replace', () => {
   it('preserves inline trailing comment AND its alignment whitespace verbatim', () => {
@@ -167,6 +167,21 @@ describe('updateYamlIn — type-mismatch guard', () => {
     // overwriting 'a' with a map, which the guard must reject.
     const before = 'a: hello\n';
     expect(() => updateYamlIn(before, ['a', 'b'], 'new')).toThrow();
+  });
+
+  // The input's shape is the caller's file's problem, so each carries a code a
+  // caller can dispatch on (the CLI publishes it as CONFIG_INVALID) — never the
+  // message. An empty path is the CALLER's bug and stays uncoded.
+  it.each([
+    ['invalid YAML', 'key: [unterminated', ['key']],
+    ['a collection at the path', 'foo:\n  bar: 1\n', ['foo']],
+    ['a scalar ancestor', 'a: hello\n', ['a', 'b']],
+  ])('codes the input-shape refusal (%s) YAML_EDIT_INPUT_REFUSED', (_label, before, path) => {
+    expect(() => updateYamlIn(before, path, 'v')).toThrow(expect.objectContaining({ code: YAML_EDIT_INPUT_REFUSED_CODE }));
+  });
+
+  it('leaves an empty path uncoded: that is the caller\'s bug, not the input\'s', () => {
+    expect(() => updateYamlIn('a: 1\n', [], 'v')).toThrow(expect.not.objectContaining({ code: YAML_EDIT_INPUT_REFUSED_CODE }));
   });
 });
 

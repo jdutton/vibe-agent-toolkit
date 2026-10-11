@@ -1,11 +1,7 @@
 import * as os from 'node:os';
 
-import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
-import {
-  calculateValidationStatus,
-  countBySeverity,
-  type ValidationIssue,
-} from '@vibe-agent-toolkit/schema';
+import { describeIssues, type ValidationResult } from '@vibe-agent-toolkit/agent-skills';
+import { summarizeIssues, type SeverityCounts, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 export interface HierarchicalOutput {
@@ -27,12 +23,18 @@ export interface PluginGroup {
 
 export type CacheStatus = 'stale' | 'orphaned' | 'fresh';
 
+/**
+ * One skill in the `--user` view. Its findings are the report envelope's (each
+ * `location` names the file); the entry carries their distribution, the same
+ * `status` + `summary` pair every `files[]` row carries.
+ */
 export interface SkillEntry {
   name: string;
   /** Path relative to the run root stated once at the top of the report. */
   path: string;
-  status: 'success' | 'warning' | 'error';
-  issues: ValidationIssue[];
+  /** Literal: `findings` iff the skill carries any finding. */
+  status: 'ok' | 'findings';
+  summary: SeverityCounts;
   cacheStatus?: CacheStatus;
 }
 
@@ -247,7 +249,7 @@ function addToStandalonePluginMap(
  *
  * Suppresses cache entries when:
  * - A matching source (marketplace/plugin) exists
- * - Same validation status (success/warning/error)
+ * - Same validation status (ok/findings)
  * - Same issues (count and content)
  *
  * Keeps cache entries when:
@@ -331,8 +333,7 @@ function createSkillEntry(
   const entry: SkillEntry = {
     name: skill,
     path: issueLocation(result.path, locationRoot),
-    status: result.status,
-    issues: result.issues,
+    ...summarizeIssues(result.issues),
   };
 
   // Add cache status if this is a cached resource
@@ -405,33 +406,51 @@ function convertPluginMapToArray(pluginMap: Map<string, SkillEntry[]>): PluginGr
 }
 
 /**
+ * Whether `result` is a standalone SKILL.md directly under `plugins/` that
+ * Claude Code will not load.
+ *
+ * NOT when a `claude-plugin` result sits in the skill's own directory: that is a
+ * skill-claude-plugin (root SKILL.md beside `.claude-plugin/plugin.json`), a
+ * valid plugin shape the path alone cannot tell apart. The hierarchy-only
+ * finding used to fire on it too, where nothing counted it; now that the finding
+ * gates, a false positive would fail a valid install.
+ */
+function isMisplacedStandaloneSkill(result: ValidationResult, pluginsPath: string, pluginDirs: ReadonlySet<string>): boolean {
+  // Only a SKILL can be misplaced this way; a plugin directory under
+  // `plugins/` is exactly where it belongs.
+  if (result.type !== 'agent-skill' && result.type !== 'vat-agent') return false;
+  const { marketplace, plugin, isCached } = parsePathStructure(result.path);
+  // Only standalone skills (no marketplace, no plugin structure).
+  if (marketplace !== undefined || plugin !== undefined || isCached) return false;
+  const normalizedPath = toForwardSlash(result.path);
+  if (!normalizedPath.startsWith(pluginsPath)) return false;
+  return !pluginDirs.has(normalizedPath.slice(0, normalizedPath.lastIndexOf('/')));
+}
+
+/**
  * Add misconfiguration issues to standalone skills in wrong locations
  *
  * Detects standalone SKILL.md files in ~/.claude/plugins/ that won't be recognized
  * by Claude Code. These should be either moved to ~/.claude/skills/ or properly
  * configured as plugins with .claude-plugin/plugin.json.
  *
- * @param results - Validation results to check
+ * Applied to the `--user` run's RESULTS, before the report is built, so the
+ * finding reaches the envelope's `findings` and `summary` and the `files[]` row
+ * as well as the hierarchy. It used to be added inside the hierarchy only: an
+ * error-severity finding the header never counted and the exit code never saw.
+ *
+ * @param results - Validation results to check — every result of the run, so a
+ *   skill-claude-plugin's own plugin result is among them
  * @param locationRoot - Run root the emitted `location` is expressed relative to
  * @returns Results with misconfiguration issues added
  */
-function addMisconfigurationIssues(results: ValidationResult[], locationRoot: string): ValidationResult[] {
+export function addMisconfigurationIssues(results: ValidationResult[], locationRoot: string): ValidationResult[] {
   const homeDir = toForwardSlash(os.homedir());
   const pluginsPath = `${homeDir}/.claude/plugins/`;
+  const pluginDirs = new Set(results.filter((r) => r.type === 'claude-plugin').map((r) => toForwardSlash(r.path)));
 
   return results.map((result) => {
-    const { marketplace, plugin, isCached } = parsePathStructure(result.path);
-
-    // Only check standalone skills (no marketplace, no plugin structure)
-    if (marketplace || plugin || isCached) {
-      return result; // Not a standalone skill, leave unchanged
-    }
-
-    // Check if this standalone skill is in the plugins directory
-    const normalizedPath = toForwardSlash(result.path);
-    if (!normalizedPath.startsWith(pluginsPath)) {
-      return result; // Not in plugins dir, leave unchanged
-    }
+    if (!isMisplacedStandaloneSkill(result, pluginsPath, pluginDirs)) return result;
 
     // This is a standalone SKILL.md in ~/.claude/plugins/ - add misconfiguration issue
     const misconfigIssue: ValidationIssue = {
@@ -444,14 +463,9 @@ function addMisconfigurationIssues(results: ValidationResult[], locationRoot: st
 
     // Clone result and add issue. The status and the counts are DERIVED from the
     // new issue list by the one shared collapse — never hand-set — so they cannot
-    // drift from the findings they describe.
+    // drift from the findings they describe; so is the sentence.
     const issues = [...result.issues, misconfigIssue];
-    return {
-      ...result,
-      status: calculateValidationStatus(issues),
-      issueCounts: countBySeverity(issues),
-      issues,
-    };
+    return { ...result, ...describeIssues(issues, result.type), issues };
   });
 }
 
@@ -479,11 +493,9 @@ export function buildHierarchicalOutput(
   verbose: boolean,
   locationRoot: string,
 ): HierarchicalOutput {
-  // Filter out cache duplicates that match their source
+  // Filter out cache duplicates that match their source. Misconfiguration
+  // findings are already on `results` — see {@link addMisconfigurationIssues}.
   const { filtered: filteredResults, cacheStatusMap } = filterCacheDuplicates(results);
-
-  // Add misconfiguration detection to results BEFORE verbose filtering
-  const resultsWithMisconfigDetection = addMisconfigurationIssues(filteredResults, locationRoot);
 
   const marketplacesMap = new Map<string, Map<string, SkillEntry[]>>();
   const cachedPluginsMap = new Map<string, SkillEntry[]>();
@@ -497,7 +509,7 @@ export function buildHierarchicalOutput(
     standaloneSkills,
   };
 
-  for (const result of resultsWithMisconfigDetection) {
+  for (const result of filteredResults) {
     // Only include results with issues (terse principle), unless verbose mode.
     //
     // Keyed on the ISSUE COUNT, never on the status. A status names the worst

@@ -12,65 +12,67 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { scan } from '@vibe-agent-toolkit/discovery';
-import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { safePath, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
+import { ExitCode, exitCodeOfChild } from '@vibe-agent-toolkit/schema';
+import { fsFaultOf, pathPresent, safePath, suppressedFaultsOf, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 import { isGitUrl, parseGitUrl } from '@vibe-agent-toolkit/utils/git';
 import * as yaml from 'yaml';
 
+import { errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
+import { writeArtifactFile } from '../../utils/document-writer.js';
 import { createLogger } from '../../utils/logger.js';
-import { nothingCheckedFinding } from '../../utils/run-integrity.js';
+import { withRunIntegrity } from '../../utils/run-integrity.js';
 import { resolveVatBinPath } from '../../utils/vat-bin-path.js';
 import { withClonedRepo } from '../audit/git-url-clone.js';
-import { deriveScanRoot, getValidationResults } from '../audit.js';
+import type { Provenance } from '../audit/provenance.js';
+import { AUDIT_EXAMINED } from '../audit-schema.js';
+import {
+  buildAuditDocument,
+  deriveScanRoot,
+  getValidationResults,
+  urlAuditReport,
+  type AuditReport,
+  type CompletedAuditReport,
+} from '../audit.js';
 
-import type { AuditOutcome, AuditSummary, PluginRow, ReviewOutcome, ReviewSummary } from './report.js';
+import { writeRunOutput, type AuditOutcome, type PluginRow, type ReviewOutcome, type ReviewSummary } from './report.js';
 import type { PluginEntry } from './seed.js';
 
 export interface RunnerOptions {
   runDir: string;
   withReview: boolean;
   debug: boolean;
+  /**
+   * Where a URL entry's clone the OS would not remove, once its row was done, is put — the
+   * classified fault naming it — for the scan to report as a warning. Required: a scan cannot
+   * run an entry without saying where its leftover goes.
+   */
+  leftovers: unknown[];
 }
 
 const SKIPPED_REVIEW: ReviewOutcome = { status: 'skipped', duration_ms: 0 };
 
-/**
- * Roll a run's per-file results up into one corpus row.
- *
- * `files_scanned` counts FILES; the severity buckets count FINDINGS — two
- * different denominators, so they are named differently on purpose.
- */
-function summarizeRun(allIssues: readonly ValidationIssue[], filesScanned: number): AuditSummary {
-  return { ...countBySeverity(allIssues), files_scanned: filesScanned };
-}
-
-/** The per-plugin audit document: one result per file, plus the run-level findings that belong to none. */
-export interface AuditDocument {
-  results: readonly ValidationResult[];
-  /** Present only when non-empty, so a clean run's document keeps its shape. */
-  issues?: readonly ValidationIssue[];
+/** Where a cloned source came from, and the tempdir its paths are spelled under. */
+interface ClonedSource {
+  provenance: Provenance;
+  tempRoot: string;
 }
 
 /**
  * Derive one plugin's audit row and its document from the per-file results.
  *
- * 🚨 **An audit over zero files is an ERROR, not "an empty tree audits
- * cleanly".** `summarizeRun` over zero results gives `files_scanned: 0` and
- * zero findings, and zero findings is `success` — so a source that resolved to
- * a tree with nothing to audit (a wrong subdirectory, a clone whose default
- * branch holds no skill, an excluded tree) wrote the same `summary.yaml` row as
- * a clean plugin. The review lane on the identical fixture already answered
- * `error` ("No SKILL.md files found"); this is the same question one lane
- * over, and it now gets the same answer, through the shared mechanism in
- * `run-integrity.ts`: one non-overridable `RESOURCE_CHECK_BROKEN` at `error`,
- * counted in the row's `errors` and `findings_emitted`, carried in the document
- * under `issues` beside the (empty) per-file results.
+ * The document IS the `vat audit` report — the same builder, the same
+ * run-integrity pass the writer applies to the verb, the same schema — so a
+ * corpus row and the verb cannot disagree about a tree. A source that resolved
+ * to a tree with nothing to audit (a wrong subdirectory, a clone whose default
+ * branch holds no skill, an excluded tree) examined zero files and carries the
+ * one non-overridable `RESOURCE_CHECK_BROKEN`, counted in the row's `errors`
+ * and `findings_emitted`, rather than writing the row of a clean plugin.
  *
  * `unloadable` is deliberately NOT the status here. Unloadable means the audit
  * could not run — a missing path, a failed clone. This audit ran, and found no
@@ -84,92 +86,146 @@ export interface AuditDocument {
  * @param results - One validation result per audited file
  * @param durationMs - The row's measured duration
  * @param outputPath - Where the document is written, relative to the run dir
+ * @param root - The scan root the document's paths are relative to
+ * @param cloned - For a URL source: its provenance and clone dir
  * @returns The row's audit outcome and the document to write for it
  */
 export function buildAuditOutcome(
   results: readonly ValidationResult[],
   durationMs: number,
   outputPath: string,
-): { audit: AuditOutcome; document: AuditDocument } {
-  const fileIssues = results.flatMap((r) => r.issues);
-  const runIssues = nothingCheckedFinding(results.length, fileIssues, () =>
-    'The audit ran over 0 files, so this row is not a verdict: a plugin with nothing'
-    + ' to audit produces the same counts as a clean one. The source resolved to a tree'
-    + ' holding no auditable file — usually a wrong subdirectory, a clone whose default'
-    + ' branch carries no skill or plugin, or an excluded tree.'
-    + ' `vat audit <source>` over the same path shows what the scan enumerates.');
-  const allIssues = [...runIssues, ...fileIssues];
-  const summary = summarizeRun(allIssues, results.length);
+  root: string,
+  cloned?: ClonedSource,
+): { audit: AuditOutcome; document: AuditReport } {
+  const built = buildAuditDocument(results, { root, compatMap: undefined, verbose: false, hierarchical: null, durationMs });
+  const located: CompletedAuditReport = cloned === undefined ? built : urlAuditReport(built, cloned.provenance, cloned.tempRoot);
+  const document = withRunIntegrity(located, AUDIT_EXAMINED);
+  if (document.status === 'error') {
+    // `withRunIntegrity` never turns a finished report into an unfinished one.
+    throw new Error('buildAuditOutcome: a finished audit report came back as status error');
+  }
 
   return {
     audit: {
-      status: calculateValidationStatus(allIssues),
+      status: document.status,
       duration_ms: durationMs,
-      summary,
-      findings_emitted: summary.errors + summary.warnings + summary.info,
+      // Two denominators, two keys: `summary` counts FINDINGS, `files_scanned` FILES.
+      summary: document.summary,
+      files_scanned: document.examined,
+      findings_emitted: document.findings.length,
       output_path: outputPath,
     },
-    document: { results, ...(runIssues.length === 0 ? {} : { issues: runIssues }) },
+    document,
   };
 }
 
 /**
  * Run audit + optional review against one plugin entry.
  */
-export async function auditOnePlugin(
+export function auditOnePlugin(
   entry: PluginEntry,
   opts: RunnerOptions
 ): Promise<PluginRow> {
-  if (isGitUrl(entry.source)) {
-    return runUrlEntry(entry, opts);
+  try {
+    return isGitUrl(entry.source) ? runUrlEntry(entry, opts) : runLocalEntry(entry, opts);
+  } catch (error) {
+    return Promise.reject(error as Error);
   }
-  return runLocalEntry(entry, opts);
 }
 
-async function runLocalEntry(entry: PluginEntry, opts: RunnerOptions): Promise<PluginRow> {
-  if (!existsSync(entry.source)) {
-    return unloadableRow(entry, `Source path not found: ${entry.source}`, 0);
-  }
+function runLocalEntry(entry: PluginEntry, opts: RunnerOptions): Promise<PluginRow> {
+  const unusable = localSourceUnusable(entry.source);
+  if (unusable !== undefined) return Promise.resolve(unloadableRow(entry, unusable, 0));
   return auditAndRecord(entry, entry.source, opts);
+}
+
+/**
+ * Why a local source cannot be audited, or `undefined` when it can be.
+ *
+ * Absent and unreadable are told apart (`pathPresent`, never `existsSync`,
+ * which calls an `EACCES` parent "not found"), and both are one entry's
+ * outcome — an unloadable row — never the whole scan's: per-plugin failures
+ * never abort the loop. `pathPresent` throws only its coded refusal.
+ */
+function localSourceUnusable(source: string): string | undefined {
+  try {
+    return pathPresent(source, 'follow', 'source', 'probe') ? undefined : `Source path not found: ${source}`;
+  } catch (error) {
+    if (!isEntryRefusal(error)) throw error;
+    return errorMessageOf(error);
+  }
+}
+
+/**
+ * Whether a thrown value is this ENTRY's outcome (an unloadable row) rather than
+ * the scan's. One rule for every catch in the runner, decided by code:
+ * - an uncoded throw (`INTERNAL_ERROR`) is a VAT defect, never a property of the
+ *   plugin — swallowing it into a warning row would exit 0 over a broken build;
+ * - `RUN_INCOMPLETE` is a write under `--out` the OS refused: the RUN's refusal,
+ *   the same in both lanes.
+ * Every other coded refusal (a failed clone, an unreadable source) is the entry's.
+ */
+function isEntryRefusal(error: unknown): boolean {
+  const code = refusalCodeOf(error);
+  return code !== 'INTERNAL_ERROR' && code !== 'RUN_INCOMPLETE';
 }
 
 async function runUrlEntry(entry: PluginEntry, opts: RunnerOptions): Promise<PluginRow> {
   try {
-    return await withClonedRepo(
+    const { value: row, leftover } = await withClonedRepo(
       parseGitUrl(entry.source),
       { keepTempForDebug: opts.debug },
-      async ({ targetDir }) => auditAndRecord(entry, targetDir, opts)
+      ({ targetDir, tempdir, provenance }) => auditAndRecord(entry, targetDir, opts, { provenance, tempRoot: tempdir })
     );
+    // The row is done: a clone left behind is the scan's warning, never this entry's failure.
+    if (leftover !== undefined) opts.leftovers.push(leftover);
+    return row;
   } catch (err) {
-    return unloadableRow(entry, err instanceof Error ? err.message : String(err), 0);
+    if (!isEntryRefusal(err)) throw err;
+    // The refusal becomes a row, so a clone recorded beside it would vanish with it: the scan reports it.
+    opts.leftovers.push(...suppressedFaultsOf(err));
+    return unloadableRow(entry, errorMessageOf(err), 0);
   }
 }
 
 async function auditAndRecord(
   entry: PluginEntry,
   scanPath: string,
-  opts: RunnerOptions
+  opts: RunnerOptions,
+  cloned?: ClonedSource,
 ): Promise<PluginRow> {
   const logger = createLogger(opts.debug ? { debug: true } : {});
   const start = Date.now();
 
-  const validationApplied = applyValidationOverlay(entry, scanPath);
+  const overlay = applyValidationOverlay(entry, scanPath);
+  // The overlay goes into the SOURCE, not --out: a source that refuses it is this
+  // entry's unloadable row in both lanes, and the scan carries on.
+  if (overlay.refused !== undefined) return unloadableRow(entry, overlay.refused, Date.now() - start);
+  const validationApplied = overlay.applied;
 
+  const outputPath = `${entry.name}-audit.yaml`;
+  let outcome: ReturnType<typeof buildAuditOutcome> | undefined;
   let audit: AuditOutcome;
   try {
     // The corpus run root is the scanned plugin itself — one root per row.
-    const results = await getValidationResults(scanPath, true, {}, logger, deriveScanRoot(scanPath));
-    const outputPath = `${entry.name}-audit.yaml`;
-    const outcome = buildAuditOutcome(results, Date.now() - start, outputPath);
-    const auditYamlPath = safePath.join(opts.runDir, outputPath);
-    writeFileSync(auditYamlPath, yaml.stringify(outcome.document, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
+    const root = deriveScanRoot(scanPath);
+    const results = await getValidationResults(scanPath, true, {}, logger, root);
+    outcome = buildAuditOutcome(results, Date.now() - start, outputPath, root, cloned);
     audit = outcome.audit;
   } catch (err) {
+    if (!isEntryRefusal(err)) throw err;
     audit = {
       status: 'unloadable',
       duration_ms: Date.now() - start,
-      error: err instanceof Error ? err.message : String(err),
+      error: errorMessageOf(err),
     };
+  }
+  // Outside the catch: a document the audit produced and the OS would not let
+  // the scan write is the RUN's refusal, not an unloadable plugin.
+  if (outcome !== undefined) {
+    const auditPath = safePath.join(opts.runDir, outputPath);
+    const { document } = outcome;
+    writeRunOutput(auditPath, () => writeArtifactFile('corpus-audit', auditPath, document));
   }
 
   // Skip review when audit was unloadable — nothing meaningful to review.
@@ -205,12 +261,9 @@ function reviewOneSkill(bin: string, skillDir: string, relativePath: string): Sk
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  // `vat skill review` exit semantics:
-  //   0 — review clean
-  //   1 — review completed but found warnings/errors (still a successful review for corpus purposes)
-  //   2 (or other non-zero / null) — system error, the review did not run to completion
-  const SKILL_REVIEW_FINDINGS_EXIT = 1;
-  const reviewRan = result.status === 0 || result.status === SKILL_REVIEW_FINDINGS_EXIT;
+  // Findings (exit 1) are still a review that ran; only ERROR — or a status off the
+  // contract, which `exitCodeOfChild` reads as ERROR — means it did not finish.
+  const reviewRan = exitCodeOfChild(result.status) !== ExitCode.ERROR;
 
   if (!reviewRan) {
     const stderr = (result.stderr ?? '').trim();
@@ -357,21 +410,26 @@ async function runSkillReview(
 
   const aggregated = renderAggregatedReview(entry, sections, summarizeReview(sections));
 
-  writeFileSync(reviewPath, aggregated, 'utf-8');
+  writeRunOutput(reviewPath, () => writeFileSync(reviewPath, aggregated, 'utf-8'));
 
   return buildReviewOutcome(sections, `${entry.name}-review.md`, Date.now() - start);
 }
 
+/** Whether the overlay was written, or why the source refused it. */
+type OverlayOutcome = { applied: boolean; refused?: undefined } | { applied: false; refused: string };
+
 /**
  * Write a synthetic `vibe-agent-toolkit.config.yaml` at the audit target,
  * placing the entry's `validation:` block under `skills.defaults.validation`.
- * Returns true iff the overlay was written.
+ *
+ * A write the OS refuses (classified by errno) is the SOURCE's — the entry's
+ * outcome, not the run's; anything else propagates as a defect.
  *
  * Phase 1: clobbers any pre-existing config in the cloned tree. Merging
  * with author-shipped configs is a follow-up.
  */
-function applyValidationOverlay(entry: PluginEntry, scanPath: string): boolean {
-  if (!entry.validation) return false;
+function applyValidationOverlay(entry: PluginEntry, scanPath: string): OverlayOutcome {
+  if (!entry.validation) return { applied: false };
 
   const overlayPath = safePath.join(scanPath, 'vibe-agent-toolkit.config.yaml');
   const overlay = {
@@ -381,8 +439,13 @@ function applyValidationOverlay(entry: PluginEntry, scanPath: string): boolean {
       },
     },
   };
-  writeFileSync(overlayPath, yaml.stringify(overlay, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
-  return true;
+  try {
+    writeFileSync(overlayPath, yaml.stringify(overlay, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
+  } catch (error) {
+    if (fsFaultOf(error) === undefined) throw error;
+    return { applied: false, refused: `Could not write the validation overlay ${overlayPath}: ${errorMessageOf(error)}` };
+  }
+  return { applied: true };
 }
 
 function unloadableRow(entry: PluginEntry, error: string, durationMs: number): PluginRow {

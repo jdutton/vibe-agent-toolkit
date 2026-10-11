@@ -25,7 +25,7 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { ExitCode, type ExitCodeValue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { isEntrypoint, log, PROJECT_ROOT } from './common.js';
 import { eslintRulesTable } from './eslint-rules-table.js';
@@ -113,7 +113,7 @@ const assetReferenceSites: BlockGenerator = (repoRoot) => {
     try {
       collectTypeScriptFiles(repoRoot, srcDir, files);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      if (isPathAbsentError(error)) continue;
       throw error;
     }
   }

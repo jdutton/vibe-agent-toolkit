@@ -75,7 +75,7 @@ function setupProjectWithOutsideLink(tempDir: string): string {
   // Config: no validation overrides (its presence anchors projectRoot to projectDir)
   writeTestFile(
     safePath.join(projectDir, VAT_CONFIG_FILENAME),
-    'version: 1\nskills:\n  include:\n    - "skills/SKILL.md"\n',
+    'skills:\n  include:\n    - "skills/SKILL.md"\n',
   );
 
   return projectDir;
@@ -100,7 +100,7 @@ function setupProjectWithBrokenLink(tempDir: string): string {
   // Config: no validation overrides
   writeTestFile(
     safePath.join(projectDir, VAT_CONFIG_FILENAME),
-    'version: 1\nskills:\n  include:\n    - "skills/SKILL.md"\n',
+    'skills:\n  include:\n    - "skills/SKILL.md"\n',
   );
 
   return projectDir;
@@ -123,7 +123,6 @@ function setupProjectWithBrokenLinkAllowed(tempDir: string): string {
 
   // Config: allow suppresses LINK_MISSING_TARGET — audit must ignore this
   const configContent = [
-    'version: 1',
     'skills:',
     '  include:',
     `    - "${SKILL_MD_RELATIVE}"`,
@@ -164,7 +163,6 @@ function setupProjectWithIgnoredSeverity(tempDir: string): string {
 
   // Config: severity.LINK_OUTSIDE_PROJECT set to ignore — audit must hide it
   const configContent = [
-    'version: 1',
     'skills:',
     '  include:',
     `    - "${SKILL_MD_RELATIVE}"`,
@@ -260,9 +258,10 @@ describe('vat audit — validation framework behavior (system test)', () => {
     // --help must exit 0
     expect(result.status).toBe(0);
     // The three codes, each with its meaning
-    expect(result.stdout).toContain('0 - The audit completed with nothing at error severity');
-    expect(result.stdout).toContain("1 - The audit completed and reports 'status: error'");
-    expect(result.stdout).toContain('2 - The audit could not run at all');
+    expect(result.stdout).toContain('0 - The audit finished and no finding is at error severity');
+    expect(result.stdout).toContain('1 - The audit finished with at least one error-severity finding');
+    // `status: error` means only "did not finish", and names its refusal.
+    expect(result.stdout).toContain("2 - The audit did not finish ('status: error', the reason in error.code)");
     // Still names the sibling gate that honours validation.allow
     expect(result.stdout).toContain('skills validate');
     // Must reference validation-codes.md

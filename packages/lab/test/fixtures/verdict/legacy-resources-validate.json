@@ -1,0 +1,23 @@
+{
+  "status": "error",
+  "filesScanned": 4,
+  "filesWithErrors": 2,
+  "issueCounts": { "errors": 2, "warnings": 0, "info": 0 },
+  "issueSummary": { "LINK_INTEGRITY_BROKEN": 2 },
+  "validationMode": "strict",
+  "durationSecs": 0.031,
+  "issues": [
+    {
+      "file": "docs/a.md",
+      "issues": [
+        { "line": 5, "column": 1, "code": "LINK_INTEGRITY_BROKEN", "severity": "error", "message": "Broken link to ./missing.md" }
+      ]
+    },
+    {
+      "file": "docs/b.md",
+      "issues": [
+        { "line": 9, "column": 3, "code": "LINK_INTEGRITY_BROKEN", "severity": "error", "message": "Broken link to ./missing.md" }
+      ]
+    }
+  ]
+}

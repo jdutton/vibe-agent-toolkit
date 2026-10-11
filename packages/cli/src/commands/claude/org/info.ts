@@ -18,7 +18,7 @@ export function createOrgInfoCommand(): Command {
     .description('Show organization details (id, type, name)')
     .option('--debug', 'Enable debug logging')
     .action(async (options: { debug?: boolean }) => {
-      await executeOrgCommand('OrgInfo', options.debug, async ({ client }) => {
+      await executeOrgCommand('claude org info', options.debug, async ({ client }) => {
         const org = await client.get<OrgInfoResponse>('/v1/organizations/me');
         return { id: org.id, type: org.type, name: org.name };
       });
@@ -29,14 +29,13 @@ Description:
   Requires ANTHROPIC_ADMIN_API_KEY environment variable.
 
 Output:
-  - status: success
   - id: organization ID
   - type: organization type
   - name: organization name
 
 Exit Codes:
   0 - Success
-  2 - System error (missing key, API failure)
+  2 - Refused: { error: { code, message } } (missing key, API failure)
 
 Example:
   $ vat claude org info

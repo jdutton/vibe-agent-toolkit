@@ -68,7 +68,13 @@ export function convertPureFunctionToTool<TInput, TOutput>(
     mcpServerName,
     inputSchema,
     outputSchema,
-    async (input: TInput) => agent.execute(input),
+    (input: TInput) => {
+      try {
+        return Promise.resolve(agent.execute(input));
+      } catch (error) {
+        return Promise.reject(error as Error);
+      }
+    },
   );
 
   return {

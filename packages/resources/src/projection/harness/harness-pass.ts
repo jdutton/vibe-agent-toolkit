@@ -10,7 +10,7 @@
  * row can only ever mean "the harness never reaches this", never "not yet".
  */
 
-import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, isPathAbsentError } from '@vibe-agent-toolkit/utils';
 
 import { harnessRowsFor } from '../blob-facts.js';
 import { parserKindOf } from '../blob-population.js';
@@ -61,13 +61,14 @@ export async function runHarnessPass(
 ): Promise<HarnessPassResult> {
   let derived = 0;
   const unreadableKeys = new Set<string>();
-  for (const profile of profiles) {
-    for (;;) {
-      const frontier = harnessFrontier(builder.base(), profile).filter((entry) => !unreadableKeys.has(entry.contentKey));
-      if (frontier.length === 0) break;
-      derived += await deriveFrontier(builder, profile, frontier, readContent, unreadableKeys);
-    }
-  }
+  // One round per frontier, each only after the last one's rows are in the builder.
+  const drain = async (profile: HarnessProfile): Promise<void> => {
+    const frontier = harnessFrontier(builder.base(), profile).filter((entry) => !unreadableKeys.has(entry.contentKey));
+    if (frontier.length === 0) return;
+    derived += await deriveFrontier(builder, profile, frontier, readContent, unreadableKeys);
+    return drain(profile);
+  };
+  await forEachInOrder(profiles, drain);
   return { derived, unreadable: unreadableKeys.size, unreadableKeys };
 }
 
@@ -89,17 +90,17 @@ async function deriveFrontier(
   unreadable: Set<string>,
 ): Promise<number> {
   let derived = 0;
-  for (const entry of frontier) {
+  await forEachInOrder(frontier, async (entry) => {
     const content = await readContent(entry);
     if (content === null) {
       unreadable.add(entry.contentKey);
-      continue;
+      return;
     }
     const rows = harnessRowsFor(entry.contentKey, profile.id, profile.factsOf(content));
     for (const row of rows.imports) builder.addHarnessBlobImport(row);
     builder.addHarnessBlobFacts(rows.facts);
     derived += 1;
-  }
+  });
   return derived;
 }
 

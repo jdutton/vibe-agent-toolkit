@@ -36,11 +36,17 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { isPathAbsentError, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { InstrumentVersion } from '../src/envelope/coordinate.js';
+import type { ArmEnvironment } from '../src/harness/arm-env.js';
 import type { RepeatSpec } from '../src/harness/repeat.js';
 import type { ResolvedInstrument } from '../src/harness/types.js';
 
 /** Axis C is irrelevant to a probe run; every instrument here shares one. */
-export const PROBE_VERSION: InstrumentVersion = { version: '0.0.0-test', commit: null, dirty: null };
+export const PROBE_VERSION: InstrumentVersion = {
+  version: '0.0.0-test',
+  commit: null,
+  dirty: null,
+  closure: null,
+};
 
 /** Base-environment variable, expected in EVERY child including the cache clear. */
 export const PROBE_BASE_ENV = 'LAB_PROBE_BASE';
@@ -81,6 +87,29 @@ export const PROBE_EXIT_CODE_ENV = 'LAB_PROBE_EXIT_CODE';
  */
 export const PROBE_STDOUT_ENV = 'LAB_PROBE_STDOUT';
 
+/**
+ * Set to a comma-separated list of variable names for the probe to echo to
+ * stdout as one JSON object, `null` for a name the child did not receive.
+ *
+ * Exists so a suite can read back the environment a child ACTUALLY got — the
+ * only evidence that an arm-owned variable in the parent (`VAT_BIN`) did not
+ * leak through. `null` rather than an omitted key, so "absent" is a value the
+ * assertion names rather than one it infers.
+ */
+export const PROBE_ECHO_ENV = 'LAB_PROBE_ECHO_ENV';
+
+/**
+ * Set (to anything) to make the probe write NO `probe.log` into its cwd.
+ *
+ * Exists for the `verdict` facet, whose cwd is the SUBJECT: a log written there
+ * moves the subject's content fingerprint between two arms' captures, and the
+ * compare then — correctly — refuses them as a moved subject. With no log,
+ * every invocation sees zero prior children, so {@link PROBE_FAIL_AT_ENV} `0`
+ * fails EVERY invocation and {@link PROBE_STDOUT_ENV}'s first entry is always
+ * the one printed: a per-arm constant, which is what an arm fixture wants.
+ */
+export const PROBE_NO_LOG_ENV = 'LAB_PROBE_NO_LOG';
+
 /** An argument that makes every invocation of that command fail. */
 export const PROBE_FAIL_TOKEN = 'boom';
 
@@ -118,7 +147,14 @@ const PROBE_SOURCE = [
   `  base: process.env.${PROBE_BASE_ENV} ?? null,`,
   `  perRepeat: process.env.${PROBE_REPEAT_ENV} ?? null,`,
   '});',
-  String.raw`appendFileSync(log, line + '\n');`,
+  `if (process.env.${PROBE_NO_LOG_ENV} === undefined) {`,
+  String.raw`  appendFileSync(log, line + '\n');`,
+  '}',
+  `const echoSpec = process.env.${PROBE_ECHO_ENV};`,
+  'if (echoSpec !== undefined) {',
+  "  const names = echoSpec.split(',').filter((name) => name !== '');",
+  '  process.stdout.write(JSON.stringify(Object.fromEntries(names.map((name) => [name, process.env[name] ?? null]))));',
+  '}',
   `const outSpec = process.env.${PROBE_STDOUT_ENV};`,
   'if (outSpec !== undefined) {',
   '  const outputs = JSON.parse(outSpec);',
@@ -211,13 +247,20 @@ function readProbeLog(cwd: string): ProbeEntry[] {
  * @param overrides - What the case varies
  * @returns A complete spec
  */
-export function probeSpec(probe: Probe, overrides: Partial<RepeatSpec> = {}): RepeatSpec {
+export function probeSpec(probe: Probe, overrides: ProbeSpecOverrides = {}): RepeatSpec {
+  const { env, ...rest } = overrides;
   return {
     instrument: probe.instrument,
     cwd: probe.cwd,
     args: ['audit'],
     runs: 2,
     cache: 'warm',
-    ...overrides,
+    ...rest,
+    env: { set: env ?? {}, unset: [] },
   };
 }
+
+/** What a case varies about a probe's repeats; `env` names only what it SETS. */
+type ProbeSpecOverrides = Omit<Partial<RepeatSpec>, 'env'> & {
+  readonly env?: ArmEnvironment['set'];
+};

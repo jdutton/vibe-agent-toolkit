@@ -12,9 +12,9 @@
  *    artifact is 1.81 MB — but it is **order-insensitive**, so a pure
  *    reordering counts `0/0`. Status is therefore decided by string equality
  *    and never by the counts.
- * 2. `extractHeaderFacts` scans leading `key: value` lines rather than parsing.
- *    A 1.8 MB YAML parse is slow and a JSON parse of a truncated capture throws,
- *    so the headline column is **advisory** — see its JSDoc.
+ * 2. `extractHeaderFacts` scans an oracle artifact's leading `key: value`
+ *    lines rather than parsing it, so the headline column is **advisory** —
+ *    see its JSDoc.
  * 3. `renderUnifiedDiff` runs a real LCS only within a bounded cell budget and
  *    otherwise degrades to a positional report, which is a different and weaker
  *    statement. It says so in its own output rather than looking complete.
@@ -24,7 +24,6 @@ import { toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import type {
   ArtifactDelta,
-  ArtifactKind,
   ArtifactStatus,
   CompareReport,
   LoadedSnapshot,
@@ -33,35 +32,6 @@ import type {
 
 /** Leading `key: value` line of an oracle artifact header. */
 const ORACLE_HEADER_LINE = /^([A-Za-z][A-Za-z0-9]*): (.*)$/u;
-
-/**
- * Top-level scalar line of a YAML or JSON capture, key optionally quoted.
- *
- * Every quantifier here is over a character class disjoint from what follows
- * it, and every one except the final `(.*)$` is explicitly BOUNDED. That is
- * deliberate: this pattern is run over `vat audit` output reaching ~1.8 MB,
- * where a super-linearly backtracking alternative would not be a theoretical
- * risk. Indentation is matched as literal spaces rather than `\s`, because a
- * tab would not be YAML indentation anyway.
- *
- * The bounds are semantic, not lint appeasement. This scan only ever wants
- * *top-level* scalars — indent 0 for YAML, at most 2 for JSON — so a line
- * indented past `{0,8}` is one the caller would reject on the next line
- * anyway ({@link readTopLevelScalar} compares against `maxIndent`). Bounding
- * the separator runs is safe for the same reason: {@link cleanScalarValue}
- * trims the captured value, so spaces past the bound land in the capture and
- * are removed rather than changing the result.
- */
-const COMMAND_HEADER_LINE = /^( {0,8})"?([A-Za-z_][A-Za-z0-9_-]*)"? {0,4}: {0,4}(.*)$/u;
-
-/** Values that mean "a container follows", not a scalar. */
-const CONTAINER_VALUE_PREFIXES = new Set(['{', '[', '|', '>']);
-
-/** How many lines of a command capture the header scan is willing to read. */
-const COMMAND_SCAN_LINE_LIMIT = 2000;
-
-/** How many header keys a command capture may contribute. */
-const COMMAND_HEADER_KEY_LIMIT = 60;
 
 /** Above this line count on either side, `renderUnifiedDiff` refuses to run an LCS. */
 const LCS_MAX_LINES = 20_000;
@@ -91,7 +61,6 @@ interface DiffOp extends RawOp {
 /** A pair of artifacts to compare, either side possibly absent. */
 interface ArtifactPair {
   name: string;
-  kind: ArtifactKind;
   beforeArtifact: string | null;
   afterArtifact: string | null;
 }
@@ -140,35 +109,17 @@ export function countLineDelta(
 /**
  * Leading `key: value` header facts, for the advisory headline column.
  *
- * ⚠️ **Advisory, and deliberately not a parse.** For `oracle` text the header is
- * the run of leading `key: value` lines before the first blank line — exactly
- * what `pipeline-oracles/serialize.ts` emits (`lane:`, `corpus:`,
- * `enumeratedCount:`, `blobCount:`, `keyDisagreementCount:`, …). For `command`
- * text it is a shallow scan of top-level scalar lines (indent 0 for YAML,
- * indent no greater than 2 for JSON), capped at the first
- * {@link COMMAND_HEADER_KEY_LIMIT} keys and {@link COMMAND_SCAN_LINE_LIMIT} lines.
+ * ⚠️ **Advisory, and deliberately not a parse.** The header is the run of
+ * leading `key: value` lines before the first blank line — exactly what
+ * `pipeline-oracles/serialize.ts` emits (`lane:`, `corpus:`,
+ * `enumeratedCount:`, `blobCount:`, `keyDisagreementCount:`, …). The
+ * authoritative signal is `status` plus the line counts; headlines exist to
+ * save a drill-down, never to replace one.
  *
- * Parsing the document instead was rejected at both ends: a 1.8 MB YAML parse is
- * slow enough to dominate the comparison, and a JSON parse of a capture that was
- * truncated by a crashing child throws rather than degrading. So the
- * authoritative signal is `status` plus the line counts; headlines exist to save
- * a drill-down, never to replace one.
- *
- * @param text - Artifact text, LF-normalized
- * @param kind - Which scan to apply
+ * @param text - Oracle artifact text, LF-normalized
  * @returns Header key to value, in the order encountered
  */
-export function extractHeaderFacts(text: string, kind: ArtifactKind): Map<string, string> {
-  return kind === 'oracle' ? extractOracleHeader(text) : extractCommandHeader(text);
-}
-
-/**
- * Leading header of an oracle artifact: `key: value` lines before the first blank.
- *
- * @param text - Artifact text
- * @returns Header key to value
- */
-function extractOracleHeader(text: string): Map<string, string> {
+export function extractHeaderFacts(text: string): Map<string, string> {
   const facts = new Map<string, string>();
   for (const line of text.split('\n')) {
     if (line.trim() === '') {
@@ -185,92 +136,6 @@ function extractOracleHeader(text: string): Map<string, string> {
 }
 
 /**
- * Shallow scan of top-level scalars in a YAML or JSON command capture.
- *
- * @param text - Artifact text
- * @returns Header key to value, capped
- */
-function extractCommandHeader(text: string): Map<string, string> {
-  const facts = new Map<string, string>();
-  const lines = text.split('\n');
-  const maxIndent = looksLikeJson(lines) ? 2 : 0;
-  const scanLimit = Math.min(lines.length, COMMAND_SCAN_LINE_LIMIT);
-
-  for (let index = 0; index < scanLimit; index += 1) {
-    if (facts.size >= COMMAND_HEADER_KEY_LIMIT) {
-      break;
-    }
-    const entry = readTopLevelScalar(lines[index] ?? '', maxIndent);
-    if (entry !== null) {
-      facts.set(entry.key, entry.value);
-    }
-  }
-  return facts;
-}
-
-/**
- * Whether a capture opens with a JSON container rather than YAML.
- *
- * @param lines - Capture lines
- * @returns `true` when the first non-blank line starts a JSON object or array
- */
-function looksLikeJson(lines: readonly string[]): boolean {
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed !== '') {
-      return trimmed.startsWith('{') || trimmed.startsWith('[');
-    }
-  }
-  return false;
-}
-
-/**
- * Read one `key: value` scalar line, if it is shallow enough to be top-level.
- *
- * @param line - The raw line
- * @param maxIndent - Greatest leading-space count still considered top level
- * @returns The key and its cleaned value, or `null` when the line is not a top-level scalar
- */
-function readTopLevelScalar(
-  line: string,
-  maxIndent: number,
-): { key: string; value: string } | null {
-  const match = COMMAND_HEADER_LINE.exec(line);
-  const indent = match?.[1];
-  const key = match?.[2];
-  const rawValue = match?.[3];
-  if (indent === undefined || key === undefined || rawValue === undefined) {
-    return null;
-  }
-  if (indent.length > maxIndent) {
-    return null;
-  }
-
-  const value = cleanScalarValue(rawValue);
-  if (value === '' || CONTAINER_VALUE_PREFIXES.has(value)) {
-    return null;
-  }
-  return { key, value };
-}
-
-/**
- * Strip a JSON trailing comma and surrounding double quotes from a scalar.
- *
- * @param rawValue - Value text as it appeared after the colon
- * @returns The cleaned value
- */
-function cleanScalarValue(rawValue: string): string {
-  let value = rawValue.trim();
-  if (value.endsWith(',')) {
-    value = value.slice(0, -1).trim();
-  }
-  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
-    value = value.slice(1, -1);
-  }
-  return value;
-}
-
-/**
  * `enumeratedCount 265→267` strings for header keys whose values differ.
  *
  * Only keys present on both sides are reported: a key that appeared or vanished
@@ -280,12 +145,11 @@ function cleanScalarValue(rawValue: string): string {
  *
  * @param before - Artifact text from the earlier snapshot
  * @param after - Artifact text from the later snapshot
- * @param kind - Which header scan to apply
  * @returns One `name before→after` string per moved key, in header order
  */
-export function headlineChanges(before: string, after: string, kind: ArtifactKind): string[] {
-  const beforeFacts = extractHeaderFacts(before, kind);
-  const afterFacts = extractHeaderFacts(after, kind);
+export function headlineChanges(before: string, after: string): string[] {
+  const beforeFacts = extractHeaderFacts(before);
+  const afterFacts = extractHeaderFacts(after);
 
   const changes: string[] = [];
   for (const [key, beforeValue] of beforeFacts) {
@@ -312,7 +176,7 @@ export function headlineChanges(before: string, after: string, kind: ArtifactKin
  * walk-route comparison, a half captured on one side only — is stated in
  * `constraints`, and the comparison continues.
  *
- * `capturedAtIso` and each command's `wallMs` are never compared as content.
+ * `capturedAtIso` is never compared as content.
  *
  * @param before - The earlier snapshot
  * @param after - The later snapshot
@@ -453,8 +317,7 @@ function lastPathSegment(value: string): string {
  * Enumerate every artifact selector across both snapshots, in display order.
  *
  * Selector names are the strings a user passes to `--detail`, so they are
- * stable: `enumeration.<laneId>`, `parse-facts`, `command.<name>.stdout`,
- * `command.<name>.stderr`.
+ * stable: `enumeration.<laneId>` and `parse-facts`.
  *
  * @param before - Earlier manifest
  * @param after - Later manifest
@@ -472,7 +335,6 @@ function pairArtifacts(before: SnapshotManifest, after: SnapshotManifest): Artif
   for (const laneId of orderedKeys(beforeLanes, afterLanes)) {
     pairs.push({
       name: `enumeration.${laneId}`,
-      kind: 'oracle',
       beforeArtifact: beforeLanes.get(laneId) ?? null,
       afterArtifact: afterLanes.get(laneId) ?? null,
     });
@@ -481,46 +343,11 @@ function pairArtifacts(before: SnapshotManifest, after: SnapshotManifest): Artif
   if (before.parseFactArtifact !== null || after.parseFactArtifact !== null) {
     pairs.push({
       name: 'parse-facts',
-      kind: 'oracle',
       beforeArtifact: before.parseFactArtifact,
       afterArtifact: after.parseFactArtifact,
     });
   }
 
-  pairs.push(...pairCommandArtifacts(before, after));
-  return pairs;
-}
-
-/**
- * Pair the two streams of every command present on either side.
- *
- * @param before - Earlier manifest
- * @param after - Later manifest
- * @returns Two pairs per command
- */
-function pairCommandArtifacts(before: SnapshotManifest, after: SnapshotManifest): ArtifactPair[] {
-  const beforeCommands = new Map(before.commands.map((command) => [command.name, command]));
-  const afterCommands = new Map(after.commands.map((command) => [command.name, command]));
-
-  const pairs: ArtifactPair[] = [];
-  for (const name of orderedKeys(beforeCommands, afterCommands)) {
-    const beforeCommand = beforeCommands.get(name);
-    const afterCommand = afterCommands.get(name);
-    pairs.push(
-      {
-        name: `command.${name}.stdout`,
-        kind: 'command',
-        beforeArtifact: beforeCommand?.stdoutArtifact ?? null,
-        afterArtifact: afterCommand?.stdoutArtifact ?? null,
-      },
-      {
-        name: `command.${name}.stderr`,
-        kind: 'command',
-        beforeArtifact: beforeCommand?.stderrArtifact ?? null,
-        afterArtifact: afterCommand?.stderrArtifact ?? null,
-      },
-    );
-  }
   return pairs;
 }
 
@@ -569,12 +396,11 @@ function toDelta(
   const { addedLines, removedLines } = countLineDelta(beforeText, afterText);
   return {
     name: pair.name,
-    kind: pair.kind,
     artifact,
     status,
     addedLines,
     removedLines,
-    headlines: status === 'same' ? [] : headlineChanges(beforeText, afterText, pair.kind),
+    headlines: status === 'same' ? [] : headlineChanges(beforeText, afterText),
   };
 }
 
@@ -598,7 +424,6 @@ function onePresentDelta(
   const lineCount = text === '' ? 0 : text.split('\n').length;
   return {
     name: pair.name,
-    kind: pair.kind,
     artifact,
     status: added ? 'added' : 'removed',
     addedLines: added ? lineCount : 0,

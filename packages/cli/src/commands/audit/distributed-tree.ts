@@ -181,10 +181,15 @@ export async function getOrCreateGitTracker(gitRoot: string): Promise<GitTracker
  * {@link resetGitTrackerCache} itself between phases, exactly as this module's
  * own tests do in `beforeEach`.
  */
-export const gitTrackerForProjectRoot: GitTrackerSource = async (projectRoot) => {
-  const gitRoot = gitFindRoot(projectRoot);
+export const gitTrackerForProjectRoot: GitTrackerSource = (projectRoot) => {
+  let gitRoot: string | null;
+  try {
+    gitRoot = gitFindRoot(projectRoot);
+  } catch (error) {
+    return Promise.reject(error as Error);
+  }
   if (gitRoot === null) {
-    return undefined;
+    return Promise.resolve(undefined);
   }
   // No catch, deliberately. "Not a repository" and "git did not answer" are
   // both absorbed INSIDE `GitTracker.initialize()` (a null listing, a tracker
@@ -413,7 +418,7 @@ export async function distributedTreeFindings(
   if (provenance === REPO_SOURCE) return [];
 
   const treeRoot = safePath.resolve(skillPath, '..');
-  const present = detectPackagedAgentInstructionFiles(treeRoot, locationRoot, []);
+  const present = detectPackagedAgentInstructionFiles(treeRoot, locationRoot, [], []);
   if (provenance === 'distributed') return present;
 
   // Provenance is unknown. Report the unknown, not the files: calling them

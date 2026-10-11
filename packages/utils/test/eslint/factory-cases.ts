@@ -84,7 +84,7 @@ export function unanchoredExemptCases(unsafeCode: string, safeCode: string): Rul
 
 /**
  * `no-os-tmpdir` / `no-fs-mkdirSync` / `no-fs-realpathSync` /
- * `no-child-process-execSync` / `no-fs-promises-cp` share `eslint-rule-factory`,
+ * `no-child-process-execSync` share `eslint-rule-factory`,
  * which had the same substring-exemption bug (`filename.includes('path-utils.ts')`)
  * as the path rules. Same decoy discipline applies: a same-named file in a
  * different directory must fire.

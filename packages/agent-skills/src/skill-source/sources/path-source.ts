@@ -18,5 +18,5 @@ export async function resolvePathSource(
   const resolvedDir = resolveAssetReference(spec, ctx.repoRoot);
   const hash = await hashDirectory(resolvedDir);
   const stagedDir = await stageDirInto(resolvedDir, ctx, `path-${hash}`);
-  return { stagedDir, identity: `path:${hash}` };
+  return { stagedDir, identity: `path:${hash}`, leftovers: [] };
 }

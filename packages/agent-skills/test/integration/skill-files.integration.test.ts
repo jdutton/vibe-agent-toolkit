@@ -8,8 +8,9 @@ import { globSync } from 'glob';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { applyFilesConfig, mergeFilesConfig } from '../../src/files-config.js';
-import { packageSkill, type PackageSkillOptions } from '../../src/skill-packager.js';
+import type { PackageSkillOptions } from '../../src/skill-packager.js';
 import { detectPackagedAgentInstructionFiles } from '../../src/validators/agent-instruction-presence.js';
+import { packageInPlace } from '../test-helpers.js';
 
 const FIXTURE_DIR = safePath.join(import.meta.dirname, '..', 'fixtures', 'skill-files');
 
@@ -66,7 +67,7 @@ function setupSkillFilesTestDir(): { getTempDir: () => string } {
     // findProjectRoot to config-first, no longer consults npm workspaces).
     await writeFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-      'version: 1\n',
+      '{}\n',
     );
   });
 
@@ -79,14 +80,18 @@ function setupSkillFilesTestDir(): { getTempDir: () => string } {
   return { getTempDir: () => tempDir };
 }
 
-/** Package a skill from the fixture with a unique output dir name */
+/**
+ * Package a skill from the fixture with a unique output dir name — in place, so a test reads what
+ * the packager wrote whether or not the package passed its own checks (`packageSkill` lands only
+ * one that passed).
+ */
 async function packageFixtureSkill(
   tempDir: string,
   skillName: string,
   outputSuffix: string,
   overrides: Partial<PackageSkillOptions> = {},
 ) {
-  return packageSkill(
+  return packageInPlace(
     safePath.join(tempDir, 'skills', skillName, 'SKILL.md'),
     {
       outputPath: safePath.join(tempDir, 'out', outputSuffix),
@@ -333,7 +338,7 @@ function setupLinkedGlobRepo(): LinkedGlobRepo {
     }
 
     await writeFile(safePath.join(repoRoot, '.gitignore'), 'out/\nnode_modules/\n');
-    await writeFile(safePath.join(repoRoot, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+    await writeFile(safePath.join(repoRoot, 'vibe-agent-toolkit.config.yaml'), '{}\n');
     await writeFile(
       safePath.join(repoRoot, 'package.json'),
       JSON.stringify({ name: 'linked-glob-fixture', private: true }),
@@ -363,7 +368,7 @@ async function packageLinkedGlobSkill(
   outputSuffix: string,
   files: PackageSkillOptions['files'],
 ) {
-  return packageSkill(safePath.join(repoRoot, 'skills', skillDir, 'SKILL.md'), {
+  return packageInPlace(safePath.join(repoRoot, 'skills', skillDir, 'SKILL.md'), {
     outputPath: safePath.join(repoRoot, 'out', outputSuffix),
     files,
   });
@@ -647,6 +652,7 @@ describe('explicit files: dest suppresses PACKAGED_AGENT_INSTRUCTION_FILE', () =
       result.outputPath,
       result.outputPath,
       [NOTES_CLAUDE_DEST],
+      [],
     );
     expect(issues.map(i => i.location)).toEqual(['AGENTS.md']);
   });

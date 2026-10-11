@@ -16,7 +16,7 @@
  *
  * // Add resources
  * await registry.addResource('./README.md');
- * await registry.crawl({ baseDir: './docs', unreadable: 'refuse' });
+ * await registry.crawl({ outputs: [], baseDir: './docs', unreadable: 'refuse' });
  *
  * // Validate all links
  * const result = await registry.validate();
@@ -597,14 +597,18 @@ export {
 export {
   parseConfigFile,
   loadConfig,
+  readConfigText,
+  readConfigTextSync,
 } from './config-parser.js';
 
 export {
+  CONFIG_LOAD_CODE,
   formatConfigValidationError,
   parseConfigAllowingUnknownKeys,
 } from './config-issues.js';
 
 export {
+  ExternalPluginSourceSchema,
   ProjectConfigSchema,
   SkillExecutableEntrySchema,
   SkillFileEntrySchema,
@@ -645,7 +649,8 @@ export {
 export { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
 // The refusal `buildLinkAuthEngineConfig` throws for a provider that cannot
 // compile — named, so a caller can tell a config error from an engine bug.
-export { LinkAuthConfigError } from './link-auth/compile-check.js';
+export { LINK_AUTH_CONFIG_CODE, LinkAuthConfigError } from './link-auth/compile-check.js';
+export { matchesCollection } from './collection-matcher.js';
 
 // linkAuth pure engine — public API only.
 // Internal helpers (rewrite, build-headers, etc.) stay module-private.
@@ -863,7 +868,7 @@ export {
 // A project's own SQL assertions over its projection: what a returned row MEANS.
 // The statement itself is the CLI's business — only it knows a storage backend
 // exists — so the rule engine here never opens a database.
-export { issuesFromCheckRows } from './projection/sql-checks.js';
+export { issuesFromCheckRows, PROJECTION_STATEMENT_REFUSED_CODE } from './projection/sql-checks.js';
 
 // VAT's OWN default assertions over the same projection — TypeScript predicates,
 // never SQL, because a default-on rule written as a statement would make the
@@ -1086,6 +1091,7 @@ export {
 // See docs/concepts/knowledge-interop-formats.md.
 export {
   OKF_FINDING_CODES,
+  OKF_UNKNOWN_BUNDLE_CODE,
   discoverOkfBundle,
   okfBundleRuns,
   validateOkfBundle,

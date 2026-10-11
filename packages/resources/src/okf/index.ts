@@ -13,7 +13,7 @@
  */
 
 export { discoverOkfBundle, type OkfBundleFiles } from './discovery.js';
-export { okfBundleRuns, type OkfBundleRunOptions } from './config.js';
+export { OKF_UNKNOWN_BUNDLE_CODE, okfBundleRuns, type OkfBundleRunOptions } from './config.js';
 export { validateOkfBundle, type ValidateOkfBundleOptions } from './validate.js';
 export {
   OKF_FINDING_CODES,

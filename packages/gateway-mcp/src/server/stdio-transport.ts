@@ -43,14 +43,14 @@ export class StdioMCPGateway extends MCPGateway {
     );
 
     // Register tools/list handler
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+    this.server.setRequestHandler(ListToolsRequestSchema, () => {
       const tools = this.getToolDefinitions();
       this.logger.debug('tools/list requested', { toolCount: tools.length });
       return { tools };
     });
 
     // Register tools/call handler
-    this.server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
+    this.server.setRequestHandler(CallToolRequestSchema, (request): Promise<CallToolResult> => {
       const { name, arguments: args } = request.params;
 
       this.logger.debug('Tool call received', {

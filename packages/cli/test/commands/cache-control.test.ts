@@ -15,9 +15,9 @@
  *    developer's or CI's live cache is a bug regardless of whether it passes.
  */
 
-import { mkdtempSync, promises as fs, rmSync } from 'node:fs';
+import { promises as fs, rmSync } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -26,6 +26,7 @@ import { clearCacheDirectory, vatCacheRoot } from '../../src/commands/cache/clea
 import { createCacheCommand } from '../../src/commands/cache/index.js';
 import { createResourcesCommand } from '../../src/commands/resources/index.js';
 import { renderCommandHelp } from '../help-text-helpers.js';
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 /** The flag under test, spelled once so a rename cannot half-land. */
 const NO_CACHE_FLAG = '--no-cache';
@@ -172,40 +173,27 @@ describe('root --no-cache', () => {
 describe('clearCacheDirectory', () => {
   let workDir: string;
 
+  // Every clear here removes recursively: the temp root it could reach is the test's own scratch.
+  const scratch = useScratchTmpdir('vat-cache-clear-');
   beforeEach(() => {
-    workDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-cache-clear-'));
-  });
-
-  afterEach(() => {
-    rmSync(workDir, { recursive: true, force: true });
+    workDir = scratch();
   });
 
   it('removes a populated cache tree and reports what went', async () => {
     const fake = await createFakeCache(workDir);
 
-    const report = await clearCacheDirectory(fake.root);
+    const { data, leftover } = await clearCacheDirectory(fake.root);
 
-    expect(report.status).toBe('success');
-    expect(report.existed).toBe(true);
-    expect(report.entriesRemoved).toBe(fake.fileCount);
-    expect(report.bytesRemoved).toBe(fake.totalBytes);
-    expect(report.removed).toEqual([AUTH_TENANT, EXTERNAL_LINKS, 'parse']);
-    await expect(fs.access(fake.root)).rejects.toThrow();
+    expect(leftover).toBeUndefined();
+    expect(data).toEqual({ cacheDir: fake.root, existed: true, removed: [AUTH_TENANT, EXTERNAL_LINKS, 'parse'], entriesRemoved: fake.fileCount, bytesRemoved: fake.totalBytes });
+    // Nothing is left at the cache path, nor beside it: the parked tree went too.
+    expect(await fs.readdir(workDir)).toEqual([]);
   });
 
   it('succeeds on a directory that does not exist', async () => {
     const missing = safePath.join(workDir, 'never-created');
 
-    const report = await clearCacheDirectory(missing);
-
-    expect(report).toEqual({
-      status: 'success',
-      cacheDir: missing,
-      existed: false,
-      removed: [],
-      entriesRemoved: 0,
-      bytesRemoved: 0,
-    });
+    expect(await clearCacheDirectory(missing)).toEqual({ data: { cacheDir: missing, existed: false, removed: [], entriesRemoved: 0, bytesRemoved: 0 } });
   });
 
   it('clears even when caching is disabled', async () => {
@@ -213,50 +201,88 @@ describe('clearCacheDirectory', () => {
     // an operator would be left with a cache they can neither use nor remove.
     await withVatCache(DISABLED, async () => {
       const fake = await createFakeCache(workDir);
-      const report = await clearCacheDirectory(fake.root);
-      expect(report.existed).toBe(true);
-      expect(report.entriesRemoved).toBe(fake.fileCount);
+      const { data } = await clearCacheDirectory(fake.root);
+      expect(data.existed).toBe(true);
+      expect(data.entriesRemoved).toBe(fake.fileCount);
       await expect(fs.access(fake.root)).rejects.toThrow();
     });
   });
 
-  it('reports a partial clear by re-reading the tree, not by trusting the error', async () => {
-    // The shared cache root is written by every VAT on the machine, so a delete
-    // racing a concurrent run gives up part-way. The error names ONE path and
-    // says nothing about the rest, which is why the survivors are read back off
-    // disk. Injected here rather than provoked with permissions: a chmod-EACCES
-    // fixture is POSIX-only and no-ops as root, so it would be a test that
-    // silently stops testing on two of the three platforms this ships to.
+  it('removes a cache holding a read-only directory: the removal grants the owner rwx on its way down', async () => {
+    // A directory whose entries could not be unlinked used to stop the delete part-way.
     const fake = await createFakeCache(workDir);
-    const stubborn = safePath.join(fake.root, 'parse');
+    await fs.chmod(safePath.join(fake.root, 'parse', 'ab'), 0o555);
 
-    const rm = vi.spyOn(fs, 'rm').mockImplementation(async () => {
-      rmSync(safePath.join(fake.root, AUTH_TENANT), { recursive: true, force: true });
-      rmSync(safePath.join(fake.root, EXTERNAL_LINKS), { force: true });
-      throw Object.assign(new Error(`ENOTEMPTY: directory not empty, rmdir '${stubborn}'`), {
-        code: 'ENOTEMPTY',
-      });
+    const { data } = await clearCacheDirectory(fake.root);
+
+    expect(data.entriesRemoved).toBe(fake.fileCount);
+    expect(await fs.readdir(workDir)).toEqual([]);
+  });
+
+  it('a removal the OS stops after the cache left its path is a leftover naming the parked tree, the clear done', async () => {
+    // The cache is moved off its path whole before it is removed: there is no "part of the cache"
+    // left where the next run looks — the clear is done — and the failure names where the rest is.
+    const fake = await createFakeCache(workDir);
+    const realRm = fs.rm;
+    const rm = vi.spyOn(fs, 'rm').mockImplementation(async (target, ...rest) => {
+      if (String(target).endsWith('.previous')) throw Object.assign(new Error(`EBUSY: resource busy or locked, rm '${String(target)}'`), { code: 'EBUSY', syscall: 'rm', path: String(target) });
+      return (realRm as (...args: unknown[]) => Promise<void>)(target, ...rest);
     });
-
+    let outcome;
     try {
-      const report = await clearCacheDirectory(fake.root);
-
-      expect(report.status).toBe('partial');
-      expect(report.removed).toEqual([AUTH_TENANT, EXTERNAL_LINKS]);
-      expect(report.remaining).toEqual(['parse']);
-      expect(report.reason).toContain('ENOTEMPTY');
-      // The counts describe what actually went. Reporting the pre-delete
-      // measurement here would claim the whole cache was reclaimed while most
-      // of it is still on disk — the failure this branch exists to prevent.
-      expect(report.entriesRemoved).toBeGreaterThan(0);
-      expect(report.entriesRemoved).toBeLessThan(fake.fileCount);
-      expect(report.bytesRemoved).toBeLessThan(fake.totalBytes);
+      outcome = await clearCacheDirectory(fake.root);
     } finally {
       rm.mockRestore();
     }
+
+    const refused = outcome.leftover;
+    expect(refused).toMatchObject({ code: 'FS_FAULT', side: 'destination', faultClass: 'busy' });
+    expect(outcome.data).toMatchObject({ existed: true, entriesRemoved: fake.fileCount });
+    await expect(fs.access(fake.root)).rejects.toThrow();
+    const parked = (await fs.readdir(workDir)).find((name) => name.endsWith('.previous'));
+    expect(parked).toBeDefined();
+    expect(String(refused)).toContain(parked);
   });
 
-  it('measures a file that vanished mid-walk as nothing, and one the OS refuses as a failure', async () => {
+  it('refuses a cache root whose listing says ENOENT while its parent still lists it, removing nothing', async () => {
+    // "Absent" is believed only when the parent agrees: a listing the OS refused as ENOENT used to
+    // read as "no cache" — existed: false, exit 0, the whole cache still on disk.
+    const fake = await createFakeCache(workDir);
+    const realReaddir = fs.readdir;
+    const readdir = vi.spyOn(fs, 'readdir').mockImplementation(async (target, ...rest) => {
+      if (String(target) === fake.root) throw Object.assign(new Error(`ENOENT: no such file or directory, scandir '${fake.root}'`), { code: 'ENOENT' });
+      return (realReaddir as (...args: unknown[]) => Promise<never>)(target, ...rest);
+    });
+    try {
+      await expect(clearCacheDirectory(fake.root)).rejects.toMatchObject({ code: 'FS_FAULT', side: 'environment' });
+    } finally {
+      readdir.mockRestore();
+    }
+    expect(await fs.readdir(fake.root)).toHaveLength(3);
+  });
+
+  // Every VAT on the machine shares this tree: another clear can take it after the plan saw it. Gone
+  // is the goal state — a clear of nothing, never a refusal.
+  it.each([
+    ['listed', 'readdir'],
+    ['moved aside', 'rename'],
+  ] as const)('reports a cache another clear removed before it was %s as existed: false', async (_when, method) => {
+    const fake = await createFakeCache(workDir);
+    const real = fs[method] as (...args: unknown[]) => Promise<unknown>;
+    const raced = vi.spyOn(fs, method).mockImplementation((async (target: unknown, ...rest: unknown[]) => {
+      if (String(target) !== fake.root) return real(target, ...rest);
+      rmSync(fake.root, { recursive: true, force: true });
+      throw Object.assign(new Error(`ENOENT: no such file or directory, ${method} '${fake.root}'`), { code: 'ENOENT', path: fake.root });
+    }) as never);
+    try {
+      expect(await clearCacheDirectory(fake.root)).toEqual({ data: { cacheDir: fake.root, existed: false, removed: [], entriesRemoved: 0, bytesRemoved: 0 } });
+    } finally {
+      raced.mockRestore();
+    }
+    expect(await fs.readdir(workDir)).toEqual([]);
+  });
+
+  it('measures a file that really vanished mid-walk as nothing, and one the OS refuses as a failure', async () => {
     // A concurrent run pruning its own temp file is the case the 0 is for. A
     // refused stat used to read as the same 0 — an entry that is still there,
     // reported as reclaimed, and about to fail the delete anyway.
@@ -266,40 +292,44 @@ describe('clearCacheDirectory', () => {
     await fs.writeFile(vanished, Buffer.alloc(64));
     const lstat = vi.spyOn(fs, 'lstat').mockImplementation(async (target, ...rest) => {
       if (String(target) === vanished) {
+        // Really gone: the parent no longer lists it, so its ENOENT is believed.
+        rmSync(vanished);
         throw Object.assign(new Error('ENOENT: vanished'), { code: 'ENOENT' });
       }
       return (realLstat as (...args: unknown[]) => Promise<never>)(target, ...rest);
     });
     try {
-      const report = await clearCacheDirectory(fake.root);
-      expect(report.status).toBe('success');
+      const { data } = await clearCacheDirectory(fake.root);
       // The vanished file was listed (so it counts as an entry) but weighs nothing.
-      expect(report.entriesRemoved).toBe(fake.fileCount + 1);
-      expect(report.bytesRemoved).toBe(fake.totalBytes);
+      expect(data.entriesRemoved).toBe(fake.fileCount + 1);
+      expect(data.bytesRemoved).toBe(fake.totalBytes);
     } finally {
       lstat.mockRestore();
     }
 
     const refused = await createFakeCache(workDir);
-    const denied = vi.spyOn(fs, 'lstat').mockRejectedValue(
-      Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }),
-    );
+    const denied = vi.spyOn(fs, 'lstat').mockImplementation(async (target, ...rest) => {
+      if (String(target).startsWith(`${refused.root}/`)) throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      return (realLstat as (...args: unknown[]) => Promise<never>)(target, ...rest);
+    });
     try {
-      await expect(clearCacheDirectory(refused.root)).rejects.toMatchObject({ code: 'EACCES' });
+      // Refused, and classified at the entry as VAT's own cache (environment) — never "reclaimed", never INTERNAL_ERROR.
+      await expect(clearCacheDirectory(refused.root)).rejects.toMatchObject({ code: 'FS_FAULT', side: 'environment', faultClass: 'refused' });
     } finally {
       denied.mockRestore();
     }
+    expect(await fs.readdir(refused.root)).toHaveLength(3);
   });
 
   it('counts an empty cache root as existing, with nothing in it', async () => {
     const empty = safePath.join(workDir, CACHE_DIR_NAME);
     await fs.mkdir(empty, { recursive: true });
 
-    const report = await clearCacheDirectory(empty);
+    const { data } = await clearCacheDirectory(empty);
 
-    expect(report.existed).toBe(true);
-    expect(report.entriesRemoved).toBe(0);
-    expect(report.removed).toEqual([]);
+    expect(data.existed).toBe(true);
+    expect(data.entriesRemoved).toBe(0);
+    expect(data.removed).toEqual([]);
   });
 });
 

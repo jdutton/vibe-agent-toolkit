@@ -5,26 +5,20 @@
  * every command back to the literal it was meant to remove.
  */
 
-import { describe, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { RULE_TESTER_CASES, type RuleCases, expectRulePasses } from '../rule-tester.js';
+import { RULE_TESTER_CASES, type RuleCases, expectRulePasses, loadLocalRule, ruleTester } from '../rule-tester.js';
 
 const RULE = 'no-literal-process-exit';
 const LINTED = '/repo/packages/cli/src/commands/build.ts';
 const BIN_FALLBACK = 'packages/cli/src/bin.ts';
 const ALLOW_BIN = [{ allow: [BIN_FALLBACK] }];
 
-/** A file under the derived scope, and one that is its legacy exception. */
+/** A file under the derived scope, and one outside it. */
 const DERIVED_FILE = '/repo/packages/cli/src/commands/okf/validate.ts';
-const LEGACY_FILE = '/repo/packages/cli/src/commands/audit.ts';
 const OUTSIDE_FILE = '/repo/packages/dev-tools/src/check.ts';
-const DERIVED = [{
-  derived: {
-    paths: ['packages/cli/src/'],
-    calls: ['exitCodeForReport', 'exitCodeOfChild'],
-    legacy: ['packages/cli/src/commands/audit.ts'],
-  },
-}];
+const DERIVED_OPTION = { paths: ['packages/cli/src/'], calls: ['exitCodeForReport', 'exitCodeOfChild'] };
+const DERIVED = [{ derived: DERIVED_OPTION }];
 
 const CASES: RuleCases = {
   valid: [
@@ -52,14 +46,12 @@ const CASES: RuleCases = {
     { code: 'process.exit(ExitCode.OK);', filename: DERIVED_FILE, options: DERIVED },
     { code: 'process.exit(ExitCode.ERROR);', filename: DERIVED_FILE, options: DERIVED },
     { code: 'process.exit(exitCodeForReport(report));', filename: DERIVED_FILE, options: DERIVED },
-    { code: 'process.exit(schema.exitCodeForReport(report, { strict }));', filename: DERIVED_FILE, options: DERIVED },
+    { code: 'process.exit(schema.exitCodeForReport(report));', filename: DERIVED_FILE, options: DERIVED },
     { code: 'process.exitCode = exitCodeOfChild(result.status);', filename: DERIVED_FILE, options: DERIVED },
     // Outside the derived scope the old floor still applies, and only it.
     { code: 'process.exit(ok ? ExitCode.OK : ExitCode.FINDINGS);', filename: OUTSIDE_FILE, options: DERIVED },
     // A test file is not a verb.
     { code: 'process.exit(ExitCode.FINDINGS);', filename: '/repo/packages/cli/src/commands/x.test.ts', options: DERIVED },
-    // A LEGACY file may still decide by hand — that is what the entry says.
-    { code: 'process.exit(bad ? ExitCode.FINDINGS : ExitCode.OK);', filename: LEGACY_FILE, options: DERIVED },
   ],
   invalid: [
     { code: 'process.exit(0);', filename: LINTED, errors: [{ messageId: 'literalExit', data: { literal: '0' } }] },
@@ -92,13 +84,20 @@ const CASES: RuleCases = {
     { code: 'process.exit(exitCodeForPhases(results));', filename: DERIVED_FILE, options: DERIVED, errors: [{ messageId: 'exitNotDerived' }] },
     // A literal is still reported ONCE, as a literal.
     { code: 'process.exit(1);', filename: DERIVED_FILE, options: DERIVED, errors: [{ messageId: 'literalExit' }] },
-    // The ratchet's other direction: a legacy file that decides nothing by hand is a stale entry.
-    { code: 'process.exit(exitCodeForReport(report));', filename: LEGACY_FILE, options: DERIVED, errors: [{ messageId: 'staleLegacy' }] },
   ],
 };
 
 describe(RULE, () => {
   it(RULE_TESTER_CASES, () => {
     expectRulePasses(RULE, CASES);
+  });
+
+  it('refuses a `legacy` exemption list — every verb derives, and no file may opt out', () => {
+    expect(() => {
+      ruleTester.run(RULE, loadLocalRule(`${RULE}.cjs`), {
+        valid: [{ code: 'process.exit(ExitCode.OK);', filename: DERIVED_FILE, options: [{ derived: { ...DERIVED_OPTION, legacy: [] } }] }],
+        invalid: [],
+      });
+    }).toThrow(/additional properties/i);
   });
 });

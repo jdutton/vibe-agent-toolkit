@@ -12,14 +12,16 @@ import { findBarrelDrift } from '../../dev-tools/src/pin-barrel-exports.js';
 
 const BARREL_EXPORTS = [
   'ESTIMATOR_DIVERGENCE_FACTOR',
-  'LANCEDB_QUERY_SUPPORT',
   'LanceDBRAGProvider',
   'SPECIAL_TOKEN_OVERHEAD',
   'buildMetadataFilter',
   'buildMetadataWhereClause',
   'buildWhereClause',
   'chunkToLanceRow',
+  'foreignDatabaseEntries',
   'lanceRowToChunk',
+  'linkedDatabasePath',
+  'removeRagDatabase',
   'resolveChunkingConfig',
 ];
 

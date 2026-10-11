@@ -11,13 +11,15 @@
  */
 
 
-import { cpSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
+  applyTreePlan,
   isAbsolutePath,
   mkdirSyncReal,
   normalizedTmpdir,
+  planTreeChanges,
   safePath,
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
@@ -47,7 +49,7 @@ function ensureDir(dir: string): void {
   }
 }
 
-function stageLocal(entry: CorpusEntry, source: Extract<SkillSource, { kind: 'local' }>, projectRoot: string, cacheDir: string): StagedSkill {
+async function stageLocal(entry: CorpusEntry, source: Extract<SkillSource, { kind: 'local' }>, projectRoot: string, cacheDir: string): Promise<StagedSkill> {
   const stageDir = safePath.join(cacheDir, 'local', entry.id);
   ensureDir(safePath.join(cacheDir, 'local'));
 
@@ -63,8 +65,15 @@ function stageLocal(entry: CorpusEntry, source: Extract<SkillSource, { kind: 'lo
     return finalizeStage(entry, stageDir);
   }
 
-  ensureDir(stageDir);
-  cpSync(absSource, stageDir, { recursive: true });
+  // Staged beside its name and swapped in whole: a copy that fails leaves no half-staged
+  // directory for the reuse above to mistake for a complete one.
+  await applyTreePlan(await planTreeChanges([{
+    op: 'replace',
+    dest: stageDir,
+    ownership: { kind: 'vat-state' },
+    fill: { from: 'copy', source: absSource, side: 'source', links: 'preserve' },
+    label: `staged local skill ${entry.id}`,
+  }]));
   return finalizeStage(entry, stageDir);
 }
 
@@ -145,13 +154,13 @@ function finalizeStage(entry: CorpusEntry, stageDir: string): StagedSkill {
   return { entryId: entry.id, rootDir, skillPath };
 }
 
-export function fetchSource(entry: CorpusEntry, projectRoot: string, options: FetchOptions = {}): StagedSkill {
+export async function fetchSource(entry: CorpusEntry, projectRoot: string, options: FetchOptions = {}): Promise<StagedSkill> {
   const cacheDir = options.cacheDir ?? defaultCacheDir();
   ensureDir(cacheDir);
 
   switch (entry.source.kind) {
     case 'local':
-      return stageLocal(entry, entry.source, projectRoot, cacheDir);
+      return await stageLocal(entry, entry.source, projectRoot, cacheDir);
     case 'git':
       return stageGit(entry, entry.source, cacheDir);
     case 'npm':

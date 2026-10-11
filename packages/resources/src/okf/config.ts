@@ -7,7 +7,7 @@
  * restating them.
  */
 
-import { compareCodeUnits, resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
+import { compareCodeUnits, resolveAssetReference, safePath, VatError } from '@vibe-agent-toolkit/utils';
 
 import type { OkfConfig } from '../schemas/project-config.js';
 
@@ -21,12 +21,16 @@ export interface OkfBundleRunOptions {
   specVersion?: string;
 }
 
+/** The `VatError` code of a bundle argument the project does not declare under `okf.bundles`. */
+export const OKF_UNKNOWN_BUNDLE_CODE = 'OKF_UNKNOWN_BUNDLE';
+
 /** The error an undeclared bundle name earns, naming what IS declared. */
 function unknownBundleError(requested: string, declared: string[]): Error {
   const known = declared.length === 0
     ? 'this project declares no okf.bundles at all'
     : `declared bundles: ${declared.join(', ')}`;
-  return new Error(`No OKF bundle named '${requested}' in okf.bundles — ${known}.`);
+  // Coded: the caller refuses it as the invocation's mistake, and never by reading this sentence.
+  return new VatError(OKF_UNKNOWN_BUNDLE_CODE, `No OKF bundle named '${requested}' in okf.bundles — ${known}.`);
 }
 
 /**

@@ -35,14 +35,12 @@ const ARD: ProjectConfig['ard'] = {
 
 /** Skills declared only by discovery glob — no `skills.config` at all. */
 const DISCOVERY_ONLY: ProjectConfig = {
-  version: 1,
   skills: { include: [SKILL_GLOB] },
   ard: ARD,
 };
 
 /** `skills.config` present but empty, which is the same silence by a other route. */
 const EMPTY_CONFIG: ProjectConfig = {
-  version: 1,
   skills: { include: [SKILL_GLOB], config: {} },
   ard: ARD,
 };
@@ -73,7 +71,7 @@ describe('ARD surface collection when skills are discovered, not configured', ()
   it('says nothing when the project declares no skills at all', () => {
     // Absence of a `skills` block is not a gap — there is nothing to advertise
     // and no mistake to point at. Warning here would train people to ignore it.
-    const { surfaces, skipped } = collectArdSurfaces({ version: 1, ard: ARD }, NO_DEFAULTS);
+    const { surfaces, skipped } = collectArdSurfaces({ ard: ARD }, NO_DEFAULTS);
 
     expect(surfaces).toHaveLength(0);
     expect(skipped.filter((s) => s.kind === 'skill')).toHaveLength(0);
@@ -81,7 +79,6 @@ describe('ARD surface collection when skills are discovered, not configured', ()
 
   it('says nothing once a skill IS configured — the guard must not cry wolf', () => {
     const configured: ProjectConfig = {
-      version: 1,
       skills: { include: [SKILL_GLOB], config: { expenses: {} } },
       ard: ARD,
     };

@@ -7,33 +7,20 @@ import { expect } from 'vitest';
 import { type ValidationResult } from '../src/validator/agent-validator.js';
 
 /**
- * Assert that validation result shows errors with specific content
+ * Assert that the result carries an error-severity finding of `code` whose
+ * message names at least one of `searchTerms`.
  */
 export function assertValidationHasError(
   result: ValidationResult,
+  code: string,
   searchTerms: string[]
 ): void {
-  expect(result.valid).toBe(false);
-  expect(result.errors.length).toBeGreaterThan(0);
-  const hasExpectedError = result.errors.some(error =>
-    searchTerms.some(term => error.includes(term))
+  expect(result.status).toBe('findings');
+  expect(result.summary.errors).toBeGreaterThan(0);
+  const hasExpectedError = result.issues.some(issue =>
+    issue.code === code && issue.severity === 'error' && searchTerms.some(term => issue.message.includes(term))
   );
-  expect(hasExpectedError).toBe(true);
-}
-
-/**
- * Assert that validation failed with unknown manifest info
- */
-export function assertValidationFailedWithUnknownManifest(
-  result: ValidationResult,
-  options: { checkVersion?: boolean } = {}
-): void {
-  expect(result.valid).toBe(false);
-  expect(result.errors.length).toBeGreaterThan(0);
-  expect(result.manifest.name).toBe('unknown');
-  if (options.checkVersion !== false) {
-    expect(result.manifest.version).toBe('unknown');
-  }
+  expect(hasExpectedError, JSON.stringify(result.issues)).toBe(true);
 }
 
 /**

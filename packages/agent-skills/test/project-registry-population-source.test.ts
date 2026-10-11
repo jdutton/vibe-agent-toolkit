@@ -113,7 +113,7 @@ function projectionSource(
       root: boundRoot,
       enumerate: async (root: string) => {
         offeredRoots.push(root);
-        const population = await buildResourcePopulation({
+        const population = await buildResourcePopulation({ outputs: [],
           root,
           cache: { store, treeUnchanged: () => true, treeHash: 'test-tree-hash' },
         });
@@ -142,6 +142,7 @@ describe('createProjectRegistry populationSource', () => {
     // here.
     const offeredRoots: string[] = [];
     const registry = await createProjectRegistry(root, {
+      outputs: [],
       populationSource: {
         root,
         enumerate: async (enumeratedRoot) => {
@@ -165,6 +166,7 @@ describe('createProjectRegistry populationSource', () => {
     // Everything the extent would enumerate, handed over verbatim — the shape a
     // real projection population arrives in.
     const registry = await createProjectRegistry(root, {
+      outputs: [],
       populationSource: { root, enumerate: async () => ({ paths: [markdown, html, text, vendored], conditions: [] }) },
     });
 
@@ -176,7 +178,7 @@ describe('createProjectRegistry populationSource', () => {
     write(root, 'docs/a.md', '# a\n');
     write(root, 'docs/b.md', '# b\n');
 
-    const registry = await createProjectRegistry(root);
+    const registry = await createProjectRegistry(root, { outputs: [] });
 
     expect(memberPaths(root, registry)).toEqual(['docs/a.md', 'docs/b.md']);
   });
@@ -203,6 +205,7 @@ describe('packageSkills populationSource', () => {
       root,
       createAllowUsageLedger(),
       {
+        outputs: [safePath.join(root, 'out')],
         populationSource: {
           root,
           enumerate: async (enumeratedRoot) => {
@@ -236,7 +239,7 @@ describe('the packaging validator\'s own project root, against a source bound to
     const store = recordingStore();
     const { source, offeredRoots } = projectionSource(root, store);
 
-    await validateSkillForPackaging(builtSkillPath, undefined, 'built', { unreadable: 'refuse', populationSource: source });
+    await validateSkillForPackaging(builtSkillPath, undefined, 'built', { unreadable: 'refuse', outputs: [safePath.join(root, 'dist', 'skills', 'demo')], populationSource: source });
 
     // The POSITIVE CONTROL for the next test: same helper, same store shape, and
     // here the lane really does run and really does key an extent. Without it,
@@ -257,6 +260,7 @@ describe('the packaging validator\'s own project root, against a source bound to
 
     const result = await validateSkillForPackaging(builtSkillPath, undefined, 'built', {
       unreadable: 'refuse',
+      outputs: [outputRoot],
       populationSource: source,
     });
 

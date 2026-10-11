@@ -20,7 +20,8 @@ export interface Verdict {
   code: VerdictCode;
   observationCode: string;
   target: Target | undefined;
-  summary: string;
+  /** One sentence; never `summary`, which always means severity counts. */
+  description: string;
 }
 
 function verdictForObservationAndTarget(
@@ -37,7 +38,7 @@ function verdictForObservationAndTarget(
             code: 'COMPAT_TARGET_INCOMPATIBLE',
             observationCode: observation.code,
             target,
-            summary: `Target '${target}' has no local shell but skill requires one.`,
+            description: `Target '${target}' has no local shell but skill requires one.`,
           }];
 
     case 'CAPABILITY_BROWSER_AUTH':
@@ -47,7 +48,7 @@ function verdictForObservationAndTarget(
             code: 'COMPAT_TARGET_INCOMPATIBLE',
             observationCode: observation.code,
             target,
-            summary: `Target '${target}' has no browser but skill requires interactive browser auth.`,
+            description: `Target '${target}' has no browser but skill requires interactive browser auth.`,
           }];
 
     case 'CAPABILITY_EXTERNAL_CLI': {
@@ -58,7 +59,7 @@ function verdictForObservationAndTarget(
           code: 'COMPAT_TARGET_INCOMPATIBLE',
           observationCode: observation.code,
           target,
-          summary: `Target '${target}' has no local shell; external CLI '${binary}' cannot be invoked.`,
+          description: `Target '${target}' has no local shell; external CLI '${binary}' cannot be invoked.`,
         }];
       }
       if (!profile.preinstalledBinaries.has(binary)) {
@@ -66,7 +67,7 @@ function verdictForObservationAndTarget(
           code: 'COMPAT_TARGET_NEEDS_REVIEW',
           observationCode: observation.code,
           target,
-          summary: `Target '${target}' has shell but does not guarantee '${binary}' is installed.`,
+          description: `Target '${target}' has shell but does not guarantee '${binary}' is installed.`,
         }];
       }
       return [];
@@ -93,7 +94,7 @@ export function computeVerdicts(input: VerdictInput): Verdict[] {
         code: 'COMPAT_TARGET_UNDECLARED',
         observationCode: obs.code,
         target: undefined,
-        summary: `Capability observation '${obs.code}' has no declared target.`,
+        description: `Capability observation '${obs.code}' has no declared target.`,
       });
     }
     return out;
@@ -104,7 +105,7 @@ export function computeVerdicts(input: VerdictInput): Verdict[] {
       code: 'COMPAT_TARGET_INCOMPATIBLE' as const,
       observationCode: obs.code,
       target: undefined,
-      summary: `Plugin declares "targets: []" (no runtime); observation '${obs.code}' is incompatible.`,
+      description: `Plugin declares "targets: []" (no runtime); observation '${obs.code}' is incompatible.`,
     }));
   }
 

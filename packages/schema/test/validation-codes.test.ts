@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { CODE_REGISTRY, CONSISTENCY_CODES, IssueCodeSchema, type ConsistencyCode, type IssueCode } from '../src/validation-codes.js';
+import {
+  CODE_REGISTRY,
+  CONSISTENCY_CODES,
+  FindingCodeSchema,
+  IssueCodeSchema,
+  REFUSAL_CODES,
+  RefusalCodeSchema,
+  type ConsistencyCode,
+  type IssueCode,
+} from '../src/validation-codes.js';
+import { ValidationConfigSchema } from '../src/validation-config.js';
 
 describe('CODE_REGISTRY', () => {
   it('contains every overridable code with a default severity', () => {
@@ -274,5 +284,106 @@ describe('CONSISTENCY_CODES', () => {
     for (const code of CONSISTENCY_CODES) {
       expect(code in CODE_REGISTRY, `${code} must not be overridable`).toBe(false);
     }
+  });
+});
+
+describe('findings of verbs that read no validation config', () => {
+  // `vat claude plugin install|uninstall`, `vat audit settings` and `vat agent validate`
+  // examine Claude user state, a settings file and an agent manifest. None loads a
+  // project `validation:` block, so a registry entry for one of their codes would
+  // let the config accept a key nothing applies.
+  const LANE_OWNED = [
+    'PLUGIN_UNINSTALL_INCOMPLETE',
+    'PLUGIN_NOT_INSTALLED_BY_VAT',
+    'PLUGIN_KEPT_SIBLING_UNEXAMINED',
+    'SETTINGS_FILE_INVALID',
+    'SETTINGS_TYPE_AMBIGUOUS',
+    'SETTINGS_PATH_DEPRECATED',
+    'SETTINGS_RULE_SHADOWED',
+    'SETTINGS_MARKETPLACE_TOKEN_MISSING',
+    'AGENT_MANIFEST_INVALID',
+    'AGENT_REFERENCE_MISSING',
+    'AGENT_REFERENCE_UNREADABLE',
+    'AGENT_RAG_NO_SOURCES',
+  ];
+  const ALLOW_ENTRY = [{ reason: 'expected here' }];
+
+  it('accepts a real finding code under both maps, so the refusals below are about the code', () => {
+    expect(ValidationConfigSchema.safeParse({ severity: { LINK_OUTSIDE_PROJECT: 'ignore' } }).success).toBe(true);
+    expect(ValidationConfigSchema.safeParse({ allow: { LINK_OUTSIDE_PROJECT: ALLOW_ENTRY } }).success).toBe(true);
+  });
+
+  it.each(LANE_OWNED)('%s is neither a registry entry nor a validation.severity / validation.allow key', (code) => {
+    expect(code in CODE_REGISTRY).toBe(false);
+    expect(ValidationConfigSchema.safeParse({ severity: { [code]: 'ignore' } }).success).toBe(false);
+    expect(ValidationConfigSchema.safeParse({ allow: { [code]: ALLOW_ENTRY } }).success).toBe(false);
+  });
+
+  it('never tells a reader to set a severity override on a code that is not a key', () => {
+    const inert = Object.entries(CODE_REGISTRY).flatMap(([code, entry]) => {
+      const named = /severity\.([A-Z][A-Z0-9_]*)/.exec(entry.fix)?.[1];
+      return named !== undefined && !FindingCodeSchema.safeParse(named).success ? [`${code} -> ${named}`] : [];
+    });
+    expect(inert).toEqual([]);
+  });
+});
+
+describe('CODE_REGISTRY — every code has a kind', () => {
+  const EXPECTED_REFUSALS = [
+    'USAGE_INVALID',
+    'CONFIG_INVALID',
+    'INPUT_UNREADABLE',
+    'BACKEND_UNAVAILABLE',
+    'EXTERNAL_API_FAILED',
+    'NOT_IMPLEMENTED',
+    'RUN_INCOMPLETE',
+    'INTERNAL_ERROR',
+    'RESOURCE_CHECK_BROKEN',
+    'ARD_NOT_CONFIGURED',
+    'ARD_DERIVATION_FAILED',
+  ];
+
+  it('gives every registry entry a kind', () => {
+    for (const [code, entry] of Object.entries(CODE_REGISTRY)) {
+      expect(['finding', 'refusal'], `${code} has no kind`).toContain((entry as { kind?: unknown }).kind);
+    }
+  });
+
+  it('registers RESOURCE_CHECK_BROKEN as a refusal', () => {
+    expect(CODE_REGISTRY.RESOURCE_CHECK_BROKEN.kind).toBe('refusal');
+    expect(CODE_REGISTRY.RESOURCE_CHECK_BROKEN.defaultSeverity).toBe('error');
+  });
+
+  it('registers exactly the refusal vocabulary, and derives it from the registry by kind', () => {
+    expect(new Set(REFUSAL_CODES)).toEqual(new Set(EXPECTED_REFUSALS));
+    const byKind = Object.entries(CODE_REGISTRY).filter(([, entry]) => entry.kind === 'refusal').map(([code]) => code);
+    expect(new Set(byKind)).toEqual(new Set(REFUSAL_CODES));
+  });
+
+  it('gives every refusal the error default — a refusal is never quiet', () => {
+    for (const code of REFUSAL_CODES) expect(CODE_REGISTRY[code].defaultSeverity).toBe('error');
+  });
+
+  it('partitions the registry: a code is a refusal or a finding, never both, never neither', () => {
+    for (const code of IssueCodeSchema.options) {
+      const asRefusal = RefusalCodeSchema.safeParse(code).success;
+      const asFinding = FindingCodeSchema.safeParse(code).success;
+      expect(asRefusal !== asFinding, `${code} is in ${asRefusal ? 'both' : 'neither'}`).toBe(true);
+    }
+    expect(RefusalCodeSchema.safeParse('LINK_MISSING_TARGET').success).toBe(false);
+    expect(FindingCodeSchema.safeParse('INTERNAL_ERROR').success).toBe(false);
+  });
+});
+
+describe('SCAN_PATH_UNREADABLE remedy', () => {
+  // Emitted by audit, skills list, agent list and agent installed — and only
+  // audit takes --exclude, while the listings load no config. The registry text
+  // must not hand every other verb a flag or an override it does not have.
+  it('names --exclude and the severity override only as the levers of the verbs that have them', () => {
+    const { fix, description } = CODE_REGISTRY.SCAN_PATH_UNREADABLE;
+    expect(fix).not.toMatch(/re-run the audit/);
+    expect(fix).toMatch(/vat audit takes --exclude/);
+    expect(fix).toMatch(/other verbs have no lever/);
+    expect(description).not.toMatch(/audited tree/);
   });
 });

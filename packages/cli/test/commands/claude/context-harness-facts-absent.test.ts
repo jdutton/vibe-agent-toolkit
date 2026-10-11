@@ -5,8 +5,9 @@
  *
  * The query is stubbed to throw exactly what the resources package throws
  * (`HarnessFactsAbsentError`, carrying `code: HARNESS_FACTS_ABSENT`), and the
- * assertion is on the exit code, the published document and the coded label on
- * stderr — the command recognises the error by `code`, never by message.
+ * assertion is on the exit code, the published refusal and its stack on stderr:
+ * the error carries no refusal code, so it publishes as VAT's own defect
+ * (`INTERNAL_ERROR`), which is what it is.
  */
 
 import { HarnessFactsAbsentError, type Projection } from '@vibe-agent-toolkit/resources';
@@ -56,12 +57,14 @@ describe('vat claude context — a reached blob with no harness facts', () => {
 
     expect(exitSpy).toHaveBeenCalledWith(ExitCode.ERROR);
     expect(exitSpy).not.toHaveBeenCalledWith(ExitCode.OK);
-    const published = outSpy.mock.calls.map((call) => String(call[0])).join('');
-    expect(published).toContain(BLOB);
-    expect(published).toContain('acme/CLAUDE.md');
-    // Named by its code on stderr, so an operator can tell VAT's bug from the tree's.
+    const published = JSON.parse(outSpy.mock.calls.map((call) => String(call[0])).join('')) as { status: string; error: { code: string; message: string } };
+    // VAT's bug, not the tree's: the refusal code says so, and the message names the blob and where it was reached.
+    expect(published).toMatchObject({ status: 'error', error: { code: 'INTERNAL_ERROR' } });
+    expect(published.error.message).toContain(BLOB);
+    expect(published.error.message).toContain('acme/CLAUDE.md');
+    // An INTERNAL_ERROR always carries its stack on stderr, which names the class.
     const diagnostics = errSpy.mock.calls.map((call) => String(call[0])).join('');
-    expect(diagnostics).toContain('claude context (HARNESS_FACTS_ABSENT) failed');
+    expect(diagnostics).toContain('HarnessFactsAbsentError');
   });
 
   it('is the coded error the resources package exports — dispatchable by code, not message', () => {

@@ -31,11 +31,12 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
-import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { ExitCode, exitCodeForReport } from '@vibe-agent-toolkit/schema';
+import { findConfigFile, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, vi } from 'vitest';
 
 import { selectBuildPhases } from '../../src/commands/build.js';
+import { PACKAGED_CONTENT_REPORT_SCHEMA } from '../../src/commands/orchestrator-schema.js';
 import {
   decidePhaseSelection,
   rejectRetiredOnly,
@@ -45,13 +46,13 @@ import {
 import { selectValidateSurfaces } from '../../src/commands/validate.js';
 import {
   buildPackagedContentPhase,
-  checkFilesConfigDests,
   formatVerifyAnnouncement,
+  runFilesConfigDestsPhase,
   selectVerifyPhases,
-  toPublishedIssue,
 } from '../../src/commands/verify.js';
+import { reportShapeFor } from '../../src/report-schemas.js';
 import { fakePluginLocalIndex } from '../helpers/plugin-local-fixture.js';
-import { captureProcessExit, type CapturedExit } from '../test-doubles.js';
+import { silentLogger } from '../test-doubles.js';
 
 /**
  * The three phase entry points a selection can bind, stubbed.
@@ -62,20 +63,27 @@ import { captureProcessExit, type CapturedExit } from '../test-doubles.js';
  * with — which is also the thing that actually matters. A test that inspected a
  * serialized argv could pass while the option never reached the function.
  */
+/** What every stubbed phase returns: a completed run over one thing. Hoisted, since `vi.mock` is. */
+const { STUB_REPORT } = vi.hoisted(() => ({
+  STUB_REPORT: { status: 'ok', examined: 1, findings: [], summary: { errors: 0, warnings: 0, info: 0 }, gate: { strict: false }, data: null },
+}));
+
 vi.mock('../../src/commands/resources/validate.js', () => ({
-  runResourcesValidatePhase: vi.fn(() => Promise.resolve({ document: undefined, exitCode: 0 })),
+  runResourcesValidatePhase: vi.fn(() => Promise.resolve({ report: STUB_REPORT })),
 }));
 vi.mock('../../src/commands/skills/validate.js', () => ({
-  runSkillsValidatePhase: vi.fn(() => Promise.resolve({ document: undefined, exitCode: 0 })),
+  runSkillsValidatePhase: vi.fn(() => Promise.resolve({ report: STUB_REPORT })),
 }));
 vi.mock('../../src/commands/claude/marketplace/validate.js', () => ({
-  runMarketplaceValidatePhase: vi.fn(() => Promise.resolve({ document: undefined, exitCode: 0 })),
+  runMarketplaceValidatePhase: vi.fn(() => Promise.resolve({ report: STUB_REPORT })),
 }));
 vi.mock('../../src/commands/skills/build.js', () => ({
-  runSkillsBuildPhase: vi.fn(() => Promise.resolve({ document: undefined, exitCode: 0 })),
+  runSkillsBuildPhase: vi.fn(() => Promise.resolve({ report: STUB_REPORT })),
+  distSkillsDir: (cwd: string) => `${cwd}/dist/skills`,
 }));
 vi.mock('../../src/commands/claude/plugin/build.js', () => ({
-  runClaudePluginBuildPhase: vi.fn(() => Promise.resolve({ document: undefined, exitCode: 0 })),
+  runClaudePluginBuildPhase: vi.fn(() => Promise.resolve({ report: STUB_REPORT })),
+  pluginBuildOutput: (cwd: string) => `${cwd}/dist/.claude/plugins/marketplaces`,
 }));
 
 const { runResourcesValidatePhase } = await import('../../src/commands/resources/validate.js');
@@ -122,30 +130,28 @@ function failMessage(selection: PhaseSelection): string {
   return selection.message;
 }
 
-/**
- * Run `rejectRetiredOnly` with `process.exit` and `process.stderr.write`
- * captured. See {@link captureProcessExit} for why the exit stub throws.
- */
-async function captureRetiredOnly(only: string | undefined): Promise<CapturedExit> {
-  return captureProcessExit(() => {
+/** Run `rejectRetiredOnly`, returning the refusal it threw — or `undefined` when it threw none. */
+function retiredOnlyRefusal(only: string | undefined): { refusal: string; message: string } | undefined {
+  try {
     rejectRetiredOnly(only, 'vat validate', 35);
-  });
+    return undefined;
+  } catch (error) {
+    return error as { refusal: string; message: string };
+  }
 }
 
 const SKILL_GLOB = '**/SKILL.md';
 
-const CONFIG_RESOURCES_ONLY = { version: 1, resources: {} } as unknown as ProjectConfig;
-const CONFIG_SKILLS_ONLY = { version: 1, skills: { include: [SKILL_GLOB] } } as unknown as ProjectConfig;
+const CONFIG_RESOURCES_ONLY = { resources: {} } as unknown as ProjectConfig;
+const CONFIG_SKILLS_ONLY = { skills: { include: [SKILL_GLOB] } } as unknown as ProjectConfig;
 const CONFIG_BOTH = {
-  version: 1,
   resources: {},
   skills: { include: [SKILL_GLOB] },
 } as unknown as ProjectConfig;
-const CONFIG_EMPTY = { version: 1 } as unknown as ProjectConfig;
+const CONFIG_EMPTY = {} as unknown as ProjectConfig;
 /** What a config that exists but does not parse hands back to the orchestrator. */
 const BROKEN_CONFIG_ERROR = 'Failed to load config: bad yaml';
 const CONFIG_MARKETPLACE = {
-  version: 1,
   skills: { include: [SKILL_GLOB] },
   claude: { marketplaces: { 'test-tools': {} } },
 } as unknown as ProjectConfig;
@@ -233,6 +239,41 @@ describe('selectVerifyPhases', () => {
   });
 });
 
+/**
+ * Every delegated phase is held to its OWN verb's registered report schema.
+ *
+ * The orchestrator's schema carries a phase's `data` as `unknown`; what keeps
+ * that data honest is `runPhase` parsing each report against `phase.schema`.
+ * So the binding is the contract: a phase wired to the wrong schema, or to a
+ * permissive one, would fold data its verb does not describe.
+ */
+describe('each delegated phase names its verb\'s registered schema', () => {
+  const REGISTERED: Record<string, string> = {
+    resources: 'resources validate',
+    skills: 'skills validate',
+    'marketplace:test-tools': 'claude marketplace validate',
+  };
+
+  it.each([
+    ['vat verify', () => selectVerifyPhases({ ...CONFIG_BOTH, claude: CONFIG_MARKETPLACE.claude } as ProjectConfig)],
+    ['vat validate', () => selectValidateSurfaces(CONFIG_BOTH)],
+  ])('%s', (_label, select) => {
+    const phases = runPhases(select());
+    expect(phases.length).toBeGreaterThan(0);
+    for (const phase of phases) {
+      const verb = REGISTERED[phase.name];
+      if (verb === undefined) throw new Error(`no registered verb expected for phase '${phase.name}'`);
+      expect(phase.schema, phase.name).toBe(reportShapeFor(verb).schema);
+    }
+  });
+
+  it('vat build', () => {
+    const [skills, claude] = runPhases(selectBuildPhases(undefined, true));
+    expect(skills?.schema).toBe(reportShapeFor('skills build').schema);
+    expect(claude?.schema).toBe(reportShapeFor('claude plugin build').schema);
+  });
+});
+
 describe('decidePhaseSelection', () => {
   const VOCAB = {
     noun: 'Phase',
@@ -250,7 +291,7 @@ describe('decidePhaseSelection', () => {
       unreadableConfig: BROKEN_CONFIG_ERROR,
     });
 
-    expect(selection).toEqual({ kind: 'fail', message: BROKEN_CONFIG_ERROR });
+    expect(selection).toEqual({ kind: 'fail', code: 'CONFIG_INVALID', message: BROKEN_CONFIG_ERROR });
   });
 });
 
@@ -279,7 +320,7 @@ describe('formatVerifyAnnouncement', () => {
   it('names no in-process phase when the project declares no skills:', () => {
     // The first fix traded under-reporting for OVER-reporting. Both in-process
     // phases read the same input — the `skills:` block. Without one,
-    // `checkFilesConfigDests` has no `files:` entry to resolve and
+    // `runFilesConfigDestsPhase` has no `files:` entry to resolve and
     // `runConsistencyPhase` returns before its first lookup, so a run on a
     // resources-only project announced 'resources → files-config-dests →
     // consistency' and emitted a document containing `resources` and nothing
@@ -291,14 +332,14 @@ describe('formatVerifyAnnouncement', () => {
   it('names no in-process phase when the config could not be read', () => {
     // An unreadable config still runs the delegated phases so THE PHASE reports
     // the real error. Verify's own phases cannot even look:
-    // `checkFilesConfigDests` re-reads the same broken file and yields nothing.
+    // `runFilesConfigDestsPhase` re-reads the same broken file and yields nothing.
     expect(formatVerifyAnnouncement(['resources', 'skills'], undefined)).toBe(
       '🔍 vat verify (phases: resources → skills)',
     );
   });
 });
 
-describe('checkFilesConfigDests', () => {
+describe('runFilesConfigDestsPhase', () => {
   it('reports nothing for a project with no skills: block', () => {
     // Load-bearing for the announcement above. Dropping `files-config-dests`
     // from a no-`skills:` run changes the announced phase list and never the
@@ -310,12 +351,13 @@ describe('checkFilesConfigDests', () => {
     try {
       writeFileSync(
         safePath.join(dir, 'vibe-agent-toolkit.config.yaml'),
-        'version: 1\nresources:\n  include: ["docs/**/*.md"]\n',
+        'resources:\n  include: ["docs/**/*.md"]\n',
       );
 
       // `[]` is what the command itself passes here: with no `skills:` block
       // there is nothing to discover, so this is the real input, not a stub.
-      expect(checkFilesConfigDests(dir, [], fakePluginLocalIndex([]), new Map())).toEqual([]);
+      const { report } = runFilesConfigDestsPhase(dir, [], fakePluginLocalIndex([]), new Map(), silentLogger);
+      expect([report.examined, report.findings]).toEqual([0, []]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -326,13 +368,29 @@ describe('selectBuildPhases', () => {
   it('forwards verbose to every phase, or to none', async () => {
     // A request not relayed to a phase cannot reach it, so `vat build
     // --verbose` would silently produce the collapsed report.
+    // The claude phase is also told what the skills phase wrote before it: `dist/skills` is then the run's own output.
+    // And the skills phase what the claude phase writes after it: the marketplaces are the run's output too.
+    const runOutputs = [`${process.cwd()}/dist/skills`];
+    const configPath = findConfigFile(process.cwd());
+    const configDir = configPath === null ? process.cwd() : safePath.resolve(configPath, '..');
+    const skillsRunOutputs = [`${configDir}/dist/.claude/plugins/marketplaces`];
     await invokeAll(selectBuildPhases(undefined, true, true));
-    expect(runSkillsBuildPhase).toHaveBeenCalledWith(undefined, { verbose: true });
-    expect(runClaudePluginBuildPhase).toHaveBeenCalledWith({ verbose: true });
+    expect(runSkillsBuildPhase).toHaveBeenCalledWith(undefined, { verbose: true }, skillsRunOutputs);
+    expect(runClaudePluginBuildPhase).toHaveBeenCalledWith({ verbose: true }, runOutputs);
 
     await invokeAll(selectBuildPhases(undefined, true, false));
-    expect(runSkillsBuildPhase).toHaveBeenCalledWith(undefined, { verbose: false });
-    expect(runClaudePluginBuildPhase).toHaveBeenCalledWith({ verbose: false });
+    expect(runSkillsBuildPhase).toHaveBeenCalledWith(undefined, { verbose: false }, skillsRunOutputs);
+    expect(runClaudePluginBuildPhase).toHaveBeenCalledWith({ verbose: false }, runOutputs);
+  });
+
+  it('tells a skills-only build that the run writes no marketplace', async () => {
+    await invokeAll(selectBuildPhases('skills', true));
+    expect(runSkillsBuildPhase).toHaveBeenCalledWith(undefined, { verbose: false }, []);
+  });
+
+  it('tells a claude-only build that the run wrote no dist/skills: it is an input there', async () => {
+    await invokeAll(selectBuildPhases('claude', true));
+    expect(runClaudePluginBuildPhase).toHaveBeenCalledWith({ verbose: false }, []);
   });
 
   it('builds skills, and claude only when marketplaces are configured', () => {
@@ -369,18 +427,14 @@ describe('selectValidateSurfaces', () => {
 });
 
 describe('rejectRetiredOnly', () => {
-  it('is a no-op when --only was not passed', async () => {
-    const { stderr, exited } = await captureRetiredOnly(undefined);
-
-    expect(stderr).toBe('');
-    expect(exited).toBeUndefined();
+  it('is a no-op when --only was not passed', () => {
+    expect(retiredOnlyRefusal(undefined)).toBeUndefined();
   });
 
-  it('fails with ERROR when --only was passed', async () => {
-    // Non-zero, and the usage code: a CI gate that was failing on a bad --only
-    // must keep failing across the removal rather than flip to green, and a
-    // flag the command no longer has is a usage mistake, not a finding.
-    expect((await captureRetiredOnly('skills')).exited).toBe(ExitCode.ERROR);
+  it('refuses the run as USAGE_INVALID when --only was passed', () => {
+    // A flag the command no longer has is a usage mistake (exit 2), not a
+    // finding — and a CI gate that was failing on a bad --only keeps failing.
+    expect(retiredOnlyRefusal('skills')?.refusal).toBe('USAGE_INVALID');
   });
 
   /**
@@ -389,13 +443,13 @@ describe('rejectRetiredOnly', () => {
    * cannot tell a typo from a removal, and has no way to learn what replaced
    * it. Each assertion below is one thing that error could not say.
    */
-  it('names the removal, the command, the evidence, and where --only still works', async () => {
-    const { stderr } = await captureRetiredOnly('skills');
+  it('names the removal, the command, the evidence, and where --only still works', () => {
+    const message = retiredOnlyRefusal('skills')?.message ?? '';
 
-    expect(stderr).toContain("'--only' was removed");
-    expect(stderr).toContain('vat validate');
-    expect(stderr).toContain('~35s');
-    expect(stderr).toContain('vat build --only');
+    expect(message).toContain("'--only' was removed");
+    expect(message).toContain('vat validate');
+    expect(message).toContain('~35s');
+    expect(message).toContain('vat build --only');
   });
 });
 
@@ -404,57 +458,15 @@ const PACKAGED_CODE = 'PACKAGED_AGENT_INSTRUCTION_FILE';
 /** Where such a finding lands in a built bundle. */
 const PACKAGED_LOCATION = 'dist/skills/demo/CLAUDE.md';
 
-describe('toPublishedIssue', () => {
-  // The archived YAML is what a CI consumer parses; stderr is not. A finding that
-  // reaches the document without its anchor names no file at all — the same defect
-  // `vat skills build` was fixed for one command over, reproduced here by a
-  // `PublishedIssue` shape that declared only {severity, code, message, fix}.
-  it('carries the whole anchor into the document', () => {
-    expect(toPublishedIssue({
-      code: PACKAGED_CODE,
-      severity: 'warning',
-      message: 'A repo-internal agent-instruction file is packaged in this bundle.',
-      location: PACKAGED_LOCATION,
-      line: 3,
-      fix: 'Remove it from the bundle.',
-      reference: 'docs/validation-codes.md',
-    })).toEqual({
-      code: PACKAGED_CODE,
-      severity: 'warning',
-      message: 'A repo-internal agent-instruction file is packaged in this bundle.',
-      location: PACKAGED_LOCATION,
-      line: 3,
-      fix: 'Remove it from the bundle.',
-      reference: 'docs/validation-codes.md',
-    });
-  });
-
-  it('omits the optional keys entirely rather than publishing them as null', () => {
-    // `exactOptionalPropertyTypes` distinguishes absent from explicit-undefined,
-    // and `yaml.stringify` renders the latter as `location: null` — a claim the
-    // finding never made.
-    const published = toPublishedIssue({
-      code: 'SKILL_MISSING_DESCRIPTION',
-      severity: 'error',
-      message: 'No description.',
-    });
-
-    expect(Object.keys(published).toSorted((a, b) => a.localeCompare(b)))
-      .toEqual(['code', 'fix', 'message', 'severity']);
-    expect(published.fix).toBe('');
-  });
-});
-
 /**
- * The `packaged-content` phase must never report `success` over zero bundles.
+ * The `packaged-content` phase must never report `ok` over zero bundles.
  *
  * The phase is pushed unconditionally whenever `skills:` exists, and it feeds
  * the real exit code. `discoverSkillsFromConfig` returning `[]` on a typo'd
  * glob — or `dist/` simply not having been built — gave it nothing to crawl,
- * and nothing crawled is zero findings is `success`, with no count in the
- * document to say so. The phase now publishes `bundlesInspected` and refuses a
- * zero through the shared run-integrity mechanism, ONE non-overridable
- * `RESOURCE_CHECK_BROKEN` at `error`.
+ * and nothing crawled was zero findings was a pass, with no count in the
+ * document to say so. The phase publishes the count as `examined` and refuses a
+ * zero itself, ONE non-overridable `RESOURCE_CHECK_BROKEN` at `error`.
  */
 describe('buildPackagedContentPhase — a phase over zero bundles is not a verdict', () => {
   const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
@@ -465,22 +477,26 @@ describe('buildPackagedContentPhase — a phase over zero bundles is not a verdi
     const phase = buildPackagedContentPhase({ bundlesInspected: 0, bundlesExpected: 0, bundlesInPlace: 0, bundlesMissing: [], issues: [] });
 
     expect(phase.name).toBe('packaged-content');
-    expect(phase.status).toBe('error');
-    expect(phase.bundlesInspected).toBe(0);
-    expect(phase.issueCounts).toEqual({ errors: 1, warnings: 0, info: 0 });
-    expect(phase.issues.map((i) => [i.code, i.severity])).toEqual([[RUN_INTEGRITY_CODE, 'error']]);
-    expect(phase.issues[0]?.message).toContain('vat build');
-    expect(phase.issues[0]?.message).toContain('skills.include');
+    expect(phase.report.status).toBe('findings');
+    expect(exitCodeForReport(phase.report)).toBe(ExitCode.FINDINGS);
+    expect(phase.report.examined).toBe(0);
+    expect(phase.report.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(phase.report.findings.map((i) => [i.code, i.severity])).toEqual([[RUN_INTEGRITY_CODE, 'error']]);
+    expect(phase.report.findings[0]?.message).toContain('vat build');
+    expect(phase.report.findings[0]?.message).toContain('skills.include');
   });
 
   it('publishes the count and stays silent once a bundle was inspected', () => {
     // 🔑 The over-correction guard.
     const phase = buildPackagedContentPhase({ bundlesInspected: 2, bundlesExpected: 2, bundlesInPlace: 0, bundlesMissing: [], issues: [] });
 
-    expect(phase.status).toBe('success');
-    expect(phase.bundlesInspected).toBe(2);
-    expect(phase.issueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
-    expect(phase.issues).toEqual([]);
+    expect(phase.report.status).toBe('ok');
+    expect(phase.report.examined).toBe(2);
+    expect(phase.report.findings).toEqual([]);
+    // What it crawled is `examined`; `data` is only what it should have found —
+    // exactly what the phase's published schema describes, strictly.
+    expect(phase.report.data).toEqual({ bundlesExpected: 2, bundlesInPlace: 0, bundlesMissing: [] });
+    expect(() => PACKAGED_CONTENT_REPORT_SCHEMA.parse(phase.report)).not.toThrow();
   });
 
   it('carries real findings through unchanged, count beside them', () => {
@@ -497,13 +513,13 @@ describe('buildPackagedContentPhase — a phase over zero bundles is not a verdi
       }],
     });
 
-    expect(phase.status).toBe('warning');
-    expect(phase.bundlesInspected).toBe(1);
-    expect(phase.issues).toEqual([{
+    expect(phase.report.status).toBe('findings');
+    expect(exitCodeForReport(phase.report)).toBe(ExitCode.OK);
+    expect(phase.report.examined).toBe(1);
+    expect(phase.report.findings).toEqual([{
       code: PACKAGED_CODE,
       severity: 'warning',
       message: 'shipped',
-      fix: '',
       location: PACKAGED_LOCATION,
     }]);
   });

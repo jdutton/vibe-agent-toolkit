@@ -78,19 +78,29 @@ export type {
   MarketplaceSource,
 } from './install/plugin-registry.js';
 export {
-  installPlugin,
+  CLAUDE_USER_STATE_UNREADABLE_CODE,
+  PLUGIN_KEY_INVALID_CODE,
   readInstalledPlugins,
   readKnownMarketplaces,
-  writeInstalledPlugins,
-  writeKnownMarketplaces,
+  requirePluginInstallNames,
+  VAT_MARKETPLACE_MARKER,
+  writeUserState,
 } from './install/plugin-registry.js';
+export type { RegistryEdit } from './install/registry-edit.js';
+export type { PackageInstallOptions, PackageInstallPlan, PackageMarketplaceInstall, PackagePluginInstall } from './install/package-install.js';
+export { planPackageInstall } from './install/package-install.js';
+export type { DevSkillLink } from './install/dev-skill-links.js';
+export { linkDevSkills } from './install/dev-skill-links.js';
 
 // Plugin uninstall
 export type {
+  PluginUninstallPlan,
+  UninstallAuthority,
+  UninstallPluginsOutcome,
   UninstallPluginOptions,
   UninstallPluginResult,
 } from './install/plugin-uninstall.js';
-export { findPluginsByPackage, uninstallPlugin } from './install/plugin-uninstall.js';
+export { findPluginsByPackage, parsePluginKey, planPluginUninstall, uninstallPlugins } from './install/plugin-uninstall.js';
 
 // Plugin list
 export type {
@@ -107,16 +117,19 @@ export {
   // Unexported, a caller outside the package could not name it and had to match
   // on message TEXT to tell a 429 from a 400 — which is exactly the brittleness
   // the typed error was added to remove.
+  API_REQUEST_CODE,
   ApiRequestError,
   // Its counterpart for a failure that never earned a status. It carries the
   // bytes that actually left the socket, which is the only fact a caller may
   // build a claim about the request on — the CLI previously inferred one from
   // `!(error instanceof ApiRequestError)` and told an operator with no API key
   // that a connection had closed mid-upload.
+  API_TRANSPORT_CODE,
   ApiTransportError,
   buildMultipartFormData,
   createOrgApiClientFromEnv,
   OrgApiClient,
+  ORG_API_KEY_MISSING_CODE,
   // The one spelling of a skill's versions path, so the CLI's `versions list`
   // and `delete --all` address the same resource the client's POST and DELETE
   // do, with the same id encoding.
@@ -166,7 +179,6 @@ export {
   readEffectiveSettings,
   readSettingsLayers,
   resolveSettingsPaths,
-  summarizeSettingsFindings,
   validateSettingsFile,
 } from './settings/index.js';
 

@@ -111,7 +111,7 @@ const defaultRunner: ClaudeRunner = (args, opts) => runClaudeSubscription(args, 
  * the difference is what they do with the result and whether they persist a
  * verbatim artifact.
  */
-async function executeRecordVerdictCall(args: {
+function executeRecordVerdictCall(args: {
   runClaude: ClaudeRunner;
   model: string;
   systemPrompt: string;
@@ -125,28 +125,31 @@ async function executeRecordVerdictCall(args: {
     '--output-format', 'json',
   ];
 
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  // Two attempts, each only after the previous one failed.
+  const attempt = async (attemptIdx: number, lastErr: unknown): Promise<RecordVerdictCallResult> => {
+    if (attemptIdx >= 2) {
+      throw new Error(`judge verdict unparseable after retry: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
+    }
     const res = await runClaude(cliArgs, { timeoutMs: JUDGE_TIMEOUT_MS });
     if (res.exitCode !== 0) {
-      lastErr = new Error(`claude judge exited ${String(res.exitCode)}: ${res.stderr.slice(0, 500)}`);
-      continue;
+      return attempt(attemptIdx + 1, new Error(`claude judge exited ${String(res.exitCode)}: ${res.stderr.slice(0, 500)}`));
     }
+    let parsed: ReturnType<typeof parseVerdictFromEnvelope>;
     try {
-      const parsed = parseVerdictFromEnvelope(res.stdout);
-      return {
-        verdict: parsed.verdict.verdict,
-        rationale: parsed.verdict.rationale,
-        confidence: parsed.verdict.confidence,
-        responseContent: [parsed.envelope],
-        responseUsage: parsed.usage,
-        ...(parsed.sessionId === undefined ? {} : { requestId: parsed.sessionId }),
-      };
+      parsed = parseVerdictFromEnvelope(res.stdout);
     } catch (err) {
-      lastErr = err; // malformed verdict — retry once
+      return attempt(attemptIdx + 1, err); // malformed verdict — retry once
     }
-  }
-  throw new Error(`judge verdict unparseable after retry: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
+    return {
+      verdict: parsed.verdict.verdict,
+      rationale: parsed.verdict.rationale,
+      confidence: parsed.verdict.confidence,
+      responseContent: [parsed.envelope],
+      responseUsage: parsed.usage,
+      ...(parsed.sessionId === undefined ? {} : { requestId: parsed.sessionId }),
+    };
+  };
+  return attempt(0, undefined);
 }
 
 /**

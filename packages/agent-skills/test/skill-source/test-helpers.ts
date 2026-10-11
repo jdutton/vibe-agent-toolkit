@@ -57,6 +57,8 @@ export interface BareRepoOptions {
   skillContent?: string;
   /** Subdirectory within the work-tree to place SKILL.md (defaults to repo root). */
   skillSubdir?: string;
+  /** Shape the work-tree further (e.g. commit a symbolic link) before the one commit. */
+  beforeCommit?: (workDir: string) => void;
 }
 
 /**
@@ -75,6 +77,7 @@ export function makeBareRepoWithSkill(options: BareRepoOptions = {}): {
   const {
     skillContent = FIXTURE_SKILL_MD,
     skillSubdir,
+    beforeCommit,
   } = options;
 
   const bareDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-ss-bare-'));
@@ -95,6 +98,7 @@ export function makeBareRepoWithSkill(options: BareRepoOptions = {}): {
   }
 
   writeFileSync(safePath.join(skillTargetDir, 'SKILL.md'), skillContent);
+  beforeCommit?.(workDir);
   runGit(['add', '-A'], workDir);
   runGit(['commit', '-m', 'init'], workDir);
   runGit(['push', 'origin', 'main'], workDir);

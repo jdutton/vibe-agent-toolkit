@@ -12,7 +12,11 @@
  * the same lesson `packages/cli/src/qa-snapshot/capture.ts` documents, and the
  * reason it is restated rather than referenced: the two modules are read apart.)
  *
- * **Env is merged over `process.env`, never replaced.** See {@link buildEnv}.
+ * **Env is merged over `process.env`, never replaced — except the arm-owned
+ * keys.** `process.env` is inherited so the io facet's `NODE_OPTIONS` preload
+ * reaches vat's second node process; the variables that decide WHICH vat runs
+ * (`VAT_BIN`, `VAT_ROOT_DIR`, …) are never inherited, only set by the arm. See
+ * {@link buildEnv} and `arm-env.ts`.
  *
  * **The output cap is generous on purpose.** `spawnSync`'s 1 MB default sets
  * `ENOBUFS` and hands back a TRUNCATED stream; `vat audit` alone emits ~1.8 MB
@@ -51,6 +55,7 @@ import {
 } from '@vibe-agent-toolkit/utils/process';
 import which from 'which';
 
+import { buildArmEnv } from './arm-env.js';
 import type { ResolvedInstrument, RunOptions, RunResult } from './types.js';
 
 /**
@@ -68,7 +73,7 @@ const MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
  *
  * @param instrument - Which vat to run; `leadingArgs` precede `args`
  * @param args - The vat subcommand and its arguments
- * @param options - Working directory, extra environment, and an optional timeout
+ * @param options - Working directory, the arm's environment, and an optional timeout
  * @returns Wall time, both streams, and an exit code that is `null` when the
  *   process never ran or was killed
  */
@@ -106,21 +111,27 @@ export function runCommand(
 }
 
 /**
- * The child's environment: **`process.env` with `extra` merged OVER it.**
+ * The child's environment: **inherited, except arm-owned keys** — see `arm-env.ts`.
  *
- * This is load-bearing, not hygiene. The I/O facet works by setting
- * `NODE_OPTIONS=--require <preload>`, and vat's own launcher spawns a SECOND
- * node process for the real binary — the preload propagates to that descendant
- * through the inherited environment. A harness that handed `spawnSync` only the
- * caller's `env` would strip everything else (`PATH`, `HOME`, `NODE_OPTIONS`
- * set by the surrounding shell) and the facet would silently measure the
- * launcher alone, reporting a plausible number for the wrong process.
+ * Inheriting `process.env` is load-bearing, not hygiene. The I/O facet works
+ * by setting `NODE_OPTIONS=--require <preload>`, and vat's own launcher spawns
+ * a SECOND node process for the real binary — the preload propagates to that
+ * descendant through the inherited environment. A harness that handed
+ * `spawnSync` only the arm's own variables would strip everything else
+ * (`PATH`, `HOME`, `NODE_OPTIONS` set by the surrounding shell) and the facet
+ * would silently measure the launcher alone, reporting a plausible number for
+ * the wrong process.
  *
- * @param extra - Caller-supplied variables, which win on a key collision
- * @returns The merged environment to hand the child
+ * The arm-owned keys are the one exception, in the other direction: a
+ * `VAT_BIN` or `VAT_ROOT_DIR` exported in the operator's shell would reach both
+ * arms of an A/B and make them one build. They reach a child only when the arm
+ * sets them, and the arm's `unset` removes anything else it must run without.
+ *
+ * @param env - The arm's environment
+ * @returns The environment to hand the child
  */
-function buildEnv(extra: RunOptions['env']): NodeJS.ProcessEnv {
-  return { ...process.env, ...extra };
+function buildEnv(env: RunOptions['env']): NodeJS.ProcessEnv {
+  return buildArmEnv(process.env, env);
 }
 
 /**

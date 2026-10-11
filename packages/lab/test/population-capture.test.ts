@@ -91,7 +91,7 @@ function captureRow(
     commands: [{ name: SPEC.name, args }],
     runs,
     cache: 'warm',
-    env: { [PROBE_STDOUT_ENV]: JSON.stringify(outputs) },
+    env: { set: { [PROBE_STDOUT_ENV]: JSON.stringify(outputs) }, unset: [] },
     capturedAt: CAPTURED_AT,
   };
   const report = capturePopulation(request);
@@ -164,7 +164,11 @@ describe('capturePopulation', () => {
 
     expect(row.failed).toBe(true);
     expect(row.attribution).toBe('not-measured');
-    expect(row.failure).toContain('no JSON document');
+    // `'not a document at all'` parses as a bare YAML scalar (a string), not an
+    // object — `parseDocument`'s reason for calling it unparsed, now that JSON
+    // and YAML are both read through one parser.
+    expect(row.failure).toContain('no document this facet can read');
+    expect(row.failure).toContain('root value is not an object');
     expect(row.files).toEqual([]);
   });
 

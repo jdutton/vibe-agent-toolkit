@@ -31,25 +31,17 @@
  * comparable to each other.
  */
 
-import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 
-import {
-  fileContentHash,
-  isPathAbsentError,
-  safePath,
-  toForwardSlash,
-} from '@vibe-agent-toolkit/utils';
-import {
-  crawlDirectorySync,
-  NEVER_CRAWL_GLOBS,
-} from '@vibe-agent-toolkit/utils/crawl';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { NEVER_CRAWL_GLOBS } from '@vibe-agent-toolkit/utils/crawl';
 import {
   gitFindRoot,
 } from '@vibe-agent-toolkit/utils/git';
 
 import type { SubjectRef, SubjectVersion } from '../envelope/coordinate.js';
 
+import { type FingerprintScope, fingerprintFiles } from './fingerprint.js';
 import { hasUncommittedChanges, runGit } from './git-state.js';
 import type { ResolvedSubject, SubjectSource } from './types.js';
 
@@ -62,60 +54,7 @@ import type { ResolvedSubject, SubjectSource } from './types.js';
 const CONCRETE_COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 /**
- * Separates the fields of one manifest record from the next.
- *
- * A NUL cannot occur in a path on any filesystem VAT supports, so the framing
- * is unambiguous: no two distinct file sets can produce the same byte stream by
- * a path that happens to contain the separator.
- */
-const RECORD_SEPARATOR = Buffer.from([0]);
-
-/**
- * Stands in for a file the population listed but that is not there — a
- * tracked file deleted from the working tree, or a dangling symlink.
- *
- * Recorded rather than skipped, and rather than allowed to throw. Throwing
- * would make one of the commonest dirty states of all (`rm` a tracked file)
- * crash the run, since `git ls-files` still lists a deleted-but-tracked path.
- * Skipping would drop the path from the manifest, which reads as "this file
- * never existed" rather than "this file is gone". It cannot collide with a real
- * digest, which is always 64 hex characters.
- *
- * Absence is the ONLY case it stands in for. A file that is there but cannot
- * be read (a permission denial) throws instead — see {@link contentDigest}.
- */
-const ABSENT = '<absent>';
-
-/**
- * What a fingerprint covers.
- *
- * The manifest construction is identical for both — same crawl, same sorted
- * order, same content hashing — and only the *population* differs, which is why
- * this is a parameter rather than a second algorithm.
- */
-interface FingerprintScope {
-  /**
-   * Take git's own population (tracked, plus untracked-but-not-ignored) rather
-   * than walking the filesystem.
-   *
-   * This is not an optimisation. It is what makes `workingFingerprint` cohere
-   * with `dirty`: `git status --porcelain` decides dirtiness over exactly this
-   * set, so a filesystem walk would fingerprint a *different* population than
-   * the one the label was computed from. An edit to a gitignored build artifact
-   * would then move the fingerprint — and so read as a moved subject — while
-   * git, and therefore `dirty`, considered nothing to have changed at all.
-   */
-  readonly fromGit: boolean;
-}
-
-/** A plain folder: whatever is on disk, since git has no opinion about it. */
-const PLAIN_FOLDER: FingerprintScope = { fromGit: false };
-
-/** A working tree: exactly the files git judges dirtiness over. */
-const GIT_POPULATION: FingerprintScope = { fromGit: true };
-
-/**
- * What a fingerprint excludes, in both scopes.
+ * What a subject fingerprint excludes, in both scopes.
  *
  * Only {@link NEVER_CRAWL_GLOBS} — dependencies, git internals, coverage and
  * test output, nested worktrees, turborepo caches. Those are not the subject's
@@ -130,6 +69,24 @@ const GIT_POPULATION: FingerprintScope = { fromGit: true };
  * this value exists to prevent.
  */
 const FINGERPRINT_EXCLUDE: readonly string[] = NEVER_CRAWL_GLOBS;
+
+/**
+ * A plain folder: whatever is on disk, since git has no opinion about it.
+ *
+ * Never git's route, even under a `.git` — see {@link FingerprintScope.fromGit}.
+ */
+const PLAIN_FOLDER: FingerprintScope = { fromGit: false, exclude: FINGERPRINT_EXCLUDE };
+
+/**
+ * A working tree: exactly the files git judges dirtiness over.
+ *
+ * Git's own population, so `workingFingerprint` covers the set `git status
+ * --porcelain` decided `dirty` over. A filesystem walk would fingerprint a
+ * different population: an edit to a gitignored build artifact would then move
+ * the fingerprint — and so read as a moved subject — while git, and therefore
+ * `dirty`, considered nothing to have changed at all.
+ */
+const GIT_POPULATION: FingerprintScope = { fromGit: true, exclude: FINGERPRINT_EXCLUDE };
 
 /**
  * The branch name HEAD points at, or `null` when HEAD is detached.
@@ -147,123 +104,6 @@ function currentBranch(cwd: string): string | null {
   if (result.status !== 0) return null;
   const name = result.stdout.trim();
   return name.length > 0 ? name : null;
-}
-
-/**
- * Order two relative paths deterministically, by UTF-16 code unit.
- *
- * Explicit rather than relying on the default sort so nothing locale-aware can
- * creep in: the fingerprint must be identical on every machine that hashes the
- * same tree.
- *
- * @param a - One relative path
- * @param b - The other
- * @returns Negative, zero, or positive per the comparator contract
- */
-function compareByCodeUnit(a: string, b: string): number {
-  if (a < b) return -1;
-  return a > b ? 1 : 0;
-}
-
-/**
- * The SHA-256 of a file's raw bytes, or {@link ABSENT} when the file is gone.
- *
- * A file that is there but REFUSES to be read throws, for the reason a
- * directory that refuses to be listed does: a placeholder in its slot would
- * make two different contents behind the lock fingerprint identically, which
- * is the one thing a fingerprint exists to catch.
- *
- * @param root - The subject being fingerprinted, for the error message
- * @param relativePath - The file, relative to `root`
- * @returns A 64-character hex digest, or the absent sentinel
- * @throws {Error} naming the file when it exists and cannot be read
- */
-function contentDigest(root: string, relativePath: string): string {
-  try {
-    return fileContentHash(safePath.join(root, relativePath));
-  } catch (cause) {
-    if (isPathAbsentError(cause)) return ABSENT;
-    throw new Error(
-      `Cannot fingerprint ${root}: ${relativePath} could not be read ` +
-        `(${cause instanceof Error ? cause.message : String(cause)}). ` +
-        'Fix the permissions on that file: a subject the lab cannot read in full cannot be fingerprinted.',
-      { cause },
-    );
-  }
-}
-
-/**
- * Fingerprint a set of files.
- *
- * The digest is taken over a manifest of one record per file — the file's
- * **relative path** (forward-slash, UTF-8 bytes) followed by the SHA-256 of its
- * **raw content bytes**, never a decoded string, so encoding and line endings
- * are covered rather than normalised away. Records are emitted in sorted path
- * order, which makes the result order-independent by construction rather than
- * by hoping the crawler is stable. The path is part of the record because
- * moving a file changes the tree even when no byte of content does.
- *
- * One algorithm, two populations — see {@link FingerprintScope}. The plain
- * folder scope deliberately never takes git's route (`respectGitignore: false`),
- * because it runs both for folders with no repository and for repositories with
- * an unborn HEAD, and letting a `.git` above the path change which files are
- * counted would make that fingerprint mean two different things.
- *
- * @param root - Absolute path to fingerprint
- * @param scope - Which population to cover
- * @returns The hex digest and the number of files it covers
- */
-function fingerprintFiles(
-  root: string,
-  scope: FingerprintScope,
-): { fingerprint: string; fileCount: number } {
-  // `refuse`, deliberately: a fingerprint over a tree the walk could not
-  // fully list is not a fingerprint of that tree — it would match the same
-  // tree with the directory readable and its contents changed, which is the
-  // one thing a fingerprint exists to catch. So a refused directory throws
-  // `DirectoryListingRefusedError` and the subject cannot be resolved — on
-  // BOTH scopes. The PLAIN_FOLDER walk meets it in `readdir`. The
-  // GIT_POPULATION scope asks `git ls-files --cached --others` (that is what
-  // `includeUntracked: true` selects), and `--others` walks the working tree:
-  // git omits the subtree, warns on stderr, and the crawler reads that warning
-  // and raises the same refusal. Pinned by `subject.test.ts`.
-  //
-  // 🪤 An earlier version of this comment said the git scope "refuses nothing"
-  // and resolves. That describes the TRACKED-ONLY listing (`includeUntracked:
-  // false`), which opens no directory because the index names every member —
-  // a listing this function never asks for. What is still true of the git
-  // scope: a tracked file that is GONE from the working tree is recorded by
-  // `contentDigest` as `<absent>` rather than thrown, because that route lists
-  // tracked-but-deleted paths (`ENOENT`). A locked FILE refuses exactly as a
-  // locked directory does — the same hole, one level down.
-  const relativePaths = crawlDirectorySync({
-    baseDir: root,
-    include: ['**/*'],
-    exclude: [...FINGERPRINT_EXCLUDE],
-    absolute: false,
-    filesOnly: true,
-    followSymlinks: false,
-    respectGitignore: scope.fromGit,
-    includeUntracked: scope.fromGit,
-    unreadable: {
-      refuse: {
-        root,
-        remedy: 'Fix the permissions on that directory: a subject the lab cannot list in full cannot be fingerprinted.',
-      },
-    },
-  }).map((relativePath) => toForwardSlash(relativePath));
-
-  relativePaths.sort(compareByCodeUnit);
-
-  const digest = createHash('sha256');
-  for (const relativePath of relativePaths) {
-    digest.update(relativePath, 'utf8');
-    digest.update(RECORD_SEPARATOR);
-    digest.update(contentDigest(root, relativePath), 'utf8');
-    digest.update(RECORD_SEPARATOR);
-  }
-
-  return { fingerprint: digest.digest('hex'), fileCount: relativePaths.length };
 }
 
 /**

@@ -500,7 +500,7 @@ export class ExternalLinkValidator {
 	 * @param urls - URLs to validate
 	 * @returns Array of validation results
 	 */
-	async validateLinks(urls: string[]): Promise<LinkValidationResult[]> {
+	validateLinks(urls: string[]): Promise<LinkValidationResult[]> {
 		return Promise.all(urls.map((url) => this.validateLink(url)));
 	}
 
@@ -594,7 +594,7 @@ export class ExternalLinkValidator {
 	/**
 	 * Check a link using markdown-link-check
 	 */
-	private async checkLink(
+	private checkLink(
 		url: string,
 	): Promise<Pick<LinkValidationResult, 'url' | 'status' | 'statusCode' | 'error'>> {
 		return new Promise((resolve) => {

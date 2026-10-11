@@ -19,7 +19,7 @@ describe('packager rewrites links inside bundled HTML resources', () => {
 
     writeFileSync(
       safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'),
-      ['version: 1', ''].join('\n'),
+      '{}\n',
     );
     writeFileSync(
       safePath.join(projectRoot, 'skills', 'example', 'SKILL.md'),
@@ -123,7 +123,7 @@ describe('an HTML file that loses a resource-id collision', () => {
     const skillDir = safePath.join(projectRoot, 'skills', 'example');
     mkdirSyncReal(safePath.join(skillDir, 'a-b'), { recursive: true });
     mkdirSyncReal(safePath.join(skillDir, 'a'), { recursive: true });
-    writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+    writeFileSync(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), '{}\n');
     writeFileSync(
       safePath.join(skillDir, 'SKILL.md'),
       [

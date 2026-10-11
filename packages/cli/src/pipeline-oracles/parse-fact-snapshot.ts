@@ -30,7 +30,7 @@ import type {
   ParseResult,
   ResourceLink,
 } from '@vibe-agent-toolkit/resources';
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 
 import type {
   ConditionFact,
@@ -130,10 +130,11 @@ export async function captureParseFactSnapshot(
   const pathsByKey = new Map<string, string[]>();
   const keyDisagreements: KeyDisagreement[] = [];
 
-  for (const absolutePath of absolutePaths) {
+  // In order: a measurement, and `firstPathByKey` means first in input order.
+  await forEachInOrder(absolutePaths, async (absolutePath) => {
     const keyed = await readKeyedOrSkip(absolutePath);
     if (keyed === null) {
-      continue;
+      return;
     }
 
     const relativePath = relativize(absolutePath, corpusRoot);
@@ -147,7 +148,7 @@ export async function captureParseFactSnapshot(
     // exists to test it, leaving nothing to compare against.
     const parsed = await parseOrNull(absolutePath, keyed);
     if (parsed === null) {
-      continue;
+      return;
     }
     const row = toRow(keyed.key, keyed.parserKind, parsed);
 
@@ -155,7 +156,7 @@ export async function captureParseFactSnapshot(
     if (existing === undefined) {
       byKey.set(keyed.key, row);
       firstPathByKey.set(keyed.key, relativePath);
-      continue;
+      return;
     }
 
     const fields = diffParseFactRows(existing, row);
@@ -167,7 +168,7 @@ export async function captureParseFactSnapshot(
         fields,
       });
     }
-  }
+  });
 
   return {
     corpus: options.corpus,

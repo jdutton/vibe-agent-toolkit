@@ -1,6 +1,6 @@
-import { cpSync, existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, copyRegularFile, copyTree, forEachInOrder, FsFaultError, isFsFaultError, mkdirSyncReal, safePath, VatError, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { sanitizeGraderText, sanitizeTextPreservingLines } from './grader-text.js';
@@ -26,9 +26,9 @@ export class EvalInputError extends VatError {
 
 /**
  * Neutralize a SUITE-AUTHORED string before it is quoted into an
- * {@link EvalInputError}, whose message reaches `process.stdout` on the
- * `Summary:` line — the one channel deliberately kept machine-readable — and
- * renders twice on the way there.
+ * {@link EvalInputError}, whose message reaches `process.stdout` as the
+ * published report's `error.message` — the one channel deliberately kept
+ * machine-readable — and stderr beside it, rendering twice on the way there.
  *
  * The suite is nominally adopter-authored, but `resolveEvalSuitePath` will
  * harvest one out of a FETCHED npm/url artifact, i.e. out of the skill under
@@ -357,53 +357,104 @@ export interface StageEvalWorkspacesInput {
  * the sibling: `../with/<id>/` was a guessable path to the treatment arm's live
  * output. Independent random tokens fix both, and cost nothing.
  */
-export function stageEvalWorkspaces(input: StageEvalWorkspacesInput): string {
-  for (const arm of armsOf(input.armDirs)) {
-    stageEvalWorkspacesForArm(input, arm);
-  }
+export async function stageEvalWorkspaces(input: StageEvalWorkspacesInput): Promise<string> {
+  // In order: an input error names the first offending arm and eval, as it always has.
+  await forEachInOrder(armsOf(input.armDirs), (arm) => stageEvalWorkspacesForArm(input, arm));
   return input.workspacesRoot;
 }
 
-function stageEvalWorkspacesForArm(input: StageEvalWorkspacesInput, arm: EvalArm): void {
+/**
+ * Copy one declared input — a file, or a directory with everything under it — to `dest`, under the
+ * eval's workspace. A
+ * link is followed (the workspace gets what it points at), and inside a directory only to
+ * what lies under that directory.
+ */
+async function copyEvalInput(src: string, evalWorkspace: string, dest: string): Promise<void> {
+  const relative = safePath.relative(evalWorkspace, dest);
+  if (statSync(src).isDirectory()) {
+    await copyTree(src, evalWorkspace, relative, { links: 'follow-contained', side: 'source', onto: 'fresh' });
+    return;
+  }
+  await copyRegularFile(src, evalWorkspace, relative, { side: 'source', reading: `eval input ${src}`, existing: 'replace', writing: `eval input ${src} into its workspace` });
+}
+
+/**
+ * Make a directory of the workspaces tree, 0700. The tree is VAT's own scratch: a directory the OS
+ * will not make there (a full or read-only temp directory) is the ENVIRONMENT's fault, never the
+ * eval suite's and never an uncoded errno.
+ */
+export function makeWorkspaceDir(dir: string): void {
+  withFsFaultSync({ side: 'environment', action: 'create an eval workspace directory', path: dir }, () => mkdirSyncReal(dir, { recursive: true, mode: 0o700 }));
+}
+
+async function stageEvalWorkspacesForArm(input: StageEvalWorkspacesInput, arm: EvalArm): Promise<void> {
   const armRoot = safePath.joinUnderRoot(input.workspacesRoot, armDirSegment(input.armDirs, arm));
-  mkdirSyncReal(armRoot, { recursive: true, mode: 0o700 });
-  for (const entry of input.suite.evals) {
+  makeWorkspaceDir(armRoot);
+  // In order: the first input error names the first offending eval, as it always has.
+  await forEachInOrder(input.suite.evals, async (entry) => {
     const evalWorkspace = safePath.joinUnderRoot(armRoot, String(entry.id));
     // 0700 like the root above it — created for every eval, populated only by
     // those declaring `files`.
-    mkdirSyncReal(evalWorkspace, { recursive: true, mode: 0o700 });
-    for (const rel of entry.files ?? []) {
-      // Containment first: a `rel` that escapes evalsDir or the workspace is a
-      // genuine "escapes the eval directory" problem and is reported as such.
-      let src: string;
-      let dest: string;
-      try {
-        src = safePath.joinUnderRoot(input.evalsDir, rel);
-        dest = safePath.joinUnderRoot(evalWorkspace, rel);
-      } catch (err) {
-        throw new EvalInputError(
-          `eval ${entry.id} declares input file "${quoteSuiteText(rel)}" that escapes the eval directory: ` +
-            quoteSuiteText((err as Error).message),
-        );
-      }
-      if (!existsSync(src)) {
-        throw new EvalInputError(
-          `eval ${entry.id} declares input file "${quoteSuiteText(rel)}" but it is absent at ${quoteSuiteText(src)}`,
-        );
-      }
-      // Copy failures (permissions, illegal filename on the host, disk) are
-      // reported accurately rather than mislabeled as a containment escape.
-      try {
-        // 0700 like the workspaces root above it: with an out-of-tree suite these
-        // hold data that may never have been in the repo.
-        mkdirSyncReal(safePath.join(dest, '..'), { recursive: true, mode: 0o700 });
-        cpSync(src, dest, { recursive: true });
-      } catch (err) {
-        throw new EvalInputError(
-          `eval ${entry.id} failed to stage input file "${quoteSuiteText(rel)}" into the workspace: ` +
-            quoteSuiteText((err as Error).message),
-        );
-      }
-    }
+    makeWorkspaceDir(evalWorkspace);
+    await forEachInOrder(entry.files ?? [], (rel) => stageEvalInput(input.evalsDir, evalWorkspace, String(entry.id), rel));
+  });
+}
+
+/**
+ * A failure staging an input, as the ENVIRONMENT's fault when it is one: an uncoded errno (the copy
+ * classifies its own reads on `source`, so what is left is a write into the workspace) or a workspace
+ * directory that would not be made. `undefined` for anything else — the suite's input. The path and
+ * the input name are suite-authored text and reach the terminal, so both are quoted as suite text.
+ */
+function workspaceWriteFault(error: unknown, id: string, rel: string, dest: string): FsFaultError | undefined {
+  const fault = classifyFsFault(error, { side: 'environment', action: 'stage an eval input', path: dest });
+  if (!isFsFaultError(fault) || fault.side !== 'environment') return undefined;
+  return new FsFaultError({
+    side: 'environment',
+    faultClass: fault.faultClass,
+    errno: fault.errno,
+    path: quoteSuiteText(fault.path ?? dest),
+    origin: fault.origin,
+    action: `stage eval ${id}'s input "${quoteSuiteText(rel)}" into its workspace`,
+    cause: error,
+  });
+}
+
+/** Copy one eval's declared input `rel` from the evals dir into its workspace. */
+async function stageEvalInput(evalsDir: string, evalWorkspace: string, id: string, rel: string): Promise<void> {
+  // Containment first: a `rel` that escapes evalsDir or the workspace is a
+  // genuine "escapes the eval directory" problem and is reported as such.
+  let src: string;
+  let dest: string;
+  try {
+    src = safePath.joinUnderRoot(evalsDir, rel);
+    dest = safePath.joinUnderRoot(evalWorkspace, rel);
+  } catch (err) {
+    throw new EvalInputError(
+      `eval ${id} declares input file "${quoteSuiteText(rel)}" that escapes the eval directory: ` +
+        quoteSuiteText((err as Error).message),
+    );
+  }
+  if (!existsSync(src)) {
+    throw new EvalInputError(
+      `eval ${id} declares input file "${quoteSuiteText(rel)}" but it is absent at ${quoteSuiteText(src)}`,
+    );
+  }
+  // Copy failures are reported accurately rather than mislabeled as a containment escape — and by
+  // side: what the copy READS is the suite's input (already classified `source` by the copy), what
+  // it WRITES is the workspace, VAT's own scratch. A fault writing it (a full disk, a read-only temp
+  // directory) is the environment's and is thrown as it is, never as the author's eval input error.
+  try {
+    // 0700 like the workspaces root above it: with an out-of-tree suite these
+    // hold data that may never have been in the repo.
+    makeWorkspaceDir(safePath.join(dest, '..'));
+    await copyEvalInput(src, evalWorkspace, dest);
+  } catch (err) {
+    const fault = workspaceWriteFault(err, id, rel, dest);
+    if (fault !== undefined) throw fault;
+    throw new EvalInputError(
+      `eval ${id} failed to stage input file "${quoteSuiteText(rel)}" into the workspace: ` +
+        quoteSuiteText((err as Error).message),
+    );
   }
 }

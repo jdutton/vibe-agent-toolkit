@@ -64,8 +64,10 @@ commit the regenerated `.json` beside the `.ts` change. There is no `*.schema.js
 2. Keep the command focused and composable; orchestrate other packages, never duplicate their
    logic — the walk, the merge, the validation live in the library package.
 3. Help text follows `.claude/rules/cli-help-text.md` (fires when you edit a command file).
-4. Every command exits `0` ok / `1` findings / `2` usage or system error, through the shared
-   `ExitCode` enum and `handleCommandError`; a `--json` output registers its report schema.
+4. Every command publishes through the one writer (`utils/document-writer.ts`): register the verb
+   in `PUBLISHED_SHAPES` (`src/report-schemas.ts`), end with `endWithReport` / `endWithRefusal`, and
+   the exit code (`0` ok / `1` findings / `2` could not do its job) derives from the document —
+   see "The report contract" in [`docs/architecture/cli.md`](../architecture/cli.md).
 5. Update [`command-lane-table.md`](command-lane-table.md) if the command reads the filesystem to
    build a population — the table is the bounded list of walkers.
 6. Handle errors with a user-facing message that names the config mechanism that fixes it.

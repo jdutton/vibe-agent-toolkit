@@ -1,19 +1,14 @@
 /**
  * The one answer to "issues → status", and the counts that keep it honest.
  *
- * This repo had five implementations of this three-line function and three
- * different answers for an info-only issue set: `calculateValidationStatus`
- * said `warning`, `audit` and `marketplace validate` said `success`, and
- * `corpus/runner`'s `statusFromCounts(errors, warnings)` could not see info at
- * all — its signature made the case unrepresentable. So `vat audit` and the
- * plugin validator could report different statuses for the same plugin.
+ * This repo had five implementations of this function and three different
+ * answers for an info-only issue set, so `vat audit` and the plugin validator
+ * could report different statuses for the same plugin. The second vocabulary
+ * (`success | warning | error`) is gone; the one left is literal.
  *
  * The contract these tests pin:
- *   - status names the worst ACTIONABLE severity: errors ⇒ `error`, warnings ⇒
- *     `warning`, and anything else ⇒ `success`.
- *   - info-only ⇒ `success`, because an informational note is not something the
- *     consumer must act on — but ONLY because the counts travel beside the
- *     status, so `success` never means "there was nothing to see".
+ *   - status is `findings` when any published finding exists, `ok` otherwise;
+ *     `summary` carries how much of it is actionable.
  *   - `ignore` never counts: it is config-suppressed by the adopter's own
  *     decision, and counting it would resurrect a finding they silenced.
  */
@@ -21,8 +16,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  calculateValidationStatus,
+  buildReport,
   countBySeverity,
+  resultStatus,
+  summarizeIssues,
   type ValidationIssue,
 } from '../src/index.js';
 
@@ -30,27 +27,45 @@ function issue(severity: ValidationIssue['severity']): ValidationIssue {
   return { code: 'SKILL_TOO_MANY_FILES', severity, message: `a ${severity}` };
 }
 
-describe('calculateValidationStatus', () => {
-  it('is success for no issues', () => {
-    expect(calculateValidationStatus([])).toBe('success');
+describe('resultStatus', () => {
+  it('is ok for no issues and findings for an info-only set', () => {
+    // The info-only set is the case that had three answers (`warning`,
+    // `success`, and a signature that could not see info). The literal word
+    // ends the argument: a non-empty list is `findings`, and `summary` says
+    // how much of it is actionable.
+    expect(resultStatus([])).toBe('ok');
+    expect(resultStatus([issue('info'), issue('info')])).toBe('findings');
   });
 
-  it('is error when any issue is an error, whatever else is present', () => {
-    expect(calculateValidationStatus([issue('info'), issue('warning'), issue('error')])).toBe('error');
+  it('is findings for any published severity', () => {
+    expect(resultStatus([issue('warning')])).toBe('findings');
+    expect(resultStatus([issue('error')])).toBe('findings');
   });
 
-  it('is warning when the worst actionable severity is a warning', () => {
-    expect(calculateValidationStatus([issue('info'), issue('warning')])).toBe('warning');
+  it('is ok when every issue is config-suppressed, agreeing with an all-zero summary', () => {
+    // An `ignore` issue is never published (a Finding cannot carry it), so a
+    // result holding only suppressed issues says the same thing a report does.
+    const issues = [issue('ignore')];
+    expect(resultStatus(issues)).toBe('ok');
+    expect(countBySeverity(issues)).toEqual({ errors: 0, warnings: 0, info: 0 });
   });
 
-  it('is success for an info-only set — the divergence this function exists to end', () => {
-    // `calculateValidationStatus` used to return `warning` here while `audit`
-    // returned `success`, so two lanes disagreed about the same plugin.
-    expect(calculateValidationStatus([issue('info'), issue('info')])).toBe('success');
+  it('is the derivation buildReport uses', () => {
+    const gate = { strict: false };
+    expect(buildReport({ examined: 1, findings: [], data: null, gate }).status).toBe(resultStatus([]));
+    const findings = [{ code: 'SKILL_TOO_MANY_FILES' as const, severity: 'info' as const, message: 'x' }];
+    expect(buildReport({ examined: 1, findings, data: null, gate }).status).toBe(resultStatus(findings));
   });
+});
 
-  it('is success when every issue is config-suppressed', () => {
-    expect(calculateValidationStatus([issue('ignore')])).toBe('success');
+describe('summarizeIssues', () => {
+  it('derives status and summary from one issue list, so neither can disagree with it', () => {
+    const issues = [issue('error'), issue('info'), issue('ignore')];
+    expect(summarizeIssues(issues)).toStrictEqual({
+      status: resultStatus(issues),
+      summary: countBySeverity(issues),
+    });
+    expect(summarizeIssues([])).toStrictEqual({ status: 'ok', summary: { errors: 0, warnings: 0, info: 0 } });
   });
 });
 
@@ -81,9 +96,9 @@ describe('countBySeverity', () => {
     });
   });
 
-  it('makes an info-only `success` legible rather than silent', () => {
+  it('makes an info-only `findings` legible: the count says how much is actionable', () => {
     const issues = [issue('info')];
-    expect(calculateValidationStatus(issues)).toBe('success');
-    expect(countBySeverity(issues).info).toBe(1);
+    expect(resultStatus(issues)).toBe('findings');
+    expect(countBySeverity(issues)).toEqual({ errors: 0, warnings: 0, info: 1 });
   });
 });

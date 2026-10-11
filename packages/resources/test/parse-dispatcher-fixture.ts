@@ -65,8 +65,8 @@ export function mutableCache(): {
     enabled: true,
     directory: '/nowhere/cache',
     stats,
-    get: async (): Promise<ParseResult> => CANNED_PARSE,
-    set: async (): Promise<void> => undefined,
+    get: (): Promise<ParseResult> => Promise.resolve(CANNED_PARSE),
+    set: (): Promise<void> => Promise.resolve(),
   } as unknown as ParseCache;
   return {
     cache,

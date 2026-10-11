@@ -6,6 +6,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { computeReconcilePlan, StagedManifestSchema } from '../../src/skill-test/manifest.js';
 import type { PluginLayout } from '../../src/skill-test/plugin-layout.js';
 import { descriptorToSource, stageHarness, type StageItem } from '../../src/skill-test/staging.js';
+import { useScratchTmpdir } from '../test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test (and every child
+// a test spawns), so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-12-');
 
 /** Shared relative source spec for the fake resolver (one literal, many uses). */
 const SUBJECT_SRC = '../subject';
@@ -42,7 +47,7 @@ function makeFakeResolver(srcRoot: string) {
     const dir = safePath.join(srcRoot, id.replaceAll(/[^a-z0-9]/gi, '_'));
     mkdirSyncReal(dir, { recursive: true });
     writeFileSync(safePath.join(dir, 'SKILL.md'), `# ${id}\n`, 'utf8');
-    return { stagedDir: dir, identity: `id-${id}` };
+    return { stagedDir: dir, identity: `id-${id}`, leftovers: [] };
   };
 }
 
@@ -128,7 +133,7 @@ describe('stageHarness (integration)', () => {
     writeFileSync(safePath.join(evalsDir, 'evals.json'), '{}\n', 'utf8');
 
     // Resolver returns srcDir verbatim so we can mutate the source between runs.
-    const resolve = (async () => ({ stagedDir: srcDir, identity: 'id-subject' })) as never;
+    const resolve = (async () => ({ stagedDir: srcDir, identity: 'id-subject', leftovers: [] })) as never;
     const items: StageItem[] = [{ name: 'subject', source: descriptorToSource({ path: SUBJECT_SRC }) }];
     const opts = { harnessRoot: root, items, resolve, ctx: {} as never, currentUid: uid };
 
@@ -174,7 +179,7 @@ describe('stageHarness (integration)', () => {
         mkdirSyncReal(scripts, { recursive: true });
         writeFileSync(safePath.join(flat, 'SKILL.md'), '# report\n', 'utf8');
         writeFileSync(safePath.join(scripts, 'report.mjs'), '// report\n', 'utf8');
-        return { stagedDir: flat, identity: 'id-report' };
+        return { stagedDir: flat, identity: 'id-report', leftovers: [] };
       }) as never,
       ctx: {} as never,
       currentUid: uid,

@@ -2,10 +2,13 @@
  * Agent discovery utility - finds agents in common locations
  */
 
+import type { Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 
-import { direntKindFollowing, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, everyInOrder, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
+
+import { CommandRefusalError } from './command-refusal.js';
 
 export interface DiscoveredAgent {
   name: string;
@@ -15,74 +18,137 @@ export interface DiscoveredAgent {
 }
 
 /**
- * Discover all agents in common locations
+ * The directories agent discovery lists, relative to the working directory, in
+ * search order.
+ */
+export const AGENT_SEARCH_PATHS: readonly string[] = [
+  'packages/vat-development-agents/agents',
+  'agents',
+  '.',
+];
+
+/** A path discovery could not read: every agent beneath it is missing from the answer. */
+export interface UnreadableAgentPath {
+  /** The absolute directory or manifest the OS refused. */
+  path: string;
+  /** The errno it was refused with. */
+  errno: string;
+}
+
+/** What one discovery found, and the paths it could not read. */
+interface AgentSurvey {
+  agents: DiscoveredAgent[];
+  /** One entry per refused path, deduplicated: empty when the answer is complete. */
+  unreadable: UnreadableAgentPath[];
+}
+
+/**
+ * Discover the agents under {@link AGENT_SEARCH_PATHS}, keeping going past a
+ * path the OS refuses and handing each refusal back — for a listing, which
+ * reports the gap as its own finding.
+ *
+ * Only an ABSENCE is empty: a search path that does not exist holds no agents,
+ * a directory with no manifest is not an agent, a manifest that is not YAML is
+ * not one either. A path the OS refuses is none of those, and is `unreadable`.
+ */
+export async function surveyAgents(): Promise<AgentSurvey> {
+  const unreadable = new Map<string, UnreadableAgentPath>();
+  const refused = (path: string, error: unknown): null => {
+    unreadable.set(path, { path, errno: (error as NodeJS.ErrnoException).code ?? 'unknown error' });
+    return null;
+  };
+
+  const agentArrays = await Promise.all(
+    AGENT_SEARCH_PATHS.map(searchPath => discoverAgentsInPath(safePath.resolve(process.cwd(), searchPath), refused)),
+  );
+  return { agents: agentArrays.flat(), unreadable: [...unreadable.values()] };
+}
+
+/**
+ * Discover all agents in common locations — refusing, rather than answering
+ * short, when any of them cannot be read: a lookup by name that silently missed
+ * the agent would say "not found" about a tree it never opened.
+ *
+ * @throws {CommandRefusalError} `INPUT_UNREADABLE` naming the first path the OS refused
  */
 export async function discoverAgents(): Promise<DiscoveredAgent[]> {
-  const searchPaths = [
-    'packages/vat-development-agents/agents',
-    'agents',
-    '.',
-  ];
-
-  const agentPromises = searchPaths.map(searchPath => discoverAgentsInPath(searchPath));
-  const agentArrays = await Promise.all(agentPromises);
-
-  return agentArrays.flat();
-}
-
-async function discoverAgentsInPath(searchPath: string): Promise<DiscoveredAgent[]> {
-  try {
-    const absolutePath = safePath.resolve(process.cwd(), searchPath);
-    const entries = await fs.readdir(absolutePath, { withFileTypes: true });
-
-    // Followed: a `--dev` install is a symlinked agent directory and is discovered.
-    const kinds = await Promise.all(entries.map(entry => direntKindFollowing(absolutePath, entry)));
-    const directories = entries.filter((_, i) => kinds[i] === 'directory');
-    const agentPromises = directories.map(entry =>
-      discoverAgentInDirectory(safePath.join(absolutePath, entry.name))
+  const { agents, unreadable } = await surveyAgents();
+  const [first] = unreadable;
+  if (first) {
+    throw new CommandRefusalError(
+      'INPUT_UNREADABLE',
+      `Agent discovery could not read ${first.path} (${first.errno}); an agent beneath it cannot be found.`,
     );
-
-    const agents = await Promise.all(agentPromises);
-    return agents.filter((agent): agent is DiscoveredAgent => agent !== null);
-  } catch (error) {
-    // No such search path: nothing here. Only an ABSENCE reads as empty — a
-    // directory the OS refuses to list is not one with no agents in it, and
-    // answering "no agents" for it is how `agent install x` said "not found"
-    // about a tree it never opened.
-    if (isPathAbsentError(error)) return [];
-    throw error;
   }
+  return agents;
 }
 
-async function discoverAgentInDirectory(agentDir: string): Promise<DiscoveredAgent | null> {
-  const manifestPath = await findManifest(agentDir);
+/** Records a refused path and answers `null` (nothing found there). */
+type RefusedPath = (path: string, error: unknown) => null;
+
+async function discoverAgentsInPath(absolutePath: string, refused: RefusedPath): Promise<DiscoveredAgent[]> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(absolutePath, { withFileTypes: true });
+  } catch (error) {
+    // No such search path: nothing here.
+    if (isPathAbsentError(error)) return [];
+    refused(absolutePath, error);
+    return [];
+  }
+
+  // Followed: a `--dev` install is a symlinked agent directory and is discovered.
+  const kinds = await Promise.all(entries.map(async entry => {
+    try {
+      return await direntKindFollowing(absolutePath, entry);
+    } catch (error) {
+      return refused(safePath.join(absolutePath, entry.name), error);
+    }
+  }));
+  const directories = entries.filter((_, i) => kinds[i] === 'directory');
+  const agents = await Promise.all(directories.map(entry =>
+    discoverAgentInDirectory(safePath.join(absolutePath, entry.name), refused)
+  ));
+  return agents.filter((agent): agent is DiscoveredAgent => agent !== null);
+}
+
+async function discoverAgentInDirectory(agentDir: string, refused: RefusedPath): Promise<DiscoveredAgent | null> {
+  const manifestPath = await findManifest(agentDir, refused);
   if (!manifestPath) {
     return null;
   }
 
-  return parseAgentManifest(manifestPath, agentDir);
+  return parseAgentManifest(manifestPath, agentDir, refused);
 }
 
-async function findManifest(dir: string): Promise<string | null> {
+async function findManifest(dir: string, refused: RefusedPath): Promise<string | null> {
   const candidates = ['agent.yaml', 'agent.yml'];
+  let found: string | null = null;
 
-  for (const candidate of candidates) {
+  // In order: the first candidate present wins, and a refusal stops the probe.
+  await everyInOrder(candidates, async (candidate) => {
     const manifestPath = safePath.join(dir, candidate);
     try {
       await fs.access(manifestPath);
-      return manifestPath;
+      found = manifestPath;
+      return false;
     } catch (error) {
-      // Not this candidate. Anything but an absence stays loud.
-      if (!isPathAbsentError(error)) throw error;
+      // Not this candidate. Anything but an absence is the directory refusing
+      // the probe — recorded against the directory, which is what a listing of
+      // it refused too, so one locked directory is one gap.
+      if (isPathAbsentError(error)) return true;
+      found = refused(dir, error);
+      return false;
     }
-  }
+  });
 
-  return null;
+  return found;
 }
 
 async function parseAgentManifest(
   manifestPath: string,
-  agentDir: string
+  agentDir: string,
+  refused: RefusedPath,
 ): Promise<DiscoveredAgent | null> {
   try {
     const content = await fs.readFile(manifestPath, 'utf-8');
@@ -101,8 +167,8 @@ async function parseAgentManifest(
   } catch (error) {
     // A manifest that is not YAML is skipped — the documented shape of "not an
     // agent". A manifest that vanished since the probe is the same. A manifest
-    // the OS refuses to read is neither, and stays loud.
-    if (!(error instanceof yaml.YAMLParseError) && !isPathAbsentError(error)) throw error;
+    // the OS refuses to read is neither.
+    if (!(error instanceof yaml.YAMLParseError) && !isPathAbsentError(error)) return refused(manifestPath, error);
   }
 
   return null;

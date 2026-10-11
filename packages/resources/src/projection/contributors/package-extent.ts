@@ -38,7 +38,14 @@
 import { existsSync, readdirSync } from 'node:fs';
 
 import type { Severity } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, isPathAbsentError, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  direntKindFollowingSync,
+  forEachInOrder,
+  isPathAbsentError,
+  resolveAssetReference,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
 import { readTextContentSync } from '@vibe-agent-toolkit/utils/fs';
 import { z } from 'zod';
 
@@ -141,12 +148,12 @@ export class PackageExtentContributor implements ExtentContributor {
       claudeRulePatterns: [],
     };
 
-    for (const spec of collectPackageSpecs(base.root, params)) {
-      // Sequential on purpose: `ResourceIdentityMap` memoizes per path, and the
-      // realization collector is a couple of `lstat`s — a fan-out would buy
-      // nothing but a nondeterministic row order.
-      await contributePackage(base, spec, params, contribution);
-    }
+    // Sequential on purpose: `ResourceIdentityMap` memoizes per path, and the
+    // realization collector is a couple of `lstat`s — a fan-out would buy
+    // nothing but a nondeterministic row order.
+    await forEachInOrder(collectPackageSpecs(base.root, params), (spec) =>
+      contributePackage(base, spec, params, contribution),
+    );
 
     return contribution;
   }
@@ -201,9 +208,7 @@ async function contributePackage(
   }
 
   out.realizations.push(await realization(base, located.path, resourceId, extentId));
-  for (const subpath of params.subpaths) {
-    await contributeSubpath(base, spec.name, extentId, subpath, out);
-  }
+  await forEachInOrder(params.subpaths, (subpath) => contributeSubpath(base, spec.name, extentId, subpath, out));
 }
 
 /**
@@ -247,7 +252,7 @@ function resourceRow(resourceId: string, kind: string, observed: boolean): Resou
 }
 
 /** The realization row for an absolute path in one package extent. */
-async function realization(
+function realization(
   base: ProjectionBase,
   absolutePath: string,
   resourceId: string,

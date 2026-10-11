@@ -41,7 +41,6 @@ const SAFE_MODULE_RULE_TRIGGERS: Record<string, string> = {
   'no-os-tmpdir': "import { tmpdir } from 'node:os';\nconst t = tmpdir();",
   'no-fs-mkdirSync': "import { mkdirSync } from 'node:fs';\nmkdirSync(d, { recursive: true });",
   'no-fs-realpathSync': "import { realpathSync } from 'node:fs';\nconst r = realpathSync(p);",
-  'no-fs-promises-cp': "import { cp } from 'node:fs/promises';\nawait cp(a, b);",
   [RULE.execSync]: `${namedImport('execSync', NODE_CHILD_PROCESS)}\nexecSync('ls');`,
   'no-url-pathname-for-fs': "const p = new URL('../fixtures/x.yaml', import.meta.url).pathname;",
   'no-bare-dynamic-import-path': 'const m = await import(configPath);',

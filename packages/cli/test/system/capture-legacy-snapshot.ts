@@ -73,7 +73,7 @@ async function main(): Promise<void> {
 	console.error('=== capture-legacy-snapshot: starting ===');
 	const start = Date.now();
 
-	const corpus = await getTestFixturesPath();
+	const corpus = getTestFixturesPath();
 	console.error(`corpus: ${corpus}`);
 
 	// Audit the entire corpus root recursively in one pass.

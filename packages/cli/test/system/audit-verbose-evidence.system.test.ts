@@ -2,9 +2,10 @@
  * System tests for `vat audit --verbose` evidence rendering.
  *
  * Verifies that:
- * 1. Without --verbose, per-file YAML output omits the `evidence` field.
- * 2. With --verbose, per-file YAML includes an `evidence` array containing
- *    the expected pattern IDs for the test skill.
+ * 1. Without --verbose, no evidence is rendered and no file row carries any.
+ * 2. With --verbose, stderr renders the evidence behind each capability
+ *    finding, with the expected pattern IDs for the test skill. The report's
+ *    file rows never carry evidence — their findings are the envelope's.
  */
 
 import * as fs from 'node:fs';
@@ -40,11 +41,11 @@ function createTestSkill(parentDir: string, skillName: string): string {
 
 interface FileEntry {
   path: string;
-  evidence?: Array<{ patternId: string }>;
+  evidence?: unknown;
 }
 
 function getFiles(parsed: Record<string, unknown>): FileEntry[] {
-  return (parsed['files'] ?? []) as FileEntry[];
+  return ((parsed['data'] as { files?: FileEntry[] } | undefined)?.files ?? []);
 }
 
 describe('Audit --verbose evidence rendering (system test)', () => {
@@ -60,7 +61,7 @@ describe('Audit --verbose evidence rendering (system test)', () => {
     cleanupTestTempDir(tempDir);
   });
 
-  it('omits the evidence field on file entries when --verbose is not set', async () => {
+  it('renders no evidence when --verbose is not set, and no file row carries any', async () => {
     const skillPath = createTestSkill(tempDir, 'no-verbose-skill');
     const { result, parsed } = await executeCliAndParseYaml(binPath, ['audit', skillPath]);
 
@@ -68,22 +69,20 @@ describe('Audit --verbose evidence rendering (system test)', () => {
     const files = getFiles(parsed);
     expect(files.length).toBeGreaterThan(0);
     expect(files[0]?.evidence).toBeUndefined();
+    expect(result.stderr).not.toContain('supporting evidence');
   });
 
-  it('includes the expected evidence pattern IDs when --verbose is set', async () => {
+  it('renders the expected evidence pattern IDs on stderr when --verbose is set', async () => {
     const skillPath = createTestSkill(tempDir, 'verbose-skill');
     const { result, parsed } = await executeCliAndParseYaml(binPath, ['audit', skillPath, '--verbose']);
 
     expect(result.status).toBe(0);
-    const files = getFiles(parsed);
-    expect(files.length).toBeGreaterThan(0);
-
-    const evidence = files[0]?.evidence;
-    expect(Array.isArray(evidence)).toBe(true);
-
-    const patternIds = (evidence ?? []).map(e => e.patternId);
-    expect(patternIds).toContain('FENCED_SHELL_BLOCK');
-    expect(patternIds).toContain('EXTERNAL_CLI_AZ');
-    expect(patternIds).toContain('BROWSER_AUTH_AZ_LOGIN');
+    // The report's file rows carry no evidence at any verbosity: the evidence is
+    // the human channel's, beneath the finding it supports.
+    expect(getFiles(parsed)[0]?.evidence).toBeUndefined();
+    expect(result.stderr).toContain('supporting evidence');
+    expect(result.stderr).toContain('[FENCED_SHELL_BLOCK]');
+    expect(result.stderr).toContain('[EXTERNAL_CLI_AZ]');
+    expect(result.stderr).toContain('[BROWSER_AUTH_AZ_LOGIN]');
   });
 });

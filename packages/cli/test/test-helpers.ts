@@ -1,9 +1,9 @@
-import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { NODE_EXECUTABLE, gitExecutable } from '@vibe-agent-toolkit/utils/testing';
+import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 
 import type { AuditCommandOptions } from '../src/commands/audit.js';
 import { deriveScanRoot, getValidationResults, resetAuditCaches } from '../src/commands/audit.js';
@@ -19,20 +19,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export const binPath = safePath.resolve(__dirname, '../dist/bin.js');
 
 /**
- * Execute a CLI command using the built bin.js
- * Safe for use in tests - binPath is resolved at module load time
- */
-export function runCliCommand(command: string, ...args: string[]): SpawnSyncReturns<string> {
-  return spawnSync(NODE_EXECUTABLE, [binPath, command, ...args], {
-    encoding: 'utf-8',
-  });
-}
-
-/**
  * Run `vat audit` validation directly against a target path (no CLI subprocess).
  * options.recursive defaults to true (recursive by default); set to false to disable.
  */
-export async function runAudit(
+export function runAudit(
   targetPath: string,
   options: AuditCommandOptions = {}
 ): ReturnType<typeof getValidationResults> {

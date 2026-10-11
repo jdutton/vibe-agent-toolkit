@@ -9,7 +9,7 @@
 
 import { lstatSync, realpathSync, statSync } from 'node:fs';
 
-import { isFilesystemAccessError, isVatError, safePath, TextTooLargeError, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { fsFaultOf, isVatError, safePath, TextTooLargeError, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { matchesCollection } from '../collection-matcher.js';
@@ -212,7 +212,7 @@ function statObservation(absolutePath: string): PathObservation {
       // The target is not there, or the OS will not follow the link to it
       // (ELOOP, EACCES on the target's directory): either way this process
       // cannot resolve it, which is what the column says.
-      if (!isFilesystemAccessError(error)) throw error;
+      if (fsFaultOf(error) === undefined) throw error;
       return {
         exists: true,
         isDirectory: false,
@@ -225,7 +225,7 @@ function statObservation(absolutePath: string): PathObservation {
     // Absent, or the filesystem refused to look — `exists` is false and every
     // other column takes its "we could not look" default rather than a guess.
     // A bug in this function is not "could not look" and stays loud.
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return {
       exists: false,
       isDirectory: false,
@@ -387,7 +387,7 @@ export function realPathOrNull(absolutePath: string): string | null {
   } catch (error) {
     // Absent, dangling, a cycle, or refused: the filesystem will not resolve
     // it, which is the `null` this answers. A bug is not that.
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return null;
   }
 }
@@ -464,7 +464,7 @@ async function keyOrState(
     }
     // `unreadable` means the filesystem refused the bytes, and that is the
     // only thing it may mean: a bug in the keying is not a fact about the corpus.
-    if (!isFilesystemAccessError(error)) throw error;
+    if (fsFaultOf(error) === undefined) throw error;
     return { contentKey: null, contentState: 'unreadable' };
   }
 }

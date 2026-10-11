@@ -39,7 +39,7 @@ export const COORDINATE: Coordinate = {
     dirty: false,
     workingFingerprint: null,
   },
-  instrument: { version: '0.1.42', commit: '1'.repeat(40), dirty: false },
+  instrument: { version: '0.1.42', commit: '1'.repeat(40), dirty: false, closure: null },
 };
 
 /**

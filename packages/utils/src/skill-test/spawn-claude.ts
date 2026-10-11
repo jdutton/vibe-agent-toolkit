@@ -1,6 +1,7 @@
 import { spawnSync, type ChildProcess, type ChildProcessByStdio } from 'node:child_process';
 import { Readable, type Writable } from 'node:stream';
 
+import { isProcessGoneError } from '../errors/errno-table.js';
 import { spawnHardened } from '../spawn-hardened.js';
 
 export interface ClaudeSpawnArgs {
@@ -82,7 +83,7 @@ export interface SpawnResult {
  *
  * - Guards an undefined pid (child never spawned — nothing to kill).
  * - Absorbs the throw that means the group is already gone (see
- *   {@link isProcessGroupGone}); anything else stays loud.
+ *   {@link isProcessGoneError}); anything else stays loud.
  * - Windows has no POSIX process groups: fall back to `taskkill /T /F`, which
  *   terminates the whole process tree.
  */
@@ -102,20 +103,8 @@ export function killProcessTree(child: { pid?: number | undefined }): void {
     // orphan-billing defect the registry exists to prevent, so only "already
     // gone" is absorbed. A bug here — the one other thing `process.kill` on our
     // own child's group can throw — stays loud.
-    if (!isProcessGroupGone(error)) throw error;
+    if (!isProcessGoneError(error)) throw error;
   }
-}
-
-/**
- * Whether `process.kill(-pid)` failed because the group is already gone.
- *
- * `ESRCH`: no such process group. `EPERM`: the group id has been recycled to a
- * process this uid may not signal — which, for a group WE created and would
- * have permission over, also means every process of ours in it has exited.
- * Both are the outcome the kill was after.
- */
-function isProcessGroupGone(error: unknown): boolean {
-  return error instanceof Error && 'code' in error && (error.code === 'ESRCH' || error.code === 'EPERM');
 }
 
 /**

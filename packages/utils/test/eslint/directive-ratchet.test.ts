@@ -44,12 +44,11 @@ const CEILINGS: Readonly<Record<string, number>> = {
   '@typescript-eslint/await-thenable': 1,
   '@typescript-eslint/explicit-module-boundary-types': 6,
   '@typescript-eslint/no-explicit-any': 24,
-  '@typescript-eslint/no-non-null-assertion': 1,
   '@typescript-eslint/no-require-imports': 1,
   '@typescript-eslint/prefer-nullish-coalescing': 2,
   'import/order': 1,
   'local/no-bare-dynamic-import-path': 1,
-  'local/no-bare-symlink-in-tests': 3,
+  'local/no-bare-symlink-in-tests': 1,
   // `failure-reason.ts`: a property read that throws IS "declared nothing";
   // reason inline at the directive.
   'local/no-blind-catch': 2,
@@ -79,7 +78,7 @@ const CEILINGS: Readonly<Record<string, number>> = {
   'no-void': 1,
   'security/detect-child-process': 1,
   // `generate-tsconfig-refs.ts`: assembled from a module constant, never input.
-  'security/detect-non-literal-regexp': 21,
+  'security/detect-non-literal-regexp': 20,
   'security/detect-possible-timing-attacks': 1,
   'security/detect-unsafe-regex': 10,
   'sonarjs/cognitive-complexity': 2,
@@ -94,7 +93,7 @@ const CEILINGS: Readonly<Record<string, number>> = {
   'sonarjs/regex-complexity': 2,
   'sonarjs/unused-import': 4,
   'sonarjs/void-use': 1,
-  'unicorn/prefer-structured-clone': 5,
+  'unicorn/prefer-structured-clone': 4,
 };
 
 /** `// eslint-disable…` or `/* eslint-disable…` — a directive, as opposed to prose that mentions one. */

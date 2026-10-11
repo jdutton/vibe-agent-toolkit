@@ -9,7 +9,8 @@
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
-import * as YAML from 'yaml';
+
+import { orchestratorReportOf, phaseDataMismatches } from '../helpers/published-phase.js';
 
 import {
   createSkillMarkdown,
@@ -24,13 +25,17 @@ const TEMP_DIR_PREFIX = 'vat-validate-test-';
 const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 const SKILL_INCLUDE_GLOB = 'resources/skills/**/SKILL.md';
 const SKILL_SOURCE_PATH = safePath.join('resources', 'skills', 'SKILL.md');
-const SUCCESS_MARKER = 'status: success';
+
+
+/** The names of the phases a published report carries. */
+function phaseNames(stdout: string): string[] {
+  return (orchestratorReportOf(stdout).data?.phases ?? []).map((phase) => phase.name);
+}
 /** A markdown file with nothing for the resources validator to complain about. */
 const CLEAN_MARKDOWN = '# Title\n\nNo links here.\n';
 
 /** A minimal resources config block (presence is what enables the surface). */
-const RESOURCES_CONFIG = `version: 1
-resources:
+const RESOURCES_CONFIG = `resources:
   exclude:
     - "node_modules/**"
 `;
@@ -68,10 +73,9 @@ describe('vat validate command (system test)', () => {
     const result = await suite.runValidate(tempDir);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(SUCCESS_MARKER);
-    expect(result.stdout).toContain('resources');
+    expect(orchestratorReportOf(result.stdout).status).toBe('ok');
     // skills surface must not run when no skills block is present
-    expect(result.stdout).not.toContain('name: skills');
+    expect(phaseNames(result.stdout)).toEqual(['resources']);
   });
 
   it('runs the skills surface when only skills is configured', async () => {
@@ -82,8 +86,10 @@ describe('vat validate command (system test)', () => {
     const result = await suite.runValidate(tempDir);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain(SUCCESS_MARKER);
-    expect(result.stdout).toContain('skills');
+    expect(phaseNames(result.stdout)).toEqual(['skills']);
+    // Not `ok`: the fixture's `version:` frontmatter key is a
+    // SKILL_FRONTMATTER_EXTRA_FIELDS warning, published on the envelope.
+    expect(orchestratorReportOf(result.stdout).status).toBe('findings');
   });
 
   it('discovers configured surfaces when run from a subdirectory', async () => {
@@ -99,23 +105,21 @@ describe('vat validate command (system test)', () => {
     const result = await suite.runValidate(subDir);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('name: resources');
-    expect(result.stdout).not.toContain('No configured validators');
+    expect(phaseNames(result.stdout)).toEqual(['resources']);
   });
 
-  it('reports a no-op note and a stderr warning when no surface is configured', async () => {
-    // Exit 0 is correct here (nothing configured is not an error per #128), but
-    // a bare exit-code check can't distinguish this from "everything passed" —
-    // the stderr warning is what makes a config typo (e.g. `recources:`)
-    // discoverable to anyone not reading the YAML note on stdout.
+  it('refuses a run with no surface configured — it examined nothing — and warns on stderr', async () => {
+    // A gate that checked nothing is not a pass: the writer refuses the run
+    // (exit 1), and the stderr warning names the likely config typo
+    // (e.g. `recources:`).
     const tempDir = suite.createTempDir();
-    suite.writeConfig(tempDir, 'version: 1\n');
+    suite.writeConfig(tempDir, '{}\n');
 
     const result = await suite.runValidate(tempDir);
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain(SUCCESS_MARKER);
-    expect(result.stdout).toContain('No configured validators');
+    expect(result.status).toBe(1);
+    const report = orchestratorReportOf(result.stdout);
+    expect([report.examined, report.findings.map((finding) => finding.code)]).toEqual([0, ['RESOURCE_CHECK_BROKEN']]);
     expect(result.stderr).toContain('nothing to validate');
   });
 
@@ -163,16 +167,15 @@ describe('vat validate command (system test)', () => {
 
     const result = await suite.runValidate(tempDir);
 
-    const parsed = YAML.parse(result.stdout) as {
-      status: string;
-      phases: Array<{ name: string; report?: { status?: string } }>;
-    };
+    const phases = orchestratorReportOf(result.stdout).data?.phases ?? [];
 
-    expect(parsed.phases.map((p) => p.name)).toEqual(['resources', 'skills']);
-    // Each validator's own report survives as data under its own surface —
-    // which is exactly what a flat concatenation could not represent.
-    expect(parsed.phases[0]?.report?.status).toBeDefined();
-    expect(parsed.phases[1]?.report?.status).toBeDefined();
+    expect(phases.map((p) => p.name)).toEqual(['resources', 'skills']);
+    // Each validator's own data survives under its own surface — which is
+    // exactly what a flat concatenation could not represent.
+    expect(phases[0]?.data).toMatchObject({ collections: expect.any(Object) });
+    expect(phases[1]?.data).toMatchObject({ skills: expect.any(Array) });
+    // ...and is exactly what that validator's own registered schema describes.
+    expect(phaseDataMismatches(orchestratorReportOf(result.stdout), 'validate')).toEqual([]);
   });
 
   it('exits exactly 1 — not 2 — when a configured validator reports validation errors', async () => {
@@ -187,8 +190,8 @@ describe('vat validate command (system test)', () => {
     // exit 2 (a validator could not run) are different facts for a CI gate, and
     // the surface status must say which one happened.
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain('status: error');
-    expect(result.stdout).toContain('exitCode: 1');
-    expect(result.stdout).not.toContain('system-error');
+    const report = orchestratorReportOf(result.stdout);
+    expect(report.status).toBe('findings');
+    expect(report.data?.phases.map((phase) => phase.status)).toEqual(['findings']);
   });
 });

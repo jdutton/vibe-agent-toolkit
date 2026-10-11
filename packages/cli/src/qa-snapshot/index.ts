@@ -6,9 +6,14 @@
  * `capture` → `store` → `diff` → `render` is a pipeline with one entry point per
  * stage, and a caller that wires them together should import the stages, not
  * the modules' internals. Everything re-exported here is a stage boundary;
- * everything not re-exported here (`normalize.ts`'s `NormalizeContext`,
- * `diff.ts`'s masking helpers) is an implementation detail that a caller has no
- * business reaching for.
+ * everything not re-exported here (`diff.ts`'s masking helpers) is an
+ * implementation detail that a caller has no business reaching for.
+ *
+ * The snapshot is the ORACLE half only. The whole-command half it used to carry
+ * behind a capture flag — spawn the corpus-enumerating verbs, normalize and
+ * keep their streams — had no caller once `vat pipeline` was deleted, and is
+ * now the lab's `verdict` facet (`packages/lab/src/facets/verdict/`), which
+ * also owns the one output normalizer.
  *
  * `invariants` sits beside that chain rather than inside it. It asks whether a
  * single capture is trustworthy at all — did every builder run, does the
@@ -59,16 +64,11 @@ export {
 export { renderCompareSummary, renderDetailHeader } from './render.js';
 export { readSnapshot, snapshotPaths, writeSnapshot, type SnapshotPaths } from './store.js';
 export {
-  COMMAND_DIR,
-  COMMAND_SPECS,
   MANIFEST_FILENAME,
   ORACLE_DIR,
   SnapshotManifestSchema,
   type ArtifactDelta,
-  type ArtifactKind,
   type ArtifactStatus,
-  type CommandManifestEntry,
-  type CommandSpec,
   type CompareReport,
   type InvariantViolation,
   type LaneManifestEntry,

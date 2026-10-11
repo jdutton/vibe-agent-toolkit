@@ -167,7 +167,9 @@ Body content for a skill under a broken governing config.
     // consumer parsing it sees a status rather than a truncated answer.
     expect(result.stdout).toContain('status: error');
     expect(result.stdout).toContain('Failed to load config');
-    expect(result.stderr).toContain('claude context failed');
+    // The adopter's config is the mistake: coded CONFIG_INVALID, never VAT's INTERNAL_ERROR.
+    expect(result.stdout).toContain('code: CONFIG_INVALID');
+    expect(result.stderr).toContain('Failed to load config');
   });
 
   it('vat inventory tolerates the broken config, exits 0, and blames the CONFIG rather than its own lane', async () => {

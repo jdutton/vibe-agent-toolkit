@@ -5,8 +5,19 @@
  * The first ANALYSIS verb under `vat claude`, which until now held only
  * management verbs (plugins, marketplaces, org administration). It answers a
  * question, changes nothing, and never gates: there is no threshold anywhere in
- * this file, and the only non-zero exit is {@link handleCommandError}'s 2 for a
- * system failure. A number that fails a build teaches people to stop reading it.
+ * this file, and the only non-zero exit is a refusal's 2. A number that fails a
+ * build teaches people to stop reading it.
+ *
+ * ## The one legacy document — interim, until wave C replaces the verb
+ *
+ * Its answer is not the `Report<T>` envelope; it is the registry's one
+ * remaining `legacy` entry, published through the writer's
+ * `writeLegacyDocument` (the only serializer a legacy verb may use) and ended on
+ * `ExitCode.OK`. A refusal IS the envelope's error branch — `refusalReport`,
+ * with the code {@link refusalCodeOf} reads off the throw (a path outside the
+ * corpus is `USAGE_INVALID`, a missing projection backend `BACKEND_UNAVAILABLE`,
+ * VAT's own defect `INTERNAL_ERROR`) — written the same way and ended on the
+ * code it derives. Wave C replaces the verb, and this path with it.
  *
  * ## Everything below is orchestration and formatting — deliberately
  *
@@ -68,7 +79,6 @@ import {
   CLAUDE_CONTEXT_LIMITS,
   CLAUDE_CONTEXT_MODELLED_BEHAVIOURS,
   discoverableFrom,
-  HarnessFactsAbsentError,
   whatLoadsAt,
   type AccountedRow,
   type Admission,
@@ -84,14 +94,14 @@ import {
   type RegionCost,
   type StatedLimit,
 } from '@vibe-agent-toolkit/resources';
-import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, isVatError } from '@vibe-agent-toolkit/utils';
+import { ExitCode, exitCodeForReport } from '@vibe-agent-toolkit/schema';
+import { findProjectRoot } from '@vibe-agent-toolkit/utils';
 import { Command, Option } from 'commander';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { targetPathWithin } from '../../utils/corpus-target.js';
+import { NOTHING_FINISHED, refusalReport, writeLegacyDocument } from '../../utils/document-writer.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { writeJsonOutput, writeStdoutSync, writeYamlOutput } from '../../utils/output.js';
 import { populationWiring } from '../../utils/population-wiring.js';
 import { withPopulationCache } from '../../utils/projection-store.js';
 import { gitTrackerForProjectRoot } from '../audit/distributed-tree.js';
@@ -101,6 +111,9 @@ const WRAP_COLUMNS = 96;
 
 /** How this command names itself in a refusal. */
 const COMMAND_NAME = 'vat claude context';
+
+/** `vat claude context` never gates: there is no `--strict`, and no threshold to apply one to. */
+const CLAUDE_CONTEXT_GATE = { strict: false } as const;
 
 /**
  * How many rows each RANKED section of the `--all` cost map prints.
@@ -338,8 +351,8 @@ Description:
   the TOTAL of that launch floor and what fires on demand there (a path-scoped
   rule fires for some directories and not others, so the on-demand half is
   never borrowed from a region-mate). Directories are ranked by that total. It
-  emits no per-path documents; name paths for those. --discoverable applies to
-  named paths only.
+  emits no per-path documents; name paths for those. --all with a path or
+  with --discoverable (which applies to named paths only) is refused.
 
 Output:
   - kind:    context-answers for named paths, context-cost-map for --all —
@@ -365,11 +378,22 @@ Output:
   A path the projection never realized answers kind: unknown — never zero.
   Diagnostics and blob-stage refusals go to stderr; stdout is the document.
 
+  A refusal publishes the report envelope's error branch (status: error,
+  error: { code, message }, gate) in the requested format (text renders it
+  as YAML), with the message on stderr.
+
 Exit Codes:
   0 - An answer was produced (there is no threshold and no gate)
-  1 - Invalid usage (unknown option, or an unsupported --format value)
-  2 - System error (a path outside the corpus root, unreadable tree, or a
-      VAT bug: a memory file reached with no derived harness facts)
+  2 - Invalid usage rejected before the verb runs (an unknown option, or an
+      unsupported --format value: Commander's message on stderr, no document),
+      or refused: error.code USAGE_INVALID (a path outside the corpus root,
+      or --all with a path or --discoverable),
+      BACKEND_UNAVAILABLE (the projection store's optional backend is not
+      installed), INPUT_UNREADABLE (a tree the OS will not read, including
+      one file in a git repository the OS will not let git read — the
+      message names it), or
+      INTERNAL_ERROR (a VAT bug, e.g. a memory file reached with no derived
+      harness facts — its stack goes to stderr)
 
 Example:
   $ vat claude context src/index.ts docs/ README.md   # one scan, three answers
@@ -394,17 +418,16 @@ export async function claudeContextCommand(
   options: ClaudeContextOptions,
 ): Promise<void> {
   const logger = createLogger(options.debug === true ? { debug: true } : {});
-  const startTime = Date.now();
   const sweep = options.all === true;
+  const format = options.format ?? 'text';
   try {
     const root = findProjectRoot(process.cwd()) ?? process.cwd();
     // 🔑 Every argument is resolved BEFORE the population, not inside the map.
     // A path outside the corpus is a usage error, and finding it afterwards
     // would charge the caller a full population — minutes on a cold cache — to
-    // be told they mistyped. `--all` has no arguments to check.
-    const requested = sweep ? [] : targetsWithin(root, pathArgs);
+    // be told they mistyped.
+    const requested = requestedTargets(root, pathArgs, options);
     const projection = await populateContext(root, logger);
-    const format = options.format ?? 'text';
     if (sweep) {
       // Every number in the map is decided in `@vibe-agent-toolkit/resources`.
       // This branch calls one function and formats what it returns.
@@ -419,31 +442,41 @@ export async function claudeContextCommand(
       );
       emit(contextEnvelope(root, answers), renderEnvelopeText(answers), format);
     }
-    // ⛔ Always 0. There is no threshold in this command and there is not going
-    // to be one — a number that fails a build is a number people learn to stop
-    // reading. The explicit exit matches every other leaf here and guarantees the
-    // process ends rather than waiting on whatever the population left behind.
+    // ⛔ Always 0 for an answer. There is no threshold in this command and there
+    // is not going to be one — a number that fails a build is a number people
+    // learn to stop reading. The explicit exit guarantees the process ends rather
+    // than waiting on whatever the population left behind.
     process.exit(ExitCode.OK);
   } catch (error) {
-    const label = failureLabel(error);
-    handleCommandError(error, logger, startTime, label, options.format);
+    // Coded at the cause, read here — never relabelled by where it was thrown.
+    const report = refusalReport(refusalCodeOf(error), error, CLAUDE_CONTEXT_GATE, NOTHING_FINISHED);
+    writeLegacyDocument('claude context', report, format, undefined);
+    process.exit(exitCodeForReport(report));
   }
 }
 
 /**
- * How a failure names itself on stderr — with its `code` when it is the
- * producer bug the query refuses to answer through.
+ * The paths a run answers for, checked before anything is populated.
  *
- * ⛔ Recognised by `code`, never by message. A reached memory file with no
- * derived harness facts means the answer would be wrong, so there is no answer:
- * it takes the same exit-2 ending as every other failure, and the code in the
- * label is what tells an operator (and a bug report) it is VAT's, not the tree's.
+ * `--all` answers the whole tree and emits no per-path document, so a path or
+ * `--discoverable` beside it would be silently dropped: refused instead.
  *
- * @param error - The value that was thrown
- * @returns The command name `handleCommandError` prints before the message
+ * @param root - The corpus root
+ * @param pathArgs - The path arguments, possibly empty
+ * @param options - The command's flags
+ * @returns The root-relative targets; empty under `--all`
  */
-function failureLabel(error: unknown): string {
-  return isVatError(error, HarnessFactsAbsentError.code) ? `claude context (${error.code})` : 'claude context';
+function requestedTargets(root: string, pathArgs: readonly string[], options: ClaudeContextOptions): string[] {
+  if (options.all !== true) return targetsWithin(root, pathArgs);
+  const ignored = [...pathArgs, ...(options.discoverable === true ? ['--discoverable'] : [])];
+  if (ignored.length > 0) {
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
+      `--all reports the whole tree and answers no named path, so it cannot take ${ignored.join(', ')}.`
+      + ' Drop --all to answer for named paths (with --discoverable if wanted), or drop the rest for the cost map.',
+    );
+  }
+  return [];
 }
 
 /**
@@ -930,7 +963,7 @@ function groupDigits(value: number): string {
  *   middle of it breaks every consumer
  * @returns The populated projection
  */
-async function populateContext(root: string, logger: Logger): Promise<Projection> {
+function populateContext(root: string, logger: Logger): Promise<Projection> {
   return withPopulationCache({ root }, async (cache) => {
     const gitTracker = await gitTrackerForProjectRoot(root);
     return buildClaudeContextPopulation({ root, ...populationWiring(logger, gitTracker, cache, root) });
@@ -938,22 +971,15 @@ async function populateContext(root: string, logger: Logger): Promise<Projection
 }
 
 /**
- * Write the document in the requested format.
+ * Publish the answer through the writer's one legacy serializer: the text
+ * rendering under `--format text`, the document itself otherwise.
  *
  * @param document - The yaml/json payload
  * @param text - The text rendering of the same answer
  * @param format - The selected format
  */
 function emit(document: unknown, text: string, format: ContextOutputFormat): void {
-  if (format === 'json') {
-    writeJsonOutput(document);
-    return;
-  }
-  if (format === 'yaml') {
-    writeYamlOutput(document);
-    return;
-  }
-  writeStdoutSync(text);
+  writeLegacyDocument('claude context', document, format, text);
 }
 
 /**
@@ -997,6 +1023,9 @@ function renderUnknownText(document: ContextUnknownDocument): string {
     '',
   ].join('\n');
 }
+
+/** Test seam: the non-answer's document and its text rendering. */
+export const __internal = { renderUnknownText, requestedTargets, unknownDocumentFor };
 
 /**
  * Render the answer for a person.

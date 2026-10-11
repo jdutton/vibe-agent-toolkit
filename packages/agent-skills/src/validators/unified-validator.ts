@@ -1,4 +1,4 @@
-import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { summarizeIssues, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { issueLocation, VatError } from '@vibe-agent-toolkit/utils';
 
 import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
@@ -13,23 +13,22 @@ import type { ValidationResult } from './types.js';
 /**
  * A single-error `unknown`-format result.
  *
- * Both call sites go through here so `issueCounts` is DERIVED from the issue
+ * Both call sites go through here so `status` and `summary` are DERIVED from the issue
  * rather than hand-written beside it — a literal `{ errors: 1, ... }` is a
  * second copy of the same fact and can drift from the array it describes.
  */
 function unknownFormatResult(
 	path: string,
-	summary: string,
+	description: string,
 	issue: ValidationIssue,
 ): ValidationResult {
 	const issues = [issue];
 	return {
 		path,
 		type: 'unknown',
-		status: 'error',
-		summary,
+		...summarizeIssues(issues),
+		description,
 		issues,
-		issueCounts: countBySeverity(issues),
 	};
 }
 

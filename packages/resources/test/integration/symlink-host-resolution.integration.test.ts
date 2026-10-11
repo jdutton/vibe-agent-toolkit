@@ -38,7 +38,7 @@ type ConditionRow = Awaited<ReturnType<typeof buildExtentContribution>>['contrib
 async function walkConditionAt(root: string): Promise<(path: string) => ConditionRow | undefined> {
   const { contribution } = await buildExtentContribution(
     root,
-    new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at)),
+    new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, [])),
   );
   return (path) => contribution.conditions.find((condition) => condition.path === path);
 }

@@ -1,0 +1,30 @@
+{
+  "status": "findings",
+  "examined": 5,
+  "findings": [
+    {
+      "code": "RESOURCES_CHECK_FAILED",
+      "severity": "error",
+      "message": "Budget exceeded for packages/lab",
+      "location": "packages/lab/docs/facets.md",
+      "scope": { "root": "packages/lab" }
+    },
+    {
+      "code": "RESOURCES_CHECK_FAILED",
+      "severity": "error",
+      "message": "Budget exceeded for packages/cli",
+      "location": "packages/cli/docs/audit.md",
+      "scope": { "root": "packages/cli" }
+    },
+    {
+      "code": "LINK_INTEGRITY_BROKEN",
+      "severity": "warning",
+      "message": "Link target does not exist",
+      "location": "docs/README.md"
+    }
+  ],
+  "summary": { "errors": 2, "warnings": 1, "info": 0 },
+  "data": {
+    "gate": { "passed": false, "rootsChecked": 2 }
+  }
+}

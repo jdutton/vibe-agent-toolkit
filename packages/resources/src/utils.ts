@@ -7,14 +7,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import {
-  isFilesystemAccessError,
+  fsFaultOf,
+  normalizePath,
+  realpathFrom,
+  type RealpathTable,
+  safePath,
   toForwardSlash,
   toForwardSlashAnyPlatform,
-  normalizePath,
-  safePath,
-  realpathFrom,
   toNfc,
-  type RealpathTable,
 } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
@@ -421,7 +421,7 @@ export function canonicalizeSync(filePath: string): string {
       // ancestor's namespace is a strictly better answer than the lexical one,
       // which is the ruling `FsLookupCache.realpath` documents and this
       // function must match. A bug is none of those and stays loud.
-      if (!isFilesystemAccessError(error)) throw error;
+      if (fsFaultOf(error) === undefined) throw error;
       const parent = toForwardSlash(path.dirname(candidate));
       // Fixpoint at a filesystem root, where `dirname` returns its own input.
       // Nothing left to walk, and nothing on the path resolved, so the lexical

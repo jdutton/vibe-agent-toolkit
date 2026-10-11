@@ -112,7 +112,7 @@ import { existsSync } from 'node:fs';
 
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { mapConcurrentFailingInOrder, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import {
   CLAUDE_WEB_REFERENCES_SUBDIR,
@@ -343,7 +343,7 @@ function routedSpelling(rel: string, target: PackagingTarget): string {
  *   production caller ever passed either: the only caller is the packager, via
  *   `checkMissingReferencedPaths`, and it genuinely does not know the plugin root
  *   — it packages one skill into its own output directory before any plugin is
- *   assembled. `vat build`'s `validateShippedPluginSkillLinks` does walk a whole
+ *   assembled. `vat build`'s `checkShippedPluginSkillLinks` does walk a whole
  *   plugin tree, and wiring this there was considered and REJECTED: it runs only
  *   `checkBrokenPackagedLinks`, its documented stance is the opposite one (a skill
  *   is a self-contained portable unit, so an escape from its own directory is a
@@ -366,8 +366,11 @@ export async function detectMissingReferencedPaths(
   const registryEntry = CODE_REGISTRY.PACKAGED_REFERENCED_PATH_MISSING;
   const issues: ValidationIssue[] = [];
 
-  for (const docFile of docFiles) {
-    const candidates = await bundledPathCandidates(docFile);
+  // Independent reads; a failure is the first by document order, and the issues
+  // are folded in that order.
+  const candidatesByDoc = await mapConcurrentFailingInOrder(docFiles, (docFile) => bundledPathCandidates(docFile));
+  for (const [index, docFile] of docFiles.entries()) {
+    const candidates = candidatesByDoc[index] ?? [];
     const missing = candidates.filter(
       rel => !bundleHas(skillDir, rel) && !bundleHas(skillDir, routedSpelling(rel, target)),
     );

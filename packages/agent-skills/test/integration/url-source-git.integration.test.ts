@@ -5,6 +5,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
 
 import { resolveUrlSource } from '../../src/skill-source/sources/url-source.js';
 import { makeBareRepoWithSkill, setupSkillSourceTestSuite } from '../skill-source/test-helpers.js';
+import { useScratchTmpdir } from '../test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test (and every child
+// a test spawns), so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-10-');
 
 // Integration tier: every test here spawns real git (bare repo fixtures plus a
 // clone per resolve). In the unit tier the fixture hook outran its 10 s timeout

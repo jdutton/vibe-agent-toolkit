@@ -73,14 +73,14 @@ describe('extent source selection', () => {
   it('falls back to the filesystem enumerator on a tree with no git repository', () => {
     // No env stubbing: this IS the default, and the default must not throw here.
     expect(gitExtentSelected(plainDirectory)).toBe(false);
-    expect(crawlSourceFor(plainDirectory).kind).toBe('filesystem');
+    expect(crawlSourceFor(plainDirectory, []).kind).toBe('filesystem');
   });
 
   it('selects the git enumerator inside a git working tree by default', () => {
     // The mirror. Without this the test above would also pass against a build
     // where the flip never happened, or where git selection was broken outright.
     expect(gitExtentSelected(repository)).toBe(true);
-    expect(crawlSourceFor(repository).kind).toBe('git');
+    expect(crawlSourceFor(repository, []).kind).toBe('git');
   });
 
   it('falls back when a .git marker exists but is not a repository git can read', () => {
@@ -89,17 +89,17 @@ describe('extent source selection', () => {
     // enumerator, which then threw — turning a directory that used to scan
     // fine into `status: error`. Both broken shapes must fall back, not fail.
     expect(gitExtentSelected(emptyMarker)).toBe(false);
-    expect(crawlSourceFor(emptyMarker).kind).toBe('filesystem');
+    expect(crawlSourceFor(emptyMarker, []).kind).toBe('filesystem');
 
     expect(gitExtentSelected(danglingPointer)).toBe(false);
-    expect(crawlSourceFor(danglingPointer).kind).toBe('filesystem');
+    expect(crawlSourceFor(danglingPointer, []).kind).toBe('filesystem');
   });
 
   it('opts back to the filesystem enumerator inside a repository when asked', () => {
     vi.stubEnv(EXTENT_SOURCE_ENV, EXTENT_SOURCE_FILESYSTEM);
 
     expect(gitExtentSelected(repository)).toBe(false);
-    expect(crawlSourceFor(repository).kind).toBe('filesystem');
+    expect(crawlSourceFor(repository, []).kind).toBe('filesystem');
   });
 
   it('still honours an explicit git request, and still cannot grant it without a repository', () => {
@@ -110,6 +110,6 @@ describe('extent source selection', () => {
 
     expect(gitExtentSelected(repository)).toBe(true);
     expect(gitExtentSelected(plainDirectory)).toBe(false);
-    expect(crawlSourceFor(plainDirectory).kind).toBe('filesystem');
+    expect(crawlSourceFor(plainDirectory, []).kind).toBe('filesystem');
   });
 });

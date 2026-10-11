@@ -33,7 +33,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 describe('inventory pipeline parity', () => {
 	it('produces at-least the same findings as the captured legacy snapshot', async () => {
-		const corpus = await getTestFixturesPath();
+		const corpus = getTestFixturesPath();
 		const snapshotPath = safePath.join(__dirname, '../fixtures/legacy-audit-snapshot.json');
 
 		const legacy = JSON.parse(readFileSync(snapshotPath, 'utf-8')) as FindingTuple[];

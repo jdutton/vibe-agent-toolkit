@@ -14,7 +14,6 @@
  */
 
 import { existsSync, statSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import {
@@ -31,25 +30,33 @@ import {
   CODE_REGISTRY,
   runSingleUnitValidation,
   runValidationFramework,
+  summarizeIssues,
   type AllowUsageLedger,
   type AllowRecord,
   type IssueCode,
+  type SeverityCounts,
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
 import {
+  classifyFsFault,
   findProjectRoot,
+  type FsSide,
+  isNotARegularFileError,
   issueLocation,
+  mapWithConcurrency,
   normalizedTmpdir,
   toForwardSlash,
   toForwardSlashAnyPlatform,
   safePath,
 } from '@vibe-agent-toolkit/utils';
-import { type DirectoryRefusal, DirectoryListingRefusedError } from '@vibe-agent-toolkit/utils/crawl';
+import { type DirectoryRefusal, settleCrawlRefusal, type UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
+import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { collectPreBuildGlobFindings, preBuildGlobFindingsToIssues } from '../files-config.js';
+import { isSkillPackagingInputError } from '../packaging-errors.js';
 import {
   conventionalSuiteProbe,
   partitionTestInputFileEntries,
@@ -132,15 +139,23 @@ export interface PackagingValidationResult {
   skillName: string;
 
   /**
-   * Gate verdict: `error` iff there is an active error. TWO-valued on purpose —
-   * this is the build/validate gate, and a warning does not fail a build.
+   * `findings` when {@link PackagingValidationResult.allErrors} holds anything,
+   * `ok` when it is empty — `resultStatus(allErrors)` from
+   * `@vibe-agent-toolkit/schema`, the one derivation every library result and
+   * `buildReport` share.
    *
-   * It therefore says NOTHING about warnings or info. Read {@link
-   * PackagingValidationResult.allErrors} for the distribution — via
-   * `countBySeverity(result.allErrors)` from `@vibe-agent-toolkit/schema`,
-   * which is the same collapse every other lane uses.
+   * It is NOT the build gate. "Does this fail a build?" is `summary.errors > 0`
+   * — a warning does not fail a build, and an info-only result is `findings`.
    */
-  status: 'success' | 'error';
+  status: 'ok' | 'findings';
+
+  /**
+   * Per-severity counts of {@link PackagingValidationResult.allErrors}
+   * (`countBySeverity`). Anything that appends to `allErrors` after
+   * construction (the CLI's `applyConfigVerdicts`) re-derives `status` and
+   * `summary` in the same step, so the counts never go stale.
+   */
+  summary: SeverityCounts;
 
   /**
    * THE container: every emitted issue after severity resolution, stored once.
@@ -154,8 +169,8 @@ export interface PackagingValidationResult {
    * that serializes a result spreads the whole object, each issue record —
    * including its paragraph-length `fix` and `reference` prose — was written to
    * the output document twice. Derive the partition instead:
-   * {@link activeErrorsOf} / {@link activeWarningsOf}, or `countBySeverity` /
-   * `calculateValidationStatus` from `@vibe-agent-toolkit/schema`.
+   * {@link activeErrorsOf} / {@link activeWarningsOf}, or read
+   * {@link PackagingValidationResult.summary} for the counts.
    */
   allErrors: ValidationIssue[];
 
@@ -196,7 +211,7 @@ type WithAllErrors = Pick<PackagingValidationResult, 'allErrors'>;
  * The active errors: emitted, resolved-severity `error`.
  *
  * Derived on read, never stored on the result — see the `allErrors` doc comment
- * for why. Equivalent to `result.status === 'error'` when all you need is the
+ * for why. Equivalent to `result.summary.errors > 0` when all you need is the
  * gate bit; use this only when you need the issues themselves.
  */
 export function activeErrorsOf(result: WithAllErrors): ValidationIssue[] {
@@ -257,6 +272,47 @@ function validateFilesConfig(
 }
 
 /**
+ * What to do about a bundled file the OS will not read: a named pipe, socket or
+ * device has no permissions to fix — only a regular file to put in its place.
+ */
+function unreadableRemedy(error: unknown): string {
+  return isNotARegularFileError(error)
+    ? 'Link a regular file in its place (a named pipe, socket or device has no content to bundle), or remove the link.'
+    : "Check the file's permissions and ownership, and that every directory above it is traversable.";
+}
+
+/**
+ * A bundled markdown file's text, or the finding that replaces it when the OS
+ * will not read it — `LINK_TARGET_UNREADABLE` at that file, the code the walker
+ * gives a link target it cannot stat. The fault is classified once, on `side`:
+ * one the skill's source owns (`isSkillPackagingInputError`) is a finding against
+ * the skill; a capacity fault, or one on VAT's own output, is the run's — carried
+ * as the failure. Read through `readTextContent`, which refuses a named pipe
+ * unread (`EFTYPE`) — a bare `readFile` blocked on one until a writer appeared,
+ * hanging the build.
+ */
+async function readBundledMarkdown(file: string, location: string, side: FsSide): Promise<BundledMarkdownRead> {
+  try {
+    return { text: (await readTextContent(file)).text };
+  } catch (error) {
+    // Carried, not thrown: reads run in parallel, and the failure the caller
+    // raises must be the first in bundle order, not the first to finish.
+    const fault = classifyFsFault(error, { side, origin: 'content', action: `read linked file ${location}`, path: file });
+    if (!isSkillPackagingInputError(fault)) return { failure: fault };
+    return {
+      issue: registryIssueAt(
+        'LINK_TARGET_UNREADABLE',
+        `Linked file ${location} is bundled, but it could not be read: ${(error as Error).message}. ${unreadableRemedy(error)}`,
+        location,
+      ),
+    };
+  }
+}
+
+/** One bundled markdown read: its text, the finding that replaces it, or a failure that refuses the run. */
+type BundledMarkdownRead = { text: string } | { issue: ValidationIssue } | { failure: unknown };
+
+/**
  * Create a validation issue from a code-registry code with a bespoke message,
  * anchored at a project-relative `location`.
  *
@@ -303,6 +359,14 @@ export interface CrawlRegistryOptions {
    * an environment, so a library caller that passes nothing keeps the walk.
    */
   populationSource?: ResourcePopulationSource | undefined;
+  /**
+   * What the calling verb writes — its outputs and their staging — or `[]` for a verb that
+   * only reads the project: the crawl's one declaration of which side a fault is on (on, in
+   * or holding an output: the destination's; anything else the project's content). Required:
+   * only the caller knows. Part of the memo key: two callers that disagree must not share one
+   * crawl.
+   */
+  outputs: readonly string[];
 }
 
 /**
@@ -332,17 +396,20 @@ interface MemoizedRegistry {
  * @param refusals - What the one crawl of `projectRoot` was refused
  * @param unreadable - This caller's ruling
  * @param projectRoot - The crawl's root, for the refuse sentence
+ * @param outputs - What the crawl's caller writes: a refusal on or under one is the destination's, anything else the project's content (`source`)
  */
 function replayRefusals(
   refusals: readonly DirectoryRefusal[],
   unreadable: RegistryUnreadablePolicy,
   projectRoot: string,
+  outputs: readonly string[],
 ): void {
   for (const refusal of refusals) {
-    if (unreadable === 'refuse') {
-      throw new DirectoryListingRefusedError(refusal, { root: projectRoot, remedy: listingRefusalRemedy(projectRoot) });
-    }
-    unreadable.degrade(refusal);
+    // The crawl's own policy, replayed: on what the verb writes the destination's, anything else the project's content.
+    const policy: UnreadablePolicy = unreadable === 'refuse'
+      ? { refuse: { root: projectRoot, remedy: listingRefusalRemedy(projectRoot), side: 'source' } }
+      : unreadable;
+    settleCrawlRefusal(policy, refusal, outputs);
   }
 }
 
@@ -403,13 +470,15 @@ export async function crawlAndResolveRegistry(
   projectRoot: string,
   options: CrawlRegistryOptions,
 ): Promise<ResourceRegistry> {
-  const { populationSource, unreadable } = options;
+  const { populationSource, unreadable, outputs } = options;
   const cache = registryCacheFor(populationSource);
-  const key = toForwardSlash(safePath.resolve(projectRoot));
+  // The outputs are in the key: the crawl that settles a memo entry classifies a fault on its
+  // caller's outputs as the destination's, and a rejected crawl is memoized too.
+  const key = `${JSON.stringify(outputs.map((output) => toForwardSlash(safePath.resolve(output))))}:${toForwardSlash(safePath.resolve(projectRoot))}`;
   const cached = cache.get(key);
   if (cached !== undefined) {
     const { registry, refusals } = await cached;
-    replayRefusals(refusals, unreadable, projectRoot);
+    replayRefusals(refusals, unreadable, projectRoot, outputs);
     return registry;
   }
   // The PROMISE is cached, not the resolved value, so two overlapping requests
@@ -428,6 +497,7 @@ export async function crawlAndResolveRegistry(
         baseDir: projectRoot,
         include: ['**/*.md', '**/*.html', '**/*.htm'],
         unreadable: recorded,
+        outputs,
         // Enumeration only. `ResourceRegistry.crawl` re-applies the include set
         // above — and the crawl's default exclude — to whatever the source
         // offers, through the same compiled matcher the walk itself uses, so a
@@ -575,20 +645,33 @@ export function resetPackagingRegistryCache(): void {
  * @param skillPath - Path to SKILL.md
  * @param projectRoot - The root the fallback crawl covers
  * @param shared - The batching caller's context, if any
+ * @param outputs - What the calling verb writes: the crawl's one declaration of which side a fault is on
  * @returns A registry whose links are resolved and that covers `skillPath`
  */
-async function registryForSkill(
+function registryForSkill(
   skillPath: string,
   projectRoot: string,
   shared: SkillValidationSharedContext | undefined,
+  outputs: readonly string[],
 ): Promise<ResourceRegistry> {
   if (shared?.registry !== undefined && registryCoversSkill(shared.registry, skillPath)) {
-    return shared.registry;
+    return Promise.resolve(shared.registry);
   }
   return crawlAndResolveRegistry(projectRoot, {
+    outputs,
     unreadable: shared === undefined ? 'refuse' : shared.unreadable,
     ...(shared?.populationSource !== undefined && { populationSource: shared.populationSource }),
   });
+}
+
+/**
+ * What the calling verb writes, for the validator's own crawl: the shared context's
+ * declaration, or — for a single-skill lane with no context — the context's: a `built`
+ * skill is this run's output (its directory), a `source` skill's project is only read.
+ */
+function crawlOutputs(context: 'source' | 'built', skillPath: string, shared: SkillValidationSharedContext | undefined): readonly string[] {
+  if (shared !== undefined) return shared.outputs;
+  return context === 'built' ? [dirname(skillPath)] : [];
 }
 
 /**
@@ -661,6 +744,15 @@ export interface SkillValidationSharedContext {
    * separately and the run pays a crawl per skill.
    */
   populationSource?: ResourcePopulationSource;
+  /**
+   * What the CALLING VERB writes, for the validator's own crawl: `vat skills build` its
+   * `dist/skills` and staging, the packager's post-build check the bundle it wrote, so a
+   * fault on them is the run's (`RUN_INCOMPLETE`); `[]` for a verb that only reads
+   * (`vat skills validate`, `vat audit`). Required: only the calling verb knows. (A caller
+   * with NO shared context is a single-skill lane, and the context decides: `built` → the
+   * skill's own directory.)
+   */
+  outputs: readonly string[];
   /** Pre-populated tracker for the repo that contains the skill. */
   gitTracker?: GitTracker;
   /**
@@ -804,8 +896,9 @@ export async function validateSkillForPackaging(
   const locationRoot = shared?.locationRoot ?? projectRoot;
   const skillLocation = issueLocation(skillPath, locationRoot);
 
-  // Parse SKILL.md
-  const parseResult = await parseFileCached(skillPath, 'markdown');
+  // Parse SKILL.md. A `built` skill is VAT's own output re-read: a refused read is the
+  // destination's, never the user's input.
+  const parseResult = await parseFileCached(skillPath, 'markdown', { side: context === 'built' ? 'destination' : 'source' });
   // The parser already decoded these bytes; a second whole-file read of the same
   // path would only add a syscall and a TOCTOU window. `content` is the raw
   // source verbatim, so fenced code blocks reach `runCompatDetectors` intact.
@@ -847,7 +940,8 @@ export async function validateSkillForPackaging(
   // per-file markdown parse is paid for exactly once across the batch. Only
   // reuse when the shared registry covers this skill's projectRoot; otherwise
   // fall back to a fresh crawl to avoid leaking resources across roots.
-  const registry = await registryForSkill(skillPath, projectRoot, shared);
+  // A `built` skill sits in output this run wrote inside the project: the project root is then a destination.
+  const registry = await registryForSkill(skillPath, projectRoot, shared, crawlOutputs(context, skillPath, shared));
 
   const skillResource = registry.getResource(safePath.resolve(skillPath));
   // Only the entries the PACKAGER will actually copy defer a link: an entry pointing
@@ -961,23 +1055,31 @@ export async function validateSkillForPackaging(
   // reachable bundled doc for non-portable asset references (the agent reads
   // and copies invocations from reference files too, not just SKILL.md).
   let totalLines = skillLines;
-  for (const bundledFile of bundledFiles) {
-    if (bundledFile.endsWith('.md')) {
-      const content = await readFile(bundledFile, 'utf-8');
-      totalLines += content.split('\n').length;
-      // Anchor contract: never hand a producer an absolute path as `location`.
-      const bundledLocation = issueLocation(bundledFile, locationRoot);
-      collectNonPortableAssetReferenceIssues(content, bundledLocation, rawIssues);
-      collectNonPortableCommandIssues(content, bundledLocation, rawIssues);
-      // Whole-file bytes, frontmatter included — safe because the detector
-      // strips leading frontmatter itself. It did not always, and this lane was
-      // the half of the invariant nobody was enforcing: a bundled file carrying
-      // `allowed-tools: [mcp__x__do_thing]` seeded the vocabulary the SKILL.md
-      // lane's comment (below) says must come from prose, then fired on its own
-      // body. Pinned by "does not let a bundled file's allowed-tools frontmatter
-      // supply the vocabulary" in packaging-validator.test.ts.
-      collectUnqualifiedMcpToolIssues(content, bundledLocation, rawIssues);
+  const bundledMarkdown = bundledFiles.filter((file) => file.endsWith('.md'));
+  // Anchor contract: never hand a producer an absolute path as `location`.
+  const bundledLocations = bundledMarkdown.map((file) => issueLocation(file, locationRoot));
+  // Independent reads, folded below in bundle order.
+  const bundledReads = await mapWithConcurrency(bundledMarkdown, (file, index) =>
+    readBundledMarkdown(file, bundledLocations[index] ?? '', context === 'built' ? 'destination' : 'source'));
+  for (const [index, read] of bundledReads.entries()) {
+    const bundledLocation = bundledLocations[index] ?? '';
+    if ('failure' in read) throw read.failure;
+    if ('issue' in read) {
+      rawIssues.push(read.issue);
+      continue;
     }
+    const content = read.text;
+    totalLines += content.split('\n').length;
+    collectNonPortableAssetReferenceIssues(content, bundledLocation, rawIssues);
+    collectNonPortableCommandIssues(content, bundledLocation, rawIssues);
+    // Whole-file bytes, frontmatter included — safe because the detector
+    // strips leading frontmatter itself. It did not always, and this lane was
+    // the half of the invariant nobody was enforcing: a bundled file carrying
+    // `allowed-tools: [mcp__x__do_thing]` seeded the vocabulary the SKILL.md
+    // lane's comment (below) says must come from prose, then fired on its own
+    // body. Pinned by "does not let a bundled file's allowed-tools frontmatter
+    // supply the vocabulary" in packaging-validator.test.ts.
+    collectUnqualifiedMcpToolIssues(content, bundledLocation, rawIssues);
   }
 
   const excludedDetails = deduplicateExcludedReferences(excludedReferences, skillPath);
@@ -1029,7 +1131,7 @@ export async function validateSkillForPackaging(
 
   return {
     skillName,
-    status: framework.hasErrors ? 'error' : 'success',
+    ...summarizeIssues(framework.emitted),
     allErrors: framework.emitted,
     ignoredErrors: framework.allowed,
     observations,

@@ -9,8 +9,8 @@ import {
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { packageSkill } from '../../src/skill-packager.js';
 import { validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
+import { packageInPlace } from '../test-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Link-code constants (string literals avoids importing internal types)
@@ -153,7 +153,9 @@ async function runBothPaths(
 
   // Build path — no injected gitTracker; real git check-ignore runs.
   // packageSkill throws if a files: source does not exist — our source DOES exist (gitignored ≠ absent).
-  const buildResult = await packageSkill(skillPath, {
+  // In place: the build's findings are the subject, whether or not its checks pass (`packageSkill`
+  // lands only a package that passed them).
+  const buildResult = await packageInPlace(skillPath, {
     outputPath,
     files: FILES_CONFIG,
   });

@@ -435,16 +435,6 @@ function validateNameRules(name: string): ValidationIssue[] {
 		});
 	}
 
-	if (containsXmlTag(name)) {
-		issues.push({
-			severity: 'error',
-			code: 'SKILL_NAME_XML_TAGS',
-			message: 'Name contains XML tags',
-			field: FRONTMATTER_NAME_FIELD,
-			fix: 'Remove the XML/HTML tag from the name',
-		});
-	}
-
 	return issues;
 }
 

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import { escapeRegExpLiteral } from './regexp-escape.js';
-import { IssueCodeSchema, IssueSeveritySchema, type IssueCode, type IssueSeverity } from './validation-codes.js';
+import { FindingCodeSchema, IssueSeveritySchema, RefusalCodeSchema, type FindingCode, type IssueSeverity } from './validation-codes.js';
 import { CUSTOM_CHECK_CODE_PATTERN_SOURCE, type CustomCheckCode } from './validation-issue.js';
 
 
@@ -37,14 +37,19 @@ export type AllowEntry = z.infer<typeof AllowEntrySchema>;
 // The explicit `| undefined` is required by `exactOptionalPropertyTypes`, which
 // this repo enables: Zod infers an optional field as `T | undefined`, and without
 // the union the annotation is narrower than the schema it describes.
+//
+// Keyed by `FindingCode`, not every registered code: a refusal-kind code (the
+// run could not do its job) is never a config key — see `severityKeyRefusal`.
 export interface ValidationConfig {
-  severity?: Partial<Record<IssueCode | CustomCheckCode, IssueSeverity>> | undefined;
-  allow?: Partial<Record<IssueCode, AllowEntry[]>> | undefined;
+  severity?: Partial<Record<FindingCode | CustomCheckCode, IssueSeverity>> | undefined;
+  allow?: Partial<Record<FindingCode, AllowEntry[]>> | undefined;
 }
 
 /**
- * The key space of `validation.severity`: every shipped registry code, **plus**
- * the `CUSTOM:<name>` namespace `resources.checks` mints.
+ * The key space of `validation.severity`: every shipped FINDING-kind registry
+ * code, **plus** the `CUSTOM:<name>` namespace `resources.checks` mints. A
+ * refusal-kind code is not in it: a refusal reports that the run could not do
+ * its job, and that has no legitimate `ignore`.
  *
  * ## Why this is not the enum, and not a bare `z.string()` either
  *
@@ -78,8 +83,9 @@ export interface ValidationConfig {
  *
  * One `z.string().regex(...)` over an alternation of the registry codes and the
  * `CUSTOM:` namespace is a shape that parser CAN emit, so both contracts say the
- * same thing. The alternation is composed from `IssueCodeSchema.options`, so a
- * new code joins it with no human action.
+ * same thing. The alternation is composed from `FindingCodeSchema.options`, so
+ * a new finding code joins it with no human action — and a new refusal code
+ * stays out of it with none either.
  *
  * The cost, stated plainly: `propertyNames` is now a `pattern` rather than an
  * `enum`, so an editor can flag a bad key but cannot complete a good one. That
@@ -97,8 +103,8 @@ export interface ValidationConfig {
  * A key shaped like a shipped registry code — `SCREAMING_SNAKE_CASE`.
  *
  * Derived from the SHAPE rather than listed, so it cannot fall behind the
- * registry or behind `NonOverridableCode`. It exists only to tell two refusals
- * apart in the MESSAGE; membership decisions still belong to `IssueCodeSchema`
+ * registry or behind `NonOverridableCode`. It exists only to tell refusals
+ * apart in the MESSAGE; membership decisions still belong to `FindingCodeSchema`
  * and {@link CUSTOM_CHECK_CODE_PATTERN_SOURCE}.
  */
 const REGISTRY_SHAPED_KEY = /^[A-Z][\dA-Z_]*$/;
@@ -106,38 +112,33 @@ const REGISTRY_SHAPED_KEY = /^[A-Z][\dA-Z_]*$/;
 /**
  * Explain a `severity` key this schema will not take.
  *
- * 🪤 **Two refusals, and conflating them sent half the readers to the wrong
- * place.** The message used to be one sentence for every rejected key: *"a
- * custom severity key must be `CUSTOM:<name>`, naming a check declared under
- * resources.checks"*. An adopter who wrote `RESOURCE_CHECK_BROKEN: ignore` —
- * having read three docs that describe it at length — was told they had
- * misspelled a *custom* key, which is not what happened and not what to do
- * about it. A registry-shaped key that is not in the registry is either a typo
- * or a code that is deliberately unsilenceable, and both readings are worth
- * more than a sentence about `CUSTOM:`.
+ * 🪤 **Two refusals, told apart.** A registry-shaped key that is not accepted
+ * is a typo or a code that is deliberately unsilenceable — never a misspelled
+ * *custom* key, which is what one shared sentence about `CUSTOM:` told an
+ * adopter who had written `RESOURCE_CHECK_BROKEN: ignore`.
  *
- * ⛔ **It no longer claims the name must be DECLARED.** The old wording ended
- * "naming a check declared under resources.checks" and nothing enforced it —
- * `isCustomCheckCode` tests the prefix and nothing else, so
- * `CUSTOM:a-check-that-does-not-exist` parsed, overrode nothing, and said
- * nothing. Enforcing it here is impossible (this schema cannot see
- * `resources.checks`) and enforcing it at the parent would be a new breaking
- * refusal, so the check moved to a run-time WARNING in
- * `vat resources check` — see `warnUndeclaredOverrides` there. A message must
- * not promise a guard that does not exist: an adopter who believes a stale
- * override would be refused stops looking for one.
+ * ⛔ **It does not claim the `CUSTOM:` name must be DECLARED.** Nothing here can
+ * enforce that (this schema cannot see `resources.checks`); an undeclared
+ * override is a run-time WARNING in `vat resources check`
+ * (`warnUndeclaredOverrides`). A message must not promise a guard that does
+ * not exist.
  *
  * @param code - The rejected key
  * @returns What to tell the adopter
  */
 function severityKeyRefusal(code: string): string {
+  if (RefusalCodeSchema.safeParse(code).success) {
+    return `\`${code}\` is a refusal code: it reports that a run could not do its job — for`
+      + ' `RESOURCE_CHECK_BROKEN`, that a declared check STOPPED RUNNING — and a refusal is'
+      + ' unsilenceable by construction, so it is never a `validation.severity` or'
+      + ' `validation.allow` key. You can downgrade or ignore a check with `CUSTOM:<its-name>`;'
+      + ' you cannot downgrade the news that it stopped checking.';
+  }
   if (REGISTRY_SHAPED_KEY.test(code)) {
     return `\`${code}\` is not a severity key this config accepts. Either it is a misspelled`
       + ' registry code, or it is one of the codes deliberately kept outside the override'
-      + ' framework — `RESOURCE_CHECK_BROKEN` among them, which reports that a declared check'
-      + ' STOPPED RUNNING and is unsilenceable by construction so a renamed column cannot end a'
-      + ' gate quietly. You can downgrade or ignore a check with `CUSTOM:<its-name>`; you cannot'
-      + ' downgrade the news that it stopped checking.';
+      + ' framework (docs/validation-codes.md, "Codes outside the overridable framework").'
+      + ' You can downgrade or ignore a check with `CUSTOM:<its-name>`.';
   }
   return 'a custom severity key must be spelled `CUSTOM:<name>`, where `<name>` is a check\'s key'
     + ' under resources.checks';
@@ -152,7 +153,7 @@ function severityKeyRefusal(code: string): string {
 // eslint-disable-next-line security/detect-non-literal-regexp -- composed from the registry's own code names and a module constant; no input reaches it
 const SEVERITY_KEY_PATTERN = new RegExp(
   `^(?:${[
-    ...IssueCodeSchema.options.map((code) => escapeRegExpLiteral(code)),
+    ...FindingCodeSchema.options.map((code) => escapeRegExpLiteral(code)),
     CUSTOM_CHECK_CODE_PATTERN_SOURCE,
   ].join('|')})$`,
 );
@@ -187,5 +188,6 @@ export const ValidationConfigSchema: z.ZodType<ValidationConfig, z.ZodTypeDef, u
   // nothing, and report nothing — the adopter would believe a path was excused
   // while every finding under it still failed their build. A loud config error
   // is the honest answer until the check lane actually runs the allow filter.
-  allow: z.record(IssueCodeSchema, z.array(AllowEntrySchema)).optional(),
+  // Finding codes only, like `severity`: a refusal cannot be waived per path.
+  allow: z.record(FindingCodeSchema, z.array(AllowEntrySchema)).optional(),
 }).strict();

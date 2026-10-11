@@ -56,7 +56,7 @@ runs:
     # ⚠️ The derived value must be a FULL x.y.z, and this step is where that is
     # decided. node-floor.yml compares it to `process.versions.node` for exact
     # string equality, so a legal-but-partial floor — `>=22`, `22.x`,
-    # `>=22.13.0 <25` — would derive to something setup-node happily resolves
+    # `>=22.16.0 <25` — would derive to something setup-node happily resolves
     # to a different patch release, and that assertion would then fail saying
     # the RUNNER is wrong. Refusing here is the only place the message can name
     # the real cause.
@@ -89,7 +89,7 @@ runs:
           # message, its later lines ARE workflow commands.
           DECLARED_LINE=$(printf '%s' "$DECLARED" | head -1)
           FLOOR_LINE=$(printf '%s' "$FLOOR" | head -1)
-          echo "::error::Root package.json declares engines.node \"$DECLARED_LINE\", which derives to \"$FLOOR_LINE\" — not a full x.y.z version. setup-node would resolve that to some other patch release and the floor assertion would then fail while blaming the runner. Declare an exact floor, e.g. \">=22.13.0\"."
+          echo "::error::Root package.json declares engines.node \"$DECLARED_LINE\", which derives to \"$FLOOR_LINE\" — not a full x.y.z version. setup-node would resolve that to some other patch release and the floor assertion would then fail while blaming the runner. Declare an exact floor, e.g. \">=22.16.0\"."
           exit 1
         fi
         echo "Declared floor: $FLOOR"

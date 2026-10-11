@@ -46,8 +46,8 @@ export interface PatternDefinition {
 export interface Observation {
   /** Validation code (e.g. 'CAPABILITY_LOCAL_SHELL'). */
   code: string;
-  /** Human-readable claim. */
-  summary: string;
+  /** Human-readable claim, one sentence. Never `summary`: that name always means severity counts. */
+  description: string;
   /** Payload specific to the observation code. */
   payload?: Record<string, unknown>;
   /** patternId[] of evidence records that support this observation. */

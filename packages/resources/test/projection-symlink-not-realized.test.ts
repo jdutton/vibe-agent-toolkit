@@ -291,7 +291,7 @@ describe.skipIf(CAPABILITY === null)('a link git records whose checkout is a pla
 
     const { contribution } = await buildExtentContribution(
       root,
-      new FilesystemExtentContributor((at) => new GitCrawlSource(at)),
+      new FilesystemExtentContributor((at) => new GitCrawlSource(at, [])),
     );
     const row = contribution.conditions.find((condition) => condition.path === 'flat.md');
 
@@ -327,7 +327,7 @@ describe.skipIf(CAPABILITY === null)('an absolute in-root target spelled through
 
     const { contribution } = await buildExtentContribution(
       root,
-      new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at)),
+      new FilesystemExtentContributor((at) => new FilesystemCrawlSource(at, [])),
     );
     const row = contribution.conditions.find((condition) => condition.path === 'absolute.md');
 

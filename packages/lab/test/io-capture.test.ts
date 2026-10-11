@@ -49,6 +49,7 @@ import {
   IoBodySchema,
   type IoCommandStats,
 } from '../src/facets/io/types.js';
+import { type ArmEnvironment, EMPTY_ARM_ENVIRONMENT } from '../src/harness/arm-env.js';
 import type { MeasuredCommandSpec } from '../src/harness/commands.js';
 import type { ResolvedSubject } from '../src/harness/types.js';
 
@@ -252,8 +253,12 @@ function trace(probe: Probe): TraceLine[] {
  */
 async function capture(
   probe: Probe,
-  overrides: Partial<CaptureIoOptions> = {},
+  overrides: Omit<Partial<CaptureIoOptions>, 'env'> & {
+    env?: ArmEnvironment['set'];
+    unset?: ArmEnvironment['unset'];
+  } = {},
 ): Promise<ReportEnvelope<IoBody>> {
+  const { env, unset, ...rest } = overrides;
   return captureIo({
     instrument: probe.instrument,
     subject: subjectAt(probe.cwd),
@@ -262,8 +267,8 @@ async function capture(
     cache: 'warm',
     capturedAt: CAPTURED_AT,
     counterPath,
-    ...overrides,
-    env: { [TRACE_ENV]: tracePath(probe), ...overrides.env },
+    ...rest,
+    env: { set: { [TRACE_ENV]: tracePath(probe), ...env }, unset: unset ?? [] },
   });
 }
 
@@ -393,15 +398,34 @@ describe('captureIo — the arm is read from what the subject PRINTED', () => {
     expect(row.extentSource).toBeNull();
   });
 
-  it('reports both null, and does NOT fail the row, when the subject printed YAML', async () => {
+  it('reads the lane and extent source the subject printed as YAML, and does not fail the row', async () => {
     const probe = setupProbe(PREFIX);
 
-    // The default `resources-scan` spec prints YAML. The `lane:` line is right
-    // there and this facet must not read it: a YAML parser is a dependency the
-    // lab does not carry, and a call count is a measurement whether or not the
-    // output named its arm. The row is honest about not knowing, not failed.
+    // The default `resources-scan` spec prints YAML. Every reader in the lab
+    // goes through one document reader (`document-shape.ts`) that parses JSON
+    // first, then YAML, so the `lane:` line is read here exactly as it would be
+    // from the JSON shape above — and a call count is a measurement whether or
+    // not the output named its arm, so the row is not failed either way.
     const row = onlyRow(
       await capture(probe, { runs: 1, env: { [PROBE_STDOUT_ENV]: JSON.stringify([SCAN_YAML]) } }),
+    );
+
+    expect(row.failed).toBe(false);
+    expect(row.userCalls).toBe(DEFAULT_COUNT);
+    expect(row.lane).toBe('projection');
+    expect(row.extentSource).toBe('git');
+  });
+
+  it('reports both null, and does NOT fail the row, when the subject printed neither JSON nor YAML', async () => {
+    const probe = setupProbe(PREFIX);
+
+    // Genuinely unparseable output — not a document this reader can classify
+    // at all — is the case that is still honestly "did not say", and it must
+    // not fail the row: a call count is a measurement whether or not the
+    // output named its arm.
+    const notADocument = 'a: [1, 2\n';
+    const row = onlyRow(
+      await capture(probe, { runs: 1, env: { [PROBE_STDOUT_ENV]: JSON.stringify([notADocument]) } }),
     );
 
     expect(row.failed).toBe(false);
@@ -547,6 +571,24 @@ describe('captureIo — the counter preload', () => {
     ]);
   });
 
+  it('honours an arm that UNSETS an inherited NODE_OPTIONS — the preload stands alone', async () => {
+    const probe = setupProbe(PREFIX);
+    const original = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = '--no-warnings';
+
+    try {
+      await capture(probe, { runs: 1, unset: ['NODE_OPTIONS'] });
+    } finally {
+      if (original === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = original;
+    }
+
+    // Reading the base from `process.env` would resurrect the value the arm
+    // removed, underneath the preload — the child would run with a setting the
+    // arm said it must not have.
+    expect(trace(probe).map((line) => line.nodeOptions)).toEqual([preloadOf(counterPath)]);
+  });
+
   it('CONTROL: with no NODE_OPTIONS anywhere, the preload stands alone', async () => {
     const probe = setupProbe(PREFIX);
     const original = process.env.NODE_OPTIONS;
@@ -650,6 +692,7 @@ describe('captureIo — the counter has to exist', () => {
         commands: [PASSES],
         runs: 1,
         cache: 'warm',
+        env: EMPTY_ARM_ENVIRONMENT,
         capturedAt: CAPTURED_AT,
       }),
     ).rejects.toThrow(/counter\.cjs/);

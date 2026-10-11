@@ -46,7 +46,7 @@ import { BUSY_LOAD, COORDINATE, makeReport, reportMissingCommandField } from './
 const OTHER_SUBJECT = { id: 'other-project', source: '/srv/other-project' };
 
 /** A second instrument build, so axis C can be moved. */
-const OTHER_INSTRUMENT = { version: '0.1.43', commit: '2'.repeat(40) };
+const OTHER_INSTRUMENT = { version: '0.1.43', commit: '2'.repeat(40), dirty: false, closure: null };
 
 /**
  * An io report at a coordinate varied from the shared baseline.

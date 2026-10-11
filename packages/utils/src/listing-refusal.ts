@@ -18,8 +18,12 @@
  * a HIGH. A required field is what makes `tsc` enumerate the callers.
  */
 
+import { fsFaultOf } from './errors/errno-table.js';
+import { FS_FAULT_CODE, FsFaultError, type FsSide } from './errors/fs-fault.js';
 import { VatError } from './errors/vat-error.js';
 import { type DirectoryRefusal, transientRefusalClause } from './fs-utils.js';
+import { canonicalPath } from './path-containment.js';
+import { relativeEscapesRoot } from './path-core.js';
 import { safePath, toForwardSlash } from './path-utils.js';
 
 /**
@@ -41,6 +45,15 @@ export interface RefuseListingContext {
    * differs per caller and is why the crawler cannot supply it.
    */
   remedy: string;
+  /**
+   * Which side of the calling verb the listed directories are on — an input it reads
+   * (`source`), an output it wrote (`destination`), or VAT's own scratch (`environment`).
+   * Required: the refusal table decides the refusal by it, and only the caller knows which
+   * tree it is listing. In a CRAWL, a directory that is (or lies in, or holds) one of the
+   * crawl's declared `outputs` is the destination's whatever this says: the crawl's
+   * `outputs` are the one declaration of what the verb writes ({@link settleCrawlRefusal}).
+   */
+  side: FsSide;
 }
 
 /**
@@ -67,14 +80,35 @@ export type UnreadablePolicy =
 /**
  * Thrown by a listing under `{ refuse }` when a directory refused to be
  * listed. The message is the adopter's sentence — see {@link refusedListingMessage}.
+ *
+ * Coded `FS_FAULT` and carrying the classified fault as its `cause` (side from
+ * the caller's context, class from the errno), so the refusal is the schema
+ * table's for that side and class — never a code of its own. An errno outside
+ * the classifier's table carries no cause: it is not known to be the
+ * filesystem's, so it stays a defect report.
  */
 export class DirectoryListingRefusedError extends VatError {
   readonly refusal: DirectoryRefusal;
 
   constructor(refusal: DirectoryRefusal, context: RefuseListingContext) {
-    super('DIRECTORY_LISTING_REFUSED', refusedListingMessage(refusal, context));
+    super(FS_FAULT_CODE, refusedListingMessage(refusal, context), { cause: classifiedListingFault(refusal, context.side) });
     this.refusal = refusal;
   }
+}
+
+/** The classified fault a refused listing stands for, or `undefined` for an errno outside the table. */
+function classifiedListingFault(refusal: DirectoryRefusal, side: FsSide): FsFaultError | undefined {
+  const facts = fsFaultOf({ code: refusal.code });
+  if (facts === undefined) return undefined;
+  return new FsFaultError({
+    side,
+    faultClass: facts.faultClass,
+    errno: facts.errno,
+    path: refusal.directory,
+    origin: 'content',
+    action: 'list a directory',
+    cause: undefined,
+  });
 }
 
 /**
@@ -132,6 +166,59 @@ export function settleRefusal(policy: UnreadablePolicy, refusal: DirectoryRefusa
 }
 
 /**
+ * Whether `path` is on what a crawl's verb WRITES: one of its `outputs`, inside one, or holding
+ * one (the crawl base of a project a build writes into holds its output). THE one place a
+ * crawl derives a side from its `outputs` — the base `stat`, a refused listing at the base or
+ * beneath it, on every route. Paths are compared canonically (`canonicalPath`: real path, one
+ * spelling), so a directory git reports under its real path (`/private/var` for `/var`) or
+ * another drive-letter case is still the output.
+ *
+ * @param path - A directory the crawl met
+ * @param outputs - The trees the calling verb writes, `[]` for a verb that only reads
+ */
+export function onCrawlOutput(path: string, outputs: readonly string[]): boolean {
+  if (outputs.length === 0) return false;
+  const at = canonicalOrSpelled(path);
+  return outputs.some((output) => {
+    const out = canonicalOrSpelled(output);
+    return !relativeEscapesRoot(safePath.relative(out, at)) || !relativeEscapesRoot(safePath.relative(at, out));
+  });
+}
+
+/**
+ * The side of a path a crawl met: the destination's when it is on the verb's `outputs`
+ * ({@link onCrawlOutput}), else the side of the tree the verb reads — the policy's own
+ * (`source` when the policy degrades).
+ */
+export function crawlSideOf(path: string, outputs: readonly string[], policy: UnreadablePolicy): FsSide {
+  if (onCrawlOutput(path, outputs)) return 'destination';
+  return 'refuse' in policy ? policy.refuse.side : 'source';
+}
+
+/**
+ * Settle one refusal a CRAWL met: a refused directory that is on the crawl's `outputs`
+ * ({@link onCrawlOutput}) is the destination's; any other keeps the policy's own side.
+ *
+ * @param policy - The caller's decision
+ * @param refusal - The directory that could not be listed
+ * @param outputs - The trees the calling verb writes (the crawl's one declaration of them)
+ */
+export function settleCrawlRefusal(policy: UnreadablePolicy, refusal: DirectoryRefusal, outputs: readonly string[]): void {
+  const onOutput = 'refuse' in policy && onCrawlOutput(refusal.directory, outputs);
+  settleRefusal(onOutput ? { refuse: { ...policy.refuse, side: 'destination' } } : policy, refusal);
+}
+
+function canonicalOrSpelled(path: string): string {
+  try {
+    return toForwardSlash(canonicalPath(path));
+  } catch (error) {
+    // A directory that refused its listing may refuse resolution too: its spelling is all there is.
+    if (fsFaultOf(error) === undefined) throw error;
+    return toForwardSlash(safePath.resolve(path));
+  }
+}
+
+/**
  * Refuse an omitted policy up front, by name, before any directory is listed.
  *
  * The type already makes `unreadable` required, and that is what enumerates
@@ -148,7 +235,7 @@ export function settleRefusal(policy: UnreadablePolicy, refusal: DirectoryRefusa
 export function requireUnreadablePolicy(policy: UnreadablePolicy | undefined, api: string): asserts policy is UnreadablePolicy {
   if (policy === undefined) {
     throw new TypeError(
-      `${api}: \`unreadable\` is required — pass { refuse: { root, remedy } } to stop on a directory the listing cannot open, ` +
+      `${api}: \`unreadable\` is required — pass { refuse: { root, remedy, side } } to stop on a directory the listing cannot open, ` +
         'or { degrade: (refusal) => … } to keep going and report the gap yourself.',
     );
   }

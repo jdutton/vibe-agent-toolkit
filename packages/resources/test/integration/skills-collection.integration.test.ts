@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
+import type { ResourceRegistry } from '../../src/resource-registry.js';
 import { setupResourceTestSuite } from '../test-helpers.js';
 
 /**
@@ -16,6 +17,13 @@ async function createSkillFile(tempDir: string, content: string): Promise<string
   await fs.writeFile(skillPath, content, 'utf-8');
 
   return skillPath;
+}
+
+
+/** Crawl every markdown file under `dir` (a tree the test only reads) and validate it against `schema`. */
+async function crawlAndValidate(registry: ResourceRegistry, dir: string, schema: object): Promise<Awaited<ReturnType<ResourceRegistry['validate']>>> {
+  await registry.crawl({ unreadable: 'refuse', outputs: [], baseDir: dir, include: ['**/*.md'] });
+  return registry.validate({ frontmatterSchema: schema });
 }
 
 describe('Skills Collection Integration', () => {
@@ -52,6 +60,7 @@ See [documentation](../../docs/README.md) for details.
       // Crawl and validate
       await suite.registry.crawl({
         unreadable: 'refuse',
+        outputs: [],
         baseDir: suite.tempDir,
         include: ['**/*.md'],
       });
@@ -87,6 +96,7 @@ See [missing file](../../docs/MISSING.md) for more.
       // Crawl and validate
       await suite.registry.crawl({
         unreadable: 'refuse',
+        outputs: [],
         baseDir: suite.tempDir,
         include: ['**/*.md'],
       });
@@ -135,15 +145,7 @@ This should fail validation.
 `,
       );
 
-      // Crawl all markdown files
-      await suite.registry.crawl({
-        unreadable: 'refuse',
-        baseDir: suite.tempDir,
-        include: ['**/*.md'],
-      });
-
-      // Validate with frontmatter schema
-      const result = await suite.registry.validate({ frontmatterSchema: schema });
+      const result = await crawlAndValidate(suite.registry, suite.tempDir, schema);
 
       // Should have frontmatter validation error (missing description)
       expect(result.errorCount).toBeGreaterThan(0);
@@ -189,15 +191,7 @@ This should fail pattern validation.
 `,
       );
 
-      // Crawl all markdown files
-      await suite.registry.crawl({
-        unreadable: 'refuse',
-        baseDir: suite.tempDir,
-        include: ['**/*.md'],
-      });
-
-      // Validate with frontmatter schema
-      const result = await suite.registry.validate({ frontmatterSchema: schema });
+      const result = await crawlAndValidate(suite.registry, suite.tempDir, schema);
 
       // Should have frontmatter validation error for pattern mismatch
       expect(result.errorCount).toBeGreaterThan(0);
@@ -249,6 +243,7 @@ See [missing file](../../docs/MISSING.md) for more.
       // Crawl all markdown files
       await suite.registry.crawl({
         unreadable: 'refuse',
+        outputs: [],
         baseDir: suite.tempDir,
         include: ['**/*.md'],
       });

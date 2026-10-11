@@ -1,8 +1,13 @@
-import { existsSync } from 'node:fs';
+import { chmodSync, existsSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import type { RefusalCode } from '@vibe-agent-toolkit/schema';
+import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
+import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it } from 'vitest';
+import yaml from 'yaml';
+
+import { PLUGIN_BUILD_REPORT_SCHEMA, type PluginBuildReport } from '../../src/commands/claude/plugin/build-schema.js';
 
 import {
   createSkillMarkdown,
@@ -16,8 +21,7 @@ const binPath = getBinPath(import.meta.url);
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-plugin-neg-');
 
 function configMin(pluginYaml: string): string {
-  return `version: 1
-skills:
+  return `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
 claude:
   marketplaces:
@@ -57,6 +61,27 @@ async function runSkillsThenPluginBuild(tempDir: string): ReturnType<typeof exec
   return executeCli(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
 }
 
+/** The build's stdout, read through the published schema. */
+function reportOf(stdout: string): PluginBuildReport {
+  return PLUGIN_BUILD_REPORT_SCHEMA.parse(yaml.parse(stdout));
+}
+
+/** The build refused with `code`, exit 2 — a user's mistake, never INTERNAL_ERROR. */
+function expectRefusal(result: Awaited<ReturnType<typeof executeCli>>, code: RefusalCode): void {
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
+  const report = reportOf(result.stdout);
+  expect(report.status === 'error' ? report.error.code : report.status).toBe(code);
+}
+
+/** `git init` + commit, so the tree-copy sees the fixture's files. */
+function commitAll(tempDir: string): void {
+  runGitOrThrow(['init', '-q'], { cwd: tempDir });
+  runGitOrThrow(['config', 'user.email', 't@t'], { cwd: tempDir });
+  runGitOrThrow(['config', 'user.name', 't'], { cwd: tempDir });
+  runGitOrThrow(['add', '-A'], { cwd: tempDir });
+  runGitOrThrow(['commit', '-q', '-m', 'init'], { cwd: tempDir });
+}
+
 /**
  * Seed a plugin-local skill for plugin `p1` and write the minimal config that
  * declares it. Shared setup for negative-path tests whose bodies diverge only
@@ -70,6 +95,64 @@ function seedPluginP1WithMinimalConfig(tempDir: string): void {
   );
 }
 
+/** The two verbs that run the plugin build lane. */
+const PLUGIN_BUILD_LANES: [string, string[]][] = [
+  ['claude plugin build', ['claude', 'plugin', 'build']],
+  ['build', ['build']],
+];
+
+/** The `files:` source plugin-local `skill-a` declares, relative to the project. */
+const FILES_SOURCE = 'generated/payload.bin';
+
+/** Plugin `p1` holding plugin-local `skill-a`, which declares {@link FILES_SOURCE} — never written here. */
+function seedPluginLocalSkillWithFilesSource(tempDir: string): void {
+  seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
+  mkdirSyncReal(safePath.join(tempDir, 'generated'), { recursive: true });
+  writeTestFile(
+    safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
+    `skills:
+  include: ["plugins/*/skills/**/SKILL.md"]
+  defaults:
+    publish: false
+  config:
+    skill-a:
+      files:
+        - source: ${FILES_SOURCE}
+          dest: scripts/payload.bin
+claude:
+  marketplaces:
+    mp1:
+      owner:
+        name: Test
+      plugins:
+        - name: p1
+          skills: []
+`,
+  );
+}
+
+/**
+ * The run stopped (`RUN_INCOMPLETE`, exit 2) on one `SKILL_PACKAGING_FAILED` finding at `skill-a` — never `INTERNAL_ERROR`.
+ *
+ * @returns That finding's message
+ */
+function expectStoppedAtSkillA(result: Awaited<ReturnType<typeof executeCli>>): string {
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
+  const document = yaml.parse(result.stdout) as {
+    error: { code: string };
+    findings: Array<{ code: string; severity: string; location?: string; message: string }>;
+    data?: { phases?: Array<{ name: string; error?: { code: string } }> };
+  };
+  expect(document.error.code).toBe('RUN_INCOMPLETE');
+  expect(result.stdout).not.toContain('INTERNAL_ERROR');
+  expect(document.findings.map(({ code, severity, location }) => ({ code, severity, location }))).toEqual([
+    { code: 'SKILL_PACKAGING_FAILED', severity: 'error', location: 'plugins/p1/skills/skill-a/SKILL.md' },
+  ]);
+  const phases = document.data?.phases;
+  if (phases !== undefined) expect(phases.find((phase) => phase.name === 'claude')?.error?.code).toBe('RUN_INCOMPLETE');
+  return document.findings[0]?.message ?? '';
+}
+
 describe('vat claude plugin build (negative paths)', () => {
   afterEach(() => cleanupTempDirs());
 
@@ -80,7 +163,7 @@ describe('vat claude plugin build (negative paths)', () => {
     writeTestFile(safePath.join(tempDir, 'plugins', 'p1', 'hooks', 'hooks.json'), '{not json');
 
     const result = await runSkillsThenPluginBuild(tempDir);
-    expect(result.status).not.toBe(0);
+    expectRefusal(result, 'INPUT_UNREADABLE');
     expect(result.stderr).toContain('hooks.json');
   });
 
@@ -91,7 +174,7 @@ describe('vat claude plugin build (negative paths)', () => {
     writeTestFile(safePath.join(tempDir, 'plugins', 'p1', '.mcp.json'), 'bogus');
 
     const result = await runSkillsThenPluginBuild(tempDir);
-    expect(result.status).not.toBe(0);
+    expectRefusal(result, 'INPUT_UNREADABLE');
     expect(result.stderr).toContain('.mcp.json');
   });
 
@@ -100,8 +183,7 @@ describe('vat claude plugin build (negative paths)', () => {
     seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
     writeTestFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-      `version: 1
-skills:
+      `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
 claude:
   marketplaces:
@@ -117,8 +199,104 @@ claude:
 `,
     );
     const result = await runSkillsThenPluginBuild(tempDir);
-    expect(result.status).not.toBe(0);
+    expectRefusal(result, 'INPUT_UNREADABLE');
     expect(result.stderr).toContain('dist/missing.mjs');
+  });
+
+  // The packager refusing a plugin-local skill's own content is the project's to
+  // fix — the same `SKILL_PACKAGING_FAILED` finding on a stopped run that
+  // `vat skill test run` and `vat agent build` publish for it, never a defect in VAT.
+  it.each(PLUGIN_BUILD_LANES)('vat %s: a plugin-local skill whose files: source is missing stops the run, coded at the skill', async (_verb, args) => {
+    const tempDir = createTempDir();
+    seedPluginLocalSkillWithFilesSource(tempDir);
+
+    expectStoppedAtSkillA(await executeCli(binPath, args, { cwd: tempDir }));
+  });
+
+  // The source is THERE and the OS will not read it: it passes the packager's
+  // existence check, and the copy's read is what fails — a classified source fault.
+  it.skipIf(CANNOT_DENY_READS).each(PLUGIN_BUILD_LANES)('vat %s: a plugin-local skill whose files: source cannot be read stops the run, coded at the skill', async (_verb, args) => {
+    const tempDir = createTempDir();
+    seedPluginLocalSkillWithFilesSource(tempDir);
+    const locked = safePath.join(tempDir, FILES_SOURCE);
+    writeTestFile(locked, 'payload\n');
+    chmodSync(locked, 0o000);
+
+    try {
+      const result = await executeCli(binPath, args, { cwd: tempDir });
+
+      // The fault names what was read; the refusal table supplies the remedy.
+      expect(expectStoppedAtSkillA(result)).toMatch(/Could not read files: source '[\s\S]*Grant read permission on the named input/);
+    } finally {
+      chmodSync(locked, 0o644);
+    }
+  });
+
+  // A plugin build's INPUTS the OS will not read are the build's input, named —
+  // never INTERNAL_ERROR from an unwrapped copy: a marketplace LICENSE, a plugin
+  // files[] source, a skill another build left in dist/skills.
+  describe.skipIf(CANNOT_DENY_READS)('an input the OS will not read is INPUT_UNREADABLE, naming it', () => {
+    const lockedPaths: string[] = [];
+    const lockFile = (path: string): void => {
+      chmodSync(path, 0o000);
+      lockedPaths.push(path);
+    };
+    afterEach(() => {
+      for (const path of lockedPaths.splice(0)) chmodSync(path, 0o644);
+    });
+
+    it('a marketplace LICENSE', async () => {
+      const tempDir = createTempDir();
+      seedPluginP1WithMinimalConfig(tempDir);
+      writeTestFile(safePath.join(tempDir, 'LICENSE'), 'MIT\n');
+      lockFile(safePath.join(tempDir, 'LICENSE'));
+
+      const result = await runSkillsThenPluginBuild(tempDir);
+
+      expectRefusal(result, 'INPUT_UNREADABLE');
+      expect(result.stderr).toContain('LICENSE');
+    });
+
+    it('a plugin files[] source', async () => {
+      const tempDir = createTempDir();
+      seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
+      writeTestFile(
+        safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
+        configMin('        - name: p1\n          skills: []\n          files:\n            - source: gen/hook.mjs\n              dest: hooks/hook.mjs\n'),
+      );
+      mkdirSyncReal(safePath.join(tempDir, 'gen'));
+      writeTestFile(safePath.join(tempDir, 'gen', 'hook.mjs'), 'export {};\n');
+      lockFile(safePath.join(tempDir, 'gen', 'hook.mjs'));
+
+      const result = await runSkillsThenPluginBuild(tempDir);
+
+      expectRefusal(result, 'INPUT_UNREADABLE');
+      expect(result.stderr).toContain('gen/hook.mjs');
+    });
+
+    it('a pool skill in dist/skills', async () => {
+      const tempDir = createTempDir();
+      writeConfigAndPkg(tempDir, `skills:
+  include: ["skills/**/SKILL.md"]
+claude:
+  marketplaces:
+    mp1:
+      owner:
+        name: Test
+      plugins:
+        - name: p1
+          skills: [pool-a]
+`);
+      mkdirSyncReal(safePath.join(tempDir, 'skills', 'pool-a'), { recursive: true });
+      writeTestFile(safePath.join(tempDir, 'skills', 'pool-a', 'SKILL.md'), createSkillMarkdown('pool-a'));
+      expect((await executeCli(binPath, ['skills', 'build'], { cwd: tempDir })).status).toBe(0);
+      lockFile(safePath.join(tempDir, 'dist', 'skills', 'pool-a', 'SKILL.md'));
+
+      const result = await executeCli(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
+
+      expectRefusal(result, 'INPUT_UNREADABLE');
+      expect(result.stderr).toContain('dist/skills/pool-a/SKILL.md');
+    });
   });
 
   it('errors when the same plugin name is declared in two marketplaces', async () => {
@@ -126,8 +304,7 @@ claude:
     seedPluginLocalSkill(tempDir, 'dup', 'skill-a');
     writeTestFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-      `version: 1
-skills:
+      `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
 claude:
   marketplaces:
@@ -146,7 +323,7 @@ claude:
 `,
     );
     const result = await runSkillsThenPluginBuild(tempDir);
-    expect(result.status).not.toBe(0);
+    expectRefusal(result, 'CONFIG_INVALID');
     expect(result.stderr).toMatch(/declared more than once|globally unique/i);
   });
 
@@ -154,8 +331,94 @@ claude:
     const tempDir = createTempDir();
     writeConfigAndPkg(tempDir, configMin('        - name: empty\n          skills: []\n'));
     const result = await runSkillsThenPluginBuild(tempDir);
-    expect(result.status).not.toBe(0);
+    expectRefusal(result, 'CONFIG_INVALID');
     expect(result.stderr).toMatch(/has no content/i);
+  });
+
+  it('refuses a --marketplace the config does not declare as USAGE_INVALID', async () => {
+    const tempDir = createTempDir();
+    seedPluginP1WithMinimalConfig(tempDir);
+    const result = await executeCli(binPath, ['claude', 'plugin', 'build', '--marketplace', 'nope'], { cwd: tempDir });
+    expectRefusal(result, 'USAGE_INVALID');
+    expect(result.stderr).toContain('declared: mp1');
+  });
+
+  it('refuses a marketplace name that climbs out of dist/ as CONFIG_INVALID, and removes nothing', async () => {
+    const tempDir = createTempDir();
+    seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
+    mkdirSyncReal(safePath.join(tempDir, 'victim'));
+    const keep = safePath.join(tempDir, 'victim', 'keep.txt');
+    writeTestFile(keep, 'operator file');
+    writeTestFile(
+      safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
+      `skills:
+  include: ["plugins/*/skills/**/SKILL.md"]
+claude:
+  marketplaces:
+    "../../../../victim":
+      owner:
+        name: Test
+      plugins:
+        - name: p1
+          skills: []
+`,
+    );
+    const result = await executeCli(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
+    expectRefusal(result, 'CONFIG_INVALID');
+    expect(existsSync(keep)).toBe(true);
+  });
+
+  it('refuses outside a project as CONFIG_INVALID', async () => {
+    const tempDir = createTempDir();
+    const result = await executeCli(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
+    expectRefusal(result, 'CONFIG_INVALID');
+  });
+
+  it('plugin build publishes a gate failure as findings, exit 1', async () => {
+    const tempDir = createTempDir();
+    writeConfigAndPkg(tempDir, `skills:
+  include: ["plugins/*/skills/**/SKILL.md"]
+  defaults:
+    validation:
+      severity:
+        LINK_OUTSIDE_SKILL_DIR: error
+claude:
+  marketplaces:
+    mp1:
+      owner:
+        name: Test
+      plugins:
+        - name: p1
+          skills: []
+`);
+    const skills = safePath.join(tempDir, 'plugins', 'p1', 'skills');
+    mkdirSyncReal(safePath.join(skills, 'strict'), { recursive: true });
+    writeTestFile(safePath.join(skills, 'shared.md'), '# Shared notes\n');
+    writeTestFile(
+      safePath.join(skills, 'strict', 'SKILL.md'),
+      '---\nname: strict\ndescription: Plugin-local skill whose SKILL.md links a file outside its own directory.\n---\n\n# strict\n\nSee [shared notes](../shared.md).\n',
+    );
+    writeTestFile(safePath.join(tempDir, '.gitignore'), 'dist/\n');
+    commitAll(tempDir);
+
+    const result = await executeCli(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
+
+    // The gate's error-severity finding is a finding, not a crash: exit 1, never 2.
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+    const report = reportOf(result.stdout);
+    expect(report.status).toBe('findings');
+    // Located relative to the directory holding the config, never absolute.
+    expect(report.findings).toContainEqual(expect.objectContaining({
+      code: 'LINK_OUTSIDE_SKILL_DIR',
+      severity: 'error',
+      location: 'plugins/p1/skills/strict/SKILL.md',
+    }));
+    expect(result.stdout).not.toContain(toForwardSlash(tempDir));
+    expect(report.data.marketplaces[0]).toMatchObject({
+      name: 'mp1',
+      status: 'findings',
+      reason: expect.stringMatching(/post-build validation errors: strict$/),
+    });
   });
 
   it('does not copy gitignored node_modules from plugins/<p>/', async () => {

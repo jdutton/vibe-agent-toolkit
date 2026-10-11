@@ -8,9 +8,9 @@
  * to the source. These helpers only extract content for the commit message.
  */
 
-import { readFileSync } from 'node:fs';
-
 import { safePath } from '@vibe-agent-toolkit/utils';
+
+import { configNamedFileAbsent, readInputFile } from '../../../utils/project-root-policy.js';
 
 /**
  * Regex to match the [Unreleased] heading (case-insensitive).
@@ -83,5 +83,5 @@ export function parseVersionSection(changelog: string, version: string): string 
  */
 export function readChangelog(filePath: string, baseDir: string): string {
   const resolved = safePath.resolve(baseDir, filePath);
-  return readFileSync(resolved, 'utf-8');
+  return readInputFile(resolved, configNamedFileAbsent('publish.changelog', filePath));
 }

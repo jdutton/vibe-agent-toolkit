@@ -6,7 +6,7 @@
 
 import { homedir } from 'node:os';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { requireTestScratch, safePath } from '@vibe-agent-toolkit/utils';
 
 export interface ClaudeUserPaths {
   /** ~/.claude directory */
@@ -74,7 +74,8 @@ export function buildClaudeUserPaths(claudeDir: string): ClaudeUserPaths {
  * ```
  */
 export function getClaudeUserPaths(): ClaudeUserPaths {
-  return buildClaudeUserPaths(resolveClaudeDir(homedir()));
+  // Fail closed in a test process: a Claude directory outside the temp tree is somebody's real one.
+  return buildClaudeUserPaths(requireTestScratch(resolveClaudeDir(homedir()), 'The Claude directory'));
 }
 
 /**

@@ -30,7 +30,7 @@ import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 
 import { validateFragments } from './changelog-fragments.js';
-import { checkCommentDensity } from './comment-density.js';
+import { checkCommentDensity, nonDeletedGitListing } from './comment-density.js';
 import { GENERATED_DOCUMENTS, regenerateDocument } from './generate-claude-md.js';
 import { findStaleTsconfigs } from './generate-tsconfig-refs.js';
 import { checkValidateWorkflow, WORKFLOW_PATH } from './generate-workflow.js';
@@ -119,10 +119,9 @@ export function checkNoStrayGeneratedMarkers(
     );
 }
 
-/** Every tracked `.md` file, repo-relative with forward slashes. */
+/** Every tracked `.md` file that still exists in the working tree, repo-relative with forward slashes. */
 function trackedMarkdownFiles(repoRoot: string): string[] {
-  const listing = String(runGitOrThrow(['ls-files', '-z', '--', '*.md', '**/*.md'], { cwd: repoRoot, trim: false }));
-  return listing.split('\0').filter((rel) => rel.length > 0);
+  return nonDeletedGitListing(repoRoot, ['*.md', '**/*.md']);
 }
 
 /** Rule: the root `CLAUDE.md` stays under its byte budget. */

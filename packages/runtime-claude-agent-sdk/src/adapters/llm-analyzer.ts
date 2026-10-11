@@ -57,14 +57,18 @@ import {
 export const convertLLMAnalyzerToTool: SingleAgentConverter = createSingleConverterFunction(
   'llm-analyzer',
   createAnthropicLLMContext,
-  (agent, callLLM, model, temperature) => async (input) => {
+  (agent, callLLM, model, temperature) => (input) => {
     const context = {
       mockable: false,
       model,
       temperature,
       callLLM,
     };
-    return agent.execute(input, context);
+    try {
+      return Promise.resolve(agent.execute(input, context));
+    } catch (error) {
+      return Promise.reject(error as Error);
+    }
   },
 ) as never;
 

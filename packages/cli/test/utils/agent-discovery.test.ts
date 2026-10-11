@@ -8,6 +8,7 @@ import {
   discoverAgents,
   findAgentByName,
   resolveAgentPath,
+  surveyAgents,
 } from '../../src/utils/agent-discovery.js';
 
 const ORIGINAL_READDIR = fs.readdir;
@@ -242,21 +243,32 @@ describe('agent-discovery', () => {
         return (ORIGINAL_READDIR as (...args: unknown[]) => Promise<never>)(target, ...rest);
       });
 
-      await expect(discoverAgents()).rejects.toMatchObject({ code: 'EACCES' });
+      await expect(discoverAgents()).rejects.toMatchObject({ refusal: 'INPUT_UNREADABLE', message: expect.stringContaining('EACCES') });
+      // A listing keeps going and hands the gap back instead.
+      const survey = await surveyAgents();
+      expect(survey.agents).toStrictEqual([]);
+      expect(survey.unreadable).toStrictEqual([{ path: refused, errno: 'EACCES' }]);
     });
 
     it('refuses a manifest the OS will not read instead of skipping the agent', async () => {
       await seedAgent(tempDir);
       vi.spyOn(fs, 'readFile').mockRejectedValue(REFUSED);
 
-      await expect(discoverAgents()).rejects.toMatchObject({ code: 'EACCES' });
+      await expect(discoverAgents()).rejects.toMatchObject({ refusal: 'INPUT_UNREADABLE', message: expect.stringContaining('EACCES') });
+      expect((await surveyAgents()).unreadable).toStrictEqual([
+        { path: safePath.join(tempDir, 'agents/test-agent/agent.yaml'), errno: 'EACCES' },
+      ]);
     });
 
     it('refuses a candidate manifest whose probe fails for a reason other than absence', async () => {
       await seedAgent(tempDir);
       vi.spyOn(fs, 'access').mockRejectedValue(Object.assign(new Error('ELOOP: too many links'), { code: 'ELOOP' }));
 
-      await expect(discoverAgents()).rejects.toMatchObject({ code: 'ELOOP' });
+      await expect(discoverAgents()).rejects.toMatchObject({ refusal: 'INPUT_UNREADABLE', message: expect.stringContaining('ELOOP') });
+      // Recorded against each directory whose probe was refused (every one, under this mock), once each.
+      const gaps = (await surveyAgents()).unreadable.map(({ path }) => path);
+      expect(gaps).toContain(safePath.join(tempDir, 'agents/test-agent'));
+      expect(new Set(gaps).size).toBe(gaps.length);
     });
 
     it('should prefer agent.yaml over agent.yml', async () => {

@@ -71,14 +71,18 @@ jobs:
       # alone (their verdicts as tests are validate.yml's, on Node 24 and on
       # Windows). After the upload so a ratchet red never costs the coverage
       # report. NET_AVAILABLE as in validate.yml: the network suites run here
-      # too, so their durations are measured where they are judged.
+      # too, so their durations are measured where they are judged. Both run
+      # whatever an earlier step did: a Codecov outage or an earlier red must
+      # not hide a ratchet red behind it.
       - name: Per-file duration ratchet — integration tier (serial, on the floor)
+        if: ${{ !cancelled() }}
         run: bun run test:integration:serial
         env:
           GH_TOKEN: ${{ github.token }}
           NET_AVAILABLE: "1"
 
       - name: Per-file duration ratchet — system tier (serial, on the floor)
+        if: ${{ !cancelled() }}
         run: bun run test:system:serial
         env:
           GH_TOKEN: ${{ github.token }}

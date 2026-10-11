@@ -6,7 +6,7 @@
  * platform guard).
  */
 
-import { chmodSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -28,16 +28,26 @@ describe('prepareHarnessRoot', () => {
     rmSync(tmpBase, { recursive: true, force: true });
   });
 
+  // A file where the harness root must be a directory is the operator's input
+  // (USAGE_INVALID), named, and left as it is — not a write the OS refused.
+  it('refuses a harness root that exists and is not a directory, leaving the file untouched', () => {
+    const file = safePath.join(tmpBase, 'out-file');
+    writeFileSync(file, 'precious');
+    expect(() => prepareHarnessRoot(file, 'operator')).toThrow(HarnessLocationError);
+    expect(() => prepareHarnessRoot(file, 'operator')).toThrow(/is not a directory/);
+    expect(readFileSync(file, 'utf8')).toBe('precious');
+  });
+
   it('does nothing when the path does not yet exist', () => {
     const dir = safePath.join(tmpBase, 'nonexistent');
     // Should not throw — caller will create it later.
-    expect(() => prepareHarnessRoot(dir)).not.toThrow();
+    expect(() => prepareHarnessRoot(dir, 'vat')).not.toThrow();
   });
 
   it('does not throw when an existing directory is already 0700', () => {
     const dir = safePath.join(tmpBase, 'good');
     mkdirSyncReal(dir, { mode: 0o700 });
-    expect(() => prepareHarnessRoot(dir)).not.toThrow();
+    expect(() => prepareHarnessRoot(dir, 'vat')).not.toThrow();
     if (process.platform !== 'win32') {
       expect(statSync(dir).mode & 0o777).toBe(0o700);
     }
@@ -52,7 +62,7 @@ describe('prepareHarnessRoot', () => {
       // Confirm starting mode
       expect(statSync(dir).mode & 0o777).toBe(0o755);
 
-      expect(() => prepareHarnessRoot(dir)).not.toThrow();
+      expect(() => prepareHarnessRoot(dir, 'vat')).not.toThrow();
 
       expect(statSync(dir).mode & 0o777).toBe(0o700);
     },
@@ -61,7 +71,32 @@ describe('prepareHarnessRoot', () => {
   it('still throws HarnessLocationError when the path is a symlink', ({ skip }) => {
     const cap = symlinkCapability() ?? skip();
     const { link } = createSymlinkedDir(tmpBase, cap);
-    expect(() => prepareHarnessRoot(link)).toThrow(HarnessLocationError);
+    expect(() => prepareHarnessRoot(link, 'vat')).toThrow(HarnessLocationError);
+  });
+
+  // `--out` names a directory the OPERATOR owns. Re-moding it is never VAT's to do:
+  // 0555 → 0700 ADDS owner write, which also defeated the unwritable-output refusal.
+  it.each([{ mode: 0o555, label: '0555' }, { mode: 0o755, label: '0755' }])(
+    'never changes the mode of an operator-supplied directory ($label)',
+    { skip: process.platform === 'win32' },
+    ({ mode }) => {
+      const dir = safePath.join(tmpBase, `operator-${mode.toString(8)}`);
+      mkdirSyncReal(dir, { mode: 0o755 });
+      chmodSync(dir, mode);
+
+      try {
+        expect(() => prepareHarnessRoot(dir, 'operator')).not.toThrow();
+        expect(statSync(dir).mode & 0o777).toBe(mode);
+      } finally {
+        chmodSync(dir, 0o755);
+      }
+    },
+  );
+
+  it('still refuses an operator-supplied symlink', ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const { link } = createSymlinkedDir(tmpBase, cap);
+    expect(() => prepareHarnessRoot(link, 'operator')).toThrow(HarnessLocationError);
   });
 
   it(
@@ -74,7 +109,7 @@ describe('prepareHarnessRoot', () => {
       chmodSync(dir, 0o644);
       expect(statSync(dir).mode & 0o777).toBe(0o644);
 
-      expect(() => prepareHarnessRoot(dir)).not.toThrow();
+      expect(() => prepareHarnessRoot(dir, 'vat')).not.toThrow();
 
       expect(statSync(dir).mode & 0o777).toBe(0o700);
     },

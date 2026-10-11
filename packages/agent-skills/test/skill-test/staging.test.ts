@@ -20,8 +20,8 @@ import type {
   StageItem,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
+import { mkdirSyncReal, normalizedTmpdir, recordSuppressedFault, safePath, suppressedFaultsOf, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { installFaultFs, withSyncFsRefused } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import {
@@ -29,7 +29,11 @@ import {
   descriptorToSource,
   stageHarness,
 } from '../../src/skill-test/staging.js';
-import { setupTempDir } from '../test-helpers.js';
+import { setupTempDir, useScratchTmpdir } from '../test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test (and every child
+// a test spawns), so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-6-');
 
 const currentUid = process.getuid?.() ?? 0;
 const MANIFEST_FILE = 'staged.manifest.json';
@@ -79,7 +83,7 @@ function makeHarnessRoot(): string {
 
 /** A fake `resolve` that returns the given staged dir + identity, ignoring its source. */
 function fakeResolve(stagedDir: string, identity: string): StageHarnessResolve {
-  return async () => ({ stagedDir, identity });
+  return async () => ({ stagedDir, identity, leftovers: [] });
 }
 
 /** Write a minimal source skill dir (SKILL.md + evals/evals.json) and return its path. */
@@ -268,8 +272,8 @@ describe('stageHarness — plugin basename collision', () => {
 
     const resolve: StageHarnessResolve = async (source) => {
       const p = 'path' in source ? source.path : '';
-      if (p === skillA) return { stagedDir: skillA, identity: 'id-a' };
-      if (p === skillB) return { stagedDir: skillB, identity: 'id-b' };
+      if (p === skillA) return { stagedDir: skillA, identity: 'id-a', leftovers: [] };
+      if (p === skillB) return { stagedDir: skillB, identity: 'id-b', leftovers: [] };
       throw new Error(`unexpected source: ${p}`);
     };
 
@@ -297,7 +301,7 @@ describe('stageHarness — plugin basename collision', () => {
 function resolveOnlyKnown(okSource: string, okStagedDir: string, okIdentity: string): StageHarnessResolve {
   return async (source) => {
     const p = 'path' in source ? source.path : '';
-    if (p === okSource) return { stagedDir: okStagedDir, identity: okIdentity };
+    if (p === okSource) return { stagedDir: okStagedDir, identity: okIdentity, leftovers: [] };
     throw new Error(`cannot resolve: ${p}`);
   };
 }
@@ -363,8 +367,8 @@ describe('stageHarness — optional item resolve failure (skip-with-warning)', (
     ];
     const resolve: StageHarnessResolve = async (source) => {
       const p = 'path' in source ? source.path : '';
-      if (p === subjectDir) return { stagedDir: subjectDir, identity: FAKE_IDENTITY };
-      if (p === optionalDir) return { stagedDir: optionalDir, identity: 'opt-identity' };
+      if (p === subjectDir) return { stagedDir: subjectDir, identity: FAKE_IDENTITY, leftovers: [] };
+      if (p === optionalDir) return { stagedDir: optionalDir, identity: 'opt-identity', leftovers: [] };
       throw new Error(`cannot resolve: ${p}`);
     };
 
@@ -373,6 +377,51 @@ describe('stageHarness — optional item resolve failure (skip-with-warning)', (
     expect(result.skippedOptional).toEqual([]);
     expect(result.pluginDirs).toHaveLength(2);
     expect(result.manifest.entries.map((e) => e.name)).toEqual([SUBJECT_NAME, 'good-optional']);
+  });
+
+  // A temp dir an EARLIER item could not remove must not vanish with the run: staging has no
+  // result to carry it once a required item throws, so it rides the thrown error.
+  it('records the leftovers already collected beside a REQUIRED item\'s throw', async () => {
+    const sourceDir = writeSourceSkill(getTempDir());
+    const leftover = new Error('could not remove /tmp/vat-ws-build-earlier');
+    const items: StageItem[] = [
+      { name: SUBJECT_NAME, source: { path: sourceDir }, role: 'subject' },
+      { name: 'required-companion', source: { path: UNRESOLVABLE_SOURCE } },
+    ];
+    const resolve: StageHarnessResolve = async (source) => {
+      if ('path' in source && source.path === sourceDir) return { stagedDir: sourceDir, identity: FAKE_IDENTITY, leftovers: [leftover] };
+      throw new Error('cannot resolve');
+    };
+
+    const thrown: unknown = await stageHarness({ harnessRoot: makeHarnessRoot(), items, resolve, ctx: CTX, currentUid, ...EVAL_ISOLATION })
+      .then(() => undefined, (error: unknown) => error);
+
+    expect((thrown as Error).message).toBe('cannot resolve');
+    expect(suppressedFaultsOf(thrown)).toEqual([leftover]);
+  });
+
+  // A skipped optional item's failure may itself carry a leftover (its fetch's temp dir): the skip
+  // keeps the reason, and the leftover joins the run's.
+  it('keeps a leftover recorded beside a skipped OPTIONAL item\'s failure', async () => {
+    const leftover = new Error('could not remove /tmp/vat-fetch-optional');
+    const { harnessRoot, items, resolve: resolveSubject } = stagingWithFailingCompanion(getTempDir, {
+      name: 'flaky-optional',
+      source: { path: UNRESOLVABLE_SOURCE },
+      optional: true,
+    });
+    const resolve: StageHarnessResolve = async (source, ctx) => {
+      try {
+        return await resolveSubject(source, ctx);
+      } catch (error) {
+        recordSuppressedFault(error, leftover);
+        throw error;
+      }
+    };
+
+    const result = await stageHarness({ harnessRoot, items, resolve, ctx: CTX, currentUid, ...EVAL_ISOLATION });
+
+    expect(result.skippedOptional).toHaveLength(1);
+    expect(result.leftovers).toEqual([leftover]);
   });
 });
 
@@ -401,6 +450,29 @@ describe('stageHarness — manifest re-stage behavior (readExistingManifest)', (
     await withSyncFsRefused('readFileSync', safePath.join(harnessRoot, MANIFEST_FILE), 'EACCES', async () => {
       await expect(stageFlat(harnessRoot, sourceDir)).rejects.toThrow(/EACCES/);
     });
+  });
+
+  // The staged manifest and the staged copy are the run's own output: a write the OS
+  // refuses (a full disk) is RUN_INCOMPLETE, never an uncoded errno.
+  it('codes a manifest write the OS refuses as the run\'s output (a destination fault)', async () => {
+    const sourceDir = writeSourceSkill(getTempDir());
+    const harnessRoot = makeHarnessRoot();
+    await withSyncFsRefused('writeFileSync', safePath.join(harnessRoot, MANIFEST_FILE), 'ENOSPC', async () => {
+      await expect(stageFlat(harnessRoot, sourceDir)).rejects.toMatchObject({ code: 'FS_FAULT', side: 'destination', faultClass: 'exhausted' });
+    });
+  });
+
+  it('codes a staged copy the OS refuses as the run\'s output (a destination fault)', async () => {
+    const sourceDir = writeSourceSkill(getTempDir());
+    const harnessRoot = makeHarnessRoot();
+    // The disk fills while the copy is written into its staged directory beside the destination.
+    const faults = installFaultFs({ within: harnessRoot, faults: [{ family: 'write', path: (p) => p.includes('.vat-staged-'), errno: 'ENOSPC' }] });
+    try {
+      await expect(stageFlat(harnessRoot, sourceDir)).rejects.toMatchObject({ code: 'FS_FAULT', side: 'destination', faultClass: 'exhausted' });
+      expect(faults.fired).not.toEqual([]);
+    } finally {
+      faults.restore();
+    }
   });
 
   it('treats a schema-invalid manifest as corrupt too (valid JSON, wrong shape) and re-stages', async () => {

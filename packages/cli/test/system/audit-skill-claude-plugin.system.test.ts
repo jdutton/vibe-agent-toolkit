@@ -19,13 +19,9 @@ interface FileEntry {
   path?: string;
 }
 
-interface AuditSummary {
-  filesScanned?: number;
-}
-
 interface ParsedAuditOutput {
-  summary?: AuditSummary;
-  files?: FileEntry[];
+  examined?: number;
+  data?: { files?: FileEntry[] };
 }
 
 const binPath = getWrapperPath(import.meta.url);
@@ -54,9 +50,9 @@ describe('vat audit skill-claude-plugin (system)', () => {
     expect(result.status).toBe(0);
 
     const audit = parsed as ParsedAuditOutput;
-    expect(audit.summary?.filesScanned).toBe(2);
-    expect(audit.files).toHaveLength(2);
-    const types = (audit.files ?? [])
+    expect(audit.examined).toBe(2);
+    expect(audit.data?.files).toHaveLength(2);
+    const types = (audit.data?.files ?? [])
       .map((f) => f.type)
       .filter((t): t is string => typeof t === 'string')
       .sort((a, b) => a.localeCompare(b));

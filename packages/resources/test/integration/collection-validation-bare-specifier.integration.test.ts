@@ -40,7 +40,6 @@ describe('Collection validation with npm bare-specifier schema (integration)', (
     );
 
     const config: ProjectConfig = {
-      version: 1,
       resources: {
         collections: {
           skills: {

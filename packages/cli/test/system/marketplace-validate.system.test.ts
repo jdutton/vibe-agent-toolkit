@@ -4,6 +4,8 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { MARKETPLACE_VALIDATE_REPORT_SCHEMA, type MarketplaceValidateReport } from '../../src/commands/claude/marketplace/validate-schema.js';
+
 import {
   createTempDirTracker,
   executeCliAndParseYaml,
@@ -36,7 +38,7 @@ function createValidMarketplace(tempDir: string): void {
   mkdirSyncReal(safePath.join(tempDir, 'plugins', 'test-plugin', '.claude-plugin'), { recursive: true });
   writeTestFile(
     safePath.join(tempDir, 'plugins', 'test-plugin', '.claude-plugin', 'plugin.json'),
-    JSON.stringify({ name: 'test-plugin', description: 'Test plugin', version: '1.0.0' }),
+    JSON.stringify({ name: 'test-plugin', description: 'Test plugin', version: '1.0.0', author: { name: 'Test Owner' }, license: 'MIT' }),
   );
 
   // skill within plugin
@@ -63,14 +65,16 @@ function createValidMarketplace(tempDir: string): void {
   writeTestFile(safePath.join(tempDir, 'CHANGELOG.md'), '# Changelog\n\n## 1.0.0\n\n- Initial release');
 }
 
+/** Run marketplace validate; the published document parsed with the verb's own registry schema. */
+async function validateMarketplaceAt(tempDir: string): Promise<{ status: number | null; document: MarketplaceValidateReport }> {
+  const { result, parsed } = await executeCliAndParseYaml(binPath, [...VALIDATE_ARGS, tempDir]);
+  return { status: result.status, document: MARKETPLACE_VALIDATE_REPORT_SCHEMA.parse(parsed) as MarketplaceValidateReport };
+}
+
 /**
- * Run marketplace validate and assert a specific issue is present with expected severity.
- *
- * Runs with `--verbose`: the default publishes per-location COUNTS plus a
- * `codes` tally, and this helper asserts the SEVERITY a given code resolved to
- * — a code↔severity pairing only the flat per-issue form states. The two tests
- * above that assert only run-level totals (`status`, exit code) stay on the
- * default path, so both listing modes remain covered here.
+ * Run marketplace validate and assert a specific finding is published with the
+ * expected severity. Every finding is flat on the envelope, so the code and the
+ * severity it resolved to are stated together at every verbosity.
  */
 async function validateAndExpectIssue(
   tempDir: string,
@@ -78,11 +82,10 @@ async function validateAndExpectIssue(
   expectedSeverity: string,
   expectedExitCode: number,
 ): Promise<void> {
-  const { result, parsed } = await executeCliAndParseYaml(binPath, [...VALIDATE_ARGS, tempDir, '--verbose']);
+  const { status, document } = await validateMarketplaceAt(tempDir);
 
-  expect(result.status).toBe(expectedExitCode);
-  const issues = parsed['issues'] as Array<{ code: string; severity: string }>;
-  const matchingIssue = issues.find(i => i.code === expectedCode);
+  expect(status).toBe(expectedExitCode);
+  const matchingIssue = document.findings.find(i => i.code === expectedCode);
   expect(matchingIssue).toBeDefined();
   expect(matchingIssue?.severity).toBe(expectedSeverity);
 }
@@ -100,20 +103,28 @@ describe('vat claude marketplace validate (system)', () => {
 
     expect(existsSync(safePath.join(tempDir, '.claude-plugin', 'marketplace.json'))).toBe(true);
 
-    const { result, parsed } = await executeCliAndParseYaml(binPath, [...VALIDATE_ARGS, tempDir]);
+    const { status, document } = await validateMarketplaceAt(tempDir);
 
-    expect(result.status).toBe(0);
-    expect(parsed['status']).toBe('success');
+    expect(status).toBe(0);
+    expect(document.status).toBe('ok');
+    expect(document.examined).toBe(1);
+    expect(document.data.root).toBe(tempDir);
+    expect(document.data.plugins.map((plugin) => [plugin.name, plugin.path, plugin.manifestRead, plugin.status])).toEqual([
+      ['test-plugin', 'plugins/test-plugin', true, 'ok'],
+    ]);
   });
 
   it('should fail with exit 1 when marketplace.json is missing', async () => {
     const tempDir = createTempDir();
     mkdirSyncReal(tempDir, { recursive: true });
 
-    const { result, parsed } = await executeCliAndParseYaml(binPath, [...VALIDATE_ARGS, tempDir]);
+    const { status, document } = await validateMarketplaceAt(tempDir);
 
-    expect(result.status).toBe(1);
-    expect(parsed['status']).toBe('error');
+    // A finding about the directory, exit 1 — the path exists, so it is not a refusal.
+    expect(status).toBe(1);
+    expect(document.status).toBe('findings');
+    expect(document.data.marketplace).toBeNull();
+    expect(document.findings.map((finding) => finding.code)).toContain('MARKETPLACE_MISSING_MANIFEST');
   });
 
   it('should report MARKETPLACE_MISSING_LICENSE as error when LICENSE is missing', async () => {

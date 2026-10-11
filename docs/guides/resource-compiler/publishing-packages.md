@@ -189,18 +189,17 @@ npm install -D tsup  # Or your preferred build tool
 
 ```typescript
 // scripts/post-build.ts
-import { createPostBuildScript } from '@vibe-agent-toolkit/resource-compiler/utils';
-import { cpSync } from 'node:fs';
+import { copyResources, createPostBuildScript } from '@vibe-agent-toolkit/resource-compiler/utils';
 
 // Copy compiled resources (generated .js/.d.ts files)
-createPostBuildScript({
+await createPostBuildScript({
   generatedDir: 'generated',
   distDir: 'dist',
   verbose: true,
 });
 
 // Copy original markdown files
-cpSync('resources', 'dist/resources', { recursive: true });
+await copyResources({ sourceDir: 'resources', targetDir: 'dist/resources' });
 console.log('✓ Copied original markdown to dist/resources/');
 
 console.log('\n✅ Build complete! Package ready for publishing.');
@@ -366,14 +365,14 @@ The post-build script copies both:
 
 ```typescript
 // Copy compiled JavaScript/TypeScript
-createPostBuildScript({
+await createPostBuildScript({
   generatedDir: 'generated',
   distDir: 'dist',
   verbose: true,
 });
 
 // Copy original markdown
-cpSync('resources', 'dist/resources', { recursive: true });
+await copyResources({ sourceDir: 'resources', targetDir: 'dist/resources' });
 ```
 
 ### Result in Published Package

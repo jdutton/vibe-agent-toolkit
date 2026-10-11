@@ -102,21 +102,29 @@ describe('findStaleExemptions', () => {
 
 describe('parseAuditFindings', () => {
   const report = `
-status: warning
-files:
-  - path: a/SKILL.md
-    issues:
-      - severity: warning
-        code: TOO_LONG
-        message: long
-  - path: b/SKILL.md
-    issues: []
+status: findings
+examined: 2
+findings:
+  - severity: warning
+    code: TOO_LONG
+    message: long
+    location: a/SKILL.md
+summary: { errors: 0, warnings: 1, info: 0 }
+gate: { strict: false }
+data: { files: [] }
 `;
 
-  it('reads every issue and attributes it to its file', () => {
+  it('reads every finding and attributes it to the file it names', () => {
     const findings = parseAuditFindings(report);
     expect(findings).toEqual([
       { file: 'a/SKILL.md', code: 'TOO_LONG', severity: 'warning', message: 'long' },
+    ]);
+  });
+
+  it('attributes a finding with no file to the run, so it still reaches the gate', () => {
+    const refused = 'status: findings\nfindings:\n  - severity: error\n    code: RESOURCE_CHECK_BROKEN\n    message: nothing examined\n';
+    expect(parseAuditFindings(refused)).toEqual([
+      { file: '<run>', code: 'RESOURCE_CHECK_BROKEN', severity: 'error', message: 'nothing examined' },
     ]);
   });
 
@@ -124,11 +132,16 @@ files:
   // like a clean repository to a `length === 0` gate, so a shape change in the
   // command we ship would silently switch our own gate off.
   it('THROWS on a document with no status rather than reporting a clean repo', () => {
-    expect(() => parseAuditFindings('files: []')).toThrow(/status/);
+    expect(() => parseAuditFindings('findings: []')).toThrow(/status/);
   });
 
-  it('THROWS when files is not an array', () => {
-    expect(() => parseAuditFindings('status: ok\nfiles: nope')).toThrow(/files/);
+  it('THROWS on a run that did not finish, naming its refusal', () => {
+    expect(() => parseAuditFindings('status: error\nfindings: []\nerror: { code: USAGE_INVALID, message: no }\n'))
+      .toThrow(/did not finish.*USAGE_INVALID/);
+  });
+
+  it('THROWS when findings is not an array', () => {
+    expect(() => parseAuditFindings('status: ok\nfindings: nope')).toThrow(/findings/);
   });
 
   it('THROWS on output that is not a YAML mapping at all', () => {
@@ -143,39 +156,26 @@ files:
  * severity, say — parsed to ZERO findings. The gate then failed for the only
  * reason left, "N exemption(s) match nothing — delete them", a maintainer
  * followed that printed instruction, and the gate passed green forever over a
- * report it could no longer read. Two levels validated and the third coerced is
- * not "mostly strict": it is the whole hole.
+ * report it could no longer read. Every level is validated, never coerced.
  */
-describe('parseAuditFindings — the issues level is validated, never coerced', () => {
-  it('THROWS when `issues` is an object rather than an array', () => {
+describe('parseAuditFindings — every level is validated, never coerced', () => {
+  it('THROWS when `findings` is grouped into an object rather than a list', () => {
     const grouped = `
-status: error
-files:
-  - path: a/SKILL.md
-    issues:
-      error:
-        - code: REAL_DEFECT
-          message: this must not vanish
+status: findings
+findings:
+  error:
+    - code: REAL_DEFECT
+      message: this must not vanish
 `;
-    expect(() => parseAuditFindings(grouped)).toThrow(/issues/);
+    expect(() => parseAuditFindings(grouped)).toThrow(/findings/);
   });
 
-  it('THROWS when a file entry carries no `issues` at all', () => {
-    expect(() => parseAuditFindings('status: ok\nfiles:\n  - path: a/SKILL.md\n')).toThrow(/issues/);
+  it('THROWS when a finding is not a mapping', () => {
+    expect(() => parseAuditFindings('status: findings\nfindings:\n  - just-a-string\n')).toThrow(/finding that is not a mapping/);
   });
 
-  it('names the offending path, so the shape change is diagnosable', () => {
-    expect(() => parseAuditFindings('status: ok\nfiles:\n  - path: b/SKILL.md\n'))
-      .toThrow(/b\/SKILL\.md/);
-  });
-
-  it('THROWS when a file entry is not a mapping', () => {
-    expect(() => parseAuditFindings('status: ok\nfiles:\n  - just-a-string\n')).toThrow(/file entry/);
-  });
-
-  it('still accepts an empty issues array — a clean file is not a shape change', () => {
-    expect(parseAuditFindings('status: ok\nfiles:\n  - path: a/SKILL.md\n    issues: []\n'))
-      .toEqual([]);
+  it('still accepts an empty findings list — a clean tree is not a shape change', () => {
+    expect(parseAuditFindings('status: ok\nfindings: []\n')).toEqual([]);
   });
 });
 
@@ -188,10 +188,14 @@ files:
  * `result.error`; this gate had copied the `maxBuffer` half and not the check.
  */
 describe('auditRunFailure', () => {
-  const ran = { status: 0, stdout: '---\nstatus: ok\nfiles: []\n' } as const;
+  const ran = { status: 0, stdout: '---\nstatus: ok\nfindings: []\n' } as const;
 
   it('trusts a run that exited 0 with a document', () => {
     expect(auditRunFailure(ran)).toBeNull();
+  });
+
+  it('trusts a run that exited 1 — an error-severity finding is this gate\'s to judge, not a crash', () => {
+    expect(auditRunFailure({ ...ran, status: 1 })).toBeNull();
   });
 
   it('refuses a spawn error even though bytes came back', () => {
@@ -199,8 +203,8 @@ describe('auditRunFailure', () => {
     expect(auditRunFailure(truncated)).toMatch(/ENOBUFS/);
   });
 
-  it('refuses a non-zero exit — `vat audit` exits 0 by design, so a code means it crashed', () => {
-    expect(auditRunFailure({ ...ran, status: 1 })).toMatch(/exit(ed)? 1|status 1/i);
+  it('refuses exit 2 — `vat audit` did not finish, so its output is not a verdict', () => {
+    expect(auditRunFailure({ ...ran, status: 2 })).toMatch(/exited 2/);
   });
 
   it('refuses an empty document — the command did not run', () => {

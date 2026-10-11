@@ -89,7 +89,7 @@ const COLLECTIONS: Readonly<Record<string, CollectionConfig>> = {
 };
 
 /** The same declarations as a whole project config — ONE source, no drift. */
-const CONFIG: ProjectConfig = { version: 1, resources: { collections: COLLECTIONS } };
+const CONFIG: ProjectConfig = { resources: { collections: COLLECTIONS } };
 
 /**
  * The corpus, config file included.
@@ -142,7 +142,7 @@ function registryVerdicts(registry: ResourceRegistry): Record<string, Verdict> {
  */
 async function projectionVerdicts(): Promise<Record<string, Verdict>> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor(() => crawlSourceFor(corpus.root())));
+  registry.register(new FilesystemExtentContributor(() => crawlSourceFor(corpus.root(), [])));
 
   const projection = await populate({
     root: corpus.root(),
@@ -179,7 +179,7 @@ describe('the projection lane and ResourceRegistry agree about a declared mimeTy
     // `this.config?.resources?.collections` with `undefined` in
     // `admitResource` left the whole suite green before this existed.
     const registry = await ResourceRegistry.fromCrawl(
-      { unreadable: 'refuse', baseDir: corpus.root(), include: ['**/*.md'] },
+      { outputs: [], unreadable: 'refuse', baseDir: corpus.root(), include: ['**/*.md'] },
       { config: CONFIG },
     );
 
@@ -191,6 +191,7 @@ describe('the projection lane and ResourceRegistry agree about a declared mimeTy
     // the disagreement is caused by the absent config and by nothing else, so
     // every failing lane below has exactly one cause.
     const registry = await ResourceRegistry.fromCrawl({
+      outputs: [],
       unreadable: 'refuse',
       baseDir: corpus.root(),
       include: ['**/*.md'],
@@ -202,7 +203,7 @@ describe('the projection lane and ResourceRegistry agree about a declared mimeTy
 
 describe('every shipped registry-construction site reaches the projection lane verdict', () => {
   it('crawlAndResolveRegistry — `vat audit`, `vat skills build` post-build validation', async () => {
-    const registry = await crawlAndResolveRegistry(corpus.root(), { unreadable: 'refuse' });
+    const registry = await crawlAndResolveRegistry(corpus.root(), { outputs: [], unreadable: 'refuse' });
 
     expect(registryVerdicts(registry)).toEqual(EXPECTED);
   });

@@ -20,14 +20,18 @@ import {
   type Coordinate,
   decideComparison,
   type InstrumentVersion,
+  InstrumentVersionSchema,
   movedAxes,
   type SubjectVersion,
 } from '../src/envelope/coordinate.js';
 
 const GIT_A: SubjectVersion = { kind: 'git', commit: 'a'.repeat(40), ref: 'main', dirty: false, workingFingerprint: null };
 const GIT_B: SubjectVersion = { kind: 'git', commit: 'b'.repeat(40), ref: 'main', dirty: false, workingFingerprint: null };
-const VAT_RELEASE: InstrumentVersion = { version: '0.1.42', commit: '1'.repeat(40), dirty: false };
-const VAT_DEV: InstrumentVersion = { version: '0.1.42', commit: '2'.repeat(40), dirty: false };
+const VAT_RELEASE: InstrumentVersion = { version: '0.1.42', commit: '1'.repeat(40), dirty: false, closure: null };
+const VAT_DEV: InstrumentVersion = { version: '0.1.42', commit: '2'.repeat(40), dirty: false, closure: null };
+/** Two `dist:` arms of one version: no commit, nothing but the closure to tell them apart. */
+const DIST_ONE: InstrumentVersion = { version: '0.2.0', commit: null, dirty: null, closure: 'a'.repeat(64) };
+const DIST_TWO: InstrumentVersion = { ...DIST_ONE, closure: 'b'.repeat(64) };
 /** The same build as {@link VAT_DEV}, but with uncommitted changes on top. */
 const VAT_DEV_DIRTY: InstrumentVersion = { ...VAT_DEV, dirty: true };
 
@@ -90,6 +94,31 @@ describe('movedAxes', () => {
     // an instrument against itself.
     expect(VAT_DEV.version).toBe(VAT_RELEASE.version);
     expect(movedAxes(coord(), coord({ instrument: VAT_DEV }))).not.toEqual([]);
+  });
+
+  it('treats two dist arms of one version with different closures as different instruments', () => {
+    // Everything a stamp carried before the closure digest is identical here —
+    // version, commit null, dirty null — so a comparator that ignored `closure`
+    // would report that nothing moved for a two-build comparison.
+    expect({ ...DIST_TWO, closure: DIST_ONE.closure }).toStrictEqual(DIST_ONE);
+
+    expect(movedAxes(coord({ instrument: DIST_ONE }), coord({ instrument: DIST_TWO }))).toEqual([
+      'instrument',
+    ]);
+    // Positive control: one closure against itself is still no movement.
+    expect(movedAxes(coord({ instrument: DIST_ONE }), coord({ instrument: DIST_ONE }))).toEqual([]);
+  });
+
+  it('refuses a closure that is not 64 lowercase hex', () => {
+    expect(InstrumentVersionSchema.safeParse(DIST_ONE).success).toBe(true);
+    for (const closure of ['A'.repeat(64), 'a'.repeat(63), 'g'.repeat(64), '']) {
+      expect(InstrumentVersionSchema.safeParse({ ...DIST_ONE, closure }).success).toBe(false);
+    }
+    // A stored report from before the field existed is refused, not defaulted.
+    const withoutClosure = Object.fromEntries(
+      Object.entries(DIST_ONE).filter(([key]) => key !== 'closure'),
+    );
+    expect(InstrumentVersionSchema.safeParse(withoutClosure).success).toBe(false);
   });
 
   it('reports the subjectVersion axis when the same repo moved commit', () => {

@@ -22,10 +22,15 @@ import { coordinateLines, instrumentLabel, instrumentTrustNotes } from '../src/h
 
 import { COORDINATE } from './report-fixtures.js';
 
-const CLEAN: InstrumentVersion = { version: '0.2.0-rc.2', commit: '7b65ba86'.repeat(5), dirty: false };
+const CLEAN: InstrumentVersion = {
+  version: '0.2.0-rc.2',
+  commit: '7b65ba86'.repeat(5),
+  dirty: false,
+  closure: null,
+};
 const DIRTY: InstrumentVersion = { ...CLEAN, dirty: true };
 const OTHER_CLEAN: InstrumentVersion = { ...CLEAN, commit: 'a'.repeat(40) };
-const RELEASED: InstrumentVersion = { version: '0.1.41', commit: null, dirty: null };
+const RELEASED: InstrumentVersion = { version: '0.1.41', commit: null, dirty: null, closure: null };
 
 /**
  * Every note the two arms produce, as one string.

@@ -7,7 +7,7 @@ import type { SpawnOptionsWithoutStdio, SpawnSyncReturns } from 'node:child_proc
 import { spawn as nodeSpawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
-import { fileURLToPath as urlFileURLToPath } from 'node:url';
+import { fileURLToPath as urlFileURLToPath, pathToFileURL } from 'node:url';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
@@ -59,6 +59,16 @@ export function getFixturePath(testFileUrl: string, fixtureName: string): string
  * invoked from the monorepo root or from packages/cli directly.
  * @param testFileUrl - import.meta.url from the test file
  */
+/**
+ * The `nodeArgs` that load the in-process fault injector into a spawned binary before it runs
+ * (`VAT_FAULT_FS` says what to fail). A `file:` URL, never a path: node's `--import` reads a
+ * Windows absolute path's drive letter as a URL scheme and refuses to load it.
+ */
+export function faultPreloadArgs(testFileUrl: string): readonly string[] {
+  const preload = safePath.join(getMonorepoRoot(testFileUrl), 'packages', 'utils', 'dist', 'testing', 'fault-fs-preload.js');
+  return ['--import', pathToFileURL(preload).href];
+}
+
 export function getMonorepoRoot(testFileUrl: string): string {
   const testDir = pathDirname(urlFileURLToPath(testFileUrl));
   return pathResolve(testDir, '../../../..');
@@ -70,6 +80,18 @@ export function getMonorepoRoot(testFileUrl: string): string {
  */
 export function createTestTempDir(prefix: string): string {
   return createTempDir(prefix);
+}
+
+/**
+ * Write a tree of files under `dir`: each key a `/`-separated path relative to
+ * it, each value the file's UTF-8 content. Parent directories are created.
+ */
+export function writeFileTree(dir: string, files: Readonly<Record<string, string>>): void {
+  for (const [relative, content] of Object.entries(files)) {
+    const target = safePath.join(dir, relative);
+    mkdirSyncReal(pathDirname(target), { recursive: true });
+    fs.writeFileSync(target, content, 'utf-8');
+  }
 }
 
 /**
@@ -203,7 +225,7 @@ function mergeEnvWithOverrides(overrides: Record<string, string>): NodeJS.Proces
   return merged;
 }
 
-async function spawnAndCollect(
+function spawnAndCollect(
   command: string,
   args: string[],
   options: SpawnOptionsWithoutStdio,
@@ -267,13 +289,15 @@ async function spawnAndCollect(
 /**
  * Execute CLI command and return result
  * Handles ESLint suppressions for test execution
+ *
+ * `nodeArgs` go to node itself, before the binary: `['--import', preload]` runs a module first.
  */
-export async function executeCli(
+export function executeCli(
   binPath: string,
   args: string[],
-  options?: { cwd?: string; env?: Record<string, string> }
+  options?: { cwd?: string; env?: Record<string, string>; nodeArgs?: readonly string[] }
 ): Promise<SpawnSyncReturns<string>> {
-  return spawnAndCollect('node', [binPath, ...args], {
+  return spawnAndCollect('node', [...(options?.nodeArgs ?? []), binPath, ...args], {
     cwd: options?.cwd,
     env: options?.env ? mergeEnvWithOverrides(options.env) : undefined,
   });
@@ -325,7 +349,7 @@ export async function buildSkillsThenPlugin(
  * @param args - Arguments to pass to vat command
  * @param options - Optional execution options
  */
-export async function executeBunVat(
+export function executeBunVat(
   testFileUrl: string,
   args: string[],
   options?: { cwd?: string }
@@ -432,7 +456,7 @@ export function createSkillsConfigYaml(
   includeGlobs: string[],
   excludeGlobs?: string[]
 ): string {
-  let content = `version: 1\nskills:\n  include:\n`;
+  let content = `skills:\n  include:\n`;
   for (const glob of includeGlobs) {
     content += `    - "${glob}"\n`;
   }

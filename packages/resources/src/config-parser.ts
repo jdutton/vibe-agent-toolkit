@@ -4,12 +4,51 @@
  * Discovers and parses project configuration files with directory tree walk-up.
  */
 
-import { findConfigFile } from '@vibe-agent-toolkit/utils';
-import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
+import { findConfigFile, type FsFaultContext, type FsSide, VatError, withFsFault, withFsFaultSync } from '@vibe-agent-toolkit/utils';
+import { readTextContent, readTextContentSync } from '@vibe-agent-toolkit/utils/fs';
 import { parse as parseYaml } from 'yaml';
 
-import { parseConfigAllowingUnknownKeys } from './config-issues.js';
+import { CONFIG_LOAD_CODE, parseConfigAllowingUnknownKeys } from './config-issues.js';
 import { ProjectConfigSchema, type ProjectConfig } from './schemas/project-config.js';
+
+/**
+ * How a failed config read is classified: an errno is about the adopter's own
+ * file — a `source` fault named by config for a verb that reads it, a
+ * `destination` fault for the verb that edits it; anything else is a defect and
+ * propagates as thrown.
+ */
+function configRead(configPath: string, side: FsSide): FsFaultContext {
+  return { side, origin: 'config', action: `read config file ${configPath}`, path: configPath };
+}
+
+/**
+ * Read a `vibe-agent-toolkit.config.yaml` through the one decoder — an adopter's
+ * config may be UTF-16LE (PowerShell 5.1's default) or BOM-prefixed — coding a
+ * read the OS refused. The ONE config read every reader shares, so one broken
+ * file is classified the same way by every verb that reads it — `INPUT_UNREADABLE`
+ * as a source; the one verb that edits it (`vat skill test configure`, unless
+ * `--print`) reads it as its destination, `RUN_INCOMPLETE`.
+ *
+ * @param configPath - Path to the config file
+ * @param side - `destination` when the verb reads the config to edit it (`vat skill test
+ *   configure`): a refusal is then the run not finishing, not the input's fault
+ * @returns The decoded text
+ * @throws `FsFaultError` (origin `config`, on `side`) when the OS refuses the read
+ */
+export function readConfigText(configPath: string, side: FsSide = 'source'): Promise<string> {
+  return withFsFault(configRead(configPath, side), async () => (await readTextContent(configPath)).text);
+}
+
+/**
+ * {@link readConfigText}, synchronously.
+ *
+ * @param configPath - Path to the config file
+ * @returns The decoded text
+ * @throws `FsFaultError` (side `source`, origin `config`) when the OS refuses the read
+ */
+export function readConfigTextSync(configPath: string): string {
+  return withFsFaultSync(configRead(configPath, 'source'), () => readTextContentSync(configPath).text);
+}
 
 /**
  * Parse a project configuration file.
@@ -26,13 +65,12 @@ import { ProjectConfigSchema, type ProjectConfig } from './schemas/project-confi
  * @param configPath - Absolute path to config file
  * @param onUnknownKeys - Receives a warning when unknown keys were dropped
  * @returns Parsed and validated configuration
- * @throws Error if file cannot be read, YAML is invalid, or validation fails for
- *   any reason other than an unknown key
+ * @throws `FsFaultError` (side `source`, origin `config`) if the OS refuses the read; `VatError` `CONFIG_LOAD` if YAML is
+ *   invalid, or validation fails for any reason other than an unknown key
  *
  * @example
  * ```typescript
  * const config = await parseConfigFile('/project/vibe-agent-toolkit.config.yaml', console.warn);
- * console.log(`Version: ${config.version}`);
  * console.log(`Collections: ${Object.keys(config.resources?.collections ?? {}).join(', ')}`);
  * ```
  */
@@ -40,18 +78,14 @@ export async function parseConfigFile(
   configPath: string,
   onUnknownKeys: (message: string) => void = (message) => process.stderr.write(`${message}\n`),
 ): Promise<ProjectConfig> {
-  // Read file content through the one decoder. An adopter's config file is
-  // authored by hand on whatever platform they use — PowerShell 5.1 writes
-  // UTF-16LE by default — and `readFile(path, 'utf-8')` would hand the YAML
-  // parser mojibake, or a BOM that makes the first key unparseable.
-  const { text: content } = await readTextContent(configPath);
+  const content = await readConfigText(configPath);
 
   // Parse YAML
   let parsed: unknown;
   try {
     parsed = parseYaml(content);
   } catch (error) {
-    throw new Error(`Invalid YAML in config file: ${error instanceof Error ? error.message : String(error)}`);
+    throw new VatError(CONFIG_LOAD_CODE, `Invalid YAML in config file: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
 
   // Validate against schema. The message is built by the ONE formatter all THREE

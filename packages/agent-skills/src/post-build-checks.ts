@@ -11,7 +11,7 @@ import { dirname } from 'node:path';
 
 import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, FollowedWalk, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowingSync, FollowedWalk, forEachInOrder, mapConcurrentFailingInOrder, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
 
 import { type PackagingTarget } from './content-type-routing.js';
 import { normalizeRelPath } from './files-config.js';
@@ -60,7 +60,8 @@ function stripCodeBlocks(content: string): string {
  * Recursively collect all file paths in a directory.
  */
 function walkDir(dir: string, walk?: FollowedWalk): string[] {
-  const guard = walk ?? new FollowedWalk();
+  // The tree walked is the package just written: a directory it cannot resolve is the output's fault.
+  const guard = walk ?? new FollowedWalk('destination');
   if (walk === undefined) guard.enter(dir);
   const files: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -113,7 +114,8 @@ function extractLocalLinks(content: string): string[] {
  */
 async function extractLocalHrefs(filePath: string): Promise<string[]> {
   if (filePath.endsWith('.html') || filePath.endsWith('.htm')) {
-    const result = await parseFileCached(filePath, 'html');
+    // The packaged output this build just wrote: a refused read is the destination's, not the user's input.
+    const result = await parseFileCached(filePath, 'html', { side: 'destination' });
     return result.links
       .filter(link => link.type === 'local_file')
       .map(link => {
@@ -122,8 +124,8 @@ async function extractLocalHrefs(filePath: string): Promise<string[]> {
       })
       .filter(href => href.length > 0);
   }
-  // Markdown: read content and regex-match
-  const content = await readFile(filePath, 'utf-8');
+  // Markdown: read content and regex-match. The packaged output, as above.
+  const content = await withFsFault({ side: 'destination', action: `read back the packaged ${filePath} to check its links` }, () => readFile(filePath, 'utf-8'));
   return extractLocalLinks(content);
 }
 
@@ -237,15 +239,13 @@ async function collectReferencedPaths(
   // SKILL.md itself is the root — always referenced
   referenced.add(toForwardSlash(skillMdPath));
 
-  while (fileQueue.length > 0) {
-    const filePath = fileQueue.shift();
-    if (!filePath) break;
-
+  // In order: a breadth-first worklist that grows from its own results, guarded by `visited`.
+  await forEachInOrder(fileQueue, async (filePath) => {
     const normalized = toForwardSlash(filePath);
-    if (visited.has(normalized)) continue;
+    if (visited.has(normalized)) return;
     visited.add(normalized);
 
-    if (!existsSync(filePath)) continue;
+    if (!existsSync(filePath)) return;
 
     const hrefs = await extractLocalHrefs(filePath);
 
@@ -262,7 +262,7 @@ async function collectReferencedPaths(
         fileQueue.push(resolved);
       }
     }
-  }
+  });
 
   return referenced;
 }
@@ -288,8 +288,9 @@ async function addMentionReferences(
     return;
   }
 
+  // The packaged output this build just wrote: a refused read is the destination's.
   const contents = await Promise.all(
-    contentFiles.map(f => readFile(f, 'utf-8')),
+    contentFiles.map(f => withFsFault({ side: 'destination', action: `read back the packaged ${f} to find what it mentions` }, () => readFile(f, 'utf-8'))),
   );
   const haystack = contents.join('\n');
 
@@ -405,7 +406,7 @@ export async function checkUnreferencedFiles(
  * @param outputDir Absolute path to the packaged skill output.
  * @param target The packaging target the output was produced for.
  */
-export async function checkMissingReferencedPaths(
+export function checkMissingReferencedPaths(
   outputDir: string,
   target: PackagingTarget,
 ): Promise<ValidationIssue[]> {
@@ -423,7 +424,7 @@ export async function checkMissingReferencedPaths(
  *   to `.dest`. A link resolving to one of THESE is broken by deliberate policy,
  *   and gets a remediation that says so instead of the generic "report a VAT bug".
  *   Defaults to none for callers that never ran a files config (e.g.
- *   `validateShippedPluginSkillLinks`, which inspects an already-built plugin
+ *   `checkShippedPluginSkillLinks`, which inspects an already-built plugin
  *   tree): they cannot know a drop happened, so they correctly claim no cause.
  */
 export async function checkBrokenPackagedLinks(
@@ -437,12 +438,10 @@ export async function checkBrokenPackagedLinks(
   );
   const allFileSet = new Set(allFiles.map(f => toForwardSlash(f)));
 
-  const issues: ValidationIssue[] = [];
-
-  for (const sourceFile of linkableFiles) {
-    const hrefs = await extractLocalHrefs(sourceFile);
-    issues.push(...collectBrokenLinkIssues(sourceFile, hrefs, allFileSet, outputDir, droppedDestSet));
-  }
-
-  return issues;
+  // Independent reads; a failure is the first by file order, and the issues are
+  // folded afterwards in that order.
+  const hrefsByFile = await mapConcurrentFailingInOrder(linkableFiles, (sourceFile) => extractLocalHrefs(sourceFile));
+  return linkableFiles.flatMap((sourceFile, index) =>
+    collectBrokenLinkIssues(sourceFile, hrefsByFile[index] ?? [], allFileSet, outputDir, droppedDestSet),
+  );
 }

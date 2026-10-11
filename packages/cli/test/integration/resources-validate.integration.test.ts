@@ -1,7 +1,7 @@
-
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { RESOURCES_VALIDATE_REPORT_SCHEMA } from '../../src/commands/resources/validate-schema.js';
 import {
   getBinPath,
   createTestTempDir,
@@ -35,8 +35,9 @@ describe('vat resources validate (integration)', () => {
     ]);
 
     expect(result.status).toBe(0);
-    expect(parsed).toBeDefined();
-    expect(parsed.status).toBe('success');
+    const report = RESOURCES_VALIDATE_REPORT_SCHEMA.parse(parsed);
+    expect(report.status).toBe('ok');
+    expect(report.examined).toBe(2);
   });
 
   it('should detect broken links and exit 1', async () => {
@@ -49,18 +50,18 @@ describe('vat resources validate (integration)', () => {
     ]);
 
     expect(result.status).toBe(1);
-    expect(parsed).toBeDefined();
-    expect(parsed.status).toBe('error');
-    expect(parsed.errorsFound).toBeGreaterThan(0);
+    const report = RESOURCES_VALIDATE_REPORT_SCHEMA.parse(parsed);
+    expect(report.status).toBe('findings');
+    expect(report.findings).toMatchObject([{ code: 'LINK_BROKEN_FILE', severity: 'error', location: 'README.md' }]);
   });
 
-  it('should output test-format errors to stderr', async () => {
+  it('should print one compiler-style line per finding under --format text', async () => {
     writeTestFile(safePath.join(tempDir, 'test.md'), '[broken](./missing.md)');
 
     const result = await executeCli(binPath, ['resources', 'validate', tempDir, '--format', 'text']);
 
-    expect(result.stderr).toMatch(/test\.md:\d+:\d+: /);
-    expect(result.stderr).toContain('missing.md');
+    expect(result.status).toBe(1);
+    expect(result.stdout).toMatch(/test\.md:\d+: error: .*missing\.md.*\[LINK_BROKEN_FILE\]/);
   });
 
   it('should detect broken anchors', async () => {
@@ -69,6 +70,6 @@ describe('vat resources validate (integration)', () => {
     const result = await executeCli(binPath, ['resources', 'validate', tempDir, '--format', 'text']);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('#missing');
+    expect(result.stdout).toContain('#missing');
   });
 });

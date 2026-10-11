@@ -6,7 +6,7 @@
 
 import { createPostBuildScript } from '@vibe-agent-toolkit/resource-compiler/utils';
 
-createPostBuildScript({
+await createPostBuildScript({
   generatedDir: 'generated',
   distDir: 'dist',
   verbose: true,

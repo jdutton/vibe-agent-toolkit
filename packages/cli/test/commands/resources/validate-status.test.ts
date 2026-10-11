@@ -1,209 +1,199 @@
 /**
- * Unit tests for the verdict `vat resources validate` reports.
+ * Unit tests for the report `vat resources validate` publishes.
  *
- * One question — "issues → status" — must get ONE answer across every lane, in
- * ONE vocabulary: `success | warning | error`, meaning the worst ACTIONABLE
- * severity. This command used to answer it in a private two-value vocabulary
- * (`success | failed`), so the same underlying condition read differently here
- * than from `vat audit`, `vat skills validate`, or the library validators.
+ * One question — "issues → status" — gets ONE answer across every report verb,
+ * in the envelope's vocabulary: `ok` (nothing found) | `findings` (at least
+ * one). The load-bearing case is info-only: it is `findings`, and `summary`
+ * says the one thing found was info — the gate (not the status word) is what
+ * decides it does not fail the run.
  *
- * The load-bearing case is info-only: it must report `success` (nothing to act
- * on) while `issueCounts.info` proves something WAS found. A test that only
- * covers clean-vs-error cannot tell the two vocabularies apart.
+ * The run-integrity refusal for a run over zero resources is the WRITER's, from
+ * the registry's declared denominator; the last suite asserts it through
+ * `publishedReport`, the one pass every published document takes.
  *
  * All in-memory — the builder is pure, so no CLI spawn and no file system.
  */
 
+import { exitCodeForReport, type ValidationIssue } from '@vibe-agent-toolkit/schema';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { RESOURCES_VALIDATE_REPORT_SCHEMA } from '../../../src/commands/resources/validate-schema.js';
 import {
-  buildIssuesOutputData,
-  buildValidationDocument,
-  exitCodeForValidateRun,
+  buildResourcesValidateReport,
+  type ResourcesValidateInput,
 } from '../../../src/commands/resources/validate.js';
+import { publishedReport } from '../../../src/utils/document-writer.js';
 
-/** Registry stub: no resource belongs to a collection, so collection stats stay empty. */
-const NO_COLLECTIONS = { getResource: () => undefined };
+/** The code the run-integrity refusal carries, shared with `vat resources check`. */
+const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
 
-const CONTEXT = {
-  stats: { totalResources: 3, totalLinks: 7, linksByType: {} },
-  validationMetadata: { validationMode: 'strict' as const },
-  collectionStats: undefined,
-  duration: 12,
-};
+const ROOT = safePath.resolve('/testroot-rv');
 
-/** One flattened issue at the given severity, all four severities available. */
-function issue(severity: 'error' | 'warning' | 'info' | 'ignore', file = 'docs/a.md') {
-  return {
-    file,
-    absPath: `/testroot-rv/${file}`,
-    line: 4,
-    column: 1,
-    code: 'LINK_BROKEN_FILE' as const,
-    severity,
-    message: `${severity} finding`,
-  };
+/** Three resources, so a report over some of them cannot pass for one over all. */
+const RESOURCES = ['docs/a.md', 'docs/b.md', 'docs/c.md'].map((file) => ({ filePath: safePath.join(ROOT, file) }));
+
+/** One library issue at the given severity, all four severities available. */
+function issue(severity: ValidationIssue['severity'], location = 'docs/a.md'): ValidationIssue {
+  return { code: 'LINK_BROKEN_FILE', severity, message: `${severity} finding`, location, line: 4 };
 }
 
-/** Build the reported payload for a set of severities. */
-function report(...severities: Array<'error' | 'warning' | 'info' | 'ignore'>) {
-  return buildIssuesOutputData(severities.map((s) => issue(s)), CONTEXT, NO_COLLECTIONS);
+/** The report for a set of issues over {@link RESOURCES}, parsed with the published schema. */
+function report(issues: readonly ValidationIssue[], overrides: Partial<ResourcesValidateInput> = {}) {
+  const built = buildResourcesValidateReport({
+    root: ROOT,
+    resources: RESOURCES,
+    issues,
+    collectionStats: undefined,
+    verbose: false,
+    durationMs: 12,
+    ...overrides,
+  });
+  RESOURCES_VALIDATE_REPORT_SCHEMA.parse(built);
+  return built;
 }
 
-describe('buildIssuesOutputData — reported status vocabulary', () => {
-  it('reports `error` (never `failed`) when an error-severity issue fired', () => {
-    const data = report('error');
-    expect(data.status).toBe('error');
-    expect(data.errorsFound).toBe(1);
-    expect(data.filesWithErrors).toBe(1);
-    expect(data.issueCounts).toEqual({ errors: 1, warnings: 0, info: 0 });
+const severities = (...list: Array<ValidationIssue['severity']>) => list.map((s) => issue(s));
+
+describe('buildResourcesValidateReport — the envelope vocabulary', () => {
+  it('is findings, exit 1, when an error-severity issue fired', () => {
+    const built = report(severities('error'));
+
+    expect(built.status).toBe('findings');
+    expect(built.summary).toEqual({ errors: 1, warnings: 0, info: 0 });
+    expect(exitCodeForReport(built)).toBe(1);
   });
 
-  it('reports `warning` for a warning-only run — a verdict `failed` could not express', () => {
-    const data = report('warning');
-    expect(data.status).toBe('warning');
-    expect(data.errorsFound).toBe(0);
-    expect(data.filesWithErrors).toBe(0);
-    expect(data.issueCounts).toEqual({ errors: 0, warnings: 1, info: 0 });
+  it('is findings at exit 0 for a warning-only run — the gate is not strict', () => {
+    const built = report(severities('warning'));
+
+    expect(built.status).toBe('findings');
+    expect(built.gate).toEqual({ strict: false });
+    expect(exitCodeForReport(built)).toBe(0);
   });
 
-  it('reports `success` for an info-only run WHILE counting the info issue', () => {
-    // The discriminating case: `status` names the worst ACTIONABLE severity, so
-    // an informational observation is not a failure — and that is only honest
-    // because `issueCounts` rides beside it and the issue is still listed.
-    const data = report('info');
-    expect(data.status).toBe('success');
-    expect(data.issueCounts?.info).toBe(1);
-    expect(data.errorsFound).toBe(0);
-    // The file still has a row, and the row still names the severity — as the
-    // presence of an `info` count rather than as a per-issue `severity` field.
-    expect(data.issues?.[0]).toEqual({
-      file: 'docs/a.md',
-      info: 1,
-      codes: { LINK_BROKEN_FILE: 1 },
+  it('is findings for an info-only run, with summary naming what was found', () => {
+    // The discriminating case: the old vocabulary answered `success` here and
+    // left `issueCounts` to say otherwise — two answers to one question.
+    const built = report(severities('info'));
+
+    expect(built.status).toBe('findings');
+    expect(built.summary.info).toBe(1);
+    expect(exitCodeForReport(built)).toBe(0);
+  });
+
+  it('publishes an `ignore`-severity issue nowhere — not as a finding, not in summary', () => {
+    // Suppressed by the adopter's own `validation.allow` config; publishing it
+    // under any other name would resurrect what they deliberately silenced.
+    const built = report(severities('ignore'));
+
+    expect(built.status).toBe('ok');
+    expect(built.findings).toEqual([]);
+    expect(built.summary).toEqual({ errors: 0, warnings: 0, info: 0 });
+  });
+
+  it('publishes each finding flat, located relative to the stated root', () => {
+    const built = report([issue('error', 'docs/b.md')]);
+
+    expect(built.data.root).toBe(ROOT);
+    expect(built.findings).toEqual([
+      { code: 'LINK_BROKEN_FILE', severity: 'error', message: 'error finding', location: 'docs/b.md', line: 4 },
+    ]);
+  });
+
+  it('counts the resources validated as examined', () => {
+    expect(report([]).examined).toBe(3);
+    expect(report([], { resources: RESOURCES.slice(0, 1) }).examined).toBe(1);
+  });
+});
+
+describe('the --verbose file rows', () => {
+  it('lists every resource validated, the clean ones included, with its own status and summary', () => {
+    const built = report([issue('error', 'docs/a.md'), issue('info', 'docs/a.md')], { verbose: true });
+
+    expect(built.data.files).toEqual([
+      { path: 'docs/a.md', status: 'findings', summary: { errors: 1, warnings: 0, info: 1 } },
+      { path: 'docs/b.md', status: 'ok', summary: { errors: 0, warnings: 0, info: 0 } },
+      { path: 'docs/c.md', status: 'ok', summary: { errors: 0, warnings: 0, info: 0 } },
+    ]);
+  });
+
+  it('publishes no file rows without --verbose, and the same envelope either way', () => {
+    const issues = [issue('error', 'docs/a.md')];
+    const terse = report(issues);
+    const verbose = report(issues, { verbose: true });
+
+    expect(terse.data).not.toHaveProperty('files');
+    expect({ ...terse, data: null }).toEqual({ ...verbose, data: null });
+  });
+});
+
+describe('collections', () => {
+  it('counts each collection\'s findings, and its files carrying an error', () => {
+    const built = report([issue('error', 'docs/a.md'), issue('warning', 'docs/b.md'), issue('error', 'docs/c.md')], {
+      resources: [
+        { filePath: safePath.join(ROOT, 'docs/a.md'), collections: ['guides'] },
+        { filePath: safePath.join(ROOT, 'docs/b.md'), collections: ['guides'] },
+        { filePath: safePath.join(ROOT, 'docs/c.md'), collections: ['other'] },
+      ],
+      collectionStats: {
+        totalCollections: 2,
+        resourcesInCollections: 3,
+        collections: {
+          guides: { resourceCount: 2, hasSchema: false },
+          other: { resourceCount: 1, hasSchema: true, validationMode: 'permissive' },
+        },
+      },
+    });
+
+    expect(built.data.collections).toEqual({
+      guides: { resourceCount: 2, hasSchema: false, filesWithErrors: 1, summary: { errors: 1, warnings: 1, info: 0 } },
+      other: {
+        resourceCount: 1,
+        hasSchema: true,
+        validationMode: 'permissive',
+        filesWithErrors: 1,
+        summary: { errors: 1, warnings: 0, info: 0 },
+      },
     });
   });
 
-  it('counts an `ignore`-severity issue in no bucket at all', () => {
-    // Suppressed by the adopter's own `validation.allow` config — counting it as
-    // info would resurrect something they deliberately silenced.
-    const data = report('ignore');
-    expect(data.status).toBe('success');
-    expect(data.issueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
-  });
-
-  it('collapses a mixed set to the worst actionable severity', () => {
-    expect(report('info', 'warning', 'error').status).toBe('error');
-    expect(report('ignore', 'info', 'warning').status).toBe('warning');
-  });
-
-  it('never emits the retired `failed` verdict', () => {
-    const statuses = [
-      report('error').status,
-      report('warning').status,
-      report('info').status,
-      report('ignore').status,
-    ];
-    expect(statuses).not.toContain('failed');
+  it('publishes `{}` for a project that configures none', () => {
+    expect(report([]).data.collections).toEqual({});
   });
 });
 
 /**
- * The run-integrity refusal: a run that scanned NO file must never answer
- * `success`.
+ * A run that validated NO resource is not a verdict.
  *
- * ## The defect
- *
- * `vat resources validate --collection no-such-collection` reported
- * `status: success`, `filesScanned: 0`, exit 0. A `--collection` name that
- * matches nothing (a typo, a renamed collection) filters every resource out,
- * and zero issues over zero files serializes identically to "every file in the
- * collection is clean". A path argument naming a tree with no markdown does the
- * same through the other builder. Neither the registry nor the CLI had a
- * zero-resource refusal, and no test covered the zero case.
- *
- * ## Why the assertion is on the document builder
- *
- * Both outcomes — clean and with-issues — go through `buildValidationDocument`,
- * so deriving the refusal there makes "filesScanned: 0, status: success"
- * unrepresentable by construction rather than merely unwritten. The precedent is
- * `vat resources check` and `vat claude budget`: a non-overridable
- * `RESOURCE_CHECK_BROKEN` at `error`, ONE per run, shared through
- * `run-integrity.ts`.
+ * `vat resources validate --collection no-such-collection` once reported
+ * `status: success`, `filesScanned: 0`, exit 0. The refusal is now the
+ * writer's, derived from the registry's declared denominator — so the verb has
+ * no seam at which to forget it.
  */
-describe('buildValidationDocument — a run that scanned nothing is not a verdict', () => {
-  /** The code the run-integrity refusal carries, shared with `vat resources check`. */
-  const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
+describe('a run over zero resources, as published', () => {
+  it('is refused with ONE RESOURCE_CHECK_BROKEN at error, exit 1', () => {
+    const published = publishedReport('resources validate', report([], { resources: [] }));
 
-  /** A context whose scan matched no resource — what a stray `--collection` produces. */
-  const NOTHING_SCANNED = {
-    ...CONTEXT,
-    stats: { totalResources: 0, totalLinks: 0, linksByType: {} },
-    collection: 'no-such-collection',
-  };
-
-  it('refuses a clean run over zero files with ONE RESOURCE_CHECK_BROKEN at error', () => {
-    // 🔑 The reproduced defect. Delete the guard and this reds: no issue was
-    // flattened, so the success builder answers `success` over `filesScanned: 0`.
-    const data = buildValidationDocument([], NOTHING_SCANNED, NO_COLLECTIONS, false);
-
-    expect(data.status).toBe('error');
-    expect(data.filesScanned).toBe(0);
-    expect(data.issueCounts).toEqual({ errors: 1, warnings: 0, info: 0 });
-    expect(data.issueSummary).toEqual({ [RUN_INTEGRITY_CODE]: 1 });
-    // ONE row, and it is not a file: the claim is about the run.
-    expect(data.issues).toHaveLength(1);
-    expect(data.issues?.[0]).toMatchObject({ errors: 1, codes: { [RUN_INTEGRITY_CODE]: 1 } });
-    // No file carried the error, so no file is counted as carrying one.
-    expect(data.filesWithErrors).toBe(0);
+    expect(published.status).toBe('findings');
+    expect(published.examined).toBe(0);
+    expect(published.findings.map((finding) => finding.code)).toEqual([RUN_INTEGRITY_CODE]);
+    expect(exitCodeForReport(published)).toBe(1);
   });
 
-  it('names the filter that matched nothing and what to do about it', () => {
-    const data = buildValidationDocument([], NOTHING_SCANNED, NO_COLLECTIONS, true);
-    const row = data.issues?.[0] as { issues: Array<{ code: string; message: string }> };
-    const [finding] = row.issues;
+  it('says what to check — the --collection filter among the causes — and never that the corpus is broken', () => {
+    const [refusal] = publishedReport('resources validate', report([], { resources: [] })).findings;
 
-    expect(finding?.code).toBe(RUN_INTEGRITY_CODE);
-    expect(finding?.message).toContain('no-such-collection');
-    expect(finding?.message).toContain('vat resources scan');
-    // It claims the RUN is not a verdict — never that the corpus is broken.
-    expect(finding?.message).not.toMatch(/broken link|invalid/i);
+    expect(refusal?.message).toContain('0 resources');
+    expect(refusal?.message).toContain('--collection');
+    expect(refusal?.message).toContain('vat resources scan');
+    expect(refusal?.message).not.toMatch(/broken link|invalid/i);
   });
 
   it('stays silent over a populated corpus, however clean', () => {
-    // 🔑 The over-correction guard: an ordinary clean run must not start
-    // reporting an error.
-    const data = buildValidationDocument([], CONTEXT, NO_COLLECTIONS, false);
+    const published = publishedReport('resources validate', report([]));
 
-    expect(data.status).toBe('success');
-    expect(data.filesScanned).toBe(3);
-    expect(data.issues).toBeUndefined();
-  });
-
-  it('adds the refusal beside real findings when those came from a zero-file scan', () => {
-    // A location-less library finding (a config-level error, say) over a
-    // filter that matched nothing: the run is still not a verdict about files.
-    const data = buildValidationDocument([issue('warning')], NOTHING_SCANNED, NO_COLLECTIONS, false);
-
-    expect(data.status).toBe('error');
-    expect(data.issueSummary?.[RUN_INTEGRITY_CODE]).toBe(1);
-    expect(data.issueCounts).toEqual({ errors: 1, warnings: 1, info: 0 });
-  });
-});
-
-describe('exitCodeForValidateRun — the exit code agrees with the document', () => {
-  it('exits 1 when the document refused the run, even though the library found no error', () => {
-    // The library's `hasErrors` is computed over the WHOLE project; the refusal
-    // is derived over what was REPORTED. Both must fail the run.
-    expect(exitCodeForValidateRun(false, { status: 'error' })).toBe(1);
-  });
-
-  it('still exits 1 on a library error the --collection filter hid from the document', () => {
-    expect(exitCodeForValidateRun(true, { status: 'success' })).toBe(1);
-  });
-
-  it('exits 0 only when both agree the run is clean', () => {
-    expect(exitCodeForValidateRun(false, { status: 'success' })).toBe(0);
-    expect(exitCodeForValidateRun(false, { status: 'warning' })).toBe(0);
+    expect(published.status).toBe('ok');
+    expect(published.findings).toEqual([]);
   });
 });

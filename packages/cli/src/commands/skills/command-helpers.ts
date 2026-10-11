@@ -1,15 +1,15 @@
 /**
  * Helper functions for skill commands.
  *
- * Error handling deliberately does NOT live here: every command family shares
- * the one implementation in `utils/command-error.ts`. This module used to carry
- * a second `handleCommandError` with the same name and signature that wrote
- * nothing to stdout before exiting 2.
+ * Error handling deliberately does NOT live here: every command family ends
+ * through the one writer (`utils/document-writer.ts`). This module used to carry
+ * a second failure helper that wrote nothing to stdout before exiting 2.
  */
 
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
+import { CommandRefusalError } from '../../utils/command-refusal.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 
 /**
@@ -28,7 +28,8 @@ export interface DiscoveredSkill {
  * @param skills - All discovered skills
  * @param skillName - Optional skill name to filter by
  * @returns Filtered skills array
- * @throws Error if skillName specified but not found
+ * @throws {CommandRefusalError} `USAGE_INVALID` when `skillName` names no discovered skill —
+ *   the invocation's mistake, never a defect in VAT
  */
 export function filterSkillsByName<T extends DiscoveredSkill>(
   skills: T[],
@@ -42,24 +43,13 @@ export function filterSkillsByName<T extends DiscoveredSkill>(
 
   if (filtered.length === 0) {
     const available = skills.map(s => s.name).join(', ');
-    throw new Error(
-      `Skill "${skillName}" not found. Available skills: ${available}`
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
+      `Skill "${skillName}" not found. Available skills: ${available}`,
     );
   }
 
   return filtered;
-}
-
-/**
- * Write YAML header to stdout
- *
- * @param fields - Key-value pairs to write as YAML
- */
-export function writeYamlHeader(fields: Record<string, string | number | boolean>): void {
-  process.stdout.write('---\n');
-  for (const [key, value] of Object.entries(fields)) {
-    process.stdout.write(`${key}: ${value}\n`);
-  }
 }
 
 /**

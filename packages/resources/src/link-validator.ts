@@ -1096,7 +1096,7 @@ function validateLocalFileLink(
  * promise — so one transient descriptor exhaustion silently unvalidated every
  * link under that directory for the rest of the run, at exit 0. Both halves are
  * closed: the cache drops a *transient* refusal once it has settled (see
- * `TRANSIENT_LISTING_ERRNOS`), and the cause now carries the errno and the
+ * `isTransientListingCode`), and the cause now carries the errno and the
  * directory, so the message below can say which one and why.
  *
  * 🔑 `LINK_TARGET_UNREADABLE` rather than a new code: it is the registry's

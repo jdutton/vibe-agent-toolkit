@@ -16,7 +16,7 @@ export function createMockPureFunctionAgent(
       description: 'Test agent',
       archetype: 'pure-function' as const,
     },
-    execute: async () => ({ result: { status: RESULT_SUCCESS, data: { result: true } } }),
+    execute: () => Promise.resolve({ result: { status: RESULT_SUCCESS, data: { result: true } } }),
   };
 }
 
@@ -36,6 +36,6 @@ export function createMockAgent(
       description: 'Test',
       archetype,
     },
-    execute: async () => ({ result: { status: RESULT_SUCCESS, data: {} } }),
+    execute: () => Promise.resolve({ result: { status: RESULT_SUCCESS, data: {} } }),
   };
 }

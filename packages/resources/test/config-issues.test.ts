@@ -19,7 +19,7 @@ function refusalOf(document: unknown): z.ZodError {
 describe('formatConfigValidationError', () => {
   it('names the config file, so an adopter with several knows which one', () => {
     const message = formatConfigValidationError(
-      refusalOf({ version: 1, resources: { metadata: { frontmatter: true } } }),
+      refusalOf({ resources: { metadata: { frontmatter: true } } }),
       { configPath: '/repo/vibe-agent-toolkit.config.yaml', schema: ProjectConfigSchema },
     );
     expect(message).toContain('/repo/vibe-agent-toolkit.config.yaml');
@@ -27,7 +27,7 @@ describe('formatConfigValidationError', () => {
 
   it('names the refused key in words, at its dotted path', () => {
     const message = formatConfigValidationError(
-      refusalOf({ version: 1, resources: { metadata: { frontmatter: true } } }),
+      refusalOf({ resources: { metadata: { frontmatter: true } } }),
       { configPath: '/repo/config.yaml', schema: ProjectConfigSchema },
     );
     expect(message).toContain('resources: unrecognized key "metadata"');
@@ -38,7 +38,7 @@ describe('formatConfigValidationError', () => {
     // reason: the adopter's config worked yesterday. Saying "removed, and we
     // were discarding it" is the half that makes the refusal make sense.
     const message = formatConfigValidationError(
-      refusalOf({ version: 1, resources: { metadata: true } }),
+      refusalOf({ resources: { metadata: true } }),
       { schema: ProjectConfigSchema },
     );
     expect(message).toContain('removed from VAT\'s schema');
@@ -47,7 +47,7 @@ describe('formatConfigValidationError', () => {
 
   it('lists the keys that ARE accepted at that path, derived from the schema', () => {
     const message = formatConfigValidationError(
-      refusalOf({ version: 1, resources: { cheks: {} } }),
+      refusalOf({ resources: { cheks: {} } }),
       { schema: ProjectConfigSchema },
     );
     // Derived from `ResourcesConfigSchema.shape` — adding a config key moves
@@ -62,7 +62,6 @@ describe('formatConfigValidationError', () => {
     // rule the adopter believes is being enforced.
     const message = formatConfigValidationError(
       refusalOf({
-        version: 1,
         resources: { checks: { orphans: { description: 'd', sql: 'SELECT 1', sevrity: 'error' } } },
       }),
       { schema: ProjectConfigSchema },
@@ -73,7 +72,7 @@ describe('formatConfigValidationError', () => {
 
   it('omits the accepted-key clause rather than guessing when given no schema', () => {
     const message = formatConfigValidationError(
-      refusalOf({ version: 1, resources: { metadata: true } }),
+      refusalOf({ resources: { metadata: true } }),
     );
     expect(message).toContain('unrecognized key "metadata"');
     expect(message).not.toContain('Accepted here');
@@ -81,7 +80,7 @@ describe('formatConfigValidationError', () => {
 
   it('renders an ordinary type failure as path plus message', () => {
     const message = formatConfigValidationError(
-      refusalOf({ version: 1, resources: { exclude: 'not-an-array' } }),
+      refusalOf({ resources: { exclude: 'not-an-array' } }),
       { schema: ProjectConfigSchema },
     );
     expect(message).toContain('resources.exclude:');
@@ -92,7 +91,7 @@ describe('formatConfigValidationError', () => {
     // The shipped defect: `ZodError.message` is the issue ARRAY, serialized. It
     // named no file, no remedy, and was what five verbs printed before exiting 2.
     const message = formatConfigValidationError(
-      refusalOf({ version: 1, resources: { metadata: true } }),
+      refusalOf({ resources: { metadata: true } }),
       { configPath: '/repo/config.yaml', schema: ProjectConfigSchema },
     );
     expect(message).not.toContain('"code":');
@@ -105,7 +104,7 @@ describe('formatConfigValidationError', () => {
       checks[`c${index}`] = { description: 'd', sql: 'SELECT 1', sevrity: 'error' };
     }
     const message = formatConfigValidationError(
-      refusalOf({ version: 1, resources: { checks } }),
+      refusalOf({ resources: { checks } }),
       { schema: ProjectConfigSchema },
     );
     expect(message).toContain('… and 10 more issue(s)');
@@ -113,7 +112,7 @@ describe('formatConfigValidationError', () => {
 
   it('labels a top-level refusal rather than showing an empty path', () => {
     const message = formatConfigValidationError(
-      refusalOf({ version: 1, nonsense: true }),
+      refusalOf({ nonsense: true }),
       { schema: ProjectConfigSchema },
     );
     expect(message).toContain('(top level): unrecognized key "nonsense"');

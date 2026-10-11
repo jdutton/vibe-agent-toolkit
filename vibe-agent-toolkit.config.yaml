@@ -1,7 +1,6 @@
 # vibe-agent-toolkit configuration
 # Configuration for vat CLI tool
 
-version: 1
 
 resources:
   # Global excludes (apply to all scanning)

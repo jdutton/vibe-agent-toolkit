@@ -113,6 +113,7 @@ import {
   CRAWL_CLOSURE_RESOLVE_ID,
   CRAWL_PASS_INSIDE,
   crawlTimingStart,
+  promised,
   recordCrawlPass,
 } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
@@ -308,7 +309,7 @@ export class ClosureExtentContributor implements ExtentContributor {
    * @throws When `parameters` is not a valid declaration, or names a `kind` other
    *   than the one this contributor is registered under
    */
-  async contribute(base: ProjectionBase, parameters: JsonValue): Promise<ExtentContribution> {
+  contribute(base: ProjectionBase, parameters: JsonValue): Promise<ExtentContribution> {
     // Bracketed from the inside, under a synthetic id shared by every declared
     // extent — see `crawl-timing.ts`. The merge driver already records this
     // invocation per extent and per fixpoint pass; what only an inner bracket can
@@ -316,7 +317,7 @@ export class ClosureExtentContributor implements ExtentContributor {
     // and the provenance rows the driver wraps around it.
     const startedAt = crawlTimingStart();
     try {
-      return this.#contribute(base, parameters);
+      return promised(() => this.#contribute(base, parameters));
     } finally {
       recordCrawlPass(CRAWL_CLOSURE_CONTRIBUTE_ID, 'closure', CRAWL_PASS_INSIDE, startedAt);
     }

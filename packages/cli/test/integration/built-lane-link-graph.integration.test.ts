@@ -61,7 +61,7 @@ const roots: string[] = [];
 function makeProject(label: string): { root: string; skillPath: string } {
   const root = mkdtempSync(safePath.join(normalizedTmpdir(), `vat-bundling-${label}-`));
   roots.push(root);
-  writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n', 'utf-8');
+  writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), '{}\n', 'utf-8');
   for (const [relativePath, contents] of Object.entries(BUNDLING_SKILL_FILES)) {
     const absolutePath = safePath.join(root, relativePath);
     mkdirSyncReal(safePath.resolve(absolutePath, '..'), { recursive: true });

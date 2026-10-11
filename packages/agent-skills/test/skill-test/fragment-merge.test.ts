@@ -221,8 +221,8 @@ describe('mergeFragmentsToGrading', () => {
 
 describe('mergeFragmentsToFriction', () => {
   it('concatenates friction items across fragments and de-dups byte-identical ones', () => {
-    const item = { severity: 'high', category: PATH_ASSUMPTION_CATEGORY, message: TMP_ASSUMPTION_MESSAGE } as const;
-    const otherItem = { severity: 'low', category: 'doc-engine-drift', message: 'other' } as const;
+    const item = { severity: 'error', category: PATH_ASSUMPTION_CATEGORY, message: TMP_ASSUMPTION_MESSAGE } as const;
+    const otherItem = { severity: 'info', category: 'doc-engine-drift', message: 'other' } as const;
     const fragments: EvalFragment[] = [
       makeFragment({ friction: [item] }),
       makeFragment({ evalId: 'eval-2', friction: [item, otherItem] }),
@@ -242,11 +242,11 @@ describe('mergeFragmentsToFriction', () => {
   it('keeps items that differ in any field (not byte-identical)', () => {
     const fragments: EvalFragment[] = [
       makeFragment({
-        friction: [{ severity: 'high', category: PATH_ASSUMPTION_CATEGORY, message: TMP_ASSUMPTION_MESSAGE }],
+        friction: [{ severity: 'error', category: PATH_ASSUMPTION_CATEGORY, message: TMP_ASSUMPTION_MESSAGE }],
       }),
       makeFragment({
         evalId: 'eval-2',
-        friction: [{ severity: 'low', category: PATH_ASSUMPTION_CATEGORY, message: TMP_ASSUMPTION_MESSAGE }],
+        friction: [{ severity: 'info', category: PATH_ASSUMPTION_CATEGORY, message: TMP_ASSUMPTION_MESSAGE }],
       }),
     ];
 

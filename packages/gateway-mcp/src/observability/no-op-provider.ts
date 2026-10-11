@@ -33,9 +33,12 @@ class NoOpSpan implements Span {
 }
 
 class NoOpTracer implements Tracer {
-  async startActiveSpan<T>(_name: string, fn: (span: Span) => Promise<T>): Promise<T> {
-    const span = new NoOpSpan();
-    return fn(span);
+  startActiveSpan<T>(_name: string, fn: (span: Span) => Promise<T>): Promise<T> {
+    try {
+      return fn(new NoOpSpan());
+    } catch (error) {
+      return Promise.reject(error as Error);
+    }
   }
 }
 

@@ -72,7 +72,7 @@ async function populateWith(
   collections: Readonly<Record<string, CollectionConfig>> | undefined,
 ): Promise<Projection> {
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor(() => crawlSourceFor(fixture.root())));
+  registry.register(new FilesystemExtentContributor(() => crawlSourceFor(fixture.root(), [])));
 
   return populate({
     root: fixture.root(),

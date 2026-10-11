@@ -2,23 +2,16 @@
  * Unit tests for ZipSizeLimitError and validateZipSize.
  *
  * validateZipSize is an internal function called via packageSkill() when
- * target === 'claude-web' and 'zip' is in formats. This file uses vi.mock
- * to control statSync return values so we can test size thresholds without
- * creating real multi-megabyte ZIP files.
- *
- * The fake is scoped to the `.zip` artifact by {@link fakeZipSize}. A blanket
- * `mockReturnValue` fakes EVERY stat the packager takes, which silently couples
- * this file to every other validator that stats the output — the packaged-size
- * walk asks `stats.isFile()`, and a stub carrying only `size` made five tests
- * here fail with `stats.isFile is not a function` when that walk was added.
+ * target === 'claude-web' and 'zip' is in formats. The archive is judged by the
+ * size of its bytes in memory, BEFORE the package's plan lands it, so this file
+ * fakes the archive adm-zip produces ({@link fakeZipSize}) to test the thresholds
+ * without archiving multi-megabyte trees.
  *
  * Separated from skill-packager.test.ts because vi.mock() must be at the
- * module level in ESM — mixing with real-fs tests would break both.
+ * module level in ESM — mixing with real-archive tests would break both.
  */
 
-import * as nodeFs from 'node:fs';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,36 +20,27 @@ import { ZipSizeLimitError, packageSkill } from '../src/skill-packager.js';
 
 import { createFrontmatter } from './test-helpers.js';
 
-/**
- * The real `statSync`, captured before the module mock replaces it, so
- * {@link fakeZipSize} can delegate every non-ZIP stat to the filesystem.
- */
-const { statSync: realStatSync } = await vi.importActual<typeof nodeFs>('node:fs');
+/** The size of the archive the faked adm-zip produces next. */
+const fakeArchive = { bytes: 1024 };
 
-/**
- * Fake the size of the packaged ZIP and nothing else.
- *
- * Every other path — including the packaged bundle the size walk weighs — is
- * answered by the real filesystem, so this file tests the ZIP threshold without
- * standing in for validators it knows nothing about.
- */
+/** Fake the size of the packaged ZIP and nothing else: every byte of it is zero. */
 function fakeZipSize(bytes: number): void {
-  vi.mocked(nodeFs.statSync).mockImplementation(((target: nodeFs.PathLike, options?: unknown) =>
-    (typeof target === 'string' && target.endsWith('.zip'))
-      ? ({ size: bytes, isFile: () => true, isDirectory: () => false } as nodeFs.Stats)
-      : (realStatSync as unknown as (t: nodeFs.PathLike, o?: unknown) => nodeFs.Stats)(target, options)
-  ) as unknown as typeof nodeFs.statSync);
+  fakeArchive.bytes = bytes;
 }
 
-// vi.mock is hoisted by vitest above all imports, so this runs before any
-// module loads node:fs — preserving all real operations except statSync.
-vi.mock('node:fs', async (importOriginal) => {
-  const actual = await importOriginal() as typeof nodeFs;
-  return {
-    ...actual,
-    statSync: vi.fn(actual.statSync),
-  };
-});
+// vi.mock is hoisted by vitest above all imports: the packager's dynamic import of
+// adm-zip gets an archive whose bytes are `fakeArchive.bytes` long.
+vi.mock('adm-zip', () => ({
+  default: class FakeAdmZip {
+    addLocalFolder(): void {
+      // The bundle is not read: the size under test is the fake's.
+    }
+
+    toBuffer(): Buffer {
+      return Buffer.alloc(fakeArchive.bytes);
+    }
+  },
+}));
 
 // ============================================================================
 // Constants
@@ -172,6 +156,9 @@ describe('validateZipSize (via packageSkill, target: claude-web)', () => {
         target: CLAUDE_WEB,
       }),
     ).rejects.toThrow(ZipSizeLimitError);
+    // One plan: an archive over the ceiling lands nothing — neither it nor the bundle.
+    expect(existsSync(outDir)).toBe(false);
+    expect(readdirSync(tempDir)).toEqual(['SKILL.md']);
   });
 
   it('throws ZipSizeLimitError when ZIP size exceeds 8MB', async () => {

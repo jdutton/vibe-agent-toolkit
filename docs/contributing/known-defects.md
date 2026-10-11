@@ -1,0 +1,738 @@
+# Known defects — open, reproduced or traced, not yet fixed
+
+These are the open defects VAT's maintainers know about. Every entry is either reproduced against
+the built CLI or traced in code, and says which. **Delete an entry in the commit that fixes it.**
+Do not mark it fixed, strike it through or move it to a "done" list: git holds the history. Add an
+entry when a review or a session finds a defect that will not be fixed in the change that found it.
+
+Each entry gives the mechanism, a minimal reproduction, where it lives, the likely fix, an effort
+(**S** under about an hour, one package, the fix is clear; **M** more than that; **L** needs a
+design or the root cause is unknown) and whether fixing it changes what a user sees. Severity is
+the finder's: **Critical** destroys or exposes data, **Important** gives a wrong answer or a wrong
+code where a user acts on it, **Minor** everything else. Line numbers are approximate and drift.
+Search for the symbol if a line has moved.
+
+No session logistics, dates, commit ids, issue numbers or names of people, adopters or companies.
+Routing for other kinds of statement is in [`content-routing.md`](content-routing.md). A failure
+that only *looks* like a defect belongs in [`traps.md`](traps.md).
+
+## CLI arguments and config
+
+### An unloadable governing config gets three different answers, and one comment is false
+
+- **Severity:** Minor · **Effort:** M (choose the one answer) · **User-visible:** yes
+- **Mechanism:** with the same broken config, each lane answers differently:
+  - `skills validate` refuses with `CONFIG_INVALID`;
+  - `audit` puts a `SCAN_PATH_UNREADABLE` warning in the document;
+  - `claude marketplace validate` logs to stderr only, and its document says nothing. Its comment
+    justifies this by `vat verify` reporting the parse error in its other phases, which does not
+    hold when the verb runs on its own.
+
+  The audit fallback justifies itself as "can only show more than the adopter asked for, never
+  less". That holds for `ignore`. It is false for a `validation.severity` override that raises a
+  code to `error`: the finding is then published at its default severity, and the run can exit 0.
+- **Reproduce:** use a project with a malformed config and a severity override that raises a
+  warning to error. Run `vat claude marketplace validate`: it exits 0.
+- **Where:** [`marketplace/validate.ts:500-515`](../../packages/cli/src/commands/claude/marketplace/validate.ts)
+  (`resolveProjectValidationConfig`),
+  [`audit.ts:1353-1375`](../../packages/cli/src/commands/audit.ts)
+- **Fix:** publish the same `SCAN_PATH_UNREADABLE` finding in the marketplace document, and correct
+  both comments.
+
+### Published documents carry absolute paths outside `data.root`
+
+- **Severity:** Minor · **Effort:** L (choose one rule and apply it across verbs) · **User-visible:** yes
+- **Mechanism:** the stated convention is that `data.root` is the only absolute path. These break it:
+  - `skill review --yaml` puts an absolute path in `data.source`;
+  - `inventory` does the same in `data.inventory.path`;
+  - `doctor` does the same in `currentDir`, `projectRoot` and `configPath`;
+  - every "Path does not exist" refusal puts one in `error.message`;
+  - `skill test configure <undeclared>` names the config file by its absolute path in
+    `error.message` ("No skill named 'typo' is declared by /…/vibe-agent-toolkit.config.yaml");
+  - `skills package -o <occupied>` (dry or real) puts the output's absolute path in
+    `error.message` ("output occ: /…/occ already exists");
+  - a classified filesystem fault (`FsFaultError`) names the absolute path the OS named
+    ("Could not <action> (<errno>): /…"), and every packaging lane publishes a packager's
+    source fault with that message as the `SKILL_PACKAGING_FAILED` finding (traced);
+  - `agent build` refusing a pipe, socket or device under `scripts/` names it by its absolute
+    path in `error.message` ("Agent source cannot be read (not a regular file…): /…/scripts/pipe");
+  - a skill source the OS will not read is a fault saying "Could not read the skill source at
+    <path>" with the path `resolveAssetReference` resolved, so absolute
+    (`skill test run --with name=path:<dir>`).
+- **Reproduce:** `vat skill review skills/foo --yaml`, then read `data.source`.
+- **Where:** the verbs above; `requireDeclaredSkill` in
+  [`configure.ts`](../../packages/cli/src/commands/skill/test/configure.ts);
+  `recognisePackageOutput` in [`skill-packager.ts`](../../packages/agent-skills/src/skill-packager.ts);
+  [`fs-fault.ts`](../../packages/utils/src/errors/fs-fault.ts) (`FsFaultError`'s message);
+  [`builder.ts`](../../packages/agent-skills/src/builder.ts) (the agent-source refusal);
+  [`content-hash.ts`](../../packages/agent-skills/src/skill-source/content-hash.ts).
+- **Fix:** relativize to a stated root, or document each exception in the schema docstrings.
+
+### A Commander usage error publishes no document
+
+- **Severity:** Minor · **Effort:** L (contract decision) · **User-visible:** yes
+- **Mechanism:** every node gets `exitOverride()` and `allowExcessArguments(false)`, so an unknown
+  option, a bad `.choices()` value and an operand a verb never declared all end as a
+  `CommanderError`. `bin.ts` maps that to exit 2 and exits with nothing on stdout, for every verb.
+  This is deliberate. Even so, "every document verb publishes its document on failure too" holds
+  only for refusals raised inside a verb. `validate`, `build` and `verify` refuse excess operands
+  by hand instead (`marksOperandRefusalByHand`), throwing `USAGE_INVALID` inside the action, so the
+  same mistake takes the verb's own refusal path there and commander's document-less ending
+  everywhere else.
+- **Reproduce:** traced. Any verb with an unknown option, such as `vat resources validate --bogus`,
+  should exit 2 with an empty stdout.
+- **Where:** [`bin.ts:222-231`](../../packages/cli/src/bin.ts),
+  [`command-tree.ts`](../../packages/cli/src/command-tree.ts) (`applyCommandTreePolicy`),
+  [`commander-ending.ts`](../../packages/cli/src/utils/commander-ending.ts)
+- **Fix:** decide before 0.2.0 stable. Either publish a `USAGE_INVALID` document from the ending
+  handler, or state the exception in the report contract.
+
+### A config warning is headed "Invalid configuration in …"
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** yes
+- **Mechanism:** a config whose only problems are unknown keys is accepted with a warning, but the
+  warning is rendered by the same formatter as the refusal. Its first line reads "Invalid
+  configuration in …" for what its own body calls a warning.
+- **Reproduce:** `vat claude plugin build` with a config that carries an unknown root key.
+- **Where:** [`config-issues.ts:188-198, 331`](../../packages/resources/src/config-issues.ts)
+  (`formatConfigValidationError`, called from `parseConfigAllowingUnknownKeys`)
+- **Fix:** give the formatter a subject for the warning case, and pass it from the unknown-keys path.
+
+### One broken link, two finding codes
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes
+- **Mechanism:** the same line of the same file gets a different code depending on the lane:
+  - `skills validate`, and `audit` when the config loaded, report `LINK_MISSING_TARGET`;
+  - `skills install`, `skills package`, and `audit` when the config is unloadable, report
+    `LINK_INTEGRITY_BROKEN`.
+
+  A `validation.severity` override on one name does not reach the other lanes.
+- **Reproduce:** use a skill with one broken link, then compare `vat skills validate` with
+  `vat skills package`.
+- **Where:** the link validators in [`agent-skills`](../../packages/agent-skills/src/validators/)
+- **Fix:** one code for one cause, emitted by one validator that every lane calls.
+
+### `command-refusal.ts` imports the whole agent-skills barrel for six constants
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** no
+- **Mechanism:** the refusal map exists so a helper that only needs to refuse does not load heavy
+  modules. It still imports six code constants from `@vibe-agent-toolkit/agent-skills`, whose
+  package exports only `.`, so loading the map loads the whole barrel.
+- **Where:** [`command-refusal.ts:22-29`](../../packages/cli/src/utils/command-refusal.ts),
+  [`agent-skills/package.json`](../../packages/agent-skills/package.json) (`exports`)
+- **Fix:** add a light agent-skills subpath that exports the code constants, and import from it.
+
+### `vat skill test run` with an expired `claude` login is `INTERNAL_ERROR`
+
+- **Severity:** Important · **Effort:** M · **User-visible:** yes
+- **Mechanism:** preflight's auth check reads `claude auth status --json` and accepts
+  `loggedIn: true`, which does not prove the credential is still live. The run then spawns the
+  grader, which exits non-zero, and `eval-grader.ts` throws every non-zero grader exit as an
+  `InternalHarnessError`. An expired login is therefore published as a defect in VAT, "Grader
+  exited non-zero", instead of an auth refusal the user can act on.
+- **Reproduce:** observed with an expired subscription login: `vat skill test run <skill>
+  --i-understand-this-runs-skill-code` exits 2 `INTERNAL_ERROR`.
+- **Where:** [`eval-grader.ts:292-295`](../../packages/agent-skills/src/skill-test/eval-grader.ts),
+  [`auth-resolver.ts:46, 85`](../../packages/utils/src/skill-test/auth-resolver.ts),
+  [`preflight.ts`](../../packages/agent-skills/src/skill-test/preflight.ts)
+- **Fix:** have preflight prove the credential with a cheap authenticated call, and code a spawn
+  that fails on authentication as the preflight's auth refusal rather than a harness defect.
+
+### Code-hygiene leftovers
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** no
+- **Mechanism:** each item below changes no behaviour:
+  - [`plugin/install.ts:22`](../../packages/cli/src/commands/claude/plugin/install.ts) has a long single-line import;
+  - the literal `'agent-skill'` is used twice in [`skill-validator.ts:715-716`](../../packages/agent-skills/src/validators/skill-validator.ts);
+  - `CLEAN_SENTENCE` is typed as `Partial<Record>` ([`describe-issues.ts:19`](../../packages/agent-skills/src/validators/describe-issues.ts));
+  - `graderSeverityToShared` is a one-line wrapper ([`friction-schema.ts:27`](../../packages/agent-skills/src/skill-test/friction-schema.ts));
+  - an over-long comment line in [`resources/check.ts`](../../packages/cli/src/commands/resources/check.ts) near line 1522;
+  - the lab's `arm-env.ts` and `verdict/compare.ts` import `compareByCodeUnit` from `fingerprint.ts`.
+- **Fix:** tidy them when the file is next touched.
+
+## Plugin install and uninstall
+
+### Nothing holds a lock across an install's plan and its apply
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes
+- **Mechanism:** an install or uninstall plans against the trees and registry files it reads, then
+  stages, swaps and rewrites them, with no lock across the plan and its apply. The apply re-examines
+  each destination before it parks or creates it, and the registry edit re-reads each registry file
+  and refuses when its bytes are no longer what the plan read — so a writer that lands BEFORE those
+  checks is refused, not overwritten. What is left is the instant between a check and the rename or
+  write it guards, and the fact that a second run is refused (`RUN_INCOMPLETE`, "changed by another
+  program … re-run") rather than made to wait. Traced, not run.
+- **Where:** `requireUnchanged` in
+  [`registry-edit.ts`](../../packages/claude-marketplace/src/install/registry-edit.ts),
+  `requireAsPlanned` in [`apply.ts`](../../packages/utils/src/tree-change/apply.ts)
+- **Fix:** take a lock file under the Claude plugins directory for the plan-and-apply, as the
+  skill-test harness lock does. It cannot cover Claude Code's own writes of `settings.json`, which
+  is why the byte comparison stays.
+
+### `vat claude plugin uninstall <key>` cannot recognise a plugin a pre-marker VAT installed
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes
+- **Mechanism:** the `.vat-marketplace` marker is the only witness that VAT made a marketplace
+  directory, and VAT releases before the marker wrote none. An uninstall of a key the user names has
+  nothing else to go on — its `known_marketplaces.json` entry has the same shape Claude Code writes
+  for an npm marketplace — so such a plugin is reported `PLUGIN_NOT_INSTALLED_BY_VAT` and left
+  alone until `--force` is given. `uninstall --all` (which knows the package) and a re-install of the
+  same package both recognise it by the registry entry naming that package, and the re-install
+  writes the marker. Traced.
+- **Where:** `marketplaceProvenance` in
+  [`plugin-uninstall.ts`](../../packages/claude-marketplace/src/install/plugin-uninstall.ts)
+- **Fix:** none without a second witness; the remedy is in the finding (`--force`, or re-install).
+
+### Every lister has to remember that a tree-change leftover is not a sibling
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes
+- **Mechanism:** a staged or parked entry (`.<name>.vat-staged-*`, `….previous`) sits beside its
+  destination until the change finishes, and stays when a run is killed (nothing handles SIGINT or
+  SIGTERM, and only the fetch cache sweeps its own leftovers). Each code path that lists such a
+  directory calls `isTreeChangeResidue` itself; nothing makes a new lister do so. Seven listers do
+  today (skills install, skills list, plugin install, plugin build, plugin list, agent installed,
+  the inventory extractor). `vat verify`, `vat audit` and `npm pack` of a `dist/` holding a leftover
+  were not checked. Traced.
+- **Where:** `isTreeChangeResidue` in
+  [`staging-names.ts`](../../packages/utils/src/tree-change/staging-names.ts) and its callers
+- **Fix:** one listing helper in `utils` that owns the filter, with a lint rule against a raw
+  `readdir` of a directory a tree change stages in; and a sweep (or a signal handler) for the
+  user-facing destinations, so a killed run leaves nothing to filter.
+
+## Packaging and build
+
+### Archives have no single extract or create primitive, and nothing enforces one
+
+- **Severity:** Important (deferred scope) · **Effort:** M · **User-visible:** not today
+- **Mechanism:** every recursive copy, remove and rename goes through the tree-change primitive, held
+  there by `local/no-destructive-fs`. Archives have no equivalent. `adm-zip` is used directly at
+  four sites and `tar` at one, and no lint rule restricts who imports either. The two zip
+  extractors are not equally careful: `archive-staging.ts` classifies failures, recovers the errno
+  `adm-zip`'s `chmod` retry hides, and refuses a file entry with another entry under it from the
+  entry list; the URL skill source is a bare `extractAllTo(dir, true)` — no classification, no
+  entry-list check — on bytes fetched from the network. Path escape (`../x`, an absolute name) and
+  link entries are left to the two libraries; what they guarantee has not been verified here.
+- **What a user sees:** nothing known. The install lanes extract only into staging directories VAT
+  made, and the tree-change primitive governs what leaves staging; the URL skill source extracts
+  into its fetch cache directory. Narrower than the libraries, by design of the entry-list check:
+  a tarball that replaces a file by a directory in sequence is refused (`npm pack` emits none); a
+  drive-rooted tar name (`C:/a`), which node-tar strips, is not compared; every tarball is read
+  twice, the first time synchronously.
+- **Reproduce:** by reading; not run.
+- **Where:** `openZip` / `extractTarball` in
+  [`archive-staging.ts`](../../packages/cli/src/utils/archive-staging.ts); `extractZipBytes` in
+  [`url-source.ts`](../../packages/agent-skills/src/skill-source/sources/url-source.ts); the zip
+  writer in [`skill-packager.ts`](../../packages/agent-skills/src/skill-packager.ts); the entry
+  reader in [`skills.ts`](../../packages/cli/src/commands/claude/org/skills.ts)
+- **Fix:** one extract and one create primitive in `utils` (escape, link entries, entry clashes and
+  failure classification decided once), the four sites migrated, and an import restriction on
+  `adm-zip` and `tar` outside it. Before that, read both extractors for escape and link entries.
+
+### An archive whose entries are one name only where the volume folds names is not judged from its entry list
+
+- **Severity:** Important · **Effort:** S · **User-visible:** yes (a file silently left out, or a refusal code that differs by host)
+- **Mechanism:** `entryClash` compares entry names exactly, so a file `A` beside an entry `a/b` is
+  not refused from the entry list. On a volume that keeps case the two are two names and both
+  extract, correctly. On a volume that folds case the outcome is the library's and the order's:
+  with `A` listed first the write under it fails and the refusal is classified from the host's
+  errno (`INPUT_UNREADABLE` where that is `ENOTDIR`, `RUN_INCOMPLETE` on win32, where it is
+  `ENOENT`); with `a/b` listed first in a ZIP, adm-zip finds a directory where `A` goes, skips the
+  entry and reports nothing.
+- **What a user sees:** on a folding volume, either a refusal whose code differs by host, or — a ZIP
+  listing `a/b` before `A` — an install that exits 0 without `A`. For names that match exactly
+  both orders are refused on every host.
+- **Reproduce:** by reading; not run.
+- **Where:** `entryClash` in [`archive-staging.ts`](../../packages/cli/src/utils/archive-staging.ts)
+- **Fix:** with the archive primitive above, compare entry names by the one fold `copyTree` uses.
+
+### A refereed pool skill's directory is never checked against the other selected pool skills
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** yes (a misleading refusal)
+- **Mechanism:** when a plugin-local skill and a pool skill declare one name, the pool copy takes
+  the plugin-local skill's authored directory. `resolveCollidingSkills` checks a plugin-local
+  skill's directory against the selected pool names only when the skill did NOT collide by name, so
+  a refereed skill's directory is never checked. A plugin-local skill named `foo` authored at
+  `skills/bar/`, with pool skills `foo` and `bar` both selected, sends both to `skills/bar`; one
+  authored UNDER a selected pool skill's directory (`skills/group/x`, pool `group` selected) is sent
+  inside it. Separately, the check that does run compares directory names as exact strings, so on
+  a volume that folds case `skills/Bar` beside pool `bar` passes it. The copy order is decided with
+  a fold of its own (`foldedSegment`, a superset of the one `copyTree` refuses twins by), so
+  "are these one directory" has more than one answer in the build.
+- **What a user sees:** for two skills at one directory, the second copy is refused with a raw `EEXIST` on the build's own output
+  (`RUN_INCOMPLETE`), naming whichever skill sorts second, where the cause is the config: two
+  skills claim one directory, which the build reports as `CONFIG_INVALID` in the un-refereed case.
+  Nothing is written outside the build and the previous marketplace is kept. For a skill sent
+  under another's directory with no link in the way, the build exits 0 and ships one skill inside
+  the other — the layout the un-refereed check refuses.
+- **Reproduce:** by reading; not run.
+- **Where:** `resolveCollidingSkills` in
+  [`build.ts`](../../packages/cli/src/commands/claude/plugin/build.ts)
+- **Fix:** run the directory-clash check for a refereed skill too, against every other selected
+  pool skill's destination, comparing by the one fold `copyTree` uses (moved to `utils`, and used
+  for the copy order as well).
+
+### Writes and directories in a tree VAT fills that still follow a link, where no link is today
+
+- **Severity:** Minor (not reachable from an input today) · **Effort:** S each · **User-visible:** no
+- **Mechanism:** every file VAT makes in a tree that holds a links-preserved copy goes through one
+  exclusive, non-following primitive (`writeFileUnder` / `copyRegularFile` / `makeDirectoryUnder`).
+  `copyTree` takes a root and a path under it, and makes every directory between the two the same
+  way. The writes and directories below, into trees that hold NO kept link today, are still plain and
+  following, so each is safe by the shape of the tree and not by the primitive. Traced, not run.
+  - The skill-source staging copy (`copyTreeNoSymlinks`) makes its root, and each directory under it, with a recursive `mkdir` and
+    writes each file with `writeFile` then `chmod` by path, into a content-keyed directory under
+    VAT's 0700 staging root that later runs reuse. The source's links are refused, so the only link
+    it could meet is one something else planted in that root.
+  - `regenerateVendoredManifest` writes `vendored.manifest.json` into a vendored directory with a
+    following `writeFileSync`.
+  - The packager writes a link-rewritten markdown or HTML file into the bundle with a following
+    `writeFile`, after making that file's parents with a recursive `mkdir` (the files it copies
+    verbatim go through the primitive), and
+    `vat claude plugin build` makes each plugin's directory in the staged marketplace with a
+    recursive `mkdir`.
+  - The packager makes the bundle's own root with a recursive `mkdir`, and the eval-workspace staging
+    makes the parents of each declared input with a recursive `mkdirSync` (`makeWorkspaceDir`, for
+    their `0700` mode) before the primitive copies the input — which then only checks them.
+- **What a user sees:** nothing. One `links: 'preserve'` copy added ahead of any of these writes,
+  or a reorder of a build's phases, makes the next one a write through a link.
+- **Where:** `copyTreeNoSymlinks` in
+  [`stage.ts`](../../packages/agent-skills/src/skill-source/stage.ts); `regenerateVendoredManifest`
+  in [`vendor-manifest.ts`](../../packages/agent-skills/src/skill-test/vendor-manifest.ts);
+  `copyAndRewriteFile` in [`skill-packager.ts`](../../packages/agent-skills/src/skill-packager.ts);
+  `buildPlugin` in [`build.ts`](../../packages/cli/src/commands/claude/plugin/build.ts);
+  `stageEvalInput` in [`eval-inputs.ts`](../../packages/agent-skills/src/skill-test/eval-inputs.ts)
+- **Fix:** `writeFileUnder` (with `existing: 'replace'`) for the three file writes (the staging
+  copy's, the vendored manifest, the rewritten markdown) and `makeDirectoryUnder` for the five
+  directories (the staging root, the rewritten file's parents, the plugin directory, the bundle
+  root, the eval input's parents), each rooted at the tree's own root. The staging copy
+  could instead become a `copyTree` with a link-refusing policy. Each changes the calls a fault-matrix
+  lane traces, so re-run that lane.
+
+### A library packaging validation dropped a link silently in a repo with no config file
+
+- **Severity:** Minor (cause unknown) · **Effort:** L · **User-visible:** yes
+- **Mechanism:** observed, not traced. `validateSkillForPackaging` called as a library in a git
+  repository with no `vibe-agent-toolkit.config.yaml` reported `fileCount: 1` for a skill that
+  links a second file, and recorded no exclusion for the link. With a config file present, the
+  same call walked the link. A link the walk drops without a word is a packaged skill missing a
+  file nobody was told about.
+- **Reproduce:** a git repo with a `SKILL.md` that links `ref.md`, no config file; call
+  `validateSkillForPackaging` and read its file count. Add an empty config file and call it again.
+- **Where:** [`packaging-validator.ts`](../../packages/agent-skills/src/validators/packaging-validator.ts)
+  and the crawl it delegates to
+- **Fix:** root-cause first: find which population or exclusion rule the absent config changes.
+
+### `vat agent build` lands a package its own post-build checks fail, and drops those findings
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes
+- **Mechanism:** `packageSkill` refuses to write a package whose post-build checks emit an error
+  (`SkillPackageChecksFailedError`); the agent builder does not apply the same rule. It adds
+  `scripts/` and `LICENSE.txt`, which the generated SKILL.md never links, so the packager's
+  `PACKAGED_UNREFERENCED_FILE` (an error) fires on every agent that has either — refusing on it
+  would refuse those builds outright. `BuildResult` has no findings channel, so the error findings
+  of a generated package are dropped and the build exits 0.
+- **Reproduce:** an agent whose system prompt links a file that does not exist; `vat agent build`
+  exits 0 with a packaged SKILL.md carrying the broken link.
+- **Where:** `writeAgentBuild` in [`builder.ts`](../../packages/agent-skills/src/builder.ts)
+- **Fix:** declare the builder's own additions to the packager (explicit `files:` dests are exempt
+  from the unreferenced-file check), then apply `refuseFailedChecks` as `packageSkill` does.
+
+### `vat claude plugin build` says on stderr only that something did not ship
+
+- **Severity:** Important · **Effort:** M · **User-visible:** yes (new findings in the report)
+- **Mechanism:** four conditions change what a built plugin holds and are written as
+  `logger.info('warning: …')`, never as a finding, so the report is `status: ok`, `findings: []`:
+  a plugin-local skill directory git does not track ("was NOT packaged"), a plugin-local skill
+  dropped for the pool copy of the same name, the `plugin.json` merge's warnings, and the version
+  resolution's. The same file names this shape "the bug" for dead `exclude:` patterns and fixes it
+  there (`PLUGIN_EXCLUDE_PATTERN_UNUSED`). Traced.
+- **What a user sees:** `vat claude plugin build` exits 0 with `status: ok` and no findings, and the
+  built plugin is missing a skill (or carries a different copy of it, a different `plugin.json`
+  field or version than the source says). The only trace is a `warning:` line on stderr, which a
+  CI log scrolls past and a script reading the report never receives. Parked for this release by
+  the controller: registered, not fixed.
+- **Where:** `discoverPluginLocalSkills`, the collision loop of `buildOnePlugin`,
+  `writeMergedPluginJson` and the `resolveVersion` call in
+  [`build.ts`](../../packages/cli/src/commands/claude/plugin/build.ts)
+- **Fix:** one registry code per condition (each is overridable project validation, so each needs a
+  `CODE_REGISTRY` entry, a `docs/validation-codes.md` section and the skill-doc golden regenerated),
+  built through `materializeIssue` and joined to the plugin's `issues` as the exclude finding is.
+
+### `vat claude plugin build` stops the whole build at the first refused skill
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes
+- **Mechanism:** the first plugin skill refused with `SKILL_PACKAGING_FAILED` ends the run, so
+  other plugins' findings are never reported. The help and changelog state this as a known gap.
+- **Where:** [`plugin/build.ts:936-1012`](../../packages/cli/src/commands/claude/plugin/build.ts)
+  (the "KNOWN GAP" comment and `SkillPackagingStop`)
+- **Fix:** contain refusals per skill, as `skills build` does, and publish every finding.
+
+### `vat skills package -f npm` advertises a format it does not produce
+
+- **Severity:** Minor · **Effort:** M (implement or drop the format) · **User-visible:** yes
+- **Mechanism:** `createNpmPackage` writes a `package.json` and returns a placeholder path. No
+  `.tgz` is ever made, yet `--help` lists `npm`.
+- **Reproduce:** `vat skills package … -f directory,npm` exits 0, and no tarball exists.
+- **Where:** [`skill-packager.ts:2868-2890`](../../packages/agent-skills/src/skill-packager.ts)
+- **Fix:** run `npm pack` on the written directory, or remove `npm` from the formats.
+
+## RAG
+
+### `vat rag stats` publishes a fabricated `lastIndexed` and a constant `examined`
+
+- **Severity:** Important · **Effort:** M · **User-visible:** yes (the schema changes)
+- **Mechanism:** `getStats` returns `new Date(0)` for a database with no chunk table, and
+  `new Date()`, the current time, for a populated one ("Would need to track this separately").
+  Neither value answers "when was this last indexed". Also, `examined` is the constant
+  `DATABASES_OPENED = 1`, so the verb's `whenZero` can never fire.
+- **Reproduce:** run `vat rag stats` twice a minute apart on an unchanged index. `lastIndexed`
+  moves.
+- **Where:** [`lancedb-rag-provider.ts:484, 505`](../../packages/rag-lancedb/src/lancedb-rag-provider.ts),
+  [`stats-command.ts:18, 26`](../../packages/cli/src/commands/rag/stats-command.ts),
+  [`admin-schema.ts:30`](../../packages/cli/src/commands/rag/admin-schema.ts)
+- **Fix:** record the index time when `rag index` writes, and make `lastIndexed` nullable.
+
+### A mid-run `rag index` failure discards the partial counts
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes
+- **Mechanism:** a throw inside `indexResources` ends the run with `NOTHING_FINISHED`. The
+  provider exposes no partial counters, so the report cannot say what was indexed. Exit 2 is
+  honest; `data` is empty.
+- **Where:** [`rag/index-command.ts:167-181`](../../packages/cli/src/commands/rag/index-command.ts)
+- **Fix:** have the provider report progress, and publish it as the refusal's finished work.
+
+## Audit and validators
+
+### `vat audit` counts no unreadable path when the refusal rides on a host result
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** yes
+- **Mechanism:** `data.counts.pathsUnreadable` counts only results of type `unknown` whose every
+  issue is `SCAN_PATH_UNREADABLE`. Several validators file that code as one issue on a host result
+  instead: a plugin, marketplace or registry manifest the OS refused, the agent-instruction
+  presence check, and the packaged-size check. The document then publishes a
+  `SCAN_PATH_UNREADABLE` finding while `pathsUnreadable` stays 0, and the refused path is counted
+  as a scanned file. Traced.
+- **Where:** [`audit.ts:3219, 3234`](../../packages/cli/src/commands/audit.ts)
+  (`isUnreadablePathResult`, `countFilesByStatus`)
+- **Fix:** decide what the count means, then either count every `SCAN_PATH_UNREADABLE` issue's
+  path or state in the schema docstring that only whole-path refusals are counted.
+
+## Git and crawl
+
+### A tracked file deleted but not yet staged is enumerated, then reported unreadable
+
+- **Severity:** Important · **Effort:** S · **User-visible:** traced, not shown — the mechanism is
+  in the crawl every validating verb shares, but no verb has been run against it: the one
+  reproduction is this repository's own system test. Whether `vat resources validate` publishes
+  the same finding for an adopter is the first thing a fix must establish.
+- **Mechanism:** the crawl's git route takes its population from `git ls-files`, which lists the
+  INDEX. A tracked markdown file removed from the working tree and not yet staged is still in the
+  index, so it is enumerated; the read then fails `ENOENT` and the registry files a
+  `RESOURCE_UNREADABLE` error for a file that is simply gone. A gate run on an uncommitted tree
+  that deletes a tracked `.md` therefore fails until the deletion is staged.
+- **Reproduce (the test, not a verb):** delete a tracked markdown file without `git rm`, then run
+  `packages/resources/test/system/project-validation.system.test.ts`: one `RESOURCE_UNREADABLE`
+  per deleted file ("was enumerated but could not be read … (ENOENT)"). Staging the deletion, or
+  restoring the file, clears it.
+- **Where:** the `git ls-files` branch of `crawlDirectorySync` in
+  [`file-crawler.ts`](../../packages/utils/src/file-crawler.ts)
+- **Fix:** subtract `git ls-files --deleted` from the tracked list (one more git call, no file
+  read), with a test that deletes a tracked file unstaged.
+
+### A full disk under the repository is `INTERNAL_ERROR` "not a git repository" in every crawl lane
+
+- **Severity:** Important · **Effort:** L · **User-visible:** yes
+- **Mechanism:** the git snapshot fails when git's temp index cannot be written (`ENOSPC`).
+  `unreadableSnapshotRefusal` recognises only an unreadable file, so it falls through to an
+  uncoded "git did not answer … it is not a git repository". That is a user's environment
+  published as a VAT defect, with a false diagnosis attached. On this path the probe also opens
+  every listed file before returning `undefined`.
+- **Reproduce:** put the project on a full volume (a 2 MiB disk image works). `skills validate`,
+  `resources validate`, `resources scan`, `claude context` and `rag index` then all exit 2
+  `INTERNAL_ERROR`.
+- **Where:** [`crawl-source.ts:632-635`](../../packages/resources/src/projection/crawl-source.ts),
+  [`git-snapshot.ts:330`](../../packages/utils/src/git-snapshot.ts) (`unreadableSnapshotRefusal`)
+- **Fix:** a structural answer to an output-side errno during *any* crawl, rather than one more
+  call site: carry git's stderr and errno through the snapshot result, and code `ENOSPC`/`EROFS`
+  as `RUN_INCOMPLETE`.
+
+### The same tree flips between exit 1 and exit 2 across runs
+
+- **Severity:** Minor · **Effort:** L (root cause unknown) · **User-visible:** yes
+- **Mechanism:** a tracked, linked `ref.md` was `chmod 000` after `git add`. Consecutive
+  `vat skills build` runs then alternated:
+  - some runs gave `INPUT_UNREADABLE` from the git snapshot, exit 2;
+  - others gave a `LINK_TARGET_UNREADABLE` finding, exit 1.
+
+  A `git status` between runs changed which one appeared next. The suspected cause is git's stat
+  cache sometimes skipping the re-read; this has not been traced. A CI gate sees different exit
+  codes for one input.
+- **Reproduce:** as above. Run `vat skills build` four times, with one `git status` in between.
+- **Fix:** root-cause first; the likely shape is to refresh the index stat data before the
+  snapshot.
+
+### Raw git stderr and a false projection-store warning precede a coded refusal
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** yes
+- **Mechanism:** before the `INPUT_UNREADABLE` refusal, stderr carries git's own lines
+  (`error: unable to index file …`, `fatal: updating files failed`). It also carries the
+  projection-store warning "…is not inside a readable git repository … Populating without a
+  cache", which is false.
+- **Reproduce:** `chmod 000` any file in a git project, then run `vat skills validate`.
+- **Where:** [`git-snapshot.ts`](../../packages/utils/src/git-snapshot.ts) (child stderr
+  inheritance), the projection-store open path in `resources`
+- **Fix:** capture git's stderr into the refusal, and make the store's warning name the real
+  failure.
+
+## Windows
+
+### `isSingleFsSegment` does not consider Win32 name normalisation
+
+- **Severity:** Minor (unverified; raise it if a reproduction shows traversal) · **Effort:** S ·
+  **User-visible:** yes
+- **Mechanism:** the guard refuses `.`, `..`, separators, NUL and a drive prefix. Three Windows
+  name rules are not covered:
+  - Win32 strips trailing dots and spaces from path components, so `".. "` or `"..."` may resolve
+    as a parent reference;
+  - `a:b` names an NTFS alternate data stream;
+  - `CON`, `NUL` and `COM1` are reserved device names.
+
+  Plugin names, marketplace names and versions all pass through this guard before a
+  `rm`/`rename`. None of this has been exercised on Windows.
+- **Where:** [`path-core.ts:157-167`](../../packages/utils/src/path-core.ts)
+- **Fix:** run the hostile-name set on the Windows box first. Then refuse trailing dot/space, `:`
+  and reserved device names.
+
+### On Windows the tree-change suites retry a rename with no real wait, so a transient refusal is a flake
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** no
+- **Mechanism:** under win32 `renameFileAtomic` retries a rename refused with contention (`EPERM`,
+  `EBUSY`, `EACCES`) up to 6 tries. The five utils suites that fail a rename on purpose replace
+  `node:timers/promises` (`tree-change-no-backoff.ts`), so the backoff is recorded and never
+  waited — on Windows too. There, the six tries of ANY rename in those files, the un-faulted ones
+  included, are then over in microseconds: a real, transient `EPERM` / `EBUSY` from a scanner or
+  indexer that the 1.55 s backoff would have absorbed is not, and shows as a flake in whichever
+  case made the rename. The CLI fault matrix does not replace the timer and waits the real backoff.
+  (The harness's `everyTry`, which those suites and the matrix fail a retried rename with, has run
+  green on a Windows host.)
+- **Reproduce:** not seen. On Windows, the utils integration files `tree-change-apply`,
+  `tree-change-apply-rollback`, `tree-change-apply-edges`, `tree-change-files` and
+  `tree-change-win32-retry`.
+- **Where:** `tree-change-no-backoff.ts` in the tree-change test kit
+- **Fix:** if the flake appears, have the stand-in serve the real wait on a real win32 host (decided
+  from the platform read before any test stubs it) and record it elsewhere.
+
+## Test-suite health
+
+### The fault matrix is 490 committed one-statement files and a hand-typed sizing table
+
+- **Severity:** Minor (deferred scope) · **Effort:** M · **User-visible:** no
+- **Mechanism:** each matrix file is one `planMatrixShard(<TABLE>['<case>'], <index>)` statement.
+  The files exist to keep a file under the 40-injection limit and the per-file duration budget.
+  How many files a case gets is 40 integer literals typed by hand in two shard tables, and a
+  third test holds the files and the tables to each other both ways. The number of injections a
+  case selects is the host's (the filesystem's case behaviour, the Node version), so a table sized
+  on one host overflows on another and is found by a CI red. Windows totals have not been measured.
+- **What a user sees:** nothing. A contributor adding a traced call to an install or a build may
+  have to add files and edit a table on a host they cannot run.
+- **Where:** [`cases/install-family.ts`](../../packages/cli/test/fault-matrix/cases/install-family.ts),
+  [`cases/build-family.ts`](../../packages/cli/test/fault-matrix/cases/build-family.ts),
+  `shardFilesFor` in [`select.ts`](../../packages/cli/test/fault-matrix/select.ts), and the
+  `fault-matrix-*` files under `packages/cli/test/integration/`
+- **Fix:** compute the shards at run time from the trace — no committed shard files, no sizing
+  table, no consistency test, no overflow on a new host. Separately, measure whether a sampled
+  matrix on a pull request (one errno per fault class per call) with the exhaustive one nightly
+  would still have caught the defects the exhaustive one found, before choosing it.
+
+### `--force` over a marketplace VAT did not make has no fault-matrix lane
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** no
+- **Mechanism:** the plugin-install matrix lanes named `…/force` no longer pass `--force` — they
+  install over a marketplace that carries VAT's marker, so the marker path is what the matrix runs
+  under every errno class. The `force` ownership override itself (`planPackageInstall` with
+  `force: true`: replace a marketplace directory nothing shows VAT installed) is covered by unit
+  and integration tests only, so no injected fault is ever placed inside that replace. Read from
+  the cases, not run.
+- **What a user sees:** nothing from the matrix. The rollback of a `--force` install that fails
+  midway over someone else's marketplace clone is unproven under faults.
+- **Where:** `pluginInstallCase` in
+  [`install-family.ts`](../../packages/cli/test/fault-matrix/cases/install-family.ts)
+- **Fix:** add a variant whose prior marketplace is unmarked and whose argv carries `--force`, with
+  its own shard table entry; rename the existing `…/force` variants for what they now run.
+
+### The fault matrix cannot see a fault answered as "absent"
+
+- **Severity:** Important · **Effort:** L · **User-visible:** no
+- **Mechanism:** three gaps, one consequence — the class "absent concluded from could-not-look" is
+  the one the matrix is structurally blind to. (1) `existsSync` is not in the harness's op table
+  (`OPS`), so no injection point is ever selected at such a probe; every file on the ratchet still calls it
+  (the `no-existssync` ratchet). (2) Invariant I8 judges only a refusal built from a classified
+  fault: a verb that catches an injected `EACCES` and refuses with a hand-built "does not exist"
+  passes I1, I2 and I4 and skips I8. (3) At exit 0 only the units are held to golden, so a refused
+  probe of an OPTIONAL input (absent in the fixture) that the verb reads as "absent" passes.
+  Read from the invariants; the size of the red is unknown until (1) is switched on.
+- **What a user sees:** nothing from the matrix — that is the defect. A verb with this bug tells
+  them "not found" (or builds, installs or audits without the file, exit 0) when the truth is that
+  the OS refused the look: a permission, a full disk, a stale mount. They go looking for a file
+  that is there. The commit that added the matrix says it runs every destructive verb under every
+  errno class; it does not run this class. Parked for this release by the controller.
+- **Where:** `OPS` in [`fault-spec.ts`](../../packages/utils/src/testing/fault-spec.ts),
+  `refusalOwedByTable` and `exitedZero` in
+  [`invariants.ts`](../../packages/cli/test/fault-matrix/invariants.ts)
+- **Fix:** trace `existsSync` as an op whose injected fault makes it answer `false` (what the OS
+  does), then triage what goes red file by file as the ratchet shrinks; require a classified fault
+  under a `refused`- or `exhausted`-class injection; fail an exit-0 run whose `refused` injection no
+  finding names. Not a local change: each file on that ratchet is a potential red.
+
+### The fault matrix sees inside a recursive removal only by load order
+
+- **Severity:** Important · **Effort:** M · **User-visible:** no
+- **Mechanism:** Node's recursive `fs.rm` / `fs.promises.rm` capture `lstat`, `readdir`, `rmdir` and
+  `unlink` from the `fs` module once, the first time anything in the process removes a tree. On
+  Node 22 a recursive `rmSync` triggers that capture, and every test's cleanup calls one; on
+  Node 24 and later `rmSync` is native and only an `fs.rm` does. When the capture happens outside a
+  fault session it holds the unwrapped functions, and from then on no session traces or fails a
+  call inside a removal — only the `rm` call as a whole. `removeOnce` removes with recursive
+  `fs.rm`, so whether the matrix can fail one child of a tree being removed depends on the Node
+  version and on what ran earlier in the test file. Traced with a probe that wraps `fs.readdir`
+  after an `rmSync`: 0 wrapped calls on Node 22, 5 on Node 24 and 26.
+- **What a user sees:** nothing from the matrix. A remove that half-finishes on a refused child is
+  the case whose report (`RUN_INCOMPLETE`, what is left) is unproven on the Node floor.
+- **Where:** `installFaultFs` in [`fault-fs.ts`](../../packages/utils/src/testing/fault-fs.ts);
+  `removeOnce` in [`files.ts`](../../packages/utils/src/tree-change/files.ts)
+- **Fix:** either remove with VAT's own walk (the harness header already says a verb that wants
+  per-file fault coverage must not use a natively recursive call), or have `installFaultFs` make
+  Node's capture happen under its wrappers before any removal runs. Both change which calls every
+  matrix file traces, so expect new cases and run the whole matrix on the Node floor and on the
+  current Node.
+
+### Tests in the wrong tier
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** no
+- **Mechanism:** the tier table puts "spawns child processes" in System. 19 of the 60
+  `packages/cli/test/integration` files spawn a process directly, counted by grepping for
+  `child_process`, `executeCli`, `bin.js`, `spawnSync` and `execSync`; three more run git through
+  a helper. Outside the CLI, nine of the 18 `utils` integration files spawn too: seven directly
+  (`eslint-recommended-config`, `file-crawler`, `git-ignore-oracle-parity`, `git-utils`,
+  `safe-exec`, `spawn-hardened`, `spawn-claude-watchdog`) and two through the git helpers
+  (`git-hook-env`, `git-snapshot-unreadable`).
+- **Where:** [`packages/cli/test/integration/`](../../packages/cli/test/integration/),
+  [`packages/utils/test/integration/`](../../packages/utils/test/integration/)
+- **Fix:** move each spawning file to `*.system.test.ts` by rename. Never raise a budget or add
+  an allowlist entry for one.
+
+### Exit-code matrix scenarios that never run on CI
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** no
+- **Mechanism:** three `ok` scenarios skip on every CI runner, because the runners provision none
+  of their prerequisites:
+  - `skill test run → ok` needs a `claude` binary;
+  - `rag query → ok` needs the cached ONNX model;
+  - `doctor → ok` needs the live npm registry, and its probe and the child each ask separately,
+    so the two can race.
+
+  The skips are named, but these rows are verified only on a developer's machine.
+- **Where:** [`exit-code-matrix.ts:600, 828, 881`](../../packages/cli/test/system/test-helpers/exit-code-matrix.ts)
+- **Fix:** make each hermetic:
+  - put a fake `claude` and a fake `npm` on the child's `PATH`;
+  - add a tiny fixture embedding model;
+  - or provision both in CI.
+
+### Test files are never typechecked
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** no
+- **Mechanism:** `tsc --build` covers `src` only. A latent `TS2345` sits at `cli-runner.ts:34`:
+  `yamlContent` is `string | undefined` and is passed to `yaml.parse`. Narrowing gaps in tests
+  pass review because nothing compiles them.
+- **Where:** [`cli-runner.ts:33-34`](../../packages/cli/test/system/test-helpers/cli-runner.ts)
+- **Fix:** add a `tsconfig.test.json` per package with a `typecheck:tests` step, and fix what it
+  reports.
+
+### Nothing enforces that a non-overridable code is refused as an override key
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** no
+- **Mechanism:** codes such as `SETTINGS_*` and `AGENT_*` are
+  emitted by verbs that read no validation config. Each was made non-overridable by hand, and
+  no test asserts the class. A new code from such a verb would be accepted as a
+  `validation.severity` key and silently ignored.
+- **Where:** [`validation-codes.ts`](../../packages/schema/src/validation-codes.ts)
+- **Fix:** derive overridability from the emitting lane, or assert it per code in the schema tests.
+
+### `skill test run`'s `evals[]` row is never exercised by a tagged example
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** no
+- **Mechanism:** the populated `skill test run` example is a dry run, so its `data.evals` is `[]`.
+  No tagged example carries an `{ id, passed }` row, so the row's schema is never checked against
+  a real document. Producing one needs a real graded run.
+- **Where:** [`skill-test.md`](../../packages/cli/docs/skill-test.md) tagged examples,
+  [`run-schema.ts:31`](../../packages/cli/src/commands/skill/test/run-schema.ts)
+- **Fix:** add a trimmed example from a real run with at least one graded eval.
+
+### The committed verdict deltas are never reconciled against an observation in the gate
+
+- **Severity:** Minor · **Effort:** L · **User-visible:** no
+- **Mechanism:** the gate checks that `verdict-deltas.yaml`'s changelog references resolve both
+  ways. Whether its entries match what the two builds actually do is shown only by a local
+  crucible run over a private subjects file, and that run leaves no artifact.
+- **Where:** [`verdict-deltas.yaml`](../../packages/lab/data/verdict-deltas.yaml)
+- **Fix:** record which tree the last passing crucible ran on, or commit a public subject the gate
+  can run.
+
+### A `resources query` row declared `reshaped` proves only the exit code
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** no
+- **Mechanism:** a declared reshape covers every document difference on the row. A
+  `resources query` document has no findings layer, so a candidate returning different *rows*
+  passes.
+- **Where:** [`verdict-deltas.yaml`](../../packages/lab/data/verdict-deltas.yaml) (`resources-query:sql/…`)
+- **Fix:** compare `data.rows` as the verdict for `resources-query` rows, or note the limit beside
+  the entry.
+
+### Verdict-delta markers have two blind spots
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** no
+- **Mechanism:** a `<!-- verdict-delta:… -->` marker that sits outside any bullet, and that
+  nothing cites, is invisible to the both-ways test. Separately, the markers ship into
+  `CHANGELOG.md` at the stable fold. They are HTML comments, so they do not render, but they are
+  noise in the file.
+- **Where:** [`deltas.ts`](../../packages/lab/src/facets/verdict/deltas.ts),
+  [`committed-verdict-deltas.integration.test.ts`](../../packages/lab/test/integration/committed-verdict-deltas.integration.test.ts)
+- **Fix:** refuse an orphan marker, and strip markers in the stable fold once the deltas file is
+  re-baselined.
+
+## Docs
+
+### The changelog needs consolidating before 0.2.0 stable
+
+- **Severity:** Important · **Effort:** L · **User-visible:** yes
+- **Mechanism:** two problems:
+  - `.changes/v020-stable-foundation.md` still announces as `Breaking` many report-contract moves
+    between two release candidates, on surfaces the last stable release never had. The rule says
+    those fold into `Added`. (Its filesystem-fault, install and build entries were checked against
+    the last stable; the report-contract entries were not.)
+  - `CHANGELOG.md` `[Unreleased]` still states behaviour that has changed: Node `>= 22.13.0`
+    (lines 85-86, 442), `vat rag index` "`status: partial`" (125, 988), "`system-error`" (804),
+    and two `Breaking` entries for one RAG filter change.
+
+  Some of the `rc`-only bullets carry `verdict-delta` markers that the lab test requires. Those
+  markers must move to the `Added` bullets in the same change.
+- **Where:** [`CHANGELOG.md`](../../CHANGELOG.md), [`.changes/`](../../.changes/)
+- **Fix:** rewrite `[Unreleased]` against the last stable, fold the fragments, and re-point every
+  `changelog:` reference in `verdict-deltas.yaml`.
+
+### Nothing checks the release-notes size before a stable publish
+
+- **Severity:** Important (fails the publish after npm has already published) · **Effort:** M ·
+  **User-visible:** no
+- **Mechanism:** `publish.yml` passes the extracted changelog section to
+  `gh release create --notes-file` after npm publish and both marketplace publishes. The folded
+  section is about 157 KB. GitHub's limit on a release body is unmeasured; 125,000 characters is
+  the figure recalled. `pre-publish --release-readiness` has no size check. The rule file also
+  cites a vendor claim ("states no maximum") that is not cached under `docs/external/`.
+- **What a user sees:** if the limit is below the section's size, the stable release is on npm and
+  both marketplace branches are published, and the workflow then fails at its last step: no GitHub
+  release, no release notes, a red publish run for a version that cannot be re-published. An
+  adopter sees a new version with no notes. Parked for this release by the controller.
+- **Where:** [`pre-publish-check.ts`](../../packages/dev-tools/src/pre-publish-check.ts),
+  [`changelog-adopter-visible.md`](../../.claude/rules/changelog-adopter-visible.md)
+- **Fix:** measure the limit, add a size check to release-readiness, and cache the vendor page.

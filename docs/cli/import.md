@@ -60,29 +60,32 @@ vat agent import my-skill/SKILL.md --debug
 
 ## Output Format
 
-Success output (YAML to stdout):
+The report envelope (YAML) on stdout; human-readable messages on stderr. One
+skill per run, so `examined` is 1 when agent.yaml was written:
 
 ```yaml
-status: success
-agentPath: /path/to/agent.yaml
-duration: "15ms"
+status: ok                # ok | error
+examined: 1
+findings: []
+summary: { errors: 0, warnings: 0, info: 0 }
+gate: { strict: false }
+durationMs: 15
+data:
+  agentPath: /path/to/agent.yaml
 ```
 
-Error output (YAML to stdout):
-
-```yaml
-status: error
-error: "Error message"
-duration: "10ms"
-```
-
-Human-readable messages are written to stderr.
+An import that could not finish writes nothing and publishes the error branch,
+`error: { code, message }` with `data: null`.
 
 ## Exit Codes
 
-- **0** - Import successful
-- **1** - Import failed (validation errors, file exists, etc.)
-- **2** - System error (unexpected failure)
+Derived from the document:
+
+- **0** - `ok`: agent.yaml was written
+- **2** - `error`; `error.code` says why:
+  - `USAGE_INVALID` — no SKILL.md at the path, or agent.yaml already exists and `--force` was not given
+  - `INPUT_UNREADABLE` — the SKILL.md cannot be read (a directory, permissions), its frontmatter is not YAML, or no Agent Skills schema accepts it
+  - `RUN_INCOMPLETE` — writing agent.yaml failed, an `--output` whose directory does not exist included
 
 ## What Gets Converted
 
@@ -106,7 +109,7 @@ The import command validates SKILL.md before conversion:
 - **Required fields** - name and description must be present
 - **Name format** - lowercase alphanumeric with hyphens
 - **Description length** - 1024 characters max
-- **No XML tags** - no markup (`</x>`, `<x/>`, `<x a="b">`, `<!--`), no free-standing `<word>` placeholder outside backticks, and no prompt-channel name such as `<system>` or `<invoke>` in name or description; a comparison like `a < b` is fine (see [`SKILL_DESCRIPTION_XML_TAGS`](../validation-codes.md#structural-prerequisites-never-overridable))
+- **No XML tags** - no markup (`</x>`, `<x/>`, `<x a="b">`, `<!--`), no free-standing `<word>` placeholder outside backticks, and no prompt-channel name such as `<system>` or `<invoke>` in the description (the name is judged only by its format rule); a comparison like `a < b` is fine (see [`SKILL_DESCRIPTION_XML_TAGS`](../validation-codes.md#structural-prerequisites-never-overridable))
 - **No reserved words** - "anthropic" and "claude" not allowed in name
 
 See [`vat audit`](../../packages/cli/docs/audit.md) for complete validation rules.
@@ -239,36 +242,28 @@ done
 
 ### Missing SKILL.md
 
-```
+```yaml
 status: error
-error: "SKILL.md does not exist: /path/to/SKILL.md"
+error: { code: USAGE_INVALID, message: "SKILL.md does not exist: /path/to/SKILL.md" }
 ```
 
 **Fix:** Verify file path is correct
 
 ### Invalid Frontmatter
 
-```
+```yaml
 status: error
-error: "Invalid SKILL.md frontmatter - name: Name is required"
+error: { code: INPUT_UNREADABLE, message: "Invalid SKILL.md frontmatter - name: Name is required" }
 ```
 
-**Fix:** Add missing required fields to frontmatter
-
-### Validation Errors
-
-```
-status: error
-error: "Invalid SKILL.md frontmatter - name: String must contain at most 64 character(s)"
-```
-
-**Fix:** See [`vat audit`](../../packages/cli/docs/audit.md) for validation rules and fixes
+**Fix:** Add missing required fields to frontmatter. See [`vat audit`](../../packages/cli/docs/audit.md)
+for validation rules and fixes.
 
 ### File Already Exists
 
-```
+```yaml
 status: error
-error: "agent.yaml already exists at /path/to/agent.yaml. Use --force to overwrite."
+error: { code: USAGE_INVALID, message: "agent.yaml already exists at /path/to/agent.yaml. Use --force to overwrite." }
 ```
 
 **Fix:** Use `--force` flag to overwrite or specify different output path

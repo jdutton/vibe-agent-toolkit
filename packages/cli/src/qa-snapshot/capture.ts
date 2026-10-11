@@ -1,31 +1,24 @@
 /**
- * Capture both halves of a QA snapshot over one corpus.
+ * Capture a QA snapshot over one corpus: the oracle half, which drives
+ * `packages/cli/src/pipeline-oracles/` — narrow captures that name a lane and a
+ * row.
  *
- * The **oracle half** drives `packages/cli/src/pipeline-oracles/` — narrow
- * captures that name a lane and a row. The **whole-command half** spawns the
- * three corpus-enumerating verbs and keeps their streams — broad enough to
- * catch anything and unable to localize any of it. Neither is worth much alone;
- * the pair is.
+ * The whole-command half that used to sit beside it — spawn the corpus-
+ * enumerating verbs and keep their normalized streams — is the lab's `verdict`
+ * facet now (`packages/lab/src/facets/verdict/`), with the one normalizer.
  *
- * Three properties of this module exist because of how a later comparison can
- * be misled, and none of them are incidental:
+ * Two properties of this module exist because of how a later comparison can
+ * be misled, and neither is incidental:
  *
- * - **Order is fixed**: lanes in `LANES` order, commands in `COMMAND_SPECS`
- *   order, one run each. A capture whose order varies produces artifacts that
- *   differ for reasons that are not findings.
+ * - **Order is fixed**: lanes in `LANES` order, one run each. A capture whose
+ *   order varies produces artifacts that differ for reasons that are not
+ *   findings.
  * - **A lane that dies is recorded, never fatal.** `buildError` rides into the
  *   manifest with a `warnings` line beside it.
- * - **A command that never RAN is not a command that exited.** `spawnSync`
- *   reports ENOENT, a timeout kill and E2BIG alike as `status: null` plus an
- *   `error`; recording that as an exit code would invent a clean exit out of a
- *   process that never started.
  */
 
-import { spawnSync } from 'node:child_process';
-import { homedir } from 'node:os';
-
 import { vatCacheNamespace } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
 import {
@@ -41,44 +34,11 @@ import {
 } from '../pipeline-oracles/index.js';
 import { version } from '../version.js';
 
-import { normalizeCommandOutput, type NormalizeContext } from './normalize.js';
 import {
-  COMMAND_DIR,
-  COMMAND_SPECS,
   ORACLE_DIR,
-  type CommandManifestEntry,
-  type CommandSpec,
   type LaneManifestEntry,
   type SnapshotManifest,
 } from './types.js';
-
-/**
- * Resolve the absolute path to the vat binary under capture.
- *
- * `bin.js` directly, never the `vat.js` wrapper: the wrapper re-derives
- * dev/local/global context from the cwd and would spawn the ADOPTER project's
- * installed vat rather than the build being measured.
- *
- * This lived in `phase-utils.ts` while the orchestrators spawned a child per
- * phase and shared the resolution with it. They no longer spawn anything, so it
- * moved to its one remaining caller — a snapshot capture runs the command UNDER
- * TEST as a real process on purpose, which is a different thing from a phase and
- * is why it survives the collapse.
- *
- * This file lives in qa-snapshot/, one level below the compiled bin.
- */
-function resolveBinPath(): string {
-  return safePath.resolve(safePath.join(import.meta.dirname, '../bin.js'));
-}
-
-/**
- * Cap on a captured child stream.
- *
- * `vat audit` alone emits ~1.8 MB of YAML on a large corpus, and `spawnSync`'s
- * 1 MB default would set ENOBUFS and hand back a TRUNCATED stream — a silently
- * shortened artifact that compares as a large deletion.
- */
-const MAX_COMMAND_OUTPUT_BYTES = 256 * 1024 * 1024;
 
 /** Ceiling on each provenance `git` call, so a wedged repo cannot stall a capture. */
 const GIT_TIMEOUT_MS = 10_000;
@@ -89,12 +49,8 @@ export interface CaptureRequest {
   corpusLabel: string;
   /** Lane ids to capture; defaults to all five. */
   lanes?: readonly LaneId[];
-  /** Capture the whole-command half. Default true. */
-  includeCommands: boolean;
-  /** Capture the parse-fact oracle. Default true — it is the slowest oracle on a large corpus. */
+  /** Capture the parse-fact oracle. It is the slowest oracle on a large corpus. */
   includeParseFacts: boolean;
-  /** Millisecond ceiling per spawned command. */
-  commandTimeoutMs: number;
 }
 
 /** A capture, ready to hand to `writeSnapshot`. */
@@ -124,26 +80,18 @@ interface ParseFactHalf extends SnapshotHalf {
   keyDisagreementCount: number | null;
 }
 
-/** The whole-command half. */
-interface CommandHalf extends SnapshotHalf {
-  entries: CommandManifestEntry[];
-}
-
 /**
  * Capture a QA snapshot over a corpus.
  *
- * @param request - Corpus, label, which halves to capture, per-command timeout
+ * @param request - Corpus, label, which lanes, whether to capture parse facts
  * @returns The manifest and every artifact it names
  * @throws {Error} When `request.lanes` names an id that is not one of the five
  */
 export async function captureSnapshot(request: CaptureRequest): Promise<CaptureResult> {
   const corpusRoot = safePath.resolve(request.corpusRoot);
-  const binPath = resolveBinPath();
-  const context = normalizeContextFor(corpusRoot, binPath);
 
   const lanes = await captureLanes(request, corpusRoot);
   const parseFacts = await captureParseFactHalf(request, corpusRoot, lanes.enumeratedPaths);
-  const commands = captureCommandHalf(request, binPath, corpusRoot, context);
 
   const manifest: SnapshotManifest = {
     vatVersion: version,
@@ -155,7 +103,6 @@ export async function captureSnapshot(request: CaptureRequest): Promise<CaptureR
     nodeVersion: process.version,
     ...gitProvenance(corpusRoot),
     lanes: lanes.entries,
-    commands: commands.entries,
     parseFactArtifact: parseFacts.artifact,
     parseFactBlobCount: parseFacts.blobCount,
     parseFactKeyDisagreementCount: parseFacts.keyDisagreementCount,
@@ -163,13 +110,12 @@ export async function captureSnapshot(request: CaptureRequest): Promise<CaptureR
       ...untrackedFileWarnings(corpusRoot),
       ...lanes.warnings,
       ...parseFacts.warnings,
-      ...commands.warnings,
     ],
   };
 
   return {
     manifest,
-    artifacts: new Map([...lanes.artifacts, ...parseFacts.artifacts, ...commands.artifacts]),
+    artifacts: new Map([...lanes.artifacts, ...parseFacts.artifacts]),
   };
 }
 
@@ -209,7 +155,8 @@ async function captureLanes(request: CaptureRequest, corpusRoot: string): Promis
   const entries: LaneManifestEntry[] = [];
   const enumeratedPaths = new Set<string>();
 
-  for (const lane of orderedLanes(request.lanes ?? ALL_LANE_IDS)) {
+  // In order: a measurement, and lanes must not overlap each other.
+  await forEachInOrder(orderedLanes(request.lanes ?? ALL_LANE_IDS), async (lane) => {
     const snapshot = await captureEnumerationSnapshot(lane, {
       corpusRoot,
       corpus: request.corpusLabel,
@@ -243,7 +190,7 @@ async function captureLanes(request: CaptureRequest, corpusRoot: string): Promis
       restatementDriftCount: snapshot.restatementDrift.length,
       buildError: snapshot.buildError ?? null,
     });
-  }
+  });
 
   return { entries, artifacts, warnings, enumeratedPaths: [...enumeratedPaths] };
 }
@@ -313,139 +260,6 @@ async function captureParseFactHalf(
     blobCount: snapshot.rows.length,
     keyDisagreementCount: snapshot.keyDisagreements.length,
   };
-}
-
-/**
- * Run each of {@link COMMAND_SPECS} exactly once and keep both streams.
- *
- * @param request - The capture request (whether this half is wanted, and the timeout)
- * @param binPath - Absolute path to the vat binary to spawn
- * @param corpusRoot - Absolute corpus root, substituted for `{corpus}`
- * @param context - Roots to scrub out of the captured streams
- * @returns Command manifest entries, artifacts and warnings
- */
-function captureCommandHalf(
-  request: CaptureRequest,
-  binPath: string,
-  corpusRoot: string,
-  context: NormalizeContext,
-): CommandHalf {
-  if (!request.includeCommands) {
-    return {
-      artifacts: new Map(),
-      warnings: [
-        'whole-command half SKIPPED (includeCommands: false). Absent, not unchanged: nothing here constrains what the three corpus-enumerating verbs emit.',
-      ],
-      entries: [],
-    };
-  }
-
-  const artifacts = new Map<string, string>();
-  const warnings: string[] = [];
-  const entries: CommandManifestEntry[] = [];
-
-  for (const spec of COMMAND_SPECS) {
-    const outcome = runOneCommand(spec, binPath, corpusRoot, request.commandTimeoutMs);
-    const stdoutArtifact = `${COMMAND_DIR}/${spec.name}.stdout.txt`;
-    const stderrArtifact = `${COMMAND_DIR}/${spec.name}.stderr.txt`;
-    const stdout = normalizeCommandOutput(outcome.stdout, context);
-    const stderr = normalizeCommandOutput(outcome.stderr, context);
-
-    artifacts.set(stdoutArtifact, stdout);
-    artifacts.set(stderrArtifact, stderr);
-    warnings.push(...outcome.warnings);
-    entries.push({
-      name: spec.name,
-      args: outcome.args,
-      exitCode: outcome.exitCode,
-      signal: outcome.signal,
-      wallMs: outcome.wallMs,
-      stdoutArtifact,
-      stderrArtifact,
-      stdoutBytes: Buffer.byteLength(stdout, 'utf8'),
-      stderrBytes: Buffer.byteLength(stderr, 'utf8'),
-    });
-  }
-
-  return { artifacts, warnings, entries };
-}
-
-/** One spawned command's raw result, before normalization. */
-interface CommandOutcome {
-  args: string[];
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  signal: string | null;
-  wallMs: number;
-  warnings: string[];
-}
-
-/**
- * Spawn one command once.
- *
- * @param spec - The command template
- * @param binPath - Absolute path to the vat binary
- * @param corpusRoot - Substituted for every `{corpus}` placeholder
- * @param timeoutMs - Millisecond ceiling on the child
- * @returns Both streams, the exit status, and any warnings the spawn earned
- */
-function runOneCommand(
-  spec: CommandSpec,
-  binPath: string,
-  corpusRoot: string,
-  timeoutMs: number,
-): CommandOutcome {
-  const args = spec.args.map((arg) => arg.replaceAll('{corpus}', corpusRoot));
-  const startedAt = Date.now();
-  const result = spawnSync(process.execPath, [binPath, ...args], {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    maxBuffer: MAX_COMMAND_OUTPUT_BYTES,
-    timeout: timeoutMs,
-  });
-  const wallMs = Date.now() - startedAt;
-
-  return {
-    args,
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-    // A process that never ran has no exit code. Reporting `result.status` here
-    // would publish `null` as though the child had chosen it.
-    exitCode: result.error === undefined ? result.status : null,
-    signal: result.signal ?? null,
-    wallMs,
-    warnings: spawnWarnings(spec.name, result.error, result.status, result.signal),
-  };
-}
-
-/**
- * Say out loud when a command did not produce an exit code of its own.
- *
- * @param name - Command name, as it appears in the manifest
- * @param error - The spawn error, when `spawnSync` set one
- * @param status - The child's exit code, when it exited on its own
- * @param signal - The signal that killed it, when one did
- * @returns One warning line, or none when the child ran and exited normally
- */
-function spawnWarnings(
-  name: string,
-  error: Error | undefined,
-  status: number | null,
-  signal: NodeJS.Signals | null,
-): string[] {
-  const killedBy = signal === null ? '' : ` (signal ${signal})`;
-  if (error !== undefined) {
-    return [
-      `command '${name}' never produced an exit code${killedBy}: ${error.message}. exitCode is recorded as null — read it as "did not run", never as a clean exit.`,
-    ];
-  }
-  if (status === null) {
-    return [
-      `command '${name}' was killed before exiting${killedBy}; its streams are whatever it had emitted by then and may be truncated.`,
-    ];
-  }
-  return [];
 }
 
 /**
@@ -537,26 +351,6 @@ const UNTRACKED_SAMPLE_SIZE = 5;
 function gitOutput(cwd: string, args: string[], trim: boolean): string | null {
   const result = runGit(args, { cwd, timeout: GIT_TIMEOUT_MS, trim });
   return result.ok ? result.stdout : null;
-}
-
-/**
- * The roots a captured stream is scrubbed against.
- *
- * `vatRoot` is derived from the binary that will actually be spawned rather
- * than from the cwd, for the same reason `--version` prints its binary path:
- * the cwd-derived answer is not a property of what ran.
- *
- * @param corpusRoot - Absolute corpus root
- * @param binPath - Absolute path to the vat binary (`<pkgRoot>/dist/bin.js`)
- * @returns The normalization context
- */
-function normalizeContextFor(corpusRoot: string, binPath: string): NormalizeContext {
-  return {
-    corpusRoot,
-    // bin.js → dist → the package root.
-    vatRoot: safePath.resolve(binPath, '..', '..'),
-    homeDir: homedir(),
-  };
 }
 
 /** Every lane id, in `LANES` order — the default population. */

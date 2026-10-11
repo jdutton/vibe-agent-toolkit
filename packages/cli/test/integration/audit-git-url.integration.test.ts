@@ -11,8 +11,14 @@ import { pathToFileURL } from 'node:url';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { gitExecutable } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { parse } from 'yaml';
 
+import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 import { runAuditCli } from '../test-helpers.js';
+
+// ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
+// child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
+useScratchTmpdir('vat-scratch-cli-1-');
 
 let bareRepo: string;
 let bareRepoUrl: string;
@@ -46,7 +52,7 @@ beforeAll(() => {
   // Without it, Ubuntu CI runners (init.defaultBranch=master) leave HEAD
   // dangling at refs/heads/master, and `git clone --single-branch` against
   // such a bare repo produces an empty working tree where `rev-parse HEAD`
-  // fails — the audit then exits 2 via handleCommandError.
+  // fails — the audit then exits 2 with a refusal.
   git(['init', '--bare', '--initial-branch=main'], bareRepo);
   git(['init', '--initial-branch=main'], workTree);
   git(['config', 'user.email', 'test@example.com'], workTree);
@@ -85,9 +91,12 @@ describe('vat audit <git-url> — happy path', () => {
     const result = runAuditCli(bareRepoUrl);
 
     expect(result.status).toBe(0);
-    // Provenance header is emitted as a YAML comment so downstream
-    // tools (yq/jq) can pipe-parse the rest of the audit output.
-    expect(result.stdout).toMatch(/^# Audited: .+ @ HEAD \(commit [a-f0-9]{8}\)$/m);
+    // Provenance is data in the report, and a human line on stderr — stdout is the report alone.
+    const report = parse(result.stdout) as { data: { root: unknown; provenance: { url: string; ref: string; commit: string } } };
+    expect(report.data.root).toBeNull();
+    expect(report.data.provenance).toMatchObject({ url: bareRepoUrl, ref: 'HEAD' });
+    expect(report.data.provenance.commit).toMatch(/^[a-f0-9]{40}$/);
+    expect(result.stderr).toMatch(/Audited: .+ @ HEAD \(commit [a-f0-9]{8}\)/);
     // Path appears as repo-relative, not tempdir-relative.
     expect(result.stdout).toContain('plugins/foo/SKILL.md');
     expect(result.stdout).not.toMatch(/\/vat-audit-/);
@@ -98,12 +107,14 @@ describe('vat audit <git-url> — ref pinning', () => {
   it('clones at a specific tag', () => {
     const result = runAuditCli(`${bareRepoUrl}#v1.0.0`);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('@ v1.0.0');
+    expect((parse(result.stdout) as { data: { provenance: { ref: string } } }).data.provenance.ref).toBe('v1.0.0');
   });
 
   it('reports a clear error when the ref is not found', () => {
     const result = runAuditCli(`${bareRepoUrl}#nonexistent-ref`);
-    expect(result.status).not.toBe(0);
+    // The source the argument names could not be read as asked: the run did not finish.
+    expect(result.status).toBe(2);
+    expect(parse(result.stdout)).toMatchObject({ status: 'error', error: { code: 'INPUT_UNREADABLE' } });
     expect(result.stderr + result.stdout).toMatch(/Reference not found|Clone failed/);
   });
 });
@@ -112,12 +123,14 @@ describe('vat audit <git-url> — subpath', () => {
   it('audits only the subpath when specified', () => {
     const result = runAuditCli(`${bareRepoUrl}#main:plugins/foo`);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('# Subpath: plugins/foo');
+    expect((parse(result.stdout) as { data: { provenance: { subpath: string } } }).data.provenance.subpath).toBe('plugins/foo');
   });
 
   it('reports clearly when subpath is missing', () => {
     const result = runAuditCli(`${bareRepoUrl}#main:does/not/exist`);
-    expect(result.status).not.toBe(0);
+    // The source was cloned; the subpath is the argument's mistake.
+    expect(result.status).toBe(2);
+    expect(parse(result.stdout)).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
     expect(result.stderr + result.stdout).toMatch(/Subpath not found/);
   });
 
@@ -126,7 +139,8 @@ describe('vat audit <git-url> — subpath', () => {
     // before the audit is allowed to run, regardless of whether the
     // resolved target happens to exist on the host filesystem.
     const result = runAuditCli(`${bareRepoUrl}#main:../../../etc`);
-    expect(result.status).not.toBe(0);
+    expect(result.status).toBe(2);
+    expect(parse(result.stdout)).toMatchObject({ status: 'error', error: { code: 'USAGE_INVALID' } });
     expect(result.stderr + result.stdout).toMatch(/escapes|traversal|outside/i);
   });
 });

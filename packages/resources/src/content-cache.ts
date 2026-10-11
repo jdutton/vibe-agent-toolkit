@@ -45,7 +45,7 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 
-import { isFilesystemAccessError, safePath } from '@vibe-agent-toolkit/utils';
+import { fsFaultOf, safePath } from '@vibe-agent-toolkit/utils';
 import { ZodError } from 'zod';
 
 import {
@@ -124,7 +124,7 @@ export class ContentCache {
       // build cannot validate — becomes a no-op. The current run still has the
       // fresh bytes; only the disk persistence is lost. Anything else is a bug
       // in this class or its caller, and a bug is not a persistence failure.
-      if (!isFilesystemAccessError(error) && !(error instanceof ZodError)) throw error;
+      if (fsFaultOf(error) === undefined && !(error instanceof ZodError)) throw error;
     }
   }
 
@@ -157,7 +157,7 @@ export class ContentCache {
       // ENOENT (never written), EACCES (perms revoked), SyntaxError
       // (corrupted JSON) — all degrade to a miss. The next fetch repopulates.
       // A TypeError from our own code is not a miss and stays loud.
-      if (!isFilesystemAccessError(error) && !(error instanceof SyntaxError)) throw error;
+      if (fsFaultOf(error) === undefined && !(error instanceof SyntaxError)) throw error;
       return null;
     }
   }
@@ -171,7 +171,7 @@ export class ContentCache {
     } catch (error) {
       // The `.json` half was readable and fresh but the `.bin` half is not
       // there or cannot be opened: a miss, on the same fail-soft footing.
-      if (!isFilesystemAccessError(error)) throw error;
+      if (fsFaultOf(error) === undefined) throw error;
       return null;
     }
   }

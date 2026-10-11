@@ -83,6 +83,40 @@ function executeCliCommand(
   return parseYamlOutput(result);
 }
 
+/**
+ * The `Report<T>` envelope every migrated `vat` verb publishes: `status` is
+ * `ok|findings|error`, the verb's own payload lives under `data`, and the run's
+ * bookkeeping is `summary`, `examined`, `findings` and `gate`.
+ *
+ * This package cannot import the CLI's published schemas (`rag-lancedb` is a
+ * dependency of the CLI, not the reverse), so the envelope is checked here
+ * structurally. A clean run means `status: ok` with no findings.
+ */
+interface ReportEnvelope<T> {
+  status: string;
+  summary: unknown;
+  examined: number;
+  findings: unknown[];
+  gate: unknown;
+  data: T;
+}
+
+/**
+ * Assert a parsed document is a clean report envelope and return it.
+ * @param output - Parsed CLI document
+ * @returns The same document, typed with its `data` payload
+ */
+function expectCleanReport<T>(output: unknown): ReportEnvelope<T> {
+  const report = output as ReportEnvelope<T>;
+  expect(report.status).toBe('ok');
+  expect(report.findings).toStrictEqual([]);
+  expect(report.summary).toBeDefined();
+  expect(report.gate).toBeDefined();
+  expect(report.examined).toBeGreaterThan(0);
+  expect(report.data).toBeDefined();
+  return report;
+}
+
 /** Where the CLI lives and which database it should be pointed at. */
 interface CliTarget {
   binPath: string;
@@ -112,13 +146,13 @@ function queryTopResourceId(cli: CliTarget, query: string): string {
     ['rag', 'query', query, '--db', cli.dbPath, '--limit', '1'],
     cli.projectRoot,
     30000 // 30 seconds for query with embedding
-  ) as { status: string; stats: { totalMatches: number }; chunks: { resourceId: string }[] };
+  );
 
-  expect(output.status).toBe('success');
-  expect(output.stats.totalMatches).toBe(1);
-  expect(output.chunks).toHaveLength(1);
+  const { data } = expectCleanReport<{ stats: { totalMatches: number }; chunks: { resourceId: string }[] }>(output);
+  expect(data.stats.totalMatches).toBe(1);
+  expect(data.chunks).toHaveLength(1);
 
-  const [topHit] = output.chunks;
+  const [topHit] = data.chunks;
   return topHit.resourceId;
 }
 
@@ -186,8 +220,8 @@ describe('RAG CLI (Node.js dogfooding)', () => {
       30000
     );
 
-    expect(output.status).toBe('success');
-    expect(output.resourcesIndexed).toBe(5);
+    const { data } = expectCleanReport<{ resourcesIndexed: number; chunksCreated: number }>(output);
+    expect(data.resourcesIndexed).toBe(5);
     // Pinned, not `> 0`: a chunker change is the thing most likely to move
     // indexing cost, and `> 0` cannot see it.
     //
@@ -220,7 +254,7 @@ describe('RAG CLI (Node.js dogfooding)', () => {
     //
     // If this number changes, decide whether the chunker change was intended —
     // do not simply update it.
-    expect(output.chunksCreated).toBe(12);
+    expect(data.chunksCreated).toBe(12);
   }, 30000);
 
   it('should query indexed documentation via CLI', () => {
@@ -237,10 +271,10 @@ describe('RAG CLI (Node.js dogfooding)', () => {
   it('should show database statistics via CLI', () => {
     const output = executeCliCommand(binPath, ['rag', 'stats', '--db', testDbPath], projectRoot, 10000);
 
-    expect(output.status).toBe('success');
-    expect(output.totalChunks).toBeGreaterThan(0);
-    expect(output.totalResources).toBeGreaterThan(0);
-    expect(output.embeddingModel).toBeTruthy();
+    const { data } = expectCleanReport<{ totalChunks: number; totalResources: number; embeddingModel: string }>(output);
+    expect(data.totalChunks).toBeGreaterThan(0);
+    expect(data.totalResources).toBeGreaterThan(0);
+    expect(data.embeddingModel).toBeTruthy();
   });
 
   it('should find relevant chunks for configuration questions', () => {
@@ -253,7 +287,7 @@ describe('RAG CLI (Node.js dogfooding)', () => {
   it('should clear database via CLI', () => {
     const output = executeCliCommand(binPath, ['rag', 'clear', '--db', testDbPath], projectRoot, 10000);
 
-    expect(output.status).toBe('success');
+    expect(expectCleanReport<{ cleared: boolean }>(output).data.cleared).toBe(true);
 
     // Verify database is gone
     expect(existsSync(testDbPath)).toBe(false);

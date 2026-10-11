@@ -235,6 +235,102 @@ export {
 } from './facets/population/types.js';
 
 export {
+  captureVerdict,
+  type VerdictCaptureRequest,
+  type VerdictCaptureResult,
+} from './facets/verdict/capture.js';
+export {
+  compareVerdict,
+  diffExcerpt,
+  readVerdictDirectory,
+  type VerdictCompareOptions,
+  type VerdictComparison,
+  type VerdictComparisonResult,
+  type VerdictExcludedRow,
+  type VerdictRowComparison,
+} from './facets/verdict/compare.js';
+export {
+  bulletAnchors,
+  changelogRefusals,
+  type DeclaredDelta,
+  type DeclaredFinding,
+  type DeltaChange,
+  type FindingDigestKey,
+  loadVerdictDeltas,
+  type ObservedDelta,
+  parseVerdictDeltas,
+  readChangelogSources,
+  type Reconciliation,
+  reconcileDeltas,
+  type ReconcileRun,
+  type VerdictDeltas,
+  type VerdictDeltasResult,
+  VerdictDeltasSchema,
+} from './facets/verdict/deltas.js';
+export {
+  extractVerdict,
+  FINDING_SEVERITIES,
+  findingIdentity,
+  type FindingKey,
+  FindingKeySchema,
+  locationDigest,
+  phaseSeverityCounts,
+  type PublishedTallies,
+  publishedTallies,
+  refusalCodes,
+  rowVerdict,
+  type SeverityCounts,
+  type Verdict,
+} from './facets/verdict/extract.js';
+export {
+  buildPathSubstitutions,
+  normalizeCommandOutput,
+  type NormalizeContext,
+  type PathSubstitution,
+} from './facets/verdict/normalize.js';
+export {
+  type CloneDir,
+  type CloneSource,
+  type ClonePlan,
+  type CloneStep,
+  executeClonePlan,
+  type GitKind,
+  planApfsClone,
+  readCloneSource,
+} from './facets/verdict/clone.js';
+export { multisetDifference } from './facets/verdict/multiset.js';
+export { renderVerdictComparison, renderVerdictReport } from './facets/verdict/render.js';
+export {
+  loadVerdictSubjects,
+  type LoadedVerdictSubjects,
+  parseVerdictSubjects,
+  type VerdictSubject,
+  type VerdictSubjects,
+  VerdictSubjectsSchema,
+  type VerdictSubjectsResult,
+} from './facets/verdict/subjects.js';
+export {
+  VERDICT_FACET,
+  type VerdictBody,
+  VerdictBodySchema,
+  type VerdictExclusion,
+  type VerdictRow,
+} from './facets/verdict/types.js';
+export {
+  type BuildVerbPlan,
+  planBuildVerbs,
+  VERDICT_BUILD_VERB_NAMES,
+  VERDICT_VERB_NAMES,
+  type VerbInvocation,
+  type VerbQuery,
+  type VerbSubject,
+  type VerdictBuildVerbName,
+  verdictVerb,
+  type VerdictVerbName,
+  type VerdictVerbSpec,
+} from './facets/verdict/verbs.js';
+
+export {
   type AbArmSummary,
   type AbCommandResult,
   abExitCondition,
@@ -250,6 +346,16 @@ export {
   runAb,
   UNMEASURABLE_VERDICT,
 } from './harness/ab.js';
+export {
+  ARM_OWNED_ENV_KEYS,
+  type ArmEnvironment,
+  armEnvironmentClash,
+  buildArmEnv,
+  EMPTY_ARM_ENVIRONMENT,
+  mergeArmEnvironments,
+  sameArmEnvironment,
+} from './harness/arm-env.js';
+export { type ArmIdentity, closureDigest, indistinguishableArms } from './harness/closure.js';
 export {
   completedExitCodesOf,
   DEFAULT_COMPLETED_EXIT_CODES,
@@ -333,6 +439,7 @@ export {
   classifyRunFailure,
   materializeArgs,
   measureSpec,
+  type RepeatEnvFor,
   type RepeatSpec,
   runRepeats,
   runRepeatsFor,

@@ -522,7 +522,7 @@ Two things this costs that the boundary itself does not pay for:
   export change and must be labelled one.
 - ⚠️ **There is no HTML corpus to control on.** The repository holds three committed `.html` files,
   all under `test/fixtures/`, which `vibe-agent-toolkit.config.yaml` excludes globally — a scan sees
-  `filesScanned: 0`. A parse5 *presence* assertion therefore has nothing to fire on until a corpus
+  `examined: 0`. A parse5 *presence* assertion therefore has nothing to fire on until a corpus
   exists, and an absence assertion with no live present-case asserts nothing.
 
 ## 5. What this implies for the execution spec

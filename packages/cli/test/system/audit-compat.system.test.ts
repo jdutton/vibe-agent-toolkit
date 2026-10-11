@@ -11,6 +11,8 @@ import * as fs from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { AUDIT_REPORT_SCHEMA } from '../../src/commands/audit-schema.js';
+
 import {
   cleanupTestTempDir,
   createTestTempDir,
@@ -84,8 +86,7 @@ function runCompatAuditAndParse(
   expect(status).toBe(0);
   expect(stdout).toBeTruthy();
 
-  const output = parseYamlOutput(stdout);
-  const files = output['files'] as Array<Record<string, unknown>>;
+  const files = AUDIT_REPORT_SCHEMA.parse(parseYamlOutput(stdout)).data.files as Array<Record<string, unknown>>;
   expect(files).toBeDefined();
 
   return { files };
@@ -212,11 +213,11 @@ This skill has no plugin.json so no compat analysis applies.
     expect(status).toBe(0);
     expect(stdout).toBeTruthy();
 
-    const output = parseYamlOutput(stdout);
+    const report = AUDIT_REPORT_SCHEMA.parse(parseYamlOutput(stdout));
 
-    // The --user path outputs a hierarchical summary plus a files array when compat is active
-    expect(output).toHaveProperty('files');
-    const files = output['files'] as Array<Record<string, unknown>>;
+    // The --user path publishes the hierarchy beside the file rows; compat rides on the rows
+    expect(report.data.hierarchical).not.toBeNull();
+    const files = report.data.files as Array<Record<string, unknown>>;
     expect(files.length).toBeGreaterThan(0);
 
     // At least one file entry should have compatibility data (the plugin)

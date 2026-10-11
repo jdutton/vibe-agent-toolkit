@@ -184,8 +184,17 @@ bare `'common.ts'` used to be a substring match, which silently exempted every p
 CONTAINING it.
 
 A rule that cannot be green on the whole tree today lands as a **ratchet**: enable it with an
-explicit allowlist of today's offending files (a reason beside each), so a listed file that becomes
-clean fails until delisted and an unlisted new site fails at once. The list may only shrink.
+explicit allowlist of today's offending files (a reason beside each, or one reason in the list's
+comment when every entry shares it), so a listed file that becomes clean fails until delisted and
+an unlisted new site fails at once. The list may only shrink.
+Register the list in `packages/dev-tools/test/eslint-allowlist-ratchets.test.ts`, which lints each
+listed file with the exemption lifted and requires the entries to be sorted source files —
+`no-existssync` (`NO_EXISTSSYNC_RATCHET`, the product files still asking `existsSync` instead of
+`pathPresent`) and `no-io-in-unit-tier` are the shape.
+When it reaches zero, delete the mechanism, not just the entries: `no-literal-process-exit` lost
+its `derived.legacy` option (its schema now refuses one) when the last verb derived its exit code,
+and `no-stdout-outside-writer`'s `allowFiles` keeps only `commands/agent/run.ts`, a protocol leaf
+whose stdout is not a document.
 
 ## Why This Matters for Agentic Development
 

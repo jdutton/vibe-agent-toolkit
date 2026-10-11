@@ -105,6 +105,7 @@ import {
   AST_SYNTACTIC_FORMS,
   ClosureNonConvergenceError,
   ContributorRegistry,
+  crawlSourceFor,
   FilesystemExtentContributor,
   GitExtentContributor,
   PackageExtentContributor,
@@ -187,6 +188,7 @@ let registeredIds: readonly string[];
  */
 async function discoverSkillPaths(): Promise<string[]> {
   const absolute = await crawlDirectory({
+    outputs: [],
     baseDir: ROOT,
     unreadable: refuseUnreadableFixture(ROOT),
     include: ['**/SKILL.md'],
@@ -222,7 +224,7 @@ function buildRegistry(skillPaths: readonly string[]): {
     ids.push(contributor.id);
   };
 
-  add(new FilesystemExtentContributor());
+  add(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
   add(new GitExtentContributor());
   add(new PackageExtentContributor());
 

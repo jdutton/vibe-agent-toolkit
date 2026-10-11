@@ -1,14 +1,46 @@
 import { homedir } from 'node:os';
 
 
-import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, it, expect } from 'vitest';
+import { normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 
 import { getClaudeUserPaths, getClaudeProjectPaths } from '../src/paths/claude-paths.js';
 
+// The shared vitest setup arms this guard for every test process (and every `vat` child it spawns): a
+// Claude directory that resolves OUTSIDE the temp tree is someone's real configuration, and a test
+// that got there must stop before anything is written. It fails CLOSED: a test that unsets
+// CLAUDE_CONFIG_DIR without pointing HOME at a temp directory lands on the ambient home, and throws.
+describe('getClaudeUserPaths under the test guard (VAT_TEST_USER_STATE_UNDER)', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('is armed by the shared setup, naming the temp tree', () => {
+    expect(process.env['VAT_TEST_USER_STATE_UNDER'] ?? '').not.toBe('');
+  });
+
+  it('throws, before any path is handed out, when the Claude directory would be the ambient home\'s', () => {
+    vi.stubEnv('CLAUDE_CONFIG_DIR', undefined);
+    expect(() => getClaudeUserPaths()).toThrow(/outside .* refusing to resolve it in a test process/);
+  });
+
+  it('throws for a CLAUDE_CONFIG_DIR outside the temp tree, and answers for one inside it', () => {
+    vi.stubEnv('CLAUDE_CONFIG_DIR', safePath.join(homedir(), '.claude-elsewhere'));
+    expect(() => getClaudeUserPaths()).toThrow(/refusing to resolve it in a test process/);
+    const inside = safePath.join(normalizedTmpdir(), 'vat-guard-inside');
+    vi.stubEnv('CLAUDE_CONFIG_DIR', inside);
+    expect(toForwardSlash(getClaudeUserPaths().claudeDir)).toBe(toForwardSlash(safePath.resolve(inside)));
+  });
+});
+
 describe('getClaudeUserPaths', () => {
-  beforeEach(() => { delete process.env['CLAUDE_CONFIG_DIR']; });
-  afterEach(() => { delete process.env['CLAUDE_CONFIG_DIR']; });
+  // Stubbed, never deleted: once these tests are done the worker is back on the scratch default the
+  // shared setup gives it, not on an unset variable (which falls back to the real ~/.claude).
+  // The guard is lifted for THIS suite only, and said so: it computes paths (the real home's among
+  // them) and reads or writes nothing at any of them.
+  beforeEach(() => {
+    vi.stubEnv('CLAUDE_CONFIG_DIR', undefined);
+    vi.stubEnv('VAT_TEST_USER_STATE_UNDER', '');
+  });
+  afterEach(() => { vi.unstubAllEnvs(); });
 
   it('should return absolute paths to Claude directories', () => {
     const paths = getClaudeUserPaths();

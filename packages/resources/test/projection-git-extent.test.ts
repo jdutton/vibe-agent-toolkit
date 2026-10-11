@@ -188,6 +188,7 @@ describe('git and filesystem extents disagree — the proving rung', () => {
     // Deliberately a LOCAL filesystem enumeration rather than the filesystem
     // contributor: the same claim, provable without coupling two modules.
     const walked = await crawlDirectory({
+      outputs: [],
       baseDir: root,
       unreadable: refuseUnreadableFixture(root),
       respectGitignore: false,

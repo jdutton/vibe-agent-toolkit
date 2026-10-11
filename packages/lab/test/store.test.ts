@@ -44,8 +44,18 @@ describe('reportFileName', () => {
     // The case the whole scheme exists for: every dev build carries the semver
     // of the release it branched from. If the name keyed on version alone, a
     // dev-vs-release comparison would write both sides to one file.
-    const dev = reportAt({ instrument: { version: '0.1.42', commit: '2'.repeat(40), dirty: false } });
+    const dev = reportAt({ instrument: { version: '0.1.42', commit: '2'.repeat(40), dirty: false, closure: null } });
     expect(reportFileName(report())).not.toBe(reportFileName(dev));
+  });
+
+  it('separates two dist builds of one version by their closure digest', () => {
+    // No commit on either side, one version: keyed on those alone, the second
+    // `run` into one --out would overwrite the first build's report.
+    const distOf = (closure: string): ReturnType<typeof reportAt> =>
+      reportAt({ instrument: { version: '0.2.0', commit: null, dirty: null, closure } });
+    expect(reportFileName(distOf('a'.repeat(64)))).not.toBe(reportFileName(distOf('b'.repeat(64))));
+    // Positive control: one closure names one file.
+    expect(reportFileName(distOf('a'.repeat(64)))).toBe(reportFileName(distOf('a'.repeat(64))));
   });
 
   it('separates a dirty instrument from the clean commit it was built on', () => {
@@ -53,7 +63,7 @@ describe('reportFileName', () => {
     // branched from are different binaries, so sharing a filename would let one
     // overwrite the other's measurement.
     const dirty = reportAt({
-      instrument: { version: '0.1.42', commit: '1'.repeat(40), dirty: true },
+      instrument: { version: '0.1.42', commit: '1'.repeat(40), dirty: true, closure: null },
     });
     expect(reportFileName(report())).not.toBe(reportFileName(dirty));
   });
@@ -63,7 +73,7 @@ describe('reportFileName', () => {
     // is the built output, not the checkout. So a dirty instrument is pinned by
     // observation time — weaker than an identity, and deliberately so, but it
     // does guarantee the second run never silently overwrites the first.
-    const instrument = { version: '0.1.42', commit: '1'.repeat(40), dirty: true };
+    const instrument = { version: '0.1.42', commit: '1'.repeat(40), dirty: true, closure: null };
     const first = { ...reportAt({ instrument }), capturedAt: '2026-08-14T10:00:00.000Z' };
     const second = { ...reportAt({ instrument }), capturedAt: '2026-08-14T11:30:00.000Z' };
 
@@ -162,7 +172,7 @@ describe('writeReport and readReport', () => {
     const impossible = report({
       coordinate: {
         ...COORDINATE,
-        instrument: { version: '0.1.42', commit: null, dirty: false },
+        instrument: { version: '0.1.42', commit: null, dirty: false, closure: null },
       },
     });
     await expect(writeReport(tempDir, impossible)).rejects.toThrow(/could not read back/);

@@ -19,7 +19,9 @@ import { cpSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { afterEach, describe, expect, it } from 'vitest';
+import yaml from 'yaml';
 
+import { MARKETPLACE_PUBLISH_REPORT_SCHEMA } from '../../src/commands/claude/marketplace/publish-schema.js';
 import {
   commitAllAndPushMain,
   createTempDirTracker,
@@ -159,11 +161,9 @@ describe('multi-plugin marketplace — end-to-end build + publish (integration)'
     ).toBe(0);
 
     // Issue #110 regression guard: multi-plugin marketplaces have no aggregate
-    // version, so the published[*].version field must be omitted from the YAML
-    // status payload. Match any indented `version:` line in stdout — YAML
-    // fields are always indented under the array entry, top-level keys aren't.
-    // Bounded quantifier avoids sonarjs/slow-regex backtracking concerns.
-    expect(publishResult.stdout).not.toMatch(/^ {1,8}version:/m);
+    // version, so published[*].version is null — never a borrowed or invented one.
+    const report = MARKETPLACE_PUBLISH_REPORT_SCHEMA.parse(yaml.parse(publishResult.stdout));
+    expect(report.status === 'error' ? undefined : report.data.published.map((row) => row.version)).toStrictEqual([null]);
 
     // Inspect published branch
     const inspectDir = cloneBranchToInspect(bareRemote, PUBLISH_BRANCH);

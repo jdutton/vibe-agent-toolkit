@@ -78,10 +78,11 @@
 import { readFile, realpath, stat } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
-import { isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { everyInOrder, isPathAbsentError, promised, safePath } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 import { z } from 'zod';
 
+import { closureDigest } from './closure.js';
 import { hasUncommittedChanges } from './git-state.js';
 import type { InstrumentSource, ResolvedInstrument } from './types.js';
 
@@ -95,15 +96,17 @@ import type { InstrumentSource, ResolvedInstrument } from './types.js';
  * through it would spawn whatever vat the *subject* has installed while the
  * report went on naming the build under test. The vat CLI made this same call
  * for the same reason while it still spawned a child per phase; that spawn is
- * gone, and the surviving instance of the choice is `resolveBinPath()` in
- * `packages/cli/src/qa-snapshot/capture.ts`, which runs the command UNDER TEST
- * as a real process and resolves `bin.js` directly so it cannot be diverted to
- * an adopter's local install.
+ * gone, and the surviving instance of the choice is `resolveVatBinPath()` in
+ * `packages/cli/src/utils/vat-bin-path.ts`, which resolves `bin.js` directly so
+ * a spawned child cannot be diverted to an adopter's local install.
  */
 const TREE_BIN_RELATIVE = 'packages/cli/dist/bin.js';
 
 /** Where a vat checkout keeps the manifest that carries the version. */
 const TREE_PACKAGE_JSON_RELATIVE = 'packages/cli/package.json';
+
+/** The cli package inside a checkout — where a tree arm's module closure starts. */
+const TREE_CLI_PACKAGE_RELATIVE = 'packages/cli';
 
 /**
  * Entry points looked for when `kind: 'dist'` names a directory rather than a
@@ -303,19 +306,17 @@ async function readManifestVersion(manifestPath: string, kind: string): Promise<
  * @throws {Error} when no manifest exists anywhere above `startDir`
  */
 async function findNearestManifest(startDir: string, subject: string): Promise<string> {
-  let current = safePath.resolve(startDir);
-  for (;;) {
-    const candidate = safePath.join(current, 'package.json');
-    if (await isRegularFile(candidate)) return candidate;
-    const parent = safePath.resolve(dirname(current));
-    if (parent === current) {
-      throw new Error(
-        `resolveInstrument({ kind: 'dist' }): no package.json above ${subject}, ` +
-          `so the vat version cannot be determined. ${NO_FALLBACK_NOTE}`,
-      );
-    }
-    current = parent;
+  const current = safePath.resolve(startDir);
+  const candidate = safePath.join(current, 'package.json');
+  if (await isRegularFile(candidate)) return candidate;
+  const parent = safePath.resolve(dirname(current));
+  if (parent === current) {
+    throw new Error(
+      `resolveInstrument({ kind: 'dist' }): no package.json above ${subject}, ` +
+        `so the vat version cannot be determined. ${NO_FALLBACK_NOTE}`,
+    );
   }
+  return findNearestManifest(parent, subject);
 }
 
 /**
@@ -402,11 +403,14 @@ async function resolveTree(path: string): Promise<ResolvedInstrument> {
   // files differently and label one report's two axes by two definitions of
   // "dirty", which no reader could see.
   const dirty = hasUncommittedChanges(treeRoot, `the instrument checkout at ${treeRoot}`);
+  // The bytes, beside the commit: a dirty build is otherwise named only by a
+  // HEAD whose bytes did not run. See `closure.ts`.
+  const closure = closureDigest(safePath.join(treeRoot, TREE_CLI_PACKAGE_RELATIVE));
 
   return {
     command: process.execPath,
     leadingArgs: [binPath],
-    version: { version, commit, dirty },
+    version: { version, commit, dirty, closure },
     root: treeRoot,
   };
 }
@@ -427,9 +431,14 @@ async function locateDistBin(target: string): Promise<string> {
   }
 
   const candidates = DIST_BIN_CANDIDATES.map((relative) => safePath.join(target, relative));
-  for (const candidate of candidates) {
-    if (await isRegularFile(candidate)) return candidate;
-  }
+  let found: string | undefined;
+  // In order: the first candidate present wins.
+  await everyInOrder(candidates, async (candidate) => {
+    if (!(await isRegularFile(candidate))) return true;
+    found = candidate;
+    return false;
+  });
+  if (found !== undefined) return found;
 
   // A dist with the wrapper but no `bin.js` is a specific, diagnosable state —
   // half a build, or a `bin/` directory mistaken for the entry point. Saying
@@ -461,18 +470,20 @@ async function resolveDist(path: string): Promise<ResolvedInstrument> {
   const binPath = await locateDistBin(target);
   const manifestPath = await findNearestManifest(dirname(binPath), binPath);
   const version = await readManifestVersion(manifestPath, 'dist');
+  // The package root, not the path the caller named: `dist:` accepts a bin
+  // file as readily as a directory, and rooting sites at the file's own
+  // directory would make every site outside `dist/bin` look foreign.
+  const packageRoot = safePath.resolve(dirname(manifestPath));
 
   return {
     command: process.execPath,
     leadingArgs: [binPath],
     // `dirty: null` for the same reason `commit` is: there is no checkout to
     // ask. A `false` here would be a confident claim of cleanliness over a build
-    // whose provenance nobody inspected.
-    version: { version, commit: null, dirty: null },
-    // The package root, not the path the caller named: `dist:` accepts a bin
-    // file as readily as a directory, and rooting sites at the file's own
-    // directory would make every site outside `dist/bin` look foreign.
-    root: safePath.resolve(dirname(manifestPath)),
+    // whose provenance nobody inspected. The closure is what tells two `dist:`
+    // arms of one version apart — see `closure.ts`.
+    version: { version, commit: null, dirty: null, closure: closureDigest(packageRoot) },
+    root: packageRoot,
   };
 }
 
@@ -518,8 +529,9 @@ function resolveNpx(spec: string): ResolvedInstrument {
     command: 'npx',
     leadingArgs: ['--yes', trimmed],
     // A published tarball carries no provenance: no commit, and therefore
-    // nothing that could have been dirty.
-    version: { version, commit: null, dirty: null },
+    // nothing that could have been dirty. No closure either: its bytes are not
+    // on disk until npx unpacks them at run time, and the pinned version pins them.
+    version: { version, commit: null, dirty: null, closure: null },
   };
 }
 
@@ -533,13 +545,14 @@ function resolveNpx(spec: string): ResolvedInstrument {
  *   cannot be found or cannot supply its coordinate. Resolution failures are
  *   errors, never fallbacks — see the module header.
  */
-export async function resolveInstrument(source: InstrumentSource): Promise<ResolvedInstrument> {
+export function resolveInstrument(source: InstrumentSource): Promise<ResolvedInstrument> {
   switch (source.kind) {
     case 'tree':
       return resolveTree(source.path);
     case 'dist':
       return resolveDist(source.path);
     case 'npx':
-      return resolveNpx(source.spec);
+      // `resolveNpx` is synchronous; its throw must still arrive as a rejection.
+      return promised(() => resolveNpx(source.spec));
   }
 }

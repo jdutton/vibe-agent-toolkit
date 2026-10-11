@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 
 import type { EvidenceRecord, Observation } from '@vibe-agent-toolkit/agent-skills';
-import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, mapWithConcurrency, safePath } from '@vibe-agent-toolkit/utils';
 
 import { readMarketplaceDefaultTargets, resolveEffectiveTargets } from './marketplace-defaults.js';
 import {
@@ -265,16 +265,22 @@ export async function analyzeCompatibility(
 
   // Each file is scanned on its own: one the filesystem refuses, or one whose
   // JSON will not parse, is named under `unchecked` and the rest are still
-  // analyzed. This used to throw out of the whole plugin.
-  for (const relativePath of files) {
+  // analyzed. This used to throw out of the whole plugin. The scans are
+  // read-only and run concurrently; their results fold in file order.
+  const outcomes = await mapWithConcurrency(files, async (relativePath) => {
     const fullPath = safePath.join(pluginDir, relativePath);
     try {
-      const scanned = await scanFile(relativePath, fullPath, locationRoot);
-      if (scanned === undefined) continue;
-      counts[scanned.counter]++;
-      allEvidence.push(...scanned.evidence);
+      return { scanned: await scanFile(relativePath, fullPath, locationRoot) };
     } catch (error) {
-      unchecked.push(uncheckedEntry(fullPath, reasonOf(error), locationRoot));
+      return { failed: uncheckedEntry(fullPath, reasonOf(error), locationRoot) };
+    }
+  });
+  for (const outcome of outcomes) {
+    if ('failed' in outcome) {
+      unchecked.push(outcome.failed);
+    } else if (outcome.scanned !== undefined) {
+      counts[outcome.scanned.counter]++;
+      allEvidence.push(...outcome.scanned.evidence);
     }
   }
 
@@ -304,6 +310,6 @@ export async function analyzeCompatibility(
     observations,
     verdicts,
     unchecked,
-    summary: counts,
+    fileCounts: counts,
   };
 }

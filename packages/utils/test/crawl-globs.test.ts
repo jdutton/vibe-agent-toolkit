@@ -116,7 +116,7 @@ describe('.turbo is excluded by the crawler that ships, not just by the list', (
     writeFileSync(safePath.join(tempDir, 'docs', 'guide.md'), '# Guide');
      
 
-    const found = crawlDirectorySync({ baseDir: tempDir, unreadable: refuseUnreadableFixture(tempDir), respectGitignore: false }).map((p) =>
+    const found = crawlDirectorySync({ outputs: [], baseDir: tempDir, unreadable: refuseUnreadableFixture(tempDir), respectGitignore: false }).map((p) =>
       toForwardSlash(p),
     );
 

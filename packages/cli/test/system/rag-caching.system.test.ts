@@ -4,6 +4,8 @@
  * Tests that RAG correctly detects unchanged files and skips re-indexing.
  */
 
+import { RAG_INDEX_REPORT_SCHEMA, type RagIndexData } from '../../src/commands/rag/index-schema.js';
+
 import {
   describe,
   executeCliAndParseYaml,
@@ -16,6 +18,13 @@ import {
 } from './rag-test-setup.js';
 
 const binPath = getBinPath(import.meta.url);
+
+/** An index run's counters, from its document validated by the verb's published schema. */
+function dataOf(parsed: Record<string, unknown>): RagIndexData {
+  const { data } = RAG_INDEX_REPORT_SCHEMA.parse(parsed);
+  if (data === null) throw new Error('rag index published no data');
+  return data;
+}
 const suite = setupRagTestSuite('caching', binPath, getTestOutputDir);
 
 describe('RAG caching and incremental updates (system test)', () => {
@@ -32,14 +41,14 @@ describe('RAG caching and incremental updates (system test)', () => {
     );
 
     expect(firstResult.status).toBe(0);
-    expect(firstParsed.status).toBe('success');
+    expect(firstParsed.status).toBe('ok');
 
     // All files should be skipped (content hash matches)
-    const skippedCount = firstParsed.resourcesSkipped as number;
+    const skippedCount = dataOf(firstParsed).resourcesSkipped;
     expect(skippedCount).toBeGreaterThan(0);
-    expect(firstParsed.resourcesIndexed).toBe(0);
-    expect(firstParsed.chunksCreated).toBe(0);
-    expect(firstParsed.chunksDeleted).toBe(0);
+    expect(dataOf(firstParsed).resourcesIndexed).toBe(0);
+    expect(dataOf(firstParsed).chunksCreated).toBe(0);
+    expect(dataOf(firstParsed).chunksDeleted).toBe(0);
 
     // Second re-index should also skip all files
     const { result: secondResult, parsed: secondParsed } = await executeCliAndParseYaml(
@@ -49,13 +58,13 @@ describe('RAG caching and incremental updates (system test)', () => {
     );
 
     expect(secondResult.status).toBe(0);
-    expect(secondParsed.status).toBe('success');
+    expect(secondParsed.status).toBe('ok');
 
     // CRITICAL: All files should still be skipped (content hash matches)
-    expect(secondParsed.resourcesSkipped).toBe(skippedCount);
-    expect(secondParsed.resourcesIndexed).toBe(0);
-    expect(secondParsed.chunksCreated).toBe(0);
-    expect(secondParsed.chunksDeleted).toBe(0);
+    expect(dataOf(secondParsed).resourcesSkipped).toBe(skippedCount);
+    expect(dataOf(secondParsed).resourcesIndexed).toBe(0);
+    expect(dataOf(secondParsed).chunksCreated).toBe(0);
+    expect(dataOf(secondParsed).chunksDeleted).toBe(0);
   });
 
   it('should detect and re-index changed files', async () => {
@@ -71,7 +80,7 @@ describe('RAG caching and incremental updates (system test)', () => {
       { cwd: suite.projectDir }
     );
 
-    expect(firstParsed.resourcesIndexed).toBeGreaterThanOrEqual(1);
+    expect(dataOf(firstParsed).resourcesIndexed).toBeGreaterThanOrEqual(1);
 
     // Re-index without changes - should skip
     const { parsed: secondParsed } = await executeCliAndParseYaml(
@@ -80,8 +89,8 @@ describe('RAG caching and incremental updates (system test)', () => {
       { cwd: suite.projectDir }
     );
 
-    expect(secondParsed.resourcesSkipped).toBeGreaterThan(0);
-    expect(secondParsed.resourcesIndexed).toBe(0);
+    expect(dataOf(secondParsed).resourcesSkipped).toBeGreaterThan(0);
+    expect(dataOf(secondParsed).resourcesIndexed).toBe(0);
 
     // Modify the file
     fs.writeFileSync(testFile, '# Modified Content\n\nThis content has been changed.');
@@ -93,9 +102,9 @@ describe('RAG caching and incremental updates (system test)', () => {
       { cwd: suite.projectDir }
     );
 
-    expect(thirdParsed.resourcesUpdated).toBe(1);
-    expect(thirdParsed.chunksDeleted).toBeGreaterThan(0);
-    expect(thirdParsed.chunksCreated).toBeGreaterThan(0);
+    expect(dataOf(thirdParsed).resourcesUpdated).toBe(1);
+    expect(dataOf(thirdParsed).chunksDeleted).toBeGreaterThan(0);
+    expect(dataOf(thirdParsed).chunksCreated).toBeGreaterThan(0);
 
     // Clean up
     fs.unlinkSync(testFile);

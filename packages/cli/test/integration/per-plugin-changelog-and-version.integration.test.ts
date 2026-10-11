@@ -44,8 +44,7 @@ function buildFixture(
     );
   }
 
-  const config = `version: 1
-skills:
+  const config = `skills:
   include: ["plugins/*/skills/**/SKILL.md"]
 claude:
   marketplaces:

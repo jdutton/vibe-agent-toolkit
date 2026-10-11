@@ -134,7 +134,7 @@ describe('compareParse — refusals come before any subtraction', () => {
   it('refuses when more than one axis moved', () => {
     const elsewhere = makeReportAt({
       subject: { id: 'other', source: 'other' },
-      instrument: { version: '9.9.9', commit: null, dirty: null },
+      instrument: { version: '9.9.9', commit: null, dirty: null, closure: null },
     });
     const result = compareParse(parseReport([parseCommand()]), {
       ...elsewhere,

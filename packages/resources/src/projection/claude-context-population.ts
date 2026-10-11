@@ -175,7 +175,7 @@ import type { Projection } from './projection.js';
  * @returns A source that reports the enumerator that ran and replays its result
  */
 async function sharedEnumeration(root: string): Promise<CrawlSource> {
-  const source = crawlSourceFor(root);
+  const source = crawlSourceFor(root, []);
   const enumerated = await source.enumerate();
   // `kind` is the INSTANCE's own, never re-read from the environment:
   // `crawlSourceFor` falls back silently when the root is not in a repository,
@@ -307,7 +307,7 @@ export async function buildClaudeContextPopulation(options: {
   // both branches — the discovery branch replays its own crawl into this slot
   // (see {@link sharedEnumeration}), and the stored branch runs one population.
   let source: CrawlSource | undefined;
-  const sourceOnce = (): CrawlSource => (source ??= crawlSourceFor(root));
+  const sourceOnce = (): CrawlSource => (source ??= crawlSourceFor(root, []));
 
   const registry = new ContributorRegistry();
   const filesystem = new FilesystemExtentContributor(sourceOnce);

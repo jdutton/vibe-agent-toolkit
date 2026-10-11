@@ -415,7 +415,7 @@ async function runArm(root: string, useGitSource: boolean): Promise<Arm> {
   await tracker.initialize({ includeUntracked: true });
   const cache = new RunContentCache();
   const builder = new ProjectionBuilder({ root, gitTracker: tracker, contentCache: cache });
-  const contribution = await new FilesystemExtentContributor().contribute(builder.base(), null);
+  const contribution = await new FilesystemExtentContributor((at) => crawlSourceFor(at, [])).contribute(builder.base(), null);
   for (const row of contribution.contexts) builder.addContext(row);
   for (const row of contribution.resources) builder.addResource(row);
   for (const row of contribution.realizations) builder.addRealization(row);
@@ -424,7 +424,7 @@ async function runArm(root: string, useGitSource: boolean): Promise<Arm> {
   return {
     projection: builder.build(),
     stats: cache.stats,
-    extentSource: crawlSourceFor(root).kind,
+    extentSource: crawlSourceFor(root, []).kind,
   };
 }
 

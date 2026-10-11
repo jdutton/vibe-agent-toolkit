@@ -3,7 +3,7 @@ import { accessSync, constants } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { isAbsolutePath } from '../src/path-core.js';
-import { NODE_EXECUTABLE, executableCandidates, gitExecutable, resolveExecutable } from '../src/testing/executables.js';
+import { NODE_EXECUTABLE, executableCandidates, findExecutable, gitExecutable, resolveExecutable } from '../src/testing/executables.js';
 
 describe('resolveExecutable', () => {
   it('returns an absolute, executable path for a binary on PATH', () => {
@@ -14,6 +14,11 @@ describe('resolveExecutable', () => {
 
   it('names the missing binary and the PATH it searched when nothing matches', () => {
     expect(() => resolveExecutable('vat-no-such-binary-9f3a')).toThrow(/vat-no-such-binary-9f3a.*PATH/);
+  });
+
+  it('findExecutable answers undefined for a missing binary and the resolved path for a present one', () => {
+    expect(findExecutable('vat-no-such-binary-9f3a')).toBeUndefined();
+    expect(findExecutable('git')).toBe(resolveExecutable('git'));
   });
 
   it('caches git for the process and agrees with a fresh resolution', () => {

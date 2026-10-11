@@ -51,6 +51,7 @@
 
 import {
   ContributorRegistry,
+  crawlSourceFor,
   FilesystemExtentContributor,
   populate,
   populationOracles,
@@ -246,7 +247,7 @@ export async function buildInventoryPopulation(options: {
   const hasGitTracker = options.gitTracker !== undefined;
 
   const registry = new ContributorRegistry();
-  registry.register(new FilesystemExtentContributor());
+  registry.register(new FilesystemExtentContributor((at) => crawlSourceFor(at, [])));
 
   const parameters: Record<string, JsonValue> = {};
   // The skill's own root-relative path is the discriminator. It is unique within

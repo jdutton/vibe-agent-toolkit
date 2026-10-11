@@ -62,6 +62,7 @@ whenever you touch a command file under `src/commands/` or a doc under `docs/`.
 
 ## Command Implementation, Output, and Testing Patterns
 
-The command file skeleton, the `handleCommandError` pattern, and CLI-specific system-test
-patterns live in [`../../docs/architecture/cli.md`](../../docs/architecture/cli.md) — see
-"Command Structure", "Error Handling", and "Testing Patterns".
+The command file skeleton, the report contract (`endWithReport` / `endWithRefusal`, the
+`PUBLISHED_SHAPES` registry), and CLI-specific system-test patterns live in
+[`../../docs/architecture/cli.md`](../../docs/architecture/cli.md) — see "Command Structure",
+"Error Handling", "The report contract", and "Testing Patterns".

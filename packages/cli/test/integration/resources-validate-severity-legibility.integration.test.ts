@@ -17,18 +17,20 @@
  * anyone could tell which ones blocked — then asked for three separate codes to
  * be "downgraded to warnings" when all three were already `info`.
  *
- * `vat audit` is the sibling lane that gets this right (`issues: {errors,
- * warnings, info}` in aggregate and per file). These tests pin `resources
- * validate` to the same contract.
+ * The report envelope is the contract now: every finding carries its
+ * `severity`, `summary` counts findings by severity, and the per-file and
+ * per-collection rows carry their own `summary` — one meaning of the word
+ * everywhere. These tests pin `resources validate` to it.
  */
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
+import yaml from 'yaml';
 
+import { RESOURCES_VALIDATE_REPORT_SCHEMA, type ResourcesValidateReport } from '../../src/commands/resources/validate-schema.js';
 import {
   cleanupTestTempDir,
   createTestTempDir,
   executeCli,
-  executeCliAndParseYaml,
   getBinPath,
   writeTestFile,
 } from '../system/test-common.js';
@@ -51,10 +53,10 @@ function writeInfoOnlyFixture(tempDir: string): void {
   writeTestFile(safePath.join(tempDir, 'fragment.component.html'), '<div>body</div>\n');
 }
 
-interface SeverityCounts {
-  errors: number;
-  warnings: number;
-  info: number;
+/** Run the verb and parse its stdout with the published schema. */
+async function validateReport(args: readonly string[]): Promise<{ status: number | null; report: ResourcesValidateReport }> {
+  const result = await executeCli(binPath, ['resources', 'validate', ...args]);
+  return { status: result.status, report: RESOURCES_VALIDATE_REPORT_SCHEMA.parse(yaml.parse(result.stdout)) as ResourcesValidateReport };
 }
 
 describe('vat resources validate severity legibility (integration)', () => {
@@ -70,55 +72,47 @@ describe('vat resources validate severity legibility (integration)', () => {
 
     const result = await executeCli(binPath, ['resources', 'validate', tempDir, '--format', 'text']);
 
-    // Text findings go to stderr, one per line, in `file:line:col: severity: message` form.
-    expect(result.stderr).toMatch(/fragment\.component\.html:\d+:\d+: info: Malformed HTML/);
-    expect(result.stderr).toMatch(/doc\.md:\d+:\d+: error: File not found/);
+    // One compiler-style line per finding on stdout: `location:line: severity: message [code]`.
+    const lines = result.stdout.split('\n');
+    expect(lines.find((line) => line.startsWith('fragment.component.html'))).toMatch(/: info: .*\[MALFORMED_HTML\]$/);
+    expect(lines.find((line) => line.startsWith('doc.md:'))).toMatch(/: error: File not found.*\[LINK_BROKEN_FILE\]$/);
   });
 
-  it('counts filesWithErrors by error severity only, not by "any issue"', async () => {
+  it('counts a file\'s errors by error severity only, not by "any issue"', async () => {
     tempDir = createTestTempDir('vat-resources-severity-counts-');
     writeMixedSeverityFixture(tempDir);
 
-    const { parsed } = await executeCliAndParseYaml(binPath, ['resources', 'validate', tempDir]);
+    const { report } = await validateReport([tempDir, '--verbose']);
 
     // Two files carry a finding, but only doc.md carries an *error*.
-    expect(parsed['errorsFound']).toBe(1);
-    expect(parsed['filesWithErrors']).toBe(1);
+    const errorFiles = (report.data.files ?? []).filter((row) => row.summary.errors > 0).map((row) => row.path);
+    expect(errorFiles).toEqual(['doc.md']);
+    expect(report.summary.errors).toBe(1);
   });
 
-  it('reports a per-severity breakdown alongside the error-only counts', async () => {
+  it('reports a per-severity breakdown, and each finding carries its own severity', async () => {
     tempDir = createTestTempDir('vat-resources-severity-breakdown-');
     writeMixedSeverityFixture(tempDir);
 
-    const { parsed } = await executeCliAndParseYaml(binPath, ['resources', 'validate', tempDir]);
+    const { report } = await validateReport([tempDir]);
 
-    expect(parsed['issueCounts']).toEqual<SeverityCounts>({ errors: 1, warnings: 0, info: 1 });
-
-    // The by-code summary and the detail array carry ALL severities, so they are
-    // named `issue*`. An info-only scan must still report WHICH codes fired.
-    expect(parsed['issueSummary']).toEqual({ MALFORMED_HTML: 1, LINK_BROKEN_FILE: 1 });
-    const files = parsed['issues'] as Array<{ file: string; issues: Array<{ severity: string }> }>;
-    expect(files.flatMap((f) => f.issues)).toHaveLength(2);
-
-    // No field named after "error" may leak into the all-severity vocabulary.
-    expect(parsed['errorSummary']).toBeUndefined();
-    expect(parsed['errors']).toBeUndefined();
+    expect(report.summary).toEqual({ errors: 1, warnings: 0, info: 1 });
+    expect(report.findings.map((finding) => `${finding.code}:${finding.severity}`).sort((a, b) => a.localeCompare(b))).toEqual([
+      'LINK_BROKEN_FILE:error',
+      'MALFORMED_HTML:info',
+    ]);
   });
 
-  it('does not claim a file has errors when every finding on it is info', async () => {
+  it('does not fail, or claim an error, when every finding is info', async () => {
     tempDir = createTestTempDir('vat-resources-severity-infoonly-');
     writeInfoOnlyFixture(tempDir);
 
-    const { result, parsed } = await executeCliAndParseYaml(binPath, [
-      'resources', 'validate', tempDir,
-    ]);
+    const { status, report } = await validateReport([tempDir, '--verbose']);
 
-    // The self-contradicting shape this test exists to prevent: a successful run
-    // that simultaneously reports a file with errors.
-    expect(result.status).toBe(0);
-    expect(parsed['status']).toBe('success');
-    expect(parsed['errorsFound']).toBe(0);
-    expect(parsed['filesWithErrors']).toBe(0);
-    expect(parsed['issueCounts']).toEqual<SeverityCounts>({ errors: 0, warnings: 0, info: 1 });
+    // `findings` (something was found) at exit 0 (nothing at error severity).
+    expect(status).toBe(0);
+    expect(report.status).toBe('findings');
+    expect(report.summary).toEqual({ errors: 0, warnings: 0, info: 1 });
+    expect(report.data.files?.every((row) => row.summary.errors === 0)).toBe(true);
   });
 });

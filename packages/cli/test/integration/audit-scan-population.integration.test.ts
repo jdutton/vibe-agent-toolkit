@@ -152,8 +152,8 @@ describe('enumerateAuditPopulation', () => {
 
   it('reports a nested config strictly beneath the root, and never the root’s own', async () => {
     const root = tracker.create();
-    place(root, 'vibe-agent-toolkit.config.yaml', 'version: 1\n');
-    place(root, 'pkg/vibe-agent-toolkit.config.yaml', 'version: 1\n');
+    place(root, 'vibe-agent-toolkit.config.yaml', '{}\n');
+    place(root, 'pkg/vibe-agent-toolkit.config.yaml', '{}\n');
 
     const { nestedConfigs } = await enumerateAuditPopulation({ ...DEFAULTS, scanDir: root, respectGitignore: true });
 

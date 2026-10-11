@@ -2,7 +2,7 @@ import { VatError } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { BaselineContaminationHitSchema, BaselineScanDegradationSchema } from './baseline-integrity.js';
-import { FrictionItemSchema } from './friction-schema.js';
+import { GraderFrictionItemSchema } from './friction-schema.js';
 import { sanitizeGraderText, sanitizeGraderTextDeep } from './grader-text.js';
 import { ToolVerdictBodySchema } from './tool-eval-schema.js';
 
@@ -45,7 +45,8 @@ export const EvalFragmentSchema = z.object({
   evalId: z.union([z.string().min(1), z.number().int()]).transform(String),
   arm: z.enum(['with', 'without']).optional(),
   expectations: z.array(EvalFragmentExpectationSchema).min(1),
-  friction: z.array(FrictionItemSchema).optional(),
+  // The grader answers high|medium|low; parsing maps it to error|warning|info (friction-schema.ts).
+  friction: z.array(GraderFrictionItemSchema).optional(),
   tool: ToolVerdictBodySchema.optional(),
   /**
    * WITHOUT-arm baseline-integrity hits (see baseline-integrity.ts). Like `arm`,
@@ -123,7 +124,7 @@ const UNSANITIZED_FRAGMENT_KEYS: ReadonlySet<string> = new Set(['runNonce']);
  * so a grader that wobbles on the friction shape (e.g. emits bare strings, the
  * common failure mode) must NOT be allowed to discard the
  * verdict-bearing grading for the whole run. We drop friction items that don't
- * match {@link FrictionItemSchema} (and a `friction` that isn't an array at
+ * match {@link GraderFrictionItemSchema} (and a `friction` that isn't an array at
  * all), then hand the rest to the STRICT fragment parse — so the verdict
  * channels (`runNonce`/`evalId`/`expectations`/`tool`) stay fully fail-closed
  * and an unknown field elsewhere still surfaces as a grader bug.
@@ -148,7 +149,7 @@ function sanitizeFrictionField(raw: unknown): { value: unknown; dropped: number 
     }
     return { value: rest, dropped: 1 };
   }
-  const kept = friction.filter((item) => FrictionItemSchema.safeParse(item).success);
+  const kept = friction.filter((item) => GraderFrictionItemSchema.safeParse(item).success);
   if (kept.length === friction.length) return { value: raw, dropped: 0 };
   return { value: { ...obj, friction: kept }, dropped: friction.length - kept.length };
 }

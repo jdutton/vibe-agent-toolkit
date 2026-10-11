@@ -14,7 +14,7 @@ import {
   relativize,
   type ResourceRegistry,
 } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
 
@@ -77,15 +77,15 @@ export async function captureEnumerationSnapshot(
     ...lane.crawlOptions(corpusRoot),
     unreadable: oracleRefuses(corpusRoot),
   });
-  const enumerated: EnumerationRow[] = [];
-  for (const absolutePath of crawled) {
+  // In order: a measurement over the crawl's own order, one file at a time.
+  const enumerated: EnumerationRow[] = await mapInOrder(crawled, async (absolutePath) => {
     const realization = await collectRealization(absolutePath, ORACLE_RESOURCE_ID, {
       root: corpusRoot,
       extentId: ORACLE_EXTENT_ID,
       ...(gitTracker !== undefined && { gitTracker }),
     });
-    enumerated.push(toEnumerationRow(realization, absolutePath, corpusRoot));
-  }
+    return toEnumerationRow(realization, absolutePath, corpusRoot);
+  });
   // Aliasing is a property of the population, not of a path, so it can only be
   // answered once the whole lane has been walked.
   markAliases(enumerated, crawled);

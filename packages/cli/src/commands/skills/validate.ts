@@ -3,6 +3,12 @@
  *
  * Discovers skills from config yaml skills.include/exclude, validates each
  * using validateSkillForPackaging with merged packaging config.
+ *
+ * Publishes the `Report<T>` envelope (`validate-schema.ts`): every finding
+ * flat with its `location` relative to `data.root`, one `data.skills` row per
+ * skill validated, `examined` = skills validated. A run over zero skills is
+ * refused by the writer, from the registry's declared denominator — never by
+ * a check at this site. `--verbose` decides only how much stderr prints.
  */
 
 import {
@@ -22,26 +28,28 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import {
   allowUnusedIssues,
-  calculateValidationStatus,
+  buildReport,
   countBySeverity,
   createAllowUsageLedger,
+  summarizeIssues,
+  toFindings,
+  type Finding,
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
 import { gitFindRoot, GitTracker } from '@vibe-agent-toolkit/utils/git';
-import * as yaml from 'yaml';
 
-import { reportCommandError } from '../../utils/command-error.js';
+import type { DocumentFormat } from '../../report-schemas.js';
+import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { loadConfig } from '../../utils/config-loader.js';
-import { formatDurationSecs } from '../../utils/duration.js';
+import { endWithReport, NOTHING_FINISHED, refusalReport } from '../../utils/document-writer.js';
 import {
   formatIssueLines,
   formatRunIssueLines,
   formatSeverityBreakdown,
   issuesToRenderAtVerbosity,
   summarizeFindings,
-  sumSeverityCounts,
 } from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
@@ -50,18 +58,19 @@ import {
   RESOURCES_CRAWL_PROJECTION,
   withResourcePopulationSource,
 } from '../../utils/resource-loader.js';
-import { nothingCheckedFinding } from '../../utils/run-integrity.js';
 import { collectDeclaredEvalSuites, mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
-import { finishCommand, type PhaseOutcome } from '../phase-utils.js';
+import type { PhaseOutcome } from '../phase-utils.js';
 
 import {
   filterSkillsByName,
   setupCommandContext,
   type DiscoveredSkill,
 } from './command-helpers.js';
+import { assertScopableSkillsPath, type SkillsScopeSubject } from './scope-guard.js';
 import { discoverSkillsFromConfig } from './skill-discovery.js';
+import type { SkillsValidateData, SkillsValidateReport } from './validate-schema.js';
 
 /**
  * Skills validate command options
@@ -79,80 +88,93 @@ export interface ValidatableSkill extends DiscoveredSkill {
   packagingConfig: SkillPackagingConfig;
 }
 
-/** The vocabulary of a validation verdict: worst ACTIONABLE severity. */
-type ValidationStatus = 'success' | 'warning' | 'error';
+/** `vat skills validate` offers no `--strict`: warnings never fail it. */
+const GATE = { strict: false } as const;
+
+/** This command offers no `--format`: its document is YAML. */
+const FORMAT: DocumentFormat = 'yaml';
 
 /**
- * Every issue emitted across the batch, after severity resolution.
+ * What a mis-scoped `vat skills validate` used to do.
+ *
+ * In a package where the bare invocation validates 13 skills, one mistyped
+ * character rescoped it to nothing and still reported success — the same
+ * "went wide / went narrow and reported success" defect
+ * `rejectPositionalArguments` was added to `vat verify` / `vat validate` /
+ * `vat build` for, arrived at from the opposite direction. `vat skills build`
+ * carried the identical hole and is guarded by the same module.
+ */
+const SCOPE_SUBJECT: SkillsScopeSubject = {
+  command: 'vat skills validate',
+  silentSuccess: 'nothing to validate',
+};
+
+/**
+ * Every finding a skill published: its emitted issues after severity
+ * resolution, minus any the adopter resolved to `ignore`.
  *
  * `allErrors` is the full emitted set INCLUDING info despite the name (see the
  * doc comment on `PackagingValidationResult`), and excluding issues suppressed
- * by `validation.allow` — those live in `ignoredErrors`.
+ * by `validation.allow` — those live in `ignoredErrors`, counted as `allowed`.
  */
-function batchIssues(results: readonly PackagingValidationResult[]): ValidationIssue[] {
-  return results.flatMap((r) => r.allErrors);
+function skillFindings(result: PackagingValidationResult): Finding[] {
+  return toFindings(result.allErrors);
 }
 
 /**
- * Findings about the RUN rather than about any one skill — currently the
- * `validation.allow` entries no skill in the batch matched (ALLOW_UNUSED).
- *
- * They are a separate parameter, not folded into a skill's result, because
- * that is what they are: `validation.allow` is declared once per package, so
- * attributing "nothing matched this entry" to whichever skill happened to be
- * validated at the time is what produced 78 warnings from 3 real entries.
+ * The discovery globs that decided which skills a run validated — named on
+ * stderr when they matched nothing ({@link nothingDiscoveredLine}); the
+ * document carries only the registry's generic `whenZero`. Only these two keys
+ * are read, so a full `SkillsConfig` and a test's two arrays hand in the same thing.
  */
-type RunIssues = readonly ValidationIssue[];
+type SkillDiscoveryPatterns = Pick<SkillsConfig, 'include' | 'exclude'>;
+
+/** What {@link buildSkillsValidateReport} needs — the run's results, nothing it has to go and read. */
+interface SkillsValidateInput {
+  /** The directory the config was read from: the ONE base every `location` is relative to. */
+  readonly root: string;
+  /** One result per skill the run validated: the denominator. */
+  readonly results: readonly PackagingValidationResult[];
+  /**
+   * Findings about the RUN rather than about any one skill — the
+   * `validation.allow` entries no skill in the batch matched (ALLOW_UNUSED).
+   * `validation.allow` is declared once per package, so attributing "nothing
+   * matched this entry" to whichever skill happened to be validated at the
+   * time is what produced 78 warnings from 3 real entries.
+   */
+  readonly runIssues: readonly ValidationIssue[];
+  readonly durationMs: number;
+}
 
 /**
- * The discovery declaration a run's document answers for: the globs that
- * decided which skills it validated. Only these two keys are read, so a caller
- * with a full `SkillsConfig` and a test with two arrays hand in the same thing.
+ * Build the report. Pure: no file system, no clock, no `process.exit`.
+ *
+ * Every finding is on the envelope, flat — each skill's, then the run's — so
+ * the envelope `summary` is exactly the sum of the `data.skills[].summary`
+ * rows plus the run-level findings, by construction. Every validated skill has
+ * a row, clean or not: `examined` and `data.skills.length` agree, so a reader
+ * never has to guess whether an absent skill was clean or never validated.
+ *
+ * The run-integrity refusal for a run over zero skills is NOT decided here;
+ * the writer adds it from the registry's declared denominator.
+ *
+ * @param input - The run's results
+ * @returns The report, before the writer's run-integrity pass
  */
-export type SkillDiscoveryPatterns = Pick<SkillsConfig, 'include' | 'exclude'>;
+export function buildSkillsValidateReport(input: SkillsValidateInput): SkillsValidateReport {
+  const skills: SkillsValidateData['skills'] = input.results.map((result) => ({
+    name: result.skillName,
+    ...summarizeIssues(skillFindings(result)),
+    allowed: result.ignoredErrors.length,
+  }));
 
-/**
- * The run-level findings, with the run-integrity refusal derived in front of
- * them when the run validated no skill.
- *
- * 🚨 **Zero skills validated is an ERROR, not a clean run.** `skills.include`
- * globs that discover nothing — a typo, a renamed directory, an `exclude` that
- * swallows every match — used to take an early return that printed one info
- * line and published NO document at exit 0, and `vat validate` folded that into
- * `status: success`: the gate the docs name as THE gate, green forever on a
- * config that checked nothing. `vat verify` refused the identical config in its
- * `packaged-content` phase and its message sent the operator to this command,
- * which then said nothing.
- *
- * 🔑 The ONE seam both channels read. {@link buildValidateSummary} (the
- * document) and {@link formatValidationReportLines} (stderr) both derive their
- * issue set here, so "denominator zero, status clean" is unrepresentable on
- * either channel rather than merely unwritten, and the exit code — derived from
- * the document's own counts — agrees with both by construction. Through the
- * shared mechanism in `run-integrity.ts`: one non-overridable
- * `RESOURCE_CHECK_BROKEN` at `error`.
- *
- * Only the empty GLOB is refused. A config with no `skills:` block at all is a
- * choice — the project declares no skills — and both orchestrators already skip
- * this phase on that config; the phase declines it the same way (no document,
- * exit 0) rather than inventing a refusal for a gate nobody declared.
- *
- * @param results - One result per skill the run validated: the denominator
- * @param runIssues - The run's own findings so far (`ALLOW_UNUSED`), so an
- *   existing run-integrity report is not duplicated
- * @param patterns - The discovery globs, named in the refusal so the operator
- *   sees what matched nothing
- * @returns The run-level issues the document and the stderr report publish
- */
-export function withRunIntegrity(
-  results: readonly PackagingValidationResult[],
-  runIssues: RunIssues,
-  patterns: SkillDiscoveryPatterns,
-): ValidationIssue[] {
-  return [
-    ...nothingCheckedFinding(results.length, runIssues, () => nothingDiscoveredMessage(patterns)),
-    ...runIssues,
-  ];
+  return buildReport({
+    examined: input.results.length,
+    findings: [...input.results.flatMap(skillFindings), ...toFindings(input.runIssues)],
+    data: { root: input.root, skills },
+    gate: GATE,
+    durationMs: input.durationMs,
+  });
 }
 
 /** The globs as an operator wrote them, back-quoted and comma-separated. */
@@ -160,168 +182,36 @@ function quoteGlobs(globs: readonly string[]): string {
   return globs.map((glob) => `\`${glob}\``).join(', ');
 }
 
-/** What did not run, and what the operator can do — invariant 5 of `run-integrity.ts`. */
-function nothingDiscoveredMessage(patterns: SkillDiscoveryPatterns): string {
-  const include = quoteGlobs(patterns.include);
+/**
+ * The stderr half of a run over zero skills: WHICH globs matched nothing.
+ *
+ * The document's refusal is the registry's generic `whenZero` — the writer
+ * cannot see the config — so the globs this run actually used are named here,
+ * where the operator reads them.
+ */
+export function nothingDiscoveredLine(patterns: SkillDiscoveryPatterns | undefined): string {
+  if (patterns === undefined) {
+    return 'vibe-agent-toolkit.config.yaml declares no `skills:` block, so there is nothing to validate.';
+  }
   const exclude = patterns.exclude === undefined || patterns.exclude.length === 0
     ? ''
     : ` after \`skills.exclude\` (${quoteGlobs(patterns.exclude)})`;
-  return 'vat skills validate validated 0 skills, so this run is not a verdict: nothing was checked,'
-    + ' and the document reads the same as a run over clean skills. The `skills.include` globs in'
-    + ` vibe-agent-toolkit.config.yaml (${include}) matched no SKILL.md${exclude} — usually a typo`
-    + ' in the glob, a renamed directory, or an exclude that swallows every match. Fix the patterns'
-    + ' so they discover the skills this project ships, or remove the `skills:` block if it ships'
-    + ' none.';
+  return `The \`skills.include\` globs (${quoteGlobs(patterns.include)}) matched no SKILL.md${exclude}.`;
 }
 
-/**
- * One skill's VERBOSE YAML entry: the whole result plus the per-severity counts
- * its two-valued `status` cannot express.
- *
- * The per-skill `status` stays the gate verdict (`error` iff an active error) —
- * that is what the exit code is derived from. `issueCounts` beside it is what
- * makes `success` readable: "nothing you must act on", not "nothing was found".
- *
- * This shape is optimized for `> file` then `grep`, not for reading: on a
- * 90-skill repo it is 17,262 of the 22,156 stdout lines `vat verify` emits.
- */
-function toVerboseYamlResult(result: PackagingValidationResult): unknown {
-  return { ...result, issueCounts: countBySeverity(result.allErrors) };
-}
-
-/**
- * Does this skill have anything to say? Emitted findings OR allow-suppressed
- * ones — the same predicate the human report uses, so the two streams cannot
- * disagree about which skills exist.
- */
+/** Any finding at all, emitted or allow-suppressed — the skills the human report lists. */
 function hasFindings(result: PackagingValidationResult): boolean {
   return result.allErrors.length > 0 || result.ignoredErrors.length > 0;
-}
-
-/**
- * One skill's DEFAULT YAML entry: which asset has problems, how many, of what
- * code — and nothing else.
- *
- * Why the per-code tally is a summary rather than N findings: 1,728 of the 1,897
- * findings on a real 90-skill repo are one code, LINK_DROPPED_BY_DEPTH, and the
- * four remedies its `fix` hint proposes (`linkFollowDepth`, `files:`,
- * `validation.allow`, `excludeReferencesFromBundle`) are all SKILL-level config
- * edits — so 348 findings on one skill propose the same four edits 348 times.
- * The skill is the unit the reader acts on, so the skill is the unit we publish.
- * Aggregating at EMISSION instead would break `validation.allow`'s per-`paths:`
- * matching and per-path severity overrides, both of which need one issue per
- * link; the collapse therefore has to happen here, after allow-filtering.
- * Downgrading the code to `info` was considered and rejected: it would delete
- * the signal the code exists for (a depth-limited walk may silently omit content
- * the author expected to ship) and would contradict PACKAGED_TEST_INPUT, which
- * `docs/validation-codes.md` keeps at `warning` on identical "this is configured
- * behaviour, here is your receipt" reasoning.
- *
- * `allowed` is a scalar, not a list: an allow-suppressed finding is a fact about
- * the skill a reader must not lose, but it is deliberately NOT in `codes`, which
- * summarizes the EMITTED set.
- */
-function toSummaryYamlResult(result: PackagingValidationResult): unknown {
-  const { codes, ...counts } = summarizeFindings(result.allErrors);
-  const allowedCount = result.ignoredErrors.length;
-  return {
-    skillName: result.skillName,
-    status: result.status,
-    ...counts,
-    ...(allowedCount > 0 ? { allowed: allowedCount } : {}),
-    codes,
-  };
-}
-
-/**
- * Build the YAML summary object.
- *
- * `status` is the shared `issues → status` collapse over the WHOLE batch, so it
- * can say `warning`. It previously read
- * `results.some(r => r.status === 'error') ? 'error' : 'success'` — a two-value
- * collapse that could never report the warning case, and so reported 33 active
- * warnings as `success`.
- *
- * The header total counts BOTH the per-skill findings and the run-level ones,
- * because the exit code does too — dropping run issues from the header would
- * divorce the published verdict from the code the process actually returns.
- * That is why `runIssueCounts` exists beside them: on a large real repo the
- * header read 1814 warnings against a per-skill sum of 1800, and the missing 14
- * were run-level ALLOW_UNUSED entries published only as a bare LIST. The
- * identity `issueCounts === Σ results[].issueCounts + runIssueCounts` now holds
- * by construction, so a consumer can reconcile the two numbers instead of
- * hand-counting a list to find out whether anything went missing.
- *
- * That identity survives the default mode dropping every finding-free skill from
- * `results[]`, because a dropped row contributes exactly zero to each bucket —
- * and it survives the default row publishing its counts flat with zero buckets
- * omitted, because an absent bucket reads as zero. Only the per-asset ROWS omit
- * zeros: `issueCounts` and `runIssueCounts` keep their complete
- * `{errors, warnings, info}` shape in both modes, because they are the
- * reconciliation identity rather than something a reader scans.
- *
- * A run over ZERO skills is refused here, not passed — see
- * {@link withRunIntegrity}, which is why the discovery `patterns` are a
- * parameter of a document builder: the refusal names the globs that matched
- * nothing, and the builder is where the refusal is derived.
- */
-export function buildValidateSummary(
-  results: PackagingValidationResult[],
-  duration: number,
-  verbose: boolean,
-  runIssues: RunIssues,
-  patterns: SkillDiscoveryPatterns,
-): {
-  status: ValidationStatus;
-  issueCounts: SeverityCounts;
-  runIssueCounts: SeverityCounts;
-  skillsValidated: number;
-  results: unknown[];
-  runIssues: ValidationIssue[];
-  durationSecs: number;
-} {
-  const skillIssues = batchIssues(results);
-  const published = withRunIntegrity(results, runIssues, patterns);
-  const runIssueCounts = countBySeverity(published);
-  return {
-    status: calculateValidationStatus([...skillIssues, ...published]),
-    issueCounts: sumSeverityCounts([countBySeverity(skillIssues), runIssueCounts]),
-    runIssueCounts,
-    // `skillsValidated` stays the true denominator even though the default
-    // `results[]` lists only the skills with something to say.
-    //
-    // KNOWN, DELIBERATELY NOT FIXED — the denominator and the listing disagree,
-    // and nothing in the document explains the gap. A real adopter run published
-    // `skillsValidated: 92` beside a `results:` array of 62 rows. Omitting the
-    // clean skills is the DESIGN — a report of 92 rows where 30 say nothing is a
-    // report nobody reads — but 23 of the omitted were config-DECLARED skills, so
-    // a reader reconciling 92 against 62 cannot tell "validated and clean" from
-    // "never validated at all". The omission is deliberate; the unexplained
-    // difference is the defect. A fix names the omitted population rather than
-    // re-listing it (a count of clean skills, or their names on a separate key) —
-    // it does not put the empty rows back.
-    skillsValidated: results.length,
-    results: verbose
-      ? results.map((r) => toVerboseYamlResult(r))
-      : results.filter((r) => hasFindings(r)).map((r) => toSummaryYamlResult(r)),
-    runIssues: published,
-    durationSecs: formatDurationSecs(duration),
-  };
-}
-
-/**
- * Output YAML summary to stdout
- */
-function writeYamlSummary(summary: ReturnType<typeof buildValidateSummary>): void {
-  console.log(yaml.stringify(summary, { indent: 2, lineWidth: 0, aliasDuplicateObjects: false }));
 }
 
 /**
  * ONE line for one skill: its severity breakdown, its allowed count, and the
  * codes behind it, dominant first.
  *
- * The stderr counterpart of {@link toSummaryYamlResult} — same unit (the asset),
- * same reason (see that function's comment). The per-issue blocks below are what
+ * The skill is the unit the reader acts on: 1,728 of the 1,897 findings on a
+ * real 90-skill repo are one code, LINK_DROPPED_BY_DEPTH, whose four remedies
+ * are all SKILL-level config edits — so the default stderr report is one row
+ * per skill, never one block per finding. The per-issue blocks below are what
  * made this stream 6,261 lines on a 90-skill repo.
  */
 function skillSummaryLine(result: PackagingValidationResult): string {
@@ -333,6 +223,26 @@ function skillSummaryLine(result: PackagingValidationResult): string {
   const tally = Object.entries(codes).map(([code, count]) => `${code}: ${count}`).join(', ');
   const codeSuffix = tally === '' ? '' : ` — ${tally}`;
   return `  ${result.skillName}: ${breakdown}${allowed}${codeSuffix}`;
+}
+
+/** Under `--verbose`: the allow-suppressed records and the references left out of the bundle. */
+function verboseDetailLines(result: PackagingValidationResult): string[] {
+  const lines: string[] = [];
+  if (result.ignoredErrors.length > 0) {
+    lines.push(`  Allowed issues (${result.ignoredErrors.length}):`);
+    for (const record of result.ignoredErrors) {
+      lines.push(`    [${String(record.code)}] ${String(record.location)} (allowed: ${record.reason})`);
+    }
+  }
+  const excluded = result.metadata.excludedReferences;
+  if (excluded.length > 0) {
+    lines.push(`  Excluded references (${excluded.length}):`);
+    for (const reference of excluded) {
+      const pattern = reference.matchedPattern === undefined ? '' : `, pattern ${reference.matchedPattern}`;
+      lines.push(`    ${reference.path} (${reference.reason}${pattern})`);
+    }
+  }
+  return lines;
 }
 
 /**
@@ -347,8 +257,8 @@ function skillSummaryLine(result: PackagingValidationResult): string {
  * re-run with `-v` to learn what failed the gate), while `warning`/`info`
  * collapse into the row unless asked for.
  *
- * The allow-suppressed records are listed only under `verbose`; by default the
- * row's `(+N allowed by config)` is their receipt.
+ * The allow-suppressed records and the excluded references are listed only
+ * under `verbose`; by default the row's `(+N allowed by config)` is the receipt.
  */
 function skillReportLines(result: PackagingValidationResult, verbose: boolean): string[] {
   const lines = [skillSummaryLine(result)];
@@ -358,31 +268,27 @@ function skillReportLines(result: PackagingValidationResult, verbose: boolean): 
     lines.push(...formatIssueLines(issue, '    '));
   }
 
-  const listAllowed = verbose && result.ignoredErrors.length > 0;
-  if (listAllowed) {
-    lines.push(`  Allowed issues (${result.ignoredErrors.length}):`);
-    for (const record of result.ignoredErrors) {
-      lines.push(`    [${String(record.code)}] ${String(record.location)} (allowed: ${record.reason})`);
-    }
-  }
+  const detail = verbose ? verboseDetailLines(result) : [];
+  lines.push(...detail);
 
   // A trailing blank line only when something was rendered beneath the row —
   // otherwise consecutive one-line rows would be double-spaced.
-  if (rendered.length > 0 || listAllowed) {
+  if (rendered.length > 0 || detail.length > 0) {
     lines.push('');
   }
   return lines;
 }
 
 /**
- * One glyph per status value — total, so a status this renderer has not thought
- * about cannot fall through to the reassuring `✅`.
+ * One glyph per severity outcome. Info never rates a warning: the same rule
+ * `statusFromEnvelope` applies to a phase, so an info-only skill is `✅` here
+ * and `success` in `vat validate`.
  */
-const STATUS_GLYPHS: Record<ValidationStatus, string> = {
-  error: '❌',
-  warning: '⚠️ ',
-  success: '✅',
-};
+function glyphFor(counts: SeverityCounts): string {
+  if (counts.errors > 0) return '❌';
+  if (counts.warnings > 0) return '⚠️ ';
+  return '✅';
+}
 
 /**
  * Banner naming what the run actually found.
@@ -395,25 +301,18 @@ const STATUS_GLYPHS: Record<ValidationStatus, string> = {
  * directly above `FILES_GLOB_MATCHED_NOTHING`, whose message reads "`vat skills
  * build` fails on a glob that matches nothing, so the build will fail unless
  * that artifact is produced first" — a headline contradicting the single line
- * beneath it.
- *
- * The severity is right (a glob over an unbuilt `dist/` matching nothing is the
- * expected pre-build state and must not fail CI); only the claim was wrong. It
- * is dropped rather than made conditional because the code registry carries no
- * build-blocking fact to condition it on — `CodeRegistryEntry` in
- * schema/src/validation-codes.ts is exactly `defaultSeverity` /
- * `description` / `fix` / `reference` — and keying the claim
- * on a hardcoded list of code names would assert a cause this renderer cannot
- * observe, and would go stale the next time a code is added.
+ * beneath it. Keying the claim on a hardcoded list of code names would assert a
+ * cause this renderer cannot observe, and would go stale the next time a code
+ * is added.
  */
-function reportBanner(status: ValidationStatus, counts: SeverityCounts): string {
-  if (status === 'error') {
+function reportBanner(counts: SeverityCounts): string {
+  if (counts.errors > 0) {
     return `\n❌ Validation failed — ${formatSeverityBreakdown(counts)}:\n`;
   }
   if (counts.warnings + counts.info > 0) {
     // Non-blocking (exit 0), which is exactly why this used to print
     // "All validations passed" over the findings.
-    return `\n${STATUS_GLYPHS[status]} Validation passed with findings — ${formatSeverityBreakdown(counts)}:\n`;
+    return `\n${glyphFor(counts)} Validation passed with findings — ${formatSeverityBreakdown(counts)}:\n`;
   }
   return '\n✅ All validations passed';
 }
@@ -421,42 +320,37 @@ function reportBanner(status: ValidationStatus, counts: SeverityCounts): string 
 /**
  * Human-readable report lines for the whole batch.
  *
- * Renders every skill with ANY emitted finding, not just the ones that failed
- * the gate: a warning-only or info-only run used to print the success banner and
+ * Renders every skill with ANY finding, not just the ones that failed the
+ * gate: a warning-only or info-only run used to print the success banner and
  * nothing else, so the findings existed only in the YAML on stdout.
  *
  * Every skill with findings gets its summary row at every verbosity; `verbose`
  * picks only which findings are ALSO rendered in full beneath that row, per
  * {@link issuesToRenderAtVerbosity} — errors always, `warning`/`info` when
- * asked, `ignore` never. `verbose` deliberately does NOT gate errors: a default
- * run that collapsed the error it exited 1 on into a count line forced the reader
- * to re-run with a flag to learn what broke.
+ * asked, `ignore` never.
  *
- * Run-level findings and the banner are printed in full either way — there are
- * ~14 of the former, and they belong to the project config rather than to any
- * asset, so there is no row for them to collapse into.
+ * `runFindings` are the published run-level findings — the `validation.allow`
+ * entries no skill matched, and the writer's run-integrity refusal when the
+ * run validated nothing — so the banner counts what the document counts and a
+ * run over zero skills cannot print a green banner over a refused document.
  *
- * Reads the same seam as the document builder ({@link withRunIntegrity}), so a
- * run over zero skills prints the refusal here too rather than a green banner
- * over a document that says `error`.
+ * @param results - One result per skill validated
+ * @param runFindings - The run-level findings the document published
+ * @param verbose - Render every finding in full, and the per-skill detail
  */
 export function formatValidationReportLines(
-  results: PackagingValidationResult[],
-  runIssues: RunIssues,
+  results: readonly PackagingValidationResult[],
+  runFindings: readonly ValidationIssue[],
   verbose: boolean,
-  patterns: SkillDiscoveryPatterns,
 ): string[] {
-  const published = withRunIntegrity(results, runIssues, patterns);
-  const issues = [...batchIssues(results), ...published];
-  const counts = countBySeverity(issues);
-  const status = calculateValidationStatus(issues);
-  const lines = [reportBanner(status, counts)];
+  const counts = countBySeverity([...results.flatMap(skillFindings), ...toFindings(runFindings)]);
+  const lines = [reportBanner(counts)];
 
   for (const result of results) {
     if (!hasFindings(result)) continue;
     lines.push(...skillReportLines(result, verbose));
   }
-  const runLines = formatRunIssueLines(published);
+  const runLines = formatRunIssueLines(runFindings);
   if (runLines.length > 0) {
     lines.push(...runLines, '');
   }
@@ -464,30 +358,25 @@ export function formatValidationReportLines(
 }
 
 /**
- * Output validation report to stdout (YAML) and stderr (human-readable)
+ * The human half, on stderr: the report lines and the quality footer.
  */
 function reportValidationToStderr(
-  results: PackagingValidationResult[],
+  results: readonly PackagingValidationResult[],
+  runFindings: readonly ValidationIssue[],
   logger: ReturnType<typeof createLogger>,
   verbose: boolean,
-  runIssues: RunIssues,
-  patterns: SkillDiscoveryPatterns,
 ): void {
-  // Collect all emitted codes across skills (both errors and warnings) to drive the footer
-  const emittedCodes = new Set<string>();
-  for (const r of results) {
-    for (const issue of r.allErrors) {
-      emittedCodes.add(issue.code);
-    }
-  }
-  for (const issue of withRunIntegrity(results, runIssues, patterns)) {
-    emittedCodes.add(issue.code);
-  }
-  const hasSkillFindings = results.some(
-    (r) => calculateValidationStatus(r.allErrors) !== 'success',
-  );
+  // Collect all emitted codes across skills and the run to drive the footer.
+  const emittedCodes = new Set<string>([
+    ...results.flatMap((r) => r.allErrors.map((issue) => issue.code)),
+    ...runFindings.map((issue) => issue.code),
+  ]);
+  const hasSkillFindings = results.some((r) => {
+    const counts = countBySeverity(skillFindings(r));
+    return counts.errors + counts.warnings > 0;
+  });
 
-  for (const line of formatValidationReportLines(results, runIssues, verbose, patterns)) {
+  for (const line of formatValidationReportLines(results, runFindings, verbose)) {
     logger.info(line);
   }
   renderSkillQualityFooter(logger, hasSkillFindings, emittedCodes);
@@ -496,20 +385,18 @@ function reportValidationToStderr(
 /**
  * Log validation progress for a single skill.
  *
- * The per-skill glyph follows the shared collapse (`⚠️` for a warning-only
- * skill), and the severity breakdown is always spelled out. A skill with
- * warnings used to print a bare `✅ <name>`, which is the same reassuring
- * collapse as the batch banner, one line earlier.
+ * The per-skill glyph follows the skill's worst severity (`⚠️` for a
+ * warning-only skill), and the severity breakdown is always spelled out. A
+ * skill with warnings used to print a bare `✅ <name>`, which is the same
+ * reassuring collapse as the batch banner, one line earlier.
  */
 export function formatSkillProgressLine(
   skillName: string,
   result: PackagingValidationResult,
 ): string[] {
-  const counts = countBySeverity(result.allErrors);
-  const status = calculateValidationStatus(result.allErrors);
-  const glyph = STATUS_GLYPHS[status];
-  const detail = result.allErrors.length > 0 ? `: ${formatSeverityBreakdown(counts)}` : '';
-  const lines = [`   ${glyph} ${skillName}${detail}`];
+  const counts = countBySeverity(skillFindings(result));
+  const detail = result.allErrors.length > 0 ? `: ${formatSeverityBreakdown(countBySeverity(result.allErrors))}` : '';
+  const lines = [`   ${glyphFor(counts)} ${skillName}${detail}`];
 
   if (result.ignoredErrors.length > 0) {
     lines.push(`      (${result.ignoredErrors.length} allowed by config)`);
@@ -531,20 +418,6 @@ function logSkillProgress(
   }
 }
 
-/**
- * Build a single shared validation context for an entire `vat skills validate`
- * invocation.
- *
- * When every skill in the batch resolves to the same projectRoot (the normal
- * monorepo case), we crawl the resource registry once and hand the same
- * instance to each skill's validation — the per-skill markdown reparse
- * disappears. Similarly, gitignore checks are backed by a single
- * {@link GitTracker} when every skill sits inside the same git repository.
- *
- * When the batch is heterogeneous (e.g. multiple projectRoots), the helper
- * returns an empty context and validators transparently fall back to their
- * legacy per-skill setup — correctness first, perf second.
- */
 /**
  * Options for {@link buildSkillsValidateRegistry}.
  */
@@ -599,6 +472,8 @@ export async function buildSkillsValidateRegistry(
       // `vat skills validate` acts on this registry as the whole population: a
       // directory it cannot list refuses the run by name, exit 2.
       unreadable: 'refuse',
+      // It only reads the project.
+      outputs: [],
       ...(populationSource !== undefined && { populationSource }),
     },
     config === undefined ? undefined : { config },
@@ -607,6 +482,20 @@ export async function buildSkillsValidateRegistry(
   return registry;
 }
 
+/**
+ * Build a single shared validation context for an entire `vat skills validate`
+ * invocation.
+ *
+ * When every skill in the batch resolves to the same projectRoot (the normal
+ * monorepo case), we crawl the resource registry once and hand the same
+ * instance to each skill's validation — the per-skill markdown reparse
+ * disappears. Similarly, gitignore checks are backed by a single
+ * {@link GitTracker} when every skill sits inside the same git repository.
+ *
+ * When the batch is heterogeneous (e.g. multiple projectRoots), the helper
+ * returns an empty context and validators transparently fall back to their
+ * legacy per-skill setup — correctness first, perf second.
+ */
 export async function buildSharedValidationContext(
   skills: ValidatableSkill[],
   projectSkills: readonly DeclaredEvalSuite[],
@@ -641,7 +530,7 @@ export async function buildSharedValidationContext(
   // lane must model a bundle that excludes EVERY declared suite, not just the
   // subject's. Present even for an empty batch, so no early return can drop it.
   if (skills.length === 0) {
-    return { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse' };
+    return { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse', outputs: [] };
   }
 
   const projectRoots = new Set<string>();
@@ -661,7 +550,8 @@ export async function buildSharedValidationContext(
     }
   }
 
-  const context: SkillValidationSharedContext = { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse' };
+  // Validation only reads the project.
+  const context: SkillValidationSharedContext = { allowLedger, projectSkills, suiteProbe, unreadable: 'refuse', outputs: [] };
 
   // One tracker per repo; when the batch spans repos, skip rather than spawn
   // multiple `git ls-files`.
@@ -697,7 +587,7 @@ export async function buildSharedValidationContext(
       // on both lanes.
       const registry = await withResourcePopulationSource(
         { root: sharedRoot, gitTracker: context.gitTracker },
-        async (populationSource) => {
+        (populationSource) => {
           logger.debug(
             populationSource
               ? `Enumerating via the projection lane (${RESOURCES_CRAWL_ENV}=${RESOURCES_CRAWL_PROJECTION})`
@@ -726,24 +616,94 @@ export async function buildSharedValidationContext(
   return context;
 }
 
+/** What one run of the validator produced, before the document is built. */
+interface SkillsRun {
+  readonly results: PackagingValidationResult[];
+  readonly runIssues: ValidationIssue[];
+}
+
 /**
- * Validate every configured skill and hand back the document and exit code,
- * printing the document nowhere.
+ * Validate every skill the `skills:` block declares (narrowed by `--skill`).
  *
- * The phase entry point for `vat validate` and `vat verify`. The one early
- * return publishes NO document: a config with no `skills:` block prints one
- * info line, exits 0, and `phaseResultFromOutcome` records that as `success`
- * with no `report` — both orchestrators skip the phase on that config anyway,
- * because declaring no skills is a choice.
+ * @param skillsConfig - The config's `skills:` block
+ * @param cwd - The directory the config was read from; discovery globs resolve against it
+ * @param config - The whole config, handed to the shared registry
+ * @param options - `--skill`
+ * @param logger - Progress on stderr
+ */
+async function validateConfiguredSkills(
+  skillsConfig: NonNullable<ProjectConfig['skills']>,
+  cwd: string,
+  config: ProjectConfig,
+  options: SkillsValidateCommandOptions,
+  logger: ReturnType<typeof createLogger>,
+): Promise<SkillsRun> {
+  // `'refuse'`: one fewer skill at exit 0 is the drop this command must not
+  // make. A directory the OS will not list is refused by code (INPUT_UNREADABLE).
+  const discovered = await discoverSkillsFromConfig(skillsConfig, cwd, 'refuse');
+
+  // No early return on `discovered.length === 0`: the empty batch flows through
+  // every step below unchanged — the shared context is built for zero skills
+  // (its ledger and probe exist regardless), the loop runs zero times, and the
+  // writer refuses the zero denominator.
+  const { defaults, config: perSkillConfig } = skillsConfig;
+  const validatableSkills: ValidatableSkill[] = discovered.map(skill => ({
+    ...skill,
+    packagingConfig: mergeSkillPackagingConfig(
+      defaults as Record<string, unknown> | undefined,
+      perSkillConfig?.[skill.name] as Record<string, unknown> | undefined,
+    ),
+  }));
+
+  const skillsToValidate = filterSkillsByName(validatableSkills, options.skill);
+  logger.info(`🔍 Found ${skillsToValidate.length} skill(s) to validate\n`);
+
+  // Every declared skill, not just `skillsToValidate`: `--skill x` narrows what is
+  // REPORTED on, never what counts as some skill's declared test input.
+  const projectSkills = collectDeclaredEvalSuites(skillsConfig, discovered);
+  const sharedContext = await buildSharedValidationContext(skillsToValidate, projectSkills, config, logger);
+
+  // In order: `sharedContext`'s caches and the per-skill progress lines.
+  const results: PackagingValidationResult[] = await mapInOrder(skillsToValidate, async (skill) => {
+    logger.info(`   Validating: ${skill.name}`);
+    logger.debug(`   Source: ${skill.sourcePath}`);
+
+    const result = await validateSkillForPackaging(skill.sourcePath, skill.packagingConfig, 'source', sharedContext);
+    // `cwd` is the anchor root: config is read from it and discovery globs
+    // resolve against it, so every other location in this report is already
+    // relative to it.
+    applyConfigVerdicts(result, skill.packagingConfig.targets as readonly Target[] | undefined, skill.sourcePath, cwd);
+    logSkillProgress(skill.name, result, logger);
+    return result;
+  });
+
+  // Drain the run's allow ledger AFTER the last skill — an entry matched by
+  // any skill in the batch is used, so this is the first point at which
+  // "matched nothing" is answerable.
+  const runIssues = sharedContext.allowLedger === undefined ? [] : allowUnusedIssues(sharedContext.allowLedger);
+  return { results, runIssues };
+}
+
+/**
+ * Validate every configured skill and hand back the report, printing it
+ * nowhere.
  *
- * A `skills:` block whose globs discover nothing is NOT a second early return.
- * It used to be — one info line, no document, exit 0 — and that made `vat
- * validate` green forever on a typo'd glob. It now runs through the same
- * builder as a populated batch, which refuses a zero denominator (see
- * {@link withRunIntegrity}): a document with one `RESOURCE_CHECK_BROKEN` at
- * `error`, `status: error`, exit 1. Exit 1 and not 2, deliberately: the run
- * completed and the gate FAILED, which is the class an operator's CI already
- * handles; 2 is for a run that could not answer at all.
+ * The phase entry point for `vat validate` and `vat verify`, and the command's
+ * own. The report is the one BEFORE the writer's run-integrity pass: inside an
+ * orchestrator, zero examined is judged on the whole run, not on this phase.
+ *
+ * A run that validated no skill — globs that discover nothing, or a config
+ * with no `skills:` block — is not a clean run. It used to take an early
+ * return that printed one info line and published NO document at exit 0, and
+ * `vat validate` folded that into success: the gate the docs name as THE gate,
+ * green forever on a config that checked nothing. Now it reports zero skills,
+ * which the writer refuses with `RESOURCE_CHECK_BROKEN` (exit 1) when this is
+ * the whole run; stderr names the globs that matched nothing. Both
+ * orchestrators skip this phase for a config with no `skills:` block.
+ *
+ * Every refusal is classified by code: a `[path]` naming nothing, an unknown
+ * `--skill`, no project root → `USAGE_INVALID`; an unlistable directory →
+ * `INPUT_UNREADABLE`; a config that does not parse → `CONFIG_INVALID`.
  */
 export async function runSkillsValidatePhase(
   pathArg: string | undefined,
@@ -752,101 +712,28 @@ export async function runSkillsValidatePhase(
   const { logger, cwd, startTime } = setupCommandContext(pathArg, options.debug);
 
   try {
-    // Spec §7: `vat skills validate` requires a projectRoot — fails fast at
-    // the CLI boundary if no config or git ancestor exists. The resolved root
-    // is discarded here because config is read from `cwd`; the guard exists
-    // to satisfy the policy contract.
+    assertScopableSkillsPath(SCOPE_SUBJECT, pathArg);
+    // Spec §7: `vat skills validate` requires a projectRoot. Config is read
+    // from `cwd`; the guard exists to satisfy the policy contract.
     requireProjectRoot(cwd, 'vat skills validate');
 
     // Load config yaml from cwd (not workspace root — config lives next to the package)
     const config = loadConfig(cwd);
+    const { results, runIssues } = config?.skills === undefined
+      ? { results: [], runIssues: [] }
+      : await validateConfiguredSkills(config.skills, cwd, config, options, logger);
 
-    if (!config?.skills) {
-      logger.info('No skills section in config yaml — nothing to validate');
-      return { document: undefined, exitCode: 0 };
-    }
-
-    // Discover skills from config yaml (relative to cwd where config lives).
-    // `'refuse'`: one fewer skill at exit 0 is the drop this command must not
-    // make. The throw lands in the catch below → `reportCommandError`, exit 2.
-    const discovered = await discoverSkillsFromConfig(config.skills, cwd, 'refuse');
-
-    // No early return on `discovered.length === 0` — see the function comment.
-    // The empty batch flows through every step below unchanged: the shared
-    // context is built for zero skills (its ledger and probe exist regardless),
-    // the loop runs zero times, and the builder refuses the zero denominator.
-
-    // Merge packaging config for each skill.
-    const { defaults, config: perSkillConfig } = config.skills;
-    const validatableSkills: ValidatableSkill[] = discovered.map(skill => ({
-      ...skill,
-      packagingConfig: mergeSkillPackagingConfig(
-        defaults as Record<string, unknown> | undefined,
-        perSkillConfig?.[skill.name] as Record<string, unknown> | undefined,
-      ),
-    }));
-
-    // Filter by name if specified
-    const skillsToValidate = filterSkillsByName(validatableSkills, options.skill);
-    logger.info(`🔍 Found ${skillsToValidate.length} skill(s) to validate\n`);
-
-    // Build shared context once per invocation. Both the resource registry
-    // (for markdown parses) and the git tracker (for gitignore checks) can be
-    // shared across every skill whose projectRoot + gitRoot match the derived
-    // values, which is the common case for a single-repo `vat skills validate`.
-    // Every declared skill, not just `skillsToValidate`: `--skill x` narrows what is
-    // REPORTED on, never what counts as some skill's declared test input.
-    const projectSkills = collectDeclaredEvalSuites(config.skills, discovered);
-    const sharedContext = await buildSharedValidationContext(skillsToValidate, projectSkills, config, logger);
-
-    // Validate each skill
-    const results: PackagingValidationResult[] = [];
-    for (const skill of skillsToValidate) {
-      logger.info(`   Validating: ${skill.name}`);
-      logger.debug(`   Source: ${skill.sourcePath}`);
-
-      const result = await validateSkillForPackaging(
-        skill.sourcePath,
-        skill.packagingConfig,
-        'source',
-        sharedContext,
-      );
-      // `cwd` is the anchor root: config is read from it and discovery globs
-      // resolve against it, so every other location in this report is already
-      // relative to it.
-      applyConfigVerdicts(
-        result,
-        skill.packagingConfig.targets as readonly Target[] | undefined,
-        skill.sourcePath,
-        cwd,
-      );
-      logSkillProgress(skill.name, result, logger);
-      results.push(result);
-    }
-
-    // Drain the run's allow ledger AFTER the last skill — an entry matched by
-    // any skill in the batch is used, so this is the first point at which
-    // "matched nothing" is answerable.
-    const runIssues = sharedContext.allowLedger === undefined
-      ? []
-      : allowUnusedIssues(sharedContext.allowLedger);
-
-    const duration = Date.now() - startTime;
-    const verbose = options.verbose === true;
-    const document = buildValidateSummary(results, duration, verbose, runIssues, config.skills);
-    reportValidationToStderr(results, logger, verbose, runIssues, config.skills);
-
-    // The exit code is read off the DOCUMENT, not recomputed beside it, so the
-    // two cannot disagree: whatever the builder refused, the process refuses.
-    // `issueCounts.errors` counts an active error on any skill and every
-    // run-level error alike — including the zero-denominator refusal.
-    return { document, exitCode: document.issueCounts.errors > 0 ? 1 : 0 };
+    const report = buildSkillsValidateReport({
+      root: cwd,
+      results,
+      runIssues,
+      durationMs: Date.now() - startTime,
+    });
+    reportValidationToStderr(results, runIssues, logger, options.verbose === true);
+    if (report.examined === 0) logger.error(nothingDiscoveredLine(config?.skills));
+    return { report };
   } catch (error) {
-    return {
-      document: reportCommandError(error, logger, startTime, 'SkillsValidate'),
-      exitCode: 2,
-      failed: true,
-    };
+    return { report: refusalReport(refusalCodeOf(error), error, GATE, NOTHING_FINISHED) };
   }
 }
 
@@ -857,9 +744,5 @@ export async function validateCommand(
   pathArg: string | undefined,
   options: SkillsValidateCommandOptions
 ): Promise<void> {
-  // `undefined`: this command offers no `--format`, so its failure envelope is
-  // YAML like its report.
-  finishCommand(await runSkillsValidatePhase(pathArg, options), (document) => {
-    writeYamlSummary(document as ReturnType<typeof buildValidateSummary>);
-  }, undefined);
+  endWithReport('skills validate', (await runSkillsValidatePhase(pathArg, options)).report, FORMAT);
 }
