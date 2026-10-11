@@ -3061,25 +3061,20 @@ async function generatePackageArtifacts(
 /**
  * The ZIP archive of a packaged skill, in memory.
  *
- * Uses adm-zip for fast, cross-platform ZIP creation.
- * ZIP format preferred over TAR for Windows compatibility.
+ * Written by the one archive primitive (`@vibe-agent-toolkit/utils/archive`), loaded only
+ * when a ZIP is asked for. ZIP format preferred over TAR for Windows compatibility.
  *
  * @param sourceDir - Directory to archive
  * @param projectRoot - The project root, so a refused read names the package relative to it
  */
 async function createZipArchive(sourceDir: string, projectRoot: string): Promise<Buffer> {
-  const AdmZip = (await import('adm-zip')).default;
-
-  const zip = new AdmZip();
-
-  // Add directory contents to ZIP. adm-zip reads the output back from disk: what it
-  // lists and reads is the package this run just wrote, so a refusal is the output's.
-  withFsFaultSync(
+  const { zipOfDirectory } = await import('@vibe-agent-toolkit/utils/archive');
+  // The archive is read back from disk: what is listed and read is the package this run just
+  // wrote, so a refusal is the output's.
+  return withFsFaultSync(
     { side: 'destination', action: `read back the package ${issueLocation(sourceDir, projectRoot) || '.'} to archive it` },
-    () => zip.addLocalFolder(sourceDir),
+    () => zipOfDirectory(sourceDir),
   );
-
-  return zip.toBuffer();
 }
 
 /**

@@ -35,9 +35,10 @@ import type { ExaminedDeclaration } from '../utils/run-integrity.js';
  * What `examined` counts for an orchestrator, and the remedy when it is zero.
  *
  * The sum of the phases' own denominators — files, skills, bundles, plugins —
- * so the unit is "whatever each phase examined". Zero is refused ONCE, on the
- * sum: a project that configures one surface and not another must not fail
- * because the other examined nothing.
+ * so the unit is "whatever each phase examined". This judges the run in which
+ * no phase ran, or none had anything to examine. A CONFIGURED phase that
+ * examined nothing is refused before the fold, by its own declaration
+ * (`phaseVerdict` in `phase-utils.ts`), so a healthy phase beside it hides nothing.
  */
 export const ORCHESTRATOR_EXAMINED: ExaminedDeclaration = {
   unit: 'items across every phase',
@@ -91,6 +92,20 @@ const PackagedContentDataSchema = z.object({
 }).strict();
 
 export type PackagedContentData = z.infer<typeof PackagedContentDataSchema>;
+
+/**
+ * What `examined` counts for `vat verify`'s `packaged-content` phase, and the remedy when it is
+ * zero. `vat verify` exists to check the BUILT tree: a phase that crawled none of it is not a
+ * verdict on it.
+ */
+export const PACKAGED_CONTENT_EXAMINED: ExaminedDeclaration = {
+  unit: 'built skill bundles',
+  whenZero: 'The packaged-content phase is not a verdict: nothing was crawled for files that must not'
+    + ' ship, and the document reads the same as a run over clean bundles. Either `vat build` has not'
+    + ' run (or wrote somewhere other than dist/), or `skills.include` in vibe-agent-toolkit.config.yaml'
+    + ' matched no SKILL.md — usually a typo in the glob. Run `vat build` first; `vat skills validate`'
+    + ' lists what the globs discover.',
+};
 
 /** The report `vat verify`'s `packaged-content` phase hands back. */
 export const PACKAGED_CONTENT_REPORT_SCHEMA = reportSchema(PackagedContentDataSchema, FindingSchema);

@@ -22,6 +22,7 @@ import { exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { phaseVerdict } from '../../src/commands/phase-utils.js';
 import {
   discoverSkillsFromConfig,
   readPluginLocalSkillNames,
@@ -30,6 +31,7 @@ import {
 import {
   buildPackagedContentPhase,
   checkPackagedAgentInstructionFiles,
+  IN_PROCESS_PHASES,
   runPackagedContentPhase,
   type PackagedContentCrawl,
   type PackagedContentPhaseResult,
@@ -256,10 +258,11 @@ async function inPlaceCrawlIn(root: string): Promise<PackagedContentCrawl> {
   return { ...crawl, bundlesMissing: [...crawl.bundlesMissing].sort((a, b) => a.localeCompare(b)) };
 }
 
-/** The refusal shape: one run-integrity finding, exit 1. */
+/** The refusal shape: one run-integrity finding, exit 1 — the phase judged as `runPhase` judges it, by its own declaration. */
 async function expectRefused(root: string): Promise<void> {
   const { phase } = await phaseIn(root);
-  expect([phase.report.status, ...phase.report.findings.map((i) => i.code), exitCodeForReport(phase.report)]).toEqual(['findings', 'RESOURCE_CHECK_BROKEN', 1]);
+  const report = phaseVerdict(IN_PROCESS_PHASES['packaged-content'], phase.report);
+  expect([report.status, ...report.findings.map((i) => i.code), exitCodeForReport(report)]).toEqual(['findings', 'RESOURCE_CHECK_BROKEN', 1]);
 }
 
 describe('packaged-content with in-place (publish: false) skills', () => {

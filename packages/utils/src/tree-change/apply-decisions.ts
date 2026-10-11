@@ -4,7 +4,7 @@
  * the halves that make the calls — and hold nothing else to decide.
  */
 
-import type { FsFaultFacts } from '../errors/errno-table.js';
+import { type FsFaultFacts, pathsActedOn } from '../errors/errno-table.js';
 import { FsFaultError, type FsSide } from '../errors/fs-fault.js';
 import { VatError } from '../errors/vat-error.js';
 import { relativeEscapesRoot, safePath } from '../path-core.js';
@@ -18,15 +18,17 @@ export const TEMP_DIR_OUTSIDE_TMPDIR_CODE = 'TEMP_DIR_OUTSIDE_TMPDIR';
 export const TREE_CLEANUP_INCOMPLETE_CODE = 'TREE_CLEANUP_INCOMPLETE';
 
 /**
- * Whether a `write` fill's failure is the DESTINATION's: the errno names a path under the staged
- * tree — all the callback may write. Anything else, an input the callback read (a sibling of the
- * destination included), is not: it is rethrown as it was, for the verb's boundary to classify.
+ * Whether a `write` fill's failure is the DESTINATION's: a path the failing call acted on
+ * ({@link pathsActedOn} — the one reading of an errno's two paths, so never a symlink's target
+ * text) is under the staged tree, all the callback may write. Anything else, an input the
+ * callback read (a sibling of the destination included), is not: it is rethrown as it was, for
+ * the verb's boundary to classify.
  *
- * @param facts - The errno and the paths the OS named
+ * @param facts - The errno, the call and the paths the OS named
  * @param sideOf - The side a path is on, with the staged tree as the only `destination`
  */
-export function fillFaultIsDestinations(facts: Pick<FsFaultFacts, 'path' | 'dest'>, sideOf: (path: string) => FsSide | undefined): boolean {
-  return [facts.path, facts.dest].some((named) => named !== undefined && sideOf(named) === 'destination');
+export function fillFaultIsDestinations(facts: FsFaultFacts, sideOf: (path: string) => FsSide | undefined): boolean {
+  return pathsActedOn(facts).some((named) => sideOf(named) === 'destination');
 }
 
 /** What is at a destination when the apply reaches it. */

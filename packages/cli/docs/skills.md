@@ -379,10 +379,21 @@ whole install fails rather than one silently overwriting the other. Use `--name`
 to override (single-skill sources only).
 
 **Supported Sources:**
-- **Local directory:** `./path/to/skill-dir` — must contain `SKILL.md` at root or in subdirectories
-- **Local ZIP file:** `./path/to/skill.zip` — extracted to a temp directory, then installed
+- **Local directory:** `./path/to/skill-dir` — must contain `SKILL.md` at root or in subdirectories. A symbolic link inside a skill is installed as a link, so one whose target is an absolute path, leads outside the skill, passes through another link, or does not exist is refused (`INPUT_UNREADABLE`), naming the link
+- **Local ZIP file:** `./path/to/skill.zip` — `SKILL.md` at the ZIP's top level, or exactly one top-level folder with `SKILL.md` directly inside it (a skill folder, compressed). Any other layout is refused, `INPUT_UNREADABLE` — the one rule `vat claude plugin install` and `vat claude org skills install` also apply. Extracted to a temp directory, then installed
 - **Local tarball:** `./path/to/skill.tgz` or `skill.tar.gz` — extracted as an npm package tarball
 - **npm package:** `npm:@scope/package-name` — downloaded from the registry, `dist/skills/` is used
+
+**Archives are judged whole before anything is written.** A ZIP or tarball (an npm package's
+included) is refused, `INPUT_UNREADABLE`, naming the first offending entry, when it holds a
+symbolic link, a hard link, a device, a FIFO or a sparse or unknown-type entry; a name that would
+land outside the archive (absolute, drive-rooted, `..`); one name listed twice, a file with an
+entry beneath it, or two names that are one where a filesystem folds letter case or Unicode form;
+or more than 50,000 entries or 256 MiB expanded, a tarball compressed twice or with zstd, or a
+ZIP64 archive. A backslash in an entry's name is a path separator on every host. Extracted files are
+plain files with mode `0644` or `0755`, narrowed by your umask. `vat skills package` writes none
+of these; `npm pack` writes no symbolic link, and a hard link only when the package holds two
+paths to one file.
 
 **Arguments:**
 - `<source>` - Source to install from (required)
@@ -425,7 +436,7 @@ any other target lands correctly but is invisible to them.
 **Exit Codes:**
 - `0` - Installed, or `--dry-run` complete
 - `1` - A skill failed its pre-install validation: its error findings are published and nothing in the batch is installed
-- `2` - Could not install, and nothing was installed (`data` is null). `error.code` says why: `USAGE_INVALID` for a bad `--target`/`--scope`/`--name`, a source holding no `SKILL.md`, two skills claiming one name, or something already at an install path without `--force`; `INPUT_UNREADABLE` for a source the OS (or the ZIP/tarball reader) will not read — an archive holding an entry that cannot be extracted (a file `a` beside a file `a/b`) included; `EXTERNAL_API_FAILED` when the npm registry will not hand over an `npm:` package; `RUN_INCOMPLETE` for an install path the OS will not let VAT examine or write (it is what the install writes), or a staging copy under `$TMPDIR` or beside the install path it could not create or write (full, read-only)
+- `2` - Could not install, and nothing was installed (`data` is null). `error.code` says why: `USAGE_INVALID` for a bad `--target`/`--scope`/`--name`, a source holding no `SKILL.md`, two skills claiming one name, or something already at an install path without `--force`; `INPUT_UNREADABLE` for a source the OS (or the ZIP/tarball reader) will not read, an archive VAT does not accept (see **Supported Sources**), a ZIP that is not laid out as a skill ZIP, or a skill directory holding a link that is absolute, leads outside it, passes through another link, or points at nothing; `EXTERNAL_API_FAILED` when the npm registry will not hand over an `npm:` package; `RUN_INCOMPLETE` for an install path the OS will not let VAT examine or write (it is what the install writes), or a staging copy under `$TMPDIR` or beside the install path it could not create or write (full, read-only)
 
 **Output** — the `Report` envelope (schema: `schemas/skills-install.json`); `examined` counts the skills in the install plan and `durationMs` is on the envelope:
 ```yaml

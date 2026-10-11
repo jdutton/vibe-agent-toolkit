@@ -201,49 +201,204 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 
 ## Packaging and build
 
-### Archives have no single extract or create primitive, and nothing enforces one
+### The archive-library ban names two packages, and a lint rule sees only literal specifiers
 
-- **Severity:** Important (deferred scope) · **Effort:** M · **User-visible:** not today
-- **Mechanism:** every recursive copy, remove and rename goes through the tree-change primitive, held
-  there by `local/no-destructive-fs`. Archives have no equivalent. `adm-zip` is used directly at
-  four sites and `tar` at one, and no lint rule restricts who imports either. The two zip
-  extractors are not equally careful: `archive-staging.ts` classifies failures, recovers the errno
-  `adm-zip`'s `chmod` retry hides, and refuses a file entry with another entry under it from the
-  entry list; the URL skill source is a bare `extractAllTo(dir, true)` — no classification, no
-  entry-list check — on bytes fetched from the network. Path escape (`../x`, an absolute name) and
-  link entries are left to the two libraries; what they guarantee has not been verified here.
-- **What a user sees:** nothing known. The install lanes extract only into staging directories VAT
-  made, and the tree-change primitive governs what leaves staging; the URL skill source extracts
-  into its fetch cache directory. Narrower than the libraries, by design of the entry-list check:
-  a tarball that replaces a file by a directory in sequence is refused (`npm pack` emits none); a
-  drive-rooted tar name (`C:/a`), which node-tar strips, is not compared; every tarball is read
-  twice, the first time synchronously.
+- **Severity:** Minor · **Effort:** M · **User-visible:** no
+- **Mechanism:** `no-restricted-imports` / `no-restricted-syntax` ban `tar` and `adm-zip` (by name
+  or subpath; `import`, `import()`, `require`, `createRequire(...)(...)`, string or expression-free
+  template literal) outside `packages/utils/src/archive/`. A second extractor can still be written
+  with ANOTHER archive library, by spawning the system `tar` / `unzip`, or by loading either banned
+  package through a specifier computed at run time or a `createRequire` result bound to a name
+  other than `require`. The lane-coverage test would not see such a lane either: it follows calls
+  of the archive module's readers.
+- **Where:** `ARCHIVE_LIBRARY_BAN` in [`eslint.config.js`](../../eslint.config.js),
+  [`archive-library-ban.integration.test.ts`](../../packages/dev-tools/test/integration/archive-library-ban.integration.test.ts)
+- **Fix:** an allowlist of the packages that may be a dependency at all (the dependency check), and
+  a spawn rule naming the archive binaries.
+
+### A typo'd `skills.include` beside one plugin-local skill is exit 0
+
+- **Severity:** Important (a ruled trade-off) · **Effort:** M · **User-visible:** yes
+- **Mechanism:** a `skills` phase that examined nothing is an answer whenever the project ships at
+  least one plugin-local skill (`skillsPhaseExamined`), because a project whose skills are ALL
+  plugin-local legitimately has an include that matches nothing. The rule cannot tell that project
+  from one with a real pool whose include is misspelled and one plugin-local skill beside it: the
+  pool is then silently neither validated nor built, at exit 0 — the case the per-phase refusal
+  exists for.
+- **Reproduce:** a project with `skills/a/SKILL.md`, `plugins/p/skills/b/SKILL.md` and
+  `skills.include: ['skilz/**/SKILL.md']`; `vat validate` exits 0.
+- **Where:** `skillsPhaseExamined` in
+  [`phase-utils.ts`](../../packages/cli/src/commands/phase-utils.ts)
+- **Fix:** let a plugin-local project say so (an include that names the plugin skills, or an
+  explicit empty pool), and refuse an include that matches nothing otherwise.
+
+### A local install's link check and its copy are two reads of the source
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** no
+- **Mechanism:** `installUnit` walks the directory being installed and judges every link in it;
+  the copy then reads the tree again and keeps each link's text. A process that can write the
+  source between the two can swap a judged link (or a judged file) for another link. It needs a
+  local writer on the operator's own directory, who could change what is installed anyway.
+- **Where:** `installUnit` in [`install-plan.ts`](../../packages/cli/src/utils/install-plan.ts),
+  the `link` visitor in [`copy-tree.ts`](../../packages/utils/src/tree-change/copy-tree.ts)
+- **Fix:** judge each link's text in the copy's own visitor, on the `readlink` it is about to write.
+
+### A refused rename is sided by its destination even when the SOURCE directory refused it
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** yes (the refusal code)
+- **Mechanism:** `rename` needs write permission on both parent directories, and `EACCES` / `EPERM`
+  does not say which one refused. `pathsActedOn` puts a rename's destination first, so
+  `fsBoundary` sides the fault by the destination whenever a root covers it — also when the
+  unwritable directory is the source's. (For `ENOENT`, `sidingPaths` asks the filesystem which end
+  is absent; there is no such probe for `refused`: `access(W_OK)` answers for the real uid, and a
+  sticky directory refuses a rename it lets you write to.)
+- **What a user sees:** a refusal naming both ends, coded for the destination side
+  (`RUN_INCOMPLETE`) where the source side's code (`INPUT_UNREADABLE`) would be right.
 - **Reproduce:** by reading; not run.
-- **Where:** `openZip` / `extractTarball` in
-  [`archive-staging.ts`](../../packages/cli/src/utils/archive-staging.ts); `extractZipBytes` in
-  [`url-source.ts`](../../packages/agent-skills/src/skill-source/sources/url-source.ts); the zip
-  writer in [`skill-packager.ts`](../../packages/agent-skills/src/skill-packager.ts); the entry
-  reader in [`skills.ts`](../../packages/cli/src/commands/claude/org/skills.ts)
-- **Fix:** one extract and one create primitive in `utils` (escape, link entries, entry clashes and
-  failure classification decided once), the four sites migrated, and an import restriction on
-  `adm-zip` and `tar` outside it. Before that, read both extractors for escape and link entries.
+- **Where:** `sidingPaths` in [`fs-boundary.ts`](../../packages/utils/src/errors/fs-boundary.ts)
+- **Fix:** on a `refused` rename, retry the two halves the OS can tell apart (a probe create in
+  each parent), and side by the one that fails.
 
-### An archive whose entries are one name only where the volume folds names is not judged from its entry list
+### A ZIP entry's Unix mode is read only when the archive says it was made on Unix
 
-- **Severity:** Important · **Effort:** S · **User-visible:** yes (a file silently left out, or a refusal code that differs by host)
-- **Mechanism:** `entryClash` compares entry names exactly, so a file `A` beside an entry `a/b` is
-  not refused from the entry list. On a volume that keeps case the two are two names and both
-  extract, correctly. On a volume that folds case the outcome is the library's and the order's:
-  with `A` listed first the write under it fails and the refusal is classified from the host's
-  errno (`INPUT_UNREADABLE` where that is `ENOTDIR`, `RUN_INCOMPLETE` on win32, where it is
-  `ENOENT`); with `a/b` listed first in a ZIP, adm-zip finds a directory where `A` goes, skips the
-  entry and reports nothing.
-- **What a user sees:** on a folding volume, either a refusal whose code differs by host, or — a ZIP
-  listing `a/b` before `A` — an install that exits 0 without `A`. For names that match exactly
-  both orders are refused on every host.
+- **Severity:** Minor · **Effort:** S · **User-visible:** not today
+- **Mechanism:** `unixModeOf` trusts an entry's external attributes for a symlink type only when
+  `version made by` names host 3. Info-ZIP also maps a Unix mode for other hosts, so a link entry
+  written with another host byte is read as a regular file. Harmless where VAT extracts (it writes
+  a regular file holding the target text); a differential in the org upload lane, which forwards
+  the ZIP to a reader that may see the link.
 - **Reproduce:** by reading; not run.
-- **Where:** `entryClash` in [`archive-staging.ts`](../../packages/cli/src/utils/archive-staging.ts)
-- **Fix:** with the archive primitive above, compare entry names by the one fold `copyTree` uses.
+- **Where:** `unixModeOf` in [`zip-reader.ts`](../../packages/utils/src/archive/zip-reader.ts)
+- **Fix:** read the type bits whatever the host byte, and refuse a link type from any of them.
+
+### No test inflates a DEFLATED ZIP entry past the size it declares
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** not today
+- **Mechanism:** what bounds a ZIP's real expanded bytes is `adm-zip` capping each inflation at the
+  entry's declared size. The stored case is pinned (`archive-read.test.ts`, an entry holding more
+  than it declares); the deflated case, which is the bomb, is not — `zipFixture` deflates what it is
+  given and cannot understate a deflated entry's size independently of its data.
+- **Where:** [`archive-read.test.ts`](../../packages/utils/test/archive-read.test.ts),
+  [`archive-fixtures.ts`](../../packages/utils/src/testing/archive-fixtures.ts)
+- **Fix:** let the fixture writer take the stored bytes and the declared size separately, and pin it.
+
+### On Windows a lone archive entry named `name:stream` is written as a stream of `name`
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** Windows only, unverified
+- **Mechanism:** the entry policy folds `name:stream` to `name`, so an archive listing BOTH is a
+  `name-clash`. One listing only `name:stream` passes, and on NTFS the write creates an alternate
+  data stream of a file `name` the archive never listed. Not verified on a Windows host.
+- **Where:** `unsafeNameReason` in [`entries.ts`](../../packages/utils/src/archive/entries.ts)
+- **Fix:** refuse a `:` in any segment after the drive check, as `unsafe-name`.
+
+### A link whose text begins `C:` is refused as absolute on POSIX, where it is a plain name
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** yes (an over-refusal)
+- **Mechanism:** the install link rule refuses a link text that is absolute on ANY host — a
+  leading `/` or `\`, or a drive prefix (`C:`) — so that one rule decides for a tree installed
+  anywhere. On POSIX a file may really be named `C:notes.md`, and a relative link to it is refused
+  as absolute.
+- **Where:** `ABSOLUTE` in [`link-walk.ts`](../../packages/utils/src/tree-change/link-walk.ts)
+- **Fix:** decide "absolute" by the host, as the separators already are.
+
+### A skill ZIP re-zipped for upload is not byte- or mode-identical to the archive that was judged
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** not today
+- **Mechanism:** when a skill ZIP holds a top-level `__MACOSX/` or `.DS_Store`,
+  `vat claude org skills install` extracts it to staging without them and uploads a new ZIP of the
+  staging. That ZIP carries each file's mode as extracted under the operator's umask (`0600` /
+  `0700` under `umask 077`) and fresh modification times, not the archive's own. And the ZIP is read
+  from disk up to three times — the bytes weighed, the inspection, the extraction for the re-zip —
+  so what is sent is not provably what was judged if the file changes in between.
+- **Where:** `withoutHostAdded` and `installFromLocal` in
+  [`skills.ts`](../../packages/cli/src/commands/claude/org/skills.ts)
+- **Fix:** read the archive once, and write the upload from the judged records (their modes and
+  times) rather than from a staging directory.
+
+### A ZIP with a member that does not inflate uploads alone, and is refused beside a `.DS_Store`
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** yes (two answers for one archive)
+- **Mechanism:** `vat claude org skills install` tolerates a member it cannot inflate (an odd
+  compression method, an encrypted entry): it warns, names the member and uploads the archive. The
+  same archive with a `.DS_Store` beside the skill takes the re-zip path, which extracts EVERY
+  member — and the one that does not inflate refuses the upload (`INPUT_UNREADABLE`).
+- **Where:** `inflateOrRecord` and `withoutHostAdded` in
+  [`skills.ts`](../../packages/cli/src/commands/claude/org/skills.ts)
+- **Fix:** one answer for a member that does not inflate — refuse in both, since the upload lane's
+  checks did not read it either.
+
+### An archive file that grows between its size check and its read is read past the cap
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** no
+- **Mechanism:** `fileBytes` sizes the archive by `fstat` on the handle, then reads the whole file
+  through it. A file another process appends to between the two is read at its new length (a local
+  race only; the parsed archive is still held to its entry and byte limits).
+- **Where:** `fileBytes` in [`archive.ts`](../../packages/utils/src/archive/archive.ts); the same
+  shape in `boundedFile` in
+  [`url-source.ts`](../../packages/agent-skills/src/skill-source/sources/url-source.ts)
+- **Fix:** read at most cap + 1 bytes and refuse when the extra byte arrives.
+
+### A `url:` skill source the network fails is `INPUT_UNREADABLE`, where the npm lane says `EXTERNAL_API_FAILED`
+
+- **Severity:** Minor · **Effort:** S (a decision) · **User-visible:** yes (the refusal code)
+- **Mechanism:** every failure of a `url:` source — a timeout, HTTP 5xx, a refused connection — is
+  `SKILL_SOURCE_FETCH_FAILED`, mapped to `INPUT_UNREADABLE`; a registry failure in an `npm:` lane is
+  `EXTERNAL_API_FAILED`. A missing `git` binary on a git `url:` source becomes `GIT_CLONE_FAILED`,
+  also `INPUT_UNREADABLE`, where the rest of VAT calls a missing tool `BACKEND_UNAVAILABLE`.
+- **Where:** `fetchFailure` in
+  [`url-source.ts`](../../packages/agent-skills/src/skill-source/sources/url-source.ts),
+  [`failure-reason.ts`](../../packages/agent-skills/src/skill-test/failure-reason.ts)
+- **Fix:** split the fetch error by cause (the remote did not answer / the bytes are wrong) and
+  map the first to `EXTERNAL_API_FAILED`; probe for `git` before cloning.
+
+### A plugin-local project's empty pool is an answer to `vat build`, and a refusal to `vat skills build`
+
+- **Severity:** Minor · **Effort:** S (a decision) · **User-visible:** yes
+- **Mechanism:** a project whose skills are all plugin-local has a `skills.include` that matches
+  no pool skill. The orchestrators (`vat build`, `vat validate`, `vat verify`) take that phase's
+  zero as an answer (`skillsPhaseExamined`); the verbs run alone (`vat skills build`,
+  `vat skills validate`) still refuse it, `RESOURCE_CHECK_BROKEN`, exit 1. So the phase and its
+  verb disagree for exactly this project.
+- **Where:** `skillsPhaseExamined` in
+  [`phase-utils.ts`](../../packages/cli/src/commands/phase-utils.ts); the two verbs' writers
+- **Fix:** decide whether the verbs alone take the same answer, and give their writers the same
+  declaration if so.
+
+### A phase that examined nothing is system-tested for `vat validate` and `vat build`, not `vat verify`
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** no
+- **Mechanism:** exit 1 for one configured phase examining nothing is run end to end for
+  `vat validate` and `vat build`; `vat verify` rests on the pure table
+  (`phase-selection.test.ts`). In that table the build orchestrator's `shipped-links` row is added
+  by hand (the phase is appended after selection), so a new build post-phase added the same way
+  would not red the "names every phase" test.
+- **Where:** [`phase-selection.test.ts`](../../packages/cli/test/commands/phase-selection.test.ts),
+  `shippedLinksPhase` in [`build.ts`](../../packages/cli/src/commands/build.ts)
+- **Fix:** one exported list of every build phase the run can append, read by the test; a
+  `vat verify` system case beside the `vat validate` one.
+
+### `copyTree` carries a directory's setuid, setgid and sticky bits
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** not today
+- **Mechanism:** a copied FILE's mode is masked to its permission bits (`& 0o777`) and an extracted
+  archive entry gets `0644`/`0755` only. A copied DIRECTORY keeps `mode & 0o7777`, so a setgid or
+  sticky directory in a source tree is one in the destination.
+- **Reproduce:** by reading; not run.
+- **Where:** the directory `chmod` in
+  [`copy-tree.ts`](../../packages/utils/src/tree-change/copy-tree.ts)
+- **Fix:** mask to `0o777` as the file path does, with the red-first test beside the file one.
+
+### An extracted archive is read whole into memory
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** not today
+- **Mechanism:** the archive module judges the whole entry list before it writes anything, and to
+  do that it holds the archive's bytes — and a tarball's whole inflated stream — in memory. The
+  required `limits` bound it (`ARCHIVE_LIMITS`: 50,000 entries, 256 MiB expanded; a download is
+  bounded at 100 MiB), so the cost is a ceiling, not an exposure; a package near the ceiling costs
+  that much heap.
+- **Where:** [`packages/utils/src/archive/`](../../packages/utils/src/archive/)
+- **Fix:** a two-pass reader over the file (headers, then bodies) if a legitimate package ever
+  approaches the bound.
 
 ### A refereed pool skill's directory is never checked against the other selected pool skills
 
@@ -256,8 +411,9 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   authored UNDER a selected pool skill's directory (`skills/group/x`, pool `group` selected) is sent
   inside it. Separately, the check that does run compares directory names as exact strings, so on
   a volume that folds case `skills/Bar` beside pool `bar` passes it. The copy order is decided with
-  a fold of its own (`foldedSegment`, a superset of the one `copyTree` refuses twins by), so
-  "are these one directory" has more than one answer in the build.
+  `foldedSegment` (the fold the archive module also judges entry names by, and a superset of the
+  one `copyTree` refuses twins by), so "are these one directory" has more than one answer in the
+  build.
 - **What a user sees:** for two skills at one directory, the second copy is refused with a raw `EEXIST` on the build's own output
   (`RUN_INCOMPLETE`), naming whichever skill sorts second, where the cause is the config: two
   skills claim one directory, which the build reports as `CONFIG_INVALID` in the un-refereed case.

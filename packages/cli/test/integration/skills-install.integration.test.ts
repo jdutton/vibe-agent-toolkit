@@ -1,9 +1,9 @@
-import { chmodSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 
 import { ExitCode, type RefusalCode } from '@vibe-agent-toolkit/schema';
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS, installFaultFs } from '@vibe-agent-toolkit/utils/testing';
+import { createSymlink, mkdirSyncReal, normalizedTmpdir, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
+import { archiveEntriesOfDirectory, CANNOT_DENY_READS, installFaultFs, tarFixture, zipFixture } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
@@ -11,7 +11,6 @@ import { SKILLS_INSTALL_REPORT_SCHEMA, type SkillsInstallReport } from '../../sr
 import { installCommand, type InstallCommandOptions } from '../../src/commands/skills/install.js';
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 import { captureCommand } from '../helpers/stdout-capture.js';
-import { tarballOf } from '../helpers/tarball.js';
 
 /** Run the install lane: the report it published (validated against its registry schema) and the code it ended on. */
 async function runInstall(
@@ -59,8 +58,29 @@ function createSkillDirNamed(
   return dir;
 }
 
+/** A ZIP of what `dir` holds, its entries at the archive's root (or under `prefix`, a directory name ending in `/`). */
+function zipOfDir(dir: string, zipPath: string, prefix = ''): void {
+  writeFileSync(zipPath, zipFixture(archiveEntriesOfDirectory(dir, prefix)));
+}
+
+/** A gzipped tarball of what `dir` holds, as `tar -C dir .` packs it. */
+function tarballOfDir(dir: string, tarballPath: string): void {
+  writeFileSync(tarballPath, tarFixture(archiveEntriesOfDirectory(dir)));
+}
+
 function createSkillDir(parent: string, name: string, description: string): string {
   return createSkillDirNamed(parent, name, name, description);
+}
+
+/** A skill under `parent` holding `notes.md` and a link `keys` to `target`, beside a `secret/` directory no skill owns. */
+function linkedSkill(parent: string, name: string, target: string, skip: () => never): string {
+  const capability = symlinkCapability() ?? skip();
+  const skill = createSkillDir(parent, name, 'Holds a link.');
+  mkdirSyncReal(safePath.join(parent, 'secret'), { recursive: true });
+  writeFileSync(safePath.join(parent, 'secret', 'key.txt'), 'the operator\'s own file\n');
+  writeFileSync(safePath.join(skill, 'notes.md'), 'notes\n');
+  createSymlink(capability, target, safePath.join(skill, 'keys'), 'file');
+  return skill;
 }
 
 /**
@@ -203,10 +223,8 @@ describe('vat skills install — local directory source', () => {
     const skillSrc = createSkillDir(tempDir, 'zipped-skill', 'From a zip.');
     const zipPath = safePath.join(tempDir, 'zipped-skill.zip');
 
-    const AdmZip = (await import('adm-zip')).default;
-    const zip = new AdmZip();
-    zip.addLocalFolder(skillSrc, 'zipped-skill');
-    zip.writeZip(zipPath);
+    // The folder itself, compressed: one top-level folder with SKILL.md directly inside.
+    zipOfDir(skillSrc, zipPath, 'zipped-skill/');
 
     const projectDir = safePath.join(tempDir, 'project');
     mkdirSyncReal(projectDir, { recursive: true });
@@ -231,12 +249,8 @@ describe('vat skills install — local directory source', () => {
       'utf-8',
     );
 
-    const tarModule = await import('tar');
     const tarballPath = safePath.join(tempDir, 'fake-pkg-1.0.0.tgz');
-    await tarModule.create(
-      { file: tarballPath, cwd: safePath.join(tempDir, 'fake-npm-pkg'), gzip: true },
-      ['package'],
-    );
+    tarballOfDir(safePath.join(tempDir, 'fake-npm-pkg'), tarballPath);
 
     const projectDir = safePath.join(tempDir, 'project');
     mkdirSyncReal(projectDir, { recursive: true });
@@ -377,10 +391,7 @@ describe('vat skills install — refusals coded at their cause', () => {
     mkdirSyncReal(safePath.join(skill, 'references'), { recursive: true });
     writeFileSync(safePath.join(skill, 'references', 'a.md'), 'a');
     const zipPath = safePath.join(tempDir, 'zs.zip');
-    const AdmZip = (await import('adm-zip')).default;
-    const zip = new AdmZip();
-    zip.addLocalFolder(skill, 'zs');
-    zip.writeZip(zipPath);
+    zipOfDir(skill, zipPath, 'zs/');
 
     const session = installFaultFs({
       within: normalizedTmpdir(),
@@ -399,32 +410,119 @@ describe('vat skills install — refusals coded at their cause', () => {
     expect(outcome.report.error?.code).toBe('RUN_INCOMPLETE');
   });
 
+  // ONE layout rule for a skill ZIP, shared with `vat claude plugin install` and the org upload
+  // (`archive-hostile-lanes-zip` runs every layout through all three): SKILL.md at the top level, or
+  // directly inside the single top-level folder. This verb used to take the FIRST top-level folder
+  // holding one, whatever stood beside it, and answer USAGE_INVALID for an archive with none.
+  it('refuses a ZIP whose skill folder sits beside another top-level folder as INPUT_UNREADABLE, naming both', async () => {
+    const zipPath = safePath.join(tempDir, 'two-folders.zip');
+    writeFileSync(zipPath, zipFixture([
+      ...archiveEntriesOfDirectory(createSkillDir(tempDir, 'zipped-folder', 'From a zipped folder.'), 'zipped-folder/'),
+      { name: 'other/readme.md', data: 'x' },
+    ]));
+
+    await expectRefusal(zipPath, at(), 'INPUT_UNREADABLE', /is not a skill ZIP, nothing was changed: its `zipped-folder\/SKILL\.md` sits beside other top-level entries \(other\)/);
+    expect(existsSync(safePath.join(projectDir, '.claude', 'skills', 'zipped-folder'))).toBe(false);
+  });
+
+  it('refuses a ZIP holding no SKILL.md at all as INPUT_UNREADABLE', async () => {
+    const zipPath = safePath.join(tempDir, 'no-skill.zip');
+    writeFileSync(zipPath, zipFixture([{ name: 'readme.txt', data: 'hi\n' }]));
+
+    await expectRefusal(zipPath, at(), 'INPUT_UNREADABLE', /is not a skill ZIP.*holds no SKILL\.md at its top level, nor directly inside a single top-level folder/s);
+  });
+
+  // An install keeps a link as a link, verbatim: one leading out of the skill would, once installed,
+  // point at the installing user's own files (`keys -> ../../../secret` is `<project>/secret` at project scope).
+  describe('a skill directory holding a symbolic link', () => {
+    it('refuses one whose link leads out of the skill, and installs nothing', async ({ skip }) => {
+      const skill = linkedSkill(tempDir, 'linked-out', '../secret/key.txt', skip);
+
+      await expectRefusal(skill, at(), 'INPUT_UNREADABLE', /keys is a symbolic link to a path outside it/);
+      expect(existsSync(safePath.join(projectDir, '.claude', 'skills'))).toBe(false);
+    });
+
+    // An absolute link points at the same place wherever the copy lands: back at the source.
+    it('refuses one whose link text is absolute, though it points inside the skill', async ({ skip }) => {
+      const skill = linkedSkill(tempDir, 'linked-abs', safePath.join(tempDir, 'linked-abs', 'notes.md'), skip);
+
+      await expectRefusal(skill, at(), 'INPUT_UNREADABLE', /keys is a symbolic link with an absolute target/);
+      expect(existsSync(safePath.join(projectDir, '.claude', 'skills'))).toBe(false);
+    });
+
+    // `up` resolves to the skill's root, so `up/../../..` is three levels ABOVE the skill to the
+    // kernel — nothing there, the link dangles — and inside it to a lexical resolve. Installed at
+    // `<project>/.claude/skills/<name>`, the same text reaches the project's parent.
+    it('refuses one whose link climbs out through another link, dangling at the source', async ({ skip }) => {
+      const capability = symlinkCapability() ?? skip();
+      const skill = createSkillDir(tempDir, 'through-link', 'Holds a link through a link.');
+      const deep = safePath.join(skill, 'deep', 'a');
+      mkdirSyncReal(deep, { recursive: true });
+      createSymlink(capability, '../..', safePath.join(deep, 'up'), 'dir');
+      createSymlink(capability, 'up/../../../.ssh/id_rsa', safePath.join(deep, 'l'), 'file');
+
+      await expectRefusal(skill, at(), 'INPUT_UNREADABLE', /deep\/a\/l is a symbolic link whose target passes through another symbolic link \(deep\/a\/up\)/);
+      expect(existsSync(safePath.join(projectDir, '.claude', 'skills'))).toBe(false);
+    });
+
+    it('refuses one holding a link to nothing', async ({ skip }) => {
+      const skill = linkedSkill(tempDir, 'linked-nowhere', 'not-there.md', skip);
+
+      await expectRefusal(skill, at(), 'INPUT_UNREADABLE', /keys is a symbolic link to nothing/);
+      expect(existsSync(safePath.join(projectDir, '.claude', 'skills'))).toBe(false);
+    });
+
+    // A link out of one directory of the skill into another is the skill's own, and installs.
+    it('installs one whose link reaches a sibling directory of the skill', async ({ skip }) => {
+      const capability = symlinkCapability() ?? skip();
+      const skill = createSkillDir(tempDir, 'linked-sibling', 'Links across its own directories.');
+      mkdirSyncReal(safePath.join(skill, 'shared'), { recursive: true });
+      mkdirSyncReal(safePath.join(skill, 'docs'), { recursive: true });
+      writeFileSync(safePath.join(skill, 'shared', 'b.md'), 'shared\n');
+      createSymlink(capability, '../shared/b.md', safePath.join(skill, 'docs', 'a.md'), 'file');
+
+      await install(skill, at());
+
+      expect(readFileSync(safePath.join(projectDir, '.claude', 'skills', 'linked-sibling', 'docs', 'a.md'), 'utf8')).toBe('shared\n');
+    });
+
+    // The positive control: the same skill, the link aimed inside it, installs with the link kept.
+    it('installs one whose link stays inside the skill, the link kept as a link', async ({ skip }) => {
+      const skill = linkedSkill(tempDir, 'linked-in', 'notes.md', skip);
+
+      await install(skill, at());
+
+      const link = safePath.join(projectDir, '.claude', 'skills', 'linked-in', 'keys');
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(readFileSync(link, 'utf8')).toBe('notes\n');
+    });
+  });
+
   it('refuses a ZIP the reader cannot read as INPUT_UNREADABLE', async () => {
     const zipPath = safePath.join(tempDir, 'corrupt.zip');
     writeFileSync(zipPath, 'not a zip archive', 'utf-8');
 
-    await expectRefusal(zipPath, at(), 'INPUT_UNREADABLE', /could not be extracted/);
+    await expectRefusal(zipPath, at(), 'INPUT_UNREADABLE', /is not an archive VAT accepts/);
   });
 
   it('refuses a tarball the reader cannot read as INPUT_UNREADABLE', async () => {
     const tarballPath = safePath.join(tempDir, 'corrupt.tgz');
     writeFileSync(tarballPath, 'not a gzip stream', 'utf-8');
 
-    await expectRefusal(tarballPath, at(), 'INPUT_UNREADABLE', /could not be extracted/);
+    await expectRefusal(tarballPath, at(), 'INPUT_UNREADABLE', /is not an archive VAT accepts/);
   });
 
-  // node-tar reports an entry it cannot write as a WARNING and resolves: the package
-  // installed without that entry. A file `a` beside a file `a/b` is the archive's.
+  // A file `a` beside a file `a/b` is the archive's own layout: no directory can hold the two.
   it('refuses a tarball holding an entry that cannot be extracted as INPUT_UNREADABLE', async () => {
     const tarballPath = safePath.join(tempDir, 'clash.tgz');
-    writeFileSync(tarballPath, tarballOf([
-      ['package/package.json', JSON.stringify({ name: '@test/clash', version: '1.0.0' })],
-      ['package/dist/skills/clash/SKILL.md', '---\nname: clash\ndescription: Says hello to the user.\n---\n\n# clash\n'],
-      ['package/a', 'A'],
-      ['package/a/b', 'B'],
+    writeFileSync(tarballPath, tarFixture([
+      { name: 'package/package.json', data: JSON.stringify({ name: '@test/clash', version: '1.0.0' }) },
+      { name: 'package/dist/skills/clash/SKILL.md', data: '---\nname: clash\ndescription: Says hello to the user.\n---\n\n# clash\n' },
+      { name: 'package/a', data: 'A' },
+      { name: 'package/a/b', data: 'B' },
     ]));
 
-    await expectRefusal(tarballPath, at(), 'INPUT_UNREADABLE', /could not be extracted, nothing was changed: it holds both `package\/a` and `package\/a\/b`/);
+    await expectRefusal(tarballPath, at(), 'INPUT_UNREADABLE', /is not an archive VAT accepts, nothing was changed: it holds both `package\/a` and `package\/a\/b`/);
     expect(existsSync(safePath.join(projectDir, '.claude', 'skills', 'clash'))).toBe(false);
   });
 
@@ -432,8 +530,7 @@ describe('vat skills install — refusals coded at their cause', () => {
     const staging = safePath.join(tempDir, 'staging');
     createSkillDir(staging, 'loose-skill', 'Not packed by npm.');
     const tarballPath = safePath.join(tempDir, 'loose.tgz');
-    const tarModule = await import('tar');
-    await tarModule.create({ file: tarballPath, cwd: staging, gzip: true }, ['loose-skill']);
+    tarballOfDir(staging, tarballPath);
 
     await expectRefusal(tarballPath, at(), 'USAGE_INVALID', /does not contain a package\/ directory/);
   });
@@ -501,10 +598,7 @@ describe('vat skills install — installed name comes from the skill, not the pa
     const skillSrc = createSkillDirNamed(tempDir, 'staging', 'root-zip-skill', 'From a flat zip.');
     const zipPath = safePath.join(tempDir, 'flat.zip');
 
-    const AdmZip = (await import('adm-zip')).default;
-    const zip = new AdmZip();
-    zip.addLocalFolder(skillSrc);
-    zip.writeZip(zipPath);
+    zipOfDir(skillSrc, zipPath);
 
     const projectDir = safePath.join(tempDir, 'project');
     mkdirSyncReal(projectDir, { recursive: true });
@@ -614,10 +708,7 @@ describe('vat skills install — one transaction for the batch', () => {
     // The staging lives under $TMPDIR, this test's scratch: the refused removal is of nothing real.
     const scratchTmp = scratchTmpdir();
     const zipPath = safePath.join(tempDir, 'zs.zip');
-    const AdmZip = (await import('adm-zip')).default;
-    const zip = new AdmZip();
-    zip.addLocalFolder(createSkillDir(tempDir, 'zs', 'From a zip.'), 'zs');
-    zip.writeZip(zipPath);
+    zipOfDir(createSkillDir(tempDir, 'zs', 'From a zip.'), zipPath, 'zs/');
 
     const session = installFaultFs({
       within: scratchTmp,

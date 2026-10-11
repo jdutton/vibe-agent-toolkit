@@ -5,21 +5,22 @@
  * Callers are responsible for cleaning up temp directories after use.
  *
  * Every refusal is coded where it is raised: a source that is not a skill
- * package is the invocation's mistake (`USAGE_INVALID`), one the OS or the
- * archive reader will not read is the input's (`INPUT_UNREADABLE`), and a
- * registry that will not hand the package over is `EXTERNAL_API_FAILED`
- * (`downloadNpmPackage`).
+ * package is the invocation's mistake (`USAGE_INVALID`), one the OS will not
+ * read or the archive module will not extract is the input's
+ * (`INPUT_UNREADABLE`), and a registry that will not hand the package over is
+ * `EXTERNAL_API_FAILED` (`downloadNpmPackage`).
  */
 
-import { existsSync, readdirSync, type Dirent } from 'node:fs';
+import { readdirSync, type Dirent } from 'node:fs';
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { disposeTempDir, disposeTempDirAfterFailure, forEachInOrder, pathPresent, safePath, toForwardSlash, withFsFaultSync } from '@vibe-agent-toolkit/utils';
+import { ARCHIVE_LIMITS, extractArchive } from '@vibe-agent-toolkit/utils/archive';
 
-import { extractTarball, makeStagingDir } from '../../utils/archive-staging.js';
 import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
 import { leftoverIssue, leftoverIssueOf } from '../../utils/document-writer.js';
 import { requireInputPath } from '../../utils/project-root-policy.js';
+import { makeStagingDir } from '../../utils/staging-dir.js';
 import { downloadNpmPackage } from '../claude/plugin/helpers.js';
 
 /**
@@ -68,10 +69,12 @@ export async function extractTarballToTemp(
   requireInputPath(tarballPath, { origin: 'argument', message: `Path does not exist: ${tarballPath}` });
   const tempDir = await makeStagingDir('vat-skills-tgz-');
   const packageDir = await discardingOnFailure(tempDir, async () => {
-    await extractTarball(tarballPath, tempDir);
-    // A probe of the temp tree this process just extracted — VAT's own directory, not the user's path.
+    // One entry at a time: when the extraction throws, nothing is still being written under the staging.
+    await extractArchive({ file: tarballPath, side: 'source' }, tempDir, { format: 'tar', limits: ARCHIVE_LIMITS });
+    // A probe of the temp tree this process just extracted — VAT's own directory, not the user's path:
+    // one the OS refuses is the environment's fault, never "not an npm pack tarball".
     const extracted = safePath.join(tempDir, 'package');
-    if (!existsSync(extracted)) {
+    if (!pathPresent(extracted, 'follow', 'environment', 'confirmed')) {
       throw new CommandRefusalError(
         'USAGE_INVALID',
         `Tarball does not contain a package/ directory (not an npm pack tarball): ${tarballPath}`,
@@ -107,7 +110,8 @@ export async function discardingOnFailure<T>(tempDir: string, work: () => T | Pr
  */
 export function findSkillsDirInNpmPackage(packageDir: string): string {
   const distSkills = safePath.join(packageDir, 'dist', 'skills');
-  if (existsSync(distSkills)) {
+  // The package is in VAT's own staging: a probe the OS refuses is the environment's fault, never "no dist/skills/".
+  if (pathPresent(distSkills, 'follow', 'environment', 'confirmed')) {
     return distSkills;
   }
   throw new CommandRefusalError(
@@ -134,7 +138,7 @@ export async function resolveNpmOrTarballSource(
 ): Promise<ResolvedNpmSource> {
   if (source.startsWith('npm:')) {
     const tempDir = await makeStagingDir('vat-skills-npm-');
-    const skillsDir = await discardingOnFailure(tempDir, () => findSkillsDirInNpmPackage(downloadNpmPackage(source, tempDir)));
+    const skillsDir = await discardingOnFailure(tempDir, async () => findSkillsDirInNpmPackage(await downloadNpmPackage(source, tempDir)));
     return { skillsDir, tempDirs: [tempDir] };
   }
 

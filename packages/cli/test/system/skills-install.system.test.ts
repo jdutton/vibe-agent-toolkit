@@ -4,11 +4,11 @@
  * System tests for claude plugin install command
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import AdmZip from 'adm-zip';
+import { archiveEntriesOfDirectory, zipFixture } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { PLUGIN_INSTALL_REPORT_SCHEMA, type PluginInstallData } from '../../src/commands/claude/plugin/install-schema.js';
@@ -91,10 +91,8 @@ describe('claude plugin install command (system test)', () => {
     it('should detect ZIP source', async () => {
       // A real archive: install opens it before deciding anything, so a dry run
       // refuses a `.zip` that is not one.
-      const zip = new AdmZip();
-      zip.addLocalFolder(await createSimpleSkill(suite.tempDir, 'test-skill'));
       const zipPath = safePath.join(suite.tempDir, 'test-skill.zip');
-      zip.writeZip(zipPath);
+      writeFileSync(zipPath, zipFixture(archiveEntriesOfDirectory(await createSimpleSkill(suite.tempDir, 'test-skill'))));
 
       expectDryRunDetects(zipPath, 'zip', 'test-skill');
     });
@@ -212,9 +210,7 @@ describe('claude plugin install command (system test)', () => {
       // 'source detection' suite above, so this test must prove extraction happens.
       const skillDir = await createSimpleSkill(suite.tempDir, 'zip-contents');
       const zipPath = safePath.join(suite.tempDir, 'zipped-skill.zip');
-      const zip = new AdmZip();
-      zip.addLocalFolder(skillDir);
-      zip.writeZip(zipPath);
+      writeFileSync(zipPath, zipFixture(archiveEntriesOfDirectory(skillDir)));
 
       executeInstallAndExpectSuccess(
         suite.binPath,

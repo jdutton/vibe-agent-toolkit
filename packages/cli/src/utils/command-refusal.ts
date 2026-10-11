@@ -39,6 +39,7 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import { fsFaultRefusal, type RefusalCode } from '@vibe-agent-toolkit/schema';
 import {
+  ARCHIVE_REFUSED_CODE,
   ASSET_REFERENCE_UNREADABLE_CODE,
   COPY_LINK_ESCAPES_SOURCE_CODE,
   DIRECTORY_WALK_REVISITED_CODE,
@@ -78,6 +79,9 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   [CONFIG_LOAD_CODE]: 'CONFIG_INVALID',
   // A bundle argument the project does not declare under `okf.bundles`.
   [OKF_UNKNOWN_BUNDLE_CODE]: 'USAGE_INVALID',
+  // An archive VAT will not read or extract (`ArchiveRefusedError`): not an archive, past a limit, or holding
+  // an entry the one entry policy refuses — a link, a device, a name outside the archive, two entries one name.
+  [ARCHIVE_REFUSED_CODE]: 'INPUT_UNREADABLE',
   // A symlink inside a tree being copied that points outside it (`CopyLinkEscapesSourceError`): the input's link.
   [COPY_LINK_ESCAPES_SOURCE_CODE]: 'INPUT_UNREADABLE',
   // An entry of a tree being copied that the OS would not list, stat or read (or a dangling link): the input's.

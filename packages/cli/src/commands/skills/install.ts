@@ -47,10 +47,9 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
-import { archiveFailure, openZip, type StagedZip } from '../../utils/archive-staging.js';
 import { CommandRefusalError, refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, leftoverIssue, NOTHING_FINISHED, type FinishedWork } from '../../utils/document-writer.js';
-import { inStaging, occupiedRefusal, skillCopyChange } from '../../utils/install-plan.js';
+import { extractSkillZip, inStaging, installUnit, occupiedRefusal, skillCopyChange } from '../../utils/install-plan.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { requireInputPath } from '../../utils/project-root-policy.js';
 
@@ -198,28 +197,6 @@ function assertNoNameCollisions(skills: DiscoveredSkill[]): void {
   }
 }
 
-/**
- * Find a skill root inside an extracted ZIP. The ZIP may contain a single
- * top-level directory (e.g. `my-skill/SKILL.md`) or have SKILL.md at the root.
- */
-function findSkillRootInExtracted(extractedDir: string): string {
-  if (holdsSkillMd(extractedDir)) {
-    return extractedDir;
-  }
-  // Otherwise look for a single subdirectory containing SKILL.md
-  for (const entry of readSourceDir(extractedDir)) {
-    if (direntKindFollowingSync(extractedDir, entry) !== 'directory') continue;
-    const candidate = safePath.join(extractedDir, entry.name);
-    if (holdsSkillMd(candidate)) {
-      return candidate;
-    }
-  }
-  throw new CommandRefusalError(
-    'USAGE_INVALID',
-    `ZIP does not contain a SKILL.md at root or in a top-level directory: ${extractedDir}`,
-  );
-}
-
 interface ResolvedSource {
   /** The resolved directory containing SKILL.md (may be inside an extracted ZIP). */
   dir: string;
@@ -274,22 +251,17 @@ async function inResolvedTempDirs<T>(resolved: ResolvedSource, run: InstallRun, 
 }
 
 /**
- * A ZIP, extracted into a fresh `$TMPDIR` staging directory ({@link inStaging}) and handed to
- * `work`. The ZIP may hold one top-level directory (`my-skill/SKILL.md`) or SKILL.md at its root.
+ * A ZIP, extracted through the one archive primitive into a fresh `$TMPDIR` staging directory
+ * ({@link inStaging}) and handed to `work`. Where the skill is inside it is the one layout rule
+ * every verb that takes a skill ZIP shares (`extractSkillZip`): its top level, or its single
+ * top-level folder.
  */
 async function fromZip<T>(zipPath: string, run: InstallRun, work: (resolved: ResolvedSource) => Promise<T>): Promise<T> {
   // A holder, not a `let`: `work` resolves inside the staging callback, where flow analysis cannot see.
   const holder: { result?: { value: T } } = {};
   await inStaging('vat-skills-install-zip-', async (staging) => {
-    let zip: StagedZip;
-    try {
-      zip = openZip(zipPath);
-    } catch (error) {
-      // Nothing is staged by the open: a fault here is the archive's, or the machine's.
-      throw archiveFailure(zipPath, [], error);
-    }
-    zip.extractTo(zipPath, staging);
-    holder.result = { value: await work({ dir: findSkillRootInExtracted(staging), tempDirs: [staging], side: 'environment' }) };
+    const dir = await extractSkillZip(zipPath, staging);
+    holder.result = { value: await work({ dir, tempDirs: [staging], side: 'environment' }) };
   }, (issue) => run.leftovers.push(issue));
   // `inStaging` resolves only once `work` has.
   if (holder.result === undefined) throw new Error('vat skills install: the ZIP staging resolved without running the install');
@@ -395,7 +367,9 @@ async function installFromDir(
   progress: InstallProgress,
   run: InstallRun,
 ): Promise<InstallOutcome> {
-  const skillDirs = discoverSkillDirs(resolved.dir);
+  // Each skill as the tree it is copied from, before anything reads it: one in the operator's own
+  // directory holding a link that leads out of it is refused here (`installUnit`).
+  const skillDirs = discoverSkillDirs(resolved.dir).map((dir) => installUnit({ root: resolved.dir, side: resolved.side }, dir, 'the skill directory'));
   const boundary = sourceBoundary(resolved);
   // Reject an unusable --name override before doing any real work.
   if (options.name !== undefined) assertNameOverrideApplies(skillDirs.length, options.name);
@@ -499,6 +473,15 @@ Description:
   name of the directory it came from — a ZIP or npm source has no meaningful
   directory name. Override with --name.
 
+  A .zip holds SKILL.md at its top level, or exactly one top-level folder
+  with SKILL.md directly inside (a skill folder, compressed). Every
+  archive (.zip, .tgz, an npm tarball) is judged whole before anything is
+  written: one holding a symbolic or hard link, a device, a name that leaves
+  the archive (absolute, ".."), one name twice (or twice once letter case is
+  folded), or more than 50,000 entries / 256 MiB expanded is refused. A skill
+  directory may hold links, but only relative ones to something that exists
+  inside the skill, reached through no other link.
+
 Visibility:
   VAT's own inspection commands are Claude-scoped: "vat skills list --user" and
   "vat audit --user" read ~/.claude only. A skill installed to any other target
@@ -528,8 +511,8 @@ Exit Codes:
   2 - Could not install, and nothing was installed: a bad --target/--scope/--name
       or source, something already at an install path without --force, an
       unreadable source (or an install path the OS will not let VAT examine or
-      write), a .zip/.tgz holding an entry that cannot be extracted, an npm
-      registry failure, or a staging copy under $TMPDIR or beside the install
+      write), an archive VAT does not accept or a link leading out of a skill
+      directory (INPUT_UNREADABLE; see Description), an npm registry failure, or a staging copy under $TMPDIR or beside the install
       path it could not create or write (full, read-only)
 
 Example:

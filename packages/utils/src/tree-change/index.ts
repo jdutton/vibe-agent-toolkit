@@ -14,6 +14,8 @@ export { copyRegularFile, copyTree } from './copy-tree.js';
 export type { CopyRegularFileOptions, CopyTreeOptions } from './copy-tree.js';
 export type { CopyOnto } from './copy-decisions.js';
 export type { LinkPolicy, TreeWalkOptions } from './tree-walk.js';
+export { refuseEscapingLinks, treeContainment } from './link-containment.js';
+export type { LinkContainmentCheck } from './link-containment.js';
 export {
   planTreeChanges,
   TREE_DEST_HOLDS_SOURCE_CODE,

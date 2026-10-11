@@ -9,6 +9,7 @@
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
+import * as YAML from 'yaml';
 
 import { orchestratorReportOf, phaseDataMismatches } from '../helpers/published-phase.js';
 
@@ -55,7 +56,10 @@ function setupValidateTestSuite() {
   const runValidate = (dir: string, extraArgs: string[] = []) =>
     executeCli(binPath, ['--cwd', dir, 'validate', ...extraArgs]);
 
-  return { createTempDir, cleanupTempDirs, writeConfig, writeSkillSource, runValidate };
+  /** The skills surface's own verb, alone: what an orchestrated `skills` phase must agree with. */
+  const runSkillsValidate = (dir: string) => executeCli(binPath, ['--cwd', dir, 'skills', 'validate']);
+
+  return { createTempDir, cleanupTempDirs, writeConfig, writeSkillSource, runValidate, runSkillsValidate };
 }
 
 describe('vat validate command (system test)', () => {
@@ -121,6 +125,37 @@ describe('vat validate command (system test)', () => {
     const report = orchestratorReportOf(result.stdout);
     expect([report.examined, report.findings.map((finding) => finding.code)]).toEqual([0, ['RESOURCE_CHECK_BROKEN']]);
     expect(result.stderr).toContain('nothing to validate');
+  });
+
+  // A configured surface that examined nothing is a refusal of ITS phase, whatever the others found.
+  // The zero-examined check used to be made once, on the sum: a `skills.include` matching nothing
+  // beside a healthy `resources:` surface was `status: ok`, exit 0 — while `vat skills validate`
+  // alone, on the same config, refused.
+  it('refuses a configured skills surface that matched no SKILL.md exactly as `vat skills validate` alone does, a healthy resources surface beside it', async () => {
+    const tempDir = suite.createTempDir();
+    suite.writeConfig(tempDir, `${RESOURCES_CONFIG}${createSkillsConfigYaml(['skilz/**/SKILL.md'])}`);
+    writeTestFile(safePath.join(tempDir, 'README.md'), CLEAN_MARKDOWN);
+    suite.writeSkillSource(tempDir, 'test-skill');
+
+    const alone = await suite.runSkillsValidate(tempDir);
+    const orchestrated = await suite.runValidate(tempDir);
+
+    // The control: the verb alone refuses this config.
+    expect(alone.status).toBe(1);
+    const aloneRefusal = (YAML.parse(alone.stdout) as { findings: { code: string; severity: string; message: string }[] }).findings;
+    expect(aloneRefusal.map((finding) => finding.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
+
+    const report = orchestratorReportOf(orchestrated.stdout);
+    expect(orchestrated.status).toBe(alone.status);
+    expect(report.status).toBe('findings');
+    // The same finding, word for word — one contract for "a configured phase examined nothing".
+    expect(report.findings).toEqual(aloneRefusal);
+    expect((report.data?.phases ?? []).map((phase) => [phase.name, phase.status, phase.examined > 0])).toEqual([
+      ['resources', 'ok', true],
+      ['skills', 'findings', false],
+    ]);
+    // stderr says what the document says.
+    expect(orchestrated.stderr).toContain('Nothing was examined: 0 skills');
   });
 
   it('fails the retired --only with an explanation, not Commander\'s unknown-option error', async () => {

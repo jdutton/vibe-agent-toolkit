@@ -1,9 +1,11 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, statSync, writeFileSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it } from 'vitest';
 
+import { GIT_CLONE_FAILED_CODE } from '../../src/skill-source/git-clone.js';
 import { resolveUrlSource } from '../../src/skill-source/sources/url-source.js';
+import { SKILL_TEST_REFUSAL_BY_ERROR_CODE } from '../../src/skill-test/failure-reason.js';
 import { makeBareRepoWithSkill, setupSkillSourceTestSuite } from '../skill-source/test-helpers.js';
 import { useScratchTmpdir } from '../test-helpers.js';
 
@@ -62,6 +64,43 @@ it('keys the git cache on the full url so two distinct repos never cross-contami
     repoA.cleanup();
     repoB.cleanup();
   }
+});
+
+// What is cached and staged is the SUBPATH's tree. Keyed on the clone url and the commit alone, the
+// second of two subpaths of one commit was a cache hit on the first's tree: `skills/b` resolved to
+// `skills/a`'s files, under an identity naming `skills/b`.
+it('keys the cache entry and the staged directory on the ref and subpath: two subpaths of one commit are two trees', async () => {
+  const repo = makeBareRepoWithSkill({
+    skillSubdir: 'skills/a',
+    skillContent: '# skill A',
+    beforeCommit: (workDir) => {
+      mkdirSyncReal(safePath.join(workDir, 'skills', 'b'), { recursive: true });
+      writeFileSync(safePath.join(workDir, 'skills', 'b', 'SKILL.md'), '# skill B');
+    },
+  });
+  try {
+    const a = await resolveUrlSource(`${repo.bareUrl}#main:skills/a`, undefined, suite.ctx);
+    const b = await resolveUrlSource(`${repo.bareUrl}#main:skills/b`, undefined, suite.ctx);
+
+    expect(b.stagedDir).not.toBe(a.stagedDir);
+    expect(readFileSync(safePath.join(a.stagedDir, 'SKILL.md'), 'utf-8')).toBe('# skill A');
+    expect(readFileSync(safePath.join(b.stagedDir, 'SKILL.md'), 'utf-8')).toBe('# skill B');
+    // Under --refresh too: the cache is rewritten, and the two still must not share one staged directory.
+    const refreshed = { ...suite.ctx, refresh: true };
+    await resolveUrlSource(`${repo.bareUrl}#main:skills/a`, undefined, refreshed);
+    const again = await resolveUrlSource(`${repo.bareUrl}#main:skills/b`, undefined, refreshed);
+    expect(readFileSync(safePath.join(again.stagedDir, 'SKILL.md'), 'utf-8')).toBe('# skill B');
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// A clone that did not happen is the source's refusal, coded: uncoded, the CLI published it as a defect in VAT.
+it('refuses a repository that cannot be cloned with a coded refusal the operator can fix', async () => {
+  const error = await resolveUrlSource(`${bareUrl.replace('#main', '')}#no-such-branch`, undefined, suite.ctx).then(() => undefined, (thrown: unknown) => thrown);
+
+  expect(error).toMatchObject({ code: GIT_CLONE_FAILED_CODE, message: expect.stringMatching(/Reference not found/) });
+  expect(SKILL_TEST_REFUSAL_BY_ERROR_CODE[GIT_CLONE_FAILED_CODE]).toBe('INPUT_UNREADABLE');
 });
 
 it('embeds the full 40-char commit SHA in a git url identity (M3)', async () => {

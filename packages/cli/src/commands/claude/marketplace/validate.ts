@@ -862,8 +862,8 @@ function logFindings(report: Report<unknown>, verbose: boolean, logger: Logger):
  *
  * The phase entry point for `vat verify`, which runs this once per configured
  * marketplace, and the command's own. The report is the one BEFORE the
- * writer's run-integrity pass: inside an orchestrator, zero examined is judged
- * on the whole run, not on this phase. A refusal is the envelope's error
+ * writer's run-integrity pass: inside an orchestrator, `runPhase` applies the same
+ * pass to this phase's report, by the declaration this verb gives its own writer. A refusal is the envelope's error
  * branch, its message already on stderr.
  */
 export async function runMarketplaceValidatePhase(

@@ -38,8 +38,13 @@
  *    `resolveIssueSeverity` and `applyAllowFilter` and makes "denominator zero,
  *    status clean" unrepresentable rather than merely unwritten. A pure
  *    function, unit-testable without I/O — no verb decides this at its own site.
- * 4. **ONE finding per run**, however many things went unmatched. The claim is
- *    about the RUN; one per argument is per-finding duplication.
+ *    An orchestrated PHASE passes through the same function, with its verb's own
+ *    declaration, before it is folded (`phaseVerdict` in `commands/phase-utils.ts`):
+ *    judged on the orchestrator's sum alone, a configured phase that examined
+ *    nothing was hidden by a healthy phase beside it — the tenth instance.
+ * 4. **ONE finding per run of a verb**, however many things went unmatched. The
+ *    claim is about the RUN; one per argument is per-finding duplication. An
+ *    orchestrator carries each phase's own, at most one per phase.
  * 5. **The message says what did not run and what the operator can do.** It
  *    must not claim the corpus is broken — it claims the run is not a verdict.
  * 6. **stderr may still carry a human warning; the document and the exit code

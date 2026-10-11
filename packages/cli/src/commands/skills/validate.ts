@@ -690,7 +690,8 @@ async function validateConfiguredSkills(
  *
  * The phase entry point for `vat validate` and `vat verify`, and the command's
  * own. The report is the one BEFORE the writer's run-integrity pass: inside an
- * orchestrator, zero examined is judged on the whole run, not on this phase.
+ * orchestrator, `runPhase` applies the same pass to this phase's report, by the
+ * declaration this verb gives its own writer.
  *
  * A run that validated no skill — globs that discover nothing, or a config
  * with no `skills:` block — is not a clean run. It used to take an early

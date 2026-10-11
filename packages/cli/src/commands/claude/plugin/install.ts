@@ -59,13 +59,13 @@ import {
   withFsFault,
   withFsFaultSync,
 } from '@vibe-agent-toolkit/utils';
+import { ARCHIVE_LIMITS, extractArchive } from '@vibe-agent-toolkit/utils/archive';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 import { Command } from 'commander';
 
-import { archiveFailure, extractTarballSync, openZip, type StagedZip } from '../../../utils/archive-staging.js';
 import { CommandRefusalError, refusalCodeOf } from '../../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, leftoverIssue, NOTHING_FINISHED, type FinishedWork } from '../../../utils/document-writer.js';
-import { inStaging, occupiedRefusal, skillCopyChange } from '../../../utils/install-plan.js';
+import { extractSkillZip, inStaging, installLinks, installUnit, occupiedRefusal, skillCopyChange } from '../../../utils/install-plan.js';
 import { createLogger } from '../../../utils/logger.js';
 import { requireInputPath } from '../../../utils/project-root-policy.js';
 
@@ -147,6 +147,21 @@ function newInstallRun(options: PluginInstallCommandOptions, logger: Logger): In
 /** The classifier over the run's trees: a fault's side is decided by the path it names. */
 function boundaryOf(run: InstallRun): FsBoundary {
   return fsBoundary({ source: run.roots.source, environment: run.roots.environment }, { origin: 'content' });
+}
+
+/**
+ * One tree the run is about to copy ({@link installUnit}): a staged one as it is, one in the
+ * operator's own directory as its real path once no link in it leads outside it.
+ *
+ * @param dir - The tree: a skill, a marketplace or a plugin directory
+ * @param side - The side the lane resolved its package on
+ * @param what - What the tree is, for a refusal
+ */
+function unitOf(run: InstallRun, dir: string, side: FsSide, what: string): string {
+  // A lane that installs from the operator's directory names it before it plans anything.
+  const [root] = run.roots.source;
+  if (side !== 'environment' && root === undefined) throw new Error('install lane planned a copy before naming its source directory');
+  return installUnit({ root: root ?? dir, side }, dir, what);
 }
 
 /** Name the source the run installs from. */
@@ -338,7 +353,18 @@ Description:
   marker says so; for an install made by a VAT older than the marker, the
   known_marketplaces.json entry naming this package does). Anything else there — a
   marketplace Claude Code added, or one another package installed — is refused
-  with nothing changed; --force replaces it.
+  with nothing changed; --force replaces it. So is a marketplace name whose
+  known_marketplaces.json entry another source registered, with no directory
+  (or an empty one) there.
+
+  Archives (.zip, .tgz, an npm tarball) are judged whole before anything is
+  written: one holding a symbolic or hard link, a device, a name that leaves the
+  archive (absolute, ".."), one name twice (or twice once letter case is
+  folded), or more than 50,000 entries / 256 MiB expanded is refused. A skill
+  ZIP holds SKILL.md at its top level, or exactly one top-level folder with
+  SKILL.md directly inside. A local directory may hold links, but only
+  relative ones to something that exists inside the plugin or skill being
+  installed, reached through no other link.
 
   One transaction: the marketplace copy, each plugin's cache, each skill, the
   registry files and everything vat.replaces removes change together, or not at
@@ -372,10 +398,11 @@ Exit Codes:
       directory VAT did not install from this package (without --force), an unknown
       --target, a plain directory with no SKILL.md (USAGE_INVALID); --target claude.ai (NOT_IMPLEMENTED); an unreadable
       source (a package directory it cannot list, or a named pipe, socket or
-      device in the package, refused unopened, included), a .zip that is
-      not a ZIP archive, holds an entry that does not inflate or cannot be
-      extracted, a .tgz (or npm tarball) that is not a tarball or holds an
-      entry that cannot be extracted, a registry file that is not JSON, a
+      device in the package, refused unopened, included), a link in a local
+      directory that leads outside what is being installed, a .zip, .tgz or
+      npm tarball VAT does not accept (see Archives above; not an archive,
+      or an entry that does not inflate, included), a ZIP not laid out
+      as a skill ZIP, a registry file that is not JSON, a
       package whose vat.replaces is not { plugins?: string[], flatSkills?: string[] },
       whose plugin or marketplace directory, version, vat.replaces.plugins or
       vat.replaces.flatSkills entry is not one path segment (or whose version
@@ -564,7 +591,7 @@ function skillCopy(run: InstallRun, side: FsSide, skillPath: string, skillName: 
   // `--force` replaces whatever is at this path.
   const installPath = safePath.join(skillsDir, assertSkillEntryName(skillName, 'skill name'));
   return {
-    change: skillCopyChange({ name: skillName, source: skillPath, dest: installPath }, side, run.options.force === true),
+    change: skillCopyChange({ name: skillName, source: unitOf(run, skillPath, side, 'the skill directory'), dest: installPath }, side, run.options.force === true),
     skill: { name: skillName, installPath, sourcePath: null },
   };
 }
@@ -625,17 +652,18 @@ function devPlugin(plugin: PluginSource, rootDir: string): DevPlugin {
  * skill to `dist/skills/<name>`, so a rebuild is picked up live.
  */
 async function writeDevPlugin(dev: DevPlugin, staged: string, relative: string): Promise<void> {
-  await copyTree(dev.plugin.srcPluginDir, staged, relative, { links: 'preserve', side: dev.plugin.side, onto: 'fresh', filter: notSkills });
+  await copyTree(dev.plugin.srcPluginDir, staged, relative, { links: installLinks(dev.plugin.side), side: dev.plugin.side, onto: 'fresh', filter: notSkills });
   if (dev.hasSkills) await linkDevSkills(relative === '' ? staged : safePath.join(staged, relative), dev.links);
 }
 
-/** The plugins one marketplace of the package ships, with where each goes under `paths`. */
-function pluginsOf(side: FsSide, srcMpDir: string, marketplaceName: string, destMpDir: string): PluginSource[] {
+/** The plugins one marketplace of the package ships, each as the tree its cache is copied from, with where it goes under `paths`. */
+function pluginsOf(run: InstallRun, side: FsSide, srcMpDir: string, marketplaceName: string, destMpDir: string): PluginSource[] {
   return listSubdirectories(safePath.join(srcMpDir, 'plugins'), side).map((pluginName) => ({
     side,
     marketplaceName,
     pluginName,
-    srcPluginDir: safePath.join(srcMpDir, 'plugins', pluginName),
+    // Its own unit: the cache holds this plugin alone, so a link from it into a sibling plugin would leave the copy.
+    srcPluginDir: unitOf(run, safePath.join(srcMpDir, 'plugins', pluginName), side, 'the plugin directory'),
     destPluginDir: safePath.join(destMpDir, 'plugins', pluginName),
   }));
 }
@@ -654,13 +682,13 @@ function copiedMarketplace(marketplaceName: string, srcMpDir: string, plugins: r
   return {
     install: {
       marketplaceName,
-      write: (staged) => copyTree(srcMpDir, staged, '', { links: 'preserve', side, onto: 'fresh' }),
+      write: (staged) => copyTree(srcMpDir, staged, '', { links: installLinks(side), side, onto: 'fresh' }),
       reads: [srcMpDir],
       // A `write` fill, not a `copy`: the planner proves every `copy` source again, and the whole package was
       // proven readable once already ({@link planPluginTree}). The holding check still sees it (`reads`).
       plugins: plugins.map(({ pluginName, srcPluginDir }) => ({
         pluginName,
-        cacheFill: { from: 'write', write: (staged) => copyTree(srcPluginDir, staged, '', { links: 'preserve', side, onto: 'fresh' }), reads: [srcPluginDir] },
+        cacheFill: { from: 'write', write: (staged) => copyTree(srcPluginDir, staged, '', { links: installLinks(side), side, onto: 'fresh' }), reads: [srcPluginDir] },
       })),
     },
     skills,
@@ -675,7 +703,7 @@ function devMarketplace(marketplaceName: string, srcMpDir: string, plugins: read
     install: {
       marketplaceName,
       write: async (staged) => {
-        await copyTree(srcMpDir, staged, '', { links: 'preserve', side, onto: 'fresh', filter: notPlugins });
+        await copyTree(srcMpDir, staged, '', { links: installLinks(side), side, onto: 'fresh', filter: notPlugins });
         // In order: each plugin is built into the one staged tree, and the first refusal stops the fill.
         await forEachInOrder(linked, (dev) => writeDevPlugin(dev, staged, `plugins/${dev.plugin.pluginName}`));
       },
@@ -697,22 +725,25 @@ function devMarketplace(marketplaceName: string, srcMpDir: string, plugins: read
  * proven readable before anything is decided. A marketplace directory already there is
  * replaced only when VAT installed it from this very package, or under `force` (`--force`).
  */
-async function planPluginTree(input: Extract<InstallInput, { kind: typeof PLUGIN_TREE }>, mode: 'copy' | 'dev', force: boolean): Promise<PlannedInstall> {
+async function planPluginTree(run: InstallRun, input: Extract<InstallInput, { kind: typeof PLUGIN_TREE }>, mode: 'copy' | 'dev'): Promise<PlannedInstall> {
   const { rootDir, packageJson, side } = input;
+  const force = run.options.force === true;
   const marketplacesDir = safePath.join(rootDir, PLUGIN_MARKETPLACES_SUBPATH);
   const paths = getClaudeUserPaths();
   const version = packageJson.version ?? '0.0.0';
   const marketplaceNames = listSubdirectories(marketplacesDir, side);
   assertPackagePluginNames(marketplacesDir, marketplaceNames, packageJson, version, side);
+  // Each marketplace as the tree it is copied from, before anything reads it: one in the operator's
+  // own directory with a link leading out of it is the package's refusal (INPUT_UNREADABLE).
+  const marketplaces = marketplaceNames.map((mpName) => ({ mpName, srcMpDir: unitOf(run, safePath.join(marketplacesDir, mpName), side, 'the marketplace directory') }));
   // Every file of the package, before anything changes — dry run or real: a file the
   // install cannot read is the package's refusal (INPUT_UNREADABLE).
-  const proof = mode === 'dev' ? { links: 'preserve', side, filter: notPluginSkills } as const : { links: 'preserve', side } as const;
+  const proof = mode === 'dev' ? { links: installLinks(side), side, filter: notPluginSkills } as const : { links: installLinks(side), side } as const;
   // In order: the first unreadable entry named is the first marketplace's, deterministically.
-  await forEachInOrder(marketplaceNames, (mpName) => proveTreeReadable(safePath.join(marketplacesDir, mpName), proof));
+  await forEachInOrder(marketplaces, ({ srcMpDir }) => proveTreeReadable(srcMpDir, proof));
 
-  const built = marketplaceNames.map((mpName): BuiltMarketplace => {
-    const srcMpDir = safePath.join(marketplacesDir, mpName);
-    const plugins = pluginsOf(side, srcMpDir, mpName, safePath.join(paths.marketplacesDir, mpName));
+  const built = marketplaces.map(({ mpName, srcMpDir }): BuiltMarketplace => {
+    const plugins = pluginsOf(run, side, srcMpDir, mpName, safePath.join(paths.marketplacesDir, mpName));
     return mode === 'dev' ? devMarketplace(mpName, srcMpDir, plugins, rootDir, side) : copiedMarketplace(mpName, srcMpDir, plugins, side);
   });
   const replaces = packageJson.vat?.replaces;
@@ -747,7 +778,7 @@ async function planPluginTree(input: Extract<InstallInput, { kind: typeof PLUGIN
  * whose skills are linked, not copied (`--dev`).
  */
 function planInstall(run: InstallRun, input: InstallInput, mode: 'copy' | 'dev'): Promise<PlannedInstall> {
-  if (input.kind === PLUGIN_TREE) return planPluginTree(input, mode, run.options.force === true);
+  if (input.kind === PLUGIN_TREE) return planPluginTree(run, input, mode);
   // A skills lane plans synchronously; a refusal still rejects the returned promise.
   return Promise.resolve().then(() => planSkills(run, input.side, input.kind === 'skills'
     ? input.skillNames.map((name) => ({ path: safePath.join(input.rootDir, 'dist', 'skills', skillNameToFsPath(name)), name }))
@@ -874,7 +905,7 @@ async function handleNpmInstall(source: string, run: InstallRun): Promise<void> 
   logger.info(`📥 Installing skill from npm: ${packageName}`);
   await stagedIn(run, 'vat-install-npm-', async (tempDir) => {
     logger.info('   Downloading package...');
-    const extractedPath = downloadNpmPackage(packageName, tempDir);
+    const extractedPath = await downloadNpmPackage(packageName, tempDir);
     await installPackageDir(run, extractedPath, 'environment');
   });
 }
@@ -912,19 +943,6 @@ async function handleLocalInstall(source: string, run: InstallRun): Promise<void
 }
 
 /**
- * The refusal of a ZIP with no SKILL.md at its root: it would install as a directory Claude Code
- * never loads as a skill. The archive is the input (`INPUT_UNREADABLE`); where the SKILL.md is one
- * folder down — the usual result of zipping a folder — the message says which, and what to zip instead.
- */
-function zipHoldsNoSkill(zipPath: string, extracted: string): CommandRefusalError {
-  const inner = listSubdirectories(extracted, 'environment').filter((name) => pathPresent(safePath.join(extracted, name, 'SKILL.md'), 'follow', 'environment', 'confirmed'));
-  const hint = inner.length === 0
-    ? 'A skill archive holds SKILL.md at its top level.'
-    : `Its SKILL.md is one folder down, in ${inner.join(', ')}/: zip the CONTENTS of that folder, not the folder.`;
-  return new CommandRefusalError('INPUT_UNREADABLE', `${zipPath} holds no SKILL.md at its root, so it is not a skill; nothing was installed. ${hint}`);
-}
-
-/**
  * Handle ZIP file installation
  */
 async function handleZipInstall(source: string, run: InstallRun): Promise<void> {
@@ -936,31 +954,18 @@ async function handleZipInstall(source: string, run: InstallRun): Promise<void> 
   logger.info(`📥 Installing skill from ZIP: ${sourcePath}`);
   assertSourceFile(sourcePath);
 
-  // Read WHOLE first. Opening parses only the central directory — entry data is
-  // inflated (and its CRC checked) lazily, so a corrupt entry would throw from the
-  // extraction, uncoded.
-  let zip: StagedZip;
-  try {
-    zip = openZip(sourcePath);
-    for (const entry of zip.zip.getEntries()) entry.getData();
-  } catch (error) {
-    // Nothing is staged yet: a fault here is the archive's, or the machine's.
-    throw archiveFailure(sourcePath, [], error);
-  }
-
-  // Extracted to staging first: an archive the pre-read accepts can still fail to
-  // EXTRACT (a file `a` and a file `a/b`), and nothing under ~/.claude has changed then.
+  // Extracted to staging first, through the one archive primitive: an archive it refuses — an
+  // entry that does not inflate, a link, two entries one name — is refused with nothing under
+  // ~/.claude changed.
   await stagedIn(run, 'vat-install-zip-', async (tempDir) => {
     logger.info('   Extracting ZIP...');
     const extracted = safePath.join(tempDir, 'skill');
     await withFsFault({ side: 'environment', action: 'create the staging directory', path: extracted }, () => fs.mkdir(extracted));
-    zip.extractTo(sourcePath, extracted);
-    // The directory lane's rule, applied to what was extracted: a skill is a directory with a
-    // SKILL.md at its root, installed under the name that SKILL.md declares.
-    const skillMd = safePath.join(extracted, 'SKILL.md');
-    if (!pathPresent(skillMd, 'follow', 'environment', 'confirmed')) throw zipHoldsNoSkill(sourcePath, extracted);
-    const skillName = options.name ?? readDeclaredSkillName(skillMd) ?? basename(sourcePath, '.zip');
-    await install(run, { kind: 'skill-dir', side: 'environment', skillPath: extracted, skillName }, 'copy');
+    // The one extraction of a skill ZIP, shared with `vat skills install` and the org upload: the
+    // skill is at the top level or in the single top-level folder, installed under the name its SKILL.md declares.
+    const skillPath = await extractSkillZip(sourcePath, extracted);
+    const skillName = options.name ?? readDeclaredSkillName(safePath.join(skillPath, 'SKILL.md')) ?? basename(sourcePath, '.zip');
+    await install(run, { kind: 'skill-dir', side: 'environment', skillPath, skillName }, 'copy');
   });
 }
 
@@ -980,10 +985,8 @@ async function handleTgzInstall(source: string, run: InstallRun): Promise<void> 
 
   await stagedIn(run, 'vat-install-tgz-', async (tempDir) => {
     logger.info('   Extracting tarball...');
-    // Synchronously: an asynchronous extraction rejects at its first failure (a refused read of the
-    // archive) while entries are still being written, so the staging was removed under writes that
-    // then left files in $TMPDIR. A synchronous one has written everything it ever will when it throws.
-    extractTarballSync(sourcePath, tempDir);
+    // One entry at a time: when the extraction throws, nothing is still being written under the staging.
+    await extractArchive({ file: sourcePath, side: 'source' }, tempDir, { format: 'tar', limits: ARCHIVE_LIMITS });
     // npm pack tarballs extract under package/ subdirectory
     const packageDir = safePath.join(tempDir, 'package');
     await installPackageDir(run, pathPresent(packageDir, 'follow', 'environment', 'confirmed') ? packageDir : tempDir, 'environment');

@@ -4,7 +4,7 @@
  * validateZipSize is an internal function called via packageSkill() when
  * target === 'claude-web' and 'zip' is in formats. The archive is judged by the
  * size of its bytes in memory, BEFORE the package's plan lands it, so this file
- * fakes the archive adm-zip produces ({@link fakeZipSize}) to test the thresholds
+ * fakes the archive the archive module produces ({@link fakeZipSize}) to test the thresholds
  * without archiving multi-megabyte trees.
  *
  * Separated from skill-packager.test.ts because vi.mock() must be at the
@@ -14,13 +14,14 @@
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import type * as ArchiveModule from '@vibe-agent-toolkit/utils/archive';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ZipSizeLimitError, packageSkill } from '../src/skill-packager.js';
 
 import { createFrontmatter } from './test-helpers.js';
 
-/** The size of the archive the faked adm-zip produces next. */
+/** The size of the archive the faked archive module produces next. */
 const fakeArchive = { bytes: 1024 };
 
 /** Fake the size of the packaged ZIP and nothing else: every byte of it is zero. */
@@ -28,18 +29,12 @@ function fakeZipSize(bytes: number): void {
   fakeArchive.bytes = bytes;
 }
 
-// vi.mock is hoisted by vitest above all imports: the packager's dynamic import of
-// adm-zip gets an archive whose bytes are `fakeArchive.bytes` long.
-vi.mock('adm-zip', () => ({
-  default: class FakeAdmZip {
-    addLocalFolder(): void {
-      // The bundle is not read: the size under test is the fake's.
-    }
-
-    toBuffer(): Buffer {
-      return Buffer.alloc(fakeArchive.bytes);
-    }
-  },
+// vi.mock is hoisted by vitest above all imports: the packager's dynamic import of the
+// archive module gets a ZIP whose bytes are `fakeArchive.bytes` long. The bundle is not read:
+// the size under test is the fake's.
+vi.mock('@vibe-agent-toolkit/utils/archive', async (importOriginal) => ({
+  ...(await importOriginal<typeof ArchiveModule>()),
+  zipOfDirectory: (): Buffer => Buffer.alloc(fakeArchive.bytes),
 }));
 
 // ============================================================================

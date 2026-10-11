@@ -43,15 +43,17 @@ import {
   ORCHESTRATOR_FORMAT,
   rejectRetiredOnly,
   runPhase,
+  shipsPluginLocalSkills,
+  skillsPhaseExamined,
   type Phase,
   type PhaseResult,
   type PhaseSelection,
   type PhaseVocabulary,
 } from './phase-utils.js';
 import { rejectPositionalArguments } from './positional-args.js';
-import { RESOURCES_VALIDATE_REPORT_SCHEMA } from './resources/validate-schema.js';
+import { RESOURCES_VALIDATE_EXAMINED, RESOURCES_VALIDATE_REPORT_SCHEMA } from './resources/validate-schema.js';
 import { runResourcesValidatePhase } from './resources/validate.js';
-import { SKILLS_VALIDATE_REPORT_SCHEMA } from './skills/validate-schema.js';
+import { SKILLS_VALIDATE_EXAMINED, SKILLS_VALIDATE_REPORT_SCHEMA } from './skills/validate-schema.js';
 import { runSkillsValidatePhase } from './skills/validate.js';
 
 /** Surfaces `vat validate` knows how to run, in stable execution order. */
@@ -126,7 +128,8 @@ Output:
 
 Exit Codes:
   0 - Every surface finished and no finding is an error (warnings never fail)
-  1 - An error finding, or nothing was examined at all (RESOURCE_CHECK_BROKEN)
+  1 - An error finding, or a configured phase examined nothing — an include
+      that matches no file, say (RESOURCE_CHECK_BROKEN, naming the phase's unit)
   2 - The run could not do its job: a surface did not finish (RUN_INCOMPLETE,
       the finished surfaces still in data.phases), a path argument or the
       retired '--only' (USAGE_INVALID), no project root
@@ -180,6 +183,7 @@ export function selectValidateSurfaces(
     phases.push({
       name: 'resources',
       schema: RESOURCES_VALIDATE_REPORT_SCHEMA,
+      examined: RESOURCES_VALIDATE_EXAMINED,
       run: () => runResourcesValidatePhase(undefined, { verbose }),
     });
   }
@@ -188,6 +192,9 @@ export function selectValidateSurfaces(
     phases.push({
       name: 'skills',
       schema: SKILLS_VALIDATE_REPORT_SCHEMA,
+      // The phase validates the POOL (`skills.include`); a project whose skills are all plugin-local has
+      // none, and its block is there for their config. The cwd is where the phase itself loads the config.
+      examined: skillsPhaseExamined(SKILLS_VALIDATE_EXAMINED, () => shipsPluginLocalSkills(config, process.cwd())),
       run: () => runSkillsValidatePhase(undefined, { verbose }),
     });
   }

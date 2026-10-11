@@ -2,18 +2,17 @@
  * The fault matrix compares a package's ZIP across runs: two runs that wrote the same entries at
  * different times must snapshot equal, and anything that is not a whole archive must not.
  */
-import AdmZip from 'adm-zip';
+import { zipFixture } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { zipWithoutEntryTimes } from './fault-matrix/cases/zip-times.js';
 
 /** A ZIP of the same two entries, each stamped `at`. */
 function archiveAt(at: Date, body = 'notes\n'): Buffer {
-  const zip = new AdmZip();
-  zip.addFile('SKILL.md', Buffer.from('# skill\n'));
-  zip.addFile('references/notes.md', Buffer.from(body));
-  for (const entry of zip.getEntries()) entry.header.time = at;
-  return zip.toBuffer();
+  return zipFixture([
+    { name: 'SKILL.md', data: '# skill\n', modified: at },
+    { name: 'references/notes.md', data: body, modified: at },
+  ]);
 }
 
 describe('zipWithoutEntryTimes', () => {

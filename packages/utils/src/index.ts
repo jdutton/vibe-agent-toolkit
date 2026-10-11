@@ -27,6 +27,9 @@
 // block dispatches on, never `message`.
 export * from './errors/vat-error.js';
 export { RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE } from './errors/rag-index-empty.js';
+// The code alone: the archive readers are on `./archive` (they load `tar` and `adm-zip`), and a
+// refusal map needs only the code.
+export { ARCHIVE_REFUSED_CODE, placeOf as archiveEntryPlace } from './archive/entries.js';
 // The code alone: its error class is on `./crawl`, and the CLI's refusal map needs only the code.
 
 // Cross-platform path utilities
@@ -121,6 +124,8 @@ export type { FsFaultContext, FsSide, SourceOrigin } from './errors/fs-fault.js'
 export { fsBoundary } from './errors/fs-boundary.js';
 export { requireConfirmedAbsent } from './errors/confirmed-absent.js';
 export { pathPresent } from './errors/path-present.js';
+// The one fold for "are these two names one entry on some volume".
+export { foldedSegment } from './name-fold.js';
 // Faults raised while a failure was being handled, recorded beside it (never on its cause chain).
 export { recordSuppressedFault, suppressedFaultsOf } from './errors/suppressed-faults.js';
 export type { FsBoundary, FsRoots } from './errors/fs-boundary.js';
@@ -207,6 +212,7 @@ export {
   proveTreeReadable,
   readRegularFile,
   makeDirectoryUnder,
+  refuseEscapingLinks,
   renameFileAtomic,
   replaceFile,
   writeFileUnder,
@@ -219,6 +225,7 @@ export {
   TREE_DESTS_OVERLAP_CODE,
   TREE_ROLLBACK_INCOMPLETE_CODE,
   TREE_SOURCE_HOLDS_DEST_CODE,
+  treeContainment,
   TreeRollbackIncompleteError,
   withTempDir,
 } from './tree-change/index.js';
@@ -234,6 +241,7 @@ export type {
   EntrySameness,
   FileContents,
   Identity,
+  LinkContainmentCheck,
   LinkPolicy,
   Ownership,
   OwnershipVerdict,

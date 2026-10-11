@@ -16,8 +16,8 @@ import { chmodSync, existsSync, writeFileSync } from 'node:fs';
 
 import { exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { ARCHIVE_LIMITS, listArchive } from '@vibe-agent-toolkit/utils/archive';
 import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
-import AdmZip from 'adm-zip';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
@@ -77,9 +77,9 @@ function setupSkillsPackageClaudeWebTestSuite() {
   /**
    * Get entries from a ZIP file
    */
-  const getZipEntries = (zipPath: string): string[] => {
-    const zip = new AdmZip(zipPath);
-    return zip.getEntries().map(e => e.entryName);
+  const getZipEntries = async (zipPath: string): Promise<string[]> => {
+    const entries = await listArchive({ file: zipPath, side: 'source' }, { format: 'zip', limits: ARCHIVE_LIMITS });
+    return entries.map(e => e.name);
   };
 
   const runPackageCommand = async (
@@ -97,13 +97,13 @@ function setupSkillsPackageClaudeWebTestSuite() {
    * Assert ZIP directory structure for a given output directory.
    * Verifies the ZIP exists, then returns whether references/ and resources/ exist.
    */
-  const assertZipStructure = (outputDir: string): {
+  const assertZipStructure = async (outputDir: string): Promise<{
     hasReferences: boolean;
     hasResources: boolean;
-  } => {
+  }> => {
     const zipPath = `${outputDir}.zip`;
     expect(existsSync(zipPath)).toBe(true);
-    const entries = getZipEntries(zipPath);
+    const entries = await getZipEntries(zipPath);
     return {
       hasReferences: entries.some(e => e.startsWith(REFERENCES_PREFIX)),
       hasResources: entries.some(e => e.startsWith(RESOURCES_PREFIX)),
@@ -118,7 +118,7 @@ function setupSkillsPackageClaudeWebTestSuite() {
     skillMdPath: string,
     outputDir: string,
     target: string
-  ): Promise<ReturnType<typeof assertZipStructure>> => {
+  ): ReturnType<typeof assertZipStructure> => {
     const { result, parsed } = await runPackageCommand(
       skillMdPath,
       outputDir,
@@ -292,7 +292,7 @@ See [Extra](./extra.md).
     assertPackagedWithoutErrors(parsed);
 
     // Default: resources/ should be present, references/ should not
-    const { hasResources, hasReferences } = suite.assertZipStructure(outputDir);
+    const { hasResources, hasReferences } = await suite.assertZipStructure(outputDir);
     expect(hasResources).toBe(true);
     expect(hasReferences).toBe(false);
   });

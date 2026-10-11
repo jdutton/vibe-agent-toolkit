@@ -15,6 +15,8 @@ import { AuthPreflightError } from '@vibe-agent-toolkit/utils/skill-test';
 import { describe, expect, it } from 'vitest';
 
 import { FETCH_CACHE_NOT_OWNED_CODE } from '../../src/skill-source/fetch-cache.js';
+import { GitCloneFailedError } from '../../src/skill-source/git-clone.js';
+import { SkillSourceDigestRequiredError, SkillSourceFetchError, SkillStagingNotOwnedError } from '../../src/skill-source/source-errors.js';
 import { SkillSourceUnreadableError } from '../../src/skill-source/stage.js';
 import { BuildHookError } from '../../src/skill-test/build-hook.js';
 import { UnknownEnvTokenError, UnresolvableEnvTokenError } from '../../src/skill-test/declared-env.js';
@@ -146,6 +148,10 @@ describe('SKILL_TEST_REFUSAL_BY_ERROR_CODE', () => {
     ['BootstrapNeededError (no evals.json: the input is absent)', new BootstrapNeededError('/p/evals/evals.json'), 'INPUT_UNREADABLE'],
     ['EvalInputError (a suite or declared input that is not usable)', new EvalInputError('bad suite'), 'INPUT_UNREADABLE'],
     ['SkillSourceUnreadableError (a --with companion holding a symlink staging refuses)', new SkillSourceUnreadableError('x'), 'INPUT_UNREADABLE'],
+    ['GitCloneFailedError (a url source whose repository could not be cloned)', new GitCloneFailedError('Clone failed'), 'INPUT_UNREADABLE'],
+    ['SkillSourceFetchError (a url source that could not be fetched, or does not match its digest)', new SkillSourceFetchError('HTTP 404'), 'INPUT_UNREADABLE'],
+    ['SkillSourceDigestRequiredError (a .zip url source with no sha256)', new SkillSourceDigestRequiredError('https://x/y.zip'), 'USAGE_INVALID'],
+    ['SkillStagingNotOwnedError (staging another user owns)', new SkillStagingNotOwnedError('/tmp/staging', 0, 501), 'RUN_INCOMPLETE'],
     ['AuthPreflightError', new AuthPreflightError('x'), 'USAGE_INVALID'],
     ['HarnessLocationError', new HarnessLocationError('x'), 'USAGE_INVALID'],
     ['PromptInvariantError', new PromptInvariantError('x'), 'USAGE_INVALID'],

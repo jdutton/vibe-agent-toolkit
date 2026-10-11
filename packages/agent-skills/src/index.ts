@@ -96,6 +96,7 @@ export {
 } from './parsers/frontmatter-parser.js';
 
 export { declaredSkillNameIn, readDeclaredSkillName } from './skill-identity.js';
+export { hostAddedToSkillZip, skillZipLayout, type SkillZipEntry, type SkillZipLayout } from './skill-zip-layout.js';
 
 export { type AnchorRootOptions, resolveAnchorRoot } from './validators/anchor-root.js';
 export { generateFixSuggestion } from './validators/validation-utils.js';

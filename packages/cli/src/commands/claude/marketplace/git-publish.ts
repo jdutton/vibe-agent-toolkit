@@ -11,9 +11,9 @@ import type { RefusalCode } from '@vibe-agent-toolkit/schema';
 import { copyTree, disposeTempDir, disposeTempDirAfterFailure, safePath, withFsFault } from '@vibe-agent-toolkit/utils';
 import { runGit } from '@vibe-agent-toolkit/utils/git';
 
-import { makeStagingDir } from '../../../utils/archive-staging.js';
 import { CommandRefusalError } from '../../../utils/command-refusal.js';
 import type { Logger } from '../../../utils/logger.js';
+import { makeStagingDir } from '../../../utils/staging-dir.js';
 import { redactUrlCredentials } from '../../../utils/url-redact.js';
 
 export interface CommitMetadata {

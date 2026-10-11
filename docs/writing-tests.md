@@ -128,7 +128,11 @@ Large test data for system/integration tests should be stored as compressed arch
 SonarQube analyzing third-party code:
 
 **Pattern**: `packages/X/test/fixtures/*.zip` (committed)
-**Extraction**: Use cross-platform libraries (e.g., `adm-zip` npm package) in test setup
+**Extraction**: `extractArchive` from `@vibe-agent-toolkit/utils/archive` in test setup — the one
+module that may import `adm-zip` or `tar` (`no-restricted-imports`; a test helper is not exempt)
+**Building one in a test**: `tarFixture` / `zipFixture` from `@vibe-agent-toolkit/utils/testing`
+write an archive byte by byte with no library, so a test can make the entries no library will
+write (a link, `../x`, a name listed twice); `hostileArchiveRows` is the shared table of them
 **Location**: Extract to temp directories during test execution (gitignored)
 
 **Why compressed archives?**
@@ -139,12 +143,12 @@ SonarQube analyzing third-party code:
 
 **Why ZIP instead of TAR.GZ?**
 - ZIP extraction is significantly faster on Windows (3-5s vs 100+ seconds)
-- `adm-zip` is pure JavaScript and works consistently across platforms
+- The ZIP reader is pure JavaScript and works consistently across platforms
 - Similar compression ratio to TAR.GZ (~7% larger, acceptable trade-off)
 
 **Example**: `packages/cli/test/fixtures/claude-plugins-snapshot.zip`
 - Contains snapshot of real ~/.claude/plugins directory
-- Extracted by `test-fixture-loader.ts` during test setup using `adm-zip`
+- Extracted by `test-fixture-loader.ts` during test setup through `extractArchive`
 - Tests run against extracted version in temp directory
 
 For small test data (<10 files), raw files in `test/fixtures/` are fine.

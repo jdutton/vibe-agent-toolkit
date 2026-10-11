@@ -7,11 +7,20 @@
  * publish, BEFORE the writer's run-integrity pass — and the orchestrator folds
  * every phase into {@link orchestratorReport}: findings flat on the envelope,
  * `examined` the sum, each phase's status, count, summary and `data` under
- * `data.phases`. The writer then applies run integrity ONCE, to the sum. Applied
- * per phase, a project configuring resources and not skills — or a marketplace
- * of plugin-local skills and no `skills:` pool — failed on the phase that had
- * nothing to look at, and `claude plugin install --build`, which trusts `vat
- * build`'s exit, failed with it.
+ * `data.phases`.
+ *
+ * 🔑 **A configured phase that examined nothing is a refusal of THAT phase**
+ * ({@link phaseVerdict}), by the declaration its verb's writer is given when the
+ * verb runs alone — so an orchestrated phase and its verb cannot disagree. Judged
+ * on the sum alone, a `skills.include` matching nothing beside a healthy
+ * `resources:` surface was `status: ok`, exit 0. What is NOT refused is a phase
+ * for which zero is an answer, and each one says why ({@link ZeroIsAnAnswer}): a
+ * phase that ran with no config block of its own (`vat build`'s `skills` phase in a
+ * project with no `skills:` block), a `skills` phase whose pool is empty in a project
+ * that ships plugin-local skills ({@link skillsPhaseExamined} — refusing that failed
+ * `claude plugin install --build`, which trusts `vat build`'s exit), or one that
+ * checks what another phase discovered. The writer still judges the sum, for the
+ * run in which no phase ran at all.
  *
  * Each phase's report is held to its OWN schema before the fold ({@link Phase}
  * `schema`, parsed by {@link runPhase}): the orchestrator's schema carries a
@@ -24,6 +33,8 @@
  * `RUN_INCOMPLETE` with the finished phases still in `data.phases`.
  */
 
+import { indexPluginLocalSkills } from '@vibe-agent-toolkit/agent-skills';
+import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
 import {
   buildErrorReport,
   buildReport,
@@ -42,19 +53,29 @@ import type { DocumentFormat } from '../report-schemas.js';
 import { CommandRefusalError, refusalCodeOf } from '../utils/command-refusal.js';
 import { NOTHING_FINISHED, refusalReport, type FinishedWork } from '../utils/document-writer.js';
 import { createLogger } from '../utils/logger.js';
+import { type ExaminedDeclaration, warnRunIntegrity, withRunIntegrity } from '../utils/run-integrity.js';
 
 import type { OrchestratorData, OrchestratorPhaseEntry } from './orchestrator-schema.js';
 
 /**
  * What one phase produced: the report its own command would publish, before
- * the writer's run-integrity pass.
- *
- * Before, because integrity is a verdict on a RUN, and inside an orchestrator
- * a phase is not the run: see the header.
+ * the run-integrity pass — which {@link runPhase} applies, by the phase's own
+ * declaration ({@link Phase} `examined`), exactly as that command's writer does.
  */
 export interface PhaseOutcome {
   report: Report<unknown>;
 }
+
+/** A phase for which examining nothing IS an answer, and the reason it is. */
+export interface ZeroIsAnAnswer {
+  readonly zeroIsAnAnswer: string;
+}
+
+/**
+ * What a phase's `examined` counts and the remedy when it is zero — the declaration its verb's
+ * writer is given when that verb runs alone — or the reason zero is an answer for it.
+ */
+export type PhaseExamined = ExaminedDeclaration | ZeroIsAnAnswer;
 
 /** The schema a phase's report is held to: its own verb's registered report schema. */
 export type PhaseReportSchema = ReportZodSchema<ZodTypeAny, ZodTypeAny>;
@@ -77,6 +98,12 @@ export const DATALESS_PHASE_REPORT_SCHEMA: PhaseReportSchema = reportSchema(z.nu
  * verb's schema does not describe. A delegated phase names its verb's
  * registered `<VERB>_REPORT_SCHEMA`; an in-process one names its own.
  *
+ * `examined` is REQUIRED, for the same reason every writer's is: a phase that
+ * examined nothing and says nothing about it folds into the run as a clean one.
+ * A delegated phase names its verb's registered `<VERB>_EXAMINED`; a phase for
+ * which zero is an answer says so, with its reason. A function of the report for
+ * the one phase whose own `data` decides which of the two a zero is.
+ *
  * `run` is a bound closure rather than an argv array because the phase executes
  * in this process. An argv array would mean re-entering Commander to
  * parse arguments this process has already parsed — a second, weaker copy of the
@@ -86,7 +113,38 @@ export const DATALESS_PHASE_REPORT_SCHEMA: PhaseReportSchema = reportSchema(z.nu
 export interface Phase {
   name: string;
   schema: PhaseReportSchema;
+  examined: PhaseExamined | ((report: Report<unknown>) => PhaseExamined);
   run: () => Promise<PhaseOutcome>;
+}
+
+/**
+ * Whether the project ships at least one plugin-local skill — by the ONE answer to that question
+ * (`indexPluginLocalSkills`: what the claude phase packages), never a path prefix.
+ *
+ * @param config - The project's config, or `undefined` when none loaded
+ * @param configDir - The directory the config was loaded from
+ */
+export function shipsPluginLocalSkills(config: ProjectConfig | undefined, configDir: string): boolean {
+  return config !== undefined && indexPluginLocalSkills(config, configDir).locations.length > 0;
+}
+
+/**
+ * The declaration of a `skills` phase (`vat build`, `vat validate`, `vat verify`): zero pool
+ * skills is the verb's own refusal — unless the project ships a plugin-local skill.
+ *
+ * `skills.include` is required by the schema, and a plugin-local skill reads its packaging
+ * config from `skills.config` / `skills.defaults`, so a project whose skills are all plugin-local
+ * MUST carry a `skills:` block whose include legitimately matches nothing in the pool. Refusing
+ * that stopped `vat build` before the `claude` phase that builds those very skills. With no pool
+ * match AND no plugin-local skill, the run examined no skill at all, and it is the refusal.
+ *
+ * @param declared - What the phase's verb declares its `examined` counts
+ * @param pluginLocal - Asked only when the phase examined nothing: it lists the project's plugins
+ */
+export function skillsPhaseExamined(declared: ExaminedDeclaration, pluginLocal: () => boolean): (report: Report<unknown>) => PhaseExamined {
+  return (report) => (report.examined === 0 && pluginLocal()
+    ? { zeroIsAnAnswer: 'skills.include matches no pool skill, and the project ships plugin-local skills — which read skills.config and skills.defaults, so the block is theirs' }
+    : declared);
 }
 
 /** One phase that ran: its name and its report. */
@@ -278,6 +336,10 @@ export function applyPhaseSelection(
  * report the schema rejects is VAT's defect: the `ZodError` carries no code, so
  * it becomes the phase's `INTERNAL_ERROR`, never a finished phase.
  *
+ * Then it is judged as its verb's writer judges it ({@link phaseVerdict}): a
+ * configured phase that examined nothing is refused, and the refusal is said on
+ * stderr as well as in the document.
+ *
  * The `catch` is a BACKSTOP, not the error path: every phase function returns
  * its own refusal as a report. A throw that escaped that becomes the phase's
  * refusal — classified by its code, `INTERNAL_ERROR` when it carries none —
@@ -287,10 +349,31 @@ export async function runPhase(phase: Phase): Promise<PhaseResult> {
   try {
     const { report } = await phase.run();
     phase.schema.parse(report);
-    return { name: phase.name, report };
+    const judged = phaseVerdict(phase, report);
+    // The refusal was added here, so no phase has said it: the document and stderr must agree.
+    if (judged !== report) warnRunIntegrity(judged);
+    return { name: phase.name, report: judged };
   } catch (error) {
     return { name: phase.name, report: refusalReport(refusalCodeOf(error), error, ORCHESTRATOR_GATE, NOTHING_FINISHED) };
   }
+}
+
+/**
+ * A phase's report as its own verb's writer would publish it: with the ONE
+ * `RESOURCE_CHECK_BROKEN` refusal added when it examined nothing — unless zero is
+ * an answer for this phase. `withRunIntegrity` is the same function every writer
+ * calls, so there is one contract for "a run that examined nothing", and an
+ * orchestrated phase gets the very finding its verb gives alone.
+ *
+ * Pure: no I/O, no stderr.
+ *
+ * @param phase - The phase's `examined` declaration
+ * @param report - What the phase returned
+ * @returns `report` itself when nothing is added, so a caller can tell by identity
+ */
+export function phaseVerdict(phase: Pick<Phase, 'examined'>, report: Report<unknown>): Report<unknown> {
+  const declared = typeof phase.examined === 'function' ? phase.examined(report) : phase.examined;
+  return 'zeroIsAnAnswer' in declared ? report : withRunIntegrity(report, declared);
 }
 
 /** One phase as `data.phases` publishes it. */
@@ -323,7 +406,8 @@ function finishedPhases(results: readonly PhaseResult[]): { examined: number; fi
  * phases that stopped, and the finished ones stay in `data.phases` — a failed
  * phase never erases what the others found.
  *
- * Pure: the writer applies run integrity to the sum when it publishes.
+ * Pure: each phase was judged as it ran ({@link runPhase}), and the writer judges
+ * the sum when it publishes — which refuses the run in which no phase ran.
  *
  * @param results - Every phase that ran, in execution order
  * @param gate - The gate the run is judged by

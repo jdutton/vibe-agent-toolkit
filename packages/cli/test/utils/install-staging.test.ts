@@ -167,8 +167,15 @@ describe('planInstall (the skills lanes)', () => {
 
   it('one skill directory is one copy from that directory, and --force may take what is there', async () => {
     pathPresent.mockReturnValue(true);
-    const planned = await planInstall(runWith({ force: true }), { kind: 'skill-dir', side: 'source', skillPath: '/src/my-skill', skillName: 'my-skill' } as never, 'copy');
-    expect(planned.changes).toEqual([expect.objectContaining({ dest: `${SKILLS_DIR}/my-skill`, ownership: { kind: 'force' }, label: 'skill my-skill' })]);
+    // A skill extracted into staging: a tree in the operator's own directory is examined on disk first (`installUnit`).
+    const planned = await planInstall(runWith({ force: true }), { kind: 'skill-dir', side: 'environment', skillPath: '/tmp/staged/my-skill', skillName: 'my-skill' } as never, 'copy');
+    expect(planned.changes).toEqual([expect.objectContaining({
+      dest: `${SKILLS_DIR}/my-skill`,
+      ownership: { kind: 'force' },
+      label: 'skill my-skill',
+      // What the archive module extracted holds no link: one found there refuses the copy.
+      fill: { from: 'copy', source: '/tmp/staged/my-skill', side: 'environment', links: 'refuse' },
+    })]);
   });
 
   it('a declared skill with no build rejects as the invocation\'s mistake, naming the path', async () => {

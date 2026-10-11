@@ -34,12 +34,15 @@ describe('fillFaultIsDestinations', () => {
   const sideOf = (path: string): 'destination' | undefined => (relativeEscapesRoot(safePath.relative(at('staged'), path)) ? undefined : 'destination');
 
   it.each([
-    ['the path the OS named is under the staged tree', { path: at('staged', 'a.md'), dest: undefined }, true],
-    ['the second path of a two-path call is', { path: at('in', 'a.md'), dest: at('staged', 'a.md') }, true],
-    ['it names an input beside the destination', { path: at('in', 'a.md'), dest: undefined }, false],
-    ['the OS named no path at all', { path: undefined, dest: undefined }, false],
-  ])('%s → %s', (_label, facts, expected) => {
-    expect(fillFaultIsDestinations(facts, sideOf)).toBe(expected);
+    ['the path the OS named is under the staged tree', { path: at('staged', 'a.md'), dest: undefined, syscall: 'open' }, true],
+    ['the second path of a two-path call is', { path: at('in', 'a.md'), dest: at('staged', 'a.md'), syscall: 'copyfile' }, true],
+    ['it names an input beside the destination', { path: at('in', 'a.md'), dest: undefined, syscall: 'open' }, false],
+    ['the OS named no path at all', { path: undefined, dest: undefined, syscall: undefined }, false],
+    // A symlink's first path is its TARGET TEXT, which the call never touched: only the link sides the fault.
+    ['a link made outside the staged tree merely POINTS into it', { path: at('staged', 'a.md'), dest: at('in', 'link'), syscall: 'symlink' }, false],
+    ['a link made in the staged tree points out of it', { path: at('in', 'a.md'), dest: at('staged', 'link'), syscall: 'symlink' }, true],
+  ])('%s → %s', (_label, named, expected) => {
+    expect(fillFaultIsDestinations({ errno: 'EACCES', faultClass: 'refused', ...named }, sideOf)).toBe(expected);
   });
 });
 

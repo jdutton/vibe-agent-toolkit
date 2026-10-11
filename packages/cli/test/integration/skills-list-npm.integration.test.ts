@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { archiveEntriesOfDirectory, tarFixture } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import yaml from 'yaml';
 
@@ -44,12 +45,8 @@ async function buildFakeTarball(
 
   alsoPlant(safePath.join(pkgDir, 'dist', 'skills'));
 
-  const tarModule = await import('tar');
   const tarballPath = safePath.join(tempDir, `${subdirName}-1.0.0.tgz`);
-  await tarModule.create(
-    { file: tarballPath, cwd: safePath.join(tempDir, subdirName), gzip: true },
-    ['package'],
-  );
+  writeFileSync(tarballPath, tarFixture(archiveEntriesOfDirectory(safePath.join(tempDir, subdirName))));
 
   return tarballPath;
 }
@@ -116,12 +113,8 @@ describe('vat skills list — npm source', () => {
       'utf-8',
     );
 
-    const tarModule = await import('tar');
     const tarballPath = safePath.join(tempDir, 'empty-pkg-1.0.0.tgz');
-    await tarModule.create(
-      { file: tarballPath, cwd: safePath.join(tempDir, 'empty-pkg'), gzip: true },
-      ['package'],
-    );
+    writeFileSync(tarballPath, tarFixture(archiveEntriesOfDirectory(safePath.join(tempDir, 'empty-pkg'))));
 
     const report = await runListCommand(tarballPath);
 

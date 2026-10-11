@@ -1303,6 +1303,9 @@ export type NonOverridableCode =
   | 'SETTINGS_PATH_DEPRECATED'
   | 'SETTINGS_RULE_SHADOWED'
   | 'SETTINGS_MARKETPLACE_TOKEN_MISSING'
+  // `vat audit --compat` / `--settings`
+  | 'SETTINGS_POLICY_CONFLICT'
+  | 'COMPAT_NOT_CHECKED'
   // `vat agent validate`
   | 'AGENT_MANIFEST_INVALID'
   | 'AGENT_REFERENCE_MISSING'

@@ -1218,6 +1218,18 @@ section are registry entries of kind **refusal**: a statement that the *run* cou
 - **What:** An input the command must read to answer at all could not be read — absent, refused by permissions, or not the kind of thing the verb expected.
 - **Fix:** Make the named input readable, or point the command at the right one.
 - **Which filesystem faults:** see [Filesystem faults](#filesystem-faults-which-refusal) — a full disk or too many open files while *reading* an input is `RUN_INCOMPLETE`, not this code.
+- **Archives:** a ZIP or tarball (an npm package's included) is judged from its whole entry list before anything is written or sent, by one policy in every lane that opens one — `vat skills install` and `vat skills list` (`.zip`, `.tgz`, `npm:`), `vat claude plugin install` (`.zip`, `.tgz`, `npm:`), `vat claude org skills install` (`.zip`, `--from-npm`), and a `url:` skill source. It is this refusal, naming the archive and the first offending entry, when:
+  - the bytes are not an archive of the format, are compressed more than once, or are a zstd stream (VAT inflates one gzip layer, bounded);
+  - a ZIP is one VAT will not take although it found its end record: a ZIP64 archive (a ZIP64 end-of-central-directory record or locator anywhere beside or after the end record — the archive comment included — or an end record that defers its count to ZIP64 fields); an end record that is not the END of the archive (the comment it declares and the bytes that follow disagree); a second end-record signature beside or after it; an end record that counts its entries two ways; a central directory that does not run exactly from its start to the end record; or one whose entries, as the ZIP library builds them, are not the entries the end record names. Each would have two readers judge two different directories. No skill or plugin ZIP within the limits below needs ZIP64;
+  - an entry is a symbolic link, a hard link, a device, a FIFO, or of a type the reader does not model (a sparse file, a continuation, an unknown type byte);
+  - a name would land outside the archive — absolute, drive-rooted, UNC, a `..` segment, a NUL — whether the header spells it or a PAX / GNU long-name record renames the entry to it. A backslash in a name is a separator on every host, in a tarball as in a ZIP: `a\b.md` extracts as `a/b.md`, and `..\x` is such a name;
+  - one name is listed twice (in a tarball or a ZIP alike), a file has an entry beneath it, or two names are one where a filesystem folds letter case or Unicode form — or, on NTFS, share the text before a `:` (`10:00.log` and `10:30.log` are one file's two streams there; the refusal says which rule matched);
+  - it holds more than 50,000 entries or expands past 256 MiB, or a `url:` source (`http(s)://` or `file://`) is larger than 100 MiB.
+
+  The ONE exception is by design, and it is narrow: `vat claude org skills install <zip>` sends on, with a warning that its checks were skipped, bytes that are no ZIP at all — they hold no end-of-central-directory record — because the API is the authority on that upload. That is the only case: a ZIP VAT found the end of and will not take (every item above, ZIP64 and a name listed twice included) is refused in that lane as in every other, and nothing is sent. A full disk while extracting is `RUN_INCOMPLETE`: the staging is VAT's. Extracted files are `0644` or `0755` (by the entry's executable bit), narrowed by the umask.
+- **Skill ZIP layout:** `vat skills install <zip>`, `vat claude plugin install <zip>` and `vat claude org skills install <zip>` take a ZIP with `SKILL.md` at its top level, or with exactly one top-level folder and `SKILL.md` directly inside it (a folder, compressed). A top-level `__MACOSX/` folder or `.DS_Store` — what macOS adds to an archive it makes — is not counted, not installed, and not uploaded: the org verb sends the archive re-zipped without them. Any other layout — `SKILL.md` deeper, several top-level entries with none at the top, no `SKILL.md` — is this refusal in all three.
+- **Links in a directory you install:** `vat skills install <dir>` and `vat claude plugin install <dir>` keep a symbolic link as a link, and the copy lands somewhere else — so a link is taken only when two things both hold. Its text, walked one component at a time from the directory the link really is in — split as THIS host's kernel splits it (on POSIX a backslash is part of a name, not a separator) — stays inside the skill or plugin wherever that is; and the kernel's own resolution of the link, at the source, exists and is inside it. It is this refusal, naming the link, when the text is an absolute path (it would point back at the source); when the walk rises above the skill or plugin, even to come back in by its directory's name; when it passes THROUGH another symbolic link (whose own text decides where the rest leads); or when it leads to nothing the kernel can resolve — a link that dangles, or a cycle of links, proves nothing about where it lands once copied.
+- **`url:` skill sources:** a download that fails or is over the bound, a `sha256` mismatch, or a clone or checkout that fails is this refusal (a `url:` archive with no `sha256` is `USAGE_INVALID`) — never `INTERNAL_ERROR`.
 
 ### `BACKEND_UNAVAILABLE`
 
@@ -1249,9 +1261,11 @@ A refusal the operating system raised is decided by one table, by **side** — a
 reads (`source`), an output or user state it writes (`destination`), or VAT's own scratch space:
 staging, the temporary directory, caches and locks (`environment`) — and by **class** of errno.
 For a source, an absent path also depends on who named it: a command-line argument, a config
-value, or content found inside another input. The side is decided by the path the OS named, not by
-the code that made the call. The published message names the path and the errno, followed by the
-row's remedy.
+value, or content found inside another input. The side is decided by the path the failing call
+acted on, not by the code that made the call: for a link that could not be created that is the
+link (never its target text), and for a rename it is where the entry could not land. The published
+message names the path and the errno — both ends of a refused rename — followed by the row's
+remedy.
 
 | class | errnos |
 |---|---|
@@ -1298,7 +1312,7 @@ destination back exactly as it was. Its own refusals are not filesystem faults, 
 | code | refusal | when |
 |---|---|---|
 | `TREE_DEST_OCCUPIED` | `USAGE_INVALID` | A destination that must be free (absent, or an empty directory) already holds something. Nothing was written. Choose another path, or empty it. |
-| `TREE_DEST_NOT_OWNED` | `USAGE_INVALID` | A destination VAT replaces only when it made it — an explicit `--output`, a RAG database — holds something VAT did not produce; the message says what. Nothing was written. Pass `--force` where the verb offers it, or choose another path. |
+| `TREE_DEST_NOT_OWNED` | `USAGE_INVALID` | A destination VAT replaces only when it made it — an explicit `--output`, a RAG database — holds something VAT did not produce; the message says what. For `vat claude plugin install` that includes a marketplace name whose `known_marketplaces.json` entry another source registered, with no directory under `marketplaces/` for a marker to speak for. Nothing was written. Pass `--force` where the verb offers it, or choose another path. |
 | `TREE_DEST_HOLDS_SOURCE` | `USAGE_INVALID` | The tree to copy is the destination or lies inside it, so replacing the destination would delete it. Nothing was written. |
 | `TREE_SOURCE_HOLDS_DEST` | `USAGE_INVALID` | The destination lies inside the tree being copied into it. Nothing was written. |
 | `TREE_ROLLBACK_INCOMPLETE` | `RUN_INCOMPLETE` | The change failed and could not be fully undone: a previous tree could not be renamed back, or a newly created one could not be moved off its path. A previous tree is never deleted — the message names where it is (a dot-named `*.vat-staged-*.previous` entry beside its destination), and the failure that started the rollback. Rename it back yourself. |
@@ -1323,7 +1337,7 @@ the moved-aside entry. There is no partial remove: an entry is on its path, whol
 ### `RESOURCE_CHECK_BROKEN`
 
 - **Default:** `error`
-- **What:** A declared check could not run, or a gate examined nothing (a scan over zero files, a budget over no matched path, a marketplace walk that found fewer than the declared local plugins, a verify over zero bundles) — the run's green would mean nothing. Published as an `error`-severity finding (exit 1) when the run itself completed: the one code every gate uses for "this run checked nothing", decided once in the CLI's `run-integrity.ts` rather than per verb.
+- **What:** A declared check could not run, or a gate examined nothing (a scan over zero files, a budget over no matched path, a marketplace walk that found fewer than the declared local plugins, a verify over zero bundles, one configured phase of `vat validate` / `vat verify` / `vat build` that examined nothing while the others did — except a `skills` phase whose pool is empty in a project that ships plugin-local skills, which is an answer) — the run's green would mean nothing. Published as an `error`-severity finding (exit 1) when the run itself completed: the one code every gate uses for "this run checked nothing", decided once in the CLI's `run-integrity.ts` rather than per verb.
 - **Why it matters:** A `vat resources check` violation carries `CUSTOM:<name>`, which an adopter may downgrade or ignore. If "the check is broken" shared that code, `severity: { 'CUSTOM:foo': ignore }` would also silence "foo could not run", and a renamed projection column would end a gate at exit 0.
 - **Fix:** Fix the check or the population the message names. This code cannot be downgraded or waived, by design.
 
@@ -1525,6 +1539,21 @@ finding about the document as a whole.
 | `SETTINGS_PATH_DEPRECATED` | error | A managed settings file exists at a path Claude Code no longer reads (the legacy Windows managed-settings location): the organisation's managed policy in that file is not in effect, while the file's presence suggests it is | Move the managed settings file to the current managed-settings path (`vat audit settings --show-paths` lists it) and remove the legacy file |
 | `SETTINGS_RULE_SHADOWED` | warning | A permission rule can never take effect: a `deny` rule shadows an `ask` or `allow` rule for the same tool, an `ask` rule shadows an `allow` rule, or a duplicate in the same list already decides it. The shadowed rule reads as policy and is not | Remove the shadowed rule, or narrow the rule that shadows it |
 | `SETTINGS_MARKETPLACE_TOKEN_MISSING` | warning | A marketplace registered in the effective settings is sourced from GitHub and `GITHUB_TOKEN` is not set in the environment the audit ran in, so a private repository cannot be fetched and its plugins would not install or update | Set `GITHUB_TOKEN` in the environment Claude Code runs in, or register the marketplace from a public source |
+
+### Compatibility and Settings Lane Codes
+
+Emitted only by `vat audit --compat` (with or without `--settings`), on the plugin the lane was
+asked about, and declared as `NonOverridableCode` in `packages/schema/src/validation-codes.ts`:
+the lanes run after the project's `validation:` block has been applied, so a `validation.severity`
+or `validation.allow` key for either would parse and do nothing, and both refuse it. They say as
+findings what the row's `compatibility:` and `settings:` blocks say, so the report's `status`, the
+row's `status` and `data.counts` agree with the blocks and with stderr. Both are warnings: they
+move the status to `findings` and never the exit code.
+
+| Code | Severity | What | Fix |
+|---|---|---|---|
+| `SETTINGS_POLICY_CONFLICT` | warning | The settings given to `--settings` block something the plugin declares — a tool, a hook, an MCP server or a model. One finding per conflict; `location` is the plugin, and the message names what is blocked, the rule, and the settings file and level it comes from | Remove what the policy blocks from the plugin, or change the settings rule the message names |
+| `COMPAT_NOT_CHECKED` | warning | A lane could not look at something, so its answer for the plugin does not cover it: the compatibility analysis could not run for the plugin at all (`location` is the plugin), or one path beneath it could not be read or parsed (`location` is that path). A path whose refusal the report already carries — a `SCAN_PATH_UNREADABLE` or `SKILL_MISSING_FRONTMATTER` finding at that path — is not filed a second time (an unrelated finding at the same path does not count), and a plugin neither lane could run for is one finding, not two | Make the path readable and well-formed, then re-run |
 
 ### Agent Manifest Codes
 

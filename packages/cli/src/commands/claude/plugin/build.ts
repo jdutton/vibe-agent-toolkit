@@ -12,7 +12,7 @@ import { mkdir, readdir } from 'node:fs/promises';
 import { conventionalSuiteProbe, createProjectRegistry, getMarketplaceOutputDir, getPluginSourceDir, isSkillPackagingInputError, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, materializeIssue, packageSkillInto, packagingConfigToPackageOptions, pluginDirInMarketplace, skillNameToFsPath, stagedPathMapper, type ConventionalSuiteProbe, type DeclaredEvalSuite, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, ExternalPluginSource, ProjectConfig, ResourceRegistry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Finding, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { applyTreePlan, writeFileUnder, compareCodeUnits, direntKindFollowing, everyInOrder, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, relativeEscapesRoot, safePath, toForwardSlash, VatError, withFsFault } from '@vibe-agent-toolkit/utils';
+import { applyTreePlan, writeFileUnder, compareCodeUnits, direntKindFollowing, everyInOrder, foldedSegment, forEachInOrder, type FsSide, isSingleFsSegment, issueLocation, isTreeChangeResidue, mapInOrder, pathPresent, planTreeChanges, relativeEscapesRoot, safePath, toForwardSlash, VatError, withFsFault } from '@vibe-agent-toolkit/utils';
 import { onCrawlOutput } from '@vibe-agent-toolkit/utils/crawl';
 import { Command } from 'commander';
 
@@ -41,7 +41,7 @@ import { assertMarketplaceDeclared, loadClaudeProjectConfig } from '../claude-co
 import type { PluginBuildData } from './build-schema.js';
 import { buildMarketplaceJson, type MarketplaceJsonPluginEntry } from './marketplace-json.js';
 import { resolvePluginChangelogPath } from './plugin-changelog.js';
-import { applyPluginFiles, foldedSegment } from './plugin-files.js';
+import { applyPluginFiles } from './plugin-files.js';
 import { mergePluginJson, resolveVersion } from './plugin-json-merge.js';
 import {
   parsePluginJsonFiles,

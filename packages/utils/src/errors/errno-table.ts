@@ -101,6 +101,38 @@ export function fsFaultOf(error: unknown): FsFaultFacts | undefined {
   };
 }
 
+
+/**
+ * The paths the failing syscall ACTED ON, the one to name the fault by first.
+ *
+ * Node files a two-path call's first argument under `path` and its second under `dest`, whatever
+ * the call does with them. For `symlink(target, link)` the first is the link's TARGET TEXT — a
+ * string the call never resolved, often relative — so only `dest`, the link being created, is a
+ * path the call acted on. `rename(from, to)` acted on both, and what it could not do is land the
+ * entry: `dest` first. Every other call — `link(existing, new)` and `copyfile` included, whose
+ * two arguments are both real paths either of which may be the one refused — is read `path` first.
+ *
+ * @param facts - The fault's facts, as {@link fsFaultOf} read them off the errno
+ * @returns Every path the call acted on, the one that names the fault first; empty when the errno carries none
+ */
+export function pathsActedOn(facts: FsFaultFacts): readonly string[] {
+  const { path, dest, syscall } = facts;
+  let ordered: ReadonlyArray<string | undefined> = [path, dest];
+  if (syscall === 'symlink') ordered = [dest];
+  else if (syscall === 'rename') ordered = [dest, path];
+  return ordered.filter((each): each is string => each !== undefined);
+}
+
+/**
+ * For a refused `rename`, the entry that was being moved — the other end of the path the fault is
+ * named by. `undefined` for every other call, and for a rename whose errno names one path only.
+ *
+ * @param facts - The fault's facts, as {@link fsFaultOf} read them off the errno
+ */
+export function movedFromOf(facts: FsFaultFacts): string | undefined {
+  return facts.syscall === 'rename' && facts.dest !== undefined ? facts.path : undefined;
+}
+
 function hasAnyErrno(error: unknown, errnos: readonly string[]): boolean {
   return findCoded(error, (code) => errnos.includes(code)) !== undefined;
 }

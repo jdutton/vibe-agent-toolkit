@@ -404,6 +404,16 @@ export function marketplaceVerdict(dir: string, claim: MarketplaceClaim, known: 
   return { owned: false, reason: `${marker.present ? 'its marker names no installer' : NO_MARKER} and ${registryRecord(known)}, so nothing shows VAT installed it from ${claim.installedFrom}` };
 }
 
+/**
+ * Whether a marketplace's known_marketplaces.json ENTRY is `installedFrom`'s to rewrite when nothing
+ * stands at its directory, so no marker can speak for it: owned when the registry does not list the
+ * name, or records this very installer.
+ */
+export function registryEntryVerdict(known: KnownMarketplaceEntry | undefined, installedFrom: string): OwnershipVerdict {
+  if (known === undefined || installerIdentity(known.source) === installedFrom) return { owned: true };
+  return { owned: false, reason: `${registryRecord(known)} and nothing is installed at its directory, so nothing shows VAT installed it from ${installedFrom}; it is left as it is` };
+}
+
 /** Whether `dir` is a directory holding nothing: nothing of anyone's is lost by installing over it. */
 export function isEmptyDirectory(dir: string): boolean {
   return withFsFaultSync({ side: 'destination', action: 'list the marketplace directory', path: dir }, () => lstatSync(dir).isDirectory() && readdirSync(dir).length === 0);

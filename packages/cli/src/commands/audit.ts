@@ -116,6 +116,7 @@ import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';
 import { computeConfigVerdicts } from '../utils/verdict-helpers.js';
 
+import { compatLaneIssues, type FiledFinding } from './audit/compat-lane-findings.js';
 import {
   crawlOwnsSubtree,
   distributedTreeFindings,
@@ -883,7 +884,10 @@ Validation Checks:
   Warnings (should fix):
   - Skill exceeds recommended length (>5000 lines)
   - With --compat: a declared target cannot or may not run the skill
-    (COMPAT_TARGET_INCOMPATIBLE, COMPAT_TARGET_NEEDS_REVIEW)
+    (COMPAT_TARGET_INCOMPATIBLE, COMPAT_TARGET_NEEDS_REVIEW); a plugin or a
+    path the analysis could not look at (COMPAT_NOT_CHECKED)
+  - With --compat --settings: something the plugin declares that the settings
+    block (SETTINGS_POLICY_CONFLICT)
   - Unreferenced files detected (with --warn-unreferenced-files)
 
   Info (observations):
@@ -2184,7 +2188,29 @@ export async function runCompatAnalysis(
     compatMap.set(result.path, entry);
   });
 
+  fileLaneFindings(results, compatMap, locationRoot);
   return compatMap;
+}
+
+/**
+ * File what the lanes found, and what they could not look at, as findings on each plugin's own
+ * result — so the envelope's status, the row's status and the file counts say what the
+ * `compatibility:` and `settings:` blocks say. A path whose refusal the document already carries
+ * (by its code: `compatLaneIssues` decides which) is not filed a second time.
+ */
+function fileLaneFindings(results: ValidationResult[], compatMap: ReadonlyMap<string, PluginCompatEntry>, locationRoot: string): void {
+  const locationOf = (absolutePath: string): string => issueLocation(absolutePath, locationRoot) || '.';
+  const filed: FiledFinding[] = results.flatMap((result) => result.issues.map((issue) => ({ code: issue.code, location: issue.location ?? locationOf(result.path) })));
+  for (const result of results) {
+    const entry = compatMap.get(result.path);
+    if (entry === undefined) continue;
+    const issues = compatLaneIssues(locationOf(result.path), {
+      compatibility: entry.compat,
+      ...(entry.settings !== undefined && { settings: renderSettingsBlock(entry.settings, locationRoot) }),
+    }, filed);
+    appendIssues(result, issues);
+    filed.push(...issues.map((issue) => ({ code: issue.code, location: issue.location ?? locationOf(result.path) })));
+  }
 }
 
 /**

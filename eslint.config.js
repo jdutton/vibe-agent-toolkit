@@ -288,7 +288,6 @@ const NO_EXISTSSYNC_RATCHET = { allowFiles: [
   'packages/cli/src/commands/build.ts',
   'packages/cli/src/commands/claude/marketplace/validate.ts',
   'packages/cli/src/commands/claude/org/skills.ts',
-  'packages/cli/src/commands/claude/plugin/helpers.ts',
   'packages/cli/src/commands/claude/plugin/plugin-changelog.ts',
   'packages/cli/src/commands/claude/plugin/plugin-files.ts',
   'packages/cli/src/commands/claude/plugin/tree-copy.ts',
@@ -298,7 +297,6 @@ const NO_EXISTSSYNC_RATCHET = { allowFiles: [
   'packages/cli/src/commands/skills/package.ts',
   'packages/cli/src/commands/skills/scope-guard.ts',
   'packages/cli/src/commands/skills/skill-discovery.ts',
-  'packages/cli/src/commands/skills/source-resolvers.ts',
   'packages/cli/src/commands/verify.ts',
   'packages/cli/src/qa-snapshot/store.ts',
   'packages/cli/src/skill-resolution/resolve-skill-reference.ts',
@@ -673,16 +671,76 @@ const unicornRulesConfig = {
 // approved `js-yaml`; the lint rule is the durable record, so the docs point
 // here). Applied to both TS and JS blocks below.
 const OPEN_FRONTMATTER_MESSAGE = 'Use openFrontmatter from @vibe-agent-toolkit/resources — preserves comments.';
-const noRestrictedImportsConfig = ['error', {
-  paths: [
-    {
-      name: 'js-yaml',
-      message: 'Use `yaml` (eemeli) — the one YAML library in this repo; see noRestrictedImportsConfig in eslint.config.js. Frontmatter writes: openFrontmatter from @vibe-agent-toolkit/resources.',
-    },
-    { name: 'gray-matter', message: OPEN_FRONTMATTER_MESSAGE },
-    { name: 'front-matter', message: OPEN_FRONTMATTER_MESSAGE },
-  ],
-}];
+const YAML_LIBRARY_BAN = [
+  {
+    name: 'js-yaml',
+    message: 'Use `yaml` (eemeli) — the one YAML library in this repo; see noRestrictedImportsConfig in eslint.config.js. Frontmatter writes: openFrontmatter from @vibe-agent-toolkit/resources.',
+  },
+  { name: 'gray-matter', message: OPEN_FRONTMATTER_MESSAGE },
+  { name: 'front-matter', message: OPEN_FRONTMATTER_MESSAGE },
+];
+
+// The ONE owner of "which code may open an archive". Every tarball and ZIP VAT
+// reads, extracts or writes goes through `packages/utils/src/archive/`
+// (`@vibe-agent-toolkit/utils/archive`): one entry policy, one set of limits,
+// one writer that never creates a link. Five extract lanes each with their own
+// rules is how a crafted tarball came to install a directory it did not hold,
+// so `tar` and `adm-zip` are banned everywhere else — product source and tests
+// alike. A test that needs an archive builds it with `tarFixture` / `zipFixture`
+// from `@vibe-agent-toolkit/utils/testing`, which are written byte by byte so
+// they can express the archives a library refuses to write.
+const ARCHIVE_MODULE_FILES = 'packages/utils/src/archive/**';
+const ARCHIVE_LIBRARY_MESSAGE = 'Open an archive only through @vibe-agent-toolkit/utils/archive (listArchive / extractArchive / zipOfDirectory): the one entry policy and the one set of limits live there. A test builds one with tarFixture / zipFixture from @vibe-agent-toolkit/utils/testing.';
+const ARCHIVE_LIBRARY_BAN = [
+  { name: 'adm-zip', message: ARCHIVE_LIBRARY_MESSAGE },
+  { name: 'tar', message: ARCHIVE_LIBRARY_MESSAGE },
+];
+// A SUBPATH is the same library: `tar/extract` is the whole link-creating extractor, and adm-zip
+// has no `exports` map, so every file of it is importable. A group with a slash is anchored, so
+// `./tar/x.js` and `tarball` are not caught.
+const ARCHIVE_LIBRARY_SUBPATH_BAN = [{ group: ['tar/**', 'adm-zip/**'], message: ARCHIVE_LIBRARY_MESSAGE }];
+// `no-restricted-imports` reads static imports only; these are the same ban for
+// `await import('tar/x')`, `require('tar')` and `createRequire(import.meta.url)('adm-zip')` — each
+// with its specifier as a string or as a template literal that holds no expression. (TypeScript's
+// `import tar = require('tar')` is an import declaration to `no-restricted-imports`, which fires on it.)
+//
+// What a lint rule CANNOT see is a specifier computed at run time (`import(name)`, a template with
+// an expression, a `createRequire` result bound to a name other than `require`): nothing here
+// pretends to. The barrier for those is that only `packages/utils` declares the two packages.
+const ARCHIVE_LIBRARY_SPECIFIER = String.raw`/^(adm-zip|tar)(\u002f|$)/`;
+/** A call argument, or an import source, at `path`: a string literal, or a template literal with no expression. */
+const archiveSpecifierAt = (path) => [
+  `[${path}.value=${ARCHIVE_LIBRARY_SPECIFIER}]`,
+  `[${path}.type='TemplateLiteral'][${path}.expressions.length=0][${path}.quasis.0.value.cooked=${ARCHIVE_LIBRARY_SPECIFIER}]`,
+];
+const ARCHIVE_LIBRARY_RESTRICTED_SYNTAX = [
+  ...archiveSpecifierAt('source').map((specifier) => `ImportExpression${specifier}`),
+  ...archiveSpecifierAt('arguments.0').map((specifier) => `CallExpression[callee.name='require']${specifier}`),
+  ...archiveSpecifierAt('arguments.0').map((specifier) => `CallExpression[callee.type='CallExpression'][callee.callee.name='createRequire']${specifier}`),
+].map((selector) => ({ selector, message: ARCHIVE_LIBRARY_MESSAGE }));
+
+const noRestrictedImportsConfig = ['error', { paths: [...YAML_LIBRARY_BAN, ...ARCHIVE_LIBRARY_BAN], patterns: ARCHIVE_LIBRARY_SUBPATH_BAN }];
+
+// No dispatch on error PROSE, and no bare `Error` subclass: the `src`-only
+// restrictions, named so the archive module's block below can keep them while
+// dropping the archive-library ban that every other file carries.
+const ERROR_CONTRACT_RESTRICTED_SYNTAX = [
+  {
+    selector: "CallExpression[callee.type='MemberExpression'][callee.object.type='MemberExpression'][callee.object.property.name='message'][callee.property.name=/^(includes|startsWith|endsWith|match|search)$/]",
+    message: 'Do not dispatch on an error message. Dispatch on its code (`isVatError(err, code)`), its class (`instanceof`), or an errno predicate (`isPathAbsentError`) — prose is for humans and changes when it is improved.',
+  },
+  {
+    selector: "CallExpression[callee.type='MemberExpression'][callee.property.name='test'][arguments.0.type='MemberExpression'][arguments.0.property.name='message']",
+    message: 'Do not test a regex against an error message. Dispatch on its code (`isVatError(err, code)`), its class (`instanceof`), or an errno predicate (`isPathAbsentError`).',
+  },
+  // Every VAT error carries a `code`: a class that extends the bare
+  // `Error` has none, and the contract above has nothing to dispatch on.
+  // One such class survived the sweep by being added after it.
+  {
+    selector: "ClassDeclaration[superClass.name='Error']",
+    message: 'Extend `VatError` from @vibe-agent-toolkit/utils (with a SCREAMING_SNAKE code), not the bare `Error` — every VAT error carries a code a catch block can dispatch on.',
+  },
+];
 
 // General rules that apply to both TS and JS — except `no-unused-vars`,
 // which the TS block overrides with the @typescript-eslint variant.
@@ -758,6 +816,7 @@ export default [
       'vitest.shared.ts',
       'vitest.setup.js',
       '.claude/worktrees/',  // Claude Code worktrees
+      '.superpowers/',  // Gitignored working material (specs, scratch reproductions): never committed, never product
       '**/test-fixtures/**',  // Test fixture data (third-party code)
       '**/test/fixtures/**',  // Test fixture data (emulates user/3p content)
       '**/transformer-fixtures/**',  // Transformer test fixtures (sample code)
@@ -809,6 +868,9 @@ export default [
       ...generalRulesConfig,
 
       'no-restricted-imports': noRestrictedImportsConfig,
+      // The `import()` / `require` half of the archive-library ban, for every TS file. The
+      // `src`-only block below restates it beside the error-contract selectors.
+      'no-restricted-syntax': ['error', ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX],
 
       // TypeScript-specific (use @typescript-eslint variant of no-unused-vars)
       'no-unused-vars': 'off',
@@ -899,23 +961,16 @@ export default [
     files: [PRODUCT_SOURCE_TS],
     rules: {
       'local/explicit-zod-strictness': ['error', { allowDefaultStripIn: [] }],
-      'no-restricted-syntax': ['error',
-        {
-          selector: "CallExpression[callee.type='MemberExpression'][callee.object.type='MemberExpression'][callee.object.property.name='message'][callee.property.name=/^(includes|startsWith|endsWith|match|search)$/]",
-          message: 'Do not dispatch on an error message. Dispatch on its code (`isVatError(err, code)`), its class (`instanceof`), or an errno predicate (`isPathAbsentError`) — prose is for humans and changes when it is improved.',
-        },
-        {
-          selector: "CallExpression[callee.type='MemberExpression'][callee.property.name='test'][arguments.0.type='MemberExpression'][arguments.0.property.name='message']",
-          message: 'Do not test a regex against an error message. Dispatch on its code (`isVatError(err, code)`), its class (`instanceof`), or an errno predicate (`isPathAbsentError`).',
-        },
-        // Every VAT error carries a `code`: a class that extends the bare
-        // `Error` has none, and the contract above has nothing to dispatch on.
-        // One such class survived the sweep by being added after it.
-        {
-          selector: "ClassDeclaration[superClass.name='Error']",
-          message: 'Extend `VatError` from @vibe-agent-toolkit/utils (with a SCREAMING_SNAKE code), not the bare `Error` — every VAT error carries a code a catch block can dispatch on.',
-        },
-      ],
+      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX, ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX],
+    },
+  },
+  // The archive module: the one place `tar` and `adm-zip` may be imported (see
+  // ARCHIVE_LIBRARY_BAN). It keeps every other restriction its neighbours carry.
+  {
+    files: [ARCHIVE_MODULE_FILES],
+    rules: {
+      'no-restricted-imports': ['error', { paths: YAML_LIBRARY_BAN }],
+      'no-restricted-syntax': ['error', ...ERROR_CONTRACT_RESTRICTED_SYNTAX],
     },
   },
   // `existsSync` folds "could not look" into "absent", over product `src/` (the rule
@@ -927,10 +982,11 @@ export default [
       'local/no-existssync': ['error', NO_EXISTSSYNC_RATCHET],
     },
   },
-  // The base class itself is the one legitimate `extends Error` in `src`.
+  // The base class itself is the one legitimate `extends Error` in `src`: the error-contract
+  // selectors are lifted for it, and the archive-library ban every other file carries is not.
   {
     files: ['packages/utils/src/errors/vat-error.ts'],
-    rules: { 'no-restricted-syntax': 'off' },
+    rules: { 'no-restricted-syntax': ['error', ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX] },
   },
 
   // Plain JS / CJS / MJS files (eslint configs, dev-tools scripts, the rule
@@ -967,6 +1023,7 @@ export default [
       ...generalRulesConfig,
 
       'no-restricted-imports': noRestrictedImportsConfig,
+      'no-restricted-syntax': ['error', ...ARCHIVE_LIBRARY_RESTRICTED_SYNTAX],
 
       // JS-only: use the core no-unused-vars (the TS block uses the
       // @typescript-eslint variant instead).

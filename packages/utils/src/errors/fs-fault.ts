@@ -17,7 +17,7 @@
 
 import { toForwardSlash } from '../path-core.js';
 
-import { type FsFaultClass, fsFaultOf, isFileInTheWayError } from './errno-table.js';
+import { type FsFaultClass, fsFaultOf, isFileInTheWayError, movedFromOf, pathsActedOn } from './errno-table.js';
 import { isVatError, VatError } from './vat-error.js';
 
 /** The one code every classified filesystem refusal carries. */
@@ -44,7 +44,10 @@ export class FsFaultError extends VatError {
   readonly side: FsSide;
   readonly faultClass: FsFaultClass;
   readonly errno: string;
+  /** The path the failing call acted on: for a link it could not create, the link; for a rename, where the entry could not land. */
   readonly path: string | undefined;
+  /** For a refused rename, the entry that was being moved to {@link path}; `undefined` for every other call. */
+  readonly movedFrom: string | undefined;
   readonly origin: SourceOrigin;
   readonly action: string;
 
@@ -53,6 +56,8 @@ export class FsFaultError extends VatError {
     faultClass: FsFaultClass;
     errno: string;
     path: string | undefined;
+    /** Only a refused rename has one. */
+    movedFrom?: string | undefined;
     origin: SourceOrigin;
     action: string;
     cause: unknown;
@@ -61,12 +66,15 @@ export class FsFaultError extends VatError {
     // as every path VAT displays or compares. An errno's own `path` is the host's — on Windows Node
     // hands back the backslash form whatever the caller passed — while a context's is VAT's.
     const path = facts.path === undefined ? undefined : toForwardSlash(facts.path);
-    const where = path === undefined ? '' : `: ${path}`;
+    const movedFrom = facts.movedFrom === undefined ? undefined : toForwardSlash(facts.movedFrom);
+    const ends = [movedFrom, path].filter((end) => end !== undefined).join(' -> ');
+    const where = ends === '' ? '' : `: ${ends}`;
     super(FS_FAULT_CODE, `Could not ${facts.action} (${facts.errno})${where}`, { cause: facts.cause });
     this.side = facts.side;
     this.faultClass = facts.faultClass;
     this.errno = facts.errno;
     this.path = path;
+    this.movedFrom = movedFrom;
     this.origin = facts.origin;
     this.action = facts.action;
   }
@@ -153,7 +161,8 @@ export function classifyFsFault(error: unknown, ctx: FsFaultContext): unknown {
     side,
     faultClass: facts.faultClass,
     errno: facts.errno,
-    path: facts.path ?? facts.dest ?? ctx.path,
+    path: pathsActedOn(facts)[0] ?? ctx.path,
+    movedFrom: movedFromOf(facts),
     origin: ctx.origin ?? (ctx.shapeFromSource === true && side === 'source' ? 'content' : 'argument'),
     action: ctx.action,
     cause: error,

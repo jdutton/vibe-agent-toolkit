@@ -33,8 +33,8 @@ async function* sourceBytes(source: FileHandle, readFault: ReadFault): AsyncGene
 
 /**
  * Copy the bytes of an open file — one already judged a regular file on that very handle — into
- * `claimed`, a file this copy has just made exclusively (opened `wx`), and carry its mode over, as
- * `copyFile` does, so a script stays executable. The ONE file copy of the tree copy and the
+ * `claimed`, a file this copy has just made exclusively (opened `wx`), and carry its permission bits
+ * over, so a script stays executable — never its setuid, setgid or sticky bit. The ONE file copy of the tree copy and the
  * single-file copy: bytes and mode both go to that very handle, never to a path, so nothing swapped
  * in after the claim — a link least of all — is written or chmod-ed through. Closes `claimed`.
  */
@@ -43,7 +43,8 @@ async function copyOpenFileInto(handle: FileHandle, claimed: FileHandle, mode: n
     // On the handle, not through a stream of it: a stream owns the handle it writes and closes it
     // with itself, before the mode could be set on it.
     await claimed.writeFile(sourceBytes(handle, readFault));
-    await claimed.chmod(mode & 0o7777);
+    // The permission bits only: setuid, setgid and sticky never travel with a copy.
+    await claimed.chmod(mode & 0o777);
   } catch (error: unknown) {
     // The copy's own failure is the answer: a close refused after it is not a second one.
     await claimed.close().catch(() => undefined);
@@ -93,6 +94,23 @@ interface CopyDestination {
 async function claimDestination(into: CopyDestination, copied: string): Promise<string> {
   await claimRoot(into.root);
   return into.relative === '' ? into.root : await makeDirectoryUnder(into.root, into.relative, `the copy of ${copied}`);
+}
+
+/**
+ * Make the directory a copy's own entry goes IN, for a source that is not a directory at all — a
+ * root that is a link, kept as one (`links: 'preserve'`): the destination root's parents as the
+ * caller's, every component under the root as a real directory or not at all.
+ *
+ * @param copied - What is copied, for a refusal's message
+ */
+async function claimParentOfDestination(into: CopyDestination, copied: string): Promise<void> {
+  if (into.relative === '') {
+    await fs.mkdir(parentOf(into.root), { recursive: true });
+    return;
+  }
+  await claimRoot(into.root);
+  const parent = parentOf(into.relative);
+  if (parent !== '') await makeDirectoryUnder(into.root, parent, `the copy of ${copied}`);
 }
 
 /** What {@link copyTree} is told: the walk, the side its reads are on, and what it does about what is already there. */
@@ -177,6 +195,8 @@ export function copyVisitor(where: CopyDestination, copied: string, side: FsSide
     },
     async link(entry) {
       const linkTarget = await readingTree(side, entry.path, () => fs.readlink(entry.path));
+      // The source itself is a link: there is no copied directory to hold it, so its place is made first.
+      if (entry.relative === '') await claimParentOfDestination(where, copied);
       // Verbatim, and untyped: on Windows Node picks `file` or `dir` from the target. A host that
       // cannot make the link (Windows without the privilege: EPERM; a filesystem with none: ENOTSUP)
       // raises the raw errno, a write like any other, for the caller's boundary to classify.

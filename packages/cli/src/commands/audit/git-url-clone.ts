@@ -16,8 +16,8 @@ import { cloneGitSource } from '@vibe-agent-toolkit/agent-skills';
 import { disposeTempDir, disposeTempDirAfterFailure } from '@vibe-agent-toolkit/utils';
 import { type ParsedGitUrl } from '@vibe-agent-toolkit/utils/git';
 
-import { makeStagingDir } from '../../utils/archive-staging.js';
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
+import { makeStagingDir } from '../../utils/staging-dir.js';
 
 import type { Provenance } from './provenance.js';
 

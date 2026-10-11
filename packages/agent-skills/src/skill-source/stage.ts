@@ -14,6 +14,7 @@ import {
   withFsFault,
 } from '@vibe-agent-toolkit/utils';
 
+import { SkillStagingNotOwnedError } from './source-errors.js';
 import type { ResolveSkillSourceContext } from './types.js';
 
 /** The `VatError` code of a skill source staging refuses on purpose: a symlinked entry (§7). */
@@ -88,12 +89,7 @@ function assertOwnedIfExists(dir: string, currentUid: number): void {
     if (isPathAbsentError(err)) return;
     throw err;
   }
-  if (currentUid >= 0 && st.uid !== currentUid) {
-    throw new Error(
-      `Refusing to stage into '${dir}': directory ownership (uid ${st.uid}) ` +
-        `does not match the current user (uid ${currentUid}). Possible shared-tmp attack.`,
-    );
-  }
+  if (currentUid >= 0 && st.uid !== currentUid) throw new SkillStagingNotOwnedError(dir, st.uid, currentUid);
 }
 
 /**
@@ -129,7 +125,8 @@ async function copyTreeNoSymlinks(src: string, dest: string, boundary: FsBoundar
       const bytes = await boundary.run(`read ${srcPath}`, 'source', () => readRegularFile(srcPath));
       await withFsFault({ side: 'environment', action: `stage ${srcPath}` }, async () => {
         await writeFile(destPath, bytes);
-        await chmod(destPath, st.mode & 0o7777);
+        // The permission bits only: setuid, setgid and sticky never travel from a source into staging.
+        await chmod(destPath, st.mode & 0o777);
       });
     }
   });

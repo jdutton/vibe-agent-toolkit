@@ -6,7 +6,7 @@
  * the new plugins registered, the replaced ones gone — or changes nothing.
  */
 
-import { type Ownership, safePath, type TreeChange, type TreeFill, VatError, writeFileUnder } from '@vibe-agent-toolkit/utils';
+import { type Ownership, pathPresent, safePath, TREE_DEST_NOT_OWNED_CODE, type TreeChange, type TreeFill, VatError, writeFileUnder } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
@@ -23,6 +23,7 @@ import {
   readRegistryFiles,
   recordPluginInstall,
   registrationEdit,
+  registryEntryVerdict,
   type RegistryFiles,
   requirePluginInstallNames,
   VAT_MARKETPLACE_MARKER,
@@ -92,6 +93,14 @@ function marketplaceChange(paths: ClaudeUserPaths, marketplace: PackageMarketpla
   };
 }
 
+/** Refuse (`TREE_DEST_NOT_OWNED`) a marketplace whose registry entry is another source's and whose directory is absent or empty — where no marker can speak, and the planner would call the place free. */
+function refuseForeignEntry(paths: ClaudeUserPaths, marketplaceName: string, known: RegistryFiles['known'][string] | undefined, installedFrom: string): void {
+  const dir = safePath.join(paths.marketplacesDir, marketplaceName);
+  if (pathPresent(dir, 'entry', 'destination', 'confirmed') && !isEmptyDirectory(dir)) return;
+  const verdict = registryEntryVerdict(known, installedFrom);
+  if (!verdict.owned) throw new VatError(TREE_DEST_NOT_OWNED_CODE, `marketplace ${marketplaceName}: refusing to replace its known_marketplaces.json entry: ${verdict.reason}`);
+}
+
 /** Every plugin directory a replaced cache must not be: the new plugins', and those of every plugin that stays registered. */
 function keptPluginDirs(opts: PackageInstallOptions, files: RegistryFiles, replaced: ReadonlySet<string>): string[] {
   const installing = opts.marketplaces.flatMap(({ marketplaceName, plugins }) => plugins.map(({ pluginName }) => ({ pluginName, marketplace: marketplaceName })));
@@ -124,7 +133,8 @@ function dropReplaced(files: RegistryFiles, keys: readonly string[]): void {
  *   VAT installed from this very installer (its marker says so; a marker that names none, or — what
  *   every VAT before the marker left — no marker, only when known_marketplaces.json records this
  *   installer), an empty directory, or under `force`; anything else refuses the plan
- *   (`TREE_DEST_NOT_OWNED`), nothing changed;
+ *   (`TREE_DEST_NOT_OWNED`), nothing changed — as does, with nothing standing there, a
+ *   known_marketplaces.json entry another source registered;
  * - replace `cache/<marketplace>/<plugin>/<version>/` with each plugin's `cacheFill`;
  * - remove `cache/<marketplace>/<plugin>/` of each replaced key, KEPT where it is, or could not be
  *   ruled out to be, the same entry as a plugin directory the install writes or a registered plugin
@@ -134,8 +144,8 @@ function dropReplaced(files: RegistryFiles, keys: readonly string[]): void {
  * package also installs stays registered, as the new install.
  *
  * @throws VatError `PLUGIN_KEY_INVALID` or `CLAUDE_USER_STATE_UNREADABLE`; a `destination` fault for a
- *   registry file the OS will not read. The marketplace ownership refusal is the planner's
- *   (`planTreeChanges`), which reads the marker from disk when it decides.
+ *   registry file the OS will not read; `TREE_DEST_NOT_OWNED` for a registry entry of another source
+ *   with no directory. The refusal of a directory that IS there is the planner's (`planTreeChanges`).
  */
 export function planPackageInstall(opts: PackageInstallOptions): PackageInstallPlan {
   const { marketplaces, version, source, paths } = opts;
@@ -154,6 +164,9 @@ export function planPackageInstall(opts: PackageInstallOptions): PackageInstallP
   const keepIfSameAs = (): readonly string[] => kept;
   // Own keys only: a marketplace named `constructor` must not read `Object.prototype`.
   const knownBefore = new Map(Object.entries(files.known));
+  if (!opts.force) {
+    for (const { marketplaceName } of marketplaces) refuseForeignEntry(paths, marketplaceName, knownBefore.get(marketplaceName), installedFrom);
+  }
   const ownershipOf = (marketplaceName: string): Ownership => {
     if (opts.force) return { kind: 'force' };
     return {

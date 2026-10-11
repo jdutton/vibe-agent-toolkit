@@ -5,8 +5,9 @@
  * command would publish, before the writer's run-integrity pass — and the
  * orchestrator folds every phase into ONE report. These pin the fold: findings
  * flat and unchanged, `examined` summed, a phase that did not finish making the
- * run `error` / `RUN_INCOMPLETE` with the finished phases still in the data, and
- * integrity applied once to the sum rather than per phase.
+ * run `error` / `RUN_INCOMPLETE` with the finished phases still in the data. And
+ * they pin the verdict on a phase that examined nothing: refused as its verb
+ * refuses it alone, unless zero is an answer for that phase.
  */
 
 import { buildReport, exitCodeForReport, ExitCode, FindingSchema, reportSchema, type Finding, type Report } from '@vibe-agent-toolkit/schema';
@@ -19,17 +20,25 @@ import {
   orchestrate,
   ORCHESTRATOR_GATE,
   orchestratorReport,
+  phaseVerdict,
   runPhase,
   type Phase,
   type PhaseResult,
 } from '../../src/commands/phase-utils.js';
+import { SKILLS_VALIDATE_EXAMINED } from '../../src/commands/skills/validate-schema.js';
 import { CommandRefusalError } from '../../src/utils/command-refusal.js';
 import { NOTHING_FINISHED, publishedReport, refusalReport } from '../../src/utils/document-writer.js';
 import { createLogger } from '../../src/utils/logger.js';
-import { withRunIntegrity } from '../../src/utils/run-integrity.js';
+import { type ExaminedDeclaration, withRunIntegrity } from '../../src/utils/run-integrity.js';
 
 const WARNING: Finding = { code: 'LINK_MISSING_TARGET', severity: 'warning', message: 'gone', location: 'docs/a.md' };
 const ERROR: Finding = { code: 'LINK_MISSING_TARGET', severity: 'error', message: 'gone', location: 'skills/x/SKILL.md', line: 3 };
+
+/** What a test phase's `examined` counts: a zero of it is refused. */
+const COUNTED: ExaminedDeclaration = { unit: 'things', whenZero: 'Check the glob.' };
+
+/** A test phase for which examining nothing is an answer. */
+const ZERO_IS_FINE = { zeroIsAnAnswer: 'this phase checks what another discovered' } as const;
 
 /** A phase schema that accepts any `data` — for the tests where the data is not the question. */
 const ANY_DATA = reportSchema(z.unknown(), FindingSchema);
@@ -112,9 +121,10 @@ describe('orchestratorReport', () => {
     expect(report).not.toHaveProperty('durationMs');
   });
 
-  it('applies run integrity ONCE, to the sum: a phase that examined nothing does not fail a run that examined something', () => {
-    // A project with a resources: block and a skills: block that matched no
-    // SKILL.md, or a marketplace of plugin-local skills and no skills: pool.
+  it('adds no refusal of its own for a phase that examined nothing: each phase was judged as it ran', () => {
+    // The fold sees what `runPhase` already judged. A phase for which zero is an answer — a
+    // marketplace of plugin-local skills and no skills: pool — arrives untouched, and must not fail
+    // a run that examined something. (A CONFIGURED phase's zero arrives carrying its refusal: below.)
     const report = published([done('resources', 5), done('skills', 0)]);
 
     expect(report.status).toBe('ok');
@@ -136,10 +146,86 @@ describe('orchestratorReport', () => {
   });
 });
 
+describe('phaseVerdict', () => {
+  const zero = done('skills', 0).report;
+
+  it('refuses a phase that examined nothing with the very finding its verb\'s writer adds', () => {
+    const judged = phaseVerdict({ examined: COUNTED }, zero);
+
+    expect(judged).toEqual(withRunIntegrity(zero, COUNTED));
+    expect(judged.findings).toEqual([{ code: 'RESOURCE_CHECK_BROKEN', severity: 'error', message: 'Nothing was examined: 0 things. Check the glob.' }]);
+    expect(exitCodeForReport(judged)).toBe(ExitCode.FINDINGS);
+  });
+
+  it('hands back the very report when zero is an answer for the phase', () => {
+    expect(phaseVerdict({ examined: ZERO_IS_FINE }, zero)).toBe(zero);
+  });
+
+  it('hands back the very report when the phase examined something, did not finish, or already refused', () => {
+    const examined = done('skills', 2, [ERROR]).report;
+    const unfinished = refused('skills').report;
+    const refusedAlready = done('skills', 0, [{ code: 'RESOURCE_CHECK_BROKEN', severity: 'error', message: 'half the build is missing' }]).report;
+    for (const report of [examined, unfinished, refusedAlready]) expect(phaseVerdict({ examined: COUNTED }, report)).toBe(report);
+  });
+
+  it('asks a phase whose own data decides what its zero means', () => {
+    const declare = (report: Report<unknown>): ExaminedDeclaration | typeof ZERO_IS_FINE => ((report.data as { expected: number }).expected === 0 ? ZERO_IS_FINE : COUNTED);
+    const nothingExpected = done('bundles', 0, [], { expected: 0 }).report;
+    const somethingExpected = done('bundles', 0, [], { expected: 3 }).report;
+
+    expect(phaseVerdict({ examined: declare }, nothingExpected)).toBe(nothingExpected);
+    expect(phaseVerdict({ examined: declare }, somethingExpected).findings.map((finding) => finding.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
+  });
+});
+
 describe('runPhase', () => {
   it('hands back the phase\'s report under its name', async () => {
     const report = done('skills', 2).report;
-    expect(await runPhase({ name: 'skills', schema: NAMED_DATA, run: () => Promise.resolve({ report }) })).toEqual({ name: 'skills', report });
+    expect(await runPhase({ name: 'skills', schema: NAMED_DATA, examined: COUNTED, run: () => Promise.resolve({ report }) })).toEqual({ name: 'skills', report });
+  });
+
+  /**
+   * The defect this closes, at the seam it lived in. `skills.include` matching nothing beside a
+   * healthy `resources:` surface: the skills phase examined 0, the sum was 5, and the run was
+   * `status: ok`, exit 0 — while `vat skills validate` alone, on the same config, refused.
+   */
+  it('refuses a configured phase that examined nothing, a healthy phase beside it hiding nothing — and says so on stderr', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    let skills: PhaseResult;
+    try {
+      skills = await runPhase({ name: 'skills', schema: ANY_DATA, examined: SKILLS_VALIDATE_EXAMINED, run: () => Promise.resolve({ report: done('skills', 0).report }) });
+      expect(stderr.mock.calls.map(([line]) => String(line)).join('')).toContain('Warning: Nothing was examined: 0 skills.');
+    } finally {
+      stderr.mockRestore();
+    }
+
+    // The same finding the verb's own writer adds to this report, by the same function.
+    expect(skills.report).toEqual(withRunIntegrity(done('skills', 0).report, SKILLS_VALIDATE_EXAMINED));
+    const report = published([done('resources', 5), skills]);
+    expect(report.status).toBe('findings');
+    expect(report.findings.map((finding) => finding.code)).toEqual(['RESOURCE_CHECK_BROKEN']);
+    expect(exitCodeForReport(report)).toBe(ExitCode.FINDINGS);
+    expect((report.data as { phases: { name: string; status: string; examined: number }[] }).phases.map((phase) => [phase.name, phase.status, phase.examined])).toEqual([
+      ['resources', 'ok', 5],
+      ['skills', 'findings', 0],
+    ]);
+  });
+
+  it('says nothing, and adds nothing, for a phase whose zero is an answer', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const report = done('consistency', 0).report;
+      expect((await runPhase({ name: 'consistency', schema: ANY_DATA, examined: ZERO_IS_FINE, run: () => Promise.resolve({ report }) })).report).toBe(report);
+      expect(stderr).not.toHaveBeenCalled();
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  // A phase with no declaration is not a phase whose zero is fine: it is VAT's defect, never a clean fold.
+  it('refuses a phase that declares nothing about its zero as INTERNAL_ERROR', async () => {
+    const undeclared = { name: 'skills', schema: ANY_DATA, run: () => Promise.resolve({ report: done('skills', 0).report }) } as unknown as Phase;
+    expect((await quietly(() => runPhase(undeclared))).report).toMatchObject({ status: 'error', error: { code: 'INTERNAL_ERROR' } });
   });
 
   /**
@@ -150,7 +236,7 @@ describe('runPhase', () => {
    */
   it('refuses a phase whose report its own schema rejects — INTERNAL_ERROR, never folded as finished', async () => {
     const report = buildReport({ examined: 1, findings: [], data: { name: 'skills', extra: true }, gate: ORCHESTRATOR_GATE });
-    const result = await quietly(() => runPhase({ name: 'skills', schema: NAMED_DATA, run: () => Promise.resolve({ report }) }));
+    const result = await quietly(() => runPhase({ name: 'skills', schema: NAMED_DATA, examined: COUNTED, run: () => Promise.resolve({ report }) }));
 
     expect(result.report).toMatchObject({ status: 'error', error: { code: 'INTERNAL_ERROR' }, examined: 0 });
     expect(orchestratorReport([result], ORCHESTRATOR_GATE)).toMatchObject({ status: 'error', error: { code: 'RUN_INCOMPLETE' } });
@@ -165,7 +251,7 @@ describe('runPhase', () => {
   it('turns a throw past the phase\'s own handling into that phase\'s refusal', async () => {
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
-      const result = await runPhase({ name: 'skills', schema: ANY_DATA, run: () => Promise.reject(new Error('registry blew up')) });
+      const result = await runPhase({ name: 'skills', schema: ANY_DATA, examined: COUNTED, run: () => Promise.reject(new Error('registry blew up')) });
 
       expect(result.report.status).toBe('error');
       expect(result.report).toMatchObject({ error: { code: 'INTERNAL_ERROR', message: 'registry blew up' }, examined: 0 });
@@ -178,7 +264,7 @@ describe('runPhase', () => {
 
 describe('applyPhaseSelection', () => {
   const logger = createLogger({});
-  const phases: Phase[] = [{ name: 'skills', schema: ANY_DATA, run: () => Promise.resolve({ report: done('skills', 1).report }) }];
+  const phases: Phase[] = [{ name: 'skills', schema: ANY_DATA, examined: COUNTED, run: () => Promise.resolve({ report: done('skills', 1).report }) }];
 
   it('returns the phases untouched when there is work to do', () => {
     expect(applyPhaseSelection({ kind: 'run', phases }, logger)).toBe(phases);

@@ -1,7 +1,7 @@
 import { lstatSync, readdirSync, readlinkSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { canonicalPath, COPY_LINK_ESCAPES_SOURCE_CODE, isPathAbsentError, isTimedOutError, isUnderRoot, safePath, VatError } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, isTimedOutError, refuseEscapingLinks, safePath, treeContainment, VatError, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 import {
   nonInteractiveGitOverrides,
   runGit as runGitSafely,
@@ -50,12 +50,28 @@ function runGit(
     maxBuffer: GIT_MAX_BUFFER,
   });
   if (result.error !== undefined && isTimedOutError(result.error)) {
-    throw new Error(
+    throw new GitCloneFailedError(
       `git ${args[0] ?? ''} timed out after ${(GIT_TIMEOUT_MS / 1000).toString()}s ` +
         `(possible unreachable remote or hang).`,
+      { cause: result.error },
     );
   }
   return result;
+}
+
+/**
+ * The code a clone that did not happen is thrown with: the remote would not hand the
+ * repository over (unreachable, refused, a ref it does not have, a timeout). The source
+ * the caller named could not be read — never a defect in VAT.
+ */
+export const GIT_CLONE_FAILED_CODE = 'GIT_CLONE_FAILED';
+
+/** A git source that could not be cloned. Reason `preflight`: the operator fixes the URL, the ref or the network. */
+export class GitCloneFailedError extends VatError {
+  readonly reason = 'preflight' as const;
+  constructor(message: string, options?: ErrorOptions) {
+    super(GIT_CLONE_FAILED_CODE, message, options);
+  }
 }
 
 /**
@@ -98,19 +114,30 @@ export function cloneGitSource(parsed: ParsedGitUrl, targetTempdir: string): Git
       `Subpath not found in cloned repo: ${subpath ?? '(none)'}. Repo root contains: ${topLevel}.`,
     );
   }
-  refuseEscapingLinks(targetTempdir, targetDir);
+  // Every consumer of `targetDir` (the audit walk, staging) follows links, so one committed
+  // `docs/keys -> ~/.ssh` would read the operator's own files as the repository's content.
+  withFsFaultSync({ side: 'environment', action: 'examine the links of the cloned repository', path: targetDir }, () => refuseEscapingLinks({
+    root: targetTempdir,
+    subtree: targetDir,
+    skip: safePath.join(targetTempdir, '.git'),
+    // The clone is read where it is: an absolute link inside it reads the clone's own files.
+    placement: 'in-place',
+    tree: 'the cloned repository',
+    within: 'the clone',
+    consequence: 'Every reader of the source follows links, so it would read files the repository does not hold',
+  }));
 
   return { ref, commit, targetDir };
 }
 
 /**
  * Where the subpath stands relative to the clone. A subpath that is itself a
- * link is judged by its own text too, as {@link followLink} judges one found
+ * link is judged by its own text too, as `refuseEscapingLinks` judges one found
  * while walking: a DANGLING link aimed outside escapes, and one aimed inside
  * names nothing — either way the subpath's refusal, never a raw ENOENT.
  */
 function subpathPlacement(cloneRoot: string, targetDir: string): 'inside' | 'outside' | 'absent' {
-  const placement = cloneContainment(cloneRoot, targetDir);
+  const placement = treeContainment(cloneRoot, targetDir);
   if (placement !== 'inside' || targetDir === cloneRoot) return placement;
   try {
     if (!lstatSync(targetDir).isSymbolicLink()) return placement;
@@ -118,7 +145,7 @@ function subpathPlacement(cloneRoot: string, targetDir: string): 'inside' | 'out
     if (isPathAbsentError(error)) return 'absent';
     throw error;
   }
-  if (cloneContainment(cloneRoot, safePath.resolve(dirname(targetDir), readlinkSync(targetDir))) === 'outside') return 'outside';
+  if (treeContainment(cloneRoot, safePath.resolve(dirname(targetDir), readlinkSync(targetDir))) === 'outside') return 'outside';
   try {
     statSync(targetDir);
   } catch (error) {
@@ -126,70 +153,6 @@ function subpathPlacement(cloneRoot: string, targetDir: string): 'inside' | 'out
     throw error;
   }
   return placement;
-}
-
-/**
- * Where `candidate` stands relative to the clone, on real paths. The clone
- * root itself counts as inside (`isUnderRoot` calls a root `outside` itself,
- * which is right for a sink and wrong here: `#ref:.` names the whole clone).
- */
-function cloneContainment(cloneRoot: string, candidate: string): 'inside' | 'outside' | 'absent' {
-  if (canonicalPath(candidate) === canonicalPath(cloneRoot)) return 'inside';
-  return isUnderRoot(cloneRoot, candidate);
-}
-
-/**
- * Refuse any symbolic link in the selected subtree whose target resolves
- * outside the clone. Every consumer of `targetDir` (the audit walk, staging)
- * follows links, so one committed `docs/keys -> ~/.ssh` would read the
- * operator's own files as the repository's content. Links that stay inside the
- * clone are followed, so a link into a sibling directory cannot smuggle out a
- * second-hop link; the visited set stops a link cycle.
- *
- * Coded `COPY_LINK_ESCAPES_SOURCE`: the source's own link, never the
- * argument's mistake, so it is the input's refusal rather than a usage error.
- */
-function refuseEscapingLinks(cloneRoot: string, subtree: string): void {
-  const gitDir = canonicalPath(safePath.join(cloneRoot, '.git'));
-  const visited = new Set<string>();
-  const pending = [subtree];
-  for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
-    const canonical = canonicalPath(dir);
-    if (canonical === gitDir || visited.has(canonical)) continue;
-    visited.add(canonical);
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const entryPath = safePath.join(dir, entry.name);
-      if (entry.isSymbolicLink()) {
-        if (followLink(cloneRoot, entryPath)) pending.push(entryPath);
-      } else if (entry.isDirectory()) {
-        pending.push(entryPath);
-      }
-    }
-  }
-}
-
-/**
- * Throw when the link at `link` escapes the clone; otherwise answer whether it
- * leads to a directory the walk must enter. The target is judged from the
- * link's own text as well as its realpath, so a DANGLING link aimed outside is
- * refused too — nothing reads it today, but it names a path the source does not own.
- */
-function followLink(cloneRoot: string, link: string): boolean {
-  const target = safePath.resolve(dirname(link), readlinkSync(link));
-  if (cloneContainment(cloneRoot, target) === 'outside' || cloneContainment(cloneRoot, link) === 'outside') {
-    throw new VatError(
-      COPY_LINK_ESCAPES_SOURCE_CODE,
-      `Refusing the cloned repository: ${safePath.relative(cloneRoot, link)} is a symbolic link to a path outside the clone. ` +
-        'Every reader of the source follows links, so it would read files the repository does not hold — ' +
-        'replace the link with the files, or point it inside the repository.',
-    );
-  }
-  try {
-    return statSync(link).isDirectory();
-  } catch (error) {
-    if (isPathAbsentError(error)) return false;
-    throw error;
-  }
 }
 
 function cloneShallow(parsed: ParsedGitUrl, tempdir: string): string {
@@ -213,10 +176,10 @@ function cloneShallow(parsed: ParsedGitUrl, tempdir: string): string {
   return parsed.ref ?? 'HEAD';
 }
 
-/** Turn a non-zero `git clone` into the most specific error we can justify. */
-function cloneFailure(parsed: ParsedGitUrl, stderr: string): Error {
+/** Turn a non-zero `git clone` into the most specific refusal we can justify. */
+function cloneFailure(parsed: ParsedGitUrl, stderr: string): GitCloneFailedError {
   if (parsed.ref !== undefined && /not found|did not match/i.test(stderr)) {
-    return new Error(
+    return new GitCloneFailedError(
       `Reference not found in ${parsed.cloneUrl}: ${parsed.ref}. ` +
         `Hint: --depth 1 cloning cannot resolve arbitrary deep commit SHAs; try a branch or tag name.`,
     );
@@ -224,13 +187,13 @@ function cloneFailure(parsed: ParsedGitUrl, stderr: string): Error {
   if (parsed.inferredFromShorthand) {
     // With prompts disabled, a nonexistent-or-private repo surfaces as an
     // authentication failure. Name the expansion, because the user never typed it.
-    return new Error(
+    return new GitCloneFailedError(
       `Clone failed:\n${stderr}\n` +
         `Hint: shorthand was expanded to ${parsed.cloneUrl}. Check the owner/repo spelling; ` +
         `if the repository is private, pass the full URL to authenticate interactively.`,
     );
   }
-  return new Error(`Clone failed:\n${stderr}`);
+  return new GitCloneFailedError(`Clone failed:\n${stderr}`);
 }
 
 function revParseHead(tempdir: string): string {
@@ -238,7 +201,7 @@ function revParseHead(tempdir: string): string {
   const result = runGit(['rev-parse', 'HEAD'], {}, tempdir);
   const status = result.status ?? 1;
   if (status !== 0) {
-    throw new Error(`Failed to resolve HEAD commit in cloned repo: ${(result.stderr ?? '').trim()}`);
+    throw new GitCloneFailedError(`Failed to resolve HEAD commit in cloned repo: ${(result.stderr ?? '').trim()}`);
   }
   // Full 40-char SHA: the commit is the git cache key, so truncation risks cross-repo collisions.
   return (result.stdout ?? '').trim();

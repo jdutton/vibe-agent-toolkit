@@ -287,11 +287,13 @@ describe('CONSISTENCY_CODES', () => {
   });
 });
 
-describe('findings of verbs that read no validation config', () => {
+describe('findings no validation config is applied to', () => {
   // `vat claude plugin install|uninstall`, `vat audit settings` and `vat agent validate`
-  // examine Claude user state, a settings file and an agent manifest. None loads a
-  // project `validation:` block, so a registry entry for one of their codes would
-  // let the config accept a key nothing applies.
+  // examine Claude user state, a settings file and an agent manifest, and none loads a
+  // project `validation:` block. `vat audit --compat` does load one — and applies it to the
+  // scan's findings BEFORE its two lanes file theirs (`SETTINGS_POLICY_CONFLICT`,
+  // `COMPAT_NOT_CHECKED`), so the block never reaches those either. For every code here a
+  // registry entry would let the config accept a key nothing applies.
   const LANE_OWNED = [
     'PLUGIN_UNINSTALL_INCOMPLETE',
     'PLUGIN_NOT_INSTALLED_BY_VAT',
@@ -301,6 +303,8 @@ describe('findings of verbs that read no validation config', () => {
     'SETTINGS_PATH_DEPRECATED',
     'SETTINGS_RULE_SHADOWED',
     'SETTINGS_MARKETPLACE_TOKEN_MISSING',
+    'SETTINGS_POLICY_CONFLICT',
+    'COMPAT_NOT_CHECKED',
     'AGENT_MANIFEST_INVALID',
     'AGENT_REFERENCE_MISSING',
     'AGENT_REFERENCE_UNREADABLE',
