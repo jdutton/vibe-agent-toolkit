@@ -1,9 +1,19 @@
 import { SeveritySchema } from '@vibe-agent-toolkit/schema';
+import { FS_FAULT_ERRNOS_BY_CLASS, type FsFaultClass } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { ContentKeySchema, JsonValueSchema } from './projection-shared.js';
 
 const EXTENT_FK_DESC = 'Foreign key to resolution_contexts.contextId, species "extent"';
+
+/**
+ * The classes a link resolution the OS declined or could not complete can carry: utils' one
+ * vocabulary less `absent` — the OS that looked and found nothing is EXTENT_SYMLINK_TARGET_UNRESOLVED,
+ * whose row carries no class.
+ */
+const TARGET_FAULT_CLASSES = (Object.keys(FS_FAULT_ERRNOS_BY_CLASS) as FsFaultClass[]).filter(
+  (faultClass): faultClass is Exclude<FsFaultClass, 'absent'> => faultClass !== 'absent',
+) as [Exclude<FsFaultClass, 'absent'>, ...Array<Exclude<FsFaultClass, 'absent'>>];
 
 /**
  * A row of the `roots` table — a federated corpus root.
@@ -350,17 +360,22 @@ export const RealizationConditionRowSchema = z.object({
     .describe('The FIRST glob declared by the refusal rule that matched — the rule\'s identifying pattern, read the same way packaging-validator.ts reads matchedRule.patterns[0]. Names WHICH rule, not which of its globs fired; the code column already says why. Null when the matching rule declares no patterns (it refused by basename, kind or flag), and for every condition no refusal rule produced.'),
   matchedPayload: JsonValueSchema
     .describe('The matched refusal rule\'s OPAQUE payload, copied verbatim from the declaration and never interpreted — the channel for caller vocabulary the primitive has no column for (the skill translation carries an excludeReferencesFromBundle rule\'s index and its template here). Null when the rule declared none, and for every condition no refusal rule produced.'),
+  targetFaultClass: z.enum(TARGET_FAULT_CLASSES).nullable()
+    .describe('The fault class (the FsFaultClass vocabulary less absent: refused, exhausted, wrong-type, occupied, busy, unsupported, device) of a resolution the OS declined or could not complete — set on EXTENT_SYMLINK_TARGET_UNREADABLE, where it says WHY the link could not be followed, so a query or check reads the cause from a column and never from message. Null on every other condition: nothing was looked up, or the OS looked and found nothing.'),
 }).strict().describe('A row of the path-dependent `realization_conditions` table');
 
 export type RealizationConditionRow = z.infer<typeof RealizationConditionRowSchema>;
 
 /**
- * The six provenance columns, all null — a condition **no reference provoked**.
+ * The six provenance columns, all null — a condition **no reference provoked**
+ * — and `targetFaultClass`, null because no lookup failed.
  *
  * Spread at every such producer (`REALIZATION_PATH_COLLISION`,
  * `CLOSURE_ROOT_ABSENT`, the package and plugin extents' locate failures) so
  * the row states "there is no reference behind this" once, by name, instead of
- * repeating six null literals that a reader has to recognise as a set.
+ * repeating seven null literals that a reader has to recognise as a set. The one
+ * producer that knows a fault (a declined link whose resolution the OS refused)
+ * spreads it and then states its class.
  */
 export const CONDITION_WITHOUT_REFERENCE = {
   sourcePath: null,
@@ -369,9 +384,10 @@ export const CONDITION_WITHOUT_REFERENCE = {
   targetExists: null,
   matchedPattern: null,
   matchedPayload: null,
+  targetFaultClass: null,
 } as const satisfies Pick<
   RealizationConditionRow,
-  'sourcePath' | 'sourceLine' | 'sourceRef' | 'targetExists' | 'matchedPattern' | 'matchedPayload'
+  'sourcePath' | 'sourceLine' | 'sourceRef' | 'targetExists' | 'matchedPattern' | 'matchedPayload' | 'targetFaultClass'
 >;
 
 /**

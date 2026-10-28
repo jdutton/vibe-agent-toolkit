@@ -28,7 +28,7 @@ export const ARCHIVE_READ_SITES = {
   // The one extraction every npm lane shares: reached by each lane that downloads.
   'packages/cli/src/commands/claude/plugin/helpers.ts › extractArchive': ['vat skills install npm:', 'vat skills list npm:', 'vat claude plugin install npm:', 'vat claude org skills install npm:'],
   'packages/cli/src/commands/claude/org/skills.ts › openArchive': ['vat claude org skills install <zip>'],
-  'packages/cli/src/commands/claude/org/skills.ts › extractSkillZip': ['vat claude org skills install <zip>'],
+  'packages/cli/src/commands/claude/org/skills.ts › zipOfArchive': ['vat claude org skills install <zip>'],
   'packages/cli/src/commands/claude/org/skills.ts › downloadNpmPackage': ['vat claude org skills install npm:'],
   // A `url:` skill source, and the chain `vat skill test run --with <name>=url:…` reaches it by. The
   // table is run where the archive is fetched and extracted (`resolveUrlSource`); the three callers

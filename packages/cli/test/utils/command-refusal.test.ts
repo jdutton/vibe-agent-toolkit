@@ -50,6 +50,10 @@ describe('refusalCodeOf', () => {
     ['source', 'EACCES', 'INPUT_UNREADABLE'],
     ['destination', 'EACCES', 'RUN_INCOMPLETE'],
     ['source', 'EMFILE', 'RUN_INCOMPLETE'],
+    // An errno no table lists: a listing is a filesystem call by construction, so it is the
+    // unlisted (device) class, never a refusal with no cause read as INTERNAL_ERROR.
+    ['source', 'EWHATEVER', 'INPUT_UNREADABLE'],
+    ['source', 'ECHARSET', 'INPUT_UNREADABLE'],
   ] as const)('reads a %s listing refused with %s as the table\'s %s', (side, code, refusal) => {
     const refused = new DirectoryListingRefusedError(
       { kind: 'directory_unreadable', code, directory: '/p/docs', transient: false },

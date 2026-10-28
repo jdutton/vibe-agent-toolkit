@@ -110,15 +110,19 @@
  * It can be re-sourced.
  */
 
-import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readlinkSync } from 'node:fs';
 import { basename, isAbsolute } from 'node:path';
 
 import {
+  assertUnresolvableLink,
   forEachInOrder,
+  type FsFaultFacts,
   fsFaultOf,
   isAbsoluteAnyPlatform,
   isInvalidArgumentError,
   isPathAbsentError,
+  linkResolutionFault,
+  realpathNativeSync,
   relativeEscapesRoot,
   safePath,
   toForwardSlash,
@@ -137,6 +141,7 @@ import {
 } from '../../schemas/projection-resources.js';
 import type { JsonValue } from '../../schemas/projection-shared.js';
 import type { ResolutionContextRow } from '../../schemas/projection-zones.js';
+import { projectRootResolution } from '../../utils.js';
 import type {
   ContributorStratum,
   ExtentContribution,
@@ -561,17 +566,19 @@ export const EXTENT_SYMLINK_NOT_REALIZED = 'EXTENT_SYMLINK_NOT_REALIZED';
  * `.claude/rules -> ../vendor/rules` in-root when `vendor` itself leaves the
  * root, and `chain.md -> hop.md` in-root when `hop.md` does: two rule sets the
  * harness skips, reported as in force. The target TEXT is used only to name an
- * in-root spelling in the message. A link that resolves nowhere takes this code
- * only when its text already leaves the root — Claude Code loads nothing through
- * it either way, and where it points is the fact the author can act on;
- * otherwise it is {@link EXTENT_SYMLINK_TARGET_UNRESOLVED}.
+ * in-root spelling in the message. A link the host looked up and found nothing
+ * at takes this code only when its text already leaves the root — Claude Code
+ * loads nothing through it either way, and where it points is the fact the author
+ * can act on; otherwise it is {@link EXTENT_SYMLINK_TARGET_UNRESOLVED}. A link
+ * whose lookup the OS refused or could not complete is
+ * {@link EXTENT_SYMLINK_TARGET_UNREADABLE} wherever its text points.
  */
 export const EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT = 'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT';
 
 /**
  * `realization_conditions.code` for a declined link that resolves to NOTHING on
- * this host — dangling, a loop, or a path the OS refuses to resolve — while its
- * target text does not leave the root.
+ * this host — dangling, a loop, or a reparse point it cannot follow: the OS
+ * looked and found nothing — while its target text does not leave the root.
  *
  * ## Why a third code
  *
@@ -589,16 +596,39 @@ export const EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT = 'EXTENT_SYMLINK_TARGET_OUTSIDE
 export const EXTENT_SYMLINK_TARGET_UNRESOLVED = 'EXTENT_SYMLINK_TARGET_UNRESOLVED';
 
 /**
+ * `realization_conditions.code` for a declined link whose resolution the OS
+ * DECLINED or could not complete — `EACCES`/`EPERM` on a component, an exhausted
+ * descriptor table, an I/O error, Windows' ambiguous `UNKNOWN` (libuv
+ * `src/win/error.c:172` answers it for a share that is not there AND for
+ * credentials the share refused). The fault class is in the row's own
+ * `targetFaultClass` column, the errno in its message.
+ *
+ * ## Why a fourth code
+ *
+ * {@link EXTENT_SYMLINK_TARGET_UNRESOLVED} tells the author the link dangles and
+ * to point it at a file that exists or delete it. A link the host was not allowed
+ * to follow does not dangle, and deleting it is the wrong remedy — though where it
+ * leads, once followed, is not known here: a target outside the root is skipped then too. The same errno is a fault on
+ * every other lane — the link validator's existence walk, `vat claude plugin
+ * build`, every install — so one link gets one answer: here, "could not be read",
+ * never "leads nowhere". Claude Code reads nothing through it on this host
+ * either, which is what the consumers need.
+ */
+export const EXTENT_SYMLINK_TARGET_UNREADABLE = 'EXTENT_SYMLINK_TARGET_UNREADABLE';
+
+/**
  * Every `realization_conditions.code` a declined symbolic link is recorded
  * under — the ONE contract each consumer filters on.
  *
  * Declaration order is the order a reader meets them: the general decline
- * first, the out-of-root arm second, the resolves-nowhere arm third.
+ * first, the out-of-root arm second, the resolves-nowhere arm third, the
+ * could-not-look arm fourth.
  */
 export const DECLINED_SYMLINK_CODES = [
   EXTENT_SYMLINK_NOT_REALIZED,
   EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
   EXTENT_SYMLINK_TARGET_UNRESOLVED,
+  EXTENT_SYMLINK_TARGET_UNREADABLE,
 ] as const;
 
 /** One of the codes in {@link DECLINED_SYMLINK_CODES}. */
@@ -670,7 +700,7 @@ function declinedSymlinkRow(
   recordedBy: () => CrawlSourceKind,
 ): RealizationConditionRow {
   const path = toForwardSlash(safePath.relative(roots.root, link));
-  const { code, clause } = linkTarget(link, roots, realized, recordedBy);
+  const { code, clause, faultClass } = linkTarget(link, roots, realized, recordedBy);
   return {
     extentId,
     path,
@@ -679,6 +709,7 @@ function declinedSymlinkRow(
     message: `'${path}' is a symbolic link ${clause}. ${NOT_COUNTED_CLAUSE}`,
     resourceId: null,
     ...CONDITION_WITHOUT_REFERENCE,
+    targetFaultClass: faultClass,
   };
 }
 
@@ -688,6 +719,8 @@ interface LinkTargetVerdict {
   readonly code: DeclinedSymlinkCode;
   /** The clause that follows "is a symbolic link". */
   readonly clause: string;
+  /** The row's `targetFaultClass`: why the OS would not resolve the link, or `null`. */
+  readonly faultClass: RealizationConditionRow['targetFaultClass'];
 }
 
 /**
@@ -717,21 +750,38 @@ function linkTarget(
   const host = hostResolution(link, roots.realRoot);
   const text = readTargetText(link);
   const code = declinedCode(host, link, roots, text);
+  const faultClass = targetFaultClassOf(host);
   // Gone or unreadable between the enumeration and here: still a declined
   // link, still recorded — only its target text is unknown.
-  if (!text.readable) return { code, clause: unreadableTargetClause(text.error, recordedBy()) };
+  if (!text.readable) return { code, clause: unreadableTargetClause(text.error, recordedBy(), host), faultClass };
   const named = namedInRoot(link, roots, text.target);
   switch (host.kind) {
     case 'inside': {
-      return { code, clause: insideClause(named ?? host.path, host.path, roots, realized) };
+      return { code, clause: insideClause(named ?? host.path, host.path, roots, realized), faultClass };
     }
     case 'outside': {
-      return { code, clause: escapingClause(named) };
+      return { code, clause: escapingClause(named), faultClass };
     }
     case 'nowhere': {
-      return { code, clause: named === undefined ? OUTSIDE_UNNAMED_CLAUSE : unresolvedClause(named) };
+      return { code, clause: nowhereClause(named, host.fault), faultClass };
     }
   }
+}
+
+/**
+ * The row's `targetFaultClass`: the class of a resolution the OS declined or
+ * could not complete, and `null` for every other answer.
+ *
+ * The absent class is never a fault here — a target that resolves to nothing
+ * is `nowhere` with no fault — so it is `null` like every other no-fault answer.
+ *
+ * @param host - How the host resolved the link
+ * @returns The class, or `null`
+ */
+function targetFaultClassOf(host: HostResolution): RealizationConditionRow['targetFaultClass'] {
+  if (host.kind !== 'nowhere' || host.fault === null) return null;
+  const { faultClass } = host.fault;
+  return faultClass === 'absent' ? null : faultClass;
 }
 
 /** A link's target text, or the filesystem refusal that kept it unread. */
@@ -776,8 +826,11 @@ function namedInRoot(link: string, roots: LinkRoots, target: string): string | u
  * The ONE decision of a declined link's code, reached only through
  * {@link declinedSymlinkRow}.
  *
- * The host's resolution decides. The target text only places a link that
- * resolves nowhere: outside the root when the text was readable and leaves it.
+ * The host's resolution decides. A lookup the OS refused or could not complete
+ * is {@link EXTENT_SYMLINK_TARGET_UNREADABLE} whatever the text says — the
+ * fault, not the spelling, is what the author must act on. The target text only
+ * places a link the host looked up and found nothing at: outside the root when
+ * the text was readable and leaves it.
  *
  * @param host - Where the host resolves the link
  * @param link - Absolute, forward-slashed link path
@@ -786,7 +839,7 @@ function namedInRoot(link: string, roots: LinkRoots, target: string): string | u
  * @returns The row's code
  */
 function declinedCode(host: HostResolution, link: string, roots: LinkRoots, text: TargetText): DeclinedSymlinkCode {
-  if (host.kind !== 'nowhere' || !text.readable) return unnamedTargetCode(host);
+  if (host.kind !== 'nowhere' || host.fault !== null || !text.readable) return unnamedTargetCode(host);
   return namedInRoot(link, roots, text.target) === undefined
     ? EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT
     : EXTENT_SYMLINK_TARGET_UNRESOLVED;
@@ -846,7 +899,7 @@ export function declinedSymlinkRowsStillHold(
     const realized = realizedByExtent.get(row.extentId) ?? new Set<string>();
     const link = toForwardSlash(safePath.resolve(root, row.path));
     const fresh = declinedSymlinkRow(link, roots, row.extentId, realized, recordedBy);
-    return fresh.code === row.code && fresh.message === row.message;
+    return fresh.code === row.code && fresh.message === row.message && fresh.targetFaultClass === row.targetFaultClass;
   });
 }
 
@@ -874,9 +927,14 @@ interface LinkRoots {
  */
 function realRootOf(root: string): string {
   try {
-    return toForwardSlash(realpathSync.native(root));
+    return realpathNativeSync(root);
   } catch (error) {
-    if (fsFaultOf(error) === undefined) throw error;
+    // The root is no link target: it is the namespace every target is compared
+    // in, so a root the OS will not resolve stops the run — on the source side,
+    // which the corpus root is by definition.
+    // The fault is the corpus's — never "it leads nowhere", which would send the operator to fix
+    // a root that is fine — under the one root context the link validator uses too.
+    assertUnresolvableLink(error, projectRootResolution(root));
     return root;
   }
 }
@@ -887,15 +945,23 @@ type HostResolution =
   | { readonly kind: 'inside'; readonly path: string }
   /** Somewhere outside the root — never named. */
   | { readonly kind: 'outside' }
-  /** Nowhere: dangling, a loop, or refused. */
-  | { readonly kind: 'nowhere' };
+  /**
+   * Nowhere the host could reach: dangling, a loop, or a reparse point it cannot follow
+   * (`fault: null`), or a resolution the OS declined or failed (`fault` names it — the row's
+   * message carries its errno and class). One link's fault is that link's row, never the run's.
+   */
+  | { readonly kind: 'nowhere'; readonly fault: FsFaultFacts | null };
 
 /**
  * Where the host resolves one link — the ONE containment predicate every code
  * is chosen by.
  *
  * `realpathSync.native` rather than `realpathSync`: only the native call returns
- * the canonical on-disk spelling, which {@link linkTargetRealization} needs.
+ * the canonical on-disk spelling, which {@link linkTargetRealization} needs
+ * ({@link realpathNativeSync}: the JS realpath only on a volume that cannot
+ * answer a final-path query, or to confirm a native absent answer — `ENOENT`
+ * or `ENOTDIR` — that a folder-mounted volume or a procfs-less musl gives for a
+ * path that exists).
  *
  * @param link - Absolute, forward-slashed link path
  * @param realRoot - The root's real path
@@ -904,12 +970,12 @@ type HostResolution =
 function hostResolution(link: string, realRoot: string): HostResolution {
   let real: string;
   try {
-    real = toForwardSlash(realpathSync.native(link));
+    real = realpathNativeSync(link);
   } catch (error) {
-    // Dangling, looping or unreadable: the host reaches nothing, which is an
-    // answer rather than a bug. Anything that is not a filesystem refusal is.
-    if (fsFaultOf(error) === undefined) throw error;
-    return { kind: 'nowhere' };
+    // Dangling or looping: the host reaches nothing, which is an answer. A host
+    // that declined or could not look reaches nothing EITHER, and says why —
+    // the row carries it. A bug (no errno) stays loud.
+    return { kind: 'nowhere', fault: linkResolutionFault(error) ?? null };
   }
   const relative = toForwardSlash(safePath.relative(realRoot, real));
   return relativeEscapesRoot(relative) ? { kind: 'outside' } : { kind: 'inside', path: relative };
@@ -918,7 +984,8 @@ function hostResolution(link: string, realRoot: string): HostResolution {
 /**
  * The code for a link whose target text could not be read — the host's verdict
  * alone. Resolving nowhere is {@link EXTENT_SYMLINK_TARGET_UNRESOLVED}: nothing
- * was read, so nothing places the target outside the root.
+ * was read, so nothing places the target outside the root — unless the OS
+ * refused or failed the lookup, which is {@link EXTENT_SYMLINK_TARGET_UNREADABLE}.
  *
  * @param host - Where the host resolves the link
  * @returns The row's code
@@ -932,7 +999,7 @@ function unnamedTargetCode(host: HostResolution): DeclinedSymlinkCode {
       return EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT;
     }
     case 'nowhere': {
-      return EXTENT_SYMLINK_TARGET_UNRESOLVED;
+      return host.fault === null ? EXTENT_SYMLINK_TARGET_UNRESOLVED : EXTENT_SYMLINK_TARGET_UNREADABLE;
     }
   }
 }
@@ -953,13 +1020,26 @@ function escapingClause(named: string | undefined): string {
     + ' real target is not named here), so it is realized nowhere in this projection';
 }
 
+/** Who the host could not resolve: the named in-root target, or a target left unnamed. */
+function unresolvedSubject(named: string | undefined): string {
+  if (named === undefined) return 'whose target (not named here)';
+  return `to ${named === '' ? 'the project root' : quotedPath(named)}, which`;
+}
+
 /**
- * The clause for a link whose in-root target resolves to nothing on this host.
+ * The clause for a link the host resolves to nothing: the OS found nothing, or
+ * declined or failed the lookup.
  *
- * @param named - The target text's in-root spelling
+ * @param named - The target text's in-root spelling, or `undefined` when the text leaves the root
+ * @param fault - The resolution the OS declined or failed, or `null` when it looked and found nothing
  * @returns The clause
  */
-function unresolvedClause(named: string): string {
+function nowhereClause(named: string | undefined, fault: FsFaultFacts | null): string {
+  if (fault !== null) {
+    return `${unresolvedSubject(named)} this host could not resolve — the OS refused or failed the lookup (${fault.errno},`
+      + ` ${fault.faultClass}) — so nothing is read through the link on this host and it is realized nowhere in this projection`;
+  }
+  if (named === undefined) return OUTSIDE_UNNAMED_CLAUSE;
   const where = named === '' ? 'to the project root' : `to ${quotedPath(named)}`;
   return `${where}, which resolves to nothing on this host — it does not exist, is a link loop, or`
     + ' cannot be resolved — so nothing is read through the link and it is realized nowhere in this projection';
@@ -1008,11 +1088,16 @@ function isSymbolicLink(absolutePath: string): boolean {
  * where the link points, and a code that said "outside the root" here would be
  * a guess the reader cannot check.
  *
+ * Every other refusal names its errno and class, and — when the host could not
+ * resolve the link either — that fault's too: the code's registry entry
+ * promises the errno in the message, and the column carries only the class.
+ *
  * @param error - The filesystem access error `readlinkSync` threw
  * @param recordedBy - Which source met the link
+ * @param host - How the host resolved the link
  * @returns The clause that follows "is a symbolic link"
  */
-function unreadableTargetClause(error: unknown, recordedBy: CrawlSourceKind): string {
+function unreadableTargetClause(error: unknown, recordedBy: CrawlSourceKind, host: HostResolution): string {
   // EINVAL: the path is not a link on disk. From git that is a stable fact —
   // the index says mode 120000 and the working tree holds a plain file, a
   // checkout with `core.symlinks=false` (the Windows default without
@@ -1023,7 +1108,10 @@ function unreadableTargetClause(error: unknown, recordedBy: CrawlSourceKind): st
       ? 'in git that is not a symbolic link on disk (a checkout with core.symlinks=false writes it as a plain file holding the target text)'
       : 'that is no longer a symbolic link on disk';
   }
-  return 'whose target could not be read';
+  const refusal = fsFaultOf(error);
+  const read = refusal === undefined ? 'whose target could not be read' : `whose target could not be read (${refusal.errno}, ${refusal.faultClass})`;
+  const fault = host.kind === 'nowhere' ? host.fault : null;
+  return fault === null ? read : `${read}, and which this host could not resolve either (${fault.errno}, ${fault.faultClass})`;
 }
 
 /**
@@ -1161,19 +1249,26 @@ function inRootRelative(roots: LinkRoots, resolved: string): string | undefined 
  * was called outside it. The path's own last segment is never resolved — the
  * message names the spelling the link wrote, not where a further link leads.
  *
+ * Only an ABSENT ancestor walks further up. Any other failure — a cycle, a
+ * name too long, an OS that declined (`EACCES`/`EPERM`) or failed — answers
+ * `undefined`: the target text left the root lexically and nothing resolved
+ * brings it back, so it is outside, unnamed. That is decidable without the
+ * refused segment, and it is never a reason to stop the run.
+ *
  * @param path - Absolute path
  * @returns The respelled path, or `undefined` when an ancestor exists but the
  *   OS will not resolve it — it cannot be shown to be inside the root, so it is
  *   reported as outside, and never named
+ * @throws The resolution's error when it carries no errno — a bug stays loud
  */
 function realThroughNearestAncestor(path: string): string | undefined {
   const tail = [basename(path)];
   let directory = safePath.resolve(path, '..');
   for (;;) {
     try {
-      return safePath.join(realpathSync.native(directory), ...tail);
+      return safePath.join(realpathNativeSync(directory), ...tail);
     } catch (error) {
-      if (fsFaultOf(error) === undefined) throw error;
+      linkResolutionFault(error);
       if (!isPathAbsentError(error)) return undefined;
     }
     const up = safePath.resolve(directory, '..');

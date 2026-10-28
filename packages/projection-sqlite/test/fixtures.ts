@@ -182,6 +182,7 @@ export function sampleExtentRows(rootId = 'root-1'): ExtentScopedRows {
       targetExists: null,
       matchedPattern: null,
       matchedPayload: null,
+      targetFaultClass: null,
     }],
     claudeRulePatterns: [{
       resourceId: 'res-1',

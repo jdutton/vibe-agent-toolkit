@@ -75,14 +75,17 @@ describe('a fault is named and sided by the path its syscall acted on', () => {
 
   it('names a refused symlink by the LINK it could not create, never by its target text', ({ skip }) => {
     const { raw, link } = refusedLink(tree, '../shared/x', skip);
-    // The premise, read off the OS's own error: `path` is the target text, `dest` the link.
-    expect(raw).toMatchObject({ code: 'EEXIST', syscall: 'symlink', path: '../shared/x' });
+    // The premise, read off the OS's own error: `path` is the target text, `dest` the link. On
+    // win32 Node rewrites a relative target's `/` to `\` before the call, and reports that text.
+    expect(raw).toMatchObject({ code: 'EEXIST', syscall: 'symlink' });
+    expect(toForwardSlash(String((raw as { path?: unknown }).path))).toBe('../shared/x');
 
     const fault = asFault(classifyFsFault(raw, { side: 'destination', action: 'create the link' }));
 
     expect(fault.path).toBe(toForwardSlash(link));
     expect(fault.message).toContain(toForwardSlash(link));
     expect(fault.message).not.toContain('../shared/x');
+    expect(fault.message).not.toContain(String.raw`..\shared\x`);
   });
 
   it('sides a refused symlink by the link, when its target text points into another side\'s root', ({ skip }) => {

@@ -38,9 +38,18 @@ export function tooLarge(archive: string, limits: ArchiveLimits, cause?: unknown
   return new ArchiveRefusedError(archive, { reason: 'too-large', why: `it expands to more than ${limits.maxBytes} bytes, the most VAT reads from one archive` }, { cause });
 }
 
-/** The refusal of bytes that are no archive of the format, or of an entry that does not inflate. */
-export function unreadableArchive(archive: string, why: string, cause?: unknown, entry?: string): ArchiveRefusedError {
-  return new ArchiveRefusedError(archive, { reason: 'unreadable', why, ...(entry === undefined ? {} : { entry }) }, { cause });
+/** The refusal of bytes that are no archive of the format: the one reason a lane may pass bytes on. */
+export function unreadableArchive(archive: string, why: string, cause?: unknown): ArchiveRefusedError {
+  return new ArchiveRefusedError(archive, { reason: 'unreadable', why }, { cause });
+}
+
+/**
+ * The refusal of an archive that parsed, as it is opened, for an entry that does not hold what it
+ * declares: `unsupported`, naming it. Refused as a whole — a read of one entry that fails is
+ * an `ArchiveEntryReadError` instead.
+ */
+export function unsupportedEntry(archive: string, entry: string, what: string): ArchiveRefusedError {
+  return new ArchiveRefusedError(archive, { reason: 'unsupported', entry, why: `its entry \`${entry}\` ${what}` });
 }
 
 /**

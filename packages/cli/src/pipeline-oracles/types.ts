@@ -56,6 +56,9 @@ export const ENUMERATION_ROUTES = ['git-ls-files', 'walk'] as const;
 /** One of {@link ENUMERATION_ROUTES}. */
 export type EnumerationRoute = (typeof ENUMERATION_ROUTES)[number];
 
+/** Where a path's real location lies against the corpus root — see {@link EnumerationRow.targetInsideRoot}. */
+export type TargetPlacement = boolean | null | { readonly fault: string };
+
 /**
  * One enumerated path and the cheap attributes later stages must not go compute
  * for themselves.
@@ -85,13 +88,14 @@ export interface EnumerationRow {
   /**
    * Is this path's real location inside the corpus root?
    *
-   * `null` when the real path could not be read (a dangling link, chiefly).
+   * `null` when the real path resolves to nothing (a dangling link, chiefly),
+   * and `{ fault: <errno> }` when the OS declined or failed to resolve it.
    * False means the row widens the corpus to somewhere nobody pointed the
    * command at — the hazard the `followSymlinks` boolean bundles together with
    * looping and with membership, and the one a visited-set does NOT bound: that
    * guard limits re-entry, not reach.
    */
-  targetInsideRoot: boolean | null;
+  targetInsideRoot: TargetPlacement;
   /**
    * Does another enumerated path in this same lane resolve to the same file?
    *

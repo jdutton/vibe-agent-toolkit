@@ -59,6 +59,19 @@ export interface BareRepoOptions {
   skillSubdir?: string;
   /** Shape the work-tree further (e.g. commit a symbolic link) before the one commit. */
   beforeCommit?: (workDir: string) => void;
+  /**
+   * Symbolic links committed straight into the index — `path -> text`, mode `120000` — so a link
+   * of any text exists in the commit on every host, symlink privilege or not.
+   */
+  links?: Readonly<Record<string, string>>;
+}
+
+/** Commit-to-be `links` as mode-`120000` index entries, their texts written as blobs. */
+function stageLinks(workDir: string, links: Readonly<Record<string, string>>): void {
+  for (const [path, text] of Object.entries(links)) {
+    const blob = runGitOrThrow(['hash-object', '-w', '--stdin'], { cwd: workDir, input: text });
+    runGit(['update-index', '--add', '--cacheinfo', `120000,${blob},${path}`], workDir);
+  }
 }
 
 /**
@@ -78,6 +91,7 @@ export function makeBareRepoWithSkill(options: BareRepoOptions = {}): {
     skillContent = FIXTURE_SKILL_MD,
     skillSubdir,
     beforeCommit,
+    links = {},
   } = options;
 
   const bareDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-ss-bare-'));
@@ -100,6 +114,7 @@ export function makeBareRepoWithSkill(options: BareRepoOptions = {}): {
   writeFileSync(safePath.join(skillTargetDir, 'SKILL.md'), skillContent);
   beforeCommit?.(workDir);
   runGit(['add', '-A'], workDir);
+  stageLinks(workDir, links);
   runGit(['commit', '-m', 'init'], workDir);
   runGit(['push', 'origin', 'main'], workDir);
 

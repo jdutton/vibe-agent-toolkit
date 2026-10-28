@@ -24,7 +24,7 @@
     "clean": "rimraf --glob dist \"*.tsbuildinfo\" .tsc-staging"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@vibe-agent-toolkit/schema": "workspace:*",
     "zod": "^3.25.0"
   },

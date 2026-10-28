@@ -31,7 +31,7 @@ export { TextTooLargeError } from './text-content.js';
 export type { DecodedText, EncodingSource, TextEncoding, TextProvenance } from './text-content.js';
 
 // Two materialized columns, each a fill+judge pair and nothing else. In both the
-// row IS the answer, so the row lookup — `pathSpellingFrom`, `realpathFrom` — is
+// row IS the answer, so the row lookup — `pathSpellingFrom`, `realpathRowFrom` — is
 // itself the judge and is exported. See `index.ts` for the full reasoning.
 export { fsFaultOf, isPathAbsentError } from './errors/errno-table.js';
 export {
@@ -40,7 +40,7 @@ export {
   fillRealpaths,
   FsLookupCache,
   pathSpellingFrom,
-  realpathFrom,
+  realpathRowFrom,
   spellingWalkRoot,
 } from './fs-utils.js';
 export type {
@@ -51,5 +51,7 @@ export type {
   PathSpelling,
   PathSpellingRequest,
   PathSpellingTable,
+  RealpathFault,
+  RealpathRow,
   RealpathTable,
 } from './fs-utils.js';

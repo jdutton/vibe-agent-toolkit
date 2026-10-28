@@ -12,8 +12,8 @@ import {
   isAccessRefusedError,
   isAlreadyExistsError,
   isFileInTheWayError,
+  isFinalPathUnanswerableError,
   isInvalidArgumentError,
-  isLinkLoopError,
   isNameTooLongError,
   isNoSuchEntryError,
   isNotARegularFileError,
@@ -24,21 +24,25 @@ import {
   isRetryableShortageError,
   isSymlinkUnsupportedError,
   isTimedOutError,
+  isUnresolvableLinkError,
   isWouldBlockError,
+  pathsActedOn,
   type FsFaultClass,
 } from '../../src/errors/errno-table.js';
 import {
+  assertUnresolvableLink,
   classifyFsFault,
   FS_FAULT_CODE,
   FsFaultError,
   isCapacityFault,
   isFsFaultError,
   isLayoutFault,
+  linkResolutionFault,
   withFsFault,
   withFsFaultSync,
 } from '../../src/errors/fs-fault.js';
 import { VatError } from '../../src/errors/vat-error.js';
-import { INJECTED_ERRNOS } from '../../src/testing/fault-spec.js';
+import { INJECTED_ERRNOS, injectedErrnoError } from '../../src/testing/fault-spec.js';
 
 function errno(code: string, fields: Record<string, string> = {}): Error & { code: string } {
   return Object.assign(new Error(`${code}: simulated`), { code }, fields);
@@ -52,13 +56,14 @@ const TABLE: ReadonlyArray<readonly [FsFaultClass, readonly string[]]> = [
   ['occupied', ['EEXIST', 'ENOTEMPTY']],
   ['busy', ['EBUSY', 'ETXTBSY', 'EAGAIN']],
   ['unsupported', ['ENOTSUP', 'EOPNOTSUPP', 'EXDEV', 'EINVAL', 'EROFS']],
-  ['device', ['EIO', 'ESTALE', 'ETIMEDOUT', 'EHOSTDOWN', 'ENETDOWN', 'UNKNOWN']],
+  ['device', ['EIO', 'ESTALE', 'ETIMEDOUT', 'EHOSTDOWN', 'ENETDOWN', 'ENETUNREACH', 'EHOSTUNREACH', 'ECONNRESET', 'ENOTCONN', 'UNKNOWN']],
 ];
 const CASES = TABLE.flatMap(([faultClass, errnos]) => errnos.map((code) => ({ code, faultClass })));
 
 describe('the errno table', () => {
-  it.each(CASES)('$code is $faultClass, directly and through a 2-deep cause chain', ({ code, faultClass }) => {
-    expect(fsFaultOf(errno(code))?.faultClass).toBe(faultClass);
+  // Shaped as a file call's error (a path it acted on): a network errno is the filesystem's only then.
+  it.each(CASES)('$code from a file call is $faultClass, directly and through a 2-deep cause chain', ({ code, faultClass }) => {
+    expect(fsFaultOf(errno(code, { syscall: 'open', path: '/p' }))?.faultClass).toBe(faultClass);
     const wrapped = new Error('outer', { cause: new Error('middle', { cause: errno(code, { path: '/p' }) }) });
     expect(fsFaultOf(wrapped)).toMatchObject({ errno: code, faultClass, path: '/p' });
   });
@@ -77,7 +82,7 @@ describe('the errno table', () => {
   });
 
   it('classifies every errno the fault injector can raise', () => {
-    for (const code of INJECTED_ERRNOS) expect(fsFaultOf(errno(code)), code).toBeDefined();
+    for (const code of INJECTED_ERRNOS) expect(fsFaultOf(injectedErrnoError(code, 'stat', '/p')), code).toBeDefined();
   });
 
   it('keeps EROFS out of refused: no permission would change it', () => {
@@ -97,6 +102,17 @@ describe('the errno table', () => {
     });
   });
 
+  // Read once, here: what a fault displays, how it is sided and which parent walk it stops are all
+  // judged on the same path — never `\\?\C:\…` in one and `C:\…` in another.
+  it('reads path and dest without the win32 namespace prefix Node may report them with, so every consumer sees one path', () => {
+    const B = String.fromCodePoint(0x5c);
+    const namespace = `${B}${B}?${B}`;
+    const facts = fsFaultOf(errno('EPERM', { path: `${namespace}C:${B}staged`, dest: `${namespace}UNC${B}host${B}share${B}x.md`, syscall: 'rename' }));
+
+    expect(facts).toMatchObject({ path: `C:${B}staged`, dest: `${B}${B}host${B}share${B}x.md` });
+    expect(facts === undefined ? [] : pathsActedOn(facts)).toEqual([`${B}${B}host${B}share${B}x.md`, `C:${B}staged`]);
+  });
+
   it('bounds a cyclic cause chain', () => {
     const loop: { cause?: unknown } = {};
     loop.cause = loop;
@@ -109,7 +125,6 @@ describe('the single-errno questions', () => {
   it.each([
     ['isPathAbsentError', isPathAbsentError, ['ENOENT', 'ENOTDIR'], ['EACCES', 'ELOOP']],
     ['isAlreadyExistsError', isAlreadyExistsError, ['EEXIST'], ['ENOTEMPTY']],
-    ['isLinkLoopError', isLinkLoopError, ['ELOOP'], ['ENOENT']],
     ['isNoSuchEntryError', isNoSuchEntryError, ['ENOENT'], ['ENOTDIR', 'EACCES']],
     ['isNameTooLongError', isNameTooLongError, ['ENAMETOOLONG'], ['ELOOP', 'EISDIR']],
     ['isInvalidArgumentError', isInvalidArgumentError, ['EINVAL'], ['ENOTSUP']],
@@ -121,11 +136,65 @@ describe('the single-errno questions', () => {
     ['isRenameContentionError', isRenameContentionError, ['EPERM', 'EBUSY', 'EACCES'], ['ENOENT', 'EXDEV', 'ENOSPC']],
     ['isAccessRefusedError', isAccessRefusedError, ['EACCES', 'EPERM'], ['EBUSY', 'EROFS', 'ENOENT']],
     ['isOccupiedError', isOccupiedError, ['EEXIST', 'ENOTEMPTY'], ['EACCES', 'ENOENT', 'EBUSY']],
+    // A native realpath on a volume that cannot answer a final-path query (Windows' ERROR_INVALID_FUNCTION is EISDIR).
+    ['isFinalPathUnanswerableError', isFinalPathUnanswerableError, ['EISDIR', 'ENOTSUP', 'EOPNOTSUPP'], ['EACCES', 'ENOENT', 'UNKNOWN']],
+    // The OS looked and found nothing to resolve to; declined, exhausted, busy and the device class
+    // are faults — and so are the AMBIGUOUS answers: libuv `src/win/error.c` reports four Win32
+    // errors as EINVAL (:102-105), ERROR_BUFFER_OVERFLOW as ENAMETOOLONG (:129), and a missing share
+    // AND refused credentials alike as UNKNOWN (:172), so none can mean "nothing there".
+    [
+      'isUnresolvableLinkError',
+      isUnresolvableLinkError,
+      ['ENOENT', 'ENOTDIR', 'ELOOP'],
+      ['EINVAL', 'ENAMETOOLONG', 'UNKNOWN', 'ENETUNREACH', 'EHOSTUNREACH', 'ECONNRESET', 'ENOTCONN', 'EACCES', 'EPERM', 'ENOSPC', 'EDQUOT', 'EMFILE', 'ENFILE', 'EBUSY', 'ETXTBSY', 'EAGAIN', 'EIO', 'ESTALE', 'ETIMEDOUT', 'EHOSTDOWN', 'ENETDOWN', 'EISDIR', 'EEXIST', 'ENOTSUP', 'EXDEV', 'EROFS'],
+    ],
   ] as const)('%s', (_name, predicate, yes, no) => {
     for (const code of yes) expect(predicate(errno(code)), code).toBe(true);
     for (const code of no) expect(predicate(errno(code)), code).toBe(false);
     expect(predicate(new TypeError('x'))).toBe(false);
     expect(predicate(new Error('outer', { cause: errno(yes[0]) }))).toBe(true);
+  });
+});
+
+describe('assertUnresolvableLink', () => {
+  const ctx = { side: 'source', origin: 'content', action: 'resolve /r/link', path: '/r/link' } as const;
+
+  it('returns for a link that resolves to nothing, and throws every other filesystem errno classified on ctx', () => {
+    for (const code of ['ENOENT', 'ENOTDIR', 'ELOOP']) expect(() => { assertUnresolvableLink(errno(code), ctx); }, code).not.toThrow();
+    for (const code of ['EACCES', 'EPERM', 'EIO', 'UNKNOWN', 'EINVAL', 'ENAMETOOLONG', 'ENETUNREACH']) {
+      expect(() => { assertUnresolvableLink(errno(code, { syscall: 'realpath', path: '/r/link' }), ctx); }, code).toThrow(expect.objectContaining({ code: FS_FAULT_CODE, errno: code, side: 'source', origin: 'content', path: '/r/link' }));
+    }
+  });
+
+  it('throws a non-filesystem error as it was', () => {
+    const bug = new TypeError('x');
+    expect(() => { assertUnresolvableLink(bug, ctx); }).toThrow(bug);
+  });
+
+  // The table is not the guarantee: an errno it does not list, from a system call, is still a fault.
+  it('throws an errno no table lists classified, never raw', () => {
+    expect(() => { assertUnresolvableLink(errno('EWHATEVER', { syscall: 'stat', path: '/r/link' }), ctx); }).toThrow(expect.objectContaining({ code: FS_FAULT_CODE, errno: 'EWHATEVER', faultClass: 'device' }));
+  });
+});
+
+// The read lane's twin: the same predicate, a fault handed back for that one target, nothing thrown.
+describe('linkResolutionFault', () => {
+  it('answers undefined for a link that resolves to nothing, and the facts of every other filesystem errno', () => {
+    for (const code of ['ENOENT', 'ENOTDIR', 'ELOOP']) expect(linkResolutionFault(errno(code)), code).toBeUndefined();
+    expect(linkResolutionFault(errno('EINVAL'))).toMatchObject({ errno: 'EINVAL', faultClass: 'unsupported' });
+    expect(linkResolutionFault(errno('ENAMETOOLONG'))).toMatchObject({ errno: 'ENAMETOOLONG', faultClass: 'wrong-type' });
+    expect(linkResolutionFault(errno('EWHATEVER', { syscall: 'realpath', path: '/r/link' }))).toMatchObject({ errno: 'EWHATEVER', faultClass: 'device' });
+    expect(linkResolutionFault(errno('UNKNOWN'))).toMatchObject({ errno: 'UNKNOWN', faultClass: 'device' });
+    expect(linkResolutionFault(errno('EACCES'))).toMatchObject({ errno: 'EACCES', faultClass: 'refused' });
+    expect(linkResolutionFault(errno('EPERM'))).toMatchObject({ errno: 'EPERM', faultClass: 'refused' });
+    expect(linkResolutionFault(errno('EIO'))).toMatchObject({ errno: 'EIO', faultClass: 'device' });
+  });
+
+  it('throws a non-filesystem error, and a VAT error, as it was', () => {
+    const bug = new TypeError('x');
+    expect(() => linkResolutionFault(bug)).toThrow(bug);
+    const refusal = new FsFaultError({ side: 'source', faultClass: 'refused', errno: 'EACCES', path: '/r', movedFrom: undefined, origin: 'content', action: 'read /r', cause: errno('EACCES') });
+    expect(() => linkResolutionFault(refusal)).toThrow(refusal);
   });
 });
 

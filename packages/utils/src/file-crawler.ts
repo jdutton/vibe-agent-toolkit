@@ -13,7 +13,7 @@ import {
 import { gitFindRoot, gitLsFiles } from './git-utils.js';
 import { promised } from './in-order.js';
 import { crawlSideOf, requireUnreadablePolicy, settleCrawlRefusal, type UnreadablePolicy } from './listing-refusal.js';
-import { toForwardSlash, safePath } from './path-utils.js';
+import { realpathNativeSync, toForwardSlash, safePath } from './path-utils.js';
 
 export { rootListingRefusal, type DirectoryRefusal } from './fs-utils.js';
 // The refusal vocabulary lives in `listing-refusal.ts` so `git-utils.ts` can
@@ -517,7 +517,9 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   function alreadyWalked(dir: string): boolean {
     let realPath: string;
     try {
-      realPath = fs.realpathSync.native(dir);
+      // The one native fallback rule (`realpathNativeSync`): a volume that cannot answer a
+      // final-path query is asked of the JS walk rather than reported as a refused directory.
+      realPath = realpathNativeSync(dir);
     } catch (error) {
       reportOrSkip(error, dir);
       return true;

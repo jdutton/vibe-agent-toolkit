@@ -101,8 +101,10 @@ describe('inspectZipArchive', () => {
     // is the authority on. Degrade, do not destroy — and say so: this used to
     // be a bare `undefined`, which the caller turned into silence about every
     // check it then skipped.
+    // And it hands back the bytes it read — the ONE read — for the caller to send as they are.
     await expect(inspectZipArchive(notAZip)).resolves.toEqual({
       archiveUnreadable: expect.stringMatching(/zip|format|header/i),
+      bytes: Buffer.from('this is not a zip archive'),
     });
   });
 

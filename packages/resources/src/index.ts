@@ -254,7 +254,7 @@ export {
   collectionMimeConflictCondition,
   collectRealization,
   createCollectionMimeResolver,
-  realPathOrNull,
+  resolveRealPath,
   relativize,
   COLLECTION_MIME_CONFLICT,
   NO_DECLARED_MIME_TYPES,
@@ -263,6 +263,7 @@ export {
   type ContentDemand,
   type PathShape,
   type RealizationContext,
+  type RealPathResolution,
 } from './projection/realizations.js';
 
 // The per-run content cache: one `readFile` + one SHA-256 per file per

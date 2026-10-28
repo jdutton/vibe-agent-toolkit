@@ -73,6 +73,13 @@ describe('ResourceRegistry read failures, by fault class', () => {
     },
   );
 
+  // An errno no table lists, from the read itself (its syscall and path say a file call raised it):
+  // the unlisted class, device — thrown classified like any device fault, never raw.
+  it('throws an errno no table lists, raised by the read, classified as a device fault', async () => {
+    const raw = Object.assign(errno('EWHATEVER'), { syscall: 'open', path: safePath.join(suite.tempDir, 'doc.md') });
+    expect((await addFailing(suite.tempDir, raw)).threw).toMatchObject({ code: FS_FAULT_CODE, side: 'source', faultClass: 'device', errno: 'EWHATEVER', cause: raw });
+  });
+
   it('throws a plain wrapper whose cause carries an errno, classified, rather than filing a finding', async () => {
     const wrapper = new Error('could not read', { cause: errno('EACCES') });
     expect(await addFailing(suite.tempDir, wrapper)).toMatchObject({ unreadable: [], threw: { code: FS_FAULT_CODE, cause: wrapper } });

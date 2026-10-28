@@ -746,7 +746,9 @@ describe('what installFromLocal actually reads out of a REAL archive', () => {
     expect(log).toContain('checks were not run');
   });
 
-  it('names a member it could not inflate, so an unchecked document is never silently unchecked', async () => {
+  // VAT sends its own ZIP of what it read; a member it could not read cannot be in it, so the upload
+  // is refused — and the warning before it says which member went unchecked, and why.
+  it('names a member it could not inflate, and refuses to send an archive it could not read whole', async () => {
     const goodPath = writeZipFixture(tempDir, 'one-bad-member-source.zip', [
       ['bm/SKILL.md', skillMdBytes('bm')],
       ['bm/resources/guide.md', Buffer.from('# Guide\n', 'utf8')],
@@ -763,10 +765,12 @@ describe('what installFromLocal actually reads out of a REAL archive', () => {
     writeFileSync(zipPath, bytes);
     const logger = recordingLogger();
 
-    await installFromLocal(zipPath, undefined, clientReturningSkill(), logger);
+    await expect(installFromLocal(zipPath, undefined, clientThatMustNotBeCalled(), logger))
+      .rejects.toMatchObject({ code: 'ARCHIVE_ENTRY_UNREADABLE', reason: 'unsupported', entry: 'bm/resources/guide.md' });
 
     const log = logger.lines.join('\n');
-    expect(log).toMatch(/1 archive member\(s\) could not be inflated and were not checked: bm\/\S+ \(/);
+    // The warning says what happens next — the refusal above — never that the publish goes on without it.
+    expect(log).toMatch(/1 archive member\(s\) could not be inflated: bm\/\S+ \(.*the upload will refuse the archive.*nothing is sent/);
   });
 
   it('sends a clean archive, so the refusal is about the answer key and not about ZIPs', async () => {

@@ -123,6 +123,7 @@ describe('docs/validation-codes.md', () => {
       'EXTENT_SYMLINK_NOT_REALIZED',
       'EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT',
       'EXTENT_SYMLINK_TARGET_UNRESOLVED',
+      'EXTENT_SYMLINK_TARGET_UNREADABLE',
     ] as const)('the %s section quotes the registry verbatim', (code) => {
       const entry = CODE_REGISTRY[code];
       const section = sectionFor(doc, `### \`${code}\``);

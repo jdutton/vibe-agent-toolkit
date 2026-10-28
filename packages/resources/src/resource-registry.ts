@@ -162,8 +162,10 @@ function isReadFailure(error: unknown): error is Error {
 function readFault(error: Error): { faultClass: FsFaultClass; errno: string } | undefined {
   if (isFsFaultError(error)) return { faultClass: error.faultClass, errno: error.errno };
   if (isVatError(error)) return undefined;
-  const { code } = error as { code?: unknown };
-  return typeof code === 'string' ? fsFaultOf({ code }) : undefined;
+  // The classifier asked of the error itself (its syscall and path decide an unlisted or network
+  // errno), and kept only when the errno it found is this error's own, never one down its cause chain.
+  const facts = fsFaultOf(error);
+  return facts !== undefined && facts.errno === (error as { code?: unknown }).code ? facts : undefined;
 }
 
 /**
@@ -1919,7 +1921,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // false statement about it. The same reasoning applies more sharply to
     // `validateFrontmatterLinks` below: it is link validation, not schema
     // handling, and the fact tables it reads throw ON PURPOSE
-    // (`realpathFrom`/`pathSpellingFrom` crash on a missing row so that a
+    // (`realpathRowFrom`/`pathSpellingFrom` crash on a missing row so that a
     // fill/judge divergence names its own remedy). That crash must reach the
     // operator intact rather than be reworded into a schema complaint — do not
     // re-wrap either call.

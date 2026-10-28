@@ -33,7 +33,7 @@
     "@vibe-agent-toolkit/schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "commander": "^12.1.0",
-    "markdown-it": "^14.1.0",
+    "markdown-it": "^14.3.3",
     "markdown-it-front-matter": "^0.2.4",
     "semver": "^7.8.5",
     "which": "^5.0.0",

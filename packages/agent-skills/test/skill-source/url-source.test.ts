@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { ARCHIVE_REFUSED_CODE, isFsFaultError, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { ARCHIVE_ENTRY_UNREADABLE_CODE, ARCHIVE_REFUSED_CODE, isFsFaultError, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { ARCHIVE_DOWNLOAD_MAX_BYTES, ARCHIVE_LIMITS } from '@vibe-agent-toolkit/utils/archive';
-import { type ArchiveFixtureEntry, hostileArchive, hostileArchiveRows, zipFixture } from '@vibe-agent-toolkit/utils/testing';
+import { type ArchiveFixtureEntry, entryHoldingMoreThanDeclared, hostileArchive, hostileArchiveRows, zipFixture } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { SKILL_SOURCE_DIGEST_REQUIRED_CODE, SKILL_SOURCE_FETCH_FAILED_CODE } from '../../src/skill-source/source-errors.js';
@@ -217,5 +217,18 @@ describe(`${archiveLane('url: skill source')} — a .zip VAT will not extract`, 
     expect(existsSync(local.stagingRoot)).toBe(false);
     expect(readdirSync(local.fetchCacheDir)).toEqual([]);
     expect(readdirSync(root)).not.toContain('planted.txt');
+  });
+
+  // Not a row of the table: the member is refused when it is read, under its own code, which the CLI
+  // maps to INPUT_UNREADABLE (`command-refusal.ts`, pinned for this lane in `archive-hostile-lanes-zip`).
+  it('refuses one whose member holds more than it declares, naming the member, staging and caching nothing', async () => {
+    const { url, sha } = zipAt('entry-unreadable.zip', [{ name: 'SKILL.md', data: ZIP_SKILL_BODY }, ...entryHoldingMoreThanDeclared('')]);
+    const local: ResolveSkillSourceContext = { ...ctx, stagingRoot: safePath.join(root, 'staging-entry'), fetchCacheDir: safePath.join(root, 'cache-entry') };
+
+    const error = await rejectionOf(() => resolveUrlSource(url, sha, local));
+
+    expect(error).toMatchObject({ code: ARCHIVE_ENTRY_UNREADABLE_CODE, entry: 'guide.md' });
+    expect(existsSync(local.stagingRoot)).toBe(false);
+    expect(readdirSync(local.fetchCacheDir)).toEqual([]);
   });
 });

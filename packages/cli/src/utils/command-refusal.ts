@@ -39,6 +39,7 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import { fsFaultRefusal, type RefusalCode } from '@vibe-agent-toolkit/schema';
 import {
+  ARCHIVE_ENTRY_UNREADABLE_CODE,
   ARCHIVE_REFUSED_CODE,
   ASSET_REFERENCE_UNREADABLE_CODE,
   COPY_LINK_ESCAPES_SOURCE_CODE,
@@ -47,6 +48,7 @@ import {
   type FsFaultError,
   isFsFaultError,
   isVatError,
+  LINK_CHAIN_REFUSED_CODE,
   RAG_DATABASE_UNREADABLE_CODE,
   RAG_INDEX_EMPTY_CODE,
   TREE_DEST_HOLDS_SOURCE_CODE,
@@ -82,6 +84,8 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   // An archive VAT will not read or extract (`ArchiveRefusedError`): not an archive, past a limit, or holding
   // an entry the one entry policy refuses — a link, a device, a name outside the archive, two entries one name.
   [ARCHIVE_REFUSED_CODE]: 'INPUT_UNREADABLE',
+  // One entry of an opened archive that does not inflate or hold what it declares (`ArchiveEntryReadError`).
+  [ARCHIVE_ENTRY_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
   // A symlink inside a tree being copied that points outside it (`CopyLinkEscapesSourceError`): the input's link.
   [COPY_LINK_ESCAPES_SOURCE_CODE]: 'INPUT_UNREADABLE',
   // An entry of a tree being copied that the OS would not list, stat or read (or a dangling link): the input's.
@@ -89,6 +93,9 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   [ASSET_REFERENCE_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
   // A symlink that leads a following walk back into a directory it already entered: the input's loop.
   [DIRECTORY_WALK_REVISITED_CODE]: 'INPUT_UNREADABLE',
+  // A path whose link chain VAT will not hand the OS (`LinkChainRefusedError`): a link on the way
+  // names a network path, or the chain never ends — the input's link.
+  [LINK_CHAIN_REFUSED_CODE]: 'INPUT_UNREADABLE',
   // A git URL's `#ref:subpath` naming a path the clone does not hold, or one escaping it.
   [GIT_SUBPATH_INVALID_CODE]: 'USAGE_INVALID',
   // A `resources.linkAuth` provider that does not compile (`LinkAuthConfigError`): the config's mistake.

@@ -324,7 +324,8 @@ export interface CrawlSource {
    * with nothing saying so. `FilesystemExtentContributor` carries each as an
    * declined-link condition row — `EXTENT_SYMLINK_NOT_REALIZED`, or
    * `EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT` when the target resolves outside the root, or
-   * `EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to nothing. Both
+   * `EXTENT_SYMLINK_TARGET_UNRESOLVED` when it resolves to nothing, or
+   * `EXTENT_SYMLINK_TARGET_UNREADABLE` when the OS would not resolve it. Both
    * sources report the same set for the same tree, as they do for members.
    */
   readonly symlinks: readonly string[];

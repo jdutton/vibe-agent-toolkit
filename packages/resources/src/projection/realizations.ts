@@ -7,9 +7,9 @@
  * exactly the same `lstat`, and one fact must have one implementation.
  */
 
-import { lstatSync, realpathSync, statSync } from 'node:fs';
+import { lstatSync, statSync } from 'node:fs';
 
-import { fsFaultOf, isVatError, safePath, TextTooLargeError, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { type FsFaultFacts, fsFaultOf, isVatError, linkResolutionFault, realpathNativeSync, safePath, TextTooLargeError, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 import { matchesCollection } from '../collection-matcher.js';
@@ -366,7 +366,19 @@ export async function collectRealization(
 }
 
 /**
- * A path's real location, or `null` when it cannot be resolved.
+ * Where a path really lives, as {@link resolveRealPath} answers it.
+ *
+ * `nowhere` is one answer with its reason: `fault: null` when the OS looked and
+ * found nothing (absent, dangling, a cycle), and the fault — errno and class —
+ * when it declined or failed to look. A read lane reports that fault against the
+ * one path; it never stops the run.
+ */
+export type RealPathResolution =
+  | { readonly kind: 'resolved'; readonly path: string }
+  | { readonly kind: 'nowhere'; readonly fault: FsFaultFacts | null };
+
+/**
+ * A path's real location, or why it has none.
  *
  * Exported so a population pass can group by identity without resolving twice,
  * and because "two paths are the same file" is a question only the real path
@@ -375,20 +387,18 @@ export async function collectRealization(
  * already contains.
  *
  * Distinct from `identity.ts`'s ancestor-walking fallback on purpose: this one
- * reports unresolvability as `null` rather than inventing a spelling, because
- * its callers are asking *whether* a path resolves.
+ * reports unresolvability rather than inventing a spelling, because its callers
+ * are asking *whether* a path resolves.
  *
  * @param absolutePath - Path to resolve
- * @returns Forward-slashed real path, or null
+ * @returns The forward-slashed real path, or `nowhere` with the fault (or `null`) that says why
+ * @throws The resolution's error when it carries no errno — a bug stays loud
  */
-export function realPathOrNull(absolutePath: string): string | null {
+export function resolveRealPath(absolutePath: string): RealPathResolution {
   try {
-    return toForwardSlash(realpathSync.native(absolutePath));
+    return { kind: 'resolved', path: realpathNativeSync(absolutePath) };
   } catch (error) {
-    // Absent, dangling, a cycle, or refused: the filesystem will not resolve
-    // it, which is the `null` this answers. A bug is not that.
-    if (fsFaultOf(error) === undefined) throw error;
-    return null;
+    return { kind: 'nowhere', fault: linkResolutionFault(error) ?? null };
   }
 }
 

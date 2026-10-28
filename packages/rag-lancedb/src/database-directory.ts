@@ -11,7 +11,7 @@
 
 import fs from 'node:fs';
 
-import { applyTreePlanOrLeftover, fsFaultOf, isPathAbsentError, type OwnershipVerdict, planTreeChanges, safePath, toForwardSlash, withFsFaultSync } from '@vibe-agent-toolkit/utils';
+import { applyTreePlanOrLeftover, assertUnresolvableLink, fsFaultOf, isPathAbsentError, type OwnershipVerdict, planTreeChanges, realpathNativeSync, safePath, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 
 /** The chunk table: every indexed chunk and its embedding. */
 export const TABLE_NAME = 'rag_chunks';
@@ -119,11 +119,12 @@ export function linkedDatabasePath(dbPath: string): string | undefined {
     }
     if (!stats.isSymbolicLink()) return undefined;
     try {
-      return toForwardSlash(fs.realpathSync.native(dbPath));
+      return realpathNativeSync(dbPath);
     } catch (error: unknown) {
-      // Dangling: name where it points, absolute.
-      if (isPathAbsentError(error)) return safePath.resolve(safePath.join(dbPath, '..'), fs.readlinkSync(dbPath));
-      throw error;
+      // Resolves to nothing (dangling, a cycle, a share that is not there): name where it
+      // points, absolute. A refusal stops the removal — the one link predicate's write lane.
+      assertUnresolvableLink(error, fault);
+      return safePath.resolve(safePath.join(dbPath, '..'), fs.readlinkSync(dbPath));
     }
   });
 }

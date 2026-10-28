@@ -8,13 +8,13 @@ import { lstatSync, readdirSync, readFileSync, statSync, writeFileSync } from 'n
 import { describe, expect, it } from 'vitest';
 
 import { extractArchive, listArchive } from '../../src/archive/archive.js';
-import { ARCHIVE_REFUSED_CODE, type ArchiveFormat, type ArchiveLimits } from '../../src/archive/entries.js';
+import { ARCHIVE_REFUSED_CODE, type ArchiveLimits } from '../../src/archive/entries.js';
 import { zipOfDirectory } from '../../src/archive/zip-reader.js';
 import { isFsFaultError } from '../../src/errors/fs-fault.js';
 import { isVatError } from '../../src/errors/vat-error.js';
 import { safePath } from '../../src/path-core.js';
 import { mkdirSyncReal } from '../../src/path-utils.js';
-import { type ArchiveFixtureEntry, hostileArchive, hostileArchiveRows, tarFixture, zipFixture } from '../../src/testing/archive-fixtures.js';
+import { archiveFixture, type ArchiveFixtureEntry, hostileArchive, hostileArchiveRows, tarFixture, zipFixture } from '../../src/testing/archive-fixtures.js';
 import { PERMISSIONS_ENFORCED } from '../../src/testing/platform-gates.js';
 import { diffSnapshots, snapshotTree } from '../../src/testing/tree-snapshot.js';
 
@@ -25,10 +25,6 @@ const suite = treeChangeSuite('archive-extract-');
 /** Small enough that the two limit rows are a handful of entries, not fifty thousand. */
 const LIMITS: ArchiveLimits = { maxEntries: 12, maxBytes: 4096 };
 
-const BUILD: Readonly<Record<ArchiveFormat, (entries: readonly ArchiveFixtureEntry[]) => Buffer>> = {
-  tar: (entries) => tarFixture(entries),
-  zip: (entries) => zipFixture(entries),
-};
 
 const SOUND: readonly ArchiveFixtureEntry[] = [
   { name: 'skill/', kind: 'directory' },
@@ -47,7 +43,7 @@ function stage(): { root: string; into: string } {
 
 describe.each(['tar', 'zip'] as const)('extractArchive (%s)', (format) => {
   const extract = (entries: readonly ArchiveFixtureEntry[], into: string, limits = LIMITS): ReturnType<typeof extractArchive> =>
-    extractArchive({ bytes: BUILD[format](entries), label: `fixture.${format}` }, into, { format, limits });
+    extractArchive({ bytes: archiveFixture(format, entries), label: `fixture.${format}` }, into, { format, limits });
 
   it('writes every file and directory of a sound archive, and returns what it wrote', async () => {
     const { into } = stage();
@@ -90,7 +86,7 @@ describe.each(['tar', 'zip'] as const)('extractArchive (%s)', (format) => {
     const { root, into } = stage();
     const before = snapshotTree(root);
 
-    const bytes = hostileArchive(row, BUILD[format]([...SOUND, ...row.entries('skill/')]));
+    const bytes = hostileArchive(row, archiveFixture(format, [...SOUND, ...row.entries('skill/')]));
 
     const error = await rejectionOf(() => extractArchive({ bytes, label: `fixture.${format}` }, into, { format, limits: LIMITS }));
 
@@ -104,7 +100,7 @@ describe.each(['tar', 'zip'] as const)('extractArchive (%s)', (format) => {
   it('leaves an omitted entry unwritten, and still judges it', async () => {
     const { into } = stage();
     const litter = (entry: { readonly name: string }): boolean => entry.name.startsWith('litter/');
-    const source = (entries: readonly ArchiveFixtureEntry[]): { bytes: Buffer; label: string } => ({ bytes: BUILD[format](entries), label: `fixture.${format}` });
+    const source = (entries: readonly ArchiveFixtureEntry[]): { bytes: Buffer; label: string } => ({ bytes: archiveFixture(format, entries), label: `fixture.${format}` });
 
     const listed = await extractArchive(source([...SOUND, { name: 'litter/x.bin', data: 'x' }]), into, { format, limits: LIMITS, omit: litter });
 

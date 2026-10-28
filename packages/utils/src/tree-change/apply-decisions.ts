@@ -123,21 +123,6 @@ export function entryInTheWayFault(entry: string, writing: string, cause: unknow
   });
 }
 
-const WIN32_NAMESPACE = String.raw`\\?` + '\\';
-const WIN32_UNC_NAMESPACE = `${WIN32_NAMESPACE}UNC\\`;
-
-/**
- * The first directory a recursive `mkdir` reports it made, in the spelling the caller's own paths
- * have. Under win32 Node hands the OS a namespaced path (`\\?\C:\…`, `\\?\UNC\server\share\…`) and
- * may report the directory it made in that form; held against a plain `C:\…` destination it reads as
- * another root, and the parents a failed create made would then never be removed
- * ({@link madeParentStep} stops at the first step). Everything else is returned as it is.
- */
-export function madeDirectoryPath(made: string): string {
-  if (made.startsWith(WIN32_UNC_NAMESPACE)) return `\\\\${made.slice(WIN32_UNC_NAMESPACE.length)}`;
-  return made.startsWith(WIN32_NAMESPACE) ? made.slice(WIN32_NAMESPACE.length) : made;
-}
-
 /** A rename is tried this many times under win32 when the OS reports contention; the waits between are 50, 100, 200, 400, 800 ms. */
 export const RENAME_TRIES = 6;
 const FIRST_BACKOFF_MS = 50;

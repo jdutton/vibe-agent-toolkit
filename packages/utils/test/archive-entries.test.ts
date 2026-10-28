@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ARCHIVE_REFUSED_CODE, type ArchiveEntry, archiveEntryRefusal, assertArchiveExtractable } from '../src/archive/entries.js';
+import { ARCHIVE_REFUSED_CODE, type ArchiveEntry, archiveEntryRefusal, assertArchiveExtractable, entryNameOf } from '../src/archive/entries.js';
 import { isVatError } from '../src/errors/vat-error.js';
 import { foldedSegment } from '../src/name-fold.js';
 
@@ -34,6 +34,38 @@ describe('archiveEntryRefusal', () => {
     expect(archiveEntryRefusal([file(name)])).toMatchObject({ reason: 'unsafe-name', entry: name });
   });
 
+  // A name Windows cannot hold as spelled is refused on EVERY host: on NTFS `a.md:hidden` writes a
+  // stream of `a.md`, `aux` opens a device, and `a.` and `a ` lose their last character.
+  it.each([
+    ['a.md:hidden', 'holds a `:`'],
+    ['dir:x/a.md', 'holds a `:`'],
+    ['a.', 'ends in a `.` or a space'],
+    ['docs /a.md', 'ends in a `.` or a space'],
+    ['skill/notes.md ', 'ends in a `.` or a space'],
+    ['CON', 'is a Windows device name'],
+    ['skill/prn.txt', 'is a Windows device name'],
+    ['Aux.tar.gz', 'is a Windows device name'],
+    ['nul', 'is a Windows device name'],
+    ['skill/com1.md', 'is a Windows device name'],
+    ['lpt9/a.md', 'is a Windows device name'],
+    ['LPT\u00b9', 'is a Windows device name'],
+    ['con .md', 'is a Windows device name'],
+    ...['<', '>', '"', '|', '?', '*'].map((character) => [`skill/a${character}b.md`, 'holds a character Windows does not allow in a name']),
+    ...[1, 9, 31].map((codePoint) => [`skill/a${String.fromCodePoint(codePoint)}b.md`, 'holds a character Windows does not allow in a name']),
+  ])('refuses %j, which %s, on every host', (name, why) => {
+    const refusal = archiveEntryRefusal([file(name)]);
+    expect(refusal).toMatchObject({ reason: 'unsafe-name', entry: name });
+    expect(refusal?.why).toContain(why);
+  });
+
+  it.each([['console.md'], ['nullable.md'], ['com10.md'], ['lpt.md'], ['auxiliary/a.md'], ['a.b.md'], ['.hidden'], ['a b(1)[2]{3}#&!@=+,;~.md'], [`a${String.fromCodePoint(32)}b.md`], [`caf${String.fromCodePoint(0xe9)}.md`]])('keeps %j, which only looks like one of those', (name) => {
+    expect(archiveEntryRefusal([file(name)])).toBeUndefined();
+  });
+
+  it('refuses a stream name beside the file it would write into, as the stream, before any clash', () => {
+    expect(archiveEntryRefusal([file('a.md'), file('a.md:hidden')])).toMatchObject({ reason: 'unsafe-name', entry: 'a.md:hidden' });
+  });
+
   it.each([
     ['listed twice', [file('a/b.md'), file('a/b.md')]],
     ['listed twice, one spelled with a backslash', [file('a/b.md'), file(String.raw`a\b.md`)]],
@@ -45,8 +77,6 @@ describe('archiveEntryRefusal', () => {
     ['differing only in Unicode form', [file('caf\u00e9.md'), file('cafe\u0301.md')]],
     ['one a compatibility form of the other', [file('\ufb01le.md'), file('file.md')]],
     ['folding to one name', [file('stra\u00dfe.md'), file('STRASSE.md')]],
-    ['differing only in a trailing dot', [file('a.'), file('a')]],
-    ['one a stream of the other', [file('a.md:hidden'), file('a.md')]],
   ] as const)('refuses two entries %s', (_what, entries) => {
     expect(archiveEntryRefusal(entries)).toMatchObject({ reason: 'name-clash', entry: entries[1].name });
   });
@@ -79,17 +109,38 @@ describe('assertArchiveExtractable', () => {
   });
 });
 
-describe('a name clash says which fold made two names one', () => {
-  it('names the NTFS stream rule when the two names share only the text before a `:`', () => {
-    const refusal = archiveEntryRefusal([file('logs/10:00.log'), file('logs/10:30.log')]);
+// The readers name an entry as the tar library does on win32 (its `normalizeWindowsPath`: every
+// backslash read as `/`), on every host — so the name the policy sees on Windows is the name it
+// sees here, and a refusal proven here is the one Windows gives.
+describe('an entry name on every host', () => {
+  /** A hostile header name, and the name the tar library yields for it on win32 — spelled out, not computed. */
+  const HOSTILE: ReadonlyArray<readonly [raw: string, onWin32: string]> = [
+    [String.raw`C:\x.md`, 'C:/x.md'],
+    ['C:x.md', 'C:x.md'],
+    [String.raw`C:\a/b.md`, 'C:/a/b.md'],
+    [String.raw`\\host\share\x.md`, '//host/share/x.md'],
+    [String.raw`..\x`, '../x'],
+    [String.raw`a\..\..\x`, 'a/../../x'],
+    [String.raw`\abs.md`, '/abs.md'],
+  ];
 
-    expect(refusal).toMatchObject({ reason: 'name-clash', entry: 'logs/10:30.log' });
-    expect(refusal?.why).toContain('what follows a `:` names a stream');
-    expect(refusal?.why).not.toContain('letter case');
+  it.each(HOSTILE)('reads %j as the tar library yields it on win32, %j', (raw, onWin32) => {
+    expect(entryNameOf(raw)).toBe(onWin32);
   });
 
-  it('names case, Unicode form and trailing dots otherwise', () => {
-    expect(archiveEntryRefusal([file('Notes.md'), file('notes.md')])?.why).toContain('folds letter case, Unicode form or trailing dots');
+  it.each(HOSTILE)('refuses %j, and %j, as a place outside the archive', (raw, onWin32) => {
+    expect(archiveEntryRefusal([file(raw)])).toMatchObject({ reason: 'unsafe-name' });
+    expect(archiveEntryRefusal([file(onWin32)])).toMatchObject({ reason: 'unsafe-name', entry: onWin32 });
+  });
+
+  it('keeps every other character as the archive spells it', () => {
+    expect(entryNameOf('skill/caf\u00e9 notes v2.md')).toBe('skill/caf\u00e9 notes v2.md');
+  });
+});
+
+describe('a name clash says which fold made two names one', () => {
+  it('names letter case and Unicode form', () => {
+    expect(archiveEntryRefusal([file('Notes.md'), file('notes.md')])?.why).toContain('folds letter case or Unicode form');
   });
 });
 

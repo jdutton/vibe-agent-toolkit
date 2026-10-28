@@ -6,12 +6,19 @@
  * lanes are `archive-hostile-lanes-tar`.
  */
 
-import { type ArchiveFixtureEntry, tempDirTracker, zipFixture } from '@vibe-agent-toolkit/utils/testing';
+import { createHash } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+
+import { resolveSkillSource } from '@vibe-agent-toolkit/agent-skills';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { type ArchiveFixtureEntry, entryHoldingMoreThanDeclared, tempDirTracker, withUnlistedLocalEntry, zipFixture } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { installFromLocal } from '../../src/commands/claude/org/skills.js';
 import { createPluginCommand } from '../../src/commands/claude/plugin/index.js';
 import { createSkillsCommand } from '../../src/commands/skills/index.js';
+import { refusalCodeOf } from '../../src/utils/command-refusal.js';
 import { skillMd } from '../fault-matrix/cases/tree-files.js';
 import { archiveLane } from '../helpers/archive-lane-registry.js';
 import { type ArchiveLane, describeHostileArchiveLanes, LANE_SKILL, orgLane, runOnArchive, skillZip } from '../helpers/archive-lanes.js';
@@ -30,6 +37,29 @@ const LANES: readonly ArchiveLane[] = [
 ];
 
 describeHostileArchiveLanes('vat-archive-hostile-zip-', LANES);
+
+// The fourth lane that reads a ZIP's members: a `url:` skill source (`vat skill test run --with
+// <name>=url:…`). Its hostile table runs in agent-skills, which cannot see the CLI's refusal table, so
+// the mapping of the member-read code is held here — the error the lane really throws, through the
+// CLI's one `refusalCodeOf`.
+describe('a url: skill source whose ZIP member holds more than it declares', () => {
+  const urlScratch = tempDirTracker('vat-url-entry-unreadable-');
+  afterEach(() => urlScratch.cleanupAll());
+
+  it('is refused as INPUT_UNREADABLE, never INTERNAL_ERROR', async () => {
+    const root = urlScratch.create();
+    const bytes = zipFixture([{ name: 'SKILL.md', data: skillMd(LANE_SKILL) }, ...entryHoldingMoreThanDeclared('')]);
+    const zip = safePath.join(root, 'skill.zip');
+    writeFileSync(zip, bytes);
+    const ctx = { repoRoot: root, stagingRoot: safePath.join(root, 'staging'), fetchCacheDir: safePath.join(root, 'cache') };
+
+    const error = await resolveSkillSource({ url: pathToFileURL(zip).href, sha256: createHash('sha256').update(bytes).digest('hex') }, ctx)
+      .then(() => undefined, (thrown: unknown) => thrown);
+
+    expect(error).toMatchObject({ code: 'ARCHIVE_ENTRY_UNREADABLE', entry: 'guide.md' });
+    expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
+  });
+});
 
 // --- the one layout rule ----------------------------------------------------------------------
 
@@ -88,5 +118,23 @@ describe.each(LANES)('the skill ZIP layout rule — $name', (lane) => {
       expect(landed).toBe(false);
       expect(homeChanges).toEqual([]);
     }
+  });
+});
+
+// The lane that SENDS an archive sends exactly what VAT judged — its own ZIP of the entries the
+// central directory lists — never the operator's bytes, which may hold entries only a reader that
+// walks local headers from the front would see.
+describe.each(LANES.filter((lane) => 'sent' in lane))('what is sent is what was judged — $name', (lane) => {
+  it('leaves out a local entry the central directory does not list', async () => {
+    const bytes = withUnlistedLocalEntry(zipFixture([SKILL]), { name: 'evals/answers.json', data: 'the answer key' });
+    // The control: the operator's bytes do carry it.
+    expect(bytes.toString('latin1')).toContain('evals/answers.json');
+
+    const { outcome } = await runOnArchive(scratch.create(), lane, { fileName: `${LANE_SKILL}.zip`, bytes });
+
+    expect(outcome.exitCode ?? 0, outcome.message).toBe(0);
+    const sent = ('sent' in lane ? lane.sent() : undefined)?.toString('latin1') ?? '';
+    expect(sent).toContain('SKILL.md');
+    expect(sent).not.toContain('evals/answers.json');
   });
 });

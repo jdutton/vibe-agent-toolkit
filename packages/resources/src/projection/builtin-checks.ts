@@ -40,6 +40,7 @@ import { nestedRuleParent } from './claude-context-rules.js';
 import {
   DECLINED_SYMLINK_CODES,
   EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
+  EXTENT_SYMLINK_TARGET_UNREADABLE,
   EXTENT_SYMLINK_TARGET_UNRESOLVED,
   isDeclinedSymlinkCode,
 } from './contributors/filesystem-extent.js';
@@ -409,12 +410,15 @@ function rulesLinkKind(path: string): 'file' | 'tree' | null {
  * the author believes governs the session is in force NOWHERE, and VAT's blind
  * spot is the lesser problem beside that. A link that resolves to nothing on
  * this host — dangling, a loop — loads nothing either, and calling it "in
- * force" described a rule that does not exist.
+ * force" described a rule that does not exist. A link the host was not allowed
+ * to follow (or could not, on a device fault) loads nothing on THIS host, but it
+ * does not dangle: its remedy is the permission or the share, never "delete it".
  *
  * ⚠️ This check is a pure predicate over rows and resolves no link itself. It
  * reads the verdict from the condition row's own code
  * ({@link EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT},
- * {@link EXTENT_SYMLINK_TARGET_UNRESOLVED}), set where the host resolved the
+ * {@link EXTENT_SYMLINK_TARGET_UNRESOLVED},
+ * {@link EXTENT_SYMLINK_TARGET_UNREADABLE}), set where the host resolved the
  * link, and never from the row's prose, which would be the *"a contract carried
  * in text"* drift class.
  *
@@ -432,6 +436,14 @@ function rulesLinkKind(path: string): 'file' | 'tree' | null {
  * @returns The sentences that follow the blind-checks clause
  */
 function linkPositionClause(code: string): string {
+  if (code === EXTENT_SYMLINK_TARGET_UNREADABLE) {
+    return ' This host could not resolve it — the OS refused or failed the lookup — so Claude Code'
+      + ' loads nothing through it here. The link does not dangle: fix the permission on the target'
+      + ' or the directories leading to it (or reconnect the share) rather than deleting it. Whether'
+      + ' the rule then loads depends on where it leads: if its target lies outside the project root,'
+      + ' Claude Code skips it even once it resolves. The EXTENT_SYMLINK_TARGET_UNREADABLE row at this'
+      + ' path records the errno, and its targetFaultClass column the fault class.';
+  }
   if (code === EXTENT_SYMLINK_TARGET_UNRESOLVED) {
     return ' It resolves to nothing on this host — the target does not exist, or the link loops or'
       + ' cannot be resolved — so Claude Code loads nothing through it: no rule reaches the session'

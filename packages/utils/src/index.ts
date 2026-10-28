@@ -27,9 +27,9 @@
 // block dispatches on, never `message`.
 export * from './errors/vat-error.js';
 export { RAG_DATABASE_UNREADABLE_CODE, RAG_INDEX_EMPTY_CODE } from './errors/rag-index-empty.js';
-// The code alone: the archive readers are on `./archive` (they load `tar` and `adm-zip`), and a
-// refusal map needs only the code.
-export { ARCHIVE_REFUSED_CODE, placeOf as archiveEntryPlace } from './archive/entries.js';
+// The code and the one-entry predicate alone: the archive readers are on `./archive` (they load
+// `tar` and `adm-zip`), and a refusal map, or a lane that skips one member, needs only these.
+export { ARCHIVE_ENTRY_UNREADABLE_CODE, ARCHIVE_REFUSED_CODE, isArchiveEntryReadRefusal, placeOf as archiveEntryPlace } from './archive/entries.js';
 // The code alone: its error class is on `./crawl`, and the CLI's refusal map needs only the code.
 
 // Cross-platform path utilities
@@ -71,7 +71,7 @@ export * from './asset-reference.js';
 //     published too, for the lazy caller that cannot enumerate its targets up
 //     front.
 //   - realpaths — `fillRealpaths` (every canonicalization, once, up front) plus
-//     `realpathFrom`.
+//     `realpathRowFrom`.
 //
 // In both, the row lookup IS the judge: the row is the answer, so there is
 // nothing left to keep internal.
@@ -96,8 +96,8 @@ export {
   fsFaultOf,
   isAlreadyExistsError,
   isFileInTheWayError,
+  isFinalPathUnanswerableError,
   isInvalidArgumentError,
-  isLinkLoopError,
   isNoSuchEntryError,
   isNotARegularFileError,
   isPathAbsentError,
@@ -105,10 +105,13 @@ export {
   isRenameContentionError,
   isSymlinkUnsupportedError,
   isTimedOutError,
+  isUnresolvableLinkError,
   isWouldBlockError,
+  LINK_CHAIN_REFUSED_CODE,
 } from './errors/errno-table.js';
 export type { FsFaultClass, FsFaultFacts } from './errors/errno-table.js';
 export {
+  assertUnresolvableLink,
   classifyFsFault,
   FS_FAULT_CODE,
   FS_SIDES,
@@ -116,6 +119,7 @@ export {
   isCapacityFault,
   isFsFaultError,
   isLayoutFault,
+  linkResolutionFault,
   SOURCE_ORIGINS,
   withFsFault,
   withFsFaultSync,
@@ -137,7 +141,7 @@ export {
   fillPathSpellings,
   fillRealpaths,
   pathSpellingFrom,
-  realpathFrom,
+  realpathRowFrom,
   spellingWalkRoot,
 } from './fs-utils.js';
 export type {
@@ -149,6 +153,8 @@ export type {
   PathSpelling,
   PathSpellingRequest,
   PathSpellingTable,
+  RealpathFault,
+  RealpathRow,
   RealpathTable,
   VerifiedPrefix,
 } from './fs-utils.js';
@@ -205,6 +211,8 @@ export {
   disposeTempDirAfterFailure,
   entryIdentities,
   FollowedWalk,
+  assertLocalChain,
+  HOST_PATH_FLAVOR,
   isInsideByIdentity,
   isParkedTreeEntry,
   isTreeChangeResidue,
@@ -225,8 +233,10 @@ export {
   TREE_DESTS_OVERLAP_CODE,
   TREE_ROLLBACK_INCOMPLETE_CODE,
   TREE_SOURCE_HOLDS_DEST_CODE,
+  treeChain,
   treeContainment,
   TreeRollbackIncompleteError,
+  untrustedTextRefusal,
   withTempDir,
 } from './tree-change/index.js';
 export type {

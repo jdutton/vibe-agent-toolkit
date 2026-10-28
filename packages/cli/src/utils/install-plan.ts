@@ -10,6 +10,7 @@ import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   CopyLinkEscapesSourceError,
   type FsSide,
+  HOST_PATH_FLAVOR,
   isVatError,
   type LinkPolicy,
   normalizePath,
@@ -19,6 +20,7 @@ import {
   toForwardSlash,
   TREE_DEST_OCCUPIED_CODE,
   type TreeChange,
+  treeChain,
   treeContainment,
   withFsFaultSync,
   withTempDir,
@@ -75,12 +77,17 @@ interface InstallSourceTree {
 export function installUnit(tree: InstallSourceTree, dir: string, what: string): string {
   if (tree.side === 'environment') return dir;
   return withFsFaultSync({ side: tree.side, origin: 'content', action: `examine the links of ${what} ${dir}`, path: dir }, () => {
+    // `dir` may itself be a link, or below one: its chain is read by text first (the one resolver),
+    // so the kernel never resolves a link to a network path, or one leaving the tree, to answer this.
+    if (treeChain(tree.root, dir, HOST_PATH_FLAVOR).kind === 'refused') throw new CopyLinkEscapesSourceError(dir, tree.root);
     // An absent `dir` is not this check's to name: resolving it below raises the OS's own answer.
     if (treeContainment(tree.root, dir) === 'outside') throw new CopyLinkEscapesSourceError(dir, tree.root);
     const real = toForwardSlash(normalizePath(dir));
     refuseEscapingLinks({
       root: real,
       placement: 'relocated',
+      side: tree.side,
+      flavor: HOST_PATH_FLAVOR,
       tree: `${what} ${dir}`,
       within: 'it',
       consequence: 'An install keeps a link as a link, so once installed this one would point at files its source does not hold',

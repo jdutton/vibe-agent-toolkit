@@ -522,7 +522,7 @@ function withPackagingStop(finished: FinishedWork, error: unknown, configDir: st
 function builtWork(configDir: string, built: readonly MarketplaceBuildResult[]): FinishedWork & { data: PluginBuildData; findings: Finding[] } {
   return {
     examined: built.length,
-    findings: toFindings(built.flatMap(marketplaceIssues)),
+    findings: toFindings(built.flatMap((result) => marketplaceIssues(result))),
     data: pluginBuildData(configDir, built),
   };
 }
@@ -903,7 +903,7 @@ function poolCopyOrder(
   return selected
     .map((skillName) => {
       const fsPath = destOverrides.get(skillName) ?? skillNameToFsPath(skillName);
-      return { skillName, fsPath, placed: toForwardSlash(fsPath).split('/').map(foldedSegment).join('/') };
+      return { skillName, fsPath, placed: toForwardSlash(fsPath).split('/').map((segment) => foldedSegment(segment)).join('/') };
     })
     .toSorted((a, b) => compareCodeUnits(a.placed, b.placed) || compareCodeUnits(a.skillName, b.skillName))
     .map(({ skillName, fsPath }) => ({ skillName, fsPath }));

@@ -121,6 +121,26 @@
             }
           ],
           "description": "The matched refusal rule's OPAQUE payload, copied verbatim from the declaration and never interpreted — the channel for caller vocabulary the primitive has no column for (the skill translation carries an excludeReferencesFromBundle rule's index and its template here). Null when the rule declared none, and for every condition no refusal rule produced."
+        },
+        "targetFaultClass": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "refused",
+                "exhausted",
+                "wrong-type",
+                "occupied",
+                "busy",
+                "unsupported",
+                "device"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The fault class (the FsFaultClass vocabulary less absent: refused, exhausted, wrong-type, occupied, busy, unsupported, device) of a resolution the OS declined or could not complete — set on EXTENT_SYMLINK_TARGET_UNREADABLE, where it says WHY the link could not be followed, so a query or check reads the cause from a column and never from message. Null on every other condition: nothing was looked up, or the OS looked and found nothing."
         }
       },
       "required": [
@@ -135,7 +155,8 @@
         "sourceRef",
         "targetExists",
         "matchedPattern",
-        "matchedPayload"
+        "matchedPayload",
+        "targetFaultClass"
       ],
       "additionalProperties": false,
       "description": "A row of the path-dependent `realization_conditions` table"

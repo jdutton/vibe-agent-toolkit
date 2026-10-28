@@ -21,7 +21,7 @@
 import type { Dirent } from 'node:fs';
 import * as fs from 'node:fs/promises';
 
-import { forEachInOrder, isPathAbsentError, safePath } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, isPathAbsentError, realpathNative, safePath } from '@vibe-agent-toolkit/utils';
 
 /** A path the walk could not list, and the OS message for it. Absolute. */
 export interface WalkRefusal {
@@ -91,7 +91,8 @@ export async function walkFollowingLinks(rootDir: string, options: WalkOptions =
   const visited = new Set<string>();
 
   async function listDir(dir: string): Promise<Dirent<string>[]> {
-    const real = await fs.realpath(dir);
+    // The one native realpath rule: a volume that cannot answer a final-path query is asked again by the JS walk.
+    const real = await realpathNative(dir);
     if (visited.has(real)) return [];
     visited.add(real);
     return fs.readdir(dir, { withFileTypes: true, encoding: 'utf-8' });

@@ -62,7 +62,7 @@ export function pluginFilesDest(rawDest: string): string {
     if (segment !== '..') segments.push(segment);
     else if (segments.pop() === undefined) throw outside();
   }
-  const folded = segments.map(foldedSegment);
+  const folded = segments.map((segment) => foldedSegment(segment));
   // Nothing left names the plugin output dir itself, which is not a file in it.
   if (folded.length === 0) throw outside();
   if (folded[0] === 'skills') {

@@ -5,14 +5,13 @@ import path from 'node:path';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-
 import {
   DirectorySpellingIndex,
   fillPathSpellings,
   fillRealpaths,
   FsLookupCache,
   pathSpellingFrom,
-  realpathFrom,
+  realpathRowFrom,
   spellingWalkRoot,
 } from '../src/fs-utils.js';
 import type { DirectoryListing, RealpathTable } from '../src/fs-utils.js';
@@ -85,13 +84,15 @@ async function plantDeep(dir: string): Promise<string> {
  * answer differently.
  *
  * ⚠️ **The split IS the contract under test, not a taxonomy.** `EACCES` (a mode
- * bit) and `ELOOP` (a committed symlink cycle) are facts about the tree that
- * hold for the whole run, so memoizing them is exactly what the cache is for.
+ * bit) and `EPERM` (a policy) are facts about the tree that hold for the whole
+ * run, so memoizing them is exactly what the cache is for. (`ELOOP` is not a
+ * refusal at all to the existence walk: the one link predicate calls it a link to
+ * nothing — see "one link, one answer" below.)
  * `EMFILE`/`ENFILE` are a *moment* — the process ran out of descriptors — and a
  * memo that keeps one turns a blip into a run-long verdict about every path
  * under that directory, at exit 0, that a re-run does not reproduce.
  */
-const STABLE_REFUSALS = ['EACCES', 'ELOOP', 'ESTALE', 'ENOSPC'] as const;
+const STABLE_REFUSALS = ['EACCES', 'EPERM', 'ESTALE', 'ENOSPC'] as const;
 // Transient = what `isRetryableShortageError` says a re-ask can get past: busy, or out of descriptors.
 // A full disk (`ENOSPC`) is not: re-asking frees no space.
 const TRANSIENT_REFUSALS = ['EMFILE', 'ENFILE', 'EBUSY'] as const;
@@ -299,12 +300,12 @@ describe('fs-utils', () => {
       const spy = vi.spyOn(nodeFs, 'realpath');
 
       try {
-        const real = await cache.realpath(tempDir);
-        expect(await cache.realpath(tempDir)).toBe(real);
+        const real = (await cache.realpath(tempDir)).path;
+        expect((await cache.realpath(tempDir)).path).toBe(real);
         expect(spy).toHaveBeenCalledTimes(1);
 
         const missing = safePath.join(tempDir, 'no-such-path');
-        expect(await cache.realpath(missing)).toBe(safePath.resolve(missing));
+        expect((await cache.realpath(missing)).path).toBe(safePath.resolve(missing));
       } finally {
         spy.mockRestore();
       }
@@ -477,7 +478,7 @@ describe('fs-utils', () => {
       const { canonicalRealRoot, linkRoot } = await setupSymlinkedRoot(tempDir, skip);
       const missing = safePath.join(linkRoot, DOCS, GONE);
 
-      const answer = await new FsLookupCache().realpath(missing);
+      const answer = (await new FsLookupCache().realpath(missing)).path;
 
       // Proof the fixture DISCRIMINATES before trusting the green: the two
       // candidate answers are different strings here, which they are not under a
@@ -492,7 +493,7 @@ describe('fs-utils', () => {
       const { canonicalRealRoot, linkRoot } = await setupSymlinkedRoot(tempDir, skip);
       const missing = safePath.join(linkRoot, DOCS, 'nope', 'deeper', GONE);
 
-      const answer = await new FsLookupCache().realpath(missing);
+      const answer = (await new FsLookupCache().realpath(missing)).path;
 
       // Every missing component is re-appended in order — a single-level walk
       // would answer the parent's canonical path, and a walk that dropped the
@@ -505,7 +506,7 @@ describe('fs-utils', () => {
       const present = safePath.join(linkRoot, DOCS, 'here.md');
       await fs.writeFile(present, '');
 
-      const answer = await new FsLookupCache().realpath(present);
+      const answer = (await new FsLookupCache().realpath(present)).path;
 
       // The success path is untouched by the fallback change, and this column's
       // whole contract is equivalence with `fs.realpathSync` byte for byte.
@@ -520,7 +521,7 @@ describe('fs-utils', () => {
       await fs.writeFile(escapeTarget, '');
       await createSymlinkAsync(cap, escapeTarget, safePath.join(realRoot, 'escape.md'));
 
-      const answer = await new FsLookupCache().realpath(safePath.join(linkRoot, 'escape.md'));
+      const answer = (await new FsLookupCache().realpath(safePath.join(linkRoot, 'escape.md'))).path;
 
       expect(answer).toBe(toForwardSlash(nodeFs.realpathSync(escapeTarget)));
       expect(answer.startsWith(canonicalRealRoot + '/')).toBe(false);
@@ -533,7 +534,7 @@ describe('fs-utils', () => {
       await createSymlinkAsync(cap, outside, safePath.join(realRoot, 'outlink'), 'dir');
       const missing = safePath.join(linkRoot, 'outlink', GONE);
 
-      const answer = await new FsLookupCache().realpath(missing);
+      const answer = (await new FsLookupCache().realpath(missing)).path;
 
       // The walk must widen nothing: canonicalizing through the deepest existing
       // ancestor is what makes an escape stay an escape, because the ancestor is
@@ -550,7 +551,7 @@ describe('fs-utils', () => {
       const orphan = 'vat-no-such-root-entry-9f3a';
       const missing = safePath.join(fsRoot, orphan);
 
-      const answer = await new FsLookupCache().realpath(missing);
+      const answer = (await new FsLookupCache().realpath(missing)).path;
 
       expect(answer).toBe(safePath.join(toForwardSlash(nodeFs.realpathSync(fsRoot)), orphan));
     });
@@ -566,20 +567,41 @@ describe('fs-utils', () => {
       const spy = vi
         .spyOn(nodeFs, 'realpath')
         .mockImplementation(((_target: string, callback: (error: Error) => void) => {
-          // Not ENOENT: EACCES and ELOOP land in the same catch, and the walk is
-          // deliberately errno-blind.
-          callback(new Error('EACCES: permission denied'));
+          // What a nonexistent or disconnected drive root answers: it resolves to nothing.
+          callback(Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' }));
         }) as unknown as typeof nodeFs.realpath);
       const fsRoot = toForwardSlash(path.parse(safePath.resolve(tempDir)).root);
       const missing = safePath.join(fsRoot, 'a', 'b', 'c.md');
 
-      const answer = await new FsLookupCache().realpath(missing);
+      const answer = (await new FsLookupCache().realpath(missing)).path;
 
       // Every level fell back, so the walk composes back to the lexical form —
       // which is the right answer precisely when nothing on the path resolves.
       expect(answer).toBe(missing);
       expect(spy.mock.calls.length).toBeGreaterThan(1);
       vi.restoreAllMocks();
+    });
+
+    // One answer to "does it resolve?", and a read lane's consequence: an OS that DECLINED to resolve
+    // a path is a row carrying that fault (the judge reports it against the one target), answered
+    // from the ancestor like a path that resolves to nothing — never a rejection, which would end the
+    // whole `Promise.all` fill and lose every other target's finding.
+    it('answers a path the OS declines to resolve from its ancestor, carrying the fault, and one that resolves to nothing with none', async () => {
+      const declined = safePath.join(tempDir, 'declined.md');
+      const gone = safePath.join(tempDir, 'gone.md');
+      vi.spyOn(nodeFs, 'realpath').mockImplementation(((target: string, callback: (error: Error | null, real?: string) => void) => {
+        if (toForwardSlash(target) === declined) callback(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES', path: target }));
+        else if (toForwardSlash(target) === gone) callback(Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT', path: target }));
+        else callback(null, nodeFs.realpathSync(target));
+      }) as unknown as typeof nodeFs.realpath);
+      try {
+        const cache = new FsLookupCache();
+        const real = toForwardSlash(nodeFs.realpathSync(tempDir));
+        expect(await cache.realpath(declined)).toMatchObject({ path: safePath.join(real, 'declined.md'), fault: { errno: 'EACCES', faultClass: 'refused' } });
+        expect(await cache.realpath(gone)).toEqual({ path: safePath.join(real, 'gone.md'), fault: null });
+      } finally {
+        vi.restoreAllMocks();
+      }
     });
 
     it('shares one in-flight promise and canonicalizes the ancestor through the memo', async ({
@@ -607,7 +629,7 @@ describe('fs-utils', () => {
     });
   });
 
-  describe('fillRealpaths + realpathFrom', () => {
+  describe('fillRealpaths + realpathRowFrom', () => {
     const PURE = 'Pure.txt';
 
     /**
@@ -645,7 +667,7 @@ describe('fs-utils', () => {
       const byName = (a: string, b: string): number => a.localeCompare(b);
       expect([...table.keys()].sort(byName)).toEqual([...filePaths].sort(byName));
       expect(
-        names.every((name, i) => realpathFrom(table, filePaths[i] ?? '').endsWith(name))
+        names.every((name, i) => realpathRowFrom(table, filePaths[i] ?? '').path.endsWith(name))
       ).toBe(true);
     });
 
@@ -684,10 +706,10 @@ describe('fs-utils', () => {
       // The fallback IS the contract: a non-existent path has no realpath, and a
       // caller comparing paths still needs an answer. So a filled row is always a
       // string, which is what lets `undefined` mean "absent key" and nothing else.
-      expect(realpathFrom(table, missing)).toBe(safePath.resolve(missing));
+      expect(realpathRowFrom(table, missing).path).toBe(safePath.resolve(missing));
     });
 
-    it('throws from realpathFrom when the table holds no row for the path', () => {
+    it('throws from realpathRowFrom when the table holds no row for the path', () => {
       const unfilled = safePath.join(tempDir, 'Unkeyed.txt');
       const empty: RealpathTable = new Map();
 
@@ -695,8 +717,8 @@ describe('fs-utils', () => {
       // syscall this column exists to remove, and no test of the VERDICT would
       // catch it. The miss is a programming error, so it is loud — and it names
       // the remedy.
-      expect(() => realpathFrom(empty, unfilled)).toThrow(unfilled);
-      expect(() => realpathFrom(empty, unfilled)).toThrow('fillRealpaths');
+      expect(() => realpathRowFrom(empty, unfilled).path).toThrow(unfilled);
+      expect(() => realpathRowFrom(empty, unfilled).path).toThrow('fillRealpaths');
     });
 
     it('judges from a filled table, reaching neither the async nor the sync realpath', async () => {
@@ -715,7 +737,7 @@ describe('fs-utils', () => {
       expect(routes.counts().every((n) => n > 0)).toBe(true);
       routes.clear();
 
-      expect(realpathFrom(table, filePath).endsWith(PURE)).toBe(true);
+      expect(realpathRowFrom(table, filePath).path.endsWith(PURE)).toBe(true);
       expect(routes.counts()).toEqual([0, 0]);
       vi.restoreAllMocks();
     });
@@ -748,8 +770,8 @@ describe('fs-utils', () => {
 
       // The row is the TARGET's canonical path filed under the LINK's path,
       // which is what makes this column a canonicalization rather than an echo.
-      expect(realpathFrom(table, linkPath)).toBe(toForwardSlash(nodeFs.realpathSync(targetPath)));
-      expect(realpathFrom(table, linkPath)).not.toBe(safePath.resolve(linkPath));
+      expect(realpathRowFrom(table, linkPath).path).toBe(toForwardSlash(nodeFs.realpathSync(targetPath)));
+      expect(realpathRowFrom(table, linkPath).path).not.toBe(safePath.resolve(linkPath));
     });
 
     it('answers a mis-cased path exactly as realpathSync does, not as the native resolver does', async ({
@@ -777,7 +799,7 @@ describe('fs-utils', () => {
       // to a literal string: the contract is equivalence with the synchronous
       // route that the synchronous callers this column replaced use. Anything
       // else changes findings on a case-insensitive filesystem.
-      expect(realpathFrom(table, misCased)).toBe(toForwardSlash(nodeFs.realpathSync(misCased)));
+      expect(realpathRowFrom(table, misCased).path).toBe(toForwardSlash(nodeFs.realpathSync(misCased)));
     });
 
     it('answers the empty path as realpathSync does, where the native resolver throws', async () => {
@@ -790,7 +812,7 @@ describe('fs-utils', () => {
       // pinning to the sync route stops a future fallback change drifting it.
       const table = await fillRealpaths([''], new FsLookupCache());
 
-      expect(realpathFrom(table, '')).toBe(toForwardSlash(nodeFs.realpathSync('')));
+      expect(realpathRowFrom(table, '').path).toBe(toForwardSlash(nodeFs.realpathSync('')));
     });
 
     it('routes canonicalization through the node:fs default object, so a post-load spy sees it', async () => {
@@ -804,7 +826,7 @@ describe('fs-utils', () => {
       await fs.writeFile(filePath, '');
       const spy = vi.spyOn(nodeFs, 'realpath');
 
-      const answer = await new FsLookupCache().realpath(filePath);
+      const answer = (await new FsLookupCache().realpath(filePath)).path;
 
       expect(spy).toHaveBeenCalledTimes(1);
       expect(spy.mock.calls[0]?.[0]).toBe(filePath);
@@ -1248,6 +1270,38 @@ describe('fs-utils', () => {
             transient: TRANSIENT_REFUSALS.includes(code as (typeof TRANSIENT_REFUSALS)[number]),
           },
         });
+      });
+
+      // One link, one answer: an errno the link predicate calls "resolves to nothing" is ABSENCE
+      // to this walk, as it is to the realpath beside it (`FsLookupCache.realpath`) and to every
+      // other lane — a looping directory used to read "unreadable" here and "missing" there. The
+      // listing itself still records the refusal: only the existence verdict reads it as absence.
+      it.each(['ELOOP'])('reads a listing that fails %s as no such entry — the link predicate\'s answer', async (code) => {
+        const looped = safePath.join(tempDir, 'looped-cause');
+        await fs.mkdir(looped, { recursive: true });
+        const cache = new FsLookupCache();
+        const index = new DirectorySpellingIndex(cache);
+
+        const { result } = await withReaddirRefusedOnce(
+          code,
+          async () => ({ spelling: await index.lookup(looped, ANY_NAME), listing: await cache.readdir(looped) }),
+        );
+
+        expect(result.spelling).toEqual({ match: 'absent', because: { kind: 'no_such_entry' } });
+        expect(result.listing).toEqual({ outcome: 'unreadable', code });
+      });
+
+      // Ambiguous on Windows — libuv src/win/error.c reports four Win32 errors as EINVAL (:102-105) and
+      // ERROR_BUFFER_OVERFLOW as ENAMETOOLONG (:129) — so neither means "nothing there": a refusal,
+      // with the errno, exactly as the realpath beside this walk records a fault for it.
+      it.each(['EINVAL', 'ENAMETOOLONG'])('reads a listing that fails %s as a refusal, never as no such entry', async (code) => {
+        const odd = safePath.join(tempDir, 'ambiguous-cause');
+        await fs.mkdir(odd, { recursive: true });
+        const index = new DirectorySpellingIndex(new FsLookupCache());
+
+        const { result } = await withReaddirRefusedOnce(code, async () => await index.lookup(odd, ANY_NAME));
+
+        expect(result).toMatchObject({ match: 'absent', because: { kind: 'directory_unreadable', code, directory: odd } });
       });
 
       it('says `no_such_entry` and nothing else when the directory WAS listed', async () => {

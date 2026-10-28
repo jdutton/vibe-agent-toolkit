@@ -7,7 +7,7 @@
 // snapshots a builtin's named ESM exports at import time, so `vi.spyOn(fs,
 // 'existsSync')` cannot see a call made through a named binding — the spy
 // attaches and counts zero, which reads exactly like "this function performs no
-// I/O". `pathSpellingFrom` and `realpathFrom` are guarded by precisely that
+// I/O". `pathSpellingFrom` and `realpathRowFrom` are guarded by precisely that
 // assertion (they must reach neither `readdir` nor this pair), so a "tidy-up"
 // back to named imports would silently disarm the guard. The async half below
 // already uses the default object for the same reason.
@@ -16,10 +16,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { fsFaultOf, isRetryableShortageError } from './errors/errno-table.js';
+import { type FsFaultClass, fsFaultOf, isRetryableShortageError, isUnresolvableLinkError } from './errors/errno-table.js';
+import { linkResolutionFault } from './errors/fs-fault.js';
 import { everyInOrder } from './in-order.js';
 import { toForwardSlash, toNfc } from './path-core.js';
 import { safePath } from './path-utils.js';
+import { assertLocalChain } from './tree-change/host-chain.js';
+import { HOST_PATH_FLAVOR } from './tree-change/link-chain.js';
 
 /**
  * What one path looked like the first time this run asked.
@@ -193,7 +196,7 @@ export class FsLookupCache {
   readonly #listings = new Map<string, Promise<DirectoryListing>>();
 
   /** Path → its canonical path, falling back to the resolved path. */
-  readonly #realpaths = new Map<string, Promise<string>>();
+  readonly #realpaths = new Map<string, Promise<RealpathRow>>();
 
   /** Path → the existence/kind pair recorded the first time it was probed. */
   readonly #probes = new Map<string, PathProbe>();
@@ -319,9 +322,16 @@ export class FsLookupCache {
    * is idempotent at a root (`'/'` on posix, `'C:/'` for a drive, `'//server/share/'`
    * for a UNC share), so without it the walk never terminates.
    *
-   * Errno is deliberately not inspected. EACCES on an existing file and ELOOP on
-   * a symlink cycle land in the same catch as ENOENT, and for all three the
-   * ancestor's namespace is a strictly better answer than the lexical one.
+   * Every filesystem failure walks up, and the row says which kind it was
+   * ({@link linkResolutionFault}, the one predicate): a path that resolves to
+   * nothing (ENOENT, ELOOP on a cycle, …) carries `fault: null`, and one the OS
+   * DECLINED (`EACCES`/`EPERM`) or could not look at carries the fault — errno
+   * and class — for the judge to report against that ONE target. Never a
+   * rejection: this column is filled over every link target in one
+   * `Promise.all`, and one refused target must not abort the run and lose every
+   * other finding. The ancestor answer is still the containment answer: a
+   * target outside the root is outside whatever refused beneath it. A bug
+   * (no errno) rejects as itself.
    *
    * ⚠️ **`promisify(nodeFs.realpath)` — NOT `fs/promises.realpath`. Node ships two
    * different realpaths and they do not agree.** `fs.realpathSync` and the
@@ -359,9 +369,10 @@ export class FsLookupCache {
    * The wrapper is allocated only on a cache MISS, i.e. once per actual syscall.
    *
    * @param targetPath - Path to canonicalize
-   * @returns Canonical path with forward slashes on every platform
+   * @returns The canonical path with forward slashes on every platform, and the
+   *   fault (or `null`) that sent the answer to an ancestor
    */
-  realpath(targetPath: string): Promise<string> {
+  realpath(targetPath: string): Promise<RealpathRow> {
     const cached = this.#realpaths.get(targetPath);
     if (cached !== undefined) return cached;
 
@@ -372,9 +383,19 @@ export class FsLookupCache {
     // sibling lookups: the rule matches a member call on an fs object, and the
     // path is passed to the promisified wrapper instead. The path is
     // caller-validated all the same.
-    const pending = promisify(nodeFs.realpath)(targetPath)
-      .then(toForwardSlash)
-      .catch(() => this.#canonicalizeViaAncestor(targetPath));
+    // The kernel is asked only once the link chain has been read and shown local
+    // (`assertLocalChain`); a chain it refuses is this target's fault, like any other.
+    const pending = Promise.resolve()
+      .then(() => {
+        assertLocalChain(targetPath, HOST_PATH_FLAVOR);
+        return promisify(nodeFs.realpath)(targetPath);
+      })
+      .then((real): RealpathRow => ({ path: toForwardSlash(real), fault: null }))
+      .catch((error: unknown) => {
+        const facts = linkResolutionFault(error);
+        const fault = facts === undefined ? null : { errno: facts.errno, faultClass: facts.faultClass, error };
+        return this.#canonicalizeViaAncestor(targetPath, fault);
+      });
     this.#realpaths.set(targetPath, pending);
     return pending;
   }
@@ -389,17 +410,20 @@ export class FsLookupCache {
    * before any of this can start.
    *
    * @param targetPath - Path that could not be canonicalized
-   * @returns Canonical ancestor plus the missing remainder, forward-slashed
+   * @param fault - Why it could not, when the OS declined or could not look; `null` when it resolves to nothing
+   * @returns Canonical ancestor plus the missing remainder, forward-slashed, with
+   *   this path's own fault — or, when it has none, the ancestor's
    */
-  async #canonicalizeViaAncestor(targetPath: string): Promise<string> {
+  async #canonicalizeViaAncestor(targetPath: string, fault: RealpathFault | null): Promise<RealpathRow> {
     const absolutePath = safePath.resolve(targetPath);
     const parent = toForwardSlash(path.dirname(absolutePath));
     // Fixpoint at a filesystem root — `/`, `C:/`, `//server/share/` — where
     // `dirname` returns its own input. Nothing left to walk, and no guard means
     // no termination.
-    if (parent === absolutePath) return absolutePath;
+    if (parent === absolutePath) return { path: absolutePath, fault };
 
-    return safePath.join(await this.realpath(parent), path.basename(absolutePath));
+    const ancestor = await this.realpath(parent);
+    return { path: safePath.join(ancestor.path, path.basename(absolutePath)), fault: fault ?? ancestor.fault };
   }
 
   /**
@@ -653,6 +677,19 @@ export function rootListingRefusal(error: unknown, directory: string): Directory
 /**
  * The cause for a listing that produced no index.
  *
+ * ⛔ One link, one answer. A directory whose listing failed with an errno the ONE link predicate
+ * ({@link isUnresolvableLinkError}) calls "resolves to nothing" — the `absent` class, and a link
+ * loop (`ELOOP`) — is ABSENCE here, exactly as the realpath beside this walk
+ * ({@link FsLookupCache.realpath}, through `linkResolutionFault`) answers the same errno, and as the
+ * projection extent and every install lane do. This walk used to call a looping directory
+ * "unreadable" while that realpath called the same link a link to nothing: two answers for one
+ * link. Every other failed listing stays a refusal with its errno: declined or failed (`EACCES`,
+ * `EIO`, Windows' `UNKNOWN`), and Windows' ambiguous `EINVAL` / `ENAMETOOLONG`, each of which libuv
+ * answers for more than one Win32 error.
+ *
+ * {@link listingFailure} itself keeps `absent` to `ENOENT`/`ENOTDIR`: the crawler reads it to
+ * decide what it could not ENUMERATE, a different question from whether a link target exists.
+ *
  * @param listing - A `readdir` outcome that is not `listed`
  * @param directory - The directory that was asked about
  * @returns Which absence this is, and — when it is a refusal — its detail
@@ -661,7 +698,7 @@ function absenceCauseFor(
   listing: Exclude<DirectoryListing, { outcome: 'listed' }>,
   directory: string
 ): AbsenceCause {
-  if (listing.outcome === 'absent') return { kind: 'no_such_entry' };
+  if (listing.outcome === 'absent' || isUnresolvableLinkError({ code: listing.code })) return { kind: 'no_such_entry' };
   return directoryRefusalFor(listing, directory);
 }
 
@@ -1129,23 +1166,51 @@ export function pathSpellingFrom(
 }
 
 /**
- * The materialized realpath column: path → its canonical path.
+ * Why a path's canonical answer came from an ancestor although something is
+ * there to resolve: the OS declined (`EACCES`, `EPERM`), ran short or could not
+ * look. Carried on the row so a judge reports it against that ONE target.
+ */
+export interface RealpathFault {
+  readonly errno: string;
+  readonly faultClass: FsFaultClass;
+  /** The resolution's own error — what a caller classifies when the path is the run's own (the project root), not a target. */
+  readonly error: unknown;
+}
+
+/** One row of the realpath column. */
+export interface RealpathRow {
+  /** The canonical path, forward-slashed — from the deepest ancestor that resolved when the path itself did not. */
+  readonly path: string;
+  /**
+   * `null` when the path resolved, or resolves to nothing (dangling, a cycle);
+   * otherwise the fault that kept it from resolving. Required, never optional,
+   * so every WRITER of a row must decide it. The type does not make a reader ask:
+   * one that uses `path` alone still compiles, and reads a faulted row as the
+   * nearest ancestor that resolved. Every judge of a link target reads `fault`
+   * before it trusts `path` (`gitIgnoreSafetyIssue` beside `isWithinProjectFrom`).
+   */
+  readonly fault: RealpathFault | null;
+}
+
+/**
+ * The materialized realpath column: path → its canonical path and the fault, if
+ * any, that kept it from resolving.
  *
- * Every filled row is a string — never `null`, never `undefined`.
+ * Every filled row is a {@link RealpathRow} — never `null`, never `undefined`.
  * {@link FsLookupCache.realpath} answers a path it cannot canonicalize from that
  * path's deepest existing ancestor rather than failing, because a path that does
  * not exist has no realpath and a caller comparing paths still needs an answer.
  * That fallback IS the contract, and it is what lets `undefined` out of this map
- * mean exactly one thing: *absent key*. See {@link realpathFrom}.
+ * mean exactly one thing: *absent key*. See {@link realpathRowFrom}.
  */
-export type RealpathTable = ReadonlyMap<string, string>;
+export type RealpathTable = ReadonlyMap<string, RealpathRow>;
 
 /**
  * Canonicalize every path in `paths` — the only place I/O is legal for this
  * fact, and the pass that must run *before* any judging.
  *
  * ⚠️ **Rows are keyed by the input path string exactly as given** — not a
- * dirname, not a re-resolved form. {@link realpathFrom} looks that same string
+ * dirname, not a re-resolved form. {@link realpathRowFrom} looks that same string
  * up, so any normalization applied here and not there is a silent miss (a loud
  * one, in fact: the judge throws). Contrast {@link fillPathSpellings}, which
  * keys by (walk root, target) *because* many references share one walk; here the
@@ -1168,7 +1233,7 @@ export async function fillRealpaths(
 ): Promise<RealpathTable> {
   const distinctPaths = new Set(paths);
 
-  const table = new Map<string, string>();
+  const table = new Map<string, RealpathRow>();
   await Promise.all(
     [...distinctPaths].map(async (filePath) => {
       table.set(filePath, await fsCache.realpath(filePath));
@@ -1179,7 +1244,8 @@ export async function fillRealpaths(
 }
 
 /**
- * Read the canonical path for `filePath` out of an already-filled table. Pure.
+ * Read the row for `filePath` — its canonical path and the fault, if any, that
+ * kept it from resolving — out of an already-filled table. Pure.
  *
  * **A miss throws rather than degrading to a recomputed realpath.** The fill set
  * is derived from exactly the paths the judge will be asked about, so a missing
@@ -1202,20 +1268,20 @@ export async function fillRealpaths(
  *
  * @param table - Table filled by {@link fillRealpaths}
  * @param filePath - Path being asked about, as it was handed to the fill
- * @returns The canonical path, with forward slashes on every platform
+ * @returns The row: the canonical path, with forward slashes on every platform, and its fault
  * @throws If `table` holds no row for `filePath`
  */
-export function realpathFrom(table: RealpathTable, filePath: string): string {
-  // `undefined` can only mean "absent key": a filled row is always a string,
+export function realpathRowFrom(table: RealpathTable, filePath: string): RealpathRow {
+  // `undefined` can only mean "absent key": a filled row is always a row,
   // because `FsLookupCache.realpath` falls back to the deepest existing
   // ancestor's canonical path rather than leaving an unresolvable path without
   // an answer.
-  const realPath = table.get(filePath);
-  if (realPath === undefined) {
+  const row = table.get(filePath);
+  if (row === undefined) {
     throw new Error(
       `No canonical path for "${filePath}". Fill it with fillRealpaths() before judging.`
     );
   }
 
-  return realPath;
+  return row;
 }

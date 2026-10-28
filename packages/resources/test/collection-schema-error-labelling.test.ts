@@ -9,7 +9,7 @@
  * failure and must not be relabelled as one.
  *
  * The throw that matters is the one the link fact tables raise on purpose:
- * `realpathFrom`/`pathSpellingFrom` crash on a missing row so that a fill/judge
+ * `realpathRowFrom`/`pathSpellingFrom` crash on a missing row so that a fill/judge
  * divergence names its own remedy. These tests pin that the crash reaches the
  * caller intact rather than being reworded into a schema complaint — the fix is
  * the propagation, not a new finding code.
@@ -58,7 +58,7 @@ const COMPILES_CLEANLY = {
   },
 };
 
-/** Verbatim shape of the fill/judge divergence crash from `realpathFrom`. */
+/** Verbatim shape of the fill/judge divergence crash from `realpathRowFrom`. */
 const FILL_DIVERGENCE_MESSAGE =
   'No canonical path for "/tmp/docs/target.md". Fill it with fillRealpaths() before judging.';
 

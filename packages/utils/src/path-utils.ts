@@ -1,11 +1,14 @@
-import { mkdirSync, realpathSync } from 'node:fs';
+import { mkdirSync, realpath, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 
-import { isPathAbsentError } from './errors/errno-table.js';
+import { isFinalPathUnanswerableError, isPathAbsentError } from './errors/errno-table.js';
 import { classifyFsFault } from './errors/fs-fault.js';
-import { safePath } from './path-core.js';
+import { safePath, toForwardSlash } from './path-core.js';
+import { assertLocalChain } from './tree-change/host-chain.js';
+import { HOST_PATH_FLAVOR } from './tree-change/link-chain.js';
 
 /**
  * Re-export every pure path helper so the package barrel keeps exposing the
@@ -33,20 +36,13 @@ export * from './path-core.js';
  * containment check judged such a path by the spelling the OS had just refused
  * to resolve. They stay loud.
  *
- * The JS `realpathSync` is asked before absence is concluded, because the
- * native call can fail where the JS walk succeeds — Node's docs note that on a
- * musl libc without procfs the native `realpath(3)` cannot work at all, and it
- * reports that as `ENOENT` for a path that exists. Only when both agree that
- * nothing is there is the lexical path the answer.
+ * Only when the native call AND the JS walk agree that nothing is there is the
+ * lexical path the answer — the one fallback rule every native site shares
+ * ({@link nativeAnswerNeedsJsWalk}), here with native separators kept.
  */
 function realpathOrSelf(target: string): string {
   try {
-    return realpathSync.native(target);
-  } catch (error) {
-    if (!isPathAbsentError(error)) throw error;
-  }
-  try {
-    return realpathSync(target);
+    return realpathNativeRawSync(target);
   } catch (error) {
     if (isPathAbsentError(error)) return target;
     throw error;
@@ -228,4 +224,97 @@ export function resolveFromImportMeta(importMetaUrl: string, ...segments: string
 export async function dynamicImportPath<T = unknown>(absPath: string): Promise<T> {
   const mod: unknown = await import(pathToFileURL(absPath).href);
   return mod as T;
+}
+
+/**
+ * Whether a native realpath's failure must be asked again of Node's JS realpath
+ * before anyone believes it — the ONE fallback rule every native site shares
+ * (`realpathNativeSync`, `realpathNative`, `normalizePath`'s `realpathOrSelf`, the
+ * file crawler's identity check). They used to hold two: `realpathOrSelf` fell
+ * back on absence and an unanswerable volume, the exported pair on the latter
+ * only, so one dangling-looking path got two answers on a host where they differ.
+ *
+ * - A volume whose driver does not implement final-path queries (a RAM disk, some
+ *   redirectors and virtual drives) answers EVERY native realpath with
+ *   `ERROR_INVALID_FUNCTION`, which libuv reports as `EISDIR`
+ *   ({@link isFinalPathUnanswerableError}). That says nothing about the path.
+ * - An absent answer ({@link isPathAbsentError}) is confirmed by the JS walk:
+ *   Node's docs note that on a musl libc without procfs the native `realpath(3)`
+ *   cannot work at all and reports `ENOENT` for a path that exists, and Windows
+ *   answers `ENOENT` (`ERROR_PATH_NOT_FOUND`) for a file on a volume mounted into
+ *   a folder with no drive letter, which has no DOS name to give (pinned on a
+ *   real host by `realpath-native-folder-mount.integration.test.ts`). A path the
+ *   JS walk also finds absent throws the walk's own `ENOENT`, so nothing that is
+ *   really missing reads as present.
+ *
+ * ⚠️ The JS answer is not the on-disk spelling, and that is NOT fail-closed on
+ * every host. It keeps the casing the caller spelled (and, on Windows, an 8.3
+ * short name); on POSIX a mis-cased spelling of an in-root path compares OUTSIDE a
+ * canonical root, but on Windows `safePath.relative` (`path.win32.relative`)
+ * ignores case, so it compares inside — right on a case-insensitive volume, wrong
+ * in a directory marked case-sensitive. And the JS walk expands only what `lstat`
+ * calls a link: a `subst` drive and a volume mount point (`\??\Volume{GUID}\`,
+ * which libuv reports as a plain directory) stay as spelled, so one file has two
+ * spellings that compare either way, depending on how the root was spelled. No
+ * lane walks a mount point differently from a directory today; a caller that
+ * needs the kernel's own identity compares `stat` identities, not these strings.
+ *
+ * @param error - What the native realpath threw
+ * @returns True when the JS walk decides instead
+ */
+function nativeAnswerNeedsJsWalk(error: unknown): boolean {
+  return isFinalPathUnanswerableError(error) || isPathAbsentError(error);
+}
+
+/**
+ * `realpathSync.native` with native separators, asked again of the JS realpath
+ * under the one fallback rule ({@link nativeAnswerNeedsJsWalk}) — and asked at
+ * all only once the link chain to `path` has been read, hop by hop, and shown
+ * to be local ({@link assertLocalChain}): a Windows kernel resolving a link to
+ * `\\host\share` offers the operator's NTLM credentials to that host before any
+ * answer comes back, so the kernel is the second lock, never the first.
+ *
+ * @param path - Path to resolve
+ * @returns The real path, in the host's own separators
+ * @throws LinkChainRefusedError for a chain through a network path, or one that never ends; the JS
+ *   walk's error when it is asked and fails, else the native error
+ */
+function realpathNativeRawSync(path: string): string {
+  assertLocalChain(path, HOST_PATH_FLAVOR);
+  try {
+    return realpathSync.native(path);
+  } catch (error: unknown) {
+    if (!nativeAnswerNeedsJsWalk(error)) throw error;
+    return realpathSync(path);
+  }
+}
+
+/**
+ * The native realpath — the canonical ON-DISK spelling (`realpath(3)` /
+ * `GetFinalPathNameByHandleW`) — forward-slashed, under the one fallback rule
+ * ({@link nativeAnswerNeedsJsWalk}).
+ *
+ * @param path - Path to resolve
+ * @returns The real path, forward-slashed
+ * @throws The resolution's own error otherwise — the caller classifies it
+ */
+export function realpathNativeSync(path: string): string {
+  return toForwardSlash(realpathNativeRawSync(path));
+}
+
+/**
+ * The asynchronous {@link realpathNativeSync} (`realpath.native`).
+ *
+ * @param path - Path to resolve
+ * @returns The real path, forward-slashed
+ * @throws The resolution's own error otherwise — the caller classifies it
+ */
+export async function realpathNative(path: string): Promise<string> {
+  assertLocalChain(path, HOST_PATH_FLAVOR);
+  try {
+    return toForwardSlash(await promisify(realpath.native)(path));
+  } catch (error: unknown) {
+    if (!nativeAnswerNeedsJsWalk(error)) throw error;
+    return toForwardSlash(await promisify(realpath)(path));
+  }
 }

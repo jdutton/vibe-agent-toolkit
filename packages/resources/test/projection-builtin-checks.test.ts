@@ -33,6 +33,7 @@ import {
 import {
   EXTENT_SYMLINK_NOT_REALIZED,
   EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT,
+  EXTENT_SYMLINK_TARGET_UNREADABLE,
   EXTENT_SYMLINK_TARGET_UNRESOLVED,
 } from '../src/projection/contributors/filesystem-extent.js';
 import type { ClaudeRulePatternRow } from '../src/schemas/projection-claude-rules.js';
@@ -533,6 +534,28 @@ describe('CLAUDE_RULE_LINK_UNCHECKED — a rules file VAT can see but cannot che
     expect(issue?.message).toContain(EXTENT_SYMLINK_TARGET_UNRESOLVED);
     expect(issue?.message).not.toContain('it is in force and unchecked');
     expect(issue?.message).not.toContain('outside the project root');
+  });
+
+  it('⭐ sends a link this host could not resolve to the permission or the share — never "delete it"', () => {
+    // A link the OS refused to follow does not dangle: on a machine with the
+    // right permissions it reaches a rule. The dangling-link remedy would have
+    // the author delete a working link.
+    const [issue, ...rest] = CLAUDE_RULE_LINK_UNCHECKED_CHECK.run(
+      linkInput([symlinkCondition('.claude/rules/locked.md', EXTENT_SYMLINK_TARGET_UNREADABLE)]),
+    );
+
+    expect(rest).toStrictEqual([]);
+    expect(issue?.code).toBe('CLAUDE_RULE_LINK_UNCHECKED');
+    expect(issue?.message).toContain('This host could not resolve it');
+    expect(issue?.message).toContain('fix the permission on the target');
+    expect(issue?.message).toContain(EXTENT_SYMLINK_TARGET_UNREADABLE);
+    expect(issue?.message).not.toContain('or delete it');
+    expect(issue?.message).not.toContain('resolves to nothing on this host');
+    expect(issue?.message).not.toContain('it is in force and unchecked');
+    // The row cannot say where the text points, so the clause never promises the rule loads: a link
+    // whose target lies outside the project root is skipped by Claude Code once it resolves too.
+    expect(issue?.message).not.toContain('may reach a rule');
+    expect(issue?.message).toContain('outside the project root, Claude Code skips it even once it resolves');
   });
 
   it('says NOTHING about a condition row carrying another code', () => {

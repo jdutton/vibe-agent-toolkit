@@ -42,7 +42,7 @@
 #   * fast-uri and qs — new advisories against the exact versions `overrides`
 #     held; re-pinned forward (3.1.6 / 6.16.0) under rule 1 rather than listed.
 #
-# What that leaves is a single advisory, below. If you are adding a second one,
+# What that left was a single advisory. If you are adding a second one,
 # the bar is rule 1: show that a real fix was tried first.
 #
 # Reconciled 2026-10-03 (27 CI advisories + 3 published since): every one with a
@@ -66,29 +66,30 @@
 # fixed in 4.7.10): fixed under rule 1 by moving the existing `overrides` pin
 # 4.7.9 -> 4.7.10, inside `@vibe-agent-toolkit/resources`' declared `^4.7.8`.
 # Nothing else in the lockfile moved; nothing listed.
+#
+# Reconciled 2026-10-26: esbuild (GHSA-g7r4-m6w7-qqqr) DELETED under rule 3 —
+# vite 7.3.7 declares `^0.27.0 || ^0.28.0`, and the lockfile now resolves only
+# esbuild@0.28.2, past the 0.28.1 fix. braces (GHSA-vfj7-8cjw-p6xm) DELETED under
+# rule 3 — the advisory was WITHDRAWN upstream on 2026-10-23 and osv-scanner
+# reported the entry as an unused ignore. zod (GHSA-mrhx-c7xc-m3w5) added, below.
 # ---------------------------------------------------------------------------
 
-# --- esbuild (dev-server file read) ------------------------------------------
-# The advisory affects `esbuild serve` (the dev server). VAT never runs the
-# esbuild dev server; esbuild is build-time-only tooling (reached via vite/tsx)
-# and is not present in any published package. CVSS 2.5.
-# BLOCKER TO RE-CHECK (rule 4), stated so it can be tested rather than believed:
-# the fix is esbuild 0.28.1, and the copy in this tree is pulled transitively by
-# vite. Check whether vite's declared esbuild range now admits 0.28.x; if it
-# does, this entry is retired by a `overrides` pin and this file becomes empty.
+# --- zod 3 (GHSA-mrhx-c7xc-m3w5) ---------------------------------------------
+# Scope: zod@3.25.76 ONLY. The five nested zod 4 copies (claude-agent-sdk, knip,
+# @langchain/core, @langchain/openai, @modelcontextprotocol/sdk) were re-resolved
+# to 4.6.7 under rule 1 — their declared ranges admit it. OSV-Scanner cannot
+# scope an IgnoredVulns entry to one package version (a PackageOverrides entry
+# would ignore EVERY advisory against 3.25.76, which is wider), so the scope is
+# ENFORCED by `bun run check:zod-advisory-scope` (packages/dev-tools/src/
+# zod-advisory-scope.ts, full tier): red when any other zod < 4.6.6 resolves, and
+# red once 3.25.76 is gone (delete this entry) or this entry is (delete the check).
+# Why it cannot be fixed now: 18 of VAT's 25 workspaces declare zod `^3.25` and the
+# only fixed version is zod 4.6.6, a Breaking migration of every schema VAT
+# publishes — scheduled as its own PR after the next feature PR.
+# Exposure: VAT is a CLI that validates the operator's OWN config and files with
+# zod; no schema parses input from a remote party.
+# BLOCKER TO RE-CHECK (rule 4): the zod 4 migration PR. Delete this entry with it.
 [[IgnoredVulns]]
-id = "GHSA-g7r4-m6w7-qqqr"
-reason = "esbuild advisory affects the `esbuild serve` dev server, which VAT never runs. Build-time-only, not shipped in any published package. Fix (0.28.1) is outside vite's declared range; re-check whether vite has widened it."
-
-# --- braces (stack exhaustion on deeply nested patterns) ---------------------
-# NO FIXED VERSION EXISTS: the advisory's range is `last_affected: 3.0.3`, and
-# 3.0.3 is the newest braces published. Rule 1 cannot apply. The copies here come
-# from chokidar@3 (resource-compiler's watch mode, `^3.6.0`) and micromatch via
-# fast-glob (jscpd, knip, globby — dev tooling). braces expands glob patterns the
-# project author writes in its own config or on the command line, not input from
-# a remote party, so the exhausted stack is the author's own process.
-# BLOCKER TO RE-CHECK (rule 4): a braces release that fixes it (then delete this
-# entry), or chokidar 4 in resource-compiler, which drops braces from that path.
-[[IgnoredVulns]]
-id = "GHSA-vfj7-8cjw-p6xm"
-reason = "No fixed braces version exists (last_affected 3.0.3, the newest release). Reached via chokidar@3 (resource-compiler watch mode) and micromatch/fast-glob dev tooling; patterns come from the project's own config/CLI, not a remote party. Delete when braces ships a fix or resource-compiler moves to chokidar 4."
+id = "GHSA-mrhx-c7xc-m3w5"
+ignoreUntil = 2026-12-31
+reason = "Only zod@3.25.76 remains affected (nested zod 4 copies re-resolved to 4.6.7). 18 of VAT's 25 workspaces declare zod ^3.25; the only fix is zod 4.6.6, a Breaking migration scheduled as its own PR after the next feature PR. Exposure: a CLI validating the operator's own config and files, no remote input."

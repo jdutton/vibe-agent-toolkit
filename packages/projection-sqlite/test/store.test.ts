@@ -145,6 +145,7 @@ function extentBundle(contexts: readonly ContextFixture[], rootId: string = KEY.
         targetExists: null,
         matchedPattern: null,
         matchedPayload: null,
+        targetFaultClass: null,
       })),
     resolutionContexts: contexts.map((fixture) => ({
       contextId: fixture.contextId,

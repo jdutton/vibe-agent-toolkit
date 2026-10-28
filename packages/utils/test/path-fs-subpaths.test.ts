@@ -30,7 +30,7 @@ describe('./fs subpath entry', () => {
     expect(typeof mod.resolveFromImportMeta).toBe('function');
     expect(typeof mod.dynamicImportPath).toBe('function');
     expect(typeof mod.fillRealpaths).toBe('function');
-    expect(typeof mod.realpathFrom).toBe('function');
+    expect(typeof mod.realpathRowFrom).toBe('function');
     expect(typeof mod.fillPathSpellings).toBe('function');
     expect(typeof mod.pathSpellingFrom).toBe('function');
     expect(typeof mod.FsLookupCache).toBe('function');

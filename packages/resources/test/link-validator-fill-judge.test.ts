@@ -439,7 +439,7 @@ describe('link validation fill/judge split', () => {
       skipGitIgnoreCheck: false,
     });
 
-    // `realpathFrom` throws on a missing row, so a fill set that failed to cover
+    // `realpathRowFrom` throws on a missing row, so a fill set that failed to cover
     // the judged set surfaces here as a crash rather than a wrong answer. This
     // is the agreement test for the realpath column, with the gate OPEN.
     expect(() => lane.judge()).not.toThrow();
@@ -543,7 +543,7 @@ describe('link validation fill/judge split', () => {
 
   it('gates the fill on exactly the condition the judge short-circuits on', () => {
     // One predicate, two call sites: a duplicated inline condition on either
-    // side is a latent crash, because realpathFrom throws on a missing row.
+    // side is a latent crash, because realpathRowFrom throws on a missing row.
     expect(needsRealpathColumn({ projectRoot: '/project', skipGitIgnoreCheck: false })).toBe(true);
     expect(needsRealpathColumn({ projectRoot: '/project' })).toBe(true);
     expect(needsRealpathColumn({ projectRoot: '/project', skipGitIgnoreCheck: true })).toBe(false);

@@ -3,7 +3,8 @@
  * `archive-lane-coverage.integration.test.ts`. Pure over the texts it is given, so the same scan
  * runs over the repository and over a fixture of three lines.
  *
- * A READER is one of the archive module's (`extractArchive`, `openArchive`, `listArchive`), or —
+ * A READER is one of the archive module's (`extractArchive`, `openArchive`, `listArchive`,
+ * `zipOfArchive`), or —
  * to a fixpoint — any function that reaches one and is called from another file. A SITE is a
  * call, from one file, of a reader defined in another: `<file> › <reader>`.
  *
@@ -27,9 +28,9 @@
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript';
 
-/** The archive module: the three readers every site leads to. Its own files are not scanned. */
+/** The archive module: the four readers every site leads to. Its own files are not scanned. */
 export const ARCHIVE_SPECIFIER = '@vibe-agent-toolkit/utils/archive';
-const BASE_READERS: ReadonlySet<string> = new Set(['extractArchive', 'openArchive', 'listArchive']);
+const BASE_READERS: ReadonlySet<string> = new Set(['extractArchive', 'openArchive', 'listArchive', 'zipOfArchive']);
 
 /** A name bound from another module: what it is called there (`default` for a default import), and the specifier. */
 interface Imported { readonly name: string; readonly from: string }
@@ -127,36 +128,41 @@ function isValueUse(node: ts.Identifier): boolean {
   return !(declares && (parent as { name?: ts.Node }).name === node);
 }
 
+/** Record the calls and value uses under `node`, each against the top-level function it is `within`. */
+function visit(node: ts.Node, within: string, facts: FileFacts): void {
+  if (ts.isCallExpression(node)) {
+    dynamicImport(node, facts);
+    if (ts.isIdentifier(node.expression)) facts.calls.push({ callee: node.expression.text, within });
+  } else if (ts.isIdentifier(node) && isValueUse(node)) {
+    facts.values.push({ name: node.text });
+  }
+  // A command's `.action(...)` is where a lane STARTS: what runs there is the verb, not a step of the
+  // function that registered it, so it does not make that function a reader for its own callers.
+  const startsALane = ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'action';
+  ts.forEachChild(node, (child) => { visit(child, startsALane ? '' : within, facts); });
+}
+
+/** Record what one top-level statement imports, exports, declares and calls. */
+function statementFacts(statement: ts.Statement, facts: FileFacts): void {
+  if (ts.isImportDeclaration(statement)) staticImport(statement, facts);
+  else if (ts.isExportDeclaration(statement)) exportDeclaration(statement, facts);
+  else if (ts.isExportAssignment(statement) && ts.isIdentifier(statement.expression)) facts.exports.set('default', statement.expression.text);
+  else if (ts.isClassDeclaration(statement)) visit(statement, `class ${statement.name?.text ?? 'default'}`, facts);
+  else {
+    const functions = declared(statement);
+    for (const each of functions) {
+      facts.functions.add(each.name);
+      if (each.exportedAs !== undefined) facts.exports.set(each.exportedAs, each.name);
+      visit(each.body, each.name, facts);
+    }
+    if (functions.length === 0) visit(statement, '', facts);
+  }
+}
+
 function factsOf(file: string, text: string): FileFacts {
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   const facts: FileFacts = { file, imports: new Map(), wholeModules: [], functions: new Set(), exports: new Map(), reexports: [], calls: [], values: [] };
-  const visit = (node: ts.Node, within: string): void => {
-    if (ts.isCallExpression(node)) {
-      dynamicImport(node, facts);
-      if (ts.isIdentifier(node.expression)) facts.calls.push({ callee: node.expression.text, within });
-    } else if (ts.isIdentifier(node) && isValueUse(node)) {
-      facts.values.push({ name: node.text });
-    }
-    // A command's `.action(...)` is where a lane STARTS: what runs there is the verb, not a step of the
-    // function that registered it, so it does not make that function a reader for its own callers.
-    const startsALane = ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'action';
-    ts.forEachChild(node, (child) => { visit(child, startsALane ? '' : within); });
-  };
-  for (const statement of source.statements) {
-    if (ts.isImportDeclaration(statement)) staticImport(statement, facts);
-    else if (ts.isExportDeclaration(statement)) exportDeclaration(statement, facts);
-    else if (ts.isExportAssignment(statement) && ts.isIdentifier(statement.expression)) facts.exports.set('default', statement.expression.text);
-    else if (ts.isClassDeclaration(statement)) visit(statement, `class ${statement.name?.text ?? 'default'}`);
-    else {
-      const functions = declared(statement);
-      for (const each of functions) {
-        facts.functions.add(each.name);
-        if (each.exportedAs !== undefined) facts.exports.set(each.exportedAs, each.name);
-        visit(each.body, each.name);
-      }
-      if (functions.length === 0) visit(statement, '');
-    }
-  }
+  for (const statement of source.statements) statementFacts(statement, facts);
   return facts;
 }
 
@@ -243,7 +249,7 @@ class Readers {
     const calledElsewhere = new Set(sources.all.flatMap((facts) => facts.calls
       .map((call) => sources.importedAs(facts, call.callee))
       .filter((defined): defined is Defined => defined !== undefined && defined.file !== facts.file)
-      .map(key)));
+      .map((defined) => key(defined))));
     for (let grew = true; grew;) {
       grew = false;
       for (const facts of sources.all) {

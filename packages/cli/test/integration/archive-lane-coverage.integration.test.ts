@@ -28,7 +28,7 @@ import { ARCHIVE_SPECIFIER, laneRegistrations, scanReadSites } from '../helpers/
 
 const REPO_ROOT = resolveFromImportMeta(import.meta.url, '..', '..', '..', '..');
 
-/** The archive module: where the three readers every site leads to are defined. */
+/** The archive module: where the four readers every site leads to are defined. */
 const ARCHIVE_MODULE = 'packages/utils/src/archive';
 
 /** Every `.ts` file under `packages/<each>/<sub>`, repo-relative → its text, links not followed. */

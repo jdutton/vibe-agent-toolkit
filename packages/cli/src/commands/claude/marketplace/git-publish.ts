@@ -232,6 +232,38 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<un
   return dryRun ? undefined : disposeTempDir(tmpRepo);
 }
 
+/** `git ls-remote --exit-code` exits 2 when the remote holds no matching ref. */
+const LS_REMOTE_NO_MATCH = 2;
+
+/**
+ * Point the staging repo's branch at the remote branch's tip, so the publish commit builds on it.
+ *
+ * Whether the branch exists is ASKED of the remote, never inferred from a fetch: a fetch that
+ * failed (a full-history fetch outliving its timeout on a large marketplace) once fell through to
+ * an orphan commit, and the plain push of that commit was rejected as non-fast-forward. Now only
+ * the remote's own "no such branch" makes the first commit an orphan; any other failure refuses.
+ *
+ * The tip alone is fetched (`--depth=1`): the push needs only the parent the remote already has.
+ * `--no-push` fetches the whole history, because it copies the staging repo into the caller's.
+ */
+function buildOnRemoteTip(tmpRepo: string, remoteUrl: string, options: Pick<PublishGitOptions, 'branch' | 'noPush' | 'logger'>): void {
+  const ref = `refs/heads/${options.branch}`;
+  const probe = git(['ls-remote', '--exit-code', '--heads', remoteUrl, ref], { cwd: tmpRepo, allowFailure: true });
+  if (probe.status === LS_REMOTE_NO_MATCH) {
+    options.logger.info(`   Branch ${options.branch} does not exist on the remote; the first commit has no parent`);
+    return;
+  }
+  if (probe.status !== 0) {
+    throw new CommandRefusalError(
+      'EXTERNAL_API_FAILED',
+      `git ls-remote could not read ${redactUrlCredentials(remoteUrl)} (exit ${probe.status}):\n${probe.stderr}`,
+    );
+  }
+  const depth = options.noPush ? [] : ['--depth=1'];
+  git(['fetch', ...depth, remoteUrl, ref], { cwd: tmpRepo, refusal: 'EXTERNAL_API_FAILED' });
+  git(['reset', '--soft', 'FETCH_HEAD'], { cwd: tmpRepo });
+}
+
 /** {@link publishToGitBranch}'s work in the temp repo: stage the tree, commit it, deliver it. */
 async function commitAndDeliver(tmpRepo: string, cwd: string, remoteUrl: string, options: PublishGitOptions): Promise<void> {
   const { publishDir, branch, commitMessage, force, dryRun, logger } = options;
@@ -240,16 +272,10 @@ async function commitAndDeliver(tmpRepo: string, cwd: string, remoteUrl: string,
   git(['config', 'user.name', 'vat marketplace publish'], { cwd: tmpRepo });
   git(['checkout', '-b', branch], { cwd: tmpRepo });
 
-  // Try to fetch existing branch history (skip for dry-run — commit parent doesn't matter)
-  if (!dryRun) {
-    const fetchResult = git(
-      ['fetch', remoteUrl, `refs/heads/${branch}`],
-      { cwd: tmpRepo, allowFailure: true, timeout: 30_000 }
-    );
-    if (fetchResult.status === 0 && !force) {
-      // Reset to fetched branch tip so our commit builds on top of it
-      git(['reset', '--soft', 'FETCH_HEAD'], { cwd: tmpRepo });
-    }
+  // Build on the branch's tip. Skipped for a dry run (the parent does not matter) and under
+  // --force (the push replaces the branch).
+  if (!dryRun && !force) {
+    buildOnRemoteTip(tmpRepo, remoteUrl, options);
   }
 
   // Copy publish tree content into temp repo. Both trees are VAT's own staging: a fault

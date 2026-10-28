@@ -7,18 +7,22 @@ import { sep } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { FS_FAULT_CODE } from '../../src/errors/fs-fault.js';
 import { isVatError } from '../../src/errors/vat-error.js';
+import { canonicalPath } from '../../src/path-containment.js';
 import { safePath } from '../../src/path-core.js';
 import { mkdirSyncReal } from '../../src/path-utils.js';
 import { createSymlink, symlinkCapability, type SymlinkCapability } from '../../src/test-helpers.js';
+import { installFaultFs } from '../../src/testing/fault-fs.js';
 import { COPY_LINK_ESCAPES_SOURCE_CODE } from '../../src/tree-change/followed-walk.js';
-import { refuseEscapingLinks } from '../../src/tree-change/link-containment.js';
+import { HOST_PATH_FLAVOR } from '../../src/tree-change/link-chain.js';
+import { kernelRefusal, refuseEscapingLinks } from '../../src/tree-change/link-containment.js';
 
 import { plant, treeChangeSuite } from './tree-change-test-kit.js';
 
 const suite = treeChangeSuite('link-containment-');
 
-const NAMED = { placement: 'in-place', tree: 'the skill directory', within: 'it', consequence: 'An install would hold a link to files the skill does not own' } as const;
+const NAMED = { placement: 'in-place', side: 'source', flavor: HOST_PATH_FLAVOR, tree: 'the skill directory', within: 'it', consequence: 'An install would hold a link to files the skill does not own' } as const;
 
 /**
  * A unit holding a real directory `real` whose link `x` climbs out of the unit to a path that does
@@ -63,7 +67,7 @@ describe('refuseEscapingLinks', () => {
   it('accepts a tree with no link, and one whose links stay inside it', ({ skip }) => {
     const { cap, unit } = fixture(skip);
     expect(() => check(unit)).not.toThrow();
-    createSymlink(cap, safePath.join(unit, 'docs'), safePath.join(unit, 'alias'), 'dir');
+    createSymlink(cap, 'docs', safePath.join(unit, 'alias'), 'dir');
     createSymlink(cap, '../SKILL.md', safePath.join(unit, 'docs', 'up.md'), 'file');
     expect(() => check(unit)).not.toThrow();
   });
@@ -74,8 +78,17 @@ describe('refuseEscapingLinks', () => {
 
     const refusal = refusalOf(() => check(unit));
 
-    expect(refusal.message).toContain('Refusing the skill directory: docs/keys is a symbolic link to a path outside it');
+    expect(refusal.message).toContain(`Refusing the skill directory: docs/keys is a symbolic link whose target leads through an absolute path (${outside})`);
     expect(refusal.message).toContain(NAMED.consequence);
+  });
+
+  // In place too, the text is judged before the kernel resolves it — and an absolute text is
+  // refused unresolved, wherever it points: resolving it is the act that must not happen first.
+  it('refuses an absolute link in place even when it points inside the tree', ({ skip }) => {
+    const { cap, unit } = fixture(skip);
+    createSymlink(cap, safePath.join(unit, 'docs', 'a.md'), safePath.join(unit, 'pinned.md'), 'file');
+
+    expect(refusalOf(() => check(unit)).message).toContain('pinned.md is a symbolic link whose target leads through an absolute path');
   });
 
   it('refuses a relative link that climbs out of the tree', ({ skip }) => {
@@ -97,12 +110,12 @@ describe('refuseEscapingLinks', () => {
   });
 
   it('follows a link that stays inside, so a second hop out is still found', ({ skip }) => {
-    const { cap, unit, outside } = fixture(skip);
+    const { cap, unit } = fixture(skip);
     const sibling = safePath.join(unit, 'sibling');
     mkdirSyncReal(sibling, { recursive: true });
-    createSymlink(cap, outside, safePath.join(sibling, 'hop'), 'dir');
+    createSymlink(cap, '../../outside', safePath.join(sibling, 'hop'), 'dir');
     // Only reached through `docs/via`: the walk starts at `docs`, below `sibling`.
-    createSymlink(cap, sibling, safePath.join(unit, 'docs', 'via'), 'dir');
+    createSymlink(cap, '../sibling', safePath.join(unit, 'docs', 'via'), 'dir');
 
     expect(refusalOf(() => refuseEscapingLinks({ root: unit, subtree: safePath.join(unit, 'docs'), ...NAMED })).message).toContain('hop');
   });
@@ -145,7 +158,8 @@ describe('refuseEscapingLinks', () => {
       const { cap, unit } = fixture(skip);
       createSymlink(cap, '../unit/SKILL.md', safePath.join(unit, 'self.md'), 'file');
 
-      expect(() => check(unit)).not.toThrow();
+      // In place too: the walk never rises above the root, not even to come back in by its name.
+      expect(refusalOf(() => check(unit)).message).toContain('self.md is a symbolic link to a path outside it (../unit/SKILL.md)');
       expect(refusalOf(() => relocated(unit)).message).toContain('self.md is a symbolic link to a path outside it');
     });
 
@@ -193,7 +207,7 @@ describe('refuseEscapingLinks', () => {
       createSymlink(cap, 'pong', safePath.join(unit, 'ping'), 'file');
       createSymlink(cap, 'ping', safePath.join(unit, 'pong'), 'file');
 
-      expect(refusalOf(() => relocated(unit)).message).toMatch(/p[io]ng is a symbolic link to nothing/);
+      expect(refusalOf(() => relocated(unit)).message).toMatch(/p[io]ng is a symbolic link to nothing \(p[io]ng does not resolve: ELOOP\)/);
     });
 
     it('accepts a link into a sibling directory of the tree, and one to a directory', ({ skip }) => {
@@ -209,8 +223,6 @@ describe('refuseEscapingLinks', () => {
       const { cap, unit } = fixture(skip);
       createSymlink(cap, safePath.join(unit, 'docs', 'a.md'), safePath.join(unit, 'pinned.md'), 'file');
 
-      // The control: where the tree stays put, the same link is inside it.
-      expect(() => check(unit)).not.toThrow();
       expect(refusalOf(() => relocated(unit)).message).toContain('pinned.md is a symbolic link with an absolute target');
     });
 
@@ -219,11 +231,55 @@ describe('refuseEscapingLinks', () => {
       createSymlink(cap, '../SKILL.md', safePath.join(unit, 'docs', 'up.md'), 'file');
       expect(() => relocated(unit)).not.toThrow();
     });
+
+    // The kernel lock ALONE, the walk out of the way: with a correct walk, a link the kernel resolves
+    // outside never reaches this check from a real tree — so only a direct call can show it refuses.
+    it('the kernel check alone refuses a link that resolves outside the tree, and passes one inside', ({ skip }) => {
+      const { cap, unit, outside } = fixture(skip);
+      const root = canonicalPath(unit);
+      const out = safePath.join(root, 'out.txt');
+      const inside = safePath.join(root, 'in.md');
+      createSymlink(cap, safePath.join(outside, 'key.txt'), out, 'file');
+      createSymlink(cap, 'SKILL.md', inside, 'file');
+      const relocatedCheck = { root: unit, ...NAMED, placement: 'relocated' } as const;
+
+      expect(kernelRefusal(relocatedCheck, root, inside, 'SKILL.md')).toBeUndefined();
+      expect(kernelRefusal(relocatedCheck, root, out, 'the-text')).toBe('to a path outside it (the-text resolves outside it)');
+    });
+
+    // The kernel lock alone on a link that does not resolve: what it says is the kernel's errno, not the walk's reading.
+    it.for([
+      ['a dangling link', 'missing.md', 'ENOENT'],
+      ['a link to itself', 'self.md', 'ELOOP'],
+    ] as const)('the kernel check alone refuses %s as a link to nothing, naming the errno', ([, target, code], { skip }) => {
+      const { cap, unit } = fixture(skip);
+      const root = canonicalPath(unit);
+      const link = safePath.join(root, 'self.md');
+      createSymlink(cap, target, link, 'file');
+      const relocatedCheck = { root: unit, ...NAMED, placement: 'relocated' } as const;
+
+      expect(kernelRefusal(relocatedCheck, root, link, 'the-text')).toBe(`to nothing (the-text does not resolve: ${code}), so where it would lead once it is copied cannot be shown`);
+    });
+
+    // A link that does not resolve is the link's refusal; the OS refusing to look is a fault on the
+    // operator's tree, thrown CLASSIFIED (the one link predicate's write lane) — never "a link to nothing".
+    it('throws a refused probe of the link\'s target as a classified source fault, not as a link to nothing', ({ skip }) => {
+      const { cap, unit } = fixture(skip);
+      const link = safePath.join(canonicalPath(unit), 'docs', 'up.md');
+      createSymlink(cap, '../SKILL.md', link, 'file');
+      const session = installFaultFs({ within: canonicalPath(unit), faults: [{ op: 'stat', path: (path) => path === link, errno: 'EACCES' }] });
+      try {
+        expect(() => relocated(unit)).toThrow(expect.objectContaining({ code: FS_FAULT_CODE, errno: 'EACCES', side: 'source', path: link }));
+        expect(session.fired.length).toBeGreaterThan(0);
+      } finally {
+        session.restore();
+      }
+    });
   });
 
   it('survives a cycle of links inside the tree', ({ skip }) => {
     const { cap, unit } = fixture(skip);
-    createSymlink(cap, unit, safePath.join(unit, 'docs', 'loop'), 'dir');
+    createSymlink(cap, '..', safePath.join(unit, 'docs', 'loop'), 'dir');
     expect(() => check(unit)).not.toThrow();
   });
 

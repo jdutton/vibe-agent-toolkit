@@ -6,7 +6,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { toForwardSlashAnyPlatform } from '../src/path-core.js';
-import { linkTextRefusal, type PlaceKind } from '../src/tree-change/link-walk.js';
+import type { PlaceKind } from '../src/tree-change/link-chain.js';
+import { linkTextRefusal } from '../src/tree-change/link-walk.js';
 
 /** A tree, as what stands at each place below its root; anything not listed is absent. */
 type Layout = Readonly<Record<string, Exclude<PlaceKind, 'absent'>>>;

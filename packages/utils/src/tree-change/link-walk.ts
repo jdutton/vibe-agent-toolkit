@@ -17,13 +17,13 @@
  *   about where it lands after the copy.
  *
  * The walk is a MODEL of the kernel's resolution, and a model can be wrong (it once split a text
- * on a backslash the POSIX kernel reads as part of a name). So its caller holds a second lock
- * beside it — the kernel's own resolution of the link at the source — and a link is kept only
- * when both agree.
+ * on a backslash the POSIX kernel reads as part of a name). So its caller holds two more locks
+ * beside it — the one link-chain resolver (`link-chain.ts`), which reads the chain from the link to
+ * its end before anything follows it, and then the kernel's own resolution of the link at the
+ * source — and a link is kept only when all three agree.
  */
 
-/** What stands at a place in the tree. */
-export type PlaceKind = 'directory' | 'file' | 'link' | 'absent';
+import type { PathFlavor, PlaceKind } from './link-chain.js';
 
 /** Why a link's text is refused, with the place (root-relative, `/`-joined) the walk stopped at. */
 export type LinkTextRefusal =
@@ -33,15 +33,18 @@ export type LinkTextRefusal =
   | { readonly why: 'dangling'; readonly at: string };
 
 /**
- * The host whose kernel will resolve the link: what separates the components of a link's text is
- * ITS answer, not VAT's. On POSIX only `/` does — a backslash is an ordinary character of a name,
- * so `a\b` is one component, and reading it as two would count a `..` the kernel never takes.
+ * What separates the components of a link's text is the answer of the kernel that resolves it,
+ * not VAT's. On POSIX only `/` does — a backslash is an ordinary character of a name, so `a\b` is
+ * one component, and reading it as two would count a `..` the kernel never takes.
  */
-export type LinkHost = 'posix' | 'win32';
-
-const SEPARATOR: Readonly<Record<LinkHost, RegExp>> = { posix: /\//, win32: /[/\\]/ };
+const SEPARATOR: Readonly<Record<PathFlavor, RegExp>> = { posix: /\//, win32: /[/\\]/ };
 /** A POSIX root, a UNC root or a drive prefix: absolute, or drive-relative, on some host. */
 const ABSOLUTE = /^([/\\]|[A-Za-z]:)/;
+
+/** The components of a link's text, as `flavor` splits it: `.` and empty ones dropped. */
+function segmentsOf(text: string, flavor: PathFlavor): string[] {
+  return text.split(SEPARATOR[flavor]).filter((segment) => segment !== '' && segment !== '.');
+}
 
 /**
  * Walk a link's text from the directory the link is in.
@@ -49,13 +52,13 @@ const ABSOLUTE = /^([/\\]|[A-Za-z]:)/;
  * @param linkDir - The link's REAL directory, as segments below the tree's root (`[]`: the root itself)
  * @param text - The link's text, verbatim
  * @param kindAt - What stands at a place below the root, never following a link there
- * @param host - The host whose kernel resolves the link: its separators split the text
+ * @param flavor - Whose kernel resolves the link: its separators split the text
  * @returns `undefined` when the text leads to something that exists inside the tree, by a walk
  *   that passes through no link; otherwise why it is refused
  */
-export function linkTextRefusal(linkDir: readonly string[], text: string, kindAt: (place: readonly string[]) => PlaceKind, host: LinkHost): LinkTextRefusal | undefined {
+export function linkTextRefusal(linkDir: readonly string[], text: string, kindAt: (place: readonly string[]) => PlaceKind, flavor: PathFlavor): LinkTextRefusal | undefined {
   if (ABSOLUTE.test(text)) return { why: 'absolute' };
-  const segments = text.split(SEPARATOR[host]).filter((segment) => segment !== '' && segment !== '.');
+  const segments = segmentsOf(text, flavor);
   const place = [...linkDir];
   for (const [index, segment] of segments.entries()) {
     if (segment === '..') {

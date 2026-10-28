@@ -42,7 +42,7 @@ describe('fsFaultOf: is this the filesystem refusing a path?', () => {
       'EROFS',
       'EMFILE',
       'EIO',
-      'UNKNOWN',  // Windows reparse points and some network paths
+      'UNKNOWN',  // libuv src/win/error.c:172's default: a share that is not there, refused credentials, an unready drive
     ];
 
     for (const code of REFUSALS) {
@@ -50,6 +50,49 @@ describe('fsFaultOf: is this the filesystem refusing a path?', () => {
         expect(isFilesystemFault(errno(code))).toBe(true);
       });
     }
+  });
+
+  // A file call on a share whose network failed raises these (libuv src/win/error.c :131, :100, :94,
+  // :152) — and so does every socket. They are the filesystem's only when a filesystem call raised
+  // them: one that names the path it acted on, or a descriptor-only fs call.
+  describe('classifies a network errno only from a filesystem call', () => {
+    const NETWORK = ['ENETUNREACH', 'EHOSTUNREACH', 'ECONNRESET', 'ENOTCONN'];
+
+    it.each(NETWORK)('treats %s from a file call on a share as a device fault', (code) => {
+      expect(fsFaultOf(Object.assign(errno(code), { syscall: 'open', path: '//host/share/x' }))).toMatchObject({ errno: code, faultClass: 'device' });
+      expect(fsFaultOf(Object.assign(errno(code), { syscall: 'fstat' }))?.faultClass).toBe('device');
+    });
+
+    it.each(NETWORK)('leaves %s from a socket, a bare code, or a failed fetch alone', (code) => {
+      expect(isFilesystemFault(errno(code))).toBe(false);
+      expect(isFilesystemFault(Object.assign(errno(code), { syscall: 'connect', address: 'host.invalid', port: 443 }))).toBe(false);
+      // A socket's read names no path, exactly as undici's `fetch failed` cause does.
+      expect(isFilesystemFault(Object.assign(errno(code), { syscall: 'read' }))).toBe(false);
+      expect(isFilesystemFault(new TypeError('fetch failed', { cause: Object.assign(errno(code), { syscall: 'read' }) }))).toBe(false);
+    });
+  });
+
+  // The table is not the guarantee. An errno it does not list — `EFAULT`, `ECHARSET` (libuv
+  // src/win/error.c :98, :89), whatever a later libuv adds — on an error a system call raised is the
+  // filesystem failing all the same: classified, of the `device` class, never handed back raw.
+  describe('classifies an errno no table lists', () => {
+    it.each(['EWHATEVER', 'EFAULT', 'ECHARSET'])('treats %s from a system call as a device fault', (code) => {
+      expect(fsFaultOf(Object.assign(errno(code), { syscall: 'lstat', path: '/p' }))).toMatchObject({ errno: code, faultClass: 'device', path: '/p', syscall: 'lstat' });
+    });
+
+    it('finds it through a cause chain, and prefers a listed errno further down', () => {
+      expect(fsFaultOf(new Error('outer', { cause: Object.assign(errno('EWHATEVER'), { syscall: 'scandir', path: '/d' }) }))?.faultClass).toBe('device');
+      const both = Object.assign(errno('EWHATEVER'), { syscall: 'open', cause: Object.assign(errno('EACCES'), { syscall: 'open' }) });
+      expect(fsFaultOf(both)).toMatchObject({ errno: 'EACCES', faultClass: 'refused' });
+    });
+
+    it('leaves an unlisted code with no filesystem call, a Node API code, and a name-resolution, socket or spawn errno alone', () => {
+      expect(isFilesystemFault(errno('EWHATEVER'))).toBe(false);
+      expect(isFilesystemFault(Object.assign(errno('ERR_INVALID_ARG_TYPE'), { syscall: 'open', path: '/p' }))).toBe(false);
+      for (const syscall of ['getaddrinfo', 'connect', 'spawn git', 'queryA', 'read', 'write', 'close']) {
+        expect(isFilesystemFault(Object.assign(errno('ECONNREFUSED'), { syscall })), syscall).toBe(false);
+      }
+    });
   });
 
   describe('does not launder a bug into an environment problem', () => {

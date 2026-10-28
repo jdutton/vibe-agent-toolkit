@@ -514,6 +514,7 @@ describe('ClosureExtentContributor', () => {
       // attaches `matchedRule` only for `pattern-matched`).
       matchedPattern: null,
       matchedPayload: null,
+      targetFaultClass: null,
     });
     expectContributionRowsValid(contribution);
   });

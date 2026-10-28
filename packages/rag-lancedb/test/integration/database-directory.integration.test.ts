@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
-import { createSymlink, FS_FAULT_CODE, isVatError, mkdirSyncReal, safePath, symlinkCapability, TREE_DEST_NOT_OWNED_CODE } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS, registerScratchTmpdir } from '@vibe-agent-toolkit/utils/testing';
+import { createSymlink, FS_FAULT_CODE, isVatError, mkdirSyncReal, realpathNativeSync, safePath, symlinkCapability, TREE_DEST_NOT_OWNED_CODE } from '@vibe-agent-toolkit/utils';
+import { CANNOT_DENY_READS, installFaultFs, registerScratchTmpdir, type FaultFsSession, type InjectedErrno } from '@vibe-agent-toolkit/utils/testing';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { linkedDatabasePath, removeRagDatabase } from '../../src/database-directory.js';
@@ -33,8 +33,13 @@ describe('removeRagDatabase', () => {
   let dir = '';
   // Every case can reach the primitive's recursive removal: the temp root it could touch is this scratch tree.
   const scratch = registerScratchTmpdir('vat-rag-remove-', { beforeEach, afterEach });
+  let session: FaultFsSession | undefined;
   beforeEach(() => {
     dir = scratch();
+  });
+  afterEach(() => {
+    session?.restore();
+    session = undefined;
   });
 
   it('removes a database that holds operating-system litter beside its tables', async () => {
@@ -143,6 +148,34 @@ describe('removeRagDatabase', () => {
     expect(String(await removalError(link))).toContain(`symbolic link to ${real},`);
     expect(linkedDatabasePath(real)).toBeUndefined();
     expect(linkedDatabasePath(safePath.join(dir, 'none'))).toBeUndefined();
+  });
+
+  // A link that resolves to nothing names where it points (the one link predicate's "unresolvable"):
+  // a cycle is not a fault, so the removal refuses it by name rather than stopping on a filesystem fault.
+  it('names a looping link\'s own next hop, and refuses it by name rather than as a fault', async ({ skip }) => {
+    const cap = symlinkCapability() ?? skip();
+    const loop = safePath.join(dir, 'loop');
+    createSymlink(cap, 'loop', loop, 'dir');
+
+    expect(linkedDatabasePath(loop)).toBe(loop);
+    expect(await removalError(loop)).toMatchObject({ code: TREE_DEST_NOT_OWNED_CODE });
+  });
+
+  // Windows' ambiguous answers (libuv reports four Win32 errors as EINVAL and a buffer overflow as
+  // ENAMETOOLONG), the network failing under a share, and an errno no table lists are faults like
+  // the rest: never read as "nothing there", never named by the link's text.
+  it.skipIf(symlinkCapability() === null).each<InjectedErrno>(['EACCES', 'EIO', 'UNKNOWN', 'EINVAL', 'ENAMETOOLONG', 'ENETUNREACH', 'EWHATEVER'])('stops on a link whose resolution the OS fails with %s: a destination fault, never a name', (errno) => {
+    const cap = symlinkCapability();
+    if (cap === null) return;
+    // Real-spelled, so the injected fault matches the path the resolution asks about.
+    const base = realpathNativeSync(dir);
+    const real = database(base, 'real');
+    const link = safePath.join(base, 'link');
+    createSymlink(cap, real, link, 'dir');
+    session = installFaultFs({ within: base, faults: [{ op: 'realpath', path: (path) => path === link, errno, everyTry: true }] });
+
+    expect(() => linkedDatabasePath(link)).toThrow(expect.objectContaining({ code: FS_FAULT_CODE, side: 'destination', errno }));
+    expect(session.fired.length).toBeGreaterThan(0);
   });
 
   // A read-only directory the user owns is still theirs to remove: the removal grants itself the

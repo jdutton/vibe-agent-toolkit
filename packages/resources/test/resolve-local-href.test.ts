@@ -16,7 +16,7 @@ import {
   mkdirSyncReal,
   normalizedTmpdir,
   normalizePath,
-  realpathFrom,
+  realpathRowFrom,
   safePath,
   symlinkCapability,
   toForwardSlash,
@@ -451,10 +451,10 @@ describe('symlinked project root (real-filesystem)', () => {
       const cache = new FsLookupCache();
       const table = await fillRealpaths([missing, deepMissing, sourceViaLink, linkRoot], cache);
 
-      expect(canonicalizeSync(missing)).toBe(realpathFrom(table, missing));
-      expect(canonicalizeSync(deepMissing)).toBe(realpathFrom(table, deepMissing));
-      expect(canonicalizeSync(sourceViaLink)).toBe(realpathFrom(table, sourceViaLink));
-      expect(canonicalizeSync(linkRoot)).toBe(realpathFrom(table, linkRoot));
+      expect(canonicalizeSync(missing)).toBe(realpathRowFrom(table, missing).path);
+      expect(canonicalizeSync(deepMissing)).toBe(realpathRowFrom(table, deepMissing).path);
+      expect(canonicalizeSync(sourceViaLink)).toBe(realpathRowFrom(table, sourceViaLink).path);
+      expect(canonicalizeSync(linkRoot)).toBe(realpathRowFrom(table, linkRoot).path);
 
       expect(canonicalizeSync(missing)).toBe(safePath.join(canonicalRealRoot, 'docs', 'gone.md'));
       expect(canonicalizeSync(deepMissing)).toBe(
@@ -474,10 +474,12 @@ describe('symlinked project root (real-filesystem)', () => {
     // by TIMEOUT rather than by assertion. Reaching the expect at all is half of
     // what it asserts.
     const spy = vi.spyOn(nodeFs, 'realpathSync').mockImplementation((() => {
-      // Not ENOENT: EACCES and ELOOP walk to the ancestor exactly as ENOENT
-      // does — the errno decides only that it WAS the filesystem refusing
-      // (a `code`-less throw is a bug and propagates; see the test below).
-      throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+      // What a nonexistent drive root answers: it resolves to nothing, so the
+      // walk goes up. A declined path (a disconnected drive, a refused
+      // directory) walks up too — a read lane answers it from the ancestor and
+      // never throws — while a `code`-less throw is a bug and propagates (see
+      // the test below).
+      throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
     }) as unknown as typeof nodeFs.realpathSync);
     try {
       const fsRoot = toForwardSlash(path.parse(safePath.resolve(baseDir)).root);

@@ -17,7 +17,7 @@ import { copyFileSync, readdirSync, writeFileSync } from 'node:fs';
 import type { OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { ARCHIVE_LIMITS } from '@vibe-agent-toolkit/utils/archive';
-import { type ArchiveFixtureEntry, diffSnapshots, hostileArchive, hostileArchiveRows, type HostileArchiveRow, snapshotTree, tempDirTracker } from '@vibe-agent-toolkit/utils/testing';
+import { type ArchiveFixtureEntry, diffSnapshots, entryHoldingMoreThanDeclared, hostileArchive, hostileArchiveRows, type HostileArchiveRow, snapshotTree, tempDirTracker } from '@vibe-agent-toolkit/utils/testing';
 import type { Command } from 'commander';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -129,6 +129,8 @@ function took(lane: ArchiveLane, run: LaneRun): boolean {
 
 /** No hostile entry at all: the positive control of every lane. */
 const SOUND_ROW: HostileArchiveRow = { what: 'nothing hostile', formats: ['tar', 'zip'], reason: 'unreadable', entries: () => [] };
+/** The sound archive with one member that holds more than it declares — refused on read, as `ARCHIVE_ENTRY_UNREADABLE`. */
+const ENTRY_UNREADABLE_ROW: HostileArchiveRow = { what: 'a member holding more than it declares', formats: ['zip'], reason: 'unsupported', entries: entryHoldingMoreThanDeclared };
 
 export interface LaneRun {
   readonly r: CaseRoot;
@@ -193,6 +195,19 @@ export function describeHostileArchiveLanes(prefix: string, lanes: readonly Arch
 
       expect(sound.outcome.exitCode ?? 0, sound.outcome.message).toBe(0);
       expect(took(lane, sound)).toBe(true);
+    });
+
+    // Not a row of the table: the archive parses and passes the entry policy, and the member is refused
+    // only when it is read (`ARCHIVE_ENTRY_UNREADABLE`). The CLI maps that code to INPUT_UNREADABLE; without
+    // the mapping it would be INTERNAL_ERROR, at exit 1, on every lane below.
+    it.skipIf(lane.format !== 'zip')('refuses a ZIP whose member holds more than it declares as INPUT_UNREADABLE, and installs, lists or sends nothing', async () => {
+      const { r, outcome, homeChanges } = await run(lane, ENTRY_UNREADABLE_ROW);
+
+      expect(outcome, outcome.message).toMatchObject({ exitCode: 2, refusal: 'INPUT_UNREADABLE' });
+      expect(outcome.message).toContain('guide.md');
+      expect(homeChanges).toEqual([]);
+      expect('landed' in lane && lane.landed()).toBe(false);
+      expect(readdirSync(r.tmp)).toEqual([]);
     });
 
     it.each(hostileArchiveRows(ARCHIVE_LIMITS).filter((row) => row.formats.includes(lane.format)))('refuses an archive holding $what, and installs, lists or sends nothing', async (row) => {

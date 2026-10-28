@@ -44,13 +44,13 @@ const LINK_ABSOLUTE_NO_ROOT = '/foo.md';
  * answers a path it cannot canonicalize with `safePath.resolve()`, which is the
  * identity for an already-absolute POSIX path. Writing the table by hand instead
  * of calling `fillRealpaths` keeps these unit tests free of both I/O and a
- * platform-dependent root — which is exactly what `realpathFrom` taking a table
- * rather than a cache is for.
+ * platform-dependent root — which is exactly what `realpathRowFrom` taking a table
+ * rather than a cache is for. Each row is a canonical path with no fault.
  *
  * ⚠️ A missing row THROWS, so every target below must be listed here.
  */
 const REALPATHS: RealpathTable = new Map(
-  [PROJECT_ROOT, TARGET_FOO, TARGET_SECRET, TARGET_OUTSIDE].map((p) => [p, p]),
+  [PROJECT_ROOT, TARGET_FOO, TARGET_SECRET, TARGET_OUTSIDE].map((p) => [p, { path: p, fault: null }]),
 );
 
 function makeOptions(overrides: Partial<GitIgnoreCheckOptions> = {}): GitIgnoreCheckOptions {

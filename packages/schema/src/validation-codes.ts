@@ -166,7 +166,7 @@ export const CODE_REGISTRY = {
     'finding',
     'error',
     'Markdown link target could not be checked: a read failure along its path left its existence, spelling, and anchor all unverified, and — when packaging — the target was not bundled either. Usually permissions; sometimes a transient errno (EMFILE/ENFILE/EAGAIN/EBUSY/ETXTBSY — re-run before investigating), a change racing the walk, or a target that is not a regular file (a named pipe, socket or device), refused unread.',
-    'Re-run first if the errno looks transient (EMFILE/ENFILE/EAGAIN/EBUSY/ETXTBSY) — the target may check out clean on a second pass. Otherwise fix the permissions on the path, link a regular file in place of a named pipe, socket or device, or investigate what changed mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read.',
+    'Re-run first if the errno looks transient (EMFILE/ENFILE/EAGAIN/EBUSY/ETXTBSY) — the target may check out clean on a second pass. Otherwise fix the permissions on the path, link a regular file in place of a named pipe, socket or device, or investigate what changed mid-walk, then re-run. Set severity.LINK_TARGET_UNREADABLE to warning if a corpus is expected to contain entries the walk cannot read. What a downgrade costs: a target git ignores as written is still LINK_TO_GITIGNORED when its resolution fails (the leak check fails closed), but the gitignore check of a tracked path whose link hops the OS would not resolve is skipped with only this finding to show for it.',
     'link_target_unreadable',
   ),
   LINK_DEFERRED_ARTIFACT: entry(
@@ -509,15 +509,15 @@ export const CODE_REGISTRY = {
   EXTENT_SYMLINK_NOT_REALIZED: entry(
     'finding',
     'info',
-    'A symbolic link in the tree is not realized: VAT never realizes a link\'s own path, so nothing in the projection is at that path and no size, Claude context chain or load, or claude_rule_patterns row counts it — although Claude Code reads a CLAUDE.md or rules file through a link. The finding names the target, root-relative, and says whether it is realized at its own path. A link whose target resolves outside the project root draws EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT instead, and one that resolves to nothing draws EXTENT_SYMLINK_TARGET_UNRESOLVED, so a query about declined links asks for all three codes.',
+    'A symbolic link in the tree is not realized: VAT never realizes a link\'s own path, so nothing in the projection is at that path and no size, Claude context chain or load, or claude_rule_patterns row counts it — although Claude Code reads a CLAUDE.md or rules file through a link. The finding names the target, root-relative, and says whether it is realized at its own path. A link whose target resolves outside the project root draws EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT instead, one that resolves to nothing draws EXTENT_SYMLINK_TARGET_UNRESOLVED, and one this host could not resolve draws EXTENT_SYMLINK_TARGET_UNREADABLE, so a query about declined links asks for all four codes.',
     'Nothing to fix when the target is realized at its own path and nothing needs to count the link. If the link is a CLAUDE.md or rules file whose load matters to a budget or rules check, replace the link with the file (or an @ import of it) so VAT sees it at that path. Set severity.EXTENT_SYMLINK_NOT_REALIZED to ignore to silence it.',
     'extent_symlink_not_realized',
   ),
   // The same decline as the code above, under its own name because WHERE the
   // link points must not be carried in message text. A second code, not a
   // nullable column that only links would fill. `info` like its siblings; all
-  // three (with EXTENT_SYMLINK_TARGET_UNRESOLVED) are always read together
-  // through `DECLINED_SYMLINK_CODES`.
+  // four (with EXTENT_SYMLINK_TARGET_UNRESOLVED and _UNREADABLE) are always read
+  // together through `DECLINED_SYMLINK_CODES`.
   EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT: entry(
     'finding',
     'info',
@@ -531,9 +531,19 @@ export const CODE_REGISTRY = {
   EXTENT_SYMLINK_TARGET_UNRESOLVED: entry(
     'finding',
     'info',
-    'A symbolic link in the tree is not realized and resolves to nothing on this host — its target does not exist, the link loops, or it cannot be resolved — while its target text stays inside the project root. Everything EXTENT_SYMLINK_NOT_REALIZED says about the link applies; this code adds that Claude Code reads nothing through it.',
+    'A symbolic link in the tree is not realized and resolves to nothing on this host — its target does not exist, the link loops, or it is a reparse point this host cannot follow: the OS looked and found nothing — while its target text stays inside the project root. Everything EXTENT_SYMLINK_NOT_REALIZED says about the link applies; this code adds that Claude Code reads nothing through it.',
     'Point the link at a file that exists, or delete it. A link that dangles only on this host (its target is generated or checked out elsewhere) resolves where the target exists. Set severity.EXTENT_SYMLINK_TARGET_UNRESOLVED to ignore to silence it.',
     'extent_symlink_target_unresolved',
+  ),
+  // The fourth member: the OS DECLINED or failed the lookup. Not UNRESOLVED,
+  // whose remedy (delete the link) is wrong for a link this host may not follow;
+  // the class is the row's `targetFaultClass` column, never only its message.
+  EXTENT_SYMLINK_TARGET_UNREADABLE: entry(
+    'finding',
+    'info',
+    'A symbolic link in the tree is not realized and this host could not resolve it: the OS refused or failed the lookup — a permission on the target or on a directory leading to it, an exhausted descriptor table, an I/O error, or a network share that is unreachable or refused its credentials (Windows answers UNKNOWN for both). Everything EXTENT_SYMLINK_NOT_REALIZED says about the link applies; this code adds that Claude Code reads nothing through it on this host, and the row\'s targetFaultClass column says why — refused, exhausted, busy, unsupported or device — with the errno in its message.',
+    'Fix the permission on the target or on the directories leading to it, or reconnect the share — the link does not dangle, so deleting it is the wrong remedy. Set severity.EXTENT_SYMLINK_TARGET_UNREADABLE to ignore for a link that is expected to be unreadable on this host.',
+    'extent_symlink_target_unreadable',
   ),
   SKILL_LENGTH_EXCEEDS_RECOMMENDED: entry(
     'finding',
@@ -1048,16 +1058,17 @@ export const CODE_REGISTRY = {
   ),
   // Projection path — a `.claude/rules/` file or directory that is ITSELF a
   // symlink is realized at no path, so BOTH rule checks above are blind to it.
-  // ⛔ ONE code and ONE severity across all three arms — the MESSAGE splits,
+  // ⛔ ONE code and ONE severity across all four arms — the MESSAGE splits,
   // read from the condition row's code (EXTENT_SYMLINK_NOT_REALIZED /
-  // EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT / EXTENT_SYMLINK_TARGET_UNRESOLVED), never
+  // EXTENT_SYMLINK_TARGET_OUTSIDE_ROOT / EXTENT_SYMLINK_TARGET_UNRESOLVED /
+  // EXTENT_SYMLINK_TARGET_UNREADABLE), never
   // its prose: one concern, one severity entry, the same size of defect each
   // way. Not `error` (the link is legitimate), not `info` (VAT is not guessing).
   CLAUDE_RULE_LINK_UNCHECKED: entry(
     'finding',
     'warning',
-    'A .claude directory, a .claude/rules/ directory, or a file under one is itself a symbolic link. VAT realizes no link path, so the linked rule is in no claude_rule_patterns row and in no blobs row at that path — CLAUDE_RULE_GLOB_INERT cannot see its paths: globs and CLAUDE_RULE_FRONTMATTER_INVALID cannot see its frontmatter. Whether the rule is in force depends on where the link points, and the finding says which of three arms applies: Claude Code loads a rules file or directory reached through a link whose target stays inside the directory the session started in, skips one whose target resolves outside it, and loads nothing through a link that resolves to nothing.',
-    'For a target inside the project root the rule is in force and unchecked: replace the link with the file itself, or with an @ import of the shared file from a rules file that is not a link, if you want VAT to check its globs and frontmatter. For a target outside it the rule is in force nowhere, because Claude Code skips the link too — copy or vendor those rules into the repository, since sharing one rule set across repositories by symlink does not work. For a link that resolves to nothing no rule is loaded through it: point it at a file that exists or delete it. Keep the link and set resources.validation.severity.CLAUDE_RULE_LINK_UNCHECKED to ignore to accept the blind spot.',
+    'A .claude directory, a .claude/rules/ directory, or a file under one is itself a symbolic link. VAT realizes no link path, so the linked rule is in no claude_rule_patterns row and in no blobs row at that path — CLAUDE_RULE_GLOB_INERT cannot see its paths: globs and CLAUDE_RULE_FRONTMATTER_INVALID cannot see its frontmatter. Whether the rule is in force depends on where the link points, and the finding says which of four arms applies: Claude Code loads a rules file or directory reached through a link whose target stays inside the directory the session started in, skips one whose target resolves outside it, loads nothing through a link that resolves to nothing, and loads nothing on this host through a link this host could not resolve.',
+    'For a target inside the project root the rule is in force and unchecked: replace the link with the file itself, or with an @ import of the shared file from a rules file that is not a link, if you want VAT to check its globs and frontmatter. For a target outside it the rule is in force nowhere, because Claude Code skips the link too — copy or vendor those rules into the repository, since sharing one rule set across repositories by symlink does not work. For a link that resolves to nothing no rule is loaded through it: point it at a file that exists or delete it. For a link this host could not resolve, fix the permission or the share rather than deleting it. Keep the link and set resources.validation.severity.CLAUDE_RULE_LINK_UNCHECKED to ignore to accept the blind spot.',
     'claude_rule_link_unchecked',
   ),
 

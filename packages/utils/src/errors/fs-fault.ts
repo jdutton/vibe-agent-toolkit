@@ -5,8 +5,10 @@
  *
  * The errno → class table and the single-errno questions (`isPathAbsentError`,
  * `isRenameContentionError`, …) live in the leaf `errno-table.ts`. This module
- * imports only that table and `vat-error.ts`, so the path helpers below it
- * (`path-utils.ts`: `normalizedTmpdir`) can classify their own faults. Deciding a
+ * imports only that table, `vat-error.ts` and the link-chain refusal
+ * (`tree-change/host-chain.ts`, which imports neither this module nor
+ * `path-utils.ts`), so the path helpers below it (`path-utils.ts`:
+ * `normalizedTmpdir`) can classify their own faults. Deciding a
  * side by containment needs `path-containment.ts`, which imports `path-utils.ts`:
  * that is `fs-boundary.ts`, one level up, never imported back.
  *
@@ -16,8 +18,9 @@
  */
 
 import { toForwardSlash } from '../path-core.js';
+import { isLinkChainRefusedError } from '../tree-change/host-chain.js';
 
-import { type FsFaultClass, fsFaultOf, isFileInTheWayError, movedFromOf, pathsActedOn } from './errno-table.js';
+import { type FsFaultClass, type FsFaultFacts, fsFaultOf, isFileInTheWayError, isUnresolvableLinkError, LINK_CHAIN_REFUSED_CODE, movedFromOf, pathsActedOn } from './errno-table.js';
 import { isVatError, VatError } from './vat-error.js';
 
 /** The one code every classified filesystem refusal carries. */
@@ -64,7 +67,8 @@ export class FsFaultError extends VatError {
   }) {
     // The ONE place a fault gets its path, so the one place it gets its spelling: forward slashes,
     // as every path VAT displays or compares. An errno's own `path` is the host's — on Windows Node
-    // hands back the backslash form whatever the caller passed — while a context's is VAT's.
+    // hands back the backslash form whatever the caller passed — while a context's is VAT's. (The
+    // win32 namespace prefix is already gone: `fsFaultOf` reads every errno path without it.)
     const path = facts.path === undefined ? undefined : toForwardSlash(facts.path);
     const movedFrom = facts.movedFrom === undefined ? undefined : toForwardSlash(facts.movedFrom);
     const ends = [movedFrom, path].filter((end) => end !== undefined).join(' -> ');
@@ -176,6 +180,46 @@ export async function withFsFault<T>(ctx: FsFaultContext, work: () => Promise<T>
   } catch (error: unknown) {
     throw classifyFsFault(error, ctx);
   }
+}
+
+/**
+ * The catch body of a WRITE lane that resolves a link, or a path through links, and has an answer
+ * for one that resolves to nothing (a dangling link's own spelling, `null`, its nearest ancestor):
+ * returns when `error` says so ({@link isUnresolvableLinkError}), and otherwise throws it —
+ * a filesystem errno classified on `ctx` (the OS declined, ran short or could not look, which says
+ * nothing about the link), anything else as it was. A lane that acts on the path cannot act on one
+ * it could not resolve, so the run stops.
+ *
+ * A READ/report lane asks {@link linkResolutionFault} instead: one bad target is a finding about
+ * that target, never the end of the run.
+ *
+ * @throws FsFaultError on `ctx.side` for every other filesystem errno; `error` itself for a non-filesystem error
+ */
+export function assertUnresolvableLink(error: unknown, ctx: FsFaultContext): void {
+  if (!isUnresolvableLinkError(error)) throw classifyFsFault(error, ctx);
+}
+
+/**
+ * The catch body of a READ/report lane that resolves a link target: the same one predicate as
+ * {@link assertUnresolvableLink} ({@link isUnresolvableLinkError}), but a fault is handed back for
+ * the lane to report against that ONE target (a row, a finding, carrying `errno` and `faultClass`)
+ * instead of thrown — one target the OS declined to resolve never rejects a batch, never aborts the
+ * run and never loses another target's finding. No side is picked: nothing is thrown.
+ *
+ * A chain VAT would not hand the kernel (`LinkChainRefusedError`: a link on the way names a
+ * network path, or the chain never ends) is a fault of the `refused` class on that one target,
+ * its `errno` the refusal's code — VAT, not the OS, declined to look.
+ *
+ * @returns `undefined` when the link resolves to nothing; the fault's facts when the OS declined,
+ *   ran short or could not look, or VAT declined to ask it
+ * @throws `error` itself when it carries no filesystem errno — a bug stays loud
+ */
+export function linkResolutionFault(error: unknown): FsFaultFacts | undefined {
+  if (isLinkChainRefusedError(error)) return { errno: LINK_CHAIN_REFUSED_CODE, faultClass: 'refused', path: error.path, dest: undefined, syscall: 'readlink' };
+  if (isUnresolvableLinkError(error)) return undefined;
+  const facts = fsFaultOf(error);
+  if (facts === undefined || isVatError(error)) throw error;
+  return facts;
 }
 
 /** Synchronous {@link withFsFault}. */

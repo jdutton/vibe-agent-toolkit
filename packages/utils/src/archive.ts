@@ -6,9 +6,9 @@
  * quarantined behind its own subpath — a command that touches no archive never loads either.
  */
 
-export { extractArchive, listArchive, openArchive } from './archive/archive.js';
+export { extractArchive, listArchive, openArchive, readArchiveFile, zipOfArchive } from './archive/archive.js';
 export type { ArchiveExtractOptions, ArchiveReadOptions, ArchiveSource, OpenedArchive } from './archive/archive.js';
-export { ARCHIVE_REFUSED_CODE, archiveEntryRefusal, ArchiveRefusedError } from './archive/entries.js';
+export { ARCHIVE_ENTRY_UNREADABLE_CODE, ARCHIVE_REFUSED_CODE, ArchiveEntryReadError, archiveEntryRefusal, ArchiveRefusedError } from './archive/entries.js';
 export type { ArchiveEntry, ArchiveEntryKind, ArchiveFormat, ArchiveLimits, ArchiveRefusalReason, EntryRefusal } from './archive/entries.js';
 export { ARCHIVE_DOWNLOAD_MAX_BYTES, ARCHIVE_LIMITS } from './archive/limits.js';
 export { zipOfDirectory } from './archive/zip-reader.js';

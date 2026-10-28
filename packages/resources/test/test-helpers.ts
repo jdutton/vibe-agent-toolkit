@@ -17,8 +17,8 @@ import {
   toForwardSlash,
 } from '@vibe-agent-toolkit/utils';
 import { GitTracker, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
-import { gitExecutable, removeScratchDir, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
-import { afterAll, beforeAll, beforeEach, expect, type Assertion } from 'vitest';
+import { createTempDir, gitExecutable, removeScratchDir, removeTempDir, setupAsyncTempDirSuite, type FaultFsSession } from '@vibe-agent-toolkit/utils/testing';
+import { afterAll, afterEach, beforeAll, beforeEach, expect, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
 import { parseMarkdown } from '../src/link-parser.js';
@@ -72,6 +72,44 @@ export function writeFileIn(rootDir: string, relativePath: string, contents: str
  * // Now tempDir is a valid git repository
  * ```
  */
+/** A file's fault-fs session and scratch directories: {@link faultFsScratch}. */
+export interface FaultFsScratch {
+  /** A new temp directory, removed after the test. */
+  tempDir(prefix: string): string;
+  /** Keep `installed` as the test's session, restored after the test; returns it. */
+  watch(installed: FaultFsSession): FaultFsSession;
+  /** The test's session, if one was installed. */
+  readonly session: FaultFsSession | undefined;
+}
+
+/**
+ * Called once at a test file's module scope: each test's fault-fs session is restored and its
+ * scratch directories removed after it.
+ */
+export function faultFsScratch(): FaultFsScratch {
+  let session: FaultFsSession | undefined;
+  const dirs: string[] = [];
+  afterEach(() => {
+    session?.restore();
+    session = undefined;
+    for (const dir of dirs.splice(0)) removeTempDir(dir);
+  });
+  return {
+    tempDir: (prefix) => {
+      const dir = createTempDir(prefix);
+      dirs.push(dir);
+      return dir;
+    },
+    watch: (installed) => {
+      session = installed;
+      return installed;
+    },
+    get session() {
+      return session;
+    },
+  };
+}
+
 export function createGitRepo(directory: string): string {
   spawnSync(gitExecutable(), ['init'], { cwd: directory, stdio: 'pipe' });
   // `gitFindRoot()` memoizes `null` for any directory a prior walk climbed

@@ -17,7 +17,7 @@ import { recordSuppressedFault } from '../errors/suppressed-faults.js';
 import { mapWithConcurrency } from '../in-order.js';
 import { isUnderRoot } from '../path-containment.js';
 import { safePath, toForwardSlash } from '../path-core.js';
-import { normalizedTmpdir } from '../path-utils.js';
+import { normalizedTmpdir, realpathNative } from '../path-utils.js';
 
 import { entryInTheWayFault, renameRetryDelay, tempDirRefusal } from './apply-decisions.js';
 import { stagingName } from './staging-names.js';
@@ -138,7 +138,8 @@ async function removeOnce(entry: string): Promise<boolean> {
 /** Where a write to `dest` really lands: a link's target (so a dotfiles link stays a link), or `dest` itself. */
 async function writeTarget(dest: string): Promise<{ path: string; mode: number | undefined }> {
   try {
-    const real = toForwardSlash(await fs.realpath(dest));
+    // The one native realpath rule (`realpathNative`): an unanswerable volume is asked again by the JS walk.
+    const real = await realpathNative(dest);
     return { path: real, mode: (await fs.stat(real)).mode & 0o7777 };
   } catch (error: unknown) {
     if (isPathAbsentError(error)) return { path: dest, mode: undefined };

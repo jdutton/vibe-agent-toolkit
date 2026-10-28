@@ -20,11 +20,11 @@ import { toForwardSlash } from '../path-core.js';
 import { openForReading } from '../text-file.js';
 import { makeDirectoryUnder, openFileUnder } from '../tree-change/files.js';
 
-import { type ArchiveEntry, type ArchiveFormat, type ArchiveLimits, ArchiveRefusedError, archiveEntryRefusal, placeOf } from './entries.js';
-import { archiveBytesCap, tooLarge, unreadableArchive } from './limits.js';
+import { type ArchiveEntry, ArchiveEntryReadError, type ArchiveFormat, type ArchiveLimits, ArchiveRefusedError, archiveEntryRefusal, placeOf } from './entries.js';
+import { archiveBytesCap, tooLarge } from './limits.js';
 import type { ArchiveRecord } from './records.js';
 import { readTar } from './tar-reader.js';
-import { readZip } from './zip-reader.js';
+import { readZip, zipOfEntries } from './zip-reader.js';
 
 /**
  * Where an archive is: a file — on the `side` of the verb that named it, an operator's argument
@@ -59,7 +59,7 @@ export interface OpenedArchive {
   /**
    * The bytes of one of {@link entries} (a file).
    *
-   * @throws ArchiveRefusedError `unreadable`, naming the entry, when it does not inflate to the size it declares
+   * @throws ArchiveEntryReadError (`unsupported`, naming the entry) when it does not inflate to the size it declares
    */
   read(entry: ArchiveEntry): Buffer;
 }
@@ -92,13 +92,17 @@ export function extractedFileMode(created: number, executable: boolean): number 
 const labelOf = (source: ArchiveSource): string => ('file' in source ? toForwardSlash(source.file) : source.label);
 
 /**
- * The archive file's bytes, through a handle opened without blocking (a named pipe is refused,
- * never waited on) and sized by `fstat` on that handle before a byte is read.
+ * An archive file's bytes, through a handle opened without blocking (a named pipe is refused,
+ * never waited on) and sized by `fstat` on that handle before a byte is read. For a lane that
+ * reads an archive ONCE and both judges and passes on those bytes (`{ bytes, label }`).
  *
+ * @param file - The archive's path
+ * @param side - Whose the file is: an operator's argument (`source`) or VAT's own download (`environment`)
+ * @param limits - The bounds the archive will be held to: a file no archive within them can be is refused unread
  * @throws FsFaultError on `side` for a read the OS refuses; ArchiveRefusedError `too-large` for a
  *   file no archive within `limits` can be
  */
-async function fileBytes(file: string, side: FsSide, limits: ArchiveLimits): Promise<Buffer> {
+export async function readArchiveFile(file: string, side: FsSide, limits: ArchiveLimits): Promise<Buffer> {
   return await withFsFault({ side, origin: 'argument', action: `read the archive ${toForwardSlash(file)}`, path: file }, async () => {
     const handle = await openForReading(file);
     try {
@@ -111,21 +115,25 @@ async function fileBytes(file: string, side: FsSide, limits: ArchiveLimits): Pro
 }
 
 async function bytesOf(source: ArchiveSource, limits: ArchiveLimits): Promise<Buffer> {
-  if ('file' in source) return await fileBytes(source.file, source.side, limits);
+  if ('file' in source) return await readArchiveFile(source.file, source.side, limits);
   if (source.bytes.byteLength > archiveBytesCap(limits)) throw tooLarge(source.label, limits);
   return Buffer.from(source.bytes.buffer, source.bytes.byteOffset, source.bytes.byteLength);
 }
 
-/** One record's bytes, held to the size its entry declared. */
+/**
+ * One record's bytes, held to the size its entry declared. An entry that does not inflate, or does
+ * not hold what it declares, is in an archive that parsed: `unsupported` — never `unreadable`, which
+ * means bytes that are no archive at all, the one refusal a lane may pass on.
+ */
 function bytesOfRecord(archive: string, record: ArchiveRecord): Buffer {
   let data: Buffer;
   try {
     data = record.read();
   } catch (error: unknown) {
-    throw unreadableArchive(archive, `its entry \`${record.name}\` does not inflate (${String(error)})`, error, record.name);
+    throw new ArchiveEntryReadError(archive, record.name, `does not inflate (${String(error)})`, { cause: error });
   }
   if (data.length !== record.size) {
-    throw unreadableArchive(archive, `its entry \`${record.name}\` declares ${record.size} bytes and holds ${data.length}`, undefined, record.name);
+    throw new ArchiveEntryReadError(archive, record.name, `declares ${record.size} bytes and holds ${data.length}`);
   }
   return data;
 }
@@ -173,6 +181,23 @@ export async function listArchive(source: ArchiveSource, options: ArchiveReadOpt
   return (await openRecords(source, options)).entries;
 }
 
+/**
+ * An archive read and judged whole ({@link archiveEntryRefusal}): what an extraction writes, and
+ * what a re-zip writes, are decided by the one entry policy before a byte of either is written.
+ *
+ * @throws as {@link openArchive}; ArchiveRefusedError for an entry the policy refuses
+ */
+async function openJudged(source: ArchiveSource, options: ArchiveReadOptions): Promise<OpenedRecords> {
+  const opened = await openRecords(source, options);
+  const refusal = archiveEntryRefusal(opened.entries);
+  if (refusal !== undefined) throw new ArchiveRefusedError(opened.label, refusal);
+  return opened;
+}
+
+/** The records of a judged archive to write: every one but those the caller omits. */
+const keptRecords = (opened: OpenedRecords, options: ArchiveExtractOptions): readonly ArchiveRecord[] =>
+  options.omit === undefined ? opened.records : opened.records.filter((record) => options.omit?.(record) !== true);
+
 /** Write one accepted entry under `into`: a directory made plainly, a file created exclusively with only its executable bit kept. */
 async function writeRecord(archive: string, into: string, record: ArchiveRecord): Promise<void> {
   const relative = placeOf(record.name).join('/');
@@ -205,19 +230,43 @@ async function writeRecord(archive: string, into: string, record: ArchiveRecord)
  * @param options - The archive's `format`, the `limits` it is held to, and any entries to `omit`
  * @returns Every entry of the archive, in archive order — an omitted one included
  * @throws ArchiveRefusedError — the input's refusal — for an archive that is unreadable, past
- *   `limits`, or holds an entry the policy refuses, with nothing written; FsFaultError on the
- *   source's side for a read the OS refuses, and side `environment` for a write it refuses
+ *   `limits`, or holds an entry the policy refuses, with nothing written; ArchiveEntryReadError
+ *   (`ARCHIVE_ENTRY_UNREADABLE`, the input's too) for a member that does not inflate or holds other
+ *   than it declares, met as it is written; FsFaultError on the source's side for a read the OS
+ *   refuses, and side `environment` for a write it refuses
  */
 export async function extractArchive(source: ArchiveSource, into: string, options: ArchiveExtractOptions): Promise<readonly ArchiveEntry[]> {
-  const opened = await openRecords(source, options);
-  const refusal = archiveEntryRefusal(opened.entries);
-  if (refusal !== undefined) throw new ArchiveRefusedError(opened.label, refusal);
+  const opened = await openJudged(source, options);
   try {
     // In order: a directory before what goes in it, and the first failure the only one.
-    const written = options.omit === undefined ? opened.records : opened.records.filter((record) => options.omit?.(record) !== true);
-    await forEachInOrder(written, (record) => writeRecord(opened.label, into, record));
+    await forEachInOrder(keptRecords(opened, options), (record) => writeRecord(opened.label, into, record));
   } catch (error: unknown) {
     throw classifyFsFault(error, { side: 'environment', action: `extract ${opened.label}`, path: into });
   }
   return opened.entries;
+}
+
+/**
+ * The ZIP VAT writes of an archive it accepts, in memory: the archive judged whole as an extraction
+ * judges it, then each entry it lists — but those the caller omits — named by the place it lands
+ * at, each file's bytes held to the size it declares, with mode `0644` or `0755` by its executable
+ * bit. Nothing else of the archive's bytes: no local entry its directory does not list, no stub
+ * before it, no comment, no other mode. What a lane that passes an archive ON sends, so the bytes
+ * that leave are exactly the entries that were judged.
+ *
+ * @param source - The archive
+ * @param options - The archive's `format`, the `limits` it is held to, and any entries to `omit`
+ * @returns The new archive's bytes
+ * @throws as {@link openArchive}; ArchiveRefusedError for an entry the policy refuses;
+ *   ArchiveEntryReadError (`ARCHIVE_ENTRY_UNREADABLE`) for a member that does not inflate, or does
+ *   not hold the size it declares
+ */
+export async function zipOfArchive(source: ArchiveSource, options: ArchiveExtractOptions): Promise<Buffer> {
+  const opened = await openJudged(source, options);
+  return zipOfEntries(keptRecords(opened, options).flatMap((record) => {
+    const place = placeOf(record.name).join('/');
+    // The archive's own root (`./`) is no entry of the new one.
+    if (place === '') return [];
+    return [{ place, data: record.kind === 'directory' ? undefined : bytesOfRecord(opened.label, record), executable: record.executable }];
+  }));
 }

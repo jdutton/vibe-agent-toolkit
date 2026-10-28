@@ -252,6 +252,7 @@ describe('PROJECTION_TABLES primary keys', () => {
         targetExists: null,
         matchedPattern: null,
         matchedPayload: null,
+        targetFaultClass: null,
       });
     }
 

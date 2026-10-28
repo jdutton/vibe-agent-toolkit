@@ -169,6 +169,20 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   skill-test harness lock does. It cannot cover Claude Code's own writes of `settings.json`, which
   is why the byte comparison stays.
 
+### A `--dev` plugin's link into its own `skills/<name>/` resolves through the dev link once installed
+
+- **Severity:** Minor · **Effort:** S · **User-visible:** dev mode only
+- **Mechanism:** `vat claude plugin install --dev` copies a plugin's non-skill content and replaces
+  each built skill with a link to `dist/skills/<name>`. A link elsewhere in the plugin that points
+  into `skills/<name>/…` passes the unit check (it stays inside the plugin at the source), and once
+  installed it resolves through the dev link into `dist/skills/<name>` — a different entry than it
+  named at the source. The operator's own tree, in dev mode only.
+- **Reproduce:** by reading; not run.
+- **Where:** `writeDevPlugin` / `linkDevSkills` in
+  [`install.ts`](../../packages/cli/src/commands/claude/plugin/install.ts)
+- **Fix:** judge a `--dev` plugin's links against the tree as installed (skills replaced by their
+  dev links), or refuse a link into `skills/` in a `--dev` plugin.
+
 ### `vat claude plugin uninstall <key>` cannot recognise a plugin a pre-marker VAT installed
 
 - **Severity:** Minor · **Effort:** M · **User-visible:** yes
@@ -264,12 +278,36 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Severity:** Minor · **Effort:** S · **User-visible:** not today
 - **Mechanism:** `unixModeOf` trusts an entry's external attributes for a symlink type only when
   `version made by` names host 3. Info-ZIP also maps a Unix mode for other hosts, so a link entry
-  written with another host byte is read as a regular file. Harmless where VAT extracts (it writes
-  a regular file holding the target text); a differential in the org upload lane, which forwards
-  the ZIP to a reader that may see the link.
+  written with another host byte is read as a regular file. Harmless today: VAT extracts it as a
+  regular file holding the target text, and no lane forwards the operator's ZIP bytes (the org
+  upload sends VAT's own re-zip, every entry `0644`/`0755`).
 - **Reproduce:** by reading; not run.
 - **Where:** `unixModeOf` in [`zip-reader.ts`](../../packages/utils/src/archive/zip-reader.ts)
 - **Fix:** read the type bits whatever the host byte, and refuse a link type from any of them.
+
+### Nothing enforces that a site resolving a link asks the one predicate
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** not today
+- **Mechanism:** `isUnresolvableLinkError` is the one answer to "does this link resolve?". A write
+  lane asks it through `assertUnresolvableLink`, which throws the classified `FS_FAULT` (a fault
+  stops the run): `tree-copy`, `link-containment` (the tree-change link walk), `rag-lancedb`'s
+  `linkedDatabasePath` and the projection extent's `realRootOf`. A read lane asks it through
+  `linkResolutionFault` (a fault is that one target's row or finding): the projection extent,
+  `realizations` (`resolveRealPath`, which both pipeline oracles — enumeration aliases and symlink
+  divergence — record a row's fault through), identity, `canonicalizeSync` and
+  `FsLookupCache.realpath`. The link validator's existence walk (`absenceCauseFor` in `fs-utils.ts`)
+  asks `isUnresolvableLinkError` directly, so a listing that failed `ELOOP` is a missing target there
+  as it is to the realpath beside it, and one that failed any other errno — Windows' ambiguous
+  `EINVAL` / `ENAMETOOLONG` included — is a refusal. Two `realpath` catches answer a different, narrower question on
+  purpose and do not: `tree-change/files.ts` `writeTarget` and `path-utils.ts` `realpathOrSelf`
+  treat only an absent path as "nothing there" — `realpathOrSelf` after the one native fallback
+  rule every native realpath site shares (`nativeAnswerNeedsJsWalk`: an unanswerable volume or a
+  native "absent" is asked again of the JS walk). Nothing stops the next `realpath` catch from
+  answering `fsFaultOf(e) !== undefined` ("any filesystem error leads nowhere") again.
+- **Where:** [`errno-table.ts`](../../packages/utils/src/errors/errno-table.ts),
+  [`fs-fault.ts`](../../packages/utils/src/errors/fs-fault.ts)
+- **Fix:** a lint rule flagging a `catch` around a `realpath*` call that returns a value without
+  calling `linkResolutionFault` / `assertUnresolvableLink` / `isUnresolvableLinkError`.
 
 ### No test inflates a DEFLATED ZIP entry past the size it declares
 
@@ -282,50 +320,36 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   [`archive-fixtures.ts`](../../packages/utils/src/testing/archive-fixtures.ts)
 - **Fix:** let the fixture writer take the stored bytes and the declared size separately, and pin it.
 
-### On Windows a lone archive entry named `name:stream` is written as a stream of `name`
-
-- **Severity:** Minor · **Effort:** S · **User-visible:** Windows only, unverified
-- **Mechanism:** the entry policy folds `name:stream` to `name`, so an archive listing BOTH is a
-  `name-clash`. One listing only `name:stream` passes, and on NTFS the write creates an alternate
-  data stream of a file `name` the archive never listed. Not verified on a Windows host.
-- **Where:** `unsafeNameReason` in [`entries.ts`](../../packages/utils/src/archive/entries.ts)
-- **Fix:** refuse a `:` in any segment after the drive check, as `unsafe-name`.
-
 ### A link whose text begins `C:` is refused as absolute on POSIX, where it is a plain name
 
 - **Severity:** Minor · **Effort:** S · **User-visible:** yes (an over-refusal)
-- **Mechanism:** the install link rule refuses a link text that is absolute on ANY host — a
-  leading `/` or `\`, or a drive prefix (`C:`) — so that one rule decides for a tree installed
-  anywhere. On POSIX a file may really be named `C:notes.md`, and a relative link to it is refused
-  as absolute.
-- **Where:** `ABSOLUTE` in [`link-walk.ts`](../../packages/utils/src/tree-change/link-walk.ts)
-- **Fix:** decide "absolute" by the host, as the separators already are.
+- **Mechanism:** an untrusted tree's link text is held to BOTH hosts' rules — a leading `/` or
+  `\`, a drive prefix (`C:`), a network or `\\?\` path — so that one rule decides for a tree
+  installed or cloned anywhere: an install, a cloned skill source (read from the object store
+  before checkout) and the tree walk all ask it. On POSIX a file may really be named
+  `C:notes.md`, and a relative link to it is refused as drive-relative. Deliberate for now: the
+  same commit cloned on Windows would resolve it against a per-drive working directory.
+- **Where:** `untrustedTextRefusal` in [`link-chain.ts`](../../packages/utils/src/tree-change/link-chain.ts),
+  `ABSOLUTE` in [`link-walk.ts`](../../packages/utils/src/tree-change/link-walk.ts)
+- **Fix:** decide by the flavor the tree will be read under, if a tree read on one host only ever
+  becomes a thing VAT can know.
 
-### A skill ZIP re-zipped for upload is not byte- or mode-identical to the archive that was judged
+### On Windows a crawled link to a share may still be stat'd or read through by the kernel outside the realpath lanes
 
-- **Severity:** Minor · **Effort:** M · **User-visible:** not today
-- **Mechanism:** when a skill ZIP holds a top-level `__MACOSX/` or `.DS_Store`,
-  `vat claude org skills install` extracts it to staging without them and uploads a new ZIP of the
-  staging. That ZIP carries each file's mode as extracted under the operator's umask (`0600` /
-  `0700` under `umask 077`) and fresh modification times, not the archive's own. And the ZIP is read
-  from disk up to three times — the bytes weighed, the inspection, the extraction for the re-zip —
-  so what is sent is not provably what was judged if the file changes in between.
-- **Where:** `withoutHostAdded` and `installFromLocal` in
-  [`skills.ts`](../../packages/cli/src/commands/claude/org/skills.ts)
-- **Fix:** read the archive once, and write the upload from the judged records (their modes and
-  times) rather than from a staging directory.
-
-### A ZIP with a member that does not inflate uploads alone, and is refused beside a `.DS_Store`
-
-- **Severity:** Minor · **Effort:** S · **User-visible:** yes (two answers for one archive)
-- **Mechanism:** `vat claude org skills install` tolerates a member it cannot inflate (an odd
-  compression method, an encrypted entry): it warns, names the member and uploads the archive. The
-  same archive with a `.DS_Store` beside the skill takes the re-zip path, which extracts EVERY
-  member — and the one that does not inflate refuses the upload (`INPUT_UNREADABLE`).
-- **Where:** `inflateOrRecord` and `withoutHostAdded` in
-  [`skills.ts`](../../packages/cli/src/commands/claude/org/skills.ts)
-- **Fix:** one answer for a member that does not inflate — refuse in both, since the upload lane's
-  checks did not read it either.
+- **Severity:** Major (unmeasured) · **Effort:** M · **User-visible:** only on Windows, for a tree holding a
+  link whose text is `\\host\share…`
+- **Mechanism:** on Windows every realpath VAT asks walks the link chain first (`assertLocalChain`), and every
+  tree an install or a clone keeps links in is walked by `treeChain` before the kernel follows
+  anything. A `stat`, `open` or `readFile` that follows a link is not a realpath, and nothing
+  guards it: a read lane over a project the user names that follows a link WITHOUT first
+  resolving it would hand a `\\host\share` link to the kernel, which on Windows offers the
+  operator's NTLM credentials to the host. Not traced site by site; candidates are a `files:`
+  glob's `stat` and any parse of a crawled `.md` reached through a link. Lanes that resolve before
+  they read reach the refusal first.
+- **Where:** `statSync`/`readFile`/`open` call sites under `packages/resources/src` and
+  `packages/agent-skills/src` that take a crawled path
+- **Fix:** route every link-following call on a crawled path through one guarded primitive (as the
+  realpaths are), and a lint rule that flags a bare `fs` follow on a crawled path.
 
 ### An archive file that grows between its size check and its read is read past the cap
 
@@ -659,6 +683,31 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** run the hostile-name set on the Windows box first. Then refuse trailing dot/space, `:`
   and reserved device names.
 
+### The JS realpath fallback answers the caller's casing and 8.3 short name, not the on-disk spelling
+
+- **Severity:** Minor · **Effort:** M · **User-visible:** only on a volume that cannot answer a
+  final-path query (a RAM disk, some redirectors and virtual drives) or one mounted into a folder
+  with no drive letter
+- **Mechanism:** every native realpath site (`realpathNativeSync`, `realpathNative`,
+  `normalizePath`, the file crawler's identity check) falls back to Node's JS realpath when the
+  native call fails with `EISDIR`/`ENOTSUP` or calls the path absent. The JS walk is an
+  lstat/readlink walk: it keeps the casing the caller spelled and does not expand an 8.3 short name
+  (`PROGRA~1`), nor a `subst` drive or a volume mount point (`lstat` reports a mount point as a
+  plain directory). On such a volume two spellings of one directory compare as two paths, and NOT
+  always fail-closed: on Windows `path.win32.relative` ignores case, so a mis-cased in-root path
+  compares inside (wrong only in a directory marked case-sensitive), and a path spelled through a
+  mount point can compare inside or outside depending on how the root was spelled. The crawler's
+  cycle guard could walk one directory twice under two spellings, and a containment check could
+  refuse an in-root path.
+- **Reproduce:** a VHD mounted into a folder on the Windows CI leg
+  (`realpath-native-folder-mount.integration.test.ts`: it checks the answer against the path it
+  built, and on CI a mount that fails is a failure, not a skip; a developer host that cannot mount
+  one skips); otherwise the fallback is pinned by mocking the native call
+  (`realpath-native.integration.test.ts`). macOS/Linux have no 8.3 names.
+- **Where:** `nativeAnswerNeedsJsWalk` in [`path-utils.ts`](../../packages/utils/src/path-utils.ts)
+- **Fix:** after a JS fallback, canonicalise each segment's case from its parent's `readdir`
+  listing (the `DirectorySpellingIndex` approach), and expand a `~N` segment the same way.
+
 ### On Windows the tree-change suites retry a rename with no real wait, so a transient refusal is a flake
 
 - **Severity:** Minor · **Effort:** S · **User-visible:** no
@@ -855,6 +904,22 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
   [`committed-verdict-deltas.integration.test.ts`](../../packages/lab/test/integration/committed-verdict-deltas.integration.test.ts)
 - **Fix:** refuse an orphan marker, and strip markers in the stable fold once the deltas file is
   re-baselined.
+
+## Dependencies
+
+### zod 3 carries an advisory fixed only in zod 4, and 18 workspaces declare zod `^3.25`
+
+- **Severity:** Important · **Effort:** L · **User-visible:** not today
+- **Mechanism:** GHSA-mrhx-c7xc-m3w5: zod through 4.6.5 holds one issue per failing element of an
+  unbounded array schema, so a large enough input exhausts memory. There is no fixed 3.x release.
+  18 of VAT's 25 workspaces declare `zod ^3.25`, and so do `@vibe-validate/*`, so the lockfile
+  holds `zod@3.25.76`. The nested zod 4 copies already resolve to a fixed 4.6.x. Exposure: VAT
+  validates the operator's own config and files with zod; no schema parses remote input. The
+  advisory is in `osv-scanner.toml`'s register, scoped by its reason to `zod@3.25.76`.
+- **Reproduce:** `osv-scanner scan --lockfile=bun.lock` with the register entry removed
+- **Where:** every `packages/*/package.json` that declares `zod`
+- **Fix:** migrate those workspaces to zod ≥ 4.6.6 (a Breaking change to every exported schema),
+  as its own PR, and delete the register entry with it.
 
 ## Docs
 

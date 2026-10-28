@@ -90,8 +90,9 @@ describe('docs/validation-codes.md lists the errnos of each class as utils class
   it.each(TABLE_CLASSES)('%s: exactly the errnos utils puts in it', (faultClass) => {
     const expected = CLASSIFIED_ERRNOS.get(faultClass) ?? [];
     expect(expected.length).toBeGreaterThan(0);
-    // The table and the classifier are one thing: each errno it lists is classified into that class.
-    expect(expected.filter((code) => fsFaultOf({ code })?.faultClass !== faultClass)).toEqual([]);
+    // The table and the classifier are one thing: each errno it lists, raised by a filesystem call
+    // (one naming its path — a network errno from a socket is no filesystem fault), is classified into that class.
+    expect(expected.filter((code) => fsFaultOf({ code, syscall: 'open', path: 'x' })?.faultClass !== faultClass)).toEqual([]);
     expect(new Set(listed.get(faultClass))).toEqual(new Set(expected));
   });
 });

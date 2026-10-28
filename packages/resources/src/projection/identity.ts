@@ -7,9 +7,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { realpathSync } from 'node:fs';
 
-import { fsFaultOf, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { linkResolutionFault, realpathNativeSync, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { type GitTracker } from '@vibe-agent-toolkit/utils/git';
 
 /** Hex characters kept from a SHA-256 digest. 128 bits — collision-free at any corpus size. */
@@ -277,16 +276,20 @@ function realPathOrSelf(absolutePath: string): string {
 /**
  * The real path, or null when the filesystem will not resolve it.
  *
- * `ENOENT` is the motivating case, but `EACCES` on an existing file and
- * `ELOOP` on a symlink cycle land here too, and for all three the ancestor's
- * namespace is the better answer — the ruling `FsLookupCache.realpath`
- * documents. A bug is none of those and stays loud.
+ * A read lane, and a SPELLING, never a link verdict: nothing downstream reads
+ * "unresolved" from this, so whatever {@link linkResolutionFault} says — the
+ * path resolves to nothing (`ENOENT`, `ELOOP` …) or the OS declined
+ * or failed (`EACCES`, `EIO`, `UNKNOWN` …) — the caller takes the ancestor's namespace, the
+ * ruling `FsLookupCache.realpath` documents. Nothing is thrown for a
+ * filesystem errno, so no side is picked: identity is minted before any crawl
+ * source and its `outputs` exist, and the path's own crawl reports a refusal on
+ * the side `crawlSideOf` charges it to. A bug (no errno) stays loud.
  */
 function tryRealPath(absolutePath: string): string | null {
   try {
-    return toForwardSlash(realpathSync.native(absolutePath));
+    return realpathNativeSync(absolutePath);
   } catch (error) {
-    if (fsFaultOf(error) === undefined) throw error;
+    linkResolutionFault(error);
     return null;
   }
 }
