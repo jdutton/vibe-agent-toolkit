@@ -77,7 +77,8 @@ describe('the link-following primitives ask the kernel only about a chain read a
     kernel = undefined;
   });
 
-  const refused = { code: LINK_CHAIN_REFUSED_CODE, refusal: expect.objectContaining({ why: 'network', text: UNC }) };
+  // A Windows kernel hands a UNC link's text back with a trailing separator (`\\attacker\share\`).
+  const refused = { code: LINK_CHAIN_REFUSED_CODE, refusal: expect.objectContaining({ why: 'network', text: expect.stringMatching(/^\\\\attacker\\share\\?$/) }) };
 
   it.for(['smb', 'a', 'a/inner.md'])('refuses %s in every sync primitive before the kernel is asked', (start, { skip }) => {
     kernel = planted(root, skip);
@@ -152,7 +153,8 @@ describe('the link-following primitives ask the kernel only about a chain read a
     }
   });
 
-  it('guards every host: under posix the chain is walked too', ({ skip }) => {
+  // A Windows host's temp root carries a drive, which no POSIX walk can be rooted at: POSIX hosts only.
+  it.skipIf(process.platform === 'win32')('guards every host: under posix the chain is walked too', ({ skip }) => {
     kernel = planted(root, skip);
     kernel.restore();
     const session = installFaultFs({ within: root });

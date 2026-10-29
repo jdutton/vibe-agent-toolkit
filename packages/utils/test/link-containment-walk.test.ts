@@ -18,7 +18,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { isUnresolvableLinkError } from '../src/errors/errno-table.js';
 import { FS_FAULT_CODE } from '../src/errors/fs-fault.js';
 import { safePath, toForwardSlash, toForwardSlashAnyPlatform } from '../src/path-core.js';
-import type { PathFlavor } from '../src/tree-change/link-chain.js';
+import { HOST_PATH_FLAVOR, type PathFlavor } from '../src/tree-change/link-chain.js';
 
 /** One entry of the fake tree, by its real path. */
 type Node = { readonly type: 'dir' } | { readonly type: 'file' } | { readonly type: 'link'; readonly target: string };
@@ -152,11 +152,13 @@ vi.mock('../src/path-containment.js', () => {
 });
 
 const { kernelRefusal, refuseEscapingLinks, treeChain } = await import('../src/tree-change/link-containment.js');
-const FLAVOR_LIST: readonly PathFlavor[] = ['posix', 'win32'];
+// The follower walks by the HOST's rules, and ROOT carries the host's drive: a Windows host can only
+// model its own kernel. A POSIX host models both — a Windows kernel's `..` and hop limit are pure text.
+const FLAVOR_LIST: readonly PathFlavor[] = HOST_PATH_FLAVOR === 'win32' ? ['win32'] : ['posix', 'win32'];
 const { COPY_LINK_ESCAPES_SOURCE_CODE } = await import('../src/tree-change/followed-walk.js');
 
 /** A fresh tree: directories, files, and links, each named relative to {@link ROOT}. */
-function plant(entries: Readonly<Record<string, string>>, flavor: PathFlavor = 'posix'): void {
+function plant(entries: Readonly<Record<string, string>>, flavor: PathFlavor = HOST_PATH_FLAVOR): void {
   setKernel(flavor);
   tree.clear();
   listed.length = 0;
@@ -171,7 +173,7 @@ function plant(entries: Readonly<Record<string, string>>, flavor: PathFlavor = '
   }
 }
 
-const CHECK = { side: 'source', flavor: 'posix', tree: 'the skill', within: 'the skill', consequence: 'Kept, it would read the installing user\'s files' } as const;
+const CHECK = { side: 'source', flavor: HOST_PATH_FLAVOR, tree: 'the skill', within: 'the skill', consequence: 'Kept, it would read the installing user\'s files' } as const;
 const unit = safePath.join(ROOT, 'skill');
 const relocated = { ...CHECK, root: unit, placement: 'relocated' } as const;
 const inPlace = { ...CHECK, root: unit, placement: 'in-place' } as const;
