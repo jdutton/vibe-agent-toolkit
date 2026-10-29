@@ -159,10 +159,11 @@ describe('refuseEscapingLinks', () => {
     // Inside at the source, by the unit's own directory name — which an install need not keep.
     it('refuses a link that leaves the tree and comes back in by its name', ({ skip }) => {
       const { cap, unit } = fixture(skip);
-      createSymlink(cap, '../unit/SKILL.md', safePath.join(unit, 'self.md'), 'file');
+      const self = safePath.join(unit, 'self.md');
+      createSymlink(cap, '../unit/SKILL.md', self, 'file');
 
       // In place too: the walk never rises above the root, not even to come back in by its name.
-      expect(refusalOf(() => check(unit)).message).toContain('self.md is a symbolic link to a path outside it (../unit/SKILL.md)');
+      expect(refusalOf(() => check(unit)).message).toContain(`self.md is a symbolic link to a path outside it (${readlinkSync(self)})`);
       expect(refusalOf(() => relocated(unit)).message).toContain('self.md is a symbolic link to a path outside it');
     });
 
