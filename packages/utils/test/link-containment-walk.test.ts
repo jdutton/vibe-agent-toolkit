@@ -338,6 +338,15 @@ describe('refuseEscapingLinks, a tree read in place', () => {
     expect(refusalOf(inPlace)).toBeUndefined();
   });
 
+  // A Windows kernel collapses `skill/../skill` to `skill` by string: the climb must be seen on the way, not at the end.
+  it.each(FLAVOR_LIST)('refuses a text that rises above the root and comes back in by its name (%s)', (flavor) => {
+    plant({ ...SKILL, 'skill/self.md': '-> ../skill/SKILL.md' }, flavor);
+
+    for (const placement of [inPlace, relocated]) {
+      expect(refusalOf({ ...placement, flavor })?.message).toContain('self.md is a symbolic link to a path outside the skill (../skill/SKILL.md)');
+    }
+  });
+
   // R11-CONTRACT-C1: a real cycle (not `self -> .`) reads nothing in place, like a dangle — never a fault.
   it.each(FLAVOR_LIST)('accepts a real cycle in place, as a link that leads to nothing (%s)', (flavor) => {
     plant({ ...SKILL, 'skill/a': '-> b', 'skill/b': '-> a' }, flavor);

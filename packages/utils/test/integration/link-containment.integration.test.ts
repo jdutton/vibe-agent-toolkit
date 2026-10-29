@@ -3,6 +3,7 @@
  * directory an operator installs from) — no link in it may lead outside it, judged on real paths
  * and on the link's own text.
  */
+import { readlinkSync } from 'node:fs';
 import { sep } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -74,11 +75,13 @@ describe('refuseEscapingLinks', () => {
 
   it('refuses an absolute link out of the tree, naming it relative to the tree', ({ skip }) => {
     const { cap, unit, outside } = fixture(skip);
-    createSymlink(cap, outside, safePath.join(unit, 'docs', 'keys'), 'dir');
+    const keys = safePath.join(unit, 'docs', 'keys');
+    createSymlink(cap, outside, keys, 'dir');
 
     const refusal = refusalOf(() => check(unit));
 
-    expect(refusal.message).toContain(`Refusing the skill directory: docs/keys is a symbolic link whose target leads through an absolute path (${outside})`);
+    // The link's text as the OS stored it: Windows keeps an absolute target in its own separators.
+    expect(refusal.message).toContain(`Refusing the skill directory: docs/keys is a symbolic link whose target leads through an absolute path (${readlinkSync(keys)})`);
     expect(refusal.message).toContain(NAMED.consequence);
   });
 

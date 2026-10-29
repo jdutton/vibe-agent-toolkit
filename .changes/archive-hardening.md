@@ -190,6 +190,9 @@
 
 ### Fixed
 
+- **On Windows, a kept link whose text climbs above its tree and comes back in by the tree's own
+  name (`self.md -> ../skill/SKILL.md`) was accepted**, so an installed copy pointed at a sibling of
+  the install. It is refused on every host, as it already was on POSIX.
 - **`vat audit --compat --settings` reported `status: ok` with no findings for a plugin the settings
   block.** Each conflict is now a `SETTINGS_POLICY_CONFLICT` warning, and a plugin or path a lane
   could not look at a `COMPAT_NOT_CHECKED` warning; the exit code is unchanged.

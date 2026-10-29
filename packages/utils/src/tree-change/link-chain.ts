@@ -330,10 +330,24 @@ function splice(walk: Walk, link: string, text: string, rule: ChainRule): ChainR
   if (rule.flavor === 'win32') {
     // Joined onto the link's directory and collapsed by string BEFORE anything is looked at, then
     // re-walked: a `..` never asks what the component before it is.
-    return rebase(walk, walk.prefix, collapsed([...walk.done, ...form.parts, ...walk.pending]), rule);
+    const whole = [...walk.done, ...form.parts, ...walk.pending];
+    // The collapse forgets a climb that comes back in by the root's own name; a tree that may not be left sees it on the way.
+    if (rule.outside === 'refuse' && risesAbove(whole, walk.base.parts.length)) return { why: CLIMBS_OUT, link, text };
+    return rebase(walk, walk.prefix, collapsed(whole), rule);
   }
   walk.pending = [...form.parts, ...walk.pending];
   return undefined;
+}
+
+/** Whether collapsing `parts` by string ever leaves fewer than `floor` components: the name passes above the root. */
+function risesAbove(parts: readonly string[], floor: number): boolean {
+  let depth = 0;
+  for (const part of parts) {
+    if (part === '..') depth -= 1;
+    else if (part !== '.' && part !== '') depth += 1;
+    if (depth < floor && part === '..') return true;
+  }
+  return false;
 }
 
 /**
