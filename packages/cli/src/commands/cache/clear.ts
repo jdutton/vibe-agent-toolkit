@@ -30,7 +30,7 @@ import { basename, dirname } from 'node:path';
 
 import { parseCacheDirectory } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Gate } from '@vibe-agent-toolkit/schema';
-import { applyTreePlanOrLeftover, classifyFsFault, isFsFaultError, direntKind, type EntryKind, type FsFaultContext, isPathAbsentError, planTreeChanges, requireConfirmedAbsent, safePath } from '@vibe-agent-toolkit/utils';
+import { applyTreePlanOrLeftover, classifyFsFault, isFsFaultError, direntKind, everywhere, type EntryKind, type FsFaultContext, isPathAbsentError, planTreeChanges, requireConfirmedAbsent, safePath } from '@vibe-agent-toolkit/utils';
 
 import { refusalCodeOf } from '../../utils/command-refusal.js';
 import { endWithRefusal, endWithReport, type FinishedWork, leftoverIssueOf, NOTHING_FINISHED } from '../../utils/document-writer.js';
@@ -226,7 +226,7 @@ function refuse(error: unknown, finished: FinishedWork): never {
  */
 function vanished(error: unknown, target: string, ctx: FsFaultContext): true {
   if (!isPathAbsentError(error)) throw classifyFsFault(error, { ...ctx, path: target });
-  requireConfirmedAbsent(target, error, ctx, { follows: false });
+  requireConfirmedAbsent(target, error, { action: ctx.action, path: target }, { follows: false, sideOf: everywhere(ctx.side) });
   return true;
 }
 

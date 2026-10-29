@@ -59,6 +59,8 @@ export type ChainRefusal =
   | { readonly why: 'absolute'; readonly link: string; readonly text: string }
   /** A drive-relative text (`C:x`): it names a place relative to a per-drive working directory no walk can know. */
   | { readonly why: 'drive-relative'; readonly link: string; readonly text: string }
+  /** A text holding a NUL, or a component ending in a dot or a space, in a tree whose links may not leave it: not the text a kernel resolves. */
+  | { readonly why: 'unportable'; readonly link: string; readonly text: string }
   /** A step above the tree's root, in a tree whose links may not leave it. */
   | { readonly why: 'climbs-out'; readonly link: string; readonly text: string }
   /** More than {@link MAX_LINK_HOPS} links that are not a cycle: a chain longer than either kernel follows. */
@@ -113,9 +115,11 @@ type TextForm =
   | { readonly form: 'network' }
   | { readonly form: 'drive-relative' };
 
-/** `\\?\C:\…` / `\\.\C:\…`, slashes already forward: a local drive through the Win32 namespace. */
+/** `X:\…` / `X:/…`, slashes already forward: the one absolute form of a link text a Windows kernel resolves locally. */
+const WIN32_DRIVE_ABSOLUTE = /^([A-Za-z]:)\//;
+/** `\\?\C:\…` / `\\.\C:\…`, slashes already forward: a local drive through the Win32 namespace — a NAMED path only. */
 const WIN32_NAMESPACED_DRIVE = /^\/\/[?.]\/([A-Za-z]:)(?:\/|$)/;
-/** `\\?\Volume{GUID}\…`, slashes already forward: a local volume by its GUID, as a junction or mount point names one. */
+/** `\\?\Volume{GUID}\…`, slashes already forward: a local volume by its GUID — a NAMED path only. */
 const WIN32_VOLUME = /^\/\/\?\/(Volume\{[0-9A-Fa-f-]+\})(?:\/|$)/;
 /** `\\host\share\…` / `\\?\UNC\host\share\…`, slashes already forward: the share a NAMED path (never a link's text) hangs from. */
 const WIN32_SHARE_ROOT = /^\/\/(?:\?\/UNC\/)?([^/?.][^/]*\/[^/]+)(?:\/|$)/i;
@@ -131,41 +135,50 @@ const DRIVE_RELATIVE = 'drive-relative';
 const CLIMBS_OUT = 'climbs-out';
 
 /**
- * How `text` reads under `flavor`.
+ * How a link's TEXT reads under `flavor` — an ALLOWLIST under win32, never a list of network
+ * spellings: a text is local only when it is relative (no leading separator, no drive) or
+ * drive-absolute (`X:\…`). Every other form — UNC, `\\?\…`, `\\.\…`, the NT object paths libuv's
+ * `readlink` hands back verbatim (`\??\GLOBALROOT\Device\Mup\…`, `\??\Volume{…}\…`, `\Device\…`,
+ * `\DosDevices\…`, `\GLOBAL??\…`), a root-relative `\x`, and anything not recognised — is a
+ * network or device path, which the walk never resolves and the kernel is never asked about.
  *
- * @param text - A path or a link's text
+ * @param text - A link's text, verbatim
  * @param flavor - Whose rules
- * @param drive - The drive root a win32 rooted-but-driveless text (`\x`) hangs from: the current place's
  */
-function textForm(text: string, flavor: PathFlavor, drive: string): TextForm {
+function textForm(text: string, flavor: PathFlavor): TextForm {
   if (flavor === 'posix') {
     return text.startsWith('/') ? { form: 'rooted', rooted: { prefix: '/', parts: partsOf(text) } } : { form: 'relative', parts: partsOf(text) };
   }
   const slashed = toForwardSlashAnyPlatform(text);
-  const namespaced = WIN32_NAMESPACED_DRIVE.exec(slashed);
-  if (namespaced?.[1] !== undefined) return { form: 'rooted', rooted: { prefix: `${namespaced[1].toUpperCase()}/`, parts: partsOf(slashed.slice(namespaced[0].length)) } };
-  const volume = WIN32_VOLUME.exec(slashed);
-  if (volume?.[1] !== undefined) return { form: 'rooted', rooted: { prefix: `//?/${volume[1]}/`, parts: partsOf(slashed.slice(volume[0].length)) } };
-  if (slashed.startsWith('//')) return { form: 'network' };
-  const driveRoot = WIN32_DRIVE_ROOT.exec(slashed);
-  if (driveRoot?.[1] !== undefined) return { form: 'rooted', rooted: { prefix: `${driveRoot[1].toUpperCase()}/`, parts: partsOf(slashed.slice(driveRoot[0].length)) } };
+  const drive = WIN32_DRIVE_ABSOLUTE.exec(slashed);
+  if (drive?.[1] !== undefined) return { form: 'rooted', rooted: { prefix: `${drive[1].toUpperCase()}/`, parts: partsOf(slashed.slice(drive[0].length)) } };
   if (WIN32_DRIVE_RELATIVE.test(slashed)) return { form: DRIVE_RELATIVE };
-  if (slashed.startsWith('/')) return { form: 'rooted', rooted: { prefix: drive, parts: partsOf(slashed) } };
+  if (slashed.startsWith('/')) return { form: 'network' };
   return { form: 'relative', parts: partsOf(slashed) };
 }
 
 /**
  * How a NAMED path (the start or the root — what the operator or VAT spelled, never a link's text)
- * reads: as {@link textForm}, except that under win32 a share is a root it may hang from. A tree on
- * `\\host\share` is the operator's choice; a link's text naming one is never followed.
+ * reads. Under win32 it may hang from a drive, a namespaced drive, a volume or a share: a tree on
+ * `\\host\share` is the operator's choice, while a link's text naming any of them is never
+ * followed ({@link textForm}). A rooted-but-driveless `\x` hangs from `drive`.
  */
 function anchoredForm(path: string, flavor: PathFlavor, drive: string): TextForm {
-  const form = textForm(path, flavor, drive);
-  if (form.form !== 'network') return form;
+  if (flavor === 'posix') return textForm(path, flavor);
   const slashed = toForwardSlashAnyPlatform(path);
-  const share = WIN32_SHARE_ROOT.exec(slashed);
-  if (share?.[1] === undefined) return form;
-  return { form: 'rooted', rooted: { prefix: `//${share[1]}/`, parts: partsOf(slashed.slice(share[0].length)) } };
+  const rooted = (prefix: string, rest: string): TextForm => ({ form: 'rooted', rooted: { prefix, parts: partsOf(rest) } });
+  const anchors: ReadonlyArray<readonly [RegExp, (match: string) => string]> = [
+    [WIN32_DRIVE_ROOT, (name) => `${name.toUpperCase()}/`],
+    [WIN32_NAMESPACED_DRIVE, (name) => `${name.toUpperCase()}/`],
+    [WIN32_VOLUME, (name) => `//?/${name}/`],
+    [WIN32_SHARE_ROOT, (name) => `//${name}/`],
+  ];
+  for (const [pattern, prefixOf] of anchors) {
+    const match = pattern.exec(slashed);
+    if (match?.[1] !== undefined) return rooted(prefixOf(match[1]), slashed.slice(match[0].length));
+  }
+  if (slashed.startsWith('//')) return { form: 'network' };
+  return slashed.startsWith('/') ? rooted(drive, slashed) : textForm(path, flavor);
 }
 
 /**
@@ -189,25 +202,81 @@ const FLAVORS: readonly PathFlavor[] = ['posix', 'win32'];
  * a chain in a `refuse` tree is held to at every hop, and the one a caller that has only the text
  * (a git clone reading link blobs before checkout) asks directly.
  *
+ * A text is also `unportable` when it holds a NUL (the OS cuts the text short there, so the walk
+ * would judge bytes no kernel sees) or a component ending in a dot or a space (Win32 strips those,
+ * so `.. ` would climb where the walk read a name) — the win32 rule held on every host.
+ *
  * @param text - A link's text, verbatim
- * @returns `network`, `absolute` or `drive-relative` when either kernel would read it so; `undefined` for a relative text
+ * @returns why either kernel would not read it as a relative text inside the tree; `undefined` for one it would
  */
-export function untrustedTextRefusal(text: string): 'network' | 'absolute' | 'drive-relative' | undefined {
-  const forms = new Set(FLAVORS.map((flavor) => textForm(text, flavor, '/').form));
-  if (forms.has('network')) return 'network';
-  if (forms.has(DRIVE_RELATIVE)) return DRIVE_RELATIVE;
-  if (forms.has('rooted')) return 'absolute';
+export function untrustedTextRefusal(text: string): UntrustedTextRefusal | undefined {
+  if (isUnportableText(text)) return 'unportable';
+  const [posixForm, win32Form] = FLAVORS.map((flavor) => textForm(text, flavor).form);
+  // `/etc/x` is a POSIX absolute path (and a device path to Windows); `\\host\share`, `\??\…` and
+  // `//host/share` name a network or device path to Windows whatever POSIX reads them as.
+  if (win32Form === 'network') return posixForm === 'rooted' && !toForwardSlashAnyPlatform(text).startsWith('//') ? 'absolute' : 'network';
+  if (win32Form === DRIVE_RELATIVE) return DRIVE_RELATIVE;
+  if (posixForm === 'rooted' || win32Form === 'rooted') return 'absolute';
   return undefined;
 }
 
-/** Collapse `..` by string, never above the root — what Windows does to a name before it reparses it. */
-function collapsed(parts: readonly string[]): string[] {
+/** Why an untrusted link's text alone is refused ({@link untrustedTextRefusal}). */
+type UntrustedTextRefusal = 'network' | 'absolute' | 'drive-relative' | 'unportable';
+
+/** A component that is a name ending in `.` or a space (never `.` or `..` themselves): Win32 strips the ending. */
+const STRIPPED_ENDING = /(?:^|[/\\])(?!\.\.?(?:[/\\]|$))[^/\\]*[. ](?:[/\\]|$)/;
+
+/** Whether `text` holds a NUL, or a component Windows would rename by stripping its ending. */
+function isUnportableText(text: string): boolean {
+  return text.includes(String.fromCodePoint(0)) || STRIPPED_ENDING.test(text);
+}
+
+/**
+ * Collapse `..` by string — what Windows does to a name before it reparses it — saying whether a
+ * `..` met nothing left to pop: the name climbed above the place it started from.
+ */
+function collapse(parts: readonly string[]): { readonly parts: string[]; readonly climbed: boolean } {
   const out: string[] = [];
+  let climbed = false;
   for (const part of parts) {
-    if (part === '..') out.pop();
-    else out.push(part);
+    if (part !== '..') out.push(part);
+    else if (out.pop() === undefined) climbed = true;
   }
-  return out;
+  return { parts: out, climbed };
+}
+
+/** {@link collapse}, never above the root. */
+function collapsed(parts: readonly string[]): string[] {
+  return collapse(parts).parts;
+}
+
+/**
+ * Why a committed link — `linkPath` (its `/`-separated place in the tree) whose text is `text` — is
+ * refused by its text alone, before it exists on disk: {@link untrustedTextRefusal}, or `climbs-out`
+ * when, joined onto the link's directory and split by EITHER flavor's separators, its `..`s rise above
+ * the tree's root — the same collapse the walk applies under win32.
+ *
+ * @returns The refusal, or `undefined` for a text that stays inside by its text alone
+ */
+export function untrustedLinkRefusal(linkPath: string, text: string): UntrustedTextRefusal | typeof CLIMBS_OUT | undefined {
+  const why = untrustedTextRefusal(text);
+  if (why !== undefined) return why;
+  const splitters: readonly ((value: string) => string)[] = [(value) => value, toForwardSlashAnyPlatform];
+  const climbs = splitters.some((spell) => collapse([...partsOf(posix.dirname(spell(linkPath))), ...partsOf(spell(text))]).climbed);
+  return climbs ? CLIMBS_OUT : undefined;
+}
+
+/**
+ * A name folded as Windows compares names: each character upcased on its own (an ordinal, simple
+ * case fold — never `toLowerCase`, never a mapping that changes a character's length, like `ß` → `SS`).
+ */
+export function win32FoldedName(name: string): string {
+  let folded = '';
+  for (const character of name) {
+    const upper = character.toUpperCase();
+    folded += upper.length === character.length ? upper : character;
+  }
+  return folded;
 }
 
 /** `prefix` + `parts`, forward-slashed. */
@@ -215,9 +284,12 @@ function joined(prefix: string, parts: readonly string[]): string {
   return prefix + parts.join('/');
 }
 
-/** Whether `path` is `root` or below it — case-blind under win32, as its filesystems compare names. */
-function isWithin(path: string, root: string, flavor: PathFlavor): boolean {
-  const [p, r] = flavor === 'win32' ? [path.toLowerCase(), root.toLowerCase()] : [path, root];
+/**
+ * Whether `path` is `root` or below it, both forward-slashed — case-blind under win32 by the
+ * ordinal fold Windows compares names with ({@link win32FoldedName}).
+ */
+export function isWithinUnder(path: string, root: string, flavor: PathFlavor): boolean {
+  const [p, r] = flavor === 'win32' ? [win32FoldedName(path), win32FoldedName(root)] : [path, root];
   const base = r.endsWith('/') ? r : `${r}/`;
   return p === r || p.startsWith(base);
 }
@@ -241,7 +313,7 @@ interface Walk {
 function splice(walk: Walk, link: string, text: string, rule: ChainRule): ChainRefusal | undefined {
   walk.link = link;
   walk.text = text;
-  const form = textForm(text, rule.flavor, walk.prefix);
+  const form = textForm(text, rule.flavor);
   if (form.form === 'network') return { why: 'network', link, text };
   if (form.form === 'drive-relative') return { why: DRIVE_RELATIVE, link, text };
   if (rule.outside === 'refuse') {
@@ -271,7 +343,7 @@ function splice(walk: Walk, link: string, text: string, rule: ChainRule): ChainR
  */
 function rebase(walk: Walk, prefix: string, parts: string[], rule: ChainRule): ChainRefusal | undefined {
   const { base } = walk;
-  if (isWithin(joined(prefix, parts), joined(base.prefix, base.parts), rule.flavor)) {
+  if (isWithinUnder(joined(prefix, parts), joined(base.prefix, base.parts), rule.flavor)) {
     walk.prefix = base.prefix;
     walk.done = [...base.parts];
     walk.pending = parts.slice(base.parts.length);
@@ -292,7 +364,7 @@ function startOf(start: string, rule: ChainRule, rootParts: Rooted): Walk | Chai
   const parts = rule.flavor === 'win32' ? collapsed(form.rooted.parts) : [...form.rooted.parts];
   const path = joined(form.rooted.prefix, parts);
   const root = joined(rootParts.prefix, rootParts.parts);
-  if (isWithin(path, root, rule.flavor) && (rule.flavor === 'win32' || !parts.includes('..'))) {
+  if (isWithinUnder(path, root, rule.flavor) && (rule.flavor === 'win32' || !parts.includes('..'))) {
     return { base: rootParts, prefix: rootParts.prefix, done: [...rootParts.parts], pending: parts.slice(rootParts.parts.length), link: start, text: start };
   }
   if (rule.outside === 'refuse') return { why: CLIMBS_OUT, link: start, text: start };
@@ -342,7 +414,7 @@ function stepTo(walk: Walk, part: string, rule: ChainRule, root: string, probe: 
   if (part === '..') walk.done.pop();
   else walk.done.push(part);
   const here = joined(walk.prefix, walk.done);
-  if (rule.outside === 'refuse' && !isWithin(here, root, rule.flavor)) return { kind: 'refused', refusal: { why: CLIMBS_OUT, link: walk.link, text: walk.text } };
+  if (rule.outside === 'refuse' && !isWithinUnder(here, root, rule.flavor)) return { kind: 'refused', refusal: { why: CLIMBS_OUT, link: walk.link, text: walk.text } };
   if (part === '..') return { kind: 'step', stands: 'directory' };
   const kind = probe.kindAt(here);
   if (kind === 'absent' || (kind === 'file' && walk.pending.length > 0)) return { kind: 'nothing', at: here, cause: 'absent' };

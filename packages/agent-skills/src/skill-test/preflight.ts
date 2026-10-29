@@ -1,6 +1,7 @@
-import { existsSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
+import { followedKindSync, linkResolutionFault } from '@vibe-agent-toolkit/utils';
 import {
   AuthPreflightError,
   resolveAuth,
@@ -79,11 +80,29 @@ const REQUIRED_FLAGS = [
  */
 const UNVERIFIABLE_FLAGS = ['--max-turns'] as const;
 
+/**
+ * Whether each declared path is there. Each is probed beneath its own directory (the operator's
+ * declaration): the entry's link chain is read by text before the kernel follows it. A probe the OS
+ * refused, or a chain VAT will not hand the kernel, fails the check as UNEXAMINED — never "missing".
+ */
 function checkExists(label: string, paths: string[]): PreflightCheck {
-  const missing = paths.filter(p => !existsSync(p));
-  return missing.length === 0
-    ? { name: label, passed: true, message: `all ${paths.length} present` }
-    : { name: label, passed: false, message: `missing: ${missing.join(', ')}`, suggestion: 'These are declared but absent (exit 2).', refusal: 'INPUT_UNREADABLE' };
+  const missing: string[] = [];
+  const unexamined: string[] = [];
+  for (const p of paths) {
+    try {
+      if (followedKindSync(p, dirname(p)) === 'absent') missing.push(p);
+    } catch (error) {
+      const fault = linkResolutionFault(error);
+      if (fault === undefined) missing.push(p);
+      else unexamined.push(`${p} (${fault.errno})`);
+    }
+  }
+  if (missing.length === 0 && unexamined.length === 0) return { name: label, passed: true, message: `all ${paths.length} present` };
+  const parts = [
+    ...(missing.length > 0 ? [`missing: ${missing.join(', ')}`] : []),
+    ...(unexamined.length > 0 ? [`could not be examined: ${unexamined.join(', ')}`] : []),
+  ];
+  return { name: label, passed: false, message: parts.join('; '), suggestion: 'These are declared but absent or unreadable (exit 2).', refusal: 'INPUT_UNREADABLE' };
 }
 
 /**

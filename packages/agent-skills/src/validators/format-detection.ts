@@ -1,12 +1,20 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { isPathAbsentError, promised, safePath } from '@vibe-agent-toolkit/utils';
+import { followedKindSync, followedStatSync, promised, safePath } from '@vibe-agent-toolkit/utils';
 
 
 import type { ResourceFormat, Surface } from './types.js';
 
 const CLAUDE_PLUGIN_DIR_NAME = '.claude-plugin';
+
+/**
+ * Whether `target`, beneath the resource directory `root`, resolves to something. Its link chain is
+ * read by text first; a refused probe or chain THROWS (never "absent").
+ */
+function resolvesBeneath(target: string, root: string): boolean {
+	return followedKindSync(target, root) !== 'absent';
+}
 
 /**
  * Detects the format of a resource at the given path
@@ -40,17 +48,16 @@ export function detectResourceFormat(
 /** The synchronous body of {@link detectResourceFormat}. */
 function detectResourceFormatNow(resourcePath: string): ResourceFormat {
 	try {
-		// Check if path exists
-		const exists = fs.existsSync(resourcePath);
-		if (!exists) {
+		// Check if path exists. `resourcePath` is the operator's own input, so it is its own tree;
+		// every probe beneath it reads the link chain by text before the kernel follows it.
+		const stats = followedStatSync(resourcePath, resourcePath);
+		if (stats === undefined) {
 			return {
 				type: 'unknown',
 				path: resourcePath,
 				reason: 'Path does not exist',
 			};
 		}
-
-		const stats = fs.statSync(resourcePath);
 
 		// Handle directories
 		if (stats.isDirectory()) {
@@ -87,7 +94,7 @@ function detectDirectoryFormat(dirPath: string): ResourceFormat {
 	const claudePluginDir = safePath.join(dirPath, CLAUDE_PLUGIN_DIR_NAME);
 
 	// Check if .claude-plugin directory exists
-	if (!fs.existsSync(claudePluginDir)) {
+	if (!resolvesBeneath(claudePluginDir, dirPath)) {
 		return {
 			type: 'unknown',
 			path: dirPath,
@@ -99,8 +106,8 @@ function detectDirectoryFormat(dirPath: string): ResourceFormat {
 	const pluginJsonPath = safePath.join(claudePluginDir, 'plugin.json');
 	const marketplaceJsonPath = safePath.join(claudePluginDir, 'marketplace.json');
 
-	const hasPlugin = fs.existsSync(pluginJsonPath);
-	const hasMarketplace = fs.existsSync(marketplaceJsonPath);
+	const hasPlugin = resolvesBeneath(pluginJsonPath, dirPath);
+	const hasMarketplace = resolvesBeneath(marketplaceJsonPath, dirPath);
 
 	// Both files exist - check if this is a co-located plugin pattern
 	if (hasPlugin && hasMarketplace) {
@@ -252,28 +259,23 @@ export function enumerateSurfaces(dirPath: string): Promise<Surface[]> {
 
 /** The synchronous body of {@link enumerateSurfaces}. */
 function enumerateSurfacesNow(dirPath: string): Surface[] {
-	let stats: fs.Stats;
-	try {
-		stats = fs.statSync(dirPath);
-	} catch (error) {
-		if (isPathAbsentError(error)) return [];
-		throw error;
-	}
-	if (!stats.isDirectory()) {
+	// `dirPath` is the operator's own input: its own tree.
+	const stats = followedStatSync(dirPath, dirPath);
+	if (stats?.isDirectory() !== true) {
 		return [];
 	}
 
 	const surfaces: Surface[] = [];
 
 	const skillPath = safePath.join(dirPath, 'SKILL.md');
-	if (fs.existsSync(skillPath)) {
+	if (resolvesBeneath(skillPath, dirPath)) {
 		surfaces.push({ type: 'agent-skill', path: skillPath });
 	}
 
 	const pluginJsonPath = safePath.join(dirPath, CLAUDE_PLUGIN_DIR_NAME, 'plugin.json');
 	const marketplaceJsonPath = safePath.join(dirPath, CLAUDE_PLUGIN_DIR_NAME, 'marketplace.json');
-	const hasPlugin = fs.existsSync(pluginJsonPath);
-	const hasMarketplace = fs.existsSync(marketplaceJsonPath);
+	const hasPlugin = resolvesBeneath(pluginJsonPath, dirPath);
+	const hasMarketplace = resolvesBeneath(marketplaceJsonPath, dirPath);
 
 	// Co-located plugin/marketplace pattern: when both plugin.json and
 	// marketplace.json are present AND the marketplace references the current

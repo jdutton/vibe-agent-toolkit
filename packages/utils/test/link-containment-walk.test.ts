@@ -96,10 +96,12 @@ const statsOf = (node: Node | undefined): { isSymbolicLink(): boolean; isDirecto
   isDirectory: () => node?.type === 'dir',
 });
 
+// Named AND default bindings: `link-following.ts` reaches the kernel through the default object.
 vi.mock('node:fs', async (importOriginal) => {
   const real = await importOriginal<typeof nodeFs>();
-  return {
-    ...real,
+  const realpathSync = Object.assign((path: string) => realOf(path, true, 'realpath'), { native: (path: string) => realOf(path, true, 'realpath') });
+  const fake = {
+    realpathSync,
     lstatSync: (path: string) => statsOf(tree.get(realOf(path, false, 'lstat'))),
     statSync: (path: string) => {
       const refused = refusedStat.get(path);
@@ -120,6 +122,7 @@ vi.mock('node:fs', async (importOriginal) => {
         .map(([path, node]) => ({ name: path.slice(prefix.length), ...statsOf(node) }));
     },
   };
+  return { ...real, ...fake, default: { ...real, ...fake } };
 });
 
 /** Real paths, as the containment module asks for them: the deepest existing ancestor resolved, the rest appended. */

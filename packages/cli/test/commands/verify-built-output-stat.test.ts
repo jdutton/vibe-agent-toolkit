@@ -8,7 +8,7 @@
  * an absence is a missing bundle; a refusal is the run's problem and throws.
  */
 
-import { statSync, writeFileSync } from 'node:fs';
+import nodeFs, { writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -16,19 +16,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { checkPackagedAgentInstructionFiles } from '../../src/commands/verify.js';
 import { resetLoadedConfigCache } from '../../src/utils/config-loader.js';
 import { fakePluginLocalIndex } from '../helpers/plugin-local-fixture.js';
-import { errno, realBehind, refusingOnly } from '../helpers/refusal-doubles.js';
+import { errno, refuseOnDefault } from '../helpers/refusal-doubles.js';
 import { createTempDirTracker } from '../system/test-common.js';
 
-// `statSync` is a named import in the command, so the refusal is injected at
-// the module seam.
-vi.mock('node:fs', async (importOriginal) =>
-  (await import('../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['statSync']));
+// The bundle's `stat` goes through utils' link-following, which reaches the kernel through the
+// DEFAULT `node:fs` object, so the refusal is injected there.
 
 const SKILL = 'only-skill';
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('verify-built-stat-');
 
 afterEach(() => {
-  vi.mocked(statSync).mockRestore();
+  vi.restoreAllMocks();
   resetLoadedConfigCache();
   cleanupTempDirs();
 });
@@ -66,7 +64,7 @@ describe('a built-output directory the run cannot stat', () => {
     const root = projectWithOneCandidate();
     const bundle = safePath.join(root, 'dist', 'skills', SKILL);
     mkdirSyncReal(bundle, { recursive: true });
-    vi.mocked(statSync).mockImplementation(refusingOnly(bundle, errno('EACCES'), realBehind(statSync)));
+    refuseOnDefault(nodeFs, 'statSync', bundle, errno('EACCES'));
 
     expect(() => checkPackagedAgentInstructionFiles(root, [], fakePluginLocalIndex([]), new Map())).toThrow(expect.objectContaining({ code: 'EACCES' }));
   });

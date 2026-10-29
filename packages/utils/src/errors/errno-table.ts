@@ -105,6 +105,11 @@ function isListedFault(code: string, node: object): boolean {
   return CLASS_BY_ERRNO.has(code) && (!NETWORK_ERRNOS.has(code) || isRaisedByFilesystemCall(node));
 }
 
+/** Whether the error that carries `code` is a refused link chain (`LinkChainRefusedError`, by shape). */
+function isRefusedLinkChain(code: string, node: object): boolean {
+  return code === LINK_CHAIN_REFUSED_CODE && 'refusal' in node;
+}
+
 /** Whether the error that carries `code` is a filesystem call's errno the table does not list. */
 function isUnlistedFilesystemErrno(code: string, node: object): boolean {
   return ERRNO_SHAPE.test(code) && !CLASS_BY_ERRNO.has(code) && isRaisedByFilesystemCall(node);
@@ -184,10 +189,13 @@ function findCoded(error: unknown, accept: (code: string, node: object) => boole
  *
  * A listed errno anywhere on the chain wins (a network one only from a filesystem call); failing
  * that, the first errno a filesystem call raised that the table does not list is a fault of
- * {@link UNLISTED_ERRNO_CLASS} — never `undefined`, so no caller hands it back raw.
+ * {@link UNLISTED_ERRNO_CLASS} — never `undefined`, so no caller hands it back raw. A link chain VAT
+ * would not hand the kernel ({@link LINK_CHAIN_REFUSED_CODE}, a `LinkChainRefusedError` — matched by
+ * its code and its `refusal`, as this module cannot import it) is a fault of the `refused` class
+ * too, so every catch that asks "is this the filesystem?" answers it as one, never as a bug.
  */
 export function fsFaultOf(error: unknown): FsFaultFacts | undefined {
-  const found = findCoded(error, isListedFault) ?? findCoded(error, isUnlistedFilesystemErrno);
+  const found = findCoded(error, isListedFault) ?? findCoded(error, isUnlistedFilesystemErrno) ?? findCoded(error, isRefusedLinkChain);
   if (found === undefined) return undefined;
   return {
     errno: found.code,

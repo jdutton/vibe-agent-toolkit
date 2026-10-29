@@ -236,7 +236,7 @@ describe('refuseEscapingLinks', () => {
     // outside never reaches this check from a real tree — so only a direct call can show it refuses.
     it('the kernel check alone refuses a link that resolves outside the tree, and passes one inside', ({ skip }) => {
       const { cap, unit, outside } = fixture(skip);
-      const root = canonicalPath(unit);
+      const root = canonicalPath(unit, unit);
       const out = safePath.join(root, 'out.txt');
       const inside = safePath.join(root, 'in.md');
       createSymlink(cap, safePath.join(outside, 'key.txt'), out, 'file');
@@ -253,7 +253,7 @@ describe('refuseEscapingLinks', () => {
       ['a link to itself', 'self.md', 'ELOOP'],
     ] as const)('the kernel check alone refuses %s as a link to nothing, naming the errno', ([, target, code], { skip }) => {
       const { cap, unit } = fixture(skip);
-      const root = canonicalPath(unit);
+      const root = canonicalPath(unit, unit);
       const link = safePath.join(root, 'self.md');
       createSymlink(cap, target, link, 'file');
       const relocatedCheck = { root: unit, ...NAMED, placement: 'relocated' } as const;
@@ -265,9 +265,9 @@ describe('refuseEscapingLinks', () => {
     // operator's tree, thrown CLASSIFIED (the one link predicate's write lane) — never "a link to nothing".
     it('throws a refused probe of the link\'s target as a classified source fault, not as a link to nothing', ({ skip }) => {
       const { cap, unit } = fixture(skip);
-      const link = safePath.join(canonicalPath(unit), 'docs', 'up.md');
+      const link = safePath.join(canonicalPath(unit, unit), 'docs', 'up.md');
       createSymlink(cap, '../SKILL.md', link, 'file');
-      const session = installFaultFs({ within: canonicalPath(unit), faults: [{ op: 'stat', path: (path) => path === link, errno: 'EACCES' }] });
+      const session = installFaultFs({ within: canonicalPath(unit, unit), faults: [{ op: 'stat', path: (path) => path === link, errno: 'EACCES' }] });
       try {
         expect(() => relocated(unit)).toThrow(expect.objectContaining({ code: FS_FAULT_CODE, errno: 'EACCES', side: 'source', path: link }));
         expect(session.fired.length).toBeGreaterThan(0);

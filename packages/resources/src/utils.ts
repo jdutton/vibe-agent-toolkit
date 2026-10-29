@@ -3,13 +3,13 @@
  * These are not exported from the public API.
  */
 
-import fs from 'node:fs';
 import path from 'node:path';
 
 import {
-  assertLocalChain,
+  followedRealpathSync,
   type FsFaultContext,
-  HOST_PATH_FLAVOR,
+  isLinkChainRefusedError,
+  LINK_CHAIN_REFUSED_CODE,
   linkResolutionFault,
   normalizePath,
   realpathRowFrom,
@@ -336,12 +336,16 @@ export function sameDirectory(left: string, right: string): boolean {
  * What the filesystem calls this path — symlinks resolved, and the casing it
  * actually stores rather than the casing the caller typed.
  *
- * @param resolvedPath - An already-resolved absolute path
+ * Both callers' sides are the operator's OWN roots (a crawl base and the root a
+ * population source was bound to), so each is its own `within`: the kernel
+ * answers the operator's input directly, as `link-following.ts` rules for an edge.
+ *
+ * @param resolvedPath - An already-resolved absolute path the operator named
  * @returns Its on-disk, forward-slashed spelling, or the input when it is not on
  *   disk (`normalizePath`'s own last resort)
  */
 function onDiskSpelling(resolvedPath: string): string {
-  return toForwardSlash(normalizePath(resolvedPath));
+  return toForwardSlash(normalizePath(resolvedPath, resolvedPath));
 }
 
 /**
@@ -409,7 +413,7 @@ function onDiskSpelling(resolvedPath: string): string {
  * boundary. `src/index.ts` does not re-export it, so the package's public API is
  * unchanged.
  */
-export function canonicalizeSync(filePath: string): string {
+export function canonicalizeSync(filePath: string, within: string): string {
   // Resolve up front so the walk only ever sees absolute, `..`-free paths.
   // Costs nothing: Node's `fs.realpathSync` opens with the same `path.resolve`.
   const absolutePath = safePath.resolve(filePath);
@@ -420,10 +424,12 @@ export function canonicalizeSync(filePath: string): string {
 
   for (;;) {
     try {
-      // The kernel is asked only once the link chain has been read and shown local.
-      assertLocalChain(candidate, HOST_PATH_FLAVOR);
-      return safePath.join(toForwardSlash(fs.realpathSync(candidate)), ...missingRemainder);
+      // The kernel is asked only once the link chain beneath `within` has been read and shown local.
+      return safePath.join(toForwardSlash(followedRealpathSync(candidate, within)), ...missingRemainder);
     } catch (error) {
+      // A chain VAT will not hand the kernel (a link to a network or device path, a chain that never
+      // ends) has no namespace at all: it is never inside, so no ancestor answers for it.
+      if (isLinkChainRefusedError(error)) throw error;
       // A containment answer, never a verdict on the target: it resolves to
       // nothing (ENOENT, ELOOP on a cycle) or the OS declined or could not look
       // (EACCES, EIO) — for every one the ancestor's namespace is the answer, the
@@ -506,7 +512,15 @@ export function canonicalizeSync(filePath: string): string {
  * ```
  */
 export function isWithinProject(filePath: string, projectRoot: string): boolean {
-  return isPathUnderRoot(canonicalizeSync(filePath), canonicalizeSync(projectRoot));
+  let canonical: string;
+  try {
+    canonical = canonicalizeSync(filePath, projectRoot);
+  } catch (error) {
+    // A chain VAT will not hand the kernel is never inside, whatever its spelling says.
+    if (isLinkChainRefusedError(error)) return false;
+    throw error;
+  }
+  return isPathUnderRoot(canonical, canonicalizeSync(projectRoot, projectRoot));
 }
 
 /**
@@ -533,7 +547,10 @@ export function isWithinProjectFrom(
   filePath: string,
   projectRoot: string,
 ): boolean {
-  return isPathUnderRoot(realpathRowFrom(table, filePath).path, realpathRowFrom(table, projectRoot).path);
+  const row = realpathRowFrom(table, filePath);
+  // As in `isWithinProject`: a refused chain is never inside, whatever ancestor answered for its spelling.
+  if (row.fault?.errno === LINK_CHAIN_REFUSED_CODE) return false;
+  return isPathUnderRoot(row.path, realpathRowFrom(table, projectRoot).path);
 }
 
 /**

@@ -28,7 +28,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -36,6 +36,7 @@ import { fileURLToPath } from 'node:url';
 import { ExitCode, exitCodeOfChild, installLastResortExit } from '@vibe-agent-toolkit/schema';
 import {
   findNodeWorkspaceRoot,
+  followedKindSync,
   isPathAbsentError,
   safePath,
 } from '@vibe-agent-toolkit/utils';
@@ -106,14 +107,16 @@ function explicitOverride(
     if (basename(binPath) === 'vat.js' && basename(dirname(binPath)) === 'bin') {
       refuseOverride('VAT_BIN', binPath, 'names the context-detecting wrapper, which would re-resolve and run itself; point it at dist/bin.js');
     }
-    if (!existsSync(binPath)) refuseOverride('VAT_BIN', binPath, 'does not exist');
+    // The operator's own variable: its own `within`.
+    if (followedKindSync(binPath, binPath) === 'absent') refuseOverride('VAT_BIN', binPath, 'does not exist');
     // <root>/packages/cli/dist/bin.js: dist → cli → packages → <root> is FOUR hops.
     return { binPath, contextPath: dirname(dirname(dirname(dirname(binPath)))), variable: 'VAT_BIN' };
   }
   const rootDir = env['VAT_ROOT_DIR'];
   if (rootDir) {
     const binPath = safePath.join(rootDir, 'packages/cli/dist/bin.js');
-    if (!existsSync(binPath)) refuseOverride('VAT_ROOT_DIR', binPath, 'has no built CLI (run `bun run build` there)');
+    // Beneath the directory the operator named: its links are read before followed.
+    if (followedKindSync(binPath, rootDir) === 'absent') refuseOverride('VAT_ROOT_DIR', binPath, 'has no built CLI (run `bun run build` there)');
     return { binPath, contextPath: rootDir, variable: 'VAT_ROOT_DIR' };
   }
   return null;
@@ -135,14 +138,16 @@ function refuseOverride(variable: string, path: string, why: string): never {
 function getDevModeBinary(projectRoot: string): string | null {
   const wrapperPath = safePath.join(projectRoot, 'packages/cli/dist/bin/vat.js');
   const binPath = safePath.join(projectRoot, 'packages/cli/dist/bin.js');
+  // Beneath the project root found from the operator's cwd: its links are read before followed.
+  const present = (path: string): boolean => followedKindSync(path, projectRoot) !== 'absent';
 
   if (process.env['VAT_DEBUG'] === '1') {
-    console.error(`[vat debug] Dev check - wrapper: ${wrapperPath} (${existsSync(wrapperPath)})`);
-    console.error(`[vat debug] Dev check - bin: ${binPath} (${existsSync(binPath)})`);
+    console.error(`[vat debug] Dev check - wrapper: ${wrapperPath} (${present(wrapperPath)})`);
+    console.error(`[vat debug] Dev check - bin: ${binPath} (${present(binPath)})`);
   }
 
   // Both files must exist to confirm we're in vibe-agent-toolkit repo
-  if (existsSync(wrapperPath) && existsSync(binPath)) {
+  if (present(wrapperPath) && present(binPath)) {
     return binPath;
   }
 
@@ -202,7 +207,8 @@ function findLocalInstall(projectRoot: string): string | null {
     // Still existence-checked: a dependency can be installed without having been
     // built (a fresh workspace checkout, a partial install), and spawning a
     // missing file would fail far from its cause.
-    if (existsSync(localBin)) return localBin;
+    // Beneath the package directory Node's resolver found: its links are read before followed.
+    if (followedKindSync(localBin, dirname(manifestPath)) !== 'absent') return localBin;
   }
   return null;
 }
@@ -240,17 +246,13 @@ function isResolutionNotFound(error: unknown): boolean {
  */
 function readVersion(packageJsonPath: string): string | null {
   try {
-    if (!existsSync(packageJsonPath)) {
-      return null;
-    }
     const content = readFileSync(packageJsonPath, 'utf-8');
     const pkg = JSON.parse(content) as { version?: string };
     return pkg.version ?? null;
   } catch (error) {
-    // The existence check above is not atomic with the read: a manifest removed
-    // between the two is "not found". A manifest the OS refuses, or one that is
-    // not JSON, is not — this wrapper is about to dispatch to that very install,
-    // and a broken manifest is the first fact worth seeing.
+    // No existence probe: the read's own absence is "not found". A manifest the
+    // OS refuses, or one that is not JSON, is not — this wrapper is about to
+    // dispatch to that very install, and a broken manifest is the first fact worth seeing.
     if (isPathAbsentError(error)) return null;
     throw error;
   }

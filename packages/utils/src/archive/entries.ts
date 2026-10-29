@@ -86,7 +86,6 @@ export const ARCHIVE_ENTRY_UNREADABLE_CODE = 'ARCHIVE_ENTRY_UNREADABLE';
  * whether an `entry` happens to be set (a clash, a link and a cut-short tarball name one too).
  */
 export class ArchiveEntryReadError extends VatError {
-  readonly reason = 'unsupported';
   readonly entry: string;
 
   /**

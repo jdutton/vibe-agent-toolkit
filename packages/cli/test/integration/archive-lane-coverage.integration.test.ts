@@ -20,7 +20,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs';
 
-import { direntKind, pathPresent, resolveFromImportMeta, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { direntKind, everywhere, pathPresent, resolveFromImportMeta, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { ARCHIVE_LANE_NAMES, ARCHIVE_READ_SITES } from '../helpers/archive-lane-registry.js';
@@ -36,7 +36,7 @@ function filesOfEveryPackage(sub: 'src' | 'test'): Map<string, string> {
   const files = readdirSync(safePath.join(REPO_ROOT, 'packages'), { withFileTypes: true })
     .filter((entry) => direntKind(entry) === 'directory')
     .map((entry) => `packages/${entry.name}/${sub}`)
-    .filter((dir) => pathPresent(safePath.join(REPO_ROOT, dir), 'follow', 'source', 'probe'))
+    .filter((dir) => pathPresent(safePath.join(REPO_ROOT, dir), { follow: REPO_ROOT }, everywhere('source'), 'probe'))
     .flatMap((dir) => readdirSync(safePath.join(REPO_ROOT, dir), { withFileTypes: true, recursive: true })
       .filter((entry) => direntKind(entry) === 'file' && entry.name.endsWith('.ts') && !entry.name.endsWith('.d.ts'))
       .map((entry) => safePath.relative(REPO_ROOT, safePath.join(entry.parentPath, entry.name))));

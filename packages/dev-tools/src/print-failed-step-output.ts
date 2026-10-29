@@ -52,7 +52,7 @@ export function orderCaptures(names: readonly string[]): string[] {
 function subdirectoriesOf(dir: string): string[] {
   try {
     return readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => direntKindFollowingSync(dir, entry) === 'directory')
+      .filter((entry) => direntKindFollowingSync(dir, entry, dir) === 'directory')
       .map((entry) => entry.name);
   } catch (error) {
     if (isPathAbsentError(error)) return [];

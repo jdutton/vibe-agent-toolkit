@@ -632,11 +632,11 @@ describe('resolveRealPath', () => {
     const alias = safePath.join(root, 'alias.md');
     createSymlink(cap, safePath.join(root, NESTED_RELATIVE), alias);
 
-    expect(resolveRealPath(alias)).toEqual(resolveRealPath(safePath.join(root, NESTED_RELATIVE)));
-    expect(resolveRealPath(alias)).toMatchObject({ kind: 'resolved' });
+    expect(resolveRealPath(alias, root)).toEqual(resolveRealPath(safePath.join(root, NESTED_RELATIVE), root));
+    expect(resolveRealPath(alias, root)).toMatchObject({ kind: 'resolved' });
   });
 
   it('answers nowhere, with no fault, for a path that resolves to nothing', () => {
-    expect(resolveRealPath(safePath.join(root, NOWHERE))).toEqual({ kind: 'nowhere', fault: null });
+    expect(resolveRealPath(safePath.join(root, NOWHERE), root)).toEqual({ kind: 'nowhere', fault: null });
   });
 });

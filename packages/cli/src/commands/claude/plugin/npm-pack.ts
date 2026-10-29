@@ -4,7 +4,7 @@
  * and everything after it, extraction included, is the real code.
  */
 
-import { pathPresent, safePath } from '@vibe-agent-toolkit/utils';
+import { everywhere, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 import { safeExecSync } from '@vibe-agent-toolkit/utils/process';
 
 import { CommandRefusalError } from '../../../utils/command-refusal.js';
@@ -35,7 +35,7 @@ export function packNpmPackage(packageName: string, tempDir: string): string {
   // npm pack outputs the filename (e.g., "package-1.0.0.tgz")
   const tarballPath = safePath.join(tempDir, packOutput.toString().trim());
   // The download directory is VAT's own staging: a probe the OS refuses is the environment's, never "no tarball".
-  if (!pathPresent(tarballPath, 'follow', 'environment', 'confirmed')) {
+  if (!pathPresent(tarballPath, { follow: tempDir }, everywhere('environment'), 'confirmed')) {
     throw new CommandRefusalError('EXTERNAL_API_FAILED', `npm pack succeeded but tarball not found: ${tarballPath}`);
   }
   return tarballPath;

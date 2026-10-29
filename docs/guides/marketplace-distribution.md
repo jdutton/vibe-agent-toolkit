@@ -209,7 +209,7 @@ claude:
         name: Your Name or Org
       publish:
         branch: claude-marketplace          # default
-        remote: origin                      # git remote name, or full URL for cross-repo publish
+        remote: origin                      # git remote name, or full URL for cross-repo publish (never starting with "-")
         changelog: docs/marketplace-changelog.md
         readme: docs/marketplace-readme.md
         license: mit                        # SPDX identifier or file path

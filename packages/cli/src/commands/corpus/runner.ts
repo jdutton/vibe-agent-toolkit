@@ -18,7 +18,7 @@ import { dirname } from 'node:path';
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { scan } from '@vibe-agent-toolkit/discovery';
 import { ExitCode, exitCodeOfChild } from '@vibe-agent-toolkit/schema';
-import { fsFaultOf, pathPresent, safePath, suppressedFaultsOf, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
+import { everywhere, fsFaultOf, pathPresent, safePath, suppressedFaultsOf, toForwardSlash, transientRefusalClause } from '@vibe-agent-toolkit/utils';
 import type { DirectoryRefusal } from '@vibe-agent-toolkit/utils/crawl';
 import { isGitUrl, parseGitUrl } from '@vibe-agent-toolkit/utils/git';
 import * as yaml from 'yaml';
@@ -149,7 +149,8 @@ function runLocalEntry(entry: PluginEntry, opts: RunnerOptions): Promise<PluginR
  */
 function localSourceUnusable(source: string): string | undefined {
   try {
-    return pathPresent(source, 'follow', 'source', 'probe') ? undefined : `Source path not found: ${source}`;
+    // A corpus entry's source is a root the operator listed: its own `within`.
+    return pathPresent(source, { follow: source }, everywhere('source'), 'probe') ? undefined : `Source path not found: ${source}`;
   } catch (error) {
     if (!isEntryRefusal(error)) throw error;
     return errorMessageOf(error);

@@ -1,6 +1,17 @@
-import { existsSync, statSync } from 'node:fs';
-
-import { classifyFsFault, copyRegularFile, copyTree, forEachInOrder, FsFaultError, isFsFaultError, mkdirSyncReal, safePath, VatError, withFsFaultSync } from '@vibe-agent-toolkit/utils';
+import {
+  classifyFsFault,
+  copyRegularFile,
+  copyTree,
+  type FollowedPathKind,
+  followedKindSync,
+  forEachInOrder,
+  FsFaultError,
+  isFsFaultError,
+  mkdirSyncReal,
+  safePath,
+  VatError,
+  withFsFaultSync,
+} from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { sanitizeGraderText, sanitizeTextPreservingLines } from './grader-text.js';
@@ -369,9 +380,9 @@ export async function stageEvalWorkspaces(input: StageEvalWorkspacesInput): Prom
  * link is followed (the workspace gets what it points at), and inside a directory only to
  * what lies under that directory.
  */
-async function copyEvalInput(src: string, evalWorkspace: string, dest: string): Promise<void> {
+async function copyEvalInput(src: string, kind: FollowedPathKind, evalWorkspace: string, dest: string): Promise<void> {
   const relative = safePath.relative(evalWorkspace, dest);
-  if (statSync(src).isDirectory()) {
+  if (kind === 'directory') {
     await copyTree(src, evalWorkspace, relative, { links: 'follow-contained', side: 'source', onto: 'fresh' });
     return;
   }
@@ -435,7 +446,13 @@ async function stageEvalInput(evalsDir: string, evalWorkspace: string, id: strin
         quoteSuiteText((err as Error).message),
     );
   }
-  if (!existsSync(src)) {
+  // The suite's directory is the tree: the input's link chain is read by text before the kernel follows
+  // it, and a refused probe is the suite's fault (`source`) — never "absent".
+  const srcKind = withFsFaultSync(
+    { side: 'source', origin: 'content', action: `examine eval input ${src}`, path: src },
+    () => followedKindSync(src, evalsDir),
+  );
+  if (srcKind === 'absent') {
     throw new EvalInputError(
       `eval ${id} declares input file "${quoteSuiteText(rel)}" but it is absent at ${quoteSuiteText(src)}`,
     );
@@ -448,7 +465,7 @@ async function stageEvalInput(evalsDir: string, evalWorkspace: string, id: strin
     // 0700 like the workspaces root above it: with an out-of-tree suite these
     // hold data that may never have been in the repo.
     makeWorkspaceDir(safePath.join(dest, '..'));
-    await copyEvalInput(src, evalWorkspace, dest);
+    await copyEvalInput(src, srcKind, evalWorkspace, dest);
   } catch (err) {
     const fault = workspaceWriteFault(err, id, rel, dest);
     if (fault !== undefined) throw fault;

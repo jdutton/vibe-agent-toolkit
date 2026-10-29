@@ -53,22 +53,36 @@ describe('path-utils realpath helpers: absence is the only failure answered lexi
   });
 
   describe('normalizePath', () => {
+    it('resolves parent directory references and drops a trailing slash', () => {
+      expect(toForwardSlash(normalizePath(`${root}/docs/../README.md`, root))).toBe(safePath.join(root, 'README.md'));
+      expect(normalizePath(`${root}/docs/`, root)).not.toMatch(/[/\\]$/);
+    });
+
+    it('answers the tree root itself (the operator\'s own path) with its native realpath', () => {
+      expect(normalizePath(root, root)).toBe(fs.realpathSync.native(root));
+    });
+
+    it('resolves a relative target against cwd, never against `within` (the old baseDir form is gone)', () => {
+      const relative = './no-such-normalize-target.md';
+      expect(toForwardSlash(normalizePath(relative, root))).toBe(safePath.resolve(relative));
+    });
+
     it('answers an absent path with its lexical resolution (positive control)', () => {
       const missing = safePath.join(root, 'no', 'such', 'file.md');
-      expect(toForwardSlash(normalizePath(missing))).toBe(safePath.resolve(missing));
+      expect(toForwardSlash(normalizePath(missing, root))).toBe(safePath.resolve(missing));
     });
 
     it('answers a present path with its realpath', () => {
       const present = safePath.join(root, 'present.md');
       fs.writeFileSync(present, '');
-      expect(normalizePath(present)).toBe(fs.realpathSync.native(present));
+      expect(normalizePath(present, root)).toBe(fs.realpathSync.native(present));
     });
 
     it.each(['EACCES', 'EPERM', 'ELOOP', 'ENAMETOOLONG'])('throws when the OS refuses the path with %s', (code) => {
       const present = safePath.join(root, 'refused.md');
       fs.writeFileSync(present, '');
       restore = refuseNativeRealpathOf(present, code);
-      expect(errnoOf(() => normalizePath(present))).toBe(code);
+      expect(errnoOf(() => normalizePath(present, root))).toBe(code);
     });
 
     it('falls through to the JS realpath when the native call reports a present path absent', () => {
@@ -77,14 +91,14 @@ describe('path-utils realpath helpers: absence is the only failure answered lexi
       const present = safePath.join(root, 'musl.md');
       fs.writeFileSync(present, '');
       restore = refuseNativeRealpathOf(present, 'ENOENT');
-      expect(normalizePath(present)).toBe(fs.realpathSync(present));
+      expect(normalizePath(present, root)).toBe(fs.realpathSync(present));
     });
 
     it('throws ELOOP on a real symlink cycle rather than pretending the cycle is a path', ({ skip }) => {
       const cap = symlinkCapability() ?? skip();
       const loop = safePath.join(root, 'loop');
       createSymlink(cap, 'loop', loop);
-      expect(errnoOf(() => normalizePath(loop))).toBe('ELOOP');
+      expect(errnoOf(() => normalizePath(loop, root))).toBe('ELOOP');
     });
   });
 

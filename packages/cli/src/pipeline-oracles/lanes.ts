@@ -99,7 +99,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
     id: 'resources',
     description: '`vat resources scan` / `validate` — config-aware, md+html+htm',
     crawlOptions: (projectRoot) => {
-      const config = loadConfig(projectRoot);
+      const config = loadConfig(projectRoot, 'source');
       return {
         baseDir: projectRoot,
         // Every oracle lane only reads the corpus.
@@ -175,7 +175,7 @@ export const LANES: readonly LaneDefinition[] = Object.freeze([
     // `mimeType`s and this copy did not, so the oracle described a lane nobody
     // runs. Naming the builder is what makes that class of drift impossible.
     build: (projectRoot) => buildSkillsValidateRegistry(projectRoot, {
-      config: loadConfig(projectRoot),
+      config: loadConfig(projectRoot, 'source'),
     }),
   },
 ]);

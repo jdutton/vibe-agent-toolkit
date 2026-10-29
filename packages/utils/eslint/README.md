@@ -73,7 +73,7 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 **The auto-fix writes the import to the subpath in that column**, not to the barrel — `--fix` on a raw `path.join()` inserts `import { safePath } from '@vibe-agent-toolkit/utils/path'`. A file that already reaches the helper through the barrel keeps its existing import and only has the call rewritten: adding a second binding of the same name is a `SyntaxError`, not a redundant import.
 
 <!-- gen:eslint-rules -->
-38 rules; 6 auto-fix. `configs.recommended` enables 17 of them (15 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
+39 rules; 6 auto-fix. `configs.recommended` enables 17 of them (15 at `error`, 2 at `warn`); `—` in the last column means the rule ships but must be enabled by name.
 
 #### Path handling
 
@@ -96,9 +96,10 @@ The table is **generated** from each rule's `meta.docs` by `bun run generate:cla
 | `no-bare-symlink-in-tests` | unguarded `fs.symlinkSync()` / `fs.promises.symlink()` | in tests: `createSymlink(cap, …)` / `createSymlinkAsync(cap, …)`; in shipped code: a win32 junction, or a `catch` naming the privilege | `/testing` |  | — |
 | `no-child-process-execSync` | `child_process.execSync()` | `safeExecSync()` | `/process` | ✓ | `error` |
 | `no-destructive-fs` | recursive `rm`/`rmSync`, `rmdir`, `rename`, `cp` and `copyFile` from `node:fs` / `node:fs/promises` (and their `Sync` forms), called or passed as values | `planTreeChanges()` / `applyTreePlan()`, `renameFileAtomic()`, `replaceFile()`, `copyTree()`, `withTempDir()` / `disposeTempDir()` | — |  | — |
-| `no-existssync` | `existsSync()` from `node:fs` — called, handed on, destructured or re-exported — under `packages/*/src/` | `pathPresent(path, mode, side, absence)` (absent only on an absence; every other errno a classified `FS_FAULT`) | — |  | — |
+| `no-existssync` | `existsSync()` from `node:fs` — called, handed on, destructured or re-exported — under `packages/*/src/` | `pathPresent(path, mode, sideOf, absence)` (absent only on an absence; every other errno a classified `FS_FAULT`) | — |  | — |
 | `no-fs-mkdirSync` | `fs.mkdirSync()` | `mkdirSyncReal()` | `/fs` | ✓ | `error` |
 | `no-fs-realpathSync` | `fs.realpathSync()` | `normalizePath()` | `/fs` | ✓ | `error` |
+| `no-link-following-fs` | `stat`/`statSync`/`existsSync`/`realpath`/`realpathSync`, and `symlink`/`symlinkSync` called with no type, from `node:fs` or `node:fs/promises` under `packages/*/src/` | `followedStatSync`/`followedKindSync`/`realpathNativeSync(path, within)` or `pathPresent(path, { follow: within }, …)` | — |  | — |
 | `no-os-tmpdir` | `os.tmpdir()` (8.3 short names on Windows) | `normalizedTmpdir()` | `/fs` | ✓ | `error` |
 | `no-unix-shell-commands` | `tar`, `grep`, `rm`, `echo`, … spawned directly | Node APIs, or a portable script fixture | — |  | `error` |
 

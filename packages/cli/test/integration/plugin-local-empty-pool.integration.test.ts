@@ -52,8 +52,8 @@ const zero = buildReport({ examined: 0, findings: [], data: null, gate: ORCHESTR
 
 const ORCHESTRATORS: ReadonlyArray<readonly [name: string, select: (root: string) => PhaseSelection]> = [
   ['vat build', (root) => selectBuildPhases(undefined, configuredBuildSurfaces(root))],
-  ['vat validate', (root) => selectValidateSurfaces(loadConfig(root))],
-  ['vat verify', (root) => selectVerifyPhases(loadConfig(root))],
+  ['vat validate', (root) => selectValidateSurfaces(loadConfig(root, 'source'))],
+  ['vat verify', (root) => selectVerifyPhases(loadConfig(root, 'source'))],
 ];
 
 describe.each(ORCHESTRATORS)('%s over a pool include that matches nothing', (_name, select) => {

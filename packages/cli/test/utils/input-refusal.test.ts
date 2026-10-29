@@ -6,22 +6,31 @@
  * `INTERNAL_ERROR`.
  */
 
-import { readFileSync, statSync } from 'node:fs';
+import nodeFs, { readFileSync } from 'node:fs';
 
-import { FS_FAULT_CODE } from '@vibe-agent-toolkit/utils';
+import { everywhere, FS_FAULT_CODE, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { refusalCodeOf } from '../../src/utils/command-refusal.js';
 import { configNamedFileAbsent, readInputFile, requireInputPath } from '../../src/utils/project-root-policy.js';
-import { errno, thrownBy } from '../helpers/refusal-doubles.js';
+import { errno, refusingOnly, thrownBy } from '../helpers/refusal-doubles.js';
 
 vi.mock('node:fs', async (importOriginal) =>
-  (await import('../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['readFileSync', 'statSync']));
+  (await import('../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['readFileSync']));
 
-const TARGET = '/project/dist/thing';
+// A path that exists: the link walk answers an absent one itself, before the injected `stat` is reached.
+const TARGET = safePath.resolve(import.meta.dirname);
 const ABSENT = { origin: 'config', message: 'publish.readme names README.md, which does not exist.' } as const;
 
+// `requireInputPath` stats through utils' link-following, which reaches the kernel through the
+// DEFAULT `node:fs` object, shared by every module: the refusal is a spy on that object.
+const realStat = nodeFs.statSync;
+function refuseStat(code: string): void {
+  vi.spyOn(nodeFs, 'statSync').mockImplementation(refusingOnly(TARGET, errno(code), realStat));
+}
+
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
 });
 
@@ -31,8 +40,8 @@ describe('requireInputPath', () => {
     ['argument', 'USAGE_INVALID'],
     ['content', 'INPUT_UNREADABLE'],
   ] as const)('refuses an absent path named by %s as the table\'s %s, in the caller\'s words', (origin, refusal) => {
-    vi.mocked(statSync).mockImplementationOnce(() => { throw errno('ENOENT'); });
-    const error = thrownBy(() => requireInputPath(TARGET, { origin, message: ABSENT.message }));
+    refuseStat('ENOENT');
+    const error = thrownBy(() => requireInputPath(TARGET, TARGET, { origin, message: ABSENT.message }, everywhere('source')));
     expect(refusalCodeOf(error)).toBe(refusal);
     expect((error as Error).message).toBe(ABSENT.message);
     // The classified fault rides along, so a judge walking the cause chain sees the same table row.
@@ -40,16 +49,16 @@ describe('requireInputPath', () => {
   });
 
   it('classifies a path the OS will not stat as a source fault, INPUT_UNREADABLE, not as absent', () => {
-    vi.mocked(statSync).mockImplementationOnce(() => { throw errno('EACCES'); });
-    const error = thrownBy(() => requireInputPath(TARGET, ABSENT));
+    refuseStat('EACCES');
+    const error = thrownBy(() => requireInputPath(TARGET, TARGET, ABSENT, everywhere('source')));
     expect(error).toMatchObject({ code: FS_FAULT_CODE, side: 'source', faultClass: 'refused', path: TARGET });
     expect(refusalCodeOf(error)).toBe('INPUT_UNREADABLE');
     expect((error as Error).message).toContain('EACCES');
   });
 
   it('classifies the machine running out while it stats as the run not finishing', () => {
-    vi.mocked(statSync).mockImplementationOnce(() => { throw errno('EMFILE'); });
-    expect(refusalCodeOf(thrownBy(() => requireInputPath(TARGET, ABSENT)))).toBe('RUN_INCOMPLETE');
+    refuseStat('EMFILE');
+    expect(refusalCodeOf(thrownBy(() => requireInputPath(TARGET, TARGET, ABSENT, everywhere('source'))))).toBe('RUN_INCOMPLETE');
   });
 });
 

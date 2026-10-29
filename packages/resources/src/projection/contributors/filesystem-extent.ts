@@ -110,11 +110,12 @@
  * It can be re-sourced.
  */
 
-import { existsSync, lstatSync, readdirSync, readlinkSync } from 'node:fs';
+import { lstatSync, readdirSync, readlinkSync } from 'node:fs';
 import { basename, isAbsolute } from 'node:path';
 
 import {
   assertUnresolvableLink,
+  followedKindSync,
   forEachInOrder,
   type FsFaultFacts,
   fsFaultOf,
@@ -747,7 +748,7 @@ function linkTarget(
   realized: ReadonlySet<string>,
   recordedBy: () => CrawlSourceKind,
 ): LinkTargetVerdict {
-  const host = hostResolution(link, roots.realRoot);
+  const host = hostResolution(link, roots);
   const text = readTargetText(link);
   const code = declinedCode(host, link, roots, text);
   const faultClass = targetFaultClassOf(host);
@@ -927,7 +928,8 @@ interface LinkRoots {
  */
 function realRootOf(root: string): string {
   try {
-    return realpathNativeSync(root);
+    // The root is the operator's own input: its own `within`.
+    return realpathNativeSync(root, root);
   } catch (error) {
     // The root is no link target: it is the namespace every target is compared
     // in, so a root the OS will not resolve stops the run — on the source side,
@@ -963,21 +965,24 @@ type HostResolution =
  * or `ENOTDIR` — that a folder-mounted volume or a procfs-less musl gives for a
  * path that exists).
  *
+ * A chain VAT will not hand the kernel (a hop naming a network or device path)
+ * reaches `nowhere` with a `refused` fault — that one link's row, never the run's.
+ *
  * @param link - Absolute, forward-slashed link path
- * @param realRoot - The root's real path
+ * @param roots - The root as enumerated (the tree the link is crawled in) and as resolved
  * @returns The resolution
  */
-function hostResolution(link: string, realRoot: string): HostResolution {
+function hostResolution(link: string, roots: LinkRoots): HostResolution {
   let real: string;
   try {
-    real = realpathNativeSync(link);
+    real = realpathNativeSync(link, roots.root);
   } catch (error) {
     // Dangling or looping: the host reaches nothing, which is an answer. A host
     // that declined or could not look reaches nothing EITHER, and says why —
     // the row carries it. A bug (no errno) stays loud.
     return { kind: 'nowhere', fault: linkResolutionFault(error) ?? null };
   }
-  const relative = toForwardSlash(safePath.relative(realRoot, real));
+  const relative = toForwardSlash(safePath.relative(roots.realRoot, real));
   return relativeEscapesRoot(relative) ? { kind: 'outside' } : { kind: 'inside', path: relative };
 }
 
@@ -1233,7 +1238,7 @@ type LinkTargetRealization =
 function inRootRelative(roots: LinkRoots, resolved: string): string | undefined {
   const lexical = toForwardSlash(safePath.relative(roots.root, resolved));
   if (!relativeEscapesRoot(lexical)) return lexical;
-  const realSpelling = realThroughNearestAncestor(resolved);
+  const realSpelling = realThroughNearestAncestor(resolved, roots.root);
   if (realSpelling === undefined) return undefined;
   const real = toForwardSlash(safePath.relative(roots.realRoot, realSpelling));
   return relativeEscapesRoot(real) ? undefined : real;
@@ -1256,17 +1261,18 @@ function inRootRelative(roots: LinkRoots, resolved: string): string | undefined 
  * refused segment, and it is never a reason to stop the run.
  *
  * @param path - Absolute path
+ * @param within - The corpus root the link was crawled in (`link-following.ts`)
  * @returns The respelled path, or `undefined` when an ancestor exists but the
  *   OS will not resolve it — it cannot be shown to be inside the root, so it is
  *   reported as outside, and never named
  * @throws The resolution's error when it carries no errno — a bug stays loud
  */
-function realThroughNearestAncestor(path: string): string | undefined {
+function realThroughNearestAncestor(path: string, within: string): string | undefined {
   const tail = [basename(path)];
   let directory = safePath.resolve(path, '..');
   for (;;) {
     try {
-      return safePath.join(realpathNativeSync(directory), ...tail);
+      return safePath.join(realpathNativeSync(directory, within), ...tail);
     } catch (error) {
       linkResolutionFault(error);
       if (!isPathAbsentError(error)) return undefined;
@@ -1315,12 +1321,21 @@ function quotedPath(path: string): string {
  */
 export function unlistableRowStillHolds(row: RealizationConditionRow, root: string): boolean {
   const directory = safePath.resolve(root, row.path);
-  if (!existsSync(directory)) return false;
+  try {
+    if (followedKindSync(directory, root) === 'absent') return false;
+  } catch (error) {
+    // Could not look — a chain VAT will not hand the kernel, or a probe the OS
+    // refused: the stored row cannot be shown still true, so it is a miss, and
+    // the fresh crawl that follows meets the same refusal and records it as its
+    // own row. A bug (no errno) stays loud.
+    linkResolutionFault(error);
+    return false;
+  }
   try {
     readdirSync(directory);
     return false;
   } catch (error) {
-    // Gone between the `existsSync` and the listing: not a true row either.
+    // Gone between the probe and the listing: not a true row either.
     // Anything else — EACCES, ELOOP, a dead mount — is the refusal the row
     // records, still refusing.
     return !isPathAbsentError(error);

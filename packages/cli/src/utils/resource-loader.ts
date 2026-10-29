@@ -434,7 +434,7 @@ export async function loadResourcesWithConfig(
   logger: Logger,
 ): Promise<ResourceLoadResult> {
   // Config lookup is anchored at the resolved projectRoot.
-  const config = loadConfig(projectRoot);
+  const config = loadConfig(projectRoot, 'source');
 
   if (config) {
     logger.debug(`Loaded config from ${projectRoot}`);

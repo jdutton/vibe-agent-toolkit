@@ -7,17 +7,21 @@
  * - Version checks
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 
 
 import { buildReport, toFindings, type FindingsReport, type Gate, type OkReport, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   ASSET_REFERENCE_UNREADABLE_CODE,
   ASSET_REFERENCE_UNRESOLVED_CODE,
+  everywhere,
   findConfigFile,
+  followedKindSync,
   fsFaultOf,
+  isFsFaultError,
   isPathAbsentError,
   isVatError,
+  pathPresent,
   resolveAssetReference,
   safePath,
 } from '@vibe-agent-toolkit/utils';
@@ -274,7 +278,8 @@ export function checkGitRepository(): DoctorCheckResult {
 
     // Loop until we reach root (works on both Unix / and Windows C:\)
     while (currentDir !== previousDir) {
-      if (existsSync(safePath.join(currentDir, '.git'))) {
+      // Each ancestor of the operator's own cwd is its own `within`: `.git` beneath it is read before followed.
+      if (followedKindSync(safePath.join(currentDir, '.git'), currentDir) !== 'absent') {
         return {
           name: CHECK_NAME_GIT_REPOSITORY,
           outcome: 'pass',
@@ -351,24 +356,31 @@ function checkSchemaFiles(
     const schemaPath = collectionConfig.validation?.frontmatterSchema;
     if (schemaPath) {
       schemaFiles.push(schemaPath);
-      try {
-        const absoluteSchemaPath = resolveAssetReference(schemaPath, configDir);
-        if (!existsSync(absoluteSchemaPath)) {
-          missingSchemas.push(schemaPath);
-        }
-      } catch (error) {
-        // A bare specifier that names nothing installed is coded
-        // ASSET_REFERENCE_UNRESOLVED: a missingSchemas entry. One whose package
-        // is installed but unreadable (a malformed package.json) is not missing,
-        // and is listed apart. Any other throw reaches the caller's own catch.
-        if (isVatError(error, ASSET_REFERENCE_UNREADABLE_CODE)) unreadableSchemas.push(schemaPath);
-        else if (isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE)) missingSchemas.push(schemaPath);
-        else throw error;
-      }
+      const state = schemaFileState(schemaPath, configDir);
+      if (state === 'missing') missingSchemas.push(schemaPath);
+      if (state === 'unreadable') unreadableSchemas.push(schemaPath);
     }
   }
 
   return { schemaFiles, missingSchemas, unreadableSchemas };
+}
+
+/** Whether one configured schema reference resolves to a file doctor can examine. */
+function schemaFileState(schemaPath: string, configDir: string): 'present' | 'missing' | 'unreadable' {
+  try {
+    const absoluteSchemaPath = resolveAssetReference(schemaPath, configDir);
+    return pathPresent(absoluteSchemaPath, { follow: configDir }, everywhere('source'), 'probe') ? 'present' : 'missing';
+  } catch (error) {
+    // A bare specifier that names nothing installed is coded
+    // ASSET_REFERENCE_UNRESOLVED: a missingSchemas entry. One whose package
+    // is installed but unreadable (a malformed package.json) is not missing,
+    // and is listed apart — as is a schema the OS will not let doctor examine (or
+    // whose link chain names a network path). Any other throw reaches the caller's own catch.
+    if (isVatError(error, ASSET_REFERENCE_UNREADABLE_CODE)) return 'unreadable';
+    if (isVatError(error, ASSET_REFERENCE_UNRESOLVED_CODE)) return 'missing';
+    if (isFsFaultError(error)) return 'unreadable';
+    throw error;
+  }
 }
 
 /** The failed config check for schema references that are missing, or whose package cannot be read. */
@@ -418,7 +430,7 @@ export function checkConfigValid(): DoctorCheckResult {
     try {
       // loadConfig expects project root directory, not config file path
       const configDir = safePath.join(configPath, '..');
-      const config = loadConfig(configDir);
+      const config = loadConfig(configDir, 'source');
 
       // Basic validation passed, now check collections and schema files
       const collections = config?.resources?.collections;
@@ -558,13 +570,14 @@ function isVatSourceTree(projectRoot: string | null): boolean {
   if (!projectRoot) return false;
 
   const cliPackagePath = safePath.join(projectRoot, 'packages/cli/package.json');
-  if (!existsSync(cliPackagePath)) return false;
+  // Its link chain is read beneath the project root before anything follows it; a refusal throws classified.
+  if (!pathPresent(cliPackagePath, { follow: projectRoot }, everywhere('source'), 'probe')) return false;
 
   let raw: string;
   try {
     raw = readFileSync(cliPackagePath, 'utf8');
   } catch (error) {
-    // Gone since the existence check: not the source tree. Anything else is
+    // Gone since the presence check: not the source tree. Anything else is
     // the probe failing, not the probe answering "no".
     if (isPathAbsentError(error)) return false;
     const reason = error instanceof Error ? error.message : String(error);

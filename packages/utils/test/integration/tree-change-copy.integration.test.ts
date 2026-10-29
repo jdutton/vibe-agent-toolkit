@@ -235,7 +235,7 @@ describe('copyTree', () => {
       await expect(fs.access(safePath.join(dest, 'scripts', 'etc'))).rejects.toMatchObject({ code: 'ENOENT' });
     });
 
-    it('preserve copies a dangling link as a link, its target verbatim, never examining it', async ({ skip }) => {
+    it('preserve copies a dangling link as a link, its target verbatim, reading its chain but never following it', async ({ skip }) => {
       const cap = symlinkCapability() ?? skip(SKIP_NO_LINKS);
       const { root, src, dest } = await srcAndDest();
       const dangling = safePath.join(src, 'dangling');
@@ -246,8 +246,9 @@ describe('copyTree', () => {
 
       expect((await fs.lstat(safePath.join(dest, 'dangling'))).isSymbolicLink()).toBe(true);
       expect(await fs.readlink(safePath.join(dest, 'dangling'))).toBe('nowhere');
+      // Its text, then its chain read by `lstat` and `readlink` alone to type the copy — nothing that follows it.
       const touched = session.calls.filter((call) => call.path === dangling).map((call) => call.op);
-      expect(touched).toEqual(['readlink']);
+      expect(touched).toEqual(['readlink', 'lstat', 'readlink']);
     });
   });
 

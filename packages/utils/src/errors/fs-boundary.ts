@@ -38,7 +38,8 @@ export interface FsBoundary {
  */
 function containedBy(root: string, candidate: string): boolean {
   try {
-    return canonicalPath(root) === canonicalPath(candidate) || isUnderRoot(root, candidate) !== 'outside';
+    // Both are the verb's own roots and the paths it names: each is its own edge.
+    return canonicalPath(root, root) === canonicalPath(candidate, root) || isUnderRoot(root, candidate) !== 'outside';
   } catch (error: unknown) {
     if (fsFaultOf(error) !== undefined) return false;
     throw error;

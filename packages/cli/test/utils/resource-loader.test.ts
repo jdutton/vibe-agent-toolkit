@@ -60,12 +60,22 @@ function crawlPatterns(): Record<string, unknown> | undefined {
   return rest;
 }
 
-vi.mock('node:fs', () => ({
-  existsSync: (p: string): boolean => existingDirectories.has(p),
-  statSync: (p: string): { isDirectory: () => boolean } => ({
-    isDirectory: () => existingDirectories.has(p),
-  }),
-}));
+vi.mock('node:fs', () => {
+  const directory = { isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false };
+  const fake = {
+    existsSync: (p: string): boolean => existingDirectories.has(p),
+    statSync: (p: string): { isDirectory: () => boolean } => ({
+      isDirectory: () => existingDirectories.has(p),
+    }),
+    // The link-chain walk root discovery probes `.git` by: `lstat` answers from the same staged directories.
+    lstatSync: (p: string): typeof directory => {
+      if (existingDirectories.has(p)) return directory;
+      throw Object.assign(new Error(`ENOENT: no such file or directory, lstat '${p}'`), { code: 'ENOENT', syscall: 'lstat', path: p });
+    },
+  };
+  // utils' link-following reaches the kernel through the DEFAULT object, so it is faked too.
+  return { ...fake, default: fake };
+});
 
 vi.mock('@vibe-agent-toolkit/resources', async (importOriginal) => ({
   ...(await importOriginal<OriginalModule>()),

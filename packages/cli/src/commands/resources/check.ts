@@ -1585,7 +1585,7 @@ async function runChecksHere(
   onProgress?.({ kind: 'started' });
 
   const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
-  const config = loadConfigCached(projectRoot);
+  const config = loadConfigCached(projectRoot, 'source');
   const checks = config?.resources?.checks;
 
   if (checks === undefined || Object.keys(checks).length === 0) {

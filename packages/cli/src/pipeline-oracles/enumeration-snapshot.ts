@@ -88,7 +88,7 @@ export async function captureEnumerationSnapshot(
   });
   // Aliasing is a property of the population, not of a path, so it can only be
   // answered once the whole lane has been walked.
-  markAliases(enumerated, crawled);
+  markAliases(enumerated, crawled, corpusRoot);
 
   // Post-deduplication, ordered, from the lane's real production builder. The
   // builder can throw — see EnumerationSnapshot.buildError — and a lane that

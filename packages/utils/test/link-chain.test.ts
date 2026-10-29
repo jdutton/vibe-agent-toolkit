@@ -94,12 +94,44 @@ describe('walkLinkChain', () => {
     expect(walkLinkChain(String.raw`\\fileserver\team\repo\l`, rule, probe)).toMatchObject({ kind: 'refused', refusal: { why: 'network' } });
   });
 
-  it('follows a volume-GUID text under win32 in the user\'s own tree, and refuses it in an untrusted one', () => {
-    const volume = String.raw`\\?\Volume{12345678-aaaa-bbbb-cccc-1234567890ab}\data`;
-    const tree = { ...under('win32', { j: `-> ${volume}` }), '//?/Volume{12345678-aaaa-bbbb-cccc-1234567890ab}/data': 'dir' };
-    const probe = probeOf(tree, 'win32');
-    expect(walkLinkChain('C:/r/j', { flavor: 'win32', root: 'C:/r', outside: 'follow' }, probe)).toMatchObject({ kind: 'resolved', final: 'directory' });
-    expect(walkLinkChain('C:/r/j', { flavor: 'win32', root: 'C:/r', outside: 'refuse' }, probe)).toMatchObject({ kind: 'refused', refusal: { why: 'absolute' } });
+  // R12-WIN-C1 / R12-SEC-C2: an ALLOWLIST, not a list of network spellings. Under win32 a link text
+  // is local only when it is relative or drive-absolute (`X:\…`). The first three are what libuv's
+  // readlink returns verbatim for an absolute link that is neither a drive nor UNC; each of these is
+  // refused in every lane before anything past the link is probed.
+  it.each([
+    String.raw`\??\GLOBALROOT\Device\Mup\h\s`,
+    String.raw`\??\Volume{12345678-aaaa-bbbb-cccc-1234567890ab}\x`,
+    String.raw`\Device\Mup\h\s`,
+    String.raw`\DosDevices\C:\x`,
+    String.raw`\GLOBAL??\C:\x`,
+    String.raw`\??\C:\x`,
+    String.raw`\\?\C:\x`,
+    String.raw`\\.\C:\x`,
+    String.raw`\\?\Volume{12345678-aaaa-bbbb-cccc-1234567890ab}\data`,
+    String.raw`\x`,
+    '/x',
+  ])('refuses the device or namespace text %s under win32, in both rules', (text) => {
+    for (const outside of ['refuse', 'follow'] as const) {
+      const probe = probeOf(under('win32', { l: `-> ${text}` }), 'win32');
+      expect(walkLinkChain('C:/r/l', { flavor: 'win32', root: 'C:/r', outside }, probe)).toMatchObject({ kind: 'refused', refusal: { why: 'network', text } });
+      expect(probe.asked).toEqual(['C:/r/l']);
+    }
+  });
+
+  it.each([String.raw`D:\x`, 'D:/x'])('follows the drive-absolute text %s under win32 in the user\'s own tree', (text) => {
+    const tree = { ...under('win32', { l: `-> ${text}` }), 'D:/x': 'file' };
+    expect(walkLinkChain('C:/r/l', { flavor: 'win32', root: 'C:/r', outside: 'follow' }, probeOf(tree, 'win32'))).toEqual({ kind: 'resolved', path: 'D:/x', final: 'file' });
+  });
+
+  it('reads a bare drive letter under win32 as drive-relative, never as the drive\'s root', () => {
+    expect(walk('win32', { d: '-> D:' }, 'd', 'follow')).toMatchObject({ kind: 'refused', refusal: { why: 'drive-relative' } });
+  });
+
+  // R12-SEC-M2 / M3: a text the OS would cut short at a NUL, or one with a component Windows strips
+  // a trailing dot or space from, is not the text it resolves — refused in an untrusted tree on every host.
+  it.each([`ok${String.fromCodePoint(0)}x`, '.. /x', String.raw`.. \x`, 'a./b', 'a /b', '...', 'x/...'])('refuses the unportable text %j in an untrusted tree', (text) => {
+    expect(untrustedTextRefusal(text)).toBe('unportable');
+    expect(walk('posix', { l: `-> ${text}` }, 'l')).toMatchObject({ kind: 'refused', refusal: { why: 'unportable', text } });
   });
 
   // R11-SEC-C1: the walk used to stop following at 40 and answer "inside"; a Windows kernel follows 63.

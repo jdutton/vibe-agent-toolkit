@@ -5,13 +5,24 @@
  * Detects unreferenced files and broken links in the packaged output.
  */
 
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { parseFileCached } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowingSync, FollowedWalk, forEachInOrder, mapConcurrentFailingInOrder, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
+import {
+  direntKindFollowingSync,
+  FollowedWalk,
+  followedKindSync,
+  forEachInOrder,
+  type FsFaultContext,
+  mapConcurrentFailingInOrder,
+  safePath,
+  toForwardSlash,
+  withFsFault,
+  withFsFaultSync,
+} from '@vibe-agent-toolkit/utils';
 
 import { type PackagingTarget } from './content-type-routing.js';
 import { normalizeRelPath } from './files-config.js';
@@ -57,26 +68,36 @@ function stripCodeBlocks(content: string): string {
 }
 
 /**
- * Recursively collect all file paths in a directory.
+ * Recursively collect all file paths in a packaged output directory — `root`, VAT's own output,
+ * the tree every link beneath it is read in before the kernel follows it.
  */
-function walkDir(dir: string, walk?: FollowedWalk): string[] {
+function walkDir(root: string): string[] {
   // The tree walked is the package just written: a directory it cannot resolve is the output's fault.
-  const guard = walk ?? new FollowedWalk('destination');
-  if (walk === undefined) guard.enter(dir);
+  const guard = new FollowedWalk('destination', root);
+  guard.enter(root);
+  return walkInto(root, root, guard);
+}
+
+function walkInto(dir: string, root: string, guard: FollowedWalk): string[] {
   const files: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const fullPath = safePath.join(dir, entry.name);
     // Output tree: a link is how the entry got there, so follow it. A dangling
     // one is still an entry the package ships, and is listed like any file. A
     // link back into the tree is refused by the walk guard, not recursed.
-    if (direntKindFollowingSync(dir, entry) === 'directory') {
+    if (withFsFaultSync(outputProbe(fullPath), () => direntKindFollowingSync(dir, entry, root)) === 'directory') {
       guard.enter(fullPath);
-      files.push(...walkDir(fullPath, guard));
+      files.push(...walkInto(fullPath, root, guard));
     } else {
       files.push(fullPath);
     }
   }
   return files;
+}
+
+/** The fault context of a probe of the packaged output: a refused probe or link chain is the output's. */
+function outputProbe(path: string): FsFaultContext {
+  return { side: 'destination', origin: 'content', action: `examine the packaged output at ${path}`, path };
 }
 
 /**
@@ -198,7 +219,7 @@ function collectBrokenLinkIssues(
       // (`concepts/`) survived rewrite verbatim and landed here pointing at a
       // directory the output does not have — failing the build under
       // PACKAGED_BROKEN_LINK, whose remediation text blames a VAT bug.
-      const isExistingDirectory = statSync(resolved, { throwIfNoEntry: false })?.isDirectory() === true;
+      const isExistingDirectory = withFsFaultSync(outputProbe(resolved), () => followedKindSync(resolved, outputDir)) === 'directory';
       if (isExistingDirectory) {
         continue;
       }
@@ -245,7 +266,7 @@ async function collectReferencedPaths(
     if (visited.has(normalized)) return;
     visited.add(normalized);
 
-    if (!existsSync(filePath)) return;
+    if (withFsFaultSync(outputProbe(filePath), () => followedKindSync(filePath, outputDir)) === 'absent') return;
 
     const hrefs = await extractLocalHrefs(filePath);
 

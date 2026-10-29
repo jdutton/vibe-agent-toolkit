@@ -72,5 +72,6 @@ export function isEntrypoint(
   // the path unchanged when it cannot — which is the right answer here, since
   // the string comparison above has already decided the two differ and an
   // unresolvable path carries no symlink information to compare.
-  return toForwardSlash(normalizePath(modulePath)) === toForwardSlash(normalizePath(invokedPath));
+  // Both are the process's own entry points, not a crawled path: each is its own edge.
+  return toForwardSlash(normalizePath(modulePath, modulePath)) === toForwardSlash(normalizePath(invokedPath, invokedPath));
 }

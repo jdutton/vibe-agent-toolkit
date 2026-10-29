@@ -68,11 +68,12 @@ export function toEnumerationRow(
  *
  * @param rows - The lane's enumerated rows, in capture order
  * @param absolutePaths - The same paths, absolute, in the same order
+ * @param corpusRoot - The corpus they were crawled in: links beneath it are read before followed
  */
-export function markAliases(rows: EnumerationRow[], absolutePaths: readonly string[]): void {
+export function markAliases(rows: EnumerationRow[], absolutePaths: readonly string[], corpusRoot: string): void {
   const counts = new Map<string, number>();
   const reals: (string | null)[] = absolutePaths.map((absolutePath) => {
-    const resolution = resolveRealPath(absolutePath);
+    const resolution = resolveRealPath(absolutePath, corpusRoot);
     return resolution.kind === 'resolved' ? resolution.path : null;
   });
 
@@ -98,7 +99,7 @@ export function markAliases(rows: EnumerationRow[], absolutePaths: readonly stri
  *   one row's fact, never the end of the snapshot
  */
 function resolveInsideRoot(absolutePath: string, corpusRoot: string): TargetPlacement {
-  const resolution = resolveRealPath(absolutePath);
+  const resolution = resolveRealPath(absolutePath, corpusRoot);
   if (resolution.kind === 'nowhere') {
     return resolution.fault === null ? null : { fault: resolution.fault.errno };
   }

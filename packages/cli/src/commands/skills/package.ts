@@ -4,7 +4,6 @@
  * Creates distributable artifacts (directory, ZIP, npm) from a SKILL.md file
  */
 
-import { existsSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import {
@@ -20,7 +19,7 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import { parseFileCached, type ParseResult } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Gate, type Report, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, issueLocation, isVatError, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, followedStatSync, issueLocation, isVatError, requireFollowedStatSync, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
@@ -334,13 +333,16 @@ function extractSkillName(parseResult: ParseResult): string {
 /**
  * Calculate estimated ZIP size for files
  */
-function calculateZipSize(skillPath: string, linkedFiles: string[]): number {
+function calculateZipSize(skillPath: string, linkedFiles: string[], within: string): number {
   let totalSize = 0;
-  totalSize += statSync(skillPath).size;
+  // The skill the operator named: its own `within`.
+  totalSize += requireFollowedStatSync(skillPath, skillPath).size;
 
   for (const file of linkedFiles) {
-    if (existsSync(file)) {
-      totalSize += statSync(file).size;
+    // Read beneath the base links resolve against: a file that resolves to nothing weighs nothing.
+    const stats = followedStatSync(file, within);
+    if (stats !== undefined) {
+      totalSize += stats.size;
     }
   }
 
@@ -416,7 +418,7 @@ async function previewPackage(
   }
 
   if (formats.includes('zip')) {
-    const estimatedZipSize = calculateZipSize(skillPath, (plan.plannedSources ?? []).filter((file) => file !== skillPath));
+    const estimatedZipSize = calculateZipSize(skillPath, (plan.plannedSources ?? []).filter((file) => file !== skillPath), resolveBasePath(options, skillPath));
     logger.info(`\n📊 Estimated ZIP size: ~${estimatedZipSize}KB`);
   }
 

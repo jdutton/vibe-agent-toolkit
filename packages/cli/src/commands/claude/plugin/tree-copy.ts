@@ -19,11 +19,10 @@
  * Returns counts keyed to the spec's YAML summary extension.
  */
 
-import { existsSync } from 'node:fs';
-import { lstat, readdir, stat } from 'node:fs/promises';
+import { lstat, readdir } from 'node:fs/promises';
 
 import { AGENT_INSTRUCTION_FILE_PATTERNS, toAnyDepthGlobs } from '@vibe-agent-toolkit/agent-skills';
-import { assertUnresolvableLink, forEachInOrder, type FsFaultContext, isGlob, mapConcurrentFailingInOrder, realpathNative, safePath, toForwardSlash, VatError, withFsFault } from '@vibe-agent-toolkit/utils';
+import { assertUnresolvableLink, everywhere, forEachInOrder, type FsFaultContext, isGlob, mapConcurrentFailingInOrder, pathPresent, realpathNative, requireFollowedStat, safePath, toForwardSlash, VatError, withFsFault } from '@vibe-agent-toolkit/utils';
 import { crawlDirectory, crawlPathFilter } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot } from '@vibe-agent-toolkit/utils/git';
 import picomatch from 'picomatch';
@@ -397,12 +396,15 @@ function isUnderSource(real: string, realSource: string): boolean {
  */
 async function classifySymlink(
   link: SourceEntry,
+  sourceDir: string,
   realSource: string,
   shipped: ReadonlySet<string>,
 ): Promise<RefusedSymlink | 'file'> {
   let real: string;
   try {
-    real = await realpathNative(link.abs);
+    // The chain is read beneath the plugin source first: a link to a network path is refused (a
+    // classified source fault, below) before the kernel is asked to follow it.
+    real = await realpathNative(link.abs, sourceDir);
   } catch (error) {
     // 'unresolvable' is what the message says it is: the OS looked and found
     // nothing (dangling, a loop, reparse data Windows cannot follow). A link
@@ -411,11 +413,12 @@ async function classifySymlink(
     // the operator to fix a link that is fine — so it stops the copy as the
     // classified fault every write lane gives: the input's, with the "check the
     // permission / share" remedy.
-    assertUnresolvableLink(error, { side: 'source', origin: 'content', action: 'resolve the symbolic link', path: link.abs });
+    // The action names the link: a refusal on its chain names the place refused, which may be its target.
+    assertUnresolvableLink(error, { side: 'source', origin: 'content', action: `resolve the symbolic link ${link.rel}`, path: link.abs });
     return { path: link.rel, reason: 'unresolvable' };
   }
   if (!isUnderSource(real, realSource)) return { path: link.rel, reason: 'escapes-source' };
-  const targetStat = await withFsFault({ side: 'source', origin: 'content', action: 'examine the symbolic link target', path: real }, () => stat(real));
+  const targetStat = await withFsFault({ side: 'source', origin: 'content', action: 'examine the symbolic link target', path: real }, () => requireFollowedStat(real, realSource));
   if (targetStat.isDirectory()) return { path: link.rel, reason: 'directory' };
   const target = toForwardSlash(safePath.relative(realSource, real));
   return shipped.has(target) ? 'file' : { path: link.rel, reason: 'target-excluded', target };
@@ -434,9 +437,9 @@ async function judgeSymlinks(
   const copyable: SourceEntry[] = [];
   const refused: RefusedSymlink[] = [];
   if (links.length === 0) return { copyable, refused };
-  const realSource = await withFsFault(pluginSourceFault(sourceDir, 'resolve the plugin source', sourceDir), () => realpathNative(sourceDir));
+  const realSource = await withFsFault(pluginSourceFault(sourceDir, 'resolve the plugin source', sourceDir), () => realpathNative(sourceDir, sourceDir));
   const sorted = [...links].toSorted((a, b) => a.rel.localeCompare(b.rel));
-  const verdicts = await mapConcurrentFailingInOrder(sorted, (link) => classifySymlink(link, realSource, shipped));
+  const verdicts = await mapConcurrentFailingInOrder(sorted, (link) => classifySymlink(link, sourceDir, realSource, shipped));
   for (const [index, link] of sorted.entries()) {
     const verdict = verdicts[index];
     if (verdict === 'file') {
@@ -460,12 +463,14 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
     symlinksCopied: [],
   };
 
-  if (!existsSync(sourceDir)) {
+  // The plugin source is the tree this copy reads: every probe passes it as `within`, and a probe
+  // the OS refuses is the source's fault, never "nothing to copy".
+  if (!pathPresent(sourceDir, { follow: sourceDir }, everywhere('source'), 'probe')) {
     return result;
   }
 
   const authorMarketplaceJson = safePath.join(sourceDir, '.claude-plugin', 'marketplace.json');
-  if (existsSync(authorMarketplaceJson) && warn) {
+  if (warn && pathPresent(authorMarketplaceJson, { follow: sourceDir }, everywhere('source'), 'probe')) {
     warn(
       `Ignoring ${toForwardSlash(authorMarketplaceJson)}: marketplace.json is VAT-generated ` +
         `at the marketplace level and cannot be supplied per-plugin.`,

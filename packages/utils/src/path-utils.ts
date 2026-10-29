@@ -1,14 +1,12 @@
-import { mkdirSync, realpath, realpathSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { promisify } from 'node:util';
 
-import { isFinalPathUnanswerableError, isPathAbsentError } from './errors/errno-table.js';
+import { isPathAbsentError } from './errors/errno-table.js';
 import { classifyFsFault } from './errors/fs-fault.js';
-import { safePath, toForwardSlash } from './path-core.js';
-import { assertLocalChain } from './tree-change/host-chain.js';
-import { HOST_PATH_FLAVOR } from './tree-change/link-chain.js';
+import { edgeRealpathSync, requireSomethingAt } from './link-following.js';
+import { safePath } from './path-core.js';
 
 /**
  * Re-export every pure path helper so the package barrel keeps exposing the
@@ -38,11 +36,15 @@ export * from './path-core.js';
  *
  * Only when the native call AND the JS walk agree that nothing is there is the
  * lexical path the answer — the one fallback rule every native site shares
- * ({@link nativeAnswerNeedsJsWalk}), here with native separators kept.
+ * (`link-following.ts`), here with native separators kept. A chain beneath
+ * `within` is read hop by hop before the kernel is asked (`requireSomethingAt`);
+ * one that leads to nothing is absent.
  */
-function realpathOrSelf(target: string): string {
+function realpathOrSelf(target: string, within: string): string {
   try {
-    return realpathNativeRawSync(target);
+    // A dangle is `ENOENT` (absent, so the lexical path); a cycle is `ELOOP`, and stays loud.
+    requireSomethingAt(target, within, 'realpath');
+    return edgeRealpathSync(target);
   } catch (error) {
     if (isPathAbsentError(error)) return target;
     throw error;
@@ -52,8 +54,9 @@ function realpathOrSelf(target: string): string {
 /**
  * Normalize any path (resolve short names on Windows)
  *
- * Resolves Windows 8.3 short names (e.g., RUNNER~1) and symlinks.
- * Accepts multiple path segments like path.resolve() for convenience.
+ * Resolves Windows 8.3 short names (e.g., RUNNER~1) and symlinks — every link
+ * beneath `within` read by its text first, so a link to `\\host\share` is
+ * refused before the kernel is asked (`LinkChainRefusedError`).
  *
  * **Why this matters:**
  * - Windows may create paths with short names (8.3 format)
@@ -61,47 +64,23 @@ function realpathOrSelf(target: string): string {
  * - This causes path comparison failures and existsSync() issues
  * - realpathSync.native() resolves these to their actual filesystem paths
  *
- * @param paths - Path segments to join and normalize
- * @returns Real (normalized) path with **OS-native separators** (backslashes on Windows).
- * Use `toForwardSlash()` if you need forward slashes for string comparison or display.
+ * @param target - The path, absolute or relative to cwd
+ * @param within - The tree it is crawled in — the operator's own input, whose own
+ *   ancestors are never probed — or `target` itself when it IS the operator's own path
+ * @returns Real (normalized) path with **OS-native separators** (backslashes on Windows),
+ * or the resolved spelling of a path that is not there. Use `toForwardSlash()` if you need
+ * forward slashes for string comparison or display.
+ * @throws LinkChainRefusedError for a chain through a network or device path; the OS's refusal of a probe, raw
  *
  * @example
  * ```typescript
- * // Single path
- * const shortPath = 'C:\\PROGRA~1\\nodejs';
- * const longPath = normalizePath(shortPath);
+ * const longPath = normalizePath('C:\\PROGRA~1\\nodejs', 'C:\\PROGRA~1\\nodejs');
  * // Result: 'C:\\Program Files\\nodejs'
- *
- * // Multiple segments (like path.resolve)
- * const cliPath = normalizePath(__dirname, '../../dist/bin.js');
- * // Resolves to absolute path AND normalizes short names
- *
- * // Backward compatible with old signature
- * normalizePath('./docs/../README.md', '/project')
- * // Returns: '/project/README.md' (normalized)
+ * const real = normalizePath(safePath.join(projectRoot, 'docs/a.md'), projectRoot);
  * ```
  */
-export function normalizePath(...paths: string[]): string {
-  // Handle single relative path without filesystem resolution
-  if (paths.length === 1 && paths[0] && !path.isAbsolute(paths[0])) {
-    return path.normalize(paths[0]);
-  }
-
-  // Resolve to absolute path
-  // For 2 args: treat as (relativePath, baseDir) - reverse for path.resolve(baseDir, relativePath)
-  // For 3+ args or single absolute: use as-is
-  let resolved: string;
-  if (paths.length === 1) {
-    resolved = paths[0] ?? '';
-  } else if (paths.length === 2) {
-    resolved = path.resolve(paths[1] ?? '', paths[0] ?? '');
-  } else {
-    resolved = path.resolve(...paths);
-  }
-
-  // Native OS realpath first (resolves Windows short names); a path that is not
-  // there is answered with `resolved` — better than the original input.
-  return realpathOrSelf(resolved);
+export function normalizePath(target: string, within: string): string {
+  return realpathOrSelf(path.resolve(target), within);
 }
 
 /**
@@ -133,7 +112,7 @@ export function normalizePath(...paths: string[]): string {
 export function normalizedTmpdir(): string {
   const tmp = tmpdir();
   try {
-    return realpathOrSelf(tmp);
+    return realpathOrSelf(tmp, tmp);
   } catch (error: unknown) {
     // Every verb roots its scratch, staging and caches here: a refusal is VAT's scratch space failing.
     throw classifyFsFault(error, { side: 'environment', action: 'resolve the temporary directory', path: tmp });
@@ -177,7 +156,7 @@ export function mkdirSyncReal(
 ): string {
   mkdirSync(dirPath, options);
 
-  return realpathOrSelf(dirPath);
+  return realpathOrSelf(dirPath, dirPath);
 }
 
 /**
@@ -224,97 +203,4 @@ export function resolveFromImportMeta(importMetaUrl: string, ...segments: string
 export async function dynamicImportPath<T = unknown>(absPath: string): Promise<T> {
   const mod: unknown = await import(pathToFileURL(absPath).href);
   return mod as T;
-}
-
-/**
- * Whether a native realpath's failure must be asked again of Node's JS realpath
- * before anyone believes it — the ONE fallback rule every native site shares
- * (`realpathNativeSync`, `realpathNative`, `normalizePath`'s `realpathOrSelf`, the
- * file crawler's identity check). They used to hold two: `realpathOrSelf` fell
- * back on absence and an unanswerable volume, the exported pair on the latter
- * only, so one dangling-looking path got two answers on a host where they differ.
- *
- * - A volume whose driver does not implement final-path queries (a RAM disk, some
- *   redirectors and virtual drives) answers EVERY native realpath with
- *   `ERROR_INVALID_FUNCTION`, which libuv reports as `EISDIR`
- *   ({@link isFinalPathUnanswerableError}). That says nothing about the path.
- * - An absent answer ({@link isPathAbsentError}) is confirmed by the JS walk:
- *   Node's docs note that on a musl libc without procfs the native `realpath(3)`
- *   cannot work at all and reports `ENOENT` for a path that exists, and Windows
- *   answers `ENOENT` (`ERROR_PATH_NOT_FOUND`) for a file on a volume mounted into
- *   a folder with no drive letter, which has no DOS name to give (pinned on a
- *   real host by `realpath-native-folder-mount.integration.test.ts`). A path the
- *   JS walk also finds absent throws the walk's own `ENOENT`, so nothing that is
- *   really missing reads as present.
- *
- * ⚠️ The JS answer is not the on-disk spelling, and that is NOT fail-closed on
- * every host. It keeps the casing the caller spelled (and, on Windows, an 8.3
- * short name); on POSIX a mis-cased spelling of an in-root path compares OUTSIDE a
- * canonical root, but on Windows `safePath.relative` (`path.win32.relative`)
- * ignores case, so it compares inside — right on a case-insensitive volume, wrong
- * in a directory marked case-sensitive. And the JS walk expands only what `lstat`
- * calls a link: a `subst` drive and a volume mount point (`\??\Volume{GUID}\`,
- * which libuv reports as a plain directory) stay as spelled, so one file has two
- * spellings that compare either way, depending on how the root was spelled. No
- * lane walks a mount point differently from a directory today; a caller that
- * needs the kernel's own identity compares `stat` identities, not these strings.
- *
- * @param error - What the native realpath threw
- * @returns True when the JS walk decides instead
- */
-function nativeAnswerNeedsJsWalk(error: unknown): boolean {
-  return isFinalPathUnanswerableError(error) || isPathAbsentError(error);
-}
-
-/**
- * `realpathSync.native` with native separators, asked again of the JS realpath
- * under the one fallback rule ({@link nativeAnswerNeedsJsWalk}) — and asked at
- * all only once the link chain to `path` has been read, hop by hop, and shown
- * to be local ({@link assertLocalChain}): a Windows kernel resolving a link to
- * `\\host\share` offers the operator's NTLM credentials to that host before any
- * answer comes back, so the kernel is the second lock, never the first.
- *
- * @param path - Path to resolve
- * @returns The real path, in the host's own separators
- * @throws LinkChainRefusedError for a chain through a network path, or one that never ends; the JS
- *   walk's error when it is asked and fails, else the native error
- */
-function realpathNativeRawSync(path: string): string {
-  assertLocalChain(path, HOST_PATH_FLAVOR);
-  try {
-    return realpathSync.native(path);
-  } catch (error: unknown) {
-    if (!nativeAnswerNeedsJsWalk(error)) throw error;
-    return realpathSync(path);
-  }
-}
-
-/**
- * The native realpath — the canonical ON-DISK spelling (`realpath(3)` /
- * `GetFinalPathNameByHandleW`) — forward-slashed, under the one fallback rule
- * ({@link nativeAnswerNeedsJsWalk}).
- *
- * @param path - Path to resolve
- * @returns The real path, forward-slashed
- * @throws The resolution's own error otherwise — the caller classifies it
- */
-export function realpathNativeSync(path: string): string {
-  return toForwardSlash(realpathNativeRawSync(path));
-}
-
-/**
- * The asynchronous {@link realpathNativeSync} (`realpath.native`).
- *
- * @param path - Path to resolve
- * @returns The real path, forward-slashed
- * @throws The resolution's own error otherwise — the caller classifies it
- */
-export async function realpathNative(path: string): Promise<string> {
-  assertLocalChain(path, HOST_PATH_FLAVOR);
-  try {
-    return toForwardSlash(await promisify(realpath.native)(path));
-  } catch (error: unknown) {
-    if (!nativeAnswerNeedsJsWalk(error)) throw error;
-    return toForwardSlash(await promisify(realpath)(path));
-  }
 }

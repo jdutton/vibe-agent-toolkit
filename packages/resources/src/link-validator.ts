@@ -667,7 +667,7 @@ export async function validateLink(
   // a fresh instance is exactly the old, un-memoized behaviour.
   const tables = await fillLinkFacts(
     [entry],
-    options?.fsCache ?? new FsLookupCache(),
+    options?.fsCache ?? new FsLookupCache(locationRoot(options?.projectRoot)),
     options ?? {},
   );
 

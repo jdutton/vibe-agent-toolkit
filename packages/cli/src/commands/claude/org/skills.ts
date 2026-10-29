@@ -1,7 +1,7 @@
 /**
  * `vat claude org skills` — manage organization skills via Skills API.
  */
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import type { Dirent, Stats } from 'node:fs';
 import {   basename } from 'node:path';
 
@@ -31,7 +31,7 @@ import type {
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { createAllowUsageLedger, runValidationFramework } from '@vibe-agent-toolkit/schema';
 import type { RefusalCode, ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { ARCHIVE_REFUSED_CODE, archiveEntryPlace, direntKindFollowingSync, forEachInOrder, isAbsoluteAnyPlatform, isArchiveEntryReadRefusal, isVatError, safePath, toForwardSlash, toForwardSlashAnyPlatform, withTempDir } from '@vibe-agent-toolkit/utils';
+import { ARCHIVE_REFUSED_CODE, archiveEntryPlace, direntKindFollowingSync, everywhere, forEachInOrder, isAbsoluteAnyPlatform, isArchiveEntryReadRefusal, isVatError, pathPresent, requireFollowedStatSync, safePath, toForwardSlash, toForwardSlashAnyPlatform, withTempDir } from '@vibe-agent-toolkit/utils';
 // Type-only: the runtime import stays lazy inside `inspectZipArchive`, so the
 // archive readers are loaded on the one path that parses an archive.
 import type { ArchiveEntry, ArchiveRefusedError, OpenedArchive } from '@vibe-agent-toolkit/utils/archive';
@@ -1036,14 +1036,16 @@ async function declaredTestInputPaths(skillDir: string): Promise<ReadonlySet<str
  * named no path and said nothing about what to do. A dangling link produced the
  * same shape of failure with `ENOENT`.
  *
- * `statSync` follows the link, which is the same thing the build-time size walk
+ * `requireFollowedStatSync` follows the link (its chain read first), which is the same thing the build-time size walk
  * does to classify one — so both lanes reach the same verdict about the same
  * entry.
  */
-function resolvesToDirectory(entry: Dirent, fullPath: string, relativePath: string): boolean {
+function resolvesToDirectory(entry: Dirent, fullPath: string, relativePath: string, within: string): boolean {
 	if (!entry.isSymbolicLink()) return false;
 	try {
-		return statSync(fullPath).isDirectory();
+		// The chain is read beneath the skill directory first: a link to a network path is refused
+		// here, by name, before the kernel is asked to follow it.
+		return requireFollowedStatSync(fullPath, within).isDirectory();
 	} catch (error) {
 		const cause = error instanceof Error ? error.message : String(error);
 		throw new CommandRefusalError(
@@ -1095,7 +1097,7 @@ function collectFiles(
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
 		const fullPath = safePath.join(dir, entry.name);
 		const relativePath = safePath.relative(base, fullPath);
-		const linkedDirectory = resolvesToDirectory(entry, fullPath, relativePath);
+		const linkedDirectory = resolvesToDirectory(entry, fullPath, relativePath, base);
 		const directoryLike = entry.isDirectory() || linkedDirectory;
 
 		if (
@@ -1155,8 +1157,9 @@ interface PreparedUpload {
  * whether it exists is unknown, the INPUT's refusal (`INPUT_UNREADABLE`).
  * Never `existsSync`: it answers `false` for both.
  */
-function statNamedPath(path: string, absentMessage: string): Stats {
-	return requireInputPath(path, { origin: 'argument', message: absentMessage });
+function statNamedPath(path: string, within: string, absentMessage: string): Stats {
+	// Every path from the operator's named tree down to it is the operator's input.
+	return requireInputPath(path, within, { origin: 'argument', message: absentMessage }, everywhere('source'));
 }
 
 /**
@@ -1174,7 +1177,7 @@ async function prepareSkillUpload(
 	logger: UploadLogger,
 ): Promise<PreparedUpload> {
 	const skillMdPath = safePath.join(skillDir, 'SKILL.md');
-	statNamedPath(skillMdPath, `SKILL.md not found in ${skillDir}. Is this a built skill directory?`);
+	statNamedPath(skillMdPath, skillDir, `SKILL.md not found in ${skillDir}. Is this a built skill directory?`);
 
 	// The skill's own declared name — not the directory it happens to sit in,
 	// which for a built or extracted tree carries no reliable identity.
@@ -1373,18 +1376,18 @@ async function uploadSkillVersionDir(
  * untested — `packages/cli/src/commands/**` is coverage-excluded, so nothing in
  * any report said so.
  */
-export function listNodeModulePackages(nodeModulesDir: string): string[] {
-	if (!existsSync(nodeModulesDir)) return [];
+export function listNodeModulePackages(nodeModulesDir: string, within: string): string[] {
+	if (!pathPresent(nodeModulesDir, { follow: within }, everywhere('source'), 'probe')) return [];
 
 	const results: string[] = [];
 	// Followed: a workspace package under node_modules IS a symlink, and a walk
 	// that tested `isDirectory()` on the link skipped every one of them.
 	for (const entry of readdirSync(nodeModulesDir, { withFileTypes: true })) {
-		if (direntKindFollowingSync(nodeModulesDir, entry) !== 'directory') continue;
+		if (direntKindFollowingSync(nodeModulesDir, entry, within) !== 'directory') continue;
 		if (entry.name.startsWith('@')) {
 			const scopeDir = safePath.join(nodeModulesDir, entry.name);
 			for (const scopedEntry of readdirSync(scopeDir, { withFileTypes: true })) {
-				if (direntKindFollowingSync(scopeDir, scopedEntry) === 'directory') results.push(safePath.join(scopeDir, scopedEntry.name));
+				if (direntKindFollowingSync(scopeDir, scopedEntry, within) === 'directory') results.push(safePath.join(scopeDir, scopedEntry.name));
 			}
 		} else {
 			results.push(safePath.join(nodeModulesDir, entry.name));
@@ -1398,13 +1401,16 @@ export function listNodeModulePackages(nodeModulesDir: string): string[] {
  * first, then scans node_modules for sub-packages that contain built skills.
  */
 export function findSkillsDir(packageDir: string): string | undefined {
+	// Every probe is beneath the package directory: its links are read before the kernel follows them,
+	// and a probe the OS refuses is the package's source fault, never "no skills here".
+	const present = (path: string): boolean => pathPresent(path, { follow: packageDir }, everywhere('source'), 'probe');
 	const direct = safePath.join(packageDir, 'dist', 'skills');
-	if (existsSync(direct)) return direct;
+	if (present(direct)) return direct;
 
-	const candidates = listNodeModulePackages(safePath.join(packageDir, 'node_modules'));
+	const candidates = listNodeModulePackages(safePath.join(packageDir, 'node_modules'), packageDir);
 	for (const pkgDir of candidates) {
 		const candidate = safePath.join(pkgDir, 'dist', 'skills');
-		if (existsSync(candidate)) return candidate;
+		if (present(candidate)) return candidate;
 	}
 
 	return undefined;
@@ -1500,7 +1506,7 @@ export async function installFromNpm(
 
 		// Followed: a built skill directory that is a link is still a skill to upload.
 		const skillDirs = readdirSync(skillsDir, { withFileTypes: true })
-			.filter(e => direntKindFollowingSync(skillsDir, e) === 'directory')
+			.filter(e => direntKindFollowingSync(skillsDir, e, packageDir) === 'directory')
 			.map(e => e.name);
 
 		if (skillDirs.length === 0) {
@@ -1549,7 +1555,8 @@ export async function installFromLocal(
 ): Promise<object> {
 	const sourcePath = resolveSourceArgument(source);
 
-	const stat = statNamedPath(sourcePath, `Source not found: ${sourcePath}`);
+	// The operator's own argument: its own `within`.
+	const stat = statNamedPath(sourcePath, sourcePath, `Source not found: ${sourcePath}`);
 
 	// Case-INSENSITIVE. `endsWith('.zip')` refused `MySkill.ZIP` as "not a directory
 	// or .zip file" — a file Windows and macOS both consider a zip archive, and one
@@ -2190,7 +2197,7 @@ Example:
 		.action(async (skillId: string, source: string, options: { debug?: boolean }) => {
 			await executeOrgCommand('claude org skills versions add', options.debug, ({ client, logger }) => {
 				const resolved = resolveSourceArgument(source);
-				if (!statNamedPath(resolved, `Source not found: ${resolved}`).isDirectory()) {
+				if (!statNamedPath(resolved, resolved, `Source not found: ${resolved}`).isDirectory()) {
 					// Name the asymmetry IN the refusal, not only in --help. `install`
 					// accepts a ZIP and this verb does not, so the operator most likely to
 					// hit this is the one who just read that `install` takes one — and a

@@ -8,12 +8,13 @@
  * installs from) is checked here before anything reads it.
  */
 
-import { readdirSync, readlinkSync, statSync } from 'node:fs';
+import { readdirSync, readlinkSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { fsFaultOf } from '../errors/errno-table.js';
 import { assertUnresolvableLink, type FsSide, withFsFaultSync } from '../errors/fs-fault.js';
 import { VatError } from '../errors/vat-error.js';
+import { requireFollowedStatSync } from '../link-following.js';
 import { canonicalPath, isUnderRoot } from '../path-containment.js';
 import { safePath, toForwardSlash } from '../path-core.js';
 
@@ -65,7 +66,7 @@ export interface LinkContainmentCheck {
  * @param candidate - A path in any spelling, existing or not
  */
 export function treeContainment(root: string, candidate: string): 'inside' | 'outside' | 'absent' {
-  if (canonicalPath(candidate) === canonicalPath(root)) return 'inside';
+  if (canonicalPath(candidate, root) === canonicalPath(root, root)) return 'inside';
   return isUnderRoot(root, candidate);
 }
 
@@ -89,7 +90,7 @@ export function treeChain(root: string, path: string, flavor: PathFlavor): LinkC
 function linkRefusal(check: LinkContainmentCheck, link: string, what: string): VatError {
   return new VatError(
     COPY_LINK_ESCAPES_SOURCE_CODE,
-    `Refusing ${check.tree}: ${safePath.relative(canonicalPath(check.root), link)} is a symbolic link ${what}. ` +
+    `Refusing ${check.tree}: ${safePath.relative(canonicalPath(check.root, check.root), link)} is a symbolic link ${what}. ` +
       `${check.consequence} — replace the link with the files, or point it inside with a relative target.`,
   );
 }
@@ -105,6 +106,8 @@ function describedChainRefusal(check: LinkContainmentCheck, text: string, refusa
       return `to a path outside ${check.within} (${text})`;
     case 'hop-limit':
       return `whose target starts a chain of more than ${MAX_LINK_HOPS.toString()} symbolic links that is not a cycle, so where it ends cannot be shown`;
+    case 'unportable':
+      return `whose target names a component no Windows host can spell (${refusal.text}): a NUL, or a name ending in a dot or a space that Windows strips`;
   }
 }
 
@@ -147,11 +150,12 @@ function describedRefusal(check: LinkContainmentCheck, text: string, refusal: Li
 export function kernelRefusal(check: LinkContainmentCheck, root: string, link: string, text: string): string | undefined {
   try {
     // Followed to the end, as a reader of the link would: this fails where the kernel finds nothing.
-    statSync(link);
+    requireFollowedStatSync(link, root);
   } catch (error: unknown) {
     const fault = fsFaultOf(error);
     if (fault === undefined) throw error;
-    assertUnresolvableLink(error, { side: check.side, origin: 'content', action: 'resolve the symbolic link', path: link });
+    // The action names the link: a refusal on its chain names the place refused, which may be its target.
+    assertUnresolvableLink(error, { side: check.side, origin: 'content', action: `resolve the symbolic link ${link}`, path: link });
     return `to nothing (${text} does not resolve: ${fault.errno}), so where it would lead once ${check.within} is copied cannot be shown`;
   }
   // It resolves, so its canonical path is its real one.
@@ -190,7 +194,7 @@ function judgeLink(check: LinkContainmentCheck, root: string, link: string): Lin
   } else if (treeContainment(root, link) === 'outside') {
     return { refusal: `to a path outside ${check.within}` };
   }
-  return { enter: chain.kind === 'resolved' && chain.final === 'directory' ? canonicalPath(link) : undefined };
+  return { enter: chain.kind === 'resolved' && chain.final === 'directory' ? canonicalPath(link, root) : undefined };
 }
 
 /**
@@ -209,10 +213,10 @@ function judgeLink(check: LinkContainmentCheck, root: string, link: string): Lin
  */
 export function refuseEscapingLinks(check: LinkContainmentCheck): void {
   withFsFaultSync({ side: check.side, origin: 'content', action: `examine the links of ${check.tree}`, path: check.subtree ?? check.root }, () => {
-    const skipped = check.skip === undefined ? undefined : canonicalPath(check.skip);
+    const skipped = check.skip === undefined ? undefined : canonicalPath(check.skip, check.root);
     const visited = new Set<string>();
-    const root = canonicalPath(check.root);
-    const pending = [canonicalPath(check.subtree ?? check.root)];
+    const root = canonicalPath(check.root, check.root);
+    const pending = [canonicalPath(check.subtree ?? check.root, check.root)];
     for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
       if (dir === skipped || visited.has(dir)) continue;
       visited.add(dir);

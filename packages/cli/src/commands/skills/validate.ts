@@ -719,7 +719,7 @@ export async function runSkillsValidatePhase(
     requireProjectRoot(cwd, 'vat skills validate');
 
     // Load config yaml from cwd (not workspace root — config lives next to the package)
-    const config = loadConfig(cwd);
+    const config = loadConfig(cwd, 'source');
     const { results, runIssues } = config?.skills === undefined
       ? { results: [], runIssues: [] }
       : await validateConfiguredSkills(config.skills, cwd, config, options, logger);

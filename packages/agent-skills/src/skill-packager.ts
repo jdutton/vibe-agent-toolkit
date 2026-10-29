@@ -15,7 +15,7 @@
  * for link resolution and rewriting (replacing the previous inline regex approach).
  */
 
-import { existsSync, lstatSync, readdirSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
@@ -51,25 +51,27 @@ import {
   applyTreePlan,
   classifyFsFault,
   direntKindFollowingSync,
+  everywhere,
   findProjectRoot,
+  followedKindSync,
   forEachInOrder,
-  isPathAbsentError,
   isGlob,
   isSingleFsSegment,
   issueLocation,
   mapInOrder,
+  type Ownership,
+  type OwnershipVerdict,
+  pathPresent,
   planTreeChanges,
   resolveAssetReference,
   safePath,
   toForwardSlash,
   toForwardSlashAnyPlatform,
+  type TreeChange,
+  type TreeChangeWarning,
   VatError,
   withFsFault,
   withFsFaultSync,
-  type Ownership,
-  type OwnershipVerdict,
-  type TreeChange,
-  type TreeChangeWarning,
 } from '@vibe-agent-toolkit/utils';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import {
@@ -1970,18 +1972,19 @@ function applyFilesEntriesToPathMap(
 
     // Validate source exists at build time.
     //
-    // `statSync` in a guard, not `existsSync`: `existsSync` swallows EACCES and
-    // answers FALSE, so a source the process cannot REACH — one under a directory
-    // it may not traverse — was reported as "does not exist", and for a `dist/`
-    // path `buildArtifactHint` then told the author to run a build that would not
-    // have helped. A wrong diagnosis with a confident wrong remedy attached.
-    // Only ENOENT is absence; a refusal is reported as itself, naming the entry.
-    try {
-      statSync(absoluteSource);
-    } catch (error) {
-      if (!isPathAbsentError(error)) {
-        throw classifyFsFault(error, { side: 'source', origin: 'content', action: `read files entry for skill '${skillName}': source '${fileEntry.source}'` });
-      }
+    // Never `existsSync`: it swallows EACCES and answers FALSE, so a source the
+    // process cannot REACH — one under a directory it may not traverse — was
+    // reported as "does not exist", and for a `dist/` path `buildArtifactHint` then
+    // told the author to run a build that would not have helped. A wrong diagnosis
+    // with a confident wrong remedy attached. Only resolving to nothing (absent,
+    // dangling, a cycle) is absence; a refusal — the OS's, or a link chain VAT will
+    // not hand the kernel — is reported as itself, naming the entry. The source is
+    // crawled beneath the project root: every link on the way is read first.
+    const sourceKind = withFsFaultSync(
+      { side: 'source', origin: 'content', action: `read files entry for skill '${skillName}': source '${fileEntry.source}'` },
+      () => followedKindSync(absoluteSource, projectRoot),
+    );
+    if (sourceKind === 'absent') {
       throw packagingInputError(
         `files entry for skill '${skillName}': source '${fileEntry.source}' does not exist.${buildArtifactHint(fileEntry.source)}`,
       );
@@ -2779,7 +2782,11 @@ function validateNoNestedSkillMd(outputPath: string, skillName: string): void {
   const entries = readdirSync(outputPath, { recursive: true, withFileTypes: true });
   const nestedSkillMds = entries
     // Followed: a symlinked nested SKILL.md is a nested skill marker all the same.
-    .filter(entry => entry.name === 'SKILL.md' && direntKindFollowingSync(entry.parentPath, entry) === 'file')
+    // The tree is VAT's own output: a refused probe is the output's fault, never "no nested skill".
+    .filter(entry => entry.name === 'SKILL.md' && withFsFaultSync(
+      { side: 'destination', origin: 'content', action: `examine ${entry.parentPath}/${entry.name}`, path: safePath.join(entry.parentPath, entry.name) },
+      () => direntKindFollowingSync(entry.parentPath, entry, outputPath),
+    ) === 'file')
     .map(entry => safePath.relative(outputPath, safePath.join(entry.parentPath, entry.name)))
     .filter(relativePath => relativePath !== 'SKILL.md'); // Exclude the root SKILL.md
 
@@ -3169,7 +3176,10 @@ function findPackageRoot(skillPath: string, fallbackToSkillDir = false): string 
   // Walk up until we find a package.json or hit the filesystem root
   while (currentDir !== dirname(currentDir)) {
     const packageJsonPath = safePath.join(currentDir, PACKAGE_JSON_FILENAME);
-    if (existsSync(packageJsonPath)) {
+    // Each ancestor is the operator's own (the skill path's), so it is the tree the probe is in: the
+    // `package.json` entry beneath it is read by its text before the kernel follows it, and a
+    // refused probe is the source's fault, never "no package here".
+    if (pathPresent(packageJsonPath, { follow: currentDir }, everywhere('source'), 'probe')) {
       return currentDir;
     }
     currentDir = dirname(currentDir);

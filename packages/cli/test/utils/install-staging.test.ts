@@ -162,7 +162,10 @@ describe('planInstall (the skills lanes)', () => {
       ['/tmp/pkg/dist/skills/pkg__sub', 'environment', 'must-be-free'],
     ]);
     // The build is confirmed present on the side the package is on, before anything is planned to change.
-    expect(pathPresent).toHaveBeenCalledWith('/tmp/pkg/dist/skills/plain', 'follow', 'environment', 'confirmed');
+    expect(pathPresent).toHaveBeenCalledWith('/tmp/pkg/dist/skills/plain', { follow: '/tmp/pkg' }, expect.any(Function), 'confirmed');
+    // Every path the probe touches — the build, the package walked to it, the parent it lists — is VAT's staging.
+    const sideOf = pathPresent.mock.calls.find(([path]) => path === '/tmp/pkg/dist/skills/plain')?.[2] as ((path: string) => string) | undefined;
+    expect(['/tmp/pkg/dist/skills/plain', '/tmp/pkg/dist', '/tmp/pkg'].map((path) => sideOf?.(path))).toEqual(['environment', 'environment', 'environment']);
   });
 
   it('one skill directory is one copy from that directory, and --force may take what is there', async () => {

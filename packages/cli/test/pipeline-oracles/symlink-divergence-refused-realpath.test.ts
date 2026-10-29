@@ -8,32 +8,23 @@
  * and never the end of the capture.
  */
 
-import { realpathSync, rmSync, writeFileSync } from 'node:fs';
+import fs, { rmSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { captureSymlinkDivergence, laneById } from '../../src/pipeline-oracles/index.js';
-import { errno, realBehind, refusingOnly } from '../helpers/refusal-doubles.js';
+import { errno, refusingOnly } from '../helpers/refusal-doubles.js';
 import { createTempDirTracker } from '../system/test-common.js';
 
-// `realpathSync.native` is reached through a named import in the oracle, so
-// the refusal is injected at the module seam. `realpathSync` is a function
-// carrying `.native`, so the pass-through keeps the callable and spies the
-// property.
-vi.mock('node:fs', async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  const real = actual['realpathSync'] as typeof realpathSync;
-  const patched = Object.assign((...args: unknown[]) => (real as (...a: unknown[]) => string)(...args), real, {
-    native: vi.fn(real.native),
-  });
-  return { ...actual, realpathSync: patched };
-});
+// The oracle resolves through the link-chain resolver, which reaches the kernel through the
+// DEFAULT `node:fs` object (`fs.realpathSync.native`), so the refusal is a spy on that property.
+const realNative = fs.realpathSync.native;
 
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-symlink-refused-');
 
 afterEach(() => {
-  vi.mocked(realpathSync.native).mockRestore();
+  vi.restoreAllMocks();
   cleanupTempDirs();
 });
 
@@ -61,8 +52,8 @@ describe('a path the divergence oracle cannot resolve', () => {
     const root = corpusWithOneFile();
     const file = safePath.join(root, 'docs', 'a.md');
     // As Node raises it: the syscall and the path it acted on — what makes an unlisted errno a filesystem fault.
-    vi.mocked(realpathSync.native).mockImplementation(
-      refusingOnly(file, Object.assign(errno(code), { syscall: 'realpath', path: file }), realBehind(realpathSync.native)),
+    vi.spyOn(fs.realpathSync, 'native').mockImplementation(
+      refusingOnly(file, Object.assign(errno(code), { syscall: 'realpath', path: file }), realNative),
     );
 
     const report = await captureSymlinkDivergence(laneById('resources'), { corpusRoot: root, corpus: 'refused' });
@@ -74,17 +65,17 @@ describe('a path the divergence oracle cannot resolve', () => {
     const code = 'ENOENT';
     const root = corpusWithOneFile();
     writeFileSync(safePath.join(root, 'docs', 'b.md'), '# b\n');
-    const real = realBehind(realpathSync.native);
+    const real = realNative;
     // `a.md` dangles; `b.md` resolves to where `a.md` is spelt. Only if `a.md` keeps its own name do the two meet.
     // A native ENOENT is confirmed by the JS walk (the one native fallback rule), so `a.md` is really gone by then.
-    vi.mocked(realpathSync.native).mockImplementation(((path: string) => {
+    vi.spyOn(fs.realpathSync, 'native').mockImplementation(((path: string) => {
       const spelt = String(path);
       if (spelt.endsWith('a.md')) {
         rmSync(spelt, { force: true });
         throw errno(code);
       }
       return spelt.endsWith('b.md') ? `${spelt.slice(0, -'b.md'.length)}a.md` : real(spelt);
-    }) as typeof realpathSync.native);
+    }) as typeof fs.realpathSync.native);
 
     const report = await captureSymlinkDivergence(laneById('resources'), { corpusRoot: root, corpus: 'dangling' });
 

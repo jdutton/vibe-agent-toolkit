@@ -53,6 +53,17 @@ function refuseRealpath(within: string, matches: (path: string) => boolean, errn
   return scratch.watch(installFaultFs({ within, faults: [{ op: 'realpath', path: matches, errno, nth, everyTry: !once }] }));
 }
 
+/**
+ * Fail EVERY `realpath` of a path `matches` accepts, under `within` (one rule per call, up to a
+ * bound well past any run here: a rule that fires ends the match, so each rule's first match is
+ * the first call no earlier rule failed): the link-following guard (`link-following.ts`) resolves a crawl
+ * root before every walk beneath it, so "the root's Nth realpath" names no particular caller.
+ */
+function refuseEveryRealpath(within: string, matches: (path: string) => boolean, errno: InjectedErrno): FaultFsSession {
+  const faults = Array.from({ length: 64 }, () => ({ op: 'realpath' as const, path: matches, errno, nth: 1, everyTry: true }));
+  return scratch.watch(installFaultFs({ within, faults }));
+}
+
 /** What `work` threw; a return fails the test. */
 async function thrownBy(work: () => unknown): Promise<unknown> {
   try {
@@ -97,7 +108,7 @@ describe('resolveRealPath (realizations)', () => {
     const root = corpus();
     const refused = refuseRealpath(root, (path) => path.endsWith('/plain.md'), 'ENOENT');
 
-    expect(resolveRealPath(safePath.join(root, 'docs', 'plain.md'))).toEqual({ kind: 'nowhere', fault: null });
+    expect(resolveRealPath(safePath.join(root, 'docs', 'plain.md'), root)).toEqual({ kind: 'nowhere', fault: null });
     expect(refused.fired.length).toBeGreaterThan(0);
   });
 
@@ -106,16 +117,16 @@ describe('resolveRealPath (realizations)', () => {
     const target = safePath.join(root, 'docs', 'plain.md');
     refuseRealpath(root, (path) => path === target, errno);
 
-    expect(resolveRealPath(target)).toMatchObject({ kind: 'nowhere', fault: { errno, faultClass } });
+    expect(resolveRealPath(target, root)).toMatchObject({ kind: 'nowhere', fault: { errno, faultClass } });
   });
 
   it('asks the JS realpath again when the volume cannot answer a final-path query (EISDIR)', () => {
     const root = corpus();
     const target = safePath.join(root, 'docs', 'plain.md');
-    const real = resolveRealPath(target);
+    const real = resolveRealPath(target, root);
     const refused = refuseRealpath(root, (path) => path === target, 'EISDIR', { once: true });
 
-    expect(resolveRealPath(target)).toEqual(real);
+    expect(resolveRealPath(target, root)).toEqual(real);
     expect(refused.fired).toHaveLength(1);
   });
 });
@@ -123,11 +134,11 @@ describe('resolveRealPath (realizations)', () => {
 describe('canonicalizeSync', () => {
   it.each<InjectedErrno>(['ENOENT', ...FAULTS.map(({ errno }) => errno)])('answers a path whose realpath fails %s from its nearest ancestor, and throws nothing', (errno) => {
     const root = corpus();
-    const docs = canonicalizeSync(safePath.join(root, 'docs'));
+    const docs = canonicalizeSync(safePath.join(root, 'docs'), root);
     const target = safePath.join(root, 'docs', 'plain.md');
     const refused = refuseRealpath(root, (path) => path === target, errno);
 
-    expect(canonicalizeSync(target)).toBe(safePath.join(docs, 'plain.md'));
+    expect(canonicalizeSync(target, root)).toBe(safePath.join(docs, 'plain.md'));
     // The real path is that answer too: only the refusal having fired makes this the ancestor's.
     expect(refused.fired.length).toBeGreaterThan(0);
   });
@@ -165,7 +176,7 @@ async function judged(errno: InjectedErrno): Promise<{ issues: Map<string, { cod
   const refused = scratch.watch(installFaultFs({ within: parent, faults: [...refusedPaths].map((refusedPath) => ({ op: 'realpath' as const, path: (path: string) => path === refusedPath, errno, nth: 1, everyTry: true })) }));
   const options = { projectRoot: root, skipGitIgnoreCheck: false };
 
-  const tables = await fillLinkFacts(resolved, new FsLookupCache(), options);
+  const tables = await fillLinkFacts(resolved, new FsLookupCache(root), options);
   const judge = judgeOptionsFrom(options, tables);
   const issues = new Map(resolved.map((entry) => {
     const issue = judgeLink(entry, fragmentIndex(), judge);
@@ -212,9 +223,9 @@ describe('link validation over a batch of targets, one of which the OS refuses t
     const root = corpus();
     const source = safePath.join(root, 'docs', 'plain.md');
     const resolved = resolveLinkEntries([{ link: createLink('local_file', './plain.md'), sourceFilePath: source }], root);
-    refuseRealpath(root, (path) => path === root, 'EACCES');
+    refuseEveryRealpath(root, (path) => path === root, 'EACCES');
 
-    expect(await thrownBy(() => fillLinkFacts(resolved, new FsLookupCache(), { projectRoot: root, skipGitIgnoreCheck: false })))
+    expect(await thrownBy(() => fillLinkFacts(resolved, new FsLookupCache(root), { projectRoot: root, skipGitIgnoreCheck: false })))
       .toMatchObject({ code: FS_FAULT_CODE, errno: 'EACCES', side: 'source', origin: 'argument', path: root });
   });
 });
@@ -253,8 +264,10 @@ describe.skipIf(CAPABILITY === null)('the filesystem extent, resolving a link it
   });
 
   // The double fault: `readlink` refused the text AND the host could not resolve the link. The row
-  // still names both errnos — the code's registry entry promises the errno in its message. On
-  // Windows the realpath guard's own `readlink` is refused too, and leaves the answer to the kernel.
+  // still names both errnos — the code's registry entry promises the errno in its message. The
+  // SECOND `readlink` is the refused one: the first is the link-following guard's own read of the
+  // chain (`link-following.ts`), which — refused — would stop the kernel from ever being asked
+  // (the test below), so the host's EIO is reachable only past it.
   it('names both errnos when the target text and the resolution both fail (readlink EACCES, realpath EIO)', async () => {
     const { root, run } = await linkedCorpus();
     const alias = (path: string): boolean => path.endsWith('/alias.md');
@@ -262,7 +275,7 @@ describe.skipIf(CAPABILITY === null)('the filesystem extent, resolving a link it
       within: root,
       faults: [
         { op: 'realpath', path: alias, errno: 'EIO', nth: 1, everyTry: true },
-        { op: 'readlink', path: alias, errno: 'EACCES', nth: 1, everyTry: true },
+        { op: 'readlink', path: alias, errno: 'EACCES', nth: 2, everyTry: true },
       ],
     }));
 
@@ -272,6 +285,18 @@ describe.skipIf(CAPABILITY === null)('the filesystem extent, resolving a link it
     expect(row).toMatchObject({ code: EXTENT_SYMLINK_TARGET_UNREADABLE, targetFaultClass: 'device' });
     expect(row?.message).toContain('could not be read (EACCES, refused)');
     expect(row?.message).toContain('(EIO, device)');
+  });
+
+  it('charges the guard\'s own refused `readlink` to the link, and never asks the kernel to resolve it', async () => {
+    const { root, run } = await linkedCorpus();
+    const alias = (path: string): boolean => path.endsWith('/alias.md');
+    const session = scratch.watch(installFaultFs({ within: root, faults: [{ op: 'readlink', path: alias, errno: 'EACCES', nth: 1, everyTry: true }] }));
+
+    const { contribution } = await run();
+
+    expect(contribution.conditions.find((condition) => condition.path === 'alias.md')).toMatchObject({ code: EXTENT_SYMLINK_TARGET_UNREADABLE, targetFaultClass: 'refused' });
+    expect(session.calls.filter((call) => call.op === 'realpath' && alias(call.path))).toEqual([]);
+    expect(contribution.conditions.find((condition) => condition.path === 'other.md')?.code).toBe(EXTENT_SYMLINK_NOT_REALIZED);
   });
 
   it('asks the JS realpath again when the volume cannot answer a final-path query (EISDIR, hostResolution)', async () => {
@@ -284,9 +309,9 @@ describe.skipIf(CAPABILITY === null)('the filesystem extent, resolving a link it
 
   it('is a source fault when the OS declines to resolve the corpus root (realRootOf): the root is no link target', async () => {
     const { root, run } = await linkedCorpus();
-    // The SECOND resolution of the root: the first is the projection base's (`resolveRootPath`),
-    // which answers from the ancestor; the second is the extent's own.
-    const refused = refuseRealpath(root, (path) => path === root, 'EACCES', { nth: 2 });
+    // EVERY resolution of the root: the projection base's (`resolveRootPath`) and each identity's
+    // answer from the ancestor, a link's own walk is that link's row; the extent's own stops the run.
+    const refused = refuseEveryRealpath(root, (path) => path === root, 'EACCES');
 
     // The same origin the link validator's root refusal carries: one refused root, one cause sentence.
     expect(await thrownBy(run)).toMatchObject({ code: FS_FAULT_CODE, errno: 'EACCES', side: 'source', origin: 'argument', path: root });

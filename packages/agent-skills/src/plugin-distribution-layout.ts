@@ -8,11 +8,10 @@
  * resolution so the path conventions can never drift between those commands.
  */
 
-import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { everywhere, pathPresent, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { crawlDirectorySync } from '@vibe-agent-toolkit/utils/crawl';
 import { gitFindRoot, isGitIgnored } from '@vibe-agent-toolkit/utils/git';
 
@@ -113,7 +112,7 @@ export function listPluginSourceSkillDirs(pluginSourceDir: string): string[] {
  */
 export function listUntrackedPluginSkillDirs(pluginSourceDir: string): string[] {
   const skillsDir = safePath.join(pluginSourceDir, 'skills');
-  if (!existsSync(skillsDir)) return [];
+  if (!pathPresent(skillsDir, { follow: pluginSourceDir }, everywhere('source'), 'probe')) return [];
   if (gitFindRoot(safePath.resolve(skillsDir)) === null) return [];
 
   const visible = new Set(listPluginSourceSkillDirs(pluginSourceDir));
@@ -130,7 +129,7 @@ export function listUntrackedPluginSkillDirs(pluginSourceDir: string): string[] 
  */
 function crawlSkillDirs(pluginSourceDir: string, respectGitignore: boolean): string[] {
   const skillsDir = safePath.join(pluginSourceDir, 'skills');
-  if (!existsSync(skillsDir)) return [];
+  if (!pathPresent(skillsDir, { follow: pluginSourceDir }, everywhere('source'), 'probe')) return [];
 
   // `exclude: []` (not the crawler's default) so this sees exactly what
   // treeCopyPlugin sees — the only filter either applies is git visibility.

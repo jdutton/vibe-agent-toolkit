@@ -1298,12 +1298,24 @@ The table is not the guarantee: an errno a system call raised that no row lists 
 whatever a later libuv adds) is a `device` fault, never an internal error. An error that names no
 system call, or one from name resolution, socket setup or a spawn, is not a filesystem fault.
 
-On Windows, a path VAT is about to resolve has its link chain read first, by `lstat` and `readlink` alone; a
-chain through a network or device path (`\\host\share`, which a Windows kernel resolving it would
-answer by offering the operator's NTLM credentials to the host), a drive-relative text, or one
-longer than the kernel's hop limit is refused before the kernel is asked. That refusal is a
-`refused` fault whose errno reads `LINK_CHAIN_REFUSED` (its syscall `readlink`): a read lane reports
-it against that one link, as it reports `EACCES`, and a command it stops ends `INPUT_UNREADABLE`.
+Before VAT asks the kernel to FOLLOW a link — a `stat`, an existence check, a `realpath` — the chain to
+the path is read first, by `lstat` and `readlink` alone, on every host (enforced by:
+`local/no-link-following-fs`). Under Windows rules a link text is local only when it is relative or
+drive-absolute (`C:\x`, `C:/x`); every other spelling (`\\host\share`, `\\?\…`, `\\.\…`, `\??\…`,
+`\Device\…`, `\DosDevices\…`, `\GLOBAL??\…`, a rooted `\x`) names a network or device path, which a
+Windows kernel resolving it would answer by offering the operator's NTLM credentials to the host.
+Such a chain, a drive-relative text, or one longer than the kernel's hop limit is refused before the
+kernel is asked; a probe the OS refuses on the way is a fault, never a pass. That refusal is a
+`refused` fault whose errno reads `LINK_CHAIN_REFUSED`: a read lane reports it against that one
+path, as it reports `EACCES`, and a command it stops takes its exit code from the table below by
+the side it was on — `INPUT_UNREADABLE` while reading, `RUN_INCOMPLETE` on a destination.
+
+Two lanes follow a link without seeming to, and are held to the same walk. Finding a project root
+probes `vibe-agent-toolkit.config.yaml`, `.git` and `package.json` in every directory from the one
+scanned upward, so such a link planted in a scanned tree is refused (`INPUT_UNREADABLE`, the
+source's). And creating a link with no type has Node on Windows follow its target to pick `file` or
+`dir`, so a copy that keeps links types each one from its chain read by text, and refuses one whose
+chain names a network or device path, on the side of the tree it copies, before anything is made.
 
 <!-- fs-fault-refusals -->
 | side | absent | refused | wrong-type | occupied | unsupported | device | exhausted | busy |

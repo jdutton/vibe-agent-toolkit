@@ -48,7 +48,7 @@ function listDir(repoRoot: string, relDir: string): { name: string; isDirectory:
   const dir = safePath.join(repoRoot, relDir);
   return readdirSync(dir, { withFileTypes: true })
     // Followed: a linked directory is listed as the directory it is.
-    .map((entry) => ({ name: entry.name, isDirectory: direntKindFollowingSync(dir, entry) === 'directory' }))
+    .map((entry) => ({ name: entry.name, isDirectory: direntKindFollowingSync(dir, entry, dir) === 'directory' }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 

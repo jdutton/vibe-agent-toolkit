@@ -28,10 +28,10 @@ function linkedProject(): { root: string; alias: string | null } {
   const real = safePath.join(base, 'real');
   mkdirSyncReal(safePath.join(real, 'sub'), { recursive: true });
   writeFileSync(safePath.join(real, 'sub', 'CLAUDE.md'), '# sub\n', 'utf-8');
-  if (SYMLINK_CAP === null) return { root: normalizePath(real), alias: null };
+  if (SYMLINK_CAP === null) return { root: normalizePath(real, real), alias: null };
   const alias = safePath.join(base, 'alias');
   createSymlink(SYMLINK_CAP, real, alias, 'dir');
-  return { root: normalizePath(real), alias };
+  return { root: normalizePath(real, real), alias };
 }
 
 describe('targetPathWithin', () => {

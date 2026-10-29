@@ -152,7 +152,7 @@ function outputFiles(dir: string): string[] {
   const visit = (current: string): void => {
     for (const entry of readdirSync(current, { withFileTypes: true })) {
       const abs = safePath.join(current, entry.name);
-      if (direntKindFollowingSync(current, entry) === 'directory') visit(abs);
+      if (direntKindFollowingSync(current, entry, dir) === 'directory') visit(abs);
       else out.push(safePath.relative(dir, abs));
     }
   };

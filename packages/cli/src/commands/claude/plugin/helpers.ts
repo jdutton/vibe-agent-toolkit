@@ -10,7 +10,7 @@
 
 import { mkdir, readFile } from 'node:fs/promises';
 
-import { type FsSide, pathPresent, safePath, withFsFault } from '@vibe-agent-toolkit/utils';
+import { everywhere, type FsSide, pathPresent, safePath, withFsFault } from '@vibe-agent-toolkit/utils';
 import { ARCHIVE_LIMITS, extractArchive } from '@vibe-agent-toolkit/utils/archive';
 import { z } from 'zod';
 
@@ -98,7 +98,7 @@ export function detectSource(input: string): SkillSource {
   // Check filesystem: a path naming nothing is the invocation's mistake, one the OS refuses the input's.
   const absolutePath = safePath.resolve(input);
   // A bare word that names nothing is most often a source typed wrong: say what a source looks like.
-  const stat = requireInputPath(absolutePath, { origin: 'argument', message: `Path does not exist: ${absolutePath}\n${SOURCE_FORMS_HINT}` });
+  const stat = requireInputPath(absolutePath, absolutePath, { origin: 'argument', message: `Path does not exist: ${absolutePath}\n${SOURCE_FORMS_HINT}` }, everywhere('source'));
 
   if (stat.isDirectory()) {
     return 'local';
@@ -126,7 +126,7 @@ export async function readPackageJson(dir: string, from: { readonly side: FsSide
   const packageJsonPath = safePath.join(dir, 'package.json');
   // Asked first, and believed only when the directory's listing agrees: a package with no
   // package.json is the input's shape, never "VAT's scratch space vanished".
-  if (!pathPresent(packageJsonPath, 'follow', from.side, 'confirmed')) {
+  if (!pathPresent(packageJsonPath, { follow: dir }, everywhere(from.side), 'confirmed')) {
     throw new CommandRefusalError('INPUT_UNREADABLE', `${from.label} holds no package.json, so it is not a package VAT can install; nothing was changed.`);
   }
   // A read the OS refuses propagates as the errno: the install classifies it by the path it
@@ -199,7 +199,7 @@ export async function downloadNpmPackage(packageName: string, tempDir: string): 
 
   // npm pack tarballs hold everything under package/.
   const packageDir = safePath.join(extracted, 'package');
-  if (!pathPresent(packageDir, 'follow', 'environment', 'confirmed')) {
+  if (!pathPresent(packageDir, { follow: tempDir }, everywhere('environment'), 'confirmed')) {
     throw new CommandRefusalError('EXTERNAL_API_FAILED', 'npm tarball extracted but package/ directory not found');
   }
   return packageDir;

@@ -7,6 +7,7 @@ import fs, { type FileHandle } from 'node:fs/promises';
 
 import { isAlreadyExistsError, isPathAbsentError } from '../errors/errno-table.js';
 import { classifyFsFault, type FsSide } from '../errors/fs-fault.js';
+import { linkCopyType } from '../link-following.js';
 import { safePath } from '../path-core.js';
 import { openForReading } from '../text-file.js';
 
@@ -195,12 +196,16 @@ export function copyVisitor(where: CopyDestination, copied: string, side: FsSide
     },
     async link(entry) {
       const linkTarget = await readingTree(side, entry.path, () => fs.readlink(entry.path));
+      // Typed from the chain read by its text, before anything is made: an untyped `symlink` has
+      // Node on Windows ask the kernel to follow the target to pick `file` or `dir`, so a network or
+      // device text — at any hop — is refused here, on the copied tree's side, never handed on.
+      const type = await readingTree(side, entry.path, () => Promise.resolve().then(() => linkCopyType(entry.path, copied)));
       // The source itself is a link: there is no copied directory to hold it, so its place is made first.
       if (entry.relative === '') await claimParentOfDestination(where, copied);
-      // Verbatim, and untyped: on Windows Node picks `file` or `dir` from the target. A host that
-      // cannot make the link (Windows without the privilege: EPERM; a filesystem with none: ENOTSUP)
-      // raises the raw errno, a write like any other, for the caller's boundary to classify.
-      await create(entry, 'leaf', (into) => fs.symlink(linkTarget, into));
+      // Verbatim. A host that cannot make the link (Windows without the privilege: EPERM; a
+      // filesystem with none: ENOTSUP) raises the raw errno, a write like any other, for the
+      // caller's boundary to classify.
+      await create(entry, 'leaf', (into) => fs.symlink(linkTarget, into, type));
     },
   };
 }
@@ -220,7 +225,9 @@ export function copyVisitor(where: CopyDestination, copied: string, side: FsSide
  * Entries are walked, and refused, exactly as `proveTreeReadable` proves them (see
  * `tree-walk.ts`): a `follow-contained` link is copied as what it points at, inside
  * the source only; a `preserve` link is copied as a link, its target string
- * verbatim and never examined; an entry `filter` excludes is never touched; a named
+ * verbatim and never followed — its chain is read by text alone to give the copy its `file`/`dir`
+ * type, and one through a network or device path is refused (a `refused` fault on `options.side`)
+ * before anything is made; an entry `filter` excludes is never touched; a named
  * pipe, socket or device is refused unopened. Each file is copied from the handle
  * `fstat` judged, with its mode. Each directory takes its source's mode with the
  * owner's rwx kept (`| 0o700`): a read-only source must not become a copy nothing

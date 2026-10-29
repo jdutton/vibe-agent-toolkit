@@ -196,8 +196,9 @@ describe('updateSkillTestConfig (the third config reader)', () => {
   it('classifies a presence check the OS refuses on the config\'s side for this run, never as "no config"', async () => {
     // Injected, never provoked: no real path makes every host refuse the `stat` — a name too long for
     // the host is ENAMETOOLONG on POSIX and plain ENOENT on Windows, which IS "no config" there.
+    // The presence check reads the config's link chain first, so its first syscall is the `lstat`.
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
-    const session = installFaultFs({ within: tempDir, faults: [{ op: 'stat', path: (path) => path === configPath, errno: 'ENAMETOOLONG' }] });
+    const session = installFaultFs({ within: tempDir, faults: [{ op: 'lstat', path: (path) => path === configPath, errno: 'ENAMETOOLONG' }] });
 
     let failure: unknown;
     try {
@@ -205,7 +206,7 @@ describe('updateSkillTestConfig (the third config reader)', () => {
     } finally {
       session.restore();
     }
-    expect(session.fired.map((call) => call.op)).toEqual(['stat']);
+    expect(session.fired.map((call) => call.op)).toEqual(['lstat']);
     expect(failure).toMatchObject({ code: 'FS_FAULT', side: 'destination', faultClass: 'wrong-type' });
     expect(refusalCodeOf(failure)).toBe('RUN_INCOMPLETE');
   });

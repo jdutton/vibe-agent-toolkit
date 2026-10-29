@@ -203,7 +203,7 @@ async function fillThenJudge(
   entries: readonly LinkEntry[],
   fragments: FragmentIndex,
   projectRoot: string | undefined,
-  { skipGitIgnoreCheck = true, fsCache = new FsLookupCache() } = {},
+  { skipGitIgnoreCheck = true, fsCache = new FsLookupCache(projectRoot ?? process.cwd()) } = {},
 ) {
   const resolved = resolveLinkEntries(entries, projectRoot);
   const policy = { skipGitIgnoreCheck, ...(projectRoot !== undefined && { projectRoot }) };
@@ -225,7 +225,7 @@ async function validateOneAtATime(
   for (const entry of entries) {
     results.push(
       await validateLink(entry.link, entry.sourceFilePath, fragments, {
-        fsCache: new FsLookupCache(),
+        fsCache: new FsLookupCache(projectRoot ?? process.cwd()),
         skipGitIgnoreCheck: true,
         ...(projectRoot !== undefined && { projectRoot }),
       }),
@@ -482,7 +482,7 @@ describe('link validation fill/judge split', () => {
     const expectedCalls = expectedTargets.length + 1;
 
     const wave = await traceRealpathWave(async () => {
-      const tables = await fillLinkFacts(resolved, new FsLookupCache(), {
+      const tables = await fillLinkFacts(resolved, new FsLookupCache(tempDir), {
         projectRoot: tempDir,
         skipGitIgnoreCheck: false,
       });
@@ -508,7 +508,7 @@ describe('link validation fill/judge split', () => {
     // it asks for a canonical path, so filling one would be pure added syscalls
     // — the exact regression this column exists to remove.
     const skipped = await countRealpaths(async () => {
-      const tables = await fillLinkFacts(resolved, new FsLookupCache(), {
+      const tables = await fillLinkFacts(resolved, new FsLookupCache(tempDir), {
         projectRoot: tempDir,
         skipGitIgnoreCheck: true,
       });
@@ -520,7 +520,7 @@ describe('link validation fill/judge split', () => {
 
     // Gate CLOSED the other way: no projectRoot to be within.
     const rootless = await countRealpaths(async () => {
-      const tables = await fillLinkFacts(resolved, new FsLookupCache(), {
+      const tables = await fillLinkFacts(resolved, new FsLookupCache(tempDir), {
         skipGitIgnoreCheck: false,
       });
       expect(tables.realpaths.size).toBe(0);
@@ -531,7 +531,7 @@ describe('link validation fill/judge split', () => {
     // gate open. Without this the two zeroes above are equally satisfied by a
     // fill that never canonicalizes anything.
     const filled = await countRealpaths(async () => {
-      const tables = await fillLinkFacts(resolved, new FsLookupCache(), {
+      const tables = await fillLinkFacts(resolved, new FsLookupCache(tempDir), {
         projectRoot: tempDir,
         skipGitIgnoreCheck: false,
       });
@@ -572,7 +572,7 @@ describe('link validation fill/judge split', () => {
     // half: adding a field to JudgeLinkOptions without teaching
     // judgeOptionsFrom to carry it breaks it here rather than in production.
     const everyField: Required<ValidateLinkOptions> = {
-      fsCache: new FsLookupCache(),
+      fsCache: new FsLookupCache('/project'),
       projectRoot: '/project',
       skipGitIgnoreCheck: false,
       gitTracker: {} as unknown as Required<ValidateLinkOptions>['gitTracker'],

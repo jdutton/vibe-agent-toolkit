@@ -3,9 +3,7 @@
  * Prevents re-parsing markdown files on every IDE operation
  */
 
-import { statSync } from 'node:fs';
-
-import { isPathAbsentError } from '@vibe-agent-toolkit/utils';
+import { followedStatSync } from '@vibe-agent-toolkit/utils';
 
 import type { MarkdownResource } from '../compiler/types.js';
 
@@ -16,11 +14,7 @@ interface CacheEntry {
   mtime: number;
 }
 
-/**
- * Global cache of parsed markdown resources
- * Key: absolute file path
- * Value: cache entry with resource and mtime
- */
+/** Parsed markdown resources by absolute file path. */
 const cache = new Map<string, CacheEntry>();
 
 /**
@@ -28,12 +22,13 @@ const cache = new Map<string, CacheEntry>();
  * Invalidates cache if file has been modified since last load
  *
  * @param filePath - Absolute path to markdown file
+ * @param within - The tree it is read in (the importing file's directory)
  * @param loader - Function to load and parse the markdown file
  * @returns Parsed markdown resource
  *
  * @example
  * ```typescript
- * const resource = getMarkdownResource('/path/to/file.md', () => {
+ * const resource = getMarkdownResource('/path/to/file.md', '/path/to', () => {
  *   const content = readFileSync('/path/to/file.md', 'utf-8');
  *   return toMarkdownResource(content);
  * });
@@ -41,23 +36,16 @@ const cache = new Map<string, CacheEntry>();
  */
 export function getMarkdownResource(
   filePath: string,
+  within: string,
   loader: () => MarkdownResource,
 ): MarkdownResource {
   // Get current file modification time. A file that is not there caches under
   // mtime 0 (the loader decides what an absent file means). A file the OS
-  // refuses to stat must NOT share that slot: it would be cached once, under
-  // the same key as an absent one, and never reloaded once its permissions
-  // were fixed. The language-service entry points catch and log.
-  let currentMtime: number;
-  try {
-    const stats = statSync(filePath);
-    currentMtime = stats.mtimeMs;
-  } catch (error) {
-    if (!isPathAbsentError(error)) throw error;
-    currentMtime = 0;
-  }
+  // refuses to stat must NOT share that slot (it throws): cached once under
+  // the same key as an absent one, it would never be reloaded once its
+  // permissions were fixed. The language-service entry points catch and log.
+  const currentMtime = followedStatSync(filePath, within)?.mtimeMs ?? 0;
 
-  // Check if cached version is still valid
   const cached = cache.get(filePath);
   if (cached?.mtime === currentMtime) {
     return cached.resource;

@@ -184,12 +184,12 @@ function outputSkillsHuman(
 function scanSkillsDir(skillsDir: string): DiscoveredSkill[] {
   const skills: DiscoveredSkill[] = [];
 
-  for (const entry of readSourceDir(skillsDir)) {
+  for (const entry of readSourceDir(skillsDir, 'environment')) {
     // Followed: a `--dev` install is a symlinked skill directory and is listed.
     // A tree-change leftover (`.<name>.vat-staged-*`: an interrupted build's staged or parked bundle) is not a skill.
-    if (isTreeChangeResidue(entry.name) || direntKindFollowingSync(skillsDir, entry) !== 'directory') continue;
+    if (isTreeChangeResidue(entry.name) || direntKindFollowingSync(skillsDir, entry, skillsDir) !== 'directory') continue;
     const candidate = safePath.join(skillsDir, entry.name);
-    if (holdsSkillMd(candidate)) {
+    if (holdsSkillMd(candidate, skillsDir, 'environment')) {
       skills.push(...processDiscoveredSkills([{ path: safePath.join(candidate, 'SKILL.md') }]));
     }
   }
@@ -237,7 +237,7 @@ async function listProjectSkills(pathArg: string | undefined, logger: ReturnType
   const rootDir = pathArg === undefined ? process.cwd() : assertReadableDirectoryArgument(pathArg);
   logger.info(`📋 Listing skills in: ${rootDir}`);
 
-  const config = loadConfig(rootDir);
+  const config = loadConfig(rootDir, 'source');
   const scanResult: ScanSummary = await scan({
     path: rootDir,
     recursive: true,

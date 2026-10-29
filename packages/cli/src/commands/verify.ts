@@ -17,8 +17,6 @@
  * Both sets are config-gated, and both are announced on startup.
  */
 
-import { existsSync, statSync } from 'node:fs';
-
 import {
   detectPackagedAgentInstructionFiles,
   explicitFilesConfigDests,
@@ -34,7 +32,7 @@ import {
   type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { forEachInOrder, isPathAbsentError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { everywhere, followedKindSync, forEachInOrder, isPathAbsentError, pathPresent, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { marksOperandRefusalByHand } from '../command-tree.js';
@@ -267,9 +265,10 @@ interface BuiltSkillOutputs {
  * refused `dist/skills/x` as missing would name it under `missing` with a
  * remedy ("run vat build") that cannot help.
  */
-function isDirectory(dir: string): boolean {
+function isDirectory(dir: string, within: string): boolean {
   try {
-    return statSync(dir).isDirectory();
+    // Beneath the project root: every link on the way is read before the kernel follows it.
+    return followedKindSync(dir, within) === 'directory';
   } catch (error) {
     if (isPathAbsentError(error)) return false;
     throw error;
@@ -300,7 +299,7 @@ function addCheckCandidate(
   const key = `${candidate.skillName}\0${candidate.outputDir}`;
   if (seen.has(key)) return;
   seen.add(key);
-  const exists = isDirectory(candidate.outputDir);
+  const exists = isDirectory(candidate.outputDir, cwd);
   if (exists) outputs.built.push(candidate);
   if (!expected) return;
   outputs.expected += 1;
@@ -366,7 +365,7 @@ function collectBuiltSkillOutputs(
   // used to wrap this whole body could only ever absorb a DEFECT — and it
   // absorbed it into an empty candidate list, which every phase below then
   // verified against: zero bundles, zero findings, exit 0.
-  const config = loadConfig(cwd);
+  const config = loadConfig(cwd, 'source');
   if (!config) return outputs;
 
   const skillsConfig = config.skills;
@@ -431,7 +430,7 @@ function collectBuiltSkillOutputs(
  * with no existing candidate dir is not reported (the build did not run for that
  * mode) — the packaged-content phase names the unbuilt bundles.
  */
-function checkFilesConfigDestsOf(built: readonly CheckEntry[]): { checked: number; missing: MissingDests[] } {
+function checkFilesConfigDestsOf(built: readonly CheckEntry[], projectRoot: string): { checked: number; missing: MissingDests[] } {
   const results: MissingDests[] = [];
   let checked = 0;
   for (const check of built) {
@@ -442,7 +441,8 @@ function checkFilesConfigDestsOf(built: readonly CheckEntry[]): { checked: numbe
     const missing: string[] = [];
     for (const entry of mergedFiles) {
       const destPath = safePath.resolve(outputDir, entry.dest);
-      if (!existsSync(destPath)) {
+      // A probe the OS refuses is the bundle's source fault, never "missing" (a remedy that cannot help).
+      if (!pathPresent(destPath, { follow: projectRoot }, everywhere('source'), 'probe')) {
         missing.push(entry.dest);
       }
     }
@@ -556,7 +556,7 @@ export interface PackagedContentCrawl {
  */
 function loadConfigTolerant(cwd: string): { config: ProjectConfig | undefined; error?: string } {
   try {
-    return { config: loadConfig(cwd) };
+    return { config: loadConfig(cwd, 'source') };
   } catch (error) {
     return { config: undefined, error: error instanceof Error ? error.message : String(error) };
   }
@@ -903,7 +903,7 @@ export function runFilesConfigDestsPhase(
   logger: ReturnType<typeof createLogger>,
 ): PhaseResult {
   const built = collectBuiltSkillOutputs(projectRoot, discovered, pluginLocal, pluginLocalNames).built;
-  const { checked, missing } = checkFilesConfigDestsOf(built);
+  const { checked, missing } = checkFilesConfigDestsOf(built, projectRoot);
   if (missing.length > 0) reportFilesDestErrors(missing, logger);
   return {
     name: FILES_CONFIG_DESTS,

@@ -258,11 +258,11 @@ describe('finding the built skills inside a downloaded package', () => {
     const nodeModules = safePath.join(root, 'node_modules');
 
     const byCodePoint = (a: string, b: string): number => (a < b ? -1 : Number(a > b));
-    expect(listNodeModulePackages(nodeModules).sort(byCodePoint)).toEqual([
+    expect(listNodeModulePackages(nodeModules, tempDir).sort(byCodePoint)).toEqual([
       safePath.join(nodeModules, '@scope', 'inner'),
       safePath.join(nodeModules, 'plain'),
     ].sort(byCodePoint));
-    expect(listNodeModulePackages(safePath.join(tempDir, 'nope', 'node_modules'))).toEqual([]);
+    expect(listNodeModulePackages(safePath.join(tempDir, 'nope', 'node_modules'), tempDir)).toEqual([]);
   });
 });
 
@@ -766,7 +766,7 @@ describe('what installFromLocal actually reads out of a REAL archive', () => {
     const logger = recordingLogger();
 
     await expect(installFromLocal(zipPath, undefined, clientThatMustNotBeCalled(), logger))
-      .rejects.toMatchObject({ code: 'ARCHIVE_ENTRY_UNREADABLE', reason: 'unsupported', entry: 'bm/resources/guide.md' });
+      .rejects.toMatchObject({ code: 'ARCHIVE_ENTRY_UNREADABLE', entry: 'bm/resources/guide.md' });
 
     const log = logger.lines.join('\n');
     // The warning says what happens next — the refusal above — never that the publish goes on without it.

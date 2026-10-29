@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 
 import { AGENT_MANIFEST_INVALID_CODE } from '@vibe-agent-toolkit/agent-config';
 import { createSymlink, FS_FAULT_CODE, safePath, symlinkCapability } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
+import { CANNOT_DENY_READS, installFaultFs, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AGENT_PACKAGE_ROOT_MISSING_CODE, buildAgentSkill } from '../src/builder.js';
@@ -348,21 +348,39 @@ spec:
     await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject(SOURCE_FAULT);
   });
 
-  it('refuses a scripts/ it cannot stat instead of building without it', async ({ skip }) => {
+  // The probe reads the entry's link chain (`lstat`) before the kernel is asked to follow it: an
+  // `lstat` the OS refuses is the source's fault, never "no scripts/" — a link CYCLE, by contrast,
+  // resolves to nothing, as a dangling link does.
+  it('refuses a scripts/ it cannot stat instead of building without it', async () => {
+    const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'scripts-refused');
+    const scripts = safePath.join(agentDir, 'scripts');
+    await fs.mkdir(scripts);
+    const session = installFaultFs({ within: agentDir, faults: [{ op: 'lstat', path: (path) => path === scripts, errno: 'EACCES' }] });
+    try {
+      await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject({ ...SOURCE_FAULT, path: scripts });
+    } finally {
+      session.restore();
+    }
+  });
+
+  it('refuses a package.json it cannot stat instead of walking past it', async () => {
+    const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'package-refused');
+    const packageJson = safePath.join(agentDir, PACKAGE_JSON_NAME);
+    const session = installFaultFs({ within: agentDir, faults: [{ op: 'lstat', path: (path) => path === packageJson, errno: 'EACCES' }] });
+    try {
+      await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject({ ...SOURCE_FAULT, path: packageJson });
+    } finally {
+      session.restore();
+    }
+  });
+
+  it('builds without a scripts/ that is a link cycle: a cycle resolves to nothing', async ({ skip }) => {
     const cap = symlinkCapability() ?? skip();
     const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'scripts-loop');
     createSymlink(cap, 'scripts', safePath.join(agentDir, 'scripts'), 'dir');
 
-    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject(SOURCE_FAULT);
-  });
-
-  it('refuses a package.json it cannot stat instead of walking past it', async ({ skip }) => {
-    const cap = symlinkCapability() ?? skip();
-    const { agentDir, manifestPath } = await writeMinimalAgent(tempDir, 'package-loop');
-    await fs.rm(safePath.join(agentDir, PACKAGE_JSON_NAME));
-    createSymlink(cap, PACKAGE_JSON_NAME, safePath.join(agentDir, PACKAGE_JSON_NAME), 'file');
-
-    await expect(buildAgentSkill({ agentPath: manifestPath })).rejects.toMatchObject(SOURCE_FAULT);
+    const result = await buildAgentSkill({ agentPath: manifestPath });
+    expect(result.files.some((file) => file.includes('/scripts/'))).toBe(false);
   });
 
   // The output the operator chose refusing a write says nothing about the agent:

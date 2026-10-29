@@ -4,10 +4,10 @@
  * Apart from the command modules, which do not read the filesystem themselves.
  */
 
-import { accessSync, constants, readdirSync, statSync } from 'node:fs';
+import { accessSync, constants, readdirSync, type Stats } from 'node:fs';
 
 import { foreignDatabaseEntries, linkedDatabasePath, type DatabaseDirectoryEntry } from '@vibe-agent-toolkit/rag-lancedb';
-import { classifyFsFault, type FsFaultContext, type FsSide, isFileInTheWayError, isPathAbsentError, isVatError, mkdirSyncReal, RAG_INDEX_EMPTY_CODE, TREE_DEST_NOT_OWNED_CODE, VatError, withFsFaultSync } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, type FsFaultContext, type FsSide, isFileInTheWayError, isPathAbsentError, isVatError, mkdirSyncReal, RAG_INDEX_EMPTY_CODE, requireFollowedStatSync, TREE_DEST_NOT_OWNED_CODE, VatError, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from './command-refusal.js';
 
@@ -40,6 +40,14 @@ function probe<T>(fault: FsFaultContext, read: () => T): Probed<T> {
   }
 }
 
+/**
+ * `stat` the database path. It is the operator's own (`--db`, or the project's default location
+ * the operator runs the verb on): its own `within`.
+ */
+function statDatabasePath(dbPath: string): Stats {
+  return requireFollowedStatSync(dbPath, dbPath);
+}
+
 /** Whether a probe met a file in the way. */
 const fileInTheWay = <T>(probed: Probed<T>): boolean => 'missing' in probed && probed.missing === 'file-in-the-way';
 
@@ -52,7 +60,7 @@ const fileInTheWay = <T>(probed: Probed<T>): boolean => 'missing' in probed && p
  * @returns The sentence naming which
  */
 function notADirectory(dbPath: string, fault: FsFaultContext): string {
-  return fileInTheWay(probe(fault, () => statSync(dbPath))) ? `a path above ${dbPath} is not a directory` : `${dbPath} is not a directory`;
+  return fileInTheWay(probe(fault, () => statDatabasePath(dbPath))) ? `a path above ${dbPath} is not a directory` : `${dbPath} is not a directory`;
 }
 
 /**
@@ -170,7 +178,7 @@ export function notRemovableRefusal(error: unknown, dbPath: string, explicit: bo
 export function requireWritableDatabase(dbPath: string, explicit: boolean): void {
   const inputRefusal = explicit ? 'USAGE_INVALID' : 'INPUT_UNREADABLE';
   const fault = databaseFault(dbPath, 'destination', explicit, 'examine the RAG database directory');
-  const stats = probe(fault, () => statSync(dbPath));
+  const stats = probe(fault, () => statDatabasePath(dbPath));
   if (fileInTheWay(stats)) {
     throw new CommandRefusalError(inputRefusal, `Cannot index into ${dbPath}: a path above it is not a directory.`);
   }

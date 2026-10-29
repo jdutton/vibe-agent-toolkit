@@ -26,12 +26,11 @@
  * every packaging lane, so no lane can answer the question differently.
  */
 
-import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import type { SkillPackagingConfig } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { isGlob, issueLocation, relativeEscapesRoot, safePath, staticGlobBase, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { everywhere, isGlob, issueLocation, pathPresent, relativeEscapesRoot, safePath, staticGlobBase, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import { type SkillFileEntry } from './files-config.js';
 import { DEFAULT_EVALS_SUBPATH } from './skill-test/eval-suite-isolation.js';
@@ -85,7 +84,9 @@ export function conventionalSuiteProbe(): ConventionalSuiteProbe {
     const suitePath = safePath.resolve(skillDir, DEFAULT_EVALS_SUBPATH);
     const cached = answers.get(suitePath);
     if (cached !== undefined) return cached;
-    const found = existsSync(suitePath);
+    // The skill directory is the tree: the suite's link chain beneath it is read first, and a refused
+    // probe is the skill's fault — never "no conventional suite" (which would ship the suite).
+    const found = pathPresent(suitePath, { follow: skillDir }, everywhere('source'), 'probe');
     answers.set(suitePath, found);
     return found;
   };

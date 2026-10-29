@@ -86,16 +86,26 @@ async function collectMarketplaces(
 	parseErrors: ParseErrors,
 	gitTrackerSource: GitTrackerSource,
 ): Promise<void> {
-	if (presenceOrRecord(marketplacesDir, parseErrors) !== 'present') return;
+	// The install's own directory, which the operator named (or is theirs): its own `within`.
+	if (presenceOrRecord(marketplacesDir, marketplacesDir, parseErrors) !== 'present') return;
 	try {
 		const entries = await readdir(marketplacesDir, { withFileTypes: true });
 		// In order: the git-tracker cache is shared, so its first users must not race.
 		await forEachInOrder(entries, async (entry) => {
 			// `vat claude plugin install` stages and parks a marketplace it replaces beside it.
 			if (isTreeChangeResidue(entry.name)) return;
-			// A symlinked marketplace (a dev install) is a marketplace: follow it.
-			if ((await direntKindFollowing(marketplacesDir, entry)) !== 'directory') return;
 			const mpPath = safePath.join(marketplacesDir, entry.name);
+			// A symlinked marketplace (a dev install) is a marketplace: follow it — its chain read
+			// first (`link-following.ts`). A link the OS or VAT refuses to follow is that ONE
+			// marketplace's row; every other marketplace is still read.
+			let kind: Awaited<ReturnType<typeof direntKindFollowing>>;
+			try {
+				kind = await direntKindFollowing(marketplacesDir, entry, marketplacesDir);
+			} catch (e) {
+				parseErrors.push(recordedFailure(mpPath, (e as Error).message, e));
+				return;
+			}
+			if (kind !== 'directory') return;
 			marketplaces.push(await extractClaudeMarketplaceInventory(mpPath, { gitTrackerSource }));
 		});
 	} catch (e) {
@@ -106,13 +116,14 @@ async function collectMarketplaces(
 /**
  * The subdirectories of `dir`, or `[]` with the listing failure recorded in
  * `parseErrors` — every failure, the concurrent-deletion race included, because
- * a path that was listed a moment ago and is now gone is worth a row too.
+ * a path that was listed a moment ago and is now gone is worth a row too. A linked entry's chain is
+ * read beneath `within` (the cache root) first (`link-following.ts`); a refused one is a recorded row.
  */
-async function subdirectoriesOrRecord(dir: string, parseErrors: ParseErrors): Promise<string[]> {
+async function subdirectoriesOrRecord(dir: string, within: string, parseErrors: ParseErrors): Promise<string[]> {
 	try {
 		return (await readdir(dir, { withFileTypes: true }))
 			// Followed: a `--dev` install puts a marketplace or plugin here AS a link.
-			.filter(e => direntKindFollowingSync(dir, e) === 'directory')
+			.filter(e => direntKindFollowingSync(dir, e, within) === 'directory')
 			.map(e => safePath.join(dir, e.name));
 	} catch (e) {
 		parseErrors.push(recordedFailure(dir, (e as Error).message, e));
@@ -126,28 +137,29 @@ async function collectCachedPlugins(
 	parseErrors: ParseErrors,
 	gitTrackerSource: GitTrackerSource,
 ): Promise<void> {
-	if (presenceOrRecord(cacheDir, parseErrors) !== 'present') return;
+	if (presenceOrRecord(cacheDir, cacheDir, parseErrors) !== 'present') return;
 
 	// In order, like every walk here: the shared git-tracker cache, and `parseErrors` order.
-	await forEachInOrder(await subdirectoriesOrRecord(cacheDir, parseErrors), (mpDir) =>
-		collectPluginsInMarketplaceCache(mpDir, plugins, parseErrors, gitTrackerSource),
+	await forEachInOrder(await subdirectoriesOrRecord(cacheDir, cacheDir, parseErrors), (mpDir) =>
+		collectPluginsInMarketplaceCache(mpDir, cacheDir, plugins, parseErrors, gitTrackerSource),
 	);
 }
 
 async function collectPluginsInMarketplaceCache(
 	mpDir: string,
+	cacheDir: string,
 	plugins: PluginInventory[],
 	parseErrors: ParseErrors,
 	gitTrackerSource: GitTrackerSource,
 ): Promise<void> {
 	// A level the OS refuses to list is recorded against its own path, the same way
 	// the cache root above is: an unlisted marketplace used to read as "no plugins".
-	const pluginNameDirs = await subdirectoriesOrRecord(mpDir, parseErrors);
+	const pluginNameDirs = await subdirectoriesOrRecord(mpDir, cacheDir, parseErrors);
 
 	await forEachInOrder(pluginNameDirs, async (nameDir) => {
 		// A dot-named directory is never a version: it is a plugin install's staged copy or
 		// parked previous tree, left by a crash or by a removal the OS refused.
-		const versionDirs = (await subdirectoriesOrRecord(nameDir, parseErrors)).filter(dir => !basename(dir).startsWith('.'));
+		const versionDirs = (await subdirectoriesOrRecord(nameDir, cacheDir, parseErrors)).filter(dir => !basename(dir).startsWith('.'));
 		await forEachInOrder(versionDirs, async (versionDir) => {
 			try {
 				// N+1 WHOLE-CORPUS CRAWL — known, not fixed here. No `SharedRegistrySource` is

@@ -259,7 +259,7 @@ async function validateTopLevelCommand(
     // subdirectory invocation doesn't load an empty config and falsely pass.
     const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
     const phases = applyPhaseSelection(
-      selectValidateSurfaces(loadConfig(projectRoot), options.verbose === true),
+      selectValidateSurfaces(loadConfig(projectRoot, 'source'), options.verbose === true),
       logger,
     );
 

@@ -13,6 +13,7 @@ import { lstatSync, readdirSync, readFileSync } from 'node:fs';
 
 import {
   classifyFsFault,
+  everywhere,
   type FsSide,
   isPathAbsentError,
   isSingleFsSegment,
@@ -170,7 +171,7 @@ function readRegistry(filePath: string, side: FsSide): RegistryRead {
     if (!isPathAbsentError(error)) throw classifyFsFault(error, ctx);
     // Absent only when the directory's listing agrees: a refused read of a file that IS there
     // would read as an empty registry, and the write after it would drop every entry it held.
-    requireConfirmedAbsent(filePath, error, ctx, { follows: true });
+    requireConfirmedAbsent(filePath, error, { origin: ctx.origin, action: ctx.action, path: filePath }, { follows: true, sideOf: everywhere(side) });
     return { prior: undefined, parsed: undefined };
   }
   try {
@@ -359,7 +360,7 @@ function readMarker(dir: string): MarkerRead {
     if (!lstatSync(marker).isFile()) return { present: false };
   } catch (error) {
     if (!isPathAbsentError(error)) throw classifyFsFault(error, ctx);
-    requireConfirmedAbsent(marker, error, ctx, { follows: false });
+    requireConfirmedAbsent(marker, error, { action: ctx.action, path: marker }, { follows: false, sideOf: everywhere(ctx.side) });
     return { present: false };
   }
   return { present: true, installedFrom: installerRecordedIn(withFsFaultSync(ctx, () => readFileSync(marker, 'utf-8'))) };

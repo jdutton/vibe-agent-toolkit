@@ -209,7 +209,8 @@ export function settleCrawlRefusal(policy: UnreadablePolicy, refusal: DirectoryR
 
 function canonicalOrSpelled(path: string): string {
   try {
-    return toForwardSlash(canonicalPath(path));
+    // The refused directory and the verb's outputs are spelled by the verb: each is its own edge.
+    return toForwardSlash(canonicalPath(path, path));
   } catch (error) {
     // A directory that refused its listing may refuse resolution too: its spelling is all there is.
     if (fsFaultOf(error) === undefined) throw error;

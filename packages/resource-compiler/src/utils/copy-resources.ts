@@ -3,11 +3,10 @@
  * Cross-platform utility for copying generated resources to dist directory
  */
 
-import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { copyTree, mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { copyTree, followedKindSync, mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 export interface CopyResourcesOptions {
   /** Source directory containing generated resources, e.g. 'generated' or 'generated/resources'. */
@@ -58,12 +57,12 @@ export async function copyResources(options: CopyResourcesOptions): Promise<void
     console.log(`Copying resources: ${sourceDir} → ${targetDir}`);
   }
 
-  if (!existsSync(sourceDir)) {
+  if (followedKindSync(sourceDir, sourceDir) === 'absent') {
     throw new Error(`Source directory does not exist: ${sourceDir}`);
   }
 
   const targetParent = dirname(targetDir);
-  if (!existsSync(targetParent)) {
+  if (followedKindSync(targetParent, targetParent) === 'absent') {
     mkdirSyncReal(targetParent, { recursive: true });
   }
 

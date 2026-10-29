@@ -82,7 +82,7 @@ export function installUnit(tree: InstallSourceTree, dir: string, what: string):
     if (treeChain(tree.root, dir, HOST_PATH_FLAVOR).kind === 'refused') throw new CopyLinkEscapesSourceError(dir, tree.root);
     // An absent `dir` is not this check's to name: resolving it below raises the OS's own answer.
     if (treeContainment(tree.root, dir) === 'outside') throw new CopyLinkEscapesSourceError(dir, tree.root);
-    const real = toForwardSlash(normalizePath(dir));
+    const real = toForwardSlash(normalizePath(dir, tree.root));
     refuseEscapingLinks({
       root: real,
       placement: 'relocated',

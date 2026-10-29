@@ -41,10 +41,15 @@ export class DirectoryWalkRevisitedError extends VatError {
 export class FollowedWalk {
   readonly #entered = new Map<string, string>();
   readonly #side: FsSide;
+  readonly #within: string;
 
-  /** @param side - The side of the verb the walked tree is on: a refused realpath in {@link enter} is a fault there */
-  constructor(side: FsSide) {
+  /**
+   * @param side - The side of the verb the walked tree is on: a refused realpath in {@link enter} is a fault there
+   * @param within - The tree the walk is in (the operator's own input): every link beneath it is read before the kernel resolves it
+   */
+  constructor(side: FsSide, within: string) {
     this.#side = side;
+    this.#within = within;
   }
 
   /**
@@ -65,7 +70,7 @@ export class FollowedWalk {
 
   #realpath(dir: string): string {
     try {
-      return normalizePath(dir);
+      return normalizePath(dir, this.#within);
     } catch (error: unknown) {
       throw classifyFsFault(error, { side: this.#side, origin: 'content', action: `resolve ${dir}`, path: dir });
     }

@@ -194,14 +194,14 @@ describe('file-crawler', () => {
       expect(files).toEqual([]);
     });
 
-    it('should throw error for non-existent directory', () => {
+    it('refuses a non-existent base as a classified ENOENT on its own path, never an uncoded error', () => {
       expect(() =>
         crawlDirectorySync({
           outputs: [],
           baseDir: '/non/existent/path',
           unreadable: refuseUnreadableFixture('/non/existent/path'),
         })
-      ).toThrow('Base directory does not exist');
+      ).toThrow(expect.objectContaining({ errno: 'ENOENT', path: safePath.resolve('/non/existent/path') }));
     });
 
     it('should throw error when baseDir is a file', () => {

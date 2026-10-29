@@ -39,13 +39,14 @@
  * decides which refusal each is.
  */
 
-import { lstatSync, readdirSync, statSync } from 'node:fs';
+import { lstatSync, readdirSync } from 'node:fs';
 
 import { requireConfirmedAbsent } from '../errors/confirmed-absent.js';
 import { isPathAbsentError } from '../errors/errno-table.js';
-import { classifyFsFault, type FsSide, withFsFaultSync } from '../errors/fs-fault.js';
+import { classifyFsFault, everywhere, type FsSide, withFsFaultSync } from '../errors/fs-fault.js';
 import { VatError } from '../errors/vat-error.js';
 import { forEachInOrder } from '../in-order.js';
+import { followedStatSync } from '../link-following.js';
 import { relativeEscapesRoot, safePath } from '../path-core.js';
 
 import type { EntryContainment, EntrySameness } from './identity-compare.js';
@@ -327,7 +328,7 @@ function kindOf(dest: string): EntryKind {
   } catch (error: unknown) {
     if (!isPathAbsentError(error)) throw classifyFsFault(error, { ...EXAMINE_DEST, path: dest });
     // Absent only when the parent's listing agrees: a refused probe of an entry that is there is a fault.
-    requireConfirmedAbsent(dest, error, EXAMINE_DEST, { follows: false });
+    requireConfirmedAbsent(dest, error, { action: EXAMINE_DEST.action, path: dest }, { follows: false, sideOf: everywhere(EXAMINE_DEST.side) });
     return 'absent';
   }
   if (stats.isSymbolicLink()) return 'link';
@@ -338,7 +339,8 @@ function kindOf(dest: string): EntryKind {
 /** Whether the link at `dest` leads to a directory: a dangling link leads nowhere; a target the OS refuses to examine is a fault. */
 function linksToDirectory(dest: string): boolean {
   try {
-    return statSync(dest).isDirectory();
+    // `dest` is the destination the verb names: the operator's own path, its own link the edge.
+    return followedStatSync(dest, dest)?.isDirectory() ?? false;
   } catch (error: unknown) {
     if (isPathAbsentError(error)) return false;
     throw classifyFsFault(error, { ...EXAMINE_DEST, path: dest });

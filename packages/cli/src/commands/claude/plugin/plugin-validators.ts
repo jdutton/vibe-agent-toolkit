@@ -60,7 +60,7 @@ export async function verifyPluginDirCaseMatch(
   const entries: Dirent[] | undefined = await unlessAbsent(pluginsBase, () => readdir(pluginsBase, { withFileTypes: true }));
   if (entries === undefined) return;
 
-  const kinds = await Promise.all(entries.map((e) => direntKindFollowing(pluginsBase, e)));
+  const kinds = await Promise.all(entries.map((e) => direntKindFollowing(pluginsBase, e, projectRoot)));
   const matchInsensitive = entries.find(
     (e, i) => kinds[i] === 'directory' && e.name.toLowerCase() === pluginName.toLowerCase(),
   );

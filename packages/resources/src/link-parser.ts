@@ -17,11 +17,9 @@
  * `schemas/resource-metadata.ts` (single source of truth).
  */
 
-import { stat } from 'node:fs/promises';
-
-import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
 import GithubSlugger from 'github-slugger';
 
+import { readCorpusDocument } from './corpus-document.js';
 import { parseFrontmatterSource } from './frontmatter-source.js';
 import { estimateTokens } from './link-classify.js';
 import {
@@ -131,7 +129,7 @@ export interface ParseResult {
  *
  * Reads the bytes, then delegates every parsing decision to
  * {@link parseMarkdownContent}. The only thing decided here is the byte size
- * attributed to the document: `stat().size`, the real size on disk.
+ * attributed to the document: the length of the bytes read, the real size on disk.
  *
  * @param filePath - Absolute path to the markdown file
  * @returns Parsed markdown data including links, headings, size, and token estimate
@@ -145,17 +143,8 @@ export interface ParseResult {
  * ```
  */
 export async function parseMarkdown(filePath: string): Promise<ParseResult> {
-  // Read file content and stats
-  // `readTextContent`, never `readFile(path, 'utf-8')`: this reads a CORPUS
-  // document, whose encoding VAT does not choose. See text-content.ts.
-  const [decoded, stats] = await Promise.all([
-    readTextContent(filePath),
-    stat(filePath),
-  ]);
-
-  // `stats.size` is RAW bytes and stays raw — see the `sizeBytes` note on
-  // `parseMarkdownContent` for why it cannot be derived from the decoded string.
-  return parseMarkdownContent(decoded.text, stats.size);
+  const { text, sizeBytes } = await readCorpusDocument(filePath);
+  return parseMarkdownContent(text, sizeBytes);
 }
 
 /**

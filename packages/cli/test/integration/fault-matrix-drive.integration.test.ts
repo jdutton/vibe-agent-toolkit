@@ -214,7 +214,7 @@ describe('runVerb', () => {
     const r = makeCaseRoot(scratch.create());
     const c = { ...toyCase(() => { seen.cwd = process.cwd(); seen.claude = process.env['CLAUDE_CONFIG_DIR']; seen.cache = process.env['VAT_CACHE']; }), cwd: (root: typeof r) => root.project };
     await runVerb(c, r);
-    expect(safePath.resolve(seen.cwd ?? '')).toBe(safePath.resolve(normalizePath(r.project)));
+    expect(safePath.resolve(seen.cwd ?? '')).toBe(safePath.resolve(normalizePath(r.project, r.project)));
     expect(seen).toMatchObject({ claude: '', cache: '0' });
     expect(process.cwd()).toBe(cwd);
   });

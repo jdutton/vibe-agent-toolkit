@@ -33,6 +33,7 @@ import {
 } from './link-validator.js';
 import { walkFrontmatterUriReferences } from './schema-uri-walker.js';
 import type { ResourceLink, ValidationIssue } from './types.js';
+import { locationRoot } from './utils.js';
 
 /** Map the link-level code emitted by the link judge to its frontmatter-scoped code. */
 const LINK_CODE_TO_FRONTMATTER_CODE: Partial<Record<IssueCode, IssueCode>> = {
@@ -131,7 +132,7 @@ export async function validateFrontmatterLinks(
   // the very resolution objects the judge will read — see linkTargetPaths.
   const tables = await fillLinkFacts(
     entries.map(({ entry }) => entry),
-    options?.fsCache ?? new FsLookupCache(),
+    options?.fsCache ?? new FsLookupCache(locationRoot(options?.projectRoot)),
     options ?? {},
   );
   const judgeOptions = judgeOptionsFrom(options, tables);

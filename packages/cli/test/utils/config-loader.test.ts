@@ -24,7 +24,7 @@ function loadConfigCapturingStderr(dir: string): { config: ReturnType<typeof loa
     return true;
   }) as typeof process.stderr.write;
   try {
-    return { config: loadConfig(dir), writes };
+    return { config: loadConfig(dir, 'source'), writes };
   } finally {
     process.stderr.write = originalWrite;
   }
@@ -44,7 +44,7 @@ describe('loadConfig', () => {
   });
 
   it('should return undefined when no file exists', () => {
-    const result = loadConfig(tempDir);
+    const result = loadConfig(tempDir, 'source');
     expect(result).toBeUndefined();
   });
 
@@ -60,7 +60,7 @@ describe('loadConfig', () => {
 `;
     fs.writeFileSync(configPath, configContent);
 
-    const result = loadConfig(tempDir);
+    const result = loadConfig(tempDir, 'source');
     expect(result?.resources?.exclude).toEqual(['node_modules/**']);
     expect(result?.resources?.collections?.docs?.include).toEqual(['docs/**/*.md']);
   });
@@ -70,7 +70,7 @@ describe('loadConfig', () => {
     const configContent = `resources: 42\n`; // a section of the wrong type refuses
     fs.writeFileSync(configPath, configContent);
 
-    expect(() => loadConfig(tempDir)).toThrow();
+    expect(() => loadConfig(tempDir, 'source')).toThrow();
   });
 
   it('warns about a version key, naming it and the file, and drops it', () => {
@@ -122,7 +122,7 @@ describe('loadConfig', () => {
     const configPath = safePath.join(tempDir, CONFIG_FILENAME);
     fs.writeFileSync(configPath, 'skills:\n  include: not-an-array\n');
 
-    expect(() => loadConfig(tempDir)).toThrow(/Expected array/);
+    expect(() => loadConfig(tempDir, 'source')).toThrow(/Expected array/);
   });
 
   it('should throw on invalid YAML syntax', () => {
@@ -130,7 +130,7 @@ describe('loadConfig', () => {
     const configContent = `invalid: yaml: syntax:\n`;
     fs.writeFileSync(configPath, configContent);
 
-    expect(() => loadConfig(tempDir)).toThrow();
+    expect(() => loadConfig(tempDir, 'source')).toThrow();
   });
 
   it('should load config with resource collections', () => {
@@ -152,7 +152,7 @@ describe('loadConfig', () => {
 `;
     fs.writeFileSync(configPath, configContent);
 
-    const result = loadConfig(tempDir);
+    const result = loadConfig(tempDir, 'source');
     expect(result?.resources?.collections).toBeDefined();
     expect(result?.resources?.collections?.['project-docs']).toBeDefined();
     expect(result?.resources?.collections?.['project-docs']?.include).toEqual([
@@ -176,7 +176,7 @@ describe('loadConfig', () => {
 `;
     fs.writeFileSync(configPath, configContent);
 
-    const result = loadConfig(tempDir);
+    const result = loadConfig(tempDir, 'source');
     expect(result?.claude).toBeDefined();
     expect(result?.claude?.marketplaces?.['my-tools']).toBeDefined();
     expect(result?.claude?.marketplaces?.['my-tools']?.owner?.name).toBe('My Org');
@@ -205,7 +205,7 @@ claude:
 `;
     fs.writeFileSync(configPath, configContent);
 
-    const result = loadConfig(tempDir);
+    const result = loadConfig(tempDir, 'source');
     expect(result?.resources?.collections?.docs).toBeDefined();
     expect(result?.claude?.marketplaces?.['vat-skills']?.owner?.name).toBe(
       'vibe-agent-toolkit contributors'
@@ -238,38 +238,38 @@ describe('loadConfigCached (Layer 2 cache — spec §8 / §13.5)', () => {
   it('returns cached config without re-parsing on second call', () => {
     writeConfigToDir(tempDir, VALID_CONFIG_YAML);
 
-    const first = loadConfigCached(tempDir);
+    const first = loadConfigCached(tempDir, 'source');
     expect(first).toEqual({});
 
     // Mutate to broken yaml. If the cache hits, we still get the previous
     // parsed result — proving the second call did not re-parse.
     writeConfigToDir(tempDir, ':::: not yaml :::\n');
 
-    const second = loadConfigCached(tempDir);
+    const second = loadConfigCached(tempDir, 'source');
     expect(second).toBe(first); // same object reference proves cache hit
   });
 
   it('caches "not found" as undefined (no re-stat per call)', () => {
     // tempDir has no config file. First call returns undefined.
-    const first = loadConfigCached(tempDir);
+    const first = loadConfigCached(tempDir, 'source');
     expect(first).toBeUndefined();
 
     // Even if we now write a config, the cached undefined wins until reset.
     writeConfigToDir(tempDir, VALID_CONFIG_YAML);
 
-    const second = loadConfigCached(tempDir);
+    const second = loadConfigCached(tempDir, 'source');
     expect(second).toBeUndefined();
   });
 
   it('resetLoadedConfigCache() clears the cache', () => {
     // Same setup as above: cache `undefined` then mutate.
-    const first = loadConfigCached(tempDir);
+    const first = loadConfigCached(tempDir, 'source');
     expect(first).toBeUndefined();
 
     writeConfigToDir(tempDir, VALID_CONFIG_YAML);
     resetLoadedConfigCache();
 
-    const fresh = loadConfigCached(tempDir);
+    const fresh = loadConfigCached(tempDir, 'source');
     expect(fresh).toEqual({});
   });
 
@@ -294,16 +294,16 @@ describe('loadConfigCached (Layer 2 cache — spec §8 / §13.5)', () => {
       // TWO loads of the SAME config. `loadConfigCached` short-circuits on the
       // second, so `loadConfig` is called directly as well — the ledger, not the
       // parse cache, has to be what silences the repeat.
-      loadConfigCached(tempDir);
-      loadConfig(tempDir);
-      loadConfig(tempDir);
+      loadConfigCached(tempDir, 'source');
+      loadConfig(tempDir, 'source');
+      loadConfig(tempDir, 'source');
 
       expect(warnings).toHaveLength(1);
 
       // The ledger is part of the cache's state: a reset must let the warning
       // through again, or a test that edits a fixture between runs sees nothing.
       resetLoadedConfigCache();
-      loadConfig(tempDir);
+      loadConfig(tempDir, 'source');
       expect(warnings).toHaveLength(2);
     } finally {
       process.stderr.write = originalWrite;
@@ -318,15 +318,15 @@ describe('loadConfigCached (Layer 2 cache — spec §8 / §13.5)', () => {
     // section of the wrong type.
     writeConfigToDir(tempDir, 'resources: 42\n');
 
-    expect(() => loadConfigCached(tempDir)).toThrow(ConfigLoadError);
+    expect(() => loadConfigCached(tempDir, 'source')).toThrow(ConfigLoadError);
 
     // The error is cached: even fixing the file re-throws the SAME error without
     // re-parsing, until the cache is reset (mirrors the success-cache behavior).
     writeConfigToDir(tempDir, VALID_CONFIG_YAML);
-    expect(() => loadConfigCached(tempDir)).toThrow(ConfigLoadError);
+    expect(() => loadConfigCached(tempDir, 'source')).toThrow(ConfigLoadError);
 
     // After a reset, the now-valid file parses cleanly.
     resetLoadedConfigCache();
-    expect(loadConfigCached(tempDir)).toBeDefined();
+    expect(loadConfigCached(tempDir, 'source')).toBeDefined();
   });
 });

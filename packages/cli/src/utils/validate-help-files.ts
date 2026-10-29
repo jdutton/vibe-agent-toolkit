@@ -6,11 +6,11 @@
  * rather than runtime errors when users request verbose help.
  */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { followedKindSync, safePath } from '@vibe-agent-toolkit/utils';
 import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
 
 /**
@@ -62,7 +62,8 @@ export function validateHelpFiles(): void {
 
   for (const filename of REQUIRED_HELP_FILES) {
     const helpPath = safePath.join(docsDir, filename);
-    if (!existsSync(helpPath)) {
+    // VAT's own shipped docs, beneath its own package root.
+    if (followedKindSync(helpPath, packageRoot) === 'absent') {
       missingFiles.push(filename);
     }
   }

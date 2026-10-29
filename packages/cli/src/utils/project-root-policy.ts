@@ -13,10 +13,10 @@
  * root as a parameter — never call `findProjectRoot` themselves.
  */
 
-import { accessSync, constants, readFileSync, statSync, type Stats } from 'node:fs';
+import { accessSync, constants, readFileSync, type Stats } from 'node:fs';
 
 import { fsFaultRefusal } from '@vibe-agent-toolkit/schema';
-import { classifyFsFault, findProjectRoot, type FsFaultContext, isFsFaultError, safePath, type SourceOrigin } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, findProjectRoot, type FsFaultContext, type FsSide, isFsFaultError, refusedPathOf, requireFollowedStatSync, safePath, type SideOfPath, type SourceOrigin } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from './command-refusal.js';
 import type { Logger } from './logger.js';
@@ -120,9 +120,19 @@ interface AbsentInput {
  * fault as its cause; anything else is the classified fault itself.
  */
 export function classifyInputFault(resolved: string, error: unknown, absent: AbsentInput): unknown {
-  const fault = classifyFsFault(error, { side: 'source', origin: absent.origin, action: 'read the input', path: resolved });
+  return classifyInputFaultOn('source', resolved, error, absent);
+}
+
+/**
+ * {@link classifyInputFault}, the refusal charged to `side`: the side of the path the OS refused, which for a
+ * walked input may be a directory above it on another side (`<project>/dist`, the tree a build writes), or the
+ * input itself when it is the run's own output (`dist/skills` under `vat build`). An absence keeps the caller's
+ * sentence, under the refusal the table owes THAT side: nothing is there to read, whoever's directory said so.
+ */
+function classifyInputFaultOn(side: FsSide, resolved: string, error: unknown, absent: AbsentInput): unknown {
+  const fault = classifyFsFault(error, { side, origin: absent.origin, action: 'read the input', path: resolved });
   if (!isFsFaultError(fault) || fault.faultClass !== 'absent') return fault;
-  return new CommandRefusalError(fsFaultRefusal('source', 'absent', absent.origin).refusal, absent.message, { cause: fault });
+  return new CommandRefusalError(fsFaultRefusal(side, 'absent', absent.origin).refusal, absent.message, { cause: fault });
 }
 
 /** A config key naming a file that is not there: the config's mistake. */
@@ -133,15 +143,19 @@ export function configNamedFileAbsent(key: string, named: string): AbsentInput {
 /**
  * Refuse unless `resolved` can be stat'ed.
  *
+ * @param within - The tree `resolved` is read in, whose links are read before the kernel follows
+ *   them (a project root); `resolved` itself when it IS the operator's own argument
+ * @param sideOf - The side of each path the `stat` touches — `resolved`, and each component walked beneath
+ *   `within`: a refusal is charged to the side of the path the OS refused
  * @returns What the `stat` found
  * @throws {CommandRefusalError} `absent` when nothing is there (the refusal its origin owes)
- * @throws {FsFaultError} when the OS refuses the `stat`
+ * @throws {FsFaultError} when the OS refuses the `stat`, or the chain names a network or device path
  */
-export function requireInputPath(resolved: string, absent: AbsentInput): Stats {
+export function requireInputPath(resolved: string, within: string, absent: AbsentInput, sideOf: SideOfPath): Stats {
   try {
-    return statSync(resolved);
+    return requireFollowedStatSync(resolved, within);
   } catch (error) {
-    throw classifyInputFault(resolved, error, absent);
+    throw classifyInputFaultOn(sideOf(refusedPathOf(error, resolved)), resolved, error, absent);
   }
 }
 
@@ -167,7 +181,8 @@ export function readInputFile(resolved: string, absent: AbsentInput): string {
 function directoryRefusal(resolved: string): unknown {
   let stats: Stats;
   try {
-    stats = statSync(resolved);
+    // The operator's own argument: its own `within`.
+    stats = requireFollowedStatSync(resolved, resolved);
   } catch (error) {
     return classifyInputFault(resolved, error, { origin: 'argument', message: `Path does not exist: ${resolved}` });
   }

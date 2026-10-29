@@ -27,7 +27,7 @@ import {
   type SeverityCounts,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { everywhere, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { resolveProjectDeclaredEvalSuites, resolveSkillPackagingConfig } from '../../skill-resolution/packaging-config.js';
@@ -72,7 +72,8 @@ export function resolveSkillPath(pathArg: string): string {
   const absolute = safePath.resolve(pathArg);
 
   // Absent is the invocation's mistake; an `EACCES` parent is the input's refusal.
-  const stat = requireInputPath(absolute, { origin: 'argument', message: `Path does not exist: ${absolute}` });
+  // The operator's own argument: its own `within`.
+  const stat = requireInputPath(absolute, absolute, { origin: 'argument', message: `Path does not exist: ${absolute}` }, everywhere('source'));
 
   if (stat.isFile()) {
     if (!absolute.endsWith('.md')) {
@@ -86,10 +87,10 @@ export function resolveSkillPath(pathArg: string): string {
     // `stat`, not `existsSync`: a directory the OS will not read answers
     // `existsSync` false too, and that is not "no SKILL.md" — the user's own
     // directory refused the read, so it is INPUT_UNREADABLE.
-    requireInputPath(candidate, {
+    requireInputPath(candidate, absolute, {
       origin: 'argument',
       message: `No SKILL.md found in directory: ${pathArg}. Point at the skill directory (containing SKILL.md) or the SKILL.md file directly.`,
-    });
+    }, everywhere('source'));
     return candidate;
   }
 

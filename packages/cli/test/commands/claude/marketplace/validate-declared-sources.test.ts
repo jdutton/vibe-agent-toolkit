@@ -26,7 +26,7 @@
  * resolution — the half that was wrong — is what is under test.
  */
 
-import { cpSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import nodeFs, { cpSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 
 import type { SymlinkCapability } from '@vibe-agent-toolkit/utils';
 import {
@@ -42,13 +42,13 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { MarketplaceValidateReport } from '../../../../src/commands/claude/marketplace/validate-schema.js';
 import { runMarketplaceValidatePhase } from '../../../../src/commands/claude/marketplace/validate.js';
 import { publishedPhase } from '../../../helpers/published-phase.js';
-import { errno, realBehind, refusingOnly } from '../../../helpers/refusal-doubles.js';
+import { errno, realBehind, refuseOnDefault, refusingOnly } from '../../../helpers/refusal-doubles.js';
 
-// `statSync` and `readdirSync` are named imports in the command, so the
-// refused-source and refused-`skills/` cases inject at the module seam. Every
-// other case stats and lists for real through them.
+// `readdirSync` is a named import in the command, so the refused-`skills/` case injects at the
+// module seam. A source's `stat` goes through utils' link-following, which reaches the kernel through
+// the DEFAULT `node:fs` object, so the refused-source case injects there. Every other case is real.
 vi.mock('node:fs', async (importOriginal) =>
-  (await import('../../../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['statSync', 'readdirSync']));
+  (await import('../../../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['readdirSync']));
 
 const RUN_INTEGRITY_CODE = 'RESOURCE_CHECK_BROKEN';
 /**
@@ -245,9 +245,7 @@ describe('marketplace validate — the denominator is the DECLARED local sources
     const root = safePath.join(tmp, 'refused-source');
     writeMarketplace(root, [DECLARED_A]);
     writePlugin(safePath.join(root, PLUGIN_A), 'a');
-    vi.mocked(statSync).mockImplementation(
-      refusingOnly(safePath.join(root, PLUGIN_A), errno('EACCES'), realBehind(statSync)),
-    );
+    refuseOnDefault(nodeFs, 'statSync', safePath.join(root, PLUGIN_A), errno('EACCES'));
 
     try {
       const { exitCode, doc } = await validate(root, true);
@@ -256,7 +254,7 @@ describe('marketplace validate — the denominator is the DECLARED local sources
       expect(doc.status).toBe('error');
       expect(doc.status === 'error' ? doc.error.message : '').toContain('EACCES');
     } finally {
-      vi.mocked(statSync).mockRestore();
+      vi.restoreAllMocks();
     }
   });
 

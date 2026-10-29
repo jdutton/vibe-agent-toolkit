@@ -113,6 +113,7 @@ export type { FsFaultClass, FsFaultFacts } from './errors/errno-table.js';
 export {
   assertUnresolvableLink,
   classifyFsFault,
+  everywhere,
   FS_FAULT_CODE,
   FS_SIDES,
   FsFaultError,
@@ -120,14 +121,31 @@ export {
   isFsFaultError,
   isLayoutFault,
   linkResolutionFault,
+  refusedPathOf,
+  sideWithin,
   SOURCE_ORIGINS,
   withFsFault,
   withFsFaultSync,
 } from './errors/fs-fault.js';
-export type { FsFaultContext, FsSide, SourceOrigin } from './errors/fs-fault.js';
+export type { FsFaultContext, FsSide, SideOfPath, SourceOrigin } from './errors/fs-fault.js';
 export { fsBoundary } from './errors/fs-boundary.js';
-export { requireConfirmedAbsent } from './errors/confirmed-absent.js';
-export { pathPresent } from './errors/path-present.js';
+export { requireConfirmedAbsent, type ConfirmationContext, type ConfirmationProbe } from './errors/confirmed-absent.js';
+export { pathPresent, type PresenceMode } from './errors/path-present.js';
+// The one module that asks the kernel to follow a link, each call once the chain beneath `within` is read.
+export {
+  assertLocalChain,
+  type FollowedPathKind,
+  followedKind,
+  followedKindSync,
+  followedRealpath,
+  followedRealpathSync,
+  followedStat,
+  followedStatSync,
+  realpathNative,
+  realpathNativeSync,
+  requireFollowedStat,
+  requireFollowedStatSync,
+} from './link-following.js';
 // The one fold for "are these two names one entry on some volume".
 export { foldedSegment } from './name-fold.js';
 // Faults raised while a failure was being handled, recorded beside it (never on its cause chain).
@@ -211,7 +229,7 @@ export {
   disposeTempDirAfterFailure,
   entryIdentities,
   FollowedWalk,
-  assertLocalChain,
+  isLinkChainRefusedError,
   HOST_PATH_FLAVOR,
   isInsideByIdentity,
   isParkedTreeEntry,
@@ -237,6 +255,9 @@ export {
   treeContainment,
   TreeRollbackIncompleteError,
   untrustedTextRefusal,
+  untrustedLinkRefusal,
+  isWithinUnder,
+  win32FoldedName,
   withTempDir,
 } from './tree-change/index.js';
 export type {

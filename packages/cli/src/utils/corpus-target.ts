@@ -40,13 +40,14 @@ import { CommandRefusalError } from './command-refusal.js';
  * @param target - The absolute, resolved argument
  */
 function relativeThroughRoot(root: string, target: string): string | undefined {
-  const canonicalRoot = canonicalPath(root);
+  // The root and every ancestor of the typed argument are the operator's own: each is its own `within`.
+  const canonicalRoot = canonicalPath(root, root);
   const ancestors: string[] = [];
   for (let current = toForwardSlash(target); ; current = toForwardSlash(dirname(current))) {
     ancestors.unshift(current);
     if (toForwardSlash(dirname(current)) === current) break;
   }
-  const anchor = ancestors.find((ancestor) => canonicalPath(ancestor) === canonicalRoot);
+  const anchor = ancestors.find((ancestor) => canonicalPath(ancestor, ancestor) === canonicalRoot);
   return anchor === undefined ? undefined : safePath.relative(anchor, target);
 }
 

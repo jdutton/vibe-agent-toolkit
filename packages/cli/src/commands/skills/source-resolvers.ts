@@ -14,7 +14,7 @@
 import { readdirSync, type Dirent } from 'node:fs';
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { disposeTempDir, disposeTempDirAfterFailure, forEachInOrder, pathPresent, safePath, toForwardSlash, withFsFaultSync } from '@vibe-agent-toolkit/utils';
+import { disposeTempDir, disposeTempDirAfterFailure, everywhere, forEachInOrder, type FsSide, pathPresent, safePath, toForwardSlash, withFsFaultSync } from '@vibe-agent-toolkit/utils';
 import { ARCHIVE_LIMITS, extractArchive } from '@vibe-agent-toolkit/utils/archive';
 
 import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
@@ -24,24 +24,27 @@ import { makeStagingDir } from '../../utils/staging-dir.js';
 import { downloadNpmPackage } from '../claude/plugin/helpers.js';
 
 /**
- * Whether `dir` holds a `SKILL.md`. Absent is `false`; a `stat` the OS refuses
- * is the source's refusal (`INPUT_UNREADABLE`) — never "no skill here", which
- * is what `existsSync` would have answered for both.
+ * Whether `dir` holds a `SKILL.md`. Absent is `false`; a probe the OS refuses
+ * is that tree's fault on its own side — never "no skill here", which is what
+ * `existsSync` would have answered for both.
  *
  * @param dir - A source directory, or one of its immediate subdirectories
+ * @param within - The source directory the operator named (or VAT staged): links beneath it are read before followed
+ * @param side - Whose tree it is: `source` for the operator's directory, `environment` for one VAT extracted
  */
-export function holdsSkillMd(dir: string): boolean {
-  return pathPresent(safePath.join(dir, 'SKILL.md'), 'follow', 'source', 'probe');
+export function holdsSkillMd(dir: string, within: string, side: FsSide): boolean {
+  return pathPresent(safePath.join(dir, 'SKILL.md'), { follow: within }, everywhere(side), 'probe');
 }
 
 /**
- * The entries of a source directory, refused like a path argument when the OS
- * will not list it (`INPUT_UNREADABLE`).
+ * The entries of a source directory, refused on its own side when the OS will
+ * not list it (`INPUT_UNREADABLE` for the operator's, `RUN_INCOMPLETE` for VAT's staging).
  *
  * @param dir - The source directory to list
+ * @param side - Whose tree it is: `source` for the operator's directory, `environment` for one VAT extracted
  */
-export function readSourceDir(dir: string): Dirent[] {
-  return withFsFaultSync({ side: 'source', origin: 'argument', action: 'list the source directory', path: dir }, () => readdirSync(dir, { withFileTypes: true }));
+export function readSourceDir(dir: string, side: FsSide): Dirent[] {
+  return withFsFaultSync({ side, origin: 'argument', action: 'list the source directory', path: dir }, () => readdirSync(dir, { withFileTypes: true }));
 }
 
 /**
@@ -66,7 +69,7 @@ export async function extractTarballToTemp(
   tarballPath: string,
 ): Promise<{ tempDir: string; packageDir: string }> {
   // The argument first: absent is the invocation's mistake, unreadable the input's.
-  requireInputPath(tarballPath, { origin: 'argument', message: `Path does not exist: ${tarballPath}` });
+  requireInputPath(tarballPath, tarballPath, { origin: 'argument', message: `Path does not exist: ${tarballPath}` }, everywhere('source'));
   const tempDir = await makeStagingDir('vat-skills-tgz-');
   const packageDir = await discardingOnFailure(tempDir, async () => {
     // One entry at a time: when the extraction throws, nothing is still being written under the staging.
@@ -74,7 +77,7 @@ export async function extractTarballToTemp(
     // A probe of the temp tree this process just extracted — VAT's own directory, not the user's path:
     // one the OS refuses is the environment's fault, never "not an npm pack tarball".
     const extracted = safePath.join(tempDir, 'package');
-    if (!pathPresent(extracted, 'follow', 'environment', 'confirmed')) {
+    if (!pathPresent(extracted, { follow: tempDir }, everywhere('environment'), 'confirmed')) {
       throw new CommandRefusalError(
         'USAGE_INVALID',
         `Tarball does not contain a package/ directory (not an npm pack tarball): ${tarballPath}`,
@@ -111,7 +114,7 @@ export async function discardingOnFailure<T>(tempDir: string, work: () => T | Pr
 export function findSkillsDirInNpmPackage(packageDir: string): string {
   const distSkills = safePath.join(packageDir, 'dist', 'skills');
   // The package is in VAT's own staging: a probe the OS refuses is the environment's fault, never "no dist/skills/".
-  if (pathPresent(distSkills, 'follow', 'environment', 'confirmed')) {
+  if (pathPresent(distSkills, { follow: packageDir }, everywhere('environment'), 'confirmed')) {
     return distSkills;
   }
   throw new CommandRefusalError(

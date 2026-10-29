@@ -64,7 +64,7 @@ async function judge(
     safePath.join(root, 'docs', 'a.md'),
     fragmentIndex(options.fragments),
     {
-      fsCache: new FsLookupCache(),
+      fsCache: new FsLookupCache(root),
       projectRoot: root,
       skipGitIgnoreCheck: true,
       ...(options.unreadableTargets !== undefined && { unreadableTargets: options.unreadableTargets }),

@@ -65,7 +65,7 @@ async function judgeIn(
   projectRoot: string,
   source: string,
   href: string,
-  fsCache = new FsLookupCache(),
+  fsCache = new FsLookupCache(projectRoot),
 ) {
   return await validateLink(
     createLink('local_file', href),
@@ -85,7 +85,7 @@ function stripHref(issue: Awaited<ReturnType<typeof validateLink>>): Record<stri
 }
 
 /** Judge one href written in `<root>/a.md`. */
-async function judge(root: string, href: string, fsCache = new FsLookupCache()) {
+async function judge(root: string, href: string, fsCache = new FsLookupCache(root)) {
   return await judgeIn(root, 'a.md', href, fsCache);
 }
 
@@ -181,7 +181,7 @@ async function entryReadsFor(root: string, links: number): Promise<number> {
   }) as unknown as typeof nodeFsPromises.readdir);
 
   try {
-    const fsCache = new FsLookupCache();
+    const fsCache = new FsLookupCache(root);
     for (let n = 0; n < links; n += 1) {
       await judge(root, `./missing-${n}.md`, fsCache);
     }
@@ -364,7 +364,7 @@ describe('a link path is judged component by component', () => {
             createLink('local_file', REFUSAL_HREF),
             safePath.join(root, 'a.md'),
             fragmentIndex(),
-            { fsCache: new FsLookupCache(), skipGitIgnoreCheck: true },
+            { fsCache: new FsLookupCache(root), skipGitIgnoreCheck: true },
           ),
         );
 

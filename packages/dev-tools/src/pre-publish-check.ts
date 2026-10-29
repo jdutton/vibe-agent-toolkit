@@ -64,7 +64,7 @@ function getPublishablePackages(packagesDir: string): Array<{ name: string; pkgJ
 
   const packages = readdirSync(packagesDir, { withFileTypes: true })
     // Followed: a workspace package reached through a link is still a package.
-    .filter(dirent => direntKindFollowingSync(packagesDir, dirent) === 'directory')
+    .filter(dirent => direntKindFollowingSync(packagesDir, dirent, packagesDir) === 'directory')
     .map(dirent => dirent.name);
 
   for (const pkg of packages) {

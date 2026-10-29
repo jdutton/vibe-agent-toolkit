@@ -384,7 +384,9 @@ describe('listArchive (zip)', () => {
     const [entry] = opened.entries;
     expect(entry).toBeDefined();
     const refusal = await refusalOf(() => Promise.resolve().then(() => (entry === undefined ? undefined : opened.read(entry))), ARCHIVE_ENTRY_UNREADABLE_CODE);
-    expect(refusal).toMatchObject({ reason: 'unsupported', entry: 'a' });
+    expect(refusal).toMatchObject({ entry: 'a' });
+    // A whole-archive `reason` belongs to `ArchiveRefusedError`'s vocabulary: one entry's refusal carries none.
+    expect(refusal).not.toHaveProperty('reason');
     expect(isArchiveEntryReadRefusal(refusal)).toBe(true);
   });
 
@@ -408,7 +410,7 @@ describe('listArchive (zip)', () => {
     expect(cutShort).toMatchObject({ reason: 'unsupported', entry: 'a.md' });
     expect(isArchiveEntryReadRefusal(cutShort)).toBe(false);
 
-    const fromAnotherCopy = Object.assign(new Error('x'), { [Symbol.for('vat.error')]: true, code: ARCHIVE_ENTRY_UNREADABLE_CODE, reason: 'unsupported', entry: 'a' });
+    const fromAnotherCopy = Object.assign(new Error('x'), { [Symbol.for('vat.error')]: true, code: ARCHIVE_ENTRY_UNREADABLE_CODE, entry: 'a' });
     expect(isArchiveEntryReadRefusal(fromAnotherCopy)).toBe(true);
   });
 });

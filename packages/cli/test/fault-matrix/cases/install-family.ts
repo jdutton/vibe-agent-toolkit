@@ -432,16 +432,16 @@ function agentUninstallCase(mode: 'copy' | 'dev'): VerbCase {
  * `fault-matrix-shards.integration.test.ts` holds each file to this table.
  */
 export const INSTALL_FAMILY_SHARDS = {
-  'plugin/install/local/fresh': { make: () => pluginInstallCase('local', 'fresh'), files: 14 },
-  'plugin/install/local/force': { make: () => pluginInstallCase('local', 'force'), files: 16 },
+  'plugin/install/local/fresh': { make: () => pluginInstallCase('local', 'fresh'), files: 23 },
+  'plugin/install/local/force': { make: () => pluginInstallCase('local', 'force'), files: 25 },
   'plugin/install/local/replaces': { make: () => pluginInstallCase('local', 'replaces'), files: 22 },
   'plugin/install/local/case-aliased': { make: () => pluginInstallCase('local', 'case-aliased'), files: 19 },
   'plugin/install/local/replaces-case-alias': { make: () => pluginInstallCase('local', 'replaces-case-alias'), files: 17 },
   'plugin/install/tgz/fresh': { make: () => pluginInstallCase('tgz', 'fresh'), files: 23 },
   'plugin/install/npm/fresh': { make: () => pluginInstallCase('npm', 'fresh'), files: 23 },
-  'plugin/install/npm-postinstall/fresh': { make: () => pluginInstallCase('npm-postinstall', 'fresh'), files: 14 },
-  'plugin/install/dev/fresh': { make: () => pluginInstallCase('dev', 'fresh'), files: 12, posixOnly: true },
-  'plugin/install/dev/force': { make: () => pluginInstallCase('dev', 'force'), files: 14, posixOnly: true },
+  'plugin/install/npm-postinstall/fresh': { make: () => pluginInstallCase('npm-postinstall', 'fresh'), files: 23 },
+  'plugin/install/dev/fresh': { make: () => pluginInstallCase('dev', 'fresh'), files: 20, posixOnly: true },
+  'plugin/install/dev/force': { make: () => pluginInstallCase('dev', 'force'), files: 22, posixOnly: true },
   'plugin/install/dev/replaces': { make: () => pluginInstallCase('dev', 'replaces'), files: 20, posixOnly: true },
   'plugin/install/dev/case-aliased': { make: () => pluginInstallCase('dev', 'case-aliased'), files: 17, posixOnly: true },
   'plugin/install/zip/fresh': { make: () => pluginInstallZipCase('fresh'), files: 10 },

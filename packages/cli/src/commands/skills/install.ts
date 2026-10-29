@@ -29,6 +29,7 @@ import { buildReport, toFindings, withDurationMs, type Finding, type ValidationI
 import {
   applyTreePlan,
   direntKindFollowingSync,
+  everywhere,
   type FsBoundary,
   fsBoundary,
   type FsSide,
@@ -94,18 +95,18 @@ interface DiscoveredSkill {
  * Returns paths only. The skill's *name* is a separate question, answered by
  * its frontmatter — see {@link preVerifySkill}.
  */
-function discoverSkillDirs(sourceDir: string): string[] {
-  if (holdsSkillMd(sourceDir)) {
+function discoverSkillDirs(sourceDir: string, side: FsSide): string[] {
+  if (holdsSkillMd(sourceDir, sourceDir, side)) {
     return [sourceDir];
   }
 
   // Scan immediate subdirectories for any that contain a SKILL.md.
   const dirs: string[] = [];
-  for (const entry of readSourceDir(sourceDir)) {
+  for (const entry of readSourceDir(sourceDir, side)) {
     // A staged or parked tree a `vat skills build` left beside a bundle holds a SKILL.md, and is no skill.
-    if (isTreeChangeResidue(entry.name) || direntKindFollowingSync(sourceDir, entry) !== 'directory') continue;
+    if (isTreeChangeResidue(entry.name) || direntKindFollowingSync(sourceDir, entry, sourceDir) !== 'directory') continue;
     const candidate = safePath.join(sourceDir, entry.name);
-    if (holdsSkillMd(candidate)) {
+    if (holdsSkillMd(candidate, sourceDir, side)) {
       dirs.push(candidate);
     }
   }
@@ -224,7 +225,7 @@ async function withResolvedSource<T>(source: string, run: InstallRun, work: (res
 
   // The source argument: absent is the invocation's mistake, unreadable the input's.
   const sourcePath = safePath.resolve(source);
-  const stat = requireInputPath(sourcePath, { origin: 'argument', message: `Path does not exist: ${sourcePath}` });
+  const stat = requireInputPath(sourcePath, sourcePath, { origin: 'argument', message: `Path does not exist: ${sourcePath}` }, everywhere('source'));
 
   if (stat.isFile() && sourcePath.endsWith('.zip')) {
     return fromZip(sourcePath, run, work);
@@ -369,7 +370,7 @@ async function installFromDir(
 ): Promise<InstallOutcome> {
   // Each skill as the tree it is copied from, before anything reads it: one in the operator's own
   // directory holding a link that leads out of it is refused here (`installUnit`).
-  const skillDirs = discoverSkillDirs(resolved.dir).map((dir) => installUnit({ root: resolved.dir, side: resolved.side }, dir, 'the skill directory'));
+  const skillDirs = discoverSkillDirs(resolved.dir, resolved.side).map((dir) => installUnit({ root: resolved.dir, side: resolved.side }, dir, 'the skill directory'));
   const boundary = sourceBoundary(resolved);
   // Reject an unusable --name override before doing any real work.
   if (options.name !== undefined) assertNameOverrideApplies(skillDirs.length, options.name);

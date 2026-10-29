@@ -1,19 +1,30 @@
 /**
  * The link-chain resolver ({@link walkLinkChain}) bound to this host's filesystem: `lstat` and
- * `readlink`, and nothing that follows a link. Every `realpath` VAT asks the kernel goes through
- * {@link assertLocalChain} first (`path-utils.ts`), so no lane — a write lane, a read lane, an
- * untrusted tree or the user's own — hands the kernel a chain whose every text has not been read.
+ * `readlink`, and nothing that follows a link. Every call VAT makes that FOLLOWS a link — a
+ * `stat`, a `realpath` — reads the chain here first (`link-following.ts`, `assertLocalChain`), so
+ * no lane — a write lane, a read lane, an untrusted tree or the user's own — hands the kernel a
+ * chain whose every text has not been read.
  */
 
 import { lstatSync, readlinkSync } from 'node:fs';
 
-import { fsFaultOf, isPathAbsentError, LINK_CHAIN_REFUSED_CODE } from '../errors/errno-table.js';
+import { isPathAbsentError, LINK_CHAIN_REFUSED_CODE } from '../errors/errno-table.js';
 import { isVatError, VatError } from '../errors/vat-error.js';
 import { safePath, toForwardSlash } from '../path-core.js';
 
-import { type ChainProbe, type ChainRefusal, type ChainRule, type LinkChain, MAX_LINK_HOPS, namedPathRoot, type PathFlavor, type PlaceKind, walkLinkChain } from './link-chain.js';
+import { type ChainProbe, type ChainRefusal, type ChainRule, type LinkChain, MAX_LINK_HOPS, type PlaceKind, walkLinkChain } from './link-chain.js';
 
-/** What stands at `path`, a link there not followed. A probe the OS refuses is thrown raw, for the caller to classify. */
+/**
+ * What stands at `path`, a link there not followed. A probe the OS refuses is thrown raw, for the
+ * caller to classify.
+ *
+ * ⚠️ "Not followed" is `lstat`'s word, and on Windows libuv keeps it only for what it calls a
+ * symbolic link: a junction to a volume (`\??\Volume{…}\`) and a reparse point of another tag
+ * (cloud files, dedup, WCI) are retried as a link-FOLLOWING `stat` and reported as the directory
+ * or file they lead to. Their targets are local — the kernel refuses a remote mount point — so no
+ * credential leaves the host, but the walk reads such a place as a plain directory where the
+ * kernel reparses it.
+ */
 export function hostPlaceKind(path: string): PlaceKind {
   try {
     const stats = lstatSync(path);
@@ -46,6 +57,8 @@ function refusalClause(refusal: ChainRefusal): string {
       return `leads to ${refusal.text}, a network or device path, which VAT never asks the OS to follow (a Windows host would offer the operator's credentials to it)`;
     case 'hop-limit':
       return `starts a chain of more than ${MAX_LINK_HOPS.toString()} symbolic links that is not a cycle, so where it ends was never read`;
+    case 'unportable':
+      return `has a text no kernel resolves as written (${JSON.stringify(refusal.text)}: a NUL, or a name ending in a dot or a space)`;
     case 'absolute':
     case 'drive-relative':
     case 'climbs-out':
@@ -56,9 +69,10 @@ function refusalClause(refusal: ChainRefusal): string {
 /**
  * A path VAT would not resolve: a link on the way to it leads to a network path, or the chain is
  * longer than any kernel follows. A read lane records it as that one target's fault
- * (`linkResolutionFault`); a write lane stops, the input's refusal.
+ * (`linkResolutionFault`); a lane that stops classifies it on its own side, like any refusal
+ * (`classifyFsFault`), so a destination's refused chain reads as the destination's.
  */
-class LinkChainRefusedError extends VatError {
+export class LinkChainRefusedError extends VatError {
   /** The path whose resolution was asked. */
   readonly path: string;
   /** Why, with the link whose text decided it. */
@@ -73,35 +87,4 @@ class LinkChainRefusedError extends VatError {
 /** Whether `error` is a {@link LinkChainRefusedError}, by its code (a `dist` copy never `instanceof`-matches a `src` one). */
 export function isLinkChainRefusedError(error: unknown): error is VatError & { readonly path: string; readonly refusal: ChainRefusal } {
   return isVatError(error, LINK_CHAIN_REFUSED_CODE) && 'refusal' in error;
-}
-
-/**
- * Throw unless every link on the way to `path` has been read and leads somewhere local — the
- * check the kernel's `realpath` is the SECOND lock behind. The user's own paths: an absolute local
- * text is followed and walked by the same rules, so a later hop's network text is still caught.
- * A chain that leads to nothing (a dangle, a cycle) is not this check's to refuse: the kernel,
- * asked next, answers it with its own errno.
- *
- * Only a Windows kernel is guarded: it is the one that answers a link to `\\host\share` by
- * opening a session with the host (a POSIX kernel reads that text as a file name), and the walk
- * costs an `lstat` of every component from the drive root, ancestors of the tree included — on
- * POSIX that would be pure cost. A probe the OS refuses (an ancestor VAT may not look at) leaves
- * the answer to the kernel, exactly as before the check existed: the check cannot read that place,
- * and the kernel's own errno, classified where it is asked, is the true answer.
- *
- * @param path - Absolute, or relative to cwd; either separator
- * @param flavor - Whose kernel is about to be asked: bound from `process.platform` at the edge
- * @throws LinkChainRefusedError when a link on the way names a network or device path, or the chain never ends
- */
-export function assertLocalChain(path: string, flavor: PathFlavor): void {
-  if (flavor !== 'win32') return;
-  const start = toForwardSlash(safePath.resolve(path));
-  let chain: LinkChain;
-  try {
-    chain = walkLinkChain(start, { flavor, root: namedPathRoot(start, flavor), outside: 'follow' }, HOST_PROBE);
-  } catch (error: unknown) {
-    if (fsFaultOf(error) !== undefined) return;
-    throw error;
-  }
-  if (chain.kind === 'refused') throw new LinkChainRefusedError(path, chain.refusal);
 }

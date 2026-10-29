@@ -33,16 +33,18 @@
  * never a window in which the key exists in the sandbox.
  */
 
-import { existsSync, lstatSync, readdirSync } from 'node:fs';
+import { lstatSync, readdirSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import {
   applyTreePlan,
   copyRegularFile,
   copyTree,
+  everywhere,
   forEachInOrder,
   isVatError,
   PathEscapesRootError,
+  pathPresent,
   planTreeChanges,
   safePath,
   withFsFault,
@@ -167,7 +169,8 @@ async function holdEntry(from: string, holdDir: string, name: string): Promise<v
  */
 export async function isolateEvalSuite(input: IsolateEvalSuiteInput): Promise<boolean> {
   const unit = evalSuiteUnitPath(input.stagedDir, input.evalsSubpath);
-  if (unit === undefined || !existsSync(unit)) return false;
+  // The entry (lstat), as the walk below reads it: the staged copy holds no links.
+  if (unit === undefined || !pathPresent(unit, 'entry', everywhere('environment'), 'probe')) return false;
 
   assertInsideRoot(input.stagedDir, input.stagingRoot);
 

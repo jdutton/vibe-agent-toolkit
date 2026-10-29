@@ -28,6 +28,7 @@ import {
   issueLocation,
   isVatError,
   recordRegistryPass,
+  requireFollowedStat,
   resolveAssetReference,
   safePath,
   toForwardSlash,
@@ -643,7 +644,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * it caches directory *listings*, so a registry that outlives an edit (watch mode,
    * a server) must not answer the next run from the previous run's snapshot.
    */
-  private fsCache: FsLookupCache = new FsLookupCache();
+  private fsCache: FsLookupCache = new FsLookupCache(locationRoot(undefined));
 
   /**
    * Disk-backed parse cache, created on first parse unless injected.
@@ -1141,7 +1142,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // extra `stat` on a path that has already paid a whole read and a parse.
     //
     // THE stat — one call serving both `modifiedAt` and `sizeBytes`.
-    const stats = await fs.stat(absolutePath);
+    // Its link chain read beneath the crawl base first (`link-following.ts`).
+    const stats = await requireFollowedStat(absolutePath, locationRoot(this.baseDir));
 
     // Checksum from the bytes already decoded, not a second read of the file.
     // It hashes the DECODED STRING, which is a different keyspace from
@@ -2053,7 +2055,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 
     // Fresh per run: directory listings are a snapshot, and a registry can outlive
     // the state it was validated against.
-    this.fsCache = new FsLookupCache();
+    this.fsCache = new FsLookupCache(locationRoot(this.baseDir));
 
     // Build fragment index for anchor validation
     const fragmentsByFile = this.buildFragmentIndex();

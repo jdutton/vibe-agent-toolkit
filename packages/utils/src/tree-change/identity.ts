@@ -18,12 +18,13 @@
  * the CALLER names, so whatever surfaces it reports a classified fault, not a raw errno.
  */
 
-import { lstatSync, statSync, type BigIntStats } from 'node:fs';
+import { lstatSync, type BigIntStats } from 'node:fs';
 import path from 'node:path';
 
 import { requireConfirmedAbsent } from '../errors/confirmed-absent.js';
 import { isPathAbsentError } from '../errors/errno-table.js';
-import { classifyFsFault, isFsFaultError, type FsSide } from '../errors/fs-fault.js';
+import { classifyFsFault, everywhere, isFsFaultError, type FsSide } from '../errors/fs-fault.js';
+import { edgeBigintStatSync } from '../link-following.js';
 import { canonicalPath } from '../path-containment.js';
 import { safePath, toForwardSlash, toNfc } from '../path-core.js';
 import { normalizePath } from '../path-utils.js';
@@ -42,7 +43,7 @@ function guarded<T>(entry: string, side: FsSide, work: () => T): T {
 /** The fold of `real` (an absolute path): its real parent, a `/`, its base name, NFC then lower-cased. */
 function foldedRealPath(entry: string, side: FsSide, real: string): Identity {
   return guarded(entry, side, () => ({
-    foldedRealPath: toNfc(`${toForwardSlash(normalizePath(path.dirname(real)))}/${path.basename(real)}`).toLowerCase(),
+    foldedRealPath: toNfc(`${toForwardSlash(normalizePath(path.dirname(real), path.dirname(real)))}/${path.basename(real)}`).toLowerCase(),
   }));
 }
 
@@ -50,14 +51,14 @@ function foldedRealPath(entry: string, side: FsSide, real: string): Identity {
  * `stat(entry)` for an entry that may be absent: `undefined` when nothing is there — believed only when
  * the parent's listing agrees — and a classified fault when the OS refuses.
  */
-function examine(entry: string, side: FsSide, stat: (entry: string, options: { bigint: true }) => BigIntStats): BigIntStats | undefined {
+function examine(entry: string, side: FsSide, follows: boolean): BigIntStats | undefined {
   const ctx = { side, action: 'examine the entry', path: entry };
   try {
-    return stat(entry, { bigint: true });
+    return follows ? edgeBigintStatSync(entry) : lstatSync(entry, { bigint: true });
   } catch (error: unknown) {
     if (!isPathAbsentError(error)) throw classifyFsFault(error, ctx);
     // A `stat` follows a link (a dangling one is absent); an `lstat` sees the link itself.
-    requireConfirmedAbsent(entry, error, ctx, { follows: stat === statSync });
+    requireConfirmedAbsent(entry, error, { action: ctx.action, path: entry }, { follows, sideOf: everywhere(side) });
     return undefined;
   }
 }
@@ -71,13 +72,15 @@ function examine(entry: string, side: FsSide, stat: (entry: string, options: { b
  * @throws FsFaultError on `side` when the OS refuses to examine `entry`
  */
 export function entryIdentities(entry: string, side: FsSide): readonly Identity[] {
-  const own = examine(entry, side, lstatSync);
+  const own = examine(entry, side, false);
   if (own === undefined) return [];
   const identities: Identity[] = [identityOf(own, () => foldedRealPath(entry, side, entry))];
   if (!own.isSymbolicLink()) return identities;
-  const target = examine(entry, side, statSync);
+  // Every entry identified here is one the verb itself names (a destination it writes or removes):
+  // the operator's own path, its own link the edge the kernel answers.
+  const target = examine(entry, side, true);
   if (target !== undefined) {
-    identities.push(identityOf(target, () => foldedRealPath(entry, side, guarded(entry, side, () => normalizePath(entry)))));
+    identities.push(identityOf(target, () => foldedRealPath(entry, side, guarded(entry, side, () => normalizePath(entry, entry)))));
   }
   return identities;
 }
@@ -102,7 +105,7 @@ function identitiesOrUndecided(entry: string): readonly Identity[] | undefined {
  */
 function physicalSpellings(entry: string): readonly string[] | undefined {
   try {
-    return [safePath.join(canonicalPath(path.dirname(entry)), path.basename(entry)), canonicalPath(entry)];
+    return [safePath.join(canonicalPath(path.dirname(entry), path.dirname(entry)), path.basename(entry)), canonicalPath(entry, entry)];
   } catch (error: unknown) {
     // A refusal is `unknown` to the caller, exactly as an entry it cannot examine is; a defect stays loud.
     if (isFsFaultError(classifyFsFault(error, { side: 'destination', action: 'resolve the entry', path: entry }))) return undefined;

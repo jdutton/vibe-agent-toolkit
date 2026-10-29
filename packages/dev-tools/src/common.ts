@@ -215,7 +215,7 @@ export function processWorkspacePackages<T extends PackageProcessResult>(
   try {
     const packages = readdirSync(packagesDir, { withFileTypes: true })
       // Followed: a workspace package reached through a link is still a package.
-      .filter(dirent => direntKindFollowingSync(packagesDir, dirent) === 'directory')
+      .filter(dirent => direntKindFollowingSync(packagesDir, dirent, packagesDir) === 'directory')
       .map(dirent => dirent.name)
       // A readdir name is one segment by construction; the guard states it.
       .filter(name => isSingleFsSegment(name))
@@ -273,7 +273,7 @@ export function findPublishablePackages(
   const entries = readdirSync(packagesDir, { withFileTypes: true });
 
   for (const entry of entries) {
-    if (direntKindFollowingSync(packagesDir, entry) !== 'directory') {
+    if (direntKindFollowingSync(packagesDir, entry, packagesDir) !== 'directory') {
       continue;
     }
 

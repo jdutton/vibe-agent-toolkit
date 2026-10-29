@@ -1,11 +1,11 @@
-import { chmodSync, lstatSync, readdirSync, statSync } from 'node:fs';
+import { chmodSync, lstatSync, readdirSync } from 'node:fs';
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 
 import {
   forEachInOrder,
   type FsBoundary,
   fsBoundary,
-  isPathAbsentError,
+  followedStatSync,
   mkdirSyncReal,
   readRegularFile,
   safePath,
@@ -63,7 +63,7 @@ export async function stageDirInto(
   boundary.runSync(`create the staging root for ${srcDir}`, 'environment', () => ensureOwned0700Dir(ctx.stagingRoot, currentUid));
 
   const dest = safePath.join(ctx.stagingRoot, key);
-  boundary.runSync(`examine the staged copy ${dest}`, 'environment', () => assertOwnedIfExists(dest, currentUid));
+  boundary.runSync(`examine the staged copy ${dest}`, 'environment', () => assertOwnedIfExists(dest, ctx.stagingRoot, currentUid));
 
   await boundary.run(`stage ${srcDir}`, 'environment', () => mkdir(dest, { recursive: true }));
   await copyTreeNoSymlinks(srcDir, dest, boundary);
@@ -73,22 +73,22 @@ export async function stageDirInto(
 /** Create `dir` (and parents) 0700 if absent; if present, require current-uid ownership. */
 function ensureOwned0700Dir(dir: string, currentUid: number): void {
   mkdirSyncReal(dir, { recursive: true, mode: 0o700 });
-  assertOwnedIfExists(dir, currentUid);
+  assertOwnedIfExists(dir, dir, currentUid);
   // Re-enforce 0700 in case the dir already existed with looser permissions.
   // assertOwnedIfExists above confirms we own it (if it exists), so chmod is safe.
   chmodSync(dir, 0o700);
 }
 
-function assertOwnedIfExists(dir: string, currentUid: number): void {
-  let st;
-  try {
-    st = statSync(dir);
-  } catch (err) {
-    // Only an absent path is safe to ignore. A different error (e.g. EACCES on
-    // an unreadable path) must NOT be silently treated as "absent/safe".
-    if (isPathAbsentError(err)) return;
-    throw err;
-  }
+/**
+ * @param dir - The directory to check
+ * @param within - VAT's staging root (or `dir` itself, when it IS that root): every link beneath
+ *   it is read by its text before the kernel follows it
+ */
+function assertOwnedIfExists(dir: string, within: string, currentUid: number): void {
+  // Only resolving to nothing is safe to ignore. A refused probe (EACCES on an
+  // unreadable path) or a refused link chain throws — never "absent/safe".
+  const st = followedStatSync(dir, within);
+  if (st === undefined) return;
   if (currentUid >= 0 && st.uid !== currentUid) throw new SkillStagingNotOwnedError(dir, st.uid, currentUid);
 }
 

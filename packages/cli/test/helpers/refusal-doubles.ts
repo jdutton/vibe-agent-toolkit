@@ -45,6 +45,19 @@ export async function spiedModule(
 }
 
 /**
+ * Refuse one call, for exactly `target`, on a builtin's DEFAULT object (`import nodeFs from
+ * 'node:fs'`) — the seam utils' link-following reaches the kernel through, which a named-export
+ * `vi.mock` does not patch. Every other path reaches the real function. Undo with
+ * `vi.restoreAllMocks()`.
+ */
+export function refuseOnDefault<M extends object, K extends keyof M & string>(module: M, name: K, target: string, error: Error): void {
+  const real = module[name] as (...args: never[]) => unknown;
+  // `spyOn`'s overloads cannot see a generic key as a method name; the cast restates that `name` is one.
+  const spy = vi.spyOn(module as Record<K, (...args: never[]) => unknown>, name);
+  spy.mockImplementation(refusingOnly(target, error, real));
+}
+
+/**
  * An implementation for a spied path-taking function that THROWS `error` for
  * exactly `target` and delegates every other call to `real`.
  *

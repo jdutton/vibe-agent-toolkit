@@ -100,7 +100,8 @@ async function discoverAgentsInPath(absolutePath: string, refused: RefusedPath):
   // Followed: a `--dev` install is a symlinked agent directory and is discovered.
   const kinds = await Promise.all(entries.map(async entry => {
     try {
-      return await direntKindFollowing(absolutePath, entry);
+      // A search path is the operator's own (cwd, a configured agents dir): its own `within`.
+      return await direntKindFollowing(absolutePath, entry, absolutePath);
     } catch (error) {
       return refused(safePath.join(absolutePath, entry.name), error);
     }

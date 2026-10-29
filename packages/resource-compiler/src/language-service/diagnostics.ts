@@ -4,7 +4,7 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/explicit-module-boundary-types -- TypeScript Language Service plugin API requires any */
 
-import { existsSync } from 'node:fs';
+import { markdownPathPresent } from '../transformer/path-resolver.js';
 
 import {
   getMarkdownPathFromImport,
@@ -104,7 +104,7 @@ function checkMarkdownFileExists(
   const compilerOptions = info.project.getCompilerOptions();
   const absolutePath = resolveMarkdownPath(markdownPath, containingFile, compilerOptions);
 
-  if (!absolutePath || !existsSync(absolutePath)) {
+  if (!absolutePath || !markdownPathPresent(absolutePath, containingFile)) {
     return {
       file: node.getSourceFile(),
       start: node.moduleSpecifier ? node.moduleSpecifier.getStart() : node.getStart(),

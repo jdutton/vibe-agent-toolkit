@@ -11,10 +11,8 @@
  *     directory at the dest name refuses the build, naming the entry
  */
 
-import { existsSync } from 'node:fs';
-
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
-import { foldedSegment, forEachInOrder, issueLocation, safePath, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { everywhere, foldedSegment, forEachInOrder, issueLocation, pathPresent, safePath, sideWithin, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from '../../../utils/command-refusal.js';
 import { copyFileIntoMarketplace } from '../../../utils/marketplace-io.js';
@@ -90,13 +88,14 @@ export async function applyPluginFiles(args: ApplyPluginFilesArgs): Promise<void
     // Project-relative, never absolute: this refusal is published on
     // machine-readable stdout, where an absolute path publishes the developer's
     // home directory into whatever issue or CI log it lands in.
-    requireInputPath(sourceAbs, {
+    requireInputPath(sourceAbs, projectRoot, {
       origin: 'content',
       message: `plugin files[].source not found: ${entry.source} (resolved to ${issueLocation(sourceAbs, projectRoot) || '.'})`,
-    });
+    }, sideWithin(sourceAbs, 'source', 'destination')); // the named input; the directories above it are the project the build writes into
     const dest = pluginFilesDest(entry.dest);
 
-    if (existsSync(safePath.join(pluginOutputDir, dest)) && info) {
+    // The run's own output, about to be written: an entry (a link included) is asked, never followed.
+    if (info && pathPresent(safePath.join(pluginOutputDir, dest), 'entry', everywhere('destination'), 'probe')) {
       info(`plugin files[]: overwriting existing ${toForwardSlashAnyPlatform(entry.dest)}`);
     }
 

@@ -39,25 +39,25 @@ describe('dirent-kind', () => {
 
   it('direntKindFollowing answers a link by its target, and a missing target as dangling', async ({ skip }) => {
     if (tree().linkOut === null) skip('host cannot create symlinks');
-    expect(direntKindFollowingSync(tree().root, entry('link-out'))).toBe('directory');
-    expect(direntKindFollowingSync(tree().root, entry('link-in'))).toBe('directory');
-    expect(direntKindFollowingSync(tree().root, entry('dangling'))).toBe('dangling');
+    expect(direntKindFollowingSync(tree().root, entry('link-out'), tree().root)).toBe('directory');
+    expect(direntKindFollowingSync(tree().root, entry('link-in'), tree().root)).toBe('directory');
+    expect(direntKindFollowingSync(tree().root, entry('dangling'), tree().root)).toBe('dangling');
     const listed = await readdir(tree().root, { withFileTypes: true });
     const byName = (name: string) => {
       const found = listed.find((e) => e.name === name);
       if (found === undefined) throw new Error(`fixture has no entry ${name}`);
       return found;
     };
-    expect(await direntKindFollowing(tree().root, byName('dangling'))).toBe('dangling');
-    expect(await direntKindFollowing(tree().root, byName('member'))).toBe('directory');
+    expect(await direntKindFollowing(tree().root, byName('dangling'), tree().root)).toBe('dangling');
+    expect(await direntKindFollowing(tree().root, byName('member'), tree().root)).toBe('directory');
   });
 
   it('direntKindFollowing spends no syscall on a non-link (a refused stat would otherwise surface)', () => {
     // The unreadable directory can be classified from its own Dirent; only a
     // link INTO it would need a stat the OS refuses.
-    expect(direntKindFollowingSync(tree().root, entry('member'))).toBe('directory');
+    expect(direntKindFollowingSync(tree().root, entry('member'), tree().root)).toBe('directory');
     if (tree().unreadable !== null) {
-      expect(direntKindFollowingSync(tree().root, entry('unreadable'))).toBe('directory');
+      expect(direntKindFollowingSync(tree().root, entry('unreadable'), tree().root)).toBe('directory');
     }
   });
 });

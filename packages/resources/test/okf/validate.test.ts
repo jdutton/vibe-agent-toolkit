@@ -97,7 +97,7 @@ const PERMISSIONS_ENFORCED = process.platform !== 'win32';
  * instance can report that.
  */
 async function judgeHrefs(root: string, hrefs: readonly string[]) {
-  const index = new BundleDirectoryIndex(root, new FsLookupCache());
+  const index = new BundleDirectoryIndex(root, new FsLookupCache(root));
   const links: ResourceLink[] = hrefs.map((href, offset) => ({
     text: 'link',
     href,

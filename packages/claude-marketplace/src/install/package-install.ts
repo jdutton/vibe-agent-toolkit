@@ -6,7 +6,7 @@
  * the new plugins registered, the replaced ones gone — or changes nothing.
  */
 
-import { type Ownership, pathPresent, safePath, TREE_DEST_NOT_OWNED_CODE, type TreeChange, type TreeFill, VatError, writeFileUnder } from '@vibe-agent-toolkit/utils';
+import { everywhere, type Ownership, pathPresent, safePath, TREE_DEST_NOT_OWNED_CODE, type TreeChange, type TreeFill, VatError, writeFileUnder } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
@@ -96,7 +96,7 @@ function marketplaceChange(paths: ClaudeUserPaths, marketplace: PackageMarketpla
 /** Refuse (`TREE_DEST_NOT_OWNED`) a marketplace whose registry entry is another source's and whose directory is absent or empty — where no marker can speak, and the planner would call the place free. */
 function refuseForeignEntry(paths: ClaudeUserPaths, marketplaceName: string, known: RegistryFiles['known'][string] | undefined, installedFrom: string): void {
   const dir = safePath.join(paths.marketplacesDir, marketplaceName);
-  if (pathPresent(dir, 'entry', 'destination', 'confirmed') && !isEmptyDirectory(dir)) return;
+  if (pathPresent(dir, 'entry', everywhere('destination'), 'confirmed') && !isEmptyDirectory(dir)) return;
   const verdict = registryEntryVerdict(known, installedFrom);
   if (!verdict.owned) throw new VatError(TREE_DEST_NOT_OWNED_CODE, `marketplace ${marketplaceName}: refusing to replace its known_marketplaces.json entry: ${verdict.reason}`);
 }

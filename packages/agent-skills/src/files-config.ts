@@ -8,19 +8,20 @@
  * - Copying declared build artifacts into a skill output dir (every build path)
  */
 
-import { statSync } from 'node:fs';
-import { lstat, stat } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
 import { type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import {
   classifyFsFault,
   fileContentHash,
+  followedKind,
+  followedStatSync,
   fsFaultOf,
   globMagicRemainder,
   hasParentTraversalSegment,
   isGlob,
-  isPathAbsentError,
+  isLinkChainRefusedError,
   forEachInOrder,
   issueLocation,
   mapWithConcurrency,
@@ -107,7 +108,7 @@ async function partitionRegularFiles(
   const copyable = await mapWithConcurrency(matches, (rel) =>
     // joinUnderRoot asserts the match stays under absoluteBase, the same guard the
     // copy loop applies before reading it.
-    isCopyableFile(safePath.joinUnderRoot(absoluteBase, rel)));
+    isCopyableFile(safePath.joinUnderRoot(absoluteBase, rel), absoluteBase));
 
   const regular: string[] = [];
   const nonRegular: string[] = [];
@@ -126,14 +127,22 @@ async function partitionRegularFiles(
  * would move. A dangling link, or one resolving to a directory, throws from `stat`
  * and is reported as not copyable rather than escaping as the build's whole
  * explanation.
+ *
+ * The link is followed only once its chain is read beneath `within` (the glob's
+ * base, in the operator's project): a chain VAT will not hand the kernel — a link
+ * to a network or device path — is a refusal on the source side, thrown, never a
+ * quiet "not copyable".
  */
-async function isCopyableFile(absPath: string): Promise<boolean> {
+async function isCopyableFile(absPath: string, within: string): Promise<boolean> {
   try {
     const linkStat = await lstat(absPath);
     if (linkStat.isFile()) return true;
     if (!linkStat.isSymbolicLink()) return false;
-    return (await stat(absPath)).isFile();
+    return (await followedKind(absPath, within)) === 'file';
   } catch (error) {
+    if (isLinkChainRefusedError(error)) {
+      throw classifyFsFault(error, { side: 'source', origin: 'content', action: `examine ${absPath}` });
+    }
     // Unreadable or dangling. Not copyable is the honest answer, and the caller
     // reports it as a named finding — which is strictly more than the raw errno
     // this replaces ever gave.
@@ -538,18 +547,16 @@ export function verifyFilesIntegrity(
 }
 
 /**
- * The dest's content hash. `statSync` in a guard rather than `existsSync`,
+ * The dest's content hash. A followed `stat` in a guard rather than `existsSync`,
  * because `existsSync` answers FALSE for a file that is present but unreadable —
  * so a permissions problem on the dest was reported as "dest file missing",
- * sending the author to look for a file that is sitting right there. Only a real
- * ENOENT is missing; anything else is the filesystem refusing the path, and is
- * rethrown for the caller's guard to code.
+ * sending the author to look for a file that is sitting right there. Only
+ * resolving to nothing is missing; anything else is the filesystem refusing the
+ * path, and is rethrown for the caller's guard to code.
  */
 function destContentHash(absDest: string): string {
-  try {
-    statSync(absDest);
-  } catch (error) {
-    if (!isPathAbsentError(error)) throw error;
+  // The dest is the file this build just wrote — VAT's own path, so it is its own tree.
+  if (followedStatSync(absDest, absDest) === undefined) {
     throw new Error(
       `files: integrity check failed — dest file missing: ${toForwardSlash(absDest)}`,
     );
@@ -629,12 +636,12 @@ async function copyNonGlobEntry(
   projectRoot: string,
   skillOutputDir: string,
 ): Promise<{ relDest: string; absSource: string; absDest: string }> {
-  // `statSync` in a guard, not `existsSync`: `existsSync` swallows EACCES and
+  // A followed `stat` in a guard, not `existsSync`: `existsSync` swallows EACCES and
   // answers FALSE, so a source the process merely cannot REACH — one under a
   // directory it lacks permission to traverse — was reported as "does not exist".
   // For a `dist/` source that also appended `buildArtifactHint`, telling the
   // author to run a build that would not have helped: a confidently wrong
-  // diagnosis plus a confidently wrong remedy. Only ENOENT is absence; anything
+  // diagnosis plus a confidently wrong remedy. Only resolving to nothing is absence; anything
   // else is the filesystem refusing the path, and `attributed` names the entry.
   //
   // The source's `stat` is guarded as well as its copy. Guarding the copy alone
@@ -642,12 +649,13 @@ async function copyNonGlobEntry(
   // errno — and an EXPLICIT entry is the spelling that unambiguously says "ship
   // this file", so the build owes its author an error that names it back. (The two
   // deliberate errors below carry no errno, so `attributed` passes them through.)
+  //
+  // The source is crawled beneath the project root: its link chain is read by its
+  // text before the kernel follows it, and a chain VAT will not hand the kernel is
+  // a refusal `attributed` names, never "does not exist".
   await attributed(entry, absoluteSource, projectRoot, () => {
-    let sourceStat;
-    try {
-      sourceStat = statSync(absoluteSource);
-    } catch (error) {
-      if (!isPathAbsentError(error)) throw error;
+    const sourceStat = followedStatSync(absoluteSource, projectRoot);
+    if (sourceStat === undefined) {
       throw packagingInputError(
         `files: source '${entry.source}' does not exist (resolved to ${anchoredPath(absoluteSource, projectRoot)}).${buildArtifactHint(entry.source)}`,
       );

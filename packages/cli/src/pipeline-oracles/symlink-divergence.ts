@@ -153,7 +153,7 @@ export async function captureSymlinkDivergence(
   const realPaths = new Map<string, Resolved>();
   const realPathCounts = new Map<string, number>();
   for (const absolutePath of walkFollow) {
-    const resolved = realPathOrSelf(absolutePath);
+    const resolved = realPathOrSelf(absolutePath, corpusRoot);
     realPaths.set(absolutePath, resolved);
     realPathCounts.set(resolved.real, (realPathCounts.get(resolved.real) ?? 0) + 1);
   }
@@ -167,7 +167,7 @@ export async function captureSymlinkDivergence(
   const rows: DivergenceRow[] = [];
   for (const absolutePath of everyPath) {
     const path = relativize(absolutePath, corpusRoot);
-    const { real, fault } = realPaths.get(absolutePath) ?? realPathOrSelf(absolutePath);
+    const { real, fault } = realPaths.get(absolutePath) ?? realPathOrSelf(absolutePath, corpusRoot);
     const classes = classify({
       path,
       absolutePath,
@@ -267,10 +267,11 @@ interface Resolved {
  * end of the capture.
  *
  * @param absolutePath - Path to resolve
+ * @param corpusRoot - The corpus it was crawled in: every link beneath it is read before the kernel follows it
  * @returns The real path (the input when it cannot be resolved), and the errno of a fault
  */
-function realPathOrSelf(absolutePath: string): Resolved {
-  const resolution = resolveRealPath(absolutePath);
+function realPathOrSelf(absolutePath: string, corpusRoot: string): Resolved {
+  const resolution = resolveRealPath(absolutePath, corpusRoot);
   if (resolution.kind === 'resolved') return { real: resolution.path, fault: null };
   return { real: toForwardSlash(absolutePath), fault: resolution.fault?.errno ?? null };
 }

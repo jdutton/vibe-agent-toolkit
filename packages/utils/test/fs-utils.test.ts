@@ -157,7 +157,7 @@ describe('fs-utils', () => {
   describe('FsLookupCache', () => {
     it('reads a directory once no matter how many lookups hit it', async () => {
       await fs.writeFile(safePath.join(tempDir, 'a.txt'), '');
-      const cache = new FsLookupCache();
+      const cache = new FsLookupCache(tempDir);
       const spy = vi.spyOn(fs, 'readdir');
 
       await cache.readdir(tempDir);
@@ -169,7 +169,7 @@ describe('fs-utils', () => {
     });
 
     it('collapses concurrent lookups of the same directory to one syscall', async () => {
-      const cache = new FsLookupCache();
+      const cache = new FsLookupCache(tempDir);
       const spy = vi.spyOn(fs, 'readdir');
 
       // Fired before the first readdir settles: without in-flight promise sharing
@@ -186,7 +186,7 @@ describe('fs-utils', () => {
     });
 
     it('caches the missing-directory answer without re-spawning the syscall', async () => {
-      const cache = new FsLookupCache();
+      const cache = new FsLookupCache(tempDir);
       const missing = safePath.join(tempDir, NO_SUCH_DIR);
       const spy = vi.spyOn(fs, 'readdir');
 
@@ -210,7 +210,7 @@ describe('fs-utils', () => {
         const closed = safePath.join(tempDir, 'closed');
         await fs.mkdir(closed, { recursive: true });
         await fs.writeFile(safePath.join(closed, 'inside.md'), '');
-        const cache = new FsLookupCache();
+        const cache = new FsLookupCache(tempDir);
 
         const listing = await withUnlistableDirectory(
           closed,
@@ -234,7 +234,7 @@ describe('fs-utils', () => {
       it.each(STABLE_REFUSALS)(
         'memoizes a %s refusal, because a stable denial is a fact about the tree',
         async (code) => {
-          const cache = new FsLookupCache();
+          const cache = new FsLookupCache(tempDir);
 
           const { result, readdirCalls } = await withReaddirRefusedOnce(code, async () => ({
             first: await cache.readdir(tempDir),
@@ -254,7 +254,7 @@ describe('fs-utils', () => {
         'does NOT memoize a %s refusal, because a descriptor shortage is a moment',
         async (code) => {
           await fs.writeFile(safePath.join(tempDir, 'a.txt'), '');
-          const cache = new FsLookupCache();
+          const cache = new FsLookupCache(tempDir);
 
           const { result, readdirCalls } = await withReaddirRefusedOnce(code, async () => ({
             first: await cache.readdir(tempDir),
@@ -270,7 +270,7 @@ describe('fs-utils', () => {
       );
 
       it('shares the in-flight promise through a transient refusal, so N callers cost ONE syscall', async () => {
-        const cache = new FsLookupCache();
+        const cache = new FsLookupCache(tempDir);
 
         const { result, readdirCalls } = await withReaddirRefusedOnce(
           'EMFILE',
@@ -293,7 +293,7 @@ describe('fs-utils', () => {
     });
 
     it('memoizes realpath and falls back to a resolved path when it fails', async () => {
-      const cache = new FsLookupCache();
+      const cache = new FsLookupCache(tempDir);
       // `nodeFs.realpath`, not `fs/promises.realpath`: the memo deliberately runs
       // Node's JS realpath so its answers match `fs.realpathSync` on a
       // case-insensitive filesystem. See the method's docblock.
@@ -314,7 +314,7 @@ describe('fs-utils', () => {
     it('probes a path once however many times it is asked about', async () => {
       const filePath = safePath.join(tempDir, 'probed.txt');
       await fs.writeFile(filePath, '');
-      const cache = new FsLookupCache();
+      const cache = new FsLookupCache(tempDir);
 
       const first = cache.probe(filePath);
       cache.probe(filePath);
@@ -330,13 +330,13 @@ describe('fs-utils', () => {
     it('records a directory as existing and a directory', async () => {
       const dirPath = safePath.join(tempDir, 'a-directory');
       await fs.mkdir(dirPath);
-      const cache = new FsLookupCache();
+      const cache = new FsLookupCache(tempDir);
 
       expect(cache.probe(dirPath)).toEqual({ exists: true, isDirectory: true });
     });
 
     it('records an absent path as absent with no kind answer, and memoizes that too', () => {
-      const cache = new FsLookupCache();
+      const cache = new FsLookupCache(tempDir);
       const missing = safePath.join(tempDir, 'not-here.txt');
 
       expect(cache.probe(missing)).toEqual({ exists: false, isDirectory: null });
@@ -353,17 +353,17 @@ describe('fs-utils', () => {
 
       const dangling = safePath.join(tempDir, 'dangling-link');
       await createSymlinkAsync(cap, safePath.join(tempDir, 'no-such-target.txt'), dangling);
-      const cache = new FsLookupCache();
+      const cache = new FsLookupCache(tempDir);
 
-      // `existsSync` follows the link, so a dangling one reads as absent. The
-      // link-graph walker's classifier depends on exactly this: a target it
-      // cannot read is `missing-target`, not a present file.
+      // The probe follows the link (its chain read first), so a dangling one reads
+      // as absent. The link-graph walker's classifier depends on exactly this: a
+      // target it cannot read is `missing-target`, not a present file.
       expect(cache.probe(dangling)).toEqual({ exists: false, isDirectory: null });
     });
 
     it('records a present path the OS refuses to stat as "no kind answer", which the link walker reports', async () => {
-      // `existsSync` says yes, `statSync` is refused: a permission change racing
-      // between the two calls. `isDirectory: null` is what the walker turns into
+      // The chain walk reads the path as present and local, then the kernel's
+      // `statSync` is refused. `isDirectory: null` is what the walker turns into
       // an `unreadable-target` exclusion, so this IS a reported outcome.
       const filePath = safePath.join(tempDir, 'refused-stat.txt');
       await fs.writeFile(filePath, '');
@@ -371,7 +371,7 @@ describe('fs-utils', () => {
         throw Object.assign(new Error('EACCES: simulated, stat'), { code: 'EACCES' });
       });
       try {
-        expect(new FsLookupCache().probe(filePath)).toEqual({ exists: true, isDirectory: null });
+        expect(new FsLookupCache(tempDir).probe(filePath)).toEqual({ exists: true, isDirectory: null });
       } finally {
         spy.mockRestore();
       }
@@ -387,7 +387,7 @@ describe('fs-utils', () => {
         throw new TypeError('stats.isDirectory is not a function');
       });
       try {
-        expect(() => new FsLookupCache().probe(filePath)).toThrow(TypeError);
+        expect(() => new FsLookupCache(tempDir).probe(filePath)).toThrow(TypeError);
       } finally {
         spy.mockRestore();
       }
@@ -395,14 +395,14 @@ describe('fs-utils', () => {
 
     it('keeps probe entries per instance, so a fresh run re-probes', async () => {
       const filePath = safePath.join(tempDir, 'later.txt');
-      const firstRun = new FsLookupCache();
+      const firstRun = new FsLookupCache(tempDir);
       expect(firstRun.probe(filePath).exists).toBe(false);
 
       await fs.writeFile(filePath, '');
 
       // Same instance: still the snapshot it took.
       expect(firstRun.probe(filePath).exists).toBe(false);
-      expect(new FsLookupCache().probe(filePath).exists).toBe(true);
+      expect(new FsLookupCache(tempDir).probe(filePath).exists).toBe(true);
     });
 
     it('is instance-scoped, so a new instance never serves another run stale entries', async () => {
@@ -410,7 +410,7 @@ describe('fs-utils', () => {
       await fs.mkdir(dirPath);
       await fs.writeFile(safePath.join(dirPath, 'first.txt'), '');
 
-      const firstRun = new FsLookupCache();
+      const firstRun = new FsLookupCache(tempDir);
       expect(await firstRun.readdir(dirPath)).toEqual({ outcome: 'listed', names: ['first.txt'] });
 
       await fs.writeFile(safePath.join(dirPath, 'second.txt'), '');
@@ -418,7 +418,7 @@ describe('fs-utils', () => {
       // Same instance: still the snapshot it took (that is the point of a per-run cache).
       expect(await firstRun.readdir(dirPath)).toEqual({ outcome: 'listed', names: ['first.txt'] });
       // A fresh instance — what a new validation run constructs — sees the new state.
-      const secondRun = new FsLookupCache();
+      const secondRun = new FsLookupCache(tempDir);
       expect(namesOf(await secondRun.readdir(dirPath))).toHaveLength(2);
     });
   });
@@ -478,7 +478,7 @@ describe('fs-utils', () => {
       const { canonicalRealRoot, linkRoot } = await setupSymlinkedRoot(tempDir, skip);
       const missing = safePath.join(linkRoot, DOCS, GONE);
 
-      const answer = (await new FsLookupCache().realpath(missing)).path;
+      const answer = (await new FsLookupCache(tempDir).realpath(missing)).path;
 
       // Proof the fixture DISCRIMINATES before trusting the green: the two
       // candidate answers are different strings here, which they are not under a
@@ -493,7 +493,7 @@ describe('fs-utils', () => {
       const { canonicalRealRoot, linkRoot } = await setupSymlinkedRoot(tempDir, skip);
       const missing = safePath.join(linkRoot, DOCS, 'nope', 'deeper', GONE);
 
-      const answer = (await new FsLookupCache().realpath(missing)).path;
+      const answer = (await new FsLookupCache(tempDir).realpath(missing)).path;
 
       // Every missing component is re-appended in order — a single-level walk
       // would answer the parent's canonical path, and a walk that dropped the
@@ -506,7 +506,7 @@ describe('fs-utils', () => {
       const present = safePath.join(linkRoot, DOCS, 'here.md');
       await fs.writeFile(present, '');
 
-      const answer = (await new FsLookupCache().realpath(present)).path;
+      const answer = (await new FsLookupCache(tempDir).realpath(present)).path;
 
       // The success path is untouched by the fallback change, and this column's
       // whole contract is equivalence with `fs.realpathSync` byte for byte.
@@ -521,7 +521,7 @@ describe('fs-utils', () => {
       await fs.writeFile(escapeTarget, '');
       await createSymlinkAsync(cap, escapeTarget, safePath.join(realRoot, 'escape.md'));
 
-      const answer = (await new FsLookupCache().realpath(safePath.join(linkRoot, 'escape.md'))).path;
+      const answer = (await new FsLookupCache(tempDir).realpath(safePath.join(linkRoot, 'escape.md'))).path;
 
       expect(answer).toBe(toForwardSlash(nodeFs.realpathSync(escapeTarget)));
       expect(answer.startsWith(canonicalRealRoot + '/')).toBe(false);
@@ -534,7 +534,7 @@ describe('fs-utils', () => {
       await createSymlinkAsync(cap, outside, safePath.join(realRoot, 'outlink'), 'dir');
       const missing = safePath.join(linkRoot, 'outlink', GONE);
 
-      const answer = (await new FsLookupCache().realpath(missing)).path;
+      const answer = (await new FsLookupCache(tempDir).realpath(missing)).path;
 
       // The walk must widen nothing: canonicalizing through the deepest existing
       // ancestor is what makes an escape stay an escape, because the ancestor is
@@ -551,7 +551,7 @@ describe('fs-utils', () => {
       const orphan = 'vat-no-such-root-entry-9f3a';
       const missing = safePath.join(fsRoot, orphan);
 
-      const answer = (await new FsLookupCache().realpath(missing)).path;
+      const answer = (await new FsLookupCache(tempDir).realpath(missing)).path;
 
       expect(answer).toBe(safePath.join(toForwardSlash(nodeFs.realpathSync(fsRoot)), orphan));
     });
@@ -573,12 +573,15 @@ describe('fs-utils', () => {
       const fsRoot = toForwardSlash(path.parse(safePath.resolve(tempDir)).root);
       const missing = safePath.join(fsRoot, 'a', 'b', 'c.md');
 
-      const answer = (await new FsLookupCache().realpath(missing)).path;
+      const answer = (await new FsLookupCache(tempDir).realpath(missing)).path;
 
       // Every level fell back, so the walk composes back to the lexical form —
       // which is the right answer precisely when nothing on the path resolves.
       expect(answer).toBe(missing);
-      expect(spy.mock.calls.length).toBeGreaterThan(1);
+      // The kernel was asked about the filesystem root ONLY: every level below it is read
+      // by `lstat` first and leads to nothing, so its realpath is never asked of the kernel.
+      // The root's own failed canonicalization is what reaches the fixpoint guard.
+      expect(spy.mock.calls.map(([asked]) => toForwardSlash(String(asked)))).toEqual([fsRoot]);
       vi.restoreAllMocks();
     });
 
@@ -589,13 +592,16 @@ describe('fs-utils', () => {
     it('answers a path the OS declines to resolve from its ancestor, carrying the fault, and one that resolves to nothing with none', async () => {
       const declined = safePath.join(tempDir, 'declined.md');
       const gone = safePath.join(tempDir, 'gone.md');
+      // `declined` must be THERE: the chain to a path that is not is read by `lstat` and answered
+      // absent before the kernel is asked, so only a present path can carry the kernel's refusal.
+      await fs.writeFile(declined, '');
       vi.spyOn(nodeFs, 'realpath').mockImplementation(((target: string, callback: (error: Error | null, real?: string) => void) => {
         if (toForwardSlash(target) === declined) callback(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES', path: target }));
         else if (toForwardSlash(target) === gone) callback(Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT', path: target }));
         else callback(null, nodeFs.realpathSync(target));
       }) as unknown as typeof nodeFs.realpath);
       try {
-        const cache = new FsLookupCache();
+        const cache = new FsLookupCache(tempDir);
         const real = toForwardSlash(nodeFs.realpathSync(tempDir));
         expect(await cache.realpath(declined)).toMatchObject({ path: safePath.join(real, 'declined.md'), fault: { errno: 'EACCES', faultClass: 'refused' } });
         expect(await cache.realpath(gone)).toEqual({ path: safePath.join(real, 'gone.md'), fault: null });
@@ -609,7 +615,7 @@ describe('fs-utils', () => {
     }) => {
       const { linkRoot } = await setupSymlinkedRoot(tempDir, skip);
       const missing = safePath.join(linkRoot, DOCS, GONE);
-      const cache = new FsLookupCache();
+      const cache = new FsLookupCache(tempDir);
       const spy = vi.spyOn(nodeFs, 'realpath');
 
       // Asked twice with no `await` in between: the SAME promise object can only
@@ -619,12 +625,13 @@ describe('fs-utils', () => {
       expect(cache.realpath(missing)).toBe(first);
       await first;
 
-      // Two syscalls: the missing path (fails) and its parent (succeeds).
-      expect(spy).toHaveBeenCalledTimes(2);
+      // One syscall: the parent (succeeds). The missing path's chain is read by `lstat`
+      // and leads to nothing, so the kernel is never asked to canonicalize it.
+      expect(spy).toHaveBeenCalledTimes(1);
       // ...and the parent was canonicalized THROUGH this cache, so it is memoized.
-      // A private recursive helper would answer identically and cost a third call.
+      // A private recursive helper would answer identically and cost a second call.
       await cache.realpath(safePath.join(linkRoot, DOCS));
-      expect(spy).toHaveBeenCalledTimes(2);
+      expect(spy).toHaveBeenCalledTimes(1);
       vi.restoreAllMocks();
     });
   });
@@ -659,7 +666,7 @@ describe('fs-utils', () => {
       const filePaths = names.map((name) => safePath.join(tempDir, name));
       await Promise.all(filePaths.map((filePath) => fs.writeFile(filePath, '')));
 
-      const table = await fillRealpaths(filePaths, new FsLookupCache());
+      const table = await fillRealpaths(filePaths, new FsLookupCache(tempDir));
 
       // Keyed by the INPUT string, not a dirname and not a re-resolved form: the
       // judge looks up by that same string, and any normalization here would be
@@ -674,7 +681,7 @@ describe('fs-utils', () => {
     it('canonicalizes one distinct path once however many times it is passed', async () => {
       const filePath = safePath.join(tempDir, 'Repeated.txt');
       await fs.writeFile(filePath, '');
-      const cache = new FsLookupCache();
+      const cache = new FsLookupCache(tempDir);
       const syscall = vi.spyOn(nodeFs, 'realpath');
       // TWO levels are instrumented, because only one of them can see the
       // de-duplication. `FsLookupCache.realpath` memoizes, so the SYSCALL count
@@ -701,7 +708,7 @@ describe('fs-utils', () => {
     it('gives an absent path a row too — the resolved-path fallback, not a throw', async () => {
       const missing = safePath.join(tempDir, 'no-such-file.txt');
 
-      const table = await fillRealpaths([missing], new FsLookupCache());
+      const table = await fillRealpaths([missing], new FsLookupCache(tempDir));
 
       // The fallback IS the contract: a non-existent path has no realpath, and a
       // caller comparing paths still needs an answer. So a filled row is always a
@@ -726,7 +733,7 @@ describe('fs-utils', () => {
       await fs.writeFile(filePath, '');
       const routes = spyRealpathRoutes();
 
-      const table = await fillRealpaths([filePath], new FsLookupCache());
+      const table = await fillRealpaths([filePath], new FsLookupCache(tempDir));
       // Positive control for the sync route. `fs-utils.ts` has no production
       // `realpathSync` caller today — this guard exists so that one cannot be
       // ADDED at judgement time — so the control drives the same module-default
@@ -747,7 +754,7 @@ describe('fs-utils', () => {
       // so these zeros are absence of calls rather than absence of instruments.
       const routes = spyRealpathRoutes();
 
-      const table = await fillRealpaths([], new FsLookupCache());
+      const table = await fillRealpaths([], new FsLookupCache(tempDir));
 
       expect(table.size).toBe(0);
       expect(routes.counts()).toEqual([0, 0]);
@@ -766,7 +773,7 @@ describe('fs-utils', () => {
       await fs.writeFile(targetPath, '');
       await createSymlinkAsync(cap, targetPath, linkPath);
 
-      const table = await fillRealpaths([linkPath], new FsLookupCache());
+      const table = await fillRealpaths([linkPath], new FsLookupCache(tempDir));
 
       // The row is the TARGET's canonical path filed under the LINK's path,
       // which is what makes this column a canonicalization rather than an echo.
@@ -793,7 +800,7 @@ describe('fs-utils', () => {
       // exactly the two platforms this branch has no CI for.
       if (!nodeFs.existsSync(misCased)) skip();
 
-      const table = await fillRealpaths([misCased], new FsLookupCache());
+      const table = await fillRealpaths([misCased], new FsLookupCache(tempDir));
 
       // Pinned to what `fs.realpathSync` answers for the SAME input rather than
       // to a literal string: the contract is equivalence with the synchronous
@@ -810,7 +817,7 @@ describe('fs-utils', () => {
       // which also answers the cwd, so the two routes agree here whenever the cwd
       // is itself a real path. It is kept because that agreement is incidental:
       // pinning to the sync route stops a future fallback change drifting it.
-      const table = await fillRealpaths([''], new FsLookupCache());
+      const table = await fillRealpaths([''], new FsLookupCache(tempDir));
 
       expect(realpathRowFrom(table, '').path).toBe(toForwardSlash(nodeFs.realpathSync('')));
     });
@@ -826,7 +833,7 @@ describe('fs-utils', () => {
       await fs.writeFile(filePath, '');
       const spy = vi.spyOn(nodeFs, 'realpath');
 
-      const answer = (await new FsLookupCache().realpath(filePath)).path;
+      const answer = (await new FsLookupCache(tempDir).realpath(filePath)).path;
 
       expect(spy).toHaveBeenCalledTimes(1);
       expect(spy.mock.calls[0]?.[0]).toBe(filePath);
@@ -869,7 +876,7 @@ describe('fs-utils', () => {
         const referrer = safePath.join(root, 'a.md');
         const asked = safePath.join(root, 'One', 'Two', 'three.md');
 
-        const table = await fillPathSpellings([{ referrer, target: asked }], new FsLookupCache());
+        const table = await fillPathSpellings([{ referrer, target: asked }], new FsLookupCache(tempDir));
 
         expect(pathSpellingFrom(table, referrer, asked)).toEqual({
           match: 'case_mismatch',
@@ -886,7 +893,7 @@ describe('fs-utils', () => {
         const referrer = safePath.join(root, 'a.md');
         const asked = safePath.join(root, 'One', 'two', 'Three.md');
 
-        const table = await fillPathSpellings([{ referrer, target: asked }], new FsLookupCache());
+        const table = await fillPathSpellings([{ referrer, target: asked }], new FsLookupCache(tempDir));
 
         expect(pathSpellingFrom(table, referrer, asked).actualPath).toBe(PLANTED_PATH);
       });
@@ -900,7 +907,7 @@ describe('fs-utils', () => {
         const referrer = safePath.join(root, 'a.md');
         const asked = safePath.join(root, NFD_NAME, 'G.md');
 
-        const table = await fillPathSpellings([{ referrer, target: asked }], new FsLookupCache());
+        const table = await fillPathSpellings([{ referrer, target: asked }], new FsLookupCache(tempDir));
 
         expect(pathSpellingFrom(table, referrer, asked).match).toBe('case_mismatch');
       });
@@ -910,7 +917,7 @@ describe('fs-utils', () => {
         const referrer = safePath.join(root, 'a.md');
         const asked = safePath.join(root, 'one', 'two', 'nowhere.md');
 
-        const table = await fillPathSpellings([{ referrer, target: asked }], new FsLookupCache());
+        const table = await fillPathSpellings([{ referrer, target: asked }], new FsLookupCache(tempDir));
 
         // 🪤 `because` is the half that must NOT move: a fix that reported every
         // failed listing as unreadable would silence real missing files.
@@ -941,7 +948,7 @@ describe('fs-utils', () => {
           const spelling = await withUnlistableDirectory(safePath.join(root, 'one'), async () => {
             const table = await fillPathSpellings(
               [{ referrer, target: asked }],
-              new FsLookupCache(),
+              new FsLookupCache(tempDir),
             );
             return pathSpellingFrom(table, referrer, asked);
           });
@@ -1007,7 +1014,7 @@ describe('fs-utils', () => {
 
           const table = await fillPathSpellings(
             [{ referrer, target }],
-            new FsLookupCache()
+            new FsLookupCache(tempDir)
           );
 
           // D7 still holds: an accented file that is really there is present,
@@ -1035,7 +1042,7 @@ describe('fs-utils', () => {
         const referrer = safePath.join(tempDir, 'a.md');
         const target = safePath.join(tempDir, NFC_NAME);
 
-        const table = await fillPathSpellings([{ referrer, target }], new FsLookupCache());
+        const table = await fillPathSpellings([{ referrer, target }], new FsLookupCache(tempDir));
 
         expect(pathSpellingFrom(table, referrer, target)).toEqual({
           match: 'exact',
@@ -1044,11 +1051,11 @@ describe('fs-utils', () => {
         });
       });
 
-      it('judges from a filled table, reaching neither readdir nor the sync stat pair', async () => {
-        // THREE routes are instrumented, not one. `readdir` is how the fill
-        // reaches disk — but `existsSync` and `statSync` are already imported at
-        // the top of `fs-utils.ts` (for `FsLookupCache.probe`), so a judge that
-        // started stat-ing its target is one keystroke away, and a readdir-only
+      it('judges from a filled table, reaching neither readdir nor the followed stat', async () => {
+        // TWO routes are instrumented, not one. `readdir` is how the fill
+        // reaches disk — but `FsLookupCache.probe` reaches the kernel's `statSync`
+        // (through `link-following.ts`, on the `node:fs` default object), so a judge
+        // that started stat-ing its target is one keystroke away, and a readdir-only
         // spy stays green straight through that regression. Spying the default
         // objects, not namespace bindings, is what makes the counts real.
         const root = await plantDeep(tempDir);
@@ -1056,25 +1063,23 @@ describe('fs-utils', () => {
         const target = safePath.join(root, 'One', 'Two', 'three.md');
         const spies = [
           vi.spyOn(fs, 'readdir'),
-          vi.spyOn(nodeFs, 'existsSync'),
           vi.spyOn(nodeFs, 'statSync'),
         ];
         const counts = (): number[] => spies.map((spy) => spy.mock.calls.length);
 
-        const table = await fillPathSpellings([{ referrer, target }], new FsLookupCache());
-        // Positive control for the sync pair: `probe` takes exactly the route a
-        // regressed judge would take, through the same two module-level imports.
+        const table = await fillPathSpellings([{ referrer, target }], new FsLookupCache(tempDir));
+        // Positive control for the followed stat: `probe` takes exactly the route a
+        // regressed judge would take, through the same `node:fs` default object.
         // Without it, the zeros below are indistinguishable from instruments
         // that never attached to the functions under test.
         //
         // It must probe the spelling that is really ON DISK, never the asked-for
-        // `target`: `probe` reaches `statSync` only when `existsSync` says yes,
-        // so on a case-sensitive filesystem (ext4 in CI) `One/Two` opens nothing
-        // and the control silently exercises one of the two syscalls it exists to
+        // `target`: `probe` reaches `statSync` only once the chain walk finds
+        // something there, so on a case-sensitive filesystem (ext4 in CI) `One/Two`
+        // leads to nothing and the control never reaches the syscall it exists to
         // exercise. The assertion below pins that property rather than trusting
-        // it — `exists` is `statSync`'s own guard, and `isDirectory: false` is a
-        // value only `statSync` can have produced.
-        const control = new FsLookupCache().probe(safePath.join(root, PLANTED_PATH));
+        // it — `isDirectory: false` is a value only `statSync` can have produced.
+        const control = new FsLookupCache(tempDir).probe(safePath.join(root, PLANTED_PATH));
         expect(control).toEqual({ exists: true, isDirectory: false });
 
         expect(counts().every((n) => n > 0)).toBe(true);
@@ -1109,7 +1114,7 @@ describe('fs-utils', () => {
       it('indexes a directory ONCE however many paths point into it', async () => {
         const names = Array.from({ length: 50 }, (_, n) => `neighbour-${n}.md`);
         for (const name of names) await fs.writeFile(safePath.join(tempDir, name), '');
-        const index = new DirectorySpellingIndex(new FsLookupCache());
+        const index = new DirectorySpellingIndex(new FsLookupCache(tempDir));
 
         await Promise.all(
           names.map(async (name) => await index.judgePath(tempDir, safePath.join(tempDir, name))),
@@ -1122,7 +1127,7 @@ describe('fs-utils', () => {
 
       it('shares one index across the components of a nested path', async () => {
         const root = await plantDeep(tempDir);
-        const index = new DirectorySpellingIndex(new FsLookupCache());
+        const index = new DirectorySpellingIndex(new FsLookupCache(tempDir));
 
         await index.judgePath(root, safePath.join(root, 'one', 'two', 'three.md'));
         await index.judgePath(root, safePath.join(root, 'one', 'two', 'three.md'));
@@ -1136,7 +1141,7 @@ describe('fs-utils', () => {
         // A verdict that depends on a directory ABOVE the root is a verdict
         // that changes when the tree moves.
         const root = await plantDeep(tempDir);
-        const index = new DirectorySpellingIndex(new FsLookupCache());
+        const index = new DirectorySpellingIndex(new FsLookupCache(tempDir));
 
         await expect(
           index.judgePath(safePath.join(root, 'one'), safePath.join(root, 'a.md')),
@@ -1148,7 +1153,7 @@ describe('fs-utils', () => {
         // a directory outside the tree under judgement, and one that may not be
         // listable at all.
         const root = await plantDeep(tempDir);
-        const index = new DirectorySpellingIndex(new FsLookupCache());
+        const index = new DirectorySpellingIndex(new FsLookupCache(tempDir));
 
         expect(await index.judgePath(root, root)).toEqual({
           match: 'exact',
@@ -1159,7 +1164,7 @@ describe('fs-utils', () => {
       });
 
       it('answers `absent` for a directory that is not there', async () => {
-        const index = new DirectorySpellingIndex(new FsLookupCache());
+        const index = new DirectorySpellingIndex(new FsLookupCache(tempDir));
         const missing = safePath.join(tempDir, NO_SUCH_DIR);
 
         expect(await index.lookup(missing, ANY_NAME)).toEqual({
@@ -1175,7 +1180,7 @@ describe('fs-utils', () => {
           // first is evidence that the entry does not exist.
           const closed = safePath.join(tempDir, 'closed-lookup');
           await fs.mkdir(closed, { recursive: true });
-          const index = new DirectorySpellingIndex(new FsLookupCache());
+          const index = new DirectorySpellingIndex(new FsLookupCache(tempDir));
 
           const found = await withUnlistableDirectory(
             closed,
@@ -1204,7 +1209,7 @@ describe('fs-utils', () => {
         'keeps a %s refusal, so a stable denial is still listed once',
         async (code) => {
           const root = await plantDeep(tempDir);
-          const index = new DirectorySpellingIndex(new FsLookupCache());
+          const index = new DirectorySpellingIndex(new FsLookupCache(tempDir));
           const target = safePath.join(root, 'one', 'two', 'three.md');
 
           const { result, readdirCalls } = await withReaddirRefusedOnce(code, async () => ({
@@ -1223,7 +1228,7 @@ describe('fs-utils', () => {
         're-asks after a %s refusal at the INDEX layer, not only at the listing memo',
         async (code) => {
           const root = await plantDeep(tempDir);
-          const index = new DirectorySpellingIndex(new FsLookupCache());
+          const index = new DirectorySpellingIndex(new FsLookupCache(tempDir));
           const target = safePath.join(root, 'one', 'two', 'three.md');
 
           const { result } = await withReaddirRefusedOnce(code, async () => ({
@@ -1251,7 +1256,7 @@ describe('fs-utils', () => {
       it.each(ALL_REFUSALS)('carries %s and the refusing directory', async (code) => {
         const closed = safePath.join(tempDir, 'closed-cause');
         await fs.mkdir(closed, { recursive: true });
-        const index = new DirectorySpellingIndex(new FsLookupCache());
+        const index = new DirectorySpellingIndex(new FsLookupCache(tempDir));
 
         const { result } = await withReaddirRefusedOnce(
           code,
@@ -1279,7 +1284,7 @@ describe('fs-utils', () => {
       it.each(['ELOOP'])('reads a listing that fails %s as no such entry — the link predicate\'s answer', async (code) => {
         const looped = safePath.join(tempDir, 'looped-cause');
         await fs.mkdir(looped, { recursive: true });
-        const cache = new FsLookupCache();
+        const cache = new FsLookupCache(tempDir);
         const index = new DirectorySpellingIndex(cache);
 
         const { result } = await withReaddirRefusedOnce(
@@ -1297,7 +1302,7 @@ describe('fs-utils', () => {
       it.each(['EINVAL', 'ENAMETOOLONG'])('reads a listing that fails %s as a refusal, never as no such entry', async (code) => {
         const odd = safePath.join(tempDir, 'ambiguous-cause');
         await fs.mkdir(odd, { recursive: true });
-        const index = new DirectorySpellingIndex(new FsLookupCache());
+        const index = new DirectorySpellingIndex(new FsLookupCache(tempDir));
 
         const { result } = await withReaddirRefusedOnce(code, async () => await index.lookup(odd, ANY_NAME));
 
@@ -1308,7 +1313,7 @@ describe('fs-utils', () => {
         // The negative control. A cause that carried an errno for a plain miss
         // would let every genuinely missing file read as a refusal.
         const root = await plantDeep(tempDir);
-        const index = new DirectorySpellingIndex(new FsLookupCache());
+        const index = new DirectorySpellingIndex(new FsLookupCache(tempDir));
 
         expect(await index.lookup(root, 'nowhere.md')).toEqual({
           match: 'absent',
@@ -1320,7 +1325,7 @@ describe('fs-utils', () => {
         'names the ANCESTOR that refused, not the walk root and not the target parent',
         async () => {
           const root = await plantDeep(tempDir);
-          const index = new DirectorySpellingIndex(new FsLookupCache());
+          const index = new DirectorySpellingIndex(new FsLookupCache(tempDir));
           const refused = safePath.join(root, 'one');
 
           const spelling = await withUnlistableDirectory(
@@ -1361,7 +1366,7 @@ describe('fs-utils', () => {
         'carries the spelling defect it found ABOVE the directory that refused',
         async () => {
           const root = await plantDeep(tempDir);
-          const index = new DirectorySpellingIndex(new FsLookupCache());
+          const index = new DirectorySpellingIndex(new FsLookupCache(tempDir));
           const refused = safePath.join(root, 'one');
 
           const spelling = await withUnlistableDirectory(
@@ -1378,7 +1383,7 @@ describe('fs-utils', () => {
 
       it('reports an empty verified prefix when the FIRST component is what is missing', async () => {
         const root = await plantDeep(tempDir);
-        const index = new DirectorySpellingIndex(new FsLookupCache());
+        const index = new DirectorySpellingIndex(new FsLookupCache(tempDir));
 
         const spelling = await index.judgePath(root, safePath.join(root, 'nowhere', 'x.md'));
 

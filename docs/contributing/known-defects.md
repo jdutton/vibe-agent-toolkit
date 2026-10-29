@@ -334,22 +334,21 @@ that only *looks* like a defect belongs in [`traps.md`](traps.md).
 - **Fix:** decide by the flavor the tree will be read under, if a tree read on one host only ever
   becomes a thing VAT can know.
 
-### On Windows a crawled link to a share may still be stat'd or read through by the kernel outside the realpath lanes
+### On Windows a crawled link to a share may still be read through by the kernel
 
 - **Severity:** Major (unmeasured) · **Effort:** M · **User-visible:** only on Windows, for a tree holding a
   link whose text is `\\host\share…`
-- **Mechanism:** on Windows every realpath VAT asks walks the link chain first (`assertLocalChain`), and every
-  tree an install or a clone keeps links in is walked by `treeChain` before the kernel follows
-  anything. A `stat`, `open` or `readFile` that follows a link is not a realpath, and nothing
-  guards it: a read lane over a project the user names that follows a link WITHOUT first
-  resolving it would hand a `\\host\share` link to the kernel, which on Windows offers the
-  operator's NTLM credentials to the host. Not traced site by site; candidates are a `files:`
-  glob's `stat` and any parse of a crawled `.md` reached through a link. Lanes that resolve before
-  they read reach the refusal first.
-- **Where:** `statSync`/`readFile`/`open` call sites under `packages/resources/src` and
-  `packages/agent-skills/src` that take a crawled path
-- **Fix:** route every link-following call on a crawled path through one guarded primitive (as the
-  realpaths are), and a lint rule that flags a bare `fs` follow on a crawled path.
+- **Mechanism:** every `stat`, existence check and `realpath` VAT asks reads the link chain first
+  (`link-following.ts`, enforced by `local/no-link-following-fs`, which also refuses a `symlink` made
+  with no type and pins each allowlisted file's count of such calls; root discovery's walk-up probes
+  are among them), and the crawler's git-listed members
+  that are committed links are read by their chain before they are handed on. An `open` or
+  `readFile` follows a link too, and the rule does not cover it: a lane that reads a crawled file
+  without first stat-ing or resolving it would hand a `\\host\share` link to the kernel. The
+  registry reads content before its guarded `stat` (`readContentWithKey`).
+- **Where:** `readFile`/`open` call sites under `packages/resources/src` and `packages/agent-skills/src`
+  that take a crawled path
+- **Fix:** open crawled files only through a guarded primitive, and extend the rule to `open`/`readFile`.
 
 ### An archive file that grows between its size check and its read is read past the cap
 

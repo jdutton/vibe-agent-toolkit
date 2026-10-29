@@ -9,6 +9,7 @@ import { writeFileSync } from 'node:fs';
 
 import type { ValidationConfig } from '@vibe-agent-toolkit/schema';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { installFaultFs } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it } from 'vitest';
 
 import { validateSkill } from '../../src/validators/skill-validator.js';
@@ -109,6 +110,27 @@ describe('transitive link traversal — broken links', () => {
     expect(issues[0]?.message).toContain('nonexistent.md');
     expect(issues[0]?.fix).toBeDefined();
     expect(result.summary.errors).toBeGreaterThan(0);
+  });
+
+  // The target's link chain is read (`lstat`) before the kernel follows it: a probe the OS refused is
+  // that one target's finding — "could not be examined" — never "not found", and never the end of the walk.
+  it('reports a link target the OS would not examine as unreadable, not as missing', async () => {
+    const tempDir = getTempDir();
+    const { skillPath } = createTransitiveSkillStructure(tempDir, { 'refs/a.md': '# A' }, skillWithLink('./refs/a.md', 'a'));
+    const target = safePath.join(tempDir, 'refs', 'a.md');
+
+    const session = installFaultFs({ within: tempDir, faults: [{ op: 'lstat', path: (path) => path === target, errno: 'EACCES' }] });
+    let result: ValidationResult;
+    try {
+      result = await validateSkill({ side: 'source', skillPath, rootDir: tempDir, validation: {} });
+    } finally {
+      session.restore();
+    }
+
+    expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
+    const unreadable = findIssues(result, 'LINK_TARGET_UNREADABLE');
+    expect(unreadable).toHaveLength(1);
+    expect(unreadable[0]?.message).toContain('EACCES');
   });
 });
 

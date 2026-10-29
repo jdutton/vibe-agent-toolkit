@@ -17,7 +17,7 @@
  * produces the facts.
  */
 
-import { toForwardSlash } from '../path-core.js';
+import { relativeEscapesRoot, safePath, toForwardSlash } from '../path-core.js';
 import { isLinkChainRefusedError } from '../tree-change/host-chain.js';
 
 import { type FsFaultClass, type FsFaultFacts, fsFaultOf, isFileInTheWayError, isUnresolvableLinkError, LINK_CHAIN_REFUSED_CODE, movedFromOf, pathsActedOn } from './errno-table.js';
@@ -35,6 +35,44 @@ export type FsSide = (typeof FS_SIDES)[number];
 
 /** Every {@link FsSide}, for a consumer that must key a table by them (the schema refusal table's drift test). */
 export const FS_SIDES = ['source', 'destination', 'environment'] as const;
+
+/**
+ * The side of any path an operation touches, decided the way the verb decides every other path's.
+ *
+ * One probe touches more than its own path — a link walk `lstat`s each component beneath its tree,
+ * a confirmed absence lists the parent — and those paths can lie on another side than the one
+ * asked about (`<project>/dist` is the project's, `dist/skills` an input). A fault is charged to the
+ * side of the path the OS REFUSED, never to the side of the question the read was answering.
+ */
+export type SideOfPath = (path: string) => FsSide;
+
+/** A {@link SideOfPath} for an operation every path of which is on one side: VAT's own scratch, one input tree. */
+export function everywhere(side: FsSide): SideOfPath {
+  return () => side;
+}
+
+/**
+ * A {@link SideOfPath} for a probe of ONE input inside a tree on another side: `root` and what lies
+ * beneath it are on `side`, every other path the probe touches — a component above it, the parent
+ * a confirmed absence lists — on `outside`. E.g. the project config (`source`) in a project a build
+ * writes `dist/` into (`destination`).
+ */
+export function sideWithin(root: string, side: FsSide, outside: FsSide): SideOfPath {
+  return (path) => (relativeEscapesRoot(safePath.relative(root, path)) ? outside : side);
+}
+
+/**
+ * The path a refusal names — the one a {@link SideOfPath} is asked about: a refused link chain's
+ * path, the path the failing syscall acted on, or `fallback` when the error names none.
+ *
+ * @returns Forward slashes, as every path VAT compares
+ */
+export function refusedPathOf(error: unknown, fallback: string): string {
+  if (isLinkChainRefusedError(error)) return toForwardSlash(error.path);
+  const facts = fsFaultOf(error);
+  const acted = facts === undefined ? undefined : pathsActedOn(facts)[0];
+  return toForwardSlash(acted ?? fallback);
+}
 
 /** For a `source` fault, who named the input: a CLI argument, a config value, or content read from inside another input. */
 export type SourceOrigin = (typeof SOURCE_ORIGINS)[number];
@@ -156,6 +194,11 @@ export function isCapacityFault(fault: { readonly faultClass: FsFaultClass }): b
  * {@link VatError} already says what it means.
  */
 export function classifyFsFault(error: unknown, ctx: FsFaultContext): unknown {
+  // A chain VAT would not hand the kernel is a refusal on the caller's side like any other — the one
+  // side × class table decides its refusal and remedy, never a fixed code of its own.
+  if (isLinkChainRefusedError(error)) {
+    return new FsFaultError({ side: ctx.side, faultClass: 'refused', errno: LINK_CHAIN_REFUSED_CODE, path: error.path, origin: ctx.origin ?? 'argument', action: `${ctx.action} — ${error.message}`, cause: error });
+  }
   if (isVatError(error)) return error;
   const facts = fsFaultOf(error);
   if (facts === undefined) return error;
@@ -215,7 +258,8 @@ export function assertUnresolvableLink(error: unknown, ctx: FsFaultContext): voi
  * @throws `error` itself when it carries no filesystem errno — a bug stays loud
  */
 export function linkResolutionFault(error: unknown): FsFaultFacts | undefined {
-  if (isLinkChainRefusedError(error)) return { errno: LINK_CHAIN_REFUSED_CODE, faultClass: 'refused', path: error.path, dest: undefined, syscall: 'readlink' };
+  // No syscall: VAT, not the OS, declined — and a hop-limit refusal read every `readlink` it asked.
+  if (isLinkChainRefusedError(error)) return { errno: LINK_CHAIN_REFUSED_CODE, faultClass: 'refused', path: error.path, dest: undefined, syscall: undefined };
   if (isUnresolvableLinkError(error)) return undefined;
   const facts = fsFaultOf(error);
   if (facts === undefined || isVatError(error)) throw error;

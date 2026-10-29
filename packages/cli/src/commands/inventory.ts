@@ -18,7 +18,7 @@ import {
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { type PopulationCache } from '@vibe-agent-toolkit/resources';
 import { buildReport, toFindings, type Gate, type ValidationIssue } from '@vibe-agent-toolkit/schema';
-import { findProjectRoot, pathPresent, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { everywhere, findProjectRoot, pathPresent, relativeEscapesRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { CommandRefusalError, refusalCodeOf } from '../utils/command-refusal.js';
@@ -210,8 +210,8 @@ function routeInventoryNow(
 	const refusal = readableDirectoryRefusal(absolute);
 	if (refusal !== undefined) throw refusal;
 	const claudePluginDir = safePath.join(absolute, '.claude-plugin');
-	const hasMarketplace = pathPresent(safePath.join(claudePluginDir, 'marketplace.json'), 'follow', 'source', 'probe');
-	const hasPlugin = pathPresent(safePath.join(claudePluginDir, 'plugin.json'), 'follow', 'source', 'probe');
+	const hasMarketplace = pathPresent(safePath.join(claudePluginDir, 'marketplace.json'), { follow: absolute }, everywhere('source'), 'probe');
+	const hasPlugin = pathPresent(safePath.join(claudePluginDir, 'plugin.json'), { follow: absolute }, everywhere('source'), 'probe');
 	// A directory with marketplace.json but no plugin.json is a marketplace root.
 	// When both are present, the plugin extractor takes precedence (plugin is installed,
 	// marketplace.json is a cached metadata artifact alongside it).

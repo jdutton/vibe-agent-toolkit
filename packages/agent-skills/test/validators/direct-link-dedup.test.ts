@@ -6,30 +6,29 @@
  * must answer with the DISTINCT set of link targets, and must pay for the existence
  * probe once per distinct target — not once per link occurrence.
  *
- * `node:fs` is mocked (module mock, passthrough + counter) rather than spied on the
- * ESM namespace: `vi.spyOn` throws on a namespace object and silently under-counts on
- * the default export, so it cannot answer "how many probes".
+ * The probe is `followedKindSync` (its link chain read before the kernel follows it), so
+ * that is what is counted: `@vibe-agent-toolkit/utils` is module-mocked, passthrough +
+ * counter, because a spy on the ESM namespace cannot see a call through the named binding.
  */
 
-import type * as NodeFs from 'node:fs';
 import * as fs from 'node:fs';
 
+import type * as utils from '@vibe-agent-toolkit/utils';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getResolvedMarkdownLinks } from '../../src/validators/packaging-validator.js';
 import { setupTempDir } from '../test-helpers.js';
 
-const { existsSyncCalls } = vi.hoisted(() => ({ existsSyncCalls: [] as string[] }));
+const { probeCalls } = vi.hoisted(() => ({ probeCalls: [] as string[] }));
 
-vi.mock('node:fs', async (importOriginal) => {
-	const actual = await importOriginal<typeof NodeFs>();
+vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
+	const actual = await importOriginal<typeof utils>();
 	return {
 		...actual,
-		default: actual,
-		existsSync: (p: Parameters<NodeFs['existsSync']>[0]) => {
-			existsSyncCalls.push(String(p));
-			return actual.existsSync(p);
+		followedKindSync: (target: string, within: string) => {
+			probeCalls.push(target);
+			return actual.followedKindSync(target, within);
 		},
 	};
 });
@@ -60,14 +59,14 @@ function duplicateLinkList(): Array<{ href: string; type: string }> {
 
 describe('getResolvedMarkdownLinks - duplicate link targets', () => {
 	beforeEach(() => {
-		existsSyncCalls.length = 0;
+		probeCalls.length = 0;
 	});
 
 	it('returns each distinct target once, however many times it is linked', () => {
 		const tempDir = getTempDir();
 		const skillPath = writeTwoTargets(tempDir);
 
-		const resolved = getResolvedMarkdownLinks(duplicateLinkList(), skillPath);
+		const resolved = getResolvedMarkdownLinks(duplicateLinkList(), skillPath, tempDir, 'source');
 
 		expect(resolved).toEqual([
 			safePath.join(tempDir, DUP_TARGET),
@@ -79,9 +78,9 @@ describe('getResolvedMarkdownLinks - duplicate link targets', () => {
 		const tempDir = getTempDir();
 		const skillPath = writeTwoTargets(tempDir);
 
-		getResolvedMarkdownLinks(duplicateLinkList(), skillPath);
+		getResolvedMarkdownLinks(duplicateLinkList(), skillPath, tempDir, 'source');
 
-		expect(existsSyncCalls).toEqual([
+		expect(probeCalls).toEqual([
 			safePath.join(tempDir, DUP_TARGET),
 			safePath.join(tempDir, OTHER_TARGET),
 		]);
@@ -92,9 +91,9 @@ describe('getResolvedMarkdownLinks - duplicate link targets', () => {
 		const skillPath = safePath.join(tempDir, 'SKILL.md');
 		const missing = Array.from({ length: 4 }, () => ({ href: './gone.md', type: 'local_file' }));
 
-		const resolved = getResolvedMarkdownLinks(missing, skillPath);
+		const resolved = getResolvedMarkdownLinks(missing, skillPath, tempDir, 'source');
 
 		expect(resolved).toEqual([]);
-		expect(existsSyncCalls).toEqual([safePath.join(tempDir, 'gone.md')]);
+		expect(probeCalls).toEqual([safePath.join(tempDir, 'gone.md')]);
 	});
 });

@@ -15,11 +15,13 @@
  * threading the run's probe goes from S probes to S², and the row goes red — an
  * assertion that the context merely accepts the field cannot see that.
  *
- * OBSERVABILITY. The count is read from a `node:fs` MODULE mock, the only seam
- * that sees `conventionalSuiteProbe`'s `existsSync` — it is an ESM named binding,
- * which a counter installed on the default export does not intercept. Same seam,
- * same reason, as `agent-skills/test/validators/test-input-probe-once.test.ts` —
- * but a DIFFERENT tally, because the two files measure different things. That one
+ * OBSERVABILITY. The count is read from a `@vibe-agent-toolkit/utils` MODULE mock
+ * wrapping `pathPresent`, the one call `conventionalSuiteProbe` makes per suite
+ * path. A kernel-level counter cannot stand in: the probe reads the suite's link
+ * chain beneath the skill root, so for a skill with no `evals/` no syscall ever
+ * names `evals/evals.json` at all. Compare
+ * `agent-skills/test/validators/test-input-probe-once.test.ts` — a DIFFERENT
+ * tally, because the two files measure different things. That one
  * counts probes in issue order to prove one CALL resolves each root once; this one
  * needs "each root exactly once across the whole RUN", which is a per-path count,
  * so the sink here is a `path → times probed` map. A `Map` equality names both
@@ -34,10 +36,10 @@
  * apart (4 vs 16) that a stray probe cannot be mistaken for the quadratic.
  */
 
-import type * as NodeFs from 'node:fs';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import type * as Utils from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /** Forward-slash suite path → how many times the run asked the filesystem about it. */
@@ -50,15 +52,14 @@ const { probeCounts } = vi.hoisted(() => ({ probeCounts: new Map<string, number>
  */
 const EVALS_SUBPATH = 'evals/evals.json';
 
-vi.mock('node:fs', async (importOriginal) => {
-  const real = await importOriginal<typeof NodeFs>();
+vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
+  const real = await importOriginal<typeof Utils>();
   return {
     ...real,
-    default: real,
-    existsSync(target: Parameters<NodeFs['existsSync']>[0]): boolean {
-      const probed = toForwardSlash(String(target));
+    pathPresent(...args: Parameters<typeof Utils.pathPresent>): boolean {
+      const probed = real.toForwardSlash(String(args[0]));
       if (probed.endsWith(EVALS_SUBPATH)) probeCounts.set(probed, (probeCounts.get(probed) ?? 0) + 1);
-      return real.existsSync(target);
+      return real.pathPresent(...args);
     },
   };
 });

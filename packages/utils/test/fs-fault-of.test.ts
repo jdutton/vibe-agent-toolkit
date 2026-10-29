@@ -14,7 +14,9 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { fsFaultOf } from '../src/errors/errno-table.js';
+import { fsFaultOf, LINK_CHAIN_REFUSED_CODE } from '../src/errors/errno-table.js';
+import { classifyFsFault } from '../src/errors/fs-fault.js';
+import { LinkChainRefusedError } from '../src/tree-change/host-chain.js';
 
 /** Whether `fsFaultOf` classifies `error` at all: the environment's fault, not a bug. */
 const isFilesystemFault = (error: unknown): boolean => fsFaultOf(error) !== undefined;
@@ -147,6 +149,25 @@ describe('fsFaultOf: is this the filesystem refusing a path?', () => {
       const cyclic: { code: string; cause?: unknown } = { code: 'NOPE' };
       cyclic.cause = cyclic;
       expect(isFilesystemFault(cyclic)).toBe(false);
+    });
+  });
+
+  // A chain VAT would not hand the kernel is a refusal like any other — not a bug that a
+  // `if (fsFaultOf(e) === undefined) throw e` catch turns into an internal error.
+  describe('recognises a link chain VAT declined to follow', () => {
+    const refused = new LinkChainRefusedError('/t/a', { why: 'network', link: '/t/smb', text: String.raw`\\h\s` });
+
+    it('as a refused fault on the path asked, raw', () => {
+      expect(fsFaultOf(refused)).toEqual({ errno: LINK_CHAIN_REFUSED_CODE, faultClass: 'refused', path: '/t/a', dest: undefined, syscall: undefined });
+    });
+
+    it('and once classified on a side', () => {
+      const classified = classifyFsFault(refused, { side: 'destination', action: 'write', path: '/t/a' });
+      expect(fsFaultOf(classified)).toMatchObject({ errno: LINK_CHAIN_REFUSED_CODE, faultClass: 'refused' });
+    });
+
+    it('but not a stray code without the refusal', () => {
+      expect(isFilesystemFault(Object.assign(new Error('x'), { code: LINK_CHAIN_REFUSED_CODE }))).toBe(false);
     });
   });
 });

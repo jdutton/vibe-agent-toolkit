@@ -14,11 +14,29 @@
   still walked link by link by `lstat` and `readlink` alone before anything resolves it.
 - **On Windows, a link to `\\host\share` in a tree VAT reads where it stands — a project
   `vat resources validate`, `vat okf validate` or `vat audit` reads, the resource projection — was
-  resolved by the kernel, offering the operator's NTLM credentials to the host.** Every realpath
-  VAT asks now first walks the path's link chain by `lstat` and `readlink`; a chain through a
-  network or device path, or a drive-relative text, is refused before the kernel is asked, and the
-  read lanes report it as that one link's fault (class `refused`, errno `LINK_CHAIN_REFUSED`), as
-  they report a link the OS declines to resolve.
+  resolved by the kernel, offering the operator's NTLM credentials to the host — and so was one a
+  `stat` or an existence check followed (a skill's link targets, a `files:` source, a crawl that
+  follows links, a committed link the git-listed crawl handed to a reader).** Every call VAT makes that
+  follows a link (`stat`, an existence check, `realpath`) now first walks the path's link chain by
+  `lstat` and `readlink`, on every host, from the tree's own root down; a chain through a network
+  or device path, or a drive-relative text, is refused before the kernel is asked, and the read lanes
+  report it as that one path's fault (class `refused`, errno `LINK_CHAIN_REFUSED`), as they report a
+  link the OS declines to resolve. A lint rule (`local/no-link-following-fs`) keeps every new call
+  behind that walk. Under Windows rules a link text is now local only when relative or
+  drive-absolute: `\\?\…`, `\\.\…`, `\??\…` (`GLOBALROOT`, `Volume{…}` included), `\Device\…`,
+  `\DosDevices\…`, `\GLOBAL??\…` and a rooted `\x` are network or device paths.
+- **On Windows, finding a project root from a scanned directory (`vat audit` does it for every
+  SKILL.md it finds) followed a `vibe-agent-toolkit.config.yaml`, `.git` or `package.json` link planted
+  there, and a copy that keeps links (`vat skill test run`, `vat claude marketplace publish`, `vat build`)
+  had Node follow each link's target to pick its type** — either offering NTLM credentials to a
+  `\\host\share` target. Both now read the chain by `lstat`/`readlink` first; a copied link gets its type from it.
+- **A git skill source's committed link text was decoded as UTF-8 before it was judged**, so its bytes,
+  and a blob crafted to look like the next object's header, were not what the checkout would
+  create. Link texts are now read as bytes and the clone is refused on any count, size or header
+  mismatch.
+- **A `publish.remote` such as `--upload-pack=<command>` made `vat claude marketplace publish` run
+  that command**: the remote reached `git ls-remote`, `fetch` and `push` as an option. Every one of
+  them now ends option parsing (`--`) before the remote, and such a remote is refused (below).
 - **Dependencies bumped past new advisories:** `@modelcontextprotocol/sdk` 1.32.0 (shipped, by
   `@vibe-agent-toolkit/gateway-mcp`, which now requires it), and in this repo's lockfile `vite` 7.3.7, `vitest` 4.1.12, `undici`
   7.30.1, `hono` 4.13.11, `@hono/node-server` 2.1.5, `body-parser` 2.4.0, `qs` 6.16.1, `fast-uri` 3.1.9, `ip-address` 10.7.4, `markdown-it`
@@ -27,6 +45,28 @@
 
 ### Breaking
 
+- **A path whose link chain the OS refuses to read (`EACCES` on an `lstat` or `readlink` on the way)
+  is now a fault of that path — reported, or the command's refusal — never "absent" and never left to
+  the kernel.** A `LINK_CHAIN_REFUSED` refusal takes its exit code from its side (`INPUT_UNREADABLE`
+  while reading, `RUN_INCOMPLETE` on a destination), not `INPUT_UNREADABLE` always. Every refusal is
+  charged to the side of the path the OS refused — a link on the way, or the parent a "confirmed
+  absent" check lists — not to the side of the path asked about: `pathPresent` and
+  `requireConfirmedAbsent` take a required `sideOf` (`everywhere(side)`, `sideWithin(root, side,
+  outside)`) in place of one `side`. The cli's `loadConfig(projectRoot, projectSide)` and
+  `loadConfigCached` take the verb's side for the project the same way (`destination` for a verb that
+  writes into it), so `vat resources validate` under an untraversable parent is `INPUT_UNREADABLE` and
+  `vat build` there is `RUN_INCOMPLETE`.
+- **Root discovery (`findProjectRoot`, `findConfigFile`, `findNodeWorkspaceRoot`, `gitFindRoot`) and a
+  copy that keeps links refuse a link whose chain names a network or device path, and root discovery
+  treats a probe the OS refused (`EACCES`) as that fault, not "no config here"** (`FS_FAULT`,
+  `refused`, `INPUT_UNREADABLE`). Replace the link with the file it names, or fix the permission.
+- **A crawl's missing base directory is a classified fault of its side** (`FS_FAULT`, `errno: ENOENT`),
+  no longer an uncoded `Base directory does not exist` error; and under `unreadable: { refuse }` a
+  link the crawl cannot follow throws the classified fault on the link, not a `DirectoryListingRefusedError`.
+- **A git skill source refuses a commit holding a link whose text holds a NUL, is not valid UTF-8,
+  or has a component ending in a dot or a space** (`COPY_LINK_ESCAPES_SOURCE`, `INPUT_UNREADABLE`),
+  on every host: Windows strips the dot or space, and no single spelling is what both kernels create.
+  Under Windows rules a `#ref:subpath` matches a committed link's path case-insensitively.
 - **Every command that opens a ZIP or tarball refuses one holding a symbolic link, a hard link, a
   device, a sparse or unknown-type entry, a name that leaves the archive, or two entries that are
   one name** (`INPUT_UNREADABLE`, exit 2, nothing written or sent) — `vat skills install` / `list`,
@@ -119,6 +159,9 @@
 - **`vat claude plugin install` refuses a marketplace name another source registered in
   `known_marketplaces.json` when no directory, or an empty one, stands under `marketplaces/`**
   (`USAGE_INVALID`). Pass `--force` to take the name over.
+- **`vat claude marketplace publish` refuses a `publish.remote`, or the URL a remote name resolves
+  to, that starts with `-`** (`CONFIG_INVALID`, before any git runs). Set it to a remote name or a
+  full URL.
 
 ### Changed
 
@@ -157,5 +200,8 @@
   tip and builds on it; if it doesn't, the first commit has no parent. A remote that cannot be asked,
   or a tip that cannot be fetched, is refused with `EXTERNAL_API_FAILED`. `--force` skips the check,
   and `--no-push` still fetches the full history. No action needed.
+- **A failed `vat claude marketplace publish` git step quoted git's stderr with the remote URL's
+  credentials in it** (a `GH_TOKEN` injected in CI included); they are now stripped. A
+  `git ls-remote` killed by its timeout says it timed out instead of `exit 1`. No action needed.
 - **A refused symbolic link was named by its target, and a refused rename by the entry being moved.**
   The message now names the link, and both ends of the rename; no action needed.

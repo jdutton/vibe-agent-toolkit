@@ -5,7 +5,6 @@
  * Solution: Cache results and pre-populate with git ls-files (tracked + untracked non-ignored).
  */
 
-import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import {
@@ -13,9 +12,11 @@ import {
   crawlTimingStart,
   recordSharedPass,
 } from './crawl-timing.js';
+import { linkResolutionFault } from './errors/fs-fault.js';
 import { peekGitTreeSnapshot } from './git-snapshot.js';
 import { gitLsFiles, isGitIgnored } from './git-utils.js';
 import { promised } from './in-order.js';
+import { followedKindSync } from './link-following.js';
 import { safePath, toForwardSlash } from './path-utils.js';
 
 /**
@@ -409,14 +410,14 @@ export class GitTracker {
    *
    * @param absolutePath - Absolute path to check
    * @param knownToExist - The caller's own answer to the existence question, when
-   *   it has already asked. Supplying it skips this method's `existsSync`, which
+   *   it has already asked. Supplying it skips this method's own probe, which
    *   is otherwise paid once per path that is absent from the active set — i.e.
    *   once per ignored path, and the projection's `filesystem` extent enumerates
    *   all of them (11,108 calls on an 8,496-path adopter tree).
    *
-   *   **It must mean what `existsSync` means: `stat` succeeds, following
+   *   **It must mean what that probe means: the path resolves, following
    *   symlinks.** A caller holding only an `lstat` result has a DIFFERENT fact —
-   *   `lstat` succeeds on a dangling symlink where `existsSync` returns false —
+   *   `lstat` succeeds on a dangling symlink where the probe answers absent —
    *   and must narrow it to `exists && symlinkResolves !== false` rather than
    *   pass the `lstat` boolean through, or dangling symlinks silently stop
    *   falling back to `git check-ignore` and start reporting as ignored.
@@ -447,12 +448,27 @@ export class GitTracker {
 
     // Absent from the active set. That means "ignored" only for a path that is
     // actually there; otherwise the set has no opinion and git must be asked.
-    const present = knownToExist ?? existsSync(normalized);
+    const present = knownToExist ?? this.isPresent(normalized);
     if (!present) {
       return this.isIgnored(absolutePath);
     }
 
     return true;
+  }
+
+  /**
+   * Whether something resolves at `path` (inside the project), its links read beneath the project
+   * root first. A probe the OS refuses, or a chain VAT will not follow, has no answer here: the set
+   * cannot vouch for it, so git is asked (`isIgnored`), as for an absent path.
+   */
+  private isPresent(path: string): boolean {
+    try {
+      return followedKindSync(path, this.projectRoot) !== 'absent';
+    } catch (error) {
+      // A bug (no errno) stays loud: `linkResolutionFault` rethrows it.
+      linkResolutionFault(error);
+      return false;
+    }
   }
 
   private isWithinProjectRoot(normalizedAbsolutePath: string): boolean {

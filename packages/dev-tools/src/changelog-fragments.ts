@@ -147,7 +147,7 @@ export function listFragmentFiles(repoRoot: string): string[] {
     const dir = safePath.join(repoRoot, CHANGES_DIR);
     return readdirSync(dir, { withFileTypes: true })
       // Followed: a linked fragment is a fragment.
-      .filter((entry) => direntKindFollowingSync(dir, entry) === 'file' && entry.name.endsWith('.md') && entry.name !== 'README.md')
+      .filter((entry) => direntKindFollowingSync(dir, entry, dir) === 'file' && entry.name.endsWith('.md') && entry.name !== 'README.md')
       .map((entry) => `${CHANGES_DIR}/${entry.name}`)
       .sort((a, b) => a.localeCompare(b));
   } catch (error) {

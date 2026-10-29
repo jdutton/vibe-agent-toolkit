@@ -41,20 +41,21 @@ export interface PluginLayout {
  *
  * @param skillSourceDir Absolute path to the skill's TRUE on-disk source directory
  *   (NOT a staged temp copy — the staged copy has lost its plugin ancestry).
- * @param fileExists Injected probe: returns true iff the given absolute path exists
- *   (production passes `existsSync`; tests pass a fake).
+ * @param fileExists Injected probe: returns true iff the given absolute path exists beneath
+ *   `within` (the ancestor being asked — the operator's own; its link chain is read first)
+ *   (production passes a followed presence probe; tests pass a fake).
  * @returns `{ pluginRoot, relPathUnderPlugin }` for the nearest plugin ancestor, or
  *   `null` when no ancestor is a plugin root (standalone skill).
  */
 export function detectPluginLayout(
   skillSourceDir: string,
-  fileExists: (p: string) => boolean,
+  fileExists: (p: string, within: string) => boolean,
 ): PluginLayout | null {
   let current = toForwardSlash(skillSourceDir);
   // Walk up until the filesystem root (dirname is idempotent at the root).
   for (;;) {
     const marker = safePath.join(current, PLUGIN_MANIFEST_SUBPATH);
-    if (fileExists(marker)) {
+    if (fileExists(marker, current)) {
       return {
         pluginRoot: current,
         relPathUnderPlugin: safePath.relative(current, toForwardSlash(skillSourceDir)),

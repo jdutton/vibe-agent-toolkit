@@ -6,7 +6,6 @@
  *   2. vat claude plugin build (Claude plugin tree, skipped if no claude config)
  */
 
-import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 
 import { checkBrokenPackagedLinks } from '@vibe-agent-toolkit/agent-skills';
@@ -18,7 +17,7 @@ import {
   type Report,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/schema';
-import { direntKindFollowing, everyInOrder, findConfigFile, mapConcurrentFailingInOrder, mapInOrder, safePath } from '@vibe-agent-toolkit/utils';
+import { direntKindFollowing, everyInOrder, everywhere, findConfigFile, mapConcurrentFailingInOrder, mapInOrder, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { marksOperandRefusalByHand } from '../command-tree.js';
@@ -139,7 +138,7 @@ Example:
  * on it was refused as "not configured", which was not the problem.
  */
 export function configuredBuildSurfaces(cwd: string): ConfiguredBuildSurfaces {
-  const config = loadConfig(cwd);
+  const config = loadConfig(cwd, 'destination');
   return {
     skills: config?.skills !== undefined,
     claudeMarketplaces: Boolean(config?.claude?.marketplaces && Object.keys(config.claude.marketplaces).length > 0),
@@ -163,7 +162,9 @@ export interface ConfiguredBuildSurfaces {
 // pool import or verbatim tree-copy.
 async function collectShippedSkillDirs(marketplacesDir: string): Promise<string[]> {
   const skillDirs: string[] = [];
-  if (!existsSync(marketplacesDir)) {
+  // The tree the run itself built: every probe beneath it reads its links first (`within` is the
+  // marketplaces root), and a probe the OS refuses is a destination fault, never "nothing shipped".
+  if (!shippedPresent(marketplacesDir, marketplacesDir)) {
     return skillDirs;
   }
 
@@ -171,34 +172,39 @@ async function collectShippedSkillDirs(marketplacesDir: string): Promise<string[
   // multiply it, so the outer levels walk in listing order.
   const marketplaceEntries = await readdir(marketplacesDir, { withFileTypes: true });
   const perMarketplace = await mapInOrder(marketplaceEntries, async (marketplaceEntry) => {
-    if ((await direntKindFollowing(marketplacesDir, marketplaceEntry)) !== 'directory') return [];
+    if ((await direntKindFollowing(marketplacesDir, marketplaceEntry, marketplacesDir)) !== 'directory') return [];
     const pluginsDir = safePath.join(marketplacesDir, marketplaceEntry.name, 'plugins');
-    if (!existsSync(pluginsDir)) return [];
-    return collectPluginSkillDirs(pluginsDir);
+    if (!shippedPresent(pluginsDir, marketplacesDir)) return [];
+    return collectPluginSkillDirs(pluginsDir, marketplacesDir);
   });
   skillDirs.push(...perMarketplace.flat());
 
   return skillDirs;
 }
 
-async function collectPluginSkillDirs(pluginsDir: string): Promise<string[]> {
+/** Whether `path` (in the shipped tree under `within`) resolves to something: see {@link collectShippedSkillDirs}. */
+function shippedPresent(path: string, within: string): boolean {
+  return pathPresent(path, { follow: within }, everywhere('destination'), 'confirmed');
+}
+
+async function collectPluginSkillDirs(pluginsDir: string, within: string): Promise<string[]> {
   const pluginEntries = await readdir(pluginsDir, { withFileTypes: true });
   const perPlugin = await mapInOrder(pluginEntries, async (pluginEntry) => {
-    if ((await direntKindFollowing(pluginsDir, pluginEntry)) !== 'directory') return [];
+    if ((await direntKindFollowing(pluginsDir, pluginEntry, within)) !== 'directory') return [];
     const skillsDir = safePath.join(pluginsDir, pluginEntry.name, 'skills');
-    if (!existsSync(skillsDir)) return [];
-    return collectSkillsInDir(skillsDir);
+    if (!shippedPresent(skillsDir, within)) return [];
+    return collectSkillsInDir(skillsDir, within);
   });
   return perPlugin.flat();
 }
 
-async function collectSkillsInDir(skillsDir: string): Promise<string[]> {
+async function collectSkillsInDir(skillsDir: string, within: string): Promise<string[]> {
   const skillEntries = await readdir(skillsDir, { withFileTypes: true });
   const perSkill = await mapConcurrentFailingInOrder(skillEntries, async (skillEntry) => {
     // Followed: a symlinked skill directory (a dev install) ships like any other.
-    if ((await direntKindFollowing(skillsDir, skillEntry)) !== 'directory') return [];
+    if ((await direntKindFollowing(skillsDir, skillEntry, within)) !== 'directory') return [];
     const skillDir = safePath.join(skillsDir, skillEntry.name);
-    return existsSync(safePath.join(skillDir, 'SKILL.md')) ? [skillDir] : [];
+    return shippedPresent(safePath.join(skillDir, 'SKILL.md'), within) ? [skillDir] : [];
   });
   return perSkill.flat();
 }

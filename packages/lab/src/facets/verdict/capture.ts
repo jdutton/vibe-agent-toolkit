@@ -158,7 +158,8 @@ function storeDir(outDir: string, alias: string): string {
 function subjectContaining(subjects: readonly VerdictSubject[], target: string): string | undefined {
   return subjects.find(
     (subject) =>
-      canonicalPath(subject.path) === canonicalPath(target) || isUnderRoot(subject.path, target) !== 'outside',
+      // The subject is the operator's own checkout: its own path is the edge, and `target` is judged beneath it.
+      canonicalPath(subject.path, subject.path) === canonicalPath(target, subject.path) || isUnderRoot(subject.path, target) !== 'outside',
   )?.alias;
 }
 

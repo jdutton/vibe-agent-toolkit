@@ -112,7 +112,7 @@ describe('validateLink target lookups', () => {
   beforeEach(async () => {
     await suite.beforeEach();
     tempDir = suite.getTempDir();
-    fsCache = new FsLookupCache();
+    fsCache = new FsLookupCache(tempDir);
     await createFixture(tempDir);
   });
 

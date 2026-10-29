@@ -7,13 +7,12 @@
  * `--print` stdout is the `skill-test-config` artifact — the config text alone.
  */
 
-import { statSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { upsertTestConfig } from '@vibe-agent-toolkit/agent-skills';
 import { parseConfigAllowingUnknownKeys, type ProjectConfig, ProjectConfigSchema, readConfigText } from '@vibe-agent-toolkit/resources';
 import { buildReport, type Gate } from '@vibe-agent-toolkit/schema';
-import { classifyFsFault, isFsFaultError, replaceFile, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
+import { classifyFsFault, isFsFaultError, replaceFile, requireFollowedStatSync, safePath, toForwardSlash, withFsFault } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
 
@@ -117,7 +116,8 @@ export function buildKnobs(
  */
 function requireConfigPresent(configPath: string, configSide: 'source' | 'destination'): void {
   try {
-    statSync(configPath);
+    // The config sits at the project root: the root is its `within`.
+    requireFollowedStatSync(configPath, safePath.resolve(configPath, '..'));
   } catch (error) {
     const fault = classifyFsFault(error, { side: configSide, origin: 'config', action: 'find the project config', path: configPath });
     if (isFsFaultError(fault) && fault.faultClass === 'absent') {

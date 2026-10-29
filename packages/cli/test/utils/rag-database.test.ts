@@ -6,12 +6,13 @@
  * reached without a real tree, on every platform and under uid 0.
  */
 
+import realFs from 'node:fs';
 import type * as Fs from 'node:fs';
 
 import type * as RagLancedb from '@vibe-agent-toolkit/rag-lancedb';
 import type * as Utils from '@vibe-agent-toolkit/utils';
 import { TREE_DEST_NOT_OWNED_CODE, VatError } from '@vibe-agent-toolkit/utils';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { refusalCodeOf } from '../../src/utils/command-refusal.js';
 import { notRemovableRefusal, requireExistingDatabase, requireWritableDatabase } from '../../src/utils/rag-database.js';
@@ -56,6 +57,14 @@ beforeEach(() => {
   fakeUtils.mkdirSyncReal.mockReset();
   fakeFs.statSync.mockReturnValue(directory());
   fakeFs.readdirSync.mockReturnValue([]);
+  // The database path's `stat` goes through utils' link-following, which reaches the kernel through
+  // the DEFAULT `node:fs` object — the one seam a module mock does not replace — so it is routed to
+  // the same scripted answer.
+  vi.spyOn(realFs, 'statSync').mockImplementation(((...args: Parameters<typeof realFs.statSync>) => fakeFs.statSync(...args)) as typeof realFs.statSync);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('requireExistingDatabase', () => {

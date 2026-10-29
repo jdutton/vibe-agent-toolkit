@@ -13,6 +13,7 @@
  * link out as a plain file unless `core.symlinks` is on.
  */
 import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 import {
   COPY_LINK_ESCAPES_SOURCE_CODE,
@@ -23,7 +24,7 @@ import {
   safePath,
   symlinkCapability,
 } from '@vibe-agent-toolkit/utils';
-import { parseGitUrl } from '@vibe-agent-toolkit/utils/git';
+import { parseGitUrl, runGitOrThrow } from '@vibe-agent-toolkit/utils/git';
 import { installFaultFs } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -57,6 +58,25 @@ function cloneShapedInto(shape: (workDir: string) => void, subpath?: string, lin
   cleanups.push(() => rmSync(tempdir, { recursive: true, force: true }));
   const url = subpath === undefined ? `${repo.bareUrl}#main` : `${repo.bareUrl}#main:${subpath}`;
   return { clone: () => cloneGitSource(parseGitUrl(url), tempdir), tempdir };
+}
+
+/**
+ * A repository whose one commit holds only `links`, each a mode-`120000` entry whose blob is the
+ * given BYTES — no UTF-8 round trip on the way in — and the directory a `#main:plugins/foo` clone of it lands in.
+ */
+function cloneByteLinks(links: Readonly<Record<string, Buffer>>): { clone: () => ReturnType<typeof cloneGitSource>; tempdir: string } {
+  const work = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-gc-bytes-'));
+  const tempdir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-gc-bytes-clone-'));
+  cleanups.push(() => rmSync(work, { recursive: true, force: true }), () => rmSync(tempdir, { recursive: true, force: true }));
+  const git = (...args: string[]): string => runGitOrThrow(['-c', 'user.name=T', '-c', 'user.email=t@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: work });
+  git('init', '--initial-branch=main');
+  for (const [index, [path, bytes]] of Object.entries(links).entries()) {
+    const blobFile = safePath.join(work, '.git', `link-${index.toString()}`);
+    writeFileSync(blobFile, bytes);
+    git('update-index', '--add', '--cacheinfo', `120000,${git('hash-object', '-w', blobFile)},${path}`);
+  }
+  git('commit', '-m', 'byte links');
+  return { clone: () => cloneGitSource(parseGitUrl(`${pathToFileURL(work).href}#main:plugins/foo`), tempdir), tempdir };
 }
 
 /** Every filesystem call the clone made that names the link's target: the kernel asked to resolve it. */
@@ -123,6 +143,21 @@ describe('cloneGitSource refuses a committed link by its text before checkout, o
   it('classifies a refused probe of the subpath itself as a fault on the source side', () => {
     const { clone, tempdir } = cloneShapedInto(noShape, 'plugins/foo');
     expectSourceSideRefusal(clone, tempdir, 'lstat', '/plugins/foo');
+  });
+
+  // R12-SEC-C1 with real git: a link blob is BYTES, and one that is not UTF-8 must neither shift
+  // the reading of the next link nor pass as a relative text.
+  it('refuses a committed link whose blob is 0xFF bytes, before checkout', () => {
+    const { clone, tempdir } = cloneByteLinks({ 'plugins/foo/ff': Buffer.alloc(4, 0xff) });
+    expect(clone).toThrow(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE, message: expect.stringContaining('plugins/foo/ff is a symbolic link whose text is not portable') }));
+    expect(readdirSync(tempdir)).toEqual(['.git']);
+  });
+
+  it('refuses the forged-header pair of R12-SEC-C1 before checkout', () => {
+    const forging = Buffer.concat([Buffer.alloc(6, 0xff), Buffer.alloc(20, 0x61), Buffer.from('\nx blob 2\nok')]);
+    const { clone, tempdir } = cloneByteLinks({ 'plugins/foo/a': forging, 'plugins/foo/b': Buffer.from(UNC) });
+    expect(clone).toThrow(expect.objectContaining({ code: COPY_LINK_ESCAPES_SOURCE_CODE }));
+    expect(readdirSync(tempdir)).toEqual(['.git']);
   });
 
   it('checks out a commit whose links\' texts stay inside (positive control)', () => {

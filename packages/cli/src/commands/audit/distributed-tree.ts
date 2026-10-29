@@ -261,9 +261,12 @@ const REPO_SOURCE: SkillTreeProvenance = 'repo-source';
  * Canonicalising the SKILL.md before deriving the git root is what keeps the
  * second fix honest — the tracker's own keys are built from the root it is given,
  * so a canonical lookup against a non-canonical root would miss every time.
+ *
+ * @param within - The tree `filePath` was crawled in (the audit's scan root), whose links are read
+ *   before the kernel follows them; `filePath` itself when it is the operator's own path
  */
-function canonicalPath(filePath: string): string {
-  return toForwardSlash(normalizePath(safePath.resolve(filePath)));
+function canonicalPath(filePath: string, within: string): string {
+  return toForwardSlash(normalizePath(safePath.resolve(filePath), within));
 }
 
 /**
@@ -296,7 +299,8 @@ function isUnderClaudeInstallRoot(canonicalAbsolutePath: string): boolean {
   // marketplacesDir is nested under pluginsDir; listed anyway so the set reads as
   // the three install destinations rather than as an accident of layout.
   return [pluginsDir, skillsDir, marketplacesDir].some((dir) =>
-    isWithin(canonicalPath(dir), canonicalAbsolutePath),
+    // An install root is the operator's own configuration (`CLAUDE_CONFIG_DIR`/`HOME`), never a crawled entry.
+    isWithin(canonicalPath(dir, dir), canonicalAbsolutePath),
   );
 }
 
@@ -304,8 +308,8 @@ function isUnderClaudeInstallRoot(canonicalAbsolutePath: string): boolean {
  * Classify the tree holding `skillMdPath`. See this module's header for the
  * reasoning behind each clause and the order they are applied in.
  */
-export async function classifyScannedSkillTree(skillMdPath: string): Promise<SkillTreeProvenance> {
-  const absolute = canonicalPath(skillMdPath);
+export async function classifyScannedSkillTree(skillMdPath: string, within: string): Promise<SkillTreeProvenance> {
+  const absolute = canonicalPath(skillMdPath, within);
   const memoized = provenanceCache.get(absolute);
   if (memoized !== undefined) {
     return memoized;
@@ -353,8 +357,8 @@ async function classifyUncached(absolute: string): Promise<SkillTreeProvenance> 
  * skill, and a scan rooted above `<claudeDir>/skills` reaches an install root
  * from outside one.
  */
-export async function crawlOwnsSubtree(skillMdPath: string): Promise<boolean> {
-  return (await classifyScannedSkillTree(skillMdPath)) !== REPO_SOURCE;
+export async function crawlOwnsSubtree(skillMdPath: string, within: string): Promise<boolean> {
+  return (await classifyScannedSkillTree(skillMdPath, within)) !== REPO_SOURCE;
 }
 
 /**
@@ -414,7 +418,7 @@ export async function distributedTreeFindings(
   crawlTree: boolean,
 ): Promise<ValidationIssue[]> {
   if (!crawlTree) return [];
-  const provenance = await classifyScannedSkillTree(skillPath);
+  const provenance = await classifyScannedSkillTree(skillPath, locationRoot);
   if (provenance === REPO_SOURCE) return [];
 
   const treeRoot = safePath.resolve(skillPath, '..');

@@ -2,38 +2,32 @@
  * Filesystem utilities
  */
 
-// ⚠️ The sync half is reached through the DEFAULT object (`nodeFs.existsSync`),
-// not as named imports, and that is load-bearing rather than stylistic. Node
-// snapshots a builtin's named ESM exports at import time, so `vi.spyOn(fs,
-// 'existsSync')` cannot see a call made through a named binding — the spy
-// attaches and counts zero, which reads exactly like "this function performs no
-// I/O". `pathSpellingFrom` and `realpathRowFrom` are guarded by precisely that
-// assertion (they must reach neither `readdir` nor this pair), so a "tidy-up"
-// back to named imports would silently disarm the guard. The async half below
-// already uses the default object for the same reason.
-import nodeFs from 'node:fs';
+// ⚠️ Every fs call here is reached through a DEFAULT object (`fs.readdir`), and every
+// link-following one through `link-following.ts`, which does the same: Node snapshots a
+// builtin's named ESM exports at import time, so a `vi.spyOn` cannot see a call made through
+// a named binding — the spy attaches and counts zero, which reads exactly like "this function
+// performs no I/O". `pathSpellingFrom` and `realpathRowFrom` are guarded by precisely that
+// assertion, so a "tidy-up" to named imports would silently disarm the guard.
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
 import { type FsFaultClass, fsFaultOf, isRetryableShortageError, isUnresolvableLinkError } from './errors/errno-table.js';
 import { linkResolutionFault } from './errors/fs-fault.js';
 import { everyInOrder } from './in-order.js';
+import { followedRealpath, followedStatSync } from './link-following.js';
 import { toForwardSlash, toNfc } from './path-core.js';
 import { safePath } from './path-utils.js';
-import { assertLocalChain } from './tree-change/host-chain.js';
-import { HOST_PATH_FLAVOR } from './tree-change/link-chain.js';
 
 /**
  * What one path looked like the first time this run asked.
  *
  * The two fields are deliberately NOT collapsed into a single `stat` result:
- * they record the outcome of `existsSync` and of `statSync` *separately*,
+ * they record whether anything resolves there and what the `stat` said *separately*,
  * because callers distinguish three states and only two of them are "the stat
  * worked". See {@link FsLookupCache.probe}.
  */
 export interface PathProbe {
-  /** `existsSync` — follows symlinks, so a dangling link reads as absent. */
+  /** Whether the path resolves (its chain read first) — a dangling link or a cycle reads as absent. */
   readonly exists: boolean;
   /**
    * `statSync().isDirectory()`.
@@ -208,6 +202,14 @@ export class FsLookupCache {
   /** The listings turned into spelling indexes, built on first use. */
   #spellingIndex: DirectorySpellingIndex | undefined;
 
+  /** The tree every path this cache follows is crawled in: the operator's own input (`link-following.ts`). */
+  readonly #within: string;
+
+  /** @param within - The tree this run's paths are crawled in — a project or skill root the operator named */
+  constructor(within: string) {
+    this.#within = within;
+  }
+
   /**
    * The three-way spelling index over this cache's listings — one per run, for
    * the same reason the listings themselves are.
@@ -242,12 +244,12 @@ export class FsLookupCache {
   /**
    * Does this path exist, and is it a directory — asked once per run.
    *
-   * **Both syscalls are preserved, in order, exactly as an uncached caller
-   * would make them.** `existsSync` then `statSync` is not the same as one
-   * `statSync`: the pair distinguishes "absent" from "present but unstattable",
-   * and the link walker's classifier branches differently on each. Collapsing
-   * them would be a behaviour change wearing the shape of an optimization, so
-   * this method deduplicates the pair rather than replacing it.
+   * One followed `stat`, its link chain read beneath this cache's tree first
+   * (`followedStatSync`): a path that resolves to nothing — absent, dangling, a
+   * cycle — is `{ exists: false }`; a probe the OS refused, or a chain VAT will not
+   * hand the kernel (a link to a network or device path), is present with NO
+   * answer (`isDirectory: null`), which the link walker reports as an unreadable
+   * target — so the refusal is SEEN, never read as "not there".
    *
    * Synchronous, unlike this class's other two lookups, because its caller (the
    * skill link-graph walker) is synchronous throughout. One oracle answering
@@ -262,23 +264,16 @@ export class FsLookupCache {
     if (cached !== undefined) return cached;
 
     this.#probeMisses++;
-    const exists = nodeFs.existsSync(targetPath);
+    let exists = true;
     let isDirectory: boolean | null = null;
-    if (exists) {
-      try {
-        isDirectory = nodeFs.statSync(targetPath).isDirectory();
-      } catch (error) {
-        // Present to `existsSync` but unstattable — a permission change or a
-        // delete racing between the two calls. `null` records "no answer" rather
-        // than guessing `false`, which would read as "it is a file", and the
-        // link walker reports it as an unreadable target — so the refusal is
-        // SEEN, not swallowed. A bug from under the stat is not a refusal and
-        // stays loud; `fsFaultOf` is the right predicate here
-        // precisely because it groups every environmental errno together and
-        // excludes a `TypeError`.
-        if (fsFaultOf(error) === undefined) throw error;
-        isDirectory = null;
-      }
+    try {
+      const stats = followedStatSync(targetPath, this.#within);
+      exists = stats !== undefined;
+      isDirectory = stats === undefined ? null : stats.isDirectory();
+    } catch (error) {
+      // A bug from under the stat is not a refusal and stays loud: only a fault
+      // the classifier knows, or VAT's own refusal of the chain, is "no answer".
+      if (linkResolutionFault(error) === undefined) exists = false;
     }
 
     const result: PathProbe = { exists, isDirectory };
@@ -386,10 +381,7 @@ export class FsLookupCache {
     // The kernel is asked only once the link chain has been read and shown local
     // (`assertLocalChain`); a chain it refuses is this target's fault, like any other.
     const pending = Promise.resolve()
-      .then(() => {
-        assertLocalChain(targetPath, HOST_PATH_FLAVOR);
-        return promisify(nodeFs.realpath)(targetPath);
-      })
+      .then(() => followedRealpath(targetPath, this.#within))
       .then((real): RealpathRow => ({ path: toForwardSlash(real), fault: null }))
       .catch((error: unknown) => {
         const facts = linkResolutionFault(error);

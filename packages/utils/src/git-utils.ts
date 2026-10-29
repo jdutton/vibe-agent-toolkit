@@ -3,10 +3,10 @@
  * All git commands should go through this module for consistency and testability.
  */
 
-import { existsSync } from 'node:fs';
 import { dirname, parse } from 'node:path';
 
 import { errnoForGitReason } from './errors/git-errno.js';
+import { entryPresentIn } from './errors/path-present.js';
 import { directoryRefusalFor, listingFailure } from './fs-utils.js';
 import { lookupGitRoot, rememberGitRoot } from './git-root-cache.js';
 import { runGit } from './git-run.js';
@@ -151,8 +151,9 @@ export function gitFindRoot(startDir: string): string | null {
     if (memoized !== undefined) return rememberGitRoot(climbed, memoized);
     climbed.push(currentDir);
 
-    const gitDir = safePath.join(currentDir, '.git');
-    if (existsSync(gitDir)) {
+    // Climbed from inside a crawled tree (a skill directory an audit found, a plugin install's
+    // source), so `.git` may be a planted link: its chain is read before the kernel follows it.
+    if (entryPresentIn(currentDir, '.git')) {
       return rememberGitRoot(climbed, currentDir);
     }
     currentDir = dirname(currentDir);

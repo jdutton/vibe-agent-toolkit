@@ -13,7 +13,6 @@
  * - vat skills audit --user (report issues, exit 0 always)
  */
 
-import { existsSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import {
@@ -41,6 +40,7 @@ import {
 import {
   classifyFsFault,
   findProjectRoot,
+  followedKindSync,
   type FsSide,
   isNotARegularFileError,
   issueLocation,
@@ -49,6 +49,7 @@ import {
   toForwardSlash,
   toForwardSlashAnyPlatform,
   safePath,
+  withFsFaultSync,
 } from '@vibe-agent-toolkit/utils';
 import { type DirectoryRefusal, settleCrawlRefusal, type UnreadablePolicy } from '@vibe-agent-toolkit/utils/crawl';
 import { readTextContent } from '@vibe-agent-toolkit/utils/fs';
@@ -255,7 +256,12 @@ function validateFilesConfig(
     // Check if an existing source resolves to a directory — a typed single-file
     // slot cannot be satisfied by a directory.
     const resolvedSource = safePath.resolve(safePath.join(projectRoot, entry.source));
-    if (existsSync(resolvedSource) && statSync(resolvedSource).isDirectory()) {
+    // Crawled beneath the project root: a refused probe or link chain is the source's fault, thrown.
+    const sourceKind = withFsFaultSync(
+      { side: 'source', origin: 'content', action: `examine files: source '${entry.source}'`, path: resolvedSource },
+      () => followedKindSync(resolvedSource, projectRoot),
+    );
+    if (sourceKind === 'directory') {
       // Anchor at the resolved source, expressed in the run's ONE coordinate
       // system — not the raw config value, which is project-relative and so
       // unresolvable in a run that spans several projects.
@@ -896,9 +902,10 @@ export async function validateSkillForPackaging(
   const locationRoot = shared?.locationRoot ?? projectRoot;
   const skillLocation = issueLocation(skillPath, locationRoot);
 
-  // Parse SKILL.md. A `built` skill is VAT's own output re-read: a refused read is the
-  // destination's, never the user's input.
-  const parseResult = await parseFileCached(skillPath, 'markdown', { side: context === 'built' ? 'destination' : 'source' });
+  // A `built` skill is VAT's own output re-read: every read of its tree the OS refuses is the
+  // destination's, never the user's input. The ONE mapping; every read below takes `side`.
+  const side: FsSide = context === 'built' ? 'destination' : 'source';
+  const parseResult = await parseFileCached(skillPath, 'markdown', { side });
   // The parser already decoded these bytes; a second whole-file read of the same
   // path would only add a syscall and a TOCTOU window. `content` is the raw
   // source verbatim, so fenced code blocks reach `runCompatDetectors` intact.
@@ -1030,7 +1037,7 @@ export async function validateSkillForPackaging(
   const bundledFiles = [...bundledResources.map(r => r.filePath), ...bundledAssets];
 
   // Count direct links that actually made it into the bundle
-  const directLinks = getResolvedMarkdownLinks(parseResult.links, skillPath);
+  const directLinks = getResolvedMarkdownLinks(parseResult.links, skillPath, projectRoot, side);
   const bundledFileSet = new Set(bundledFiles);
   const directFileCount = directLinks.filter(p => bundledFileSet.has(p)).length;
 
@@ -1060,7 +1067,7 @@ export async function validateSkillForPackaging(
   const bundledLocations = bundledMarkdown.map((file) => issueLocation(file, locationRoot));
   // Independent reads, folded below in bundle order.
   const bundledReads = await mapWithConcurrency(bundledMarkdown, (file, index) =>
-    readBundledMarkdown(file, bundledLocations[index] ?? '', context === 'built' ? 'destination' : 'source'));
+    readBundledMarkdown(file, bundledLocations[index] ?? '', side));
   for (const [index, read] of bundledReads.entries()) {
     const bundledLocation = bundledLocations[index] ?? '';
     if ('failure' in read) throw read.failure;
@@ -1643,7 +1650,9 @@ function collectProgressiveDisclosureIssue(
  */
 export function getResolvedMarkdownLinks(
   links: Array<{ href: string; type: string }>,
-  markdownPath: string
+  markdownPath: string,
+  within: string,
+  side: FsSide,
 ): string[] {
   const markdownDir = dirname(markdownPath);
 
@@ -1676,7 +1685,12 @@ export function getResolvedMarkdownLinks(
     }
   }
 
-  return [...candidates].filter(candidate => existsSync(candidate));
+  // Each target is crawled beneath the project: its link chain is read by text before the kernel
+  // follows it, and a refused probe or chain is the skill tree's side's fault, thrown — never "not linked".
+  return [...candidates].filter(candidate => withFsFaultSync(
+    { side, origin: 'content', action: `examine the linked document ${candidate}`, path: candidate },
+    () => followedKindSync(candidate, within),
+  ) !== 'absent');
 }
 
 /**

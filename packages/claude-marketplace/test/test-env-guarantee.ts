@@ -17,7 +17,8 @@ import { expect, vi } from 'vitest';
 
 import { getClaudeUserPaths } from '../src/paths/claude-paths.js';
 
-const isUnder = (root: string, path: string): boolean => !relativeEscapesRoot(safePath.relative(canonicalPath(root), canonicalPath(path)));
+// Each side is the test's own path (the temp root, the configured dir): its own `within`.
+const isUnder = (root: string, path: string): boolean => !relativeEscapesRoot(safePath.relative(canonicalPath(root, root), canonicalPath(path, path)));
 
 /** What every refusal of the guard says, whichever resolver raised it. */
 export const REFUSED_IN_A_TEST_PROCESS = /outside .* refusing to resolve it in a test process/;

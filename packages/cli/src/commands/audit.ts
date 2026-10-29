@@ -4,7 +4,6 @@
  */
 
 import * as fs from 'node:fs';
-import { existsSync as fsExistsSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import {
@@ -67,12 +66,16 @@ import {
   withAddedFindings,
 } from '@vibe-agent-toolkit/schema';
 import {
+  everywhere,
   findProjectRoot,
+  followedKind,
+  followedKindSync,
   forEachInOrder,
   fsFaultOf,
   isPathAbsentError,
   issueLocation,
   mapInOrder,
+  pathPresent,
   relativeEscapesRoot,
   resetProjectRootCaches,
   safePath,
@@ -194,13 +197,14 @@ async function buildVATProjectContext(
   locationRoot: string,
 ): Promise<VATProjectContext | null> {
   const configPath = safePath.join(scanRoot, VAT_CONFIG_FILENAME);
-  if (!fs.existsSync(configPath)) {
+  // A probe the OS refuses is the config's source fault, never "no config here".
+  if (!pathPresent(configPath, { follow: scanRoot }, everywhere('source'), 'probe')) {
     return null;
   }
 
   let config: ReturnType<typeof loadConfig>;
   try {
-    config = loadConfig(scanRoot);
+    config = loadConfig(scanRoot, 'source');
   } catch (error) {
     logger.debug(`Config-aware audit: skipping invalid config in ${scanRoot}: ${String(error)}`);
     return null;
@@ -1008,9 +1012,12 @@ async function auditUserDirectories(
   // config dir, so that is the run's single stated root.
   const scanRoot = safePath.resolve(claudeDir);
 
-  const pluginsDirExists = fs.existsSync(pluginsDir);
-  const skillsDirExists = fs.existsSync(skillsDir);
-  const marketplacesDirExists = fs.existsSync(marketplacesDir);
+  // Each install root is the operator's own configuration (`CLAUDE_CONFIG_DIR`/`HOME`), so it is
+  // its own `within`; a probe the OS refuses is that root's source fault, never "not installed".
+  const userRootPresent = (dir: string): boolean => pathPresent(dir, { follow: dir }, everywhere('source'), 'probe');
+  const pluginsDirExists = userRootPresent(pluginsDir);
+  const skillsDirExists = userRootPresent(skillsDir);
+  const marketplacesDirExists = userRootPresent(marketplacesDir);
 
   if (!pluginsDirExists && !skillsDirExists && !marketplacesDirExists) {
     throw new CommandRefusalError(
@@ -1087,7 +1094,8 @@ const SKILL_RESULT_TYPES: ReadonlySet<ValidationResult['type']> = new Set([RESOU
  */
 export function deriveScanRoot(targetPath: string): string {
   const resolved = safePath.resolve(targetPath);
-  const isDirectory = fs.existsSync(resolved) && fs.statSync(resolved).isDirectory();
+  // The operator's own target: its own `within`.
+  const isDirectory = followedKindSync(resolved, resolved) === 'directory';
   return isDirectory ? resolved : safePath.resolve(resolved, '..');
 }
 
@@ -1368,7 +1376,7 @@ export async function buildAuditReport(
   // only show more than the adopter asked for, never less.
   let config: ReturnType<typeof loadConfig> | undefined;
   try {
-    config = loadConfig(deriveConfigRoot(scanPath));
+    config = loadConfig(deriveConfigRoot(scanPath), 'source');
   } catch (err) {
     // `warn`, not `debug`. Falling back to no config is the safe direction — it
     // can only show more than the adopter asked for, never less — but it means
@@ -1510,7 +1518,9 @@ export async function auditCommand(
     // cloned https://github.com/<that>.git instead, reaching out to the
     // network with a name derived from the caller's own directory layout.
     // Shorthand is a fallback for arguments that name nothing on disk.
-    if (targetPath !== undefined && !fsExistsSync(targetPath) && isGitUrl(targetPath)) {
+    // The operator's own argument: its own `within`. A probe the OS refuses is its source fault,
+    // never "names nothing on disk" — that would send a local path to the network.
+    if (targetPath !== undefined && !pathPresent(targetPath, { follow: targetPath }, everywhere('source'), 'probe') && isGitUrl(targetPath)) {
       await runUrlAudit(targetPath, options);
       return;
     }
@@ -1965,7 +1975,7 @@ async function validateAuditSubject(
 	}
 
 	// If unknown format, check if it's a directory we can scan
-	if (await isScannableDirectory(scanPath)) {
+	if (await isScannableDirectory(scanPath, locationRoot)) {
 		logger.debug('Scanning directory for resources');
 
 		// The project's `resources.exclude` is applied by the scan context,
@@ -2002,10 +2012,10 @@ async function validateAuditSubject(
  * `validate()` then reported the directory as an unknown resource format. A
  * scan that examined nothing was reported as a directory that was nothing.
  */
-async function isScannableDirectory(scanPath: string): Promise<boolean> {
-	const fsp = await import('node:fs/promises');
+async function isScannableDirectory(scanPath: string, locationRoot: string): Promise<boolean> {
 	try {
-		return (await fsp.stat(scanPath)).isDirectory();
+		// `scanPath` is crawled beneath the run's scan root: its links are read before the kernel follows them.
+		return (await followedKind(scanPath, locationRoot)) === 'directory';
 	} catch (error) {
 		if (isPathAbsentError(error)) return false;
 		throw error;
@@ -3151,7 +3161,7 @@ async function validateScanSubject(
     }
     const subjectCtx: ScanContext = { ...scanCtx, crawledRoot: claims.owner(subject.path) };
     const result = await handleFileEntry({ name: basename(subject.path) }, subject.path, options, logger, subjectCtx);
-    if (subject.kind === 'skill' && ownsOwnCrawl(subjectCtx, subject.path) && await crawlOwnsSubtree(subject.path)) {
+    if (subject.kind === 'skill' && ownsOwnCrawl(subjectCtx, subject.path) && await crawlOwnsSubtree(subject.path, locationRoot)) {
       claims.claim(subject.dir);
     }
     return result === null ? [] : [result];

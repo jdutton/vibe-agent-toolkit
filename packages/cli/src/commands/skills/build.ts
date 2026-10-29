@@ -1244,7 +1244,7 @@ async function prepareBuild(
   // discarded: config is read from `cwd` (the package dir), not the project root.
   requireProjectRoot(cwd, 'vat skills build');
 
-  const config = loadConfig(cwd);
+  const config = loadConfig(cwd, 'destination');
   if (!config?.skills) {
     // Examined nothing: the writer refuses the command lane's report. In `vat
     // build` this phase's zero is an answer, since a project with no `skills:`

@@ -14,10 +14,8 @@
  * ({@link assertScopableSkillsPath}).
  */
 
-import { existsSync } from 'node:fs';
-
 import type { RefusalCode } from '@vibe-agent-toolkit/schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { everywhere, isFsFaultError, pathPresent, safePath } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
 import { readableDirectoryRefusal } from '../../utils/project-root-policy.js';
@@ -76,7 +74,16 @@ export function unscopableSkillsPath(pathArg: string | undefined): ScopeRefusal 
   if (refusal !== undefined) return { refusal: refusalCodeOf(refusal), reason: errorMessageOf(refusal) };
 
   if (process.env['VAT_TEST_CONFIG'] !== undefined) return undefined;
-  if (!existsSync(safePath.join(resolved, CONFIG_FILENAME))) {
+  let configPresent: boolean;
+  try {
+    // The directory the operator named: its own `within`. A probe the OS refuses is its source
+    // fault — returned as the refusal it owes, never read as "no config there".
+    configPresent = pathPresent(safePath.join(resolved, CONFIG_FILENAME), { follow: resolved }, everywhere('source'), 'probe');
+  } catch (error) {
+    if (!isFsFaultError(error)) throw error;
+    return { refusal: refusalCodeOf(error), reason: errorMessageOf(error) };
+  }
+  if (!configPresent) {
     return { refusal: 'USAGE_INVALID', reason: `no ${CONFIG_FILENAME} there` };
   }
   return undefined;

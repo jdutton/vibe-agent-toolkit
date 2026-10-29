@@ -64,7 +64,7 @@ function tree(fixture: LinkFixture): { parent: string; root: string; arm: () => 
   scratch.push(made);
   // The real spelling (macOS `/var` is `/private/var`), so the injected fault matches the path every
   // lane asks about, however it spelled the root.
-  const parent = realpathNativeSync(made);
+  const parent = realpathNativeSync(made, made);
   const root = safePath.join(parent, 'project');
   mkdirSyncReal(safePath.join(root, 'docs'), { recursive: true });
   spawnSync(gitExecutable(), ['init', '-b', 'main', '--quiet', root], { stdio: 'ignore' });

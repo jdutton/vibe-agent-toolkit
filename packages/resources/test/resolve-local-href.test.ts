@@ -256,7 +256,7 @@ describe('resolveLocalHref leading-/ behavior', () => {
       //   <parent>/proj/docs/sub/page.md  (source)
       //   <parent>/proj/badlink       (symlink → external escape.md)
       parentDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-leading-slash-'));
-      parentDir = normalizePath(parentDir);
+      parentDir = normalizePath(parentDir, parentDir);
       projectRoot = safePath.join(parentDir, 'proj');
       mkdirSyncReal(safePath.join(projectRoot, 'docs', 'sub'), { recursive: true });
       sourceFile = safePath.join(projectRoot, 'docs', 'sub', 'page.md');
@@ -329,7 +329,8 @@ describe('symlinked project root (real-filesystem)', () => {
     //   <base>/link-root        → real-root    every question is asked THROUGH this
     //   <base>/outside/data.md                 escape target, a sibling of the root
     //   <base>/real-root/outlink → ../outside  directory link that leaves the root
-    baseDir = normalizePath(mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-symlink-root-')));
+    const madeBase = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-symlink-root-'));
+    baseDir = normalizePath(madeBase, madeBase);
     realRoot = safePath.join(baseDir, 'real-root');
     linkRoot = safePath.join(baseDir, 'link-root');
     outsideDir = safePath.join(baseDir, 'outside');
@@ -429,7 +430,7 @@ describe('symlinked project root (real-filesystem)', () => {
       const escaping = safePath.join(linkRoot, 'outlink', 'gone.md');
       expectFixtureDiscriminates(missing);
 
-      const table = await fillRealpaths([missing, escaping, linkRoot], new FsLookupCache());
+      const table = await fillRealpaths([missing, escaping, linkRoot], new FsLookupCache(linkRoot));
 
       expect(isWithinProject(missing, linkRoot)).toBe(isWithinProjectFrom(table, missing, linkRoot));
       expect(isWithinProject(missing, linkRoot)).toBe(true);
@@ -448,19 +449,19 @@ describe('symlinked project root (real-filesystem)', () => {
       // way, so each expected value is also pinned outright.
       const missing = safePath.join(linkRoot, 'docs', 'gone.md');
       const deepMissing = safePath.join(linkRoot, 'docs', 'nope', 'deeper', 'gone.md');
-      const cache = new FsLookupCache();
+      const cache = new FsLookupCache(linkRoot);
       const table = await fillRealpaths([missing, deepMissing, sourceViaLink, linkRoot], cache);
 
-      expect(canonicalizeSync(missing)).toBe(realpathRowFrom(table, missing).path);
-      expect(canonicalizeSync(deepMissing)).toBe(realpathRowFrom(table, deepMissing).path);
-      expect(canonicalizeSync(sourceViaLink)).toBe(realpathRowFrom(table, sourceViaLink).path);
-      expect(canonicalizeSync(linkRoot)).toBe(realpathRowFrom(table, linkRoot).path);
+      expect(canonicalizeSync(missing, linkRoot)).toBe(realpathRowFrom(table, missing).path);
+      expect(canonicalizeSync(deepMissing, linkRoot)).toBe(realpathRowFrom(table, deepMissing).path);
+      expect(canonicalizeSync(sourceViaLink, linkRoot)).toBe(realpathRowFrom(table, sourceViaLink).path);
+      expect(canonicalizeSync(linkRoot, linkRoot)).toBe(realpathRowFrom(table, linkRoot).path);
 
-      expect(canonicalizeSync(missing)).toBe(safePath.join(canonicalRealRoot, 'docs', 'gone.md'));
-      expect(canonicalizeSync(deepMissing)).toBe(
+      expect(canonicalizeSync(missing, linkRoot)).toBe(safePath.join(canonicalRealRoot, 'docs', 'gone.md'));
+      expect(canonicalizeSync(deepMissing, linkRoot)).toBe(
         safePath.join(canonicalRealRoot, 'docs', 'nope', 'deeper', 'gone.md'),
       );
-      expect(canonicalizeSync(linkRoot)).toBe(canonicalRealRoot);
+      expect(canonicalizeSync(linkRoot, linkRoot)).toBe(canonicalRealRoot);
     },
   );
 
@@ -487,7 +488,7 @@ describe('symlinked project root (real-filesystem)', () => {
 
       // Nothing resolved, so the walk composes back to the lexical form — the
       // only answer available, and the right one when no component exists.
-      expect(canonicalizeSync(missing)).toBe(missing);
+      expect(canonicalizeSync(missing, missing)).toBe(missing);
       expect(spy.mock.calls.length).toBeGreaterThan(1);
     } finally {
       spy.mockRestore();
@@ -503,7 +504,7 @@ describe('symlinked project root (real-filesystem)', () => {
       throw bug;
     }) as unknown as typeof nodeFs.realpathSync);
     try {
-      expect(() => canonicalizeSync(safePath.join(baseDir, 'a', 'b.md'))).toThrow(bug);
+      expect(() => canonicalizeSync(safePath.join(baseDir, 'a', 'b.md'), baseDir)).toThrow(bug);
     } finally {
       spy.mockRestore();
     }

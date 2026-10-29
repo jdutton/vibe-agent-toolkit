@@ -1036,7 +1036,9 @@ function walkLinkGraphBody(
     queue: [[skillResource, 0]],
     unfollowedFromNonRoutable: [],
     followedOutsideSkillDir: [],
-    pathProbe: options.pathProbe ?? new FsLookupCache(),
+    // The tree every link target is crawled in is the project the operator named: each target's
+    // link chain beneath it is read by its text before the kernel follows it.
+    pathProbe: options.pathProbe ?? new FsLookupCache(options.projectRoot),
     gitignoreFacts: new Map<string, boolean>(),
   };
 

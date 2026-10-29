@@ -21,7 +21,8 @@ import path from 'node:path';
 
 import { afterAll, describe, expect, it } from 'vitest';
 
-import { mkdirSyncReal, normalizedTmpdir, realpathNative, realpathNativeSync, safePath, toForwardSlash } from '../../src/path-utils.js';
+import { realpathNative, realpathNativeSync } from '../../src/link-following.js';
+import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '../../src/path-utils.js';
 
 /** Run a `diskpart` script; true when every command in it succeeded. */
 function diskpart(scriptDir: string, lines: readonly string[]): boolean {
@@ -31,16 +32,40 @@ function diskpart(scriptDir: string, lines: readonly string[]): boolean {
   return result.status === 0;
 }
 
+/**
+ * Remove the suite's directory, which holds the VHD file. Windows can keep the file busy for a
+ * moment after `detach vdisk` returns (`EBUSY`), so the removal is retried a few times with a short
+ * delay (`rmSync`'s own `maxRetries`, which retries `EBUSY`/`EPERM`/`ENOTEMPTY`); one still failing
+ * after that is thrown naming the path, never swallowed — a leaked mounted volume must be seen.
+ */
+function removeSuiteDir(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  } catch (error: unknown) {
+    throw new Error(`could not remove the folder-mount suite directory ${dir} (is the VHD still attached?)`, { cause: error });
+  }
+}
+
 const cleanups: Array<() => void> = [];
 
 afterAll(() => {
-  for (const cleanup of cleanups.toReversed()) cleanup();
+  // Every cleanup runs even when an earlier one fails, so a failed detach still gets its removal
+  // attempted; the first failure is then thrown, loud.
+  const failures: unknown[] = [];
+  for (const cleanup of cleanups.toReversed()) {
+    try {
+      cleanup();
+    } catch (error: unknown) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0) throw failures[0];
 });
 
 describe.skipIf(process.platform !== 'win32')('realpathNativeSync / realpathNative on a volume mounted into a folder', () => {
   it('answers a file on a folder-mounted volume at its true path (the native realpath calls it absent)', async ({ skip }) => {
     const dir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-folder-mount-'));
-    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    cleanups.push(() => removeSuiteDir(dir));
     const vhd = path.win32.normalize(safePath.join(dir, 'volume.vhdx'));
     const mount = path.win32.normalize(safePath.join(dir, 'mnt'));
     mkdirSyncReal(mount);
@@ -61,7 +86,8 @@ describe.skipIf(process.platform !== 'win32')('realpathNativeSync / realpathNati
     writeFileSync(file, 'x');
     // The true answer, known independently: the file is where the suite put it.
     const expected = toForwardSlash(file);
-    expect(realpathNativeSync(file)).toBe(expected);
-    expect(await realpathNative(file)).toBe(expected);
+    // `within` is the tree the suite built: the mount folder and the file lie beneath it.
+    expect(realpathNativeSync(file, dir)).toBe(expected);
+    expect(await realpathNative(file, dir)).toBe(expected);
   });
 });

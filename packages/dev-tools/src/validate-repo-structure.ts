@@ -240,7 +240,7 @@ function forEachPackageFixturesDir(
   const entries = readdirSync(packagesDir, { withFileTypes: true });
 
   for (const entry of entries) {
-    if (direntKindFollowingSync(packagesDir, entry) === 'directory') {
+    if (direntKindFollowingSync(packagesDir, entry, packagesDir) === 'directory') {
       const fixturesDir = safePath.join(packagesDir, entry.name, 'test', 'fixtures');
       checkDirectory(fixturesDir, `packages/${entry.name}/test/fixtures`);
     }
@@ -256,7 +256,7 @@ async function validateNoRuntimeExamples(): Promise<void> {
   const entries = await readdir(packagesDir, { withFileTypes: true });
 
   for (const entry of entries) {
-    if (direntKindFollowingSync(packagesDir, entry) !== 'directory') {
+    if (direntKindFollowingSync(packagesDir, entry, packagesDir) !== 'directory') {
       continue;
     }
 
@@ -294,7 +294,7 @@ async function validateScriptsLocation(): Promise<void> {
   ]);
 
   for (const entry of entries) {
-    if (direntKindFollowingSync(packagesDir, entry) !== 'directory' || allowedScriptsPackages.has(entry.name)) {
+    if (direntKindFollowingSync(packagesDir, entry, packagesDir) !== 'directory' || allowedScriptsPackages.has(entry.name)) {
       continue;
     }
 
@@ -1718,7 +1718,7 @@ export async function collectEngineFloorFindings(
   const summaries: PackageManifestSummary[] = [];
 
   // Independent reads of ~25 manifests (readManifest never rejects); folded in directory order.
-  const packageDirs = entries.filter((entry) => direntKindFollowingSync(packagesDir, entry) === 'directory');
+  const packageDirs = entries.filter((entry) => direntKindFollowingSync(packagesDir, entry, packagesDir) === 'directory');
   const reads = await Promise.all(
     packageDirs.map((entry) => readManifest(safePath.join(packagesDir, entry.name, PACKAGE_MANIFEST_FILENAME))),
   );
@@ -1812,7 +1812,7 @@ async function readBinSource(path: string): Promise<{ path: string; text: string
 async function validateBinsInstallLastResortExit(): Promise<void> {
   const packagesDir = safePath.join(REPO_ROOT, 'packages');
   const packageDirs = (await readdir(packagesDir, { withFileTypes: true }))
-    .filter((entry) => direntKindFollowingSync(packagesDir, entry) === 'directory');
+    .filter((entry) => direntKindFollowingSync(packagesDir, entry, packagesDir) === 'directory');
   // Independent reads of ~25 packages; bins keep directory order.
   const perPackage = await allInInputOrder(
     packageDirs.map(async (entry) => {

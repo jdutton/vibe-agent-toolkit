@@ -7,7 +7,7 @@
  */
 
 
-import { copyTree, safePath, withFsFault, writeFileUnder } from '@vibe-agent-toolkit/utils';
+import { copyTree, safePath, sideWithin, withFsFault, writeFileUnder } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError } from '../../../utils/command-refusal.js';
 import { configNamedFileAbsent, readInputFile, requireInputPath } from '../../../utils/project-root-policy.js';
@@ -202,10 +202,10 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
 
   // 1. Verify build output exists
   const buildDir = safePath.join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', marketplaceName);
-  requireInputPath(buildDir, {
+  requireInputPath(buildDir, configDir, {
     origin: 'content',
     message: `Marketplace build output not found at dist/.claude/plugins/marketplaces/${marketplaceName}. Run "vat build" first.`,
-  });
+  }, sideWithin(safePath.join(configDir, 'dist'), 'source', 'destination')); // publish reads the whole build tree, `dist/`, as its input
 
   // 2. Copy marketplace artifacts to output. The build output is this command's INPUT (`source`
   // reads, links kept as links); the copy lands in VAT's own staging (an `environment` write).

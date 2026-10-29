@@ -39,7 +39,7 @@ export function loadClaudeProjectConfig(): {
   }
 
   const configDir = dirname(configPath);
-  const projectConfig = loadConfig(configDir);
+  const projectConfig = loadConfig(configDir, 'source');
 
   return { configPath, configDir, projectConfig, claudeConfig: projectConfig?.claude };
 }

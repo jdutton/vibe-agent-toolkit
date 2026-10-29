@@ -5,12 +5,13 @@ import {
   COPY_LINK_ESCAPES_SOURCE_CODE,
   HOST_PATH_FLAVOR,
   isTimedOutError,
+  isWithinUnder,
   refuseEscapingLinks,
   safePath,
   toForwardSlashAnyPlatform,
   treeChain,
   treeContainment,
-  untrustedTextRefusal,
+  untrustedLinkRefusal,
   VatError,
   withFsFaultSync,
 } from '@vibe-agent-toolkit/utils';
@@ -113,7 +114,7 @@ export function cloneGitSource(parsed: ParsedGitUrl, targetTempdir: string): Git
   const ref = cloneShallow(parsed, targetTempdir);
   const commit = revParseHead(targetTempdir);
   const { subpath } = parsed;
-  refuseCommittedLinkTexts(targetTempdir, commit, subpath);
+  refuseCommittedLinkTexts(targetTempdir, commit, subpath, HOST_PATH_FLAVOR);
   checkOut(targetTempdir, commit);
   const targetDir = subpath ? safePath.join(targetTempdir, subpath) : targetTempdir;
 
@@ -168,43 +169,82 @@ function committedLinks(cloneDir: string, commit: string): CommittedLink[] {
   return links;
 }
 
+/** U+FFFD: what a UTF-8 decode leaves in place of each byte sequence it could not read. */
+const REPLACEMENT = String.fromCodePoint(0xff_fd);
+
 /**
- * The text of each link's blob, from ONE `cat-file --batch`: `<object> SP blob SP <size> LF`, then
- * `<size>` bytes, then LF, per object. Parsed by byte, so a text holding a newline is still one text.
+ * The text of each link's blob, byte for byte. `runGit` hands stdout back decoded as UTF-8, so
+ * the bytes are recovered by re-encoding — exact only when the decode met no invalid sequence,
+ * which is exactly when it left no U+FFFD. A blob that is not UTF-8 changes length in the decode,
+ * and a stream framed by its declared sizes then reads a header the blob planted as the next
+ * object (R12-SEC-C1); so a stream holding U+FFFD is never framed, and each blob is read alone.
+ * Its U+FFFD then marks the link's own text, which is refused ({@link committedLinkRefusal}).
  */
 function linkTexts(cloneDir: string, links: readonly CommittedLink[]): string[] {
-  const result = runGit(['cat-file', '--batch'], {}, cloneDir, { input: links.map((link) => `${link.blob}\n`).join(''), trim: false });
+  const stdout = readLinkObjects(['cat-file', '--batch'], cloneDir, links.map((link) => `${link.blob}\n`).join(''));
+  if (!stdout.includes(REPLACEMENT)) return framedTexts(Buffer.from(stdout, 'utf8'), links);
+  return links.map((link) => readLinkObjects(['cat-file', 'blob', link.blob], cloneDir));
+}
+
+/** One `cat-file` read of the clone's link objects, untrimmed: a text's own whitespace is data. */
+function readLinkObjects(args: string[], cloneDir: string, input?: string): string {
+  const result = runGit(args, {}, cloneDir, { ...(input === undefined ? {} : { input }), trim: false });
   if ((result.status ?? 1) !== 0) throw new GitCloneFailedError(`Failed to read the cloned repository's link texts: ${(result.stderr ?? '').trim()}`);
-  const bytes = Buffer.from(result.stdout ?? '', 'utf8');
+  return result.stdout ?? '';
+}
+
+/** A `cat-file --batch` header: the object, `blob`, its size in canonical decimal. */
+const BLOB_HEADER = /^([\da-f]{40}|[\da-f]{64}) blob (0|[1-9]\d*)$/;
+
+/**
+ * `cat-file --batch` output, framed by its bytes: `<object> SP blob SP <size> LF`, `<size>` bytes,
+ * LF — exactly one object per link, the one asked, in order, and nothing after. Anything else means
+ * the texts are not the links': refuse rather than judge them.
+ */
+function framedTexts(bytes: Buffer, links: readonly CommittedLink[]): string[] {
+  const refused = (why: string): GitCloneFailedError => new GitCloneFailedError(`Failed to read the cloned repository's link texts: ${why}.`);
   const texts: string[] = [];
   let at = 0;
   for (const link of links) {
+    if (at >= bytes.length) throw refused(`git returned ${texts.length.toString()} of ${links.length.toString()} objects`);
     const headerEnd = bytes.indexOf(0x0a, at);
-    const size = Number(bytes.subarray(at, headerEnd).toString('utf8').split(' ')[2]);
-    // A header that does not parse, or content not followed by its LF, means the bytes did not
-    // survive as text: fail closed rather than judge a text that is not the link's.
-    if (headerEnd < 0 || !Number.isInteger(size) || bytes[headerEnd + 1 + size] !== 0x0a) throw new GitCloneFailedError(`Failed to read the text of the cloned link ${link.path}.`);
-    texts.push(bytes.subarray(headerEnd + 1, headerEnd + 1 + size).toString('utf8'));
-    at = headerEnd + 1 + size + 1;
+    const header = bytes.subarray(at, headerEnd < 0 ? bytes.length : headerEnd).toString('utf8');
+    const size = BLOB_HEADER.exec(header);
+    if (headerEnd < 0 || size?.[1] !== link.blob || size[2] === undefined) throw refused(`${link.path}: its header (${header}) is not \`${link.blob} blob <size>\``);
+    const end = headerEnd + 1 + Number(size[2]);
+    if (end >= bytes.length || bytes[end] !== 0x0a) throw refused(`${link.path}: its bytes do not end where its header says`);
+    texts.push(bytes.subarray(headerEnd + 1, end).toString('utf8'));
+    at = end + 1;
   }
+  if (at < bytes.length) throw refused(`git wrote ${(bytes.length - at).toString()} bytes after the last link`);
   return texts;
 }
 
-/** How each refused link text reads in a refusal. */
-const TEXT_FORM: Readonly<Record<NonNullable<ReturnType<typeof untrustedTextRefusal>>, string>> = {
-  network: 'a network path',
-  absolute: 'an absolute path',
-  'drive-relative': 'a drive-relative path',
-};
+/** Why a committed link is refused by its text alone. */
+type CommittedLinkRefusal = NonNullable<ReturnType<typeof untrustedLinkRefusal>>;
 
-/** Why a committed link's text alone may not be checked out, after "is a symbolic link ", or `undefined`. */
-function committedTextRefusal(path: string, text: string): string | undefined {
-  const why = untrustedTextRefusal(text);
-  if (why !== undefined) return `whose target leads through ${TEXT_FORM[why]} (${text}), which names a place outside the clone`;
-  // Windows collapses `..` by string; a text that so climbs above the repository leaves it there.
-  const lexical = posix.normalize(posix.join(posix.dirname(path), toForwardSlashAnyPlatform(text)));
-  return lexical === '..' || lexical.startsWith('../') ? `to a path outside the clone (${text})` : undefined;
+/**
+ * Why a committed link's text alone may not be checked out: the one untrusted-link rule
+ * (`untrustedLinkRefusal`, shared with the link-chain walk), or `unportable` for a text holding
+ * U+FFFD. That U+FFFD is a byte sequence that is not UTF-8 ({@link linkTexts}) — or, written
+ * literally, indistinguishable from one. Such bytes are judged as bytes, and refused: POSIX creates
+ * them verbatim while Git for Windows converts the text from UTF-8 to UTF-16 to create the link,
+ * so no one string is what both kernels would be handed, and none can be judged for either.
+ */
+function committedLinkRefusal(path: string, text: string): CommittedLinkRefusal | undefined {
+  return text.includes(REPLACEMENT) ? 'unportable' : untrustedLinkRefusal(path, text);
 }
+
+/** How each refusal reads in a refusal message, after "is a symbolic link ". */
+const REFUSAL_TEXT: Readonly<Record<CommittedLinkRefusal, (text: string) => string>> = {
+  network: (text) => `whose target leads through a network path (${text}), which names a place outside the clone`,
+  absolute: (text) => `whose target leads through an absolute path (${text}), which names a place outside the clone`,
+  'drive-relative': (text) => `whose target leads through a drive-relative path (${text}), which names a place outside the clone`,
+  unportable: (text) =>
+    `whose text is not portable (${JSON.stringify(text)}): it holds a NUL, a component ending in a dot or a space, ` +
+    'or bytes that are not UTF-8, so the link the OS would create is not the text judged',
+  'climbs-out': (text) => `to a path outside the clone (${text})`,
+};
 
 /** The subpath's escape refusal: the subpath is the caller's argument, so a usage mistake by code. */
 function subpathEscapes(subpath: string | undefined): VatError {
@@ -217,26 +257,28 @@ function subpathEscapes(subpath: string | undefined): VatError {
 
 /**
  * Refuse a commit holding a symbolic link whose TEXT leaves the repository — absolute, drive-relative
- * or a network path under either host's rules, or a climb above its root — read from the object
- * store before any link exists on disk ({@link cloneGitSource}). EVERY link of the commit, not only
- * those under the subpath: the checkout writes them all, and writing one is already resolving it
- * on Windows. A link that IS the subpath, or one of its directories, is the subpath's refusal.
+ * or a network path under either host's rules, a climb above its root, or a text the OS would not
+ * create as written — read from the object store before any link exists on disk
+ * ({@link cloneGitSource}). EVERY link of the commit, not only those under the subpath: the checkout
+ * writes them all, and writing one is already resolving it on Windows. A link that IS the subpath,
+ * or one of its directories, is the subpath's refusal — matched under `flavor`'s rules, so case-blind
+ * (the ordinal fold) under win32, where `Skills` and `skills` are one directory.
  *
  * @throws VatError `GIT_SUBPATH_INVALID` for a link on the subpath; `COPY_LINK_ESCAPES_SOURCE` naming
  *   the first other such link; GitCloneFailedError when git cannot list or read the commit
  */
-function refuseCommittedLinkTexts(cloneDir: string, commit: string, subpath: string | undefined): void {
+function refuseCommittedLinkTexts(cloneDir: string, commit: string, subpath: string | undefined, flavor: typeof HOST_PATH_FLAVOR): void {
   const links = committedLinks(cloneDir, commit);
   if (links.length === 0) return;
   const onSubpath = subpath === undefined ? undefined : posix.normalize(toForwardSlashAnyPlatform(subpath)).replace(/\/$/, '');
   for (const [index, text] of linkTexts(cloneDir, links).entries()) {
     const link = links[index];
-    const refusal = link === undefined ? undefined : committedTextRefusal(link.path, text);
+    const refusal = link === undefined ? undefined : committedLinkRefusal(link.path, text);
     if (link !== undefined && refusal !== undefined) {
-      if (onSubpath !== undefined && (onSubpath === link.path || toForwardSlashAnyPlatform(onSubpath).startsWith(`${link.path}/`))) throw subpathEscapes(subpath);
+      if (onSubpath !== undefined && isWithinUnder(onSubpath, link.path, flavor)) throw subpathEscapes(subpath);
       throw new VatError(
         COPY_LINK_ESCAPES_SOURCE_CODE,
-        `Refusing the cloned repository: ${link.path} is a symbolic link ${refusal}. ` +
+        `Refusing the cloned repository: ${link.path} is a symbolic link ${REFUSAL_TEXT[refusal](text)}. ` +
           'Every reader of the source follows links, so it would read files the repository does not hold — replace the link with the files, or point it inside with a relative target.',
       );
     }

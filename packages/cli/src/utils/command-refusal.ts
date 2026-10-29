@@ -48,7 +48,6 @@ import {
   type FsFaultError,
   isFsFaultError,
   isVatError,
-  LINK_CHAIN_REFUSED_CODE,
   RAG_DATABASE_UNREADABLE_CODE,
   RAG_INDEX_EMPTY_CODE,
   TREE_DEST_HOLDS_SOURCE_CODE,
@@ -93,9 +92,6 @@ const REFUSAL_BY_ERROR_CODE: Readonly<Record<string, RefusalCode>> = {
   [ASSET_REFERENCE_UNREADABLE_CODE]: 'INPUT_UNREADABLE',
   // A symlink that leads a following walk back into a directory it already entered: the input's loop.
   [DIRECTORY_WALK_REVISITED_CODE]: 'INPUT_UNREADABLE',
-  // A path whose link chain VAT will not hand the OS (`LinkChainRefusedError`): a link on the way
-  // names a network path, or the chain never ends — the input's link.
-  [LINK_CHAIN_REFUSED_CODE]: 'INPUT_UNREADABLE',
   // A git URL's `#ref:subpath` naming a path the clone does not hold, or one escaping it.
   [GIT_SUBPATH_INVALID_CODE]: 'USAGE_INVALID',
   // A `resources.linkAuth` provider that does not compile (`LinkAuthConfigError`): the config's mistake.

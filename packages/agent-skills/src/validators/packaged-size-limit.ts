@@ -38,7 +38,7 @@
  * here is a silent zero everywhere.
  */
 
-import { readdirSync, statSync, type Dirent } from 'node:fs';
+import { lstatSync, readdirSync, type Dirent } from 'node:fs';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -363,7 +363,7 @@ function readDirOrRecord(dir: string, root: string, acc: WalkAccumulator): Diren
 function weighEntry(full: string, rel: string, acc: WalkAccumulator): void {
   let stats;
   try {
-    stats = statSync(full);
+    stats = lstatSync(full);
   } catch (error) {
     acc.unweighed.push({ path: rel, reason: `VAT could not stat it (${causeOf(error)})` });
     return;

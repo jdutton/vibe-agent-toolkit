@@ -1,9 +1,8 @@
-import { statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 
 import type { PluginInventory, PluginRef } from '@vibe-agent-toolkit/agent-skills';
 import { MarketplaceManifestSchema } from '@vibe-agent-toolkit/agent-skills';
-import { forEachInOrder, hasParentTraversalSegment, isPathAbsentError, isVatError, normalizePath, PathEscapesRootError, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
+import { forEachInOrder, hasParentTraversalSegment, isPathAbsentError, isVatError, normalizePath, PathEscapesRootError, requireFollowedStatSync, safePath, toForwardSlash, toForwardSlashAnyPlatform } from '@vibe-agent-toolkit/utils';
 
 import { extractClaudePluginInventory } from './extract-plugin.js';
 import type { GitTrackerSource } from './extract-skill.js';
@@ -54,7 +53,7 @@ export async function extractClaudeMarketplaceInventory(
 	const parseErrors: ParseErrors = [];
 	const manifestFilePath = safePath.join(absolute, '.claude-plugin', MARKETPLACE_JSON);
 
-	const manifestPresence = presenceOrRecord(manifestFilePath, parseErrors);
+	const manifestPresence = presenceOrRecord(manifestFilePath, absolute, parseErrors);
 	if (manifestPresence !== 'present') {
 		// A refused probe has recorded its own row; only an absence is "not found".
 		if (manifestPresence === 'absent') parseErrors.push({ path: manifestFilePath, message: 'marketplace.json not found' });
@@ -101,7 +100,8 @@ export async function extractClaudeMarketplaceInventory(
 	const discovered: PluginInventory[] = [];
 	const root: MarketplaceRoot = {
 		path: absolute,
-		realPath: toForwardSlash(normalizePath(absolute)),
+		// The marketplace directory the operator named: its own `within`.
+		realPath: toForwardSlash(normalizePath(absolute, absolute)),
 		manifestFilePath,
 		parseErrors,
 	};
@@ -182,8 +182,10 @@ interface MarketplaceRoot {
  *
  * 1. `safePath.joinUnderRoot` — refuses an absolute path (POSIX, drive letter,
  *    UNC) and a `..` climb, behind either separator (`toForwardSlash` first).
- * 2. `statSync` — a source that is not there is `exists: false`, as before; one
- *    the OS REFUSES to examine (`EACCES`, `ELOOP`) is refused by errno, because
+ * 2. a followed `stat`, its link chain read beneath the root first
+ *    (`link-following.ts`) — a source that is not there is `exists: false`, as
+ *    before; one the OS REFUSES to examine (`EACCES`, `ELOOP`), or whose chain
+ *    names a network path, is refused by its code, because
  *    "missing" would send the reader to create a directory that is there.
  * 3. realpath, via `normalizePath`, compared against the root's OWN realpath
  *    with the same `joinUnderRoot` — a symlink inside the root pointing out is
@@ -226,7 +228,7 @@ function containedSourceDir(
 	}
 	let isDirectory: boolean;
 	try {
-		isDirectory = statSync(resolved).isDirectory();
+		isDirectory = requireFollowedStatSync(resolved, root.path).isDirectory();
 	} catch (error) {
 		// Absent — a missing path, a dangling link, a file where a directory
 		// component should be — is the `exists: false` the caller publishes. A
@@ -237,7 +239,7 @@ function containedSourceDir(
 	}
 	if (!isDirectory) return shapeRefusal('is not a directory');
 	try {
-		safePath.joinUnderRoot(root.realPath, safePath.relative(root.realPath, toForwardSlash(normalizePath(resolved))));
+		safePath.joinUnderRoot(root.realPath, safePath.relative(root.realPath, toForwardSlash(normalizePath(resolved, root.path))));
 	} catch (error) {
 		if (!isRootEscape(error)) throw error;
 		return shapeRefusal(OUTSIDE_ROOT);

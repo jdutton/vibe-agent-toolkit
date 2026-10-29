@@ -13,20 +13,18 @@
  * DEGRADES, it does not refuse the run); anything else is a defect and throws.
  */
 
-import { stat } from 'node:fs/promises';
+import fsPromises from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getValidationResults, resetAuditCaches } from '../../../src/commands/audit.js';
-import { errno, realBehind, refusingOnly } from '../../helpers/refusal-doubles.js';
+import { errno, refuseOnDefault } from '../../helpers/refusal-doubles.js';
 import { createTempDirTracker } from '../../system/test-common.js';
 import { silentLogger } from '../../test-helpers.js';
 
-// The subject's stat is a dynamic `import('node:fs/promises')` inside the
-// command, so the refusal is injected at the module seam.
-vi.mock('node:fs/promises', async (importOriginal) =>
-  (await import('../../helpers/refusal-doubles.js')).spiedModule(importOriginal, ['stat']));
+// The subject's stat goes through utils' link-following, which reaches the kernel through the
+// DEFAULT `node:fs/promises` object, so the refusal is injected there.
 
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('audit-scan-path-stat-');
 
@@ -36,7 +34,7 @@ describe('the audit subject stat', () => {
   });
 
   afterEach(() => {
-    vi.mocked(stat).mockRestore();
+    vi.restoreAllMocks();
     cleanupTempDirs();
   });
 
@@ -51,7 +49,7 @@ describe('the audit subject stat', () => {
 
   it('files a subject the OS refuses to stat as SCAN_PATH_UNREADABLE, not as an unknown format', async () => {
     const root = createTempDir();
-    vi.mocked(stat).mockImplementation(refusingOnly(root, errno('EACCES'), realBehind(stat)));
+    refuseOnDefault(fsPromises, 'stat', root, errno('EACCES'));
 
     const results = await getValidationResults(root, true, {}, silentLogger, root);
 
@@ -61,7 +59,7 @@ describe('the audit subject stat', () => {
 
   it('lets a defect in the stat propagate rather than filing the directory as an unknown format', async () => {
     const root = createTempDir();
-    vi.mocked(stat).mockImplementation(refusingOnly(root, new TypeError('not the filesystem'), realBehind(stat)));
+    refuseOnDefault(fsPromises, 'stat', root, new TypeError('not the filesystem'));
 
     await expect(getValidationResults(root, true, {}, silentLogger, root)).rejects.toThrow('not the filesystem');
   });

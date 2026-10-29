@@ -38,6 +38,7 @@ import fs, { type FileHandle } from 'node:fs/promises';
 
 import { classifyFsFault, FsFaultError, type FsSide } from '../errors/fs-fault.js';
 import { forEachInOrder } from '../in-order.js';
+import { requireFollowedStat } from '../link-following.js';
 import { isUnderRoot } from '../path-containment.js';
 import { safePath } from '../path-core.js';
 import { refuseSpecialFile } from '../special-file.js';
@@ -68,7 +69,7 @@ export interface TreeVisitor {
   directory(entry: WalkedEntry, stats: Stats): Promise<void>;
   /** A regular file, through the handle `fstat` judged; the walk closes it. */
   file(entry: WalkedEntry, handle: FileHandle, stats: Stats): Promise<void>;
-  /** A link under `links: 'preserve'`, never examined. */
+  /** A link under `links: 'preserve'`, never followed by the walk: the visitor decides what to read of it. */
   link(entry: WalkedEntry): Promise<void>;
 }
 
@@ -149,7 +150,7 @@ class TreeWalk {
     this.#options = options;
     this.#side = side;
     this.#visitor = visitor;
-    this.#guard = options.links === 'follow-contained' ? new FollowedWalk(side) : undefined;
+    this.#guard = options.links === 'follow-contained' ? new FollowedWalk(side, root) : undefined;
   }
 
   /**
@@ -172,7 +173,7 @@ class TreeWalk {
   async directory(entry: WalkedEntry): Promise<void> {
     // Listed first: a root that is not a directory is refused by the listing (`ENOTDIR`), never opened.
     const listing = await this.#list(entry.path);
-    const stats = await readingTree(this.#side, entry.path, () => fs.stat(entry.path));
+    const stats = await readingTree(this.#side, entry.path, () => requireFollowedStat(entry.path, this.#root));
     this.#enter(entry.path);
     await this.#visitDirectory(entry, listing, stats);
   }
@@ -210,7 +211,7 @@ class TreeWalk {
       return;
     }
     if (this.#options.links === 'refuse') throw linkRefused(this.#side, entry.path);
-    const target = await readingTree(this.#side, entry.path, () => fs.stat(entry.path));
+    const target = await readingTree(this.#side, entry.path, () => requireFollowedStat(entry.path, this.#root));
     // Revisit first, so a link back into the tree is named as the loop it is; then
     // containment, so a link out is named as the escape it is.
     if (target.isDirectory()) this.#enter(entry.path);

@@ -168,7 +168,7 @@ describe('removeRagDatabase', () => {
     const cap = symlinkCapability();
     if (cap === null) return;
     // Real-spelled, so the injected fault matches the path the resolution asks about.
-    const base = realpathNativeSync(dir);
+    const base = realpathNativeSync(dir, dir);
     const real = database(base, 'real');
     const link = safePath.join(base, 'link');
     createSymlink(cap, real, link, 'dir');
