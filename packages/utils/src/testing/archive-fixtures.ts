@@ -413,7 +413,7 @@ const ZIP_FRAMINGS: ReadonlyArray<readonly [what: string, mangle: (archive: Buff
 const ZIP_FRAMING_ROWS: readonly HostileArchiveRow[] = ZIP_FRAMINGS.map(([what, mangle]) => ({ what, formats: ['zip'], reason: 'unsupported', entries: () => [], mangle }));
 
 /** One byte more than a reader's end-record search window (the record, plus the longest comment it may declare) holds after the record. */
-const PAST_END_RECORD_WINDOW = 0x1_0000;
+const PAST_END_RECORD_WINDOW = 0x1_00_00;
 /** `archive` with zeros appended past the window, so a reader searching back from the end finds no end record — and the bytes are still a ZIP. */
 const padPastEndRecordWindow = (archive: Buffer): Buffer => Buffer.concat([archive, Buffer.alloc(PAST_END_RECORD_WINDOW)]);
 

@@ -128,7 +128,7 @@ function took(lane: ArchiveLane, run: LaneRun): boolean {
 }
 
 /** No hostile entry at all: the positive control of every lane. */
-const SOUND_ROW: HostileArchiveRow = { what: 'nothing hostile', formats: ['tar', 'zip'], reason: 'unreadable', entries: () => [] };
+export const SOUND_ROW: HostileArchiveRow = { what: 'nothing hostile', formats: ['tar', 'zip'], reason: 'unreadable', entries: () => [] };
 /** The sound archive with one member that holds more than it declares — refused on read, as `ARCHIVE_ENTRY_UNREADABLE`. */
 const ENTRY_UNREADABLE_ROW: HostileArchiveRow = { what: 'a member holding more than it declares', formats: ['zip'], reason: 'unsupported', entries: entryHoldingMoreThanDeclared };
 

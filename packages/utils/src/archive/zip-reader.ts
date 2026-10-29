@@ -273,7 +273,7 @@ export function sameDirectory(
 ): void {
   const agree = entries.length === records.length && entries.every((entry, index) => {
     const record = records[index];
-    return record !== undefined && record.name.equals(entry.rawEntryName) && EXTENT_FIELDS.every((field) => entry.header[field] === record[field]);
+    return record?.name.equals(entry.rawEntryName) === true && EXTENT_FIELDS.every((field) => entry.header[field] === record[field]);
   });
   if (!agree) throw unsupportedZip(archive, 'its central directory reads two ways: the entries the ZIP reader built are not the ones its end record names');
 }

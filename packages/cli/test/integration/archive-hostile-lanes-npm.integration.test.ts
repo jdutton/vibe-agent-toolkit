@@ -8,13 +8,15 @@
 // Before anything that loads a command: the npm lane's one seam (`npm pack` is a network call).
 import '../fault-matrix/cases/npm-download-mock.js';
 
-import { tarFixture } from '@vibe-agent-toolkit/utils/testing';
+import { hostileArchive, tarFixture, tempDirTracker } from '@vibe-agent-toolkit/utils/testing';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { installFromNpm } from '../../src/commands/claude/org/skills.js';
 import { createPluginCommand } from '../../src/commands/claude/plugin/index.js';
+import { packNpmPackage } from '../../src/commands/claude/plugin/npm-pack.js';
 import { createSkillsCommand } from '../../src/commands/skills/index.js';
 import { archiveLane } from '../helpers/archive-lane-registry.js';
-import { type ArchiveLane, describeHostileArchiveLanes, orgLane, pluginPackage, skillsPackage } from '../helpers/archive-lanes.js';
+import { type ArchiveLane, describeHostileArchiveLanes, orgLane, pluginPackage, runOnArchive, skillsPackage, SOUND_ROW } from '../helpers/archive-lanes.js';
 import { recordingLogger } from '../helpers/upload-logger.js';
 
 const NPM_PACKAGE = 'npm:@fx/fx-pkg';
@@ -35,3 +37,19 @@ const LANES: readonly ArchiveLane[] = [
 ];
 
 describeHostileArchiveLanes('vat-archive-hostile-npm-', LANES);
+
+// Every row above is vacuous for a lane that reached its archive some other way: each asks `npm pack` for it.
+const scratch = tempDirTracker('vat-archive-npm-seam-');
+afterEach(() => {
+  vi.unstubAllEnvs();
+  scratch.cleanupAll();
+});
+
+describe('the npm tarball lanes', () => {
+  it.each(LANES)('$name fetches the package through `npm pack`, so its rows reach the real download lane', async (lane) => {
+    vi.mocked(packNpmPackage).mockClear();
+    await runOnArchive(scratch.create(), lane, { fileName: 'fx-pkg-1.0.0.tgz', bytes: hostileArchive(SOUND_ROW, lane.archive(SOUND_ROW)) });
+
+    expect(vi.mocked(packNpmPackage)).toHaveBeenCalledWith(expect.stringContaining('@fx/fx-pkg'), expect.any(String));
+  });
+});
