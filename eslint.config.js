@@ -1100,6 +1100,8 @@ export default [
     files: [
       '**/runtime-*/test/pure-function.test.ts',
       '**/runtime-*/test/llm-analyzer.test.ts',
+      // `describeHostileArchiveLanes` registers every row per lane.
+      'packages/cli/test/integration/archive-hostile-lanes-npm.integration.test.ts',
     ],
     rules: {
       'sonarjs/no-empty-test-file': 'off',

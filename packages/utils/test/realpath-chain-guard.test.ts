@@ -140,6 +140,20 @@ describe('the link-following primitives ask the kernel only about a chain read a
     expect(kernel?.asked).toContain(path);
   });
 
+  // An `lstat` follows every component but the last: through `a` it reaches `\\attacker\share`.
+  it('canonicalPath never asks the kernel about a path through a link the walk has not read', ({ skip }) => {
+    kernel = planted(root, skip);
+    kernel.restore();
+    const session = installFaultFs({ within: root });
+    try {
+      expect(() => canonicalPath(safePath.join(root, 'a', 'inner.md'), root)).toThrow(expect.objectContaining(refused));
+      const through = session.calls.filter((call) => /\/(?:a|b|smb)\//.test(toForwardSlash(call.path))).map((call) => `${call.op} ${call.path}`);
+      expect(through).toEqual([]);
+    } finally {
+      session.restore();
+    }
+  });
+
   it('answers the operator\'s own path (passed as its own tree) by the kernel, with no walk', ({ skip }) => {
     kernel = planted(root, skip);
     kernel.restore();

@@ -26,7 +26,9 @@ import { lstatSync } from 'node:fs';
 import path from 'node:path';
 
 import { isPathAbsentError } from './errors/errno-table.js';
+import { assertLocalChain } from './link-following.js';
 import { normalizePath, safePath, toForwardSlash } from './path-utils.js';
+import { HOST_PATH_FLAVOR } from './tree-change/link-chain.js';
 
 /**
  * Where a candidate stands relative to a root, as the filesystem sees it.
@@ -59,6 +61,8 @@ export type Containment = 'inside' | 'outside' | 'absent';
  */
 function canonicalFromAncestor(target: string, within: string): { canonical: string; exists: boolean } {
   const absolute = safePath.resolve(target);
+  // An `lstat` follows every component but the last, so the chain is read and shown local first.
+  assertLocalChain(absolute, within, HOST_PATH_FLAVOR);
   const missing: string[] = [];
   let candidate = absolute;
   for (;;) {

@@ -1,5 +1,9 @@
 ### Security
 
+- **On Windows, a containment check (`isUnderRoot`, `canonicalPath`) on a path BELOW a link whose
+  chain ends at `\\host\share` made the kernel follow that link, offering the operator's NTLM
+  credentials, before any walk read it.** Its first `lstat` of the whole path follows every component
+  but the last. The chain is now read and shown local before the kernel is asked about the path.
 - **A `.tgz` or npm package holding symbolic-link entries could make `vat skills install` and
   `vat claude plugin install` copy any file the installing user can read into the install, at exit 0.**
   0.2.0 release candidates only; 0.1.42 is not affected. Fixed (the archive is refused): re-install

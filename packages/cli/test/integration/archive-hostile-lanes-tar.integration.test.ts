@@ -1,17 +1,14 @@
 /**
- * Every verb that extracts a TARBALL — `vat skills install` and `vat claude plugin install`, over
- * a `.tgz` and over an npm package, `vat skills list` over both, and
- * `vat claude org skills install --from-npm` — in process, against every archive VAT refuses
+ * Every verb that extracts a local TARBALL — `vat skills install`, `vat skills list` and `vat claude
+ * plugin install` over a `.tgz` — in process, against every archive VAT refuses
  * (`describeHostileArchiveLanes`). One table, every lane: a lane that grows its own extractor, or
- * forgets the entry policy, goes red here. The ZIP lanes are `archive-hostile-lanes-zip`.
+ * forgets the entry policy, goes red here. The npm tarball lanes are `archive-hostile-lanes-npm`;
+ * the ZIP lanes are `archive-hostile-lanes-zip`.
  *
  * The two reproductions that opened this suite are at the bottom: a tarball whose link entries
  * climb out of staging, which an install used to answer by copying a directory the archive did
  * not hold into `~/.claude`, at exit 0.
  */
-
-// Before anything that loads a command: the npm lane's one seam (`npm pack` is a network call).
-import '../fault-matrix/cases/npm-download-mock.js';
 
 import { readdirSync, writeFileSync } from 'node:fs';
 
@@ -20,14 +17,12 @@ import { type ArchiveFixtureEntry, tarFixture, tempDirTracker } from '@vibe-agen
 import type { Command } from 'commander';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { installFromNpm } from '../../src/commands/claude/org/skills.js';
 import { createPluginCommand } from '../../src/commands/claude/plugin/index.js';
 import { createSkillsCommand } from '../../src/commands/skills/index.js';
 import { skillMd } from '../fault-matrix/cases/tree-files.js';
 import type { CaseRoot } from '../fault-matrix/drive.js';
 import { archiveLane } from '../helpers/archive-lane-registry.js';
-import { type ArchiveLane, describeHostileArchiveLanes, type LaneRun, orgLane, PACKAGE_JSON, pluginPackage, runOnArchive, skillsPackage } from '../helpers/archive-lanes.js';
-import { recordingLogger } from '../helpers/upload-logger.js';
+import { type ArchiveLane, describeHostileArchiveLanes, type LaneRun, PACKAGE_JSON, pluginPackage, runOnArchive, skillsPackage } from '../helpers/archive-lanes.js';
 
 const SKILLS_FLAGS = ['--target', 'claude', '--scope', 'user'] as const;
 const skills = (): Command => createSkillsCommand();
@@ -35,19 +30,9 @@ const plugin = (): Command => createPluginCommand();
 
 const LANES: readonly ArchiveLane[] = [
   { name: archiveLane('vat skills install <tgz>'), format: 'tar', archive: (row) => tarFixture(skillsPackage(row)), group: skills, argv: (archive) => ['install', archive, ...SKILLS_FLAGS] },
-  { name: archiveLane('vat skills install npm:'), format: 'tar', npm: true, archive: (row) => tarFixture(skillsPackage(row)), group: skills, argv: () => ['install', 'npm:@fx/fx-pkg', ...SKILLS_FLAGS] },
   // `vat skills list` previews an archive: it extracts it exactly as the install does, and installs nothing.
   { name: archiveLane('vat skills list <tgz>'), format: 'tar', lists: true, archive: (row) => tarFixture(skillsPackage(row)), group: skills, argv: (archive) => ['list', archive] },
-  { name: archiveLane('vat skills list npm:'), format: 'tar', lists: true, npm: true, archive: (row) => tarFixture(skillsPackage(row)), group: skills, argv: () => ['list', 'npm:@fx/fx-pkg'] },
   { name: archiveLane('vat claude plugin install <tgz>'), format: 'tar', archive: (row) => tarFixture(pluginPackage(row)), group: plugin, argv: (archive) => ['install', archive] },
-  { name: archiveLane('vat claude plugin install npm:'), format: 'tar', npm: true, archive: (row) => tarFixture(pluginPackage(row)), group: plugin, argv: () => ['install', 'npm:@fx/fx-pkg'] },
-  orgLane({
-    name: archiveLane('vat claude org skills install npm:'),
-    format: 'tar',
-    npm: true,
-    archive: (row) => tarFixture(skillsPackage(row)),
-    call: (_archive, client) => installFromNpm('@fx/fx-pkg', undefined, client, recordingLogger()),
-  }),
 ];
 
 describeHostileArchiveLanes('vat-archive-hostile-tar-', LANES);

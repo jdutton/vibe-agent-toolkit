@@ -325,10 +325,17 @@ describe('refuseEscapingLinks, a tree read in place', () => {
     expect(kernelFollowed).toEqual([]);
   });
 
-  it('refuses a link whose text climbs out of the tree, even through a link inside it', () => {
+  // A POSIX kernel follows `up` before the `..` after it; a Windows kernel collapses `up/..` by string first.
+  it.skipIf(HOST_PATH_FLAVOR === 'win32')('refuses a link whose text climbs out of the tree, even through a link inside it', () => {
     plant({ ...SKILL, 'skill/docs/up': '-> ..', 'skill/docs/out': '-> up/../outside/key.txt' });
 
     expect(refusalOf(inPlace)?.message).toContain('docs/out is a symbolic link to a path outside the skill (up/../outside/key.txt)');
+  });
+
+  it.skipIf(HOST_PATH_FLAVOR !== 'win32')('accepts the same text on a Windows host, where `up/..` collapses to docs and stays inside', () => {
+    plant({ ...SKILL, 'skill/docs/up': '-> ..', 'skill/docs/out': '-> up/../outside/key.txt' });
+
+    expect(refusalOf(inPlace)).toBeUndefined();
   });
 
   // R11-CONTRACT-C1: a real cycle (not `self -> .`) reads nothing in place, like a dangle — never a fault.

@@ -1,7 +1,7 @@
 /**
  * The hostile-archive table (`hostileArchiveRows`) as a suite over the CLI's archive lanes: one
- * registration per lane, every row. Shared by the tarball and the ZIP suites, which are two files
- * only because a row holding more entries than the limit is expensive to build once per lane.
+ * registration per lane, every row. Shared by the local-tarball, npm-tarball and ZIP suites, which are
+ * three files only because a row holding more entries than the limit is expensive to build once per lane.
  *
  * Each row asserts the same things: the run is refused (exit 2), the refusal is the input's
  * (`INPUT_UNREADABLE`), nothing under `~/.claude` changed, `$TMPDIR` holds no staging, and — for
