@@ -1,18 +1,30 @@
 /**
- * The supervision guard exists for exactly the supervision's duration: the handlers it installs
- * on this process are gone once the supervision ends, however it ends — so a long-lived process
- * (`vat validate`, a test runner) does not accumulate them, and its own signal handling is back
- * the moment the child is.
+ * The supervision guard exists for exactly as long as the child does: the handlers it installs on
+ * this process — the signal handlers and the `exit` guard alike — are gone once the child is gone,
+ * however the run ends. Not once the run SETTLES: a run settled on a refused kill or a throwing
+ * poll may leave its child alive, and every handler must still take that child down. So a
+ * long-lived process (`vat validate`, a test runner) does not accumulate them, and its own signal
+ * handling is back the moment the child is.
  *
  * What the handlers DO is pinned through the real binary in
- * `checks-supervisor-orphan.system.test.ts`; here only their lifetime, on a stand-in child.
+ * `checks-supervisor-orphan.system.test.ts`; here their lifetime on a stand-in child, and the
+ * watchdog poll's own kill when it throws.
  */
 
 import { EventEmitter } from 'node:events';
 
+import type * as Utils from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { __internal } from '../../src/commands/resources/check-supervisor.js';
+import { __internal, superviseCheck } from '../../src/commands/resources/check-supervisor.js';
+
+const { spawnMock, statMock } = vi.hoisted(() => ({ spawnMock: vi.fn(), statMock: vi.fn() }));
+vi.mock('node:child_process', () => ({ spawn: spawnMock }));
+vi.mock('../../src/utils/vat-bin-path.js', () => ({ resolveVatBinPath: () => 'vat-bin.js' }));
+vi.mock('@vibe-agent-toolkit/utils', async (original) => ({
+  ...(await original<typeof Utils>()),
+  requireFollowedStatSync: statMock,
+}));
 
 const GUARDED_EVENTS = ['SIGTERM', 'SIGHUP', 'SIGINT', 'exit'] as const;
 
@@ -99,14 +111,43 @@ describe('the supervision guard — its lifetime', () => {
     expect(listenerCounts()).toStrictEqual(baseline);
   });
 
-  it('keeps only the exit guard past a run that settled with its child alive (a refused kill), until the child ends', () => {
+  // 🚨 A run settled with its child alive — a refused kill, a poll that threw — used to drop the
+  // signal handlers at once: a SIGTERM meanwhile ended this process and orphaned the child.
+  it('keeps every handler past a run that settled with its child alive, until the child ends', () => {
     const baseline = listenerCounts();
     const child = new StandInChild();
 
     guard(child)();
 
-    expect(listenerCounts()).toStrictEqual({ ...baseline, exit: (baseline['exit'] ?? 0) + 1 });
+    expect(listenerCounts()).toStrictEqual(Object.fromEntries(GUARDED_EVENTS.map((event) => [event, (baseline[event] ?? 0) + 1])));
     child.end({ code: null, signal: 'SIGKILL' });
+    expect(listenerCounts()).toStrictEqual(baseline);
+  });
+});
+
+describe('the watchdog poll that throws', () => {
+  // 🚨 A poll that cannot stat the progress log has no reading, and the timer it runs in is
+  // outside every caller's `try`. The poll's own catch must kill the child: once the timer stops,
+  // nothing else bounds it — the `exit` guard fires only if this process ends, and a caller that
+  // publishes the failure (`vat validate`'s RUN_INCOMPLETE) has not ended yet.
+  it('kills the child with SIGKILL and rejects with the throw', async () => {
+    const baseline = listenerCounts();
+    const child = new StandInChild();
+    child.kill.mockImplementation(() => {
+      setImmediate(() => child.end({ code: null, signal: 'SIGKILL' }));
+      return true;
+    });
+    spawnMock.mockReturnValue(child);
+    statMock.mockImplementation(() => {
+      throw Object.assign(new Error('EACCES: permission denied, stat progress.jsonl'), { code: 'EACCES' });
+    });
+
+    const run = superviseCheck({ args: [], logPath: 'progress.jsonl', budgetMs: 500, format: 'json' });
+
+    await expect(run).rejects.toThrow('EACCES');
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    // The child's `close` releases every handler.
+    await new Promise((resolve) => setImmediate(resolve));
     expect(listenerCounts()).toStrictEqual(baseline);
   });
 });

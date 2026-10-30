@@ -8,9 +8,11 @@
  * supervising process's clock from the spawn on, so the default bound elapses in the real seconds
  * `measureBudget()` derives for this machine, exactly as a standalone kill case derives `--budget`.
  *
- * 🚨 Every case asserts the run ended in less real time than the UNSCALED bound. A preload that
- * silently failed to load would otherwise leave the default bound in force: the case would wait
- * the full default bound, get the same kill, and pass. Only a scaled clock can end it sooner.
+ * 🚨 Every case asserts the run ended within {@link KILL_WITHIN_BUDGETS} measured budgets. A preload
+ * that silently failed to load would leave the default bound in force, and the case would wait the
+ * full default bound for the same kill. Only the scaled clock ends a run that soon: before it, the
+ * run is two populations (the `resources` phase's and the child's), each a third of the measured
+ * budget at most (`measure-check-budget.ts`); after it, one budget of scaled silence.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -37,18 +39,28 @@ useScratchTmpdir('vat-scratch-validate-checks-kill-');
 let projectDir: string;
 
 /**
+ * How many measured budgets a scaled kill may take, end to end: two populations of at most a third
+ * of a budget each, one budget of silence, and the remainder as headroom for a loaded machine.
+ */
+const KILL_WITHIN_BUDGETS = 3;
+
+/**
  * The environment that makes the phase's default bound elapse in this machine's measured budget:
  * `NODE_OPTIONS` loading the fast clock (plus `more`), and the scale that maps the default bound
- * onto the measured one. Measured beside each killed case, never once per file.
+ * onto the measured one — and the real time the kill must beat. Measured beside each killed case,
+ * never once per file.
  */
-function boundedPhase(...more: string[]): NodeJS.ProcessEnv {
+function boundedPhase(...more: string[]): { env: NodeJS.ProcessEnv; withinMs: number } {
   const { budgetSeconds } = measureBudget(() => {
     writeConfig(projectDir, [['quick', TXT_ROWS]]);
     return vat(projectDir, ['resources', 'check', '--budget', '0']).elapsedMs;
   });
   return {
-    NODE_OPTIONS: [preload('parent-only-fast-clock.mjs'), ...more].join(' '),
-    TEST_PARENT_CLOCK_SCALE: String(DEFAULT_BUDGET_SECONDS / budgetSeconds),
+    env: {
+      NODE_OPTIONS: [preload('parent-only-fast-clock.mjs'), ...more].join(' '),
+      TEST_PARENT_CLOCK_SCALE: String(DEFAULT_BUDGET_SECONDS / budgetSeconds),
+    },
+    withinMs: KILL_WITHIN_BUDGETS * budgetSeconds * 1000,
   };
 }
 
@@ -62,12 +74,12 @@ describe('vat validate — the checks phase, killed by its bound', () => {
   });
 
   it('kills a check that never finishes: RESOURCE_CHECK_BROKEN naming it, the statement remedy, exit 1', () => {
-    const env = boundedPhase();
+    const { env, withinMs } = boundedPhase();
     writeConfig(projectDir, [['runaway', RUNAWAY_SQL]]);
 
     const run = vat(projectDir, ['validate'], env);
 
-    expect(run.elapsedMs).toBeLessThan(DEFAULT_BUDGET_SECONDS * 1000);
+    expect(run.elapsedMs).toBeLessThan(withinMs);
     expect(run.status).toBe(1);
     const broken = run.findings.find((f) => f.code === RUN_INTEGRITY && f.message.includes('runaway'));
     // The statement branch's own sentence — not the population's, startup's or reporting's.
@@ -77,12 +89,12 @@ describe('vat validate — the checks phase, killed by its bound', () => {
   });
 
   it('a child killed during population is a phase error: RUN_INCOMPLETE, the population remedy, exit 2', () => {
-    const env = boundedPhase(preload('child-only-stall-in-population.mjs'));
+    const { env, withinMs } = boundedPhase(preload('child-only-stall-in-population.mjs'));
     writeConfig(projectDir, [['quick', TXT_ROWS]]);
 
     const run = vat(projectDir, ['validate'], env);
 
-    expect(run.elapsedMs).toBeLessThan(DEFAULT_BUDGET_SECONDS * 1000);
+    expect(run.elapsedMs).toBeLessThan(withinMs);
     expect(run.status).toBe(2);
     expect(run.error?.code).toBe('RUN_INCOMPLETE');
     const phase = checksPhase(run);

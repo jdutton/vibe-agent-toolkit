@@ -40,7 +40,11 @@
 
 import { appendFileSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { isProcessGoneError } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
+
+import type { SupervisedChild } from './check-supervisor.js';
 
 /**
  * The child has booted — Node is up, the CLI is loaded, and no work has begun.
@@ -272,11 +276,54 @@ export function unitInFlight(entries: readonly ProgressEntry[]): UnitInFlight {
  * queued behind work the event loop never gets back to, so the line naming the
  * rule that hangs would exist only in memory — where `SIGKILL` destroys it.
  *
- * @param path - Where the supervisor is watching
+ * ## 🚨 Before every entry: is the supervisor still there?
+ *
+ * The bound lives in the supervisor. A supervisor that dies where none of its
+ * own code runs — SIGKILL, an OOM killer, a Windows outside kill — cannot take
+ * the child down, and the child, reparented, would run on with nothing bounding
+ * it and nobody reading what it publishes. So before each entry the writer asks
+ * whether its parent is still the supervisor that spawned it, and ends the child
+ * at once when it is not: exit 2, nothing on stdout. It ends by `process.exit`,
+ * never by a signal handler — the child must never install one (see
+ * `check-supervisor.ts`).
+ *
+ * ⚠️ It runs only BETWEEN units. A statement already blocked inside SQLite, or
+ * the population's one long parse, reaches no writer until it returns.
+ *
+ * @param child - Where the supervisor is watching, and the supervisor's pid
  * @returns A writer that appends one entry and returns once it is on disk
  */
-export function createProgressWriter(path: string): (entry: ProgressEntry) => void {
+export function createProgressWriter(
+  child: Pick<SupervisedChild, 'progressLog' | 'supervisorPid'>,
+): (entry: ProgressEntry) => void {
   return (entry) => {
-    appendFileSync(path, `${JSON.stringify(entry)}\n`, 'utf-8');
+    if (supervisorGone(child.supervisorPid)) {
+      process.stderr.write(
+        `vat resources check: the process supervising this checks run (pid ${String(child.supervisorPid)})`
+        + ' is gone, so nothing bounds the run or reads its report. Ending it unfinished.\n',
+      );
+      process.exit(ExitCode.ERROR);
+    }
+    appendFileSync(child.progressLog, `${JSON.stringify(entry)}\n`, 'utf-8');
   };
+}
+
+/**
+ * Whether the supervisor is gone. Two questions, because the platforms answer differently: on
+ * POSIX an orphan is reparented, so `ppid` changes; on Windows `ppid` keeps naming the dead
+ * parent, and only the pid itself can say it has ended (best effort: a reused pid reads as alive).
+ * A refusal to signal it (`EPERM`) means that pid now belongs to someone else — gone, too.
+ *
+ * @param supervisorPid - The supervisor's pid
+ * @returns True when the supervisor no longer exists
+ */
+function supervisorGone(supervisorPid: number): boolean {
+  if (process.ppid !== supervisorPid) return true;
+  try {
+    process.kill(supervisorPid, 0);
+    return false;
+  } catch (error) {
+    if (isProcessGoneError(error)) return true;
+    throw error;
+  }
 }

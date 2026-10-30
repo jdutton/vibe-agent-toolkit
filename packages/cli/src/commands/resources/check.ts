@@ -1823,7 +1823,7 @@ async function runChecksHere(
   // unit the budget is already a total bound for. See `StartedEntrySchema`.
   const onProgress = child === undefined
     ? undefined
-    : createProgressWriter(child.progressLog);
+    : createProgressWriter(child);
   onProgress?.({ kind: 'started' });
 
   const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);

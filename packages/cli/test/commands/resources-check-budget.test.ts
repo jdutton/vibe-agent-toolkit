@@ -513,7 +513,7 @@ describe('requireSupervisableFlags', () => {
     // supervised lane must survive this guard — and hand back what the value carried.
     expect(requireSupervisableFlags({
       supervisedBy: supervisedBy(invoker), budgetRaw: undefined, budgetSecs: 300,
-    })).toStrictEqual({ invoker, progressLog: 'progress.jsonl' });
+    })).toStrictEqual({ invoker, supervisorPid: process.ppid, progressLog: 'progress.jsonl' });
   });
 
   it('keeps a progress log whose path holds a colon (a Windows drive)', () => {

@@ -93,6 +93,15 @@
  * the ordinary in-process path. Forking the logic would give the supervised lane
  * and the unsupervised one two implementations of the same gate — and the one
  * nobody runs interactively is the one that would rot.
+ *
+ * ## ⚠️ When the SUPERVISOR dies
+ *
+ * Its signal handlers and `exit` guard take the child down on every ending that
+ * runs its code (see `guardSupervision`). SIGKILL, an OOM killer and, on Windows,
+ * any outside kill run none of it; for those the child ends ITSELF, before its
+ * next progress entry, once its supervisor is gone (`createProgressWriter`). A
+ * statement already blocked inside SQLite cannot be reached either way until it
+ * returns.
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
@@ -141,13 +150,16 @@ const MAX_POLL_MS = 250;
  * How many refused SIGKILLs the watchdog sends before it stops trying and
  * REPORTS instead.
  *
- * A retry count, not a bound on anything stored. It exists because the two ways
- * a kill can fail want opposite responses: `ESRCH` is a race that resolves
- * itself the instant `close` arrives, while `EPERM` is a permission fact that
- * will be just as true on the thousandth attempt. Retrying a handful of times
- * covers the first at negligible cost; continuing past that would turn the
- * supervisor into a second unbounded hang, which is the thing this module
- * exists to abolish. So it escalates to an honest report naming the pid.
+ * A retry count, not a bound on anything stored. A kill of a child that has
+ * already exited never reaches here: Node's `subprocess.kill()` swallows
+ * `ESRCH` and emits no `error` for it. What does arrive is any other refusal —
+ * `EPERM`, in practice — and that may be transient (a refusal raced against the
+ * child's own exit, an OS that briefly refuses) or permanent (a permission fact
+ * that will be just as true on the thousandth attempt). Retrying a handful of
+ * times covers the transient case at negligible cost; continuing past that
+ * would turn the supervisor into a second unbounded hang, which is the thing
+ * this module exists to abolish. So it escalates to an honest report naming
+ * the pid.
  */
 const KILL_ATTEMPTS_BEFORE_REPORTING = 5;
 
@@ -282,6 +294,13 @@ export type CheckInvocation = 'standalone' | 'phase';
 export interface SupervisedChild {
   /** Who started the supervision. */
   readonly invoker: CheckInvocation;
+  /**
+   * The supervisor's pid — this process's parent when it started. The child's progress writer
+   * checks it before every entry and ends the child once the supervisor is gone: a supervisor
+   * killed in a way no handler of its own sees (SIGKILL, an OOM killer, a Windows outside kill)
+   * cannot take the child down, and the child is then bounded by nothing else.
+   */
+  readonly supervisorPid: number;
   /** The progress log both processes watch; the child appends to it. */
   readonly progressLog: string;
 }
@@ -296,10 +315,10 @@ export const SUPERVISED_BY_FLAG = '--supervised-by';
  * The pid is what makes the flag unforgeable by accident: the child refuses it unless the pid
  * named is its own parent's — see {@link requireSupervisableFlags}.
  *
- * @param child - Who asked, and where the progress goes
+ * @param child - Who asked, and where the progress goes (the supervisor is always this process)
  * @returns The flag's value
  */
-export function supervisedByValue(child: SupervisedChild): string {
+export function supervisedByValue(child: Omit<SupervisedChild, 'supervisorPid'>): string {
   return `${child.invoker}:${String(process.pid)}:${child.progressLog}`;
 }
 
@@ -408,7 +427,7 @@ function parseSupervisedBy(raw: string): SupervisedChild {
       + ` run with no bound and print none of the run's notices.${remedy}`,
     );
   }
-  return { invoker, progressLog };
+  return { invoker, supervisorPid: process.ppid, progressLog };
 }
 
 /**
@@ -812,20 +831,27 @@ const RERAISE_GRACE_MS = 1000;
  *
  * So for exactly the supervision's duration:
  *
- * - **`exit`** SIGKILLs the child — every ending of this process passes through it, a last-resort
- *   `process.exit` included. It is released when the child is gone, not when the run settles, so a
- *   refused kill gets one more attempt when this process ends.
+ * - **`exit`** SIGKILLs the child — every ending of this process that runs any of its code passes
+ *   through it, a last-resort `process.exit` included.
  * - **{@link TERMINATING_SIGNALS}** release every handler, SIGKILL the child, remove the progress
  *   log's directory synchronously (no `finally` runs after the re-raise), and RE-RAISE the signal,
  *   so this process still dies of it with the status a shell and a CI runner expect.
  *
- * The `exit` guard removes that directory too: `process.exit` runs no `finally` either.
+ * Both are released when the child is gone, not when the run settles, so a run settled with its
+ * child still alive (a refused kill, a poll that threw) still takes the child down however this
+ * process then ends. The `exit` guard removes the progress directory too: `process.exit` runs no
+ * `finally` either.
  *
  * The module header gives why SIGKILL, and why the CHILD must never install a handler. This
  * process may: its event loop is never blocked, which is what makes a handler fire at all.
  *
- * ⚠️ Windows: `process.kill(pid, 'SIGTERM')` there is `TerminateProcess`, which runs no handler, so
- * the signal handlers are inert against an outside kill; the `exit` guard is not.
+ * ## ⚠️ What no guard here reaches
+ *
+ * An ending that runs none of this process's code: SIGKILL, an OOM killer, and on Windows ANY
+ * outside kill — `process.kill(pid, <signal>)` there is `TerminateProcess`, which runs neither a
+ * signal handler nor the `exit` guard. The child covers those itself: its progress writer ends it,
+ * before its next entry, once this process is gone (`createProgressWriter`). A child blocked
+ * inside one SQLite statement reaches no entry until the statement returns, and nothing reaches it.
  *
  * @param child - The supervised child
  * @param logPath - The progress log, alone in a directory {@link withProgressLog} minted for this run
@@ -848,14 +874,17 @@ function guardSupervision(child: ChildProcess, logPath: string): () => void {
   for (const signal of TERMINATING_SIGNALS) process.on(signal, onSignal);
   process.once('exit', onExit);
 
-  return () => {
+  // Every handler is released on the child's `close`, not when the run settles: a run settled on a
+  // refused kill or a poll that threw may still have a live child, and a signal or an exit
+  // meanwhile must still take it down.
+  const releaseAll = (): void => {
     releaseSignals();
-    const releaseExit = (): void => {
-      process.off('exit', onExit);
-    };
+    process.off('exit', onExit);
+  };
+  return () => {
     // Gone, or never started: nothing left to take down.
-    if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) releaseExit();
-    else child.once('close', releaseExit);
+    if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) releaseAll();
+    else child.once('close', releaseAll);
   };
 }
 
@@ -882,6 +911,10 @@ function disposeProgressDir(logPath: string): void {
  * `128 + n`, which would be a second exit-code table beside the contract's. Windows is not sent the
  * raise at all: it cannot SEND SIGHUP, and SIGTERM or SIGINT there terminates without a signal
  * status to preserve.
+ *
+ * ⚠️ The exit fallback has no test, and cannot have one here: reaching it needs a process whose
+ * default disposition for the signal does nothing — PID 1 in its own PID namespace — which a
+ * system test can only get by running in a container it starts, and this suite starts none.
  *
  * @param signal - The signal this process received
  */

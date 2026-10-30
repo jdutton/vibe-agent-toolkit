@@ -21,9 +21,9 @@
  * reports.
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   createProgressWriter,
@@ -145,7 +145,8 @@ describe('createProgressWriter', () => {
     const dir = createTestTempDir('vat-check-progress-');
     try {
       const path = `${dir}/progress.jsonl`;
-      const write = createProgressWriter(path);
+      // This process's parent is alive and is its parent: the supervisor is there.
+      const write = createProgressWriter({ progressLog: path, supervisorPid: process.ppid });
 
       write(POPULATION);
       const afterFirst = readFileSync(path, 'utf-8');
@@ -155,6 +156,29 @@ describe('createProgressWriter', () => {
       expect(parseProgressLog(afterFirst)).toStrictEqual([POPULATION]);
       expect(parseProgressLog(afterSecond)).toStrictEqual([POPULATION, FIRST_START]);
     } finally {
+      cleanupTestTempDir(dir);
+    }
+  });
+
+  // 🚨 A supervisor killed where none of its code runs (SIGKILL, OOM) cannot take its child down.
+  // The child, reparented, must end itself at its next unit rather than run on unbounded.
+  it('ends the child — exit 2, nothing appended — once its parent is no longer the supervisor', () => {
+    const dir = createTestTempDir('vat-check-progress-');
+    const exit = vi.spyOn(process, 'exit').mockImplementation((code) => {
+      throw new Error(`exit ${String(code)}`);
+    });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const path = `${dir}/progress.jsonl`;
+      const write = createProgressWriter({ progressLog: path, supervisorPid: process.ppid + 1 });
+
+      expect(() => write(POPULATION)).toThrow('exit 2');
+      expect(exit).toHaveBeenCalledWith(2);
+      expect(String(stderr.mock.calls[0]?.[0])).toContain(`pid ${String(process.ppid + 1)}`);
+      expect(existsSync(path)).toBe(false);
+    } finally {
+      exit.mockRestore();
+      stderr.mockRestore();
       cleanupTestTempDir(dir);
     }
   });

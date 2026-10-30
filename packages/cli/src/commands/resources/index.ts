@@ -498,10 +498,11 @@ A run that HANGS is killed and reported, not waited on:
   supervising process does handle SIGTERM, SIGHUP and SIGINT while it
   supervises, only to kill its child and then die of the same signal (exit 2,
   with no document, where the signal cannot kill it, as under PID 1), so
-  stopping it by its pid alone never leaves the child running (not on Windows,
-  where an outside kill runs no handler). Node cannot tell a process that a
-  signal was IGNORED when it started, so under nohup (or trap '' INT) a SIGHUP
-  or SIGINT arriving while the checks are supervised still ends the run.
+  stopping it by its pid alone never leaves the child running. A supervisor
+  ended where it runs no code -- SIGKILL, an OOM killer, any outside kill on
+  Windows -- cannot do that; the child then ends itself before its next unit,
+  with nothing published. A statement already running inside SQLite is not
+  reached until it returns.
 
 Output Fields (the shared report envelope; schema: packages/cli/schemas/resources-check.json):
   status:    ok | findings | error -- a literal statement about \`findings\`.

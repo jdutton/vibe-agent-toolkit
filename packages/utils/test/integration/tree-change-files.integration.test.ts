@@ -5,7 +5,7 @@
  * `isTreeChangeResidue`.
  */
 
-import { readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, readdirSync, writeFileSync } from 'node:fs';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -273,6 +273,24 @@ describe('disposeTempDirSync', () => {
     expect(readText(safePath.join(outside, 'data.md'))).toBe('d');
     expect(isVatError(thrownBy(() => disposeTempDirSync(tmp)), TEMP_DIR_OUTSIDE_TMPDIR_CODE)).toBe(true);
     expect(readText(safePath.join(tmp, 'keep.md'))).toBe('k');
+  });
+
+  // Its callers run on the way OUT of a process, where nothing can be thrown and no report is
+  // left: the fault has to come back as a value they can still write to stderr.
+  it.skipIf(!PERMISSIONS_ENFORCED)('answers the environment fault naming the directory, and keeps it, when the OS will not remove an entry', () => {
+    const root = suite.root();
+    plant(root, { 'd/locked/x.txt': 'x' });
+    const dir = safePath.join(root, 'd');
+    const locked = safePath.join(dir, 'locked');
+    chmodSync(locked, 0o555);
+    try {
+      const leftover = disposeTempDirSync(dir);
+      expect(isFsFaultError(leftover) && leftover.side === 'environment').toBe(true);
+      expect((leftover as Error).message).toContain(dir);
+      expect(present(safePath.join(locked, 'x.txt'))).toBe(true);
+    } finally {
+      chmodSync(locked, 0o755);
+    }
   });
 });
 

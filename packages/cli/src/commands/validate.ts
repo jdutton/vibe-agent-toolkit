@@ -19,8 +19,9 @@
  * surfaces only (resources, their checks, skills) and excludes marketplace-artifact
  * validation. Marketplace validation runs against the built dist tree, which
  * would couple `vat validate` to a prior `vat build` and overlap `vat verify`.
- * Keeping it build-free makes `vat validate` safe for pre-commit / CI-before-
- * build. If a single "validate the whole shippable thing" command is later
+ * Keeping it build-free lets it run in CI before a build; time it on your tree
+ * before putting it in a pre-commit hook — the checks phase builds a projection
+ * of the whole tracked tree. If a single "validate the whole shippable thing" command is later
  * wanted, fold the marketplace phase in here (mirror verify.ts).
  */
 
@@ -126,7 +127,8 @@ Description:
   Surfaces (run in this order):
     resources  → link integrity, collection frontmatter schemas (when 'resources:' configured)
     checks     → VAT's built-in checks plus the project's resources.checks SQL, exactly as
-                 'vat resources check' runs them over the whole project (when 'resources:'
+                 'vat resources check' runs them over the whole TRACKED TREE —
+                 resources.include/exclude do not scope it (when 'resources:'
                  configured); its phase entry is that command's own report
     skills     → SKILL.md frontmatter and packaging validation (when 'skills:' configured)
 
@@ -154,10 +156,12 @@ Exit Codes:
       before its population completed, or a checks supervisor that could not
       watch its child — a path argument or the retired '--only'
       (USAGE_INVALID), no project root. One exit 2 publishes NO document: a
-      signal (SIGTERM, SIGHUP, SIGINT) sent to this process while the checks
-      child is supervised kills the child, and this process dies of the same
-      signal — or, where the signal cannot kill it (PID 1 in a container),
-      exits 2 with nothing on stdout
+      signal this process could not die of (PID 1 in a container), below
+
+  A signal (SIGTERM, SIGHUP, SIGINT) sent to this process while the checks
+  child is supervised kills the child, and this process dies of that same
+  signal: its status is the signal's (a shell reports 128+n), not 0, 1 or 2,
+  and nothing is published.
 
 Checks bound:
   The checks phase runs the supervised child of 'vat resources check' under
