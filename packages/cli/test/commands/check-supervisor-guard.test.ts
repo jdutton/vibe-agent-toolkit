@@ -21,8 +21,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import { __internal, type ProgressLog, superviseCheck, withProgressLog } from '../../src/commands/resources/check-supervisor.js';
 
-const { spawnMock, statMock } = vi.hoisted(() => ({ spawnMock: vi.fn(), statMock: vi.fn() }));
-vi.mock('node:child_process', () => ({ spawn: spawnMock }));
+const { spawnMock, spawnSyncMock, statMock } = vi.hoisted(() => ({ spawnMock: vi.fn(), spawnSyncMock: vi.fn(), statMock: vi.fn() }));
+// `spawnSync` is the Windows tree kill (`taskkill /T /F` in `killProcessTree`): stubbed so a stand-in
+// pid is never handed to a real taskkill. The stand-in's own `kill` stays what each case asserts.
+vi.mock('node:child_process', () => ({ spawn: spawnMock, spawnSync: spawnSyncMock }));
 vi.mock('../../src/utils/vat-bin-path.js', () => ({ resolveVatBinPath: () => 'vat-bin.js' }));
 vi.mock('@vibe-agent-toolkit/utils', async (original) => ({
   ...(await original<typeof Utils>()),
