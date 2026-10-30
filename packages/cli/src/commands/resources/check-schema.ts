@@ -11,6 +11,8 @@ import { LIMIT_DIRECTIONS } from '@vibe-agent-toolkit/resources';
 import { FindingSchema, reportSchema, type Report } from '@vibe-agent-toolkit/schema';
 import { z } from 'zod';
 
+import type { ExaminedDeclaration } from '../../utils/run-integrity.js';
+
 /** What one rule cost, as the document publishes it. */
 const PublishedCheckCostSchema = z.object({
   name: z.string(),
@@ -93,3 +95,13 @@ export type CheckData = z.infer<typeof CheckDataSchema>;
 export const CHECK_REPORT_SCHEMA = reportSchema(CheckDataSchema, FindingSchema);
 
 export type CheckReport = Report<CheckData>;
+
+/**
+ * What `examined` counts for `vat resources check`, and the remedy when it is zero. One
+ * declaration for the verb's own writer (the published-shape registry) and for the `checks`
+ * phase `vat validate` runs, so a run that examined nothing is refused the same way in both.
+ */
+export const RESOURCES_CHECK_EXAMINED: ExaminedDeclaration = {
+  unit: 'resources in the population',
+  whenZero: 'The projection holds no tracked resource: run from inside the project, and check that its files are tracked or not excluded.',
+};

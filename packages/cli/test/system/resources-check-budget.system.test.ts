@@ -56,6 +56,7 @@ import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 import { cleanupTestTempDir, fs, getBinPath, safePath } from './test-common.js';
 import { createMarkdownGitFixture, executeCli } from './test-helpers/index.js';
+import { measureBudget, type MeasuredBudget } from './test-helpers/measure-check-budget.js';
 
 // ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
 // child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
@@ -115,34 +116,6 @@ const CHILD_HEAP_CAP = { NODE_OPTIONS: '--max-old-space-size=192' };
 const MD_ROWS = "SELECT path FROM resource_realizations WHERE ext = '.md'";
 /** A cheap statement that selects nothing, so a run over it is a clean pass. */
 const TXT_ROWS = "SELECT path FROM resource_realizations WHERE ext = '.txt'";
-
-/**
- * The floor under the killed cases' bound. Small, so the suite does not pay for
- * it on an idle machine.
- */
-const BUDGET_FLOOR_SECONDS = 2;
-
-/**
- * How many measured baselines of headroom the bound gets over the population.
- *
- * 🪤 **The bound cannot be a literal, and a literal is what shipped.** The
- * budget is time WITHOUT progress, and the population is ONE unit — so a bound
- * that does not clear the population kills the run before any rule exists, and
- * the case asserting the RULE's name has nothing to assert on. (It used to exit 2
- * there too; a budget kill is exit 1 wherever it lands now, and the case below
- * that forces a pre-population kill pins that.) A flat 2 s cleared it comfortably
- * on an idle machine and did not clear it when this file ran inside the full
- * system suite: one CI run reported `expected 2 to be 1`, and the same file
- * passed 7/7 in isolation minutes later.
- * That is not a regression in the product, it is a test whose premise silently
- * acquired a second requirement — that a population fit inside a hardcoded
- * number of seconds — and the machine decides whether it holds.
- *
- * So the bound is derived by {@link measureBudget}, a real run of the same verb
- * over the same tree, taken beside each killed case. A loaded machine moves
- * the baseline and the bound together, which is the whole point of measuring it.
- */
-const BUDGET_BASELINE_HEADROOM = 3;
 
 /** The hidden flag a supervising parent hands its child. */
 const COST_LOG_FLAG = '--cost-log';
@@ -222,40 +195,18 @@ interface PublishedCheck {
   rows?: number;
 }
 
-/** What this machine costs RIGHT NOW, and the bound derived from it. */
-interface MeasuredBudget {
-  /** A real run of the same verb over the same tree, in-process and complete. */
-  baselineMs: number;
-  /** The bound a killed case passes, in seconds — derived, never a literal. */
-  budgetSeconds: number;
-}
-
 /**
- * Probe the machine and derive the bound from what it measured.
- *
- * 🪤 **Called by each killed case, immediately before its own run — never once
- * for the file.** It used to be taken once in `beforeAll`, and the load a
- * sibling suite puts on the machine is not constant across a file: a probe taken
- * on a quiet box sized a bound that a busy one then blew during the population,
- * and the case asserting the RULE's name got a kill that landed before any rule
- * existed. Measuring beside the run is what makes "the same load" true.
+ * Probe the machine beside a killed case and derive its bound ({@link measureBudget}).
  *
  * It writes the probe's config, so a caller writes its own checks AFTER.
  *
  * @returns The baseline and the bound
  */
-function measureBudget(): MeasuredBudget {
-  // 🪤 The threshold PROBE, not a literal. What a spawn, a population and one
-  // cheap statement cost on THIS machine, measured by doing it.
-  writeChecks(['quick', TXT_ROWS]);
-  const baselineMs = check('--budget', '0').elapsedMs;
-  return {
-    baselineMs,
-    budgetSeconds: Math.max(
-      BUDGET_FLOOR_SECONDS,
-      Math.ceil((baselineMs / 1000) * BUDGET_BASELINE_HEADROOM),
-    ),
-  };
+function measureThisBudget(): MeasuredBudget {
+  return measureBudget(() => {
+    writeChecks(['quick', TXT_ROWS]);
+    return check('--budget', '0').elapsedMs;
+  });
 }
 
 /**
@@ -297,7 +248,7 @@ describe('vat resources check --budget', () => {
   it('KILLS a statement that never finishes, and fails the run naming it', () => {
     // 🔑 The whole point. Without the bound this case does not fail — it never
     // returns, and neither does the CI job it stands for.
-    const { baselineMs, budgetSeconds } = measureBudget();
+    const { baselineMs, budgetSeconds } = measureThisBudget();
     writeChecks(['runaway', RUNAWAY_SQL]);
 
     const { status, doc, elapsedMs } = check('--budget', String(budgetSeconds));
@@ -324,7 +275,7 @@ describe('vat resources check --budget', () => {
     // A killed run is still evidence. The cheap rule finished and was priced
     // before the runaway was entered, and that is exactly what the progress log
     // exists to preserve across a SIGKILL.
-    const { budgetSeconds } = measureBudget();
+    const { budgetSeconds } = measureThisBudget();
     writeChecks(['quick', MD_ROWS], ['runaway', RUNAWAY_SQL]);
 
     const { status, doc } = check('--budget', String(budgetSeconds));

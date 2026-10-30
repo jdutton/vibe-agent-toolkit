@@ -111,7 +111,7 @@ import { resolveVatBinPath } from '../../utils/vat-bin-path.js';
  * the whole objective. A tree ten times that adopter's lands near 165 s, still
  * inside the default but no longer comfortably.
  */
-const DEFAULT_BUDGET_SECONDS = 300;
+export const DEFAULT_BUDGET_SECONDS = 300;
 
 /** How many times per budget the parent looks at the log. */
 const POLLS_PER_BUDGET = 10;

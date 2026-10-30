@@ -306,7 +306,8 @@ There are two layers: **source** validation (no build required) and **built-arti
 `vat validate` runs every source validator the config declares — and only those — discovered from `vibe-agent-toolkit.config.yaml`:
 
 1. `resources validate` — links, frontmatter, schemas (when `resources:` configured)
-2. `skills validate` — SKILL.md structure, frontmatter (when `skills:` configured)
+2. `resources check` — VAT's built-in checks plus every `resources.checks` SQL statement, over the whole project (whenever `resources:` is configured)
+3. `skills validate` — SKILL.md structure, frontmatter (when `skills:` configured)
 
 It is source-level only and **never requires a build**, so it is safe for pre-commit and CI-before-build. A surface with no config block is simply skipped (no error, no noise).
 

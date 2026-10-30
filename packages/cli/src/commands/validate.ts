@@ -51,13 +51,19 @@ import {
   type PhaseVocabulary,
 } from './phase-utils.js';
 import { rejectPositionalArguments } from './positional-args.js';
+import { CHECK_REPORT_SCHEMA, RESOURCES_CHECK_EXAMINED } from './resources/check-schema.js';
+import { runResourcesCheckPhase } from './resources/check.js';
 import { RESOURCES_VALIDATE_EXAMINED, RESOURCES_VALIDATE_REPORT_SCHEMA } from './resources/validate-schema.js';
 import { runResourcesValidatePhase } from './resources/validate.js';
 import { SKILLS_VALIDATE_EXAMINED, SKILLS_VALIDATE_REPORT_SCHEMA } from './skills/validate-schema.js';
 import { runSkillsValidatePhase } from './skills/validate.js';
 
-/** Surfaces `vat validate` knows how to run, in stable execution order. */
-const VALID_SURFACES = ['resources', 'skills'] as const;
+/**
+ * Surfaces `vat validate` knows how to run, in stable execution order. `checks` runs whenever
+ * `resources:` is configured, directly after `resources`: the checks read the tree that phase
+ * populated.
+ */
+const VALID_SURFACES = ['resources', 'checks', 'skills'] as const;
 
 const VALIDATE_VOCABULARY: PhaseVocabulary = {
   noun: 'Surface',
@@ -93,7 +99,7 @@ export function createValidateTopLevelCommand(): Command {
   const command = marksOperandRefusalByHand(new Command('validate'));
 
   addRetiredOnlyOption(command)
-    .description('Validate configured surfaces from source (resources + skills) — no build required')
+    .description('Validate configured surfaces from source (resources, their checks, skills) — no build required')
     .option('--debug', 'Enable debug logging')
     .option('-v, --verbose', 'Show every finding, not just the collapsed counts')
     .action(validateTopLevelCommand)
@@ -101,8 +107,8 @@ export function createValidateTopLevelCommand(): Command {
       'after',
       `
 Description:
-  Runs the source-level validators (resources, skills) the project's config
-  declares — and only those. A surface whose config block is absent is skipped
+  Runs the source-level validators (resources, checks, skills) the project's
+  config declares — and only those. A surface whose config block is absent is skipped
   (a project with no skills block does not run skill validation). A project
   that configures nothing examines nothing, which is refused (exit 1) with a
   stderr warning naming the likely config typo.
@@ -116,6 +122,9 @@ Description:
 
   Surfaces (run in this order):
     resources  → link integrity, collection frontmatter schemas (when 'resources:' configured)
+    checks     → VAT's built-in checks plus the project's resources.checks SQL, exactly as
+                 'vat resources check' runs them over the whole project (when 'resources:'
+                 configured); its phase entry is that command's own report
     skills     → SKILL.md frontmatter and packaging validation (when 'skills:' configured)
 
 Output:
@@ -166,11 +175,18 @@ Example:
  *
  * `only` is still passed to {@link decidePhaseSelection} as `undefined`: that
  * helper is shared with `vat build`, which keeps its own `--only`.
+ *
+ * @param config - The project's config, or undefined when there is none
+ * @param run - The run's inputs, all required
+ * @param run.root - The project root this run resolved; the `checks` phase's child checks exactly it
+ * @param run.verbose - Forwarded to the resources and skills phases
+ * @param run.debug - Forwarded to the `checks` phase's child
  */
 export function selectValidateSurfaces(
   config: ProjectConfig | undefined,
-  verbose = false,
+  run: { readonly root: string; readonly verbose: boolean; readonly debug: boolean },
 ): PhaseSelection {
+  const { root, verbose, debug } = run;
   // Forwarded to every surface, exactly as `vat verify` forwards its own. Both
   // validators already accept `-v, --verbose`; only this command lacked the
   // flag, which made the collapsed warning/info detail unreachable HERE while
@@ -185,6 +201,14 @@ export function selectValidateSurfaces(
       schema: RESOURCES_VALIDATE_REPORT_SCHEMA,
       examined: RESOURCES_VALIDATE_EXAMINED,
       run: () => runResourcesValidatePhase(undefined, { verbose }),
+    });
+    // Whenever `resources:` is configured — a project with no `resources.checks` still runs VAT's
+    // built-in set — and directly after `resources`. The phase report is the supervised child's own.
+    phases.push({
+      name: 'checks',
+      schema: CHECK_REPORT_SCHEMA,
+      examined: RESOURCES_CHECK_EXAMINED,
+      run: () => runResourcesCheckPhase({ root, debug }),
     });
   }
 
@@ -212,6 +236,10 @@ export function selectValidateSurfaces(
  * writes — source-level and build-free by the decision at the top of this file —
  * so no phase can miss another's output. A verb whose phases produce files for
  * the next to read (`vat build`) must not be hoisted this way, and is not.
+ *
+ * ⚠️ The `checks` phase is a CHILD process with a store of its own: it opens
+ * and writes the projection store while this process holds it open inside the
+ * scope below. A system test pins that the pair completes on a fresh store.
  *
  * @param projectRoot - The resolved project root, which every surface roots at
  * @param phases - The surfaces to run, in order
@@ -259,7 +287,11 @@ async function validateTopLevelCommand(
     // subdirectory invocation doesn't load an empty config and falsely pass.
     const projectRoot = requireProjectRoot(process.cwd(), COMMAND_NAME);
     const phases = applyPhaseSelection(
-      selectValidateSurfaces(loadConfig(projectRoot, 'source'), options.verbose === true),
+      selectValidateSurfaces(loadConfig(projectRoot, 'source'), {
+        root: projectRoot,
+        verbose: options.verbose === true,
+        debug: options.debug === true,
+      }),
       logger,
     );
 

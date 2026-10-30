@@ -78,6 +78,9 @@ vi.mock('../../src/commands/resources/validate.js', () => ({
 vi.mock('../../src/commands/skills/validate.js', () => ({
   runSkillsValidatePhase: vi.fn(() => Promise.resolve({ report: STUB_REPORT })),
 }));
+vi.mock('../../src/commands/resources/check.js', () => ({
+  runResourcesCheckPhase: vi.fn(() => Promise.resolve({ report: STUB_REPORT })),
+}));
 vi.mock('../../src/commands/claude/marketplace/validate.js', () => ({
   runMarketplaceValidatePhase: vi.fn(() => Promise.resolve({ report: STUB_REPORT })),
 }));
@@ -92,6 +95,7 @@ vi.mock('../../src/commands/claude/plugin/build.js', () => ({
 
 const { runResourcesValidatePhase } = await import('../../src/commands/resources/validate.js');
 const { runSkillsValidatePhase } = await import('../../src/commands/skills/validate.js');
+const { runResourcesCheckPhase } = await import('../../src/commands/resources/check.js');
 const { runMarketplaceValidatePhase } = await import(
   '../../src/commands/claude/marketplace/validate.js'
 );
@@ -101,6 +105,7 @@ const { runClaudePluginBuildPhase } = await import('../../src/commands/claude/pl
 /** Every stubbed phase entry point, so a run's calls can be cleared as one. */
 const PHASE_STUBS = [
   runResourcesValidatePhase,
+  runResourcesCheckPhase,
   runSkillsValidatePhase,
   runMarketplaceValidatePhase,
   runSkillsBuildPhase,
@@ -158,6 +163,9 @@ const CONFIG_BOTH = {
   skills: { include: [SKILL_GLOB] },
 } as unknown as ProjectConfig;
 const CONFIG_EMPTY = {} as unknown as ProjectConfig;
+/** The root a `vat validate` run resolved (never touched on disk: the phases are stubbed), and the run's flags. */
+const VALIDATE_ROOT = safePath.join(normalizedTmpdir(), 'resolved-project-root');
+const VALIDATE_RUN = { root: VALIDATE_ROOT, verbose: false, debug: false } as const;
 /** What a config that exists but does not parse hands back to the orchestrator. */
 const BROKEN_CONFIG_ERROR = 'Failed to load config: bad yaml';
 const CONFIG_MARKETPLACE = {
@@ -259,13 +267,14 @@ describe('selectVerifyPhases', () => {
 describe('each delegated phase names its verb\'s registered schema', () => {
   const REGISTERED: Record<string, string> = {
     resources: 'resources validate',
+    checks: 'resources check',
     skills: 'skills validate',
     'marketplace:test-tools': 'claude marketplace validate',
   };
 
   it.each([
     ['vat verify', () => selectVerifyPhases({ ...CONFIG_BOTH, claude: CONFIG_MARKETPLACE.claude } as ProjectConfig)],
-    ['vat validate', () => selectValidateSurfaces(CONFIG_BOTH)],
+    ['vat validate', () => selectValidateSurfaces(CONFIG_BOTH, VALIDATE_RUN)],
   ])('%s', (_label, select) => {
     const phases = runPhases(select());
     expect(phases.length).toBeGreaterThan(0);
@@ -298,7 +307,7 @@ describe('every orchestrated phase is judged as its verb judges itself alone', (
   const verbs = (verb: ReportVerb): ExaminedDeclaration => reportShapeFor(verb).examined;
 
   const EXPECTED: Readonly<Record<'validate' | 'verify' | 'build', Readonly<Record<string, ExaminedDeclaration | typeof ZERO_IS_AN_ANSWER>>>> = {
-    validate: { resources: verbs('resources validate'), skills: verbs('skills validate') },
+    validate: { resources: verbs('resources validate'), checks: verbs('resources check'), skills: verbs('skills validate') },
     verify: {
       resources: verbs('resources validate'),
       skills: verbs('skills validate'),
@@ -314,7 +323,7 @@ describe('every orchestrated phase is judged as its verb judges itself alone', (
   };
 
   const PHASES: Readonly<Record<keyof typeof EXPECTED, () => ReadonlyArray<Pick<Phase, 'name' | 'examined'>>>> = {
-    validate: () => runPhases(selectValidateSurfaces(CONFIG_BOTH)),
+    validate: () => runPhases(selectValidateSurfaces(CONFIG_BOTH, VALIDATE_RUN)),
     verify: () => [
       ...runPhases(selectVerifyPhases({ ...CONFIG_BOTH, claude: CONFIG_MARKETPLACE.claude } as ProjectConfig)),
       ...Object.values(IN_PROCESS_PHASES),
@@ -530,12 +539,35 @@ describe('selectBuildPhases', () => {
 
 describe('selectValidateSurfaces', () => {
   it('runs only the surfaces the config declares', () => {
-    expect(phaseNames(selectValidateSurfaces(CONFIG_BOTH))).toEqual(['resources', 'skills']);
-    expect(phaseNames(selectValidateSurfaces(CONFIG_RESOURCES_ONLY))).toEqual(['resources']);
+    expect(phaseNames(selectValidateSurfaces(CONFIG_BOTH, VALIDATE_RUN))).toEqual(['resources', 'checks', 'skills']);
+    expect(phaseNames(selectValidateSurfaces(CONFIG_RESOURCES_ONLY, VALIDATE_RUN))).toEqual(['resources', 'checks']);
+    expect(phaseNames(selectValidateSurfaces(CONFIG_SKILLS_ONLY, VALIDATE_RUN))).toEqual(['skills']);
+  });
+
+  /**
+   * 🔑 Both ways: `checks` is present iff `resources:` is, and it directly follows `resources` —
+   * the checks read the tree the resources phase just populated. A `checks` phase selected without
+   * `resources:`, or one that drifted away from it, reds here.
+   */
+  it.each([
+    ['resources and skills', CONFIG_BOTH, true],
+    ['resources only', CONFIG_RESOURCES_ONLY, true],
+    ['skills only', CONFIG_SKILLS_ONLY, false],
+  ])('runs checks iff resources: is configured, directly after resources (%s)', (_label, config, hasResources) => {
+    const names = phaseNames(selectValidateSurfaces(config, VALIDATE_RUN));
+
+    expect(names.includes('checks')).toBe(hasResources);
+    if (hasResources) expect(names[names.indexOf('resources') + 1]).toBe('checks');
+  });
+
+  it.each([false, true])('roots the checks phase at the resolved root and forwards debug=%s', async (debug) => {
+    await invokeAll(selectValidateSurfaces(CONFIG_RESOURCES_ONLY, { ...VALIDATE_RUN, debug }));
+
+    expect(runResourcesCheckPhase).toHaveBeenCalledExactlyOnceWith({ root: VALIDATE_ROOT, debug });
   });
 
   it('is a warned no-op when nothing at all is configured', () => {
-    expect(selectValidateSurfaces(CONFIG_EMPTY).kind).toBe('noop');
+    expect(selectValidateSurfaces(CONFIG_EMPTY, VALIDATE_RUN).kind).toBe('noop');
   });
 });
 

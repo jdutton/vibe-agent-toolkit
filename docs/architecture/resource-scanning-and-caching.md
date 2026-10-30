@@ -641,7 +641,9 @@ snapshot instead of taking its own.
 ⚠️ **That hoist is admissible for `vat validate` specifically, and is not a free refactor**: one
 scope is one git snapshot for the whole run. `vat validate` never writes, so no phase can miss
 another's output. A verb whose phases produce files for the next to read (`vat build`) must not be
-hoisted this way, and is not.
+hoisted this way, and is not. Its `checks` phase is a supervised child process outside that scope:
+it opens and writes the projection store while the parent holds it open
+(`validate-checks-phase.system.test.ts` pins that the pair completes on a fresh store).
 
 **Where the store is shared, within and across invocations.** The selector is read from the
 environment, and every phase now runs in the process that read it — phases used to be child processes

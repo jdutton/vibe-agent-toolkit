@@ -156,7 +156,7 @@ are labelled below rather than rewritten. Where §4 and
 | `vat agent installed` | one-level `fs.readdir` over a hardcoded scope list | none | ⚠️ undeclared |
 | `vat cache clear` | not a corpus — walks `<tmpdir>/.vat-cache` | none | `packages/cli/src/commands/cache/clear.ts › clearCacheDirectory()` |
 | `vat build` | orchestrator; inherits `vat skills build` then `vat claude plugin build` | inherited | `packages/cli/src/commands/build.ts › createBuildTopLevelCommand()` |
-| `vat validate` | orchestrator; inherits `vat resources validate` then `vat skills validate` | inherited | `packages/cli/src/commands/validate.ts › createValidateTopLevelCommand()` |
+| `vat validate` | orchestrator; inherits `vat resources validate`, then `vat resources check` (a supervised child, whenever `resources:` is configured), then `vat skills validate` | inherited | `packages/cli/src/commands/validate.ts › createValidateTopLevelCommand()` |
 | `vat verify` | orchestrator; inherits `vat resources validate`, `vat skills validate`, `vat claude marketplace validate`, plus the in-process phases that read `dist/` | inherited | `packages/cli/src/commands/verify.ts › createVerifyTopLevelCommand()` |
 
 **The mechanism column is the finding, not a detail.** Beyond the incumbent walk and the projection

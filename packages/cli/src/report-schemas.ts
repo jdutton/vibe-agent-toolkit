@@ -88,7 +88,7 @@ import { ORCHESTRATOR_EXAMINED, ORCHESTRATOR_REPORT_SCHEMA } from './commands/or
 import { RAG_CLEAR_REPORT_SCHEMA, RAG_DATABASE_EXAMINED, RAG_STATS_REPORT_SCHEMA } from './commands/rag/admin-schema.js';
 import { RAG_INDEX_EXAMINED, RAG_INDEX_REPORT_SCHEMA } from './commands/rag/index-schema.js';
 import { RAG_QUERY_EXAMINED, RAG_QUERY_REPORT_SCHEMA } from './commands/rag/query-schema.js';
-import { CHECK_REPORT_SCHEMA } from './commands/resources/check-schema.js';
+import { CHECK_REPORT_SCHEMA, RESOURCES_CHECK_EXAMINED } from './commands/resources/check-schema.js';
 import { RESOURCES_QUERY_EXAMINED, RESOURCES_QUERY_REPORT_SCHEMA } from './commands/resources/query-schema.js';
 import { RESOURCES_SCAN_EXAMINED, RESOURCES_SCAN_REPORT_SCHEMA } from './commands/resources/scan-schema.js';
 import { RESOURCES_VALIDATE_EXAMINED, RESOURCES_VALIDATE_REPORT_SCHEMA } from './commands/resources/validate-schema.js';
@@ -228,10 +228,7 @@ const REPORTS = [
     verbs: ['resources check'],
     name: 'resources-check',
     schema: CHECK_REPORT_SCHEMA,
-    examined: {
-      unit: 'resources in the population',
-      whenZero: 'The projection holds no tracked resource: run from inside the project, and check that its files are tracked or not excluded.',
-    },
+    examined: RESOURCES_CHECK_EXAMINED,
   },
   {
     kind: 'report',

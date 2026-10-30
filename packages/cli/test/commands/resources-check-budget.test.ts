@@ -52,6 +52,7 @@ import {
 import {
   buildCheckOutputData,
   buildInterruptedCheckInput,
+  type CheckInvocation,
   type CheckPayloadInput,
   NODE_FATAL_ABORT_EXIT_CODE,
 } from '../../src/commands/resources/check.js';
@@ -236,15 +237,17 @@ describe('pollWatchdog', () => {
  * The recovered payload for a run killed while `runaway` was in flight.
  *
  * @param entries - What the child's log held, defaulting to the hang above
+ * @param invocation - Who ran the checks, defaulting to the operator's own `vat resources check`
  * @returns The input the document is built from
  */
 function killed(
   entries: readonly ProgressEntry[] = [POPULATION, FIRST_COST, HUNG_START],
+  invocation: CheckInvocation = 'standalone',
 ): CheckPayloadInput {
   return buildInterruptedCheckInput({
     entries,
     root: '/corpus',
-    ending: { kind: 'budget', budgetSecs: 2 },
+    ending: { kind: 'budget', budgetSecs: 2, invocation },
     durationMs: 3400,
   });
 }
@@ -1010,6 +1013,39 @@ describe('the remedy each ending earns', () => {
     // Where it is TRUE: neither a code nor a signal, so there is nothing to
     // name and nothing to advise.
     expect(diedOf({ kind: 'no-status' }).issues[0]?.message).toContain(NO_INFORMATION);
+  });
+});
+
+/**
+ * 🔑 A kill's remedy names only a flag the running verb accepts. `--budget` is `vat resources
+ * check`'s alone: standalone, the remedy names the flag; as `vat validate`'s `checks` phase, it
+ * names the whole `vat resources check --budget <seconds>` command and never the bare flag,
+ * which `vat validate` would reject as an unknown option.
+ */
+describe('a budget kill remedy, by who ran the checks', () => {
+  const BRANCHES: ReadonlyArray<readonly [string, readonly ProgressEntry[]]> = [
+    // An empty log is a child that never booted; `started` alone is one that was populating.
+    ['startup', []],
+    ['population', [STARTED]],
+    ['a statement', [POPULATION, FIRST_COST, HUNG_START]],
+    ['reporting', [POPULATION, FIRST_COST, CHECKS_DONE]],
+  ];
+
+  /** A `--budget` mention that is not part of the spelled-out `vat resources check` command. */
+  const BARE_BUDGET = /(?<!vat resources check )`--budget/;
+
+  it.each(BRANCHES)('as a phase, during %s: names `vat resources check --budget`, never the bare flag', (_branch, entries) => {
+    const message = killed(entries, 'phase').issues[0]?.message ?? '';
+
+    expect(message).toContain('`vat resources check --budget <seconds>`');
+    expect(message).not.toMatch(BARE_BUDGET);
+  });
+
+  it.each(BRANCHES)('standalone, during %s: names the `--budget` flag itself', (_branch, entries) => {
+    const message = killed(entries, 'standalone').issues[0]?.message ?? '';
+
+    expect(message).toMatch(BARE_BUDGET);
+    expect(message).not.toContain('vat resources check --budget');
   });
 });
 

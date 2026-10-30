@@ -78,8 +78,8 @@ describe('vat validate command (system test)', () => {
 
     expect(result.status).toBe(0);
     expect(orchestratorReportOf(result.stdout).status).toBe('ok');
-    // skills surface must not run when no skills block is present
-    expect(phaseNames(result.stdout)).toEqual(['resources']);
+    // skills surface must not run when no skills block is present; checks runs with resources
+    expect(phaseNames(result.stdout)).toEqual(['resources', 'checks']);
   });
 
   it('runs the skills surface when only skills is configured', async () => {
@@ -109,7 +109,7 @@ describe('vat validate command (system test)', () => {
     const result = await suite.runValidate(subDir);
 
     expect(result.status).toBe(0);
-    expect(phaseNames(result.stdout)).toEqual(['resources']);
+    expect(phaseNames(result.stdout)).toEqual(['resources', 'checks']);
   });
 
   it('refuses a run with no surface configured — it examined nothing — and warns on stderr', async () => {
@@ -152,6 +152,7 @@ describe('vat validate command (system test)', () => {
     expect(report.findings).toEqual(aloneRefusal);
     expect((report.data?.phases ?? []).map((phase) => [phase.name, phase.status, phase.examined > 0])).toEqual([
       ['resources', 'ok', true],
+      ['checks', 'ok', true],
       ['skills', 'findings', false],
     ]);
     // stderr says what the document says.
@@ -204,11 +205,12 @@ describe('vat validate command (system test)', () => {
 
     const phases = orchestratorReportOf(result.stdout).data?.phases ?? [];
 
-    expect(phases.map((p) => p.name)).toEqual(['resources', 'skills']);
+    expect(phases.map((p) => p.name)).toEqual(['resources', 'checks', 'skills']);
     // Each validator's own data survives under its own surface — which is
     // exactly what a flat concatenation could not represent.
     expect(phases[0]?.data).toMatchObject({ collections: expect.any(Object) });
-    expect(phases[1]?.data).toMatchObject({ skills: expect.any(Array) });
+    expect(phases[1]?.data).toMatchObject({ checks: expect.any(Array) });
+    expect(phases[2]?.data).toMatchObject({ skills: expect.any(Array) });
     // ...and is exactly what that validator's own registered schema describes.
     expect(phaseDataMismatches(orchestratorReportOf(result.stdout), 'validate')).toEqual([]);
   });
@@ -227,6 +229,6 @@ describe('vat validate command (system test)', () => {
     expect(result.status).toBe(1);
     const report = orchestratorReportOf(result.stdout);
     expect(report.status).toBe('findings');
-    expect(report.data?.phases.map((phase) => phase.status)).toEqual(['findings']);
+    expect(report.data?.phases.map((phase) => phase.status)).toEqual(['findings', 'ok']);
   });
 });

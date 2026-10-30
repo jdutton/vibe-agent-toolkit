@@ -93,7 +93,7 @@ process" — a cross-process cache is the only kind that can help them.
 |---|---|---|
 | `vat audit [path]` | `crawl` + `registry-md-html` | `audit.ts` → `audit/scan-population.ts › enumerateAuditPopulation()` → `crawlDirectory` for the subject tree (git route with untracked files by default; the walk route under `--include-artifacts` or when the scan root is itself gitignored — `NEVER_CRAWL_GLOBS` applies on both); `crawlAndResolveRegistry` once per project root it finds for the link graph. Against a bare skills directory only the crawl runs |
 | `vat build` | *spawns* `skills build`, `claude plugin build` | `build.ts` → `runPhase` |
-| `vat validate` | *spawns* `resources validate`, `skills validate` | `validate.ts` → `runPhase` |
+| `vat validate` | *spawns* `resources validate`, `resources check` (a supervised child process), `skills validate` | `validate.ts` → `runPhase` |
 | `vat verify` | `crawl`, *plus spawns* `resources validate`, `skills validate` | `verify.ts` → `runPhase` |
 | `vat agent build` | `crawl` + `registry-md` + `registry-md-html` | `agent/build.ts` |
 | `vat claude plugin build` | `crawl` + `registry-md` + `registry-md-html` | `claude/plugin/build.ts` |

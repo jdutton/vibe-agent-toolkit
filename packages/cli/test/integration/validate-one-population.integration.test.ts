@@ -117,11 +117,19 @@ describe('vat validate and the population its surfaces share', () => {
     // reached a store — which is exactly what this run would have been before
     // the default moved.
     expect(storeFilesUnder(storeDir)).toHaveLength(1);
-    expect(calls[STORE_WRITE]).toBe(1);
 
-    // The claim itself. Two lanes consulted the store; only one of them had to
-    // derive anything, and the extent the first wrote answered the second.
-    expect(calls[STORE_READ]).toBe(2);
-    expect(calls[FILESYSTEM_EXTENT]).toBe(1);
+    // The claim itself. The two in-process lanes (resources, skills) consulted
+    // the store; only one of them had to derive anything, and the extent the
+    // first wrote answered the second.
+    //
+    // ⚠️ Plus ONE of each from the `checks` phase: a supervised CHILD (it
+    // inherits `VAT_CRAWL_TIMING`) that asks the full-lane question, which is a
+    // different store key from the membership question the two surfaces share —
+    // so on a cold store it derives and writes its own. When every resources
+    // lane asks one question, the child reads what the resources phase wrote and
+    // these become 1 write and 1 derivation again.
+    expect(calls[STORE_WRITE]).toBe(2);
+    expect(calls[STORE_READ]).toBe(3);
+    expect(calls[FILESYSTEM_EXTENT]).toBe(2);
   });
 });

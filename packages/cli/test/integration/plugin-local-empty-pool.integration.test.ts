@@ -52,7 +52,7 @@ const zero = buildReport({ examined: 0, findings: [], data: null, gate: ORCHESTR
 
 const ORCHESTRATORS: ReadonlyArray<readonly [name: string, select: (root: string) => PhaseSelection]> = [
   ['vat build', (root) => selectBuildPhases(undefined, configuredBuildSurfaces(root))],
-  ['vat validate', (root) => selectValidateSurfaces(loadConfig(root, 'source'))],
+  ['vat validate', (root) => selectValidateSurfaces(loadConfig(root, 'source'), { root, verbose: false, debug: false })],
   ['vat verify', (root) => selectVerifyPhases(loadConfig(root, 'source'))],
 ];
 

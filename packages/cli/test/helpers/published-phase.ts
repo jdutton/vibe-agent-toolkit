@@ -35,6 +35,7 @@ type Orchestrator = 'build' | 'validate' | 'verify';
  */
 function ownSchemaOf(orchestrator: Orchestrator, name: string): PhaseReportSchema | undefined {
   if (name === 'resources') return reportShapeFor('resources validate').schema;
+  if (name === 'checks') return reportShapeFor('resources check').schema;
   if (name === 'skills') return reportShapeFor(orchestrator === 'build' ? 'skills build' : 'skills validate').schema;
   if (name === 'claude') return reportShapeFor('claude plugin build').schema;
   if (name.startsWith('marketplace:')) return reportShapeFor('claude marketplace validate').schema;

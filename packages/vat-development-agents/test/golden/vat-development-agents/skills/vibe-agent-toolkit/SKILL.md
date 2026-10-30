@@ -50,7 +50,7 @@ Poor fits:
 
 ```bash
 vat --help                 # top-level help
-vat validate               # validate sources: links + skills (no build needed)
+vat validate               # validate sources: links + checks + skills (no build needed)
 vat build                  # build all artifacts (skills → claude plugins)
 vat verify                 # verify built artifacts (after vat build)
 vat skills validate        # validate skill quality
