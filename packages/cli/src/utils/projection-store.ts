@@ -50,8 +50,9 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
 import type { PopulationCache, ProjectionStore } from '@vibe-agent-toolkit/resources';
 import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
-import { freshGitTreeSnapshot, gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
+import { freshGitTreeSnapshot, gitTreeSnapshot, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
+import { noticeToOperator } from './operator-notices.js';
 import { isModuleMissing, missingBackendError, type OptionalBackend } from './optional-backend.js';
 import { installSqliteWarningFilter } from './sqlite-experimental-warning.js';
 
@@ -229,6 +230,53 @@ export interface OpenedPopulationCache {
   close(): Promise<void>;
 }
 
+/** Roots this process has already told the operator it cannot key, so a nested scope does not repeat it. */
+const unkeyableRootsNoticed = new Set<string>();
+
+/**
+ * The snapshot that keys `root`'s store entry, or `null` — after telling the operator, once per
+ * root per process, that the run populates without a cache.
+ *
+ * `gitTreeSnapshot` returns null for every "git could not answer" case — no `git` on PATH, not a
+ * repository, a bare or unreadable one — and an empty snapshot of an initialized repository stays
+ * distinguishable from it.
+ *
+ * 🪤 Once per root: `vat validate`'s orchestrator scope and each lane's own scope inside it both ask
+ * when the outer one could not key ({@link joinableCache} "asks again" for a root it cannot vouch
+ * for), and the answer — and the notice — is the same every time.
+ *
+ * @param root - The absolute corpus root
+ * @returns The snapshot, or `null` when the tree cannot be keyed
+ */
+function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
+  const snapshot = gitTreeSnapshot({ cwd: root });
+  if (snapshot === null && !unkeyableRootsNoticed.has(root)) {
+    unkeyableRootsNoticed.add(root);
+    // Not "the selector is set": the store is on by default, so most users who
+    // see this never wrote the variable.
+    noticeToOperator(
+      `The projection store is on, but ${root} is not inside a readable git`
+      + ' repository, so there is no deterministic key to store a projection under.'
+      + ` Populating without a cache. Set ${PROJECTION_STORE_ENV}=${PROJECTION_STORE_OFF} to silence this.`,
+    );
+  }
+  return snapshot;
+}
+
+/**
+ * Print, from the process the operator invoked, the store notice a SUPERVISED CHILD populating
+ * `root` would have printed — the child prints no notices (see `operator-notices.ts`), so a
+ * supervising `vat resources check`, which opens no store of its own, owes this one.
+ *
+ * ⚠️ It costs what the child's own key costs: one git snapshot of the repository (~0.1 s on a
+ * 3,700-file tree). Only a supervisor calls it, once, before it spawns.
+ *
+ * @param root - The absolute corpus root the child will populate
+ */
+export function noticeWhenStoreUnkeyable(root: string): void {
+  if (projectionStoreSelected()) storeKeyOrNotice(root);
+}
+
 /**
  * Open the projection store this process selected, keyed to one tree.
  *
@@ -249,20 +297,9 @@ export async function openPopulationCache(options: {
   if (!projectionStoreSelected()) return undefined;
 
   // Before the import, so a corpus outside a repository costs nothing and says
-  // why. `gitTreeSnapshot` returns null for every "git could not answer" case —
-  // no `git` on PATH, not a repository, a bare or unreadable one — and an empty
-  // snapshot of an initialized repository stays distinguishable from it.
-  const snapshot = gitTreeSnapshot({ cwd: options.root });
-  if (snapshot === null) {
-    // Not "the selector is set": the store is on by default, so most users who
-    // see this never wrote the variable.
-    process.stderr.write(
-      `The projection store is on, but ${options.root} is not inside a readable git`
-      + ' repository, so there is no deterministic key to store a projection under.'
-      + ` Populating without a cache. Set ${PROJECTION_STORE_ENV}=${PROJECTION_STORE_OFF} to silence this.\n`,
-    );
-    return undefined;
-  }
+  // why.
+  const snapshot = storeKeyOrNotice(options.root);
+  if (snapshot === null) return undefined;
 
   const store = await loadStore();
   const cwd = options.root;

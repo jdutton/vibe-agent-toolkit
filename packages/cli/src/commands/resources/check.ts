@@ -69,6 +69,7 @@ import {
   type PopulationExtent,
   type ProjectionProvenance,
 } from '../../utils/projection-query.js';
+import { noticeWhenStoreUnkeyable } from '../../utils/projection-store.js';
 import { relationBoundsFor } from '../../utils/relation-limits.js';
 import { RUN_INTEGRITY_CODE, runIntegrityFinding } from '../../utils/run-integrity.js';
 import type { PhaseOutcome } from '../phase-utils.js';
@@ -869,6 +870,9 @@ function inFlightPhrase(inFlight: UnitInFlight): string {
     + ' statement, or after the last one had filed its cost';
 }
 
+/** The supervisor's kind for a child whose exit contradicts its own complete document. */
+const EXIT_DISAGREES = 'exit-disagrees' satisfies AbnormalDeath['kind'];
+
 /**
  * What ended the child, as a phrase.
  *
@@ -890,6 +894,10 @@ function deathPhrase(death: AbnormalDeath): string {
   if (death.kind === 'unparseable-output') {
     return `the child process exited ${death.code} and published a report that is not this`
       + ` command's document, most likely cut off mid-write (${death.detail})`;
+  }
+  if (death.kind === EXIT_DISAGREES) {
+    return `the child process published a complete report whose own verdict is exit ${death.documentExit},`
+      + ` and then exited ${death.code}`;
   }
   return 'the child process ended with neither an exit code nor a signal';
 }
@@ -1075,9 +1083,26 @@ function deathRemedy(death: AbnormalDeath): string {
   if (death.kind === 'no-output' || death.kind === 'unparseable-output') {
     return noOutputRemedy(death.code) + WATCHDOG_UNINVOLVED;
   }
+  if (death.kind === EXIT_DISAGREES) return EXIT_DISAGREES_REMEDY + WATCHDOG_UNINVOLVED;
   return ' The cause is outside anything this command can observe; the child left no exit code'
     + ' to report.' + WATCHDOG_UNINVOLVED;
 }
+
+/**
+ * Why a child whose exit disagrees with its own document is not forwarded, and where to look.
+ *
+ * ⚠️ It does not guess which of the two is true. Every path through this command ends on the code
+ * its document derives, so the disagreement is either something ending the child after it wrote
+ * (a crash in teardown, an external termination that left a code) or a defect in vat — and the
+ * report cannot tell them apart.
+ */
+const EXIT_DISAGREES_REMEDY
+  = ' Every path through this command ends on the exit code its own document derives, so the two'
+  + ' should never disagree: either something ended the child AFTER it wrote its report — a crash'
+  + ' during shutdown, or a termination from outside that left an exit code — or vat has a defect.'
+  + ' Which one cannot be told from here, so the report is withheld rather than forwarded as the'
+  + ' verdict. The child\'s stderr was inherited, so whatever it said is above this report; re-run'
+  + ' it, and if the disagreement repeats, report the exit code with the platform.';
 
 /**
  * The sentence that keeps an abnormal death from being blamed on the bound.
@@ -1144,11 +1169,30 @@ function interruptedRunFinding(
   const where = inFlightPhrase(inFlight);
   const message = ending.kind === 'budget'
     ? budgetKillMessage(inFlight, ending, where)
-    : `This run DIED before it finished: ${deathPhrase(ending.death)} ${where}, so the checks`
-      + ' after it never executed and this document is not a verdict.'
-      + deathRemedy(ending.death);
+    : deathMessage(ending.death, where);
 
   return runIntegrityFinding(message + incompleteNotice(checksCompleted));
+}
+
+/**
+ * What an abnormal death means.
+ *
+ * 🪤 A child whose exit disagrees with its document did NOT die mid-run — it finished every check
+ * and wrote a whole report — so it gets its own sentence rather than "DIED before it finished …
+ * the checks after it never executed", which would be false about it.
+ *
+ * @param death - The ending the supervisor resolved
+ * @param where - The clause naming the unit, from {@link inFlightPhrase}
+ * @returns The message body
+ */
+function deathMessage(death: AbnormalDeath, where: string): string {
+  if (death.kind === EXIT_DISAGREES) {
+    return `This run's exit contradicts its own report: ${deathPhrase(death)}, so neither can be`
+      + ' trusted as the verdict and this document replaces the report.' + deathRemedy(death);
+  }
+  return `This run DIED before it finished: ${deathPhrase(death)} ${where}, so the checks`
+    + ' after it never executed and this document is not a verdict.'
+    + deathRemedy(death);
 }
 
 /**
@@ -1423,9 +1467,13 @@ export function runProjectChecks(options: {
  *
  * 🔑 The operand is the root the PARENT resolved, always. The child is spawned
  * with no `cwd`, so without it the child would resolve its own root from the
- * inherited working directory, and a parent rooted at a nested project (`vat
- * validate` run from inside it, or `vat resources check <inner>` from outside)
- * would check a different tree from the one it reports on.
+ * INHERITED working directory — which differs from the parent's root whenever
+ * the operator named the project rather than standing in it: `vat resources
+ * check <inner>` run from an outer project would check the outer tree and
+ * report it as the inner one. (`vat validate` takes no operand and resolves its
+ * root from the working directory the child inherits, so for it the operand
+ * restates what the child would have found — it is passed so the phase cannot
+ * depend on that coincidence.)
  *
  * @param root - The project root the parent resolved
  * @param request - What the child is asked to run, and in which format
@@ -1645,12 +1693,7 @@ export async function checkCommand(
     // can therefore hang forever, which its help text says.
     const ending: SupervisedEnding = runsInThisProcess({ costLog: options.costLog, budgetSecs })
       ? { payload: await runChecksHere(pathArg, options, logger, startTime) }
-      : await superviseCheckRun({
-        root,
-        request: { check: options.check, format, debug: options.debug === true },
-        budgetSecs,
-        invocation: 'standalone',
-      });
+      : await superviseStandalone(root, options, format, budgetSecs);
     if ('forward' in ending) {
       // Verbatim (unless `withLeftover` had to add a finding to it) — the supervisor already checked it is
       // this verb's document — and on the code that document derives. The child already built what the operator's `--format` asked for, and
@@ -1676,6 +1719,34 @@ export async function checkCommand(
     // `vat resources check` offers no `--strict`: warnings never fail it.
     endWithRefusal('resources check', refusalCodeOf(error), error, format, { strict: false }, NOTHING_FINISHED);
   }
+}
+
+/**
+ * Supervise the checks child for a standalone `vat resources check`.
+ *
+ * 🔑 The store notice is printed HERE, before the spawn: the child prints no notices (it is a
+ * supervised child — see `operator-notices.ts`), and this process opens no store of its own, so
+ * without this the operator of a tree that cannot be keyed would never hear the run went uncached.
+ *
+ * @param root - The project root this process resolved, which the child checks
+ * @param options - Parsed command-line options
+ * @param format - The document format the operator asked for
+ * @param budgetSecs - The bound, in seconds
+ * @returns What to publish
+ */
+function superviseStandalone(
+  root: string,
+  options: CheckOptions,
+  format: 'yaml' | 'json',
+  budgetSecs: number,
+): Promise<SupervisedEnding> {
+  noticeWhenStoreUnkeyable(root);
+  return superviseCheckRun({
+    root,
+    request: { check: options.check, format, debug: options.debug === true },
+    budgetSecs,
+    invocation: 'standalone',
+  });
 }
 
 /**

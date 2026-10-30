@@ -675,12 +675,53 @@ describe('readCompletedDocument — a completion whose document does not survive
     expect(exitCodeForReport(report)).toBe(ExitCode.FINDINGS);
   });
 
-  it('accepts a whole document, and its exit code is derived from it', () => {
+  it('accepts a whole document whose exit the child agreed with', () => {
     // ⛔ The negative control: without it "always a death" passes the two above.
     const whole = buildCheckOutputData(diedOf({ kind: 'no-status' }));
-    const read = readCompletedDocument(JSON.stringify(whole), 0, 'json');
+    const read = readCompletedDocument(JSON.stringify(whole), exitCodeForReport(whole), 'json');
 
     expect(read).toMatchObject({ document: { report: { status: whole.status } } });
+  });
+});
+
+describe('readCompletedDocument — a child whose exit DISAGREES with its own document', () => {
+  /** A whole, clean report: the shape a child that finished every check writes. */
+  const clean = (): string => JSON.stringify(buildCheckOutputData({
+    root: '/corpus',
+    durationMs: 1200,
+    populated: { population: 'store', populationMs: 1180, lensMs: 0, lensesEvaluated: [], membersEnumerated: 8123 },
+    issues: [],
+    costs: [{ name: 'no-markdown', durationMs: 4.25, rows: 0 }],
+  }));
+
+  // 🚨 The defect: the parent forwards the DOCUMENT's code, never the process's, so a complete `ok`
+  // report followed by a non-zero exit was published as a clean pass.
+  it('refuses to forward a clean report the child then exited 3 on', () => {
+    const read = readCompletedDocument(clean(), 3, 'json');
+
+    expect(read).toStrictEqual({ death: { kind: 'exit-disagrees', code: 3, documentExit: ExitCode.OK } });
+  });
+
+  it('publishes RESOURCE_CHECK_BROKEN, exit 1, naming both codes and saying the run did finish', () => {
+    const read = readCompletedDocument(clean(), 3, 'json');
+    if (!('death' in read)) throw new Error('a disagreeing exit was forwarded');
+    const report = buildCheckOutputData(diedOf(read.death, [POPULATION, FIRST_COST, CHECKS_DONE]));
+    const message = report.findings[0]?.message ?? '';
+
+    expect(report.findings.map((finding) => finding.code)).toContain('RESOURCE_CHECK_BROKEN');
+    expect(exitCodeForReport(report)).toBe(ExitCode.FINDINGS);
+    expect(message).toContain('exit contradicts its own report');
+    expect(message).toContain('verdict is exit 0');
+    expect(message).toContain('exited 3');
+    // Not the mid-run death sentence: this child finished every check.
+    expect(message).not.toContain('DIED before it finished');
+  });
+
+  it('forwards a report whose non-zero exit IS the one it implies (the negative control)', () => {
+    const findings = buildCheckOutputData(diedOf({ kind: 'no-status' }));
+
+    expect(exitCodeForReport(findings)).toBe(ExitCode.FINDINGS);
+    expect(readCompletedDocument(JSON.stringify(findings), ExitCode.FINDINGS, 'json')).toHaveProperty('document');
   });
 });
 
@@ -1017,33 +1058,48 @@ describe('the remedy each ending earns', () => {
 });
 
 /**
+ * Each row carries a phrase only ITS branch's remedy says, so a row whose message came from the
+ * wrong branch (or the generic one) reds instead of passing on the shared `--budget` clause.
+ */
+const BRANCHES: ReadonlyArray<readonly [string, readonly ProgressEntry[], string]> = [
+  // An empty log is a child that never booted; `started` alone is one that was populating.
+  ['startup', [], 'Node and vat were still loading'],
+  ['population', [STARTED], 'Population is legitimately slow'],
+  ['a statement', [POPULATION, FIRST_COST, HUNG_START], 'A statement that will not finish'],
+  ['reporting', [POPULATION, FIRST_COST, CHECKS_DONE], 'the SIZE of the document'],
+];
+const BRANCH_PHRASES = BRANCHES.map(([, , phrase]) => phrase);
+
+/** A `--budget` mention that is not part of the spelled-out `vat resources check` command. */
+const BARE_BUDGET = /(?<!vat resources check )`--budget/;
+
+/** Asserts `message` carries `phrase` and no OTHER branch's phrase. */
+function expectOnlyBranch(message: string, phrase: string): void {
+  expect(message).toContain(phrase);
+  for (const other of BRANCH_PHRASES.filter((candidate) => candidate !== phrase)) {
+    expect(message).not.toContain(other);
+  }
+}
+
+/**
  * 🔑 A kill's remedy names only a flag the running verb accepts. `--budget` is `vat resources
  * check`'s alone: standalone, the remedy names the flag; as `vat validate`'s `checks` phase, it
  * names the whole `vat resources check --budget <seconds>` command and never the bare flag,
  * which `vat validate` would reject as an unknown option.
  */
 describe('a budget kill remedy, by who ran the checks', () => {
-  const BRANCHES: ReadonlyArray<readonly [string, readonly ProgressEntry[]]> = [
-    // An empty log is a child that never booted; `started` alone is one that was populating.
-    ['startup', []],
-    ['population', [STARTED]],
-    ['a statement', [POPULATION, FIRST_COST, HUNG_START]],
-    ['reporting', [POPULATION, FIRST_COST, CHECKS_DONE]],
-  ];
-
-  /** A `--budget` mention that is not part of the spelled-out `vat resources check` command. */
-  const BARE_BUDGET = /(?<!vat resources check )`--budget/;
-
-  it.each(BRANCHES)('as a phase, during %s: names `vat resources check --budget`, never the bare flag', (_branch, entries) => {
+  it.each(BRANCHES)('as a phase, during %s: names `vat resources check --budget`, never the bare flag', (_branch, entries, phrase) => {
     const message = killed(entries, 'phase').issues[0]?.message ?? '';
 
+    expectOnlyBranch(message, phrase);
     expect(message).toContain('`vat resources check --budget <seconds>`');
     expect(message).not.toMatch(BARE_BUDGET);
   });
 
-  it.each(BRANCHES)('standalone, during %s: names the `--budget` flag itself', (_branch, entries) => {
+  it.each(BRANCHES)('standalone, during %s: names the `--budget` flag itself', (_branch, entries, phrase) => {
     const message = killed(entries, 'standalone').issues[0]?.message ?? '';
 
+    expectOnlyBranch(message, phrase);
     expect(message).toMatch(BARE_BUDGET);
     expect(message).not.toContain('vat resources check --budget');
   });

@@ -18,6 +18,7 @@ import { classifyFsFault, type FsSide, isFsFaultError, isUnresolvableLinkError, 
 import * as yaml from 'yaml';
 
 import { errorMessageOf } from './command-refusal.js';
+import { noticeToOperator } from './operator-notices.js';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
@@ -116,7 +117,9 @@ export function loadConfig(projectRoot: string, projectSide: FsSide): ProjectCon
       (message) => {
         if (warnedConfigPaths.has(configPath)) return;
         warnedConfigPaths.add(configPath);
-        process.stderr.write(`${message}\n`);
+        // Through the one notice route: a supervised child's invoking process
+        // loaded this same config and printed this same line already.
+        noticeToOperator(message);
       },
       { configPath },
     );

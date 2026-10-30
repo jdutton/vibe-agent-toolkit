@@ -183,7 +183,6 @@ packages/cli/src/commands/okf/validate.ts okfValidateReport dead
 packages/cli/src/commands/phase-utils.ts PhaseContext dead
 packages/cli/src/commands/rag/query-command.ts QueryPayloadInput dead
 packages/cli/src/commands/resources/check-supervisor.ts RunResolution dead
-packages/cli/src/commands/resources/check-supervisor.ts SupervisedRun dead
 packages/cli/src/commands/resources/check.ts CheckRunEnding dead
 packages/cli/src/commands/resources/check.ts ProgressSink dead
 packages/cli/src/commands/resources/scan.ts ScanPayloadInput dead

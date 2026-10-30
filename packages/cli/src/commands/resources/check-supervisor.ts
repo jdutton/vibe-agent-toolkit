@@ -21,6 +21,11 @@
  *   and the event loop that would schedule it is the resource that is blocked.
  *   Installing one removes the operator's Ctrl-C. There is no
  *   `process.on('SIGINT')` here and there must never be.
+ *
+ *   That is about the process RUNNING the SQL. The supervising process is never
+ *   blocked, and it does install SIGTERM/SIGHUP handlers for the duration of a
+ *   supervision — only to take the child down with it and re-raise; see
+ *   `killChildOnTermination`.
  * - **The kill is `SIGKILL` because SIGKILL cannot be REGRESSED.** No code the
  *   child runs, now or after any future edit, can handle, ignore or block it.
  *
@@ -88,9 +93,10 @@
  * nobody runs interactively is the one that would rot.
  */
 
-import { spawn } from 'node:child_process';
+import { type ChildProcess, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
+import { ExitCode, exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import { isPathAbsentError, requireFollowedStatSync, safePath, type TempDirOutcome, withTempDir } from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
@@ -374,7 +380,18 @@ export type AbnormalDeath =
    * same situation (no usable report), so the same ending (the interrupted
    * document from the progress log), never an internal error.
    */
-  | { readonly kind: 'unparseable-output'; readonly code: number; readonly detail: string };
+  | { readonly kind: 'unparseable-output'; readonly code: number; readonly detail: string }
+  /**
+   * The child published a whole, valid document — and then exited with a code that document does
+   * not imply.
+   *
+   * 🚨 The document alone decided the forwarded exit, so a complete `ok` report followed by a
+   * non-zero exit was forwarded as a clean pass. Every path through the command ends on the code
+   * its own document derives, so a disagreement means something ended the child AFTER it wrote —
+   * a crash in teardown, a termination from outside that left an exit code — or a defect in vat.
+   * Which of the two is the truth cannot be known here, so neither is forwarded.
+   */
+  | { readonly kind: 'exit-disagrees'; readonly code: number; readonly documentExit: number };
 
 /** What a child's ending MEANT, once the watchdog's belief is reconciled with it. */
 export type RunResolution =
@@ -578,6 +595,8 @@ export async function superviseCheck(options: {
   const child = spawn(process.execPath, [binary, ...options.args], {
     stdio: ['ignore', 'pipe', 'inherit'],
   });
+  // For exactly as long as the child is supervised — released below however the run ends.
+  const releaseTermination = killChildOnTermination(child);
 
   const chunks: Buffer[] = [];
   child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -631,7 +650,7 @@ export async function superviseCheck(options: {
         resolve(resolveChildEnding({ code: null, signal: null, killed, killFailure }));
       }
     }, pollIntervalMs(options.budgetMs));
-  });
+  }).finally(releaseTermination);
   clearInterval(timer);
 
   const stdout = Buffer.concat(chunks).toString('utf-8');
@@ -653,6 +672,55 @@ export async function superviseCheck(options: {
   return ending.kind === 'killed'
     ? { outcome: 'killed', ...wreckage() }
     : { outcome: 'abnormal', death: ending.death, ...wreckage() };
+}
+
+/**
+ * The signals that end THIS process without reaching its child — a `kill <pid>`, `timeout(1)`, a
+ * CI runner stopping the step, a closed terminal.
+ *
+ * 🔑 SIGINT is deliberately absent. Ctrl-C signals the whole foreground process GROUP, so the child
+ * receives it directly and dies of it; a handler here would change nothing for that case and would
+ * put a JS callback between the operator and the default disposition.
+ */
+const ORPHANING_SIGNALS = ['SIGTERM', 'SIGHUP'] as const;
+
+/**
+ * While the child is supervised, make a termination of THIS process take the child with it.
+ *
+ * ## 🚨 The defect: a pid-only SIGTERM orphaned an unbounded child
+ *
+ * The bound is enforced by this process's timer. A SIGTERM or SIGHUP sent to this pid alone —
+ * which is how CI and `timeout(1)` stop a step — ended this process by default disposition, the
+ * timer with it, and the child it was bounding was reparented and kept running with nothing left
+ * to stop it: the exact unbounded hang the supervisor exists to abolish.
+ *
+ * So each handler SIGKILLs the child (the module header gives why SIGKILL), removes every handler,
+ * and RE-RAISES the signal, so this process still dies of it — by the default disposition, with the
+ * exit status a shell and a CI runner expect. The handlers exist only during supervision; the
+ * header's ban on a handler is about the CHILD, whose event loop is the blocked resource — this
+ * process's loop is free, which is what makes a handler work here at all.
+ *
+ * ⚠️ Not on Windows in any meaningful sense: there `process.kill(pid, 'SIGTERM')` is
+ * `TerminateProcess`, which runs no handler. A handler that cannot fire is harmless; the re-raise
+ * is replaced by an exit there because Windows refuses to SEND most signal names.
+ *
+ * @param child - The supervised child
+ * @returns A release that removes the handlers; call it however the supervision ends
+ */
+function killChildOnTermination(child: ChildProcess): () => void {
+  const handlers = ORPHANING_SIGNALS.map((signal) => [signal, (): void => {
+    release();
+    child.kill('SIGKILL');
+    // Windows refuses to SEND most signal names, so there the process cannot re-raise and stops
+    // itself instead: the operator asked it to end, so it ends, as a run that did not finish.
+    if (process.platform === 'win32') process.exit(ExitCode.ERROR);
+    process.kill(process.pid, signal);
+  }] as const);
+  function release(): void {
+    for (const [signal, handler] of handlers) process.off(signal, handler);
+  }
+  for (const [signal, handler] of handlers) process.on(signal, handler);
+  return release;
 }
 
 /**
@@ -725,23 +793,32 @@ export function withProgressLog<T>(work: (logPath: string) => Promise<T>): Promi
 
 /**
  * Read what a COMPLETED child wrote as `resources check`'s document, or name
- * the death when it is not one.
+ * the death when it is not one — or when the child's exit disagrees with it.
+ *
+ * 🔑 The exit is compared with the one the document itself derives. The parent
+ * forwards the DOCUMENT's code, never the process's, so a child that wrote a
+ * clean report and then exited non-zero would otherwise be published as a pass.
  *
  * @param stdout - Everything the child wrote (known not to be blank)
  * @param code - The child's exit code
  * @param format - The format the child was asked for
- * @returns The forwardable document, or the `unparseable-output` death
+ * @returns The forwardable document, or the `unparseable-output` / `exit-disagrees` death
  */
 export function readCompletedDocument(
   stdout: string,
   code: number,
   format: 'yaml' | 'json',
 ): { readonly document: ForwardedDocument } | { readonly death: AbnormalDeath } {
+  let document: ForwardedDocument;
   try {
-    return { document: readForwardedDocument('resources check', stdout, format) };
+    document = readForwardedDocument('resources check', stdout, format);
   } catch (error) {
     return { death: { kind: 'unparseable-output', code, detail: errorMessageOf(error) } };
   }
+  const documentExit = exitCodeForReport(document.report);
+  return documentExit === code
+    ? { document }
+    : { death: { kind: 'exit-disagrees', code, documentExit } };
 }
 
 /** Test-facing seam: the pure decisions of this module, reached by its unit tests. */

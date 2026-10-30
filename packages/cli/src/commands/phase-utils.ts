@@ -199,7 +199,7 @@ export function rejectRetiredOnly(only: string | undefined, command: string, sec
     'USAGE_INVALID',
     `error: '--only' was removed from '${command}'.\n` +
       `\n` +
-      `  A full run measures ~${seconds}s on a 90-skill project, so the flag saved\n` +
+      `  A full run measured ~${seconds}s on a 90-skill project, so the flag saved\n` +
       `  little while letting a CI gate silently lose coverage: renaming a config\n` +
       `  key left '--only <that key>' selecting nothing, and the gate stayed green.\n` +
       `\n` +

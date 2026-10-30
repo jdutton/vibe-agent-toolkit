@@ -84,17 +84,18 @@ second copy of it, and records only which enumeration entry point a command's ro
 
 ## Commands that enumerate
 
-`vat validate`, `vat verify` and `vat build` are **orchestrators**: they do no enumeration in
-process, they `spawnSync` the vat binary once per phase. Their lane is the union of the phases they
-spawn, and they are the mechanism behind "every verb re-parses the same corpus in a separate
-process" — a cross-process cache is the only kind that can help them.
+`vat validate`, `vat verify` and `vat build` are **orchestrators**: each phase is a whole vat
+command run IN PROCESS through `runPhase`, so their lane is the union of the lanes of the phases they
+run. The one exception is `vat validate`'s `checks` phase, which is `vat resources check`'s
+supervised CHILD process — it populates in a process of its own, so only the cross-process store can
+share work between it and the phases beside it.
 
 | Command | Lane | Via |
 |---|---|---|
 | `vat audit [path]` | `crawl` + `registry-md-html` | `audit.ts` → `audit/scan-population.ts › enumerateAuditPopulation()` → `crawlDirectory` for the subject tree (git route with untracked files by default; the walk route under `--include-artifacts` or when the scan root is itself gitignored — `NEVER_CRAWL_GLOBS` applies on both); `crawlAndResolveRegistry` once per project root it finds for the link graph. Against a bare skills directory only the crawl runs |
-| `vat build` | *spawns* `skills build`, `claude plugin build` | `build.ts` → `runPhase` |
-| `vat validate` | *spawns* `resources validate`, `resources check` (a supervised child process), `skills validate` | `validate.ts` → `runPhase` |
-| `vat verify` | `crawl`, *plus spawns* `resources validate`, `skills validate` | `verify.ts` → `runPhase` |
+| `vat build` | *runs* `skills build`, `claude plugin build` | `build.ts` → `runPhase` |
+| `vat validate` | *runs* `resources validate`, `resources check` (as a supervised child process), `skills validate` | `validate.ts` → `runPhase` |
+| `vat verify` | `crawl`, *plus runs* `resources validate`, `skills validate` | `verify.ts` → `runPhase` |
 | `vat agent build` | `crawl` + `registry-md` + `registry-md-html` | `agent/build.ts` |
 | `vat claude plugin build` | `crawl` + `registry-md` + `registry-md-html` | `claude/plugin/build.ts` |
 | `vat skills build` | `crawl` + `registry-md` + `registry-md-html` | `skills/build.ts` |

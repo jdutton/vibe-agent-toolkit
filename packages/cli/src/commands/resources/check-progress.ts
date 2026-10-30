@@ -42,6 +42,8 @@ import { appendFileSync } from 'node:fs';
 
 import { z } from 'zod';
 
+import { becomeSupervisedChild } from '../../utils/operator-notices.js';
+
 /**
  * The child has booted — Node is up, the CLI is loaded, and no work has begun.
  *
@@ -272,10 +274,17 @@ export function unitInFlight(entries: readonly ProgressEntry[]): UnitInFlight {
  * queued behind work the event loop never gets back to, so the line naming the
  * rule that hangs would exist only in memory — where `SIGKILL` destroys it.
  *
+ * 🔑 It also makes this process a SUPERVISED CHILD for the operator's notices
+ * (`becomeSupervisedChild`): only a supervised child is handed a progress log,
+ * and its invoking process prints every config and store notice the child would
+ * have repeated. Here rather than at a call site so the child cannot get its
+ * progress sink without going quiet.
+ *
  * @param path - Where the supervisor is watching
  * @returns A writer that appends one entry and returns once it is on disk
  */
 export function createProgressWriter(path: string): (entry: ProgressEntry) => void {
+  becomeSupervisedChild();
   return (entry) => {
     appendFileSync(path, `${JSON.stringify(entry)}\n`, 'utf-8');
   };

@@ -172,7 +172,7 @@ phases:
 
 `vat validate` runs the source-only checks — links, the project's `resources.checks` SQL plus VAT's built-in checks, and SKILL.md frontmatter — that need no build; it's cheap enough to run on every pre-commit or as the first CI-before-build gate. `vat verify` runs the full artifact check (resources → skills → marketplace → consistency) against the built `dist/` tree; it's the authoritative gate before `npm publish`, so it runs after `vat build`. In this repo's own config, `bun run validate` already does this — adopters typically mirror the pattern.
 
-Neither command runs declared `resources.checks` (standing SQL assertions) or VAT's default-on built-in checks — those are a separate command, `vat resources check`, and must be wired into the adopter's own CI or pre-commit phases to actually gate anything. See `vibe-agent-toolkit:vat-knowledge-resources`.
+`vat validate` runs the declared `resources.checks` (standing SQL assertions) and VAT's default-on built-in checks as its `checks` phase whenever `resources:` is configured — the same supervised run as `vat resources check`, under that command's default bound. `vat verify` does not run them. Reach for `vat resources check` directly when you need `--check <name>` or a different `--budget`. See `vibe-agent-toolkit:vat-knowledge-resources`.
 
 ## VAT writes a cache to disk, and CI should know where
 

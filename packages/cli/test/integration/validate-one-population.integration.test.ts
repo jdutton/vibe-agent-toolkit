@@ -25,11 +25,13 @@
  *
  * ⚠️ So this file does NOT pin the hoist: remove it and the counts below are
  * unchanged, because the second lane's own bracket still hits the extent the
- * first one wrote. What it pins is the DEFAULT-ON store doing that sharing: a
- * two-surface run **derives the filesystem extent once** and **writes the store
- * once**, while consulting it twice. Every part is a count rather than a
- * presence — `calls`, not "was this contributor charged", because a contributor
- * invoked once and invoked five times file the same single row.
+ * first one wrote. What it pins is the DEFAULT-ON store doing that sharing: the
+ * two in-process surfaces **derive the filesystem extent once** and **write the
+ * store once** between them, while consulting it twice — and the `checks` phase's
+ * supervised child, which asks a different store question, adds exactly one of
+ * each. Every part is a count rather than a presence — `calls`, not "was this
+ * contributor charged", because a contributor invoked once and invoked five
+ * times file the same single row.
  *
  * ## The positive controls
  *
@@ -92,7 +94,7 @@ beforeAll(() => {
 afterAll(context.cleanup);
 
 describe('vat validate and the population its surfaces share', () => {
-  it('derives the extent once and writes the store once, across two surfaces', async () => {
+  it('the two in-process surfaces derive and write once between them; the checks child adds one of each', async () => {
     const storeDir = context.createTempDir();
     const timing = context.createTempDir();
 

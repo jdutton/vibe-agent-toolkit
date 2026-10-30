@@ -16,7 +16,7 @@
  * validate` runs the source-level validators only and never requires a build.
  *
  * DECISION (revisitable): `vat validate` deliberately covers source-level
- * surfaces only (resources, skills) and excludes marketplace-artifact
+ * surfaces only (resources, their checks, skills) and excludes marketplace-artifact
  * validation. Marketplace validation runs against the built dist tree, which
  * would couple `vat validate` to a prior `vat build` and overlap `vat verify`.
  * Keeping it build-free makes `vat validate` safe for pre-commit / CI-before-
@@ -87,7 +87,9 @@ export interface ValidateCommandOptions {
 
 /**
  * Measured full-run duration on the 90-skill / 1,041-document adopter, cited by
- * the retired-`--only` message: resources 13.9s + skills 19.3s.
+ * the retired-`--only` message: resources 13.9s + skills 19.3s. ⚠️ Measured
+ * BEFORE the `checks` phase existed, which adds a population of its own — so it
+ * is a historical figure (the message says "measured") and a floor on today's run.
  */
 const VALIDATE_FULL_RUN_SECONDS = 35;
 
@@ -113,9 +115,9 @@ Description:
   that configures nothing examines nothing, which is refused (exit 1) with a
   stderr warning naming the likely config typo.
 
-  A run is a WHOLE run: '--only' was removed (a full run is ~35s, and the flag
-  let a renamed config key silently drop a CI gate's coverage). 'vat build'
-  keeps its '--only', where a phase costs minutes rather than seconds.
+  A run is a WHOLE run: '--only' was removed (the flag let a renamed config
+  key silently drop a CI gate's coverage). 'vat build' keeps its '--only',
+  where a phase costs minutes rather than seconds.
 
   Source-level only. Unlike 'vat verify', this never inspects built dist
   artifacts and never requires a build.
@@ -136,12 +138,22 @@ Output:
   Progress and validation errors → stderr (streamed live)
 
 Exit Codes:
-  0 - Every surface finished and no finding is an error (warnings never fail)
-  1 - An error finding, or a configured phase examined nothing — an include
-      that matches no file, say (RESOURCE_CHECK_BROKEN, naming the phase's unit)
+  0 - Every surface finished and no finding is an error (warning and info
+      findings never fail)
+  1 - An error finding — a resources.checks row at error, or a check whose
+      statement was refused or was killed by the checks bound while it ran
+      (RESOURCE_CHECK_BROKEN) — or a configured phase examined nothing: an
+      include that matches no file, say (RESOURCE_CHECK_BROKEN, naming the unit)
   2 - The run could not do its job: a surface did not finish (RUN_INCOMPLETE,
-      the finished surfaces still in data.phases), a path argument or the
-      retired '--only' (USAGE_INVALID), no project root
+      the finished surfaces still in data.phases) — including the checks child
+      killed by its bound before its population completed — a path argument or
+      the retired '--only' (USAGE_INVALID), no project root
+
+Checks bound:
+  The checks phase runs 'vat resources check''s supervised child under that
+  command's default bound: 300s without progress. This command takes no flag
+  to change it; to give slow checks more time, run them on their own with
+  'vat resources check --budget <seconds>'.
 
 Arguments:
   None. Scope comes from vibe-agent-toolkit.config.yaml, never from the command
@@ -227,19 +239,22 @@ export function selectValidateSurfaces(
 }
 
 /**
- * Run every surface inside ONE projection-store scope, so the lanes share one
- * database and one `git write-tree` instead of taking one each. The measurement,
- * and why the hoist is admissible here and nowhere else, are in
+ * Run every surface inside ONE projection-store scope, so the in-process lanes
+ * share one database and one `git write-tree` instead of taking one each. The
+ * measurement, and why the hoist is admissible here and nowhere else, are in
  * `docs/architecture/resource-scanning-and-caching.md` §3.7.
  *
- * ⚠️ One scope is one git snapshot for the whole run. `vat validate` never
- * writes — source-level and build-free by the decision at the top of this file —
- * so no phase can miss another's output. A verb whose phases produce files for
- * the next to read (`vat build`) must not be hoisted this way, and is not.
+ * ⚠️ One scope is one git snapshot for the in-process phases. `vat validate`
+ * writes nothing into the tree — source-level and build-free by the decision at
+ * the top of this file — so no phase can miss another's output. A verb whose
+ * phases produce files for the next to read (`vat build`) must not be hoisted
+ * this way, and is not.
  *
- * ⚠️ The `checks` phase is a CHILD process with a store of its own: it opens
- * and writes the projection store while this process holds it open inside the
- * scope below. A system test pins that the pair completes on a fresh store.
+ * ⚠️ The `checks` phase is OUTSIDE that sharing: it is a supervised CHILD
+ * process, so it takes its own git snapshot and opens — and, on a miss, writes —
+ * the projection store while this process holds it open inside the scope below.
+ * A system test pins that the pair derives on a fresh store and that the next
+ * run's checks phase is served from it.
  *
  * @param projectRoot - The resolved project root, which every surface roots at
  * @param phases - The surfaces to run, in order
