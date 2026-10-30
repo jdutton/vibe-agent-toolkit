@@ -17,7 +17,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import type * as Utils from '@vibe-agent-toolkit/utils';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { __internal, type ProgressLog, superviseCheck, withProgressLog } from '../../src/commands/resources/check-supervisor.js';
 
@@ -29,22 +29,39 @@ vi.mock('@vibe-agent-toolkit/utils', async (original) => ({
   requireFollowedStatSync: statMock,
 }));
 
-const GUARDED_EVENTS = ['SIGTERM', 'SIGHUP', 'SIGINT', 'SIGQUIT', 'exit'] as const;
+const GUARDED_EVENTS = ['SIGTERM', 'SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGBREAK', 'exit'] as const;
 
-/** A stand-in for a spawned child: the fields the guard reads, and `close`. */
+/**
+ * A pid no process can have (above every platform's pid ceiling), so the group kill the supervisor
+ * sends on POSIX — `process.kill(-pid)`, stubbed below all the same — could never reach a real one.
+ */
+const STAND_IN_PID = 2_147_483_000;
+
+/** A stand-in for a spawned child: the fields the guard reads, `exit` and `close`. */
 class StandInChild extends EventEmitter {
-  pid: number | undefined = 4242;
+  pid: number | undefined = STAND_IN_PID;
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
   readonly kill = vi.fn(() => true);
 
-  /** End as Node reports a child's end: the code or signal is set, then `close`. */
+  /** End as Node reports a child's end: the code or signal is set, `exit`, then `close`. */
   end(ending: { code: number | null; signal: NodeJS.Signals | null }): void {
     this.exitCode = ending.code;
     this.signalCode = ending.signal;
+    this.emit('exit', ending.code, ending.signal);
     this.emit('close', ending.code, ending.signal);
   }
 }
+
+// The supervisor's POSIX group kill (`process.kill(-pid)`) — and the guard's re-raise — never reach a
+// real process from here.
+let processKill: ReturnType<typeof vi.spyOn>;
+beforeEach(() => {
+  processKill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 /** This process's listener count for each guarded event. */
 function listenerCounts(): Record<string, number> {
@@ -54,6 +71,17 @@ function listenerCounts(): Record<string, number> {
 /** A stand-in, as the `ChildProcess` the guard is typed for — it reads only the stand-in's fields. */
 function asChild(child: StandInChild): ChildProcess {
   return child as unknown as ChildProcess;
+}
+
+/** A stand-in that ends of SIGKILL a turn after any kill, handed out by the next spawn. */
+function spawnedStandInThatDiesOnKill(): StandInChild {
+  const child = new StandInChild();
+  child.kill.mockImplementation(() => {
+    setImmediate(() => child.end({ code: null, signal: 'SIGKILL' }));
+    return true;
+  });
+  spawnMock.mockReturnValue(child);
+  return child;
 }
 
 /** Install the guard, watching a stand-in child; returns its release. */
@@ -178,12 +206,7 @@ describe('the watchdog poll that throws', () => {
   // publishes the failure (`vat validate`'s RUN_INCOMPLETE) has not ended yet.
   it('kills the child with SIGKILL and rejects with the throw', async () => {
     const baseline = listenerCounts();
-    const child = new StandInChild();
-    child.kill.mockImplementation(() => {
-      setImmediate(() => child.end({ code: null, signal: 'SIGKILL' }));
-      return true;
-    });
-    spawnMock.mockReturnValue(child);
+    const child = spawnedStandInThatDiesOnKill();
     statMock.mockImplementation(() => {
       throw Object.assign(new Error('EACCES: permission denied, stat progress.jsonl'), { code: 'EACCES' });
     });
@@ -217,17 +240,118 @@ describe('a SIGKILL the kernel ACCEPTS that does not end the child', () => {
 
       await expect(run).resolves.toMatchObject({
         outcome: 'abnormal',
-        death: { kind: 'kill-failed', pid: 4242, refused: false },
+        death: { kind: 'kill-failed', pid: STAND_IN_PID, refused: false },
       });
-      // It kept trying first — more than once — and then stopped.
-      const sent = child.kill.mock.calls.length;
-      expect(sent).toBeGreaterThan(1);
+      // It kept trying — exactly as many polls as the threshold — and then stopped.
+      expect(child.kill.mock.calls).toHaveLength(__internal.KILL_POLLS_BEFORE_REPORTING_UNREAPED);
       await vi.advanceTimersByTimeAsync(5000);
-      expect(child.kill.mock.calls).toHaveLength(sent);
+      expect(child.kill.mock.calls).toHaveLength(__internal.KILL_POLLS_BEFORE_REPORTING_UNREAPED);
     } finally {
       vi.useRealTimers();
       child.end({ code: null, signal: 'SIGKILL' });
       log.guard.release();
     }
+  });
+});
+
+describe('a SIGKILL the kernel REFUSES, every time', () => {
+  // 🚨 A refused kill arrives as the child's `error`. The handler must NOT settle on it — settling
+  // clears the timer, and nothing would ever retry — so the watchdog re-sends, and reports only
+  // once it has tried KILL_ATTEMPTS_BEFORE_REPORTING times.
+  it('does not settle on the first refusal, settles refused after exactly the retry count, and kills no more', async () => {
+    const child = new StandInChild();
+    child.kill.mockImplementation(() => {
+      child.emit('error', Object.assign(new Error('kill EPERM'), { code: 'EPERM' }));
+      return false;
+    });
+    spawnMock.mockReturnValue(child);
+    statMock.mockImplementation(() => ({ size: 0 }));
+    const log = progressLog();
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
+    try {
+      let settled = false;
+      const run = superviseCheck({ args: [], log, budgetMs: 100, format: 'json' });
+      const markSettled = (): void => {
+        settled = true;
+      };
+      run.then(markSettled, markSettled);
+      // The first breaching poll: one kill, refused — and the run still open.
+      while (child.kill.mock.calls.length === 0) await vi.advanceTimersByTimeAsync(10);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(5000);
+      await expect(run).resolves.toMatchObject({
+        outcome: 'abnormal',
+        death: { kind: 'kill-failed', pid: STAND_IN_PID, refused: true },
+      });
+      expect(child.kill.mock.calls).toHaveLength(__internal.KILL_ATTEMPTS_BEFORE_REPORTING);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(child.kill.mock.calls).toHaveLength(__internal.KILL_ATTEMPTS_BEFORE_REPORTING);
+    } finally {
+      vi.useRealTimers();
+      child.end({ code: null, signal: 'SIGKILL' });
+      log.guard.release();
+    }
+  });
+});
+
+describe('the child\'s death is its exit, not its close', () => {
+  // 🚨 `close` waits for every holder of the child's stdout. A grandchild holding it delayed
+  // `close` for ever: the watchdog kept killing a dead child and reported a kill that did not land.
+  it('a child that exits and never closes settles after the stdout grace, as what it exited with — and releases the guard at exit', async () => {
+    const baseline = listenerCounts();
+    const child = new StandInChild();
+    spawnMock.mockReturnValue(child);
+    statMock.mockImplementation(() => ({ size: 0 }));
+    const log = progressLog();
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const run = superviseCheck({ args: [], log, budgetMs: 60_000, format: 'json' });
+      log.guard.release();
+      child.exitCode = 3;
+      child.emit('exit', 3, null);
+
+      // Released at exit: every handler gone, with `close` never emitted.
+      expect(listenerCounts()).toStrictEqual(baseline);
+      await vi.advanceTimersByTimeAsync(__internal.STDOUT_GRACE_AFTER_EXIT_MS);
+      // Exit 3 with nothing on stdout: the silent completion, read as the death it is.
+      await expect(run).resolves.toMatchObject({ outcome: 'abnormal', death: { kind: 'no-output', code: 3 } });
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('the child\'s process tree', () => {
+  it.skipIf(process.platform === 'win32')('is spawned as its own process group, and the watchdog kills the GROUP as well as the leader', async () => {
+    const child = spawnedStandInThatDiesOnKill();
+    statMock.mockImplementation(() => ({ size: 0 }));
+    const log = progressLog();
+
+    await superviseCheck({ args: [], log, budgetMs: 100, format: 'json' });
+    log.guard.release();
+
+    expect(spawnMock).toHaveBeenLastCalledWith(expect.any(String), expect.any(Array), expect.objectContaining({ detached: true }));
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(processKill).toHaveBeenCalledWith(-STAND_IN_PID, 'SIGKILL');
+  });
+
+  it.skipIf(process.platform === 'win32')('a terminating signal to the supervisor kills the child\'s group, then the supervisor dies of it', () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    vi.spyOn(Atomics, 'wait').mockImplementation(() => 'timed-out');
+    const child = new StandInChild();
+    const release = guard(child);
+
+    process.emit('SIGINT', 'SIGINT');
+
+    expect(child.kill).toHaveBeenCalledWith('SIGKILL');
+    expect(processKill).toHaveBeenCalledWith(-STAND_IN_PID, 'SIGKILL');
+    expect(processKill).toHaveBeenCalledWith(process.pid, 'SIGINT');
+    expect(exit).toHaveBeenCalledWith(2);
+    // The stubbed raise returned: drop the guard's `exit` listener as a real ending would have.
+    child.end({ code: null, signal: 'SIGKILL' });
+    release();
   });
 });

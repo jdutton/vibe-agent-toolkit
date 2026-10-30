@@ -309,16 +309,17 @@ export function createProgressWriter(
  *
  * ⚠️ **It fires when this process's event loop next turns, and only then.** The population is
  * asynchronous I/O, so an orphan there ends at once. The checks run one after another
- * synchronously, so an orphan in the middle of them runs on until the last check returns, and then
- * ends before it publishes anything; a statement blocked inside SQLite reaches nothing until it
- * returns.
+ * synchronously, and a statement blocked inside SQLite reaches nothing until it returns — so an
+ * orphan in the middle of them runs on until the LAST check returns. It then ends before it
+ * publishes anything, because the child turns its loop first ({@link letSupervisorLossSurface}).
  *
  * @param supervisorPid - The supervisor's pid, named in the stderr line
- * @param stdin - This process's stdin (a parameter only so a test can hand it a stream it owns)
+ * @param stdin - This process's stdin: the caller passes `process.stdin`; a test hands it a stream
+ *   it owns
  */
 export function endWhenSupervisorGone(
   supervisorPid: number,
-  stdin: NodeJS.ReadableStream & { unref?: () => void } = process.stdin,
+  stdin: NodeJS.ReadableStream & { unref?: () => void },
 ): void {
   let ended = false;
   const end = (): void => {
@@ -336,4 +337,21 @@ export function endWhenSupervisorGone(
   // Flowing, so end-of-file is read at all; the supervisor never writes, so nothing arrives.
   stdin.resume();
   stdin.unref?.();
+}
+
+/**
+ * Let a supervisor's loss END this child before it publishes: turn the event loop twice, so an
+ * end-of-file that has waited on stdin since the supervisor died — while the synchronous check loop
+ * held the thread — is read, and {@link endWhenSupervisorGone} exits before any document is written.
+ *
+ * Twice, because the first turn may begin after this iteration's poll phase: the second always
+ * crosses one. Without it, a child orphaned inside a check wrote its document to a pipe nobody
+ * reads and exited 0.
+ *
+ * @returns A promise that resolves after two turns — when the child is still supervised
+ */
+export async function letSupervisorLossSurface(): Promise<void> {
+  const turn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+  await turn();
+  await turn();
 }

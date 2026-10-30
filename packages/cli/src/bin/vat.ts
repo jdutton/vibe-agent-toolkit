@@ -33,20 +33,16 @@ import { createRequire } from 'node:module';
 import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ExitCode, exitCodeOfChild, installLastResortExit } from '@vibe-agent-toolkit/schema';
+import { ExitCode, installLastResortExit } from '@vibe-agent-toolkit/schema';
 import {
   findNodeWorkspaceRoot,
   followedKindSync,
   isPathAbsentError,
   safePath,
 } from '@vibe-agent-toolkit/utils';
-import {
-  describeStdioBlocking,
-  isTerminatingSignal,
-  makeStdioBlocking,
-  reRaiseSignal,
-  TERMINATING_SIGNALS,
-} from '@vibe-agent-toolkit/utils/process';
+import { describeStdioBlocking, makeStdioBlocking } from '@vibe-agent-toolkit/utils/process';
+
+import { superviseCli } from './supervise-cli.js';
 
 // Before ANY output. This file — not bin.ts — is what package.json maps `vat` to,
 // so it is the CLI entry point in every installed copy, and `makeStdioBlocking`
@@ -80,22 +76,10 @@ type Context = 'dev' | 'local' | 'global';
 /**
  * Run the CLI as a child of this process, and end the way it ended.
  *
- * ## 🚨 Asynchronous, and a forwarder of every terminating signal
- *
- * This wrapper is the `vat` an operator, a CI runner and `timeout(1)` actually
- * start, so `kill <pid>` lands HERE, not on the CLI. It used to `spawnSync` the
- * CLI: it died of the signal at once and the CLI — with any `resources check`
- * child it supervises — ran on, reparented, to its own end, which made the help's
- * promise ("a signal to vat takes the checks child with it") false for the
- * documented entry point. So the CLI is spawned asynchronously and every
- * {@link TERMINATING_SIGNALS} member this process receives is forwarded to it;
- * once it has ended, this process ends the same way — dying of the same signal
- * when it died of one of those (re-raised; on Windows, or where the raise cannot
- * kill this process, exit 2), otherwise with its exit code.
- *
- * ⚠️ A Ctrl-C at a terminal signals the whole foreground process GROUP, so the
- * CLI then receives SIGINT twice — once from the terminal, once forwarded. Every
- * handler the CLI installs ends the process on the first, so the second is moot.
+ * Asynchronous, never `spawnSync`: this wrapper is the `vat` an operator and a CI runner start, so
+ * `kill <pid>` lands here, and a synchronous spawn died of it at once while the CLI — with any
+ * `resources check` child it supervises — ran on, reparented. How a signal is handled meanwhile
+ * (forwarded on POSIX, never on Windows) and how this process then ends: {@link superviseCli}.
  *
  * @param binPath - The CLI entry (`dist/bin.js`) to run
  * @param context - How it was found, for `VAT_CONTEXT`
@@ -110,36 +94,10 @@ function spawnCli(binPath: string, context: Context, contextPath?: string): void
 
   // The node running this wrapper, never a PATH lookup: the child must be the
   // same binary, and `node` by name is whatever PATH says first.
-  const child = spawn(process.execPath, [binPath, ...process.argv.slice(2)], {
+  superviseCli(spawn(process.execPath, [binPath, ...process.argv.slice(2)], {
     stdio: 'inherit',
     env,
-  });
-
-  const forward = (signal: NodeJS.Signals): void => {
-    child.kill(signal);
-  };
-  const release = (): void => {
-    for (const signal of TERMINATING_SIGNALS) process.off(signal, forward);
-  };
-  for (const signal of TERMINATING_SIGNALS) process.on(signal, forward);
-
-  // A child that never started has no status, which is not a verdict: exit 2, as
-  // `spawnSync`'s null status did. A failed FORWARD (a signal the platform cannot
-  // send) also lands here, with the child running — it is ignored, and the
-  // child's own `exit` still ends this process.
-  child.on('error', () => {
-    if (child.pid !== undefined) return;
-    release();
-    process.exit(ExitCode.ERROR);
-  });
-  child.on('exit', (code, signal) => {
-    release();
-    if (signal !== null && isTerminatingSignal(signal)) reRaiseSignal(signal, ExitCode.ERROR);
-    // The child derived its code from its own document. Any other signal death
-    // has no status, and a code off the contract (an older build's, Node's
-    // abort) is not a verdict the child published, so neither is forwarded verbatim.
-    process.exit(exitCodeOfChild(code));
-  });
+  }));
 }
 
 /**

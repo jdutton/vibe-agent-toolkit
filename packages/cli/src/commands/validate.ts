@@ -53,7 +53,7 @@ import {
 } from './phase-utils.js';
 import { rejectPositionalArguments } from './positional-args.js';
 import { CHECK_REPORT_SCHEMA, RESOURCES_CHECK_EXAMINED } from './resources/check-schema.js';
-import { DEFAULT_BUDGET_SECONDS } from './resources/check-supervisor.js';
+import { DEFAULT_BUDGET_SECONDS, SUPERVISION_SIGNAL_CONTRACT } from './resources/check-supervisor.js';
 import { runResourcesCheckPhase } from './resources/check.js';
 import { RESOURCES_VALIDATE_EXAMINED, RESOURCES_VALIDATE_REPORT_SCHEMA } from './resources/validate-schema.js';
 import { runResourcesValidatePhase } from './resources/validate.js';
@@ -159,12 +159,7 @@ Exit Codes:
       signal on Windows, or one that cannot kill this process (PID 1) — see
       the signal paragraph below
 
-  A signal (SIGTERM, SIGHUP, SIGINT, SIGQUIT) sent to this process — or to
-  the 'vat' wrapper, which forwards it — while the checks child is supervised
-  kills the child, and nothing is published. On POSIX it dies of the signal
-  (status 128+n). On Windows, or where the signal cannot kill it (PID 1), it
-  exits 2 with no document. A SIGKILL cannot be handled: the child then ends
-  itself when it reads end-of-file on the stdin this process held.
+${SUPERVISION_SIGNAL_CONTRACT}
 
 Checks bound:
   The checks phase runs the supervised child of 'vat resources check' under

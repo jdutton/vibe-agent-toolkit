@@ -29,6 +29,7 @@ import { afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 import {
   createProgressWriter,
   endWhenSupervisorGone,
+  letSupervisorLossSurface,
   parseProgressLog,
   unitInFlight,
   type ProgressEntry,
@@ -203,5 +204,30 @@ describe('endWhenSupervisorGone', () => {
     expect(exit.mock.calls).toStrictEqual([[2]]);
     expect(stderr).toHaveBeenCalledOnce();
     expect(String(stderr.mock.calls[0]?.[0])).toContain(`pid ${String(SUPERVISOR_PID)}`);
+  });
+
+  // A child that finishes must never be held open by the stream it listens on.
+  it('unreferences the stream it listens on', () => {
+    vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const stdin = Object.assign(new PassThrough(), { unref: vi.fn() });
+
+    endWhenSupervisorGone(SUPERVISOR_PID, stdin);
+
+    expect(stdin.unref).toHaveBeenCalledOnce();
+  });
+});
+
+describe('letSupervisorLossSurface', () => {
+  // The child's synchronous check loop holds the thread; an end-of-file pending meanwhile must be
+  // read — and end the child — before it publishes. Its system proof is
+  // `checks-supervisor-orphan-loop.system.test.ts`; this pins that it crosses event-loop turns.
+  it('resolves only after the event loop has turned twice', async () => {
+    const turns: string[] = [];
+    setImmediate(() => turns.push('first'));
+    setImmediate(() => setImmediate(() => turns.push('second')));
+
+    await letSupervisorLossSurface();
+
+    expect(turns).toStrictEqual(['first', 'second']);
   });
 });

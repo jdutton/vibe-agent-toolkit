@@ -12,7 +12,9 @@
  * makes never completes, and a timer keeps the loop alive (a promise nobody will settle does not).
  * `syncBuiltinESMExports()` makes the ESM bindings the CLI imports see the patches.
  *
- * When `TEST_CHILD_PID_FILE` is set, the child writes its pid there once it has stalled.
+ * When `TEST_CHILD_PID_FILE` is set, the child writes its pid there once it has stalled; when
+ * `TEST_CHILD_TRACE_FILE` is, it appends `exit:<code>` there as it exits — the one way a case can
+ * read the exit code of a process that is not its own child.
  *
  * Acts only in the process whose argv carries `--supervised-by` (the supervised child). VAT's source
  * gains no knob for this.
@@ -28,6 +30,12 @@ const FS_CALLS = ['access', 'lstat', 'open', 'opendir', 'readdir', 'readFile', '
 
 if (process.argv.includes('--supervised-by')) {
   let stalled = false;
+  const trace = process.env['TEST_CHILD_TRACE_FILE'];
+  if (trace !== undefined) {
+    process.on('exit', (code) => {
+      fs.appendFileSync(trace, `exit:${String(code)}\n`, 'utf-8');
+    });
+  }
 
   /** A child process that started and will never end. */
   const neverEnding = () => {

@@ -9,11 +9,14 @@
  * the ESM `node:fs` binding the writer imports see the patch.
  *
  * When `TEST_CHILD_PID_FILE` is set, the child writes its pid there before it stalls, so a case
- * can tell whether the stalled child outlived its supervisor.
+ * can tell whether the stalled child outlived its supervisor. When `TEST_GRANDCHILD_PID_FILE` is
+ * set, it first spawns a GRANDCHILD that idles for good — as a `git` it runs would — and writes
+ * that pid there, so a case can tell whether a kill reached the child's whole process tree.
  *
  * Acts only in the process whose argv carries `--supervised-by` (the supervised child). VAT's source
  * gains no knob for this.
  */
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 
@@ -22,6 +25,11 @@ if (process.argv.includes('--supervised-by')) {
   fs.appendFileSync = (path, data, ...rest) => {
     const result = append(path, data, ...rest);
     if (typeof data === 'string' && data.includes('"kind":"started"')) {
+      const grandchildPidFile = process.env['TEST_GRANDCHILD_PID_FILE'];
+      if (grandchildPidFile !== undefined) {
+        const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1e6)'], { stdio: 'ignore' });
+        fs.writeFileSync(grandchildPidFile, String(grandchild.pid), 'utf-8');
+      }
       const pidFile = process.env['TEST_CHILD_PID_FILE'];
       if (pidFile !== undefined) fs.writeFileSync(pidFile, String(process.pid), 'utf-8');
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);

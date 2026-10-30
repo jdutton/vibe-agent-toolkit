@@ -102,49 +102,57 @@ describe('acquireHarnessLock', () => {
   });
 });
 
+/** The raise and the exit, stubbed: what dying of the signal would have done to this process. */
+function stubEnding(): ReturnType<typeof vi.spyOn> {
+  vi.spyOn(process, 'kill').mockImplementation(() => true);
+  vi.spyOn(Atomics, 'wait').mockImplementation(() => 'timed-out');
+  return vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+}
+
 describe('installSignalCleanup', () => {
-  const settled = (): Promise<void> => Promise.resolve();
+  const SIGNALS = ['SIGTERM', 'SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGBREAK'] as const;
+  const counts = (): number[] => SIGNALS.map((signal) => process.listenerCount(signal));
 
-  it('registers SIGINT and SIGTERM handlers and removes them on dispose', () => {
-    const beforeInt = process.listenerCount('SIGINT');
-    const beforeTerm = process.listenerCount('SIGTERM');
-
-    const remove = installSignalCleanup({ onSignal: settled, exit: () => {} });
-    expect(process.listenerCount('SIGINT')).toBe(beforeInt + 1);
-    expect(process.listenerCount('SIGTERM')).toBe(beforeTerm + 1);
-
-    remove();
-    expect(process.listenerCount('SIGINT')).toBe(beforeInt);
-    expect(process.listenerCount('SIGTERM')).toBe(beforeTerm);
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it('runs onSignal and exits 130 on SIGINT only once it has settled, self-removing the handler', async () => {
+  it('guards every terminating signal and removes the guard on dispose', () => {
+    const before = counts();
+
+    const guard = installSignalCleanup(() => Promise.resolve());
+    expect(counts()).toStrictEqual(before.map((count) => count + 1));
+
+    expect(guard.release()).toBe(true);
+    expect(counts()).toStrictEqual(before);
+  });
+
+  // 🚨 A terminal Ctrl-C under the `vat` wrapper delivers SIGINT twice. The handler used to remove
+  // itself on the first, so the second met the default disposition mid-cleanup and leaked the lock.
+  it('runs onSignal ONCE, swallows a repeat while it runs, and ends only once it has settled', async () => {
+    const exit = stubEnding();
+    const before = counts();
     let finishCleanup: () => void = () => {};
-    const exitCodes: number[] = [];
-    installSignalCleanup({
-      onSignal: () => new Promise<void>((resolve) => { finishCleanup = resolve; }),
-      exit: (c) => { exitCodes.push(c); },
-    });
+    const onSignal = vi.fn(() => new Promise<void>((resolve) => { finishCleanup = resolve; }));
+    installSignalCleanup(onSignal);
 
-    const before = process.listenerCount('SIGINT');
-    process.emit('SIGINT');
+    process.emit('SIGINT', 'SIGINT');
+    process.emit('SIGINT', 'SIGINT');
+    await Promise.resolve();
 
-    // The handler removed itself, so no listener leaks even on the signal path.
-    expect(process.listenerCount('SIGINT')).toBe(before - 1);
-    // Cleanup still running: an exit now would leave half of what it removes.
-    await settled();
-    expect(exitCodes).toEqual([]);
+    expect(onSignal).toHaveBeenCalledOnce();
+    expect(counts()).toStrictEqual(before.map((count) => count + 1));
+    expect(exit).not.toHaveBeenCalled();
     finishCleanup();
-    await vi.waitFor(() => { expect(exitCodes).toEqual([130]); }); // 128 + SIGINT(2)
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(2); });
+    expect(counts()).toStrictEqual(before);
   });
 
-  it('exits 143 on SIGTERM, even when cleanup rejects', async () => {
-    const exitCodes: number[] = [];
-    const remove = installSignalCleanup({ onSignal: () => Promise.reject(new Error('cleanup failed')), exit: (c) => { exitCodes.push(c); } });
+  it('ends even when cleanup rejects', async () => {
+    const exit = stubEnding();
+    installSignalCleanup(() => Promise.reject(new Error('cleanup failed')));
 
-    process.emit('SIGTERM');
-    await vi.waitFor(() => { expect(exitCodes).toEqual([143]); }); // 128 + SIGTERM(15)
-
-    remove(); // idempotent after the handler already self-removed
+    process.emit('SIGTERM', 'SIGTERM');
+    await vi.waitFor(() => { expect(exit).toHaveBeenCalledWith(2); });
   });
 });

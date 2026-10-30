@@ -53,7 +53,7 @@ vat verify                 # verify built artifacts (after vat build)
 vat skills validate        # validate skill quality
 vat resources validate     # validate markdown collections
 vat resources query <sql>  # one read-only SQL statement over the resource projection
-vat resources check        # run the project's declared SQL assertions (fails CI on violations)
+vat resources check        # the SQL assertions alone; vat validate runs them too — a CI step only for --check/--budget
 vat audit                  # audit plugins/skills/marketplaces/settings
 vat rag index docs/        # index markdown for RAG (needs @vibe-agent-toolkit/rag-lancedb)
 vat skill review <path>    # pre-publication review

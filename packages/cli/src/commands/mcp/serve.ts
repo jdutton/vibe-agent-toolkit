@@ -13,6 +13,7 @@ import {
   NoOpObservabilityProvider,
 } from '@vibe-agent-toolkit/gateway-mcp';
 import { errorDiagnostics, ExitCode } from '@vibe-agent-toolkit/schema';
+import { handleTerminatingSignals } from '@vibe-agent-toolkit/utils/process';
 
 import { errorMessageOf } from '../../utils/command-refusal.js';
 import { writeArtifact } from '../../utils/document-writer.js';
@@ -102,10 +103,12 @@ export async function serveCommand(
 
     await gateway.start();
 
-    // Setup graceful shutdown
-    process.on('SIGINT', () => {
-      logger.info('Shutting down MCP gateway...');
-      process.exit(ExitCode.OK);
+    // A terminating signal: say so, then die of it (exit 0 where it cannot, on Windows).
+    handleTerminatingSignals({
+      fallbackExitCode: ExitCode.OK,
+      cleanup: () => {
+        logger.info('Shutting down MCP gateway...');
+      },
     });
 
     // Wait for stdin to close (stdio server lifetime = stdin lifetime)

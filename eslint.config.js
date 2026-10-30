@@ -975,6 +975,11 @@ export default [
   {
     files: [PRODUCT_SOURCE_TS, 'packages/*/src/**/*.cts'],
     rules: {
+      // ONE way to handle a terminating signal: `handleTerminatingSignals`. A hand-written
+      // handler that removed itself on the first signal let the second (a terminal Ctrl-C under
+      // the `vat` wrapper delivers two) kill the process mid-cleanup — a clone and a lock leaked.
+      // No backlog: every site was migrated the day this was enabled. `allow` names the helper.
+      'local/no-raw-signal-listener': ['error', { allow: ['packages/utils/src/terminating-signals.ts'] }],
       'local/no-existssync': ['error', NO_EXISTSSYNC_RATCHET],
       'local/no-link-following-fs': ['error', LINK_FOLLOWING_FS_ALLOW],
     },

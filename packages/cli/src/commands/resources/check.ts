@@ -77,6 +77,7 @@ import type { PhaseOutcome } from '../phase-utils.js';
 import {
   createProgressWriter,
   endWhenSupervisorGone,
+  letSupervisorLossSurface,
   parseProgressLog,
   unitInFlight,
   type ProgressEntry,
@@ -1829,7 +1830,7 @@ async function runChecksHere(
   // unit the budget is already a total bound for. See `StartedEntrySchema`.
   // And before that line: the child that outlives its supervisor ends itself — see
   // `endWhenSupervisorGone` for when that can and cannot be noticed.
-  if (child !== undefined) endWhenSupervisorGone(child.supervisorPid);
+  if (child !== undefined) endWhenSupervisorGone(child.supervisorPid, process.stdin);
   const onProgress = child === undefined
     ? undefined
     : createProgressWriter(child);
@@ -1855,6 +1856,8 @@ async function runChecksHere(
     onProgress,
   });
   const { issues, costs, ...populated } = outcome;
+  // The checks ran synchronously: a supervisor lost meanwhile ends this child HERE, unpublished.
+  if (child !== undefined) await letSupervisorLossSurface();
   return buildCheckOutputData({
     issues,
     costs,
@@ -1938,3 +1941,6 @@ function runOutcome(options: {
     return { ...ran, ...provenance, ...extent };
   });
 }
+
+/** The test-facing seam: helpers the unit tests reach that are not part of this module's API. */
+export const __internal = { noticeAudienceOf };

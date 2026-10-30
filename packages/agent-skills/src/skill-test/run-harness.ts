@@ -3148,12 +3148,14 @@ async function runHarnessCollecting(opts: RunHarnessOptions, leftovers: unknown[
     // the root above) is the single author of whether they survive.
     if (!retainWorkspaces) leftovers.push(...await removeVatOnlyDir(workspacesRoot));
   };
+  // ONE cleanup, whoever starts it — the run's own `finally` or a signal — so a signal during the
+  // `finally`'s cleanup awaits that same work instead of starting a second removal beside it.
+  let cleaning: Promise<void> | undefined;
+  const cleanupOnce = (): Promise<void> => (cleaning ??= cleanup());
   // An interrupted run publishes no document, so what its cleanup left is named on stderr as it exits.
-  const removeSignalCleanup = installSignalCleanup({
-    onSignal: async () => {
-      await cleanup();
-      for (const leftover of leftovers) reportCleanupFailure(leftover);
-    },
+  const signalGuard = installSignalCleanup(async () => {
+    await cleanupOnce();
+    for (const leftover of leftovers) reportCleanupFailure(leftover);
   });
 
   // Hoisted so the finally can surface packaging friction even when a throw
@@ -3528,11 +3530,13 @@ async function runHarnessCollecting(opts: RunHarnessOptions, leftovers: unknown[
     // the verdict this is ALREADY a no-op — the happy path emits it earlier, ahead
     // of the baseline banner — so what is left here is the throw paths.
     emitFrictionOnce();
-    // Remove the signal handlers first (no listener leak across runs), then run
-    // the same cleanup: release the lock, remove the harness dir, and remove the
-    // vat-only grader dir (which lives outside harnessRoot).
-    removeSignalCleanup();
-    await cleanup();
+    // Run the same cleanup — release the lock, remove the harness dir, and remove
+    // the vat-only grader dir (which lives outside harnessRoot) — STILL GUARDED, then
+    // release the guard (no listener leak across runs). Released first, a Ctrl-C
+    // during the removal met the default disposition and left it half-done; a
+    // signal that arrived meanwhile ends the process once the cleanup has settled.
+    await cleanupOnce();
+    await signalGuard.releaseOrAwaitEnding();
   }
 }
 

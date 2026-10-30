@@ -8,6 +8,11 @@
  * under `vat validate`. Counted on a config-only root (no git), which is the one tree that earns
  * both notices, under every way the checks run: as `vat validate`'s phase, standalone (supervised),
  * and standalone in process (`--budget 0`).
+ *
+ * Each notice is also pinned to the process that prints it (`child-only-tag-stderr.mjs` tags the
+ * child's lines): a count of one cannot tell a silenced child from a silenced supervisor. The store
+ * notice is the CHILD's under a standalone `vat resources check` — that supervisor opens no store —
+ * and the invoked process's everywhere else.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -15,7 +20,7 @@ import { describe, expect, it } from 'vitest';
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 import { fs, safePath } from './test-common.js';
-import { checksPhase, count, type Run, TXT_ROWS, vat, writeConfig } from './test-helpers/checks-phase.js';
+import { checksPhase, count, preload, type Run, TXT_ROWS, vat, writeConfig } from './test-helpers/checks-phase.js';
 
 // ⛔ Disposal paths: every `vat` process (and its checks child) inherits the scratch TMPDIR.
 const scratch = useScratchTmpdir('vat-scratch-checks-notices-');
@@ -24,6 +29,15 @@ const scratch = useScratchTmpdir('vat-scratch-checks-notices-');
 const UNKNOWN_KEY = 'Ignoring the unknown key(s) and continuing';
 /** The projection store's notice for a tree it cannot key. */
 const UNKEYABLE = 'not inside a readable git repository';
+/** What `child-only-tag-stderr.mjs` prefixes each of the checks child's stderr writes with. */
+const CHILD_TAG = '[checks child] ';
+
+/** Which process printed the one line carrying `needle`: the checks child, or the invoked process. */
+function printedBy(stderr: string, needle: string): 'child' | 'invoked' | 'nobody' {
+  const line = stderr.split('\n').find((candidate) => candidate.includes(needle));
+  if (line === undefined) return 'nobody';
+  return line.startsWith(CHILD_TAG) ? 'child' : 'invoked';
+}
 
 /** A project root with a config carrying one unknown key, and no git — never committed, never `git init`ed. */
 function configOnlyRoot(): string {
@@ -39,18 +53,20 @@ function configOnlyRoot(): string {
  * the checks phase's data — the positive control that the child ran, so a second copy of each
  * notice had somewhere to come from.
  */
-const SURFACES: ReadonlyArray<readonly [string, readonly string[], (run: Run) => unknown]> = [
-  ['vat validate', ['validate'], (run) => checksPhase(run).data?.['population']],
-  ['vat resources check (supervised)', ['resources', 'check'], (run) => run.data['population']],
-  ['vat resources check --budget 0 (in process)', ['resources', 'check', '--budget', '0'], (run) => run.data['population']],
+const SURFACES: ReadonlyArray<readonly [string, readonly string[], (run: Run) => unknown, 'child' | 'invoked']> = [
+  ['vat validate', ['validate'], (run) => checksPhase(run).data?.['population'], 'invoked'],
+  ['vat resources check (supervised)', ['resources', 'check'], (run) => run.data['population'], 'child'],
+  ['vat resources check --budget 0 (in process)', ['resources', 'check', '--budget', '0'], (run) => run.data['population'], 'invoked'],
 ];
 
 describe('the checks child is silent; the invoked process prints each notice once', () => {
-  it.each(SURFACES)('%s', (_surface, args, population) => {
-    const run = vat(configOnlyRoot(), args);
+  it.each(SURFACES)('%s', (_surface, args, population, storeNoticeBy) => {
+    const run = vat(configOnlyRoot(), args, { NODE_OPTIONS: preload('child-only-tag-stderr.mjs') });
 
     expect(population(run), run.stderr).toBe('derived');
     expect(count(run.stderr, UNKNOWN_KEY)).toBe(1);
     expect(count(run.stderr, UNKEYABLE)).toBe(1);
+    expect(printedBy(run.stderr, UNKNOWN_KEY), run.stderr).toBe('invoked');
+    expect(printedBy(run.stderr, UNKEYABLE), run.stderr).toBe(storeNoticeBy);
   });
 });

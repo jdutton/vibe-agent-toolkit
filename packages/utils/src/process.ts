@@ -33,6 +33,8 @@ export {
   TERMINATING_SIGNALS,
   isTerminatingSignal,
   reRaiseSignal,
+  type TerminatingSignalGuard,
+  handleTerminatingSignals,
 } from './terminating-signals.js';
 
 /**

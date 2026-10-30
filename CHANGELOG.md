@@ -448,9 +448,8 @@ with a regression test.
   `resources.validation.severity` can downgrade. A check that could not run is
   `RESOURCE_CHECK_BROKEN`, which nothing can silence. ⚠️ **Checks run over the TRACKED TREE, not
   your configured resource set** — `resources.include`/`exclude` do not scope the projection;
-  narrow with the check's own `WHERE`. Stopping it (or `vat validate`) by its pid alone also stops
-  the child process that runs the checks; after a SIGKILL (or any outside kill on Windows) the child
-  stops itself — at once during its population, otherwise once its running check returns.
+  narrow with the check's own `WHERE`. Stopping it (or `vat validate`) also stops the child process
+  that runs the checks; what each signal does on each platform is in `vat resources check --help`.
 
 - **The link graph is queryable** — `lens_contexts`, `edges` and `edge_resolutions` join
   `vat resources query` and `check`, alongside `claude_context_chains` and `claude_context_loads`
