@@ -12,11 +12,9 @@
  * - a SIGTERM, SIGINT or SIGHUP sent to the `vat` WRAPPER's pid (`dist/bin/vat.js`, what the
  *   package's `bin` names and so what an operator and a CI runner actually start): the wrapper
  *   forwards it to the CLI, which takes the child down, and the wrapper then dies of it too;
- * - a terminal's Ctrl-C: SIGINT to the wrapper's whole process GROUP. The checks child leads a
- *   group of its own (so the terminal's signal never reaches it directly); the supervisor's guard
- *   kills it;
- * - a child's own subprocess (a `git` it runs): the guard kills the child's whole process GROUP,
- *   so a grandchild does not outlive it;
+ * - a terminal's Ctrl-C: SIGINT to the wrapper's whole process GROUP. The checks child shares that
+ *   group (never a leader: that would put it outside the terminal's job control), so it receives
+ *   the SIGINT itself and, installing no handler, dies of it; the supervisor's guard kills it too;
  * - a throw in the supervisor's watchdog poll (`parent-only-stat-throws.mjs`). The poll runs in a
  *   timer, outside every caller's `try`, so the supervisor catches it there: the child is killed
  *   and the run is PUBLISHED as one that did not finish — `vat validate`'s RUN_INCOMPLETE with the
@@ -45,7 +43,7 @@ import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 import { cleanupTestTempDir, fs, getWrapperPath, safePath } from './test-common.js';
 import { BIN_PATH, preload, TXT_ROWS, writeConfig } from './test-helpers/checks-phase.js';
 import { createMarkdownGitFixture } from './test-helpers/index.js';
-import { alive, type LiveVat, pidWrittenTo, startVat, within } from './test-helpers/live-vat.js';
+import { alive, killStillRunning, type LiveVat, pidWrittenTo, startVat, within } from './test-helpers/live-vat.js';
 
 // ⛔ Disposal paths: every `vat` process (and its checks child) inherits the scratch TMPDIR.
 const scratch = useScratchTmpdir('vat-scratch-checks-orphan-');
@@ -77,7 +75,6 @@ let dir: string;
 // Both processes of the current case, so a red case cannot leave either running.
 let supervisor: LiveVat | undefined;
 let child: number | undefined;
-let grandchild: number | undefined;
 
 /**
  * Start a supervisor whose child writes its pid to a file, and wait for it. By default the child
@@ -145,12 +142,9 @@ describe('the checks supervisor ends — its child ends with it', () => {
   });
 
   afterEach(() => {
-    const pid = supervisor?.process.pid;
-    if (pid !== undefined && alive(pid)) supervisor?.process.kill('SIGKILL');
-    for (const pid of [child, grandchild]) if (pid !== undefined && alive(pid)) process.kill(pid, 'SIGKILL');
+    killStillRunning(supervisor, child);
     supervisor = undefined;
     child = undefined;
-    grandchild = undefined;
   });
 
   afterAll(() => {
@@ -183,8 +177,7 @@ describe('the checks supervisor ends — its child ends with it', () => {
     },
   );
 
-  // 🚨 A terminal's Ctrl-C signals the foreground GROUP. The child used to share it and die of the
-  // signal by itself; it now leads its own group, so only the supervisor's guard can end it.
+  // A terminal's Ctrl-C signals the foreground GROUP, the stalled child included.
   it.skipIf(NO_HANDLED_SIGNALS)('a Ctrl-C to the vat WRAPPER\'s whole process group: the stalled child is killed, and the wrapper dies of SIGINT', async () => {
     const { running, childPid } = await superviseChild(['resources', 'check', '--budget', '600'], {
       entry: getWrapperPath(import.meta.url),
@@ -192,22 +185,6 @@ describe('the checks supervisor ends — its child ends with it', () => {
       ownGroup: true,
     });
     await expectSignalTakesChildDown(running, childPid, 'SIGINT', () => process.kill(-(running.process.pid ?? 0), 'SIGINT'));
-  });
-
-  // 🚨 `child.kill()` reaches the child alone: a `git` it was running ran on, reparented.
-  it.skipIf(NO_HANDLED_SIGNALS)('a SIGTERM to the supervisor kills the child\'s whole process group: its own subprocess does not outlive it', async () => {
-    const grandchildPidFile = safePath.join(scratch(), 'grandchild.pid');
-    const { running, childPid } = await superviseChild(['resources', 'check', '--budget', '600'], {
-      env: { TEST_GRANDCHILD_PID_FILE: grandchildPidFile },
-    });
-    grandchild = await pidWrittenTo(grandchildPidFile);
-    const grandchildPid = grandchild;
-    expect(alive(grandchildPid)).toBe(true);
-
-    running.process.kill('SIGTERM');
-
-    await running.ended;
-    expect(await within(KILL_BOUND_MS, () => !alive(childPid) && !alive(grandchildPid)), running.stderr()).toBe(true);
   });
 
   it('vat validate: a throw in the supervisor\'s poll kills the stalled child and publishes RUN_INCOMPLETE, the resources phase kept', async () => {

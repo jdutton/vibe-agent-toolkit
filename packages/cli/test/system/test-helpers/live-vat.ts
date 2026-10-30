@@ -73,6 +73,19 @@ export async function pidWrittenTo(file: string): Promise<number> {
 }
 
 /**
+ * SIGKILL a case's supervisor and its checks child, whichever is still running — so a red case
+ * cannot leave either behind.
+ *
+ * @param supervisor - The supervising `vat`, when the case started one
+ * @param child - The checks child's pid, when the case read one
+ */
+export function killStillRunning(supervisor: LiveVat | undefined, child: number | undefined): void {
+  const pid = supervisor?.process.pid;
+  if (pid !== undefined && alive(pid)) supervisor?.process.kill('SIGKILL');
+  if (child !== undefined && alive(child)) process.kill(child, 'SIGKILL');
+}
+
+/**
  * How a `vat` process ended, the document it published (empty when it published none), and its
  * stderr SO FAR — a child it left running may still write more (see {@link LiveVat.drained}).
  */

@@ -496,8 +496,8 @@ A run that HANGS is killed and reported, not waited on:
   Ctrl-C still works at a keyboard. Under --budget 0 this process runs the
   SQL and installs no signal handler -- a process blocked in synchronous
   SQLite survives SIGINT once a handler exists. Supervised, the child runs
-  the SQL in a process group of its own, which a terminal's Ctrl-C does not
-  reach, and installs no handler either: the supervising process handles the
+  the SQL in the terminal's process group and installs no handler either, so
+  a terminal's Ctrl-C ends it directly; the supervising process handles the
   terminating signals while it supervises, only to SIGKILL the child and
   then end of the same signal.
 

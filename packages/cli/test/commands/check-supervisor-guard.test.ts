@@ -91,6 +91,28 @@ function guard(child: StandInChild): () => void {
   return installed.release;
 }
 
+/**
+ * Send `signal` to this process under a guard watching a stand-in child — ended first with
+ * `ending` when given — with the guard's re-raise and exit stubbed; then end the child (as a real
+ * ending would have) and release the guard.
+ */
+function signalTheGuard(
+  signal: NodeJS.Signals,
+  ending?: { code: number | null; signal: NodeJS.Signals | null },
+): { child: StandInChild; exit: ReturnType<typeof vi.spyOn> } {
+  const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+  vi.spyOn(Atomics, 'wait').mockImplementation(() => 'timed-out');
+  const child = new StandInChild();
+  const release = guard(child);
+  if (ending !== undefined) child.end(ending);
+
+  process.emit(signal, signal);
+
+  if (child.exitCode === null && child.signalCode === null) child.end({ code: null, signal: 'SIGKILL' });
+  release();
+  return { child, exit };
+}
+
 /** A progress log for `superviseCheck`, under a guard that watches nothing until it is spawned. */
 function progressLog(): ProgressLog {
   return { path: 'progress.jsonl', guard: __internal.guardSupervision() };
@@ -325,7 +347,10 @@ describe('the child\'s death is its exit, not its close', () => {
 });
 
 describe('the child\'s process tree', () => {
-  it.skipIf(process.platform === 'win32')('is spawned as its own process group, and the watchdog kills the GROUP as well as the leader', async () => {
+  // 🚨 A process-group leader (`detached`) is outside the terminal's job control: Ctrl-Z does not
+  // stop it, and under `stty tostop` its stderr write stops it with SIGTTOU, so the watchdog
+  // false-kills a healthy run. The child stays in the supervisor's group on every platform.
+  it.skipIf(process.platform === 'win32')('is spawned in the supervisor\'s own process group, and the watchdog kills its pid, never a group', async () => {
     const child = spawnedStandInThatDiesOnKill();
     statMock.mockImplementation(() => ({ size: 0 }));
     const log = progressLog();
@@ -333,25 +358,35 @@ describe('the child\'s process tree', () => {
     await superviseCheck({ args: [], log, budgetMs: 100, format: 'json' });
     log.guard.release();
 
-    expect(spawnMock).toHaveBeenLastCalledWith(expect.any(String), expect.any(Array), expect.objectContaining({ detached: true }));
+    const options = spawnMock.mock.lastCall?.[2] as { detached?: boolean } | undefined;
+    expect(options).toBeDefined();
+    expect(options?.detached).not.toBe(true);
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
-    expect(processKill).toHaveBeenCalledWith(-STAND_IN_PID, 'SIGKILL');
+    expect(processKill).toHaveBeenCalledWith(STAND_IN_PID, 'SIGKILL');
+    expect(processKill).not.toHaveBeenCalledWith(-STAND_IN_PID, expect.anything());
   });
 
-  it.skipIf(process.platform === 'win32')('a terminating signal to the supervisor kills the child\'s group, then the supervisor dies of it', () => {
-    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    vi.spyOn(Atomics, 'wait').mockImplementation(() => 'timed-out');
-    const child = new StandInChild();
-    const release = guard(child);
-
-    process.emit('SIGINT', 'SIGINT');
+  it.skipIf(process.platform === 'win32')('a terminating signal to the supervisor kills the child\'s pid, then the supervisor dies of it', () => {
+    const { child, exit } = signalTheGuard('SIGINT');
 
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
-    expect(processKill).toHaveBeenCalledWith(-STAND_IN_PID, 'SIGKILL');
+    expect(processKill).toHaveBeenCalledWith(STAND_IN_PID, 'SIGKILL');
+    expect(processKill).not.toHaveBeenCalledWith(-STAND_IN_PID, expect.anything());
     expect(processKill).toHaveBeenCalledWith(process.pid, 'SIGINT');
     expect(exit).toHaveBeenCalledWith(2);
-    // The stubbed raise returned: drop the guard's `exit` listener as a real ending would have.
-    child.end({ code: null, signal: 'SIGKILL' });
-    release();
+  });
+
+  // 🚨 A child that has exited may be reaped and its pid reused: a kill then reaches a stranger.
+  it.skipIf(process.platform === 'win32').each([
+    ['exited with a code', { code: 1, signal: null }],
+    ['died of a signal', { code: null, signal: 'SIGKILL' as const }],
+  ])('a terminating signal after the child %s sends it no kill', (_label, ending) => {
+    const { child, exit } = signalTheGuard('SIGTERM', ending);
+
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(processKill).not.toHaveBeenCalledWith(STAND_IN_PID, expect.anything());
+    expect(processKill).not.toHaveBeenCalledWith(-STAND_IN_PID, expect.anything());
+    expect(processKill).toHaveBeenCalledWith(process.pid, 'SIGTERM');
+    expect(exit).toHaveBeenCalledWith(2);
   });
 });

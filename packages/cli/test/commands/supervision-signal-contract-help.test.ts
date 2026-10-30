@@ -32,4 +32,11 @@ describe('the supervision signal contract', () => {
       expect(SUPERVISION_SIGNAL_CONTRACT).toContain(claim);
     }
   });
+
+  // The child is not a process-group leader (that would put it outside the terminal's job
+  // control), so on POSIX a process it started is not killed with it.
+  it('claims no kill of what the child itself started on POSIX', () => {
+    expect(SUPERVISION_SIGNAL_CONTRACT).toContain('(git) is not\n  killed with it');
+    expect(SUPERVISION_SIGNAL_CONTRACT).not.toMatch(/every process it started|process group as it exits/);
+  });
 });

@@ -19,7 +19,7 @@ import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 import { cleanupTestTempDir, fs, safePath } from './test-common.js';
 import { preload, TXT_ROWS, writeConfig } from './test-helpers/checks-phase.js';
 import { createMarkdownGitFixture } from './test-helpers/index.js';
-import { alive, type LiveVat, pidWrittenTo, startVat, within } from './test-helpers/live-vat.js';
+import { alive, killStillRunning, type LiveVat, pidWrittenTo, startVat, within } from './test-helpers/live-vat.js';
 
 // ⛔ Disposal paths: every `vat` process (and its checks child) inherits the scratch TMPDIR.
 const scratch = useScratchTmpdir('vat-scratch-checks-orphan-loop-');
@@ -44,9 +44,7 @@ describe('a checks child orphaned inside a check', () => {
   });
 
   afterEach(() => {
-    const pid = supervisor?.process.pid;
-    if (pid !== undefined && alive(pid)) supervisor?.process.kill('SIGKILL');
-    if (child !== undefined && alive(child)) process.kill(child, 'SIGKILL');
+    killStillRunning(supervisor, child);
     supervisor = undefined;
     child = undefined;
   });

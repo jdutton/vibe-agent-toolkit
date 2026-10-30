@@ -159,9 +159,10 @@ export const DEFAULT_BUDGET_SECONDS = 300;
 export const SUPERVISION_SIGNAL_CONTRACT = `Interrupting a supervised checks run:
   POSIX: SIGTERM, SIGHUP, SIGINT or SIGQUIT sent to this process, to the
   'vat' wrapper (which forwards it), or to the terminal's process group
-  (Ctrl-C) kills the checks child and every process it started, removes the
-  progress directory, publishes nothing, and dies of the signal (status
-  128+n; exit 2 where the signal cannot kill it, PID 1).
+  (Ctrl-C) kills the checks child, removes the progress directory, publishes
+  nothing, and dies of the signal (status 128+n; exit 2 where the signal
+  cannot kill it, PID 1). A process the child itself started (git) is not
+  killed with it; it ends on its own.
   Windows: a console Ctrl-C, Ctrl-Break or window close reaches every process
   on the console; this one kills the child and its process tree (taskkill
   /T) and exits 2, no document. An outside kill (taskkill /F) is
@@ -174,9 +175,7 @@ export const SUPERVISION_SIGNAL_CONTRACT = `Interrupting a supervised checks run
   reached until it returns).
   A SIGKILL of the 'vat' wrapper kills the wrapper alone: this process
   (whose stdin is the terminal's, so it reads no end-of-file) and its child
-  run on to completion, or until --budget seconds pass with no progress.
-  POSIX: whatever the child started and left running when it exited is
-  killed with its process group as it exits; on Windows it runs on.`;
+  run on to completion, or until --budget seconds pass with no progress.`;
 
 
 /** How many times per budget the parent looks at the log. */
@@ -766,10 +765,11 @@ export async function superviseCheck(options: {
   const startedAt = performance.now();
   const binary = resolveVatBinPath();
   const child = spawn(process.execPath, [binary, ...options.args], {
+    // ⛔ Never `detached`. A process-group leader is outside the terminal's job control: Ctrl-Z
+    // does not stop it, and under `stty tostop` its stderr write stops it with SIGTTOU, so the
+    // watchdog false-kills a healthy run. In this process's group it receives a terminal Ctrl-C
+    // itself — see `CHECKS_CHILD_TREE` for what that costs.
     stdio: ['pipe', 'pipe', 'inherit'],
-    // POSIX: a process-group leader, so every kill reaches what it spawns too (`CHECKS_CHILD_TREE`).
-    // Never on Windows, where `detached` opens a new console instead.
-    detached: process.platform !== 'win32',
   });
   // The guard `withProgressLog` installed now takes this child down with the process too.
   options.log.guard.watch(child);
@@ -812,7 +812,6 @@ export async function superviseCheck(options: {
     // collects the rest of stdout, and gets a bounded grace to do it (`awaitStdout`).
     child.on('exit', (code, signal) => {
       exited = true;
-      killLeftBehind(child);
       awaitStdout(child, () => {
         resolve(resolveChildEnding({ code, signal, killed, spawnError, killFailure }));
       });
@@ -966,15 +965,15 @@ export interface ProgressLog {
  * So for the supervision's WHOLE life — from before the progress directory is minted until after
  * it is removed, see {@link withProgressLog}:
  *
- * - **`exit`** SIGKILLs the child and its process tree (`CHECKS_CHILD_TREE`), once there is
- *   one, and removes the progress directory, once there is one — every ending of this process that
+ * - **`exit`** SIGKILLs the child (`CHECKS_CHILD_TREE`), once there is one and while it runs, and removes the progress directory, once there is one — every ending of this process that
  *   runs any of its code passes through it, a last-resort `process.exit` included, and
  *   `process.exit` runs no `finally`.
  * - **Every `TERMINATING_SIGNALS` member**, through `handleTerminatingSignals`: does the same,
  *   synchronously, and RE-RAISES the signal. On POSIX this process then dies of it (status 128 + n),
  *   as a shell and a CI runner expect. On Windows, or where the signal cannot kill it (PID 1), it
- *   exits 2 with no document. A repeat with the first is swallowed. The child is in its own process group on
- *   POSIX, so a terminal's Ctrl-C does not reach it directly: this guard is what kills it.
+ *   exits 2 with no document. A repeat with the first is swallowed. The child shares this
+ *   process's group, so a terminal's Ctrl-C reaches it directly too and, with no handler of its
+ *   own, ends it; this guard kills it all the same.
  *
  * The release waits for the child's `exit`, not for the run to settle, so a run settled with its
  * child still alive (a refused kill, a poll that threw) still takes the child down however this
@@ -1002,7 +1001,9 @@ function guardSupervision(): SupervisionGuard & { cover(logPath: string): void; 
   const takeDown = (): void => {
     if (takenDown) return;
     takenDown = true;
-    if (child !== undefined) killProcessTree(child, CHECKS_CHILD_TREE);
+    // 🚨 Only a child still running: one that has exited may be reaped, and its pid reused by a
+    // stranger the kill would then reach.
+    if (child?.exitCode === null && child.signalCode === null) killProcessTree(child, CHECKS_CHILD_TREE);
     if (logPath !== undefined) disposeProgressDir(logPath);
   };
   const signals = handleTerminatingSignals({ cleanup: takeDown, fallbackExitCode: ExitCode.ERROR });
@@ -1030,27 +1031,15 @@ function guardSupervision(): SupervisionGuard & { cover(logPath: string): void; 
 }
 
 /**
- * How the checks child is killed: with everything it spawned.
+ * How the checks child is killed.
  *
- * On POSIX the child is spawned as a process-group leader (`detached`, see {@link superviseCheck}),
- * so the group kill reaches the `git` it runs as well: a kill of the leader alone left those
- * grandchildren running on. On Windows `taskkill /T` takes the tree. The leader is ALSO killed
- * through `child.kill`, because that is the call whose refusal Node reports as the child's
- * `error` — the arm the watchdog retries and then reports.
+ * POSIX: its pid alone. It shares this process's group (never `detached`, see
+ * {@link superviseCheck}), so there is no group of its own to kill: a process it started (`git`)
+ * is not killed with it and ends on its own. Windows: `taskkill /T` takes its whole tree. It is
+ * ALSO killed through `child.kill`, because that is the call whose refusal Node reports as the
+ * child's `error` — the arm the watchdog retries and then reports.
  */
-const CHECKS_CHILD_TREE: KillProcessTreeOptions = { groupLeader: true, throughChild: true };
-
-/**
- * POSIX: kill whatever the checks child left running in its process group as it exited — a `git`
- * it spawned and did not wait for — so nothing it started outlives the run. Its group is still
- * there while any member lives; an empty one is already gone. On Windows there is no group, and
- * the tree of a process that has exited can no longer be walked: such a grandchild runs on.
- *
- * @param child - The checks child, at its `exit`
- */
-function killLeftBehind(child: ChildProcess): void {
-  if (process.platform !== 'win32') killProcessTree(child, { groupLeader: true, throughChild: false });
-}
+const CHECKS_CHILD_TREE: KillProcessTreeOptions = { groupLeader: false, throughChild: true };
 
 /**
  * Remove the progress log's directory, synchronously, on the way out of this process — and say so
