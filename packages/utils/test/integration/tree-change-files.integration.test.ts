@@ -309,12 +309,12 @@ describe('disposeTempDirAfterFailure', () => {
     const root = suite.root();
     plant(root, { 'd/x.txt': 'x' });
     const failure = new Error('work failed');
-    await disposeTempDirAfterFailure(safePath.join(root, 'd'), failure);
+    await expect(disposeTempDirAfterFailure(safePath.join(root, 'd'), failure)).resolves.toBeUndefined();
     expect(present(safePath.join(root, 'd'))).toBe(false);
     expect(suppressedFaultsOf(failure)).toEqual([]);
   });
 
-  it('records a refused disposal beside the failure, which stays unchanged, naming the directory', async () => {
+  it('records a refused disposal beside the failure, which stays unchanged, naming the directory — and answers it', async () => {
     const root = suite.root();
     plant(root, { 'd/x.txt': 'x' });
     const dir = safePath.join(root, 'd');
@@ -322,12 +322,14 @@ describe('disposeTempDirAfterFailure', () => {
     const refused = { op: 'rm', path: (p: string) => p === dir, errno: 'EACCES' } as const;
     suite.faults(root, [refused, { ...refused }]);
 
-    await disposeTempDirAfterFailure(dir, failure);
+    const leftover = await disposeTempDirAfterFailure(dir, failure);
     suite.restoreFaults();
 
     expect(failure.cause).toBeUndefined();
     const [disposal, ...more] = suppressedFaultsOf(failure);
     expect(more).toEqual([]);
+    // The same fault is answered too, for a caller (a signal path) no report will carry the failure to.
+    expect(leftover).toBe(disposal);
     expect(disposal).toMatchObject({ side: 'environment', faultClass: 'refused' });
     expect((disposal as Error).message).toContain(dir);
   });

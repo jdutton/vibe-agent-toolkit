@@ -3535,8 +3535,12 @@ async function runHarnessCollecting(opts: RunHarnessOptions, leftovers: unknown[
     // release the guard (no listener leak across runs). Released first, a Ctrl-C
     // during the removal met the default disposition and left it half-done; a
     // signal that arrived meanwhile ends the process once the cleanup has settled.
-    await cleanupOnce();
-    await signalGuard.releaseOrAwaitEnding();
+    // Released even when the cleanup REJECTS, so the guard never outlives the run it guarded.
+    try {
+      await cleanupOnce();
+    } finally {
+      await signalGuard.releaseOrAwaitEnding();
+    }
   }
 }
 

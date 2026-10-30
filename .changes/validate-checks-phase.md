@@ -12,3 +12,11 @@
 - **`vat mcp serve` and `vat-compile-resources watch` now die of a terminating signal** (status
   128+n on POSIX) instead of exiting 0, and every signal-handling command also handles SIGBREAK on
   Windows. Interrupting a supervised checks run: `vat resources check --help`.
+- **`vat` (every command) now waits for the CLI it starts and ends as it did:** `kill`/`timeout` on
+  the `vat` pid stops the CLI too (it used to run on), and a CLI killed by a signal makes `vat` die of
+  it (status 128+n on POSIX) instead of exiting 1. Windows Ctrl-C/Ctrl-Break exits 2.
+- **A second terminating signal more than ~0.5 s after the first ends `vat` at once**, CLI included,
+  even mid-cleanup; one within 0.5 s is treated as the same interruption.
+- **`vat skill test run` interrupted** now dies of the signal on POSIX (exits 2 on Windows) instead
+  of exiting 128+n, and **`vat audit <git-url>`** also removes its clone on SIGTERM, SIGHUP, SIGQUIT and
+  SIGBREAK, not just SIGINT.

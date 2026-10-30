@@ -11,6 +11,7 @@ import { ExitCode, exitCodeOfChild } from '@vibe-agent-toolkit/schema';
 import {
   handleTerminatingSignals,
   isTerminatingSignal,
+  killProcessTree,
   reRaiseSignal,
 } from '@vibe-agent-toolkit/utils/process';
 
@@ -23,13 +24,18 @@ import {
  * guarded (`handleTerminatingSignals`) so this process never dies before it: it waits for the
  * CLI's `exit`, then ends the same way — dying of the same signal when the CLI died of a
  * terminating one (re-raised; exit 2 where the raise cannot kill this process, and always on
- * Windows), otherwise with its exit code. A repeat is swallowed.
+ * Windows), otherwise with its exit code. A repeat within `REPEAT_SIGNAL_WINDOW_MS` is
+ * swallowed (a terminal's group Ctrl-C reaches this process and the CLI both).
+ *
+ * - **A repeat after that window FORCES the ending**: the CLI is SIGKILLed — on Windows with its
+ *   whole tree (`taskkill /T /F`) — and this process dies of the repeat at once. An operator whose
+ *   first Ctrl-C or kill met a cleanup that hung can always end the run with a second.
  *
  * - **POSIX: the first signal is FORWARDED** to the CLI, because a signal sent to this pid alone
  *   reaches nothing else. A terminal Ctrl-C signals the whole foreground group, so the CLI then
  *   receives SIGINT twice — once from the terminal, once forwarded. That is safe only because
- *   every handler the CLI has goes through `handleTerminatingSignals`, which swallows the repeat
- *   while its cleanup runs.
+ *   every handler the CLI has goes through `handleTerminatingSignals`, which swallows a repeat
+ *   that arrives with the first.
  * - **Windows: NOTHING is forwarded.** The only signals delivered there are console events
  *   (Ctrl-C, Ctrl-Break, the console closing), which the console already sends to every attached
  *   process, the CLI included; and `child.kill` there is `TerminateProcess`, which would PRE-EMPT
@@ -48,7 +54,11 @@ export function superviseCli(child: ChildProcess): void {
   });
   const guard = handleTerminatingSignals({
     fallbackExitCode: ExitCode.ERROR,
-    cleanup: (signal) => {
+    cleanup: (signal, forced) => {
+      // Not a group leader (a terminal's signals must reach it, and it reads the terminal): its pid.
+      forced.addEventListener('abort', () => {
+        killProcessTree(child, { groupLeader: false, throughChild: false });
+      }, { once: true });
       if (process.platform !== 'win32') child.kill(signal);
       // Wait for the CLI: its `exit` below is what ends this process.
       return ended;

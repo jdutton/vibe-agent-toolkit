@@ -117,13 +117,12 @@ import { ExitCode, exitCodeForReport } from '@vibe-agent-toolkit/schema';
 import {
   disposeTempDirSync,
   isPathAbsentError,
-  isProcessGoneError,
   requireFollowedStatSync,
   safePath,
   type TempDirOutcome,
   withTempDir,
 } from '@vibe-agent-toolkit/utils';
-import { handleTerminatingSignals } from '@vibe-agent-toolkit/utils/process';
+import { handleTerminatingSignals, killProcessTree, type KillProcessTreeOptions } from '@vibe-agent-toolkit/utils/process';
 
 import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
 import { readForwardedDocument, type ForwardedDocument } from '../../utils/document-writer.js';
@@ -164,17 +163,20 @@ export const SUPERVISION_SIGNAL_CONTRACT = `Interrupting a supervised checks run
   progress directory, publishes nothing, and dies of the signal (status
   128+n; exit 2 where the signal cannot kill it, PID 1).
   Windows: a console Ctrl-C, Ctrl-Break or window close reaches every process
-  on the console; this one kills the child and exits 2, no document. An
-  outside kill (taskkill /F) is TerminateProcess: no handler runs, exit 1.
+  on the console; this one kills the child and its process tree (taskkill
+  /T) and exits 2, no document. An outside kill (taskkill /F) is
+  TerminateProcess: no handler runs, exit 1.
   Ended where it runs no code (SIGKILL, an OOM killer, a Windows outside
   kill), this process cannot kill the child: the child reads end-of-file on
   the stdin pipe this process held and ends itself -- one stderr line, exit
   2, nothing published -- at once during its population, and during the
   checks once the last check returns (a statement inside SQLite is not
   reached until it returns).
-  A SIGKILL of the 'vat' wrapper kills the wrapper alone: this process and
-  its child (whose stdin is the terminal's) run on until the checks bound
-  ends them.`;
+  A SIGKILL of the 'vat' wrapper kills the wrapper alone: this process
+  (whose stdin is the terminal's, so it reads no end-of-file) and its child
+  run on to completion, or until --budget seconds pass with no progress.
+  POSIX: whatever the child started and left running when it exited is
+  killed with its process group as it exits; on Windows it runs on.`;
 
 
 /** How many times per budget the parent looks at the log. */
@@ -765,7 +767,7 @@ export async function superviseCheck(options: {
   const binary = resolveVatBinPath();
   const child = spawn(process.execPath, [binary, ...options.args], {
     stdio: ['pipe', 'pipe', 'inherit'],
-    // POSIX: a process-group leader, so every kill reaches what it spawns too (`killChildTree`).
+    // POSIX: a process-group leader, so every kill reaches what it spawns too (`CHECKS_CHILD_TREE`).
     // Never on Windows, where `detached` opens a new console instead.
     detached: process.platform !== 'win32',
   });
@@ -810,6 +812,7 @@ export async function superviseCheck(options: {
     // collects the rest of stdout, and gets a bounded grace to do it (`awaitStdout`).
     child.on('exit', (code, signal) => {
       exited = true;
+      killLeftBehind(child);
       awaitStdout(child, () => {
         resolve(resolveChildEnding({ code, signal, killed, spawnError, killFailure }));
       });
@@ -829,7 +832,7 @@ export async function superviseCheck(options: {
       // SIGKILL, because no code the child could ever gain can handle, ignore
       // or block it. See this module's header — and note the reason is NOT that
       // SIGTERM fails to reach a blocked process, which was measured false.
-      killChildTree(child);
+      killProcessTree(child, CHECKS_CHILD_TREE);
       const unended = unendedKill(killAttempts, killFailure, child.pid);
       if (unended !== undefined) resolve(resolveChildEnding({ code: null, signal: null, killed, killFailure: unended }));
     };
@@ -845,7 +848,7 @@ export async function superviseCheck(options: {
         poll();
       } catch (error) {
         clearInterval(timer);
-        killChildTree(child);
+        killProcessTree(child, CHECKS_CHILD_TREE);
         reject(error as Error);
       }
     }, pollIntervalMs(options.budgetMs));
@@ -963,14 +966,14 @@ export interface ProgressLog {
  * So for the supervision's WHOLE life — from before the progress directory is minted until after
  * it is removed, see {@link withProgressLog}:
  *
- * - **`exit`** SIGKILLs the child and, on POSIX, its process group (`killChildTree`), once there is
+ * - **`exit`** SIGKILLs the child and its process tree (`CHECKS_CHILD_TREE`), once there is
  *   one, and removes the progress directory, once there is one — every ending of this process that
  *   runs any of its code passes through it, a last-resort `process.exit` included, and
  *   `process.exit` runs no `finally`.
  * - **Every `TERMINATING_SIGNALS` member**, through `handleTerminatingSignals`: does the same,
  *   synchronously, and RE-RAISES the signal. On POSIX this process then dies of it (status 128 + n),
  *   as a shell and a CI runner expect. On Windows, or where the signal cannot kill it (PID 1), it
- *   exits 2 with no document. A repeat is swallowed. The child is in its own process group on
+ *   exits 2 with no document. A repeat with the first is swallowed. The child is in its own process group on
  *   POSIX, so a terminal's Ctrl-C does not reach it directly: this guard is what kills it.
  *
  * The release waits for the child's `exit`, not for the run to settle, so a run settled with its
@@ -999,7 +1002,7 @@ function guardSupervision(): SupervisionGuard & { cover(logPath: string): void; 
   const takeDown = (): void => {
     if (takenDown) return;
     takenDown = true;
-    if (child !== undefined) killChildTree(child);
+    if (child !== undefined) killProcessTree(child, CHECKS_CHILD_TREE);
     if (logPath !== undefined) disposeProgressDir(logPath);
   };
   const signals = handleTerminatingSignals({ cleanup: takeDown, fallbackExitCode: ExitCode.ERROR });
@@ -1027,28 +1030,26 @@ function guardSupervision(): SupervisionGuard & { cover(logPath: string): void; 
 }
 
 /**
- * SIGKILL the checks child — and, on POSIX, everything it spawned.
+ * How the checks child is killed: with everything it spawned.
  *
- * The child is spawned as a process-group leader there (`detached`, see {@link superviseCheck}), so
- * the group kill reaches the `git` it runs as well: a kill of the leader alone left those
- * grandchildren running on. The leader is ALSO killed directly, through `child.kill`, because that
- * is the call whose refusal Node reports as the child's `error` — the arm the watchdog retries and
- * then reports. A group that is already gone, or that the OS will not let this process signal,
- * leaves nothing more this kill can reach.
- *
- * On Windows there are no process groups to kill: `child.kill` is `TerminateProcess` of the child
- * alone, and a grandchild runs on until it ends (documented in the help's signal paragraph).
- *
- * @param child - The checks child
+ * On POSIX the child is spawned as a process-group leader (`detached`, see {@link superviseCheck}),
+ * so the group kill reaches the `git` it runs as well: a kill of the leader alone left those
+ * grandchildren running on. On Windows `taskkill /T` takes the tree. The leader is ALSO killed
+ * through `child.kill`, because that is the call whose refusal Node reports as the child's
+ * `error` — the arm the watchdog retries and then reports.
  */
-function killChildTree(child: ChildProcess): void {
-  child.kill('SIGKILL');
-  if (process.platform === 'win32' || child.pid === undefined) return;
-  try {
-    process.kill(-child.pid, 'SIGKILL');
-  } catch (error) {
-    if (!isProcessGoneError(error)) throw error;
-  }
+const CHECKS_CHILD_TREE: KillProcessTreeOptions = { groupLeader: true, throughChild: true };
+
+/**
+ * POSIX: kill whatever the checks child left running in its process group as it exited — a `git`
+ * it spawned and did not wait for — so nothing it started outlives the run. Its group is still
+ * there while any member lives; an empty one is already gone. On Windows there is no group, and
+ * the tree of a process that has exited can no longer be walked: such a grandchild runs on.
+ *
+ * @param child - The checks child, at its `exit`
+ */
+function killLeftBehind(child: ChildProcess): void {
+  if (process.platform !== 'win32') killProcessTree(child, { groupLeader: true, throughChild: false });
 }
 
 /**

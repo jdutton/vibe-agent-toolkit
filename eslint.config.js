@@ -213,6 +213,9 @@ const PRE_PUBLISH_CHECK_FILE = 'packages/dev-tools/src/pre-publish-check.ts';
 /** Every package's TypeScript product source — the scope of the `src`-only blocks below. */
 const PRODUCT_SOURCE_TS = 'packages/*/src/**/*.ts';
 
+/** `local/no-raw-signal-listener` over product source; `allow` names the one helper that listens. */
+const NO_RAW_SIGNAL_LISTENER = ['error', { allow: ['packages/utils/src/terminating-signals.ts'] }];
+
 /**
  * The one command file that writes stdout outside the document writer
  * (`packages/cli/src/utils/document-writer.ts`): `vat agent run`, whose stdout
@@ -979,7 +982,7 @@ export default [
       // handler that removed itself on the first signal let the second (a terminal Ctrl-C under
       // the `vat` wrapper delivers two) kill the process mid-cleanup — a clone and a lock leaked.
       // No backlog: every site was migrated the day this was enabled. `allow` names the helper.
-      'local/no-raw-signal-listener': ['error', { allow: ['packages/utils/src/terminating-signals.ts'] }],
+      'local/no-raw-signal-listener': NO_RAW_SIGNAL_LISTENER,
       'local/no-existssync': ['error', NO_EXISTSSYNC_RATCHET],
       'local/no-link-following-fs': ['error', LINK_FOLLOWING_FS_ALLOW],
     },
@@ -1035,6 +1038,19 @@ export default [
         caughtErrorsIgnorePattern: '^_',
       }],
     },
+  },
+
+  // Product source in the module flavours the TS blocks above do not match: a `.mts`, `.js` or
+  // `.mjs` under `src/` handles a signal the same way, so the one-installation ban reaches it too.
+  // `.mts` is TypeScript: parsed as such (no type information — the ban needs none).
+  {
+    files: ['packages/*/src/**/*.mts'],
+    languageOptions: { parser: tsparser, parserOptions: { ecmaVersion: 2024, sourceType: 'module' } },
+  },
+  {
+    files: ['packages/*/src/**/*.{mts,js,mjs}'],
+    plugins: { local: localRules },
+    rules: { 'local/no-raw-signal-listener': NO_RAW_SIGNAL_LISTENER },
   },
 
   // CommonJS-specific overrides — `.cjs` and `.cts` files are CJS by intent, so

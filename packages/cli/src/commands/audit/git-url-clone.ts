@@ -86,7 +86,8 @@ export async function withClonedRepo<T>(
 ): Promise<{ readonly value: T; readonly leftover: unknown }> {
   // Through the one classified creation: a temp directory the OS will not make is the environment's fault.
   const tempdir = await makeStagingDir('vat-audit-');
-  // ONE disposal, whoever starts it: the work's own end (after success or failure) or a signal. The
+  // ONE disposal, whoever starts it: the work's own end (after success or failure) or a signal. It
+  // settles on what it left behind, whichever path started it, so the signal path can name it. The
   // guard is held until that disposal has SETTLED — a Ctrl-C that also kills `git` fails the clone
   // step, and a guard released before the failure path's disposal let the pending signal kill the
   // process half-way through it, the clone left behind.
@@ -94,7 +95,7 @@ export async function withClonedRepo<T>(
   const dispose = (start: () => Promise<unknown>): Promise<unknown> => (disposal ??= start());
   // Interrupted: dispose of the clone first, then die of the signal. No report follows a signal, so a
   // clone that will not go is named on stderr. A repeat (a terminal Ctrl-C under the `vat` wrapper
-  // arrives twice) is swallowed until the disposal settles — see `handleTerminatingSignals`.
+  // arrives twice) is swallowed — see `handleTerminatingSignals`.
   const signalGuard = handleTerminatingSignals({
     fallbackExitCode: ExitCode.ERROR,
     cleanup: () => dispose(() => disposeClone(tempdir, options)).then(
@@ -107,6 +108,16 @@ export async function withClonedRepo<T>(
       },
     ),
   });
+  // The work's own disposal, then the guard's release — released even when the disposal REJECTS
+  // (a refusal to dispose at all), so a guard never outlives the work it guarded.
+  const disposeThenRelease = async (start: () => Promise<unknown>): Promise<unknown> => {
+    try {
+      return await dispose(start);
+    } finally {
+      // A signal that arrived meanwhile ends the process once this same disposal has settled.
+      await signalGuard.releaseOrAwaitEnding();
+    }
+  };
   let value: T;
   try {
     const { ref, commit, targetDir } = cloneSource(parsed, tempdir);
@@ -119,12 +130,9 @@ export async function withClonedRepo<T>(
     };
     value = await body({ tempdir, targetDir, provenance });
   } catch (error) {
-    await dispose(() => (options.keepTempForDebug ? disposeClone(tempdir, options) : disposeTempDirAfterFailure(tempdir, error)));
-    // A signal that arrived meanwhile ends the process once this same disposal has settled.
-    await signalGuard.releaseOrAwaitEnding();
+    await disposeThenRelease(() => (options.keepTempForDebug ? disposeClone(tempdir, options) : disposeTempDirAfterFailure(tempdir, error)));
     throw error;
   }
-  const leftover = await dispose(() => disposeClone(tempdir, options));
-  await signalGuard.releaseOrAwaitEnding();
+  const leftover = await disposeThenRelease(() => disposeClone(tempdir, options));
   return { value, leftover };
 }

@@ -76,7 +76,7 @@ export function registerWatchCommand(program: Command): void {
       });
 
       // A terminating signal: close the watcher, then die of the signal (exit 0 where it cannot,
-      // on Windows). A repeat is swallowed until the close has settled.
+      // on Windows). A repeat with the first is swallowed; a later one ends the process at once.
       handleTerminatingSignals({
         fallbackExitCode: ExitCode.OK,
         cleanup: async () => {

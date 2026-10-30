@@ -29,10 +29,18 @@ export {
 export { spawnHardened } from './spawn-hardened.js';
 
 export {
+  type KillableChild,
+  type KillProcessTreeOptions,
+  killProcessTree,
+} from './kill-process-tree.js';
+
+export {
   type TerminatingSignal,
   TERMINATING_SIGNALS,
   isTerminatingSignal,
+  REPEAT_SIGNAL_WINDOW_MS,
   reRaiseSignal,
+  type TerminatingSignalCleanup,
   type TerminatingSignalGuard,
   handleTerminatingSignals,
 } from './terminating-signals.js';

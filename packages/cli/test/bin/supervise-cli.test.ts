@@ -8,6 +8,7 @@
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 
+import { REPEAT_SIGNAL_WINDOW_MS } from '@vibe-agent-toolkit/utils/process';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { superviseCli } from '../../src/bin/supervise-cli.js';
@@ -95,5 +96,30 @@ describe('superviseCli', () => {
 
     expect(exit).toHaveBeenCalledWith(0);
     expect(counts()).toStrictEqual(baseline);
+  });
+
+  // 🚨 Swallowed for ever, a repeat could not end a CLI whose cleanup hung: the wrapper waited on it
+  // for good. A repeat past the window kills the CLI and ends this process at once.
+  it('a repeat AFTER the window: the CLI is SIGKILLed and this process dies of the repeat at once', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date'] });
+    try {
+      process.emit('SIGTERM', 'SIGTERM');
+      vi.advanceTimersByTime(REPEAT_SIGNAL_WINDOW_MS - 100);
+      process.emit('SIGTERM', 'SIGTERM');
+      expect(exit).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(200);
+      process.emit('SIGINT', 'SIGINT');
+
+      if (POSIX) {
+        expect(processKill).toHaveBeenCalledWith(cli.pid, 'SIGKILL');
+        expect(processKill).toHaveBeenLastCalledWith(process.pid, 'SIGINT');
+      }
+      expect(exit).toHaveBeenCalledExactlyOnceWith(2);
+      // The CLI's own exit, later, changes nothing: this process has already ended.
+      expect(counts()).toStrictEqual(baseline);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -392,13 +392,16 @@ function refuseOutsideTmpdir(dir: string): void {
  *
  * @param dir - The directory, strictly under the temp directory
  * @param failure - What the work threw; the caller rethrows it
+ * @returns `undefined` when the directory went; otherwise the leftover fault, already recorded
+ *   beside `failure` — for a caller that must also say so where no report will carry the failure
  * @throws VatError {@link TEMP_DIR_OUTSIDE_TMPDIR_CODE} — a defect in the caller — for a
  *   directory not strictly under the temp directory, with nothing removed
  */
-export async function disposeTempDirAfterFailure(dir: string, failure: unknown): Promise<void> {
+export async function disposeTempDirAfterFailure(dir: string, failure: unknown): Promise<unknown> {
   refuseOutsideTmpdir(dir);
   const fault = await disposalFault(dir);
   if (fault !== undefined) recordSuppressedFault(failure, fault);
+  return fault;
 }
 
 /** What {@link withTempDir} hands back once its work SUCCEEDED: the work's value, and what the disposal left. */
