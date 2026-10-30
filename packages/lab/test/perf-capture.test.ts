@@ -51,7 +51,24 @@ import type { MeasuredCommandSpec } from '../src/harness/commands.js';
 import { runRepeats } from '../src/harness/repeat.js';
 import type { ResolvedSubject } from '../src/harness/types.js';
 
-import { cleanupProbes, PROBE_DEFAULT_STDERR, PROBE_EXIT_CODE_ENV, PROBE_FAIL_AT_ENV, PROBE_FAIL_EXIT, PROBE_FAIL_TOKEN, PROBE_STDERR_ENV, PROBE_VERSION, probeSpec, setupProbe, type Probe } from './command-probe.js';
+import {
+  cleanupProbes,
+  EVERY_REPEAT_FAILS_COLD,
+  NO_REPEATS_COLD,
+  type Probe,
+  PROBE_DEFAULT_STDERR,
+  PROBE_EXIT_CODE_ENV,
+  PROBE_FAIL_AT_ENV,
+  PROBE_FAIL_EXIT,
+  PROBE_FAIL_TOKEN,
+  PROBE_FAILS,
+  PROBE_PASSES,
+  PROBE_STDERR_ENV,
+  PROBE_VERSION,
+  probeCaptureDefaults,
+  probeSpec,
+  setupProbe,
+} from './command-probe.js';
 
 afterAll(cleanupProbes);
 
@@ -61,16 +78,10 @@ const PREFIX = 'lab-perf-capture-';
 /** The caller owns the clock, so this exact string must come back in the report. */
 const CAPTURED_AT = '2026-08-09T12:34:56.000Z';
 
-/** A command that always succeeds. */
-const PASSES: MeasuredCommandSpec = { name: 'audit', args: ['audit'] };
-
-/** A command that always fails, on every repeat, by argv. */
-const FAILS: MeasuredCommandSpec = { name: 'broken', args: [PROBE_FAIL_TOKEN] };
-
 /**
  * The same always-non-zero command, declared to COMPLETE at 1 as well as 0.
  *
- * The one deliberate difference from {@link FAILS}: same name, same arguments,
+ * The one deliberate difference from {@link PROBE_FAILS}: same name, same arguments,
  * same probe behaviour. Pairing them is what makes the exit-code acceptance
  * falsifiable — with one spec the row is a measurement and with the other it is
  * a poisoned row, over byte-identical repeats.
@@ -79,6 +90,8 @@ const FINDINGS: MeasuredCommandSpec = {
   name: 'broken',
   args: [PROBE_FAIL_TOKEN],
   completedExitCodes: [0, 1],
+  provenance: 'none',
+  populates: false,
 };
 
 /**
@@ -92,13 +105,23 @@ const PASSES_WITH_FINDINGS: MeasuredCommandSpec = {
   name: 'audit',
   args: ['audit'],
   completedExitCodes: [0, 1],
+  provenance: 'none',
+  populates: false,
 };
 
 /** Makes the probe's non-zero exit vat's findings code rather than a crash code. */
 const EXITS_ONE = { [PROBE_EXIT_CODE_ENV]: '1' };
 
-/** The whole failure suffix a `boom` command produces, at the default stderr. */
-const FAIL_REASON = `exited ${String(PROBE_FAIL_EXIT)}: ${PROBE_DEFAULT_STDERR}`;
+/**
+ * The whole failure suffix a failing step produces, at the default stderr.
+ *
+ * @param step - The step's name, which is the measured command's name
+ * @param exit - The code it exited with
+ * @returns The suffix
+ */
+function failReason(step: string, exit = PROBE_FAIL_EXIT): string {
+  return `step '${step}' exited ${String(exit)}: ${PROBE_DEFAULT_STDERR}`;
+}
 
 /**
  * A subject literal pointing at the probe's directory.
@@ -127,15 +150,10 @@ function subjectAt(path: string): ResolvedSubject {
 function capture(
   probe: Probe,
   overrides: Omit<Partial<CapturePerfOptions>, 'env'> & { env?: ArmEnvironment['set'] } = {},
-): ReportEnvelope<PerfBody> {
+): Promise<ReportEnvelope<PerfBody>> {
   const { env, ...rest } = overrides;
   return capturePerf({
-    instrument: probe.instrument,
-    subject: subjectAt(probe.cwd),
-    commands: [PASSES],
-    runs: 3,
-    cache: 'warm',
-    capturedAt: CAPTURED_AT,
+    ...probeCaptureDefaults(probe, subjectAt(probe.cwd), CAPTURED_AT),
     ...rest,
     env: { set: env ?? {}, unset: [] },
   });
@@ -155,17 +173,18 @@ function onlyRow(report: ReportEnvelope<PerfBody>): PerfCommandStats {
 }
 
 describe('capturePerf — a clean measurement', () => {
-  it('keeps every repeat and reports statistics consistent with the samples', () => {
+  it('keeps every repeat and reports statistics consistent with the samples', async () => {
     const probe = setupProbe(PREFIX);
 
-    const row = onlyRow(capture(probe, { runs: 3 }));
+    const row = onlyRow(await capture(probe, { runs: 3 }));
 
     expect(row.failed).toBe(false);
     expect(row.failure).toBeNull();
     expect(row.exitCode).toBe(0);
     expect(row.runs).toBe(3);
     expect(row.samplesMs).toHaveLength(3);
-    expect(probe.entries()).toHaveLength(3);
+    // The warm arm's priming run, then the three measured repeats.
+    expect(probe.entries()).toHaveLength(4);
 
     // Checked against the samples the row itself published, not against a second
     // call to `summarize` — that would only prove the function agrees with
@@ -176,36 +195,36 @@ describe('capturePerf — a clean measurement', () => {
     expect(row.iqrMs).toBeLessThanOrEqual(row.maxMs - row.minMs);
   });
 
-  it('echoes the requested name, arguments and cache mode into the row', () => {
+  it('echoes the requested name, arguments and cache mode into the row', async () => {
     const probe = setupProbe(PREFIX);
 
-    const row = onlyRow(capture(probe, { runs: 1, cache: 'cold' }));
+    const row = onlyRow(await capture(probe, { runs: 1, cache: 'cold' }));
 
-    expect(row.name).toBe(PASSES.name);
-    expect(row.args).toEqual(PASSES.args);
+    expect(row.name).toBe(PROBE_PASSES.name);
+    expect(row.args).toEqual(PROBE_PASSES.args);
     expect(row.cache).toBe('cold');
   });
 });
 
 describe('capturePerf — a failed repeat is never timed', () => {
-  it('CONTROL: the fixture fails exactly the chosen repeat and no other', () => {
+  it('CONTROL: the fixture fails exactly the chosen repeat and no other', async () => {
     // Without this, "1 of 3 repeats failed" could be produced by a fixture that
     // failed all three and a mutant that lost count — the two would be
     // indistinguishable. Driving `runRepeats` directly reads the exit codes the
     // facet is about to be handed.
     const probe = setupProbe(PREFIX);
 
-    const results = runRepeats(
-      probeSpec(probe, { runs: 3, env: { [PROBE_FAIL_AT_ENV]: '1' } }),
-    );
+    const results = (await runRepeats(
+      probeSpec(probe, { runs: 3, env: { [PROBE_FAIL_AT_ENV]: '2' } }),
+    )).results;
 
     expect(results.map((run) => run.exitCode)).toEqual([0, PROBE_FAIL_EXIT, 0]);
   });
 
-  it('poisons the WHOLE row when one repeat of three failed', () => {
+  it('poisons the WHOLE row when one repeat of three failed', async () => {
     const probe = setupProbe(PREFIX);
 
-    const row = onlyRow(capture(probe, { runs: 3, env: { [PROBE_FAIL_AT_ENV]: '1' } }));
+    const row = onlyRow(await capture(probe, { runs: 3, env: { [PROBE_FAIL_AT_ENV]: '2' } }));
 
     // Two repeats produced perfectly good timings. Reporting their median would
     // answer a different question than the one asked — and, because the failure
@@ -214,58 +233,59 @@ describe('capturePerf — a failed repeat is never timed', () => {
     expect(row.samplesMs).toEqual([]);
     expect(row.exitCode).toBeNull();
     expect(row.runs).toBe(3);
-    expect(row.failure).toBe(`1 of 3 repeats failed — ${FAIL_REASON}`);
+    expect(row.failure).toBe(`1 of 3 repeats failed — ${failReason(PROBE_PASSES.name)}`);
 
     // Zeros, not absent: an empty measurement must never look like a fast one,
     // which is why `failed` and `samplesMs` above carry the meaning instead.
     expect([row.medianMs, row.minMs, row.maxMs, row.iqrMs]).toEqual([0, 0, 0, 0]);
-    expect(probe.entries()).toHaveLength(3);
+    expect(probe.entries()).toHaveLength(4);
   });
 
-  it('counts every failure when they all failed', () => {
+  it('counts every failure when they all failed', async () => {
     const probe = setupProbe(PREFIX);
 
-    const row = onlyRow(capture(probe, { runs: 2, commands: [FAILS] }));
+    const row = onlyRow(await capture(probe, EVERY_REPEAT_FAILS_COLD));
 
     expect(row.failed).toBe(true);
     expect(row.runs).toBe(2);
-    expect(row.failure).toBe(`2 of 2 repeats failed — ${FAIL_REASON}`);
+    expect(row.failure).toBe(`2 of 2 repeats failed — ${failReason(PROBE_FAILS.name)}`);
   });
 
-  it('caps the stderr excerpt so one loud failure cannot swamp the report', () => {
+  it('caps the stderr excerpt so one loud failure cannot swamp the report', async () => {
     const probe = setupProbe(PREFIX);
 
     const row = onlyRow(
-      capture(probe, {
+      await capture(probe, {
         runs: 1,
-        commands: [FAILS],
+        commands: [PROBE_FAILS],
+        cache: 'cold',
         env: { [PROBE_STDERR_ENV]: 'x'.repeat(500) },
       }),
     );
 
     expect(row.failure).toBe(
-      `1 of 1 repeats failed — exited ${String(PROBE_FAIL_EXIT)}: ${'x'.repeat(200)}`,
+      `1 of 1 repeats failed — step '${PROBE_FAILS.name}' exited ${String(PROBE_FAIL_EXIT)}: ${'x'.repeat(200)}`,
     );
   });
 });
 
 describe('capturePerf — a findings exit is a completed run', () => {
-  it('CONTROL: the fixture really does exit 1 on every repeat, not 0 and not 3', () => {
+  it('CONTROL: the fixture really does exit 1 on every repeat, not 0 and not 3', async () => {
     // Without this the measurable row below could be produced by a probe that
     // quietly exited 0, and "the spec accepted 1" would be untested.
     const probe = setupProbe(PREFIX);
 
-    const results = runRepeats(
-      probeSpec(probe, { args: [PROBE_FAIL_TOKEN], runs: 3, env: EXITS_ONE }),
-    );
+    const results = (await runRepeats(
+      probeSpec(probe, { args: [PROBE_FAIL_TOKEN], runs: 3, env: EXITS_ONE, cache: 'cold' }),
+    )).results;
 
     expect(results.map((run) => run.exitCode)).toEqual([1, 1, 1]);
   });
 
-  it('measures a command whose every repeat exited 1, when 1 means completed', () => {
+  it('measures a command whose every repeat exited 1, when 1 means completed', async () => {
     const probe = setupProbe(PREFIX);
 
-    const row = onlyRow(capture(probe, { runs: 3, commands: [FINDINGS], env: EXITS_ONE }));
+    const row = onlyRow(await capture(probe, { runs: 3, commands: [FINDINGS], env: EXITS_ONE }));
 
     expect(row.failed).toBe(false);
     expect(row.failure).toBeNull();
@@ -275,59 +295,60 @@ describe('capturePerf — a findings exit is a completed run', () => {
     expect(row.exitCode).toBe(1);
   });
 
-  it('poisons the identical repeats when the command did NOT declare 1 completed', () => {
+  it('poisons the identical repeats when the command did NOT declare 1 completed', async () => {
     // Same probe, same argv, same exit code — only the spec differs. This is the
     // shipped behaviour, pinned so the change cannot widen past what it declared.
     const probe = setupProbe(PREFIX);
 
-    const row = onlyRow(capture(probe, { runs: 3, commands: [FAILS], env: EXITS_ONE }));
+    const row = onlyRow(await capture(probe, { runs: 3, commands: [PROBE_FAILS], env: EXITS_ONE, cache: 'cold' }));
 
     expect(row.failed).toBe(true);
     expect(row.exitCode).toBeNull();
     expect(row.samplesMs).toEqual([]);
-    expect(row.failure).toBe(`3 of 3 repeats failed — exited 1: ${PROBE_DEFAULT_STDERR}`);
+    expect(row.failure).toBe(`3 of 3 repeats failed — ${failReason(PROBE_FAILS.name, 1)}`);
   });
 
-  it('refuses exit 2 even for a command that accepts a findings exit', () => {
+  it('refuses exit 2 even for a command that accepts a findings exit', async () => {
     // vat's 2 is "system error" — a run that did not complete, whose duration is
     // the duration of giving up. No spec may opt into timing that.
     const probe = setupProbe(PREFIX);
 
     const row = onlyRow(
-      capture(probe, {
+      await capture(probe, {
         runs: 2,
         commands: [FINDINGS],
+        cache: 'cold',
         env: { [PROBE_EXIT_CODE_ENV]: '2' },
       }),
     );
 
     expect(row.failed).toBe(true);
     expect(row.exitCode).toBeNull();
-    expect(row.failure).toBe(`2 of 2 repeats failed — exited 2: ${PROBE_DEFAULT_STDERR}`);
+    expect(row.failure).toBe(`2 of 2 repeats failed — ${failReason(FINDINGS.name, 2)}`);
   });
 });
 
 describe('capturePerf — repeats that completed differently', () => {
-  it('CONTROL: the fixture makes repeat 1 exit 1 while the others exit 0', () => {
+  it('CONTROL: the fixture makes repeat 1 exit 1 while the others exit 0', async () => {
     const probe = setupProbe(PREFIX);
 
-    const results = runRepeats(
-      probeSpec(probe, { runs: 3, env: { ...EXITS_ONE, [PROBE_FAIL_AT_ENV]: '1' } }),
-    );
+    const results = (await runRepeats(
+      probeSpec(probe, { runs: 3, env: { ...EXITS_ONE, [PROBE_FAIL_AT_ENV]: '2' } }),
+    )).results;
 
     // The repeats genuinely differ. A fixture where all three exited alike could
     // not tell "uniformity is checked" from "uniformity is ignored".
     expect(results.map((run) => run.exitCode)).toEqual([0, 1, 0]);
   });
 
-  it('fails the row when accepted codes disagree, naming both codes', () => {
+  it('fails the row when accepted codes disagree, naming both codes', async () => {
     const probe = setupProbe(PREFIX);
 
     const row = onlyRow(
-      capture(probe, {
+      await capture(probe, {
         runs: 3,
         commands: [PASSES_WITH_FINDINGS],
-        env: { ...EXITS_ONE, [PROBE_FAIL_AT_ENV]: '1' },
+        env: { ...EXITS_ONE, [PROBE_FAIL_AT_ENV]: '2' },
       }),
     );
 
@@ -339,13 +360,26 @@ describe('capturePerf — repeats that completed differently', () => {
   });
 });
 
-describe('capturePerf — no repeats at all', () => {
-  it('marks the row failed rather than reporting a zero-millisecond command', () => {
+describe('capturePerf — a warm arm whose priming run failed', () => {
+  it('measures nothing and says the priming run failed, not that no repeats were asked for', async () => {
     const probe = setupProbe(PREFIX);
 
-    // Cold on purpose: a cache clear hoisted out of the repeat loop would still
-    // spawn a child here, where nothing at all should run.
-    const row = onlyRow(capture(probe, { runs: 0, cache: 'cold' }));
+    const row = onlyRow(await capture(probe, { runs: 3, commands: [PROBE_FAILS] }));
+
+    expect(row.failed).toBe(true);
+    expect(row.runs).toBe(0);
+    expect(row.samplesMs).toEqual([]);
+    expect(row.failure).toBe(`priming failed — priming run: ${failReason(PROBE_FAILS.name)}`);
+    // The priming run only: a failed priming run spawns no measured repeat.
+    expect(probe.entries()).toHaveLength(1);
+  });
+});
+
+describe('capturePerf — no repeats at all', () => {
+  it('marks the row failed rather than reporting a zero-millisecond command', async () => {
+    const probe = setupProbe(PREFIX);
+
+    const row = onlyRow(await capture(probe, NO_REPEATS_COLD));
 
     expect(row.runs).toBe(0);
     expect(row.failed).toBe(true);
@@ -358,12 +392,12 @@ describe('capturePerf — no repeats at all', () => {
 });
 
 describe('capturePerf — rows are independent', () => {
-  it('keeps a failing command from poisoning the commands either side of it', () => {
+  it('keeps a failing command from poisoning the commands either side of it', async () => {
     const probe = setupProbe(PREFIX);
-    const before: MeasuredCommandSpec = { name: 'before', args: ['audit'] };
-    const after: MeasuredCommandSpec = { name: 'after', args: ['audit', '--json'] };
+    const before: MeasuredCommandSpec = { name: 'before', args: ['audit'], provenance: 'none', populates: false };
+    const after: MeasuredCommandSpec = { name: 'after', args: ['audit', '--json'], provenance: 'none', populates: false };
 
-    const report = capture(probe, { runs: 2, commands: [before, FAILS, after] });
+    const report = await capture(probe, { runs: 2, commands: [before, PROBE_FAILS, after] });
 
     // The failing command sits in the middle, so an accumulator that leaked
     // failures forward and one that leaked them backward both show up here.
@@ -378,11 +412,11 @@ describe('capturePerf — rows are independent', () => {
 });
 
 describe('capturePerf — the envelope', () => {
-  it('names the facet and stamps all three coordinate axes', () => {
+  it('names the facet and stamps all three coordinate axes', async () => {
     const probe = setupProbe(PREFIX);
     const subject = subjectAt(probe.cwd);
 
-    const report = capture(probe, { runs: 1 });
+    const report = await capture(probe, { runs: 1 });
 
     // The header this build would refuse is the header no capture may produce.
     expect(readEnvelope(report).ok).toBe(true);
@@ -394,16 +428,16 @@ describe('capturePerf — the envelope', () => {
     });
   });
 
-  it('echoes the caller-supplied capture time rather than reading a clock', () => {
+  it('echoes the caller-supplied capture time rather than reading a clock', async () => {
     const probe = setupProbe(PREFIX);
 
-    expect(capture(probe, { runs: 1 }).capturedAt).toBe(CAPTURED_AT);
+    expect((await capture(probe, { runs: 1 })).capturedAt).toBe(CAPTURED_AT);
   });
 
-  it('produces a body that validates against the facet schema, failures included', () => {
+  it('produces a body that validates against the facet schema, failures included', async () => {
     const probe = setupProbe(PREFIX);
 
-    const report = capture(probe, { runs: 2, commands: [PASSES, FAILS] });
+    const report = await capture(probe, { runs: 2, commands: [PROBE_PASSES, PROBE_FAILS] });
 
     // Reported through the assertion rather than as a bare boolean: a strict
     // schema rejecting one field should say which one.

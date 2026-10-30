@@ -41,11 +41,19 @@ import {
   type ParseCommandStats,
 } from '../src/facets/parse/types.js';
 import type { ArmEnvironment } from '../src/harness/arm-env.js';
-import type { MeasuredCommandSpec } from '../src/harness/commands.js';
 import type { ResolvedSubject } from '../src/harness/types.js';
 
 import { expectBodyMatchesSchema, expectStamp, probeSubject } from './capture-fixtures.js';
-import { cleanupProbes, PROBE_FAIL_EXIT, PROBE_FAIL_TOKEN, setupProbe, type Probe } from './command-probe.js';
+import {
+  cleanupProbes,
+  NO_REPEATS_COLD,
+  type Probe,
+  PROBE_FAIL_EXIT,
+  PROBE_FAILS,
+  PROBE_PASSES,
+  probeCaptureDefaults,
+  setupProbe,
+} from './command-probe.js';
 
 /** Temp-directory prefix, so a stray directory names this suite. */
 const PREFIX = 'lab-parse-capture-';
@@ -93,12 +101,6 @@ const MARKDOWN = 'markdown';
  */
 const THREE_TOTALS = '300,150,100';
 
-/** A command that always succeeds. */
-const PASSES: MeasuredCommandSpec = { name: 'audit', args: ['audit'] };
-
-/** A command that always fails, on every repeat, by argv. */
-const FAILS: MeasuredCommandSpec = { name: 'broken', args: [PROBE_FAIL_TOKEN] };
-
 /**
  * The stand-in seam, in CommonJS because `--require` accepts nothing else.
  *
@@ -119,7 +121,7 @@ const SEAM_SOURCE = [
   "if (typeof dir === 'string' && dir !== '') {",
   '  // Counted only here, INSIDE the dump-directory guard, so the repeat index',
   '  // advances once per measured run. A counter outside it would also count the',
-  "  // cache clears that cold mode runs, and every repeat's numbers would shift.",
+  "  // priming run that warm mode runs, and every repeat's numbers would shift.",
   '  let shot = 0;',
   "  if (typeof shotFile === 'string') {",
   "    try { shot = Number(readFileSync(shotFile, 'utf-8')) || 0; } catch { shot = 0; }",
@@ -216,12 +218,8 @@ async function capture(
   overrides: Omit<Partial<CaptureParseOptions>, 'env'> & { env?: ArmEnvironment['set'] } = {},
 ): Promise<ReportEnvelope<ParseBody>> {
   return captureParse({
-    instrument: probe.instrument,
-    subject: subjectAt(probe.cwd),
-    commands: [PASSES],
-    runs: 3,
+    ...probeCaptureDefaults(probe, subjectAt(probe.cwd), CAPTURED_AT),
     cache: 'cold',
-    capturedAt: CAPTURED_AT,
     ...overrides,
     env: {
       set: {
@@ -382,15 +380,16 @@ describe('captureParse — one dump directory per repeat', () => {
     expect(row.totalMs).toBe(300);
   });
 
-  it('instruments the measured run and not the cache clear', async () => {
+  it('instruments the measured runs and not the priming run', async () => {
     const probe = setupProbe(PREFIX);
 
-    // Four children ran — a clear before each repeat — and only the two measured
-    // ones were handed a dump directory. A clear that dumped into the repeat's
-    // own directory would double `processes` and every millisecond in it.
-    const row = onlyRow(await capture(probe, { runs: 2, cache: 'cold' }));
+    // Three children ran — the warm arm's priming run, then two repeats — and
+    // only the two measured ones were handed a dump directory. A priming run that
+    // dumped would double `processes` in the first repeat it shared a directory
+    // with, and shift the seam's per-repeat numbers by one.
+    const row = onlyRow(await capture(probe, { runs: 2, cache: 'warm' }));
 
-    expect(probe.entries()).toHaveLength(4);
+    expect(probe.entries()).toHaveLength(3);
     expect(row.processes).toBe(1);
   });
 });
@@ -448,7 +447,7 @@ describe('captureParse — a row that measured nothing says so', () => {
   it('poisons the whole row when a repeat failed', async () => {
     const probe = setupProbe(PREFIX);
 
-    const row = onlyRow(await capture(probe, { runs: 2, commands: [FAILS] }));
+    const row = onlyRow(await capture(probe, { runs: 2, commands: [PROBE_FAILS] }));
 
     // Asserted as one shape: every measurement field has to be zeroed together,
     // and `attribution` has to say `not-measured` rather than leaving a reader
@@ -474,9 +473,7 @@ describe('captureParse — a row that measured nothing says so', () => {
   it('marks a row failed rather than reporting a command that parsed nothing', async () => {
     const probe = setupProbe(PREFIX);
 
-    // Cold on purpose: a cache clear hoisted out of the repeat loop would still
-    // spawn a child here, where nothing at all should run.
-    const row = onlyRow(await capture(probe, { runs: 0, cache: 'cold' }));
+    const row = onlyRow(await capture(probe, NO_REPEATS_COLD));
 
     expect([row.runs, row.failed, row.failure]).toEqual([0, true, 'no repeats were requested']);
     expect(probe.entries()).toEqual([]);
@@ -499,7 +496,7 @@ describe('captureParse — the envelope', () => {
   it('produces a schema-valid body when one of two commands failed', async () => {
     const probe = setupProbe(PREFIX);
 
-    const report = await capture(probe, { runs: 2, commands: [PASSES, FAILS] });
+    const report = await capture(probe, { runs: 2, commands: [PROBE_PASSES, PROBE_FAILS] });
 
     expectBodyMatchesSchema(ParseBodySchema, report.body);
     expect(report.body.load.cpus).toBeGreaterThanOrEqual(1);

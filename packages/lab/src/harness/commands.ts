@@ -19,6 +19,8 @@
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
 
+import type { ProvenanceReader } from './provenance.js';
+
 /** What one vat command was asked to do. */
 export interface MeasuredCommandSpec {
   /** Stable artifact name, appearing in the report and any diff. */
@@ -49,6 +51,24 @@ export interface MeasuredCommandSpec {
    * **uniform** — see `summarizeRepeatFailures` in `repeat.ts`.
    */
   readonly completedExitCodes?: readonly number[];
+  /**
+   * Which document reader this command's stdout goes through for the warm rule
+   * (`provenance.ts`): `none` for a verb that publishes no population.
+   */
+  readonly provenance: ProvenanceReader;
+  /**
+   * Whether a cold run of this command, as the first step of its sequence, must
+   * leave the arm's store non-empty and a shard in the build's parse directory
+   * (the cold rule). `false` asserts nothing after the step — say `true` only for
+   * a verb known to populate a projection on every build it is measured with.
+   */
+  readonly populates: boolean;
+}
+
+/** A named sequence of measured commands, run in order as one repetition (CI's `&&` chain). */
+export interface MeasuredSequenceSpec {
+  readonly name: string;
+  readonly steps: readonly MeasuredCommandSpec[];
 }
 
 /**
@@ -98,11 +118,15 @@ export function completedExitCodesOf(spec: MeasuredCommandSpec): readonly number
 export const MEASURABLE_COMMANDS = Object.freeze({
   'resources-scan': Object.freeze({
     name: 'resources-scan',
+    provenance: 'none',
+    populates: false,
     args: Object.freeze(['resources', 'scan', '{subject}']),
     // Exit 1 is only the refusal for a scan of NOTHING — no measurement — so `[0]`.
   }),
   'resources-population': Object.freeze({
     name: 'resources-population',
+    provenance: 'none',
+    populates: false,
     // The same scan, asked for the whole file list in a format a consumer can
     // read without a YAML parser. Three flags, each load-bearing and none of
     // them a preference:
@@ -121,6 +145,8 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   }),
   'resources-query': Object.freeze({
     name: 'resources-query',
+    provenance: 'none',
+    populates: false,
     // The ONLY entry whose own output names which population arm the run took
     // (`population: derived | store`) and what that arm cost
     // (`populationSecs`). Every other entry is silent about it, so an A/B
@@ -145,11 +171,15 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   }),
   'resources-validate': Object.freeze({
     name: 'resources-validate',
+    provenance: 'none',
+    populates: false,
     args: Object.freeze(['resources', 'validate', '{subject}', '--format', 'json']),
     completedExitCodes: FINDINGS_COMPLETED_EXIT_CODES,
   }),
   audit: Object.freeze({
     name: 'audit',
+    provenance: 'none',
+    populates: false,
     args: Object.freeze(['audit', '{subject}']),
     // Exits 1 over `status: error` like every other gate; both codes audited
     // the whole tree.
@@ -157,6 +187,8 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   }),
   inventory: Object.freeze({
     name: 'inventory',
+    provenance: 'none',
+    populates: false,
     args: Object.freeze(['inventory', '{subject}']),
     // Structural extraction: reports what it found and exits 0 whatever that is.
     //
@@ -170,6 +202,8 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   }),
   validate: Object.freeze({
     name: 'validate',
+    provenance: 'none',
+    populates: false,
     // No subject argument: `vat validate` REJECTS a positional path (exit 2) and
     // takes its scope from the config at the cwd, which the harness has already
     // set to the subject.
@@ -178,6 +212,8 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   }),
   verify: Object.freeze({
     name: 'verify',
+    provenance: 'none',
+    populates: false,
     // Also path-rejecting, for the same reason. Reads the built `dist/` tree, so
     // a subject measured with this one has to have been built first.
     args: Object.freeze(['verify']),
@@ -185,6 +221,8 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   }),
   'claude-context-all': Object.freeze({
     name: 'claude-context-all',
+    provenance: 'none',
+    populates: false,
     // No subject argument: `--all` sweeps every path the projection realized and
     // takes no positional, so like `validate` and `verify` its scope comes from
     // the cwd, which the harness has already set to the subject.
@@ -202,6 +240,8 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   }),
   'claude-context': Object.freeze({
     name: 'claude-context',
+    provenance: 'none',
+    populates: false,
     // The single-path control arm for the sweep above. One path answered out of
     // the same enumeration the sweep pays for, so the pair separates what the
     // population costs from what each answer costs: a fix that halves the sweep
@@ -212,6 +252,8 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   }),
   'skills-validate': Object.freeze({
     name: 'skills-validate',
+    provenance: 'none',
+    populates: false,
     // The `registry-md-html` lane's cheapest read-only entry point. Everything
     // else that builds that registry — `skills build`, `skills package`,
     // `claude plugin build`, `agent build`, `skill test run` — writes output, so
@@ -223,6 +265,8 @@ export const MEASURABLE_COMMANDS = Object.freeze({
   }),
   'skills-list': Object.freeze({
     name: 'skills-list',
+    provenance: 'none',
+    populates: false,
     // The cheapest enumerating verb there is: one crawl, no validation, no
     // parse. That is the point of measuring it — it is the closest thing the
     // registry has to a control for the crawl itself, so a change that moves
@@ -230,7 +274,84 @@ export const MEASURABLE_COMMANDS = Object.freeze({
     args: Object.freeze(['skills', 'list', '{subject}']),
     // Listing reports what it found and exits 0 whatever that is.
   }),
+  // ─── Commands exactly as CI runs them ────────────────────────────────────
+  // cwd is the subject root and there is NO subject path, no `--format`, no
+  // `--verbose`: the argv a CI job types. Each commits to exit 0 — a clean
+  // subject is the committed state, so a findings exit fails the measurement
+  // rather than timing a run that did different work than CI's.
+  'resources-validate-ci': Object.freeze({
+    name: 'resources-validate-ci',
+    args: Object.freeze(['resources', 'validate']),
+    // Today's builds publish no population on `resources validate`.
+    provenance: 'none',
+    populates: true,
+  }),
+  'resources-check-ci': Object.freeze({
+    name: 'resources-check-ci',
+    args: Object.freeze(['resources', 'check']),
+    // `data.population` — the field that proves arm B's baseline is warm.
+    provenance: 'resources-check',
+    populates: true,
+  }),
+  'skills-validate-ci': Object.freeze({
+    name: 'skills-validate-ci',
+    args: Object.freeze(['skills', 'validate']),
+    provenance: 'none',
+    // Never a first step in a CI sequence; nothing is asserted after it.
+    populates: false,
+  }),
+  'validate-ci': Object.freeze({
+    name: 'validate-ci',
+    args: Object.freeze(['validate']),
+    // The orchestrator document: the resources phase's population, and the
+    // checks phase's population and lensPopulation.
+    provenance: 'validate',
+    populates: true,
+  }),
+  'verify-ci': Object.freeze({
+    name: 'verify-ci',
+    // Reads a built `dist/`: the subject must have been built first.
+    args: Object.freeze(['verify']),
+    provenance: 'none',
+    populates: false,
+  }),
 }) satisfies Readonly<Record<string, MeasuredCommandSpec>>;
+
+/**
+ * The CI sequences the timed arms replay, by name: each is one repetition,
+ * steps in order, every step timed.
+ *
+ * - `ci-a` — today's CI: `resources validate` → `skills validate`.
+ * - `ci-b` — today's CI plus the checks (equal coverage): `resources validate`
+ *   → `resources check` → `skills validate`.
+ * - `ci-c` — the single run: `validate`.
+ */
+export const MEASURABLE_SEQUENCES = Object.freeze({
+  'ci-a': Object.freeze({
+    name: 'ci-a',
+    steps: Object.freeze([MEASURABLE_COMMANDS['resources-validate-ci'], MEASURABLE_COMMANDS['skills-validate-ci']]),
+  }),
+  'ci-b': Object.freeze({
+    name: 'ci-b',
+    steps: Object.freeze([
+      MEASURABLE_COMMANDS['resources-validate-ci'],
+      MEASURABLE_COMMANDS['resources-check-ci'],
+      MEASURABLE_COMMANDS['skills-validate-ci'],
+    ]),
+  }),
+  'ci-c': Object.freeze({ name: 'ci-c', steps: Object.freeze([MEASURABLE_COMMANDS['validate-ci']]) }),
+}) satisfies Readonly<Record<string, MeasuredSequenceSpec>>;
+
+/**
+ * Look one measurable sequence up by name.
+ *
+ * @param name - A key of {@link MEASURABLE_SEQUENCES}
+ * @returns The sequence, or `undefined` when nothing answers to that name
+ */
+export function measurableSequence(name: string): MeasuredSequenceSpec | undefined {
+  const registry: Readonly<Record<string, MeasuredSequenceSpec>> = MEASURABLE_SEQUENCES;
+  return Object.hasOwn(registry, name) ? registry[name] : undefined;
+}
 
 /** Every name {@link MEASURABLE_COMMANDS} answers to, for help text and errors. */
 export const MEASURABLE_COMMAND_NAMES: readonly string[] = Object.freeze(

@@ -29,6 +29,10 @@ export const VERDICT_VERB_NAMES = [
   'context-all',
   'context-path',
   'resources-query',
+  'validate',
+  'resources-validate-ci',
+  'resources-check-ci',
+  'skills-validate-ci',
 ] as const;
 
 /** One verb a subjects file may list. */
@@ -128,6 +132,13 @@ const SUBJECT_VERBS: { readonly [K in VerdictVerbName]: VerdictVerbSpec<K> } = {
         argv: ['resources', 'query', query.sql, s.path, '--format', 'json'],
       })),
   },
+  // The verbs as CI runs them: no subject path, scoped by the cwd — which is
+  // the subject root. `validate` publishes its phases' findings flat, every one
+  // of them only under `--verbose`.
+  validate: once('validate', () => ['validate', '--verbose']),
+  'resources-validate-ci': once('resources-validate-ci', () => ['resources', 'validate', '--verbose', '--format', 'json']),
+  'resources-check-ci': once('resources-check-ci', () => ['resources', 'check', '--format', 'json']),
+  'skills-validate-ci': once('skills-validate-ci', () => ['skills', 'validate', '--verbose']),
 };
 
 /** The clone-only verbs, in the order they run (build before what reads its output). */

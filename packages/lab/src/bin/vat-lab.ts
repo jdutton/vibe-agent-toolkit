@@ -7,6 +7,8 @@
  * vat config at all.
  */
 
+import { writeFileSync } from 'node:fs';
+
 import { ExitCode, installLastResortExit } from '@vibe-agent-toolkit/schema';
 import { parseWholeNumberAtLeast, safePath } from '@vibe-agent-toolkit/utils';
 import { isEntrypoint } from '@vibe-agent-toolkit/utils/process';
@@ -22,6 +24,7 @@ import { renderIoComparison, renderIoReport } from '../facets/io/render.js';
 import { captureParse } from '../facets/parse/capture.js';
 import { compareParse } from '../facets/parse/compare.js';
 import { renderParseComparison, renderParseReport } from '../facets/parse/render.js';
+import { captureArms, renderArmsReport, sequenceSteps } from '../facets/perf/arms.js';
 import { capturePerf } from '../facets/perf/capture.js';
 import { comparePerf } from '../facets/perf/compare.js';
 import { renderPerfComparison, renderPerfReport } from '../facets/perf/render.js';
@@ -35,7 +38,10 @@ import { captureVerdict } from '../facets/verdict/capture.js';
 import { compareVerdict, readVerdictDirectory } from '../facets/verdict/compare.js';
 import { CHANGELOG_REFERENCE_ROOT, COMMITTED_VERDICT_DELTAS, loadVerdictDeltas, readChangelogSources } from '../facets/verdict/deltas.js';
 import { renderVerdictComparison, renderVerdictReport } from '../facets/verdict/render.js';
-import { loadVerdictSubjects } from '../facets/verdict/subjects.js';
+import { loadVerdictSubjects, type VerdictSubject } from '../facets/verdict/subjects.js';
+import type { VerdictBody } from '../facets/verdict/types.js';
+import { unionCoverage } from '../facets/verdict/union.js';
+import type { Validated } from '../facets/verdict/yaml-file.js';
 import {
   abExitCondition,
   CHANGED_VERDICT,
@@ -46,17 +52,23 @@ import {
   runAb,
   UNMEASURABLE_VERDICT,
 } from '../harness/ab.js';
+import { buildAlias } from '../harness/arm-dirs.js';
 import { type ArmEnvironment, armEnvironmentClash, sameArmEnvironment } from '../harness/arm-env.js';
+import { prepareClone } from '../harness/clone.js';
 import { indistinguishableArms } from '../harness/closure.js';
 import {
   DEFAULT_MEASURED_COMMANDS,
   MEASURABLE_COMMAND_NAMES,
+  MEASURABLE_SEQUENCES,
   measurableCommand,
+  measurableSequence,
   type MeasuredCommandSpec,
+  type MeasuredSequenceSpec,
   POPULATION_MEASURED_COMMANDS,
 } from '../harness/commands.js';
 import { resolveInstrument } from '../harness/instrument.js';
 import { instrumentLabel, instrumentTrustNotes } from '../harness/render.js';
+import type { SequenceStep } from '../harness/sequence.js';
 import { resolveSubject } from '../harness/subject.js';
 import type { CacheMode, InstrumentSource, ResolvedInstrument } from '../harness/types.js';
 import { readReport, writeReport } from '../store.js';
@@ -75,6 +87,10 @@ import { readReport, writeReport } from '../store.js';
 
 /** The `--out` flag's spelling, shared by every facet's `run` and `ab`. */
 const OUT_OPTION = '--out <dir>';
+/** The arm-environment options every capturing verb declares, and how a refusal names them. */
+const ENV_OPTION = '--env <KEY=VALUE>';
+const UNSET_OPTION = '--unset <KEY>';
+const ENV_OPTIONS_LABEL = '--env and --unset';
 
 /**
  * Parse an instrument specifier into a source.
@@ -438,7 +454,7 @@ function addAbCommand<TBody, TComparison extends ComparisonLike>(
     .option('--runs <n>', 'Repeats per capture', wholeNumberAtLeast('--runs', 1), wiring.defaultRuns)
     .option(
       '--cache <mode>',
-      "'warm' or 'cold' (cold clears vat's caches before every repeat)",
+      "'warm' or 'cold' (cold deletes the arm's own store and temp directory before every repeat; warm primes them once)",
       parseCacheMode,
       wiring.defaultCache,
     )
@@ -618,7 +634,7 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
     )
     .option(
       '--cache <mode>',
-      "'warm' or 'cold' (cold clears vat's caches before every repeat)",
+      "'warm' or 'cold' (cold deletes the arm's own store and temp directory before every repeat; warm primes them once)",
       parseCacheMode,
       wiring.defaultCache,
     )
@@ -628,13 +644,13 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
       collectMeasuredCommand,
     )
     .option(
-      '--env <KEY=VALUE>',
+      ENV_OPTION,
       'Set a variable for every child (repeatable). VAT_BIN, VAT_ROOT_DIR and the other ' +
         'variables that select which vat runs are never inherited — set them here',
       collectEnv('--env'),
     )
     .option(
-      '--unset <KEY>',
+      UNSET_OPTION,
       'Remove an inherited variable from every child (repeatable)',
       collectUnset('--unset'),
     )
@@ -645,7 +661,7 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
     )
     .description(wiring.runSummary)
     .action(async (subjectPath: string, options: RunOptions) => {
-      const env = armEnvironment(options.env, options.unset, '--env and --unset');
+      const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
       if (env === null) return;
       const instrument = await resolveInstrument(options.instrument);
       const subject = await resolveSubject({ id: options.id ?? subjectPath, path: subjectPath });
@@ -658,6 +674,7 @@ function createFacetCommand<TBody, TComparison extends ComparisonLike>(
         runs: options.runs,
         cache: options.cache,
         env,
+        arms: { out: safePath.resolve(options.out), build: buildAlias(instrument.version) },
         capturedAt: new Date().toISOString(),
       });
       const written = await writeReport(options.out, report);
@@ -788,6 +805,184 @@ function refuse(refusal: string): void {
   process.exitCode = ExitCode.ERROR;
 }
 
+/** A plain directory-name segment, as an arm directory's build alias must be. */
+const ALIAS = /^[\w-][\w.-]*$/u;
+
+/** One `perf arms --build`: an alias and where its vat comes from. */
+export interface ArmsBuildOption {
+  readonly alias: string;
+  readonly source: InstrumentSource;
+}
+
+/** One `perf arms --arm`: which build runs which CI sequence, cold or warm. */
+export interface ArmsSelectionOption {
+  readonly build: string;
+  readonly sequence: MeasuredSequenceSpec;
+  readonly state: CacheMode;
+}
+
+/**
+ * A Commander parser for `perf arms --build alias=<instrument>`, accumulating.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Builds collected so far
+ * @returns The accumulated builds
+ * @throws {InvalidArgumentError} when the alias is not a plain segment or the instrument does not parse
+ */
+export function collectArmsBuild(value: string, previous: readonly ArmsBuildOption[] | undefined): ArmsBuildOption[] {
+  const at = value.indexOf('=');
+  const alias = at === -1 ? '' : value.slice(0, at);
+  if (!ALIAS.test(alias)) {
+    throw new InvalidArgumentError(`--build expects alias=<instrument> with a plain directory-name alias; got '${value}'.`);
+  }
+  return [...(previous ?? []), { alias, source: parseInstrument(value.slice(at + 1)) }];
+}
+
+/**
+ * A Commander parser for `perf arms --arm build:sequence:state`, accumulating.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Arms collected so far
+ * @returns The accumulated arms
+ * @throws {InvalidArgumentError} when the sequence is not registered or the state is not warm/cold
+ */
+export function collectArmsSelection(
+  value: string,
+  previous: readonly ArmsSelectionOption[] | undefined,
+): ArmsSelectionOption[] {
+  const [build = '', name = '', state = '', ...extra] = value.split(':');
+  const sequence = measurableSequence(name);
+  if (build === '' || extra.length > 0 || sequence === undefined) {
+    throw new InvalidArgumentError(
+      `--arm expects <build>:<sequence>:<warm|cold> with a sequence among ${Object.keys(MEASURABLE_SEQUENCES).join(', ')}; got '${value}'.`,
+    );
+  }
+  if (state !== 'warm' && state !== 'cold') {
+    throw new InvalidArgumentError(`--arm expects a state of 'warm' or 'cold'; got '${value}'.`);
+  }
+  return [...(previous ?? []), { build, sequence, state }];
+}
+
+/**
+ * A Commander parser for `perf arms --prerequisite '<command> <args…>'`: one
+ * untimed tool step committed to exit 0, split on whitespace (no shell).
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Prerequisites collected so far
+ * @returns The accumulated steps, in the order given
+ * @throws {InvalidArgumentError} when the value names no command
+ */
+export function collectPrerequisite(value: string, previous: readonly SequenceStep[] | undefined): SequenceStep[] {
+  const [command, ...args] = value.trim().split(/\s+/u);
+  if (command === undefined || command === '') {
+    throw new InvalidArgumentError(`--prerequisite expects a command; got '${value}'.`);
+  }
+  const step: SequenceStep = {
+    name: value.trim(),
+    command: { kind: 'tool', command, args },
+    timed: false,
+    expectedExits: [0],
+    provenance: 'none',
+    populates: false,
+  };
+  return [...(previous ?? []), step];
+}
+
+/** Options Commander collects for `perf arms`. */
+interface PerfArmsOptions {
+  readonly build?: readonly ArmsBuildOption[];
+  readonly arm?: readonly ArmsSelectionOption[];
+  readonly prerequisite?: readonly SequenceStep[];
+  readonly commit: string;
+  readonly rounds: number;
+  readonly out: string;
+  readonly timeoutMs?: number;
+  readonly env?: ArmEnvironment['set'];
+  readonly unset?: readonly string[];
+}
+
+/**
+ * Prepare the clone, time every arm interleaved by round, and write the report.
+ *
+ * @param subjectPath - The subject repository
+ * @param options - See {@link PerfArmsOptions}
+ */
+async function runPerfArms(subjectPath: string, options: PerfArmsOptions): Promise<void> {
+  const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
+  if (env === null) return;
+  const [first] = options.arm ?? [];
+  if (options.build === undefined || first === undefined) {
+    return refuse('REFUSED: perf arms needs at least one --build and one --arm.');
+  }
+  const builds = await Promise.all(
+    options.build.map(async (build) => ({ alias: build.alias, instrument: await resolveInstrument(build.source) })),
+  );
+  const warmupBuild = builds.find((build) => build.alias === first.build);
+  const [warmupStep] = sequenceSteps(first.sequence);
+  if (warmupBuild === undefined || warmupStep === undefined) {
+    return refuse(`REFUSED: --arm names build '${first.build}', which no --build declares.`);
+  }
+  const out = safePath.resolve(options.out);
+  const timeout = options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs };
+  const prepared = await prepareClone({
+    source: safePath.resolve(subjectPath),
+    commit: options.commit,
+    out,
+    prerequisites: options.prerequisite ?? [],
+    warmup: { instrument: warmupBuild.instrument, step: warmupStep },
+    ...timeout,
+  });
+  if (!prepared.ok) return refuse(`REFUSED: ${prepared.refusal}`);
+
+  const report = await captureArms({
+    out,
+    cwd: prepared.path,
+    builds,
+    arms: (options.arm ?? []).map((arm) => ({
+      build: arm.build,
+      arm: arm.sequence.name,
+      state: arm.state,
+      steps: sequenceSteps(arm.sequence),
+    })),
+    rounds: options.rounds,
+    env,
+    ...timeout,
+  });
+  const written = safePath.join(out, 'arms-report.json');
+  writeFileSync(written, `${JSON.stringify({ prepared, ...report }, null, 2)}\n`, 'utf-8');
+  process.stdout.write(`${renderArmsReport(report)}\nWrote ${written}\n`);
+  if (report.arms.some((arm) => arm.failure !== null)) process.exitCode = ExitCode.ERROR;
+}
+
+/**
+ * Build `perf arms`: time whole CI sequences over a prepared clone.
+ *
+ * @returns The configured command
+ */
+function createPerfArmsCommand(): Command {
+  return new Command('arms')
+    .argument('<subject>', 'The subject repository; the arms run in a `git clone --local` of it under --out')
+    .option('--build <alias=instrument>', "A build to measure, e.g. 'rc11=dist:/path' (repeatable)", collectArmsBuild)
+    .option(
+      '--arm <build:sequence:state>',
+      `An arm to time (repeatable), e.g. 'rc11:ci-b:cold'. Sequences: ${Object.keys(MEASURABLE_SEQUENCES).join(', ')}`,
+      collectArmsSelection,
+    )
+    .option(
+      '--prerequisite <command>',
+      "A command run once in the clone before round 1, untimed and exit-checked (repeatable, in order; split on whitespace)",
+      collectPrerequisite,
+    )
+    .option('--commit <committish>', 'The commit to clone', 'HEAD')
+    .option('--rounds <n>', 'Measured rounds per arm, interleaved (the acceptance needs at least 5)', wholeNumberAtLeast('--rounds', 1), 5)
+    .requiredOption(OUT_OPTION, 'Directory for the clone, every arm and the report; outside the subject')
+    .option('--timeout-ms <n>', 'Kill any one step after this long', wholeNumberAtLeast('--timeout-ms', 1))
+    .option(ENV_OPTION, 'Set a variable for every VAT step of every arm (repeatable)', collectEnv('--env'))
+    .option(UNSET_OPTION, 'Remove an inherited variable from every VAT step (repeatable)', collectUnset('--unset'))
+    .description('Time CI command sequences per (build, arm, cache state), interleaved by round, in a prepared clone')
+    .action(runPerfArms);
+}
+
 /** Options Commander collects for `verdict run`. */
 interface VerdictRunOptions {
   readonly subjects: string;
@@ -796,6 +991,53 @@ interface VerdictRunOptions {
   readonly timeoutMs?: number;
   readonly env?: ArmEnvironment['set'];
   readonly unset?: readonly string[];
+  /** Subjects whose path is replaced by a prepared clone (`perf arms`' `<out>/clone`). */
+  readonly prepared?: Readonly<Record<string, string>>;
+}
+
+/**
+ * A Commander parser for `verdict run --prepared alias=<path>`, accumulating.
+ *
+ * @param value - Raw value Commander parsed
+ * @param previous - Pairs collected so far
+ * @returns The accumulated alias → resolved path map
+ * @throws {InvalidArgumentError} when either side is empty
+ */
+export function collectPreparedSubject(
+  value: string,
+  previous: Readonly<Record<string, string>> | undefined,
+): Record<string, string> {
+  const at = value.indexOf('=');
+  const path = at === -1 ? '' : value.slice(at + 1);
+  if (at <= 0 || path === '') {
+    throw new InvalidArgumentError(`--prepared expects alias=<path>; got '${value}'.`);
+  }
+  return { ...previous, [value.slice(0, at)]: safePath.resolve(path) };
+}
+
+/**
+ * Point the named subjects at their prepared clones, so bar 3 and the timed arms
+ * read one tree — never the developer's checkout.
+ *
+ * @param subjects - The subjects file's subjects
+ * @param prepared - Alias → prepared clone path
+ * @returns The subjects with those paths replaced, or a refusal naming an unknown alias
+ */
+export function applyPreparedSubjects(
+  subjects: readonly VerdictSubject[],
+  prepared: Readonly<Record<string, string>>,
+): Validated<VerdictSubject[]> {
+  const unknown = Object.keys(prepared).find((alias) => !subjects.some((subject) => subject.alias === alias));
+  if (unknown !== undefined) {
+    return { ok: false, refusal: `REFUSED: --prepared names subject '${unknown}', which the subjects file does not list.` };
+  }
+  return {
+    ok: true,
+    value: subjects.map((subject) => {
+      const path = prepared[subject.alias];
+      return path === undefined ? subject : { ...subject, path };
+    }),
+  };
 }
 
 /** Options Commander collects for `verdict compare`. */
@@ -830,17 +1072,24 @@ function createVerdictCommand(): Command {
     )
     .requiredOption(OUT_OPTION, 'Directory to write one report per alias into; outside every subject')
     .option('--timeout-ms <n>', 'Kill any one verb after this long', wholeNumberAtLeast('--timeout-ms', 1))
-    .option('--env <KEY=VALUE>', 'Set a variable for every child of this arm (repeatable)', collectEnv('--env'))
-    .option('--unset <KEY>', 'Remove an inherited variable from every child of this arm (repeatable)', collectUnset('--unset'))
+    .option(ENV_OPTION, 'Set a variable for every child of this arm (repeatable)', collectEnv('--env'))
+    .option(UNSET_OPTION, 'Remove an inherited variable from every child of this arm (repeatable)', collectUnset('--unset'))
+    .option(
+      '--prepared <alias=path>',
+      "Run a subject in its prepared clone (perf arms' <out>/clone) instead of its subjects-file path (repeatable)",
+      collectPreparedSubject,
+    )
     .description('Capture one arm: every verb of every subject, one report per alias')
     .action(async (options: VerdictRunOptions) => {
-      const env = armEnvironment(options.env, options.unset, '--env and --unset');
+      const env = armEnvironment(options.env, options.unset, ENV_OPTIONS_LABEL);
       if (env === null) return;
       const loaded = loadVerdictSubjects(options.subjects);
       if (!loaded.ok) return refuse(loaded.refusal);
+      const subjects = applyPreparedSubjects(loaded.subjects.subjects, options.prepared ?? {});
+      if (!subjects.ok) return refuse(subjects.refusal);
       const result = await captureVerdict({
         instrument: await resolveInstrument(options.instrument),
-        subjects: loaded.subjects.subjects,
+        subjects: subjects.value,
         subjectsDir: loaded.baseDir,
         env,
         outDir: safePath.resolve(options.out),
@@ -876,7 +1125,62 @@ function createVerdictCommand(): Command {
       if (comparison.exitCode !== ExitCode.OK) process.exitCode = comparison.exitCode;
     });
 
+  group
+    .command('union')
+    .argument('<leftDir>', 'The capture whose sequence must be covered (`verdict run --out`)')
+    .argument('<rightDir>', 'The capture whose sequence must cover it')
+    .requiredOption('--alias <alias>', 'The subject alias to compare')
+    .requiredOption('--left <rows>', 'The left sequence, as comma-separated row names', splitRowNames)
+    .requiredOption('--right <rows>', 'The right sequence, as comma-separated row names', splitRowNames)
+    .description("Union mode: is every (code, location, line, severity) of the left sequence's findings among the right's?")
+    .action(async (leftDir: string, rightDir: string, options: VerdictUnionOptions) => {
+      const left = await verdictBodyFor(leftDir, options.alias);
+      if (!left.ok) return refuse(left.refusal);
+      const right = await verdictBodyFor(rightDir, options.alias);
+      if (!right.ok) return refuse(right.refusal);
+      const coverage = unionCoverage(left.value, options.left, right.value, options.right);
+      if (!coverage.ok) return refuse(`REFUSED: ${coverage.refusal}`);
+      const head = coverage.covered ? 'COVERED' : `NOT COVERED — ${String(coverage.missing.length)} finding(s) missing`;
+      const lines = coverage.missing.map((key) => `  ${key.severity} ${key.code} ${key.location ?? '-'}:${String(key.line ?? '-')}`);
+      process.stdout.write(`${[head, ...lines].join('\n')}\n`);
+      if (!coverage.covered) process.exitCode = ExitCode.FINDINGS;
+    });
+
   return group;
+}
+
+/** Options Commander collects for `verdict union`. */
+interface VerdictUnionOptions {
+  readonly alias: string;
+  readonly left: readonly string[];
+  readonly right: readonly string[];
+}
+
+/**
+ * @param value - Comma-separated row names
+ * @returns The names, in order
+ * @throws {InvalidArgumentError} when no name is given
+ */
+export function splitRowNames(value: string): string[] {
+  const names = value.split(',').map((name) => name.trim()).filter((name) => name !== '');
+  if (names.length === 0) throw new InvalidArgumentError(`expected comma-separated row names; got '${value}'.`);
+  return names;
+}
+
+/**
+ * One subject's verdict body from a capture directory.
+ *
+ * @param dir - A `verdict run --out` directory
+ * @param alias - The subject alias
+ * @returns Its body, or a refusal
+ */
+async function verdictBodyFor(dir: string, alias: string): Promise<{ ok: true; value: VerdictBody } | { ok: false; refusal: string }> {
+  const read = await readVerdictDirectory(dir);
+  if (!read.ok) return read;
+  const envelope = read.value.find((candidate) => candidate.coordinate.subject.id === alias);
+  return envelope === undefined
+    ? { ok: false, refusal: `REFUSED: '${dir}' holds no verdict report for subject '${alias}'.` }
+    : { ok: true, value: envelope.body };
 }
 
 /**
@@ -897,7 +1201,7 @@ export function createProgram(): Command {
         compareSummary: 'Diff two perf reports along a single axis',
         defaultRuns: 5,
         defaultCache: 'warm',
-        capture: (request) => Promise.resolve(capturePerf(request)),
+        capture: capturePerf,
         compare: comparePerf,
         renderReport: renderPerfReport,
         renderComparison: renderPerfComparison,
@@ -905,7 +1209,7 @@ export function createProgram(): Command {
         // and it is the right number to hand `ab` for the same reason `ab` then
         // takes a minimum of it — see `harness/estimator.ts`.
         estimate: (report) => rowEstimates(report.body.commands, 'ms', (row) => row.minMs),
-      }),
+      }).addCommand(createPerfArmsCommand()),
     )
     .addCommand(
       createFacetCommand({
@@ -1010,7 +1314,7 @@ export function createProgram(): Command {
         // not move with one.
         defaultCache: 'warm',
         defaultCommands: POPULATION_MEASURED_COMMANDS,
-        capture: (request) => Promise.resolve(capturePopulation(request)),
+        capture: capturePopulation,
         compare: comparePopulation,
         renderReport: renderPopulationReport,
         renderComparison: renderPopulationComparison,

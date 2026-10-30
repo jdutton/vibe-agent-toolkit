@@ -25,7 +25,9 @@ import {
   DEFAULT_MEASURED_COMMANDS,
   MEASURABLE_COMMAND_NAMES,
   MEASURABLE_COMMANDS,
+  MEASURABLE_SEQUENCES,
   measurableCommand,
+  measurableSequence,
   type MeasuredCommandSpec,
 } from '../src/harness/commands.js';
 import { SUBJECT_TOKEN } from '../src/harness/repeat.js';
@@ -53,7 +55,20 @@ const PATHLESS_NAMES = ['validate', 'verify'];
  * subject positional either. A `{subject}` token in any of these would make
  * every repeat a usage error.
  */
-const CWD_SCOPED_NAMES = [...PATHLESS_NAMES, CONTEXT_SWEEP];
+/**
+ * The commands exactly as CI runs them: cwd-scoped, no flags, committed to exit
+ * 0 on a clean subject — so a findings exit fails the measurement.
+ */
+const CI_ARGV: Readonly<Record<string, readonly string[]>> = {
+  'resources-validate-ci': ['resources', 'validate'],
+  'resources-check-ci': ['resources', 'check'],
+  'skills-validate-ci': ['skills', 'validate'],
+  'validate-ci': ['validate'],
+  'verify-ci': ['verify'],
+};
+const CI_NAMES = Object.keys(CI_ARGV);
+
+const CWD_SCOPED_NAMES = [...PATHLESS_NAMES, CONTEXT_SWEEP, ...CI_NAMES];
 
 /** Every command handed the subject as a positional argument. */
 const SUBJECT_NAMES = [
@@ -87,6 +102,7 @@ const ALWAYS_ZERO_NAMES = [
   'skills-list',
   CONTEXT_SWEEP,
   CONTEXT_ONE,
+  ...CI_NAMES,
 ];
 
 /** The paired arms that make `vat claude context`'s cost separable. */
@@ -110,14 +126,20 @@ function specNamed(name: string): MeasuredCommandSpec {
 
 describe('completedExitCodesOf', () => {
   it('defaults a spec that says nothing to 0 alone', () => {
-    const spec: MeasuredCommandSpec = { name: 'quiet', args: ['quiet'] };
+    const spec: MeasuredCommandSpec = { name: 'quiet', args: ['quiet'], provenance: 'none', populates: false };
 
     expect(completedExitCodesOf(spec)).toEqual([0]);
     expect(DEFAULT_COMPLETED_EXIT_CODES).toEqual([0]);
   });
 
   it('returns what the spec declared when it declared something', () => {
-    const spec: MeasuredCommandSpec = { name: 'loud', args: ['loud'], completedExitCodes: [0, 1] };
+    const spec: MeasuredCommandSpec = {
+      name: 'loud',
+      args: ['loud'],
+      completedExitCodes: [0, 1],
+      provenance: 'none',
+      populates: false,
+    };
 
     expect(completedExitCodesOf(spec)).toEqual([0, 1]);
   });
@@ -180,6 +202,36 @@ describe('MEASURABLE_COMMANDS', () => {
     // A name from Object.prototype must not resolve to a spec — the lookup is a
     // registry, not a property probe.
     expect(measurableCommand('toString')).toBeUndefined();
+  });
+});
+
+describe('the CI commands and sequences', () => {
+  it.each(CI_NAMES)('spells %s exactly as CI types it', (name) => {
+    expect(specNamed(name).args).toEqual(CI_ARGV[name]);
+  });
+
+  it('reads the population where each CI verb publishes it, and nowhere else', () => {
+    expect(Object.fromEntries(CI_NAMES.map((name) => [name, specNamed(name).provenance]))).toEqual({
+      'resources-validate-ci': 'none',
+      'resources-check-ci': 'resources-check',
+      'skills-validate-ci': 'none',
+      'validate-ci': 'validate',
+      'verify-ci': 'none',
+    });
+  });
+
+  it('composes arms A, B and C from the CI commands, in CI order', () => {
+    const names = (sequence: string): string[] => measurableSequence(sequence)?.steps.map((step) => step.name) ?? [];
+    expect(names('ci-a')).toEqual(['resources-validate-ci', 'skills-validate-ci']);
+    expect(names('ci-b')).toEqual(['resources-validate-ci', 'resources-check-ci', 'skills-validate-ci']);
+    expect(names('ci-c')).toEqual(['validate-ci']);
+    expect(measurableSequence('toString')).toBeUndefined();
+  });
+
+  it('asserts the cold rule after the first step of every CI sequence', () => {
+    for (const sequence of Object.values(MEASURABLE_SEQUENCES)) {
+      expect(sequence.steps[0]?.populates, sequence.name).toBe(true);
+    }
   });
 });
 

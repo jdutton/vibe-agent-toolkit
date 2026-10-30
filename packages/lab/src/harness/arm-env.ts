@@ -106,6 +106,68 @@ export function mergeArmEnvironments(base: ArmEnvironment, over: ArmEnvironment)
 }
 
 /**
+ * Variables a VAT step of a timed arm never inherits from the developer's shell,
+ * beyond every `VAT_*` name.
+ *
+ * Each one hands the child a piece of the developer's state: `CLAUDE_CONFIG_DIR`
+ * their Claude config; `TMPDIR`/`TEMP`/`TMP` their parse cache; `XDG_CACHE_HOME`
+ * a cache root; `XDG_CONFIG_HOME` and `GIT_CONFIG_GLOBAL` their global git
+ * config and excludes, which decide what both builds' snapshots and listings
+ * admit. The arm sets its own `TMPDIR`, `HOME` and `CLAUDE_CONFIG_DIR` (see
+ * `arm-dirs.ts`); with the rest removed and `HOME` pointed, git's global config is
+ * the empty arm home, as on a CI runner.
+ */
+export const CLEARED_ENV_NAMES = Object.freeze([
+  'CLAUDE_CONFIG_DIR',
+  'GIT_CONFIG_GLOBAL',
+  'TEMP',
+  'TMP',
+  'TMPDIR',
+  'XDG_CACHE_HOME',
+  'XDG_CONFIG_HOME',
+] as const);
+
+/**
+ * Which environment a step of a sequence runs under.
+ *
+ * - `vat` — every VAT step, timed or not: the developer's environment minus
+ *   every `VAT_*` name and {@link CLEARED_ENV_NAMES}.
+ * - `tool` — a non-VAT step (`pnpm install`, a build): minus every `VAT_*` name
+ *   only. pnpm needs the real `~/.npmrc`, and pnpm, corepack and turbo write
+ *   state under `$HOME`, which must not land in the arm's home.
+ */
+export type StepEnvironmentKind = 'vat' | 'tool';
+
+/** A cleared environment, and the inherited names it removed — recorded in the run report. */
+export interface ClearedEnvironment {
+  readonly env: ArmEnvironment;
+  /** Inherited names removed, sorted; a name the arm sets itself is not listed. */
+  readonly removed: readonly string[];
+}
+
+/**
+ * The environment for one step of a timed arm: the inherited one, cleared of
+ * the developer's VAT, git and claude state, then the arm's own.
+ *
+ * @param inherited - The environment being inherited, normally `process.env`
+ * @param kind - Which steps' rule applies; see {@link StepEnvironmentKind}
+ * @param own - What the arm itself sets and removes
+ * @returns The arm environment to run under, and what it removed
+ */
+export function clearedEnvironment(
+  inherited: NodeJS.ProcessEnv,
+  kind: StepEnvironmentKind,
+  own: ArmEnvironment,
+): ClearedEnvironment {
+  const cleared: ReadonlySet<string> = new Set(kind === 'vat' ? CLEARED_ENV_NAMES : []);
+  const removed = Object.keys(inherited)
+    .filter((name) => name.startsWith('VAT_') || cleared.has(name))
+    .filter((name) => !Object.hasOwn(own.set, name))
+    .sort(compareByCodeUnit);
+  return { env: mergeArmEnvironments({ set: {}, unset: removed }, own), removed };
+}
+
+/**
  * Do two arms run under the same environment?
  *
  * Order-insensitive on both halves, and an unset key is NOT the same as an

@@ -43,9 +43,9 @@ export function captureCommandRows<TRow>(
 ): Promise<TRow[]> {
   // In order on purpose — see rule 1 in this module's header.
   return mapInOrder(options.commands, (spec) =>
-    withDumpDirs(options.runs, prefix, (directories) => {
+    withDumpDirs(options.runs, prefix, async (directories) => {
       const perRepeat = directories.map((directory) => ({ [dirEnv]: directory }));
-      const measurement = measureSpec(options, spec, (index) => perRepeat[index]);
+      const measurement = await measureSpec(options, spec, (index) => perRepeat[index]);
       return rowFrom(measurement, directories);
     }),
   );

@@ -328,14 +328,14 @@ export async function captureIo(options: CaptureIoOptions): Promise<ReportEnvelo
   const loadBefore = readLoad();
   // In order on purpose — see this function's doc: measured runs must not overlap.
   const commands: IoCommandStats[] = await mapInOrder(options.commands, (spec) =>
-    withDumpDirs(options.runs, DUMP_DIR_PREFIX, (directories) => {
+    withDumpDirs(options.runs, DUMP_DIR_PREFIX, async (directories) => {
       // Per repeat, and on `envFor` rather than `env`: only the measured run is
       // instrumented, so `cold` mode's cache clear cannot contribute its own I/O.
       const perRepeat = directories.map((directory) => ({
         [COUNTER_LOG_DIR_ENV]: directory,
         NODE_OPTIONS: nodeOptions,
       }));
-      const measurement = measureSpec(options, spec, (index) => perRepeat[index]);
+      const measurement = await measureSpec(options, spec, (index) => perRepeat[index]);
       return rowFromDumps(measurement, directories, roots);
     }),
   );

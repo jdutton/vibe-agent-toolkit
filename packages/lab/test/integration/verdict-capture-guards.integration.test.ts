@@ -2,8 +2,10 @@
  * The verdict capture's safety rails, read back through a probe that prints the
  * environment it actually received.
  *
- * Each arm runs under the caller's `--env`/`--unset` plus two lab-owned
- * settings — a private projection store under `--out`, and no inherited
+ * Each arm runs under the caller's `--env`/`--unset` over a cleared
+ * environment (no inherited `VAT_*`), with lab-owned directories under
+ * `<out>/<alias>/` — a private projection store, a `tmp/` pinned as
+ * `TMPDIR`/`TEMP`/`TMP`, and an empty home pointed at by `HOME` and
  * `CLAUDE_CONFIG_DIR` — and a capture must never write into a measured tree or
  * reuse a store an earlier capture warmed. A refusal that silently stopped
  * firing would still leave every compare green, so each rail is pinned here.
@@ -11,6 +13,7 @@
  * Integration-tier because capture spawns the probe.
  */
 
+import { statSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
@@ -27,6 +30,8 @@ import { cleanupVerdictFixtures, FIXTURE_ALIAS, fixtureSubject, tempDir } from '
 const STORE_ENV = 'VAT_PROJECTION_STORE_DIR';
 const CLAUDE_ENV = 'CLAUDE_CONFIG_DIR';
 const CALLER_ENV = 'LAB_VERDICT_CALLER';
+const PLANTED_ENV = 'VAT_LAB_VERDICT_PLANTED';
+const ECHOED = [STORE_ENV, CLAUDE_ENV, CALLER_ENV, PLANTED_ENV, 'TMPDIR', 'TEMP', 'TMP', 'HOME'];
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -53,7 +58,7 @@ function capture(
     subjects: [{ alias: FIXTURE_ALIAS, path: subjectPath, verbs: ['audit'], sqlFiles: [], ...build }],
     subjectsDir: subjectPath,
     env: {
-      set: { [PROBE_NO_LOG_ENV]: '1', [PROBE_ECHO_ENV]: [STORE_ENV, CLAUDE_ENV, CALLER_ENV].join(','), ...env.set },
+      set: { [PROBE_NO_LOG_ENV]: '1', [PROBE_ECHO_ENV]: ECHOED.join(','), ...env.set },
       unset: env.unset,
     },
     outDir,
@@ -71,20 +76,34 @@ function echoed(result: VerdictCaptureResult): Record<string, string | null> {
 }
 
 describe('verdict capture — the per-arm overlay', () => {
-  it('gives the child the private store, no CLAUDE_CONFIG_DIR, and the caller’s own --env', async () => {
-    // The parent really does carry CLAUDE_CONFIG_DIR, so "the child saw none"
-    // is the overlay's doing and not an empty inheritance.
+  it('gives the child its own store, tmp and home under <out>/<alias>, no inherited VAT_*, and the caller’s own --env', async () => {
+    // The parent really does carry both, so "the child saw ours" is the
+    // overlay's doing and not an empty inheritance.
     vi.stubEnv(CLAUDE_ENV, tempDir('lab-verdict-claude-'));
-    expect(process.env[CLAUDE_ENV]).toBeDefined();
+    vi.stubEnv(PLANTED_ENV, 'leak');
     const outDir = tempDir('lab-verdict-out-');
 
     const seen = echoed(await capture({ set: { [CALLER_ENV]: 'kept' }, unset: [] }, fixtureSubject(), outDir));
 
     // The tail, not the whole path: the normalizer may rewrite an absolute
     // prefix (a temp dir under $HOME on Windows reads as <HOME>/…).
-    expect(seen[STORE_ENV]?.endsWith(`${basename(outDir)}/${FIXTURE_ALIAS}/store`)).toBe(true);
-    expect(seen[CLAUDE_ENV]).toBeNull();
+    const under = `${basename(outDir)}/${FIXTURE_ALIAS}`;
+    expect(seen[STORE_ENV]?.endsWith(`${under}/store`)).toBe(true);
+    for (const name of ['TMPDIR', 'TEMP', 'TMP']) expect(seen[name]?.endsWith(`${under}/tmp`), name).toBe(true);
+    for (const name of [CLAUDE_ENV, 'HOME']) expect(seen[name]?.endsWith(`${under}/home`), name).toBe(true);
+    expect(seen[PLANTED_ENV]).toBeNull();
     expect(seen[CALLER_ENV]).toBe('kept');
+  });
+
+  // POSIX modes only: Windows has no owner-only bits to read back.
+  it.skipIf(process.platform === 'win32')('creates <out>/<alias>/ and its tmp/ at 0700 before any verb, and leaves store/ to VAT', async () => {
+    const outDir = tempDir('lab-verdict-out-');
+
+    echoed(await capture({ set: {}, unset: [] }, fixtureSubject(), outDir));
+
+    for (const dir of [safePath.join(outDir, FIXTURE_ALIAS), safePath.join(outDir, FIXTURE_ALIAS, 'tmp')]) {
+      expect(statSync(dir).mode & 0o777, dir).toBe(0o700);
+    }
   });
 });
 
@@ -105,6 +124,12 @@ describe('verdict capture — refusals', () => {
     );
 
     expect(result).toMatchObject({ ok: false, refusal: expect.stringContaining(`${STORE_ENV} is set by the verdict facet`) });
+  });
+
+  it('refuses a caller that names TMPDIR', async () => {
+    const result = await capture({ set: { TMPDIR: tempDir('lab-verdict-tmp-') }, unset: [] }, fixtureSubject(), tempDir('lab-verdict-out-'));
+
+    expect(result).toMatchObject({ ok: false, refusal: expect.stringContaining('TMPDIR is set by the verdict facet') });
   });
 
   it('refuses a caller that names CLAUDE_CONFIG_DIR', async () => {

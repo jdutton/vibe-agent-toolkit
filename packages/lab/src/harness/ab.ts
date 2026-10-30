@@ -332,6 +332,9 @@ async function captureArm<TBody, TComparison extends ComparisonLike>(
     runs: spec.runs,
     cache: spec.cache,
     env: arm === 'a' ? spec.envA : spec.envB,
+    // One arm directory per side for the whole A/B: a warm side's store persists
+    // across pairs, a cold one is reset inside every repeat either way.
+    arms: { out: spec.outDir, build: arm },
     capturedAt: spec.now(),
   });
   await writeReport(safePath.join(spec.outDir, `pair-${String(pair)}`, arm), report);

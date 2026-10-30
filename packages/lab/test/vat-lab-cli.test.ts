@@ -23,13 +23,19 @@ import { InvalidArgumentError, type Option } from 'commander';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
+  applyPreparedSubjects,
+  collectArmsBuild,
+  collectArmsSelection,
   collectMeasuredCommand,
+  collectPreparedSubject,
+  collectPrerequisite,
   collectUnset,
   createProgram,
   fastestRepeat,
   nonNegativeNumber,
   parseCacheMode,
   resolveAbArms,
+  splitRowNames,
 } from '../src/bin/vat-lab.js';
 import type { PerfBody, PerfCommandStats } from '../src/facets/perf/types.js';
 import { PERF_FACET } from '../src/facets/perf/types.js';
@@ -277,7 +283,9 @@ describe('vat-lab <facet> ab — every facet gets the verb, not just the one tha
   it.for(FACETS)('declares ab on %s', (facet) => {
     const group = createProgram().commands.find((candidate) => candidate.name() === facet);
 
-    expect(group?.commands.map((sub) => sub.name())).toEqual(['run', 'compare', 'ab']);
+    // `perf` alone also times whole CI sequences.
+    const expected = facet === 'perf' ? ['run', 'compare', 'ab', 'arms'] : ['run', 'compare', 'ab'];
+    expect(group?.commands.map((sub) => sub.name())).toEqual(expected);
   });
 
   it.for(FACETS)('gives %s ab both arms, the pair count and a control switch', (facet) => {
@@ -524,5 +532,94 @@ describe('vat-lab perf compare — exit codes', () => {
     await createProgram().parseAsync(['node', 'vat-lab', 'perf', 'compare', before, after]);
 
     expect(process.exitCode).toBeUndefined();
+  });
+});
+
+describe('vat-lab perf arms — the option parsers', () => {
+  it('collects --build as alias=instrument, refusing an alias that is not a directory segment', () => {
+    expect(collectArmsBuild('rc11=dist:/x/vat', undefined)).toEqual([
+      { alias: 'rc11', source: { kind: 'dist', path: '/x/vat' } },
+    ]);
+    expect(() => collectArmsBuild('../up=dist:/x', undefined)).toThrow(InvalidArgumentError);
+    expect(() => collectArmsBuild('noequals', undefined)).toThrow(InvalidArgumentError);
+  });
+
+  it('collects --arm as build:sequence:state from the registered CI sequences', () => {
+    const [arm] = collectArmsSelection('rc11:ci-b:warm', undefined);
+
+    expect(arm?.build).toBe('rc11');
+    expect(arm?.state).toBe('warm');
+    expect(arm?.sequence.name).toBe('ci-b');
+    expect(() => collectArmsSelection('rc11:nonesuch:warm', undefined)).toThrow(/ci-a/u);
+    expect(() => collectArmsSelection('rc11:ci-a:tepid', undefined)).toThrow(InvalidArgumentError);
+  });
+
+  it('collects --prerequisite as an untimed tool step committed to exit 0', () => {
+    const [step] = collectPrerequisite('pnpm install --frozen-lockfile', undefined);
+
+    expect(step).toEqual({
+      name: 'pnpm install --frozen-lockfile',
+      command: { kind: 'tool', command: 'pnpm', args: ['install', '--frozen-lockfile'] },
+      timed: false,
+      expectedExits: [0],
+      provenance: 'none',
+      populates: false,
+    });
+    expect(() => collectPrerequisite('   ', undefined)).toThrow(InvalidArgumentError);
+  });
+
+  it('wires every flag onto perf arms', () => {
+    expect(optionOf('perf', 'arms', '--build')?.parseArg).toBe(collectArmsBuild);
+    expect(optionOf('perf', 'arms', '--arm')?.parseArg).toBe(collectArmsSelection);
+    expect(optionOf('perf', 'arms', '--prerequisite')?.parseArg).toBe(collectPrerequisite);
+    expect(optionOf('perf', 'arms', '--rounds')?.defaultValue).toBe(5);
+    expect(optionOf('perf', 'arms', '--commit')?.defaultValue).toBe('HEAD');
+  });
+});
+
+describe('vat-lab verdict union', () => {
+  it('splits a sequence of row names on commas, refusing an empty one', () => {
+    expect(splitRowNames('resources-validate-ci, resources-check-ci,skills-validate-ci')).toEqual([
+      'resources-validate-ci',
+      'resources-check-ci',
+      'skills-validate-ci',
+    ]);
+    expect(() => splitRowNames(' , ')).toThrow(InvalidArgumentError);
+  });
+
+  it('declares --left and --right parsed by splitRowNames, and a required --alias', () => {
+    expect(optionOf('verdict', 'union', '--left')?.parseArg).toBe(splitRowNames);
+    expect(optionOf('verdict', 'union', '--right')?.parseArg).toBe(splitRowNames);
+    expect(optionOf('verdict', 'union', '--alias')?.required).toBe(true);
+  });
+});
+
+describe('vat-lab verdict run --prepared', () => {
+  it('collects alias=path pairs, resolving the path, and refuses a malformed one', () => {
+    expect(collectPreparedSubject('app=/work/out/clone', undefined)).toEqual({ app: safePath.resolve('/work/out/clone') });
+    expect(() => collectPreparedSubject('=/x', undefined)).toThrow(InvalidArgumentError);
+    expect(() => collectPreparedSubject('app=', undefined)).toThrow(InvalidArgumentError);
+  });
+
+  it('replaces exactly the named subjects’ paths, and refuses an alias the subjects file lacks', () => {
+    const subjects = [
+      { alias: 'app', path: '/work/app', verbs: ['validate' as const], sqlFiles: [], buildVerbs: false, unmeasurableBuildVerbs: {} },
+      { alias: 'other', path: '/work/other', verbs: ['audit' as const], sqlFiles: [], buildVerbs: false, unmeasurableBuildVerbs: {} },
+    ];
+
+    const replaced = applyPreparedSubjects(subjects, { app: '/work/out/clone' });
+
+    expect(replaced).toEqual({ ok: true, value: [{ ...subjects[0], path: '/work/out/clone' }, subjects[1]] });
+    expect(applyPreparedSubjects(subjects, { nonesuch: '/x' })).toEqual({
+      ok: false,
+      refusal: expect.stringContaining("'nonesuch'") as unknown,
+    });
+  });
+
+  it('declares --prepared on verdict run', () => {
+    const option = optionOf('verdict', 'run', '--prepared');
+
+    expect(option).toBeDefined();
+    expect(option?.parseArg).toBe(collectPreparedSubject);
   });
 });

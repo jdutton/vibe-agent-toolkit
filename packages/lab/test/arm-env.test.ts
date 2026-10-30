@@ -17,6 +17,8 @@ import {
   ARM_OWNED_ENV_KEYS,
   armEnvironmentClash,
   buildArmEnv,
+  CLEARED_ENV_NAMES,
+  clearedEnvironment,
   mergeArmEnvironments,
   sameArmEnvironment,
 } from '../src/harness/arm-env.js';
@@ -102,5 +104,51 @@ describe('sameArmEnvironment / mergeArmEnvironments', () => {
     expect(
       mergeArmEnvironments({ set: { A: '1', B: '2' }, unset: [] }, { set: {}, unset: ['A'] }),
     ).toStrictEqual({ set: { B: '2' }, unset: ['A'] });
+  });
+});
+
+describe('clearedEnvironment', () => {
+  /** A developer shell carrying every kind of state an arm must not inherit. */
+  const DEVELOPER: NodeJS.ProcessEnv = {
+    PATH: '/bin',
+    HOME: '/home/dev',
+    VAT_PROJECTION_STORE: 'off',
+    VAT_RESOURCES_CRAWL: 'walk',
+    CLAUDE_CONFIG_DIR: '/home/dev/.claude',
+    TMPDIR: '/var/dev-tmp',
+    TEMP: '/var/dev-tmp',
+    TMP: '/var/dev-tmp',
+    XDG_CACHE_HOME: '/home/dev/.cache',
+    XDG_CONFIG_HOME: '/home/dev/.config',
+    GIT_CONFIG_GLOBAL: '/home/dev/.gitconfig',
+  };
+  const byName = (a: string, b: string): number => a.localeCompare(b);
+
+  it('removes every VAT_* name and every cleared name from a VAT step, and records them', () => {
+    const cleared = clearedEnvironment(DEVELOPER, 'vat', { set: { HOME: '/arm/home' }, unset: [] });
+    const env = buildArmEnv(DEVELOPER, cleared.env);
+    for (const name of [...CLEARED_ENV_NAMES, 'VAT_PROJECTION_STORE', 'VAT_RESOURCES_CRAWL']) {
+      expect(env[name], name).toBeUndefined();
+    }
+    expect(env['HOME']).toBe('/arm/home'); // the arm's own wins
+    expect(env['PATH']).toBe('/bin'); // positive control: ordinary inheritance survives
+    expect(cleared.removed).toStrictEqual(
+      [...CLEARED_ENV_NAMES, 'VAT_PROJECTION_STORE', 'VAT_RESOURCES_CRAWL'].toSorted(byName),
+    );
+  });
+
+  it('removes only VAT_* names from a non-VAT step, keeping the real home and temp', () => {
+    const cleared = clearedEnvironment(DEVELOPER, 'tool', { set: {}, unset: [] });
+    const env = buildArmEnv(DEVELOPER, cleared.env);
+    expect(env['VAT_PROJECTION_STORE']).toBeUndefined();
+    expect(env['XDG_CONFIG_HOME']).toBe('/home/dev/.config');
+    expect(env['TMPDIR']).toBe('/var/dev-tmp');
+    expect(cleared.removed).toStrictEqual(['VAT_PROJECTION_STORE', 'VAT_RESOURCES_CRAWL']);
+  });
+
+  it('lets the arm set a cleared name, which is then not recorded as removed', () => {
+    const cleared = clearedEnvironment(DEVELOPER, 'vat', { set: { TMPDIR: '/arm/tmp' }, unset: [] });
+    expect(buildArmEnv(DEVELOPER, cleared.env)['TMPDIR']).toBe('/arm/tmp');
+    expect(cleared.removed).not.toContain('TMPDIR');
   });
 });

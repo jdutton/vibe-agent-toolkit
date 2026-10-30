@@ -28,6 +28,8 @@
  * not arms, so a lane that changed between repeats is not what it detects.
  */
 
+import { mapInOrder } from '@vibe-agent-toolkit/utils';
+
 import type { ReportEnvelope } from '../../envelope/envelope.js';
 import { trackedPaths } from '../../harness/git-state.js';
 import { judgeLoad, readLoad } from '../../harness/load-guard.js';
@@ -168,8 +170,10 @@ function rowFor(measurement: SpecMeasurement): PopulationCommandStats {
   const { spec, args, cache, results, failure } = measurement;
   const base: RowBase = { name: spec.name, args, cache };
 
-  if (results.length === 0) return failedRow(base, 0, 'no repeats were requested');
+  // The failure first: a warm arm whose priming failed measured nothing, and
+  // its empty result list is not "no repeats were requested".
   if (failure !== null) return failedRow(base, results.length, failure);
+  if (results.length === 0) return failedRow(base, 0, 'no repeats were requested');
 
   const documents = readEveryRepeat(measurement);
   if ('refusal' in documents) return failedRow(base, results.length, documents.refusal);
@@ -211,11 +215,11 @@ function rowFor(measurement: SpecMeasurement): PopulationCommandStats {
  * @param options - See {@link CapturePopulationOptions}
  * @returns A complete report envelope, ready to store
  */
-export function capturePopulation(
+export async function capturePopulation(
   options: CapturePopulationOptions,
-): ReportEnvelope<PopulationBody> {
+): Promise<ReportEnvelope<PopulationBody>> {
   const loadBefore = readLoad();
-  const commands = options.commands.map((spec) => rowFor(measureSpec(options, spec)));
+  const commands = await mapInOrder(options.commands, async (spec) => rowFor(await measureSpec(options, spec)));
   const loadAfter = readLoad();
 
   return buildReportEnvelope(POPULATION_FACET, options, {

@@ -46,9 +46,9 @@ export interface VerdictBody {
   /**
    * The environment that DISTINGUISHES this arm — the caller's `--env`/`--unset`.
    *
-   * The lab also imposes, on every arm alike, a private projection store under
-   * `--out` (`VAT_PROJECTION_STORE_DIR`) and an unset `CLAUDE_CONFIG_DIR`; those
-   * are not recorded here, because the store path differs between any two
+   * The lab also imposes, on every arm alike, a cleared environment and its own
+   * store, `tmp/` and home under `<out>/<alias>/` (see `capture.ts`); those
+   * are not recorded here, because those paths differ between any two
    * captures by construction, and recording it would make every pair of arms
    * distinguishable — the indistinguishable-arms refusal could never fire.
    */

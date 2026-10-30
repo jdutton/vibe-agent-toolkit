@@ -71,14 +71,17 @@ const MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
 /**
  * Run one vat command once and report what happened.
  *
- * @param instrument - Which vat to run; `leadingArgs` precede `args`
- * @param args - The vat subcommand and its arguments
+ * Any command, not only vat: a sequence's non-VAT step (`pnpm install`) is a
+ * command with no leading arguments.
+ *
+ * @param instrument - What to run; `leadingArgs` precede `args`
+ * @param args - The subcommand and its arguments
  * @param options - Working directory, the arm's environment, and an optional timeout
  * @returns Wall time, both streams, and an exit code that is `null` when the
  *   process never ran or was killed
  */
 export function runCommand(
-  instrument: ResolvedInstrument,
+  instrument: Pick<ResolvedInstrument, 'command' | 'leadingArgs'>,
   args: readonly string[],
   options: RunOptions,
 ): RunResult {

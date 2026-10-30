@@ -32,7 +32,7 @@
  * That is also why the counter writes a TRACE line for every process it is
  * loaded into. The trace is the only way to observe, from outside, which
  * children got the preload and what their `NODE_OPTIONS` actually said — and
- * "the cache clear must not be instrumented" is otherwise an untestable claim.
+ * "the priming run must not be instrumented" is otherwise an untestable claim.
  */
 
 
@@ -50,18 +50,22 @@ import {
   type IoCommandStats,
 } from '../src/facets/io/types.js';
 import { type ArmEnvironment, EMPTY_ARM_ENVIRONMENT } from '../src/harness/arm-env.js';
-import type { MeasuredCommandSpec } from '../src/harness/commands.js';
 import type { ResolvedSubject } from '../src/harness/types.js';
 
 import { expectBodyMatchesSchema, expectStamp, probeSubject } from './capture-fixtures.js';
 import {
   cleanupProbes,
+  EVERY_REPEAT_FAILS_COLD,
+  NO_REPEATS_COLD,
+  type Probe,
   PROBE_DEFAULT_STDERR,
   PROBE_FAIL_EXIT,
-  PROBE_FAIL_TOKEN,
+  PROBE_FAILS,
+  PROBE_PASSES,
   PROBE_STDOUT_ENV,
+  probeCaptureDefaults,
+  probeOut,
   setupProbe,
-  type Probe,
 } from './command-probe.js';
 
 /** Temp-directory prefix, so a stray directory names this suite. */
@@ -93,12 +97,6 @@ const METHOD = 'fs.readFile';
 
 /** Count the default fixture produces, chosen not to collide with any other constant. */
 const DEFAULT_COUNT = 7;
-
-/** A command that always succeeds. */
-const PASSES: MeasuredCommandSpec = { name: 'audit', args: ['audit'] };
-
-/** A command that always fails, on every repeat, by argv. */
-const FAILS: MeasuredCommandSpec = { name: 'broken', args: [PROBE_FAIL_TOKEN] };
 
 /**
  * The stand-in counter, in CommonJS because `--require` accepts nothing else.
@@ -260,12 +258,7 @@ async function capture(
 ): Promise<ReportEnvelope<IoBody>> {
   const { env, unset, ...rest } = overrides;
   return captureIo({
-    instrument: probe.instrument,
-    subject: subjectAt(probe.cwd),
-    commands: [PASSES],
-    runs: 3,
-    cache: 'warm',
-    capturedAt: CAPTURED_AT,
+    ...probeCaptureDefaults(probe, subjectAt(probe.cwd), CAPTURED_AT),
     counterPath,
     ...rest,
     env: { set: { [TRACE_ENV]: tracePath(probe), ...env }, unset: unset ?? [] },
@@ -450,12 +443,14 @@ describe('captureIo — the arm is read from what the subject PRINTED', () => {
     // first compared repeat says `walk`, and the reported (last) repeat says
     // `git`. A capture reading repeat 0 says `filesystem`; one reading the first
     // compared repeat says `walk`. Only the reported repeat's arm may travel
-    // with the reported repeat's numbers.
+    // with the reported repeat's numbers. The first document is the warm arm's
+    // priming run's, which no repeat reads.
     const row = onlyRow(
       await capture(probe, {
         runs: 3,
         env: {
           [PROBE_STDOUT_ENV]: JSON.stringify([
+            scanJson('walk', 'filesystem'),
             scanJson('projection', 'filesystem'),
             scanJson('walk', null),
             scanJson('projection', 'git'),
@@ -474,7 +469,7 @@ describe('captureIo — the arm is read from what the subject PRINTED', () => {
     const row = onlyRow(
       await capture(probe, {
         runs: 1,
-        commands: [FAILS],
+        commands: [PROBE_FAILS],
         env: { [PROBE_STDOUT_ENV]: JSON.stringify([scanJson('projection', 'git')]) },
       }),
     );
@@ -606,36 +601,36 @@ describe('captureIo — the counter preload', () => {
     expect(trace(probe).map((line) => line.nodeOptions)).toEqual([preloadOf(counterPath)]);
   });
 
-  it('reaches the measured run and never the cache clear', async () => {
+  it('reaches the measured runs and never the priming run', async () => {
     const probe = setupProbe(PREFIX);
 
-    await capture(probe, { runs: 2, cache: 'cold' });
+    await capture(probe, { runs: 2, cache: 'warm' });
 
-    // Four children ran — a clear before each repeat — and only the two measured
-    // ones were instrumented. Instrumenting the clear would fold setup's own I/O
-    // into the measurement, which is why the preload rides `envFor` and not
-    // `env`.
-    expect(probe.entries()).toHaveLength(4);
+    // Three children ran — the warm arm's priming run, then two repeats — and
+    // only the two measured ones were instrumented. Instrumenting the priming run
+    // would fold setup's own I/O into the measurement, which is why the preload
+    // rides `envFor` and not `env`.
+    expect(probe.entries()).toHaveLength(3);
     const lines = trace(probe);
     expect(lines).toHaveLength(2);
     expect(lines.every((line) => line.dir !== null)).toBe(true);
   });
 
-  it('CONTROL: a preload placed on the shared env DOES reach the cache clear', async () => {
+  it('CONTROL: a preload placed on the shared env DOES reach the priming run', async () => {
     const probe = setupProbe(PREFIX);
 
     await capture(probe, {
       runs: 2,
-      cache: 'cold',
+      cache: 'warm',
       env: { NODE_OPTIONS: preloadOf(counterPath) },
     });
 
-    // Same probe, same four children — but now the counter is loaded into all
+    // Same probe, same three children — but now the counter is loaded into all
     // of them, which is exactly what the assertion above claims cannot happen by
-    // default. The clears have no dump directory, so they are identifiable.
+    // default. The priming run has no dump directory, so it is identifiable.
     const lines = trace(probe);
-    expect(lines).toHaveLength(4);
-    expect(lines.map((line) => line.dir === null)).toEqual([true, false, true, false]);
+    expect(lines).toHaveLength(3);
+    expect(lines.map((line) => line.dir === null)).toEqual([true, false, false]);
   });
 
   it('quotes the counter path, so a directory containing a space still loads', async () => {
@@ -689,11 +684,12 @@ describe('captureIo — the counter has to exist', () => {
       captureIo({
         instrument: probe.instrument,
         subject: subjectAt(probe.cwd),
-        commands: [PASSES],
+        commands: [PROBE_PASSES],
         runs: 1,
         cache: 'warm',
         env: EMPTY_ARM_ENVIRONMENT,
         capturedAt: CAPTURED_AT,
+        arms: { out: probeOut(probe), build: 'probe' },
       }),
     ).rejects.toThrow(/counter\.cjs/);
   });
@@ -703,11 +699,11 @@ describe('captureIo — a row that measured nothing says so', () => {
   it('poisons the whole row when a repeat failed', async () => {
     const probe = setupProbe(PREFIX);
 
-    const row = onlyRow(await capture(probe, { runs: 2, commands: [FAILS] }));
+    const row = onlyRow(await capture(probe, EVERY_REPEAT_FAILS_COLD));
 
     expect(row.failed).toBe(true);
     expect(row.failure).toBe(
-      `2 of 2 repeats failed — exited ${String(PROBE_FAIL_EXIT)}: ${PROBE_DEFAULT_STDERR}`,
+      `2 of 2 repeats failed — step '${PROBE_FAILS.name}' exited ${String(PROBE_FAIL_EXIT)}: ${PROBE_DEFAULT_STDERR}`,
     );
     expect(row.runs).toBe(2);
     // Zeroed, not omitted — and `failed` carries the meaning. Counting the calls
@@ -757,9 +753,7 @@ describe('captureIo — a row that measured nothing says so', () => {
   it('marks a row failed rather than reporting a command that made no calls', async () => {
     const probe = setupProbe(PREFIX);
 
-    // Cold on purpose: a cache clear hoisted out of the repeat loop would still
-    // spawn a child here, where nothing at all should run.
-    const row = onlyRow(await capture(probe, { runs: 0, cache: 'cold' }));
+    const row = onlyRow(await capture(probe, NO_REPEATS_COLD));
 
     expect(row.runs).toBe(0);
     expect(row.comparedRuns).toBe(0);
@@ -815,13 +809,14 @@ describe('captureIo — the envelope', () => {
       facet: IO_FACET,
       subject,
       capturedAt: CAPTURED_AT,
+      arms: { out: probeOut(probe), build: 'probe' },
     });
   });
 
   it('produces a body that validates against the facet schema, failures included', async () => {
     const probe = setupProbe(PREFIX);
 
-    const report = await capture(probe, { runs: 2, commands: [PASSES, FAILS] });
+    const report = await capture(probe, { runs: 2, commands: [PROBE_PASSES, PROBE_FAILS] });
 
     expectBodyMatchesSchema(IoBodySchema, report.body);
     expect(report.body.load.cpus).toBeGreaterThanOrEqual(1);

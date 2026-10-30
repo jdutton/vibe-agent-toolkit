@@ -96,6 +96,39 @@ vat-lab io compare ./before/<report>.json ./after/<report>.json
 Reports default to `.vat-lab/`, which this repo gitignores — keep it that way, since lab output
 landing inside the tree being measured changes the next run's numbers.
 
+## Arms — every timed measurement is a sequence in its own directories
+
+A timed arm is a **sequence of steps** run in `<out>/arms/<build>-<arm>-<state>/{store,tmp,home}`
+(created at 0700), from a **cleared environment**: no inherited `VAT_*`, temp, XDG or global git
+config reaches the child, `TMPDIR`/`TEMP`/`TMP` point at the arm's `tmp/`, and `HOME` and
+`CLAUDE_CONFIG_DIR` at its empty `home/`. A developer's `VAT_PROJECTION_STORE=off`, global git
+exclude or `~/.claude/CLAUDE.md` therefore never decides a number. `runRepeats` requires the `arm`;
+single-command facet runs are one-step sequences under `<out>/arms/<build>-<command>-<cache>`.
+
+- Each step carries its **committed expected exits**; exiting otherwise is a failed measurement
+  (`step '<name>' exited N: <stderr>`), never a slow one. Exit 2 is never expected.
+- **Cold** clears the arm's store and parse cache before each repetition, and step 1 must leave
+  both non-empty. **Warm** primes the arm once before round 1 (a priming failure skips the arm), and
+  every step that should populate must publish its provenance.
+- The lab never runs `vat cache clear` — it owns the directories it clears.
+
+`vat-lab perf arms` runs named CI sequences across builds in **interleaved rounds** (default 5),
+after preparing a `git clone --local` of the subject at `--commit` under `<out>/clone`: the
+`--prerequisite` commands, then one warm-up in its own scratch arm (`prepare-warmup-cold`), then a
+check that `git status --porcelain` is empty and the tree equals the committed tree. It writes
+`<out>/arms-report.json` with min, median and IQR per arm. `judgeBar` decides a bar on the **median
+AND the min**: both hold → pass, neither → fail, one → inconclusive; `<=` ties pass, `<` ties fail.
+
+```bash
+vat-lab perf arms ../subject --build base=dist:/path/to/base/cli --build cand=dist:/path/to/cand/cli \
+  --arm base:ci-b:cold --arm cand:ci-b:cold --prerequisite "bun install" --out ./arms
+```
+
+The verdict facet reads the same prepared tree with `verdict run --prepared <alias>=<out>/clone`,
+runs `validate` and the `*-ci` verbs, and `verdict union <leftDir> <rightDir> --alias <a> --left <rows> --right <rows>`
+asks whether the left rows' findings, keyed `(code, location, line, severity)`, are all covered by
+the right rows' (exit 1 with the missing keys when not).
+
 ## The three axes
 
 Every report is a measurement at a coordinate, and carries the whole triple or it is comparable to

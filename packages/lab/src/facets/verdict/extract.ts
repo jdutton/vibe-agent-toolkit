@@ -62,6 +62,15 @@ export const FindingKeySchema: z.ZodType<FindingKey> = z
   })
   .strict();
 
+/**
+ * A finding with the line it names — what the union mode keys by. The verdict
+ * layer ({@link FindingKey}) does not carry it: a stored deltas entry is keyed
+ * without one.
+ */
+export interface LinedFinding extends FindingKey {
+  readonly line: number | null;
+}
+
 /** A run's verdict: what it exited with, what shape its output was, and what it found. */
 export interface Verdict {
   readonly exitCode: number;
@@ -96,7 +105,28 @@ export function extractVerdict(outcome: Extract<RunOutcome, { kind: 'exited' }>)
   // A report holding a finding the lab cannot read is a document the lab cannot
   // read: the row measured nothing, which the compare reports as UNMEASURED.
   if (findings === null) return { exitCode: outcome.exitCode, shape: 'unparsed', findings: [] };
-  return { exitCode: outcome.exitCode, shape: parsed.shape, findings };
+  return {
+    exitCode: outcome.exitCode,
+    shape: parsed.shape,
+    findings: findings.map(({ code, severity, location, scope }) => ({ code, severity, location, scope })),
+  };
+}
+
+/**
+ * A captured row's findings WITH their lines, read by the same extractor as
+ * {@link rowVerdict}.
+ *
+ * @param row - One captured invocation
+ * @returns Its shape and lined findings, or `null` when it produced no exit
+ *   code or holds a finding the lab cannot read
+ */
+export function rowLinedFindings(
+  row: VerdictRow,
+): { readonly shape: ParsedDocument['shape']; readonly findings: readonly LinedFinding[] } | null {
+  if (row.outcome === 'not-run' || row.exitCode === null) return null;
+  const parsed = parseDocument(row.document);
+  const findings = findingsOf(parsed);
+  return findings === null ? null : { shape: parsed.shape, findings };
 }
 
 /**
@@ -369,7 +399,7 @@ function isCount(value: unknown): value is number {
  * @returns Its findings, sorted; empty (never a guess) when unparsed; `null`
  *   for a report whose `findings[]` holds an element that is not a finding
  */
-function findingsOf(parsed: ParsedDocument): readonly FindingKey[] | null {
+function findingsOf(parsed: ParsedDocument): readonly LinedFinding[] | null {
   if (parsed.shape === 'unparsed') return [];
   const raw = parsed.shape === 'report' ? reportFindings(parsed.document) : legacyFindings(parsed.document);
   return raw === null ? null : sortFindings(raw);
@@ -395,10 +425,10 @@ function findingsOf(parsed: ParsedDocument): readonly FindingKey[] | null {
  * @returns One key per element of `findings`, in array order; `null` when any
  *   element is not a finding
  */
-function reportFindings(document: Record<string, unknown>): FindingKey[] | null {
+function reportFindings(document: Record<string, unknown>): LinedFinding[] | null {
   const findings = document['findings'];
   if (!Array.isArray(findings)) return [];
-  const keys: FindingKey[] = [];
+  const keys: LinedFinding[] = [];
   for (const finding of findings) {
     if (!isPlainObject(finding) || !isFinding(finding)) return null;
     keys.push({
@@ -406,6 +436,7 @@ function reportFindings(document: Record<string, unknown>): FindingKey[] | null 
       severity: finding['severity'] as FindingSeverity,
       location: typeof finding['location'] === 'string' ? finding['location'] : null,
       scope: 'scope' in finding ? JSON.stringify(finding['scope']) : null,
+      line: lineOf(finding),
     });
   }
   return keys;
@@ -417,8 +448,8 @@ function reportFindings(document: Record<string, unknown>): FindingKey[] | null 
  * @param document - The legacy document's root
  * @returns Every match, in the order the walk visits them (pre-order, depth-first)
  */
-function legacyFindings(document: Record<string, unknown>): FindingKey[] {
-  const out: FindingKey[] = [];
+function legacyFindings(document: Record<string, unknown>): LinedFinding[] {
+  const out: LinedFinding[] = [];
   walk(document, null, out);
   return out;
 }
@@ -434,7 +465,7 @@ function legacyFindings(document: Record<string, unknown>): FindingKey[] {
  * @param ancestorPath - The nearest ancestor's named location, or `null` above the root
  * @param out - Accumulator, appended to in visiting order
  */
-function walk(node: unknown, ancestorPath: string | null, out: FindingKey[]): void {
+function walk(node: unknown, ancestorPath: string | null, out: LinedFinding[]): void {
   if (Array.isArray(node)) {
     for (const item of node) walk(item, ancestorPath, out);
     return;
@@ -486,13 +517,23 @@ function isFinding(node: Record<string, unknown>): boolean {
  *   `node` names none of its own
  * @returns Its key; legacy documents carry no `scope`, so that field is always `null`
  */
-function legacyFindingKey(node: Record<string, unknown>, ancestorPath: string | null): FindingKey {
+function legacyFindingKey(node: Record<string, unknown>, ancestorPath: string | null): LinedFinding {
   return {
     code: node['code'] as string,
     severity: node['severity'] as FindingSeverity,
     location: legacyLocation(node, ancestorPath),
     scope: null,
+    line: lineOf(node),
   };
+}
+
+/**
+ * @param node - A finding-shaped object
+ * @returns Its `line` when it names a whole number, else `null`
+ */
+function lineOf(node: Record<string, unknown>): number | null {
+  const line = node['line'];
+  return typeof line === 'number' && Number.isInteger(line) ? line : null;
 }
 
 /**
@@ -518,7 +559,7 @@ function legacyLocation(node: Record<string, unknown>, ancestorPath: string | nu
  * @param findings - Findings in whatever order they were collected
  * @returns The same findings, sorted; duplicates kept
  */
-function sortFindings(findings: readonly FindingKey[]): FindingKey[] {
+function sortFindings<T extends FindingKey>(findings: readonly T[]): T[] {
   return [...findings].sort(
     (a, b) => compareStrings(a.code, b.code)
       || compareStrings(a.severity, b.severity)

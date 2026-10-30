@@ -3,50 +3,64 @@
  * wrong number in every report — the same stake `run.test.ts` opens with, one
  * level up.
  *
- * Three properties carry the weight, and each is pinned by a fixture that can
- * actually tell the two answers apart:
+ * A repetition is a SEQUENCE of steps run in its own arm: its own store, `TMPDIR`
+ * and home, from an environment cleared of the developer's VAT, git and claude
+ * state. The properties that carry the weight, each pinned by a fixture that can
+ * tell the two answers apart:
  *
- * 1. **Cold means cold on EVERY repeat.** The probe appends one line per
- *    child process, so the test reads an ORDERED sequence rather than a count:
- *    `[clear, run, clear, run, clear, run]`. An implementation that cleared once
- *    before the loop produces `[clear, run, run, run]` — same children, wrong
- *    shape, which a bare "was the cache cleared?" assertion would accept.
- * 2. **The per-repeat environment reaches the measured run and NOT the clear.**
- *    Every log line records both variables, so "the clear saw the per-repeat
- *    value" and "the clear never ran" are distinguishable outcomes rather than
- *    one silent absence.
- * 3. **A failed repeat still comes back.** `runRepeats` reports; it does not
- *    filter. The rule that a failure must not be timed lives one layer up, in
- *    the facet, and this suite exists partly to keep that boundary visible —
- *    `perf-capture.test.ts` pins the other side of that boundary with the same
- *    probe.
+ * 1. **Cold means cold on EVERY repeat, by deleting the arm's own store.** The
+ *    probe records whether the store existed when it started, so "the store was
+ *    reset before each cold repeat" and "it was reset once" are different logs.
+ *    The lab never runs `vat cache clear`: the probe's argv log shows no such child.
+ * 2. **Warm means one exit-checked priming run, then measured repeats.**
+ * 3. **A step that exits otherwise than committed fails the measurement.**
+ * 4. **The arm's home is empty at the start of every sequence.**
  *
- * The two pure classifiers are exercised on synthetic `RunResult`s rather than
- * on spawned children, because what they decide is arithmetic over exit codes:
- * whether a code means the run COMPLETED (the command declares that), and
- * whether the repeats agreed on which of the accepted codes they produced.
+ * The pure classifiers are exercised on synthetic results rather than on spawned
+ * children, because what they decide is arithmetic over exit codes.
  *
  * No vat binary is spawned. The instrument is `node <probe.cjs>` from
- * `command-probe.ts`, a stand-in that logs its argv and the two environment
- * variables into its working directory — which is also why no test asserts the
- * cwd directly: the log file only appears under the temp dir at all if `cwd` was
- * honoured.
+ * `command-probe.ts`, a stand-in that logs its argv and environment into its
+ * working directory.
  */
 
-import { afterAll, describe, expect, it } from 'vitest';
+import { readdirSync } from 'node:fs';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
+
+import { armDirectories } from '../src/harness/arm-dirs.js';
 import {
   classifyRunFailure,
   materializeArgs,
+  runInterleaved,
   runRepeats,
   SUBJECT_TOKEN,
   summarizeRepeatFailures,
 } from '../src/harness/repeat.js';
+import type { SequenceResult } from '../src/harness/sequence.js';
 import type { RunResult } from '../src/harness/types.js';
 
-import { cleanupProbes, PROBE_BASE_ENV, PROBE_FAIL_EXIT, PROBE_FAIL_TOKEN, PROBE_REPEAT_ENV, probeSpec, setupProbe } from './command-probe.js';
+import {
+  argsOf,
+  cleanupProbes,
+  PROBE_BASE_ENV,
+  PROBE_ECHO_ENV,
+  PROBE_EXIT_CODE_ENV,
+  PROBE_FAIL_EXIT,
+  PROBE_FAIL_TOKEN,
+  PROBE_POPULATE_ENV,
+  PROBE_REPEAT_ENV,
+  PROBE_STDOUT_ENV,
+  probeSpec,
+  probeStep,
+  setupProbe,
+} from './command-probe.js';
 
 afterAll(cleanupProbes);
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 /** Temp-directory prefix, so a stray directory names this suite. */
 const PREFIX = 'lab-repeat-';
@@ -71,13 +85,14 @@ function result(overrides: Partial<RunResult> = {}): RunResult {
 }
 
 /**
- * A set of repeats that each exited with the given code and nothing else.
+ * Build a `SequenceResult` for the summary tests.
  *
- * @param codes - One exit code per repeat, in order
- * @returns The results, ready for {@link summarizeRepeatFailures}
+ * @param exitCode - Its aggregate exit code
+ * @param violation - Why it fails the measurement, or `null`
+ * @returns A complete result with no steps
  */
-function resultsExiting(...codes: readonly number[]): RunResult[] {
-  return codes.map((exitCode) => result({ exitCode }));
+function sequence(exitCode: number, violation: string | null = null): SequenceResult {
+  return { ...result({ exitCode }), steps: [], violation };
 }
 
 describe('materializeArgs', () => {
@@ -172,128 +187,278 @@ describe('classifyRunFailure', () => {
 });
 
 describe('summarizeRepeatFailures', () => {
-  it('says nothing when every repeat exited with the same accepted code', () => {
-    expect(summarizeRepeatFailures(resultsExiting(1, 1, 1), ZERO_OR_FINDINGS)).toBeNull();
+  it('says nothing when every repeat completed with the same code', () => {
+    expect(summarizeRepeatFailures([sequence(1), sequence(1), sequence(1)])).toBeNull();
   });
 
-  it('counts the failures against the whole set', () => {
-    const failure = summarizeRepeatFailures(
-      [result(), result({ exitCode: 3, stderr: 'boom' }), result()],
-      ONLY_ZERO,
+  it('counts the violations against the whole set', () => {
+    expect(summarizeRepeatFailures([sequence(0), sequence(3, "step 'audit' exited 3: boom"), sequence(0)])).toBe(
+      "1 of 3 repeats failed — step 'audit' exited 3: boom",
     );
-
-    expect(failure).toBe('1 of 3 repeats failed — exited 3: boom');
   });
 
-  it('fails a row whose repeats exited with DIFFERENT accepted codes, naming both', () => {
-    // Nothing failed: 0 and 1 are both completed runs for this command. But one
-    // repeat found something to report and the other did not, so they did
-    // different amounts of work and a median over them describes neither.
-    const failure = summarizeRepeatFailures(resultsExiting(0, 1, 0), ZERO_OR_FINDINGS);
-
-    expect(failure).toBe(
+  it('fails a row whose repeats completed with DIFFERENT codes, naming both', () => {
+    expect(summarizeRepeatFailures([sequence(0), sequence(1), sequence(0)])).toBe(
       '3 repeats exited 0 and 1 — every repeat completed, but not with the same amount of work ' +
         'done, so a statistic over them describes neither run',
     );
   });
 
-  it('reports the outright failure, not the disagreement, when both are present', () => {
-    // A set that is non-uniform AND has a real failure in it: the failure is
-    // the more actionable thing to say, and saying both would be two sentences
-    // for one row.
-    const failure = summarizeRepeatFailures(
-      [result({ exitCode: 0 }), result({ exitCode: 1 }), result({ exitCode: 2, stderr: 'gone' })],
-      ZERO_OR_FINDINGS,
-    );
-
-    expect(failure).toBe('1 of 3 repeats failed — exited 2: gone');
+  it('reports the violation, not the disagreement, when both are present', () => {
+    expect(summarizeRepeatFailures([sequence(0), sequence(1), sequence(2, 'gone')])).toBe('1 of 3 repeats failed — gone');
   });
 
-  it('says nothing about a set with no repeats — that is the facet\'s own case', () => {
-    expect(summarizeRepeatFailures([], ONLY_ZERO)).toBeNull();
+  it("says nothing about a set with no repeats — that is the facet's own case", () => {
+    expect(summarizeRepeatFailures([])).toBeNull();
   });
 });
 
 describe('runRepeats', () => {
-  it('runs the command once per repeat and returns every result', () => {
+  it('primes a warm arm once, exit-checked, then runs one measured sequence per repeat', async () => {
     const probe = setupProbe(PREFIX);
 
-    const results = runRepeats(probeSpec(probe, { runs: 3 }));
+    const run = await runRepeats(probeSpec(probe, { runs: 3 }));
 
-    expect(results).toHaveLength(3);
-    expect(results.every((run) => run.exitCode === 0)).toBe(true);
-    expect(probe.entries().map((entry) => entry.args)).toEqual([['audit'], ['audit'], ['audit']]);
+    expect(run.priming?.violation).toBeNull();
+    expect(run.results).toHaveLength(3);
+    expect(run.results.every((sequenceRun) => sequenceRun.violation === null && sequenceRun.exitCode === 0)).toBe(true);
+    expect(argsOf(probe.entries())).toEqual([['audit'], ['audit'], ['audit'], ['audit']]);
   });
 
-  it('clears the cache before EVERY cold repeat, not once before the loop', () => {
+  it('deletes the store before EVERY cold repeat, and never runs vat cache clear', async () => {
     const probe = setupProbe(PREFIX);
 
-    runRepeats(probeSpec(probe, { runs: 3, cache: 'cold' }));
+    await runRepeats(probeSpec(probe, { runs: 3, cache: 'cold', env: { [PROBE_POPULATE_ENV]: '1' } }));
 
-    // The ordered sequence is the assertion. Clearing once yields
-    // [clear, audit, audit, audit], which is the mutant this pins.
-    expect(probe.entries().map((entry) => entry.args)).toEqual([
-      ['cache', 'clear'],
-      ['audit'],
-      ['cache', 'clear'],
-      ['audit'],
-      ['cache', 'clear'],
-      ['audit'],
-    ]);
+    // Each repeat writes a store; a reset hoisted out of the loop shows `true` from the second on.
+    expect(probe.entries().map((entry) => entry.storeExisted)).toEqual([false, false, false]);
+    expect(argsOf(probe.entries())).toEqual([['audit'], ['audit'], ['audit']]);
   });
 
-  it('never clears the cache when the mode is warm', () => {
+  it('keeps a warm store between measured repeats', async () => {
     const probe = setupProbe(PREFIX);
 
-    runRepeats(probeSpec(probe, { runs: 2 }));
+    await runRepeats(probeSpec(probe, { runs: 2, env: { [PROBE_POPULATE_ENV]: '1' } }));
 
-    expect(probe.entries().map((entry) => entry.args)).toEqual([['audit'], ['audit']]);
+    expect(probe.entries().map((entry) => entry.storeExisted)).toEqual([false, true, true]);
   });
 
-  it('spawns nothing at all when no repeats were requested, even cold', () => {
-    // The same mutant from the other side: a clear hoisted out of the loop still
-    // fires here, where nothing at all should run.
+  it('hands every sequence an EMPTY home, whatever the previous one left there', async () => {
     const probe = setupProbe(PREFIX);
 
-    const results = runRepeats(probeSpec(probe, { runs: 0, cache: 'cold' }));
+    await runRepeats(probeSpec(probe, { runs: 2, cache: 'cold' }));
 
-    expect(results).toEqual([]);
+    // The probe writes into the arm home on every run, so only a reset reads 0 twice.
+    expect(probe.entries().map((entry) => entry.homeEntries)).toEqual([0, 0]);
+  });
+
+  it('spawns nothing and creates nothing when no repeats were requested, even cold', async () => {
+    const probe = setupProbe(PREFIX);
+    const spec = probeSpec(probe, { runs: 0, cache: 'cold' });
+
+    const run = await runRepeats(spec);
+
+    expect(run.results).toEqual([]);
     expect(probe.entries()).toEqual([]);
+    expect(readdirSync(probe.cwd)).not.toContain('out');
   });
 
-  it('gives the measured run its per-repeat environment and the clear only the base', () => {
+  it('gives the measured run its per-repeat environment and the priming run only the base', async () => {
     const probe = setupProbe(PREFIX);
 
-    runRepeats(
+    await runRepeats(
       probeSpec(probe, {
         runs: 2,
-        cache: 'cold',
         env: { [PROBE_BASE_ENV]: BASE_VALUE },
         envFor: (index) => ({ [PROBE_REPEAT_ENV]: `repeat-${String(index)}` }),
       }),
     );
 
-    // Both variables are recorded by every child, so "the clear saw the
-    // per-repeat value" and "the clear never ran" are different outcomes here.
-    expect(probe.entries()).toEqual([
-      { args: ['cache', 'clear'], base: BASE_VALUE, perRepeat: null },
-      { args: ['audit'], base: BASE_VALUE, perRepeat: 'repeat-0' },
-      { args: ['cache', 'clear'], base: BASE_VALUE, perRepeat: null },
-      { args: ['audit'], base: BASE_VALUE, perRepeat: 'repeat-1' },
+    expect(probe.entries().map(({ base, perRepeat }) => ({ base, perRepeat }))).toEqual([
+      { base: BASE_VALUE, perRepeat: null },
+      { base: BASE_VALUE, perRepeat: 'repeat-0' },
+      { base: BASE_VALUE, perRepeat: 'repeat-1' },
     ]);
   });
 
-  it('keeps going after a failed repeat and reports it raw, unfiltered', () => {
-    // Deciding what a failure means belongs to the facet. If this ever started
-    // short-circuiting, a facet's "any failure poisons the row" rule would be
-    // handed a shorter list than it asked for and would under-report.
+  it('keeps going after a failed cold repeat and reports every one, each a violation', async () => {
     const probe = setupProbe(PREFIX);
 
-    const results = runRepeats(probeSpec(probe, { args: [PROBE_FAIL_TOKEN], runs: 2 }));
+    const run = await runRepeats(probeSpec(probe, { args: [PROBE_FAIL_TOKEN], runs: 2, cache: 'cold' }));
 
-    expect(results).toHaveLength(2);
-    expect(results.map((run) => run.exitCode)).toEqual([PROBE_FAIL_EXIT, PROBE_FAIL_EXIT]);
-    expect(results.every((run) => run.spawnError === null)).toBe(true);
-    expect(probe.entries()).toHaveLength(2);
+    expect(run.results.map((sequenceRun) => sequenceRun.exitCode)).toEqual([PROBE_FAIL_EXIT, PROBE_FAIL_EXIT]);
+    expect(run.results.map((sequenceRun) => sequenceRun.violation)).toEqual([
+      `step 'boom' exited ${String(PROBE_FAIL_EXIT)}: probe was asked to fail`,
+      `step 'boom' exited ${String(PROBE_FAIL_EXIT)}: probe was asked to fail`,
+    ]);
+  });
+
+  it('fails a warm arm whose priming run exits otherwise than committed, and measures nothing', async () => {
+    const probe = setupProbe(PREFIX);
+
+    const run = await runRepeats(probeSpec(probe, { args: [PROBE_FAIL_TOKEN], runs: 3 }));
+
+    expect(run.priming?.violation).toMatch(/^priming run: step 'boom' exited 3/);
+    expect(run.results).toEqual([]);
+    expect(probe.entries()).toHaveLength(1);
+  });
+
+  it("starts a VAT step from the developer's environment minus VAT_*, git and claude state, and records what it removed", async () => {
+    const probe = setupProbe(PREFIX);
+    const developerConfig = safePath.join(probe.cwd, 'developer-config');
+    vi.stubEnv('VAT_PROJECTION_STORE', 'off');
+    vi.stubEnv('XDG_CONFIG_HOME', developerConfig);
+    vi.stubEnv('CLAUDE_CONFIG_DIR', safePath.join(probe.cwd, 'developer-claude'));
+    vi.stubEnv('GIT_CONFIG_GLOBAL', safePath.join(probe.cwd, 'developer-gitconfig'));
+    const echoed = ['VAT_PROJECTION_STORE', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL', 'CLAUDE_CONFIG_DIR', 'HOME', 'TMPDIR', 'VAT_PROJECTION_STORE_DIR', 'PATH'];
+
+    const spec = probeSpec(probe, { runs: 1, cache: 'cold', env: { [PROBE_ECHO_ENV]: echoed.join(',') } });
+    const run = await runRepeats(spec);
+
+    const dirs = armDirectories(spec.arm);
+    const seen = JSON.parse(run.results[0]?.steps[0]?.stdout ?? '{}') as Record<string, string | null>;
+    expect(seen).toMatchObject({
+      VAT_PROJECTION_STORE: null,
+      XDG_CONFIG_HOME: null,
+      GIT_CONFIG_GLOBAL: null,
+      CLAUDE_CONFIG_DIR: dirs.home,
+      HOME: dirs.home,
+      TMPDIR: dirs.tmp,
+      VAT_PROJECTION_STORE_DIR: dirs.store,
+    });
+    expect(seen['PATH']).toBe(process.env['PATH']); // positive control
+    expect(run.removed).toEqual(expect.arrayContaining(['VAT_PROJECTION_STORE', 'XDG_CONFIG_HOME', 'GIT_CONFIG_GLOBAL']));
+    expect(run.removed).not.toContain('CLAUDE_CONFIG_DIR'); // pointed, not removed
+  });
+
+  it("runs a non-VAT step in the developer's environment minus VAT_* only", async () => {
+    const probe = setupProbe(PREFIX);
+    const developerConfig = safePath.join(probe.cwd, 'developer-config');
+    vi.stubEnv('VAT_PROJECTION_STORE', 'off');
+    vi.stubEnv('XDG_CONFIG_HOME', developerConfig);
+    const tool = probeStep(['tool'], {
+      command: { kind: 'tool', command: process.execPath, args: [...probe.instrument.leadingArgs, 'tool'] },
+      timed: false,
+    });
+
+    // Asked through the developer's own environment: a tool step inherits it.
+    vi.stubEnv(PROBE_ECHO_ENV, 'VAT_PROJECTION_STORE,XDG_CONFIG_HOME');
+
+    const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'cold', steps: [tool] }));
+
+    expect(run.results[0]?.violation).toBeNull();
+    expect(JSON.parse(run.results[0]?.steps[0]?.stdout ?? '{}')).toEqual({
+      VAT_PROJECTION_STORE: null,
+      XDG_CONFIG_HOME: developerConfig,
+    });
+  });
+
+  it('times only the timed steps, records every step, and stops at the first non-zero exit as CI does', async () => {
+    const probe = setupProbe(PREFIX);
+    const steps = [
+      probeStep(['untimed'], { timed: false }),
+      probeStep(['timed']),
+      probeStep([PROBE_FAIL_TOKEN]),
+      probeStep(['never']),
+    ];
+
+    const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'cold', steps }));
+    const [only] = run.results;
+
+    expect(only?.steps.map((step) => step.name)).toEqual(['untimed', 'timed', 'boom']);
+    expect(only?.wallMs).toBe((only?.steps[1]?.wallMs ?? 0) + (only?.steps[2]?.wallMs ?? 0));
+    expect(only?.exitCode).toBe(PROBE_FAIL_EXIT);
+    expect(only?.violation).toMatch(/^step 'boom' exited 3/);
+    expect(argsOf(probe.entries())).toEqual([['untimed'], ['timed'], ['boom']]);
+  });
+
+  it("fails a sequence whose later step never ran because an earlier one's committed exit was non-zero", async () => {
+    const probe = setupProbe(PREFIX);
+    const steps = [probeStep([PROBE_FAIL_TOKEN], { expectedExits: [1] }), probeStep(['after'])];
+
+    const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'cold', steps, env: { [PROBE_EXIT_CODE_ENV]: '1' } }));
+
+    expect(run.results[0]?.exitCode).toBe(1);
+    expect(run.results[0]?.violation).toBe("step 'after' did not run: an earlier step exited 1");
+  });
+
+  it('refuses a step that commits to exit 2', async () => {
+    const probe = setupProbe(PREFIX);
+    await expect(runRepeats(probeSpec(probe, { steps: [probeStep(['audit'], { expectedExits: [0, 2] })] }))).rejects.toThrow(/exit 2/);
+  });
+
+  it('refuses a caller environment that names a variable the arm owns', async () => {
+    const probe = setupProbe(PREFIX);
+    await expect(runRepeats(probeSpec(probe, { env: { VAT_PROJECTION_STORE_DIR: probe.cwd } }))).rejects.toThrow(
+      /VAT_PROJECTION_STORE_DIR/,
+    );
+  });
+});
+
+describe('runRepeats — the cold rule after the first step', () => {
+  const populating = probeStep(['audit'], { populates: true });
+
+  it('passes when the first step leaves a store and a shard in the build-resolved parse directory', async () => {
+    const probe = setupProbe(PREFIX);
+    const run = await runRepeats(
+      probeSpec(probe, { runs: 2, cache: 'cold', steps: [populating], env: { [PROBE_POPULATE_ENV]: '1' } }),
+    );
+    expect(run.results.map((sequenceRun) => sequenceRun.violation)).toEqual([null, null]);
+  });
+
+  it('fails a populating step that leaves the store and parse directory empty', async () => {
+    const probe = setupProbe(PREFIX);
+    const run = await runRepeats(probeSpec(probe, { runs: 1, cache: 'cold', steps: [populating] }));
+    expect(run.results[0]?.violation).toMatch(/^cold rule: after step 'audit' the store .* is empty/);
+  });
+
+  it('fails a warm priming run that leaves the caches empty', async () => {
+    const probe = setupProbe(PREFIX);
+    const run = await runRepeats(probeSpec(probe, { runs: 1, steps: [populating] }));
+    expect(run.priming?.violation).toMatch(/^priming run: warm rule: after priming the store .* is empty/);
+  });
+});
+
+describe('runRepeats — the warm rule on every measured repetition', () => {
+  const STORE = JSON.stringify({ status: 'success', examined: 1, findings: [], summary: {}, data: { population: 'store' } });
+  const ABSENT = JSON.stringify({ status: 'success', examined: 1, findings: [], summary: {}, data: {} });
+  const check = probeStep(['check'], { provenance: 'resources-check' });
+
+  it('records the provenance and passes a repetition served from the store', async () => {
+    const probe = setupProbe(PREFIX);
+    const run = await runRepeats(probeSpec(probe, { runs: 1, steps: [check], env: { [PROBE_STDOUT_ENV]: JSON.stringify([STORE]) } }));
+    expect(run.results[0]?.violation).toBeNull();
+    expect(run.results[0]?.steps[0]?.provenance).toEqual({ resources: 'store', checks: null, lens: null });
+  });
+
+  it('fails a repetition whose document carries no population', async () => {
+    const probe = setupProbe(PREFIX);
+    const run = await runRepeats(probeSpec(probe, { runs: 1, steps: [check], env: { [PROBE_STDOUT_ENV]: JSON.stringify([ABSENT]) } }));
+    expect(run.results[0]?.violation).toMatch(/absent is never a pass/);
+  });
+
+  it('captures every repetition\'s stderr per step', async () => {
+    const probe = setupProbe(PREFIX);
+    const run = await runRepeats(probeSpec(probe, { args: [PROBE_FAIL_TOKEN], runs: 2, cache: 'cold' }));
+    expect(run.results.map((sequenceRun) => sequenceRun.steps[0]?.stderr)).toEqual(['probe was asked to fail', 'probe was asked to fail']);
+  });
+});
+
+describe('runInterleaved', () => {
+  it('primes every warm arm, then runs one repetition of each arm per round', async () => {
+    const probe = setupProbe(PREFIX);
+    const x = probeSpec(probe, { args: ['x'], arm: 'x' });
+    const y = probeSpec(probe, { args: ['y'], arm: 'y' });
+
+    const runs = await runInterleaved([x, y], 2);
+
+    expect(runs.map((run) => run.results.length)).toEqual([2, 2]);
+    expect(argsOf(probe.entries())).toEqual([['x'], ['y'], ['x'], ['y'], ['x'], ['y']]);
+  });
+
+  it('refuses two arms that would share directories', async () => {
+    const probe = setupProbe(PREFIX);
+    const x = probeSpec(probe, { args: ['x'], arm: 'x' });
+    await expect(runInterleaved([x, x], 1)).rejects.toThrow(/share/);
   });
 });

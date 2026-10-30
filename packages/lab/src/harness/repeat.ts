@@ -1,83 +1,93 @@
 /**
- * Running one command N times against one subject — the loop every measurement
- * facet needs before it can compute anything.
+ * Running one arm's sequence N times — the loop every measurement facet needs
+ * before it can compute anything.
  *
- * It lives in the harness rather than in a facet because the two things it gets
- * right are not facet-specific, and a second copy would get one of them wrong:
+ * It lives in the harness rather than in a facet because what it gets right is
+ * not facet-specific, and a second copy would get one of these wrong:
  *
- * 1. **Cold means cold on EVERY repeat.** Clearing the cache once and then
- *    running five times measures one cold run and four warm ones, and any
- *    statistic over that mixture describes nothing. The clear is therefore
- *    inside the loop, not before it.
- * 2. **A repeat's outcome is reported, never filtered.** {@link runRepeats}
- *    hands back what happened, including failures, and {@link classifyRunFailure}
- *    names a failure without deciding what it costs. What a failure means to a
- *    measurement is the facet's call — the `perf` facet, for one, refuses to let
- *    a failed run contribute a timing and poisons the whole row if any repeat
- *    failed, because timing a crash measures how fast vat fails.
- *
- * The clear itself is deliberately untimed and deliberately best-effort: it is
- * setup, not measurement. A failure to clear shows up as the repeat after it
- * being unexpectedly fast, which the spread will show.
+ * 1. **Every arm runs in its own directories, from a cleared environment.**
+ *    A REQUIRED {@link ArmDescriptor} names `<out>/arms/<build>-<arm>-<state>/`,
+ *    whose `store/`, `tmp/` and `home/` are the child's
+ *    `VAT_PROJECTION_STORE_DIR`, `TMPDIR`/`TEMP`/`TMP` and
+ *    `HOME`/`CLAUDE_CONFIG_DIR` (see `arm-dirs.ts`), and every VAT step starts
+ *    from the developer's environment minus every `VAT_*` name and the git and
+ *    claude state in `CLEARED_ENV_NAMES` (see `arm-env.ts`). A developer's
+ *    leftover `VAT_PROJECTION_STORE=off` would otherwise silently change a
+ *    baseline arm's lane. The lab never runs `vat cache clear` and never touches
+ *    the developer's default store.
+ * 2. **Cold means cold on EVERY repeat**: the arm's store is deleted and its
+ *    `tmp/` emptied inside the loop, not once before it. **Warm means one
+ *    exit-checked priming run**, then measured repeats with nothing deleted.
+ *    Each state's rule is checked, and a violation fails the measurement.
+ * 3. **A repeat's outcome is reported, never filtered.** {@link runRepeats}
+ *    hands back every repetition, failures included; what a failure costs is
+ *    the facet's call — the `perf` facet refuses to let a failed run contribute
+ *    a timing, because timing a crash measures how fast vat fails.
  */
 
-import { type ArmEnvironment, mergeArmEnvironments } from './arm-env.js';
+import { forEachInOrder, mapInOrder } from '@vibe-agent-toolkit/utils';
+
+import { type ArmDescriptor, ARM_DIRECTORY_ENV_KEYS, armDirectories, armDirectoryEnvironment, prepareArmDirectories } from './arm-dirs.js';
+import { type ArmEnvironment, clearedEnvironment, mergeArmEnvironments } from './arm-env.js';
 import { completedExitCodesOf, type MeasuredCommandSpec } from './commands.js';
-import { runCommand } from './run.js';
-import type {
-  CacheMode,
-  CaptureRequest,
-  ResolvedInstrument,
-  RunOptions,
-  RunResult,
-} from './types.js';
+import { type ParseDirectoryResolution, resolveParseCacheDirectory } from './parse-cache.js';
+import {
+  assertCommittedExits,
+  runSequence,
+  type SequenceContext,
+  type SequenceResult,
+  type SequenceStep,
+} from './sequence.js';
+import type { CacheMode, CaptureRequest, ResolvedInstrument, RunResult } from './types.js';
 
 /** The token replaced with the subject's path in a command's arguments. */
 export const SUBJECT_TOKEN = '{subject}';
 
-/** Arguments used to clear vat's caches between cold repeats. */
-const CACHE_CLEAR_ARGS = Object.freeze(['cache', 'clear']);
-
-/** How long a single command may run before it is killed. */
+/** How long a single step may run before it is killed. */
 const DEFAULT_TIMEOUT_MS = 600_000;
 
 /** How much of a failing command's stderr travels with the failure. */
 const STDERR_EXCERPT_CHARS = 200;
 
-/** One command, repeated against one subject. */
+/** One arm's sequence, repeated against one subject. */
 export interface RepeatSpec {
   readonly instrument: ResolvedInstrument;
-  /** Working directory for every child — normally the subject's path. */
+  /** Working directory for every step — the subject's root. */
   readonly cwd: string;
-  /** Arguments as they will actually be run: {@link materializeArgs} first. */
-  readonly args: readonly string[];
-  /** Repeats to perform. Zero spawns nothing at all, including no cache clear. */
+  /** The sequence, in order. One step for a single measured command. */
+  readonly steps: readonly SequenceStep[];
+  /** Measured repeats. Zero spawns nothing and creates nothing, priming included. */
   readonly runs: number;
-  readonly cache: CacheMode;
+  /** Which arm, and so which directories and which cache state. Required: an arm with no directories is the developer's. */
+  readonly arm: ArmDescriptor;
   readonly timeoutMs?: number;
   /**
-   * The arm's environment for EVERY child, the cache clear included — applied
-   * over `process.env` by {@link runCommand} (see `arm-env.ts`).
-   *
-   * The clear needs this: a variable that redirects vat's cache or config (a
-   * `VAT_*` root, an XDG override) has to reach the clear too, or the run clears
-   * a cache the measured command never uses and every "cold" repeat is warm.
+   * The caller's own environment (`--env`/`--unset`), layered over the arm's
+   * for every VAT step, the priming run included. It may not name a variable
+   * the arm's directories own.
    */
   readonly env: ArmEnvironment;
   /**
-   * Variables SET for the MEASURED run of repeat `index` only, layered over
-   * {@link RepeatSpec.env} — a key set here cancels a base `unset` of it.
-   *
-   * Separate from `env` because of what it is for: the `io` facet gives each
-   * repeat its own syscall-log directory, and instrumenting the cache clear with
-   * the same one would fold setup's I/O into the repeat's measurement. The clear
-   * gets the base environment and nothing more, so it stays uninstrumented.
+   * Variables SET for the VAT steps of MEASURED repeat `index` only, layered
+   * over {@link RepeatSpec.env} — the `io` facet gives each repeat its own
+   * syscall-log directory, and instrumenting the priming run with it would fold
+   * setup's I/O into a repeat's measurement.
    */
   readonly envFor?: RepeatEnvFor;
 }
 
 /** Per-repeat variables for the measured run; see {@link RepeatSpec.envFor}. */
 export type RepeatEnvFor = (index: number) => ArmEnvironment['set'] | undefined;
+
+/** One arm's repeats, and what the arm was run under. */
+export interface ArmRun {
+  /** Inherited names the arm's VAT steps did not receive — recorded in the run report. */
+  readonly removed: readonly string[];
+  /** The warm arm's priming run, or `null` for a cold arm (or no repeats). */
+  readonly priming: SequenceResult | null;
+  /** One result per measured repeat, in order; empty when priming failed. */
+  readonly results: readonly SequenceResult[];
+}
 
 /**
  * Substitute the subject path into a command's arguments.
@@ -98,18 +108,14 @@ export function materializeArgs(
  *
  * The order is the content. A process that never ran has no exit code worth
  * reporting, so `spawnError` is tested first; a non-zero exit is a real run and
- * keeps its code. A caller that reversed these would report `exited null` for
- * an ENOENT.
+ * keeps its code.
  *
  * "Failed" means **did not complete**, which is not the same as "did not exit
- * zero". The accepted codes come from the command being measured — see
- * `MeasuredCommandSpec.completedExitCodes` in `commands.ts` — because only the command
- * knows that its `1` means "ran everything, found something to report" rather
- * than "gave up". They are a required parameter rather than a defaulted one: a
- * caller that forgot to pass them would get the old behaviour silently, which is
- * the defect this replaces.
+ * zero": the accepted codes come from the command being measured — see
+ * `MeasuredCommandSpec.completedExitCodes` in `commands.ts`. They are a required
+ * parameter: a defaulted one would silently restore the old behaviour.
  *
- * @param result - One repeat's raw outcome
+ * @param result - One run's raw outcome
  * @param completedExitCodes - Codes that denote a run that finished its work
  * @returns The reason it must not be treated as a completed run, or `null`
  */
@@ -125,81 +131,22 @@ export function classifyRunFailure(
 }
 
 /**
- * Run one command's repeats from what the capture was asked for.
- *
- * Every measurement facet needs exactly this translation, and two hand-written
- * copies of it is not a stylistic problem: under `exactOptionalPropertyTypes`
- * each optional field has to be spread conditionally, so the copies are long
- * enough to drift and mechanical enough that a drift reads as a typo rather
- * than as a difference in meaning. A facet that forgot to forward `timeoutMs`
- * would silently measure under a different limit than the one requested, and
- * its report would look exactly as trustworthy as one that had not.
- *
- * Building the spec and running it are one step rather than two because no
- * caller wants a {@link RepeatSpec} it does not then run — splitting them only
- * creates a state where a facet has described a measurement it never took.
- *
- * `cwd` is the subject's path, always. A facet does not get to choose where the
- * measured command runs — that is the coordinate's axis A made real, and a
- * facet running vat somewhere else would stamp a subject it did not measure.
- *
- * @param request - What the capture was asked to do
- * @param args - This command's arguments, already materialized
- * @param envFor - Per-repeat environment for the MEASURED run only; see
- *   {@link RepeatSpec.envFor} for why this is separate from `env`
- * @returns One raw result per repeat, in the order they ran
- */
-export function runRepeatsFor(
-  request: CaptureRequest,
-  args: readonly string[],
-  envFor?: RepeatEnvFor,
-): RunResult[] {
-  return runRepeats({
-    instrument: request.instrument,
-    cwd: request.subject.path,
-    args,
-    runs: request.runs,
-    cache: request.cache,
-    ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
-    env: request.env,
-    ...(envFor === undefined ? {} : { envFor }),
-  });
-}
-
-/**
  * Say whether a set of repeats can produce a measurement at all, and why not.
  *
- * Two rules, both of which poison the whole set rather than filtering it, and
- * both of which are shared rather than written per facet — the *sentence* is
- * part of the contract, because two facets that phrase this differently make one
- * report look more broken than another describing the identical outcome.
+ * **1. Any violation poisons the whole set.** A statistic over the survivors
+ * quietly answers a different question — with `perf` backwards, because a failed
+ * run returns fast and would read as an improvement.
  *
- * **1. Any failure poisons the whole set.** A run of repeats where some
- * completed and some did not is not measuring one behaviour, and reporting a
- * statistic over the survivors quietly answers a different question than the one
- * asked — with `perf` that is actively backwards, because a command that fails
- * to resolve returns in a fraction of a millisecond and would drag a median down
- * into looking like an improvement.
- *
- * **2. The accepted exit codes must be uniform across the set.** Accepting more
- * than one code (a findings command completes at `0` and at `1` alike) makes it
- * possible for every repeat to succeed while the repeats did *different amounts
- * of work*: one run that found nothing and one that rendered a page of findings
- * are two behaviours, and a median over the mixture describes neither. Such a
- * row is failed, and the failure names both codes — the usual cause is the
- * measured command mutating its own subject between repeats, which is worth
- * saying out loud rather than averaging away.
+ * **2. The exit codes must be uniform across the set.** A findings command
+ * completes at `0` and at `1` alike, and two repeats that did different amounts
+ * of work describe two behaviours; a median over the mixture describes neither.
  *
  * @param results - Every repeat's outcome, raw
- * @param completedExitCodes - Codes that denote a run that finished its work
  * @returns The failure to record, or `null` when every repeat completed alike
  */
-export function summarizeRepeatFailures(
-  results: readonly RunResult[],
-  completedExitCodes: readonly number[],
-): string | null {
+export function summarizeRepeatFailures(results: readonly SequenceResult[]): string | null {
   const reasons = results
-    .map((result) => classifyRunFailure(result, completedExitCodes))
+    .map((result) => result.violation)
     .filter((reason): reason is string => reason !== null);
   if (reasons.length > 0) {
     return `${String(reasons.length)} of ${String(results.length)} repeats failed — ${reasons[0] ?? 'unknown'}`;
@@ -225,109 +172,178 @@ export interface SpecMeasurement {
   readonly spec: MeasuredCommandSpec;
   /** Arguments as actually run, with `{subject}` substituted. */
   readonly args: readonly string[];
-  /** Which cache mode the repeats ran under. */
+  /** Which cache state the repeats ran under. */
   readonly cache: CacheMode;
-  /** Every repeat's outcome, raw and unfiltered. */
-  readonly results: readonly RunResult[];
+  /** Every measured repeat's outcome, raw and unfiltered. */
+  readonly results: readonly SequenceResult[];
   /** Why these repeats yield no usable measurement, or `null`. */
   readonly failure: string | null;
 }
 
 /**
- * Materialize one command's arguments, run its repeats, and say whether they are
- * usable — the whole preamble a measurement facet performs before it measures.
+ * The one step a single measured command is.
  *
- * The three steps are one concept, not three, and the reason they are assembled
- * here rather than at each facet is the third one. Whether a set of repeats is
- * usable is the single property the facets must **not** be allowed to differ on:
- * two hand-written copies of this preamble are free to disagree about which exit
- * codes count as completed, or to pass the accepted codes at one call site and
- * forget them at the other, and the resulting reports stay well-formed while
- * describing different populations. A `perf` row and an `io` row of the same
- * command have to have refused or admitted the same repeats, or holding one
- * beside the other means nothing.
+ * @param spec - The command
+ * @param args - Its arguments, materialized
+ * @returns A timed VAT step accepting the command's completed exits
+ */
+export function commandStep(spec: MeasuredCommandSpec, args: readonly string[]): SequenceStep {
+  return {
+    name: spec.name,
+    command: { kind: 'vat', args },
+    timed: true,
+    expectedExits: completedExitCodesOf(spec),
+    provenance: spec.provenance,
+    populates: spec.populates,
+  };
+}
+
+/**
+ * Materialize one command's arguments, run its repeats in the command's own arm,
+ * and say whether they are usable — the whole preamble a measurement facet
+ * performs before it measures, assembled once so no two facets can disagree
+ * about which repeats they admitted.
  *
- * The narrower pieces stay exported and separately tested — {@link
- * materializeArgs}, {@link runRepeatsFor}, {@link summarizeRepeatFailures} and
- * {@link classifyRunFailure} each answer a question worth asking alone. This
- * only fixes the order they are asked in.
+ * The arm is `<out>/arms/<build>-<command>-<cache>`: each command of a capture
+ * gets its own store, so one command's warm store never primes another's.
  *
  * @param request - What the capture was asked to do
  * @param spec - The command to measure
- * @param envFor - Per-repeat environment for the MEASURED run only; see
- *   {@link RepeatSpec.envFor} for why this is separate from `env`
+ * @param envFor - Per-repeat environment for the MEASURED run only
  * @returns The repeats and the verdict on them; see {@link SpecMeasurement}
  */
-export function measureSpec(
+export async function measureSpec(
   request: CaptureRequest,
   spec: MeasuredCommandSpec,
   envFor?: RepeatEnvFor,
-): SpecMeasurement {
+): Promise<SpecMeasurement> {
   const args = materializeArgs(spec.args, request.subject.path);
-  const results = runRepeatsFor(request, args, envFor);
+  const run = await runRepeats({
+    instrument: request.instrument,
+    cwd: request.subject.path,
+    steps: [commandStep(spec, args)],
+    runs: request.runs,
+    arm: { out: request.arms.out, build: request.arms.build, arm: spec.name, state: request.cache },
+    ...(request.timeoutMs === undefined ? {} : { timeoutMs: request.timeoutMs }),
+    env: request.env,
+    ...(envFor === undefined ? {} : { envFor }),
+  });
+  const primingFailure = run.priming?.violation ?? null;
   return {
     spec,
     args,
     cache: request.cache,
-    results,
-    failure: summarizeRepeatFailures(results, completedExitCodesOf(spec)),
+    results: run.results,
+    failure: primingFailure === null ? summarizeRepeatFailures(run.results) : `priming failed — ${primingFailure}`,
   };
 }
 
 /**
- * Run one command `runs` times, clearing vat's caches before each cold repeat.
+ * Run one arm's sequence `runs` times.
  *
  * @param spec - See {@link RepeatSpec}
- * @returns One raw result per repeat, in the order they ran
+ * @returns The arm's run; see {@link ArmRun}
  */
-export function runRepeats(spec: RepeatSpec): RunResult[] {
-  const results: RunResult[] = [];
-  for (let index = 0; index < spec.runs; index++) {
-    // Every repeat, not once before the loop: clearing once would measure one
-    // cold run and the rest warm, and report a statistic over the mixture.
-    if (spec.cache === 'cold') clearCache(spec);
-    results.push(runCommand(spec.instrument, spec.args, runOptions(spec, repeatEnv(spec, index))));
+export async function runRepeats(spec: RepeatSpec): Promise<ArmRun> {
+  const [run] = await runInterleaved([spec], spec.runs);
+  /* c8 ignore next -- one spec in, one run out; guards noUncheckedIndexedAccess */
+  if (run === undefined) throw new Error('runRepeats: no run for the one arm');
+  return run;
+}
+
+/**
+ * Run several arms INTERLEAVED by round — A, B, C, then the next round — never
+ * as sequential blocks, so thermal drift or a background process lands on every
+ * arm alike. Every warm arm is primed before round 1.
+ *
+ * @param specs - The arms; each one's `runs` is ignored in favour of `rounds`
+ * @param rounds - Measured repetitions per arm
+ * @returns One run per arm, in `specs` order
+ * @throws {Error} when two arms would share directories, a caller environment
+ *   names an arm-owned variable, or a step commits to exit 2
+ */
+export async function runInterleaved(specs: readonly RepeatSpec[], rounds: number): Promise<ArmRun[]> {
+  const arms = specs.map((spec) => prepareArm(spec));
+  refuseSharedDirectories(arms.map((arm) => arm.context.dirs.root));
+  if (rounds === 0) return arms.map((arm) => ({ removed: arm.removed, priming: null, results: [] }));
+
+  for (const arm of arms) prepareArmDirectories(arm.context.dirs);
+  // One sequence at a time, never concurrently: a measurement shares the machine with nothing of its own.
+  const priming = await mapInOrder(arms, (arm) => (arm.context.state === 'warm' ? primed(arm) : null));
+  const results = arms.map((): SequenceResult[] => []);
+  const roundNumbers = Array.from({ length: rounds }, (_, round) => round);
+  await forEachInOrder(roundNumbers, (round) =>
+    forEachInOrder(arms, async (arm, index) => {
+      if ((priming[index]?.violation ?? null) !== null) return;
+      results[index]?.push(await runSequence(arm.context, { kind: 'measured', vatEnv: arm.measuredEnv(round) }));
+    }),
+  );
+  return arms.map((arm, index) => ({ removed: arm.removed, priming: priming[index] ?? null, results: results[index] ?? [] }));
+}
+
+/** One arm, prepared to run. */
+interface PreparedArm {
+  readonly context: SequenceContext;
+  readonly removed: readonly string[];
+  readonly measuredEnv: (round: number) => ArmEnvironment;
+}
+
+/**
+ * Build an arm's context: its directories, its two environments, and its
+ * build-resolved parse directory (asked once, and only when a rule needs it).
+ *
+ * @param spec - The arm
+ * @returns The prepared arm
+ */
+function prepareArm(spec: RepeatSpec): PreparedArm {
+  for (const step of spec.steps) assertCommittedExits(step);
+  const owned = ARM_DIRECTORY_ENV_KEYS.find((key) => Object.hasOwn(spec.env.set, key) || spec.env.unset.includes(key));
+  if (owned !== undefined) {
+    throw new Error(`arm '${spec.arm.arm}': ${owned} is set by the arm's own directories; a caller environment cannot name it`);
   }
-  return results;
-}
-
-/**
- * Clear vat's caches so the next repeat starts cold.
- *
- * Untimed and best-effort by design — see this module's header. It runs with the
- * base environment only, never a repeat's own.
- *
- * @param spec - The repeats being run
- */
-function clearCache(spec: RepeatSpec): void {
-  runCommand(spec.instrument, CACHE_CLEAR_ARGS, runOptions(spec, spec.env));
-}
-
-/**
- * The environment for one measured repeat: the arm's, with the repeat's own
- * variables layered over.
- *
- * @param spec - The repeats being run
- * @param index - Which repeat is about to run
- * @returns The arm environment for that one child
- */
-function repeatEnv(spec: RepeatSpec, index: number): ArmEnvironment {
-  const own = spec.envFor?.(index);
-  if (own === undefined) return spec.env;
-  return mergeArmEnvironments(spec.env, { set: own, unset: [] });
-}
-
-/**
- * Assemble the options for one invocation.
- *
- * @param spec - The repeats being run
- * @param env - Environment for this particular child
- * @returns Options for {@link runCommand}
- */
-function runOptions(spec: RepeatSpec, env: ArmEnvironment): RunOptions {
-  return {
+  const dirs = armDirectories(spec.arm);
+  const vat = clearedEnvironment(process.env, 'vat', mergeArmEnvironments(armDirectoryEnvironment(dirs, process.platform), spec.env));
+  const tool = clearedEnvironment(process.env, 'tool', { set: {}, unset: [] });
+  let parse: ParseDirectoryResolution | undefined;
+  const context: SequenceContext = {
+    instrument: spec.instrument,
     cwd: spec.cwd,
-    env,
+    steps: spec.steps,
+    dirs,
+    state: spec.arm.state,
+    vatEnv: vat.env,
+    toolEnv: tool.env,
     timeoutMs: spec.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    parseDirectory: () => (parse ??= resolveParseCacheDirectory(spec.instrument, dirs.tmp)),
   };
+  return {
+    context,
+    removed: vat.removed,
+    measuredEnv: (round) => {
+      const own = spec.envFor?.(round);
+      return own === undefined ? vat.env : mergeArmEnvironments(vat.env, { set: own, unset: [] });
+    },
+  };
+}
+
+/**
+ * Run a warm arm's priming sequence, its violation labelled as the priming run's.
+ *
+ * @param arm - The arm
+ * @returns The priming run
+ */
+async function primed(arm: PreparedArm): Promise<SequenceResult> {
+  const run = await runSequence(arm.context, { kind: 'priming' });
+  return run.violation === null ? run : { ...run, violation: `priming run: ${run.violation}` };
+}
+
+/**
+ * @param roots - Every arm's directory
+ * @throws {Error} when two arms would share one
+ */
+function refuseSharedDirectories(roots: readonly string[]): void {
+  const shared = roots.find((root, index) => roots.indexOf(root) !== index);
+  if (shared !== undefined) {
+    throw new Error(`two arms would share '${shared}' — each (build, arm, state) runs in its own directories`);
+  }
 }

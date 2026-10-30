@@ -33,12 +33,14 @@
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
-import { isPathAbsentError, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { InstrumentVersion } from '../src/envelope/coordinate.js';
 import type { ArmEnvironment } from '../src/harness/arm-env.js';
+import type { MeasuredCommandSpec } from '../src/harness/commands.js';
 import type { RepeatSpec } from '../src/harness/repeat.js';
-import type { ResolvedInstrument } from '../src/harness/types.js';
+import type { SequenceStep } from '../src/harness/sequence.js';
+import type { CacheMode, CaptureRequest, ResolvedInstrument, ResolvedSubject } from '../src/harness/types.js';
 
 /** Axis C is irrelevant to a probe run; every instrument here shares one. */
 export const PROBE_VERSION: InstrumentVersion = {
@@ -110,6 +112,16 @@ export const PROBE_ECHO_ENV = 'LAB_PROBE_ECHO_ENV';
  */
 export const PROBE_NO_LOG_ENV = 'LAB_PROBE_NO_LOG';
 
+/**
+ * Set (to anything) to make the probe write what a populating VAT run writes: a
+ * file in `VAT_PROJECTION_STORE_DIR`, and one parse shard under the parse
+ * directory the fake resources package of {@link setupProbe} resolves.
+ */
+export const PROBE_POPULATE_ENV = 'LAB_PROBE_POPULATE';
+
+/** The cache namespace the probe's fake resources package names. */
+const PROBE_NAMESPACE = 'probe-ns';
+
 /** An argument that makes every invocation of that command fail. */
 export const PROBE_FAIL_TOKEN = 'boom';
 
@@ -130,8 +142,20 @@ const PROBE_LOG = 'probe.log';
  * zero-based and does not include the invocation making the decision.
  */
 const PROBE_SOURCE = [
-  "const { appendFileSync, readFileSync } = require('node:fs');",
+  "const { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } = require('node:fs');",
+  "const { tmpdir } = require('node:os');",
   "const { join } = require('node:path');",
+  'const store = process.env.VAT_PROJECTION_STORE_DIR;',
+  'const home = process.env.HOME;',
+  'const storeExisted = store === undefined ? null : existsSync(store);',
+  'const homeEntries = home === undefined || !existsSync(home) ? null : readdirSync(home).length;',
+  `if (process.env.${PROBE_POPULATE_ENV} !== undefined) {`,
+  "  if (store !== undefined) { mkdirSync(store, { recursive: true }); writeFileSync(join(store, 'projection.db'), 'probe'); }",
+  `  const parse = join(tmpdir(), '.vat-cache', ${JSON.stringify(PROBE_NAMESPACE)}, 'parse', 'ab');`,
+  "  mkdirSync(parse, { recursive: true }); writeFileSync(join(parse, 'key.json'), '{}');",
+  '}',
+  // Only ever into an ARM's home (the store's sibling), never a real one.
+  "if (store !== undefined && home === join(store, '..', 'home') && existsSync(home)) writeFileSync(join(home, 'left-by-probe'), 'x');",
   `const log = join(process.cwd(), ${JSON.stringify(PROBE_LOG)});`,
   'let priorChildren = 0;',
   'try {',
@@ -146,6 +170,8 @@ const PROBE_SOURCE = [
   '  args: process.argv.slice(2),',
   `  base: process.env.${PROBE_BASE_ENV} ?? null,`,
   `  perRepeat: process.env.${PROBE_REPEAT_ENV} ?? null,`,
+  '  storeExisted,',
+  '  homeEntries,',
   '});',
   `if (process.env.${PROBE_NO_LOG_ENV} === undefined) {`,
   String.raw`  appendFileSync(log, line + '\n');`,
@@ -173,6 +199,15 @@ export interface ProbeEntry {
   readonly args: string[];
   readonly base: string | null;
   readonly perRepeat: string | null;
+  /** Whether `VAT_PROJECTION_STORE_DIR` existed when the child started; `null` when unset. */
+  readonly storeExisted: boolean | null;
+  /** How many entries `HOME` held when the child started; `null` when unset or missing. */
+  readonly homeEntries: number | null;
+}
+
+/** The probe's args, entry by entry — the shape most ordering assertions read. */
+export function argsOf(entries: readonly ProbeEntry[]): string[][] {
+  return entries.map((entry) => entry.args);
 }
 
 /** A temp working directory plus the instrument that logs into it. */
@@ -194,12 +229,39 @@ export function setupProbe(prefix = 'lab-probe-'): Probe {
   createdProbeDirs.push(cwd);
   const script = safePath.join(cwd, 'probe.cjs');
   writeFileSync(script, PROBE_SOURCE, 'utf-8');
+  writeFakeResourcesPackage(cwd);
 
   return {
     cwd,
     instrument: { command: process.execPath, leadingArgs: [script], version: PROBE_VERSION },
     entries: () => readProbeLog(cwd),
   };
+}
+
+/**
+ * A stand-in `@vibe-agent-toolkit/resources` beside the probe, so the harness
+ * resolves the probe build's parse directory the way it resolves a real build's
+ * (from the instrument's own module resolution) — under whatever `TMPDIR` the
+ * arm hands it.
+ *
+ * @param cwd - The probe directory
+ */
+function writeFakeResourcesPackage(cwd: string): void {
+  const dir = safePath.join(cwd, 'node_modules', '@vibe-agent-toolkit', 'resources');
+  mkdirSyncReal(dir, { recursive: true });
+  writeFileSync(
+    safePath.join(dir, 'package.json'),
+    JSON.stringify({ name: '@vibe-agent-toolkit/resources', type: 'module', exports: { '.': { default: './index.js' } } }),
+  );
+  writeFileSync(
+    safePath.join(dir, 'index.js'),
+    [
+      "import { tmpdir } from 'node:os';",
+      "import { join } from 'node:path';",
+      `export function parseCacheDirectory() { return join(tmpdir(), '.vat-cache', ${JSON.stringify(PROBE_NAMESPACE)}, 'parse'); }`,
+      '',
+    ].join('\n'),
+  );
 }
 
 /** Every probe directory made so far, so a suite can drop them in one go. */
@@ -225,7 +287,7 @@ export function cleanupProbes(): void {
  * @param cwd - The probe's working directory
  * @returns One entry per child process, or none when nothing ran
  */
-function readProbeLog(cwd: string): ProbeEntry[] {
+export function readProbeLog(cwd: string): ProbeEntry[] {
   let raw: string;
   try {
     raw = readFileSync(safePath.join(cwd, PROBE_LOG), 'utf-8');
@@ -243,24 +305,100 @@ function readProbeLog(cwd: string): ProbeEntry[] {
 /**
  * Build a {@link RepeatSpec} against a probe, defaulting what a case ignores.
  *
+ * The arm lives under `<probe.cwd>/out`, so a suite's arm directories are
+ * dropped with its probe.
+ *
  * @param probe - Supplies the instrument and the working directory
  * @param overrides - What the case varies
  * @returns A complete spec
  */
 export function probeSpec(probe: Probe, overrides: ProbeSpecOverrides = {}): RepeatSpec {
-  const { env, ...rest } = overrides;
+  const { env, args, cache, arm, ...rest } = overrides;
   return {
     instrument: probe.instrument,
     cwd: probe.cwd,
-    args: ['audit'],
+    steps: [probeStep(args ?? ['audit'])],
     runs: 2,
-    cache: 'warm',
+    arm: { out: probeOut(probe), build: 'probe', arm: arm ?? 'audit', state: cache ?? 'warm' },
     ...rest,
     env: { set: env ?? {}, unset: [] },
   };
 }
 
+/**
+ * @param probe - A probe
+ * @returns The `--out` its arms live under
+ */
+export function probeOut(probe: Probe): string {
+  return safePath.join(probe.cwd, 'out');
+}
+
+/** A command the probe always completes. */
+export const PROBE_PASSES: MeasuredCommandSpec = { name: 'audit', args: ['audit'], provenance: 'none', populates: false };
+
+/** A command the probe fails on every repeat, by argv. */
+export const PROBE_FAILS: MeasuredCommandSpec = { name: 'broken', args: [PROBE_FAIL_TOKEN], provenance: 'none', populates: false };
+
+/**
+ * No repeats at all, cold. Cold on purpose: a cold reset hoisted out of the
+ * repeat loop would still run here, where nothing at all should.
+ */
+export const NO_REPEATS_COLD = Object.freeze({ runs: 0, cache: 'cold' as const });
+
+/** Two repeats of {@link PROBE_FAILS}, cold — so no warm priming run fails before the repeats do. */
+export const EVERY_REPEAT_FAILS_COLD = Object.freeze({ runs: 2, commands: [PROBE_FAILS], cache: 'cold' as const });
+
+/**
+ * The capture-request fields a facet's probe capture defaults: the probe build,
+ * {@link PROBE_PASSES} three times warm, and the probe's arms.
+ *
+ * @param probe - Supplies the instrument and the arms' `--out`
+ * @param subject - The resolved subject
+ * @param capturedAt - The caller-owned capture time
+ * @returns The defaults, for a case's overrides to spread over
+ */
+export function probeCaptureDefaults(
+  probe: Probe,
+  subject: ResolvedSubject,
+  capturedAt: string,
+): Pick<CaptureRequest, 'instrument' | 'subject' | 'commands' | 'runs' | 'cache' | 'capturedAt' | 'arms'> {
+  return {
+    instrument: probe.instrument,
+    subject,
+    commands: [PROBE_PASSES],
+    runs: 3,
+    cache: 'warm',
+    capturedAt,
+    arms: { out: probeOut(probe), build: 'probe' },
+  };
+}
+
+/**
+ * One timed VAT step against the probe.
+ *
+ * @param args - The probe's arguments
+ * @param overrides - What the case varies about the step
+ * @returns The step
+ */
+export function probeStep(args: readonly string[], overrides: Partial<SequenceStep> = {}): SequenceStep {
+  return {
+    name: args[0] ?? 'probe',
+    command: { kind: 'vat', args },
+    timed: true,
+    expectedExits: [0],
+    provenance: 'none',
+    populates: false,
+    ...overrides,
+  };
+}
+
 /** What a case varies about a probe's repeats; `env` names only what it SETS. */
-type ProbeSpecOverrides = Omit<Partial<RepeatSpec>, 'env'> & {
+type ProbeSpecOverrides = Omit<Partial<RepeatSpec>, 'env' | 'arm'> & {
   readonly env?: ArmEnvironment['set'];
+  /** The probe's arguments for the default single step. */
+  readonly args?: readonly string[];
+  /** The arm's cache state. */
+  readonly cache?: CacheMode;
+  /** The arm's name. */
+  readonly arm?: string;
 };

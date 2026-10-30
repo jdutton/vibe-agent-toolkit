@@ -4,14 +4,20 @@
  *
  * ## What each arm gets, on top of the caller's `--env`/`--unset`
  *
- * - `VAT_PROJECTION_STORE_DIR=<out>/<alias>/store` — a private projection store
- *   per arm and subject (`packages/cli/src/utils/projection-store.ts`). Two
- *   arms sharing one store would let the second read what the first wrote, and
- *   a verdict would then measure the store rather than the build.
- * - `CLAUDE_CONFIG_DIR` unset — the operator's own Claude config must not decide
- *   what `claude context` reports for an adopter's tree.
+ * A cleared environment — no inherited `VAT_*`, temp, XDG or global git config
+ * (`harness/arm-env.ts`) — and the arm's own directories under `<out>/<alias>/`,
+ * created at 0700 BEFORE any verb runs (VAT refuses a store whose parent is missing):
  *
- * Both are lab-owned: a caller naming either is refused rather than silently
+ * - `VAT_PROJECTION_STORE_DIR=<out>/<alias>/store` — a private projection store
+ *   per arm and subject, left for VAT to create. Two arms sharing one store would
+ *   let the second read what the first wrote, and a verdict would then measure
+ *   the store rather than the build.
+ * - `TMPDIR`/`TEMP`/`TMP=<out>/<alias>/tmp` — the parse cache is private too.
+ * - `HOME` and `CLAUDE_CONFIG_DIR=<out>/<alias>/home`, empty — the operator's own
+ *   Claude config must not decide what `claude context` reports for an adopter's
+ *   tree, and an UNSET `CLAUDE_CONFIG_DIR` would fall back to `HOME`.
+ *
+ * All are lab-owned: a caller naming one is refused rather than silently
  * overridden.
  *
  * ## Nothing lands inside a subject
@@ -27,7 +33,15 @@ import { homedir } from 'node:os';
 import { canonicalPath, everyInOrder, isUnderRoot, safePath, withTempDir } from '@vibe-agent-toolkit/utils';
 
 import type { ReportEnvelope } from '../../envelope/envelope.js';
-import { type ArmEnvironment, mergeArmEnvironments } from '../../harness/arm-env.js';
+import {
+  ARM_DIRECTORY_ENV_KEYS,
+  type ArmDirectories,
+  armDirectoriesAt,
+  armDirectoryEnvironment,
+  prepareArmDirectories,
+  resetArmHome,
+} from '../../harness/arm-dirs.js';
+import { type ArmEnvironment, clearedEnvironment, mergeArmEnvironments } from '../../harness/arm-env.js';
 import { messageOf } from '../../harness/dumps.js';
 import { runOutcome } from '../../harness/outcome.js';
 import { resolveSubject } from '../../harness/subject.js';
@@ -40,12 +54,6 @@ import type { VerdictSubject } from './subjects.js';
 import { VERDICT_FACET, type VerdictBody, type VerdictRow } from './types.js';
 import { planBuildVerbs, type VerbInvocation, type VerbQuery, type VerbSubject, verdictVerb } from './verbs.js';
 import type { Validated } from './yaml-file.js';
-
-/** The variable a private projection store is selected by. */
-const PROJECTION_STORE_ENV = 'VAT_PROJECTION_STORE_DIR';
-
-/** The variable the operator's Claude config is found by. */
-const CLAUDE_CONFIG_ENV = 'CLAUDE_CONFIG_DIR';
 
 /** What one verdict capture is asked for. */
 export interface VerdictCaptureRequest {
@@ -104,13 +112,13 @@ export async function captureVerdict(request: VerdictCaptureRequest): Promise<Ve
  * @returns A refusal, or `null`
  */
 function requestRefusal(request: VerdictCaptureRequest): string | null {
-  const owned = [PROJECTION_STORE_ENV, CLAUDE_CONFIG_ENV].find(
+  const owned = ARM_DIRECTORY_ENV_KEYS.find(
     (key) => Object.hasOwn(request.env.set, key) || request.env.unset.includes(key),
   );
   if (owned !== undefined) {
     return (
       `REFUSED: ${owned} is set by the verdict facet itself on every arm (a private projection ` +
-      'store, and no operator Claude config); an arm cannot choose it.'
+      'store, temp directory and home under --out); an arm cannot choose it.'
     );
   }
   const host = subjectContaining(request.subjects, request.outDir);
@@ -133,7 +141,7 @@ function requestRefusal(request: VerdictCaptureRequest): string | null {
  */
 function reusedStoreRefusal(request: VerdictCaptureRequest): string | null {
   const warm = request.subjects
-    .map((subject) => storeDir(request.outDir, subject.alias))
+    .map((subject) => subjectDirectories(request.outDir, subject.alias).store)
     .find((dir) => existsSync(dir));
   return warm === undefined
     ? null
@@ -144,10 +152,10 @@ function reusedStoreRefusal(request: VerdictCaptureRequest): string | null {
 /**
  * @param outDir - The capture's `--out`
  * @param alias - A subject alias
- * @returns That subject's private projection store under `--out`
+ * @returns That subject's private store, tmp and home under `<out>/<alias>/`
  */
-function storeDir(outDir: string, alias: string): string {
-  return safePath.join(outDir, alias, 'store');
+function subjectDirectories(outDir: string, alias: string): ArmDirectories {
+  return armDirectoriesAt(safePath.join(outDir, alias));
 }
 
 /**
@@ -179,10 +187,15 @@ async function captureSubject(
   // Resolved BEFORE any verb runs, so the coordinate names the tree as it was
   // measured rather than whatever the verbs left behind.
   const resolved = await resolveSubject({ id: subject.alias, path: subject.path });
-  const env = mergeArmEnvironments(request.env, {
-    set: { [PROJECTION_STORE_ENV]: storeDir(request.outDir, subject.alias) },
-    unset: [CLAUDE_CONFIG_ENV],
-  });
+  // Made before any verb: VAT refuses a store whose parent is missing.
+  const dirs = subjectDirectories(request.outDir, subject.alias);
+  prepareArmDirectories(dirs);
+  await resetArmHome(dirs);
+  const { env } = clearedEnvironment(
+    process.env,
+    'vat',
+    mergeArmEnvironments(armDirectoryEnvironment(dirs, process.platform), request.env),
+  );
   const verbSubject: VerbSubject = { path: resolved.path, contextPath: subject.contextPath, queries: queries.value };
   const run = (invocations: readonly VerbInvocation[], cwd: string): VerdictRow[] =>
     invocations.map((invocation) => runRow(request, invocation, cwd, env));
