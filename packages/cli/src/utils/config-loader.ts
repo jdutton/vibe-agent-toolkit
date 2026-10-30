@@ -119,7 +119,7 @@ export function loadConfig(projectRoot: string, projectSide: FsSide): ProjectCon
         warnedConfigPaths.add(configPath);
         // Through the one notice route: a supervised child's invoking process
         // loaded this same config and printed this same line already.
-        noticeToOperator(message);
+        noticeToOperator('config', message);
       },
       { configPath },
     );

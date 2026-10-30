@@ -291,6 +291,13 @@ Examples:
       // `.strict()` schema the same build reads it with.
       new Option('--cost-log <path>', 'Internal: append per-unit progress here').hideHelp(),
     )
+    .addOption(
+      // Hidden for the same reason, and passed exactly when --cost-log is: who
+      // started the child, which decides the notices it owes the operator.
+      new Option('--invocation <who>', 'Internal: who started this supervised child')
+        .choices(['standalone', 'phase'])
+        .hideHelp(),
+    )
     .addOption(yamlOrJsonFormat())
     .action(checkCommand)
     .addHelpText(
@@ -452,7 +459,7 @@ A run that HANGS is killed and reported, not waited on:
   a cold parse cache; a 9,992-file adopter tree is ~5s warm and 16.5s cold. On
   a tree much larger than that with a cold parse cache, raise the bound.
 
-  An interrupted run NEVER exits 0 and never looks like a pass. There are two
+  An interrupted run NEVER exits 0 and never looks like a pass. There are three
   ways to be interrupted and they are reported differently:
 
     Killed by the budget -- exit 1, status: findings, and a
@@ -467,16 +474,21 @@ A run that HANGS is killed and reported, not waited on:
     naming what ended it, with the remedy that ending actually earns, and
     saying plainly that raising --budget is not it.
 
-  Either way the checks that COMPLETED keep their entry under checks (including
+    Contradicted -- the child wrote a complete report and then exited with a
+    code that report does not derive. Neither is trusted, and the report is
+    replaced: once the population is in, exit 1, status: findings,
+    RESOURCE_CHECK_BROKEN saying so.
+
+  Every way, the checks that COMPLETED keep their entry under checks (including
   rows), but their individual violations are NOT in issues -- the progress the
   child records is costs, not findings. Read that issue list as incomplete.
 
-  Interrupted before the population finished -- killed or dead during the
-  child's startup or its population -- nothing was examined, so the command
-  could not do its job: exit 2, status: error. The document is still
-  published, with data.population, populationSecs, lensSecs and
-  lensesEvaluated null, examined 0, and \`error\` naming the phase and which
-  of the two happened.
+  Interrupted before the population finished -- killed, dead or contradicted
+  during the child's startup or its population -- nothing was examined, so
+  the command could not do its job: exit 2, status: error. The document is
+  still published, with data.population, populationSecs, lensSecs and
+  lensesEvaluated null, examined 0, and \`error\` naming the phase and what
+  happened.
 
   --budget cannot be combined with --cost-log (exit 2): --cost-log means the
   work runs in this process, where the budget could not be enforced.
@@ -486,9 +498,14 @@ A run that HANGS is killed and reported, not waited on:
   --budget, and any other value that PARSES to zero (1e-400 underflows, -0 is
   negative zero), are refused rather than read as 0 -- an unset shell variable
   must not silently remove the bound.
-  Ctrl-C still works at a keyboard, because this command installs no signal
-  handler -- do not add one, a process blocked in synchronous SQLite survives
-  SIGINT once a handler exists.
+  Ctrl-C still works at a keyboard, because the process running the SQL (the
+  child, or this one under --budget 0) installs no signal handler -- a process
+  blocked in synchronous SQLite survives SIGINT once a handler exists. The
+  supervising process does handle SIGTERM, SIGHUP and SIGINT while it
+  supervises, only to kill its child and then die of the same signal (exit 2
+  where the signal cannot kill it, as under PID 1), so
+  stopping it by its pid alone never leaves the child running (not on Windows,
+  where an outside kill runs no handler).
 
 Output Fields (the shared report envelope; schema: packages/cli/schemas/resources-check.json):
   status:    ok | findings | error -- a literal statement about \`findings\`.
@@ -528,12 +545,12 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
 Exit Codes:
   0 - No error-severity findings
   1 - At least one (a violation, a broken check, an empty corpus, no check
-      having run at all, or a run killed by --budget or DEAD while a check
-      was running or its document was being built)
+      having run at all, or a run killed by --budget, DEAD, or contradicted
+      by its own exit once its population was in)
   2 - System error, an unknown --check name, a [path] that names no directory,
       an unusable --budget (an empty one, one that means zero without being
-      written 0, or one passed with --cost-log), or a run killed or dead
-      before its population completed
+      written 0, or one passed with --cost-log), or a run killed, dead or
+      contradicted before its population completed
   The code is derived from the document's status and summary, never chosen
   beside it: status error is 2, error-severity findings are 1.
 

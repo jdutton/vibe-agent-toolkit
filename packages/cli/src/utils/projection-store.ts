@@ -255,26 +255,13 @@ function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
     // Not "the selector is set": the store is on by default, so most users who
     // see this never wrote the variable.
     noticeToOperator(
+      'store',
       `The projection store is on, but ${root} is not inside a readable git`
       + ' repository, so there is no deterministic key to store a projection under.'
       + ` Populating without a cache. Set ${PROJECTION_STORE_ENV}=${PROJECTION_STORE_OFF} to silence this.`,
     );
   }
   return snapshot;
-}
-
-/**
- * Print, from the process the operator invoked, the store notice a SUPERVISED CHILD populating
- * `root` would have printed — the child prints no notices (see `operator-notices.ts`), so a
- * supervising `vat resources check`, which opens no store of its own, owes this one.
- *
- * ⚠️ It costs what the child's own key costs: one git snapshot of the repository (~0.1 s on a
- * 3,700-file tree). Only a supervisor calls it, once, before it spawns.
- *
- * @param root - The absolute corpus root the child will populate
- */
-export function noticeWhenStoreUnkeyable(root: string): void {
-  if (projectionStoreSelected()) storeKeyOrNotice(root);
 }
 
 /**

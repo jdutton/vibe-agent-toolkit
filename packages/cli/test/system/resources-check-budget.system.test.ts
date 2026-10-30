@@ -362,7 +362,8 @@ describe('vat resources check --budget', () => {
     writeChecks(['quick', MD_ROWS]);
     const logPath = safePath.join(projectDir, 'progress.jsonl');
 
-    const { status } = check(COST_LOG_FLAG, logPath);
+    // With the `--invocation` a supervisor always passes beside it (one without the other is refused).
+    const { status } = check(COST_LOG_FLAG, logPath, '--invocation', 'standalone');
 
     expect(status).toBe(1);
     const kinds = fs.readFileSync(logPath, 'utf-8')

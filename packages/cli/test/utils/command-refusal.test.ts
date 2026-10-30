@@ -192,7 +192,7 @@ describe('the user mistakes the migrated verbs refuse, by the code they carry', 
   it('a bad --budget, --budget beside --cost-log, and an unknown --check are USAGE_INVALID', () => {
     expect(refusalCodeOf(thrownBy(() => parseBudgetSeconds('abc')))).toBe('USAGE_INVALID');
     expect(refusalCodeOf(thrownBy(() => parseBudgetSeconds(' ')))).toBe('USAGE_INVALID');
-    expect(refusalCodeOf(thrownBy(() => requireSupervisableFlags({ costLog: 'x', budgetRaw: '60', budgetSecs: 60 })))).toBe('USAGE_INVALID');
+    expect(refusalCodeOf(thrownBy(() => requireSupervisableFlags({ costLog: 'x', invocation: 'standalone', budgetRaw: '60', budgetSecs: 60 })))).toBe('USAGE_INVALID');
     expect(refusalCodeOf(thrownBy(() => requireKnownCheck(['builtin'], {}, 'nope')))).toBe('USAGE_INVALID');
   });
 });

@@ -23,7 +23,7 @@
 
 import { readFileSync } from 'node:fs';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
   createProgressWriter,
@@ -31,7 +31,6 @@ import {
   unitInFlight,
   type ProgressEntry,
 } from '../../src/commands/resources/check-progress.js';
-import { __testing as noticeAudience, noticeToOperator } from '../../src/utils/operator-notices.js';
 import { cleanupTestTempDir, createTestTempDir } from '../system/test-common.js';
 
 /** The population line a real run writes the instant its projection is ready. */
@@ -155,43 +154,6 @@ describe('createProgressWriter', () => {
 
       expect(parseProgressLog(afterFirst)).toStrictEqual([POPULATION]);
       expect(parseProgressLog(afterSecond)).toStrictEqual([POPULATION, FIRST_START]);
-    } finally {
-      cleanupTestTempDir(dir);
-    }
-  });
-});
-
-/**
- * 🔑 A supervised child prints no operator notices — its invoking process prints each once. The
- * progress writer is the child's only progress sink, so taking it is what silences the child: a
- * child cannot report progress and still repeat its parent's config and store notices.
- */
-describe('createProgressWriter — the supervised child goes quiet', () => {
-  // Every writer this file creates marks the process a child, so each case starts from the
-  // invoked-process audience.
-  beforeEach(() => noticeAudience.reset());
-  afterEach(() => {
-    noticeAudience.reset();
-    vi.restoreAllMocks();
-  });
-
-  it('a process that has not taken a progress writer prints its notices', () => {
-    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-
-    noticeToOperator('unknown key `bogus`');
-
-    expect(stderr).toHaveBeenCalledExactlyOnceWith('unknown key `bogus`\n');
-  });
-
-  it('a process that took one prints none', () => {
-    const dir = createTestTempDir('vat-check-progress-quiet-');
-    try {
-      createProgressWriter(`${dir}/progress.jsonl`);
-      const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
-
-      noticeToOperator('unknown key `bogus`');
-
-      expect(stderr).not.toHaveBeenCalled();
     } finally {
       cleanupTestTempDir(dir);
     }

@@ -92,6 +92,7 @@ const BARREL_EXPORTS = [
   'direntKindFollowingSync',
   'disposeTempDir',
   'disposeTempDirAfterFailure',
+  'disposeTempDirSync',
   'dynamicImportPath',
   'ensureTimingDirectory',
   'entryIdentities',

@@ -52,6 +52,7 @@ import {
 } from './phase-utils.js';
 import { rejectPositionalArguments } from './positional-args.js';
 import { CHECK_REPORT_SCHEMA, RESOURCES_CHECK_EXAMINED } from './resources/check-schema.js';
+import { DEFAULT_BUDGET_SECONDS } from './resources/check-supervisor.js';
 import { runResourcesCheckPhase } from './resources/check.js';
 import { RESOURCES_VALIDATE_EXAMINED, RESOURCES_VALIDATE_REPORT_SCHEMA } from './resources/validate-schema.js';
 import { runResourcesValidatePhase } from './resources/validate.js';
@@ -140,18 +141,22 @@ Output:
 Exit Codes:
   0 - Every surface finished and no finding is an error (warning and info
       findings never fail)
-  1 - An error finding — a resources.checks row at error, or a check whose
-      statement was refused or was killed by the checks bound while it ran
-      (RESOURCE_CHECK_BROKEN) — or a configured phase examined nothing: an
-      include that matches no file, say (RESOURCE_CHECK_BROKEN, naming the unit)
+  1 - An error finding — a resources.checks row at error, or, once the checks
+      child's population was in, RESOURCE_CHECK_BROKEN: a statement that was
+      refused, or the child killed by the checks bound, dead, publishing a
+      report that could not be read, or exiting against its own report — or a
+      configured phase examined nothing: an include that matches no file, say
+      (RESOURCE_CHECK_BROKEN, naming the unit)
   2 - The run could not do its job: a surface did not finish (RUN_INCOMPLETE,
-      the finished surfaces still in data.phases) — including the checks child
-      killed by its bound before its population completed — a path argument or
-      the retired '--only' (USAGE_INVALID), no project root
+      the finished surfaces still in data.phases) — including a checks child
+      that could not be started, refused before its population (its config,
+      say), or was killed, died or exited against its report before its
+      population completed — a path argument or the retired '--only'
+      (USAGE_INVALID), no project root
 
 Checks bound:
   The checks phase runs 'vat resources check''s supervised child under that
-  command's default bound: 300s without progress. This command takes no flag
+  command's default bound: ${DEFAULT_BUDGET_SECONDS}s without progress. This command takes no flag
   to change it; to give slow checks more time, run them on their own with
   'vat resources check --budget <seconds>'.
 
@@ -253,7 +258,7 @@ export function selectValidateSurfaces(
  * ⚠️ The `checks` phase is OUTSIDE that sharing: it is a supervised CHILD
  * process, so it takes its own git snapshot and opens — and, on a miss, writes —
  * the projection store while this process holds it open inside the scope below.
- * A system test pins that the pair derives on a fresh store and that the next
+ * A system smoke test shows the pair derives on a fresh store and that the next
  * run's checks phase is served from it.
  *
  * @param projectRoot - The resolved project root, which every surface roots at

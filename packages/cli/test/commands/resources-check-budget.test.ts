@@ -504,27 +504,38 @@ describe('requireSupervisableFlags', () => {
   // explicitly-passed, documented flag must never be silently inert.
   it('refuses an explicit budget alongside --cost-log', () => {
     expect(() => requireSupervisableFlags({
-      costLog: A_COST_LOG, budgetRaw: '60', budgetSecs: 60,
-    })).toThrow(/--cost-log/);
+      costLog: A_COST_LOG, invocation: 'standalone', budgetRaw: '60', budgetSecs: 60,
+    })).toThrow(/--budget cannot be combined with --cost-log/);
   });
 
-  it('allows --cost-log on its own — that is the child the parent spawns', () => {
-    // ⚠️ The real spawn path. `childArgs` appends `--cost-log` and does NOT
-    // forward `--budget`, so the supervised lane must survive this guard.
+  it.each(['standalone', 'phase'])('allows --cost-log with --invocation %s — the child the parent spawns', (invocation) => {
+    // ⚠️ The real spawn path. `childArgs` appends `--cost-log` and `--invocation`
+    // and does NOT forward `--budget`, so the supervised lane must survive this guard.
     expect(() => requireSupervisableFlags({
-      costLog: A_COST_LOG, budgetRaw: undefined, budgetSecs: 300,
+      costLog: A_COST_LOG, invocation, budgetRaw: undefined, budgetSecs: 300,
     })).not.toThrow();
+  });
+
+  // 🔑 Who started the child decides the notices it owes; a child that was not told is refused,
+  // never defaulted to one answer.
+  it('refuses --cost-log without --invocation, and --invocation without --cost-log', () => {
+    expect(() => requireSupervisableFlags({
+      costLog: A_COST_LOG, invocation: undefined, budgetRaw: undefined, budgetSecs: 300,
+    })).toThrow(/passed together or not at all/);
+    expect(() => requireSupervisableFlags({
+      costLog: undefined, invocation: 'phase', budgetRaw: undefined, budgetSecs: 300,
+    })).toThrow(/passed together or not at all/);
   });
 
   it('allows --budget 0 with --cost-log: both say "no supervision"', () => {
     expect(() => requireSupervisableFlags({
-      costLog: A_COST_LOG, budgetRaw: '0', budgetSecs: 0,
+      costLog: A_COST_LOG, invocation: 'standalone', budgetRaw: '0', budgetSecs: 0,
     })).not.toThrow();
   });
 
   it('allows a budget with no cost log — the ordinary supervised run', () => {
     expect(() => requireSupervisableFlags({
-      costLog: undefined, budgetRaw: '60', budgetSecs: 60,
+      costLog: undefined, invocation: undefined, budgetRaw: '60', budgetSecs: 60,
     })).not.toThrow();
   });
 });
@@ -1058,25 +1069,33 @@ describe('the remedy each ending earns', () => {
 });
 
 /**
- * Each row carries a phrase only ITS branch's remedy says, so a row whose message came from the
- * wrong branch (or the generic one) reds instead of passing on the shared `--budget` clause.
+ * Each row carries the clause only ITS unit's message says (where the kill landed) and the remedy
+ * its branch gives, so a row whose message came from the wrong branch (or the generic one) reds
+ * instead of passing on the shared `--budget` clause.
+ *
+ * `converting` is the window after the last check filed its cost and before `checks-complete`
+ * (its rows still becoming issues): a log of completed checks only, which reads as no unit in
+ * flight and earns the statement remedy.
  */
-const BRANCHES: ReadonlyArray<readonly [string, readonly ProgressEntry[], string]> = [
+const BRANCHES: ReadonlyArray<readonly [string, readonly ProgressEntry[], string, string]> = [
   // An empty log is a child that never booted; `started` alone is one that was populating.
-  ['startup', [], 'Node and vat were still loading'],
-  ['population', [STARTED], 'Population is legitimately slow'],
-  ['a statement', [POPULATION, FIRST_COST, HUNG_START], 'A statement that will not finish'],
-  ['reporting', [POPULATION, FIRST_COST, CHECKS_DONE], 'the SIZE of the document'],
+  ['startup', [], 'before the child process had finished starting', 'Node and vat were still loading'],
+  ['population', [STARTED], 'before its population completed', 'Population is legitimately slow'],
+  ['a statement', [POPULATION, FIRST_COST, HUNG_START], 'while the check "', 'A statement that will not finish'],
+  ['converting', [POPULATION, FIRST_COST], 'after the last one had filed its cost', 'A statement that will not finish'],
+  ['reporting', [POPULATION, FIRST_COST, CHECKS_DONE], 'while its document was being assembled', 'the SIZE of the document'],
 ];
-const BRANCH_PHRASES = BRANCHES.map(([, , phrase]) => phrase);
+const BRANCH_MARKERS = BRANCHES.map(([, , marker]) => marker);
+const BRANCH_REMEDIES = [...new Set(BRANCHES.map(([, , , remedy]) => remedy))];
 
 /** A `--budget` mention that is not part of the spelled-out `vat resources check` command. */
 const BARE_BUDGET = /(?<!vat resources check )`--budget/;
 
-/** Asserts `message` carries `phrase` and no OTHER branch's phrase. */
-function expectOnlyBranch(message: string, phrase: string): void {
-  expect(message).toContain(phrase);
-  for (const other of BRANCH_PHRASES.filter((candidate) => candidate !== phrase)) {
+/** Asserts `message` carries `marker` and `remedy`, and no OTHER row's marker or remedy. */
+function expectOnlyBranch(message: string, marker: string, remedy: string): void {
+  expect(message).toContain(marker);
+  expect(message).toContain(remedy);
+  for (const other of [...BRANCH_MARKERS, ...BRANCH_REMEDIES].filter((candidate) => candidate !== marker && candidate !== remedy)) {
     expect(message).not.toContain(other);
   }
 }
@@ -1088,18 +1107,18 @@ function expectOnlyBranch(message: string, phrase: string): void {
  * which `vat validate` would reject as an unknown option.
  */
 describe('a budget kill remedy, by who ran the checks', () => {
-  it.each(BRANCHES)('as a phase, during %s: names `vat resources check --budget`, never the bare flag', (_branch, entries, phrase) => {
+  it.each(BRANCHES)('as a phase, during %s: names `vat resources check --budget`, never the bare flag', (_branch, entries, marker, remedy) => {
     const message = killed(entries, 'phase').issues[0]?.message ?? '';
 
-    expectOnlyBranch(message, phrase);
+    expectOnlyBranch(message, marker, remedy);
     expect(message).toContain('`vat resources check --budget <seconds>`');
     expect(message).not.toMatch(BARE_BUDGET);
   });
 
-  it.each(BRANCHES)('standalone, during %s: names the `--budget` flag itself', (_branch, entries, phrase) => {
+  it.each(BRANCHES)('standalone, during %s: names the `--budget` flag itself', (_branch, entries, marker, remedy) => {
     const message = killed(entries, 'standalone').issues[0]?.message ?? '';
 
-    expectOnlyBranch(message, phrase);
+    expectOnlyBranch(message, marker, remedy);
     expect(message).toMatch(BARE_BUDGET);
     expect(message).not.toContain('vat resources check --budget');
   });

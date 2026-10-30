@@ -50,6 +50,8 @@ export function writeConfig(dir: string, checks: readonly CheckSpec[], extra = '
 export interface PhaseEntry {
   name: string;
   status: string;
+  examined?: number;
+  summary?: Record<string, number>;
   error?: { code: string; message: string };
   data: Record<string, unknown> | null;
 }
@@ -64,6 +66,8 @@ export interface Run {
   status: number | null;
   stderr: string;
   findings: Finding[];
+  /** The whole published document. */
+  document: Record<string, unknown>;
   /** The document's own `data` — a standalone `vat resources check` report's. */
   data: Record<string, unknown>;
   phases: PhaseEntry[];
@@ -87,6 +91,7 @@ export function vat(cwd: string, args: readonly string[], extra: NodeJS.ProcessE
     status: result.status,
     stderr: result.stderr,
     findings: (doc['findings'] ?? []) as Finding[],
+    document: doc,
     data,
     phases: (data['phases'] ?? []) as PhaseEntry[],
     error: doc['error'] as Run['error'],
@@ -104,6 +109,11 @@ export function checksPhase(run: Run): PhaseEntry {
 /** The names of the checks a document's `data.checks` lists. */
 export function checkNames(data: Record<string, unknown> | null): string[] {
   return ((data?.['checks'] ?? []) as Array<{ name: string }>).map((check) => check.name);
+}
+
+/** Each check a document's `data.checks` lists, as `name:rows` — what it selected, not what it cost. */
+export function checkRows(data: Record<string, unknown> | null): string[] {
+  return ((data?.['checks'] ?? []) as Array<{ name: string; rows?: number }>).map((check) => `${check.name}:${String(check.rows)}`);
 }
 
 /** How many times `needle` occurs in `haystack`. */

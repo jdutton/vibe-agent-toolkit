@@ -1,6 +1,7 @@
 /**
  * The checks child, KILLED: by the watchdog while a check runs or during the population (the
- * kill rows of `vat validate`'s exit table), and with its supervisor terminated from outside.
+ * kill rows of `vat validate`'s exit table). A supervisor ended from outside is
+ * `checks-supervisor-orphan.system.test.ts`.
  *
  * 🪤 The phase runs its child under the DEFAULT bound and `vat validate` accepts no flag to change
  * it, so a watchdog kill case would wait five minutes. `parent-only-fast-clock.mjs` scales the
@@ -8,17 +9,13 @@
  * `measureBudget()` derives for this machine, exactly as a standalone kill case derives `--budget`.
  */
 
-import { spawn } from 'node:child_process';
-
-import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { DEFAULT_BUDGET_SECONDS } from '../../src/commands/resources/check-supervisor.js';
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
-import { cleanupTestTempDir, fs, safePath } from './test-common.js';
+import { cleanupTestTempDir } from './test-common.js';
 import {
-  BIN_PATH,
   checksPhase,
   preload,
   RUN_INTEGRITY,
@@ -31,7 +28,7 @@ import { createMarkdownGitFixture } from './test-helpers/index.js';
 import { measureBudget } from './test-helpers/measure-check-budget.js';
 
 // ⛔ Disposal paths: every `vat` process (and its checks child) inherits the scratch TMPDIR.
-const scratch = useScratchTmpdir('vat-scratch-validate-checks-kill-');
+useScratchTmpdir('vat-scratch-validate-checks-kill-');
 
 let projectDir: string;
 
@@ -90,75 +87,3 @@ describe('vat validate — the checks phase, killed by its bound', () => {
   });
 });
 
-/** Whether a process with this pid still exists (a zombie counts until it is reaped). */
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // ESRCH: no such process. Anything else (EPERM) means it exists but is not ours to signal.
-    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
-    throw error;
-  }
-}
-
-/** Poll `condition` every 50 ms for up to `ms`; true as soon as it holds. */
-async function within(ms: number, condition: () => boolean): Promise<boolean> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    if (condition()) return true;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  return condition();
-}
-
-/**
- * 🚨 A supervisor terminated by a signal sent to ITS pid alone — `kill <pid>`, `timeout(1)`, a CI
- * runner stopping a step — must take its child with it. The bound lives in the supervisor's timer,
- * so an orphaned child has nothing left to stop it.
- *
- * ⚠️ Not on Windows: there `kill(pid, 'SIGTERM')` is `TerminateProcess`, which runs no handler in the
- * target, so no supervisor-side mechanism can exist to observe — and Windows has no SIGHUP to send.
- */
-describe.skipIf(process.platform === 'win32')('vat resources check — its supervisor terminated from outside', () => {
-  let dir: string;
-  let orphan: number | undefined;
-
-  beforeAll(() => {
-    dir = createMarkdownGitFixture('vat-check-orphan-');
-    writeConfig(dir, [['quick', TXT_ROWS]]);
-  });
-
-  afterEach(() => {
-    // A red run leaves the stalled child behind; never let it outlive the case.
-    if (orphan !== undefined && alive(orphan)) process.kill(orphan, 'SIGKILL');
-    orphan = undefined;
-  });
-
-  afterAll(() => {
-    cleanupTestTempDir(dir);
-  });
-
-  it.each(['SIGTERM', 'SIGHUP'] as const)('a %s to the supervisor\'s pid kills the stalled child, and the supervisor dies of it', async (signal) => {
-    const pidFile = safePath.join(scratch(), 'child.pid');
-    const nodeOptions = [process.env['NODE_OPTIONS'], preload('child-only-stall-in-population.mjs')]
-      .filter((part) => part !== undefined && part !== '').join(' ');
-    const parent = spawn(NODE_EXECUTABLE, [BIN_PATH, 'resources', 'check', '--budget', '600'], {
-      cwd: dir,
-      env: { ...process.env, NODE_OPTIONS: nodeOptions, TEST_CHILD_PID_FILE: pidFile },
-      stdio: 'ignore',
-    });
-    const exited = new Promise<NodeJS.Signals | null>((resolve) => parent.on('exit', (_code, sig) => resolve(sig)));
-
-    // The child is stalled, synchronously and for good, the moment its pid is on disk.
-    expect(await within(20_000, () => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf-8') !== '')).toBe(true);
-    const child = Number(fs.readFileSync(pidFile, 'utf-8'));
-    orphan = child;
-    expect(alive(child)).toBe(true);
-
-    parent.kill(signal);
-
-    expect(await exited).toBe(signal);
-    expect(await within(5000, () => !alive(child))).toBe(true);
-  });
-});

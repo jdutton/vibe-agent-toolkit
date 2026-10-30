@@ -643,14 +643,15 @@ scope is one git snapshot for every in-process phase. `vat validate` writes noth
 so no phase can miss another's output. A verb whose phases produce files for the next to read
 (`vat build`) must not be hoisted this way, and is not. Its `checks` phase is a supervised child
 process OUTSIDE that scope: it takes its own git snapshot, and opens — and on a miss writes — the
-projection store while the parent holds it open. `validate-checks-phase.system.test.ts` pins both
-halves on a fixture: the first run's checks phase reports `population: derived` with a store left on
-disk, and the next run's reports `population: store`.
+projection store while the parent holds it open. `validate-checks-phase.system.test.ts` smoke-tests
+that pair on a fixture: the first run's checks phase reports `population: derived` with a store left
+on disk, and the next run's reports `population: store`.
 
 **Where the store is shared, within and across invocations.** The selector is read from the
-environment, and every phase now runs in the process that read it — phases used to be child processes
-inheriting it across a `spawnSync`, which reached the same place by a longer route, so `vat
-validate`'s phases can no longer fail to see the selection their orchestrator did.
+environment. Every phase but `checks` runs in the process that read it — phases used to be child
+processes inheriting it across a `spawnSync`, which reached the same place by a longer route — and
+the `checks` child inherits the orchestrator's environment, so no `vat validate` phase can see a
+different selection from the one its orchestrator did.
 
 That sharing has a within-verb instance. `vat build`'s two phases — `skills build` and
 `claude plugin build` — both reach the lane through `withResourcePopulationSource`

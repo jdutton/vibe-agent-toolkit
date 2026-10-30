@@ -6,7 +6,7 @@
  * that is always disposed of.
  */
 
-import type { Stats } from 'node:fs';
+import { rmSync, type Stats } from 'node:fs';
 import fs, { type FileHandle } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -314,11 +314,16 @@ async function disposalFault(dir: string): Promise<unknown> {
     await removeEntry(dir);
     return undefined;
   } catch (error: unknown) {
-    // The action names the directory: what is left is all of it, while the errno may name an entry deep inside.
-    const fault = classifyFsFault(error, { side: 'environment', action: `remove the temporary directory ${dir}`, path: dir });
-    if (!isFsFaultError(fault)) throw error;
-    return fault;
+    return classifiedDisposalFault(dir, error);
   }
+}
+
+/** What a failed disposal of `dir` threw, classified; a non-filesystem error is a defect and is rethrown. */
+function classifiedDisposalFault(dir: string, error: unknown): unknown {
+  // The action names the directory: what is left is all of it, while the errno may name an entry deep inside.
+  const fault = classifyFsFault(error, { side: 'environment', action: `remove the temporary directory ${dir}`, path: dir });
+  if (!isFsFaultError(fault)) throw error;
+  return fault;
 }
 
 /**
@@ -338,6 +343,30 @@ async function disposalFault(dir: string): Promise<unknown> {
 export async function disposeTempDir(dir: string): Promise<unknown> {
   refuseOutsideTmpdir(dir);
   return await disposalFault(dir);
+}
+
+/**
+ * {@link disposeTempDir}, synchronously — for a process on its way OUT, where no promise will ever
+ * settle: a signal handler about to re-raise, an `exit` listener. Same refusal of any directory not
+ * strictly under the temp directory, same answer.
+ *
+ * ⚠️ One pass, with no mode repair and no retry: it is for a directory the process filled with its
+ * own ordinary files. Anything it cannot remove is answered as the leftover fault, never retried —
+ * a dying process has no time to.
+ *
+ * @param dir - The directory
+ * @returns `undefined` when it is gone (or was never there); otherwise the leftover fault
+ * @throws VatError {@link TEMP_DIR_OUTSIDE_TMPDIR_CODE} — a defect in the caller — for a
+ *   directory not strictly under the temp directory, with nothing removed
+ */
+export function disposeTempDirSync(dir: string): unknown {
+  refuseOutsideTmpdir(dir);
+  try {
+    rmSync(dir, { recursive: true, force: true });
+    return undefined;
+  } catch (error: unknown) {
+    return classifiedDisposalFault(dir, error);
+  }
 }
 
 /** Refuse (a defect in the caller) a directory to dispose of that is not strictly under the temp directory. */

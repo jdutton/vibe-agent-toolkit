@@ -17,7 +17,7 @@ import { safePath, toForwardSlash } from '../../src/path-core.js';
 import { normalizedTmpdir } from '../../src/path-utils.js';
 import { createSymlink, symlinkCapability } from '../../src/test-helpers.js';
 import { PERMISSIONS_ENFORCED } from '../../src/testing/platform-gates.js';
-import { disposeTempDir, disposeTempDirAfterFailure, makeDirectoryUnder, replaceFile, TEMP_DIR_OUTSIDE_TMPDIR_CODE, withTempDir, writeFileUnder } from '../../src/tree-change/files.js';
+import { disposeTempDir, disposeTempDirAfterFailure, disposeTempDirSync, makeDirectoryUnder, replaceFile, TEMP_DIR_OUTSIDE_TMPDIR_CODE, withTempDir, writeFileUnder } from '../../src/tree-change/files.js';
 
 import { plant, present, readText, rejectionOf, residueIn, treeChangeSuite } from './tree-change-test-kit.js';
 
@@ -257,6 +257,34 @@ describe('disposeTempDir', () => {
     expect((leftover as Error).message).toContain(dir);
   });
 });
+
+describe('disposeTempDirSync', () => {
+  it('removes the directory, and answers undefined for it and for one never there', () => {
+    const root = suite.root();
+    plant(root, { 'd/x.txt': 'x' });
+    expect(disposeTempDirSync(safePath.join(root, 'd'))).toBeUndefined();
+    expect(present(safePath.join(root, 'd'))).toBe(false);
+    expect(disposeTempDirSync(safePath.join(root, 'never'))).toBeUndefined();
+  });
+
+  it('refuses a directory outside the temp directory, and the temp directory itself, removing nothing', () => {
+    const { outside, tmp } = stubTempRoot();
+    expect(isVatError(thrownBy(() => disposeTempDirSync(outside)), TEMP_DIR_OUTSIDE_TMPDIR_CODE)).toBe(true);
+    expect(readText(safePath.join(outside, 'data.md'))).toBe('d');
+    expect(isVatError(thrownBy(() => disposeTempDirSync(tmp)), TEMP_DIR_OUTSIDE_TMPDIR_CODE)).toBe(true);
+    expect(readText(safePath.join(tmp, 'keep.md'))).toBe('k');
+  });
+});
+
+/** What `act` threw, or a failure when it returned. */
+function thrownBy(act: () => unknown): unknown {
+  try {
+    act();
+  } catch (error: unknown) {
+    return error;
+  }
+  throw new Error('expected a throw');
+}
 
 describe('disposeTempDirAfterFailure', () => {
   it('disposes of the directory and records nothing against the failure', async () => {

@@ -62,6 +62,12 @@ import {
 import { formatDurationSecs } from '../../utils/duration.js';
 import { resolveIssueSeverity, type SeverityOverrides } from '../../utils/issue-severity.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
+import {
+  EVERY_NOTICE,
+  isSupervisedChild,
+  type NoticeAudience,
+  withNoticeAudience,
+} from '../../utils/operator-notices.js';
 import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
 import {
   withQueriedProjection,
@@ -69,7 +75,6 @@ import {
   type PopulationExtent,
   type ProjectionProvenance,
 } from '../../utils/projection-query.js';
-import { noticeWhenStoreUnkeyable } from '../../utils/projection-store.js';
 import { relationBoundsFor } from '../../utils/relation-limits.js';
 import { RUN_INTEGRITY_CODE, runIntegrityFinding } from '../../utils/run-integrity.js';
 import type { PhaseOutcome } from '../phase-utils.js';
@@ -119,6 +124,11 @@ interface CheckOptions {
    * gets an unsupervised run and a log file, which is harmless.
    */
   costLog?: string;
+  /**
+   * Hidden, and passed exactly when `costLog` is: who started this child. Decides
+   * whether the child owes the operator the store notice — see {@link noticeAudienceOf}.
+   */
+  invocation?: CheckInvocation;
 }
 
 /**
@@ -1464,6 +1474,8 @@ export function runProjectChecks(options: {
  * 🚨 `--cost-log` is ALWAYS appended, and that is the recursion guard. Its
  * presence is the sole discriminator between "supervise a child" and "do the
  * work"; a path that built these arguments without it would fork bomb.
+ * `--invocation` travels with it (the child refuses one without the other): who
+ * started the child, which decides the notices the child owes the operator.
  *
  * 🔑 The operand is the root the PARENT resolved, always. The child is spawned
  * with no `cwd`, so without it the child would resolve its own root from the
@@ -1491,6 +1503,8 @@ function childArgs(root: string, request: ChildRequest, logPath: string): string
     ...(request.debug ? ['--debug'] : []),
     '--cost-log',
     logPath,
+    '--invocation',
+    request.invocation,
   ];
 }
 
@@ -1504,6 +1518,11 @@ interface ChildRequest {
   readonly check: string | undefined;
   readonly format: 'yaml' | 'json';
   readonly debug: boolean;
+  /**
+   * Who asked. Decides how a kill's remedy is worded here, and — handed to the
+   * child — whether the child owes the operator the store notice.
+   */
+  readonly invocation: CheckInvocation;
 }
 
 /** What a supervised run decided to publish. */
@@ -1523,16 +1542,14 @@ type SupervisedEnding =
  * @param options - The run
  * @param options.root - The project root the caller resolved. REQUIRED: the
  *   child checks exactly this tree, and a killed run's document is labelled with it
- * @param options.request - What the child is asked to run
+ * @param options.request - What the child is asked to run, and who asked
  * @param options.budgetSecs - The bound, in seconds
- * @param options.invocation - Who asked, which decides how a kill's remedy is worded
  * @returns What to publish, and with what exit code
  */
 async function superviseCheckRun(options: {
   root: string;
   request: ChildRequest;
   budgetSecs: number;
-  invocation: CheckInvocation;
 }): Promise<SupervisedEnding> {
   const { root, request } = options;
   const { value: ending, leftover } = await withProgressLog(async (logPath): Promise<SupervisedEnding> => {
@@ -1554,7 +1571,7 @@ async function superviseCheckRun(options: {
         // argument — so a child that aborted on its heap limit printed nothing
         // and exited 0, on precisely the runaway shape the bound exists for.
         ending: run.outcome === 'killed'
-          ? { kind: 'budget', budgetSecs: options.budgetSecs, invocation: options.invocation }
+          ? { kind: 'budget', budgetSecs: options.budgetSecs, invocation: request.invocation }
           : { kind: 'abnormal', death: run.death },
         durationMs: run.elapsedMs,
       })),
@@ -1595,9 +1612,8 @@ function withLeftover(ending: SupervisedEnding, leftover: unknown): SupervisedEn
 export async function runResourcesCheckPhase(options: { root: string; debug: boolean }): Promise<PhaseOutcome> {
   const ending = await superviseCheckRun({
     root: options.root,
-    request: { check: undefined, format: 'json', debug: options.debug },
+    request: { check: undefined, format: 'json', debug: options.debug, invocation: 'phase' },
     budgetSecs: DEFAULT_BUDGET_SECONDS,
-    invocation: 'phase',
   });
   return { report: 'forward' in ending ? ending.forward.report : ending.payload };
 }
@@ -1641,11 +1657,14 @@ function warnWhenNoOwnChecks(checks: Readonly<Record<string, ResourceCheck>> | u
  *
  * `query`'s author is at the keyboard, and Ctrl-C already works for them. It
  * works for one reason worth stating, because it is fragile: NO signal handler
- * is installed anywhere on this path. A process blocked in synchronous
+ * is installed in a process that runs the SQL. A process blocked in synchronous
  * `node:sqlite` dies instantly on SIGINT while that remains true, and SURVIVES
  * SIGINT and SIGTERM the moment a handler exists — the handler is a JS callback
  * and the event loop that would schedule it is the blocked resource. Adding one
- * would take Ctrl-C away from `query` without adding anything to `check`.
+ * would take Ctrl-C away from `query`, and from `check`'s child and its
+ * `--budget 0` run. (`check`'s SUPERVISING process does install handlers while
+ * it supervises — its event loop is free — only to take its child down with it;
+ * see `check-supervisor.ts`.)
  *
  * `check` runs unattended in CI, where nobody is there to press it. So it gets a
  * bound enforced from outside itself, and a hang becomes a bounded failure
@@ -1679,20 +1698,22 @@ export async function checkCommand(
     // is an operator error, not a bound.
     requireSupervisableFlags({
       costLog: options.costLog,
+      invocation: options.invocation,
       budgetRaw: options.budget,
       budgetSecs,
     });
     // The process the operator ran — never a supervised child — says when the
-    // project declares no checks of its own. See {@link warnWhenNoOwnChecks}.
+    // project declares no checks of its own, and prints the config's warnings
+    // with it. See {@link warnWhenNoOwnChecks}.
     const root = standaloneRoot(pathArg);
-    if (options.costLog === undefined) {
+    if (!isSupervisedChild({ costLog: options.costLog })) {
       warnWhenNoOwnChecks(loadConfigCached(root, 'source')?.resources?.checks, logger);
     }
     // The presence of `--cost-log` says "you ARE the child". `--budget 0` says
     // the operator declined the bound; both run the work here, and the second
     // can therefore hang forever, which its help text says.
     const ending: SupervisedEnding = runsInThisProcess({ costLog: options.costLog, budgetSecs })
-      ? { payload: await runChecksHere(pathArg, options, logger, startTime) }
+      ? { payload: await withNoticeAudience(noticeAudienceOf(options), () => runChecksHere(pathArg, options, logger, startTime)) }
       : await superviseStandalone(root, options, format, budgetSecs);
     if ('forward' in ending) {
       // Verbatim (unless `withLeftover` had to add a finding to it) — the supervisor already checked it is
@@ -1722,11 +1743,28 @@ export async function checkCommand(
 }
 
 /**
+ * Which notices the process running the checks prints.
+ *
+ * Any process that is not a supervised child prints every notice. A supervised child prints no
+ * config warning — its invoking process loaded the same config and printed them — and prints the
+ * store notice only when a standalone `vat resources check` started it: that supervisor opens no
+ * store (keying one is a git snapshot, unbounded work it must not do before its watchdog exists),
+ * while `vat validate` opened its store scope, and printed the notice, before any phase ran.
+ *
+ * @param options - Parsed command-line options
+ * @returns The audience
+ */
+function noticeAudienceOf(options: CheckOptions): NoticeAudience {
+  if (!isSupervisedChild({ costLog: options.costLog })) return EVERY_NOTICE;
+  return { config: false, store: options.invocation === 'standalone' };
+}
+
+/**
  * Supervise the checks child for a standalone `vat resources check`.
  *
- * 🔑 The store notice is printed HERE, before the spawn: the child prints no notices (it is a
- * supervised child — see `operator-notices.ts`), and this process opens no store of its own, so
- * without this the operator of a tree that cannot be keyed would never hear the run went uncached.
+ * 🔑 Nothing unbounded runs here before the spawn: no store is opened and no tree is snapshotted,
+ * so the watchdog exists before any work that could hang. The store notice is the child's to print
+ * (see {@link noticeAudienceOf}).
  *
  * @param root - The project root this process resolved, which the child checks
  * @param options - Parsed command-line options
@@ -1740,12 +1778,10 @@ function superviseStandalone(
   format: 'yaml' | 'json',
   budgetSecs: number,
 ): Promise<SupervisedEnding> {
-  noticeWhenStoreUnkeyable(root);
   return superviseCheckRun({
     root,
-    request: { check: options.check, format, debug: options.debug === true },
+    request: { check: options.check, format, debug: options.debug === true, invocation: 'standalone' },
     budgetSecs,
-    invocation: 'standalone',
   });
 }
 

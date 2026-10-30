@@ -85,16 +85,22 @@ describe('vat validate — the checks phase, a faulty child', () => {
    * The exit table's "the child published a refusal before populating" row: the phase is an error
    * carrying the CHILD's code, and the run is RUN_INCOMPLETE (2). Never a pass and never a finding —
    * a child that refused its config checked nothing.
+   *
+   * 🔑 It is also where `vat validate --debug` is observed reaching the CHILD: under `--debug` a
+   * refusal prints the stack of its throw site, and the frame naming `runChecksHere` exists only in
+   * the child — the parent never runs the checks. Without `--debug` the child prints no stack.
    */
-  it('a child that refuses its own config is a phase error carrying its code (exit 2)', () => {
+  it.each([false, true])('a child that refuses its own config is a phase error carrying its code (exit 2; --debug=%s)', (debug) => {
     writeConfig(projectDir, [['quick', TXT_ROWS]]);
     const broken = safePath.join(scratch(), 'child.config.yaml');
     fs.writeFileSync(broken, 'resources: [unterminated\n', 'utf-8');
 
-    const run = vat(projectDir, ['validate'], {
+    const run = vat(projectDir, debug ? ['validate', '--debug'] : ['validate'], {
       NODE_OPTIONS: preload('child-only-config.mjs'),
       TEST_CHILD_ONLY_CONFIG: broken,
     });
+
+    expect(run.stderr.includes(' at runChecksHere ('), run.stderr).toBe(debug);
 
     expect(run.status, run.stderr).toBe(2);
     expect(run.error?.code).toBe('RUN_INCOMPLETE');

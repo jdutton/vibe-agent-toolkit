@@ -15,17 +15,19 @@
  *   JS — which is why the parse pool's `terminate()` genuinely works — but a
  *   thread inside a synchronous native call is not spinning in JS. Do NOT
  *   "align" this design with the parse pool's.
- * - **A signal handler is a REGRESSION.** A process blocked in synchronous
- *   `node:sqlite` dies INSTANTLY on SIGINT while no handler is installed, and
- *   SURVIVES both SIGINT and SIGTERM once one is — the handler is a JS callback,
- *   and the event loop that would schedule it is the resource that is blocked.
- *   Installing one removes the operator's Ctrl-C. There is no
- *   `process.on('SIGINT')` here and there must never be.
+ * - **A signal handler in the process RUNNING THE SQL is a REGRESSION.** A
+ *   process blocked in synchronous `node:sqlite` dies INSTANTLY on SIGINT while
+ *   no handler is installed, and SURVIVES both SIGINT and SIGTERM once one is —
+ *   the handler is a JS callback, and the event loop that would schedule it is
+ *   the resource that is blocked. Installing one removes the operator's Ctrl-C.
+ *   That process — the supervised child, or this command under `--budget 0` —
+ *   must never have a `process.on(<signal>)`, and nothing on its path installs
+ *   one.
  *
- *   That is about the process RUNNING the SQL. The supervising process is never
- *   blocked, and it does install SIGTERM/SIGHUP handlers for the duration of a
- *   supervision — only to take the child down with it and re-raise; see
- *   `killChildOnTermination`.
+ *   The SUPERVISING process may, and does: its event loop only waits on the
+ *   child, so a handler there fires. It installs SIGTERM, SIGHUP and SIGINT
+ *   handlers for exactly the duration of a supervision, only to take the child
+ *   down with it and re-raise; see `guardSupervision`.
  * - **The kill is `SIGKILL` because SIGKILL cannot be REGRESSED.** No code the
  *   child runs, now or after any future edit, can handle, ignore or block it.
  *
@@ -95,12 +97,21 @@
 
 import { type ChildProcess, spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import { ExitCode, exitCodeForReport } from '@vibe-agent-toolkit/schema';
-import { isPathAbsentError, requireFollowedStatSync, safePath, type TempDirOutcome, withTempDir } from '@vibe-agent-toolkit/utils';
+import {
+  disposeTempDirSync,
+  isPathAbsentError,
+  requireFollowedStatSync,
+  safePath,
+  type TempDirOutcome,
+  withTempDir,
+} from '@vibe-agent-toolkit/utils';
 
 import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
 import { readForwardedDocument, type ForwardedDocument } from '../../utils/document-writer.js';
+import { isSupervisedChild } from '../../utils/operator-notices.js';
 import { resolveVatBinPath } from '../../utils/vat-bin-path.js';
 
 /**
@@ -277,7 +288,7 @@ export function parseBudgetSeconds(raw: string | undefined): number {
 export function runsInThisProcess(
   options: { costLog: string | undefined; budgetSecs: number },
 ): boolean {
-  return options.costLog !== undefined || options.budgetSecs === 0;
+  return isSupervisedChild(options) || options.budgetSecs === 0;
 }
 
 /**
@@ -299,28 +310,42 @@ export function runsInThisProcess(
  * `--budget 0` alongside `--cost-log` is allowed: both say "nobody is
  * supervising this", so there is no contradiction to report.
  *
+ * 🔑 **`--cost-log` and `--invocation` travel together.** The invocation says who
+ * started the child, which decides whether the child owes the operator the store
+ * notice (see `operator-notices.ts`), and it means nothing without a supervisor.
+ * One without the other is refused rather than defaulted, so no child runs
+ * without its supervisor having said which it is.
+ *
  * @param options - The run
  * @param options.costLog - The hidden `--cost-log` value, or undefined
+ * @param options.invocation - The hidden `--invocation` value, or undefined
  * @param options.budgetRaw - What the operator actually typed for `--budget`
  * @param options.budgetSecs - The parsed bound; 0 means none
- * @throws When both flags were passed and the budget could not be honoured
+ * @throws When the flags cannot all be honoured together
  */
 export function requireSupervisableFlags(options: {
   costLog: string | undefined;
+  invocation: string | undefined;
   budgetRaw: string | undefined;
   budgetSecs: number;
 }): void {
-  if (options.costLog === undefined) return;
-  if (options.budgetRaw === undefined || options.budgetSecs === 0) return;
-
-  throw new CommandRefusalError(
-    'USAGE_INVALID',
-    '--budget cannot be combined with --cost-log. --cost-log means "you are the'
-    + ' child a supervisor already spawned", so this process does the work rather'
-    + ' than bounding it, and the budget would be silently ignored. Drop one:'
-    + ' --budget alone gets you the bound, --cost-log alone gets you the progress'
-    + ' log with no bound at all.',
-  );
+  if (options.costLog !== undefined && options.budgetRaw !== undefined && options.budgetSecs !== 0) {
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
+      '--budget cannot be combined with --cost-log. --cost-log means "you are the'
+      + ' child a supervisor already spawned", so this process does the work rather'
+      + ' than bounding it, and the budget would be silently ignored. Drop --cost-log:'
+      + ' it is not an operator\'s flag, and --budget alone gets you the bound.',
+    );
+  }
+  if ((options.costLog === undefined) !== (options.invocation === undefined)) {
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
+      '--cost-log and --invocation are passed together or not at all: they are what a'
+      + ' supervising `vat resources check` hands the child it spawns, and neither is an'
+      + ' operator\'s flag.',
+    );
+  }
 }
 
 /**
@@ -596,7 +621,7 @@ export async function superviseCheck(options: {
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   // For exactly as long as the child is supervised — released below however the run ends.
-  const releaseTermination = killChildOnTermination(child);
+  const releaseGuard = guardSupervision(child, options.logPath);
 
   const chunks: Buffer[] = [];
   child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -650,7 +675,7 @@ export async function superviseCheck(options: {
         resolve(resolveChildEnding({ code: null, signal: null, killed, killFailure }));
       }
     }, pollIntervalMs(options.budgetMs));
-  }).finally(releaseTermination);
+  }).finally(releaseGuard);
   clearInterval(timer);
 
   const stdout = Buffer.concat(chunks).toString('utf-8');
@@ -675,52 +700,117 @@ export async function superviseCheck(options: {
 }
 
 /**
- * The signals that end THIS process without reaching its child — a `kill <pid>`, `timeout(1)`, a
- * CI runner stopping the step, a closed terminal.
+ * The signals that end THIS process by default disposition and never reach its child unless they
+ * were sent to the whole process group — `kill <pid>`, `kill -INT <pid>`, `timeout(1)`, a CI runner
+ * stopping or cancelling a step, a closed terminal.
  *
- * 🔑 SIGINT is deliberately absent. Ctrl-C signals the whole foreground process GROUP, so the child
- * receives it directly and dies of it; a handler here would change nothing for that case and would
- * put a JS callback between the operator and the default disposition.
+ * 🔑 SIGINT is here although Ctrl-C at a terminal reaches the child directly (it signals the whole
+ * foreground process GROUP): a SIGINT sent to this pid alone does not, and a runner that cancels a
+ * job that way would otherwise orphan the child exactly as a pid-only SIGTERM did.
  */
-const ORPHANING_SIGNALS = ['SIGTERM', 'SIGHUP'] as const;
+const TERMINATING_SIGNALS = ['SIGTERM', 'SIGHUP', 'SIGINT'] as const;
 
 /**
- * While the child is supervised, make a termination of THIS process take the child with it.
+ * How long a re-raised signal is given to end this process before it ends itself instead.
  *
- * ## 🚨 The defect: a pid-only SIGTERM orphaned an unbounded child
+ * A process that SURVIVES its own re-raise is one whose default disposition for the signal does
+ * nothing — PID 1 in a container is the common case — and it must still end.
+ */
+const RERAISE_GRACE_MS = 1000;
+
+/**
+ * While the child is supervised, make every way THIS process ends take the child with it.
  *
- * The bound is enforced by this process's timer. A SIGTERM or SIGHUP sent to this pid alone —
- * which is how CI and `timeout(1)` stop a step — ended this process by default disposition, the
- * timer with it, and the child it was bounding was reparented and kept running with nothing left
- * to stop it: the exact unbounded hang the supervisor exists to abolish.
+ * ## 🚨 The defect: a supervisor that ended without its child orphaned an unbounded run
  *
- * So each handler SIGKILLs the child (the module header gives why SIGKILL), removes every handler,
- * and RE-RAISES the signal, so this process still dies of it — by the default disposition, with the
- * exit status a shell and a CI runner expect. The handlers exist only during supervision; the
- * header's ban on a handler is about the CHILD, whose event loop is the blocked resource — this
- * process's loop is free, which is what makes a handler work here at all.
+ * The bound is enforced by this process's timer. Anything that ends this process ends the timer —
+ * and the child it was bounding was reparented and kept running with nothing left to stop it: the
+ * exact unbounded hang the supervisor exists to abolish. Measured ways in: a SIGTERM, SIGHUP or
+ * SIGINT sent to this pid alone; an uncaught throw in the poll (the last-resort handler ends the
+ * process with `process.exit`); and a kill the kernel refused, which settles the run while the child
+ * lives on.
  *
- * ⚠️ Not on Windows in any meaningful sense: there `process.kill(pid, 'SIGTERM')` is
- * `TerminateProcess`, which runs no handler. A handler that cannot fire is harmless; the re-raise
- * is replaced by an exit there because Windows refuses to SEND most signal names.
+ * So for exactly the supervision's duration:
+ *
+ * - **`exit`** SIGKILLs the child — every ending of this process passes through it, a last-resort
+ *   `process.exit` included. It is released when the child is gone, not when the run settles, so a
+ *   refused kill gets one more attempt when this process ends.
+ * - **{@link TERMINATING_SIGNALS}** release every handler, SIGKILL the child, remove the progress
+ *   log's directory synchronously (no `finally` runs after the re-raise), and RE-RAISE the signal,
+ *   so this process still dies of it with the status a shell and a CI runner expect.
+ *
+ * The `exit` guard removes that directory too: `process.exit` runs no `finally` either.
+ *
+ * The module header gives why SIGKILL, and why the CHILD must never install a handler. This
+ * process may: its event loop is never blocked, which is what makes a handler fire at all.
+ *
+ * ⚠️ Windows: `process.kill(pid, 'SIGTERM')` there is `TerminateProcess`, which runs no handler, so
+ * the signal handlers are inert against an outside kill; the `exit` guard is not.
  *
  * @param child - The supervised child
- * @returns A release that removes the handlers; call it however the supervision ends
+ * @param logPath - The progress log, alone in a directory {@link withProgressLog} minted for this run
+ * @returns A release; call it however the supervision ends
  */
-function killChildOnTermination(child: ChildProcess): () => void {
-  const handlers = ORPHANING_SIGNALS.map((signal) => [signal, (): void => {
-    release();
+function guardSupervision(child: ChildProcess, logPath: string): () => void {
+  const onExit = (): void => {
     child.kill('SIGKILL');
-    // Windows refuses to SEND most signal names, so there the process cannot re-raise and stops
-    // itself instead: the operator asked it to end, so it ends, as a run that did not finish.
-    if (process.platform === 'win32') process.exit(ExitCode.ERROR);
-    process.kill(process.pid, signal);
-  }] as const);
-  function release(): void {
-    for (const [signal, handler] of handlers) process.off(signal, handler);
+    disposeProgressDir(logPath);
+  };
+  const onSignal = (signal: NodeJS.Signals): void => {
+    releaseSignals();
+    process.off('exit', onExit);
+    onExit();
+    reRaise(signal);
+  };
+  function releaseSignals(): void {
+    for (const signal of TERMINATING_SIGNALS) process.off(signal, onSignal);
   }
-  for (const [signal, handler] of handlers) process.on(signal, handler);
-  return release;
+  for (const signal of TERMINATING_SIGNALS) process.on(signal, onSignal);
+  process.once('exit', onExit);
+
+  return () => {
+    releaseSignals();
+    const releaseExit = (): void => {
+      process.off('exit', onExit);
+    };
+    // Gone, or never started: nothing left to take down.
+    if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) releaseExit();
+    else child.once('close', releaseExit);
+  };
+}
+
+/**
+ * Remove the progress log's directory, synchronously, on the way out of this process — and say so
+ * on stderr when the OS would not, since no report will carry it.
+ *
+ * @param logPath - The progress log
+ */
+function disposeProgressDir(logPath: string): void {
+  const leftover = disposeTempDirSync(dirname(logPath));
+  if (leftover !== undefined) process.stderr.write(`${errorMessageOf(leftover)}\n`);
+}
+
+/**
+ * End this process OF `signal`, as its default disposition would have, with an exit fallback.
+ *
+ * Every handler is gone, so the raise meets the default disposition and the process dies of it. The
+ * wait is synchronous so nothing else runs meanwhile: a report published after the operator asked
+ * this process to end would read as the run's verdict.
+ *
+ * A process still here after {@link RERAISE_GRACE_MS} survived its own raise (PID 1), and ends as a
+ * run that did not finish: `ExitCode.ERROR`, the one contract code for that — not a shell's
+ * `128 + n`, which would be a second exit-code table beside the contract's. Windows is not sent the
+ * raise at all: it cannot SEND SIGHUP, and SIGTERM or SIGINT there terminates without a signal
+ * status to preserve.
+ *
+ * @param signal - The signal this process received
+ */
+function reRaise(signal: NodeJS.Signals): never {
+  if (process.platform !== 'win32') {
+    process.kill(process.pid, signal);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RERAISE_GRACE_MS);
+  }
+  process.exit(ExitCode.ERROR);
 }
 
 /**
@@ -822,4 +912,4 @@ export function readCompletedDocument(
 }
 
 /** Test-facing seam: the pure decisions of this module, reached by its unit tests. */
-export const __internal = { pollIntervalMs };
+export const __internal = { pollIntervalMs, guardSupervision };
