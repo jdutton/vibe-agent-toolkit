@@ -545,8 +545,9 @@ describe('selectValidateSurfaces', () => {
   });
 
   /**
-   * 🔑 Both ways: `checks` is present iff `resources:` is, and it directly follows `resources` —
-   * the checks read the tree the resources phase just populated. A `checks` phase selected without
+   * 🔑 Both ways: `checks` is present iff `resources:` is, and it directly follows `resources`
+   * (the order the help documents; the checks child derives its own population, it does not
+   * read the resources phase's). A `checks` phase selected without
    * `resources:`, or one that drifted away from it, reds here.
    */
   it.each([

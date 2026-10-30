@@ -61,8 +61,8 @@ import { runSkillsValidatePhase } from './skills/validate.js';
 
 /**
  * Surfaces `vat validate` knows how to run, in stable execution order. `checks` runs whenever
- * `resources:` is configured, directly after `resources`: the checks read the tree that phase
- * populated.
+ * `resources:` is configured, directly after `resources`. Its supervised child derives its own
+ * population of the tree — it does not read the one the `resources` phase built.
  */
 const VALID_SURFACES = ['resources', 'checks', 'skills'] as const;
 
@@ -149,16 +149,24 @@ Exit Codes:
       (RESOURCE_CHECK_BROKEN, naming the unit)
   2 - The run could not do its job: a surface did not finish (RUN_INCOMPLETE,
       the finished surfaces still in data.phases) — including a checks child
-      that could not be started, refused before its population (its config,
-      say), or was killed, died or exited against its report before its
-      population completed — a path argument or the retired '--only'
-      (USAGE_INVALID), no project root
+      that could not be started, refused (before its population — its config,
+      say — or after it), or was killed, died or exited against its report
+      before its population completed, or a checks supervisor that could not
+      watch its child — a path argument or the retired '--only'
+      (USAGE_INVALID), no project root. One exit 2 publishes NO document: a
+      signal (SIGTERM, SIGHUP, SIGINT) sent to this process while the checks
+      child is supervised kills the child, and this process dies of the same
+      signal — or, where the signal cannot kill it (PID 1 in a container),
+      exits 2 with nothing on stdout
 
 Checks bound:
-  The checks phase runs 'vat resources check''s supervised child under that
-  command's default bound: ${DEFAULT_BUDGET_SECONDS}s without progress. This command takes no flag
-  to change it; to give slow checks more time, run them on their own with
-  'vat resources check --budget <seconds>'.
+  The checks phase runs the supervised child of 'vat resources check' under
+  that command's default bound: the child is killed after ${DEFAULT_BUDGET_SECONDS}s WITHOUT
+  PROGRESS (each check finishing resets it; the population reports only when it
+  finishes, so for the population it is a total bound). This release has no
+  way to give 'vat validate' more time. 'vat resources check --budget <seconds>'
+  runs the same checks on their own with a larger bound, so they can pass
+  there, but that does not make 'vat validate' pass.
 
 Arguments:
   None. Scope comes from vibe-agent-toolkit.config.yaml, never from the command

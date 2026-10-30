@@ -45,7 +45,12 @@ describe('vat validate — the checks phase, a faulty child', () => {
 
     expect(run.status).toBe(2);
     expect(run.error?.code).toBe('RUN_INCOMPLETE');
-    expect(checksPhase(run).status).toBe('error');
+    const phase = checksPhase(run);
+    expect(phase.status).toBe('error');
+    // ITS ending, not any other way to reach RUN_INCOMPLETE: a child that exited 0 having written
+    // nothing, before it had even reported starting.
+    expect(phase.error?.message).toContain('the child process exited 0 and published no report at all');
+    expect(phase.error?.message).toContain('before the child process had finished starting');
   });
 
   it('garbled stdout after population is RESOURCE_CHECK_BROKEN naming the unreadable report (exit 1)', () => {

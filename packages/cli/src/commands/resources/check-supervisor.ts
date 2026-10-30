@@ -89,7 +89,7 @@
  *
  * ## Why the child is the CLI itself
  *
- * The child is `vat resources check` with a hidden `--cost-log` flag, running
+ * The child is `vat resources check` with a hidden `--supervised-by` flag, running
  * the ordinary in-process path. Forking the logic would give the supervised lane
  * and the unsupervised one two implementations of the same gate — and the one
  * nobody runs interactively is the one that would rot.
@@ -269,83 +269,146 @@ export function parseBudgetSeconds(raw: string | undefined): number {
 }
 
 /**
+ * Who asked for the supervised run: the operator, as `vat resources check`, or an orchestrator,
+ * as its `checks` phase. It decides how a kill's remedy is worded, and whether the child owes the
+ * operator the store notice (see `operator-notices.ts`).
+ */
+export type CheckInvocation = 'standalone' | 'phase';
+
+/**
+ * What the hidden `--supervised-by` flag carries, read: everything a supervisor tells the child it
+ * spawned, in ONE value so no half of it can arrive without the other.
+ */
+export interface SupervisedChild {
+  /** Who started the supervision. */
+  readonly invoker: CheckInvocation;
+  /** The progress log both processes watch; the child appends to it. */
+  readonly progressLog: string;
+}
+
+/** The hidden flag a supervisor hands the child it spawns, and nothing else passes. */
+export const SUPERVISED_BY_FLAG = '--supervised-by';
+
+/**
+ * The value of {@link SUPERVISED_BY_FLAG} for a child this process is about to spawn:
+ * `<invoker>:<this process's pid>:<progress log>`.
+ *
+ * The pid is what makes the flag unforgeable by accident: the child refuses it unless the pid
+ * named is its own parent's — see {@link requireSupervisableFlags}.
+ *
+ * @param child - Who asked, and where the progress goes
+ * @returns The flag's value
+ */
+export function supervisedByValue(child: SupervisedChild): string {
+  return `${child.invoker}:${String(process.pid)}:${child.progressLog}`;
+}
+
+/**
  * Does this process do the work, or supervise a child that does?
  *
- * 🚨 **The recursion guard, and the reason it is a named function.** `--cost-log`
- * is what a supervising parent hands its child, and it must WIN against the
- * budget — a child that consulted the budget first would spawn a child of its
- * own, which would spawn a child of its own. A condition inline in the command
- * would be a fork bomb one refactor away with nothing asserting on it.
+ * 🚨 **The recursion guard, and the reason it is a named function.** `--supervised-by` is what a
+ * supervising parent hands its child, and it must WIN against the budget — a child that consulted
+ * the budget first would spawn a child of its own, which would spawn a child of its own. A
+ * condition inline in the command would be a fork bomb one refactor away with nothing asserting
+ * on it.
  *
- * `--budget 0` also runs here: there is nothing to supervise, and a spawn would
- * cost a second process startup to buy no bound at all.
+ * `--budget 0` also runs here: there is nothing to supervise, and a spawn would cost a second
+ * process startup to buy no bound at all.
  *
  * @param options - The run
- * @param options.costLog - The hidden `--cost-log` value, or undefined
+ * @param options.supervisedBy - The hidden `--supervised-by` value, or undefined
  * @param options.budgetSecs - The bound in seconds; 0 means none
  * @returns True when the checks run in this process
  */
 export function runsInThisProcess(
-  options: { costLog: string | undefined; budgetSecs: number },
+  options: { supervisedBy: string | undefined; budgetSecs: number },
 ): boolean {
   return isSupervisedChild(options) || options.budgetSecs === 0;
 }
 
 /**
- * Refuse a combination where one flag the operator passed would do nothing.
+ * Read `--supervised-by` into the child it describes, refusing it unless this process really is
+ * the child of the supervisor it names — and refuse a `--budget` it would silently ignore.
  *
- * 🚨 **The defect: `--cost-log` wins the fork above unconditionally**, so
- * `vat resources check --budget 60 --cost-log /tmp/x` ran entirely UNBOUNDED and
- * said nothing about it. That is harmless to the recursion guard — a child must
- * keep winning — but an explicitly-passed, documented flag that is silently
- * inert is exactly the shape an operator never discovers until the hang it was
- * meant to prevent.
+ * 🚨 **Not an operator's flag, and passing it by hand is refused, not tolerated.** It used to be
+ * harmless-looking: the process ran the checks unbounded, printed none of the notices its
+ * supervisor would have, and appended to a log nobody watched. A flag that silently removes the
+ * bound is the shape an operator never discovers until the hang it was meant to prevent. So the
+ * value names its supervisor's pid, and a process whose parent is not that pid is refused
+ * `USAGE_INVALID` in plain words.
  *
- * ⚠️ **The real spawn path must survive this.** {@link runsInThisProcess}'s
- * caller builds the child's argv with `--cost-log` and does NOT forward
- * `--budget` — which is why the RAW flag is the discriminator here rather than
- * the parsed seconds: the child's `budgetSecs` is the 300 s default, not
- * anything the operator typed.
+ * 🔑 **One value, so an invalid combination cannot be written.** The invoker and the progress log
+ * used to be two hidden flags that had to arrive together, refused when one came alone. Now they
+ * are fields of one value, and the only thing left to refuse is a value that does not parse.
  *
- * `--budget 0` alongside `--cost-log` is allowed: both say "nobody is
- * supervising this", so there is no contradiction to report.
- *
- * 🔑 **`--cost-log` and `--invocation` travel together.** The invocation says who
- * started the child, which decides whether the child owes the operator the store
- * notice (see `operator-notices.ts`), and it means nothing without a supervisor.
- * One without the other is refused rather than defaulted, so no child runs
- * without its supervisor having said which it is.
+ * 🚨 **`--budget` beside it is refused.** The flag wins the fork in {@link runsInThisProcess}
+ * unconditionally, so `--budget 60` with it would run UNBOUNDED and say nothing. The RAW
+ * `--budget` is the discriminator, not the parsed seconds: the real spawn path never forwards
+ * `--budget`, so the child's `budgetSecs` is the default, not anything an operator typed.
+ * `--budget 0` beside it is allowed: both say "nobody is supervising this".
  *
  * @param options - The run
- * @param options.costLog - The hidden `--cost-log` value, or undefined
- * @param options.invocation - The hidden `--invocation` value, or undefined
+ * @param options.supervisedBy - The hidden `--supervised-by` value, or undefined
  * @param options.budgetRaw - What the operator actually typed for `--budget`
  * @param options.budgetSecs - The parsed bound; 0 means none
- * @throws When the flags cannot all be honoured together
+ * @returns The supervised child this process is, or undefined when it is not one
+ * @throws When the flag does not parse, names a supervisor that is not this process's parent, or
+ *   comes with a `--budget` it would ignore
  */
 export function requireSupervisableFlags(options: {
-  costLog: string | undefined;
-  invocation: string | undefined;
+  supervisedBy: string | undefined;
   budgetRaw: string | undefined;
   budgetSecs: number;
-}): void {
-  if (options.costLog !== undefined && options.budgetRaw !== undefined && options.budgetSecs !== 0) {
+}): SupervisedChild | undefined {
+  if (!isSupervisedChild(options)) return undefined;
+  const child = parseSupervisedBy(options.supervisedBy);
+  if (options.budgetRaw !== undefined && options.budgetSecs !== 0) {
     throw new CommandRefusalError(
       'USAGE_INVALID',
-      '--budget cannot be combined with --cost-log. --cost-log means "you are the'
-      + ' child a supervisor already spawned", so this process does the work rather'
-      + ' than bounding it, and the budget would be silently ignored. Drop --cost-log:'
+      `--budget cannot be combined with ${SUPERVISED_BY_FLAG}. ${SUPERVISED_BY_FLAG} means "you are`
+      + ' the child a supervisor already spawned", so this process does the work rather than'
+      + ` bounding it, and the budget would be silently ignored. Drop ${SUPERVISED_BY_FLAG}:`
       + ' it is not an operator\'s flag, and --budget alone gets you the bound.',
     );
   }
-  if ((options.costLog === undefined) !== (options.invocation === undefined)) {
+  return child;
+}
+
+/** `<invoker>:<supervisor pid>:<progress log>` — the log last, since a Windows path holds a colon. */
+const SUPERVISED_BY_SHAPE = /^(?<invoker>standalone|phase):(?<pid>\d+):(?<progressLog>.+)$/;
+
+/**
+ * Parse `--supervised-by`, and refuse it unless this process's parent is the supervisor it names.
+ *
+ * @param raw - The flag's value
+ * @returns The supervised child
+ * @throws `USAGE_INVALID` for a value that does not parse or names another process
+ */
+function parseSupervisedBy(raw: string): SupervisedChild {
+  const notAnOperatorsFlag = `${SUPERVISED_BY_FLAG} is not an operator's flag: it is how`
+    + ' `vat resources check` and `vat validate` hand the checks to the child process they'
+    + ' spawn and supervise.';
+  const remedy = ' Run `vat resources check` without it — `--budget <seconds>` sets the bound,'
+    + ' and `--budget 0` runs the checks in this process with none.';
+  const fields = SUPERVISED_BY_SHAPE.exec(raw)?.groups as
+    | { invoker: CheckInvocation; pid: string; progressLog: string }
+    | undefined;
+  if (fields === undefined) {
     throw new CommandRefusalError(
       'USAGE_INVALID',
-      '--cost-log and --invocation are passed together or not at all: they are what a'
-      + ' supervising `vat resources check` hands the child it spawns, and neither is an'
-      + ' operator\'s flag.',
+      `${notAnOperatorsFlag} "${raw}" is not a value a supervisor writes.${remedy}`,
     );
   }
+  const { invoker, pid, progressLog } = fields;
+  if (Number(pid) !== process.ppid) {
+    throw new CommandRefusalError(
+      'USAGE_INVALID',
+      `${notAnOperatorsFlag} This process was not spawned by the supervisor it names (pid ${pid};`
+      + ` this process's parent is ${String(process.ppid)}), so nothing is watching it: it would`
+      + ` run with no bound and print none of the run's notices.${remedy}`,
+    );
+  }
+  return { invoker, progressLog };
 }
 
 /**
@@ -603,7 +666,7 @@ export type SupervisedRun =
  * composition are pure functions and are pinned as such.
  *
  * @param options - The run
- * @param options.args - The child's argv after the node binary, `--cost-log` included
+ * @param options.args - The child's argv after the node binary, `--supervised-by` included
  * @param options.logPath - The progress log both sides agreed on
  * @param options.budgetMs - How long silence is allowed to last
  * @param options.format - The format the child was asked for, to read its document in
@@ -637,7 +700,7 @@ export async function superviseCheck(options: {
   // back into resolving on a child that is still alive.
   let timer: NodeJS.Timeout | undefined;
 
-  const resolution = await new Promise<RunResolution>((resolve) => {
+  const resolution = await new Promise<RunResolution>((resolve, reject) => {
     // 🪤 `error` does not always end the process, and it is not always followed
     // by `close` — so a SPAWN failure is remembered and resolved on immediately.
     // A promise settles once, so whichever event arrives first wins and the
@@ -657,14 +720,14 @@ export async function superviseCheck(options: {
       resolve(resolveChildEnding({ code, signal, killed, spawnError, killFailure }));
     });
 
-    timer = setInterval(() => {
-      const poll = pollWatchdog(state, {
+    const poll = (): void => {
+      const reading = pollWatchdog(state, {
         bytes: logSize(options.logPath),
         now: Date.now(),
         budgetMs: options.budgetMs,
       });
-      state = poll.state;
-      if (!poll.breach) return;
+      state = reading.state;
+      if (!reading.breach) return;
       killed = true;
       killAttempts += 1;
       // SIGKILL, because no code the child could ever gain can handle, ignore
@@ -673,6 +736,22 @@ export async function superviseCheck(options: {
       child.kill('SIGKILL');
       if (killFailure !== undefined && killAttempts >= KILL_ATTEMPTS_BEFORE_REPORTING) {
         resolve(resolveChildEnding({ code: null, signal: null, killed, killFailure }));
+      }
+    };
+    // 🚨 A poll that THROWS — a progress log this process can no longer stat — has no reading,
+    // and the timer is outside every caller's `try`: uncaught, it reached the CLI's last-resort
+    // handler, which exits 2 with NO document, and `vat validate` lost the phases that had
+    // finished. So the throw ends the supervision here, the one place that can: kill the child
+    // (nothing bounds it once the timer stops), stop the timer, and REJECT, so the caller
+    // publishes it — `vat validate` as RUN_INCOMPLETE, `vat resources check` as its refusal.
+    // The `exit` guard stays behind this as the second line.
+    timer = setInterval(() => {
+      try {
+        poll();
+      } catch (error) {
+        clearInterval(timer);
+        child.kill('SIGKILL');
+        reject(error as Error);
       }
     }, pollIntervalMs(options.budgetMs));
   }).finally(releaseGuard);
@@ -726,8 +805,9 @@ const RERAISE_GRACE_MS = 1000;
  * The bound is enforced by this process's timer. Anything that ends this process ends the timer —
  * and the child it was bounding was reparented and kept running with nothing left to stop it: the
  * exact unbounded hang the supervisor exists to abolish. Measured ways in: a SIGTERM, SIGHUP or
- * SIGINT sent to this pid alone; an uncaught throw in the poll (the last-resort handler ends the
- * process with `process.exit`); and a kill the kernel refused, which settles the run while the child
+ * SIGINT sent to this pid alone; an uncaught throw anywhere in this process (the last-resort handler
+ * ends it with `process.exit` — the poll's own throw is caught in {@link superviseCheck}, so this is
+ * the second line for it); and a kill the kernel refused, which settles the run while the child
  * lives on.
  *
  * So for exactly the supervision's duration:
@@ -836,7 +916,9 @@ function pollIntervalMs(budgetMs: number): number {
  * ONLY a missing file. The log lives in a directory this process minted, so a
  * refusal to stat it is not a state the watchdog has a reading for — and the
  * reading it used to take, 0 forever, is "the child has gone quiet", which
- * kills a child that may be doing fine and reports it as a runaway.
+ * kills a child that may be doing fine and reports it as a runaway. So it throws,
+ * and {@link superviseCheck} ends the supervision on the throw: the child killed,
+ * the run reported as one that did not finish.
  *
  * @param path - The progress log
  * @returns Its size in bytes

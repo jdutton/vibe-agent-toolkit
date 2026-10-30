@@ -252,6 +252,10 @@ A query answers a question once. `vat resources check` runs the questions a proj
 worth asking **every time**, against the same projection, and fails the run when any error-severity
 check is violated.
 
+**`vat validate` runs these checks too**, as its `checks` phase, whenever `resources:` is
+configured — every check, under the default bound below. So a declared check that errors, or whose
+SQL no longer runs (`RESOURCE_CHECK_BROKEN`), fails `vat validate` as well.
+
 ### VAT's built-in checks run first, with or without a config file
 
 A project that declares nothing still gets the **default set** — today three checks over
@@ -364,6 +368,9 @@ nearly the same thing today: the population is a single un-instrumented unit, so
 budget IS effectively a total-runtime bound. Size it against your population, not against your SQL —
 on a large adopter tree the population is essentially the whole check run while the SQL itself is
 milliseconds; `vat resources check --help` states the reference timings.
+
+`vat validate`'s `checks` phase always runs under the default, and has no way to raise it: a larger
+`--budget` lets the checks pass under `vat resources check`, not under `vat validate`.
 
 A killed or crashed run is still evidence: checks that completed keep their per-rule row counts, and
 the report names the rule that was in flight. It **never exits 0** — not on a watchdog kill, not on

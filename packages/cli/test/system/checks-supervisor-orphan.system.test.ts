@@ -9,50 +9,26 @@
  *   CI runner stopping or cancelling a step — under a standalone `vat resources check` and under
  *   `vat validate`'s checks phase. The supervisor still dies OF the signal, and leaves no progress
  *   directory behind;
- * - an uncaught throw in the supervisor's poll (`parent-only-stat-throws.mjs`), which the CLI's
- *   last-resort handler turns into `process.exit` — an ending no signal handler sees.
+ * - a throw in the supervisor's watchdog poll (`parent-only-stat-throws.mjs`). The poll runs in a
+ *   timer, outside every caller's `try`, so the supervisor catches it there: the child is killed
+ *   and the run is PUBLISHED as one that did not finish — `vat validate`'s RUN_INCOMPLETE with the
+ *   finished `resources` phase still in `data.phases`, `vat resources check`'s refusal.
  *
- * ⚠️ Not on Windows: there `kill(pid, <signal>)` is `TerminateProcess`, which runs no handler in the
- * target, and there is no SIGHUP to send — so a pid-only signal cannot be observed being handled.
- * The uncaught-throw case does not depend on signals, but its child is found and probed with POSIX
- * `kill(pid, 0)` semantics this suite relies on, so it is skipped with the rest.
+ * The process that runs the checks' SQL (the child, or `--budget 0`) and its own signal
+ * disposition are `checks-sql-process-signals.system.test.ts`.
  */
 
-import { type ChildProcess, spawn } from 'node:child_process';
-
-import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 import { cleanupTestTempDir, fs, safePath } from './test-common.js';
-import { BIN_PATH, preload, TXT_ROWS, writeConfig } from './test-helpers/checks-phase.js';
+import { preload, TXT_ROWS, writeConfig } from './test-helpers/checks-phase.js';
 import { createMarkdownGitFixture } from './test-helpers/index.js';
+import { alive, type LiveVat, pidWrittenTo, startVat, within } from './test-helpers/live-vat.js';
 
 // ⛔ Disposal paths: every `vat` process (and its checks child) inherits the scratch TMPDIR.
 const scratch = useScratchTmpdir('vat-scratch-checks-orphan-');
-
-/** Whether a process with this pid still exists (a zombie counts until it is reaped). */
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // ESRCH: no such process. Anything else (EPERM) means it exists but is not ours to signal.
-    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
-    throw error;
-  }
-}
-
-/** Poll `condition` every 50 ms for up to `ms`; true as soon as it holds. */
-async function within(ms: number, condition: () => boolean): Promise<boolean> {
-  const deadline = Date.now() + ms;
-  while (Date.now() < deadline) {
-    if (condition()) return true;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  return condition();
-}
 
 /** The two ways the checks child is supervised: standalone, and as `vat validate`'s phase. */
 const SURFACES = [
@@ -60,27 +36,56 @@ const SURFACES = [
   ['vat validate', ['validate']],
 ] as const;
 
-/** A supervisor's ending: its exit code, or the signal it died of. */
-interface Ending {
-  readonly code: number | null;
-  readonly signal: NodeJS.Signals | null;
+/**
+ * ⚠️ Not on Windows: there `kill(pid, <signal>)` is `TerminateProcess`, which runs no handler in the
+ * target, and there is no SIGHUP to send — so a signal sent to the supervisor's pid cannot be
+ * observed being handled. The poll-throw case involves no signal and runs everywhere.
+ */
+const NO_HANDLED_SIGNALS = process.platform === 'win32';
+
+let dir: string;
+// Both processes of the current case, so a red case cannot leave either running.
+let supervisor: LiveVat | undefined;
+let child: number | undefined;
+
+/**
+ * Start a supervisor whose child stalls for good, and wait until the child is stalled.
+ *
+ * @param args - The `vat` command
+ * @param preloads - Further test-only preloads, for the supervisor
+ * @returns The supervisor, and the stalled child's pid
+ */
+async function superviseStalledChild(
+  args: readonly string[],
+  ...preloads: string[]
+): Promise<{ running: LiveVat; childPid: number }> {
+  const pidFile = safePath.join(scratch(), 'child.pid');
+  const running = startVat(dir, args, {
+    nodeOptions: [preload('child-only-stall-in-population.mjs'), ...preloads],
+    env: { TEST_CHILD_PID_FILE: pidFile },
+  });
+  supervisor = running;
+  // The child is stalled, synchronously and for good, the moment its pid is on disk.
+  child = await pidWrittenTo(pidFile);
+  return { running, childPid: child };
 }
 
-describe.skipIf(process.platform === 'win32')('the checks supervisor ends — its child ends with it', () => {
-  let dir: string;
-  // Both processes of the current case, so a red case cannot leave either running.
-  let parent: ChildProcess | undefined;
-  let child: number | undefined;
+/** The progress directories a supervisor minted in this case's TMPDIR and left behind. */
+function progressDirsLeft(): string[] {
+  return fs.readdirSync(scratch()).filter((name) => name.startsWith('vat-check-'));
+}
 
+describe('the checks supervisor ends — its child ends with it', () => {
   beforeAll(() => {
     dir = createMarkdownGitFixture('vat-check-orphan-');
     writeConfig(dir, [['quick', TXT_ROWS]]);
   });
 
   afterEach(() => {
-    if (parent?.pid !== undefined && alive(parent.pid)) parent.kill('SIGKILL');
+    const pid = supervisor?.process.pid;
+    if (pid !== undefined && alive(pid)) supervisor?.process.kill('SIGKILL');
     if (child !== undefined && alive(child)) process.kill(child, 'SIGKILL');
-    parent = undefined;
+    supervisor = undefined;
     child = undefined;
   });
 
@@ -88,60 +93,47 @@ describe.skipIf(process.platform === 'win32')('the checks supervisor ends — it
     cleanupTestTempDir(dir);
   });
 
-  /**
-   * Start a supervisor whose child stalls for good, and wait until the child is stalled.
-   *
-   * @param args - The `vat` command
-   * @param preloads - Further test-only preloads, for the supervisor
-   * @returns The supervisor's ending, once it has one, and the stalled child's pid
-   */
-  async function superviseStalledChild(
-    args: readonly string[],
-    ...preloads: string[]
-  ): Promise<{ ended: Promise<Ending>; childPid: number }> {
-    const pidFile = safePath.join(scratch(), 'child.pid');
-    const nodeOptions = [process.env['NODE_OPTIONS'], preload('child-only-stall-in-population.mjs'), ...preloads]
-      .filter((part) => part !== undefined && part !== '').join(' ');
-    parent = spawn(NODE_EXECUTABLE, [BIN_PATH, ...args], {
-      cwd: dir,
-      env: { ...process.env, NODE_OPTIONS: nodeOptions, TEST_CHILD_PID_FILE: pidFile },
-      stdio: 'ignore',
-    });
-    const supervisor = parent;
-    const ended = new Promise<Ending>((resolve) => supervisor.on('exit', (code, signal) => resolve({ code, signal })));
-
-    // The child is stalled, synchronously and for good, the moment its pid is on disk.
-    expect(await within(20_000, () => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf-8') !== '')).toBe(true);
-    child = Number(fs.readFileSync(pidFile, 'utf-8'));
-    return { ended, childPid: child };
-  }
-
-  /** The progress directories a supervisor minted in this case's TMPDIR and left behind. */
-  function progressDirsLeft(): string[] {
-    return fs.readdirSync(scratch()).filter((name) => name.startsWith('vat-check-'));
-  }
-
   describe.each(SURFACES)('%s', (_surface, args) => {
-    it.each(['SIGTERM', 'SIGHUP', 'SIGINT'] as const)(
+    it.skipIf(NO_HANDLED_SIGNALS).each(['SIGTERM', 'SIGHUP', 'SIGINT'] as const)(
       'a %s to the supervisor\'s pid alone kills the stalled child, and the supervisor dies of it',
       async (signal) => {
-        const { ended, childPid } = await superviseStalledChild(args);
+        const { running, childPid } = await superviseStalledChild(args);
         expect(alive(childPid)).toBe(true);
+        // The positive control: the directory the assertion below says is gone exists now.
+        expect(progressDirsLeft()).toHaveLength(1);
 
-        parent?.kill(signal);
+        running.process.kill(signal);
 
-        expect(await ended).toStrictEqual({ code: null, signal });
+        expect(await running.ended).toMatchObject({ code: null, signal });
         expect(await within(5000, () => !alive(childPid))).toBe(true);
         expect(progressDirsLeft()).toStrictEqual([]);
       },
     );
+  });
 
-    it('an uncaught throw in the supervisor\'s poll still kills the stalled child', async () => {
-      const { ended, childPid } = await superviseStalledChild(args, preload('parent-only-stat-throws.mjs'));
+  it('vat validate: a throw in the supervisor\'s poll kills the stalled child and publishes RUN_INCOMPLETE, the resources phase kept', async () => {
+    const { running, childPid } = await superviseStalledChild(['validate'], preload('parent-only-stat-throws.mjs'));
 
-      // The CLI's last-resort handler: `process.exit(2)`, which only an `exit` listener sees.
-      expect(await ended).toStrictEqual({ code: 2, signal: null });
-      expect(await within(5000, () => !alive(childPid))).toBe(true);
-    });
+    const ending = await running.ended;
+
+    expect(ending.code).toBe(2);
+    expect(ending.document['error']).toMatchObject({ code: 'RUN_INCOMPLETE' });
+    const phases = (ending.document['data'] as { phases: Array<{ name: string; status: string }> }).phases;
+    expect(phases.find((phase) => phase.name === 'resources')?.status).toBe('ok');
+    expect(phases.find((phase) => phase.name === 'checks')?.status).toBe('error');
+    expect(await within(5000, () => !alive(childPid))).toBe(true);
+    expect(progressDirsLeft()).toStrictEqual([]);
+  });
+
+  it('vat resources check: a throw in the supervisor\'s poll kills the stalled child and publishes its refusal', async () => {
+    const { running, childPid } = await superviseStalledChild(['resources', 'check', '--budget', '600'], preload('parent-only-stat-throws.mjs'));
+
+    const ending = await running.ended;
+
+    expect(ending.code).toBe(2);
+    expect(ending.document['status']).toBe('error');
+    expect((ending.document['error'] as { message: string }).message).toContain('EACCES');
+    expect(await within(5000, () => !alive(childPid))).toBe(true);
+    expect(progressDirsLeft()).toStrictEqual([]);
   });
 });

@@ -4,11 +4,11 @@
  * loader's own override) while its parent reads the project's — so the child alone can be handed a
  * config it refuses.
  *
- * Acts only in the process whose argv carries `--cost-log` (the supervised child). VAT's source
+ * Acts only in the process whose argv carries `--supervised-by` (the supervised child). VAT's source
  * gains no knob for this.
  */
 const childConfig = process.env['TEST_CHILD_ONLY_CONFIG'];
 
-if (process.argv.includes('--cost-log') && childConfig !== undefined) {
+if (process.argv.includes('--supervised-by') && childConfig !== undefined) {
   process.env['VAT_TEST_CONFIG'] = childConfig;
 }

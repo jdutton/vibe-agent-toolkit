@@ -7,7 +7,7 @@
  * process with `process.exit` — the ending no signal handler sees. Gated on the pid file so the
  * case can find the child it then asserts is gone.
  *
- * Acts only in a process whose argv does NOT carry `--cost-log` (a supervisor, never the child it
+ * Acts only in a process whose argv does NOT carry `--supervised-by` (a supervisor, never the child it
  * spawns). VAT's source gains no knob for this.
  */
 import fs from 'node:fs';
@@ -15,7 +15,7 @@ import { syncBuiltinESMExports } from 'node:module';
 
 const pidFile = process.env['TEST_CHILD_PID_FILE'];
 
-if (!process.argv.includes('--cost-log') && pidFile !== undefined) {
+if (!process.argv.includes('--supervised-by') && pidFile !== undefined) {
   const stat = fs.statSync;
   fs.statSync = (path, ...rest) => {
     if (String(path).endsWith('progress.jsonl') && fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf-8') !== '') {

@@ -286,17 +286,12 @@ Examples:
     .addOption(
       // Hidden because it is not an operator's flag: it is how a supervising
       // parent tells the child it spawned to do the work rather than spawn one
-      // of its own, and where to append its progress. Documenting it would
-      // invite adopters to depend on a file whose only contract is the
-      // `.strict()` schema the same build reads it with.
-      new Option('--cost-log <path>', 'Internal: append per-unit progress here').hideHelp(),
-    )
-    .addOption(
-      // Hidden for the same reason, and passed exactly when --cost-log is: who
-      // started the child, which decides the notices it owes the operator.
-      new Option('--invocation <who>', 'Internal: who started this supervised child')
-        .choices(['standalone', 'phase'])
-        .hideHelp(),
+      // of its own — who started it, the parent's pid, and where to append its
+      // progress, in ONE value. Passed by hand it is refused (the pid is not the
+      // process's parent). Documenting it would invite adopters to depend on a
+      // file whose only contract is the `.strict()` schema the same build reads
+      // it with.
+      new Option('--supervised-by <spec>', 'Internal: <standalone|phase>:<supervisor pid>:<progress log>').hideHelp(),
     )
     .addOption(yamlOrJsonFormat())
     .action(checkCommand)
@@ -459,8 +454,9 @@ A run that HANGS is killed and reported, not waited on:
   a cold parse cache; a 9,992-file adopter tree is ~5s warm and 16.5s cold. On
   a tree much larger than that with a cold parse cache, raise the bound.
 
-  An interrupted run NEVER exits 0 and never looks like a pass. There are three
-  ways to be interrupted and they are reported differently:
+  A run that did not finish NEVER exits 0 and never looks like a pass. It is
+  reported three different ways -- two interruptions, and a child whose own
+  exit contradicts its report:
 
     Killed by the budget -- exit 1, status: findings, and a
     RESOURCE_CHECK_BROKEN finding naming the unit that was in flight (a named
@@ -490,8 +486,6 @@ A run that HANGS is killed and reported, not waited on:
   lensesEvaluated null, examined 0, and \`error\` naming the phase and what
   happened.
 
-  --budget cannot be combined with --cost-log (exit 2): --cost-log means the
-  work runs in this process, where the budget could not be enforced.
 
   --budget 0 removes the bound and runs everything in this process. Nothing
   will then stop a runaway statement. It has to be written exactly 0: an empty
@@ -502,10 +496,12 @@ A run that HANGS is killed and reported, not waited on:
   child, or this one under --budget 0) installs no signal handler -- a process
   blocked in synchronous SQLite survives SIGINT once a handler exists. The
   supervising process does handle SIGTERM, SIGHUP and SIGINT while it
-  supervises, only to kill its child and then die of the same signal (exit 2
-  where the signal cannot kill it, as under PID 1), so
+  supervises, only to kill its child and then die of the same signal (exit 2,
+  with no document, where the signal cannot kill it, as under PID 1), so
   stopping it by its pid alone never leaves the child running (not on Windows,
-  where an outside kill runs no handler).
+  where an outside kill runs no handler). Node cannot tell a process that a
+  signal was IGNORED when it started, so under nohup (or trap '' INT) a SIGHUP
+  or SIGINT arriving while the checks are supervised still ends the run.
 
 Output Fields (the shared report envelope; schema: packages/cli/schemas/resources-check.json):
   status:    ok | findings | error -- a literal statement about \`findings\`.
@@ -548,9 +544,9 @@ Exit Codes:
       having run at all, or a run killed by --budget, DEAD, or contradicted
       by its own exit once its population was in)
   2 - System error, an unknown --check name, a [path] that names no directory,
-      an unusable --budget (an empty one, one that means zero without being
-      written 0, or one passed with --cost-log), or a run killed, dead or
-      contradicted before its population completed
+      an unusable --budget (an empty one, or one that means zero without being
+      written 0), or a run killed, dead or contradicted before its population
+      completed
   The code is derived from the document's status and summary, never chosen
   beside it: status error is 2, error-severity findings are 1.
 

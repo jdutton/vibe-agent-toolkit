@@ -6,7 +6,7 @@
  * injected into ONE of them by a test-only preload beside this file, loaded through
  * `NODE_OPTIONS=--import "<file: URL>"` (a `file:` URL, because `--import` takes a module specifier
  * and a bare Windows path is not one; quoted, because a path may hold spaces). Each preload
- * discriminates on `--cost-log`, which only a supervised child carries. VAT's source gains no knob.
+ * discriminates on `--supervised-by`, which only a supervised child carries. VAT's source gains no knob.
  */
 
 import yaml from 'yaml';

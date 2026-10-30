@@ -11,13 +11,13 @@
  * When `TEST_CHILD_PID_FILE` is set, the child writes its pid there before it stalls, so a case
  * can tell whether the stalled child outlived its supervisor.
  *
- * Acts only in the process whose argv carries `--cost-log` (the supervised child). VAT's source
+ * Acts only in the process whose argv carries `--supervised-by` (the supervised child). VAT's source
  * gains no knob for this.
  */
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 
-if (process.argv.includes('--cost-log')) {
+if (process.argv.includes('--supervised-by')) {
   const append = fs.appendFileSync;
   fs.appendFileSync = (path, data, ...rest) => {
     const result = append(path, data, ...rest);

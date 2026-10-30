@@ -460,9 +460,9 @@ VAT_CACHE=0 vat validate
 ```
 
 The root `--no-cache` flag is the same switch: it sets this variable. The variable is what makes it
-work, because `vat validate`, `vat verify` and `vat build` do their parsing in spawned child
-processes, and only the environment crosses that boundary — a flag parsed in the parent would never
-reach them.
+reach every process a run uses: `vat resources check`, and `vat validate`'s checks phase, run the
+checks in a supervised child process, and only the environment crosses that boundary — a flag parsed
+in the parent would never reach the child.
 
 Caching is a pure optimisation: a run with it off produces identical results, only slower. Use
 `vat cache clear` to discard what is already stored.

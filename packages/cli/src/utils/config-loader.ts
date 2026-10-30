@@ -18,16 +18,9 @@ import { classifyFsFault, type FsSide, isFsFaultError, isUnresolvableLinkError, 
 import * as yaml from 'yaml';
 
 import { errorMessageOf } from './command-refusal.js';
-import { noticeToOperator } from './operator-notices.js';
+import { noticeToOperator, resetUnscopedNoticeLedger } from './operator-notices.js';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
-
-/**
- * Config paths already warned about for unknown keys, so one config governing
- * many skills produces one line rather than one per skill. Cleared with the
- * config cache, which is what a test isolating a fixture resets.
- */
-const warnedConfigPaths = new Set<string>();
 
 /**
  * Whether `error` is one of the two config failures {@link ConfigLoadError} stands
@@ -115,11 +108,10 @@ export function loadConfig(projectRoot: string, projectSide: FsSide): ProjectCon
       ProjectConfigSchema,
       parsed,
       (message) => {
-        if (warnedConfigPaths.has(configPath)) return;
-        warnedConfigPaths.add(configPath);
-        // Through the one notice route: a supervised child's invoking process
-        // loaded this same config and printed this same line already.
-        noticeToOperator('config', message);
+        // Through the one notice route, once per config path per notice scope: one config
+        // governing many skills is one line, not one per skill, and a supervised child's
+        // invoking process loaded this same config and printed this same line already.
+        noticeToOperator('config', message, configPath);
       },
       { configPath },
     );
@@ -194,9 +186,9 @@ const loadErrorCache: Map<string, unknown> = new Map();
 export function resetLoadedConfigCache(): void {
   loadedConfigCache.clear();
   loadErrorCache.clear();
-  // The warn-once ledger is part of this cache's state: a test that resets the
-  // caches and re-loads the same fixture expects to see the warning again.
-  warnedConfigPaths.clear();
+  // The warn-once ledger outside every notice scope is part of this cache's state: a test that
+  // resets the caches and re-loads the same fixture expects to see the warning again.
+  resetUnscopedNoticeLedger();
 }
 
 /**

@@ -12,7 +12,9 @@ import {
   EVERY_NOTICE,
   isSupervisedChild,
   noticeToOperator,
+  resetUnscopedNoticeLedger,
   withNoticeAudience,
+  withNoticeLedger,
 } from '../../src/utils/operator-notices.js';
 
 /** A spy on stderr that swallows the writes. */
@@ -21,9 +23,9 @@ function captureStderr(): ReturnType<typeof vi.spyOn> {
 }
 
 describe('isSupervisedChild — read from the explicit argv', () => {
-  it('is true exactly when --cost-log was passed', () => {
-    expect(isSupervisedChild({ costLog: '/minted/progress.jsonl' })).toBe(true);
-    expect(isSupervisedChild({ costLog: undefined })).toBe(false);
+  it('is true exactly when --supervised-by was passed', () => {
+    expect(isSupervisedChild({ supervisedBy: 'phase:1:/minted/progress.jsonl' })).toBe(true);
+    expect(isSupervisedChild({ supervisedBy: undefined })).toBe(false);
   });
 });
 
@@ -71,5 +73,58 @@ describe('noticeToOperator — the audience is a scope', () => {
 
     expect(stderr).toHaveBeenCalledExactlyOnceWith('unknown key `bogus`\n');
     expect(EVERY_NOTICE).toStrictEqual({ config: true, store: true });
+  });
+});
+
+describe('noticeToOperator — "once" belongs to the scope', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetUnscopedNoticeLedger();
+  });
+
+  it('prints a keyed notice once per scope, and again in the next scope', () => {
+    const stderr = captureStderr();
+    const twice = (): void => {
+      noticeToOperator('store', 'cannot key /r', '/r');
+      noticeToOperator('store', 'cannot key /r', '/r');
+    };
+
+    withNoticeLedger(() => {
+      twice();
+      // A nested ledger joins the enclosing scope rather than starting a fresh one.
+      withNoticeLedger(twice);
+    });
+    withNoticeAudience(EVERY_NOTICE, twice);
+
+    expect(stderr).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * 🚨 `vat validate` loads its config BEFORE it opens its population scope, and again inside it:
+   * a fresh ledger there printed the unknown-key warning a second time for one run.
+   */
+  it('a fresh ledger remembers what was printed before it, and keeps its own prints to itself', () => {
+    const stderr = captureStderr();
+
+    noticeToOperator('config', 'config at /r', '/r');
+    withNoticeLedger(() => {
+      noticeToOperator('config', 'config at /r', '/r');
+      noticeToOperator('store', 'store at /r', '/r');
+    });
+    withNoticeLedger(() => noticeToOperator('store', 'store at /r', '/r'));
+
+    expect(stderr.mock.calls).toStrictEqual([['config at /r\n'], ['store at /r\n'], ['store at /r\n']]);
+  });
+
+  it('keys by kind as well as key, and outside every scope until the ledger is reset', () => {
+    const stderr = captureStderr();
+
+    noticeToOperator('config', 'config at /r', '/r');
+    noticeToOperator('store', 'store at /r', '/r');
+    noticeToOperator('config', 'config at /r', '/r');
+    resetUnscopedNoticeLedger();
+    noticeToOperator('config', 'config at /r', '/r');
+
+    expect(stderr.mock.calls).toStrictEqual([['config at /r\n'], ['store at /r\n'], ['config at /r\n']]);
   });
 });

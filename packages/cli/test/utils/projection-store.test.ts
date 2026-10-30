@@ -183,6 +183,7 @@ const {
   projectionStoreSelected,
   withPopulationCache,
 } = await import('../../src/utils/projection-store.js');
+const { resetUnscopedNoticeLedger } = await import('../../src/utils/operator-notices.js');
 
 /**
  * The most recently opened fake store, as a lifetime handle.
@@ -277,6 +278,9 @@ beforeEach(() => {
   backend.openCalls.count = 0;
   backend.openCalls.options.length = 0;
   git.calls.count = 0;
+  // The process's own "once" ledger: a notice printed outside every scope by an earlier test
+  // would otherwise silence the same notice in every later scope of this worker.
+  resetUnscopedNoticeLedger();
 });
 
 afterEach(() => {
@@ -852,5 +856,28 @@ describe('withPopulationCache', () => {
       // undone rather than left for whatever runs next.
       rmSync(arrivedLate, { force: true });
     }
+  });
+});
+
+describe('the cannot-key notice — once per command run', () => {
+  /**
+   * 🚨 The "once" ledger was a module-level set, so a root noticed by one command was never noticed
+   * again by ANY later command in the same process — a second `vat validate` in one test worker,
+   * or a long-lived host, ran uncached in silence. "Once" belongs to the outermost population
+   * scope: every nested scope joins it, and the next run starts fresh.
+   */
+  it('prints once across nested scopes, and again in the next command run', async () => {
+    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
+    const stderr = captureStderr();
+    const oneRun = (): Promise<void> => withPopulationCache({ root: outsideAnyRepo }, () =>
+      withPopulationCache({ root: outsideAnyRepo }, () => Promise.resolve()));
+    try {
+      await oneRun();
+      await oneRun();
+    } finally {
+      stderr.restore();
+    }
+
+    expect(stderr.written.join('').split('not inside a readable git repository')).toHaveLength(3);
   });
 });

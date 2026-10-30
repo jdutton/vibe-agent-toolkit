@@ -3,10 +3,10 @@
  * CHILD prefixes its stdout with one stray line, so a run that completed its population publishes
  * a document its parent cannot parse.
  *
- * Acts only in the process whose argv carries `--cost-log` (the supervised child). VAT's source
+ * Acts only in the process whose argv carries `--supervised-by` (the supervised child). VAT's source
  * gains no knob for this.
  */
-if (process.argv.includes('--cost-log')) {
+if (process.argv.includes('--supervised-by')) {
   const write = process.stdout.write.bind(process.stdout);
   let garbled = false;
   process.stdout.write = (chunk, ...rest) => {

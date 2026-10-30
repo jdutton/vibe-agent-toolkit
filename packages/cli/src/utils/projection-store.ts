@@ -52,7 +52,7 @@ import type { PopulationCache, ProjectionStore } from '@vibe-agent-toolkit/resou
 import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
 import { freshGitTreeSnapshot, gitTreeSnapshot, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
-import { noticeToOperator } from './operator-notices.js';
+import { noticeToOperator, withNoticeLedger } from './operator-notices.js';
 import { isModuleMissing, missingBackendError, type OptionalBackend } from './optional-backend.js';
 import { installSqliteWarningFilter } from './sqlite-experimental-warning.js';
 
@@ -230,12 +230,10 @@ export interface OpenedPopulationCache {
   close(): Promise<void>;
 }
 
-/** Roots this process has already told the operator it cannot key, so a nested scope does not repeat it. */
-const unkeyableRootsNoticed = new Set<string>();
-
 /**
  * The snapshot that keys `root`'s store entry, or `null` — after telling the operator, once per
- * root per process, that the run populates without a cache.
+ * root per command run (the notice scope {@link withPopulationCache} enters), that the run
+ * populates without a cache.
  *
  * `gitTreeSnapshot` returns null for every "git could not answer" case — no `git` on PATH, not a
  * repository, a bare or unreadable one — and an empty snapshot of an initialized repository stays
@@ -250,8 +248,7 @@ const unkeyableRootsNoticed = new Set<string>();
  */
 function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
   const snapshot = gitTreeSnapshot({ cwd: root });
-  if (snapshot === null && !unkeyableRootsNoticed.has(root)) {
-    unkeyableRootsNoticed.add(root);
+  if (snapshot === null) {
     // Not "the selector is set": the store is on by default, so most users who
     // see this never wrote the variable.
     noticeToOperator(
@@ -259,6 +256,7 @@ function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
       `The projection store is on, but ${root} is not inside a readable git`
       + ' repository, so there is no deterministic key to store a projection under.'
       + ` Populating without a cache. Set ${PROJECTION_STORE_ENV}=${PROJECTION_STORE_OFF} to silence this.`,
+      root,
     );
   }
   return snapshot;
@@ -614,7 +612,10 @@ export function withPopulationCache<T>(
     // (`inventory`, `resource-loader`'s two) reaches the store through this scope,
     // and `vat validate`'s orchestrator holds one OUTSIDE all of them, which the
     // nesting above is what makes safe.
-    return withGitSnapshotCache(() => runOwnedScope(options, work));
+    //
+    // And the notice scope: the "cannot key this root" notice is printed once per root per
+    // command run — this outermost scope's ledger, which every nested scope joins.
+    return withNoticeLedger(() => withGitSnapshotCache(() => runOwnedScope(options, work)));
   } catch (error) {
     return Promise.reject(error as Error);
   }

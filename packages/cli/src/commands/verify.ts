@@ -113,7 +113,7 @@ Description:
   read the built dist/ tree, so run this after 'vat build'.
 
   For source-only validation that needs no build (resources, their checks,
-  skills — suitable for pre-commit and CI-before-build), use 'vat validate'.
+  skills — the CI-before-build gate), use 'vat validate'.
   This command does not run resources.checks; 'vat validate' and
   'vat resources check' do.
 

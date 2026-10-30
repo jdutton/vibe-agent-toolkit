@@ -73,6 +73,6 @@ describe('orchestrator help text describes in-process phases', () => {
     const help = renderCommandHelp(createValidateTopLevelCommand()).toLowerCase();
 
     expect(help).toContain('checks child');
-    expect(help).toContain("'vat resources check''s supervised child");
+    expect(help).toContain("the supervised child of 'vat resources check'");
   });
 });

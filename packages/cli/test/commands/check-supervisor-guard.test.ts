@@ -10,7 +10,7 @@
 
 import { EventEmitter } from 'node:events';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { __internal } from '../../src/commands/resources/check-supervisor.js';
 
@@ -43,17 +43,33 @@ function guard(child: StandInChild): () => void {
 }
 
 describe('the supervision guard — its lifetime', () => {
-  const releases: Array<() => void> = [];
+  const supervised: Array<{ child: StandInChild; release: () => void }> = [];
+  let before: Record<string, number>;
+
+  beforeAll(() => {
+    before = listenerCounts();
+  });
+
+  // The suite itself leaves the runner's process as it found it — every handler, `exit` included.
+  afterAll(() => {
+    expect(listenerCounts()).toStrictEqual(before);
+  });
 
   afterEach(() => {
-    // A red case must not leave its handlers on the runner's process.
-    for (const release of releases.splice(0)) release();
+    // A red case must not leave its handlers on the runner's process. The child ends FIRST: a
+    // release with the child still alive keeps the exit guard until the child's `close`, which a
+    // stand-in left running never emits — so releasing alone would leak an `exit` listener.
+    for (const { child, release } of supervised.splice(0)) {
+      if (child.exitCode === null && child.signalCode === null) child.end({ code: null, signal: 'SIGKILL' });
+      release();
+    }
   });
 
   it('adds exactly one handler per guarded event while it supervises', () => {
     const baseline = listenerCounts();
+    const child = new StandInChild();
 
-    releases.push(guard(new StandInChild()));
+    supervised.push({ child, release: guard(child) });
 
     expect(listenerCounts()).toStrictEqual(Object.fromEntries(GUARDED_EVENTS.map((event) => [event, (baseline[event] ?? 0) + 1])));
   });

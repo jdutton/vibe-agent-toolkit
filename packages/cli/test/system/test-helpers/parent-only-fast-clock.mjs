@@ -9,7 +9,7 @@
  * seconds. The test derives `scale` from `measureBudget()`, exactly as a standalone kill case
  * derives its `--budget`. The child's own clock is untouched.
  *
- * Acts only in a process whose argv does NOT carry `--cost-log` (a supervisor, never the child it
+ * Acts only in a process whose argv does NOT carry `--supervised-by` (a supervisor, never the child it
  * spawns). VAT's source gains no knob for this.
  */
 import childProcess from 'node:child_process';
@@ -17,14 +17,14 @@ import { syncBuiltinESMExports } from 'node:module';
 
 const scale = Number(process.env['TEST_PARENT_CLOCK_SCALE']);
 
-if (!process.argv.includes('--cost-log') && Number.isFinite(scale) && scale > 0) {
+if (!process.argv.includes('--supervised-by') && Number.isFinite(scale) && scale > 0) {
   const realNow = Date.now.bind(Date);
   let since;
   Date.now = () => (since === undefined ? realNow() : since + (realNow() - since) * scale);
 
   const spawn = childProcess.spawn;
   childProcess.spawn = (command, args, ...rest) => {
-    if (since === undefined && Array.isArray(args) && args.includes('--cost-log')) since = realNow();
+    if (since === undefined && Array.isArray(args) && args.includes('--supervised-by')) since = realNow();
     return spawn(command, args, ...rest);
   };
   syncBuiltinESMExports();

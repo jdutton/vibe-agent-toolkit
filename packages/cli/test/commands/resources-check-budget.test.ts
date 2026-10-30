@@ -40,6 +40,7 @@ import { unitInFlight } from '../../src/commands/resources/check-progress.js';
 import { CHECK_REPORT_SCHEMA } from '../../src/commands/resources/check-schema.js';
 import {
   type AbnormalDeath,
+  type CheckInvocation,
   parseBudgetSeconds,
   pollWatchdog,
   readCompletedDocument,
@@ -52,7 +53,6 @@ import {
 import {
   buildCheckOutputData,
   buildInterruptedCheckInput,
-  type CheckInvocation,
   type CheckPayloadInput,
   NODE_FATAL_ABORT_EXIT_CODE,
 } from '../../src/commands/resources/check.js';
@@ -88,8 +88,8 @@ const CHECKS_DONE: ProgressEntry = { kind: 'checks-complete' };
 /** A watchdog that has seen nothing yet, at time zero. */
 const FRESH: WatchdogState = { bytesSeen: 0, quietSince: 0 };
 
-/** Whatever a supervising parent handed its child as `--cost-log`. */
-const A_COST_LOG = 'progress.jsonl';
+/** What a supervising parent — THIS process, as the child's parent — hands its child as `--supervised-by`. */
+const supervisedBy = (invoker: CheckInvocation, pid = process.ppid): string => `${invoker}:${String(pid)}:progress.jsonl`;
 /** Node's own heap abort — the signal a runaway that SELECTS rows dies of. */
 const ABORTED = 'SIGABRT';
 /** A binary that is not there, for the spawn-failure cases. */
@@ -157,23 +157,23 @@ describe('parseBudgetSeconds', () => {
 });
 
 describe('runsInThisProcess — the fork', () => {
-  it('does the work HERE when a cost log was handed to it', () => {
+  it('does the work HERE when it is a supervised child', () => {
     // 🚨 The recursion guard, and the reason it is a named function rather than
-    // a condition inline in the command. `--cost-log` is what a supervising
+    // a condition inline in the command. `--supervised-by` is what a supervising
     // parent passes its child; a child that read the budget instead would spawn
     // a child of its own, and so on. Note the budget is the DEFAULT here — the
-    // cost log has to win against it, not merely alongside it.
-    expect(runsInThisProcess({ costLog: A_COST_LOG, budgetSecs: 300 })).toBe(true);
+    // flag has to win against it, not merely alongside it.
+    expect(runsInThisProcess({ supervisedBy: supervisedBy('standalone'), budgetSecs: 300 })).toBe(true);
   });
 
   it('does the work HERE when the operator removed the bound', () => {
     // `--budget 0` buys nothing from a child: there is nothing to supervise, and
     // a spawn would cost a second process startup for no bound at all.
-    expect(runsInThisProcess({ costLog: undefined, budgetSecs: 0 })).toBe(true);
+    expect(runsInThisProcess({ supervisedBy: undefined, budgetSecs: 0 })).toBe(true);
   });
 
-  it('supervises a child when there is a bound and no cost log', () => {
-    expect(runsInThisProcess({ costLog: undefined, budgetSecs: 300 })).toBe(false);
+  it('supervises a child when there is a bound and it is not a supervised child', () => {
+    expect(runsInThisProcess({ supervisedBy: undefined, budgetSecs: 300 })).toBe(false);
   });
 });
 
@@ -499,44 +499,59 @@ describe('parseBudgetSeconds — the EMPTY value', () => {
 });
 
 describe('requireSupervisableFlags', () => {
-  // 🚨 The defect: `--cost-log` wins the fork unconditionally, so
-  // `--budget 60 --cost-log /tmp/x` ran UNBOUNDED and said nothing. An
+  // 🚨 The defect: `--supervised-by` wins the fork unconditionally, so
+  // `--budget 60` beside it ran UNBOUNDED and said nothing. An
   // explicitly-passed, documented flag must never be silently inert.
-  it('refuses an explicit budget alongside --cost-log', () => {
+  it('refuses an explicit budget alongside --supervised-by', () => {
     expect(() => requireSupervisableFlags({
-      costLog: A_COST_LOG, invocation: 'standalone', budgetRaw: '60', budgetSecs: 60,
-    })).toThrow(/--budget cannot be combined with --cost-log/);
+      supervisedBy: supervisedBy('standalone'), budgetRaw: '60', budgetSecs: 60,
+    })).toThrow(/--budget cannot be combined with --supervised-by/);
   });
 
-  it.each(['standalone', 'phase'])('allows --cost-log with --invocation %s — the child the parent spawns', (invocation) => {
-    // ⚠️ The real spawn path. `childArgs` appends `--cost-log` and `--invocation`
-    // and does NOT forward `--budget`, so the supervised lane must survive this guard.
+  it.each(['standalone', 'phase'] as const)('reads --supervised-by %s from the parent that spawned it — the real spawn path', (invoker) => {
+    // ⚠️ `childArgs` appends `--supervised-by` and does NOT forward `--budget`, so the
+    // supervised lane must survive this guard — and hand back what the value carried.
+    expect(requireSupervisableFlags({
+      supervisedBy: supervisedBy(invoker), budgetRaw: undefined, budgetSecs: 300,
+    })).toStrictEqual({ invoker, progressLog: 'progress.jsonl' });
+  });
+
+  it('keeps a progress log whose path holds a colon (a Windows drive)', () => {
+    const WINDOWS_LOG = String.raw`C:\tmp\vat-check-1\progress.jsonl`;
+    expect(requireSupervisableFlags({
+      supervisedBy: `phase:${String(process.ppid)}:${WINDOWS_LOG}`, budgetRaw: undefined, budgetSecs: 300,
+    })?.progressLog).toBe(WINDOWS_LOG);
+  });
+
+  // 🚨 Passed by hand, the flag ran the checks unbounded and printed none of the run's notices.
+  // The value names its supervisor's pid, and a process whose parent is not that pid is refused.
+  it('refuses --supervised-by naming a supervisor that is not this process\'s parent', () => {
     expect(() => requireSupervisableFlags({
-      costLog: A_COST_LOG, invocation, budgetRaw: undefined, budgetSecs: 300,
+      supervisedBy: supervisedBy('standalone', process.ppid + 1), budgetRaw: undefined, budgetSecs: 300,
+    })).toThrow(/was not spawned by the supervisor it names/);
+  });
+
+  it.each([
+    ['an unknown invoker', `operator:${String(process.ppid)}:progress.jsonl`],
+    ['no pid', 'phase:progress.jsonl'],
+    ['no progress log', `phase:${String(process.ppid)}:`],
+    ['a bare path', '/tmp/progress.jsonl'],
+  ])('refuses a --supervised-by value with %s', (_label, value) => {
+    expect(() => requireSupervisableFlags({
+      supervisedBy: value, budgetRaw: undefined, budgetSecs: 300,
+    })).toThrow(/is not a value a supervisor writes/);
+  });
+
+  it('allows --budget 0 with --supervised-by: both say "no supervision"', () => {
+    expect(() => requireSupervisableFlags({
+      supervisedBy: supervisedBy('standalone'), budgetRaw: '0', budgetSecs: 0,
     })).not.toThrow();
   });
 
-  // 🔑 Who started the child decides the notices it owes; a child that was not told is refused,
-  // never defaulted to one answer.
-  it('refuses --cost-log without --invocation, and --invocation without --cost-log', () => {
-    expect(() => requireSupervisableFlags({
-      costLog: A_COST_LOG, invocation: undefined, budgetRaw: undefined, budgetSecs: 300,
-    })).toThrow(/passed together or not at all/);
-    expect(() => requireSupervisableFlags({
-      costLog: undefined, invocation: 'phase', budgetRaw: undefined, budgetSecs: 300,
-    })).toThrow(/passed together or not at all/);
-  });
-
-  it('allows --budget 0 with --cost-log: both say "no supervision"', () => {
-    expect(() => requireSupervisableFlags({
-      costLog: A_COST_LOG, invocation: 'standalone', budgetRaw: '0', budgetSecs: 0,
-    })).not.toThrow();
-  });
-
-  it('allows a budget with no cost log — the ordinary supervised run', () => {
-    expect(() => requireSupervisableFlags({
-      costLog: undefined, invocation: undefined, budgetRaw: '60', budgetSecs: 60,
-    })).not.toThrow();
+  it('allows a budget in a process that is not a supervised child — the ordinary supervised run', () => {
+    expect(requireSupervisableFlags({
+      supervisedBy: undefined, budgetRaw: '60', budgetSecs: 60,
+    })).toBeUndefined();
   });
 });
 

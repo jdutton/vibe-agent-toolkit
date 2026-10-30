@@ -6,8 +6,8 @@
  * `withProgressLog` by one that hands over a path without minting a directory, so this unit test
  * touches no filesystem. The contract: the operand is the root the orchestrator resolved,
  * `--format json` (the phase reads the child's document as JSON), `--debug` iff the orchestrator
- * was given it, `--cost-log` (the recursion guard) with `--invocation phase` (the child owes no
- * notice its orchestrator already printed) — and never `--check` (a phase runs every check) or
+ * was given it, `--supervised-by phase:<this pid>:<log>` (the recursion guard; `phase` because the
+ * child owes no notice its orchestrator already printed) — and never `--check` (a phase runs every check) or
  * `--verbose` (not a flag of the child's).
  *
  * ⚠️ That the child then checks exactly that root is observed through the real binary only for
@@ -66,7 +66,7 @@ describe('runResourcesCheckPhase — the child\'s argv', () => {
     recorded.length = 0;
   });
 
-  it.each([false, true])('is `resources check <root> --format json [--debug] --cost-log <log> --invocation phase` (debug=%s)', async (debug) => {
+  it.each([false, true])('is `resources check <root> --format json [--debug] --supervised-by phase:<pid>:<log>` (debug=%s)', async (debug) => {
     const args = await phaseArgs(debug);
 
     expect(args).toStrictEqual([
@@ -76,10 +76,8 @@ describe('runResourcesCheckPhase — the child\'s argv', () => {
       '--format',
       'json',
       ...(debug ? ['--debug'] : []),
-      '--cost-log',
-      PROGRESS_LOG,
-      '--invocation',
-      'phase',
+      '--supervised-by',
+      `phase:${String(process.pid)}:${PROGRESS_LOG}`,
     ]);
   });
 

@@ -7,6 +7,10 @@
  * it, so a watchdog kill case would wait five minutes. `parent-only-fast-clock.mjs` scales the
  * supervising process's clock from the spawn on, so the default bound elapses in the real seconds
  * `measureBudget()` derives for this machine, exactly as a standalone kill case derives `--budget`.
+ *
+ * 🚨 Every case asserts the run ended in less real time than the UNSCALED bound. A preload that
+ * silently failed to load would otherwise leave the default bound in force: the case would wait
+ * the full default bound, get the same kill, and pass. Only a scaled clock can end it sooner.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -63,6 +67,7 @@ describe('vat validate — the checks phase, killed by its bound', () => {
 
     const run = vat(projectDir, ['validate'], env);
 
+    expect(run.elapsedMs).toBeLessThan(DEFAULT_BUDGET_SECONDS * 1000);
     expect(run.status).toBe(1);
     const broken = run.findings.find((f) => f.code === RUN_INTEGRITY && f.message.includes('runaway'));
     // The statement branch's own sentence — not the population's, startup's or reporting's.
@@ -77,6 +82,7 @@ describe('vat validate — the checks phase, killed by its bound', () => {
 
     const run = vat(projectDir, ['validate'], env);
 
+    expect(run.elapsedMs).toBeLessThan(DEFAULT_BUDGET_SECONDS * 1000);
     expect(run.status).toBe(2);
     expect(run.error?.code).toBe('RUN_INCOMPLETE');
     const phase = checksPhase(run);
