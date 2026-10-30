@@ -7,6 +7,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 
 import { isPathAbsentError, isProcessGoneError } from '@vibe-agent-toolkit/utils';
 import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
+import { expect } from 'vitest';
 import yaml from 'yaml';
 
 import { fs } from '../test-common.js';
@@ -83,6 +84,35 @@ export function killStillRunning(supervisor: LiveVat | undefined, child: number 
   const pid = supervisor?.process.pid;
   if (pid !== undefined && alive(pid)) supervisor?.process.kill('SIGKILL');
   if (child !== undefined && alive(child)) process.kill(child, 'SIGKILL');
+}
+
+/**
+ * Assert how a checks child ended once its supervisor was SIGKILLed — call it once the child is gone.
+ * `trace` is the file the child's preload appends `published` (on its first stdout write) and
+ * `exit:<code>` (in its `exit` handler) to.
+ *
+ * - **POSIX**: nothing kills the child, so it ends ITSELF on reading end-of-file on the stdin pipe
+ *   its supervisor held — its one stderr line, exit 2, and no `published` before it.
+ * - **Windows**: libuv puts every child it spawns without `detached` in a job object with
+ *   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (`uv__init_global_job_handle`, `src/win/process.c`). The
+ *   supervisor holds the job's only handle, so its `TerminateProcess` closes the job and the OS
+ *   terminates the child with it: no handler runs, so there is no trace at all and no line. A child
+ *   that had published, or that ended itself, leaves a trace — which fails the case.
+ *
+ * @param running - The SIGKILLed supervisor
+ * @param trace - The child's trace file
+ */
+export async function expectOrphanedChildEnding(running: LiveVat, trace: string): Promise<void> {
+  const stderr = await running.drained;
+  const line = `the process supervising this checks run (pid ${String(running.process.pid)}) is gone`;
+  const traced = fs.existsSync(trace) ? fs.readFileSync(trace, 'utf-8') : undefined;
+  if (process.platform === 'win32') {
+    expect(traced, stderr).toBeUndefined();
+    expect(stderr).not.toContain(line);
+    return;
+  }
+  expect(stderr, `TRACE=${String(traced)}`).toContain(line);
+  expect(traced).toBe('exit:2\n');
 }
 
 /**

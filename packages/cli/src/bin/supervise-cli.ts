@@ -41,9 +41,13 @@ import {
  *   process, the CLI included; and `child.kill` there is `TerminateProcess`, which would PRE-EMPT
  *   the CLI's own cleanup (a progress directory, a clone, the MCP shutdown line). The guard still
  *   keeps this process waiting for the CLI, so it ends as the CLI ended.
- * - **A SIGKILL of this wrapper** runs none of this: the CLI (and anything it supervises) runs on
- *   to its own end, bounded by its own watchdog. The CLI's stdin is this process's, inherited — a
- *   pipe here would break every interactive command — so it never reads end-of-file.
+ * - **A SIGKILL of this wrapper** (POSIX) runs none of this: the CLI (and anything it supervises)
+ *   runs on to its own end, bounded by its own watchdog. The CLI's stdin is this process's,
+ *   inherited — a pipe here would break every interactive command — so it never reads end-of-file.
+ * - **An outside kill of this wrapper on Windows** (`TerminateProcess`, `taskkill /F`) runs none
+ *   of this either, but ends the CLI with it: libuv spawns the CLI (not `detached`) into a
+ *   kill-on-close job object whose only handle this process holds, and the CLI's own children
+ *   go the same way with it.
  *
  * @param child - The spawned CLI
  */

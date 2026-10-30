@@ -16,6 +16,12 @@ vi.mock('node:child_process', async (importOriginal) => ({
 const { killProcessTree } = await import('../src/process.js');
 
 const onPosix = process.platform !== 'win32';
+const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor;
+
+/** Run the rest of the test as if on Windows; `afterEach` restores the real platform. */
+function asWindows(): void {
+  Object.defineProperty(process, 'platform', { value: 'win32' });
+}
 
 /** A stand-in child whose own `kill` is recorded. */
 function child(pid: number | undefined): { pid: number | undefined; kill: ReturnType<typeof vi.fn> } {
@@ -24,6 +30,7 @@ function child(pid: number | undefined): { pid: number | undefined; kill: Return
 
 describe('killProcessTree', () => {
   afterEach(() => {
+    Object.defineProperty(process, 'platform', realPlatform);
     vi.restoreAllMocks();
     spawnSync.mockReset();
   });
@@ -57,13 +64,35 @@ describe('killProcessTree', () => {
     expect(kill).toHaveBeenCalledExactlyOnceWith(4242, 'SIGKILL');
   });
 
-  it.skipIf(onPosix)('Windows: taskkill /T /F takes the whole tree, the leader option notwithstanding', () => {
+  it('Windows: taskkill /T /F takes the whole tree, the leader option notwithstanding', () => {
     const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    asWindows();
 
     killProcessTree(child(4242), { groupLeader: false, throughChild: false });
 
     expect(spawnSync).toHaveBeenCalledExactlyOnceWith('taskkill', ['/pid', '4242', '/T', '/F'], expect.anything());
     expect(kill).not.toHaveBeenCalled();
+  });
+
+  it('Windows, throughChild: the child\'s own kill comes BEFORE the taskkill sweep', () => {
+    // libuv records the signal only when `child.kill`'s own TerminateProcess lands
+    // (`uv_process_kill` sets `exit_signal`); a taskkill first leaves `exit` reading (1, null).
+    const order: string[] = [];
+    const stub = child(4242);
+    stub.kill.mockImplementation(() => {
+      order.push('child.kill');
+      return true;
+    });
+    spawnSync.mockImplementation(() => {
+      order.push('taskkill');
+      return { status: 0 };
+    });
+    asWindows();
+
+    killProcessTree(stub, { groupLeader: false, throughChild: true });
+
+    expect(order).toStrictEqual(['child.kill', 'taskkill']);
+    expect(stub.kill).toHaveBeenCalledExactlyOnceWith('SIGKILL');
   });
 
   it('throughChild: the child\'s own kill too, so a refusal surfaces as its `error`', () => {

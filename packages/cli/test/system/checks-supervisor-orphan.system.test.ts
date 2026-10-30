@@ -24,9 +24,11 @@
  *   guard alone kills the child and removes the progress directory;
  * - a SIGKILL of the supervisor, which runs none of its code (on Windows, `TerminateProcess`). Here
  *   the child stalls ASYNCHRONOUSLY (`child-only-async-stall.mjs`: its population waits on I/O
- *   that never completes) and ends ITSELF: the OS closes the stdin pipe its supervisor held, and
- *   the child reads end-of-file, says so on stderr and exits 2. A child blocked inside one SQLite
- *   statement reads nothing until it returns: `checks-supervisor-orphan-loop.system.test.ts`.
+ *   that never completes). POSIX: it ends ITSELF — the OS closes the stdin pipe its supervisor
+ *   held, and the child reads end-of-file, says so on stderr and exits 2. Windows: the child sits
+ *   in libuv's kill-on-close job object, so the OS terminates it with the supervisor and none of
+ *   its code runs (`expectOrphanedChildEnding`). A child blocked inside one SQLite statement reads
+ *   nothing until it returns: `checks-supervisor-orphan-loop.system.test.ts`.
  *
  * 🚨 Every "the child is gone within N ms" here is asserted the moment the SUPERVISOR has exited
  * (`startVat().ended`), never after its stderr drains: the child inherits that stderr, so a drain
@@ -43,7 +45,15 @@ import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 import { cleanupTestTempDir, fs, getWrapperPath, safePath } from './test-common.js';
 import { BIN_PATH, preload, TXT_ROWS, writeConfig } from './test-helpers/checks-phase.js';
 import { createMarkdownGitFixture } from './test-helpers/index.js';
-import { alive, killStillRunning, type LiveVat, pidWrittenTo, startVat, within } from './test-helpers/live-vat.js';
+import {
+  alive,
+  expectOrphanedChildEnding,
+  killStillRunning,
+  type LiveVat,
+  pidWrittenTo,
+  startVat,
+  within,
+} from './test-helpers/live-vat.js';
 
 // ⛔ Disposal paths: every `vat` process (and its checks child) inherits the scratch TMPDIR.
 const scratch = useScratchTmpdir('vat-scratch-checks-orphan-');
@@ -237,8 +247,8 @@ describe('the checks supervisor ends — its child ends with it', () => {
   });
 
   // Runs everywhere: on Windows the kill is `TerminateProcess`, which runs none of the supervisor's
-  // code either — and the stdin pipe it held is closed by the OS all the same.
-  it('a SIGKILLed supervisor: its asynchronously stalled child reads end-of-file on stdin and ends itself, unpublished', async () => {
+  // code either — and libuv's kill-on-close job object then takes the child down with it.
+  it('a SIGKILLed supervisor: its asynchronously stalled child ends with it, unpublished (POSIX: on end-of-file, by itself)', async () => {
     const trace = safePath.join(scratch(), 'child.trace');
     const { running, childPid } = await superviseChild(['resources', 'check', '--budget', '600'], {
       preloads: [preload('child-only-async-stall.mjs')],
@@ -252,9 +262,9 @@ describe('the checks supervisor ends — its child ends with it', () => {
     // The bound FIRST, at the supervisor's own exit — before anything waits on the child.
     expect(await within(ORPHAN_BOUND_MS, () => !alive(childPid)), running.stderr()).toBe(true);
     if (process.platform !== 'win32') expect(ending.signal, ending.stderr).toBe('SIGKILL');
-    // The child's own ending: its one line, and exit 2.
-    expect(await running.drained).toContain(`the process supervising this checks run (pid ${String(running.process.pid)}) is gone`);
-    expect(fs.readFileSync(trace, 'utf-8')).toBe('exit:2\n');
+    // POSIX: the child's own ending — its one line, and exit 2. Windows: terminated with its
+    // supervisor by the job object, untraced.
+    await expectOrphanedChildEnding(running, trace);
     // Nothing ran in the supervisor, so its progress directory is left — and it shows the child
     // stopped where it stalled: booted, never populated.
     const [left] = progressDirsLeft();

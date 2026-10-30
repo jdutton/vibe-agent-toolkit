@@ -7,19 +7,29 @@
  * returns — so here the child is held INSIDE its first check (`child-only-slow-check.mjs`, an
  * `Atomics.wait` the way a slow statement blocks the thread) while the supervisor is SIGKILLed.
  *
- * What holds, and what `vat resources check --help` says: once that check returns, the child ends
- * — its one stderr line, exit 2 — and it publishes NOTHING: no document reaches stdout. Runs
- * everywhere: on Windows the kill is `TerminateProcess`, which closes the pipe all the same.
+ * What holds, and what `vat resources check --help` says: on POSIX, once that check returns, the
+ * child ends — its one stderr line, exit 2 — and it publishes NOTHING: no document reaches stdout.
+ * On Windows the supervisor's `TerminateProcess` closes libuv's kill-on-close job object, and the
+ * OS terminates the child at once, mid-check: gone within the bound, no trace, nothing published
+ * (`expectOrphanedChildEnding`).
  */
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
-import { cleanupTestTempDir, fs, safePath } from './test-common.js';
+import { cleanupTestTempDir, safePath } from './test-common.js';
 import { preload, TXT_ROWS, writeConfig } from './test-helpers/checks-phase.js';
 import { createMarkdownGitFixture } from './test-helpers/index.js';
-import { alive, killStillRunning, type LiveVat, pidWrittenTo, startVat, within } from './test-helpers/live-vat.js';
+import {
+  alive,
+  expectOrphanedChildEnding,
+  killStillRunning,
+  type LiveVat,
+  pidWrittenTo,
+  startVat,
+  within,
+} from './test-helpers/live-vat.js';
 
 // ⛔ Disposal paths: every `vat` process (and its checks child) inherits the scratch TMPDIR.
 const scratch = useScratchTmpdir('vat-scratch-checks-orphan-loop-');
@@ -71,8 +81,7 @@ describe('a checks child orphaned inside a check', () => {
     await running.ended;
     // The bound FIRST, at the supervisor's own exit — before anything waits on the child.
     expect(await within(ORPHAN_BOUND_MS, () => !alive(childPid)), running.stderr()).toBe(true);
-    expect(await running.drained, 'TRACE=' + fs.readFileSync(trace, 'utf-8')).toContain(`the process supervising this checks run (pid ${String(running.process.pid)}) is gone`);
-    // `published` would precede `exit:` had the child written its document.
-    expect(fs.readFileSync(trace, 'utf-8')).toBe('exit:2\n');
+    // POSIX: its own ending, unpublished. Windows: terminated with its supervisor, untraced.
+    await expectOrphanedChildEnding(running, trace);
   });
 });

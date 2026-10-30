@@ -13,7 +13,8 @@
   instead of exiting 0; SIGTERM still kills them, as before. Every signal-handling command also
   handles SIGBREAK on Windows. Interrupting a supervised checks run: `vat resources check --help`.
 - **`vat` (every command) now waits for the CLI it starts and ends as it did:** on POSIX,
-  `kill`/`timeout` on the `vat` pid stops the CLI too (it used to run on; on Windows it still does),
+  `kill`/`timeout` on the `vat` pid stops the CLI too (it used to run on; on Windows an outside kill
+  of `vat` already ended the CLI with it, as before),
   and a CLI killed by SIGTERM/SIGINT/SIGHUP/SIGQUIT makes `vat` die of it instead of exiting 1.
 - **Any other abnormal CLI end now makes `vat` exit 2:** a CLI killed by SIGKILL (an OOM killer, say),
   SIGSEGV or SIGABRT, or exiting with a code other than 0/1/2 — it used to exit 1 for a signal death

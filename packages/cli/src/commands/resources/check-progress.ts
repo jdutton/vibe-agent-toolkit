@@ -291,15 +291,18 @@ export function createProgressWriter(
  *
  * ## 🚨 Why: the bound lives in the supervisor
  *
- * A supervisor that dies where none of its own code runs — SIGKILL, an OOM killer, a Windows
- * outside kill (`TerminateProcess`) — cannot take the child down, and the child would run on with
- * nothing bounding it and nobody reading what it publishes.
+ * A supervisor that dies where none of its own code runs — SIGKILL, an OOM killer — cannot take the
+ * child down, and the child would run on with nothing bounding it and nobody reading what it
+ * publishes. This is the POSIX path: on Windows an outside kill of the supervisor
+ * (`TerminateProcess`) ends this process too, before any of its code runs, because libuv spawns it
+ * in a kill-on-close job object whose only handle the supervisor holds. The pipe below is there on
+ * Windows as well, and harmless.
  *
  * ## 🔑 How: the supervisor holds this process's stdin open and never writes to it
  *
  * The supervisor spawns the child with stdin as a pipe whose write end only it holds, and it never
  * writes or ends it. However the supervisor ends, the OS closes that end, and this process reads
- * end-of-file — on every platform, with no pid to compare and no liveness probe to misread (a pid
+ * end-of-file — with no pid to compare and no liveness probe to misread (a pid
  * reused, or a probe refused `EPERM` in a sandbox, both used to read wrongly). On EOF, a read error
  * or a close, the child ends at once: exit 2 and ONE stderr line, no document — nobody is left to
  * read one. It ends by `process.exit`, never by a signal handler: the child must never install one

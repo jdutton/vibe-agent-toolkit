@@ -99,14 +99,23 @@
  *
  * Its signal handlers and `exit` guard take the child down on every ending that
  * runs its code (see `guardSupervision`). SIGKILL, an OOM killer and, on Windows,
- * any outside kill run none of it; for those the child ends ITSELF. The child's
- * stdin is a pipe whose write end only this process holds and never writes or
- * ends, so however this process dies the OS closes it and the child reads
- * end-of-file (`endWhenSupervisorGone`). The child notices when its event loop
- * next turns: at once during the population; during the synchronous check loop,
- * once the LAST check has returned (a statement blocked inside SQLite reaches
- * nothing until it returns) — and still before it publishes anything
- * (`letSupervisorLossSurface`). Either way it exits 2 with one stderr line.
+ * any outside kill run none of it.
+ *
+ * - **Windows**: the OS takes the child down. libuv puts every child spawned
+ *   without `detached` in a job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`
+ *   whose only handle this process holds (`uv__init_global_job_handle`,
+ *   `src/win/process.c`), so its `TerminateProcess` terminates the child too, at
+ *   once and mid-check: none of the child's code runs, nothing is published.
+ * - **POSIX**: the child ends ITSELF. Its stdin is a pipe whose write end only
+ *   this process holds and never writes or ends, so however this process dies
+ *   the OS closes it and the child reads end-of-file (`endWhenSupervisorGone`).
+ *   The child notices when its event loop next turns: at once during the
+ *   population; during the synchronous check loop, once the LAST check has
+ *   returned (a statement blocked inside SQLite reaches nothing until it
+ *   returns) — and still before it publishes anything
+ *   (`letSupervisorLossSurface`). Either way it exits 2 with one stderr line.
+ *   (The pipe is there on Windows too; the job object simply ends the child
+ *   first.)
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
@@ -153,7 +162,8 @@ export const DEFAULT_BUDGET_SECONDS = 300;
  * Each claim is pinned: POSIX signals by `checks-supervisor-orphan.system.test.ts`, the group
  * Ctrl-C by the same file and `signal-guard-group-ctrl-c.system.test.ts`, the orphan's own ending
  * by `checks-supervisor-orphan.system.test.ts` (population) and
- * `checks-supervisor-orphan-loop.system.test.ts` (the check loop), the Windows wrapper by
+ * `checks-supervisor-orphan-loop.system.test.ts` (the check loop) — on Windows the same two cases
+ * pin the job object ending the child with its supervisor — the Windows wrapper by
  * `supervise-cli.test.ts`.
  */
 export const SUPERVISION_SIGNAL_CONTRACT = `Interrupting a supervised checks run:
@@ -163,19 +173,21 @@ export const SUPERVISION_SIGNAL_CONTRACT = `Interrupting a supervised checks run
   nothing, and dies of the signal (status 128+n; exit 2 where the signal
   cannot kill it, PID 1). A process the child itself started (git) is not
   killed with it; it ends on its own.
+  POSIX, ended where it runs no code (SIGKILL, an OOM killer), this process
+  cannot kill the child: the child reads end-of-file on the stdin pipe this
+  process held and ends itself -- one stderr line, exit 2, nothing
+  published -- at once during its population, and during the checks once
+  the last check returns (a statement inside SQLite is not reached until it
+  returns). A SIGKILL of the 'vat' wrapper kills the wrapper alone: this
+  process (whose stdin is the terminal's, so it reads no end-of-file) and
+  its child run on to completion, or until --budget seconds pass with no
+  progress.
   Windows: a console Ctrl-C, Ctrl-Break or window close reaches every process
-  on the console; this one kills the child and its process tree (taskkill
-  /T) and exits 2, no document. An outside kill (taskkill /F) is
-  TerminateProcess: no handler runs, exit 1.
-  Ended where it runs no code (SIGKILL, an OOM killer, a Windows outside
-  kill), this process cannot kill the child: the child reads end-of-file on
-  the stdin pipe this process held and ends itself -- one stderr line, exit
-  2, nothing published -- at once during its population, and during the
-  checks once the last check returns (a statement inside SQLite is not
-  reached until it returns).
-  A SIGKILL of the 'vat' wrapper kills the wrapper alone: this process
-  (whose stdin is the terminal's, so it reads no end-of-file) and its child
-  run on to completion, or until --budget seconds pass with no progress.`;
+  on the console; this one kills the child and exits 2, no document. An
+  outside kill (TerminateProcess, taskkill /F) of the 'vat' wrapper or of
+  this process runs no handler and ends the processes it started with it
+  (the OS job object Node puts them in): exit 1, nothing published, the
+  progress directory left behind.`;
 
 
 /** How many times per budget the parent looks at the log. */
@@ -986,9 +998,10 @@ export interface ProgressLog {
  *
  * An ending that runs none of this process's code: SIGKILL, an OOM killer, and on Windows ANY
  * outside kill — `process.kill(pid, <signal>)` there is `TerminateProcess`, which runs neither a
- * signal handler nor the `exit` guard. The child covers those itself: it reads end-of-file on the
- * stdin pipe this process held (`endWhenSupervisorGone`). A child blocked inside one SQLite
- * statement reaches nothing until the statement returns.
+ * signal handler nor the `exit` guard. On Windows the OS ends the child with this process (libuv's
+ * kill-on-close job object — see the module header). On POSIX the child covers those itself: it
+ * reads end-of-file on the stdin pipe this process held (`endWhenSupervisorGone`). A child blocked
+ * inside one SQLite statement reaches nothing until the statement returns.
  *
  * @returns The guard: `cover` names the progress log once it exists, `watch` the child once it is
  *   spawned, and `release` ends the guard — at once, or at the watched child's `exit`
@@ -1035,9 +1048,11 @@ function guardSupervision(): SupervisionGuard & { cover(logPath: string): void; 
  *
  * POSIX: its pid alone. It shares this process's group (never `detached`, see
  * {@link superviseCheck}), so there is no group of its own to kill: a process it started (`git`)
- * is not killed with it and ends on its own. Windows: `taskkill /T` takes its whole tree. It is
- * ALSO killed through `child.kill`, because that is the call whose refusal Node reports as the
- * child's `error` — the arm the watchdog retries and then reports.
+ * is not killed with it and ends on its own. It is killed through `child.kill` FIRST, because that
+ * is the call whose refusal Node reports as the child's `error` — the arm the watchdog retries and
+ * then reports — and, on Windows, the only kill whose signal `exit` then reports: a `taskkill`
+ * first made the watchdog's kill read as the child exiting 1 on its own. Windows then sweeps the
+ * tree with `taskkill /T`, best-effort (see `killProcessTree`).
  */
 const CHECKS_CHILD_TREE: KillProcessTreeOptions = { groupLeader: false, throughChild: true };
 

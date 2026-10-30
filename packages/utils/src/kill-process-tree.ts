@@ -33,11 +33,20 @@ export interface KillProcessTreeOptions {
  * - A child with no pid (never spawned) has nothing to kill. A kill whose target is already gone
  *   ({@link isProcessGoneError}) is absorbed; anything else the kill throws stays loud — a reaper
  *   that says nothing about a tree it did not reap leaves processes running unseen.
+ * - **`throughChild` goes FIRST.** On Windows only the child's own kill records the signal: libuv's
+ *   `uv_process_kill` sets the handle's `exit_signal` when ITS `TerminateProcess` lands, so `exit`
+ *   reports `(null, 'SIGKILL')`. A `taskkill` first leaves `child.kill` nothing to kill (ESRCH, no
+ *   signal recorded) and `exit` reads `(1, null)` — the supervisor's kill reported as the child
+ *   exiting 1 on its own. The `taskkill /T` sweep after it is best-effort: `TerminateProcess` is
+ *   asynchronous and Node still holds the child's handle (so its pid is not recycled), but whether
+ *   taskkill can still walk the tree from a root already terminating is not established — a
+ *   grandchild may run on, as it does on POSIX for a child that does not lead a group.
  *
  * @param child - The spawned child
  * @param options - See {@link KillProcessTreeOptions}
  */
 export function killProcessTree(child: KillableChild, options: KillProcessTreeOptions): void {
+  if (options.throughChild) child.kill('SIGKILL');
   const { pid } = child;
   if (pid !== undefined) {
     if (process.platform === 'win32') {
@@ -47,7 +56,6 @@ export function killProcessTree(child: KillableChild, options: KillProcessTreeOp
       killAbsorbingGone(options.groupLeader ? -pid : pid);
     }
   }
-  if (options.throughChild) child.kill('SIGKILL');
 }
 
 /** SIGKILL `target` (a pid, or a negated group id); a target already gone has nothing left to kill. */
