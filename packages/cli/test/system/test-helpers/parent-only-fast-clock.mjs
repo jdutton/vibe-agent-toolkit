@@ -1,0 +1,32 @@
+/**
+ * Test-only preload (`NODE_OPTIONS=--import "<file: URL>"`): the SUPERVISING process's clock runs
+ * `TEST_PARENT_CLOCK_SCALE` times faster from the moment it spawns a `vat resources check` child.
+ *
+ * An orchestrator's `checks` phase runs its child under the default bound (300 s) and accepts no
+ * flag to change it, so a system test of a kill would wait five minutes. The watchdog measures
+ * silence with the monotonic `performance.now()`, so scaling THAT clock in the parent — and only
+ * after the spawn, so the phases before it run on real time — makes the default bound elapse in
+ * `300 / scale` real seconds. (Scaling `Date.now()` instead leaves the bound at five minutes: the
+ * watchdog does not read it.) The test derives `scale` from `measureBudget()`, exactly as a standalone kill case
+ * derives its `--budget`. The child's own clock is untouched.
+ *
+ * Acts only in a process whose argv does NOT carry `--supervised-by` (a supervisor, never the child it
+ * spawns). VAT's source gains no knob for this.
+ */
+import childProcess from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+
+const scale = Number(process.env['TEST_PARENT_CLOCK_SCALE']);
+
+if (!process.argv.includes('--supervised-by') && Number.isFinite(scale) && scale > 0) {
+  const realNow = performance.now.bind(performance);
+  let since;
+  performance.now = () => (since === undefined ? realNow() : since + (realNow() - since) * scale);
+
+  const spawn = childProcess.spawn;
+  childProcess.spawn = (command, args, ...rest) => {
+    if (since === undefined && Array.isArray(args) && args.includes('--supervised-by')) since = realNow();
+    return spawn(command, args, ...rest);
+  };
+  syncBuiltinESMExports();
+}

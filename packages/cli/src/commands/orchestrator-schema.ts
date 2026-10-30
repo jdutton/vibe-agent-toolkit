@@ -44,7 +44,8 @@ export const ORCHESTRATOR_EXAMINED: ExaminedDeclaration = {
   unit: 'items across every phase',
   whenZero: 'No phase examined anything, so the run is not a verdict: vibe-agent-toolkit.config.yaml'
     + ' declares no surface this command runs (`vat build` runs `skills:` and `claude.marketplaces:`;'
-    + ' `vat validate` runs `resources:` and `skills:`; `vat verify` runs all three), or every'
+    + ' `vat validate` runs `resources:` (and, with it, the project\'s checks) and `skills:`;'
+    + ' `vat verify` runs `resources:` (without the checks), `skills:` and `claude.marketplaces:`), or every'
     + ' configured surface matched nothing — usually a typo in a glob or a config key. Each phase'
     + ' entry under `data.phases` shows what it examined.',
 };

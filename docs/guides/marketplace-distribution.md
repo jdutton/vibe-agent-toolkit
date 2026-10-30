@@ -306,9 +306,10 @@ There are two layers: **source** validation (no build required) and **built-arti
 `vat validate` runs every source validator the config declares — and only those — discovered from `vibe-agent-toolkit.config.yaml`:
 
 1. `resources validate` — links, frontmatter, schemas (when `resources:` configured)
-2. `skills validate` — SKILL.md structure, frontmatter (when `skills:` configured)
+2. `resources check` — VAT's built-in checks plus every `resources.checks` SQL statement, over the whole tracked tree — `resources.include`/`exclude` do not scope it (whenever `resources:` is configured)
+3. `skills validate` — SKILL.md structure, frontmatter (when `skills:` configured)
 
-It is source-level only and **never requires a build**, so it is safe for pre-commit and CI-before-build. A surface with no config block is simply skipped (no error, no noise).
+It is source-level only and **never requires a build**, so it is the first CI-before-build gate. The checks phase builds its own projection of the whole tracked tree, so time it on your tree before putting it in a pre-commit hook. A surface with no config block is simply skipped (no error, no noise).
 
 > **Decision (revisitable):** `vat validate` deliberately excludes marketplace-artifact validation. The marketplace check runs against the built `dist/` tree, which would couple `vat validate` to a prior `vat build` and overlap `vat verify`. Marketplace validation lives in `vat verify` (built mode) and `vat claude marketplace validate` (standalone). See issue #128.
 

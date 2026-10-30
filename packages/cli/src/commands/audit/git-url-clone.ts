@@ -3,18 +3,21 @@
  *
  * Pipeline:
  *  1. makeStagingDir('vat-audit-')
- *  2. install SIGINT handler that disposes of the tempdir
+ *  2. guard every terminating signal: dispose of the tempdir, then die of it — held until the
+ *     tempdir's one disposal (step 6, or the signal's own) has settled
  *  3. git clone --depth 1 --single-branch [--branch <ref>]
  *  4. git rev-parse HEAD → resolved commit SHA
  *  5. yield (tempdir, targetDir, provenance) to caller
- *  6. cleanup in finally — always dispose of the tempdir unless `keepTempForDebug`
+ *  6. dispose of the tempdir, success or failure, unless `keepTempForDebug`
  */
 
 
 
 import { cloneGitSource } from '@vibe-agent-toolkit/agent-skills';
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { disposeTempDir, disposeTempDirAfterFailure } from '@vibe-agent-toolkit/utils';
 import { type ParsedGitUrl } from '@vibe-agent-toolkit/utils/git';
+import { handleTerminatingSignals } from '@vibe-agent-toolkit/utils/process';
 
 import { CommandRefusalError, errorMessageOf, refusalCodeOf } from '../../utils/command-refusal.js';
 import { makeStagingDir } from '../../utils/staging-dir.js';
@@ -83,27 +86,38 @@ export async function withClonedRepo<T>(
 ): Promise<{ readonly value: T; readonly leftover: unknown }> {
   // Through the one classified creation: a temp directory the OS will not make is the environment's fault.
   const tempdir = await makeStagingDir('vat-audit-');
-  // Interrupted: dispose of the clone first, then let the signal end the process as it would have.
-  // No report follows a signal, so a clone that will not go is named on stderr.
-  const sigintListener = (): void => {
-    process.removeListener('SIGINT', sigintListener);
-    const resend = (): void => {
-      process.kill(process.pid, 'SIGINT');
-    };
-    disposeClone(tempdir, options).then(
+  // ONE disposal, whoever starts it: the work's own end (after success or failure) or a signal. It
+  // settles on what it left behind, whichever path started it, so the signal path can name it. The
+  // guard is held until that disposal has SETTLED — a Ctrl-C that also kills `git` fails the clone
+  // step, and a guard released before the failure path's disposal let the pending signal kill the
+  // process half-way through it, the clone left behind.
+  let disposal: Promise<unknown> | undefined;
+  const dispose = (start: () => Promise<unknown>): Promise<unknown> => (disposal ??= start());
+  // Interrupted: dispose of the clone first, then die of the signal. No report follows a signal, so a
+  // clone that will not go is named on stderr. A repeat (a terminal Ctrl-C under the `vat` wrapper
+  // arrives twice) is swallowed — see `handleTerminatingSignals`.
+  const signalGuard = handleTerminatingSignals({
+    fallbackExitCode: ExitCode.ERROR,
+    cleanup: () => dispose(() => disposeClone(tempdir, options)).then(
       (leftover) => {
         if (leftover !== undefined) process.stderr.write(`[vat: interrupted — temp dir left behind: ${errorMessageOf(leftover)}]\n`);
-        resend();
       },
       // A rejection is a refusal to dispose at all (nothing was touched): say that, not "left behind".
       (error_: unknown) => {
         process.stderr.write(`[vat: interrupted — temp dir not disposed of: ${errorMessageOf(error_)}]\n`);
-        resend();
       },
-    );
+    ),
+  });
+  // The work's own disposal, then the guard's release — released even when the disposal REJECTS
+  // (a refusal to dispose at all), so a guard never outlives the work it guarded.
+  const disposeThenRelease = async (start: () => Promise<unknown>): Promise<unknown> => {
+    try {
+      return await dispose(start);
+    } finally {
+      // A signal that arrived meanwhile ends the process once this same disposal has settled.
+      await signalGuard.releaseOrAwaitEnding();
+    }
   };
-  process.on('SIGINT', sigintListener);
-
   let value: T;
   try {
     const { ref, commit, targetDir } = cloneSource(parsed, tempdir);
@@ -116,11 +130,9 @@ export async function withClonedRepo<T>(
     };
     value = await body({ tempdir, targetDir, provenance });
   } catch (error) {
-    process.removeListener('SIGINT', sigintListener);
-    if (options.keepTempForDebug) await disposeClone(tempdir, options);
-    else await disposeTempDirAfterFailure(tempdir, error);
+    await disposeThenRelease(() => (options.keepTempForDebug ? disposeClone(tempdir, options) : disposeTempDirAfterFailure(tempdir, error)));
     throw error;
   }
-  process.removeListener('SIGINT', sigintListener);
-  return { value, leftover: await disposeClone(tempdir, options) };
+  const leftover = await disposeThenRelease(() => disposeClone(tempdir, options));
+  return { value, leftover };
 }

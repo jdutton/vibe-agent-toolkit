@@ -56,6 +56,7 @@ import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
 import { cleanupTestTempDir, fs, getBinPath, safePath } from './test-common.js';
 import { createMarkdownGitFixture, executeCli } from './test-helpers/index.js';
+import { measureBudget, type MeasuredBudget } from './test-helpers/measure-check-budget.js';
 
 // ⛔ Disposal paths: TMPDIR / TEMP / TMP point at a scratch tree for every test, and every `vat`
 // child it spawns inherits them, so neither the run nor a mutation of its cleanup can reach the real temp dir.
@@ -116,36 +117,16 @@ const MD_ROWS = "SELECT path FROM resource_realizations WHERE ext = '.md'";
 /** A cheap statement that selects nothing, so a run over it is a clean pass. */
 const TXT_ROWS = "SELECT path FROM resource_realizations WHERE ext = '.txt'";
 
-/**
- * The floor under the killed cases' bound. Small, so the suite does not pay for
- * it on an idle machine.
- */
-const BUDGET_FLOOR_SECONDS = 2;
-
-/**
- * How many measured baselines of headroom the bound gets over the population.
- *
- * 🪤 **The bound cannot be a literal, and a literal is what shipped.** The
- * budget is time WITHOUT progress, and the population is ONE unit — so a bound
- * that does not clear the population kills the run before any rule exists, and
- * the case asserting the RULE's name has nothing to assert on. (It used to exit 2
- * there too; a budget kill is exit 1 wherever it lands now, and the case below
- * that forces a pre-population kill pins that.) A flat 2 s cleared it comfortably
- * on an idle machine and did not clear it when this file ran inside the full
- * system suite: one CI run reported `expected 2 to be 1`, and the same file
- * passed 7/7 in isolation minutes later.
- * That is not a regression in the product, it is a test whose premise silently
- * acquired a second requirement — that a population fit inside a hardcoded
- * number of seconds — and the machine decides whether it holds.
- *
- * So the bound is derived by {@link measureBudget}, a real run of the same verb
- * over the same tree, taken beside each killed case. A loaded machine moves
- * the baseline and the bound together, which is the whole point of measuring it.
- */
-const BUDGET_BASELINE_HEADROOM = 3;
-
 /** The hidden flag a supervising parent hands its child. */
-const COST_LOG_FLAG = '--cost-log';
+const SUPERVISED_BY_FLAG = '--supervised-by';
+
+/**
+ * A `--supervised-by` value the `vat` process this test spawns accepts: it names THIS process,
+ * which is that process's parent (`executeCli` spawns the binary directly).
+ */
+function asOurChild(progressLog: string): string {
+  return `standalone:${String(process.pid)}:${progressLog}`;
+}
 
 /**
  * How many times the measured baseline plus the budget the kill may take.
@@ -222,40 +203,18 @@ interface PublishedCheck {
   rows?: number;
 }
 
-/** What this machine costs RIGHT NOW, and the bound derived from it. */
-interface MeasuredBudget {
-  /** A real run of the same verb over the same tree, in-process and complete. */
-  baselineMs: number;
-  /** The bound a killed case passes, in seconds — derived, never a literal. */
-  budgetSeconds: number;
-}
-
 /**
- * Probe the machine and derive the bound from what it measured.
- *
- * 🪤 **Called by each killed case, immediately before its own run — never once
- * for the file.** It used to be taken once in `beforeAll`, and the load a
- * sibling suite puts on the machine is not constant across a file: a probe taken
- * on a quiet box sized a bound that a busy one then blew during the population,
- * and the case asserting the RULE's name got a kill that landed before any rule
- * existed. Measuring beside the run is what makes "the same load" true.
+ * Probe the machine beside a killed case and derive its bound ({@link measureBudget}).
  *
  * It writes the probe's config, so a caller writes its own checks AFTER.
  *
  * @returns The baseline and the bound
  */
-function measureBudget(): MeasuredBudget {
-  // 🪤 The threshold PROBE, not a literal. What a spawn, a population and one
-  // cheap statement cost on THIS machine, measured by doing it.
-  writeChecks(['quick', TXT_ROWS]);
-  const baselineMs = check('--budget', '0').elapsedMs;
-  return {
-    baselineMs,
-    budgetSeconds: Math.max(
-      BUDGET_FLOOR_SECONDS,
-      Math.ceil((baselineMs / 1000) * BUDGET_BASELINE_HEADROOM),
-    ),
-  };
+function measureThisBudget(): MeasuredBudget {
+  return measureBudget(() => {
+    writeChecks(['quick', TXT_ROWS]);
+    return check('--budget', '0').elapsedMs;
+  });
 }
 
 /**
@@ -297,7 +256,7 @@ describe('vat resources check --budget', () => {
   it('KILLS a statement that never finishes, and fails the run naming it', () => {
     // 🔑 The whole point. Without the bound this case does not fail — it never
     // returns, and neither does the CI job it stands for.
-    const { baselineMs, budgetSeconds } = measureBudget();
+    const { baselineMs, budgetSeconds } = measureThisBudget();
     writeChecks(['runaway', RUNAWAY_SQL]);
 
     const { status, doc, elapsedMs } = check('--budget', String(budgetSeconds));
@@ -324,7 +283,7 @@ describe('vat resources check --budget', () => {
     // A killed run is still evidence. The cheap rule finished and was priced
     // before the runaway was entered, and that is exactly what the progress log
     // exists to preserve across a SIGKILL.
-    const { budgetSeconds } = measureBudget();
+    const { budgetSeconds } = measureThisBudget();
     writeChecks(['quick', MD_ROWS], ['runaway', RUNAWAY_SQL]);
 
     const { status, doc } = check('--budget', String(budgetSeconds));
@@ -404,14 +363,18 @@ describe('vat resources check --budget', () => {
     expect(doc['error']).toMatchObject({ code: 'USAGE_INVALID', message: expect.stringContaining('--budget') });
   });
 
-  it('writes one progress line per unit when given --cost-log', () => {
+  it('writes one progress line per unit when given --supervised-by', () => {
     // The child lane, observed directly. A supervisor that cannot see the
     // child's progress cannot tell a slow run from a hung one, so this is the
     // signal the whole bound is built on.
     writeChecks(['quick', MD_ROWS]);
     const logPath = safePath.join(projectDir, 'progress.jsonl');
 
-    const { status } = check(COST_LOG_FLAG, logPath);
+    // As the supervisor this test stands in for writes it: naming this process, the child's parent.
+    // ⚠️ The child ends itself at end-of-file on stdin (its supervisor gone), and `executeCli`
+    // hands it THIS worker's stdin — which vitest holds open as a pipe. Run from a stdin at EOF,
+    // this case would end the child with exit 2 before its first line, and red loudly.
+    const { status } = check(SUPERVISED_BY_FLAG, asOurChild(logPath));
 
     expect(status).toBe(1);
     const kinds = fs.readFileSync(logPath, 'utf-8')
@@ -442,17 +405,38 @@ describe('vat resources check --budget', () => {
     ]);
   });
 
-  it('refuses --budget alongside --cost-log rather than silently ignoring the bound', () => {
-    // 🚨 `--cost-log` wins the supervise-or-work fork unconditionally, so
-    // `--budget 60 --cost-log x` ran with NO bound and said nothing about it. An
-    // explicitly-passed, documented flag must never be silently inert.
+  it('refuses --budget alongside --supervised-by rather than silently ignoring the bound', () => {
+    // 🚨 `--supervised-by` wins the supervise-or-work fork unconditionally, so `--budget 60` beside
+    // it ran with NO bound and said nothing. An explicitly-passed, documented flag must never be
+    // silently inert. The flag is otherwise VALID here (it names this process, the run's parent),
+    // so the sentence asserted is this refusal's and no other's.
     writeChecks(['quick', TXT_ROWS]);
 
     const { status, doc } = check(
-      '--budget', '60', COST_LOG_FLAG, safePath.join(projectDir, 'ignored.jsonl'),
+      '--budget', '60', SUPERVISED_BY_FLAG, asOurChild(safePath.join(projectDir, 'ignored.jsonl')),
     );
 
     expect(status).toBe(2);
-    expect(doc['error']).toMatchObject({ code: 'USAGE_INVALID', message: expect.stringContaining(COST_LOG_FLAG) });
+    expect(doc['error']).toMatchObject({
+      code: 'USAGE_INVALID',
+      message: expect.stringContaining('--budget cannot be combined with --supervised-by'),
+    });
+  });
+
+  it('refuses --supervised-by passed by hand: no supervisor is watching, so the run would be unbounded and silent', () => {
+    // 🚨 The flag used to be tolerated by hand: an unsupervised run, none of the run's notices, a
+    // log nobody read. It names its supervisor's pid now, and a process whose parent is not that
+    // supervisor is refused in plain words — before anything runs.
+    writeChecks(['quick', TXT_ROWS]);
+    const logPath = safePath.join(projectDir, 'by-hand.jsonl');
+
+    const { status, doc } = check(SUPERVISED_BY_FLAG, `standalone:${String(process.pid + 1)}:${logPath}`);
+
+    expect(status).toBe(2);
+    expect(doc['error']).toMatchObject({
+      code: 'USAGE_INVALID',
+      message: expect.stringContaining('is not an operator\'s flag'),
+    });
+    expect(fs.existsSync(logPath)).toBe(false);
   });
 });

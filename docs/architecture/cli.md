@@ -183,7 +183,7 @@ vat resources validate [path]   # Resource validation
 vat rag ...                     # Future: RAG commands
 vat skills ...                  # Future: Skill commands
 vat agents ...                  # Future: Agent commands
-vat validate                    # Run all configured source validators (resources + skills)
+vat validate                    # Run all configured source validators (resources, their checks, skills)
 ```
 
 ### Command Groups

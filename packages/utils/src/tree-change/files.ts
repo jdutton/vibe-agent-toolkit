@@ -6,7 +6,7 @@
  * that is always disposed of.
  */
 
-import type { Stats } from 'node:fs';
+import { rmSync, type Stats } from 'node:fs';
 import fs, { type FileHandle } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 
@@ -314,11 +314,16 @@ async function disposalFault(dir: string): Promise<unknown> {
     await removeEntry(dir);
     return undefined;
   } catch (error: unknown) {
-    // The action names the directory: what is left is all of it, while the errno may name an entry deep inside.
-    const fault = classifyFsFault(error, { side: 'environment', action: `remove the temporary directory ${dir}`, path: dir });
-    if (!isFsFaultError(fault)) throw error;
-    return fault;
+    return classifiedDisposalFault(dir, error);
   }
+}
+
+/** What a failed disposal of `dir` threw, classified; a non-filesystem error is a defect and is rethrown. */
+function classifiedDisposalFault(dir: string, error: unknown): unknown {
+  // The action names the directory: what is left is all of it, while the errno may name an entry deep inside.
+  const fault = classifyFsFault(error, { side: 'environment', action: `remove the temporary directory ${dir}`, path: dir });
+  if (!isFsFaultError(fault)) throw error;
+  return fault;
 }
 
 /**
@@ -340,6 +345,38 @@ export async function disposeTempDir(dir: string): Promise<unknown> {
   return await disposalFault(dir);
 }
 
+/** How many times {@link disposeTempDirSync} retries a transient refusal (`EBUSY`, `EPERM`, `ENOTEMPTY`, …). */
+const SYNC_DISPOSAL_RETRIES = 4;
+/** The first retry's delay; each further one waits this much longer (Node's linear backoff). */
+const SYNC_DISPOSAL_RETRY_DELAY_MS = 40;
+
+/**
+ * {@link disposeTempDir}, synchronously — for a process on its way OUT, where no promise will ever
+ * settle: a signal handler about to re-raise, an `exit` listener. Same refusal of any directory not
+ * strictly under the temp directory, same answer.
+ *
+ * ⚠️ No mode repair: it is for a directory the process filled with its own ordinary files. A
+ * SHORT bounded retry ({@link SYNC_DISPOSAL_RETRIES} × {@link SYNC_DISPOSAL_RETRY_DELAY_MS}, linear
+ * backoff, at most ~0.4 s) covers the one transient refusal a dying process meets: on Windows a
+ * child it has just terminated still holds a handle in the directory for a moment, and removal
+ * answers `EBUSY`/`EPERM` until the OS lets go. Anything still there after it is answered as the
+ * leftover fault.
+ *
+ * @param dir - The directory
+ * @returns `undefined` when it is gone (or was never there); otherwise the leftover fault
+ * @throws VatError {@link TEMP_DIR_OUTSIDE_TMPDIR_CODE} — a defect in the caller — for a
+ *   directory not strictly under the temp directory, with nothing removed
+ */
+export function disposeTempDirSync(dir: string): unknown {
+  refuseOutsideTmpdir(dir);
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: SYNC_DISPOSAL_RETRIES, retryDelay: SYNC_DISPOSAL_RETRY_DELAY_MS });
+    return undefined;
+  } catch (error: unknown) {
+    return classifiedDisposalFault(dir, error);
+  }
+}
+
 /** Refuse (a defect in the caller) a directory to dispose of that is not strictly under the temp directory. */
 function refuseOutsideTmpdir(dir: string): void {
   const tmp = normalizedTmpdir();
@@ -355,13 +392,16 @@ function refuseOutsideTmpdir(dir: string): void {
  *
  * @param dir - The directory, strictly under the temp directory
  * @param failure - What the work threw; the caller rethrows it
+ * @returns `undefined` when the directory went; otherwise the leftover fault, already recorded
+ *   beside `failure` — for a caller that must also say so where no report will carry the failure
  * @throws VatError {@link TEMP_DIR_OUTSIDE_TMPDIR_CODE} — a defect in the caller — for a
  *   directory not strictly under the temp directory, with nothing removed
  */
-export async function disposeTempDirAfterFailure(dir: string, failure: unknown): Promise<void> {
+export async function disposeTempDirAfterFailure(dir: string, failure: unknown): Promise<unknown> {
   refuseOutsideTmpdir(dir);
   const fault = await disposalFault(dir);
   if (fault !== undefined) recordSuppressedFault(failure, fault);
+  return fault;
 }
 
 /** What {@link withTempDir} hands back once its work SUCCEEDED: the work's value, and what the disposal left. */

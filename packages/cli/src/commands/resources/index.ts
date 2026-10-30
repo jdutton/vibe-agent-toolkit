@@ -7,6 +7,7 @@ import { Command, Option } from 'commander';
 import { collectRepeated } from '../../utils/repeatable-option.js';
 
 import { builtinCheckList, builtinSqlTwins } from './builtin-help.js';
+import { SUPERVISION_SIGNAL_CONTRACT } from './check-supervisor.js';
 import { checkCommand } from './check.js';
 import { queryCommand } from './query.js';
 import { scanCommand } from './scan.js';
@@ -286,10 +287,12 @@ Examples:
     .addOption(
       // Hidden because it is not an operator's flag: it is how a supervising
       // parent tells the child it spawned to do the work rather than spawn one
-      // of its own, and where to append its progress. Documenting it would
-      // invite adopters to depend on a file whose only contract is the
-      // `.strict()` schema the same build reads it with.
-      new Option('--cost-log <path>', 'Internal: append per-unit progress here').hideHelp(),
+      // of its own — who started it, the parent's pid, and where to append its
+      // progress, in ONE value. Passed by hand it is refused (the pid is not the
+      // process's parent). Documenting it would invite adopters to depend on a
+      // file whose only contract is the `.strict()` schema the same build reads
+      // it with.
+      new Option('--supervised-by <spec>', 'Internal: <standalone|phase>:<supervisor pid>:<progress log>').hideHelp(),
     )
     .addOption(yamlOrJsonFormat())
     .action(checkCommand)
@@ -452,8 +455,9 @@ A run that HANGS is killed and reported, not waited on:
   a cold parse cache; a 9,992-file adopter tree is ~5s warm and 16.5s cold. On
   a tree much larger than that with a cold parse cache, raise the bound.
 
-  An interrupted run NEVER exits 0 and never looks like a pass. There are two
-  ways to be interrupted and they are reported differently:
+  A run that did not finish NEVER exits 0 and never looks like a pass. It is
+  reported three different ways -- two interruptions, and a child whose own
+  exit contradicts its report:
 
     Killed by the budget -- exit 1, status: findings, and a
     RESOURCE_CHECK_BROKEN finding naming the unit that was in flight (a named
@@ -467,28 +471,37 @@ A run that HANGS is killed and reported, not waited on:
     naming what ended it, with the remedy that ending actually earns, and
     saying plainly that raising --budget is not it.
 
-  Either way the checks that COMPLETED keep their entry under checks (including
+    Contradicted -- the child wrote a complete report and then exited with a
+    code that report does not derive. Neither is trusted, and the report is
+    replaced: once the population is in, exit 1, status: findings,
+    RESOURCE_CHECK_BROKEN saying so.
+
+  Every way, the checks that COMPLETED keep their entry under checks (including
   rows), but their individual violations are NOT in issues -- the progress the
   child records is costs, not findings. Read that issue list as incomplete.
 
-  Interrupted before the population finished -- killed or dead during the
-  child's startup or its population -- nothing was examined, so the command
-  could not do its job: exit 2, status: error. The document is still
-  published, with data.population, populationSecs, lensSecs and
-  lensesEvaluated null, examined 0, and \`error\` naming the phase and which
-  of the two happened.
+  Interrupted before the population finished -- killed, dead or contradicted
+  during the child's startup or its population -- nothing was examined, so
+  the command could not do its job: exit 2, status: error. The document is
+  still published, with data.population, populationSecs, lensSecs and
+  lensesEvaluated null, examined 0, and \`error\` naming the phase and what
+  happened.
 
-  --budget cannot be combined with --cost-log (exit 2): --cost-log means the
-  work runs in this process, where the budget could not be enforced.
 
   --budget 0 removes the bound and runs everything in this process. Nothing
   will then stop a runaway statement. It has to be written exactly 0: an empty
   --budget, and any other value that PARSES to zero (1e-400 underflows, -0 is
   negative zero), are refused rather than read as 0 -- an unset shell variable
   must not silently remove the bound.
-  Ctrl-C still works at a keyboard, because this command installs no signal
-  handler -- do not add one, a process blocked in synchronous SQLite survives
-  SIGINT once a handler exists.
+  Ctrl-C still works at a keyboard. Under --budget 0 this process runs the
+  SQL and installs no signal handler -- a process blocked in synchronous
+  SQLite survives SIGINT once a handler exists. Supervised, the child runs
+  the SQL in the terminal's process group and installs no handler either, so
+  a terminal's Ctrl-C ends it directly; the supervising process handles the
+  terminating signals while it supervises, only to SIGKILL the child and
+  then end of the same signal.
+
+${SUPERVISION_SIGNAL_CONTRACT}
 
 Output Fields (the shared report envelope; schema: packages/cli/schemas/resources-check.json):
   status:    ok | findings | error -- a literal statement about \`findings\`.
@@ -528,12 +541,12 @@ Output Fields (the shared report envelope; schema: packages/cli/schemas/resource
 Exit Codes:
   0 - No error-severity findings
   1 - At least one (a violation, a broken check, an empty corpus, no check
-      having run at all, or a run killed by --budget or DEAD while a check
-      was running or its document was being built)
+      having run at all, or a run killed by --budget, DEAD, or contradicted
+      by its own exit once its population was in)
   2 - System error, an unknown --check name, a [path] that names no directory,
-      an unusable --budget (an empty one, one that means zero without being
-      written 0, or one passed with --cost-log), or a run killed or dead
-      before its population completed
+      an unusable --budget (an empty one, or one that means zero without being
+      written 0), or a run killed, dead or contradicted before its population
+      completed
   The code is derived from the document's status and summary, never chosen
   beside it: status error is 2, error-severity findings are 1.
 

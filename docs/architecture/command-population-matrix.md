@@ -156,7 +156,7 @@ are labelled below rather than rewritten. Where §4 and
 | `vat agent installed` | one-level `fs.readdir` over a hardcoded scope list | none | ⚠️ undeclared |
 | `vat cache clear` | not a corpus — walks `<tmpdir>/.vat-cache` | none | `packages/cli/src/commands/cache/clear.ts › clearCacheDirectory()` |
 | `vat build` | orchestrator; inherits `vat skills build` then `vat claude plugin build` | inherited | `packages/cli/src/commands/build.ts › createBuildTopLevelCommand()` |
-| `vat validate` | orchestrator; inherits `vat resources validate` then `vat skills validate` | inherited | `packages/cli/src/commands/validate.ts › createValidateTopLevelCommand()` |
+| `vat validate` | orchestrator; inherits `vat resources validate`, then `vat resources check` (a supervised child, whenever `resources:` is configured), then `vat skills validate` | inherited | `packages/cli/src/commands/validate.ts › createValidateTopLevelCommand()` |
 | `vat verify` | orchestrator; inherits `vat resources validate`, `vat skills validate`, `vat claude marketplace validate`, plus the in-process phases that read `dist/` | inherited | `packages/cli/src/commands/verify.ts › createVerifyTopLevelCommand()` |
 
 **The mechanism column is the finding, not a detail.** Beyond the incumbent walk and the projection
@@ -197,10 +197,13 @@ is on by default (`packages/cli/src/utils/projection-store.ts › projectionStor
 carries the measurement the flip was made on), and `VAT_PROJECTION_STORE=off` — or `VAT_CACHE=0` for
 every cache at once — is the way back to re-deriving each run. And a phase is not a command:
 `vat build` populates twice in one invocation — once under `vat skills build`'s population bracket,
-again under `vat claude plugin build`'s. `vat validate` no longer does: its orchestrator holds one
-population scope around every surface, and a nested scope over the same repository joins it rather
-than opening a second store (`packages/cli/src/commands/validate.ts ›
-runPhasesUnderOnePopulation()`).
+again under `vat claude plugin build`'s. `vat validate` populates once IN PROCESS: its orchestrator
+holds one population scope around the in-process surfaces (resources, skills), and a nested scope
+over the same repository joins it rather than opening a second store
+(`packages/cli/src/commands/validate.ts › runPhasesUnderOnePopulation()`). Its `checks` phase is the
+exception — a supervised child process (`vat resources check`'s), so it takes its own git snapshot,
+populates under its own scope and, on a miss, writes the store: a run is one in-process population
+plus the child's.
 
 ## 4. What each command sees
 

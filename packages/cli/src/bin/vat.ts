@@ -27,23 +27,22 @@
  * Works in both git and non-git directories.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ExitCode, exitCodeOfChild, installLastResortExit } from '@vibe-agent-toolkit/schema';
+import { ExitCode, installLastResortExit } from '@vibe-agent-toolkit/schema';
 import {
   findNodeWorkspaceRoot,
   followedKindSync,
   isPathAbsentError,
   safePath,
 } from '@vibe-agent-toolkit/utils';
-import {
-  describeStdioBlocking,
-  makeStdioBlocking,
-} from '@vibe-agent-toolkit/utils/process';
+import { describeStdioBlocking, makeStdioBlocking } from '@vibe-agent-toolkit/utils/process';
+
+import { superviseCli } from './supervise-cli.js';
 
 // Before ANY output. This file — not bin.ts — is what package.json maps `vat` to,
 // so it is the CLI entry point in every installed copy, and `makeStdioBlocking`
@@ -74,7 +73,19 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 type Context = 'dev' | 'local' | 'global';
 
-function spawnCli(binPath: string, context: Context, contextPath?: string): never {
+/**
+ * Run the CLI as a child of this process, and end the way it ended.
+ *
+ * Asynchronous, never `spawnSync`: this wrapper is the `vat` an operator and a CI runner start, so
+ * `kill <pid>` lands here, and a synchronous spawn died of it at once while the CLI — with any
+ * `resources check` child it supervises — ran on, reparented. How a signal is handled meanwhile
+ * (forwarded on POSIX, never on Windows) and how this process then ends: {@link superviseCli}.
+ *
+ * @param binPath - The CLI entry (`dist/bin.js`) to run
+ * @param context - How it was found, for `VAT_CONTEXT`
+ * @param contextPath - Where it was found, for `VAT_CONTEXT_PATH`
+ */
+function spawnCli(binPath: string, context: Context, contextPath?: string): void {
   const env = {
     ...process.env,
     VAT_CONTEXT: context,
@@ -83,15 +94,10 @@ function spawnCli(binPath: string, context: Context, contextPath?: string): neve
 
   // The node running this wrapper, never a PATH lookup: the child must be the
   // same binary, and `node` by name is whatever PATH says first.
-  const result = spawnSync(process.execPath, [binPath, ...process.argv.slice(2)], {
+  superviseCli(spawn(process.execPath, [binPath, ...process.argv.slice(2)], {
     stdio: 'inherit',
     env,
-  });
-
-  // The child derived its code from its own document. A signal death has no
-  // status, and a code off the contract (an older build's, Node's abort) is not
-  // a verdict the child published, so neither is forwarded verbatim.
-  process.exit(exitCodeOfChild(result.status));
+  }));
 }
 
 /**
@@ -271,7 +277,7 @@ function main(): void {
   const debug = process.env['VAT_DEBUG'] === '1';
 
   // Reported here rather than in the block further down because every dispatch
-  // path below ends in `spawnCli`, which never returns.
+  // path below ends in `spawnCli`.
   reportStdioBlocking(debug);
 
   // Priority 1 & 2: Explicit override via VAT_BIN or VAT_ROOT_DIR. A named
@@ -284,6 +290,7 @@ function main(): void {
       console.error(`[vat debug] Binary: ${override.binPath}`);
     }
     spawnCli(override.binPath, 'dev', override.contextPath);
+    return;
   }
 
   // Find the Node monorepo workspace root from the current working directory.

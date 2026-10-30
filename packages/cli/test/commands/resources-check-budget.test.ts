@@ -40,6 +40,7 @@ import { unitInFlight } from '../../src/commands/resources/check-progress.js';
 import { CHECK_REPORT_SCHEMA } from '../../src/commands/resources/check-schema.js';
 import {
   type AbnormalDeath,
+  type CheckInvocation,
   parseBudgetSeconds,
   pollWatchdog,
   readCompletedDocument,
@@ -87,8 +88,8 @@ const CHECKS_DONE: ProgressEntry = { kind: 'checks-complete' };
 /** A watchdog that has seen nothing yet, at time zero. */
 const FRESH: WatchdogState = { bytesSeen: 0, quietSince: 0 };
 
-/** Whatever a supervising parent handed its child as `--cost-log`. */
-const A_COST_LOG = 'progress.jsonl';
+/** What a supervising parent — THIS process, as the child's parent — hands its child as `--supervised-by`. */
+const supervisedBy = (invoker: CheckInvocation, pid = process.ppid): string => `${invoker}:${String(pid)}:progress.jsonl`;
 /** Node's own heap abort — the signal a runaway that SELECTS rows dies of. */
 const ABORTED = 'SIGABRT';
 /** A binary that is not there, for the spawn-failure cases. */
@@ -156,23 +157,23 @@ describe('parseBudgetSeconds', () => {
 });
 
 describe('runsInThisProcess — the fork', () => {
-  it('does the work HERE when a cost log was handed to it', () => {
+  it('does the work HERE when it is a supervised child', () => {
     // 🚨 The recursion guard, and the reason it is a named function rather than
-    // a condition inline in the command. `--cost-log` is what a supervising
+    // a condition inline in the command. `--supervised-by` is what a supervising
     // parent passes its child; a child that read the budget instead would spawn
     // a child of its own, and so on. Note the budget is the DEFAULT here — the
-    // cost log has to win against it, not merely alongside it.
-    expect(runsInThisProcess({ costLog: A_COST_LOG, budgetSecs: 300 })).toBe(true);
+    // flag has to win against it, not merely alongside it.
+    expect(runsInThisProcess({ supervisedBy: supervisedBy('standalone'), budgetSecs: 300 })).toBe(true);
   });
 
   it('does the work HERE when the operator removed the bound', () => {
     // `--budget 0` buys nothing from a child: there is nothing to supervise, and
     // a spawn would cost a second process startup for no bound at all.
-    expect(runsInThisProcess({ costLog: undefined, budgetSecs: 0 })).toBe(true);
+    expect(runsInThisProcess({ supervisedBy: undefined, budgetSecs: 0 })).toBe(true);
   });
 
-  it('supervises a child when there is a bound and no cost log', () => {
-    expect(runsInThisProcess({ costLog: undefined, budgetSecs: 300 })).toBe(false);
+  it('supervises a child when there is a bound and it is not a supervised child', () => {
+    expect(runsInThisProcess({ supervisedBy: undefined, budgetSecs: 300 })).toBe(false);
   });
 });
 
@@ -236,15 +237,17 @@ describe('pollWatchdog', () => {
  * The recovered payload for a run killed while `runaway` was in flight.
  *
  * @param entries - What the child's log held, defaulting to the hang above
+ * @param invocation - Who ran the checks, defaulting to the operator's own `vat resources check`
  * @returns The input the document is built from
  */
 function killed(
   entries: readonly ProgressEntry[] = [POPULATION, FIRST_COST, HUNG_START],
+  invocation: CheckInvocation = 'standalone',
 ): CheckPayloadInput {
   return buildInterruptedCheckInput({
     entries,
     root: '/corpus',
-    ending: { kind: 'budget', budgetSecs: 2 },
+    ending: { kind: 'budget', budgetSecs: 2, invocation },
     durationMs: 3400,
   });
 }
@@ -496,33 +499,59 @@ describe('parseBudgetSeconds — the EMPTY value', () => {
 });
 
 describe('requireSupervisableFlags', () => {
-  // 🚨 The defect: `--cost-log` wins the fork unconditionally, so
-  // `--budget 60 --cost-log /tmp/x` ran UNBOUNDED and said nothing. An
+  // 🚨 The defect: `--supervised-by` wins the fork unconditionally, so
+  // `--budget 60` beside it ran UNBOUNDED and said nothing. An
   // explicitly-passed, documented flag must never be silently inert.
-  it('refuses an explicit budget alongside --cost-log', () => {
+  it('refuses an explicit budget alongside --supervised-by', () => {
     expect(() => requireSupervisableFlags({
-      costLog: A_COST_LOG, budgetRaw: '60', budgetSecs: 60,
-    })).toThrow(/--cost-log/);
+      supervisedBy: supervisedBy('standalone'), budgetRaw: '60', budgetSecs: 60,
+    })).toThrow(/--budget cannot be combined with --supervised-by/);
   });
 
-  it('allows --cost-log on its own — that is the child the parent spawns', () => {
-    // ⚠️ The real spawn path. `childArgs` appends `--cost-log` and does NOT
-    // forward `--budget`, so the supervised lane must survive this guard.
+  it.each(['standalone', 'phase'] as const)('reads --supervised-by %s from the parent that spawned it — the real spawn path', (invoker) => {
+    // ⚠️ `childArgs` appends `--supervised-by` and does NOT forward `--budget`, so the
+    // supervised lane must survive this guard — and hand back what the value carried.
+    expect(requireSupervisableFlags({
+      supervisedBy: supervisedBy(invoker), budgetRaw: undefined, budgetSecs: 300,
+    })).toStrictEqual({ invoker, supervisorPid: process.ppid, progressLog: 'progress.jsonl' });
+  });
+
+  it('keeps a progress log whose path holds a colon (a Windows drive)', () => {
+    const WINDOWS_LOG = String.raw`C:\tmp\vat-check-1\progress.jsonl`;
+    expect(requireSupervisableFlags({
+      supervisedBy: `phase:${String(process.ppid)}:${WINDOWS_LOG}`, budgetRaw: undefined, budgetSecs: 300,
+    })?.progressLog).toBe(WINDOWS_LOG);
+  });
+
+  // 🚨 Passed by hand, the flag ran the checks unbounded and printed none of the run's notices.
+  // The value names its supervisor's pid, and a process whose parent is not that pid is refused.
+  it('refuses --supervised-by naming a supervisor that is not this process\'s parent', () => {
     expect(() => requireSupervisableFlags({
-      costLog: A_COST_LOG, budgetRaw: undefined, budgetSecs: 300,
+      supervisedBy: supervisedBy('standalone', process.ppid + 1), budgetRaw: undefined, budgetSecs: 300,
+    })).toThrow(/was not spawned by the supervisor it names/);
+  });
+
+  it.each([
+    ['an unknown invoker', `operator:${String(process.ppid)}:progress.jsonl`],
+    ['no pid', 'phase:progress.jsonl'],
+    ['no progress log', `phase:${String(process.ppid)}:`],
+    ['a bare path', '/tmp/progress.jsonl'],
+  ])('refuses a --supervised-by value with %s', (_label, value) => {
+    expect(() => requireSupervisableFlags({
+      supervisedBy: value, budgetRaw: undefined, budgetSecs: 300,
+    })).toThrow(/is not a value a supervisor writes/);
+  });
+
+  it('allows --budget 0 with --supervised-by: both say "no supervision"', () => {
+    expect(() => requireSupervisableFlags({
+      supervisedBy: supervisedBy('standalone'), budgetRaw: '0', budgetSecs: 0,
     })).not.toThrow();
   });
 
-  it('allows --budget 0 with --cost-log: both say "no supervision"', () => {
-    expect(() => requireSupervisableFlags({
-      costLog: A_COST_LOG, budgetRaw: '0', budgetSecs: 0,
-    })).not.toThrow();
-  });
-
-  it('allows a budget with no cost log — the ordinary supervised run', () => {
-    expect(() => requireSupervisableFlags({
-      costLog: undefined, budgetRaw: '60', budgetSecs: 60,
-    })).not.toThrow();
+  it('allows a budget in a process that is not a supervised child — the ordinary supervised run', () => {
+    expect(requireSupervisableFlags({
+      supervisedBy: undefined, budgetRaw: '60', budgetSecs: 60,
+    })).toBeUndefined();
   });
 });
 
@@ -672,12 +701,53 @@ describe('readCompletedDocument — a completion whose document does not survive
     expect(exitCodeForReport(report)).toBe(ExitCode.FINDINGS);
   });
 
-  it('accepts a whole document, and its exit code is derived from it', () => {
+  it('accepts a whole document whose exit the child agreed with', () => {
     // ⛔ The negative control: without it "always a death" passes the two above.
     const whole = buildCheckOutputData(diedOf({ kind: 'no-status' }));
-    const read = readCompletedDocument(JSON.stringify(whole), 0, 'json');
+    const read = readCompletedDocument(JSON.stringify(whole), exitCodeForReport(whole), 'json');
 
     expect(read).toMatchObject({ document: { report: { status: whole.status } } });
+  });
+});
+
+describe('readCompletedDocument — a child whose exit DISAGREES with its own document', () => {
+  /** A whole, clean report: the shape a child that finished every check writes. */
+  const clean = (): string => JSON.stringify(buildCheckOutputData({
+    root: '/corpus',
+    durationMs: 1200,
+    populated: { population: 'store', populationMs: 1180, lensMs: 0, lensesEvaluated: [], membersEnumerated: 8123 },
+    issues: [],
+    costs: [{ name: 'no-markdown', durationMs: 4.25, rows: 0 }],
+  }));
+
+  // 🚨 The defect: the parent forwards the DOCUMENT's code, never the process's, so a complete `ok`
+  // report followed by a non-zero exit was published as a clean pass.
+  it('refuses to forward a clean report the child then exited 3 on', () => {
+    const read = readCompletedDocument(clean(), 3, 'json');
+
+    expect(read).toStrictEqual({ death: { kind: 'exit-disagrees', code: 3, documentExit: ExitCode.OK } });
+  });
+
+  it('publishes RESOURCE_CHECK_BROKEN, exit 1, naming both codes and saying the run did finish', () => {
+    const read = readCompletedDocument(clean(), 3, 'json');
+    if (!('death' in read)) throw new Error('a disagreeing exit was forwarded');
+    const report = buildCheckOutputData(diedOf(read.death, [POPULATION, FIRST_COST, CHECKS_DONE]));
+    const message = report.findings[0]?.message ?? '';
+
+    expect(report.findings.map((finding) => finding.code)).toContain('RESOURCE_CHECK_BROKEN');
+    expect(exitCodeForReport(report)).toBe(ExitCode.FINDINGS);
+    expect(message).toContain('exit contradicts its own report');
+    expect(message).toContain('verdict is exit 0');
+    expect(message).toContain('exited 3');
+    // Not the mid-run death sentence: this child finished every check.
+    expect(message).not.toContain('DIED before it finished');
+  });
+
+  it('forwards a report whose non-zero exit IS the one it implies (the negative control)', () => {
+    const findings = buildCheckOutputData(diedOf({ kind: 'no-status' }));
+
+    expect(exitCodeForReport(findings)).toBe(ExitCode.FINDINGS);
+    expect(readCompletedDocument(JSON.stringify(findings), ExitCode.FINDINGS, 'json')).toHaveProperty('document');
   });
 });
 
@@ -876,10 +946,10 @@ describe('resolveChildEnding — a kill the kernel REFUSED', () => {
       code: null,
       signal: null,
       killed: true,
-      killFailure: { detail: KILL_REFUSED, pid: ORPHAN_PID },
+      killFailure: { detail: KILL_REFUSED, pid: ORPHAN_PID, refused: true },
     })).toStrictEqual({
       kind: 'abnormal',
-      death: { kind: 'kill-failed', detail: KILL_REFUSED, pid: ORPHAN_PID },
+      death: { kind: 'kill-failed', detail: KILL_REFUSED, pid: ORPHAN_PID, refused: true },
     });
   });
 
@@ -904,7 +974,7 @@ describe('resolveChildEnding — a kill the kernel REFUSED', () => {
       code: 0,
       signal: null,
       killed: true,
-      killFailure: { detail: KILL_REFUSED, pid: ORPHAN_PID },
+      killFailure: { detail: KILL_REFUSED, pid: ORPHAN_PID, refused: true },
     })).toStrictEqual({ kind: 'completed', code: 0 });
   });
 });
@@ -912,7 +982,7 @@ describe('resolveChildEnding — a kill the kernel REFUSED', () => {
 describe('the document a run whose KILL was refused publishes', () => {
   /** The recovered payload for a breach whose SIGKILL the kernel refused. */
   const refused = (): CheckPayloadInput =>
-    diedOf({ kind: 'kill-failed', detail: KILL_REFUSED, pid: ORPHAN_PID });
+    diedOf({ kind: 'kill-failed', detail: KILL_REFUSED, pid: ORPHAN_PID, refused: true });
 
   it('says the kill was refused, and hands over the pid still running', () => {
     const [finding] = refused().issues;
@@ -945,6 +1015,18 @@ describe('the document a run whose KILL was refused publishes', () => {
 
   it('never claims the watchdog did not fire — it fired and was rebuffed', () => {
     expect(refused().issues[0]?.message).not.toContain('watchdog never fired');
+  });
+
+  // A SIGKILL the kernel ACCEPTED that still did not end the child (uninterruptible I/O) is not a
+  // refusal, and blaming EPERM would send the operator after a permission that was never denied.
+  it('a kill that was accepted and did not end the child says so — never "refused", never EPERM — in both sentences', () => {
+    const [finding] = diedOf({ kind: 'kill-failed', detail: 'accepted 20 times', pid: ORPHAN_PID, refused: false }).issues;
+
+    expect(finding?.message).toContain('DID NOT END IT');
+    expect(finding?.message).toContain('uninterruptible I/O');
+    expect(finding?.message).toContain(String(ORPHAN_PID));
+    expect(finding?.message).not.toContain('REFUSED (');
+    expect(finding?.message).not.toContain('EPERM');
   });
 });
 
@@ -1010,6 +1092,62 @@ describe('the remedy each ending earns', () => {
     // Where it is TRUE: neither a code nor a signal, so there is nothing to
     // name and nothing to advise.
     expect(diedOf({ kind: 'no-status' }).issues[0]?.message).toContain(NO_INFORMATION);
+  });
+});
+
+/**
+ * Each row carries the clause only ITS unit's message says (where the kill landed) and the remedy
+ * its branch gives, so a row whose message came from the wrong branch (or the generic one) reds
+ * instead of passing on the shared `--budget` clause.
+ *
+ * `converting` is the window after the last check filed its cost and before `checks-complete`
+ * (its rows still becoming issues): a log of completed checks only, which reads as no unit in
+ * flight and earns the statement remedy.
+ */
+const BRANCHES: ReadonlyArray<readonly [string, readonly ProgressEntry[], string, string]> = [
+  // An empty log is a child that never booted; `started` alone is one that was populating.
+  ['startup', [], 'before the child process had finished starting', 'Node and vat were still loading'],
+  ['population', [STARTED], 'before its population completed', 'Population is legitimately slow'],
+  ['a statement', [POPULATION, FIRST_COST, HUNG_START], 'while the check "', 'A statement that will not finish'],
+  ['converting', [POPULATION, FIRST_COST], 'after the last one had filed its cost', 'A statement that will not finish'],
+  ['reporting', [POPULATION, FIRST_COST, CHECKS_DONE], 'while its document was being assembled', 'the SIZE of the document'],
+];
+const BRANCH_MARKERS = BRANCHES.map(([, , marker]) => marker);
+const BRANCH_REMEDIES = [...new Set(BRANCHES.map(([, , , remedy]) => remedy))];
+
+/** A `--budget` mention that is not part of the spelled-out `vat resources check` command. */
+const BARE_BUDGET = /(?<!vat resources check )`--budget/;
+
+/** Asserts `message` carries `marker` and `remedy`, and no OTHER row's marker or remedy. */
+function expectOnlyBranch(message: string, marker: string, remedy: string): void {
+  expect(message).toContain(marker);
+  expect(message).toContain(remedy);
+  for (const other of [...BRANCH_MARKERS, ...BRANCH_REMEDIES].filter((candidate) => candidate !== marker && candidate !== remedy)) {
+    expect(message).not.toContain(other);
+  }
+}
+
+/**
+ * 🔑 A kill's remedy names only a flag the running verb accepts. `--budget` is `vat resources
+ * check`'s alone: standalone, the remedy names the flag; as `vat validate`'s `checks` phase, it
+ * names the whole `vat resources check --budget <seconds>` command and never the bare flag,
+ * which `vat validate` would reject as an unknown option.
+ */
+describe('a budget kill remedy, by who ran the checks', () => {
+  it.each(BRANCHES)('as a phase, during %s: names `vat resources check --budget`, never the bare flag', (_branch, entries, marker, remedy) => {
+    const message = killed(entries, 'phase').issues[0]?.message ?? '';
+
+    expectOnlyBranch(message, marker, remedy);
+    expect(message).toContain('`vat resources check --budget <seconds>`');
+    expect(message).not.toMatch(BARE_BUDGET);
+  });
+
+  it.each(BRANCHES)('standalone, during %s: names the `--budget` flag itself', (_branch, entries, marker, remedy) => {
+    const message = killed(entries, 'standalone').issues[0]?.message ?? '';
+
+    expectOnlyBranch(message, marker, remedy);
+    expect(message).toMatch(BARE_BUDGET);
+    expect(message).not.toContain('vat resources check --budget');
   });
 });
 

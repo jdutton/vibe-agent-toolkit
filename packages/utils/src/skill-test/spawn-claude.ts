@@ -1,7 +1,7 @@
-import { spawnSync, type ChildProcess, type ChildProcessByStdio } from 'node:child_process';
+import type { ChildProcess, ChildProcessByStdio } from 'node:child_process';
 import { Readable, type Writable } from 'node:stream';
 
-import { isProcessGoneError } from '../errors/errno-table.js';
+import { killProcessTree, type KillProcessTreeOptions } from '../kill-process-tree.js';
 import { spawnHardened } from '../spawn-hardened.js';
 
 export interface ClaudeSpawnArgs {
@@ -76,36 +76,12 @@ export interface SpawnResult {
 }
 
 /**
- * SIGKILL the child AND every process in its group. The child is spawned
- * `detached` (POSIX) so it leads a new process group; killing the negated pid
- * reaps backgrounded grandchildren (e.g. a skill that runs `nohup … &`) and
- * orphaned MCP subprocesses that a direct `child.kill()` would leave running.
- *
- * - Guards an undefined pid (child never spawned — nothing to kill).
- * - Absorbs the throw that means the group is already gone (see
- *   {@link isProcessGoneError}); anything else stays loud.
- * - Windows has no POSIX process groups: fall back to `taskkill /T /F`, which
- *   terminates the whole process tree.
+ * How a `claude` child is killed: with every process in its group. It is spawned `detached` (POSIX),
+ * so it leads a new process group, and the group kill reaps backgrounded grandchildren (a skill that
+ * runs `nohup … &`) and orphaned MCP subprocesses that a direct `child.kill()` would leave running;
+ * on Windows `taskkill /T /F` takes the tree.
  */
-export function killProcessTree(child: { pid?: number | undefined }): void {
-  const { pid } = child;
-  if (pid === undefined) return;
-  try {
-    if (process.platform === 'win32') {
-      // eslint-disable-next-line sonarjs/no-os-command-from-path -- taskkill is a fixed Windows system command (no PATH-injection surface); it is the only POSIX-process-group-free way to terminate the child's tree.
-      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F']);
-    } else {
-      // Negated pid → deliver the signal to the whole process group.
-      process.kill(-pid, 'SIGKILL');
-    }
-  } catch (error) {
-    // A reaper that says nothing about a tree it did not reap is the
-    // orphan-billing defect the registry exists to prevent, so only "already
-    // gone" is absorbed. A bug here — the one other thing `process.kill` on our
-    // own child's group can throw — stays loud.
-    if (!isProcessGoneError(error)) throw error;
-  }
-}
+const CLAUDE_TREE: KillProcessTreeOptions = { groupLeader: true, throughChild: false };
 
 /**
  * Registry of currently in-flight `claude` child processes, keyed by the
@@ -133,7 +109,7 @@ const activeClaudeChildren = new Set<ChildProcess>();
  */
 export function killAllActiveClaudeChildren(): void {
   for (const child of activeClaudeChildren) {
-    killProcessTree(child);
+    killProcessTree(child, CLAUDE_TREE);
   }
   activeClaudeChildren.clear();
 }
@@ -229,7 +205,7 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
 
     const wallTimer = setTimeout(() => {
       timedOut = true;
-      killProcessTree(child);
+      killProcessTree(child, CLAUDE_TREE);
     }, opts.timeoutMs);
 
     // Stall watchdog: reset on every stdout/stderr chunk; fire if silent for stallMs.
@@ -240,7 +216,7 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
         if (stallTimer !== undefined) clearTimeout(stallTimer);
         stallTimer = setTimeout(() => {
           stalled = true;
-          killProcessTree(child);
+          killProcessTree(child, CLAUDE_TREE);
         }, stallMs);
       };
       resetStallTimer();
@@ -264,7 +240,7 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
 
     promptStream.on('error', err => {
       clearAllTimers();
-      killProcessTree(child);
+      killProcessTree(child, CLAUDE_TREE);
       reject(err);
     });
     // Swallow EPIPE: if the child exits before consuming all stdin, the write
@@ -280,7 +256,7 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
     // ever fires while the process is actually alive we would otherwise drop it
     // from the reap set without killing it (the exact orphan this file guards
     // against). killProcessTree no-ops on an undefined pid (never-spawned case).
-    child.on('error', err => { clearAllTimers(); killProcessTree(child); reject(err); });
+    child.on('error', err => { clearAllTimers(); killProcessTree(child, CLAUDE_TREE); reject(err); });
     child.on('close', code => { clearAllTimers(); resolve({ status: code ?? -1, timedOut, stalled }); });
   });
 }

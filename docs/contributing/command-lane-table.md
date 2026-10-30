@@ -69,8 +69,8 @@ is set: `vat resources scan`, `vat resources validate` and `vat rag index` throu
 `› withResourcePopulationSource()` — both gated by `› resourcesProjectionCrawlSelected()`, which is
 `!== 'walk'`; `vat inventory` on a plugin directory; and `vat claude context`, which has no walk
 arm at all. Four more inherit one: `vat build`, `vat validate` and
-`vat verify` through the phases they spawn, and `vat skill test run` by re-entering
-`vat claude plugin build`.
+`vat verify` through the phases they run in process (and `vat validate` through its `checks`
+child as well), and `vat skill test run` by re-entering `vat claude plugin build`.
 
 No command carries two projections in one process: `vat claude context` populates the claude-context
 lens that `vat resources validate` used to also populate, beside its resource population, for a
@@ -84,17 +84,18 @@ second copy of it, and records only which enumeration entry point a command's ro
 
 ## Commands that enumerate
 
-`vat validate`, `vat verify` and `vat build` are **orchestrators**: they do no enumeration in
-process, they `spawnSync` the vat binary once per phase. Their lane is the union of the phases they
-spawn, and they are the mechanism behind "every verb re-parses the same corpus in a separate
-process" — a cross-process cache is the only kind that can help them.
+`vat validate`, `vat verify` and `vat build` are **orchestrators**: each phase is a whole vat
+command run IN PROCESS through `runPhase`, so their lane is the union of the lanes of the phases they
+run. The one exception is `vat validate`'s `checks` phase, which is `vat resources check`'s
+supervised CHILD process — it populates in a process of its own, so only the cross-process store can
+share work between it and the phases beside it.
 
 | Command | Lane | Via |
 |---|---|---|
 | `vat audit [path]` | `crawl` + `registry-md-html` | `audit.ts` → `audit/scan-population.ts › enumerateAuditPopulation()` → `crawlDirectory` for the subject tree (git route with untracked files by default; the walk route under `--include-artifacts` or when the scan root is itself gitignored — `NEVER_CRAWL_GLOBS` applies on both); `crawlAndResolveRegistry` once per project root it finds for the link graph. Against a bare skills directory only the crawl runs |
-| `vat build` | *spawns* `skills build`, `claude plugin build` | `build.ts` → `runPhase` |
-| `vat validate` | *spawns* `resources validate`, `skills validate` | `validate.ts` → `runPhase` |
-| `vat verify` | `crawl`, *plus spawns* `resources validate`, `skills validate` | `verify.ts` → `runPhase` |
+| `vat build` | *runs* `skills build`, `claude plugin build` | `build.ts` → `runPhase` |
+| `vat validate` | *runs* `resources validate`, `resources check` (as a supervised child process), `skills validate` | `validate.ts` → `runPhase` |
+| `vat verify` | `crawl`, *plus runs* `resources validate`, `skills validate` | `verify.ts` → `runPhase` |
 | `vat agent build` | `crawl` + `registry-md` + `registry-md-html` | `agent/build.ts` |
 | `vat claude plugin build` | `crawl` + `registry-md` + `registry-md-html` | `claude/plugin/build.ts` |
 | `vat skills build` | `crawl` + `registry-md` + `registry-md-html` | `skills/build.ts` |
@@ -104,7 +105,7 @@ process" — a cross-process cache is the only kind that can help them.
 | `vat skill review` | `crawl` + `registry-md-html` | `skill/review.ts` |
 | `vat corpus scan` | `crawl` + `registry-md-html` (`?`) | `corpus/index.ts` (inline; see limits) |
 | `vat okf validate` | `okf-bundle-walk` | `okf/validate.ts` → `discoverOkfBundle` |
-| `vat resources check` | `crawl`, *in a spawned child* | `resources/check.ts` — one population, same lane as `resources query`; both reach it through `packages/cli/src/utils/projection-query.ts › withQueriedProjection()`. With a `--budget` (the default), the crawl happens in a CHILD process: the parent spawns `dist/bin.js resources check … --cost-log <path>` and enumerates nothing itself, so it can kill a run that stops making progress (a check's SQL is adopter-authored and a runaway statement cannot be interrupted in process). `--budget 0` keeps everything in one process. It spawns ITSELF, exactly once, and its lane is unchanged |
+| `vat resources check` | `crawl`, *in a spawned child* | `resources/check.ts` — one population, same lane as `resources query`; both reach it through `packages/cli/src/utils/projection-query.ts › withQueriedProjection()`. With a `--budget` (the default), the crawl happens in a CHILD process: the parent spawns `dist/bin.js resources check … --supervised-by <invoker>:<pid>:<progress log>` and enumerates nothing itself, so it can kill a run that stops making progress (a check's SQL is adopter-authored and a runaway statement cannot be interrupted in process). `--budget 0` keeps everything in one process. It spawns ITSELF, exactly once, and its lane is unchanged |
 | `vat resources query` | `crawl` | `resources/query.ts` — one population, via `packages/resources/src/projection/resource-population.ts › buildResourceProjection()`. Same registry and same `DECLINE_IGNORED` parameter set as `resources scan`/`validate`, with content parsing ON. ⚠️ Its ROW SET is a strict superset of what `scan`/`validate` see: those post-filter directories, non-existent rows and gitignored rows out of the population, so `SELECT COUNT(*) FROM resource_realizations` counts directories a validate run never looks at |
 | `vat resources scan` | `crawl` | `resources/scan.ts` |
 | `vat resources validate` | `crawl` ×1 | `resources/validate.ts` — one crawl, for the resource population, via `loadResourcesWithConfig()`. It has no knowledge of the context budget: no check, no flag in either direction, and no other command carries one either — VAT ships no default-on context-budget check at all |
@@ -212,10 +213,12 @@ corrected since that derivation cite the code site that decided them.
 
 ### What the runtime cross-check caught that static analysis could not
 
-`vat validate` was classified `NONE` and is not: it spawns `resources validate` and
-`skills validate` as child processes. **No import edge exists to follow**, so a static graph is
-structurally blind to it and always will be. The child inherits stderr, which is the only reason the
-instrumented run saw it. Any future revision of this table must keep the runtime leg.
+`vat validate` was classified `NONE` and was not: it spawned `resources validate` and
+`skills validate` as child processes then (its phases now run in process, and only `checks` is a
+child — see "Commands that enumerate"). **No import edge exists to follow into a spawned child**, so
+a static graph is structurally blind to it and always will be. The child inherited stderr, which is
+the only reason the instrumented run saw it. Any future revision of this table must keep the
+runtime leg.
 
 ## Declared limits
 

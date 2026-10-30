@@ -118,6 +118,9 @@ const PROBE_FILES: Readonly<Record<string, string>> = {
   // Scoped by its own `paths` option to the CLI's command modules; the probe
   // publishes through the document writer, so it is NOT on the `allowFiles` ratchet.
   'no-stdout-outside-writer': 'packages/cli/src/commands/okf/validate.ts',
+  // Scoped to product `src/`; the probe installs its handler through the helper, so
+  // it is NOT the rule's one `allow` entry.
+  'no-raw-signal-listener': 'packages/cli/src/commands/audit/git-url-clone.ts',
 };
 
 /** `error` as ESLint normalizes it out of `calculateConfigForFile`. */

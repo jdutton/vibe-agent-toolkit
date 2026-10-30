@@ -227,6 +227,7 @@ export {
   DirectoryWalkRevisitedError,
   disposeTempDir,
   disposeTempDirAfterFailure,
+  disposeTempDirSync,
   entryIdentities,
   FollowedWalk,
   isLinkChainRefusedError,

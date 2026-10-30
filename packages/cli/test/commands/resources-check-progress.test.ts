@@ -22,11 +22,14 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { PassThrough } from 'node:stream';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 
 import {
   createProgressWriter,
+  endWhenSupervisorGone,
+  letSupervisorLossSurface,
   parseProgressLog,
   unitInFlight,
   type ProgressEntry,
@@ -145,7 +148,7 @@ describe('createProgressWriter', () => {
     const dir = createTestTempDir('vat-check-progress-');
     try {
       const path = `${dir}/progress.jsonl`;
-      const write = createProgressWriter(path);
+      const write = createProgressWriter({ progressLog: path });
 
       write(POPULATION);
       const afterFirst = readFileSync(path, 'utf-8');
@@ -157,5 +160,74 @@ describe('createProgressWriter', () => {
     } finally {
       cleanupTestTempDir(dir);
     }
+  });
+});
+
+/** The supervisor pid the listener names. */
+const SUPERVISOR_PID = 4242;
+
+/** Install the supervisor-gone listener on a stream this test owns, with `process.exit` and stderr captured. */
+function listen(): { stdin: PassThrough; exit: MockInstance; stderr: MockInstance } {
+  const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+  const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  const stdin = new PassThrough();
+  endWhenSupervisorGone(SUPERVISOR_PID, stdin);
+  return { stdin, exit, stderr };
+}
+
+describe('endWhenSupervisorGone', () => {
+  // 🚨 A supervisor killed where none of its code runs (SIGKILL, an OOM killer, a Windows
+  // TerminateProcess) cannot take its child down. The OS closes the stdin pipe the supervisor held,
+  // and the child must end itself on that end-of-file rather than run on unbounded.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does nothing while the supervisor holds the pipe open', async () => {
+    const { exit, stderr } = listen();
+
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(exit).not.toHaveBeenCalled();
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['its end of the pipe closes (end-of-file)', (stdin: PassThrough) => stdin.end()],
+    ['the pipe breaks (a read error)', (stdin: PassThrough) => stdin.destroy(new Error('EPIPE'))],
+  ])('ends the child — exit 2, one stderr line naming the supervisor — when %s', async (_label, sever) => {
+    const { stdin, exit, stderr } = listen();
+
+    sever(stdin);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(exit.mock.calls).toStrictEqual([[2]]);
+    expect(stderr).toHaveBeenCalledOnce();
+    expect(String(stderr.mock.calls[0]?.[0])).toContain(`pid ${String(SUPERVISOR_PID)}`);
+  });
+
+  // A child that finishes must never be held open by the stream it listens on.
+  it('unreferences the stream it listens on', () => {
+    vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const stdin = Object.assign(new PassThrough(), { unref: vi.fn() });
+
+    endWhenSupervisorGone(SUPERVISOR_PID, stdin);
+
+    expect(stdin.unref).toHaveBeenCalledOnce();
+  });
+});
+
+describe('letSupervisorLossSurface', () => {
+  // The child's synchronous check loop holds the thread; an end-of-file pending meanwhile must be
+  // read — and end the child — before it publishes. Its system proof is
+  // `checks-supervisor-orphan-loop.system.test.ts`; this pins that it crosses event-loop turns.
+  it('resolves only after the event loop has turned twice', async () => {
+    const turns: string[] = [];
+    setImmediate(() => turns.push('first'));
+    setImmediate(() => setImmediate(() => turns.push('second')));
+
+    await letSupervisorLossSurface();
+
+    expect(turns).toStrictEqual(['first', 'second']);
   });
 });

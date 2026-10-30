@@ -92,7 +92,7 @@ describe('active-children registry (spawn-claude)', () => {
     // shells out to `taskkill /T /F` over the tree. Assert whichever this host uses
     // so the registry behavior is verified on every platform (not skipped on Windows).
     if (process.platform === 'win32') {
-      expect(spawnSync).toHaveBeenCalledWith('taskkill', ['/pid', '4321', '/T', '/F']);
+      expect(spawnSync).toHaveBeenCalledWith('taskkill', ['/pid', '4321', '/T', '/F'], { stdio: 'ignore', windowsHide: true });
     } else {
       expect(killSpy).toHaveBeenCalledWith(-4321, 'SIGKILL');
     }

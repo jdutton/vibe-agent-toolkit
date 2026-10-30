@@ -50,8 +50,9 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type * as ProjectionSqlite from '@vibe-agent-toolkit/projection-sqlite';
 import type { PopulationCache, ProjectionStore } from '@vibe-agent-toolkit/resources';
 import { parseEnvBoolean } from '@vibe-agent-toolkit/utils';
-import { freshGitTreeSnapshot, gitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
+import { freshGitTreeSnapshot, gitTreeSnapshot, type GitTreeSnapshot, withGitSnapshotCache } from '@vibe-agent-toolkit/utils/git';
 
+import { noticeToOperator, withNoticeLedger } from './operator-notices.js';
 import { isModuleMissing, missingBackendError, type OptionalBackend } from './optional-backend.js';
 import { installSqliteWarningFilter } from './sqlite-experimental-warning.js';
 
@@ -230,6 +231,38 @@ export interface OpenedPopulationCache {
 }
 
 /**
+ * The snapshot that keys `root`'s store entry, or `null` — after telling the operator, once per
+ * root per command run (the notice scope {@link withPopulationCache} enters), that the run
+ * populates without a cache.
+ *
+ * `gitTreeSnapshot` returns null for every "git could not answer" case — no `git` on PATH, not a
+ * repository, a bare or unreadable one — and an empty snapshot of an initialized repository stays
+ * distinguishable from it.
+ *
+ * 🪤 Once per root: `vat validate`'s orchestrator scope and each lane's own scope inside it both ask
+ * when the outer one could not key ({@link joinableCache} "asks again" for a root it cannot vouch
+ * for), and the answer — and the notice — is the same every time.
+ *
+ * @param root - The absolute corpus root
+ * @returns The snapshot, or `null` when the tree cannot be keyed
+ */
+function storeKeyOrNotice(root: string): GitTreeSnapshot | null {
+  const snapshot = gitTreeSnapshot({ cwd: root });
+  if (snapshot === null) {
+    // Not "the selector is set": the store is on by default, so most users who
+    // see this never wrote the variable.
+    noticeToOperator(
+      'store',
+      `The projection store is on, but ${root} is not inside a readable git`
+      + ' repository, so there is no deterministic key to store a projection under.'
+      + ` Populating without a cache. Set ${PROJECTION_STORE_ENV}=${PROJECTION_STORE_OFF} to silence this.`,
+      root,
+    );
+  }
+  return snapshot;
+}
+
+/**
  * Open the projection store this process selected, keyed to one tree.
  *
  * Returns `undefined` when no store is selected, and when the tree cannot be
@@ -249,20 +282,9 @@ export async function openPopulationCache(options: {
   if (!projectionStoreSelected()) return undefined;
 
   // Before the import, so a corpus outside a repository costs nothing and says
-  // why. `gitTreeSnapshot` returns null for every "git could not answer" case —
-  // no `git` on PATH, not a repository, a bare or unreadable one — and an empty
-  // snapshot of an initialized repository stays distinguishable from it.
-  const snapshot = gitTreeSnapshot({ cwd: options.root });
-  if (snapshot === null) {
-    // Not "the selector is set": the store is on by default, so most users who
-    // see this never wrote the variable.
-    process.stderr.write(
-      `The projection store is on, but ${options.root} is not inside a readable git`
-      + ' repository, so there is no deterministic key to store a projection under.'
-      + ` Populating without a cache. Set ${PROJECTION_STORE_ENV}=${PROJECTION_STORE_OFF} to silence this.\n`,
-    );
-    return undefined;
-  }
+  // why.
+  const snapshot = storeKeyOrNotice(options.root);
+  if (snapshot === null) return undefined;
 
   const store = await loadStore();
   const cwd = options.root;
@@ -590,7 +612,10 @@ export function withPopulationCache<T>(
     // (`inventory`, `resource-loader`'s two) reaches the store through this scope,
     // and `vat validate`'s orchestrator holds one OUTSIDE all of them, which the
     // nesting above is what makes safe.
-    return withGitSnapshotCache(() => runOwnedScope(options, work));
+    //
+    // And the notice scope: the "cannot key this root" notice is printed once per root per
+    // command run — this outermost scope's ledger, which every nested scope joins.
+    return withNoticeLedger(() => withGitSnapshotCache(() => runOwnedScope(options, work)));
   } catch (error) {
     return Promise.reject(error as Error);
   }

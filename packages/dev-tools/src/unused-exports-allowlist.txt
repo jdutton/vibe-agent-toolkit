@@ -35,7 +35,6 @@ packages/agent-skills/src/skill-test/baseline-integrity.ts BASELINE_SCAN_DEGRADA
 packages/agent-skills/src/skill-test/baseline-integrity.ts PathNeedle dead
 packages/agent-skills/src/skill-test/baseline-integrity.ts ToolIntent dead
 packages/agent-skills/src/skill-test/eval-inputs.ts armsOf dead
-packages/agent-skills/src/skill-test/lock.ts InstallSignalCleanupOptions dead
 packages/agent-skills/src/skill-test/run-harness.ts ArtifactPaths dead
 packages/agent-skills/src/skill-test/run-harness.ts CleanupHarnessOptions dead
 packages/agent-skills/src/skill-test/run-harness.ts EvalWorkItem dead
@@ -183,7 +182,6 @@ packages/cli/src/commands/okf/validate.ts okfValidateReport dead
 packages/cli/src/commands/phase-utils.ts PhaseContext dead
 packages/cli/src/commands/rag/query-command.ts QueryPayloadInput dead
 packages/cli/src/commands/resources/check-supervisor.ts RunResolution dead
-packages/cli/src/commands/resources/check-supervisor.ts SupervisedRun dead
 packages/cli/src/commands/resources/check.ts CheckRunEnding dead
 packages/cli/src/commands/resources/check.ts ProgressSink dead
 packages/cli/src/commands/resources/scan.ts ScanPayloadInput dead

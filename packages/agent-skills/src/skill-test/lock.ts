@@ -1,6 +1,8 @@
 import { closeSync, openSync, rmSync } from 'node:fs';
 
+import { ExitCode } from '@vibe-agent-toolkit/schema';
 import { isAlreadyExistsError, safePath, VatError, withFsFaultSync } from '@vibe-agent-toolkit/utils';
+import { handleTerminatingSignals, type TerminatingSignalGuard } from '@vibe-agent-toolkit/utils/process';
 
 /**
  * The harness root for a subject set is already locked.
@@ -17,7 +19,7 @@ import { isAlreadyExistsError, safePath, VatError, withFsFaultSync } from '@vibe
  * turns this back into `internal`.
  *
  * The message names `lockPath` because the lockfile is created `O_EXCL` in the
- * DETERMINISTIC harness root and released only on normal exit or SIGINT/SIGTERM —
+ * DETERMINISTIC harness root and released only on normal exit or a terminating signal —
  * a SIGKILL, an OOM, or a crash leaves it behind and every later run of that skill
  * fails here, with no `--force` to escape. Until the staleness protocol (pid +
  * timestamp + liveness probe + `--force`) lands in its own lane, naming the path
@@ -122,54 +124,21 @@ export function acquireHarnessLock(harnessRoot: string, opts: { wait?: boolean }
   };
 }
 
-/** Conventional shell exit-code base for a process terminated by a signal. */
-const SIGNAL_EXIT_BASE = 128;
-
-/** Signals we trap so an interrupted run cleans up instead of leaking the lock. */
-const SIGNAL_NUMBERS: ReadonlyArray<readonly [NodeJS.Signals, number]> = [
-  ['SIGINT', 2],
-  ['SIGTERM', 15],
-];
-
-export interface InstallSignalCleanupOptions {
-  /**
-   * Invoked once on the first trapped signal, BEFORE exiting — the place to
-   * release the harness lock and remove the harness dir so a Ctrl-C mid-run does
-   * not leave `.vat-skill-test.lock` (or staged untrusted bytes) behind.
-   */
-  onSignal: () => Promise<void>;
-  /**
-   * Exit hook, injectable for tests. Defaults to `process.exit`. Called with the
-   * conventional 128+signal code so the signal is honored, not swallowed.
-   */
-  exit?: (code: number) => void;
-}
-
 /**
- * Trap SIGINT/SIGTERM while the harness lock is held. On the first such signal
- * the handler removes ITSELF (no listener leak, no re-entry), runs `onSignal`
- * (release lock + clean up), then exits with the conventional 128+signal code.
+ * Guard every terminating signal while the harness lock is held: on the first, run `onSignal`
+ * (release the lock, remove the harness dir — so a Ctrl-C mid-run leaves neither
+ * `.vat-skill-test.lock` nor staged untrusted bytes behind), then die of the signal (128+n on
+ * POSIX; exit 2 on Windows).
  *
- * Returns a disposer that removes the handlers — the caller MUST call it on
- * normal completion so listeners do not accumulate across runs in a long-lived
- * process (and so tests stay isolated).
+ * Through `handleTerminatingSignals`, so a REPEAT — a terminal Ctrl-C under the `vat` wrapper
+ * arrives twice — is swallowed until `onSignal` has settled, whichever way it settles: `onSignal`
+ * reports its own failures.
+ *
+ * @param onSignal - The cleanup
+ * @returns The guard — the caller MUST release it on normal completion so listeners do not
+ *   accumulate across runs in a long-lived process (and so tests stay isolated), and only once its
+ *   own run of the same cleanup has SETTLED: a signal during that run must still be guarded
  */
-export function installSignalCleanup(opts: InstallSignalCleanupOptions): () => void {
-  const exit = opts.exit ?? ((code: number): void => { process.exit(code); });
-  const registered: Array<readonly [NodeJS.Signals, () => void]> = [];
-  const remove = (): void => {
-    for (const [sig, handler] of registered) process.off(sig, handler);
-  };
-  for (const [sig, num] of SIGNAL_NUMBERS) {
-    const handler = (): void => {
-      remove();
-      // The exit waits for cleanup to settle — an exit mid-removal would leave half of it —
-      // and happens whichever way it settles: `onSignal` reports its own failures.
-      const leave = (): void => exit(SIGNAL_EXIT_BASE + num);
-      opts.onSignal().then(leave, leave);
-    };
-    process.on(sig, handler);
-    registered.push([sig, handler]);
-  }
-  return remove;
+export function installSignalCleanup(onSignal: () => Promise<void>): TerminatingSignalGuard {
+  return handleTerminatingSignals({ cleanup: onSignal, fallbackExitCode: ExitCode.ERROR });
 }

@@ -5,7 +5,7 @@
  * `isTreeChangeResidue`.
  */
 
-import { readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, readdirSync, writeFileSync } from 'node:fs';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -17,7 +17,7 @@ import { safePath, toForwardSlash } from '../../src/path-core.js';
 import { normalizedTmpdir } from '../../src/path-utils.js';
 import { createSymlink, symlinkCapability } from '../../src/test-helpers.js';
 import { PERMISSIONS_ENFORCED } from '../../src/testing/platform-gates.js';
-import { disposeTempDir, disposeTempDirAfterFailure, makeDirectoryUnder, replaceFile, TEMP_DIR_OUTSIDE_TMPDIR_CODE, withTempDir, writeFileUnder } from '../../src/tree-change/files.js';
+import { disposeTempDir, disposeTempDirAfterFailure, disposeTempDirSync, makeDirectoryUnder, replaceFile, TEMP_DIR_OUTSIDE_TMPDIR_CODE, withTempDir, writeFileUnder } from '../../src/tree-change/files.js';
 
 import { plant, present, readText, rejectionOf, residueIn, treeChangeSuite } from './tree-change-test-kit.js';
 
@@ -258,17 +258,63 @@ describe('disposeTempDir', () => {
   });
 });
 
+describe('disposeTempDirSync', () => {
+  it('removes the directory, and answers undefined for it and for one never there', () => {
+    const root = suite.root();
+    plant(root, { 'd/x.txt': 'x' });
+    expect(disposeTempDirSync(safePath.join(root, 'd'))).toBeUndefined();
+    expect(present(safePath.join(root, 'd'))).toBe(false);
+    expect(disposeTempDirSync(safePath.join(root, 'never'))).toBeUndefined();
+  });
+
+  it('refuses a directory outside the temp directory, and the temp directory itself, removing nothing', () => {
+    const { outside, tmp } = stubTempRoot();
+    expect(isVatError(thrownBy(() => disposeTempDirSync(outside)), TEMP_DIR_OUTSIDE_TMPDIR_CODE)).toBe(true);
+    expect(readText(safePath.join(outside, 'data.md'))).toBe('d');
+    expect(isVatError(thrownBy(() => disposeTempDirSync(tmp)), TEMP_DIR_OUTSIDE_TMPDIR_CODE)).toBe(true);
+    expect(readText(safePath.join(tmp, 'keep.md'))).toBe('k');
+  });
+
+  // Its callers run on the way OUT of a process, where nothing can be thrown and no report is
+  // left: the fault has to come back as a value they can still write to stderr.
+  it.skipIf(!PERMISSIONS_ENFORCED)('answers the environment fault naming the directory, and keeps it, when the OS will not remove an entry', () => {
+    const root = suite.root();
+    plant(root, { 'd/locked/x.txt': 'x' });
+    const dir = safePath.join(root, 'd');
+    const locked = safePath.join(dir, 'locked');
+    chmodSync(locked, 0o555);
+    try {
+      const leftover = disposeTempDirSync(dir);
+      expect(isFsFaultError(leftover) && leftover.side === 'environment').toBe(true);
+      expect((leftover as Error).message).toContain(dir);
+      expect(present(safePath.join(locked, 'x.txt'))).toBe(true);
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+});
+
+/** What `act` threw, or a failure when it returned. */
+function thrownBy(act: () => unknown): unknown {
+  try {
+    act();
+  } catch (error: unknown) {
+    return error;
+  }
+  throw new Error('expected a throw');
+}
+
 describe('disposeTempDirAfterFailure', () => {
   it('disposes of the directory and records nothing against the failure', async () => {
     const root = suite.root();
     plant(root, { 'd/x.txt': 'x' });
     const failure = new Error('work failed');
-    await disposeTempDirAfterFailure(safePath.join(root, 'd'), failure);
+    await expect(disposeTempDirAfterFailure(safePath.join(root, 'd'), failure)).resolves.toBeUndefined();
     expect(present(safePath.join(root, 'd'))).toBe(false);
     expect(suppressedFaultsOf(failure)).toEqual([]);
   });
 
-  it('records a refused disposal beside the failure, which stays unchanged, naming the directory', async () => {
+  it('records a refused disposal beside the failure, which stays unchanged, naming the directory — and answers it', async () => {
     const root = suite.root();
     plant(root, { 'd/x.txt': 'x' });
     const dir = safePath.join(root, 'd');
@@ -276,12 +322,14 @@ describe('disposeTempDirAfterFailure', () => {
     const refused = { op: 'rm', path: (p: string) => p === dir, errno: 'EACCES' } as const;
     suite.faults(root, [refused, { ...refused }]);
 
-    await disposeTempDirAfterFailure(dir, failure);
+    const leftover = await disposeTempDirAfterFailure(dir, failure);
     suite.restoreFaults();
 
     expect(failure.cause).toBeUndefined();
     const [disposal, ...more] = suppressedFaultsOf(failure);
     expect(more).toEqual([]);
+    // The same fault is answered too, for a caller (a signal path) no report will carry the failure to.
+    expect(leftover).toBe(disposal);
     expect(disposal).toMatchObject({ side: 'environment', faultClass: 'refused' });
     expect((disposal as Error).message).toContain(dir);
   });

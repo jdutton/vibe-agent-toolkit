@@ -191,7 +191,10 @@ export async function withResolvedTempDirs<T>(
   try {
     value = await work();
   } catch (error) {
-    await forEachInOrder(tempDirs, (dir) => disposeTempDirAfterFailure(dir, error));
+    await forEachInOrder(tempDirs, async (dir) => {
+      // Its leftover is recorded beside `error`, which is the answer.
+      await disposeTempDirAfterFailure(dir, error);
+    });
     throw error;
   }
   return { value, leftovers: await removeResolvedTempDirs(tempDirs) };

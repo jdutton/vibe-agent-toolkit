@@ -62,6 +62,7 @@ import {
 import { formatDurationSecs } from '../../utils/duration.js';
 import { resolveIssueSeverity, type SeverityOverrides } from '../../utils/issue-severity.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
+import { EVERY_NOTICE, type NoticeAudience, withNoticeAudience } from '../../utils/operator-notices.js';
 import { assertDirectoryArgument, projectRootOrLoudCwd, projectRootOrNull } from '../../utils/project-root-policy.js';
 import {
   withQueriedProjection,
@@ -71,9 +72,12 @@ import {
 } from '../../utils/projection-query.js';
 import { relationBoundsFor } from '../../utils/relation-limits.js';
 import { RUN_INTEGRITY_CODE, runIntegrityFinding } from '../../utils/run-integrity.js';
+import type { PhaseOutcome } from '../phase-utils.js';
 
 import {
   createProgressWriter,
+  endWhenSupervisorGone,
+  letSupervisorLossSurface,
   parseProgressLog,
   unitInFlight,
   type ProgressEntry,
@@ -81,12 +85,17 @@ import {
 } from './check-progress.js';
 import type { CheckData, CheckReport } from './check-schema.js';
 import {
+  DEFAULT_BUDGET_SECONDS,
   parseBudgetSeconds,
   requireSupervisableFlags,
   runsInThisProcess,
+  SUPERVISED_BY_FLAG,
   superviseCheck,
+  supervisedByValue,
   withProgressLog,
   type AbnormalDeath,
+  type CheckInvocation,
+  type SupervisedChild,
 } from './check-supervisor.js';
 
 /**
@@ -110,12 +119,15 @@ interface CheckOptions {
    */
   budget?: string;
   /**
-   * Hidden. Where to append progress — and, by its mere presence, the
-   * instruction to do the work here rather than supervise a child that does.
-   * Set by {@link childArgs} and by nothing else; an operator passing it by hand
-   * gets an unsupervised run and a log file, which is harmless.
+   * Hidden: `--supervised-by <invoker>:<supervisor pid>:<progress log>`. By its mere presence, the
+   * instruction to do the work here rather than supervise a child that does; its value says who
+   * started the supervision (which decides the notices this child owes — see
+   * {@link noticeAudienceOf}) and where to append progress. Set by {@link childArgs} and by nothing
+   * else. Passed by hand it is REFUSED (`USAGE_INVALID`): the supervisor it names is not this
+   * process's parent, and a run nothing watches would be unbounded and print none of its notices —
+   * see `requireSupervisableFlags`.
    */
-  costLog?: string;
+  supervisedBy?: string;
 }
 
 /**
@@ -817,8 +829,31 @@ function emptyCorpusFinding(
  * so advice to raise it is a false diagnosis that makes the situation worse.
  */
 export type CheckRunEnding =
-  | { readonly kind: 'budget'; readonly budgetSecs: number }
+  | { readonly kind: 'budget'; readonly budgetSecs: number; readonly invocation: CheckInvocation }
   | { readonly kind: 'abnormal'; readonly death: AbnormalDeath };
+
+/**
+ * How to give the run more time, as one sentence — by who ran the checks.
+ *
+ * 🔑 A kill remedy names a flag only the verb that accepts it can be given. `--budget` is
+ * `vat resources check`'s alone, and in this release `vat validate` has NO way to give its checks
+ * phase more time: the phase always runs under {@link DEFAULT_BUDGET_SECONDS}. So the phase's
+ * sentence says exactly that — what the bound measures, its value, and that running the checks
+ * standalone with a larger `--budget` lets THEM pass but does not make `vat validate` pass. A
+ * remedy promising otherwise sends the operator round a loop that cannot end.
+ *
+ * @param invocation - Who ran the checks
+ * @returns The sentence, with a leading space
+ */
+function raiseBoundSentence(invocation: CheckInvocation): string {
+  return invocation === 'standalone'
+    ? ' Raise it with `--budget <seconds>`.'
+    : ' `vat validate` cannot give it more time: its checks phase always runs under the default'
+      + ` bound of ${DEFAULT_BUDGET_SECONDS}s WITHOUT PROGRESS (a total bound on the population,`
+      + ' which reports progress only when it finishes), and this release has no way to change'
+      + ' it. Running the same checks on their own with `vat resources check --budget <seconds>`'
+      + ' can let them pass there, but `vat validate` will still fail on this tree.';
+}
 
 /**
  * Where the run was when it stopped, as a phrase.
@@ -847,6 +882,9 @@ function inFlightPhrase(inFlight: UnitInFlight): string {
     + ' statement, or after the last one had filed its cost';
 }
 
+/** The supervisor's kind for a child whose exit contradicts its own complete document. */
+const EXIT_DISAGREES = 'exit-disagrees' satisfies AbnormalDeath['kind'];
+
 /**
  * What ended the child, as a phrase.
  *
@@ -859,8 +897,9 @@ function deathPhrase(death: AbnormalDeath): string {
     return `the child process could not be started at all (${death.binary}: ${death.detail})`;
   }
   if (death.kind === 'kill-failed') {
-    return 'the budget was blown and the SIGKILL that should have ended the run was REFUSED'
-      + ` (${death.detail})`;
+    return death.refused
+      ? `the budget was blown and the SIGKILL that should have ended the run was REFUSED (${death.detail})`
+      : `the budget was blown and the SIGKILL that should have ended the run DID NOT END IT (${death.detail})`;
   }
   if (death.kind === 'no-output') {
     return `the child process exited ${death.code} and published no report at all`;
@@ -868,6 +907,10 @@ function deathPhrase(death: AbnormalDeath): string {
   if (death.kind === 'unparseable-output') {
     return `the child process exited ${death.code} and published a report that is not this`
       + ` command's document, most likely cut off mid-write (${death.detail})`;
+  }
+  if (death.kind === EXIT_DISAGREES) {
+    return `the child process published a complete report whose own verdict is exit ${death.documentExit},`
+      + ` and then exited ${death.code}`;
   }
   return 'the child process ended with neither an exit code nor a signal';
 }
@@ -896,21 +939,25 @@ function spawnFailedRemedy(detail: string): string {
 }
 
 /**
- * What to do about a kill the kernel refused.
+ * What to do about a kill that did not end the child — refused, or accepted and ineffective.
  *
  * ⛔ This must never be composed from the spawn-failure sentence, however
  * similar the plumbing is. The two are opposites: one child never existed, and
  * this one is, as far as this process can tell, STILL RUNNING.
  *
- * @param death - The refused kill, and the pid it left behind
+ * @param death - The kill that failed, and the pid it left behind
  * @returns The remedy sentence
  */
-function killFailedRemedy(detail: string, pid: number | undefined): string {
-  const handle = pid === undefined
+function killFailedRemedy(death: Extract<AbnormalDeath, { kind: 'kill-failed' }>): string {
+  const handle = death.pid === undefined
     ? ' The child\'s pid is not known to this process.'
-    : ` The child was process ${pid}.`;
+    : ` The child was process ${death.pid}.`;
+  const how = death.refused
+    ? ` SIGKILL and the kernel would not deliver it (${death.detail}), which normally means EPERM.`
+    : ` SIGKILL, the kernel accepted it, and the process still did not end (${death.detail}) —`
+      + ' which normally means it is stuck in uninterruptible I/O (a hung network mount, a wedged disk).';
   return ' The run started, ran past its budget, and then REFUSED TO DIE: the watchdog sent'
-    + ` SIGKILL and the kernel would not deliver it (${detail}), which normally means EPERM.`
+    + how
     + handle
     + ' It may still be running and still holding whatever the statement was holding, so'
     + ' check for it and end it by hand before starting another run. Nothing about the SQL'
@@ -1047,15 +1094,32 @@ function noOutputRemedy(code: number): string {
  * @returns The remedy sentence
  */
 function deathRemedy(death: AbnormalDeath): string {
-  if (death.kind === 'kill-failed') return killFailedRemedy(death.detail, death.pid);
+  if (death.kind === 'kill-failed') return killFailedRemedy(death);
   if (death.kind === 'spawn-failed') return spawnFailedRemedy(death.detail) + WATCHDOG_UNINVOLVED;
   if (death.kind === 'signal') return signalRemedy(death.signal) + WATCHDOG_UNINVOLVED;
   if (death.kind === 'no-output' || death.kind === 'unparseable-output') {
     return noOutputRemedy(death.code) + WATCHDOG_UNINVOLVED;
   }
+  if (death.kind === EXIT_DISAGREES) return EXIT_DISAGREES_REMEDY + WATCHDOG_UNINVOLVED;
   return ' The cause is outside anything this command can observe; the child left no exit code'
     + ' to report.' + WATCHDOG_UNINVOLVED;
 }
+
+/**
+ * Why a child whose exit disagrees with its own document is not forwarded, and where to look.
+ *
+ * ⚠️ It does not guess which of the two is true. Every path through this command ends on the code
+ * its document derives, so the disagreement is either something ending the child after it wrote
+ * (a crash in teardown, an external termination that left a code) or a defect in vat — and the
+ * report cannot tell them apart.
+ */
+const EXIT_DISAGREES_REMEDY
+  = ' Every path through this command ends on the exit code its own document derives, so the two'
+  + ' should never disagree: either something ended the child AFTER it wrote its report — a crash'
+  + ' during shutdown, or a termination from outside that left an exit code — or vat has a defect.'
+  + ' Which one cannot be told from here, so the report is withheld rather than forwarded as the'
+  + ' verdict. The child\'s stderr was inherited, so whatever it said is above this report; re-run'
+  + ' it, and if the disagreement repeats, report the exit code with the platform.';
 
 /**
  * The sentence that keeps an abnormal death from being blamed on the bound.
@@ -1121,12 +1185,31 @@ function interruptedRunFinding(
 ): ValidationIssue {
   const where = inFlightPhrase(inFlight);
   const message = ending.kind === 'budget'
-    ? budgetKillMessage(inFlight, ending.budgetSecs, where)
-    : `This run DIED before it finished: ${deathPhrase(ending.death)} ${where}, so the checks`
-      + ' after it never executed and this document is not a verdict.'
-      + deathRemedy(ending.death);
+    ? budgetKillMessage(inFlight, ending, where)
+    : deathMessage(ending.death, where);
 
   return runIntegrityFinding(message + incompleteNotice(checksCompleted));
+}
+
+/**
+ * What an abnormal death means.
+ *
+ * 🪤 A child whose exit disagrees with its document did NOT die mid-run — it finished every check
+ * and wrote a whole report — so it gets its own sentence rather than "DIED before it finished …
+ * the checks after it never executed", which would be false about it.
+ *
+ * @param death - The ending the supervisor resolved
+ * @param where - The clause naming the unit, from {@link inFlightPhrase}
+ * @returns The message body
+ */
+function deathMessage(death: AbnormalDeath, where: string): string {
+  if (death.kind === EXIT_DISAGREES) {
+    return `This run's exit contradicts its own report: ${deathPhrase(death)}, so neither can be`
+      + ' trusted as the verdict and this document replaces the report.' + deathRemedy(death);
+  }
+  return `This run DIED before it finished: ${deathPhrase(death)} ${where}, so the checks`
+    + ' after it never executed and this document is not a verdict.'
+    + deathRemedy(death);
 }
 
 /**
@@ -1146,17 +1229,26 @@ function interruptedRunFinding(
  * issues takes ~17 s after `checks-complete` is filed, which is one budget
  * window on its own.
  *
+ * 🔑 Every remedy names the bound through {@link raiseBoundSentence}, so a phase is never told to
+ * pass a flag its own verb (`vat validate`) rejects, nor promised a way to raise its bound.
+ *
  * @param inFlight - What the log's last state says
- * @param budgetSecs - The bound that was blown
+ * @param ending - The kill: the bound that was blown, and who ran the checks
  * @param where - The clause naming the unit, from {@link inFlightPhrase}
  * @returns The message body
  */
-function budgetKillMessage(inFlight: UnitInFlight, budgetSecs: number, where: string): string {
+function budgetKillMessage(
+  inFlight: UnitInFlight,
+  ending: Extract<CheckRunEnding, { kind: 'budget' }>,
+  where: string,
+): string {
+  const { budgetSecs, invocation } = ending;
+  const raise = raiseBoundSentence(invocation);
   if (inFlight.kind === 'startup' || inFlight.kind === 'population') {
     return `This run made no progress for ${budgetSecs}s and was killed ${where}, so no`
       + ' check ran and this document is not a verdict. There is no projection, so the'
       + ' population fields in `data` are null and `examined` is 0.'
-      + (inFlight.kind === 'startup' ? STARTUP_REMEDY : POPULATION_REMEDY);
+      + (inFlight.kind === 'startup' ? startupRemedy(raise) : populationRemedy(raise));
   }
   if (inFlight.kind === 'reporting') {
     return `This run made no progress for ${budgetSecs}s and was killed ${where}.`
@@ -1165,15 +1257,18 @@ function budgetKillMessage(inFlight: UnitInFlight, budgetSecs: number, where: st
       + ' being assembled, not a rule that would not return. Serialising a large result is'
       + ' linear in how much there is — 2,000,000 issues take about 17 seconds — so look at'
       + ' the rules under `checks` that produced the most rows and narrow them (a `LIMIT`, or'
-      + ' one row per violation rather than one per member), or raise the bound with'
-      + ' `--budget <seconds>` so the document has time to be written.';
+      + ' one row per violation rather than one per member), or give the document more time to'
+      + ` be written.${raise}`;
   }
   return `This run made no progress for ${budgetSecs}s and was killed ${where}, so the`
     + ' checks after it never executed and this document is not a verdict.'
     + ' A statement that will not finish cannot be stopped from inside the process —'
     + ' the query is synchronous and holds the event loop — so the bound is enforced by'
-    + ' killing the run. Raise it with `--budget <seconds>` if the work is legitimately'
-    + ' slow, or `--budget 0` to remove it (the run can then hang forever).';
+    + ' killing the run. If the work is legitimately slow, it needs more time.'
+    + raise
+    + (invocation === 'standalone'
+      ? ' `--budget 0` removes it (the run can then hang forever).'
+      : '');
 }
 
 /**
@@ -1183,25 +1278,33 @@ function budgetKillMessage(inFlight: UnitInFlight, budgetSecs: number, where: st
  * sizing the budget against the population would be advice about a unit that
  * never began. A boot that outlasts the budget is a saturated machine or a bound
  * too small to be one.
+ *
+ * @param raise - How to raise the bound, from {@link raiseBoundSentence}
+ * @returns The remedy sentence
  */
-const STARTUP_REMEDY
-  = ' Node and vat were still loading, so neither your tree nor your SQL is implicated: a'
-  + ' boot that outlasts the bound means a heavily loaded machine or a bound far smaller than'
-  + ' any run can meet. Raise it with `--budget <seconds>`.';
+function startupRemedy(raise: string): string {
+  return ' Node and vat were still loading, so neither your tree nor your SQL is implicated: a'
+    + ' boot that outlasts the bound means a heavily loaded machine or a bound far smaller than'
+    + ` any run can meet.${raise}`;
+}
 
 /**
  * What to do about a kill that landed during the population.
  *
  * 🔑 The measured numbers are labelled as someone else's trees. An operator
  * given one number reads it as a promise about theirs.
+ *
+ * @param raise - How to raise the bound, from {@link raiseBoundSentence}
+ * @returns The remedy sentence
  */
-const POPULATION_REMEDY
-  = ' Population is legitimately slow on a large tree, and it reports progress only when it'
-  + ' FINISHES, so the budget is a total bound for that one unit — raise it with'
-  + ' `--budget <seconds>` before assuming the crawl is stuck.'
-  + ' For scale, two MEASURED trees, neither of them yours: VAT\'s own repository is ~1.2s'
-  + ' warm and 33-35s with a cold parse cache; a 10,000-file adopter tree is ~5s warm and'
-  + ' 16.5s cold. Your tree is a third number.';
+function populationRemedy(raise: string): string {
+  return ' Population is legitimately slow on a large tree, and it reports progress only when it'
+    + ' FINISHES, so the budget is a total bound for that one unit — a crawl that outlasts it is'
+    + ` not necessarily stuck.${raise}`
+    + ' For scale, two MEASURED trees, neither of them yours: VAT\'s own repository is ~1.2s'
+    + ' warm and 33-35s with a cold parse cache; a 10,000-file adopter tree is ~5s warm and'
+    + ' 16.5s cold. Your tree is a third number.';
+}
 
 /**
  * Rebuild the document from what an INTERRUPTED run left on disk.
@@ -1376,30 +1479,57 @@ export function runProjectChecks(options: {
  * The child's argv — this very command, plus the hidden flag that stops it
  * spawning a child of its own.
  *
- * 🚨 `--cost-log` is ALWAYS appended, and that is the recursion guard. Its
+ * 🚨 `--supervised-by` is ALWAYS appended, and that is the recursion guard. Its
  * presence is the sole discriminator between "supervise a child" and "do the
- * work"; a path that built these arguments without it would fork bomb.
+ * work"; a path that built these arguments without it would fork bomb. Its one
+ * value carries who started the child (which decides the notices the child owes
+ * the operator), this process's pid (which the child checks is its parent's) and
+ * the progress log — see `supervisedByValue`.
  *
- * @param pathArg - The corpus root the operator named, or undefined
- * @param options - What the operator passed
+ * 🔑 The operand is the root the PARENT resolved, always. The child is spawned
+ * with no `cwd`, so without it the child would resolve its own root from the
+ * INHERITED working directory — which differs from the parent's root whenever
+ * the operator named the project rather than standing in it: `vat resources
+ * check <inner>` run from an outer project would check the outer tree and
+ * report it as the inner one. (`vat validate` takes no operand and resolves its
+ * root from the working directory the child inherits, so for it the operand
+ * restates what the child would have found — it is passed so the phase cannot
+ * depend on that coincidence.)
+ *
+ * @param root - The project root the parent resolved
+ * @param request - What the child is asked to run, and in which format
  * @param logPath - The progress log both sides watch
  * @returns The child's arguments after the CLI entry point
  */
-function childArgs(
-  pathArg: string | undefined,
-  options: CheckOptions,
-  logPath: string,
-): string[] {
+function childArgs(root: string, request: ChildRequest, logPath: string): string[] {
   return [
     'resources',
     'check',
-    ...(pathArg === undefined ? [] : [pathArg]),
-    ...(options.check === undefined ? [] : ['--check', options.check]),
-    ...(options.format === undefined ? [] : ['--format', options.format]),
-    ...(options.debug === true ? ['--debug'] : []),
-    '--cost-log',
-    logPath,
+    root,
+    ...(request.check === undefined ? [] : ['--check', request.check]),
+    '--format',
+    request.format,
+    ...(request.debug ? ['--debug'] : []),
+    SUPERVISED_BY_FLAG,
+    supervisedByValue({ invoker: request.invocation, progressLog: logPath }),
   ];
+}
+
+/**
+ * What a supervising parent asks its child to run. Every field is required: the
+ * parent reads the child's stdout in `format`, so a format it did not send is a
+ * format it would misread.
+ */
+interface ChildRequest {
+  /** One check's key, or undefined for every check. */
+  readonly check: string | undefined;
+  readonly format: 'yaml' | 'json';
+  readonly debug: boolean;
+  /**
+   * Who asked. Decides how a kill's remedy is worded here, and — handed to the
+   * child — whether the child owes the operator the store notice.
+   */
+  readonly invocation: CheckInvocation;
 }
 
 /** What a supervised run decided to publish. */
@@ -1417,29 +1547,24 @@ type SupervisedEnding =
  * which are all of them but one, that would accumulate.
  *
  * @param options - The run
- * @param options.pathArg - The corpus root the operator named, or undefined
- * @param options.options - What the operator passed
+ * @param options.root - The project root the caller resolved. REQUIRED: the
+ *   child checks exactly this tree, and a killed run's document is labelled with it
+ * @param options.request - What the child is asked to run, and who asked
  * @param options.budgetSecs - The bound, in seconds
  * @returns What to publish, and with what exit code
  */
 async function superviseCheckRun(options: {
-  pathArg: string | undefined;
-  options: CheckOptions;
+  root: string;
+  request: ChildRequest;
   budgetSecs: number;
 }): Promise<SupervisedEnding> {
-  const startDir = options.pathArg ?? process.cwd();
-  // 🪤 The SILENT resolution, deliberately. `projectRootOrLoudCwd` warns on
-  // stderr when there is no project ancestor, and the CHILD runs that policy for
-  // real — a parent that ran it too would print the same warning twice for one
-  // run. The parent needs a root only to label a KILLED run's document.
-  const root = projectRootOrNull(startDir) ?? safePath.resolve(startDir);
-
-  const { value: ending, leftover } = await withProgressLog(async (logPath): Promise<SupervisedEnding> => {
+  const { root, request } = options;
+  const { value: ending, leftover } = await withProgressLog(async (log): Promise<SupervisedEnding> => {
     const run = await superviseCheck({
-      args: childArgs(options.pathArg, options.options, logPath),
-      logPath,
+      args: childArgs(root, request, log.path),
+      log,
       budgetMs: options.budgetSecs * 1000,
-      format: options.options.format === 'json' ? 'json' : 'yaml',
+      format: request.format,
     });
     if (run.outcome === 'completed') return { forward: run.document };
 
@@ -1453,7 +1578,7 @@ async function superviseCheckRun(options: {
         // argument — so a child that aborted on its heap limit printed nothing
         // and exited 0, on precisely the runaway shape the bound exists for.
         ending: run.outcome === 'killed'
-          ? { kind: 'budget', budgetSecs: options.budgetSecs }
+          ? { kind: 'budget', budgetSecs: options.budgetSecs, invocation: request.invocation }
           : { kind: 'abnormal', death: run.death },
         durationMs: run.elapsedMs,
       })),
@@ -1476,6 +1601,59 @@ function withLeftover(ending: SupervisedEnding, leftover: unknown): SupervisedEn
 }
 
 /**
+ * The `checks` phase of an orchestrator: the same supervised child `vat resources check` runs,
+ * over the whole project, and its report is the phase's report.
+ *
+ * 🔑 **The report is the ending's own, in both arms** — the child's forwarded document, or the
+ * document a killed or dead child's progress log rebuilt. There is no per-arm exit mapping: the
+ * report's status already says what was in flight (findings with `RESOURCE_CHECK_BROKEN` once
+ * the population was recorded, `error` before it), and the orchestrator derives the exit from it
+ * as it does for every phase.
+ *
+ * @param options - The phase
+ * @param options.root - The project root the orchestrator resolved. REQUIRED, so no caller can
+ *   fall back to the working directory and check a different project from the one it validated
+ * @param options.debug - Whether the orchestrator was run with `--debug`, forwarded to the child
+ * @returns The phase's report
+ */
+export async function runResourcesCheckPhase(options: { root: string; debug: boolean }): Promise<PhaseOutcome> {
+  const ending = await superviseCheckRun({
+    root: options.root,
+    request: { check: undefined, format: 'json', debug: options.debug, invocation: 'phase' },
+    budgetSecs: DEFAULT_BUDGET_SECONDS,
+  });
+  return { report: 'forward' in ending ? ending.forward.report : ending.payload };
+}
+
+/**
+ * Warn, on the invoked process's stderr, that the project declares no checks of its own.
+ *
+ * 🪤 Stderr only, and it decides NOTHING — the document is what the exit code is computed from
+ * and what CI parses. ⚠️ It does not stand beside a refusal: the built-in set runs, so the run
+ * DID assert something. What the operator needs to know is that the project is relying entirely
+ * on VAT's defaults, which is what a deleted `checks:` block looks like.
+ *
+ * Printed only by the process the operator ran as `vat resources check` — never by a supervised
+ * child (any `--supervised-by` process) and so never by an orchestrator's `checks` phase, where a
+ * project with `resources:` and no `resources.checks` still runs the built-ins and "no checks of
+ * its own" is not news on every run.
+ *
+ * @param checks - The project's declared checks, or undefined
+ * @param logger - Where the warning goes
+ */
+function warnWhenNoOwnChecks(checks: Readonly<Record<string, ResourceCheck>> | undefined, logger: Logger): void {
+  if (checks !== undefined && Object.keys(checks).length > 0) return;
+  logger.warn(
+    `No checks of this project's own are declared, so this run asserted only VAT's`
+    + ` built-in set (${BUILTIN_CHECK_NAMES.join(', ')}).`
+    + ' Add your own under `resources.checks` in vibe-agent-toolkit.config.yaml;'
+    + ' each is a description plus one SQL statement selecting the rows that VIOLATE it.'
+    + ' `vat resources check --help` prints the SQL each built-in is equivalent to,'
+    + ' as a starting point.',
+  );
+}
+
+/**
  * Run the project's declared checks against its projection.
  *
  * ## 🚨 Why this verb spawns a child and `vat resources query` does not
@@ -1486,11 +1664,14 @@ function withLeftover(ending: SupervisedEnding, leftover: unknown): SupervisedEn
  *
  * `query`'s author is at the keyboard, and Ctrl-C already works for them. It
  * works for one reason worth stating, because it is fragile: NO signal handler
- * is installed anywhere on this path. A process blocked in synchronous
+ * is installed in a process that runs the SQL. A process blocked in synchronous
  * `node:sqlite` dies instantly on SIGINT while that remains true, and SURVIVES
  * SIGINT and SIGTERM the moment a handler exists — the handler is a JS callback
  * and the event loop that would schedule it is the blocked resource. Adding one
- * would take Ctrl-C away from `query` without adding anything to `check`.
+ * would take Ctrl-C away from `query`, and from `check`'s child and its
+ * `--budget 0` run. (`check`'s SUPERVISING process does install handlers while
+ * it supervises — its event loop is free — only to take its child down with it;
+ * see `check-supervisor.ts`.)
  *
  * `check` runs unattended in CI, where nobody is there to press it. So it gets a
  * bound enforced from outside itself, and a hang becomes a bounded failure
@@ -1522,17 +1703,24 @@ export async function checkCommand(
     const budgetSecs = parseBudgetSeconds(options.budget);
     // Before anything is spawned: a budget the fork below would silently ignore
     // is an operator error, not a bound.
-    requireSupervisableFlags({
-      costLog: options.costLog,
+    const child = requireSupervisableFlags({
+      supervisedBy: options.supervisedBy,
       budgetRaw: options.budget,
       budgetSecs,
     });
-    // The presence of `--cost-log` says "you ARE the child". `--budget 0` says
+    // The process the operator ran — never a supervised child — says when the
+    // project declares no checks of its own, and prints the config's warnings
+    // with it. See {@link warnWhenNoOwnChecks}.
+    const root = standaloneRoot(pathArg);
+    if (child === undefined) {
+      warnWhenNoOwnChecks(loadConfigCached(root, 'source')?.resources?.checks, logger);
+    }
+    // The presence of `--supervised-by` says "you ARE the child". `--budget 0` says
     // the operator declined the bound; both run the work here, and the second
     // can therefore hang forever, which its help text says.
-    const ending: SupervisedEnding = runsInThisProcess({ costLog: options.costLog, budgetSecs })
-      ? { payload: await runChecksHere(pathArg, options, logger, startTime) }
-      : await superviseCheckRun({ pathArg, options, budgetSecs });
+    const ending: SupervisedEnding = runsInThisProcess({ supervisedBy: options.supervisedBy, budgetSecs })
+      ? { payload: await withNoticeAudience(noticeAudienceOf(child), () => runChecksHere(pathArg, options, child, logger, startTime)) }
+      : await superviseStandalone(root, options, format, budgetSecs);
     if ('forward' in ending) {
       // Verbatim (unless `withLeftover` had to add a finding to it) — the supervisor already checked it is
       // this verb's document — and on the code that document derives. The child already built what the operator's `--format` asked for, and
@@ -1561,10 +1749,70 @@ export async function checkCommand(
 }
 
 /**
+ * Which notices the process running the checks prints.
+ *
+ * Any process that is not a supervised child prints every notice. A supervised child prints no
+ * config warning — its invoking process loaded the same config and printed them — and prints the
+ * store notice only when a standalone `vat resources check` started it: that supervisor opens no
+ * store (keying one is a git snapshot, unbounded work it must not do before its watchdog exists),
+ * while `vat validate` opened its store scope, and printed the notice, before any phase ran.
+ *
+ * @param child - The supervised child this process is, or undefined when it is not one
+ * @returns The audience
+ */
+function noticeAudienceOf(child: SupervisedChild | undefined): NoticeAudience {
+  if (child === undefined) return EVERY_NOTICE;
+  return { config: false, store: child.invoker === 'standalone' };
+}
+
+/**
+ * Supervise the checks child for a standalone `vat resources check`.
+ *
+ * 🔑 Nothing unbounded runs here before the spawn: no store is opened and no tree is snapshotted,
+ * so the watchdog exists before any work that could hang. The store notice is the child's to print
+ * (see {@link noticeAudienceOf}).
+ *
+ * @param root - The project root this process resolved, which the child checks
+ * @param options - Parsed command-line options
+ * @param format - The document format the operator asked for
+ * @param budgetSecs - The bound, in seconds
+ * @returns What to publish
+ */
+function superviseStandalone(
+  root: string,
+  options: CheckOptions,
+  format: 'yaml' | 'json',
+  budgetSecs: number,
+): Promise<SupervisedEnding> {
+  return superviseCheckRun({
+    root,
+    request: { check: options.check, format, debug: options.debug === true, invocation: 'standalone' },
+    budgetSecs,
+  });
+}
+
+/**
+ * The project root a standalone `vat resources check` names, resolved SILENTLY.
+ *
+ * 🪤 Silent deliberately. `projectRootOrLoudCwd` warns on stderr when there is
+ * no project ancestor, and the process that runs the checks (the child, or this
+ * one under `--budget 0`) runs that policy for real — resolving loudly here too
+ * would print the same warning twice for one run.
+ *
+ * @param pathArg - Where to look for the project, or omitted for the current directory
+ * @returns The project root, or the resolved start directory when there is none
+ */
+function standaloneRoot(pathArg: string | undefined): string {
+  const startDir = pathArg ?? process.cwd();
+  return projectRootOrNull(startDir) ?? safePath.resolve(startDir);
+}
+
+/**
  * Run the checks in this process and build the document.
  *
  * @param pathArg - Where to look for the project, or omitted for the current directory
  * @param options - Parsed command-line options
+ * @param child - The supervised child this process is (its progress log), or undefined
  * @param logger - Where warnings go
  * @param startTime - When the command started (from Date.now())
  * @returns The document
@@ -1572,6 +1820,7 @@ export async function checkCommand(
 async function runChecksHere(
   pathArg: string | undefined,
   options: CheckOptions,
+  child: SupervisedChild | undefined,
   logger: Logger,
   startTime: number,
 ): Promise<CheckReport> {
@@ -1579,30 +1828,17 @@ async function runChecksHere(
   // The watchdog's clock started at the spawn, so without this line Node's
   // startup and the CLI's import were charged to the population — the one
   // unit the budget is already a total bound for. See `StartedEntrySchema`.
-  const onProgress = options.costLog === undefined
+  // And before that line: the child that outlives its supervisor ends itself — see
+  // `endWhenSupervisorGone` for when that can and cannot be noticed.
+  if (child !== undefined) endWhenSupervisorGone(child.supervisorPid, process.stdin);
+  const onProgress = child === undefined
     ? undefined
-    : createProgressWriter(options.costLog);
+    : createProgressWriter(child);
   onProgress?.({ kind: 'started' });
 
   const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
   const config = loadConfigCached(projectRoot, 'source');
   const checks = config?.resources?.checks;
-
-  if (checks === undefined || Object.keys(checks).length === 0) {
-    // 🪤 Stderr only, and it decides NOTHING — the document is what the exit
-    // code is computed from and what CI parses. ⚠️ It does not stand beside a
-    // refusal: the built-in set runs here, so this run DID assert something.
-    // What the operator needs to know is that the project is relying entirely
-    // on VAT's defaults, which is what a deleted `checks:` block looks like.
-    logger.warn(
-      `No checks of this project's own are declared, so this run asserted only VAT's`
-      + ` built-in set (${BUILTIN_CHECK_NAMES.join(', ')}).`
-      + ' Add your own under `resources.checks` in vibe-agent-toolkit.config.yaml;'
-      + ' each is a description plus one SQL statement selecting the rows that VIOLATE it.'
-      + ' `vat resources check --help` prints the SQL each built-in is equivalent to,'
-      + ' as a starting point.',
-    );
-  }
 
   // Before the crawl: a mistyped flag is an operator error and pays nothing.
   requireKnownCheck(BUILTIN_CHECK_NAMES, checks ?? {}, options.check);
@@ -1620,6 +1856,8 @@ async function runChecksHere(
     onProgress,
   });
   const { issues, costs, ...populated } = outcome;
+  // The checks ran synchronously: a supervisor lost meanwhile ends this child HERE, unpublished.
+  if (child !== undefined) await letSupervisorLossSurface();
   return buildCheckOutputData({
     issues,
     costs,
@@ -1703,3 +1941,6 @@ function runOutcome(options: {
     return { ...ran, ...provenance, ...extent };
   });
 }
+
+/** The test-facing seam: helpers the unit tests reach that are not part of this module's API. */
+export const __internal = { noticeAudienceOf };

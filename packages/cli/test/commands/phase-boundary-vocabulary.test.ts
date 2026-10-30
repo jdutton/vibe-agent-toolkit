@@ -18,6 +18,12 @@
  * The positive half of each case is not padding: a help block that got emptied
  * would satisfy every "does not say" assertion, so each command must still be
  * shown naming its own phases.
+ *
+ * One phase is the exception, and it is named rather than tolerated: `vat
+ * validate`'s `checks` phase runs `vat resources check`'s supervised child, so
+ * that command's help may speak of the child's population and must say the
+ * child belongs to the checks phase. Every other term stays banned there, and
+ * `vat verify` and `vat build` keep the whole list.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -39,10 +45,14 @@ const NO_SUCH_BOUNDARY = [
   ['killed by a signal', 'a signal that took a phase would take the orchestrator too'],
 ] as const;
 
+/** The terms the `checks` phase's supervised child makes true — allowed only where that phase runs. */
+const CHECKS_CHILD_TERMS: readonly string[] = ["child's"];
+const NO_CHILD_TERMS: readonly string[] = [];
+
 const ORCHESTRATORS = [
-  ['vat validate', createValidateTopLevelCommand, 'resources'],
-  ['vat verify', createVerifyTopLevelCommand, 'consistency'],
-  ['vat build', createBuildTopLevelCommand, 'skills'],
+  ['vat validate', createValidateTopLevelCommand, 'resources', CHECKS_CHILD_TERMS],
+  ['vat verify', createVerifyTopLevelCommand, 'consistency', NO_CHILD_TERMS],
+  ['vat build', createBuildTopLevelCommand, 'skills', NO_CHILD_TERMS],
 ] as const;
 
 describe('orchestrator help text describes in-process phases', () => {
@@ -50,11 +60,19 @@ describe('orchestrator help text describes in-process phases', () => {
     expect(renderCommandHelp(create())).toContain(ownPhase);
   });
 
-  it.each(ORCHESTRATORS)('%s claims no process boundary', (_name, create) => {
+  it.each(ORCHESTRATORS)('%s claims no process boundary its phases lack', (_name, create, _phase, allowed) => {
     const help = renderCommandHelp(create()).toLowerCase();
 
     for (const [term, why] of NO_SUCH_BOUNDARY) {
+      if (allowed.includes(term)) continue;
       expect(help, `help still says "${term}" — ${why}`).not.toContain(term);
     }
+  });
+
+  it('vat validate ties its one child to the checks phase', () => {
+    const help = renderCommandHelp(createValidateTopLevelCommand()).toLowerCase();
+
+    expect(help).toContain('checks child');
+    expect(help).toContain("the supervised child of 'vat resources check'");
   });
 });

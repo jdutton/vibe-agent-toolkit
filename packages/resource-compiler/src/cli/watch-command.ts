@@ -3,6 +3,7 @@
  */
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
+import { handleTerminatingSignals } from '@vibe-agent-toolkit/utils/process';
 import { watch } from 'chokidar';
 import type { Command } from 'commander';
 
@@ -74,14 +75,17 @@ export function registerWatchCommand(program: Command): void {
         console.error('Watcher error:', error);
       });
 
-      // Keep process alive
-      process.on('SIGINT', () => {
-        console.log('');
-        console.log('Stopping file watcher...');
-        watcher.close().catch((error: unknown) => {
-          console.error('Error closing watcher:', error instanceof Error ? error.message : String(error));
-        });
-        process.exit(ExitCode.OK);
+      // A terminating signal: close the watcher, then die of the signal (exit 0 where it cannot,
+      // on Windows). A repeat with the first is swallowed; a later one ends the process at once.
+      handleTerminatingSignals({
+        fallbackExitCode: ExitCode.OK,
+        cleanup: async () => {
+          console.log('');
+          console.log('Stopping file watcher...');
+          await watcher.close().catch((error: unknown) => {
+            console.error('Error closing watcher:', error instanceof Error ? error.message : String(error));
+          });
+        },
       });
     });
 }

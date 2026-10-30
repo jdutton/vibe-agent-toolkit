@@ -424,7 +424,8 @@
   three (registry entry `orchestrator`, schema `packages/cli/schemas/orchestrator.json`).
   `status: success|warning|error|system-error` -> `ok|findings|error`; the header `issueCounts` ->
   the envelope `summary`; every phase's findings are flat in `findings[]` with their `location`
-  unchanged; `examined` is the sum of the phases' own; `duration` -> `durationMs`. `phases[]` ->
+  unchanged; `examined` is the sum of the phases' own (for `vat validate` that includes the `checks`
+  phase's, which is the whole tracked tree); `duration` -> `durationMs`. `phases[]` ->
   `data.phases[]` of `{ name, status: ok|findings|error, examined, summary, error?, data }`:
   `phases[].report` -> the phase's own `data` (its findings are on the envelope, its status and
   summary on the entry); `phases[].exitCode`, `phases[].error` (a string) and `phases[].issueCounts`

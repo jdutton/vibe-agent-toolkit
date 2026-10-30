@@ -1,0 +1,336 @@
+/**
+ * The terminating-signal list, the ONE guard every handler goes through, and the re-raise it ends
+ * with. What the re-raise does to a real process is pinned through the real binary
+ * (`checks-supervisor-orphan.system.test.ts`, `signal-guard-group-ctrl-c.system.test.ts`); here, the
+ * decisions — on `process.emit`, with the raise and the exit stubbed.
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  handleTerminatingSignals,
+  isTerminatingSignal,
+  REPEAT_SIGNAL_WINDOW_MS,
+  reRaiseSignal,
+  TERMINATING_SIGNALS,
+  type TerminatingSignalGuard,
+} from '../src/process.js';
+
+describe('TERMINATING_SIGNALS', () => {
+  it('is the five signals that terminate by default disposition and can be handled — never SIGKILL', () => {
+    expect([...TERMINATING_SIGNALS]).toStrictEqual(['SIGTERM', 'SIGHUP', 'SIGINT', 'SIGQUIT', 'SIGBREAK']);
+  });
+
+  it('isTerminatingSignal answers for exactly that list', () => {
+    expect(TERMINATING_SIGNALS.every((signal) => isTerminatingSignal(signal))).toBe(true);
+    expect(['SIGKILL', 'SIGABRT', 'SIGSEGV', ''].some((signal) => isTerminatingSignal(signal))).toBe(false);
+  });
+});
+
+/** The raise and the exit, stubbed: what reRaiseSignal would have done to this process. */
+function stubEnding(): { kill: ReturnType<typeof vi.spyOn>; exit: ReturnType<typeof vi.spyOn> } {
+  const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+  vi.spyOn(Atomics, 'wait').mockImplementation(() => 'timed-out');
+  const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+  return { kill, exit };
+}
+
+describe('reRaiseSignal', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('raises the signal on this process, then — still alive after the grace — exits with the fallback code', () => {
+    const { kill, exit } = stubEnding();
+
+    reRaiseSignal('SIGTERM', 2);
+
+    if (process.platform === 'win32') {
+      expect(kill).not.toHaveBeenCalled();
+    } else {
+      expect(kill).toHaveBeenCalledWith(process.pid, 'SIGTERM');
+    }
+    expect(exit).toHaveBeenCalledWith(2);
+  });
+
+  // 🚨 Only the guard's own listener goes: this process is a vitest worker, whose own signal
+  // listeners a test must never strip.
+  it('removes the guard\'s own listeners first, and no one else\'s', () => {
+    stubEnding();
+    const foreign = vi.fn();
+    const before = process.listenerCount('SIGQUIT');
+    const installed = handleTerminatingSignals({ cleanup: () => undefined, fallbackExitCode: 2 });
+    process.on('SIGQUIT', foreign);
+    try {
+      expect(process.listenerCount('SIGQUIT')).toBe(before + 2);
+
+      reRaiseSignal('SIGQUIT', 2);
+
+      expect(process.listeners('SIGQUIT')).toContain(foreign);
+      expect(process.listenerCount('SIGQUIT')).toBe(before + 1);
+    } finally {
+      process.off('SIGQUIT', foreign);
+      installed.release();
+    }
+  });
+});
+
+/** This process's listener count for every terminating signal. */
+function counts(): number[] {
+  return TERMINATING_SIGNALS.map((signal) => process.listenerCount(signal));
+}
+
+/** Every guard a case installed, released after it. */
+const guards: TerminatingSignalGuard[] = [];
+
+/** Install a guard with exit fallback 2, remembered for release. */
+function guard(cleanup: (signal: string, forced: AbortSignal) => unknown): TerminatingSignalGuard {
+  const installed = handleTerminatingSignals({ cleanup, fallbackExitCode: 2 });
+  guards.push(installed);
+  return installed;
+}
+
+describe('handleTerminatingSignals', () => {
+  let baseline: number[];
+
+  beforeEach(() => {
+    baseline = counts();
+  });
+
+  afterEach(() => {
+    for (const installed of guards.splice(0)) installed.release();
+    vi.restoreAllMocks();
+    expect(counts()).toStrictEqual(baseline);
+  });
+
+  it('listens on every terminating signal while a guard lives, and on none once it is released without one', () => {
+    const installed = guard(() => undefined);
+    expect(counts()).toStrictEqual(baseline.map((count) => count + 1));
+
+    expect(installed.release()).toBe(true);
+    expect(counts()).toStrictEqual(baseline);
+  });
+
+  it('a synchronous cleanup: runs once, then this process dies of the signal in the same turn', () => {
+    const { kill, exit } = stubEnding();
+    const cleanup = vi.fn();
+    guard(cleanup);
+
+    process.emit('SIGTERM', 'SIGTERM');
+
+    expect(cleanup).toHaveBeenCalledExactlyOnceWith('SIGTERM', expect.any(AbortSignal));
+    if (process.platform !== 'win32') expect(kill).toHaveBeenCalledWith(process.pid, 'SIGTERM');
+    expect(exit).toHaveBeenCalledWith(2);
+  });
+
+  // 🚨 The class this guard closes: a handler that removed itself on the first signal, so the
+  // second — a group Ctrl-C under the wrapper delivers two — killed the process mid-cleanup.
+  it('an asynchronous cleanup: a repeat is SWALLOWED until it settles, and only then does the process end', async () => {
+    const { kill, exit } = stubEnding();
+    let finish: () => void = () => undefined;
+    const cleanup = vi.fn(() => new Promise<void>((resolve) => {
+      finish = resolve;
+    }));
+    const installed = guard(cleanup);
+
+    process.emit('SIGINT', 'SIGINT');
+    process.emit('SIGINT', 'SIGINT');
+    process.emit('SIGTERM', 'SIGTERM');
+    await Promise.resolve();
+
+    expect(cleanup).toHaveBeenCalledOnce();
+    // Still listening — a repeat meets the guard, never the default disposition.
+    expect(counts()).toStrictEqual(baseline.map((count) => count + 1));
+    expect(kill).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+    // A release meanwhile does not drop the ending the signal started.
+    expect(installed.release()).toBe(false);
+
+    finish();
+    await vi.waitFor(() => {
+      expect(exit).toHaveBeenCalledWith(2);
+    });
+    if (process.platform !== 'win32') expect(kill).toHaveBeenCalledExactlyOnceWith(process.pid, 'SIGINT');
+    expect(counts()).toStrictEqual(baseline);
+  });
+
+  it('a cleanup that rejects — or throws — still ends the process', async () => {
+    const { exit } = stubEnding();
+    guard(() => Promise.reject(new Error('could not remove')));
+    guard(() => {
+      throw new Error('threw');
+    });
+
+    process.emit('SIGHUP', 'SIGHUP');
+
+    await vi.waitFor(() => {
+      expect(exit).toHaveBeenCalledWith(2);
+    });
+  });
+
+  it('two live guards: both clean up, and the process ends once the slower has settled', async () => {
+    const { exit } = stubEnding();
+    const order: string[] = [];
+    let finish: () => void = () => undefined;
+    guard(() => {
+      order.push('sync');
+    });
+    guard(() => new Promise<void>((resolve) => {
+      finish = () => {
+        order.push('async');
+        resolve();
+      };
+    }));
+
+    process.emit('SIGINT', 'SIGINT');
+    await Promise.resolve();
+    expect(order).toStrictEqual(['sync']);
+    expect(exit).not.toHaveBeenCalled();
+
+    finish();
+    await vi.waitFor(() => {
+      expect(exit).toHaveBeenCalledOnce();
+    });
+    expect(order).toStrictEqual(['sync', 'async']);
+  });
+
+  it('releaseOrAwaitEnding: resolves once released without a signal', async () => {
+    const installed = guard(() => undefined);
+
+    await expect(installed.releaseOrAwaitEnding()).resolves.toBeUndefined();
+    expect(counts()).toStrictEqual(baseline);
+  });
+
+  // 🚨 Work that goes on to publish or exit must not do so while a signal is ending the process.
+  it('releaseOrAwaitEnding: never settles once a signal is ending the process', async () => {
+    const { exit } = stubEnding();
+    let finish: () => void = () => undefined;
+    const installed = guard(() => new Promise<void>((resolve) => {
+      finish = resolve;
+    }));
+    process.emit('SIGINT', 'SIGINT');
+
+    let settled = false;
+    installed.releaseOrAwaitEnding().then(() => {
+      settled = true;
+    }, () => {
+      settled = true;
+    });
+    finish();
+    await vi.waitFor(() => {
+      expect(exit).toHaveBeenCalledWith(2);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+  });
+
+  it('a guard installed while an ending is in progress runs its cleanup at once, and the ending waits for it', async () => {
+    const { exit } = stubEnding();
+    let finishFirst: () => void = () => undefined;
+    let finishLate: () => void = () => undefined;
+    guard(() => new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    }));
+    process.emit('SIGTERM', 'SIGTERM');
+
+    const late = vi.fn(() => new Promise<void>((resolve) => {
+      finishLate = resolve;
+    }));
+    const lateGuard = guard(late);
+    expect(late).toHaveBeenCalledOnce();
+    expect(late.mock.calls[0]?.[0]).toBe('SIGTERM');
+    expect(lateGuard.release()).toBe(false);
+
+    finishFirst();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(exit).not.toHaveBeenCalled();
+
+    finishLate();
+    await vi.waitFor(() => {
+      expect(exit).toHaveBeenCalledOnce();
+    });
+  });
+});
+
+/** A guard whose cleanup never settles, and the abort signal it was handed. */
+function hungGuard(): { forced: () => AbortSignal | undefined } {
+  let forced: AbortSignal | undefined;
+  guard((_signal, abort) => {
+    forced = abort;
+    return new Promise<void>(() => {});
+  });
+  return { forced: () => forced };
+}
+
+/** End the ending a case left in progress — a repeat past the window — so the next starts clean. */
+function forceTheEnding(): void {
+  vi.advanceTimersByTime(REPEAT_SIGNAL_WINDOW_MS + 1);
+  process.emit('SIGTERM', 'SIGTERM');
+}
+
+/**
+ * 🚨 A repeat is the SAME interruption only while it arrives with the first — a terminal's group
+ * Ctrl-C and the `vat` wrapper's forward are milliseconds apart. Swallowed for ever, a second
+ * Ctrl-C or kill could no longer end a cleanup that hung.
+ */
+describe('handleTerminatingSignals — a repeat', () => {
+  let baseline: number[];
+
+  beforeEach(() => {
+    baseline = counts();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'performance', 'Date'] });
+  });
+
+  afterEach(() => {
+    for (const installed of guards.splice(0)) installed.release();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    expect(counts()).toStrictEqual(baseline);
+  });
+
+  it('inside the window is swallowed: the cleanup is not cut short', () => {
+    const { kill, exit } = stubEnding();
+    hungGuard();
+
+    process.emit('SIGINT', 'SIGINT');
+    vi.advanceTimersByTime(REPEAT_SIGNAL_WINDOW_MS - 100);
+    process.emit('SIGINT', 'SIGINT');
+
+    expect(kill).not.toHaveBeenCalled();
+    expect(exit).not.toHaveBeenCalled();
+    expect(counts()).toStrictEqual(baseline.map((count) => count + 1));
+    forceTheEnding();
+  });
+
+  it('after the window ends the process at once, of the repeat, the never-settling cleanup abandoned', () => {
+    const { kill, exit } = stubEnding();
+    const hung = hungGuard();
+
+    process.emit('SIGTERM', 'SIGTERM');
+    vi.advanceTimersByTime(REPEAT_SIGNAL_WINDOW_MS + 100);
+    expect(exit).not.toHaveBeenCalled();
+    process.emit('SIGINT', 'SIGINT');
+
+    expect(hung.forced()?.aborted).toBe(true);
+    if (process.platform !== 'win32') expect(kill).toHaveBeenCalledExactlyOnceWith(process.pid, 'SIGINT');
+    expect(exit).toHaveBeenCalledExactlyOnceWith(2);
+    expect(counts()).toStrictEqual(baseline);
+    // The hold below is let go with the ending.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // 🚨 A cleanup whose promise holds nothing open let the event loop empty: Node exited 0 — a
+  // success status for an interrupted run — instead of dying of the signal.
+  it('while a cleanup is pending, a REF\'D timer holds this process open, so it cannot end in exit 0', () => {
+    stubEnding();
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    hungGuard();
+
+    process.emit('SIGTERM', 'SIGTERM');
+
+    expect(vi.getTimerCount()).toBe(1);
+    const hold = setIntervalSpy.mock.results[0]?.value as NodeJS.Timeout | undefined;
+    expect(hold?.hasRef()).toBe(true);
+    forceTheEnding();
+  });
+});
