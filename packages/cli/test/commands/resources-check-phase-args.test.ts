@@ -3,7 +3,7 @@
  *
  * Observed at the supervisor's door: `superviseCheck` is replaced by a recorder, so the argv the
  * phase composes is read exactly as the spawn would receive it, with no process started — and
- * `withProgressLog` by one that hands over a path without minting a directory, so this unit test
+ * `withProgressLog` by one that hands over a path (and a guard that guards nothing) without minting a directory, so this unit test
  * touches no filesystem. The contract: the operand is the root the orchestrator resolved,
  * `--format json` (the phase reads the child's document as JSON), `--debug` iff the orchestrator
  * was given it, `--supervised-by phase:<this pid>:<log>` (the recursion guard; `phase` because the
@@ -38,7 +38,10 @@ vi.mock('../../src/commands/resources/check-supervisor.js', async (importOrigina
     if (report === undefined) throw new Error('the forwarded report was not built yet');
     return Promise.resolve({ outcome: 'completed', document: { text: JSON.stringify(report), report } });
   }),
-  withProgressLog: vi.fn(async <T>(work: (logPath: string) => Promise<T>) => ({ value: await work(PROGRESS_LOG), leftover: undefined })),
+  withProgressLog: vi.fn(async <T>(work: (log: SupervisorModule.ProgressLog) => Promise<T>) => ({
+    value: await work({ path: PROGRESS_LOG, guard: { watch: () => undefined } }),
+    leftover: undefined,
+  })),
 }));
 
 const { buildCheckOutputData, runResourcesCheckPhase } = await import('../../src/commands/resources/check.js');

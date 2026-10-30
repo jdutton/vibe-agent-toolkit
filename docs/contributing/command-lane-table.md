@@ -69,8 +69,8 @@ is set: `vat resources scan`, `vat resources validate` and `vat rag index` throu
 `› withResourcePopulationSource()` — both gated by `› resourcesProjectionCrawlSelected()`, which is
 `!== 'walk'`; `vat inventory` on a plugin directory; and `vat claude context`, which has no walk
 arm at all. Four more inherit one: `vat build`, `vat validate` and
-`vat verify` through the phases they spawn, and `vat skill test run` by re-entering
-`vat claude plugin build`.
+`vat verify` through the phases they run in process (and `vat validate` through its `checks`
+child as well), and `vat skill test run` by re-entering `vat claude plugin build`.
 
 No command carries two projections in one process: `vat claude context` populates the claude-context
 lens that `vat resources validate` used to also populate, beside its resource population, for a
@@ -213,10 +213,12 @@ corrected since that derivation cite the code site that decided them.
 
 ### What the runtime cross-check caught that static analysis could not
 
-`vat validate` was classified `NONE` and is not: it spawns `resources validate` and
-`skills validate` as child processes. **No import edge exists to follow**, so a static graph is
-structurally blind to it and always will be. The child inherits stderr, which is the only reason the
-instrumented run saw it. Any future revision of this table must keep the runtime leg.
+`vat validate` was classified `NONE` and was not: it spawned `resources validate` and
+`skills validate` as child processes then (its phases now run in process, and only `checks` is a
+child — see "Commands that enumerate"). **No import edge exists to follow into a spawned child**, so
+a static graph is structurally blind to it and always will be. The child inherited stderr, which is
+the only reason the instrumented run saw it. Any future revision of this table must keep the
+runtime leg.
 
 ## Declared limits
 

@@ -10,11 +10,12 @@
  * `checks-supervisor-orphan.system.test.ts`.
  */
 
+import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { chmodSync, existsSync } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { CANNOT_DENY_READS } from '@vibe-agent-toolkit/utils/testing';
+import { PERMISSIONS_ENFORCED } from '@vibe-agent-toolkit/utils/testing';
 import { describe, expect, it, vi } from 'vitest';
 
 import { __internal } from '../../src/commands/resources/check-supervisor.js';
@@ -29,17 +30,18 @@ class StandInChild extends EventEmitter {
 }
 
 describe('the supervisor\'s exit guard', () => {
-  it.skipIf(CANNOT_DENY_READS)('kills the child and names, on stderr, a progress directory the OS would not remove', () => {
+  // The fixture denies REMOVAL (a read-only directory), so the gate is whether POSIX modes are
+  // enforced at all — false on Windows and as root.
+  it.skipIf(!PERMISSIONS_ENFORCED)('kills the child and names, on stderr, a progress directory the OS would not remove', () => {
     const dir = createTestTempDir('vat-check-');
     writeFileTree(dir, { 'progress.jsonl': '', 'locked/x.txt': 'x' });
     const locked = safePath.join(dir, 'locked');
     chmodSync(locked, 0o555);
     const child = new StandInChild();
     const before = new Set(process.listeners('exit'));
-    const release = __internal.guardSupervision(
-      child as unknown as Parameters<typeof __internal.guardSupervision>[0],
-      safePath.join(dir, 'progress.jsonl'),
-    );
+    const guard = __internal.guardSupervision();
+    guard.cover(safePath.join(dir, 'progress.jsonl'));
+    guard.watch(child as unknown as ChildProcess);
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
       const onExit = process.listeners('exit').find((listener) => !before.has(listener));
@@ -54,7 +56,7 @@ describe('the supervisor\'s exit guard', () => {
       stderr.mockRestore();
       child.exitCode = 0;
       child.emit('close', 0, null);
-      release();
+      guard.release();
       chmodSync(locked, 0o755);
       cleanupTestTempDir(dir);
     }

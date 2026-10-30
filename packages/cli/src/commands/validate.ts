@@ -156,12 +156,15 @@ Exit Codes:
       before its population completed, or a checks supervisor that could not
       watch its child — a path argument or the retired '--only'
       (USAGE_INVALID), no project root. One exit 2 publishes NO document: a
-      signal this process could not die of (PID 1 in a container), below
+      signal on Windows, or one that cannot kill this process (PID 1) — see
+      the signal paragraph below
 
-  A signal (SIGTERM, SIGHUP, SIGINT) sent to this process while the checks
-  child is supervised kills the child, and this process dies of that same
-  signal: its status is the signal's (a shell reports 128+n), not 0, 1 or 2,
-  and nothing is published.
+  A signal (SIGTERM, SIGHUP, SIGINT, SIGQUIT) sent to this process — or to
+  the 'vat' wrapper, which forwards it — while the checks child is supervised
+  kills the child, and nothing is published. On POSIX it dies of the signal
+  (status 128+n). On Windows, or where the signal cannot kill it (PID 1), it
+  exits 2 with no document. A SIGKILL cannot be handled: the child then ends
+  itself when it reads end-of-file on the stdin this process held.
 
 Checks bound:
   The checks phase runs the supervised child of 'vat resources check' under

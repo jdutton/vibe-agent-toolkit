@@ -5,7 +5,7 @@
 
 import { type ChildProcess, spawn } from 'node:child_process';
 
-import { isProcessGoneError } from '@vibe-agent-toolkit/utils';
+import { isPathAbsentError, isProcessGoneError } from '@vibe-agent-toolkit/utils';
 import { NODE_EXECUTABLE } from '@vibe-agent-toolkit/utils/testing';
 import yaml from 'yaml';
 
@@ -14,17 +14,42 @@ import { fs } from '../test-common.js';
 import { BIN_PATH } from './checks-phase.js';
 
 /**
- * Whether a process with this pid still exists (a zombie counts until it is reaped). Every pid
- * asked about is one of this test's own processes, so a refusal to signal it means it is gone.
+ * Whether a process with this pid is still running. Every pid asked about is one of this test's own
+ * processes, so a refusal to signal it means it is gone.
+ *
+ * 🪤 A ZOMBIE is dead. A process that has exited but whose parent died first is reaped by whatever
+ * adopted it, and until then `kill(pid, 0)` still succeeds — so a case run where the adopter does
+ * not reap (a container whose PID 1 is not an init) would wait out its whole bound on a process
+ * that finished at once. Where `/proc` exists (Linux, where such containers run) the state is read
+ * there, and `Z` reads as gone. Elsewhere — macOS, whose launchd reaps at once, and Windows, which
+ * has no zombies — `kill(pid, 0)` is the answer, and the cases rely on a reaping PID 1.
  */
 export function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch (error) {
     if (isProcessGoneError(error)) return false;
     throw error;
   }
+  return !isZombie(pid);
+}
+
+/**
+ * Whether `/proc` says this pid is a zombie; false where there is no `/proc` entry to read.
+ *
+ * @param pid - A process `kill(pid, 0)` still reaches
+ * @returns True for state `Z`
+ */
+function isZombie(pid: number): boolean {
+  let stat: string;
+  try {
+    stat = fs.readFileSync(`/proc/${String(pid)}/stat`, 'utf-8');
+  } catch (error) {
+    if (isPathAbsentError(error)) return false;
+    throw error;
+  }
+  // `<pid> (<comm>) <state> …` — the command may hold spaces and parentheses, so read past the LAST `)`.
+  return stat.slice(stat.lastIndexOf(')') + 2).startsWith('Z');
 }
 
 /** Poll `condition` every 50 ms for up to `ms`; resolves true as soon as it holds. */
@@ -47,18 +72,21 @@ export async function pidWrittenTo(file: string): Promise<number> {
   return Number(fs.readFileSync(file, 'utf-8'));
 }
 
-/** How a `vat` process ended, and the document it published (empty when it published none). */
+/** How a `vat` process ended, the document it published (empty when it published none), and its stderr. */
 export interface Ending {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly document: Record<string, unknown>;
+  readonly stderr: string;
 }
 
 /** A running `vat` process. */
 export interface LiveVat {
   readonly process: ChildProcess;
-  /** Settles when the process has ended and its stdout is drained. */
+  /** Settles when the process has ended and its stdout and stderr are drained. */
   readonly ended: Promise<Ending>;
+  /** Everything it has written to stderr so far — for an assertion's message while it still runs. */
+  stderr(): string;
 }
 
 /**
@@ -70,27 +98,32 @@ export interface LiveVat {
  * @param options - The preloads and the extra environment
  * @param options.nodeOptions - Test-only preloads
  * @param options.env - Extra environment variables
+ * @param options.entry - The script `node` runs: the CLI (`dist/bin.js`, the default) or the `vat`
+ *   wrapper the package's `bin` names (`dist/bin/vat.js`)
  * @returns The running process
  */
 export function startVat(
   cwd: string,
   args: readonly string[],
-  options: { nodeOptions: readonly string[]; env: NodeJS.ProcessEnv },
+  options: { nodeOptions: readonly string[]; env: NodeJS.ProcessEnv; entry?: string },
 ): LiveVat {
   const nodeOptions = [process.env['NODE_OPTIONS'], ...options.nodeOptions]
     .filter((part) => part !== undefined && part !== '').join(' ');
-  const child = spawn(NODE_EXECUTABLE, [BIN_PATH, ...args], {
+  const child = spawn(NODE_EXECUTABLE, [options.entry ?? BIN_PATH, ...args], {
     cwd,
     env: { ...process.env, ...options.env, NODE_OPTIONS: nodeOptions },
-    stdio: ['ignore', 'pipe', 'ignore'],
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
   const chunks: Buffer[] = [];
+  const errChunks: Buffer[] = [];
   child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk));
+  child.stderr?.on('data', (chunk: Buffer) => errChunks.push(chunk));
+  const stderr = (): string => Buffer.concat(errChunks).toString('utf-8');
   const ended = new Promise<Ending>((resolve) => {
     child.on('close', (code, signal) => {
       const document = (yaml.parse(Buffer.concat(chunks).toString('utf-8')) ?? {}) as Record<string, unknown>;
-      resolve({ code, signal, document });
+      resolve({ code, signal, document, stderr: stderr() });
     });
   });
-  return { process: child, ended };
+  return { process: child, ended, stderr };
 }

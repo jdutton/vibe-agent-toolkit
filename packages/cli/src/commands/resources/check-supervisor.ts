@@ -98,10 +98,13 @@
  *
  * Its signal handlers and `exit` guard take the child down on every ending that
  * runs its code (see `guardSupervision`). SIGKILL, an OOM killer and, on Windows,
- * any outside kill run none of it; for those the child ends ITSELF, before its
- * next progress entry, once its supervisor is gone (`createProgressWriter`). A
- * statement already blocked inside SQLite cannot be reached either way until it
- * returns.
+ * any outside kill run none of it; for those the child ends ITSELF. The child's
+ * stdin is a pipe whose write end only this process holds and never writes or
+ * ends, so however this process dies the OS closes it and the child reads
+ * end-of-file (`endWhenSupervisorGone`). The child notices when its event loop
+ * next turns: at once during the population, after the last check during the
+ * synchronous check loop — and a statement blocked inside SQLite reaches nothing
+ * until it returns.
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
@@ -117,6 +120,7 @@ import {
   type TempDirOutcome,
   withTempDir,
 } from '@vibe-agent-toolkit/utils';
+import { reRaiseSignal, TERMINATING_SIGNALS } from '@vibe-agent-toolkit/utils/process';
 
 import { CommandRefusalError, errorMessageOf } from '../../utils/command-refusal.js';
 import { readForwardedDocument, type ForwardedDocument } from '../../utils/document-writer.js';
@@ -162,6 +166,18 @@ const MAX_POLL_MS = 250;
  * the pid.
  */
 const KILL_ATTEMPTS_BEFORE_REPORTING = 5;
+
+/**
+ * How many polls after the first ACCEPTED SIGKILL the watchdog waits for the child's `close`
+ * before it REPORTS the kill as one that did not land.
+ *
+ * The kernel accepting SIGKILL is not the child ending: a process in uninterruptible I/O (state
+ * `D` on Linux — a hung NFS mount, a wedged disk) takes the signal and does not die until the I/O
+ * returns, which may be never. Without this the watchdog re-sent SIGKILL forever and the
+ * supervisor became the second unbounded hang. 20 polls is 1-5 s at the poll bounds — far beyond
+ * the moment a SIGKILLed process normally takes to be reaped.
+ */
+const KILL_POLLS_BEFORE_REPORTING_UNREAPED = 20;
 
 /** What the watchdog remembers between polls. */
 export interface WatchdogState {
@@ -295,10 +311,9 @@ export interface SupervisedChild {
   /** Who started the supervision. */
   readonly invoker: CheckInvocation;
   /**
-   * The supervisor's pid — this process's parent when it started. The child's progress writer
-   * checks it before every entry and ends the child once the supervisor is gone: a supervisor
-   * killed in a way no handler of its own sees (SIGKILL, an OOM killer, a Windows outside kill)
-   * cannot take the child down, and the child is then bounded by nothing else.
+   * The supervisor's pid — this process's parent when it started, checked once at boot (see
+   * {@link requireSupervisableFlags}) and named in the line the child prints when it ends itself
+   * because the supervisor is gone (`endWhenSupervisorGone`, which watches stdin, not this pid).
    */
   readonly supervisorPid: number;
   /** The progress log both processes watch; the child appends to it. */
@@ -442,8 +457,11 @@ export type AbnormalDeath =
   | { readonly kind: 'signal'; readonly signal: string }
   | { readonly kind: 'spawn-failed'; readonly binary: string; readonly detail: string }
   /**
-   * The watchdog fired and the KILL WAS REFUSED — so the child is, as far as
-   * this process can tell, still running.
+   * The watchdog fired and the KILL DID NOT END THE CHILD — so the child is, as
+   * far as this process can tell, still running. `refused` says which way: the
+   * kernel refused the SIGKILL (`EPERM`, in practice), or accepted it and the
+   * child still had not ended {@link KILL_POLLS_BEFORE_REPORTING_UNREAPED} polls
+   * later (uninterruptible I/O).
    *
    * 🚨 Distinct from `spawn-failed` and that distinction is the whole point.
    * Both arrive on `child.on('error')` and the handler used to read every one of
@@ -459,6 +477,7 @@ export type AbnormalDeath =
     readonly kind: 'kill-failed';
     readonly detail: string;
     readonly pid: number | undefined;
+    readonly refused: boolean;
   }
   | { readonly kind: 'no-status' }
   /**
@@ -499,6 +518,9 @@ export type AbnormalDeath =
    * Which of the two is the truth cannot be known here, so neither is forwarded.
    */
   | { readonly kind: 'exit-disagrees'; readonly code: number; readonly documentExit: number };
+
+/** A watchdog SIGKILL that did not end the child — the fields of the `kill-failed` death. */
+type KillFailure = Omit<Extract<AbnormalDeath, { kind: 'kill-failed' }>, 'kind'>;
 
 /** What a child's ending MEANT, once the watchdog's belief is reconciled with it. */
 export type RunResolution =
@@ -557,7 +579,7 @@ export type RunResolution =
  * @param ending.signal - `close`'s second argument
  * @param ending.killed - Whether the watchdog sent SIGKILL
  * @param ending.spawnError - Set when the child never started at all
- * @param ending.killFailure - Set when the watchdog's SIGKILL was REFUSED
+ * @param ending.killFailure - Set when the watchdog's SIGKILL was refused, or did not end the child
  * @returns What actually happened
  */
 export function resolveChildEnding(ending: {
@@ -565,7 +587,7 @@ export function resolveChildEnding(ending: {
   signal: string | null;
   killed: boolean;
   spawnError?: { binary: string; detail: string } | undefined;
-  killFailure?: { detail: string; pid: number | undefined } | undefined;
+  killFailure?: KillFailure | undefined;
 }): RunResolution {
   if (ending.code !== null && ending.signal === null) {
     return { kind: 'completed', code: ending.code };
@@ -638,9 +660,13 @@ export type SupervisedRun =
 /**
  * Run `vat resources check` as a child, bounded by the budget.
  *
- * `stdio` is `['ignore', 'pipe', 'inherit']`: the child's stdout is accumulated
- * so the parent can forward the document verbatim, and its stderr is INHERITED
- * so warnings and blob-stage refusals stream live exactly as they do today.
+ * `stdio` is `['pipe', 'pipe', 'inherit']`. Its stdin is a pipe this process
+ * holds open and NEVER writes to or ends: it exists only so that the child reads
+ * end-of-file the moment this process is gone, however it went (see
+ * `endWhenSupervisorGone`). Node closes this end itself once the child has
+ * exited. The child's stdout is accumulated so the parent can forward the
+ * document verbatim, and its stderr is INHERITED so warnings and blob-stage
+ * refusals stream live exactly as they do today.
  *
  * ⚠️ Asynchronous `spawn`, never `spawnSync`. The parent's event loop is the
  * thing holding the watchdog timer; a synchronous spawn would block it for
@@ -684,33 +710,37 @@ export type SupervisedRun =
  * contorted to make it testable; the branch ordering and the message
  * composition are pure functions and are pinned as such.
  *
+ * ⏱️ Every interval is read off `performance.now()`, the monotonic clock: a
+ * wall clock stepped by NTP or an operator would grow or shrink the budget.
+ *
  * @param options - The run
  * @param options.args - The child's argv after the node binary, `--supervised-by` included
- * @param options.logPath - The progress log both sides agreed on
+ * @param options.log - The progress log both sides agreed on, and the guard {@link withProgressLog} holds over it
  * @param options.budgetMs - How long silence is allowed to last
  * @param options.format - The format the child was asked for, to read its document in
  * @returns How the child ended, and what it left behind
  */
 export async function superviseCheck(options: {
   args: readonly string[];
-  logPath: string;
+  log: ProgressLog;
   budgetMs: number;
   format: 'yaml' | 'json';
 }): Promise<SupervisedRun> {
-  const startedAt = Date.now();
+  const logPath = options.log.path;
+  const startedAt = performance.now();
   const binary = resolveVatBinPath();
   const child = spawn(process.execPath, [binary, ...options.args], {
-    stdio: ['ignore', 'pipe', 'inherit'],
+    stdio: ['pipe', 'pipe', 'inherit'],
   });
-  // For exactly as long as the child is supervised — released below however the run ends.
-  const releaseGuard = guardSupervision(child, options.logPath);
+  // The guard `withProgressLog` installed now takes this child down with the process too.
+  options.log.guard.watch(child);
 
   const chunks: Buffer[] = [];
   child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk));
 
   let killed = false;
   let killAttempts = 0;
-  let killFailure: { detail: string; pid: number | undefined } | undefined;
+  let killFailure: KillFailure | undefined;
   let spawnError: { binary: string; detail: string } | undefined;
   let state: WatchdogState = { bytesSeen: 0, quietSince: startedAt };
   // 🪤 Declared out here and started INSIDE the promise, so the watchdog can
@@ -727,7 +757,7 @@ export async function superviseCheck(options: {
     // header for why it must not settle here.
     child.on('error', (cause: Error) => {
       if (killed) {
-        killFailure = { detail: cause.message, pid: child.pid };
+        killFailure = { detail: cause.message, pid: child.pid, refused: true };
         return;
       }
       spawnError = { binary, detail: cause.message };
@@ -741,8 +771,8 @@ export async function superviseCheck(options: {
 
     const poll = (): void => {
       const reading = pollWatchdog(state, {
-        bytes: logSize(options.logPath),
-        now: Date.now(),
+        bytes: logSize(logPath),
+        now: performance.now(),
         budgetMs: options.budgetMs,
       });
       state = reading.state;
@@ -753,9 +783,8 @@ export async function superviseCheck(options: {
       // or block it. See this module's header — and note the reason is NOT that
       // SIGTERM fails to reach a blocked process, which was measured false.
       child.kill('SIGKILL');
-      if (killFailure !== undefined && killAttempts >= KILL_ATTEMPTS_BEFORE_REPORTING) {
-        resolve(resolveChildEnding({ code: null, signal: null, killed, killFailure }));
-      }
+      const unended = unendedKill(killAttempts, killFailure, child.pid);
+      if (unended !== undefined) resolve(resolveChildEnding({ code: null, signal: null, killed, killFailure: unended }));
     };
     // 🚨 A poll that THROWS — a progress log this process can no longer stat — has no reading,
     // and the timer is outside every caller's `try`: uncaught, it reached the CLI's last-resort
@@ -773,7 +802,7 @@ export async function superviseCheck(options: {
         reject(error as Error);
       }
     }, pollIntervalMs(options.budgetMs));
-  }).finally(releaseGuard);
+  });
   clearInterval(timer);
 
   const stdout = Buffer.concat(chunks).toString('utf-8');
@@ -783,7 +812,7 @@ export async function superviseCheck(options: {
   const ending = resolveSilentCompletion(resolution, stdout);
 
   const wreckage = (): { log: string; elapsedMs: number } =>
-    ({ log: readLog(options.logPath), elapsedMs: Date.now() - startedAt });
+    ({ log: readLog(logPath), elapsedMs: performance.now() - startedAt });
   if (ending.kind === 'completed') {
     // Read while the progress log still exists: a document that is not one is
     // a death, and the log is what its interrupted document is built from.
@@ -798,26 +827,51 @@ export async function superviseCheck(options: {
 }
 
 /**
- * The signals that end THIS process by default disposition and never reach its child unless they
- * were sent to the whole process group — `kill <pid>`, `kill -INT <pid>`, `timeout(1)`, a CI runner
- * stopping or cancelling a step, a closed terminal.
+ * The kill that did not end the child, once the watchdog has tried long enough to say so — or
+ * undefined while it should keep trying.
  *
- * 🔑 SIGINT is here although Ctrl-C at a terminal reaches the child directly (it signals the whole
- * foreground process GROUP): a SIGINT sent to this pid alone does not, and a runner that cancels a
- * job that way would otherwise orphan the child exactly as a pid-only SIGTERM did.
+ * A REFUSED kill is reported after {@link KILL_ATTEMPTS_BEFORE_REPORTING} attempts; an ACCEPTED one
+ * that has not ended the child after {@link KILL_POLLS_BEFORE_REPORTING_UNREAPED}. Either way the
+ * supervision settles, naming the pid, rather than polling forever.
+ *
+ * @param killAttempts - SIGKILLs sent so far, one per breaching poll
+ * @param refusal - Set when the kernel refused a SIGKILL
+ * @param pid - The child's pid
+ * @returns The failure to settle on, or undefined to keep trying
  */
-const TERMINATING_SIGNALS = ['SIGTERM', 'SIGHUP', 'SIGINT'] as const;
+function unendedKill(
+  killAttempts: number,
+  refusal: KillFailure | undefined,
+  pid: number | undefined,
+): KillFailure | undefined {
+  if (refusal !== undefined) return killAttempts >= KILL_ATTEMPTS_BEFORE_REPORTING ? refusal : undefined;
+  if (killAttempts < KILL_POLLS_BEFORE_REPORTING_UNREAPED) return undefined;
+  return {
+    detail: `SIGKILL was accepted ${String(killAttempts)} times and the process had still not ended`,
+    pid,
+    refused: false,
+  };
+}
 
 /**
- * How long a re-raised signal is given to end this process before it ends itself instead.
- *
- * A process that SURVIVES its own re-raise is one whose default disposition for the signal does
- * nothing — PID 1 in a container is the common case — and it must still end.
+ * The guard {@link withProgressLog} holds over one supervision: what {@link superviseCheck} tells it.
  */
-const RERAISE_GRACE_MS = 1000;
+export interface SupervisionGuard {
+  /** From now on, every ending of this process takes `child` down with it. */
+  watch(child: ChildProcess): void;
+}
+
+/** A progress log, and the guard over its whole life — one value, so neither travels without the other. */
+export interface ProgressLog {
+  /** The log's path, alone in a directory minted for this run. */
+  readonly path: string;
+  /** The guard over the log's directory and the child that writes it. */
+  readonly guard: SupervisionGuard;
+}
 
 /**
- * While the child is supervised, make every way THIS process ends take the child with it.
+ * While a supervision lives, make every way THIS process ends take the child and the progress
+ * directory with it.
  *
  * ## 🚨 The defect: a supervisor that ended without its child orphaned an unbounded run
  *
@@ -829,18 +883,20 @@ const RERAISE_GRACE_MS = 1000;
  * the second line for it); and a kill the kernel refused, which settles the run while the child
  * lives on.
  *
- * So for exactly the supervision's duration:
+ * So for the supervision's WHOLE life — from before the progress directory is minted until after
+ * it is removed, see {@link withProgressLog}:
  *
- * - **`exit`** SIGKILLs the child — every ending of this process that runs any of its code passes
- *   through it, a last-resort `process.exit` included.
- * - **{@link TERMINATING_SIGNALS}** release every handler, SIGKILL the child, remove the progress
- *   log's directory synchronously (no `finally` runs after the re-raise), and RE-RAISE the signal,
- *   so this process still dies of it with the status a shell and a CI runner expect.
+ * - **`exit`** SIGKILLs the child, once there is one, and removes the progress directory, once
+ *   there is one — every ending of this process that runs any of its code passes through it, a
+ *   last-resort `process.exit` included, and `process.exit` runs no `finally`.
+ * - **`TERMINATING_SIGNALS`** (SIGTERM, SIGHUP, SIGINT, SIGQUIT) release every handler, do the same,
+ *   and RE-RAISE the signal. On POSIX this process then dies of it (status 128 + n), as a shell and
+ *   a CI runner expect. On Windows, or where the signal cannot kill it (PID 1), it exits 2 with no
+ *   document (`reRaiseSignal`).
  *
- * Both are released when the child is gone, not when the run settles, so a run settled with its
+ * The release waits for the child's `close`, not for the run to settle, so a run settled with its
  * child still alive (a refused kill, a poll that threw) still takes the child down however this
- * process then ends. The `exit` guard removes the progress directory too: `process.exit` runs no
- * `finally` either.
+ * process then ends.
  *
  * The module header gives why SIGKILL, and why the CHILD must never install a handler. This
  * process may: its event loop is never blocked, which is what makes a handler fire at all.
@@ -849,81 +905,59 @@ const RERAISE_GRACE_MS = 1000;
  *
  * An ending that runs none of this process's code: SIGKILL, an OOM killer, and on Windows ANY
  * outside kill — `process.kill(pid, <signal>)` there is `TerminateProcess`, which runs neither a
- * signal handler nor the `exit` guard. The child covers those itself: its progress writer ends it,
- * before its next entry, once this process is gone (`createProgressWriter`). A child blocked
- * inside one SQLite statement reaches no entry until the statement returns, and nothing reaches it.
+ * signal handler nor the `exit` guard. The child covers those itself: it reads end-of-file on the
+ * stdin pipe this process held (`endWhenSupervisorGone`). A child blocked inside one SQLite
+ * statement reaches nothing until the statement returns.
  *
- * @param child - The supervised child
- * @param logPath - The progress log, alone in a directory {@link withProgressLog} minted for this run
- * @returns A release; call it however the supervision ends
+ * @returns The guard: `cover` names the progress log once it exists, `watch` the child once it is
+ *   spawned, and `release` ends the guard — at once, or at the watched child's `close`
  */
-function guardSupervision(child: ChildProcess, logPath: string): () => void {
+function guardSupervision(): SupervisionGuard & { cover(logPath: string): void; release(): void } {
+  let child: ChildProcess | undefined;
+  let logPath: string | undefined;
   const onExit = (): void => {
-    child.kill('SIGKILL');
-    disposeProgressDir(logPath);
+    child?.kill('SIGKILL');
+    if (logPath !== undefined) disposeProgressDir(logPath);
   };
   const onSignal = (signal: NodeJS.Signals): void => {
-    releaseSignals();
-    process.off('exit', onExit);
+    releaseAll();
     onExit();
-    reRaise(signal);
+    reRaiseSignal(signal, ExitCode.ERROR);
   };
-  function releaseSignals(): void {
+  function releaseAll(): void {
     for (const signal of TERMINATING_SIGNALS) process.off(signal, onSignal);
+    process.off('exit', onExit);
   }
   for (const signal of TERMINATING_SIGNALS) process.on(signal, onSignal);
   process.once('exit', onExit);
 
-  // Every handler is released on the child's `close`, not when the run settles: a run settled on a
-  // refused kill or a poll that threw may still have a live child, and a signal or an exit
-  // meanwhile must still take it down.
-  const releaseAll = (): void => {
-    releaseSignals();
-    process.off('exit', onExit);
-  };
-  return () => {
-    // Gone, or never started: nothing left to take down.
-    if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) releaseAll();
-    else child.once('close', releaseAll);
+  return {
+    cover: (path) => {
+      logPath = path;
+    },
+    watch: (spawned) => {
+      child = spawned;
+    },
+    release: () => {
+      // Still running: hold every handler until it is gone. Gone, never started, or never
+      // spawned: nothing left to take down.
+      if (child?.pid !== undefined && child.exitCode === null && child.signalCode === null) child.once('close', releaseAll);
+      else releaseAll();
+    },
   };
 }
 
 /**
  * Remove the progress log's directory, synchronously, on the way out of this process — and say so
- * on stderr when the OS would not, since no report will carry it.
+ * on stderr when the OS would not, since no report will carry it. `disposeTempDirSync` retries a
+ * transient refusal briefly: on Windows the child just terminated still holds its handles for a
+ * moment.
  *
  * @param logPath - The progress log
  */
 function disposeProgressDir(logPath: string): void {
   const leftover = disposeTempDirSync(dirname(logPath));
   if (leftover !== undefined) process.stderr.write(`${errorMessageOf(leftover)}\n`);
-}
-
-/**
- * End this process OF `signal`, as its default disposition would have, with an exit fallback.
- *
- * Every handler is gone, so the raise meets the default disposition and the process dies of it. The
- * wait is synchronous so nothing else runs meanwhile: a report published after the operator asked
- * this process to end would read as the run's verdict.
- *
- * A process still here after {@link RERAISE_GRACE_MS} survived its own raise (PID 1), and ends as a
- * run that did not finish: `ExitCode.ERROR`, the one contract code for that — not a shell's
- * `128 + n`, which would be a second exit-code table beside the contract's. Windows is not sent the
- * raise at all: it cannot SEND SIGHUP, and SIGTERM or SIGINT there terminates without a signal
- * status to preserve.
- *
- * ⚠️ The exit fallback has no test, and cannot have one here: reaching it needs a process whose
- * default disposition for the signal does nothing — PID 1 in its own PID namespace — which a
- * system test can only get by running in a container it starts, and this suite starts none.
- *
- * @param signal - The signal this process received
- */
-function reRaise(signal: NodeJS.Signals): never {
-  if (process.platform !== 'win32') {
-    process.kill(process.pid, signal);
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, RERAISE_GRACE_MS);
-  }
-  process.exit(ExitCode.ERROR);
 }
 
 /**
@@ -982,18 +1016,31 @@ function readLog(path: string): string {
 }
 
 /**
- * Run `work` with a fresh progress log, and remove it however that ends.
+ * Run `work` with a fresh progress log, and remove it however that ends — a signal included.
  *
  * ⚠️ Ephemeral, per run, and it carries NO format version — see
  * `check-progress.ts`. It is written and read by one process pair within one run
  * of one build, so the reader's own `.strict()` schema is the entire contract.
  *
- * @param work - Given the log's path
+ * 🔑 The guard ({@link guardSupervision}) is installed BEFORE the directory is
+ * minted and released only AFTER it is removed, so a signal in either window —
+ * not only while the child runs — still removes it. One guard, one lifetime.
+ *
+ * @param work - Given the log
  * @returns What `work` returned, with the log's directory as a `leftover` when the OS
  *   would not remove it (see `withTempDir`) — for the caller to report as a warning
  */
-export function withProgressLog<T>(work: (logPath: string) => Promise<T>): Promise<TempDirOutcome<T>> {
-  return withTempDir('vat-check-', (dir) => work(safePath.join(dir, 'progress.jsonl')));
+export async function withProgressLog<T>(work: (log: ProgressLog) => Promise<T>): Promise<TempDirOutcome<T>> {
+  const guard = guardSupervision();
+  try {
+    return await withTempDir('vat-check-', (dir) => {
+      const path = safePath.join(dir, 'progress.jsonl');
+      guard.cover(path);
+      return work({ path, guard });
+    });
+  } finally {
+    guard.release();
+  }
 }
 
 /**

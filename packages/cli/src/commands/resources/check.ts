@@ -76,6 +76,7 @@ import type { PhaseOutcome } from '../phase-utils.js';
 
 import {
   createProgressWriter,
+  endWhenSupervisorGone,
   parseProgressLog,
   unitInFlight,
   type ProgressEntry,
@@ -895,8 +896,9 @@ function deathPhrase(death: AbnormalDeath): string {
     return `the child process could not be started at all (${death.binary}: ${death.detail})`;
   }
   if (death.kind === 'kill-failed') {
-    return 'the budget was blown and the SIGKILL that should have ended the run was REFUSED'
-      + ` (${death.detail})`;
+    return death.refused
+      ? `the budget was blown and the SIGKILL that should have ended the run was REFUSED (${death.detail})`
+      : `the budget was blown and the SIGKILL that should have ended the run DID NOT END IT (${death.detail})`;
   }
   if (death.kind === 'no-output') {
     return `the child process exited ${death.code} and published no report at all`;
@@ -936,21 +938,25 @@ function spawnFailedRemedy(detail: string): string {
 }
 
 /**
- * What to do about a kill the kernel refused.
+ * What to do about a kill that did not end the child — refused, or accepted and ineffective.
  *
  * ⛔ This must never be composed from the spawn-failure sentence, however
  * similar the plumbing is. The two are opposites: one child never existed, and
  * this one is, as far as this process can tell, STILL RUNNING.
  *
- * @param death - The refused kill, and the pid it left behind
+ * @param death - The kill that failed, and the pid it left behind
  * @returns The remedy sentence
  */
-function killFailedRemedy(detail: string, pid: number | undefined): string {
-  const handle = pid === undefined
+function killFailedRemedy(death: Extract<AbnormalDeath, { kind: 'kill-failed' }>): string {
+  const handle = death.pid === undefined
     ? ' The child\'s pid is not known to this process.'
-    : ` The child was process ${pid}.`;
+    : ` The child was process ${death.pid}.`;
+  const how = death.refused
+    ? ` SIGKILL and the kernel would not deliver it (${death.detail}), which normally means EPERM.`
+    : ` SIGKILL, the kernel accepted it, and the process still did not end (${death.detail}) —`
+      + ' which normally means it is stuck in uninterruptible I/O (a hung network mount, a wedged disk).';
   return ' The run started, ran past its budget, and then REFUSED TO DIE: the watchdog sent'
-    + ` SIGKILL and the kernel would not deliver it (${detail}), which normally means EPERM.`
+    + how
     + handle
     + ' It may still be running and still holding whatever the statement was holding, so'
     + ' check for it and end it by hand before starting another run. Nothing about the SQL'
@@ -1087,7 +1093,7 @@ function noOutputRemedy(code: number): string {
  * @returns The remedy sentence
  */
 function deathRemedy(death: AbnormalDeath): string {
-  if (death.kind === 'kill-failed') return killFailedRemedy(death.detail, death.pid);
+  if (death.kind === 'kill-failed') return killFailedRemedy(death);
   if (death.kind === 'spawn-failed') return spawnFailedRemedy(death.detail) + WATCHDOG_UNINVOLVED;
   if (death.kind === 'signal') return signalRemedy(death.signal) + WATCHDOG_UNINVOLVED;
   if (death.kind === 'no-output' || death.kind === 'unparseable-output') {
@@ -1552,10 +1558,10 @@ async function superviseCheckRun(options: {
   budgetSecs: number;
 }): Promise<SupervisedEnding> {
   const { root, request } = options;
-  const { value: ending, leftover } = await withProgressLog(async (logPath): Promise<SupervisedEnding> => {
+  const { value: ending, leftover } = await withProgressLog(async (log): Promise<SupervisedEnding> => {
     const run = await superviseCheck({
-      args: childArgs(root, request, logPath),
-      logPath,
+      args: childArgs(root, request, log.path),
+      log,
       budgetMs: options.budgetSecs * 1000,
       format: request.format,
     });
@@ -1821,6 +1827,9 @@ async function runChecksHere(
   // The watchdog's clock started at the spawn, so without this line Node's
   // startup and the CLI's import were charged to the population — the one
   // unit the budget is already a total bound for. See `StartedEntrySchema`.
+  // And before that line: the child that outlives its supervisor ends itself — see
+  // `endWhenSupervisorGone` for when that can and cannot be noticed.
+  if (child !== undefined) endWhenSupervisorGone(child.supervisorPid);
   const onProgress = child === undefined
     ? undefined
     : createProgressWriter(child);

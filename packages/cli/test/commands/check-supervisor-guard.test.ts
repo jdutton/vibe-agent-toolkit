@@ -1,22 +1,25 @@
 /**
- * The supervision guard exists for exactly as long as the child does: the handlers it installs on
- * this process — the signal handlers and the `exit` guard alike — are gone once the child is gone,
+ * The supervision guard exists for exactly as long as the supervision does: installed before the
+ * progress directory is minted, and gone once that directory is removed AND the child is gone,
  * however the run ends. Not once the run SETTLES: a run settled on a refused kill or a throwing
  * poll may leave its child alive, and every handler must still take that child down. So a
  * long-lived process (`vat validate`, a test runner) does not accumulate them, and its own signal
  * handling is back the moment the child is.
  *
  * What the handlers DO is pinned through the real binary in
- * `checks-supervisor-orphan.system.test.ts`; here their lifetime on a stand-in child, and the
- * watchdog poll's own kill when it throws.
+ * `checks-supervisor-orphan.system.test.ts`; here their lifetime on a stand-in child, the watchdog
+ * poll's own kill when it throws, and the watchdog settling on a kill that never lands.
  */
 
+import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { existsSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import type * as Utils from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { __internal, superviseCheck } from '../../src/commands/resources/check-supervisor.js';
+import { __internal, type ProgressLog, superviseCheck, withProgressLog } from '../../src/commands/resources/check-supervisor.js';
 
 const { spawnMock, statMock } = vi.hoisted(() => ({ spawnMock: vi.fn(), statMock: vi.fn() }));
 vi.mock('node:child_process', () => ({ spawn: spawnMock }));
@@ -26,7 +29,7 @@ vi.mock('@vibe-agent-toolkit/utils', async (original) => ({
   requireFollowedStatSync: statMock,
 }));
 
-const GUARDED_EVENTS = ['SIGTERM', 'SIGHUP', 'SIGINT', 'exit'] as const;
+const GUARDED_EVENTS = ['SIGTERM', 'SIGHUP', 'SIGINT', 'SIGQUIT', 'exit'] as const;
 
 /** A stand-in for a spawned child: the fields the guard reads, and `close`. */
 class StandInChild extends EventEmitter {
@@ -48,10 +51,21 @@ function listenerCounts(): Record<string, number> {
   return Object.fromEntries(GUARDED_EVENTS.map((event) => [event, process.listenerCount(event)]));
 }
 
-/** Install the guard on a stand-in child. */
+/** A stand-in, as the `ChildProcess` the guard is typed for — it reads only the stand-in's fields. */
+function asChild(child: StandInChild): ChildProcess {
+  return child as unknown as ChildProcess;
+}
+
+/** Install the guard, watching a stand-in child; returns its release. */
 function guard(child: StandInChild): () => void {
-  // The guard reads only the stand-in's fields; it is not a real ChildProcess.
-  return __internal.guardSupervision(child as unknown as Parameters<typeof __internal.guardSupervision>[0], '/nowhere/progress.jsonl');
+  const installed = __internal.guardSupervision();
+  installed.watch(asChild(child));
+  return installed.release;
+}
+
+/** A progress log for `superviseCheck`, under a guard that watches nothing until it is spawned. */
+function progressLog(): ProgressLog {
+  return { path: 'progress.jsonl', guard: __internal.guardSupervision() };
 }
 
 describe('the supervision guard — its lifetime', () => {
@@ -101,6 +115,14 @@ describe('the supervision guard — its lifetime', () => {
     expect(listenerCounts()).toStrictEqual(baseline);
   });
 
+  it('returns to baseline when released before any child was spawned', () => {
+    const baseline = listenerCounts();
+
+    __internal.guardSupervision().release();
+
+    expect(listenerCounts()).toStrictEqual(baseline);
+  });
+
   it('returns to baseline when the child never started', () => {
     const baseline = listenerCounts();
     const child = new StandInChild();
@@ -125,6 +147,30 @@ describe('the supervision guard — its lifetime', () => {
   });
 });
 
+describe('the guard spans the progress log\'s whole life (withProgressLog)', () => {
+  // 🚨 The guard used to be installed only once the child was spawned, and released before the
+  // directory was removed — a signal between the directory's mkdtemp and the spawn, or during its
+  // removal, met no handler and left the directory behind.
+  it('is installed before work runs — no child yet — and the exit guard then removes the directory', async () => {
+    const baseline = listenerCounts();
+    let during: Record<string, number> | undefined;
+    let dirExistedAfterExit = true;
+
+    await withProgressLog(async (log) => {
+      during = listenerCounts();
+      const dir = dirname(log.path);
+      writeFileSync(log.path, '', 'utf-8');
+      const onExit = process.listeners('exit').at(-1) as () => void;
+      onExit();
+      dirExistedAfterExit = existsSync(dir);
+    });
+
+    expect(during).toStrictEqual(Object.fromEntries(GUARDED_EVENTS.map((event) => [event, (baseline[event] ?? 0) + 1])));
+    expect(dirExistedAfterExit).toBe(false);
+    expect(listenerCounts()).toStrictEqual(baseline);
+  });
+});
+
 describe('the watchdog poll that throws', () => {
   // 🚨 A poll that cannot stat the progress log has no reading, and the timer it runs in is
   // outside every caller's `try`. The poll's own catch must kill the child: once the timer stops,
@@ -142,12 +188,46 @@ describe('the watchdog poll that throws', () => {
       throw Object.assign(new Error('EACCES: permission denied, stat progress.jsonl'), { code: 'EACCES' });
     });
 
-    const run = superviseCheck({ args: [], logPath: 'progress.jsonl', budgetMs: 500, format: 'json' });
+    const log = progressLog();
+    const run = superviseCheck({ args: [], log, budgetMs: 500, format: 'json' });
 
     await expect(run).rejects.toThrow('EACCES');
     expect(child.kill).toHaveBeenCalledWith('SIGKILL');
     // The child's `close` releases every handler.
+    log.guard.release();
     await new Promise((resolve) => setImmediate(resolve));
     expect(listenerCounts()).toStrictEqual(baseline);
+  });
+});
+
+describe('a SIGKILL the kernel ACCEPTS that does not end the child', () => {
+  // 🚨 A child in uninterruptible I/O takes SIGKILL and does not die until the I/O returns. The
+  // kill is not refused, so no `error` fires — and the watchdog used to re-send SIGKILL forever,
+  // the supervisor itself becoming the unbounded hang. It must settle, naming the pid.
+  it('settles as kill-failed, not refused, naming the pid, after a bounded number of polls', async () => {
+    const child = new StandInChild();
+    spawnMock.mockReturnValue(child);
+    statMock.mockImplementation(() => ({ size: 0 }));
+    const log = progressLog();
+    // The watchdog's own clock and timer, driven by hand: 20 polls on a real clock would be seconds.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'performance'] });
+    try {
+      const run = superviseCheck({ args: [], log, budgetMs: 100, format: 'json' });
+      await vi.advanceTimersByTimeAsync(5000);
+
+      await expect(run).resolves.toMatchObject({
+        outcome: 'abnormal',
+        death: { kind: 'kill-failed', pid: 4242, refused: false },
+      });
+      // It kept trying first — more than once — and then stopped.
+      const sent = child.kill.mock.calls.length;
+      expect(sent).toBeGreaterThan(1);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(child.kill.mock.calls).toHaveLength(sent);
+    } finally {
+      vi.useRealTimers();
+      child.end({ code: null, signal: 'SIGKILL' });
+      log.guard.release();
+    }
   });
 });

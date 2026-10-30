@@ -495,13 +495,16 @@ A run that HANGS is killed and reported, not waited on:
   Ctrl-C still works at a keyboard, because the process running the SQL (the
   child, or this one under --budget 0) installs no signal handler -- a process
   blocked in synchronous SQLite survives SIGINT once a handler exists. The
-  supervising process does handle SIGTERM, SIGHUP and SIGINT while it
-  supervises, only to kill its child and then die of the same signal (exit 2,
-  with no document, where the signal cannot kill it, as under PID 1), so
-  stopping it by its pid alone never leaves the child running. A supervisor
-  ended where it runs no code -- SIGKILL, an OOM killer, any outside kill on
-  Windows -- cannot do that; the child then ends itself before its next unit,
-  with nothing published. A statement already running inside SQLite is not
+  supervising process does handle SIGTERM, SIGHUP, SIGINT and SIGQUIT while
+  it supervises, only to kill its child and then end of the same signal. On
+  POSIX it dies of the signal (status 128+n). On Windows, or where the signal
+  cannot kill it (PID 1), it exits 2 with no document. So stopping it by its
+  pid alone -- or the 'vat' wrapper's, which forwards these signals -- never
+  leaves the child running. A supervisor ended where it runs no code --
+  SIGKILL, an OOM killer, any outside kill on Windows -- cannot do that; the
+  child then ends itself, with nothing published, when it reads end-of-file on
+  the stdin its supervisor held: at once during the population, after the last
+  check while the checks run. A statement already running inside SQLite is not
   reached until it returns.
 
 Output Fields (the shared report envelope; schema: packages/cli/schemas/resources-check.json):

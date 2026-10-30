@@ -5,10 +5,13 @@
  * it. Most cases stall the child for good (`child-only-stall-in-population.mjs`, which writes the
  * child's pid to a file first), end the supervisor one way, and assert the child is gone:
  *
- * - a SIGTERM, SIGHUP or SIGINT sent to the supervisor's pid ALONE — `kill <pid>`, `timeout(1)`, a
- *   CI runner stopping or cancelling a step — under a standalone `vat resources check` and under
- *   `vat validate`'s checks phase. The supervisor still dies OF the signal, and leaves no progress
- *   directory behind;
+ * - a SIGTERM, SIGHUP, SIGINT or SIGQUIT sent to the supervisor's pid ALONE — `kill <pid>`,
+ *   `timeout(1)`, a CI runner stopping or cancelling a step — under a standalone `vat resources
+ *   check` and under `vat validate`'s checks phase. The supervisor still dies OF the signal, and
+ *   leaves no progress directory behind;
+ * - a SIGTERM sent to the `vat` WRAPPER's pid (`dist/bin/vat.js`, what the package's `bin` names and
+ *   so what an operator and a CI runner actually start): the wrapper forwards it to the CLI, which
+ *   takes the child down, and the wrapper then dies of it too;
  * - a throw in the supervisor's watchdog poll (`parent-only-stat-throws.mjs`). The poll runs in a
  *   timer, outside every caller's `try`, so the supervisor catches it there: the child is killed
  *   and the run is PUBLISHED as one that did not finish — `vat validate`'s RUN_INCOMPLETE with the
@@ -16,10 +19,11 @@
  * - an UNCAUGHT throw outside the poll (`parent-only-uncaught-throw.mjs`). The CLI's last-resort
  *   handler ends the supervisor with `process.exit`, which no signal handler sees, so the `exit`
  *   guard alone kills the child and removes the progress directory;
- * - a SIGKILL of the supervisor, which runs none of its code. Here the child is slow but healthy
- *   (`child-only-slow-units.mjs`) and ends ITSELF: before every progress entry it checks that its
- *   supervisor is still there. A child blocked inside one SQLite statement reaches no entry, and is
- *   not covered.
+ * - a SIGKILL of the supervisor, which runs none of its code (on Windows, `TerminateProcess`). Here
+ *   the child stalls ASYNCHRONOUSLY (`child-only-async-stall.mjs`: its population waits on I/O
+ *   that never completes) and ends ITSELF: the OS closes the stdin pipe its supervisor held, and
+ *   the child reads end-of-file. A child blocked inside one SQLite statement reads nothing until
+ *   it returns, and is not covered.
  *
  * The process that runs the checks' SQL (the child, or `--budget 0`) and its own signal
  * disposition are `checks-sql-process-signals.system.test.ts`.
@@ -29,8 +33,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 
 import { useScratchTmpdir } from '../helpers/scratch-tmpdir.js';
 
-import { cleanupTestTempDir, fs, safePath } from './test-common.js';
-import { preload, TXT_ROWS, writeConfig } from './test-helpers/checks-phase.js';
+import { cleanupTestTempDir, fs, getWrapperPath, safePath } from './test-common.js';
+import { BIN_PATH, preload, TXT_ROWS, writeConfig } from './test-helpers/checks-phase.js';
 import { createMarkdownGitFixture } from './test-helpers/index.js';
 import { alive, type LiveVat, pidWrittenTo, startVat, within } from './test-helpers/live-vat.js';
 
@@ -51,22 +55,11 @@ const SURFACES = [
 const NO_HANDLED_SIGNALS = process.platform === 'win32';
 
 /**
- * ⚠️ Not on Windows: a child there keeps naming the parent that spawned it after that parent is
- * gone, and only the pid itself can say it ended — a pid Windows may hand to an unrelated process —
- * so the child's own check of its supervisor cannot be shown to fire in bounded time.
+ * How long the orphaned child may outlive its supervisor. End-of-file reaches a child whose event
+ * loop is free at once; the bound is headroom for a loaded runner. The stalled child never ends on
+ * its own, so a child that does not notice cannot meet any bound.
  */
-const NO_REPARENTING = process.platform === 'win32';
-
-/** How many cheap checks the slow child runs: two progress entries each. */
-const SLOW_CHECKS = 40;
-/** How much longer the slow child takes over each progress entry. */
-const UNIT_DELAY_MS = 400;
-/**
- * How long the orphaned slow child may outlive its supervisor. Its next progress entry comes after
- * one unit — at most the fixture's population plus one delay — while its remaining work is
- * `2 × SLOW_CHECKS × UNIT_DELAY_MS` (32 s): a child that does not end itself cannot meet this.
- */
-const ORPHAN_BOUND_MS = 12_000;
+const ORPHAN_BOUND_MS = 5000;
 
 let dir: string;
 // Both processes of the current case, so a red case cannot leave either running.
@@ -78,19 +71,22 @@ let child: number | undefined;
  * stalls for good once the pid is on disk.
  *
  * @param args - The `vat` command
- * @param options - Preloads in place of the stall (the child's and the supervisor's), and extra env
+ * @param options - Preloads in place of the stall (the child's and the supervisor's), extra env, and
+ *   the script `node` runs
  * @param options.preloads - Test-only preloads
  * @param options.env - Further environment
+ * @param options.entry - The CLI (the default) or the `vat` wrapper
  * @returns The supervisor, and the child's pid
  */
 async function superviseChild(
   args: readonly string[],
-  options: { preloads?: readonly string[]; env?: NodeJS.ProcessEnv } = {},
+  options: { preloads?: readonly string[]; env?: NodeJS.ProcessEnv; entry?: string } = {},
 ): Promise<{ running: LiveVat; childPid: number }> {
   const pidFile = safePath.join(scratch(), 'child.pid');
   const running = startVat(dir, args, {
     nodeOptions: options.preloads ?? [preload('child-only-stall-in-population.mjs')],
     env: { ...options.env, TEST_CHILD_PID_FILE: pidFile },
+    ...(options.entry === undefined ? {} : { entry: options.entry }),
   });
   supervisor = running;
   child = await pidWrittenTo(pidFile);
@@ -124,7 +120,7 @@ describe('the checks supervisor ends — its child ends with it', () => {
   });
 
   describe.each(SURFACES)('%s', (_surface, args) => {
-    it.skipIf(NO_HANDLED_SIGNALS).each(['SIGTERM', 'SIGHUP', 'SIGINT'] as const)(
+    it.skipIf(NO_HANDLED_SIGNALS).each(['SIGTERM', 'SIGHUP', 'SIGINT', 'SIGQUIT'] as const)(
       'a %s to the supervisor\'s pid alone kills the stalled child, and the supervisor dies of it',
       async (signal) => {
         const { running, childPid } = await superviseChild(args);
@@ -134,11 +130,31 @@ describe('the checks supervisor ends — its child ends with it', () => {
 
         running.process.kill(signal);
 
-        expect(await running.ended).toMatchObject({ code: null, signal });
-        expect(await within(5000, () => !alive(childPid))).toBe(true);
+        const ending = await running.ended;
+        expect({ code: ending.code, signal: ending.signal }, ending.stderr).toStrictEqual({ code: null, signal });
+        expect(await within(5000, () => !alive(childPid)), ending.stderr).toBe(true);
         expect(progressDirsLeft()).toStrictEqual([]);
       },
     );
+  });
+
+  // 🚨 The `vat` an operator starts is the WRAPPER, which used to `spawnSync` the CLI: `kill <pid>`
+  // killed the wrapper alone, and the CLI with its checks child ran on, reparented, to the bound.
+  it.skipIf(NO_HANDLED_SIGNALS)('a SIGTERM to the vat WRAPPER\'s pid reaches the supervisor: the stalled child is killed, and the wrapper dies of it', async () => {
+    const { running, childPid } = await superviseChild(['resources', 'check', '--budget', '600'], {
+      entry: getWrapperPath(import.meta.url),
+      // Resolution pinned to this build's CLI, whatever the case's working directory resolves to.
+      env: { VAT_BIN: BIN_PATH },
+    });
+    expect(alive(childPid)).toBe(true);
+    expect(progressDirsLeft()).toHaveLength(1);
+
+    running.process.kill('SIGTERM');
+
+    const ending = await running.ended;
+    expect({ code: ending.code, signal: ending.signal }, ending.stderr).toStrictEqual({ code: null, signal: 'SIGTERM' });
+    expect(await within(5000, () => !alive(childPid)), ending.stderr).toBe(true);
+    expect(progressDirsLeft()).toStrictEqual([]);
   });
 
   it('vat validate: a throw in the supervisor\'s poll kills the stalled child and publishes RUN_INCOMPLETE, the resources phase kept', async () => {
@@ -190,24 +206,25 @@ describe('the checks supervisor ends — its child ends with it', () => {
     expect(progressDirsLeft()).toStrictEqual([]);
   });
 
-  it.skipIf(NO_REPARENTING)('a SIGKILLed supervisor: its slow child ends itself at its next unit, its work unfinished', async () => {
-    writeConfig(dir, Array.from({ length: SLOW_CHECKS }, (_, index) => [`slow${String(index)}`, TXT_ROWS] as const));
+  // Runs everywhere: on Windows the kill is `TerminateProcess`, which runs none of the supervisor's
+  // code either — and the stdin pipe it held is closed by the OS all the same.
+  it('a SIGKILLed supervisor: its asynchronously stalled child reads end-of-file on stdin and ends itself, unpublished', async () => {
     const { running, childPid } = await superviseChild(['resources', 'check', '--budget', '600'], {
-      preloads: [preload('child-only-slow-units.mjs')],
-      env: { TEST_UNIT_DELAY_MS: String(UNIT_DELAY_MS) },
+      preloads: [preload('child-only-async-stall.mjs')],
     });
     expect(alive(childPid)).toBe(true);
 
     running.process.kill('SIGKILL');
 
-    expect(await running.ended).toMatchObject({ code: null, signal: 'SIGKILL' });
-    expect(await within(ORPHAN_BOUND_MS, () => !alive(childPid))).toBe(true);
+    const ending = await running.ended;
+    if (process.platform !== 'win32') expect(ending.signal, ending.stderr).toBe('SIGKILL');
+    expect(await within(ORPHAN_BOUND_MS, () => !alive(childPid)), running.stderr()).toBe(true);
     // Nothing ran in the supervisor, so its progress directory is left — and it shows the child
-    // stopped short: it never reached the end of its checks.
+    // stopped where it stalled: booted, never populated.
     const [left] = progressDirsLeft();
     expect(left).toBeDefined();
     const log = fs.readFileSync(safePath.join(scratch(), left ?? '', 'progress.jsonl'), 'utf-8');
     expect(log).toContain('"kind":"started"');
-    expect(log).not.toContain('"kind":"checks-complete"');
+    expect(log).not.toContain('"kind":"population"');
   });
 });

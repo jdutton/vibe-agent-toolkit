@@ -41,7 +41,6 @@
 import { appendFileSync } from 'node:fs';
 
 import { ExitCode } from '@vibe-agent-toolkit/schema';
-import { isProcessGoneError } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import type { SupervisedChild } from './check-supervisor.js';
@@ -276,54 +275,65 @@ export function unitInFlight(entries: readonly ProgressEntry[]): UnitInFlight {
  * queued behind work the event loop never gets back to, so the line naming the
  * rule that hangs would exist only in memory — where `SIGKILL` destroys it.
  *
- * ## 🚨 Before every entry: is the supervisor still there?
- *
- * The bound lives in the supervisor. A supervisor that dies where none of its
- * own code runs — SIGKILL, an OOM killer, a Windows outside kill — cannot take
- * the child down, and the child, reparented, would run on with nothing bounding
- * it and nobody reading what it publishes. So before each entry the writer asks
- * whether its parent is still the supervisor that spawned it, and ends the child
- * at once when it is not: exit 2, nothing on stdout. It ends by `process.exit`,
- * never by a signal handler — the child must never install one (see
- * `check-supervisor.ts`).
- *
- * ⚠️ It runs only BETWEEN units. A statement already blocked inside SQLite, or
- * the population's one long parse, reaches no writer until it returns.
- *
- * @param child - Where the supervisor is watching, and the supervisor's pid
+ * @param child - Where the supervisor is watching
  * @returns A writer that appends one entry and returns once it is on disk
  */
 export function createProgressWriter(
-  child: Pick<SupervisedChild, 'progressLog' | 'supervisorPid'>,
+  child: Pick<SupervisedChild, 'progressLog'>,
 ): (entry: ProgressEntry) => void {
   return (entry) => {
-    if (supervisorGone(child.supervisorPid)) {
-      process.stderr.write(
-        `vat resources check: the process supervising this checks run (pid ${String(child.supervisorPid)})`
-        + ' is gone, so nothing bounds the run or reads its report. Ending it unfinished.\n',
-      );
-      process.exit(ExitCode.ERROR);
-    }
     appendFileSync(child.progressLog, `${JSON.stringify(entry)}\n`, 'utf-8');
   };
 }
 
 /**
- * Whether the supervisor is gone. Two questions, because the platforms answer differently: on
- * POSIX an orphan is reparented, so `ppid` changes; on Windows `ppid` keeps naming the dead
- * parent, and only the pid itself can say it has ended (best effort: a reused pid reads as alive).
- * A refusal to signal it (`EPERM`) means that pid now belongs to someone else — gone, too.
+ * End this supervised child the moment its supervisor is gone, however the supervisor ended.
  *
- * @param supervisorPid - The supervisor's pid
- * @returns True when the supervisor no longer exists
+ * ## 🚨 Why: the bound lives in the supervisor
+ *
+ * A supervisor that dies where none of its own code runs — SIGKILL, an OOM killer, a Windows
+ * outside kill (`TerminateProcess`) — cannot take the child down, and the child would run on with
+ * nothing bounding it and nobody reading what it publishes.
+ *
+ * ## 🔑 How: the supervisor holds this process's stdin open and never writes to it
+ *
+ * The supervisor spawns the child with stdin as a pipe whose write end only it holds, and it never
+ * writes or ends it. However the supervisor ends, the OS closes that end, and this process reads
+ * end-of-file — on every platform, with no pid to compare and no liveness probe to misread (a pid
+ * reused, or a probe refused `EPERM` in a sandbox, both used to read wrongly). On EOF, a read error
+ * or a close, the child ends at once: exit 2 and ONE stderr line, no document — nobody is left to
+ * read one. It ends by `process.exit`, never by a signal handler: the child must never install one
+ * (see `check-supervisor.ts`). Nothing else in the child reads stdin.
+ *
+ * The stream is UNREFERENCED, so a child that finishes is never held open by it.
+ *
+ * ⚠️ **It fires when this process's event loop next turns, and only then.** The population is
+ * asynchronous I/O, so an orphan there ends at once. The checks run one after another
+ * synchronously, so an orphan in the middle of them runs on until the last check returns, and then
+ * ends before it publishes anything; a statement blocked inside SQLite reaches nothing until it
+ * returns.
+ *
+ * @param supervisorPid - The supervisor's pid, named in the stderr line
+ * @param stdin - This process's stdin (a parameter only so a test can hand it a stream it owns)
  */
-function supervisorGone(supervisorPid: number): boolean {
-  if (process.ppid !== supervisorPid) return true;
-  try {
-    process.kill(supervisorPid, 0);
-    return false;
-  } catch (error) {
-    if (isProcessGoneError(error)) return true;
-    throw error;
-  }
+export function endWhenSupervisorGone(
+  supervisorPid: number,
+  stdin: NodeJS.ReadableStream & { unref?: () => void } = process.stdin,
+): void {
+  let ended = false;
+  const end = (): void => {
+    if (ended) return;
+    ended = true;
+    process.stderr.write(
+      `vat resources check: the process supervising this checks run (pid ${String(supervisorPid)})`
+      + ' is gone, so nothing bounds the run or reads its report. Ending it unfinished.\n',
+    );
+    process.exit(ExitCode.ERROR);
+  };
+  stdin.once('end', end);
+  stdin.once('close', end);
+  stdin.once('error', end);
+  // Flowing, so end-of-file is read at all; the supervisor never writes, so nothing arrives.
+  stdin.resume();
+  stdin.unref?.();
 }

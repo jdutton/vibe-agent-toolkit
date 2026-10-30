@@ -27,7 +27,7 @@
  * Works in both git and non-git directories.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, dirname } from 'node:path';
@@ -42,7 +42,10 @@ import {
 } from '@vibe-agent-toolkit/utils';
 import {
   describeStdioBlocking,
+  isTerminatingSignal,
   makeStdioBlocking,
+  reRaiseSignal,
+  TERMINATING_SIGNALS,
 } from '@vibe-agent-toolkit/utils/process';
 
 // Before ANY output. This file — not bin.ts — is what package.json maps `vat` to,
@@ -74,7 +77,31 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 type Context = 'dev' | 'local' | 'global';
 
-function spawnCli(binPath: string, context: Context, contextPath?: string): never {
+/**
+ * Run the CLI as a child of this process, and end the way it ended.
+ *
+ * ## 🚨 Asynchronous, and a forwarder of every terminating signal
+ *
+ * This wrapper is the `vat` an operator, a CI runner and `timeout(1)` actually
+ * start, so `kill <pid>` lands HERE, not on the CLI. It used to `spawnSync` the
+ * CLI: it died of the signal at once and the CLI — with any `resources check`
+ * child it supervises — ran on, reparented, to its own end, which made the help's
+ * promise ("a signal to vat takes the checks child with it") false for the
+ * documented entry point. So the CLI is spawned asynchronously and every
+ * {@link TERMINATING_SIGNALS} member this process receives is forwarded to it;
+ * once it has ended, this process ends the same way — dying of the same signal
+ * when it died of one of those (re-raised; on Windows, or where the raise cannot
+ * kill this process, exit 2), otherwise with its exit code.
+ *
+ * ⚠️ A Ctrl-C at a terminal signals the whole foreground process GROUP, so the
+ * CLI then receives SIGINT twice — once from the terminal, once forwarded. Every
+ * handler the CLI installs ends the process on the first, so the second is moot.
+ *
+ * @param binPath - The CLI entry (`dist/bin.js`) to run
+ * @param context - How it was found, for `VAT_CONTEXT`
+ * @param contextPath - Where it was found, for `VAT_CONTEXT_PATH`
+ */
+function spawnCli(binPath: string, context: Context, contextPath?: string): void {
   const env = {
     ...process.env,
     VAT_CONTEXT: context,
@@ -83,15 +110,36 @@ function spawnCli(binPath: string, context: Context, contextPath?: string): neve
 
   // The node running this wrapper, never a PATH lookup: the child must be the
   // same binary, and `node` by name is whatever PATH says first.
-  const result = spawnSync(process.execPath, [binPath, ...process.argv.slice(2)], {
+  const child = spawn(process.execPath, [binPath, ...process.argv.slice(2)], {
     stdio: 'inherit',
     env,
   });
 
-  // The child derived its code from its own document. A signal death has no
-  // status, and a code off the contract (an older build's, Node's abort) is not
-  // a verdict the child published, so neither is forwarded verbatim.
-  process.exit(exitCodeOfChild(result.status));
+  const forward = (signal: NodeJS.Signals): void => {
+    child.kill(signal);
+  };
+  const release = (): void => {
+    for (const signal of TERMINATING_SIGNALS) process.off(signal, forward);
+  };
+  for (const signal of TERMINATING_SIGNALS) process.on(signal, forward);
+
+  // A child that never started has no status, which is not a verdict: exit 2, as
+  // `spawnSync`'s null status did. A failed FORWARD (a signal the platform cannot
+  // send) also lands here, with the child running — it is ignored, and the
+  // child's own `exit` still ends this process.
+  child.on('error', () => {
+    if (child.pid !== undefined) return;
+    release();
+    process.exit(ExitCode.ERROR);
+  });
+  child.on('exit', (code, signal) => {
+    release();
+    if (signal !== null && isTerminatingSignal(signal)) reRaiseSignal(signal, ExitCode.ERROR);
+    // The child derived its code from its own document. Any other signal death
+    // has no status, and a code off the contract (an older build's, Node's
+    // abort) is not a verdict the child published, so neither is forwarded verbatim.
+    process.exit(exitCodeOfChild(code));
+  });
 }
 
 /**
@@ -271,7 +319,7 @@ function main(): void {
   const debug = process.env['VAT_DEBUG'] === '1';
 
   // Reported here rather than in the block further down because every dispatch
-  // path below ends in `spawnCli`, which never returns.
+  // path below ends in `spawnCli`.
   reportStdioBlocking(debug);
 
   // Priority 1 & 2: Explicit override via VAT_BIN or VAT_ROOT_DIR. A named
@@ -284,6 +332,7 @@ function main(): void {
       console.error(`[vat debug] Binary: ${override.binPath}`);
     }
     spawnCli(override.binPath, 'dev', override.contextPath);
+    return;
   }
 
   // Find the Node monorepo workspace root from the current working directory.

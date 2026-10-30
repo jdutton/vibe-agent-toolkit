@@ -11,8 +11,12 @@
  * 🚨 Every case asserts the run ended within {@link KILL_WITHIN_BUDGETS} measured budgets. A preload
  * that silently failed to load would leave the default bound in force, and the case would wait the
  * full default bound for the same kill. Only the scaled clock ends a run that soon: before it, the
- * run is two populations (the `resources` phase's and the child's), each a third of the measured
- * budget at most (`measure-check-budget.ts`); after it, one budget of scaled silence.
+ * run is two populations (the `resources` phase's and the child's); after it, one budget of scaled
+ * silence.
+ *
+ * ⚠️ The headroom is EMPIRICAL. `measureBudget()` times `vat resources check --budget 0`, so it
+ * bounds the CHILD's population, not the `resources` phase's — which `vat validate` runs first and
+ * nothing here measures. That the multiple holds is observed on the CI runners, not derived.
  */
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -39,8 +43,9 @@ useScratchTmpdir('vat-scratch-validate-checks-kill-');
 let projectDir: string;
 
 /**
- * How many measured budgets a scaled kill may take, end to end: two populations of at most a third
- * of a budget each, one budget of silence, and the remainder as headroom for a loaded machine.
+ * How many measured budgets a scaled kill may take, end to end: the `resources` phase's population,
+ * the child's, one budget of silence, and headroom for a loaded machine. Chosen by observation —
+ * see the file header for why it is not derived.
  */
 const KILL_WITHIN_BUDGETS = 3;
 

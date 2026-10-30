@@ -103,5 +103,5 @@ export type CheckReport = Report<CheckData>;
  */
 export const RESOURCES_CHECK_EXAMINED: ExaminedDeclaration = {
   unit: 'resources in the population',
-  whenZero: 'The projection holds no resource under the project root: check that data.root is the project you meant, and that its files are not all gitignored.',
+  whenZero: 'The projection holds no resource under the project root: check that the project root this run resolved is the one you meant, and that its files are not all gitignored.',
 };

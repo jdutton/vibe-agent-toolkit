@@ -371,6 +371,9 @@ describe('vat resources check --budget', () => {
     const logPath = safePath.join(projectDir, 'progress.jsonl');
 
     // As the supervisor this test stands in for writes it: naming this process, the child's parent.
+    // ⚠️ The child ends itself at end-of-file on stdin (its supervisor gone), and `executeCli`
+    // hands it THIS worker's stdin — which vitest holds open as a pipe. Run from a stdin at EOF,
+    // this case would end the child with exit 2 before its first line, and red loudly.
     const { status } = check(SUPERVISED_BY_FLAG, asOurChild(logPath));
 
     expect(status).toBe(1);

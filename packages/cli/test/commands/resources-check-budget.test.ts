@@ -946,10 +946,10 @@ describe('resolveChildEnding — a kill the kernel REFUSED', () => {
       code: null,
       signal: null,
       killed: true,
-      killFailure: { detail: KILL_REFUSED, pid: ORPHAN_PID },
+      killFailure: { detail: KILL_REFUSED, pid: ORPHAN_PID, refused: true },
     })).toStrictEqual({
       kind: 'abnormal',
-      death: { kind: 'kill-failed', detail: KILL_REFUSED, pid: ORPHAN_PID },
+      death: { kind: 'kill-failed', detail: KILL_REFUSED, pid: ORPHAN_PID, refused: true },
     });
   });
 
@@ -974,7 +974,7 @@ describe('resolveChildEnding — a kill the kernel REFUSED', () => {
       code: 0,
       signal: null,
       killed: true,
-      killFailure: { detail: KILL_REFUSED, pid: ORPHAN_PID },
+      killFailure: { detail: KILL_REFUSED, pid: ORPHAN_PID, refused: true },
     })).toStrictEqual({ kind: 'completed', code: 0 });
   });
 });
@@ -982,7 +982,7 @@ describe('resolveChildEnding — a kill the kernel REFUSED', () => {
 describe('the document a run whose KILL was refused publishes', () => {
   /** The recovered payload for a breach whose SIGKILL the kernel refused. */
   const refused = (): CheckPayloadInput =>
-    diedOf({ kind: 'kill-failed', detail: KILL_REFUSED, pid: ORPHAN_PID });
+    diedOf({ kind: 'kill-failed', detail: KILL_REFUSED, pid: ORPHAN_PID, refused: true });
 
   it('says the kill was refused, and hands over the pid still running', () => {
     const [finding] = refused().issues;
@@ -1015,6 +1015,18 @@ describe('the document a run whose KILL was refused publishes', () => {
 
   it('never claims the watchdog did not fire — it fired and was rebuffed', () => {
     expect(refused().issues[0]?.message).not.toContain('watchdog never fired');
+  });
+
+  // A SIGKILL the kernel ACCEPTED that still did not end the child (uninterruptible I/O) is not a
+  // refusal, and blaming EPERM would send the operator after a permission that was never denied.
+  it('a kill that was accepted and did not end the child says so — never "refused", never EPERM — in both sentences', () => {
+    const [finding] = diedOf({ kind: 'kill-failed', detail: 'accepted 20 times', pid: ORPHAN_PID, refused: false }).issues;
+
+    expect(finding?.message).toContain('DID NOT END IT');
+    expect(finding?.message).toContain('uninterruptible I/O');
+    expect(finding?.message).toContain(String(ORPHAN_PID));
+    expect(finding?.message).not.toContain('REFUSED (');
+    expect(finding?.message).not.toContain('EPERM');
   });
 });
 

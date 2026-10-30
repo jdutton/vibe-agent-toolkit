@@ -28,6 +28,13 @@ export {
 
 export { spawnHardened } from './spawn-hardened.js';
 
+export {
+  type TerminatingSignal,
+  TERMINATING_SIGNALS,
+  isTerminatingSignal,
+  reRaiseSignal,
+} from './terminating-signals.js';
+
 /**
  * On `./process` because "is this process running me as its entry script?" is a
  * question about the process, and because every package that has a bin or a
