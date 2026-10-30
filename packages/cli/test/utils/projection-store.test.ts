@@ -1,14 +1,20 @@
 /**
- * `projection-store` — selecting a backend, keying a tree, and scoping the
- * store's lifetime.
+ * `projection-store` — selecting a backend, declining a tree, and scoping the
+ * store's lifetime when no tree is keyed.
  *
  * This module is the ONLY place in the toolkit that knows the SQLite backend
  * exists, so what is under test here is the *wiring*, not the storage engine:
- * which env value turns the cache on, where the key comes from, what happens
- * when the key cannot be derived, and who closes the connection. The backend
- * itself is mocked — a unit test that opened a real `node:sqlite` database
- * would be testing `projection-sqlite`, which has its own suites, and would
- * couple this file to whether the workspace link happens to be installed.
+ * which env value turns the cache on, what happens when the key cannot be
+ * derived, and which paths return before a key is ever derived. The backend
+ * itself is mocked (`../projection-store-test-doubles.js`) — a unit test that
+ * opened a real `node:sqlite` database would be testing `projection-sqlite`,
+ * which has its own suites, and would couple this file to whether the
+ * workspace link happens to be installed.
+ *
+ * Every case that KEYS a real git tree — the hash, its determinism, the store
+ * directory, the scope's close and reentrancy, the snapshot bracket — lives in
+ * `test/integration/projection-store-git.integration.test.ts`: each spawns
+ * `git write-tree` over a fixture repository, which is integration-tier cost.
  *
  * Three properties carry most of the weight, because each one has a plausible
  * "improvement" that would break it silently:
@@ -25,118 +31,19 @@
  *    silently skipping it is exactly how a measurement arm ends up believing it
  *    tested a cache when it tested an ordinary cold run. The `undefined` and
  *    the stderr line are one behaviour, not two, and both are asserted.
- * 3. **The scope closes on the throwing path too.** That is the entire reason
- *    `withPopulationCache` is a scope rather than a bare open/close pair: a
- *    `DatabaseSync` left open holds its file handle and, in WAL mode, its read
- *    transaction.
+ * 3. **A store that is turned off costs nothing.** No `git write-tree`, no
+ *    backend constructed — asserted through the counter below.
  */
 
-import { rmSync, writeFileSync } from 'node:fs';
-
 import type { PopulationCache } from '@vibe-agent-toolkit/resources';
-// `./` is NOT the mocked module id — `./git` is. These two are the real
-// implementations and always were.
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-// `gitTreeSnapshot` comes from the module this file MOCKS and survives it: the
-// factory below spreads the real module and replaces exactly one export, so it
-// arrives here as the counting wrapper over the real implementation.
-import { gitTreeSnapshot } from '@vibe-agent-toolkit/utils/git';
 // Type-only, purely so the mock factory can spread the real module without an
 // inline `typeof import()` annotation, which this repo's lint forbids.
 import type * as UtilsGitModule from '@vibe-agent-toolkit/utils/git';
-// `./testing` is a DIFFERENT module id, so the mock above does not reach it —
-// which is what we want: `detachGitEnv` is the thing that makes the git
-// fixtures trustworthy, and a mocked version of it would quietly stop doing so.
-import { detachGitEnv } from '@vibe-agent-toolkit/utils/testing';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { backend, captureStderr, isolateProjectionStoreTests } from '../projection-store-test-doubles.js';
 import { createTempDirTracker } from '../system/test-common.js';
-import { gitAddAll, initTestGitRepo } from '../test-helpers.js';
-
-/** A read-only window onto one fake store's lifetime. */
-interface FakeStoreHandle {
-  /**
-   * How many times `close()` reached the store.
-   *
-   * Counted rather than merely flagged: the real backend promises close is
-   * idempotent, which means a double-close in THIS module would leave no trace
-   * anywhere else.
-   */
-  readonly closeCount: () => number;
-  /** Whether the connection is still usable — what "the store outlived the frame that built the source" actually means. */
-  readonly isOpen: () => boolean;
-}
-
-/**
- * The mock backend, and the handle the tests inspect it through.
- *
- * Hoisted because `vi.mock`'s factory is lifted above the imports, so it cannot
- * close over an ordinary module-level binding.
- *
- * 🪤 A closed fake REJECTS every later call rather than quietly succeeding.
- * That mirrors the real contract ("a store that has been closed rejects further
- * calls rather than silently reopening — a reopen would hide a lifetime bug in
- * the caller"), and without it the "still usable later" test below could not
- * fail: a permissive fake answers a closed store's reads happily and the
- * lifetime bug it exists to catch would sail through green.
- */
-const backend = vi.hoisted(() => {
-  const stores: {
-    closeCount: number;
-    closed: boolean;
-  }[] = [];
-
-  function makeStore(): { record: (typeof stores)[number]; store: unknown } {
-    const record = { closeCount: 0, closed: false };
-    stores.push(record);
-    const refuseIfClosed = (): void => {
-      if (record.closed) throw new Error('store is closed');
-    };
-    return {
-      record,
-      store: {
-        writeBlobFacts: async () => {
-          refuseIfClosed();
-        },
-        readBlobFacts: async () => {
-          refuseIfClosed();
-          return {};
-        },
-        writeExtent: async () => {
-          refuseIfClosed();
-        },
-        readExtent: async () => {
-          refuseIfClosed();
-          return undefined;
-        },
-        close: async () => {
-          record.closeCount += 1;
-          record.closed = true;
-        },
-      },
-    };
-  }
-
-  // `options` records the ARGUMENT, not just the count. Without it every
-  // assertion in this file passes for a build that dropped the `directory`
-  // argument entirely — and such a build silently writes the developer's own
-  // live cache, which is exactly what `VAT_PROJECTION_STORE_DIR` exists to
-  // prevent. The count alone cannot see that.
-  const openCalls = { count: 0, options: [] as unknown[] };
-
-  // The module namespace itself, so the version-floor test can hand the SAME
-  // double back to `vi.doMock` after temporarily replacing it with one that
-  // throws. A second, separately-written copy would drift from this one.
-  const moduleExports = (): Record<string, unknown> => ({
-    openSqliteProjectionStore: (options: unknown) => {
-      openCalls.count += 1;
-      openCalls.options.push(options);
-      return makeStore().store;
-    },
-  });
-
-  return { stores, makeStore, moduleExports, openCalls };
-});
 
 /**
  * 🪤 `@vibe-agent-toolkit/projection-sqlite` is NOT resolvable from
@@ -148,17 +55,16 @@ const backend = vi.hoisted(() => {
  * once the link DOES land: this file should keep testing the wiring, not the
  * engine, and should not start or stop passing because of an install decision.
  */
-vi.mock('@vibe-agent-toolkit/projection-sqlite', () => backend.moduleExports());
+vi.mock('@vibe-agent-toolkit/projection-sqlite', async () =>
+  (await import('../projection-store-test-doubles.js')).backend.moduleExports());
 
 /**
  * `gitTreeSnapshot` is left REAL and merely counted.
  *
- * A stub returning a canned hash would make the determinism test vacuous — it
- * would prove the stub returns a constant, not that `git write-tree` carries no
- * timestamp. The counter exists for one assertion only: that a process with no
- * store selected returns before the key is even derived, which is upstream of
- * the dynamic import and is therefore the cheapest observable proof the lazy
- * seam is intact.
+ * The counter exists for one assertion: that a process with no store selected
+ * returns before the key is even derived, which is upstream of the dynamic
+ * import and is therefore the cheapest observable proof the lazy seam is
+ * intact.
  */
 const git = vi.hoisted(() => ({ calls: { count: 0 } }));
 vi.mock('@vibe-agent-toolkit/utils/git', async (importOriginal) => {
@@ -186,32 +92,6 @@ const {
 const { resetUnscopedNoticeLedger } = await import('../../src/utils/operator-notices.js');
 
 /**
- * The most recently opened fake store, as a lifetime handle.
- *
- * Throws rather than returning `undefined` when nothing was opened: a test that
- * expected a store and got none must fail on that fact, not slide into
- * comparing `undefined` against `undefined` and pass.
- */
-function lastStore(): FakeStoreHandle {
-  const record = backend.stores.at(-1);
-  if (record === undefined) throw new Error('no store was opened');
-  return {
-    closeCount: () => record.closeCount,
-    isOpen: () => !record.closed,
-  };
-}
-
-/** Capture everything written to stderr for one call. */
-function captureStderr(): { readonly written: string[]; restore: () => void } {
-  const written: string[] = [];
-  const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => {
-    written.push(String(chunk));
-    return true;
-  });
-  return { written, restore: () => spy.mockRestore() };
-}
-
-/**
  * The repo's own temp-dir helper, which realpaths the OS tmpdir.
  *
  * Not a bare `mkdtemp(tmpdir())`: macOS hands out `/var/...` for a directory git
@@ -221,9 +101,11 @@ function captureStderr(): { readonly written: string[]; restore: () => void } {
  */
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-projection-store-');
 
-/** Fixture content, written twice on purpose — see the determinism test. */
-const FIXTURE_DOC = '# a document\n';
-
+/**
+ * Roots for the store-OFF paths. Plain directories, NOT repositories: every
+ * test that uses them asserts `git.calls.count` is zero, so the root is never
+ * handed to git — and if the off check broke, that count is what goes red.
+ */
 let repoRoot: string;
 let secondRepoRoot: string;
 let outsideAnyRepo: string;
@@ -233,25 +115,13 @@ beforeAll(() => {
 
   repoRoot = safePath.join(scratch, 'repo');
   mkdirSyncReal(repoRoot, { recursive: true });
-  writeFileSync(safePath.join(repoRoot, 'doc.md'), FIXTURE_DOC, 'utf-8');
-  initTestGitRepo(repoRoot);
-  gitAddAll(repoRoot);
-
-  // A SECOND repository, a sibling of the first so git cannot resolve one from
-  // the other, holding DIFFERENT content so its tree hash genuinely differs.
-  // Identical content would produce the identical hash — `git write-tree` is a
-  // function of contents alone — and the nesting test would then pass for a
-  // build that reused the outer store blindly.
   secondRepoRoot = safePath.join(scratch, 'other-repo');
   mkdirSyncReal(secondRepoRoot, { recursive: true });
-  writeFileSync(safePath.join(secondRepoRoot, 'doc.md'), '# a different document\n', 'utf-8');
-  initTestGitRepo(secondRepoRoot);
-  gitAddAll(secondRepoRoot);
 
-  // A plain directory with no repository above it. It is a SIBLING of the
-  // fixture repo, never a child: git resolves upward, so a nested directory
-  // would find `repoRoot` and this arm would assert the opposite of what it
-  // claims while still going green.
+  // A plain directory with no repository above it. git resolves upward, so it
+  // must sit under the realpathed OS tmpdir, never inside this checkout, or
+  // this arm would assert the opposite of what it claims while still going
+  // green.
   outsideAnyRepo = safePath.join(scratch, 'not-a-repo');
   mkdirSyncReal(outsideAnyRepo, { recursive: true });
 });
@@ -260,47 +130,13 @@ afterAll(() => {
   cleanupTempDirs();
 });
 
-let restoreGitEnv: () => void;
-let savedSelector: string | undefined;
-let savedCacheSwitch: string | undefined;
-let savedStoreDir: string | undefined;
-
-beforeEach(() => {
-  // 🪤 A git child inherits `GIT_DIR` / `GIT_INDEX_FILE` from whatever spawned
-  // this run — a hook, an outer `vat validate` — and would then snapshot the
-  // OUTER repository while the fixture sat untouched. Both fixtures depend on
-  // git resolving from the directory it is given and nowhere else.
-  restoreGitEnv = detachGitEnv();
-  savedSelector = process.env[PROJECTION_STORE_ENV];
-  savedCacheSwitch = process.env[CACHE_ENV];
-  savedStoreDir = process.env[PROJECTION_STORE_DIR_ENV];
-  backend.stores.length = 0;
-  backend.openCalls.count = 0;
-  backend.openCalls.options.length = 0;
-  git.calls.count = 0;
-  // The process's own "once" ledger: a notice printed outside every scope by an earlier test
-  // would otherwise silence the same notice in every later scope of this worker.
-  resetUnscopedNoticeLedger();
+isolateProjectionStoreTests({
+  envNames: [PROJECTION_STORE_ENV, CACHE_ENV, PROJECTION_STORE_DIR_ENV],
+  resetUnscopedNoticeLedger,
 });
 
-afterEach(() => {
-  // Restored rather than deleted: the selector is process-global, and a test
-  // that leaks it turns every later test in the same worker into a different
-  // test. "Passes in isolation, fails in the suite" is the signature.
-  delete process.env[PROJECTION_STORE_ENV];
-  if (savedSelector !== undefined) process.env[PROJECTION_STORE_ENV] = savedSelector;
-  // Restored exactly, for the reason `cache-control.test.ts` states about the
-  // same variable: a leaked `VAT_CACHE=0` silently disables the parse cache for
-  // every later test in this worker.
-  delete process.env[CACHE_ENV];
-  if (savedCacheSwitch !== undefined) process.env[CACHE_ENV] = savedCacheSwitch;
-  // Same reason again, and this one is the sharpest: a leaked
-  // `VAT_PROJECTION_STORE_DIR` pointing at a deleted temp directory would make
-  // every later store open somewhere no assertion looks.
-  delete process.env[PROJECTION_STORE_DIR_ENV];
-  if (savedStoreDir !== undefined) process.env[PROJECTION_STORE_DIR_ENV] = savedStoreDir;
-  restoreGitEnv();
-  vi.restoreAllMocks();
+beforeEach(() => {
+  git.calls.count = 0;
 });
 
 describe('projectionStoreSelected', () => {
@@ -430,30 +266,6 @@ describe('openPopulationCache', () => {
     expect(backend.openCalls.count).toBe(0);
   });
 
-  it("returns a cache keyed by the repository's git tree hash, and a close that releases the store", async () => {
-    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
-
-    const opened = await openPopulationCache({ root: repoRoot });
-
-    expect(opened).toBeDefined();
-    // Asserted against a fresh reading of the real snapshot rather than against
-    // a literal: the hash is a property of the fixture's contents, and pinning
-    // a constant here would turn every harmless change to the fixture into a
-    // failure that says nothing about the subject.
-    const snapshot = gitTreeSnapshot({ cwd: repoRoot });
-    expect(snapshot).not.toBeNull();
-    expect(opened?.cache.treeHash).toBe(snapshot?.hash);
-    expect(opened?.cache.store).toBeDefined();
-
-    // `close` must reach the store, not merely resolve. A closer that forgot to
-    // delegate would leave `withPopulationCache`'s whole `finally` inert while
-    // every test about it still passed.
-    expect(lastStore().isOpen()).toBe(true);
-    await opened?.close();
-    expect(lastStore().isOpen()).toBe(false);
-    expect(lastStore().closeCount()).toBe(1);
-  });
-
   it('declines out loud on stderr when the selector is set but the root is not inside a readable git repository', async () => {
     process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
     const stderr = captureStderr();
@@ -481,80 +293,6 @@ describe('openPopulationCache', () => {
     } finally {
       stderr.restore();
     }
-  });
-
-  it('keys two calls over byte-identical content to the same tree hash, so the second run can hit', async () => {
-    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
-
-    const first = await openPopulationCache({ root: repoRoot });
-    await first?.close();
-
-    // Rewritten with the SAME bytes between the two calls. That moves mtime and
-    // touches the working tree without changing content, which is the exact
-    // discrimination the key has to make: `git write-tree` hashes a tree object,
-    // which carries no timestamp, so the answer must not move.
-    writeFileSync(safePath.join(repoRoot, 'doc.md'), FIXTURE_DOC, 'utf-8');
-
-    const second = await openPopulationCache({ root: repoRoot });
-    await second?.close();
-
-    // 🪤 The `git stash create` alternative would fail exactly here: a stash is
-    // a COMMIT, whose object bakes in a wall-clock timestamp, so two calls over
-    // identical content agree only if they land in the same second — and every
-    // read after that would miss while the cache looked perfectly healthy.
-    expect(first?.cache.treeHash).toBe(second?.cache.treeHash);
-    expect(first?.cache.treeHash).toMatch(/^[0-9a-f]{40}$/);
-  });
-});
-
-/**
- * Open one store and hand back the OPTIONS the backend was constructed with.
- *
- * @param value - What `VAT_PROJECTION_STORE_DIR` holds; `undefined` unsets it
- * @returns The single argument `openSqliteProjectionStore` received
- */
-async function openedWithStoreDir(value: string | undefined): Promise<unknown> {
-  process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
-  if (value === undefined) delete process.env[PROJECTION_STORE_DIR_ENV];
-  else process.env[PROJECTION_STORE_DIR_ENV] = value;
-
-  const opened = await openPopulationCache({ root: repoRoot });
-  await opened?.close();
-
-  // Asserted before the caller inspects the argument: a run that opened no
-  // store at all would otherwise hand back `undefined` and compare it happily
-  // against nothing.
-  expect(backend.openCalls.count).toBe(1);
-  return backend.openCalls.options[0];
-}
-
-describe('the directory the backend is opened with', () => {
-  it('passes the directory VAT_PROJECTION_STORE_DIR names', async () => {
-    // 🪤 The ONLY assertion in this file that can see the variable being read.
-    // Every other test here counts opens and inspects stores, and a build that
-    // dropped the `directory` argument entirely would pass all of them — while
-    // writing the shared default database, which on this machine holds other
-    // repositories' link text, heading text and frontmatter. That is the failure
-    // the variable exists to prevent, so it is asserted rather than assumed.
-    const directory = safePath.join(createTempDir(), 'named-store');
-
-    expect(await openedWithStoreDir(directory)).toStrictEqual({ directory });
-  });
-
-  it.each([
-    ['unset', undefined],
-    ['exported as the empty string', ''],
-  ])('lets the backend default the directory when the variable is %s', async (_description, value) => {
-    // `toStrictEqual`, not `toEqual`: an explicitly-passed
-    // `{ directory: undefined }` is a DIFFERENT argument from `{}` under
-    // `exactOptionalPropertyTypes`, and only the second lets the backend apply
-    // `defaultStoreDirectory()`. `toEqual` treats the two as equal and would
-    // make the module's spread-rather-than-pass note untested.
-    //
-    // The empty-string arm is not a curiosity: `''` would resolve to the process
-    // cwd, so treating it as "unset" is a decision, and an unexported variable
-    // and one exported as `''` are the same intent.
-    expect(await openedWithStoreDir(value)).toStrictEqual({});
   });
 });
 
@@ -652,131 +390,6 @@ describe('withPopulationCache', () => {
     expect(git.calls.count).toBe(0);
   });
 
-  it('closes the store once the work resolves', async () => {
-    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
-
-    const result = await withPopulationCache({ root: repoRoot }, async (cache) => {
-      expect(cache).toBeDefined();
-      expect(lastStore().isOpen()).toBe(true);
-      return 42;
-    });
-
-    expect(result).toBe(42);
-    expect(lastStore().isOpen()).toBe(false);
-    expect(lastStore().closeCount()).toBe(1);
-  });
-
-  it('closes the store when the work throws, and rethrows the original error', async () => {
-    // 🪤 This is the whole reason the module offers a scope instead of an
-    // `openPopulationCache()` / `close()` pair. Every caller that wrote the pair
-    // by hand would eventually forget the `finally`, and the symptom is not a
-    // failed command — the command fails anyway — but a leaked file handle and,
-    // in WAL mode, a read transaction pinned to a stale snapshot, which surfaces
-    // later and somewhere else.
-    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
-    const failure = new Error('the work blew up');
-
-    await expect(
-      withPopulationCache({ root: repoRoot }, async () => {
-        expect(lastStore().isOpen()).toBe(true);
-        throw failure;
-      }),
-    ).rejects.toBe(failure);
-
-    // Rethrown by identity, not merely by message: the caller above must be able
-    // to branch on the error it actually threw, and a scope that wrapped or
-    // replaced it would take that away.
-    expect(lastStore().isOpen()).toBe(false);
-    expect(lastStore().closeCount()).toBe(1);
-  });
-
-  it('keeps the store open for a population source built in an earlier frame', async () => {
-    // The inventory extractor MEMOIZES its population provider: the frame that
-    // builds the source returns long before anything reads through it. A scope
-    // that closed at the end of the building frame would close the store under
-    // its own consumer, and a test that used the cache immediately would never
-    // see it — which is why the two calls below are deliberately separated by a
-    // returned frame rather than run back to back.
-    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
-
-    await withPopulationCache({ root: repoRoot }, async (cache) => {
-      expect(cache).toBeDefined();
-
-      // Stands in for `buildPopulationSource(cache)`: it captures the cache and
-      // returns, so its own frame is gone by the time the provider is reached.
-      const buildProvider = (): (() => Promise<unknown>) => {
-        const captured = cache;
-        return async () => captured?.store.readExtent({ rootId: 'r', treeHash: captured.treeHash });
-      };
-      const provider = buildProvider();
-
-      // A closed fake throws here, so this line is a real gate rather than a
-      // formality — see the fake's note on why a permissive double would make
-      // the lifetime bug invisible.
-      await expect(provider()).resolves.toBeUndefined();
-      expect(lastStore().isOpen()).toBe(true);
-    });
-
-    expect(lastStore().isOpen()).toBe(false);
-  });
-
-  it('is reentrant: a nested scope over the same repository reuses the open store', async () => {
-    // 🔑 The property that lets `vat validate` hoist ONE bracket over every
-    // phase without rewriting the lanes underneath. Each lane still opens its
-    // own scope — `resource-loader`'s two, `inventory`, `claude/context`,
-    // `claude/budget` — and each one now finds the orchestrator's scope already
-    // open and joins it instead of opening a second database and taking a
-    // second `git write-tree`.
-    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
-
-    const inner = await withPopulationCache({ root: repoRoot }, async (outerCache) => {
-      expect(outerCache).toBeDefined();
-      return withPopulationCache({ root: repoRoot }, async (innerCache) => {
-        // The SAME cache, by identity. An inner scope that opened a second
-        // store over the same file would also "work" — and would pay a second
-        // open, a second snapshot, and hold two connections to one WAL
-        // database.
-        expect(innerCache).toBe(outerCache);
-        // Still open INSIDE the inner scope, which is the half that catches the
-        // obvious wrong implementation: an inner scope that closed what it
-        // reused.
-        expect(lastStore().isOpen()).toBe(true);
-        return innerCache;
-      });
-    });
-
-    expect(inner).toBeDefined();
-    expect(backend.openCalls.count).toBe(1);
-    // Closed exactly once, by the scope that opened it. Twice would mean the
-    // inner scope closed a store it did not own; zero would be a leak.
-    expect(lastStore().isOpen()).toBe(false);
-    expect(lastStore().closeCount()).toBe(1);
-  });
-
-  it('opens its own store for a nested scope rooted in a DIFFERENT repository', async () => {
-    // The positive control on the reuse above, and the whole reason reuse is
-    // gated on the TREE HASH rather than on "a scope is open". A stored extent
-    // is filed under `(rootId, treeHash)`; handing a lane in another repository
-    // this repository's hash would file its extent under a key that does not
-    // describe it — the same silent mis-keying the git-snapshot bracket exists
-    // to prevent, arriving through the hoist instead.
-    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
-
-    const hashes = await withPopulationCache({ root: repoRoot }, async (outerCache) =>
-      withPopulationCache({ root: secondRepoRoot }, async (innerCache) => ({
-        outer: outerCache?.treeHash,
-        inner: innerCache?.treeHash,
-      })),
-    );
-
-    expect(backend.openCalls.count).toBe(2);
-    expect(hashes.outer).toMatch(/^[0-9a-f]{40}$/);
-    expect(hashes.inner).toMatch(/^[0-9a-f]{40}$/);
-    expect(hashes.inner).not.toBe(hashes.outer);
-    // Both closed: the inner scope owns the store it opened.
-    expect(backend.stores.every((record) => record.closeCount === 1)).toBe(true);
-  });
-
   it('gives a nested scope no cache when the store is turned off, without reopening the question', async () => {
     // The uncached path has to nest too, and has to stay cheap while it does:
     // the inner scope must not spawn its own `git write-tree` to discover there
@@ -794,68 +407,6 @@ describe('withPopulationCache', () => {
     expect(seen).toEqual([undefined, undefined]);
     expect(backend.openCalls.count).toBe(0);
     expect(git.calls.count).toBe(0);
-  });
-
-  it('reports a mid-scope edit through treeUnchanged, though the memo still hides it', async () => {
-    // The half the bracket below cannot close. The key and the crawl agree with
-    // each other; the files the population READS may not agree with either.
-    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
-    const arrivedLate = safePath.join(repoRoot, 'moved-mid-scope.md');
-
-    try {
-      const verdicts = await withPopulationCache({ root: repoRoot }, async (cache) => {
-        const before = cache?.treeUnchanged();
-        writeFileSync(arrivedLate, '# moved\n', 'utf-8');
-        return { before, after: cache?.treeUnchanged(), memo: gitTreeSnapshot({ cwd: repoRoot })?.hash, key: cache?.treeHash };
-      });
-
-      expect(verdicts.before).toBe(true);
-      expect(verdicts.after).toBe(false);
-      // Still the memo's answer — the check went around it, not through it.
-      expect(verdicts.memo).toBe(verdicts.key);
-    } finally {
-      rmSync(arrivedLate, { force: true });
-    }
-  });
-
-  it('is the git-snapshot bracket, so a mid-scope edit cannot split the key from the extent', async () => {
-    // The wiring assertion for `withGitSnapshotCache`. `packages/utils` proves
-    // the bracket dedupes; only this file can prove the bracket is OPEN AROUND
-    // BOTH consumers — the store's key snapshot and the crawl's entries
-    // snapshot. A bracket opened deeper than one of them dedupes nothing and
-    // looks exactly like a bracket that works.
-    //
-    // 🪤 Asserted as BEHAVIOUR, not as a call count. `git.calls.count` above
-    // wraps `gitTreeSnapshot`, which is where the memo lives — it counts CALLS,
-    // and stays 2 whether or not the second one spawned git. The spawn-level
-    // count belongs at the `@vibe-validate/git` seam and is asserted there, in
-    // `packages/utils/test/integration/git-snapshot-cache.integration.test.ts`.
-    process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
-    const arrivedLate = safePath.join(repoRoot, 'landed-mid-scope.md');
-
-    try {
-      const keyed = await withPopulationCache({ root: repoRoot }, async (cache) => {
-        // The race, made deliberate: unbracketed, the crawl inside `work` takes
-        // its own snapshot ~195 ms after the key was derived, and an edit
-        // landing in between files THIS extent under THAT key.
-        writeFileSync(arrivedLate, '# late\n', 'utf-8');
-        // Stands in for `GitCrawlSource.#snapshotMembers`.
-        const crawled = gitTreeSnapshot({ cwd: repoRoot });
-        return { treeHash: cache?.treeHash, crawledHash: crawled?.hash };
-      });
-
-      expect(keyed.treeHash).toMatch(/^[0-9a-f]{40}$/);
-      expect(keyed.crawledHash).toBe(keyed.treeHash);
-
-      // And the edit was REAL: outside the scope the hash moves. Without this
-      // the assertion above would also hold for a mutation git never noticed,
-      // which is the shape that makes a race test pass while proving nothing.
-      expect(gitTreeSnapshot({ cwd: repoRoot })?.hash).not.toBe(keyed.treeHash);
-    } finally {
-      // The fixture repo is shared by every test in this file, so the edit is
-      // undone rather than left for whatever runs next.
-      rmSync(arrivedLate, { force: true });
-    }
   });
 });
 
