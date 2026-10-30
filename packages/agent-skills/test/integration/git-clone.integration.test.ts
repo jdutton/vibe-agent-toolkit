@@ -6,8 +6,7 @@ import { parseGitUrl } from '@vibe-agent-toolkit/utils/git';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { cloneGitSource, GIT_SUBPATH_INVALID_CODE } from '../../src/skill-source/git-clone.js';
-
-import { makeBareRepoWithSkill } from './test-helpers.js';
+import { makeBareRepoWithSkill } from '../skill-source/test-helpers.js';
 
 let bareUrl: string;
 let fixtureCleanup: () => void;

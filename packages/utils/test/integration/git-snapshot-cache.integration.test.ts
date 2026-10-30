@@ -46,9 +46,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import type * as VibeValidateGit from '@vibe-validate/git';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '../src/path-utils.js';
-
-import { createGitRepo } from './test-helpers.js';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '../../src/path-utils.js';
+import { createGitRepo } from '../test-helpers.js';
 
 const git = vi.hoisted(() => ({ calls: 0 }));
 
@@ -63,7 +62,7 @@ vi.mock('@vibe-validate/git', async (importOriginal) => {
   };
 });
 
-const { freshGitTreeSnapshot, gitTreeSnapshot, withGitSnapshotCache } = await import('../src/git-snapshot.js');
+const { freshGitTreeSnapshot, gitTreeSnapshot, withGitSnapshotCache } = await import('../../src/git-snapshot.js');
 
 const created: string[] = [];
 

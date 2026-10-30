@@ -825,7 +825,7 @@ describe('withPopulationCache', () => {
     // wraps `gitTreeSnapshot`, which is where the memo lives — it counts CALLS,
     // and stays 2 whether or not the second one spawned git. The spawn-level
     // count belongs at the `@vibe-validate/git` seam and is asserted there, in
-    // `packages/utils/test/git-snapshot-cache.test.ts`.
+    // `packages/utils/test/integration/git-snapshot-cache.integration.test.ts`.
     process.env[PROJECTION_STORE_ENV] = PROJECTION_STORE_SQLITE;
     const arrivedLate = safePath.join(repoRoot, 'landed-mid-scope.md');
 

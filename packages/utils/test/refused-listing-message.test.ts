@@ -4,7 +4,7 @@
  * things: the readdir walk, where a refusal means nothing beneath the
  * directory was seen, and the `git ls-files --others` route, where the index
  * has already named every TRACKED file beneath it and only the untracked ones
- * are missing (`file-crawler-git-refused-listing.test.ts` pins that listing).
+ * are missing (`integration/file-crawler-git-refused-listing.integration.test.ts` pins that listing).
  *
  * The sentence therefore may not assert what was enumerated beneath the
  * directory — one route or the other would contradict it in the same report —

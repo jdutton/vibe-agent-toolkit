@@ -65,7 +65,7 @@ function git(cwd: string, ...args: string[]): void {
  * Moving the same work into the test BODY puts it under `testTimeout` —
  * `platformTestTimeout`, 900 s on win32 — which is the budget sized for real
  * I/O. Nothing about the work changed; only which clock bounds it. This is also
- * exactly what the sibling suite `git-snapshot-cache.test.ts` already does, so
+ * exactly what the sibling suite `integration/git-snapshot-cache.integration.test.ts` already does, so
  * the two files now agree.
  *
  * ⛔ Do not "tidy" this back into a `beforeEach`, and do not answer it with a

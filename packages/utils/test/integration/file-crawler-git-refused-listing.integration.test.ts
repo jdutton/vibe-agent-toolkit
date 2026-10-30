@@ -28,13 +28,12 @@ import {
   DirectoryListingRefusedError,
   type DirectoryRefusal,
   type UnreadablePolicy,
-} from '../src/file-crawler.js';
-import { runGitOrThrow } from '../src/git-run.js';
-import { mkdirSyncReal, safePath, toForwardSlash } from '../src/path-utils.js';
-import { CANNOT_DENY_READS } from '../src/testing/platform-gates.js';
-import { setupSyncTempDirSuite } from '../src/testing/temp-dir.js';
-
-import { createGitRepo } from './test-helpers.js';
+} from '../../src/file-crawler.js';
+import { runGitOrThrow } from '../../src/git-run.js';
+import { mkdirSyncReal, safePath, toForwardSlash } from '../../src/path-utils.js';
+import { CANNOT_DENY_READS } from '../../src/testing/platform-gates.js';
+import { setupSyncTempDirSuite } from '../../src/testing/temp-dir.js';
+import { createGitRepo } from '../test-helpers.js';
 
 /** `chmod 000` denies nothing to uid 0 and binds nothing on Windows. */
 

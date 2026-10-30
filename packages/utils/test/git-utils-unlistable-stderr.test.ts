@@ -8,7 +8,7 @@
  *
  * Pure: three lines in, the directories out. The wiring that turns them into a
  * `DirectoryRefusal` is exercised against a real repository in
- * `file-crawler-git-refused-listing.test.ts`.
+ * `integration/file-crawler-git-refused-listing.integration.test.ts`.
  */
 import { describe, expect, it } from 'vitest';
 
